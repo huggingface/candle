@@ -22,19 +22,22 @@ pub struct Model {
     enable_thinking: bool,
 
     // === KV Cache Management ===
-    /// Tokens that have been processed and are currently in the KV cache.
-    /// This includes: system prompt + all user/assistant turns + any generated tokens.
-    processed_tokens: Vec<u32>,
+    /// Actual token IDs that are in the KV cache.
+    /// This is the source of truth for what's been processed.
+    kv_tokens: Vec<u32>,
 
-    /// Tokens generated during the current assistant turn (for repeat penalty).
-    /// These are a subset of processed_tokens, tracking just the current generation.
+    /// Tokens generated during the current assistant turn.
     current_gen_tokens: Vec<u32>,
 
     // === Conversation State ===
+    /// Text-level conversation history (for export/display).
     conversation: Option<Conversation>,
 
     /// Accumulator for current assistant response text during generation.
     current_response: String,
+
+    /// Track whether this is the first turn (need full template) or continuation.
+    is_first_turn: bool,
 }
 
 #[wasm_bindgen]
@@ -99,10 +102,11 @@ impl Model {
             repeat_last_n: 64,
             eos_token,
             enable_thinking: true,
-            processed_tokens: Vec::new(),
+            kv_tokens: Vec::new(),
             current_gen_tokens: Vec::new(),
             conversation: None,
             current_response: String::new(),
+            is_first_turn: true,
         })
     }
 
@@ -120,26 +124,32 @@ impl Model {
 
         // Clear KV cache for new conversation
         self.model.clear_kv_cache();
-        self.processed_tokens.clear();
+        self.kv_tokens.clear();
         self.current_gen_tokens.clear();
         self.current_response.clear();
+        self.is_first_turn = true;
+
+        // Build proper system prompt with metadata
+        let reasoning_mode = if enable_thinking { "/think" } else { "/no_think" };
+        let default_system = format!(
+            "## Metadata\n\n\
+Reasoning Mode: {}\n\n\
+## Custom Instructions\n\n\
+You are a helpful AI assistant.",
+            reasoning_mode
+        );
+
+        let system = system_prompt.unwrap_or(default_system);
 
         let template = ChatTemplate::chatml_with_thinking();
         let options = ChatTemplateOptions::for_generation().thinking(enable_thinking);
-
-        let conv = match system_prompt {
-            Some(prompt) => Conversation::new(template, prompt).with_options(options),
-            None => {
-                let default_system = if enable_thinking { "/think" } else { "/no_think" };
-                Conversation::new(template, default_system).with_options(options)
-            }
-        };
+        let conv = Conversation::new(template, system).with_options(options);
 
         self.conversation = Some(conv);
 
         console_log!(
-            "Conversation started (thinking: {})",
-            if enable_thinking { "enabled" } else { "disabled" }
+            "Conversation started (reasoning mode: {})",
+            reasoning_mode
         );
     }
 
@@ -157,9 +167,10 @@ impl Model {
 
         // Clear KV cache for new conversation
         self.model.clear_kv_cache();
-        self.processed_tokens.clear();
+        self.kv_tokens.clear();
         self.current_gen_tokens.clear();
         self.current_response.clear();
+        self.is_first_turn = true;
 
         let template = ChatTemplate::from_config_json(tokenizer_config_json)
             .map_err(|e| JsError::new(&e.to_string()))?;
@@ -178,8 +189,11 @@ impl Model {
 
     /// Send a user message and prepare for generation.
     ///
-    /// This method efficiently reuses the KV cache - only new tokens are processed.
-    /// Returns the first generated token(s).
+    /// This method efficiently reuses the KV cache by only tokenizing NEW content:
+    /// - First turn: tokenizes full prompt (system + user + assistant start)
+    /// - Subsequent turns: tokenizes only the continuation (close prev + new user + assistant start)
+    ///
+    /// The `enable_thinking` parameter controls whether this specific message should use thinking mode.
     #[wasm_bindgen]
     pub fn chat(
         &mut self,
@@ -189,30 +203,17 @@ impl Model {
         repeat_penalty: f32,
         repeat_last_n: usize,
         seed: f64,
+        enable_thinking: bool,
     ) -> Result<String, JsError> {
         let _prof = ProfileGuard::new("chat");
 
         // Ensure conversation exists
         if self.conversation.is_none() {
-            self.start_conversation(None, self.enable_thinking);
+            self.start_conversation(None, enable_thinking);
         }
 
-        let conv = self.conversation.as_mut().unwrap();
-
-        // Get formatted prompt with full conversation history
-        let prompt = conv
-            .user_turn(&user_message)
-            .map_err(|e| JsError::new(&e.to_string()))?;
-
-        // Tokenize full conversation
-        let all_tokens = {
-            let _prof = ProfileGuard::new("tokenize_prompt");
-            self.tokenizer
-                .encode(prompt, true)
-                .map_err(|m| JsError::new(&m.to_string()))?
-                .get_ids()
-                .to_vec()
-        };
+        // Update thinking mode for this message
+        self.enable_thinking = enable_thinking;
 
         // Clear generation state for new turn
         self.current_gen_tokens.clear();
@@ -229,64 +230,98 @@ impl Model {
         self.repeat_penalty = repeat_penalty;
         self.repeat_last_n = repeat_last_n;
 
-        // === KV Cache Optimization ===
-        // Only process tokens that aren't already in the KV cache
-        let num_cached = self.processed_tokens.len();
-        let num_total = all_tokens.len();
+        // Tokenize ONLY new content (not the full conversation)
+        let new_tokens = if self.is_first_turn {
+            // First turn: build prompt with proper SmolLM3/Qwen3 format
+            // Reasoning mode (/think or /no_think) goes in SYSTEM prompt metadata
+            let reasoning_mode = if enable_thinking { "/think" } else { "/no_think" };
 
-        if num_cached > num_total {
-            // This shouldn't happen, but handle gracefully by resetting
-            console_log!(
-                "Warning: cached tokens ({}) > total tokens ({}), resetting cache",
-                num_cached,
-                num_total
+            // Build assistant start with proper think tag format
+            let assistant_start = if enable_thinking {
+                "<|im_start|>assistant\n<think>\n" // Open for reasoning
+            } else {
+                "<|im_start|>assistant\n<think>\n\n</think>\n" // Empty = skip reasoning
+            };
+
+            let prompt = format!(
+                "<|im_start|>system\n\
+## Metadata\n\
+\n\
+Reasoning Mode: {}\n\
+\n\
+## Custom Instructions\n\
+\n\
+You are a helpful AI assistant.\n\
+<|im_end|>\n\
+<|im_start|>user\n\
+{}<|im_end|>\n\
+{}",
+                reasoning_mode, user_message, assistant_start
             );
-            self.model.clear_kv_cache();
-            self.processed_tokens.clear();
-        }
 
-        // Verify token alignment (cached tokens should match prefix of all_tokens)
-        let cache_valid = self.processed_tokens.len() <= all_tokens.len()
-            && self
-                .processed_tokens
-                .iter()
-                .zip(all_tokens.iter())
-                .all(|(a, b)| a == b);
+            console_log!("First turn prompt:\n{}", prompt);
 
-        if !cache_valid && !self.processed_tokens.is_empty() {
-            console_log!(
-                "Warning: token mismatch detected, resetting cache (had {} tokens)",
-                self.processed_tokens.len()
-            );
-            self.model.clear_kv_cache();
-            self.processed_tokens.clear();
-        }
+            // Also add to conversation history for export
+            if let Some(conv) = self.conversation.as_mut() {
+                conv.add_message(Message::user(&user_message));
+            }
 
-        let new_tokens = &all_tokens[self.processed_tokens.len()..];
-        let start_pos = self.processed_tokens.len();
+            let tokens = {
+                let _prof = ProfileGuard::new("tokenize_prompt");
+                self.tokenizer
+                    .encode(prompt.as_str(), true)
+                    .map_err(|m| JsError::new(&m.to_string()))?
+                    .get_ids()
+                    .to_vec()
+            };
+
+            self.is_first_turn = false;
+            tokens
+        } else {
+            // Subsequent turns: only tokenize the continuation
+            // Add to conversation history (for text export)
+            if let Some(conv) = self.conversation.as_mut() {
+                conv.add_message(Message::user(&user_message));
+            }
+
+            // Format only the new part: close previous assistant + new user + assistant start
+            let continuation = self.format_continuation(&user_message, enable_thinking);
+
+            let tokens = {
+                let _prof = ProfileGuard::new("tokenize_continuation");
+                self.tokenizer
+                    .encode(continuation.as_str(), false) // false = don't add special tokens
+                    .map_err(|m| JsError::new(&m.to_string()))?
+                    .get_ids()
+                    .to_vec()
+            };
+
+            tokens
+        };
+
+        let start_pos = self.kv_tokens.len();
+        let num_messages = self.conversation.as_ref().map(|c| c.len()).unwrap_or(0);
 
         console_log!(
-            "Chat: {} messages, {} total tokens, {} cached, {} new",
-            conv.len(),
-            all_tokens.len(),
-            self.processed_tokens.len(),
-            new_tokens.len()
+            "Chat: {} messages, {} cached tokens, {} new tokens, thinking: {}",
+            num_messages,
+            start_pos,
+            new_tokens.len(),
+            if enable_thinking { "on" } else { "off" }
         );
 
         if new_tokens.is_empty() {
-            // Edge case: no new tokens (shouldn't happen normally)
             return Ok(String::new());
         }
 
         // Process new tokens and get first generated token
         let (text, first_gen_token) = self
-            .process_prompt(new_tokens, start_pos)
+            .process_prompt(&new_tokens, start_pos)
             .map_err(|m| JsError::new(&m.to_string()))?;
 
-        // Update processed tokens: first the prompt tokens, then the generated token
-        // This maintains correct order for KV cache alignment
-        self.processed_tokens.extend_from_slice(new_tokens);
-        self.processed_tokens.push(first_gen_token);
+        // Update KV token tracking: only add prompt tokens (they're now in KV cache)
+        // The first_gen_token is NOT in KV cache yet - it will be processed in next_token()
+        self.kv_tokens.extend_from_slice(&new_tokens);
         self.current_gen_tokens.push(first_gen_token);
 
         // Accumulate response
@@ -306,10 +341,12 @@ impl Model {
             let response = self.current_response.clone();
             conv.assistant_response(&response);
 
+            // Note: current_gen_tokens contains all generated tokens, but only len-1 are in KV cache
+            // (the last one hasn't been processed yet, but it's EOS so that's fine)
             console_log!(
-                "Turn ended: {} messages, {} tokens in cache ({} generated this turn)",
+                "Turn ended: {} messages, {} tokens in KV cache, {} tokens generated",
                 conv.len(),
-                self.processed_tokens.len(),
+                self.kv_tokens.len(),
                 self.current_gen_tokens.len()
             );
         }
@@ -326,9 +363,10 @@ impl Model {
             conv.clear();
         }
         self.model.clear_kv_cache();
-        self.processed_tokens.clear();
+        self.kv_tokens.clear();
         self.current_gen_tokens.clear();
         self.current_response.clear();
+        self.is_first_turn = true;
         console_log!("Conversation cleared");
     }
 
@@ -353,7 +391,7 @@ impl Model {
     /// Get number of tokens currently in KV cache.
     #[wasm_bindgen]
     pub fn get_cached_token_count(&self) -> usize {
-        self.processed_tokens.len()
+        self.kv_tokens.len()
     }
 
     // ========================================================================
@@ -365,14 +403,14 @@ impl Model {
     pub fn next_token(&mut self) -> Result<String, JsError> {
         let _prof = ProfileGuard::new("next_token");
 
-        let last_token = *self.current_gen_tokens.last().unwrap_or(
-            self.processed_tokens
-                .last()
-                .ok_or_else(|| JsError::new("No tokens to continue from"))?,
-        );
+        // Get the last sampled token (which hasn't been processed/added to KV yet)
+        let token_to_process = *self
+            .current_gen_tokens
+            .last()
+            .ok_or_else(|| JsError::new("No tokens to continue from"))?;
 
         let text = self
-            .process_generation(last_token)
+            .process_generation(token_to_process)
             .map_err(|m| JsError::new(&m.to_string()))?;
 
         // Accumulate response
@@ -386,14 +424,13 @@ impl Model {
     pub fn is_eos(&self) -> bool {
         self.current_gen_tokens
             .last()
-            .or_else(|| self.processed_tokens.last())
             .map_or(false, |&t| t == self.eos_token)
     }
 
-    /// Get total token count (cached + generated).
+    /// Get total token count in KV cache.
     #[wasm_bindgen]
     pub fn get_token_count(&self) -> usize {
-        self.processed_tokens.len()
+        self.kv_tokens.len()
     }
 
     /// Generate multiple tokens at once.
@@ -419,10 +456,11 @@ impl Model {
     #[wasm_bindgen]
     pub fn reset(&mut self) {
         let _prof = ProfileGuard::new("reset_model");
-        self.processed_tokens.clear();
+        self.kv_tokens.clear();
         self.current_gen_tokens.clear();
         self.current_response.clear();
         self.conversation = None;
+        self.is_first_turn = true;
         self.model.clear_kv_cache();
     }
 
@@ -448,10 +486,11 @@ impl Model {
 
         // Clear everything for legacy single-turn mode
         self.model.clear_kv_cache();
-        self.processed_tokens.clear();
+        self.kv_tokens.clear();
         self.current_gen_tokens.clear();
         self.current_response.clear();
         self.conversation = None;
+        self.is_first_turn = true;
 
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1. {
@@ -482,9 +521,8 @@ impl Model {
             .process_prompt(&tokens, 0)
             .map_err(|m| JsError::new(&m.to_string()))?;
 
-        // Track tokens: prompt tokens first, then the generated token
-        self.processed_tokens = tokens;
-        self.processed_tokens.push(first_gen_token);
+        // Track tokens: prompt tokens are in KV cache, first_gen_token is NOT yet
+        self.kv_tokens = tokens;
         self.current_gen_tokens.push(first_gen_token);
         self.current_response.push_str(&text);
 
@@ -497,30 +535,66 @@ impl Model {
 // ============================================================================
 
 impl Model {
-    /// Format a single-turn prompt using chat template.
+    /// Format a single-turn prompt using proper SmolLM3/Qwen3 chat template.
     fn format_single_turn(&self, prompt: &str) -> String {
-        let template = ChatTemplate::chatml_with_thinking();
+        let reasoning_mode = if self.enable_thinking { "/think" } else { "/no_think" };
 
-        let system_content = if self.enable_thinking {
-            "/think"
+        let assistant_start = if self.enable_thinking {
+            "<|im_start|>assistant\n<think>\n" // Open for reasoning
         } else {
-            "/no_think"
+            "<|im_start|>assistant\n<think>\n\n</think>\n" // Empty = skip reasoning
         };
 
-        let messages = vec![Message::system(system_content), Message::user(prompt)];
+        format!(
+            "<|im_start|>system\n\
+## Metadata\n\
+\n\
+Reasoning Mode: {}\n\
+\n\
+## Custom Instructions\n\
+\n\
+You are a helpful AI assistant.\n\
+<|im_end|>\n\
+<|im_start|>user\n\
+{}<|im_end|>\n\
+{}",
+            reasoning_mode, prompt, assistant_start
+        )
+    }
 
-        let options = ChatTemplateOptions::for_generation().thinking(self.enable_thinking);
+    /// Format the continuation for a subsequent turn.
+    /// This only generates the tokens needed to: close previous turn, add user message, start assistant.
+    /// The KV cache already has everything before this.
+    fn format_continuation(&self, user_message: &str, enable_thinking: bool) -> String {
+        // ChatML format continuation:
+        // <|im_end|>           (close previous assistant turn)
+        // <|im_start|>user
+        // {user_message}<|im_end|>
+        // <|im_start|>assistant
+        // <think>              (always present)
+        // \n</think>\n         (pre-filled if no_think mode to skip reasoning)
+        //
+        // Note: Reasoning mode is set in system prompt at conversation start,
+        // but we can still guide per-message behavior with think tag pre-filling
 
-        template.apply(&messages, &options).unwrap_or_else(|_| {
-            format!(
-                "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-                system_content, prompt
-            )
-        })
+        let assistant_start = if enable_thinking {
+            "<|im_start|>assistant\n<think>\n" // Open for reasoning
+        } else {
+            "<|im_start|>assistant\n<think>\n\n</think>\n" // Empty = skip reasoning
+        };
+
+        let result = format!(
+            "<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n{}",
+            user_message,
+            assistant_start
+        );
+
+        console_log!("Continuation format:\n{}", result);
+        result
     }
 
     /// Process prompt tokens and return the first generated token.
-    /// Note: This updates KV cache internally but does NOT modify processed_tokens.
+    /// Note: This updates KV cache internally but does NOT modify kv_tokens.
     /// The caller (chat/init_with_prompt) is responsible for token tracking.
     fn process_prompt(&mut self, tokens: &[u32], start_pos: usize) -> candle::Result<(String, u32)> {
         let _prof = ProfileGuard::new("process_prompt");
@@ -545,7 +619,7 @@ impl Model {
 
         // Apply repeat penalty using all tokens (cached + new prompt tokens)
         let all_context: Vec<u32> = self
-            .processed_tokens
+            .kv_tokens
             .iter()
             .chain(tokens.iter())
             .copied()
@@ -585,26 +659,28 @@ impl Model {
     }
 
     /// Process a single token during generation.
-    /// Note: The last_token should already be in processed_tokens when this is called.
-    fn process_generation(&mut self, last_token: u32) -> candle::Result<String> {
+    /// The token passed in is NOT yet in kv_tokens - it will be added after processing.
+    fn process_generation(&mut self, token_to_process: u32) -> candle::Result<String> {
         let _prof = ProfileGuard::new("process_generation");
 
         let dev = Device::Cpu;
 
         let input = {
             let _prof = ProfileGuard::new("create_input_tensor");
-            Tensor::new(&[last_token], &dev)?.unsqueeze(0)?
+            Tensor::new(&[token_to_process], &dev)?.unsqueeze(0)?
         };
 
-        // Position is where we're placing this token in the sequence.
-        // Since last_token is already in processed_tokens, its position is len-1.
-        let pos = self.processed_tokens.len() - 1;
+        // Position is the next slot in the sequence (token_to_process hasn't been added yet)
+        let pos = self.kv_tokens.len();
 
-        // Forward pass for single token
+        // Forward pass for single token - this adds it to KV cache
         let logits = {
             let _prof = ProfileGuard::new("model_forward_gen");
             self.model.forward(&input, pos)?
         };
+
+        // NOW add the processed token to kv_tokens (it's in KV cache now)
+        self.kv_tokens.push(token_to_process);
 
         let logits = {
             let _prof = ProfileGuard::new("logits_post_process");
@@ -616,11 +692,11 @@ impl Model {
             logits
         } else {
             let _prof = ProfileGuard::new("apply_repeat_penalty");
-            let start_at = self.processed_tokens.len().saturating_sub(self.repeat_last_n);
+            let start_at = self.kv_tokens.len().saturating_sub(self.repeat_last_n);
             candle_transformers::utils::apply_repeat_penalty(
                 &logits,
                 self.repeat_penalty,
-                &self.processed_tokens[start_at..],
+                &self.kv_tokens[start_at..],
             )?
         };
 
@@ -630,9 +706,8 @@ impl Model {
             self.logits_processor.sample(&logits)?
         };
 
-        // Track generated token
+        // Track the newly sampled token (NOT in kv_tokens yet - will be processed next iteration)
         self.current_gen_tokens.push(next_token);
-        self.processed_tokens.push(next_token);
 
         // Decode token
         let token_str = {

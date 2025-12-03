@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Qwen3 WASM Text Generation</title>
+    <title>Qwen3 WASM Chat</title>
     <style>
         * {
             margin: 0;
@@ -22,116 +22,201 @@
         .header {
             background: white;
             border-radius: 12px;
-            padding: 30px;
+            padding: 20px 30px;
             margin-bottom: 20px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         .header h1 {
             color: #333;
-            font-size: 32px;
-            margin-bottom: 15px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            font-size: 28px;
+            margin-bottom: 10px;
         }
         .header p {
             color: #666;
-            line-height: 1.6;
-            margin-bottom: 10px;
+            font-size: 14px;
         }
         .header a {
             color: #667eea;
             text-decoration: none;
-            font-weight: 500;
-        }
-        .header a:hover {
-            text-decoration: underline;
         }
         .main-panel {
             background: white;
             border-radius: 12px;
-            padding: 30px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 180px);
+            min-height: 500px;
+        }
+        .status-bar {
+            padding: 12px 20px;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
         }
         .status {
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
             font-weight: 500;
-            text-align: center;
+            font-size: 14px;
         }
-        .status.loading {
-            background: #fff3cd;
-            color: #856404;
+        .status.loading { color: #856404; }
+        .status.ready { color: #155724; }
+        .status.error { color: #721c24; }
+        .cache-info {
+            font-size: 12px;
+            color: #666;
+            font-family: 'Courier New', monospace;
         }
-        .status.ready {
-            background: #d4edda;
-            color: #155724;
+
+        /* Chat Thread */
+        .chat-thread {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
         }
-        .status.error {
-            background: #f8d7da;
-            color: #721c24;
+        .message {
+            max-width: 85%;
+            border-radius: 12px;
+            padding: 12px 16px;
         }
-        .prompt-section {
-            margin-bottom: 20px;
+        .message.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
         }
-        .prompt-section label {
-            display: block;
-            font-weight: 600;
+        .message.assistant {
+            align-self: flex-start;
+            background: #f0f0f0;
             color: #333;
+        }
+        .message-content {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            line-height: 1.5;
+        }
+        .message.assistant .message-content {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        /* Thinking Section (collapsible) */
+        .thinking-wrapper {
             margin-bottom: 8px;
         }
-        #prompt {
-            width: 100%;
+        .thinking-toggle {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .thinking-toggle:hover {
+            background: #5a6fd6;
+        }
+        .thinking-content {
+            margin-top: 8px;
             padding: 12px;
-            font-size: 16px;
-            border: 2px solid #e0e0e0;
+            background: #e8ecff;
             border-radius: 8px;
-            font-family: inherit;
-            transition: border-color 0.3s;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+            color: #444;
         }
-        #maxTokens {
-            width: 120px;
-            padding: 12px;
-            font-size: 18px;
-            font-weight: 600;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-family: inherit;
-            transition: border-color 0.3s;
-            text-align: center;
+        .thinking-content.collapsed {
+            display: none;
         }
-        #maxTokens:focus {
-            outline: none;
-            border-color: #667eea;
+
+        /* Streaming indicator */
+        .streaming-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #667eea;
+            border-radius: 50%;
+            margin-left: 8px;
+            animation: pulse 1s infinite;
         }
-        #prompt:focus {
-            outline: none;
-            border-color: #667eea;
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
         }
-        .controls {
+
+        /* Input Area */
+        .input-area {
+            padding: 16px 20px;
+            border-top: 1px solid #e0e0e0;
             display: flex;
             gap: 10px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
+            align-items: flex-end;
+        }
+        .input-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #userInput {
+            width: 100%;
+            padding: 12px;
+            font-size: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            resize: none;
+            font-family: inherit;
+            min-height: 44px;
+            max-height: 120px;
+        }
+        #userInput:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .input-options {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            font-size: 13px;
+            color: #666;
+        }
+        .input-options label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+        }
+        .input-options input[type="number"] {
+            width: 60px;
+            padding: 4px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
         }
         button {
-            padding: 12px 24px;
-            font-size: 16px;
+            padding: 12px 20px;
+            font-size: 14px;
             font-weight: 500;
             border: none;
             border-radius: 8px;
             cursor: pointer;
-            transition: all 0.3s;
-            flex: 1;
-            min-width: 120px;
+            transition: all 0.2s;
         }
         button.primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
         }
         button.primary:hover:not(:disabled) {
-            transform: translateY(-2px);
+            transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
         }
         button.secondary {
@@ -141,10 +226,11 @@
         button.secondary:hover:not(:disabled) {
             background: #5a6268;
         }
-        #stopBtn {
+        button.danger {
             background: #dc3545;
+            color: white;
         }
-        #stopBtn:hover:not(:disabled) {
+        button.danger:hover:not(:disabled) {
             background: #c82333;
         }
         button:disabled {
@@ -152,175 +238,109 @@
             color: #999;
             cursor: not-allowed;
             transform: none !important;
-            transition: none !important;
         }
-        #output {
-            background: #f8f9fa;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            padding: 20px;
-            min-height: 300px;
-            max-height: 500px;
-            overflow-y: auto;
-            font-family: 'Courier New', Consolas, monospace;
-            font-size: 14px;
-            line-height: 1.6;
-            white-space: pre-wrap;
-            word-wrap: break-word;
+        .button-group {
+            display: flex;
+            gap: 8px;
         }
-        .profiler-controls {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 2px solid #e0e0e0;
-        }
-        .profiler-controls h3 {
-            font-size: 16px;
+
+        /* Footer tools */
+        .footer-tools {
+            padding: 12px 20px;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
             color: #666;
-            margin-bottom: 10px;
         }
-        .profiler-controls button {
-            min-width: auto;
-            padding: 8px 16px;
-            font-size: 14px;
+        .footer-tools button {
+            padding: 6px 12px;
+            font-size: 12px;
         }
         #memoryInfo {
-            background: #e7f3ff;
-            border-left: 4px solid #667eea;
-            padding: 12px;
-            border-radius: 4px;
             font-family: 'Courier New', monospace;
-            font-size: 13px;
-            margin-top: 10px;
         }
-        .footer {
+
+        /* Empty state */
+        .empty-state {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #999;
             text-align: center;
-            color: white;
-            margin-top: 20px;
+            padding: 40px;
+        }
+        .empty-state h3 {
+            font-size: 18px;
+            margin-bottom: 8px;
+        }
+        .empty-state p {
             font-size: 14px;
-        }
-        .thinking-section {
-            margin: 20px 0;
-            border: 2px solid #667eea;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        .thinking-toggle {
-            width: 100%;
-            padding: 12px 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            font-size: 14px;
-            font-weight: 600;
-            text-align: left;
-            cursor: pointer;
-            transition: opacity 0.3s;
-        }
-
-        .thinking-toggle:hover {
-            opacity: 0.9;
-        }
-
-        .thinking-output {
-            padding: 20px;
-            background: #f0f4ff;
-            border-top: 1px solid #667eea;
-            font-family: 'Courier New', monospace;
-            font-size: 13px;
-            line-height: 1.6;
-            color: #333;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            max-height: 400px;
-            overflow-y: auto;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Header -->
         <div class="header">
-            <h1>
-                <span>Qwen3 Text Generation</span>
-            </h1>
+            <h1>🤖 Qwen3 Chat</h1>
             <p>
-                Running the <strong>Qwen3-0.6B</strong> language model directly in your browser using WebAssembly.
-                Qwen3 is developed by the <a href="https://github.com/QwenLM/Qwen" target="_blank">Qwen team at Alibaba Cloud</a>.
-            </p>
-            <p>
-                Quantized models from the <a href="https://huggingface.co/unsloth" target="_blank">Unsloth team</a>.
-            </p>
-            <p>
-                Implementation by <a href="https://github.com/DrJesseGlass" target="_blank">Jesse Glass</a> using the Candle framework.
+                Running <strong>Qwen3-0.6B</strong> in your browser via WebAssembly.
+                Built with <a href="https://github.com/huggingface/candle" target="_blank">Candle</a>.
             </p>
         </div>
 
-        <!-- Main Generation Panel -->
         <div class="main-panel">
-            <div id="status" class="status loading">Initializing...</div>
-
-            <div class="prompt-section">
-                <label for="prompt">Enter your prompt:</label>
-                <input
-                    id="prompt"
-                    type="text"
-                    placeholder="Once upon a time..."
-                    value="Once upon a time"
-                />
+            <!-- Status Bar -->
+            <div class="status-bar">
+                <span id="status" class="status loading">Initializing...</span>
+                <span id="cacheInfo" class="cache-info"></span>
             </div>
 
-            <div class="prompt-section">
-                <label for="maxTokens">Max tokens to generate:</label>
-                <input
-                    id="maxTokens"
-                    type="number"
-                    min="1"
-                    max="500"
-                    value="100"
-                />
-            </div>
-            <div class="prompt-section">
-                <label>
-                    <input type="checkbox" id="enableThinking" checked> Enable Reasoning Mode
-                </label>
-            </div>
-
-            <div class="controls">
-                <button id="generateBtn" class="primary" onclick="generate()" disabled>
-                    Generate
-                </button>
-                <button id="stopBtn" class="secondary" onclick="stopGeneration()" disabled>
-                    Stop Generation
-                </button>
-                <button id="resetBtn" class="secondary" onclick="reset()" disabled>
-                    Reset
-                </button>
-            </div>
-
-            <div id="thinkingSection" class="thinking-section" style="display: none;">
-            <button class="thinking-toggle" onclick="toggleThinking()">
-                <span id="thinkingArrow">▶</span> Reasoning Process
-            </button>
-            <div id="thinkingOutput" class="thinking-output" style="display: none;"></div>
-        </div>
-
-            <label>Response:</label>
-            <div id="output"></div>
-
-            <!-- Profiler Controls -->
-            <div class="profiler-controls">
-                <h3>Performance Tools</h3>
-                <div class="controls">
-                    <button class="secondary" onclick="showProfile()">Show Stats</button>
-                    <button class="secondary" onclick="updateMemory()">Update Memory</button>
+            <!-- Chat Thread -->
+            <div id="chatThread" class="chat-thread">
+                <div class="empty-state">
+                    <h3>Start a conversation</h3>
+                    <p>Type a message below to begin chatting with the model.</p>
                 </div>
-                <div id="memoryInfo">Loading memory info...</div>
             </div>
-        </div>
 
-        <div class="footer">
-            Built with WebAssembly and Rust • Quantized model for fast inference
+            <!-- Input Area -->
+            <div class="input-area">
+                <div class="input-wrapper">
+                    <textarea
+                        id="userInput"
+                        placeholder="Type your message... (Enter to send, Shift+Enter for newline)"
+                        rows="1"
+                        disabled
+                    ></textarea>
+                    <div class="input-options">
+                        <label>
+                            <input type="checkbox" id="enableThinking" checked>
+                            Thinking mode
+                        </label>
+                        <label>
+                            Max tokens:
+                            <input type="number" id="maxTokens" value="500" min="1" max="2000">
+                        </label>
+                    </div>
+                </div>
+                <div class="button-group">
+                    <button id="sendBtn" class="primary" onclick="sendMessage()" disabled>Send</button>
+                    <button id="stopBtn" class="danger" onclick="stopGeneration()" disabled>Stop</button>
+                </div>
+            </div>
+
+            <!-- Footer Tools -->
+            <div class="footer-tools">
+                <div>
+                    <button class="secondary" onclick="newConversation()">New Chat</button>
+                    <button class="secondary" onclick="showProfile()">Stats</button>
+                </div>
+                <span id="memoryInfo">Loading...</span>
+            </div>
         </div>
     </div>
 
@@ -329,53 +349,181 @@
             Model,
             profile_print_stats,
             profile_clear,
-            profile_enable,
             get_memory_info,
             get_wasm_memory_info,
-            log_memory
         } from './pkg/candle_wasm_example_quant_qwen3.js';
 
         let model = null;
         let shouldStopGeneration = false;
-        let fullResponse = '';
-        let showThinkingCollapsed = false;
+        let isGenerating = false;
+        let messageIdCounter = 0;
 
         const MODEL_FILE = window.location.pathname.endsWith('/') ?
             window.location.pathname.split('/').filter(Boolean).pop() + '.gguf' :
             'Qwen3-0.6B-Q8_0.gguf';
 
-        let currentThinkingMode = true;
+        // ====================================================================
+        // UI Helpers
+        // ====================================================================
+
+        function updateStatus(message, type = 'loading') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        function updateCacheInfo() {
+            if (!model) return;
+            const cached = model.get_cached_token_count();
+            const messages = model.get_message_count();
+            document.getElementById('cacheInfo').textContent =
+                `${messages} messages | ${cached} tokens cached`;
+        }
+
+        function updateMemory() {
+            try {
+                const jsMemory = get_memory_info();
+                const wasmMemory = get_wasm_memory_info();
+                document.getElementById('memoryInfo').textContent =
+                    `${wasmMemory}`;
+            } catch (e) {
+                document.getElementById('memoryInfo').textContent = '';
+            }
+        }
+
+        function setUIEnabled(enabled) {
+            document.getElementById('userInput').disabled = !enabled;
+            document.getElementById('sendBtn').disabled = !enabled;
+            document.getElementById('stopBtn').disabled = enabled;
+            document.getElementById('maxTokens').disabled = !enabled;
+            document.getElementById('enableThinking').disabled = !enabled;
+        }
+
+        // ====================================================================
+        // Chat Thread Management
+        // ====================================================================
+
+        function clearChatThread() {
+            const thread = document.getElementById('chatThread');
+            thread.innerHTML = `
+                <div class="empty-state">
+                    <h3>Start a conversation</h3>
+                    <p>Type a message below to begin chatting with the model.</p>
+                </div>
+            `;
+        }
+
+        function addUserMessage(content) {
+            const thread = document.getElementById('chatThread');
+
+            // Remove empty state if present
+            const emptyState = thread.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message user';
+            messageDiv.innerHTML = `<div class="message-content">${escapeHtml(content)}</div>`;
+            thread.appendChild(messageDiv);
+            thread.scrollTop = thread.scrollHeight;
+        }
+
+        function addAssistantMessage() {
+            const thread = document.getElementById('chatThread');
+            const id = ++messageIdCounter;
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message assistant';
+            messageDiv.id = `assistant-msg-${id}`;
+            messageDiv.innerHTML = `
+                <div class="thinking-wrapper" id="thinking-wrapper-${id}" style="display: none;">
+                    <button class="thinking-toggle" onclick="toggleThinking(${id})">
+                        <span id="thinking-arrow-${id}">▶</span> Reasoning
+                    </button>
+                    <div class="thinking-content collapsed" id="thinking-content-${id}"></div>
+                </div>
+                <div class="message-content" id="response-content-${id}"></div>
+                <span class="streaming-indicator" id="streaming-${id}"></span>
+            `;
+            thread.appendChild(messageDiv);
+            thread.scrollTop = thread.scrollHeight;
+
+            return id;
+        }
+
+        function updateAssistantMessage(id, thinking, response, isComplete = false) {
+            const thinkingWrapper = document.getElementById(`thinking-wrapper-${id}`);
+            const thinkingContent = document.getElementById(`thinking-content-${id}`);
+            const responseContent = document.getElementById(`response-content-${id}`);
+            const streamingIndicator = document.getElementById(`streaming-${id}`);
+
+            if (thinking) {
+                thinkingWrapper.style.display = 'block';
+                thinkingContent.textContent = thinking;
+            }
+
+            if (response) {
+                responseContent.textContent = response;
+            }
+
+            if (isComplete && streamingIndicator) {
+                streamingIndicator.remove();
+            }
+
+            // Auto-scroll
+            const thread = document.getElementById('chatThread');
+            thread.scrollTop = thread.scrollHeight;
+        }
+
+        window.toggleThinking = function(id) {
+            const content = document.getElementById(`thinking-content-${id}`);
+            const arrow = document.getElementById(`thinking-arrow-${id}`);
+
+            if (content.classList.contains('collapsed')) {
+                content.classList.remove('collapsed');
+                arrow.textContent = '▼';
+            } else {
+                content.classList.add('collapsed');
+                arrow.textContent = '▶';
+            }
+        };
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ====================================================================
+        // Response Parsing
+        // ====================================================================
 
         function parseResponse(fullText, enableThinking) {
             if (enableThinking) {
                 const lastThinkStart = fullText.lastIndexOf('<think>');
                 const lastThinkEnd = fullText.lastIndexOf('</think>');
 
-                // If last <think> comes after last </think>, we're still in thinking mode
                 if (lastThinkStart > lastThinkEnd) {
-                    // Currently inside a <think> block - everything is thinking
+                    // Still inside thinking
                     return {
                         thinking: cleanTokens(fullText),
                         response: ''
                     };
                 } else if (lastThinkEnd !== -1) {
-                    // We have a closed </think> and no <think> after it - split here
+                    // Thinking complete
                     const thinkingRaw = fullText.substring(0, lastThinkEnd);
-                    const responseRaw = fullText.substring(lastThinkEnd + 8); // Skip '</think>'
-
+                    const responseRaw = fullText.substring(lastThinkEnd + 8);
                     return {
                         thinking: cleanTokens(thinkingRaw),
                         response: cleanTokens(responseRaw)
                     };
                 } else {
-                    // No tags yet - still building initial thinking
+                    // No tags yet
                     return {
                         thinking: cleanTokens(fullText),
                         response: ''
                     };
                 }
             } else {
-                // Non-thinking mode: everything is response
                 return {
                     thinking: '',
                     response: cleanTokens(fullText)
@@ -393,42 +541,150 @@
                 .trim();
         }
 
-        window.toggleThinking = function() {
-            const output = document.getElementById('thinkingOutput');
-            const arrow = document.getElementById('thinkingArrow');
-            showThinkingCollapsed = !showThinkingCollapsed;
+        // ====================================================================
+        // Generation
+        // ====================================================================
 
-            if (showThinkingCollapsed) {
-                output.style.display = 'block';
-                arrow.textContent = '▼';
-            } else {
-                output.style.display = 'none';
-                arrow.textContent = '▶';
+        window.sendMessage = async function() {
+            if (!model || isGenerating) return;
+
+            const input = document.getElementById('userInput');
+            const userMessage = input.value.trim();
+            if (!userMessage) return;
+
+            // Clear input and disable UI
+            input.value = '';
+            input.style.height = 'auto';
+            setUIEnabled(false);
+            isGenerating = true;
+            shouldStopGeneration = false;
+
+            // Add user message to thread
+            addUserMessage(userMessage);
+
+            // Add assistant message placeholder
+            const msgId = addAssistantMessage();
+            const enableThinking = document.getElementById('enableThinking').checked;
+            const maxTokens = parseInt(document.getElementById('maxTokens').value) || 500;
+
+            try {
+                updateStatus('Generating...', 'loading');
+                profile_clear();
+                const startTime = Date.now();
+
+                // Start chat turn (uses KV cache efficiently!)
+                // Pass enableThinking so each message can have different thinking mode
+                const firstToken = model.chat(
+                    userMessage,
+                    0.6,    // temperature
+                    0.9,    // top_p
+                    1.1,    // repeat_penalty
+                    64,     // repeat_last_n
+                    Date.now(), // seed
+                    enableThinking  // per-message thinking mode
+                );
+
+                let fullResponse = firstToken;
+                let tokenCount = 1;
+
+                // Parse and display
+                let parsed = parseResponse(fullResponse, enableThinking);
+                updateAssistantMessage(msgId, parsed.thinking, parsed.response);
+
+                // Generate remaining tokens
+                for (let i = 0; i < maxTokens - 1; i++) {
+                    if (shouldStopGeneration) {
+                        updateStatus('Stopped', 'ready');
+                        break;
+                    }
+
+                    if (model.is_eos()) {
+                        break;
+                    }
+
+                    const token = model.next_token();
+                    fullResponse += token;
+                    tokenCount++;
+
+                    parsed = parseResponse(fullResponse, enableThinking);
+                    updateAssistantMessage(msgId, parsed.thinking, parsed.response);
+
+                    // Update status periodically
+                    if (tokenCount % 10 === 0) {
+                        const elapsed = (Date.now() - startTime) / 1000;
+                        const tokensPerSec = (tokenCount / elapsed).toFixed(1);
+                        updateStatus(`Generating... ${tokenCount} tokens (${tokensPerSec} tok/s)`, 'loading');
+                        updateCacheInfo();
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+
+                // End the turn - this records the response in conversation history
+                model.end_turn();
+
+                // Final update
+                updateAssistantMessage(msgId, parsed.thinking, parsed.response, true);
+
+                const totalTime = (Date.now() - startTime) / 1000;
+                const tokensPerSec = (tokenCount / totalTime).toFixed(1);
+                updateStatus(`${tokenCount} tokens in ${totalTime.toFixed(1)}s (${tokensPerSec} tok/s)`, 'ready');
+                updateCacheInfo();
+                updateMemory();
+
+            } catch (e) {
+                updateStatus(`Error: ${e.message}`, 'error');
+                console.error('Generation error:', e);
+                updateAssistantMessage(msgId, '', `Error: ${e.message}`, true);
+            } finally {
+                isGenerating = false;
+                setUIEnabled(true);
+                document.getElementById('userInput').focus();
             }
-        };
-
-        function updateStatus(message, type = 'loading') {
-            const status = document.getElementById('status');
-            status.textContent = message;
-            status.className = `status ${type}`;
-        }
-
-        window.updateMemory = function() {
-            const jsMemory = get_memory_info();
-            const wasmMemory = get_wasm_memory_info();
-            document.getElementById('memoryInfo').textContent =
-                `JS Heap: ${jsMemory}\nWASM: ${wasmMemory}`;
-        };
-
-        window.showProfile = function() {
-            profile_print_stats();
-            updateStatus('Performance stats printed to console', 'ready');
         };
 
         window.stopGeneration = function() {
             shouldStopGeneration = true;
-            updateStatus('Stopping generation...', 'loading');
         };
+
+        window.newConversation = function() {
+            if (!model) return;
+
+            const enableThinking = document.getElementById('enableThinking').checked;
+            model.start_conversation(null, enableThinking);
+
+            clearChatThread();
+            updateStatus('New conversation started', 'ready');
+            updateCacheInfo();
+            profile_clear();
+        };
+
+        window.showProfile = function() {
+            profile_print_stats();
+            console.log('Conversation JSON:', model?.get_conversation_json());
+        };
+
+        // ====================================================================
+        // Input Handling
+        // ====================================================================
+
+        document.getElementById('userInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Auto-resize textarea
+        document.getElementById('userInput').addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+
+        // Note: Thinking mode checkbox now works per-message, no need to restart conversation
+
+        // ====================================================================
+        // Model Loading
+        // ====================================================================
 
         async function loadModel() {
             try {
@@ -461,146 +717,21 @@
                     new Uint8Array(config)
                 );
 
-                document.getElementById('generateBtn').disabled = false;
-                document.getElementById('resetBtn').disabled = false;
+                // Initialize conversation
+                const enableThinking = document.getElementById('enableThinking').checked;
+                model.start_conversation(null, enableThinking);
 
-                updateStatus('Model loaded and ready!', 'ready');
+                setUIEnabled(true);
+                updateStatus('Ready', 'ready');
+                updateCacheInfo();
                 updateMemory();
+                document.getElementById('userInput').focus();
 
             } catch (e) {
                 updateStatus(`Error: ${e.message}`, 'error');
                 console.error('Load error:', e);
             }
         }
-
-        window.generate = async function() {
-            if (!model) return;
-
-            const generateBtn = document.getElementById('generateBtn');
-            const promptInput = document.getElementById('prompt');
-            const resetBtn = document.getElementById('resetBtn');
-            const maxTokensInput = document.getElementById('maxTokens');
-            const stopBtn = document.getElementById('stopBtn');
-            const outputDiv = document.getElementById('output');
-            const thinkingOutputDiv = document.getElementById('thinkingOutput');
-            const thinkingSection = document.getElementById('thinkingSection');
-            const enableThinking = document.getElementById('enableThinking').checked;
-
-            // Disable UI
-            generateBtn.disabled = true;
-            promptInput.disabled = true;
-            resetBtn.disabled = true;
-            maxTokensInput.disabled = true;
-            stopBtn.disabled = false;
-
-            // Force browser to render the disabled state NOW
-            await new Promise(r => setTimeout(r, 0));
-
-            shouldStopGeneration = false;
-            fullResponse = '';
-            outputDiv.textContent = '';
-            thinkingOutputDiv.textContent = '';
-            thinkingSection.style.display = 'none';
-
-            try {
-                const userPrompt = promptInput.value;
-
-                updateStatus('Generating...', 'loading');
-                profile_clear();
-                const startTime = Date.now();
-
-                // Initialize with formatted prompt
-                const firstToken = model.init_with_prompt(
-                    userPrompt,
-                    0.0,    // temperature (0 for deterministic)
-                    0.0,    // top_p
-                    1.1,    // repeat_penalty
-                    64,     // repeat_last_n
-                    42,     // seed (fixed for reproducibility)
-                    enableThinking    // enable thinking
-                );
-
-                fullResponse += firstToken;
-                let parsed = parseResponse(fullResponse, enableThinking);
-
-                if (parsed.thinking) {
-                    thinkingSection.style.display = 'block';
-                    thinkingOutputDiv.textContent = parsed.thinking;
-                }
-                if (parsed.response) {
-                    outputDiv.textContent = parsed.response;
-                }
-
-                let tokenCount = 1;
-                const maxTokens = parseInt(maxTokensInput.value) || 100;
-
-                // Generate tokens
-                for (let i = 0; i < maxTokens - 1; i++) {
-                    if (shouldStopGeneration) {
-                        updateStatus('Generation stopped by user', 'ready');
-                        break;
-                    }
-
-                    if (model.is_eos()) {
-                        updateStatus('Generation complete (EOS reached)', 'ready');
-                        break;
-                    }
-
-                    const token = model.next_token();
-                    fullResponse += token;
-                    tokenCount++;
-
-                    // Parse and update displays
-                    parsed = parseResponse(fullResponse, enableThinking);
-
-                    if (parsed.thinking) {
-                        thinkingSection.style.display = 'block';
-                        thinkingOutputDiv.textContent = parsed.thinking;
-                    }
-                    if (parsed.response) {
-                        outputDiv.textContent = parsed.response;
-                    }
-
-                    // Update status every 10 tokens
-                    if (tokenCount % 10 === 0) {
-                        const elapsed = (Date.now() - startTime) / 1000;
-                        const tokensPerSec = (tokenCount / elapsed).toFixed(2);
-                        updateStatus(`Generating... ${tokenCount} tokens (${tokensPerSec} tok/s)`, 'loading');
-                        await new Promise(r => setTimeout(r, 0));
-                    }
-                }
-
-                const totalTime = (Date.now() - startTime) / 1000;
-                const tokensPerSec = (tokenCount / totalTime).toFixed(2);
-                updateStatus(
-                    `Generated ${tokenCount} tokens in ${totalTime.toFixed(2)}s (${tokensPerSec} tok/s)`,
-                    'ready'
-                );
-
-                updateMemory();
-
-            } catch (e) {
-                updateStatus(`Error: ${e.message}`, 'error');
-                console.error('Generation error:', e);
-            } finally {
-                generateBtn.disabled = false;
-                stopBtn.disabled = true;
-                resetBtn.disabled = false;
-                promptInput.disabled = false;
-                maxTokensInput.disabled = false;
-            }
-        };
-
-        window.reset = function() {
-            if (!model) return;
-            model.reset();
-            document.getElementById('output').textContent = '';
-            document.getElementById('thinkingOutput').textContent = '';
-            document.getElementById('thinkingSection').style.display = 'none';
-            fullResponse = '';
-            updateStatus('Model reset and ready!', 'ready');
-            profile_clear();
-        };
 
         // Start loading
         loadModel();
