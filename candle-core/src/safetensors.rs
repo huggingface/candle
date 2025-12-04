@@ -228,10 +228,18 @@ impl Tensor {
                 let storage = match device {
                     Device::Cpu => {
                         let cpu_storage = match dtype {
-                            DType::F6E2M3 => crate::cpu_backend::CpuStorage::F6E2M3(data.to_vec()),
-                            DType::F6E3M2 => crate::cpu_backend::CpuStorage::F6E3M2(data.to_vec()),
-                            DType::F4 => crate::cpu_backend::CpuStorage::F4(data.to_vec()),
-                            DType::F8E8M0 => crate::cpu_backend::CpuStorage::F8E8M0(data.to_vec()),
+                            DType::F6E2M3 => crate::cpu_backend::CpuStorage::F6E2M3(
+                                crate::cpu_backend::to_storage_vec(data.to_vec()),
+                            ),
+                            DType::F6E3M2 => crate::cpu_backend::CpuStorage::F6E3M2(
+                                crate::cpu_backend::to_storage_vec(data.to_vec()),
+                            ),
+                            DType::F4 => crate::cpu_backend::CpuStorage::F4(
+                                crate::cpu_backend::to_storage_vec(data.to_vec()),
+                            ),
+                            DType::F8E8M0 => crate::cpu_backend::CpuStorage::F8E8M0(
+                                crate::cpu_backend::to_storage_vec(data.to_vec()),
+                            ),
                             _ => unreachable!(),
                         };
                         Storage::Cpu(cpu_storage)
@@ -328,10 +336,18 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
     let storage = match device {
         Device::Cpu => {
             let cpu_storage = match dtype {
-                DType::F6E2M3 => crate::cpu_backend::CpuStorage::F6E2M3(data.to_vec()),
-                DType::F6E3M2 => crate::cpu_backend::CpuStorage::F6E3M2(data.to_vec()),
-                DType::F4 => crate::cpu_backend::CpuStorage::F4(data.to_vec()),
-                DType::F8E8M0 => crate::cpu_backend::CpuStorage::F8E8M0(data.to_vec()),
+                DType::F6E2M3 => crate::cpu_backend::CpuStorage::F6E2M3(
+                    crate::cpu_backend::to_storage_vec(data.to_vec()),
+                ),
+                DType::F6E3M2 => crate::cpu_backend::CpuStorage::F6E3M2(
+                    crate::cpu_backend::to_storage_vec(data.to_vec()),
+                ),
+                DType::F4 => crate::cpu_backend::CpuStorage::F4(
+                    crate::cpu_backend::to_storage_vec(data.to_vec()),
+                ),
+                DType::F8E8M0 => crate::cpu_backend::CpuStorage::F8E8M0(
+                    crate::cpu_backend::to_storage_vec(data.to_vec()),
+                ),
                 _ => unreachable!(),
             };
             Storage::Cpu(cpu_storage)
