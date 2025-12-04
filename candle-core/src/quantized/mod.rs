@@ -642,6 +642,34 @@ impl QTensor {
     pub fn data(&self) -> Result<Cow<'_, [u8]>> {
         self.storage.data()
     }
+
+    pub fn indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        match &self.storage {
+            QStorage::Cuda(s) => match (&*x.storage(), &*ids.storage()) {
+                (Storage::Cuda(x_storage), Storage::Cuda(ids_storage)) => {
+                    let (storage, out_shape) = s.indexed_moe_forward(
+                        self.shape(),
+                        x_storage,
+                        x.layout(),
+                        ids_storage,
+                        ids.layout(),
+                    )?;
+                    Ok(crate::tensor::from_storage(
+                        Storage::Cuda(storage),
+                        out_shape,
+                        crate::op::BackpropOp::none(),
+                        false,
+                    ))
+                }
+                _ => {
+                    panic!("Non-cuda indexed_moe_forward is not implemented!");
+                }
+            },
+            _ => {
+                panic!("indexed_moe_forward is not implemented in this platform!");
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -712,6 +740,15 @@ impl QMatMul {
             _ => w.t()?,
         };
         xs.to_dtype(DType::F16)?.matmul(&w)?.to_dtype(in_dtype)
+    }
+
+    pub fn indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::QTensor(t) => t.indexed_moe_forward(x, ids),
+            _ => {
+                panic!("Not implemented!")
+            }
+        }
     }
 }
 
