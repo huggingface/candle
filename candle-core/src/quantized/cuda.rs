@@ -742,6 +742,11 @@ impl QCudaStorage {
             .memcpy_dtoh(&self.data.inner.slice(..self.data.len), &mut out)?;
         Ok(out)
     }
+
+    pub fn device_ptr(&self) -> Result<*const u8> {
+        use cudarc::driver::DevicePtr;
+        Ok(self.data.inner.device_ptr(self.data.inner.stream()).0 as *const u8)
+    }
 }
 
 impl QCudaStorage {
