@@ -63,6 +63,13 @@ pub fn get_block_dims(dim0: usize, dim1: usize, dim2: usize) -> MTLSize {
     }
 }
 
+/// Calculate preferred tile size given the size of a data type in bytes.
+/// f32 -> 2, f16 -> 4, u8 -> 8.
+#[inline(always)]
+pub fn get_tile_size(dtype_size: usize) -> usize {
+    1.max(8 / dtype_size)
+}
+
 pub fn set_param<P: EncoderParam>(encoder: &ComputeCommandEncoder, position: usize, data: P) {
     <P as EncoderParam>::set_param(encoder, position, data)
 }

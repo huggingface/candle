@@ -1,6 +1,6 @@
 use crate::kernels::macros::ops;
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{get_block_dims, linear_split};
+use crate::{get_block_dims, get_tile_size, linear_split};
 use crate::{
     set_params, Buffer, ComputeCommandEncoder, Device, EncoderParam, Kernels, MetalKernelError,
     Source,
@@ -18,6 +18,7 @@ pub fn call_unary_contiguous(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     kernel_name: contiguous::Kernel,
+    dtype_size: usize,
     length: usize,
     input: BufferOffset,
     output: &Buffer,
@@ -27,10 +28,12 @@ pub fn call_unary_contiguous(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
 
     set_params!(encoder, (length, &input, output));
 
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -52,6 +55,7 @@ pub fn call_unary_contiguous_tiled(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let tile_size = 2;
     let tiles = length.div_ceil(tile_size);
+    //let tiles = tiles.min(length);
 
     encoder.set_compute_pipeline_state(&pipeline);
 

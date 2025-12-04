@@ -671,7 +671,7 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, layout, self.dtype);
 
         match (el_count % 2, dtype, layout.is_contiguous()) {
-            (0, DType::BF16 | DType::F16, true) => {
+            (0, DType::U32, true) => {
                 use candle_metal_kernels::unary::contiguous_tiled;
                 let kernel_name = match (B::KERNEL, dtype) {
                     ("uabs", DType::F16) => contiguous_tiled::abs::HALF,
@@ -814,11 +814,13 @@ impl BackendStorage for MetalStorage {
                         crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
                     }
                 };
+
                 candle_metal_kernels::call_unary_contiguous(
                     &device.device,
                     &encoder,
                     &device.kernels,
                     kernel_name,
+                    dtype.size_in_bytes(),
                     el_count,
                     src,
                     &buffer,

@@ -52,11 +52,13 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
         offset_in_bytes: 0,
     };
     let output = new_buffer(&device, v);
+    let tile_size = 64 / size_of<T>();
     call_unary_contiguous(
         &device,
         &command_buffer,
         &kernels,
         name,
+        tile_size,
         v.len(),
         input,
         &output,

@@ -18,6 +18,50 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
+template <typename T, typename U, typename Unary, int N = 8 / sizeof(T)>
+[[kernel]] void unary_kernel(
+    constant size_t &dim,
+    device const T* input,
+    device U* output,
+    uint tid [[thread_position_in_grid]]
+) {
+    tid *= N;
+    if (N > 1 && tid + N > dim) {
+        for (int i = 0; tid + i < dim; ++i) {
+            output[tid + i] = static_cast<U>(Unary()(input[tid + i]));
+        }
+    } else {
+        for (int i = 0; i < N; ++i) {
+            output[tid + i] = static_cast<U>(Unary()(input[tid + i]));
+        }
+    }
+}
+
+template <typename T, typename U, typename Unary, int N = 8 / sizeof(T)>
+[[kernel]] void unary_kernel_strided(
+    constant size_t &dim,
+    constant size_t &num_dims,
+    constant size_t *dims,
+    constant size_t *strides,
+    constant T &input,
+    device U *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    tid *= N;
+    if (N > 1 && tid + N > dim) {
+        for (int i = 0; tid + i < dim; ++i) {
+            auto idx = get_strided_index(tid + i, num_dims, dims, strides);
+            output[idx] = static_cast<U>(Unary()(input[idx]));
+        }
+    } else {
+        for (int i = 0; i < N; ++i) {
+            auto idx = get_strided_index(tid + i, num_dims, dims, strides);
+            output[idx] = static_cast<U>(Unary()(input[idx]));
+        }
+    }
+}
+
+
 template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
 template <typename T> METAL_FUNC T recip(T in){ return T(1.0 / in); }
 template <typename T> METAL_FUNC T neg(T in){ return -in; }
@@ -45,9 +89,9 @@ template <typename T> METAL_FUNC T erf(T in){
     return T(sign*y);
 }
 template <typename T> METAL_FUNC T id(T in) { return in; }
-template <typename T> METAL_FUNC T gelu_erf(T x) {
-    return T(x * (1 + erf(x * M_SQRT1_2_F)) / 2);
-}
+//template <typename T> METAL_FUNC T gelu_erf(T x) {
+//    return T(x * (1 + erf(x * M_SQRT1_2_F)) / 2);
+//}
 template <typename T> METAL_FUNC T gelu(T x) {
     if (x > 5) {
         return x;
@@ -70,6 +114,21 @@ template <typename T> METAL_FUNC T silu(T in){
 template <typename T> METAL_FUNC T sigmoid(T in) {
     return recip(static_cast<T>(1) + exp(-in));
 }
+
+struct gelu_erf {
+  template <typename T>
+  T operator()(T x) {
+      return static_cast<T>(x * (1 + erf(x * M_SQRT1_2_F)) / 2);
+  }
+};
+
+struct Sqrt {
+  template <typename T>
+  T operator()(T x) {
+      return static_cast<T>(sqrt(x));
+  }
+};
+
 
 #define TILE_SIZE 2
 
@@ -148,6 +207,26 @@ kernel void FN_NAME##_##tiled( \
         output[idx] = TYPENAME(FN(float(input[idx]))); \
     } \
 }
+#define init_kernel(name, func, ...) \
+  template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
+
+
+#define init_unary(op_name, unary_op, tname, t) \
+    init_kernel(#op_name "_" #tname, unary_kernel, t, t, unary_op)
+
+#if defined(__HAVE_BFLOAT__)
+#define init_unary_float(op_name, unary_op)   \
+    init_unary(op_name, unary_op, f32, float) \
+    init_unary(op_name, unary_op, f16, half)  \
+    init_unary(op_name, unary_op, bf16, bfloat)
+#else
+#define init_unary_float(op_name, unary_op)   \
+    init_unary(op_name, unary_op, f32, float) \
+    init_unary(op_name, unary_op, f16, half)
+#endif
+
+init_unary_float(gelu_erf, gelu_erf);
+init_unary_float(sqrt, Sqrt);
 
 #define UNARY_OP(NAME) \
 UNARY(NAME, float, NAME##_f32, NAME##_f32_strided); \
@@ -185,7 +264,7 @@ CONST_SET(uint32_t, const_set_u32)
 UNARY_OP(cos)
 UNARY_OP(sin)
 UNARY_OP(sqr)
-UNARY_OP(sqrt)
+//UNARY_OP(sqrt)
 UNARY_OP(neg)
 UNARY_OP(exp)
 UNARY_OP(log)
@@ -195,7 +274,7 @@ UNARY_OP(abs)
 UNARY_OP(ceil)
 UNARY_OP(floor)
 UNARY_OP(round)
-UNARY_OP(gelu_erf)
+//UNARY_OP(gelu_erf)
 UNARY_OP(erf)
 UNARY_OP(recip)
 UNARY_OP(relu)
@@ -221,7 +300,7 @@ CONST_SET(int64_t, const_set_i64)
 BFLOAT_UNARY_OP(cos)
 BFLOAT_UNARY_OP(sin)
 BFLOAT_UNARY_OP(sqr)
-BFLOAT_UNARY_OP(sqrt)
+//BFLOAT_UNARY_OP(sqrt)
 BFLOAT_UNARY_OP(neg)
 BFLOAT_UNARY_OP(exp)
 BFLOAT_UNARY_OP(log)
@@ -231,7 +310,7 @@ BFLOAT_UNARY_OP(abs)
 BFLOAT_UNARY_OP(ceil)
 BFLOAT_UNARY_OP(floor)
 BFLOAT_UNARY_OP(round)
-BFLOAT_UNARY_OP(gelu_erf)
+//BFLOAT_UNARY_OP(gelu_erf)
 BFLOAT_UNARY_OP(erf)
 BFLOAT_UNARY_OP(recip)
 BFLOAT_UNARY_OP(relu)
