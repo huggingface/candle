@@ -1331,6 +1331,7 @@ impl BackendStorage for MetalStorage {
         let out_w = (width - w_k) / w_stride + 1;
         let out_h = (height - h_k) / h_stride + 1;
         let dst_el = out_w * out_h * b_size * channels;
+        let padding = 0;
         let buffer = self.device.new_buffer(dst_el, self.dtype, "avg_pool2d")?;
         let encoder = self.device.command_encoder()?;
         encoder.set_label("avg_pool2d");
@@ -1347,6 +1348,7 @@ impl BackendStorage for MetalStorage {
             h_k,
             w_stride,
             h_stride,
+            padding,
             &self.buffer,
             &buffer,
         )
@@ -1359,6 +1361,7 @@ impl BackendStorage for MetalStorage {
         inp_l: &Layout,
         (w_k, h_k): (usize, usize),
         (w_stride, h_stride): (usize, usize),
+        padding: usize,
     ) -> Result<Self> {
         let shape = inp_l.shape();
         let (b_size, channels, width, height) = shape.dims4()?;
@@ -1371,8 +1374,13 @@ impl BackendStorage for MetalStorage {
             DType::U32 => "max_pool2d_u32",
             dtype => crate::bail!("Metal max_pool2d {dtype:?} not implemented"),
         };
-        let out_w = (width - w_k) / w_stride + 1;
-        let out_h = (height - h_k) / h_stride + 1;
+
+        // Calculate output dimensions with padding
+        let width_padded = width + 2 * padding;
+        let height_padded = height + 2 * padding;
+        let out_w = (width_padded - w_k) / w_stride + 1;
+        let out_h = (height_padded - h_k) / h_stride + 1;
+
         let dst_el = out_w * out_h * b_size * channels;
         let buffer = self.device.new_buffer(dst_el, self.dtype, "max_pool2d")?;
         let encoder = self.device.command_encoder()?;
@@ -1390,6 +1398,7 @@ impl BackendStorage for MetalStorage {
             h_k,
             w_stride,
             h_stride,
+            padding,
             &self.buffer,
             &buffer,
         )
