@@ -253,7 +253,7 @@ pub fn get_memory_info() -> String {
     let memory = web_sys::window()
         .and_then(|w| w.performance())
         .and_then(|p| js_sys::Reflect::get(&p, &"memory".into()).ok())
-        .and_then(|m| {
+        .map(|m| {
             let used = js_sys::Reflect::get(&m, &"usedJSHeapSize".into())
                 .ok()
                 .and_then(|v| v.as_f64())
@@ -266,7 +266,7 @@ pub fn get_memory_info() -> String {
                 .ok()
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0);
-            Some((used, total, limit))
+            (used, total, limit)
         });
 
     if let Some((used, total, limit)) = memory {
@@ -308,5 +308,5 @@ pub fn get_wasm_memory_info() -> String {
 #[wasm_bindgen]
 pub fn log_wasm_memory() {
     let info = get_wasm_memory_info();
-    web_sys::console::log_1(&format!("{}", info).into());
+    web_sys::console::log_1(&info.to_string().into());
 }

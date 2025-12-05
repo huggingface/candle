@@ -43,11 +43,7 @@ pub struct Model {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn load(
-        weights: Vec<u8>,
-        tokenizer: Vec<u8>,
-        _config: Vec<u8>,
-    ) -> Result<Model, JsError> {
+    pub fn load(weights: Vec<u8>, tokenizer: Vec<u8>, _config: Vec<u8>) -> Result<Model, JsError> {
         let _prof = ProfileGuard::new("total_load");
         console_error_panic_hook::set_once();
 
@@ -130,7 +126,11 @@ impl Model {
         self.is_first_turn = true;
 
         // Build proper system prompt with metadata
-        let reasoning_mode = if enable_thinking { "/think" } else { "/no_think" };
+        let reasoning_mode = if enable_thinking {
+            "/think"
+        } else {
+            "/no_think"
+        };
         let default_system = format!(
             "## Metadata\n\n\
 Reasoning Mode: {}\n\n\
@@ -147,10 +147,7 @@ You are a helpful AI assistant.",
 
         self.conversation = Some(conv);
 
-        console_log!(
-            "Conversation started (reasoning mode: {})",
-            reasoning_mode
-        );
+        console_log!("Conversation started (reasoning mode: {})", reasoning_mode);
     }
 
     /// Load conversation template from tokenizer_config.json content.
@@ -194,6 +191,7 @@ You are a helpful AI assistant.",
     /// - Subsequent turns: tokenizes only the continuation (close prev + new user + assistant start)
     ///
     /// The `enable_thinking` parameter controls whether this specific message should use thinking mode.
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen]
     pub fn chat(
         &mut self,
@@ -232,14 +230,17 @@ You are a helpful AI assistant.",
 
         // Tokenize ONLY new content (not the full conversation)
         let new_tokens = if self.is_first_turn {
-            let conv = self.conversation.as_mut()
+            let conv = self
+                .conversation
+                .as_mut()
                 .ok_or_else(|| JsError::new("No conversation initialized"))?;
 
             // Update thinking mode for this specific turn
             conv.set_options(ChatTemplateOptions::for_generation().thinking(enable_thinking));
 
             // user_turn() adds the message AND returns the formatted prompt
-            let prompt = conv.user_turn(&user_message)
+            let prompt = conv
+                .user_turn(&user_message)
                 .map_err(|e| JsError::new(&e.to_string()))?;
 
             console_log!("First turn prompt:\n{}", prompt);
@@ -402,7 +403,7 @@ You are a helpful AI assistant.",
     pub fn is_eos(&self) -> bool {
         self.current_gen_tokens
             .last()
-            .map_or(false, |&t| t == self.eos_token)
+            .is_some_and(|&t| t == self.eos_token)
     }
 
     /// Get total token count in KV cache.
@@ -441,7 +442,6 @@ You are a helpful AI assistant.",
         self.is_first_turn = true;
         self.model.clear_kv_cache();
     }
-
 }
 
 // ============================================================================
@@ -472,8 +472,7 @@ impl Model {
 
         let result = format!(
             "<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n{}",
-            user_message,
-            assistant_start
+            user_message, assistant_start
         );
 
         console_log!("Continuation format:\n{}", result);
@@ -483,7 +482,11 @@ impl Model {
     /// Process prompt tokens and return the first generated token.
     /// Note: This updates KV cache internally but does NOT modify kv_tokens.
     /// The caller (chat/init_with_prompt) is responsible for token tracking.
-    fn process_prompt(&mut self, tokens: &[u32], start_pos: usize) -> candle::Result<(String, u32)> {
+    fn process_prompt(
+        &mut self,
+        tokens: &[u32],
+        start_pos: usize,
+    ) -> candle::Result<(String, u32)> {
         let _prof = ProfileGuard::new("process_prompt");
 
         let dev = Device::Cpu;
