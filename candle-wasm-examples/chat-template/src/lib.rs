@@ -248,8 +248,8 @@ impl ChatTemplate {
     ///
     /// This is the primary method for WASM - pass the JSON string from JavaScript.
     pub fn from_config_json(json: &str) -> Result<Self, ChatTemplateError> {
-        let config: TokenConfig = serde_json::from_str(json)
-            .map_err(|e| ChatTemplateError::ParseError(e.to_string()))?;
+        let config: TokenConfig =
+            serde_json::from_str(json).map_err(|e| ChatTemplateError::ParseError(e.to_string()))?;
 
         let template = match config.chat_template {
             Some(ChatTemplateConfig::Single(t)) => t,
@@ -602,12 +602,9 @@ impl Conversation {
     }
 
     /// Load conversation from JSON string
-    pub fn from_json(
-        template: ChatTemplate,
-        json: &str,
-    ) -> Result<Self, ChatTemplateError> {
-        let messages: Vec<Message> = serde_json::from_str(json)
-            .map_err(|e| ChatTemplateError::ParseError(e.to_string()))?;
+    pub fn from_json(template: ChatTemplate, json: &str) -> Result<Self, ChatTemplateError> {
+        let messages: Vec<Message> =
+            serde_json::from_str(json).map_err(|e| ChatTemplateError::ParseError(e.to_string()))?;
 
         Ok(Self {
             messages,
@@ -661,10 +658,7 @@ mod tests {
     #[test]
     fn test_chatml_basic() {
         let template = ChatTemplate::chatml();
-        let messages = vec![
-            Message::system("You are helpful."),
-            Message::user("Hello"),
-        ];
+        let messages = vec![Message::system("You are helpful."), Message::user("Hello")];
 
         let result = template.apply_for_generation(&messages).unwrap();
 
@@ -694,7 +688,10 @@ mod tests {
         let messages = vec![Message::user("Think about this")];
 
         let result = template
-            .apply(&messages, &ChatTemplateOptions::for_generation().with_thinking())
+            .apply(
+                &messages,
+                &ChatTemplateOptions::for_generation().with_thinking(),
+            )
             .unwrap();
 
         assert!(result.contains("<think>"));
@@ -717,10 +714,7 @@ mod tests {
     #[test]
     fn test_llama3_format() {
         let template = ChatTemplate::llama3();
-        let messages = vec![
-            Message::system("You are helpful."),
-            Message::user("Hello"),
-        ];
+        let messages = vec![Message::system("You are helpful."), Message::user("Hello")];
 
         let result = template.apply_for_generation(&messages).unwrap();
 

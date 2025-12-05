@@ -232,39 +232,17 @@ You are a helpful AI assistant.",
 
         // Tokenize ONLY new content (not the full conversation)
         let new_tokens = if self.is_first_turn {
-            // First turn: build prompt with proper SmolLM3/Qwen3 format
-            // Reasoning mode (/think or /no_think) goes in SYSTEM prompt metadata
-            let reasoning_mode = if enable_thinking { "/think" } else { "/no_think" };
+            let conv = self.conversation.as_mut()
+                .ok_or_else(|| JsError::new("No conversation initialized"))?;
 
-            // Build assistant start with proper think tag format
-            let assistant_start = if enable_thinking {
-                "<|im_start|>assistant\n<think>\n" // Open for reasoning
-            } else {
-                "<|im_start|>assistant\n<think>\n\n</think>\n" // Empty = skip reasoning
-            };
+            // Update thinking mode for this specific turn
+            conv.set_options(ChatTemplateOptions::for_generation().thinking(enable_thinking));
 
-            let prompt = format!(
-                "<|im_start|>system\n\
-## Metadata\n\
-\n\
-Reasoning Mode: {}\n\
-\n\
-## Custom Instructions\n\
-\n\
-You are a helpful AI assistant.\n\
-<|im_end|>\n\
-<|im_start|>user\n\
-{}<|im_end|>\n\
-{}",
-                reasoning_mode, user_message, assistant_start
-            );
+            // user_turn() adds the message AND returns the formatted prompt
+            let prompt = conv.user_turn(&user_message)
+                .map_err(|e| JsError::new(&e.to_string()))?;
 
             console_log!("First turn prompt:\n{}", prompt);
-
-            // Also add to conversation history for export
-            if let Some(conv) = self.conversation.as_mut() {
-                conv.add_message(Message::user(&user_message));
-            }
 
             let tokens = {
                 let _prof = ProfileGuard::new("tokenize_prompt");
@@ -464,70 +442,6 @@ You are a helpful AI assistant.\n\
         self.model.clear_kv_cache();
     }
 
-    // ========================================================================
-    // Legacy API (single-turn, backward compatible)
-    // ========================================================================
-
-    /// Legacy single-turn API. Use `chat()` for multi-turn conversations.
-    #[wasm_bindgen]
-    pub fn init_with_prompt(
-        &mut self,
-        prompt: String,
-        temp: f64,
-        top_p: f64,
-        repeat_penalty: f32,
-        repeat_last_n: usize,
-        seed: f64,
-        enable_thinking: bool,
-    ) -> Result<String, JsError> {
-        let _prof = ProfileGuard::new("init_with_prompt");
-
-        self.enable_thinking = enable_thinking;
-
-        // Clear everything for legacy single-turn mode
-        self.model.clear_kv_cache();
-        self.kv_tokens.clear();
-        self.current_gen_tokens.clear();
-        self.current_response.clear();
-        self.conversation = None;
-        self.is_first_turn = true;
-
-        let temp = if temp <= 0. { None } else { Some(temp) };
-        let top_p = if top_p <= 0. || top_p >= 1. {
-            None
-        } else {
-            Some(top_p)
-        };
-
-        self.logits_processor = LogitsProcessor::new(seed as u64, temp, top_p);
-        self.repeat_penalty = repeat_penalty;
-        self.repeat_last_n = repeat_last_n;
-
-        // Format prompt using chat template
-        let formatted_prompt = self.format_single_turn(&prompt);
-
-        let tokens = {
-            let _prof = ProfileGuard::new("tokenize_prompt");
-            self.tokenizer
-                .encode(formatted_prompt, true)
-                .map_err(|m| JsError::new(&m.to_string()))?
-                .get_ids()
-                .to_vec()
-        };
-
-        console_log!("Prompt encoded to {} tokens", tokens.len());
-
-        let (text, first_gen_token) = self
-            .process_prompt(&tokens, 0)
-            .map_err(|m| JsError::new(&m.to_string()))?;
-
-        // Track tokens: prompt tokens are in KV cache, first_gen_token is NOT yet
-        self.kv_tokens = tokens;
-        self.current_gen_tokens.push(first_gen_token);
-        self.current_response.push_str(&text);
-
-        Ok(text)
-    }
 }
 
 // ============================================================================
@@ -535,33 +449,6 @@ You are a helpful AI assistant.\n\
 // ============================================================================
 
 impl Model {
-    /// Format a single-turn prompt using proper SmolLM3/Qwen3 chat template.
-    fn format_single_turn(&self, prompt: &str) -> String {
-        let reasoning_mode = if self.enable_thinking { "/think" } else { "/no_think" };
-
-        let assistant_start = if self.enable_thinking {
-            "<|im_start|>assistant\n<think>\n" // Open for reasoning
-        } else {
-            "<|im_start|>assistant\n<think>\n\n</think>\n" // Empty = skip reasoning
-        };
-
-        format!(
-            "<|im_start|>system\n\
-## Metadata\n\
-\n\
-Reasoning Mode: {}\n\
-\n\
-## Custom Instructions\n\
-\n\
-You are a helpful AI assistant.\n\
-<|im_end|>\n\
-<|im_start|>user\n\
-{}<|im_end|>\n\
-{}",
-            reasoning_mode, prompt, assistant_start
-        )
-    }
-
     /// Format the continuation for a subsequent turn.
     /// This only generates the tokens needed to: close previous turn, add user message, start assistant.
     /// The KV cache already has everything before this.
