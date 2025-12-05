@@ -190,8 +190,8 @@ impl ChatTemplate {
 
     /// Load chat template from tokenizer_config.json content
     pub fn from_tokenizer_config_str(json: &str) -> Result<Self, ChatTemplateError> {
-        let config: TokenConfig = serde_json::from_str(json)
-            .map_err(|e| ChatTemplateError::ParseError(e.to_string()))?;
+        let config: TokenConfig =
+            serde_json::from_str(json).map_err(|e| ChatTemplateError::ParseError(e.to_string()))?;
 
         let template = match config.chat_template {
             Some(ChatTemplateConfig::Single(t)) => t,
@@ -202,7 +202,7 @@ impl ChatTemplate {
                     .find(|t| t.name == "default")
                     .or_else(|| templates.first())
                     .map(|t| t.template.clone())
-                    .ok_or_else(|| ChatTemplateError::NoTemplate)?
+                    .ok_or(ChatTemplateError::NoTemplate)?
             }
             None => return Err(ChatTemplateError::NoTemplate),
         };
@@ -460,10 +460,7 @@ mod tests {
     #[test]
     fn test_chatml_basic() {
         let template = ChatTemplate::chatml();
-        let messages = vec![
-            Message::system("You are helpful."),
-            Message::user("Hello"),
-        ];
+        let messages = vec![Message::system("You are helpful."), Message::user("Hello")];
 
         let result = template.apply_for_generation(&messages).unwrap();
 
@@ -493,7 +490,10 @@ mod tests {
         let messages = vec![Message::user("Think about this")];
 
         let result = template
-            .apply(&messages, &ChatTemplateOptions::for_generation().with_thinking())
+            .apply(
+                &messages,
+                &ChatTemplateOptions::for_generation().with_thinking(),
+            )
             .unwrap();
 
         assert!(result.contains("<think>"));
@@ -502,10 +502,7 @@ mod tests {
     #[test]
     fn test_llama3_format() {
         let template = ChatTemplate::llama3();
-        let messages = vec![
-            Message::system("You are helpful."),
-            Message::user("Hello"),
-        ];
+        let messages = vec![Message::system("You are helpful."), Message::user("Hello")];
 
         let result = template.apply_for_generation(&messages).unwrap();
 

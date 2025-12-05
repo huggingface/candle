@@ -57,7 +57,7 @@ fn reconstruct_qk_weights(gguf_weight: &Tensor, _num_heads: usize) -> Result<Ten
         heads.push(Tensor::stack(&head_odd, 0)?);
     }
 
-    Ok(Tensor::cat(&heads, 0)?)
+    Tensor::cat(&heads, 0)
 }
 
 #[derive(Debug, Clone)]
@@ -381,7 +381,7 @@ impl QuantizedDecoderLayer {
         layer_idx: usize,
         rotary_emb: Option<Arc<RotaryEmbedding>>,
     ) -> Result<Self> {
-        let attn_vb = vb.pp(&format!("blk.{layer_idx}"));
+        let attn_vb = vb.pp(format!("blk.{layer_idx}"));
 
         Ok(Self {
             self_attn: QuantizedAttention::new(attn_vb.clone(), cfg, layer_idx, rotary_emb)?,

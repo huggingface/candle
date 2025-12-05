@@ -9,8 +9,8 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 
 use candle::{DType, Device, Tensor};
+use candle_examples::chat_template::{ChatTemplate, ChatTemplateOptions, Message};
 use candle_examples::token_output_stream::TokenOutputStream;
-use candle_examples::chat_template::{ChatTemplate, Message, ChatTemplateOptions};
 
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
@@ -321,7 +321,11 @@ fn format_prompt(prompt: &str, use_chat_template: bool, enable_thinking: bool) -
     // Build system message with SmolLM3's metadata format
     let now = chrono::Local::now();
     let today_date = now.format("%d %B %Y").to_string();
-    let reasoning_mode = if enable_thinking { "/think" } else { "/no_think" };
+    let reasoning_mode = if enable_thinking {
+        "/think"
+    } else {
+        "/no_think"
+    };
 
     let system_content = format!(
         "## Metadata\n\n\
@@ -333,10 +337,7 @@ fn format_prompt(prompt: &str, use_chat_template: bool, enable_thinking: bool) -
         today_date, reasoning_mode
     );
 
-    let messages = vec![
-        Message::system(system_content),
-        Message::user(prompt),
-    ];
+    let messages = vec![Message::system(system_content), Message::user(prompt)];
 
     let options = if enable_thinking {
         ChatTemplateOptions::for_generation().with_thinking()
