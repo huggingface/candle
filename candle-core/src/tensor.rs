@@ -2617,6 +2617,11 @@ impl Tensor {
         m.forward_t(self, train)
     }
 
+    /// Check if two tensors share the same underlying storage
+    pub fn shares_storage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.storage, &other.storage)
+    }
+
     pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {
         self.storage.read().unwrap()
     }
