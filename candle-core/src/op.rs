@@ -241,31 +241,31 @@ pub trait BinaryOpT {
     fn i64_vec(_xs1: &[i64], _xs2: &[i64], _ys: &mut [i64]) {}
 }
 
-pub(crate) struct Add;
-pub(crate) struct Div;
-pub(crate) struct Mul;
-pub(crate) struct Sub;
-pub(crate) struct Maximum;
-pub(crate) struct Minimum;
-pub(crate) struct Exp;
-pub(crate) struct Log;
-pub(crate) struct Sin;
-pub(crate) struct Cos;
-pub(crate) struct Abs;
-pub(crate) struct Neg;
-pub(crate) struct Recip;
-pub(crate) struct Sqr;
-pub(crate) struct Sqrt;
-pub(crate) struct Gelu;
-pub(crate) struct GeluErf;
-pub(crate) struct Erf;
-pub(crate) struct Relu;
-pub(crate) struct Silu;
-pub(crate) struct Tanh;
-pub(crate) struct Floor;
-pub(crate) struct Ceil;
-pub(crate) struct Round;
-pub(crate) struct Sign;
+pub struct Add;
+pub struct Div;
+pub struct Mul;
+pub struct Sub;
+pub struct Maximum;
+pub struct Minimum;
+pub struct Exp;
+pub struct Log;
+pub struct Sin;
+pub struct Cos;
+pub struct Abs;
+pub struct Neg;
+pub struct Recip;
+pub struct Sqr;
+pub struct Sqrt;
+pub struct Gelu;
+pub struct GeluErf;
+pub struct Erf;
+pub struct Relu;
+pub struct Silu;
+pub struct Tanh;
+pub struct Floor;
+pub struct Ceil;
+pub struct Round;
+pub struct Sign;
 
 macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr, $f32_vec: ident, $f64_vec: ident) => {
