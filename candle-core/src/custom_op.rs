@@ -359,8 +359,14 @@ impl Tensor {
 
     /// Applies a unary custom op in place (for the first tensor).
     pub fn inplace_op2<C: InplaceOp2>(&self, rhs: &Self, c: &C) -> Result<()> {
+        if self.shares_storage(rhs) {
+            // Same storage: acquire single write lock
+        let mut storage = self.storage.write()
+            .map_err(|_| Error::msg("Lock poisoned"))?;
+    } else {
         self.storage_mut()
             .inplace_op2(self.layout(), &rhs.storage(), rhs.layout(), c)
+    }
     }
 
     /// Applies a ternary custom op in place (for the first tensor).
