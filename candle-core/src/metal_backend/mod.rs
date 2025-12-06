@@ -141,6 +141,7 @@ impl BackendStorage for MetalStorage {
                 &encoder,
                 &device.kernels,
                 name,
+                self.dtype.size_in_bytes(),
                 el,
                 src,
                 &buffer,

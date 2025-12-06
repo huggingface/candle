@@ -542,6 +542,7 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
         &command_buffer,
         &kernels,
         "affine_f32",
+        size_of::<T>(),
         size,
         BufferOffset::zero_offset(&input),
         &output,

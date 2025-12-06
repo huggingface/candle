@@ -2,7 +2,6 @@
 #include <metal_math>
 using namespace metal;
 
-
 // Utils
 METAL_FUNC uint get_strided_index(
     uint idx,

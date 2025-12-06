@@ -28,11 +28,11 @@ pub fn call_unary_contiguous(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
-    let tile_size = get_tile_size(dtype_size);
-    let tiles = length.div_ceil(tile_size);
 
     set_params!(encoder, (length, &input, output));
 
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
@@ -83,11 +83,10 @@ pub fn call_const_set_contiguous(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
-    let tile_size = get_tile_size(dtype_size);
-    let tiles = length.div_ceil(tile_size);
-
     set_params!(encoder, (length, input, &output));
 
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
     encoder.use_resource(output.buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
