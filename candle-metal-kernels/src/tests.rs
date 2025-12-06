@@ -57,6 +57,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
         &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         v.len(),
         input,
         &output,
@@ -238,9 +239,9 @@ fn gelu_f16() {
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect();
-    let expected: Vec<f32> = vec![-0.0, -0.16, 0.0, 0.84, 1.96, 3.0, 10.0, 20.0];
+    let expected: Vec<f32> = vec![-0.0, -0.159, 0.0, 0.841, 1.954, 2.996, 10.0, 20.0];
     let results = run(&v, unary::contiguous::gelu::HALF);
-    assert_eq!(approx_f16(results, 2), expected);
+    assert_eq!(approx_f16(results, 3), expected);
 }
 
 #[test]
@@ -541,6 +542,7 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
         &command_buffer,
         &kernels,
         "affine_f32",
+        size_of::<T>(),
         size,
         BufferOffset::zero_offset(&input),
         &output,
