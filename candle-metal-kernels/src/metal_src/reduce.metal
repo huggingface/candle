@@ -218,127 +218,6 @@ struct Max {
     #endif
 };
 
-template <typename T, typename _E = void>
-struct is_valid_atomic_type {
-    static constant constexpr bool value = false;
-};
-
-template <typename T>
-constexpr constant bool is_valid_atomic_t = is_valid_atomic_type<T>::value;
-
-template <>
-struct is_valid_atomic_type<uint> {
-    static constant constexpr bool value = true;
-};
-template <>
-struct is_valid_atomic_type<int> {
-    static constant constexpr bool value = true;
-};
-template <>
-struct is_valid_atomic_type<ulong> {
-    static constant constexpr bool value = true;
-};
-template <>
-struct is_valid_atomic_type<float> {
-    static constant constexpr bool value = true;
-};
-template <typename T, typename _E = void>
-struct atomic_type;
-
-template <typename T>
-struct atomic_type<T, typename metal::enable_if_t<is_valid_atomic_t<T>>> {
-    typedef T atomic_t;
-};
-
-template <>
-struct atomic_type<half> {
-    typedef ushort atomic_t;
-};
-
-#if defined(__HAVE_BFLOAT__)
-template <>
-struct atomic_type<bfloat> {
-    typedef ushort atomic_t;
-};
-#endif
-
-
-template <typename T>
-struct as_atomic
-{
-  typedef T value_t;
-  typedef typename atomic_type<T>::atomic_t A;
-
-  typedef atomic<A> atomic_t;
-
-  //METAL_FUNC atomic_t operator()(T v) { return atomic_t(const_cast<A>(v)); }
-
-  METAL_FUNC T load(const device T *buffer, uint offset) {
-      #if defined(__HAVE_COHERENT__)
-      auto b = reinterpret_cast<const volatile coherent(device) device atomic_t *>(buffer + offset);
-      #else
-      auto b = reinterpret_cast<const volatile device atomic_t *>(buffer + offset);
-      #endif
-      auto result = atomic_load_explicit(b, memory_order_relaxed);
-      return static_cast<T>(result);
-  }
-
-  METAL_FUNC void store(device T *buffer, uint offset, T value) {
-      #if defined(__HAVE_COHERENT__)
-      auto b = reinterpret_cast<volatile coherent(device) device atomic_t *>(buffer + offset);
-      #else
-      auto b = reinterpret_cast<volatile  device atomic_t *>(buffer + offset);
-      #endif
-      atomic_store_explicit(b, value, memory_order_relaxed);
-  }
-};
-/*
-template <typename T>
-struct as_atomic<T, T, typename metal::enable_if_t<is_valid_atomic_t<T>>> {};
-
-template <>
-struct as_atomic<half, uint> {};
-
-#if defined(__HAVE_BFLOAT__)
-template <>
-struct as_atomic<bfloat, uint> {};
-#endif
- */
-
- template<typename T, typename _E = void>
- struct mem_reader {
-     METAL_FUNC T operator()(device const T *src, const uint idx) {
-         return src[idx];
-     }
- };
-
- /*
- template<typename T>
- struct mem_reader<T, typename metal::enable_if_t<is_valid_atomic_t<T>>> {
-     as_atomic<T> atomic_s;
-
-     METAL_FUNC T operator()(device const T *src, const uint idx) {
-         return atomic_s.load(src, idx);
-     }
- };
- */
- template<typename T, typename R, typename _E = void>
- struct mem_writer {
-     METAL_FUNC void operator()(device R *dst, const uint offset, R value) {
-         dst[offset] = value;
-     }
- };
-/*
- template<typename T, typename R>
- struct mem_writer<T, R, typename metal::enable_if_t<is_valid_atomic_t<R>>> {
-     as_atomic<T> atomic_s;
-
-     METAL_FUNC void operator()(device R *dst, const uint offset, R value) {
-         atomic_s.store(dst, offset, value);
-     }
- };
- */
-
 template <typename T>
 constexpr constant bool is_simd_t = __is_valid_simdgroup_type<T>::value;
 
@@ -878,6 +757,7 @@ kernel void NAME##_strided(                             \
     uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
     const bool STRIDED = true;                          \
+    const bool INDEXED = true;                          \
     switch (max_shared_mem<indexed<T>>(block_dim)) {    \
         arg_reduce_case(OP, ARG(T), 1024);              \
         arg_reduce_case(OP, ARG(T), 512);               \
