@@ -67,6 +67,42 @@ template <typename T>
     output[tid] = static_cast<T>(result);
 }
 
+template <typename T, int W = work_per_thread<T>()>
+[[kernel]] void powf_kernel(
+    constant size_t &dim,
+    constant float &mul,
+    device const T *input,
+    device T *output,
+    uint tid [[thread_position_in_grid]]
+) {
+    tid *= W;
+    if (W > 1 && tid + W > dim) {
+        for (int i = 0; tid + i < dim; ++i) {
+            output[tid + i] = static_cast<T>(pow(static_cast<float>(input[tid + i]), mul));
+        }
+    } else {
+        for (int i = 0; i < W; ++i) {
+            output[tid + i] = static_cast<T>(pow(static_cast<float>(input[tid + i]), mul));
+        }
+    }
+}
+
+template <typename T>
+[[kernel]] void powf_kernel_strided(
+    constant size_t &dim,
+    constant size_t &num_dims,
+    constant size_t *dims,
+    constant size_t *strides,
+    constant float &mul,
+    constant const T *input,
+    device T *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dim) return;
+    uint idx = get_strided_index(tid, num_dims, dims, strides);
+    output[tid] = static_cast<T>(pow(static_cast<float>(input[idx]), mul));
+}
+
 // Macros to help initialize kernels
 #define init_kernel(name, func, ...) \
   template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
@@ -75,34 +111,10 @@ template <typename T>
     init_kernel("affine_" #tname, affine_kernel, t)                     \
     init_kernel("affine_" #tname "_strided", affine_kernel_strided, t)
 
-#define POWF(FN_NAME, TYPENAME) \
-kernel void FN_NAME( \
-    constant size_t &dim, \
-    constant float &mul, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint id [[ thread_position_in_grid ]] \
-) { \
-    if (id >= dim) { \
-        return; \
-    } \
-    output[id] = TYPENAME(pow(input[id], TYPENAME(mul))); \
-} \
-kernel void FN_NAME##_strided( \
-    constant size_t &dim, \
-    constant size_t &num_dims, \
-    constant size_t *dims, \
-    constant size_t *strides, \
-    constant float &mul, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint id [[ thread_position_in_grid ]] \
-) { \
-    if (id >= dim) { \
-        return; \
-    } \
-    output[id] = TYPENAME(pow(input[get_strided_index(id, num_dims, dims, strides)], TYPENAME(mul))); \
-}
+
+#define init_powf(tname, t)                                         \
+    init_kernel("powf_" #tname, powf_kernel, t)                     \
+    init_kernel("powf_" #tname "_strided", powf_kernel_strided, t)
 
 #define ELU(FN_NAME, TYPENAME) \
 kernel void FN_NAME( \
@@ -142,14 +154,15 @@ init_affine(i64, int64_t);
 init_affine(f32, float);
 init_affine(f16, half);
 
-POWF(powf_f32, float)
-POWF(powf_f16, half)
+init_powf(f32, float);
+init_powf(f16, half);
+
 ELU(elu_f32, float)
 ELU(elu_f16, half)
 
 
 #if defined(__HAVE_BFLOAT__)
 init_affine(bf16, bfloat);
-POWF(powf_bf16, bfloat);
+init_powf(bf16, bfloat);
 ELU(elu_bf16, bfloat);
 #endif
