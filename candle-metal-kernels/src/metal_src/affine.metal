@@ -103,6 +103,45 @@ template <typename T>
     output[tid] = static_cast<T>(pow(static_cast<float>(input[idx]), mul));
 }
 
+template <typename T, int W = work_per_thread<T>()>
+[[kernel]] void elu_kernel(
+    constant size_t &dim,
+    constant float &mul,
+    device const T *input,
+    device T *output,
+    uint tid [[thread_position_in_grid]]
+) {
+    tid *= W;
+    if (W > 1 && tid + W > dim) {
+        for (int i = 0; tid + i < dim; ++i) {
+            const T x = input[tid + i];
+            output[tid + i] = static_cast<T>((x > 0) ? x : mul * (exp(x) - 1));
+        }
+    } else {
+        for (int i = 0; i < W; ++i) {
+            const T x = input[tid + i];
+            output[tid + i] = static_cast<T>((x > 0) ? x : mul * (exp(x) - 1));
+        }
+    }
+}
+
+template <typename T>
+[[kernel]] void elu_kernel_strided(
+    constant size_t &dim,
+    constant size_t &num_dims,
+    constant size_t *dims,
+    constant size_t *strides,
+    constant float &mul,
+    constant const T *input,
+    device T *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dim) return;
+    uint idx = get_strided_index(tid, num_dims, dims, strides);
+    const T x = input[idx];
+    output[tid] = static_cast<T>((x > 0) ? x : mul * (exp(x) - 1));
+}
+
 // Macros to help initialize kernels
 #define init_kernel(name, func, ...) \
   template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
@@ -111,41 +150,13 @@ template <typename T>
     init_kernel("affine_" #tname, affine_kernel, t)                     \
     init_kernel("affine_" #tname "_strided", affine_kernel_strided, t)
 
-
 #define init_powf(tname, t)                                         \
     init_kernel("powf_" #tname, powf_kernel, t)                     \
     init_kernel("powf_" #tname "_strided", powf_kernel_strided, t)
 
-#define ELU(FN_NAME, TYPENAME) \
-kernel void FN_NAME( \
-    constant size_t &dim, \
-    constant float &mul, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint id [[ thread_position_in_grid ]] \
-) { \
-    if (id >= dim) { \
-        return; \
-    } \
-    const TYPENAME x = input[id]; \
-    output[id] = TYPENAME((x > 0)?x: mul * (exp(x) - 1)); \
-} \
-kernel void FN_NAME##_strided( \
-    constant size_t &dim, \
-    constant size_t &num_dims, \
-    constant size_t *dims, \
-    constant size_t *strides, \
-    constant float &mul, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint id [[ thread_position_in_grid ]] \
-) { \
-    if (id >= dim) { \
-        return; \
-    } \
-    const TYPENAME x = input[get_strided_index(id, num_dims, dims, strides)]; \
-    output[id] = TYPENAME((x > 0)?x: mul * (exp(x) - 1)); \
-} \
+#define init_elu(tname, t)                                          \
+    init_kernel("elu_" #tname, elu_kernel, t)                       \
+    init_kernel("elu_" #tname "_strided", elu_kernel_strided, t)
 
 
 init_affine(u8, uint8_t);
@@ -157,12 +168,11 @@ init_affine(f16, half);
 init_powf(f32, float);
 init_powf(f16, half);
 
-ELU(elu_f32, float)
-ELU(elu_f16, half)
-
+init_elu(f32, float);
+init_elu(f16, half);
 
 #if defined(__HAVE_BFLOAT__)
 init_affine(bf16, bfloat);
 init_powf(bf16, bfloat);
-ELU(elu_bf16, bfloat);
+init_elu(bf16, bfloat);
 #endif
