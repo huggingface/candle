@@ -312,6 +312,7 @@ struct as_atomic<bfloat, uint> {};
      }
  };
 
+ /*
  template<typename T>
  struct mem_reader<T, typename metal::enable_if_t<is_valid_atomic_t<T>>> {
      as_atomic<T> atomic_s;
@@ -320,14 +321,14 @@ struct as_atomic<bfloat, uint> {};
          return atomic_s.load(src, idx);
      }
  };
-
+ */
  template<typename T, typename R, typename _E = void>
  struct mem_writer {
      METAL_FUNC void operator()(device R *dst, const uint offset, R value) {
          dst[offset] = value;
      }
  };
-
+/*
  template<typename T, typename R>
  struct mem_writer<T, R, typename metal::enable_if_t<is_valid_atomic_t<R>>> {
      as_atomic<T> atomic_s;
@@ -336,6 +337,7 @@ struct as_atomic<bfloat, uint> {};
          atomic_s.store(dst, offset, value);
      }
  };
+ */
 
 template <typename T>
 constexpr constant bool is_simd_t = __is_valid_simdgroup_type<T>::value;
@@ -442,7 +444,6 @@ template<
     ushort BLOCKSIZE
 >
 struct loader<T, R, OP, BLOCKSIZE, false, typename metal::enable_if_t<not_indexed_t<R>>> {
-    mem_reader<T> read;
     operation<OP, R> operate;
 
     METAL_FUNC R operator()(
@@ -458,7 +459,7 @@ struct loader<T, R, OP, BLOCKSIZE, false, typename metal::enable_if_t<not_indexe
 
         #pragma clang loop unroll(full)
         for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
-            value = operate(value, read(src ,i));
+            value = operate(value, src[i]);
         }
         return value;
     }
@@ -663,7 +664,6 @@ METAL_FUNC void reduce(
     uint dst_id [[ threadgroup_position_in_grid ]]
 ) {
     loader<T, R, OP, BLOCKSIZE, STRIDED> load;
-    mem_writer<T, R> store;
     block_reducer<T, OP, BLOCKSIZE> reduce(shared);
 
     // Calculate offset for the threadgroup of current thread
@@ -684,9 +684,7 @@ METAL_FUNC void reduce(
     // Complete reduction
     R result = reduce(value, tid);
 
-    if (tid == 0) {
-        store(dst, dst_id, result);
-    }
+    if (tid == 0) dst[dst_id] = result;
 }
 
 #define reduce_case(OP, T, R, N)                        \
