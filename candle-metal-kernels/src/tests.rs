@@ -123,7 +123,6 @@ fn run_strided<T: Clone>(
         &command_buffer,
         &kernels,
         kernel,
-        size_of::<T>(),
         shape,
         input,
         strides,
