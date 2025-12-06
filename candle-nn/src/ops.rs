@@ -1,8 +1,11 @@
 //! Tensor ops.
 //!
 
-use candle::{CpuStorage, D, DType, Layout, Module, Result, Shape, Tensor, WgpuStorage, wgpu::wgpu_functions::{self, WgpuTensor, unary::UnaryOperation}};
+use candle::{CpuStorage, D, DType, Layout, Module, Result, Shape, Tensor, WgpuStorage};
 use rayon::prelude::*;
+
+#[cfg(feature = "wgpu")]
+use candle::wgpu::wgpu_functions::{self, WgpuTensor, unary::UnaryOperation};
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
@@ -234,6 +237,7 @@ impl candle::CustomOp1 for Sigmoid {
         Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
     }
 
+    #[cfg(feature = "wgpu")]
     fn wgpu_fwd(&self, storage: &WgpuStorage, layout: &Layout) -> Result<(WgpuStorage, Shape)> {
         let buffer_dest = storage.device().alloc_uninit_size(
             storage.dtype(),

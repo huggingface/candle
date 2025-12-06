@@ -766,7 +766,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
 
     fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> crate::Result<Self::Storage> {
         let data =
-                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len()) };
+                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * T::DTYPE.size_in_bytes()) };
         let buffer = self.alloc_from_bytes(T::DTYPE, data)?;
         Ok(buffer)
     }
