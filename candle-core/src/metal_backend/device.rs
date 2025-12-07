@@ -188,6 +188,28 @@ impl MetalDevice {
     /// allocates the buffer and copies over the existing data before returning the MTLBuffer.
     pub fn new_buffer_with_data<T>(&self, data: &[T]) -> Result<Arc<Buffer>> {
         let size = core::mem::size_of_val(data);
+        
+        // If using Private storage, we explicitly stage via a Shared buffer to avoid
+        // potential issues with large implicit copies or driver bugs.
+        if (RESOURCE_OPTIONS_DEFAULT.0 & MTLResourceOptions::StorageModePrivate.bits()) != 0 {
+            let src = self.device.new_buffer_with_data(
+                data.as_ptr().cast(),
+                size,
+                RESOURCE_OPTIONS_SHARED
+            ).map_err(MetalError::from)?;
+            
+            let dst = self.allocate_buffer(size)?;
+            let blit = self.blit_command_encoder()?;
+            blit.copy_from_buffer(&src, 0, &dst, 0, size);
+            // We do not end encoding here to allow batching, or we should?
+            // allocate_zeros ends it. Let's end it to be safe and ensure the copy is submitted/ready
+            // for subsequent compute commands that might use a different encoder.
+            // Actually, if we don't end it, the next compute command will trigger a switch anyway.
+            // But let's follow allocate_zeros pattern.
+            blit.end_encoding(); 
+            return Ok(dst);
+        }
+
         let new_buffer = self
             .device
             .new_buffer_with_data(data.as_ptr().cast(), size, RESOURCE_OPTIONS_DEFAULT)

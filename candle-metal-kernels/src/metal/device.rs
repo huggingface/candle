@@ -24,6 +24,10 @@ impl Device {
         self.as_ref().registryID()
     }
 
+    pub fn as_ptr(&self) -> *mut std::ffi::c_void {
+        Retained::as_ptr(&self.raw) as *mut std::ffi::c_void
+    }
+
     pub fn all() -> Vec<Self> {
         MTLCreateSystemDefaultDevice()
             .into_iter()

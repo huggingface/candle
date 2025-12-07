@@ -35,6 +35,10 @@ impl Buffer {
     pub fn did_modify_range(&self, range: NSRange) {
         self.as_ref().didModifyRange(range);
     }
+
+    pub fn as_ptr(&self) -> *mut std::ffi::c_void {
+        Retained::as_ptr(&self.raw) as *mut std::ffi::c_void
+    }
 }
 
 impl AsRef<ProtocolObject<dyn MTLBuffer>> for Buffer {

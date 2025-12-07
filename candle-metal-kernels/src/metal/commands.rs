@@ -11,8 +11,10 @@ use std::sync::{Arc, Mutex};
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
 pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 
-const DEFAULT_CANDLE_METAL_COMPUTE_PER_BUFFER: usize = 50;
-const DEFAULT_CANDLE_METAL_COMMAND_POOL_SIZE: usize = 5;
+// Favor fidelity by default: commit after every encoder unless overridden.
+// Callers can bump via CANDLE_METAL_COMPUTE_PER_BUFFER for throughput tuning.
+const DEFAULT_CANDLE_METAL_COMPUTE_PER_BUFFER: usize = 1;
+const DEFAULT_CANDLE_METAL_COMMAND_POOL_SIZE: usize = 4;
 
 /// Creates a new command buffer from the queue with an attached semaphore for tracking its state.
 pub fn create_command_buffer(
