@@ -1,6 +1,6 @@
 use crate::kernels::macros::ops;
-use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
+use crate::{get_tile_size, linear_split};
 use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
 use objc2_metal::MTLResourceUsage;
 
@@ -12,6 +12,7 @@ pub fn call_binary_contiguous(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     kernel_name: contiguous::Kernel,
+    dtype_size: usize,
     length: usize,
     left: BufferOffset,
     right: BufferOffset,
@@ -25,7 +26,9 @@ pub fn call_binary_contiguous(
 
     set_params!(encoder, (length, &left, &right, output));
 
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
 
     encoder.use_resource(left.buffer, MTLResourceUsage::Read);
     encoder.use_resource(right.buffer, MTLResourceUsage::Read);
