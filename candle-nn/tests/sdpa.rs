@@ -84,7 +84,7 @@ mod metal_sdpa_tests {
         // NOTE: Vector kernel only supports q_seq = 1 correctly
         // Full kernel does NOT support softcapping
         const BS: usize = 4;
-        const R: usize = 1;  // Vector kernel requires q_seq = 1
+        const R: usize = 1; // Vector kernel requires q_seq = 1
         const L: usize = 4;
         const DK: usize = 64;
         const H: usize = 3;
