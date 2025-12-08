@@ -363,6 +363,11 @@ impl Tensor {
             // Same storage: acquire single write lock
         let mut storage = self.storage.write()
             .map_err(|_| Error::msg("Lock poisoned"))?;
+        self.storage_mut().inplace_op2_same_storage(
+            self.layout(),
+            rhs.layout(),
+            c
+        )
     } else {
         self.storage_mut()
             .inplace_op2(self.layout(), &rhs.storage(), rhs.layout(), c)
