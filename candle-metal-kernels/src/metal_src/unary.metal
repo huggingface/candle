@@ -1,8 +1,8 @@
 #include <metal_stdlib>
 #include <metal_math>
-#
 using namespace metal;
 
+// Utils
 METAL_FUNC uint get_strided_index(
     uint idx,
     constant size_t &num_dims,
@@ -18,19 +18,112 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
-template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
-template <typename T> METAL_FUNC T recip(T in){ return T(1.0 / in); }
-template <typename T> METAL_FUNC T neg(T in){ return -in; }
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
 
+template<typename T>
+constexpr int work_per_thread() {
+    constexpr int wpt = 8 / sizeof(T);
+    return MAX(1, wpt);
+}
+
+// Kernels
+template <typename T, typename U, typename unary, int W = work_per_thread<T>()>
+[[kernel]] void unary_kernel(
+    constant size_t &dim,
+    device const T* input,
+    device U* output,
+    uint tid [[thread_position_in_grid]]
+) {
+    tid *= W;
+    if (W > 1 && tid + W > dim) {
+        for (int i = 0; tid + i < dim; ++i) {
+            output[tid + i] = static_cast<U>(unary()(input[tid + i]));
+        }
+    } else {
+        for (int i = 0; i < W; ++i) {
+            output[tid + i] = static_cast<U>(unary()(input[tid + i]));
+        }
+    }
+}
+
+template <typename T, typename U, typename unary>
+[[kernel]] void unary_kernel_strided(
+    constant size_t &dim,
+    constant size_t &num_dims,
+    constant size_t *dims,
+    constant size_t *strides,
+    constant const T *input,
+    device U *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dim) return;
+    uint idx = get_strided_index(tid, num_dims, dims, strides);
+    output[tid] = static_cast<U>(unary()(input[idx]));
+}
+
+template <typename T, int W = work_per_thread<T>()>
+[[kernel]] void const_set(
+    constant size_t &dim,
+    device const T &input,
+    device T *output,
+    uint tid [[thread_position_in_grid]]
+) {
+    tid *= W;
+    if (W > 1 && tid + W > dim) {
+        for (int i = 0; tid + i < dim; ++i) {
+            output[tid + i] = input;
+        }
+    } else {
+        for (int i = 0; i < W; ++i) {
+            output[tid + i] = input;
+        }
+    }
+}
+
+template <typename T>
+[[kernel]] void const_set_strided(
+    constant size_t &dim,
+    constant size_t &num_dims,
+    constant size_t *dims,
+    constant size_t *strides,
+    device const T &input,
+    device T *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dim) {
+        return;
+    }
+    uint idx = get_strided_index(tid, num_dims, dims, strides);
+    output[idx] = input;
+}
+
+template <typename T>
+[[kernel]] void copy2d(
+    constant int64_t &d1,
+    constant int64_t &d2,
+    constant int64_t &src_s,
+    constant int64_t &dst_s,
+    device const T *input,
+    device T *output,
+    uint2 idx [[thread_position_in_grid]]
+) {
+    if (idx.x >= d1 || idx.y >= d2) return;
+    int64_t src_idx = idx.x * src_s + idx.y;
+    int64_t dst_idx = idx.x * dst_s + idx.y;
+    output[dst_idx] = input[src_idx];
+}
+
+// Unary functions
 template <typename T> METAL_FUNC T erf(T in){
-    float x = (float) in;
     // constants
-    float a1 =  0.254829592;
-    float a2 = -0.284496736;
-    float a3 =  1.421413741;
-    float a4 = -1.453152027;
-    float a5 =  1.061405429;
-    float p  =  0.3275911;
+    constexpr const float a1 =  0.254829592;
+    constexpr const float a2 = -0.284496736;
+    constexpr const float a3 =  1.421413741;
+    constexpr const float a4 = -1.453152027;
+    constexpr const float a5 =  1.061405429;
+    constexpr const float p  =  0.3275911;
+
+    float x = static_cast<float>(in);
 
     // Save the sign of x
     int sign = 1;
@@ -46,7 +139,7 @@ template <typename T> METAL_FUNC T erf(T in){
 }
 template <typename T> METAL_FUNC T id(T in) { return in; }
 template <typename T> METAL_FUNC T gelu_erf(T x) {
-    return T(x * (1 + erf(x * M_SQRT1_2_F)) / 2);
+    return static_cast<T>(x * (1 + erf(x * M_SQRT1_2_F)) / 2);
 }
 template <typename T> METAL_FUNC T gelu(T x) {
     if (x > 5) {
@@ -58,190 +151,130 @@ template <typename T> METAL_FUNC T gelu(T x) {
     T beta =  (static_cast<T>(M_2_SQRTPI_F * M_SQRT1_2_F) * alpha);
     return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + T(precise::tanh(beta)));
 }
-template <typename T> METAL_FUNC T relu(T in){
-    if (in < 0) {
-        return 0;
+template <typename T> METAL_FUNC T relu(T x) {
+    if (x > 5) {
+        return x;
     }
-    return in;
+    T x_sq = x * x;
+    T x_cube = x_sq * x;
+    T alpha = x + static_cast<T>(0.044715) * x_cube;
+    T beta =  (static_cast<T>(M_2_SQRTPI_F * M_SQRT1_2_F) * alpha);
+    return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + T(precise::tanh(beta)));
 }
-template <typename T> METAL_FUNC T silu(T in){
-    return in / (static_cast<T>(1) + exp(-in));
+template <typename T> METAL_FUNC T recip(T x) {
+    return static_cast<T>(1.0 / x);
 }
-template <typename T> METAL_FUNC T sigmoid(T in) {
-    return recip(static_cast<T>(1) + exp(-in));
-}
-
-#define TILE_SIZE 2
-
-#define CONST_SET(TYPENAME, FN_NAME) \
-kernel void FN_NAME( \
-    constant size_t &dim, \
-    constant TYPENAME &input,  \
-    device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    if (tid >= dim) { \
-        return; \
-    } \
-    output[tid] = input; \
-} \
-kernel void FN_NAME##_##strided( \
-    constant size_t &dim, \
-    constant size_t &num_dims, \
-    constant size_t *dims, \
-    constant size_t *strides, \
-    constant TYPENAME &input,  \
-    device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    if (tid >= dim) { \
-        return; \
-    } \
-    output[get_strided_index(tid, num_dims, dims, strides)] = input; \
-} \
-kernel void FN_NAME##_##tiled( \
-    constant size_t &dim, \
-    constant TYPENAME &input,  \
-    device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    for (uint i = 0; i < TILE_SIZE; i++) { \
-        const uint idx = tid * TILE_SIZE + i; \
-        output[idx] = input; \
-    } \
+template <typename T> METAL_FUNC T sigmoid(T x) {
+    return static_cast<T>(recip(1 + exp(-x)));
 }
 
-#define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
-kernel void FN_NAME( \
-    constant size_t &dim, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    if (tid >= dim) { \
-        return; \
-    } \
-    output[tid] = TYPENAME(FN(float(input[tid]))); \
-} \
-kernel void FN_NAME##_##strided( \
-    constant size_t &dim, \
-    constant size_t &num_dims, \
-    constant size_t *dims, \
-    constant size_t *strides, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    if (tid >= dim) { \
-        return; \
-    } \
-    output[tid] = TYPENAME(FN(float(input[get_strided_index(tid, num_dims, dims, strides)]))); \
-} \
-kernel void FN_NAME##_##tiled( \
-    constant size_t &dim, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    for (uint i = 0; i < TILE_SIZE; i++) { \
-        const uint idx = tid * TILE_SIZE + i; \
-        output[idx] = TYPENAME(FN(float(input[idx]))); \
-    } \
-}
+// Define unary ops
+#define define_unary_op(name, op)   \
+struct name {                       \
+    template <typename T>           \
+    METAL_FUNC T operator()(T x) {  \
+        return static_cast<T>(op);  \
+    }                               \
+};
 
-#define UNARY_OP(NAME) \
-UNARY(NAME, float, NAME##_f32, NAME##_f32_strided); \
-UNARY(NAME, half, NAME##_f16, NAME##_f16_strided);
-
-#define BFLOAT_UNARY_OP(NAME) \
-UNARY(NAME, bfloat, NAME##_bf16, NAME##_bf16_strided);
-
-#define COPY2D(FN_NAME, TYPENAME) \
-kernel void FN_NAME( \
-    constant int64_t &d1, \
-    constant int64_t &d2, \
-    constant int64_t &src_s, \
-    constant int64_t &dst_s, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint2 idx [[thread_position_in_grid]] \
-) { \
-    if (idx.x >= d1 || idx.y >= d2) return; \
-    int64_t src_idx = idx.x * src_s + idx.y; \
-    int64_t dst_idx = idx.x * dst_s + idx.y; \
-    output[dst_idx] = input[src_idx]; \
-}
-
-COPY2D(copy2d_f32, float)
-COPY2D(copy2d_f16, half)
-COPY2D(copy2d_u8, uint8_t)
-COPY2D(copy2d_u32, uint32_t)
-
-CONST_SET(float, const_set_f32)
-CONST_SET(half, const_set_f16)
-CONST_SET(uint8_t, const_set_u8)
-CONST_SET(uint32_t, const_set_u32)
-
-UNARY_OP(cos)
-UNARY_OP(sin)
-UNARY_OP(sqr)
-UNARY_OP(sqrt)
-UNARY_OP(neg)
-UNARY_OP(exp)
-UNARY_OP(log)
-UNARY_OP(gelu)
-UNARY_OP(silu)
-UNARY_OP(abs)
-UNARY_OP(ceil)
-UNARY_OP(floor)
-UNARY_OP(round)
-UNARY_OP(gelu_erf)
-UNARY_OP(erf)
-UNARY_OP(recip)
-UNARY_OP(relu)
-UNARY_OP(sign)
-UNARY_OP(sigmoid)
-UNARY(id, float, copy_f32, copy_f32_strided)
-UNARY(id, half, copy_f16, copy_f16_strided)
-UNARY(id, uint8_t, copy_u8, copy_u8_strided)
-UNARY(id, uint32_t, copy_u32, copy_u32_strided)
-
+define_unary_op(usqr, x * x);
+define_unary_op(urecip, recip(x));
+define_unary_op(uneg, -x);
+define_unary_op(uid, x);
+define_unary_op(ugelu, gelu(x));
+define_unary_op(urelu, x < 0 ? 0 : x);
+define_unary_op(usilu, x / (1 + exp(-x)));
+define_unary_op(ugelu_erf, gelu_erf(x));
+define_unary_op(usqrt, sqrt(x));
+define_unary_op(ucos, cos(x));
+define_unary_op(usin, sin(x));
+define_unary_op(uexp, exp(x));
+define_unary_op(ulog, log(x));
+define_unary_op(uabs, abs(static_cast<float>(x)));
+define_unary_op(uceil, ceil(x));
+define_unary_op(ufloor, floor(x));
+define_unary_op(uround, round(x));
+define_unary_op(uerf, erf(x));
+define_unary_op(usign, sign(x));
+define_unary_op(usigmoid, sigmoid(x));
 // tanh may create NaN on large values, e.g. 45 rather than outputting 1.
 // This has been an issue for the encodec example.
-UNARY(precise::tanh, float, tanh_f32, tanh_f32_strided);
-UNARY(precise::tanh, half, tanh_f16, tanh_f16_strided);
+define_unary_op(utanh, precise::tanh(x));
 
-#if __METAL_VERSION__ >= 220
-UNARY(id, int64_t, copy_i64, copy_i64_strided)
-COPY2D(copy2d_i64, int64_t)
-CONST_SET(int64_t, const_set_i64)
-#endif
+// Macros to help initialize kernels
+#define init_kernel(name, func, ...) \
+  template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
+
+#define init_unary(op_name, unary_op, tname, t)                                         \
+    init_kernel(#op_name "_" #tname, unary_kernel, t, t, unary_op)                      \
+    init_kernel(#op_name "_" #tname "_strided", unary_kernel_strided, t, t, unary_op)
 
 #if defined(__HAVE_BFLOAT__)
-BFLOAT_UNARY_OP(cos)
-BFLOAT_UNARY_OP(sin)
-BFLOAT_UNARY_OP(sqr)
-BFLOAT_UNARY_OP(sqrt)
-BFLOAT_UNARY_OP(neg)
-BFLOAT_UNARY_OP(exp)
-BFLOAT_UNARY_OP(log)
-BFLOAT_UNARY_OP(gelu)
-BFLOAT_UNARY_OP(silu)
-BFLOAT_UNARY_OP(abs)
-BFLOAT_UNARY_OP(ceil)
-BFLOAT_UNARY_OP(floor)
-BFLOAT_UNARY_OP(round)
-BFLOAT_UNARY_OP(gelu_erf)
-BFLOAT_UNARY_OP(erf)
-BFLOAT_UNARY_OP(recip)
-BFLOAT_UNARY_OP(relu)
-BFLOAT_UNARY_OP(sign)
-BFLOAT_UNARY_OP(sigmoid)
+#define init_unary_float(op_name, unary_op)   \
+    init_unary(op_name, unary_op, f32, float) \
+    init_unary(op_name, unary_op, f16, half)  \
+    init_unary(op_name, unary_op, bf16, bfloat)
+#else
+#define init_unary_float(op_name, unary_op)   \
+    init_unary(op_name, unary_op, f32, float) \
+    init_unary(op_name, unary_op, f16, half)
+#endif
 
-UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
+#define init_copy2d(tname, t)  \
+    init_kernel("copy2d_" #tname, copy2d, t)
 
-UNARY(precise::tanh, bfloat, tanh_bf16, tanh_bf16_strided);
+#define init_const_set(tname, t)                    \
+    init_kernel("const_set_" #tname, const_set, t)  \
+    init_kernel("const_set_" #tname "_strided", const_set_strided, t)
 
-COPY2D(copy2d_bf16, bfloat)
-CONST_SET(bfloat, const_set_bf16)
+// Initialize all unary kernels for floating point types
+init_unary_float(gelu_erf, ugelu_erf);
+init_unary_float(sqrt, usqrt);
+init_unary_float(sqr, usqr);
+init_unary_float(neg, uneg);
+init_unary_float(recip, urecip);
+init_unary_float(copy, uid);
+init_unary_float(silu, usilu);
+init_unary_float(gelu, ugelu);
+init_unary_float(relu, urelu);
+init_unary_float(cos, ucos);
+init_unary_float(sin, usin);
+init_unary_float(exp, uexp);
+init_unary_float(log, ulog);
+init_unary_float(abs, uabs);
+init_unary_float(ceil, uceil);
+init_unary_float(floor, ufloor);
+init_unary_float(round, uround);
+init_unary_float(erf, uerf);
+init_unary_float(sign, usign);
+init_unary_float(sigmoid, usigmoid);
+init_unary_float(tanh, utanh);
+
+// Initialize copy2d kernels
+init_copy2d(f32, float);
+init_copy2d(f16, half);
+
+// Initialize const_set kernels
+init_const_set(f32, float);
+init_const_set(f16, half);
+
+#if defined(__HAVE_BFLOAT__)
+init_copy2d(bf16, bfloat);
+init_const_set(bf16, bfloat);
+#endif
+
+// Initialize unary kernels for integer dtypes
+init_unary(copy, uid, u8, uint8_t);
+init_unary(copy, uid, u32, uint32_t);
+
+init_copy2d(u8, uint8_t);
+init_copy2d(u32, uint32_t);
+
+init_const_set(u8, uint8_t);
+init_const_set(u32, uint32_t);
+
+#if __METAL_VERSION__ >= 220
+init_unary(copy, uid, i64, int64_t);
+init_copy2d(i64, int64_t);
+init_const_set(i64, int64_t);
 #endif

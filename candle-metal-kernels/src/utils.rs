@@ -1,5 +1,6 @@
 use crate::metal::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
-use objc2_metal::MTLSize;
+use crate::MTLSize;
+use std::ffi::OsStr;
 use std::ops::Deref;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
@@ -61,6 +62,13 @@ pub fn get_block_dims(dim0: usize, dim1: usize, dim2: usize) -> MTLSize {
         height: 1 << pows1,
         depth: 1 << pows2,
     }
+}
+
+/// Calculate preferred tile size given the size of a data type in bytes.
+/// f32 -> 2, f16 -> 4, u8 -> 8.
+#[inline(always)]
+pub fn get_tile_size(dtype_size: usize) -> usize {
+    1.max(8 / dtype_size)
 }
 
 pub fn set_param<P: EncoderParam>(encoder: &ComputeCommandEncoder, position: usize, data: P) {
@@ -235,4 +243,15 @@ impl<'a, T> From<RwLockWriteGuard<'a, T>> for RwLockGuard<'a, T> {
     fn from(g: RwLockWriteGuard<'a, T>) -> Self {
         RwLockGuard::Write(g)
     }
+}
+
+fn is_truthy(s: String) -> bool {
+    match s.as_str() {
+        "true" | "t" | "yes" | "y" | "1" => true,
+        _ => false,
+    }
+}
+
+pub(crate) fn get_env_bool<K: AsRef<OsStr>>(key: K, default: bool) -> bool {
+    std::env::var(key).map(is_truthy).unwrap_or(default)
 }
