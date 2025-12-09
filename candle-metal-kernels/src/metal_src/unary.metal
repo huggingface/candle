@@ -18,12 +18,18 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
-#define MAX(x, y) ((x) > (y) ? (x) : (y))
+METAL_FUNC uint nonzero(uint n) {
+    return n == 0 ? 1 : n;
+}
+
+template<uint N>
+constexpr uint nonzero() {
+    return N == 0 ? 1 : N;
+}
 
 template<typename T>
-constexpr int work_per_thread() {
-    constexpr int wpt = 8 / sizeof(T);
-    return MAX(1, wpt);
+constexpr uint work_per_thread() {
+    return nonzero<8 / sizeof(T)>();
 }
 
 // Kernels
@@ -34,15 +40,11 @@ template <typename T, typename U, typename unary, int W = work_per_thread<T>()>
     device U* output,
     uint tid [[thread_position_in_grid]]
 ) {
-    tid *= W;
-    if (W > 1 && tid + W > dim) {
-        for (int i = 0; tid + i < dim; ++i) {
-            output[tid + i] = static_cast<U>(unary()(input[tid + i]));
-        }
-    } else {
-        for (int i = 0; i < W; ++i) {
-            output[tid + i] = static_cast<U>(unary()(input[tid + i]));
-        }
+    unary op;
+    const uint step = nonzero(dim/W);
+    #pragma clang loop unroll(full)
+    for (uint i = tid; i < dim; i += step) {
+        output[i] = static_cast<U>(op(input[i]));
     }
 }
 
@@ -56,9 +58,10 @@ template <typename T, typename U, typename unary>
     device U *output,
     uint tid [[ thread_position_in_grid ]]
 ) {
+    unary op;
     if (tid >= dim) return;
     uint idx = get_strided_index(tid, num_dims, dims, strides);
-    output[tid] = static_cast<U>(unary()(input[idx]));
+    output[tid] = static_cast<U>(op(input[idx]));
 }
 
 template <typename T, int W = work_per_thread<T>()>
@@ -68,15 +71,10 @@ template <typename T, int W = work_per_thread<T>()>
     device T *output,
     uint tid [[thread_position_in_grid]]
 ) {
-    tid *= W;
-    if (W > 1 && tid + W > dim) {
-        for (int i = 0; tid + i < dim; ++i) {
-            output[tid + i] = input;
-        }
-    } else {
-        for (int i = 0; i < W; ++i) {
-            output[tid + i] = input;
-        }
+    const uint step = nonzero(dim/W);
+    #pragma clang loop unroll(full)
+    for (uint i = tid; i < dim; i += step) {
+        output[i] = input;
     }
 }
 
@@ -90,9 +88,7 @@ template <typename T>
     device T *output,
     uint tid [[ thread_position_in_grid ]]
 ) {
-    if (tid >= dim) {
-        return;
-    }
+    if (tid >= dim) return;
     uint idx = get_strided_index(tid, num_dims, dims, strides);
     output[idx] = input;
 }
