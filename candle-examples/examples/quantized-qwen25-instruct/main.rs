@@ -20,13 +20,17 @@ const DEFAULT_PROMPT: &str = "Write a function to count prime numbers up to N. "
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
     #[value(name = "0.5b")]
-    W2_0_5b,
+    W25_0_5b,
     #[value(name = "1.5b")]
-    W2_1_5b,
+    W25_1_5b,
     #[value(name = "7b")]
-    W2_7b,
-    #[value(name = "72b")]
-    W2_72b,
+    W25_7b,
+    #[value(name = "14b")]
+    W25_14b,
+    #[value(name = "32b")]
+    W25_32b,
+    #[value(name = "deepseekr1-qwen7b")]
+    DeepseekR1Qwen7B,
 }
 
 #[derive(Parser, Debug)]
@@ -98,10 +102,12 @@ impl Args {
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
                 let repo = match self.which {
-                    Which::W2_0_5b => "Qwen/Qwen2-0.5B-Instruct",
-                    Which::W2_1_5b => "Qwen/Qwen2-1.5B-Instruct",
-                    Which::W2_7b => "Qwen/Qwen2-7B-Instruct",
-                    Which::W2_72b => "Qwen/Qwen2-72B-Instruct",
+                    Which::W25_0_5b => "Qwen/Qwen2.5-0.5B-Instruct",
+                    Which::W25_1_5b => "Qwen/Qwen2.5-1.5B-Instruct",
+                    Which::W25_7b => "Qwen/Qwen2.5-7B-Instruct",
+                    Which::W25_14b => "Qwen/Qwen2.5-14B-Instruct",
+                    Which::W25_32b => "Qwen/Qwen2.5-32B-Instruct",
+                    Which::DeepseekR1Qwen7B => "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
                 };
                 let api = api.model(repo.to_string());
                 api.get("tokenizer.json")?
@@ -115,24 +121,34 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let (repo, filename, revision) = match self.which {
-                    Which::W2_0_5b => (
-                        "Qwen/Qwen2-0.5B-Instruct-GGUF",
-                        "qwen2-0_5b-instruct-q4_0.gguf",
+                    Which::W25_0_5b => (
+                        "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+                        "qwen2.5-0.5b-instruct-q4_0.gguf",
                         "main",
                     ),
-                    Which::W2_1_5b => (
-                        "Qwen/Qwen2-1.5B-Instruct-GGUF",
-                        "qwen2-1_5b-instruct-q4_0.gguf",
+                    Which::W25_1_5b => (
+                        "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+                        "qwen2.5-1.5b-instruct-q4_0.gguf",
                         "main",
                     ),
-                    Which::W2_7b => (
-                        "Qwen/Qwen2-7B-Instruct-GGUF",
-                        "qwen2-7b-instruct-q4_0.gguf",
+                    Which::W25_7b => (
+                        "Qwen/Qwen2.5-7B-Instruct-GGUF",
+                        "qwen2.5-7b-instruct-q4_0.gguf",
                         "main",
                     ),
-                    Which::W2_72b => (
-                        "Qwen/Qwen2-72B-Instruct-GGUF",
-                        "qwen2-72b-instruct-q4_0.gguf",
+                    Which::W25_14b => (
+                        "Qwen/Qwen2.5-14B-Instruct-GGUF",
+                        "qwen2.5-14b-instruct-q4_0.gguf",
+                        "main",
+                    ),
+                    Which::W25_32b => (
+                        "Qwen/Qwen2.5-32B-Instruct-GGUF",
+                        "qwen2.5-32b-instruct-q4_0.gguf",
+                        "main",
+                    ),
+                    Which::DeepseekR1Qwen7B => (
+                        "unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF",
+                        "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
                         "main",
                     ),
                 };
@@ -151,7 +167,7 @@ impl Args {
 
 fn format_size(size_in_bytes: usize) -> String {
     if size_in_bytes < 1_000 {
-        format!("{size_in_bytes}B")
+        format!("{}B", size_in_bytes)
     } else if size_in_bytes < 1_000_000 {
         format!("{:.2}KB", size_in_bytes as f64 / 1e3)
     } else if size_in_bytes < 1_000_000_000 {
@@ -216,7 +232,10 @@ fn main() -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| DEFAULT_PROMPT.to_string());
 
-    let prompt_str = format!("<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n");
+    let prompt_str = match args.which {
+        Which::DeepseekR1Qwen7B => format!("<｜User｜>{prompt_str}<｜Assistant｜>"),
+        _ => format!("<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n"),
+    };
     print!("formatted instruct prompt: {}", &prompt_str);
     let tokens = tos
         .tokenizer()
@@ -262,7 +281,10 @@ fn main() -> anyhow::Result<()> {
         std::io::stdout().flush()?;
     }
 
-    let eos_token = "<|im_end|>";
+    let eos_token = match args.which {
+        Which::DeepseekR1Qwen7B => "<｜end▁of▁sentence｜>",
+        _ => "<|im_end|>",
+    };
 
     let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
     let start_post_prompt = std::time::Instant::now();

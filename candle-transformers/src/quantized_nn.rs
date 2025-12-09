@@ -6,7 +6,7 @@
 
 use crate::models::with_tracing::QMatMul;
 use crate::quantized_var_builder::VarBuilder;
-use candle::quantized::QTensor;
+use candle::quantized::{GgmlDType, QTensor};
 use candle::{Module, Result, Tensor};
 
 #[derive(Debug, Clone)]
@@ -104,6 +104,28 @@ pub struct RmsNorm {
     span: tracing::Span,
 }
 
+thread_local! {
+    static DEQUANTIZE_ALL: bool = {
+        match std::env::var("CANDLE_DEQUANTIZE_ALL") {
+            Ok(s) => {
+                !s.is_empty() && s != "0"
+            },
+            Err(_) => false,
+        }
+    }
+}
+
+thread_local! {
+    static DEQUANTIZE_ALL_F16: bool = {
+        match std::env::var("CANDLE_DEQUANTIZE_ALL_F16") {
+            Ok(s) => {
+                !s.is_empty() && s != "0"
+            },
+            Err(_) => false,
+        }
+    }
+}
+
 impl RmsNorm {
     pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
@@ -115,6 +137,24 @@ impl RmsNorm {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let weight = weight.dequantize(&weight.device())?;
         Ok(Self { weight, eps, span })
+    }
+
+    pub fn from_arc(weight: std::sync::Arc<QTensor>, eps: f64) -> Result<Self> {
+        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
+        let dequantize = match weight.dtype() {
+            GgmlDType::F32 | GgmlDType::F16 => true,
+            _ => DEQUANTIZE_ALL.with(|b| *b),
+        };
+        if dequantize {
+            let weight = weight.dequantize(&weight.device())?;
+            Ok(Self { weight, eps, span })
+        } else if DEQUANTIZE_ALL_F16.with(|b| *b) {
+            let weight = weight.dequantize_f16(&weight.device())?;
+            Ok(Self { weight, eps, span })
+        } else {
+            let weight = weight.dequantize(&weight.device())?;
+            Ok(Self { weight, eps, span })
+        }
     }
 }
 

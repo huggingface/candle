@@ -56,6 +56,7 @@ These online demos run entirely in your browser:
 - [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
 - [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm): text generation.
 - [Phi-1.5, and Phi-2](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm): text generation.
+- [Qwen2.5-Instruct](https://huggingface.co/spaces/ITHwangg/candle-qwen25-wasm-demo): text generation.
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
 - [BLIP](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
 
@@ -84,6 +85,8 @@ We also provide some command line based examples using state of the art models:
 - [StarCoder](./candle-examples/examples/bigcode/) and
   [StarCoder2](./candle-examples/examples/starcoder2/): LLM specialized to code generation.
 - [Qwen1.5](./candle-examples/examples/qwen/): Bilingual (English/Chinese) LLMs.
+- [Qwen2-Instruct, Qwen2.5-Instruct](./candle-examples/examples/qwen-instruct/): instruct model series from Alibaba Cloud.
+- [Quantized Qwen2-Instruct, Qwen2.5-Instruct](./candle-examples/examples/quantized-qwen-instruct/): quantized version of Qwen2-Instruct, Qwen2.5-Instruct.
 - [RWKV v5 and v6](./candle-examples/examples/rwkv/): An RNN with transformer level LLM
   performance.
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
@@ -220,7 +223,7 @@ If you have an addition to this list, please submit a pull request.
         - Replit-code-v1.5-3B.
         - Bert.
         - Yi-6B and Yi-34B.
-        - Qwen1.5, Qwen1.5 MoE.
+        - Qwen1.5, Qwen1.5 MoE, Qwen2-Instruct, Qwen2.5-Instruct.
         - RWKV v5 and v6.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
@@ -228,6 +231,7 @@ If you have an addition to this list, please submit a pull request.
         - Mixtral 8x7b.
         - Zephyr 7b a and b (Mistral-7b based).
         - OpenChat 3.5 (Mistral-7b based).
+        - Qwen2-Instruct, Qwen2.5-Instruct.
     - Text to text.
         - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
