@@ -14,39 +14,39 @@ use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
-struct Gguf<R: Read + Seek> {
+pub(crate) struct Gguf<R: Read + Seek> {
     ct: gguf_file::Content,
     reader: R,
     device: Device,
 }
 
 impl<R: Read + Seek> Gguf<R> {
-    fn new(ct: gguf_file::Content, reader: R, device: Device) -> Self {
+    pub(crate) fn new(ct: gguf_file::Content, reader: R, device: Device) -> Self {
         Self { ct, reader, device }
     }
 
-    fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
+    pub(crate) fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
         QMatMul::from_weights(ws.into())
     }
 
-    fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm> {
+    pub(crate) fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
         RmsNorm::from_qtensor(ws, eps)
     }
 
-    fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value> {
+    pub(crate) fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value> {
         &self.ct.metadata
     }
 
-    fn tensor(&mut self, name: &str) -> Result<QTensor> {
+    pub(crate) fn tensor(&mut self, name: &str) -> Result<QTensor> {
         self.ct.tensor(&mut self.reader, name, &self.device)
     }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct MlpWeights {
-    gate_proj: QMatMul, //양자화 전용 행렬 곱셈기
+    gate_proj: QMatMul,
     up_proj: QMatMul,
     down_proj: QMatMul,
     act_fn: Activation,
@@ -81,13 +81,13 @@ impl Module for MlpWeights {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
+pub(crate) struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
 }
 
 impl RotaryEmbedding {
-    fn new(
+    pub(crate) fn new(
         dtype: DType,
         head_dim: usize,
         max_position_embeddings: usize,
@@ -113,7 +113,7 @@ impl RotaryEmbedding {
     }
 
     /// Apply RoPE (q, k shape: B x H x L x D)
-    fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
+    pub(crate) fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let sin = self.sin.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
@@ -124,7 +124,7 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct AttentionWeights {
+pub(crate) struct AttentionWeights {
     q_proj: QMatMul,
     k_proj: QMatMul,
     v_proj: QMatMul,
@@ -141,7 +141,7 @@ struct AttentionWeights {
 }
 
 impl AttentionWeights {
-    fn new<R: Read + Seek>(
+    pub(crate) fn new<R: Read + Seek>(
         gg: &mut Gguf<R>,
         num_heads: usize,
         num_kv_heads: usize,
@@ -181,7 +181,12 @@ impl AttentionWeights {
         })
     }
 
-    fn forward(&mut self, x: &Tensor, attn_mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
+    pub(crate) fn forward(
+        &mut self,
+        x: &Tensor,
+        attn_mask: Option<&Tensor>,
+        offset: usize,
+    ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b, l, _) = x.dims3()?;
 
@@ -234,7 +239,7 @@ impl AttentionWeights {
         self.o_proj.forward(&reshaped_ctx)
     }
 
-    fn clear_kv_cache(&mut self) {
+    pub(crate) fn clear_kv_cache(&mut self) {
         self.kv_cache.reset();
     }
 }
@@ -336,7 +341,7 @@ impl ModelWeights {
         };
 
         let embed_tensor = gg.tensor("token_embd.weight")?;
-        let embed_tokens = Embedding::new(embed_tensor.dequantize(device)?, hidden_size); //압축을 풀어버림. embedding 층은 단어를 찾아오는 거라 압축되어 있으면 indexing이 느림.
+        let embed_tokens = Embedding::new(embed_tensor.dequantize(device)?, hidden_size);
 
         let rotary = Arc::new(RotaryEmbedding::new(
             dtype,
