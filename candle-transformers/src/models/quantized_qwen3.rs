@@ -45,8 +45,8 @@ impl<R: Read + Seek> Gguf<R> {
 }
 
 #[derive(Debug, Clone)]
-struct MlpWeights {
-    gate_proj: QMatMul,
+pub(crate) struct MlpWeights {
+    gate_proj: QMatMul, //양자화 전용 행렬 곱셈기
     up_proj: QMatMul,
     down_proj: QMatMul,
     act_fn: Activation,
@@ -54,7 +54,7 @@ struct MlpWeights {
 }
 
 impl MlpWeights {
-    fn new<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
+    pub(crate) fn new<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
         let gate_proj = gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?;
         let up_proj = gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?;
         let down_proj = gg.qmatmul(&format!("{prefix}.ffn_down.weight"))?;
@@ -336,7 +336,7 @@ impl ModelWeights {
         };
 
         let embed_tensor = gg.tensor("token_embd.weight")?;
-        let embed_tokens = Embedding::new(embed_tensor.dequantize(device)?, hidden_size);
+        let embed_tokens = Embedding::new(embed_tensor.dequantize(device)?, hidden_size); //압축을 풀어버림. embedding 층은 단어를 찾아오는 거라 압축되어 있으면 indexing이 느림.
 
         let rotary = Arc::new(RotaryEmbedding::new(
             dtype,
