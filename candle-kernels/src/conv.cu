@@ -619,8 +619,14 @@ __device__ void upsample_bilinear2d(
     const scalar_t v11 = src[base + h1 * src_s[2] + w1 * src_s[3]];
     
     // Bilinear interpolation
-    const double v_top = v00 * (1.0 - weight_w) + v10 * weight_w;
-    const double v_bottom = v01 * (1.0 - weight_w) + v11 * weight_w;
+    // Convert to double for computation to avoid type issues with __half and __nv_bfloat16
+    const double v00_d = static_cast<double>(v00);
+    const double v10_d = static_cast<double>(v10);
+    const double v01_d = static_cast<double>(v01);
+    const double v11_d = static_cast<double>(v11);
+    
+    const double v_top = v00_d * (1.0 - weight_w) + v10_d * weight_w;
+    const double v_bottom = v01_d * (1.0 - weight_w) + v11_d * weight_w;
     const double value = v_top * (1.0 - weight_h) + v_bottom * weight_h;
     
     dst[dst_i] = static_cast<scalar_t>(value);
@@ -871,7 +877,6 @@ UPSAMPLE_NEAREST2D_OP(uint32_t, upsample_nearest2d_u32)
 
 UPSAMPLE_BILINEAR2D_OP(float, upsample_bilinear2d_f32)
 UPSAMPLE_BILINEAR2D_OP(double, upsample_bilinear2d_f64)
-UPSAMPLE_BILINEAR2D_OP(__half, upsample_bilinear2d_f16)
 UPSAMPLE_BILINEAR2D_OP(uint8_t, upsample_bilinear2d_u8)
 UPSAMPLE_BILINEAR2D_OP(uint32_t, upsample_bilinear2d_u32)
 
