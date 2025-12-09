@@ -1345,6 +1345,61 @@ impl BackendStorage for MetalStorage {
         Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
+    fn upsample_bilinear2d(
+        &self,
+        inp_l: &Layout,
+        out_h: usize,
+        out_w: usize,
+        align_corners: bool,
+        scale_h: Option<f64>,
+        scale_w: Option<f64>,
+    ) -> Result<Self> {
+        let shape = inp_l.shape();
+        let dims = shape.dims();
+        let strides = inp_l.stride();
+        
+        if dims.len() != 4 {
+            crate::bail!("unexpected input shape for upsample_bilinear2d {dims:?}")
+        }
+        
+        let name = match self.dtype {
+            DType::F32 => "upsample_bilinear2d_f32",
+            DType::F16 => "upsample_bilinear2d_f16",
+            DType::BF16 => "upsample_bilinear2d_bf16",
+            DType::U8 => "upsample_bilinear2d_u8",
+            DType::U32 => "upsample_bilinear2d_u32",
+            dtype => crate::bail!("Metal upsample_bilinear2d {dtype:?} not implemented"),
+        };
+        
+        let dst_el = out_w * out_h * dims[0] * dims[1];
+        let buffer = self
+            .device
+            .new_buffer(dst_el, self.dtype, "upsample_bilinear2d")?;
+        
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("upsample_bilinear2d");
+        
+        let src = buffer_o(&self.buffer, inp_l, self.dtype);
+        candle_metal_kernels::call_upsample_bilinear_2d(
+            &self.device.device,
+            &encoder,
+            &self.device.kernels,
+            name,
+            dims,
+            strides,
+            out_w,
+            out_h,
+            align_corners,
+            scale_h,
+            scale_w,
+            src,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+        
+        Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
+    }
+
     fn gather(&self, src_l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
         if !ids_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "gather" }.bt());
