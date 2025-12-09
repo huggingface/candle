@@ -100,7 +100,7 @@ constexpr METAL_FUNC bool operator<(indexed<T> lhs, indexed<T> rhs) {
 
 template<typename T>
 constexpr METAL_FUNC bool operator>(indexed<T> lhs, indexed<T> rhs) {
-    return lhs.val > rhs.val || (lhs.val == rhs.val && lhs.i > rhs.i);
+    return lhs.val > rhs.val || (lhs.val == rhs.val && lhs.i < rhs.i);
 }
 
 template<typename T>
