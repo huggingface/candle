@@ -1787,12 +1787,8 @@ impl MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        fn kernel_name(op: &'static str, dtype: &DType, contiguous: bool) -> String {
-            format!(
-                "{op}_{}{}",
-                dtype.as_str(),
-                if contiguous { "" } else { "_strided" }
-            )
+        fn kernel_name(op: &'static str, dtype: &DType, suffix: &str) -> String {
+            format!("{op}_{}{}", dtype.as_str(), suffix)
         }
         let device = self.device();
         let shape = lhs_l.shape();
@@ -1805,9 +1801,11 @@ impl MetalStorage {
             "eq" | "ne" | "le" | "lt" | "ge" | "gt" => DType::U8,
             _ => self.dtype,
         };
+        let lhs_contiguous = lhs_l.is_contiguous();
+        let rhs_contiguous = rhs_l.is_contiguous();
 
-        let buffer = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
-            let kernel = kernel_name(op, &self.dtype, true);
+        let buffer = if lhs_contiguous && rhs_contiguous {
+            let kernel = kernel_name(op, &self.dtype, "");
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_contiguous(
                 &device.device,
@@ -1823,13 +1821,21 @@ impl MetalStorage {
             .map_err(MetalError::from)?;
             buffer
         } else {
-            let kernel = kernel_name(op, &self.dtype, false);
+            let strided_suffix = if lhs_contiguous {
+                "_rstrided"
+            } else if rhs_contiguous {
+                "_lstrided"
+            } else {
+                "_strided"
+            };
+            let kernel = kernel_name(op, &self.dtype, strided_suffix);
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_strided(
                 &device.device,
                 &encoder,
                 &device.kernels,
                 kernel,
+                self.dtype.size_in_bytes(),
                 lhs_l.dims(),
                 lhs,
                 lhs_l.stride(),

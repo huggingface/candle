@@ -43,6 +43,7 @@ pub fn call_binary_strided<S: ToString>(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     kernel_name: S,
+    dtype_size: usize,
     shape: &[usize],
     left_input: BufferOffset,
     left_strides: &[usize],
@@ -56,7 +57,9 @@ pub fn call_binary_strided<S: ToString>(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let length: usize = shape.iter().product();
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
 
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(

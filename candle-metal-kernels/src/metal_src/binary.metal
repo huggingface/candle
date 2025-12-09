@@ -20,6 +20,28 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
+struct cont_indexer {
+    METAL_FUNC uint operator()(
+        uint idx,
+        constant size_t &num_dims,
+        constant size_t *dims,
+        constant size_t *strides
+    ) {
+        return idx;
+    }
+};
+
+struct strided_indexer {
+    METAL_FUNC uint operator()(
+        uint idx,
+        constant size_t &num_dims,
+        constant size_t *dims,
+        constant size_t *strides
+    ) {
+        return get_strided_index(idx, num_dims, dims, strides);
+    }
+};
+
 METAL_FUNC uint nonzero(uint n) {
     return n == 0 ? 1 : n;
 }
@@ -51,7 +73,13 @@ template <typename T, typename U, typename binary, uint W = work_per_thread<T>()
     }
 }
 
-template <typename T, typename U, typename binary>
+template <
+    typename T,
+    typename U,
+    typename binary,
+    typename l_indexer = strided_indexer,
+    typename r_indexer = strided_indexer,
+    uint W = work_per_thread<T>()>
 [[kernel]] void binary_kernel_strided(
     constant size_t &dim,
     constant size_t &num_dims,
@@ -63,20 +91,27 @@ template <typename T, typename U, typename binary>
     device U *output,
     uint tid [[ thread_position_in_grid ]]
 ) {
-    if (tid >= dim) return;
     binary op;
-    uint l_idx = get_strided_index(tid, num_dims, dims, left_strides);
-    uint r_idx = get_strided_index(tid, num_dims, dims, right_strides);
-    output[tid] = static_cast<U>(op(left[l_idx], right[r_idx]));
+    l_indexer l_index;
+    r_indexer r_index;
+    const uint step = nonzero(dim/W);
+    #pragma clang loop unroll(full)
+    for (uint i = tid; i < dim; i += step) {
+        uint l_idx = l_index(i, num_dims, dims, left_strides);
+        uint r_idx = r_index(i, num_dims, dims, right_strides);
+        output[i] = static_cast<U>(op(left[l_idx], right[r_idx]));
+    }
 }
 
 // Macros to help initialize kernels
 #define init_kernel(name, func, ...) \
   template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
 
-#define init_binary_k(op_name, binary_op, tname, t, u)                                    \
-    init_kernel(#op_name "_" #tname, binary_kernel, t, u, binary_op)                    \
-    init_kernel(#op_name "_" #tname "_strided", binary_kernel_strided, t, u, binary_op)
+#define init_binary_k(op_name, binary_op, tname, t, u)                                                                      \
+    init_kernel(#op_name "_" #tname, binary_kernel, t, u, binary_op)                                                        \
+    init_kernel(#op_name "_" #tname "_strided", binary_kernel_strided, t, u, binary_op)                                     \
+    init_kernel(#op_name "_" #tname "_lstrided", binary_kernel_strided, t, u, binary_op, strided_indexer, cont_indexer)     \
+    init_kernel(#op_name "_" #tname "_rstrided", binary_kernel_strided, t, u, binary_op, cont_indexer, strided_indexer)
 
 #if defined(__HAVE_BFLOAT__)
 #define init_binary(bop)                            \
