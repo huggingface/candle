@@ -106,6 +106,3 @@ objc2-foundation = { version = "0.3.1" }
 [profile.release-with-debug]
 inherits = "release"
 debug = true
-
-[profile.dev]
-debug = 1
