@@ -1,4 +1,5 @@
 pub(crate) mod affine;
+pub(crate) mod binary;
 pub(crate) mod broadcast;
 pub(crate) mod conv_transpose2d;
 pub(crate) mod copy;
@@ -32,7 +33,7 @@ impl BenchDevice for Device {
             }
             Device::Metal(device) => {
                 #[cfg(feature = "metal")]
-                return Ok(device.wait_until_completed()?);
+                return device.wait_until_completed();
                 #[cfg(not(feature = "metal"))]
                 panic!("Metal device without metal feature enabled: {:?}", device)
             }

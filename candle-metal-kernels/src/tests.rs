@@ -1,9 +1,11 @@
 use super::*;
-use crate::metal::create_command_buffer;
+use crate::metal::{create_command_buffer, CommandSemaphore, Commands};
 use core::ffi::c_void;
 use half::{bf16, f16};
 use rand::prelude::SliceRandom;
 use rand::{rng, Rng};
+use std::sync::Arc;
+use std::thread;
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
@@ -42,7 +44,8 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
     let input = BufferOffset {
         buffer: &input,
@@ -54,6 +57,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
         &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         v.len(),
         input,
         &output,
@@ -68,7 +72,8 @@ fn run_binary<T: Clone>(x: &[T], y: &[T], name: kernels::binary::contiguous::Ker
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let options = RESOURCE_OPTIONS;
     let left = new_buffer(&device, x);
     let right = new_buffer(&device, y);
@@ -100,7 +105,8 @@ fn run_strided<T: Clone>(
 ) -> Vec<T> {
     let device = device();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
     let input = BufferOffset {
         buffer: &input,
@@ -233,9 +239,9 @@ fn gelu_f16() {
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect();
-    let expected: Vec<f32> = vec![-0.0, -0.16, 0.0, 0.84, 1.96, 3.0, 10.0, 20.0];
+    let expected: Vec<f32> = vec![-0.0, -0.159, 0.0, 0.841, 1.954, 2.996, 10.0, 20.0];
     let results = run(&v, unary::contiguous::gelu::HALF);
-    assert_eq!(approx_f16(results, 2), expected);
+    assert_eq!(approx_f16(results, 3), expected);
 }
 
 #[test]
@@ -311,7 +317,8 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
     let options = RESOURCE_OPTIONS;
     let size = v.len() * std::mem::size_of::<U>();
@@ -522,7 +529,8 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
@@ -534,6 +542,7 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
         &command_buffer,
         &kernels,
         "affine_f32",
+        size_of::<T>(),
         size,
         BufferOffset::zero_offset(&input),
         &output,
@@ -557,7 +566,8 @@ fn run_affine_strided<T: Clone>(
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
@@ -614,7 +624,8 @@ fn run_mlx_sort<T: Clone>(v: &[T], ncols: usize) -> Vec<u32> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
     let input = new_buffer(&device, v);
     let indexes = vec![0u32; v.len()];
@@ -775,7 +786,8 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
     let device = Device::system_default().expect("no device found");
 
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let embeddings_buffer = new_buffer(&device, embeddings);
     let ids_buffer = new_buffer(&device, ids);
 
@@ -819,7 +831,8 @@ fn run_index_select_strided<T: Clone, I: Clone + std::fmt::Debug>(
     let device = Device::system_default().expect("no device found");
 
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let embeddings_buffer = new_buffer(&device, embeddings);
     let ids_buffer = new_buffer(&device, ids);
 
@@ -873,7 +886,8 @@ fn run_reduce<T, U: Clone>(
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
 
     let options = RESOURCE_OPTIONS;
@@ -907,7 +921,8 @@ fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'sta
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
     call_last_softmax(
@@ -1191,7 +1206,8 @@ fn run_where_cond<I: Clone, T: Clone>(
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let options = RESOURCE_OPTIONS;
 
     let length = cond.len();
@@ -1313,7 +1329,8 @@ fn run_mlx_gemm<T: Clone>(
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let options = RESOURCE_OPTIONS;
 
     let lhs = device
@@ -1463,7 +1480,8 @@ fn run_random<T: Clone>(name: &'static str, seed: u64, length: usize, a: f32, b:
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
     let options = RESOURCE_OPTIONS;
     let output = device
@@ -1594,7 +1612,8 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let options = RESOURCE_OPTIONS;
     let input_buffer = new_buffer(&device, input);
     let ids_buffer = new_buffer(&device, ids);
@@ -1699,7 +1718,8 @@ fn run_index_add<T: Clone, I: Clone + std::fmt::Debug>(
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input_buffer = new_buffer(&device, right);
     let output = new_buffer(&device, left);
     let indices_buffer = new_buffer(&device, indices);
@@ -1812,7 +1832,8 @@ fn run_pool2d<T: Clone>(
 ) -> Vec<T> {
     let device = device();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let out_w = (shape[2] - w_k) / w_stride + 1;
     let out_h = (shape[3] - h_k) / h_stride + 1;
     let dst_el = out_w * out_h * shape[0] * shape[1];
@@ -2167,7 +2188,8 @@ fn run_conv_transpose1d<T: Clone>(
 ) -> Vec<T> {
     let device = device();
     let command_queue = device.new_command_queue().unwrap();
-    let command_buffer = create_command_buffer(&command_queue).unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
     let c_out = kernel_shape[1];
     let k_size = kernel_shape[2];
@@ -2374,7 +2396,8 @@ fn const_fill() {
         let dev = device();
         let kernels = Kernels::new();
         let command_queue = dev.new_command_queue().unwrap();
-        let command_buffer = create_command_buffer(&command_queue).unwrap();
+        let semaphore = Arc::new(CommandSemaphore::new());
+        let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
         let buffer = dev
             .new_buffer(len * std::mem::size_of::<T>(), RESOURCE_OPTIONS)
             .unwrap();
@@ -2399,4 +2422,62 @@ fn const_fill() {
     test::<f16, _>("fill_f16", f16::from_f32);
     test::<bf16, _>("fill_bf16", bf16::from_f32);
     test::<f32, _>("fill_f32", |v| v);
+}
+
+#[test]
+fn commands_creation_and_encoder() {
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let commands = Commands::new(queue).unwrap();
+
+    let (_flush, encoder) = commands.command_encoder().unwrap();
+    drop(encoder);
+}
+
+#[test]
+fn commands_rotation_threshold() {
+    std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "2");
+
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let commands = Commands::new(queue).unwrap();
+
+    let mut flush_count = 0;
+    for _ in 0..6 {
+        let (flush, encoder) = commands.command_encoder().unwrap();
+        flush_count += flush as usize;
+        drop(encoder);
+    }
+
+    assert!(flush_count >= 2);
+
+    // Flushes pending work and blocks until all in‑flight command buffers complete.
+    // Ensures completion and surfaces any GPU errors before the test ends.
+    commands.wait_until_completed().unwrap();
+}
+
+#[test]
+fn commands_concurrent_acquisition() {
+    std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "2");
+    std::env::set_var("CANDLE_METAL_COMMAND_POOL_SIZE", "4");
+
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let commands = Arc::new(Commands::new(queue).unwrap());
+
+    let mut handles = vec![];
+
+    for _ in 0..16 {
+        let c = Arc::clone(&commands);
+        handles.push(thread::spawn(move || {
+            let (_flush, encoder) = c.command_encoder().unwrap();
+            drop(encoder);
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    commands.wait_until_completed().unwrap();
 }
