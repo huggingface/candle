@@ -1787,104 +1787,31 @@ impl MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
+        fn kernel_name(op: &'static str, dtype: &DType, suffix: &str) -> String {
+            format!("{op}_{}{}", dtype.as_str(), suffix)
+        }
         let device = self.device();
         let shape = lhs_l.shape();
         let el_count = shape.elem_count();
         let encoder = device.command_encoder()?;
         let lhs = buffer_o(&self.buffer, lhs_l, self.dtype);
         let rhs = buffer_o(&rhs.buffer, rhs_l, rhs.dtype);
-        let (buffer, dtype) = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
-            use candle_metal_kernels::kernels::binary::contiguous;
 
-            let (kernel_name, dtype) = match (op, self.dtype) {
-                ("badd", DType::F32) => (contiguous::add::FLOAT, self.dtype),
-                ("bsub", DType::F32) => (contiguous::sub::FLOAT, self.dtype),
-                ("bmul", DType::F32) => (contiguous::mul::FLOAT, self.dtype),
-                ("bdiv", DType::F32) => (contiguous::div::FLOAT, self.dtype),
-                ("bminimum", DType::F32) => (contiguous::min::FLOAT, self.dtype),
-                ("bmaximum", DType::F32) => (contiguous::max::FLOAT, self.dtype),
-                ("eq", DType::F32) => (contiguous::eq::FLOAT, DType::U8),
-                ("ne", DType::F32) => (contiguous::ne::FLOAT, DType::U8),
-                ("le", DType::F32) => (contiguous::le::FLOAT, DType::U8),
-                ("lt", DType::F32) => (contiguous::lt::FLOAT, DType::U8),
-                ("ge", DType::F32) => (contiguous::ge::FLOAT, DType::U8),
-                ("gt", DType::F32) => (contiguous::gt::FLOAT, DType::U8),
+        let dtype = match op {
+            "eq" | "ne" | "le" | "lt" | "ge" | "gt" => DType::U8,
+            _ => self.dtype,
+        };
+        let lhs_contiguous = lhs_l.is_contiguous();
+        let rhs_contiguous = rhs_l.is_contiguous();
 
-                ("badd", DType::F16) => (contiguous::add::HALF, self.dtype),
-                ("bsub", DType::F16) => (contiguous::sub::HALF, self.dtype),
-                ("bmul", DType::F16) => (contiguous::mul::HALF, self.dtype),
-                ("bdiv", DType::F16) => (contiguous::div::HALF, self.dtype),
-                ("bminimum", DType::F16) => (contiguous::min::HALF, self.dtype),
-                ("bmaximum", DType::F16) => (contiguous::max::HALF, self.dtype),
-                ("eq", DType::F16) => (contiguous::eq::HALF, DType::U8),
-                ("ne", DType::F16) => (contiguous::ne::HALF, DType::U8),
-                ("le", DType::F16) => (contiguous::le::HALF, DType::U8),
-                ("lt", DType::F16) => (contiguous::lt::HALF, DType::U8),
-                ("ge", DType::F16) => (contiguous::ge::HALF, DType::U8),
-                ("gt", DType::F16) => (contiguous::gt::HALF, DType::U8),
-
-                ("badd", DType::BF16) => (contiguous::add::BFLOAT, self.dtype),
-                ("bsub", DType::BF16) => (contiguous::sub::BFLOAT, self.dtype),
-                ("bmul", DType::BF16) => (contiguous::mul::BFLOAT, self.dtype),
-                ("bdiv", DType::BF16) => (contiguous::div::BFLOAT, self.dtype),
-                ("bminimum", DType::BF16) => (contiguous::min::BFLOAT, self.dtype),
-                ("bmaximum", DType::BF16) => (contiguous::max::BFLOAT, self.dtype),
-                ("eq", DType::BF16) => (contiguous::eq::BFLOAT, DType::U8),
-                ("ne", DType::BF16) => (contiguous::ne::BFLOAT, DType::U8),
-                ("le", DType::BF16) => (contiguous::le::BFLOAT, DType::U8),
-                ("lt", DType::BF16) => (contiguous::lt::BFLOAT, DType::U8),
-                ("ge", DType::BF16) => (contiguous::ge::BFLOAT, DType::U8),
-                ("gt", DType::BF16) => (contiguous::gt::BFLOAT, DType::U8),
-
-                ("badd", DType::I64) => (contiguous::add::I64, self.dtype),
-                ("bsub", DType::I64) => (contiguous::sub::I64, self.dtype),
-                ("bmul", DType::I64) => (contiguous::mul::I64, self.dtype),
-                ("bdiv", DType::I64) => (contiguous::div::I64, self.dtype),
-                ("bminimum", DType::I64) => (contiguous::min::I64, self.dtype),
-                ("bmaximum", DType::I64) => (contiguous::max::I64, self.dtype),
-                ("eq", DType::I64) => (contiguous::eq::I64, DType::U8),
-                ("ne", DType::I64) => (contiguous::ne::I64, DType::U8),
-                ("le", DType::I64) => (contiguous::le::I64, DType::U8),
-                ("lt", DType::I64) => (contiguous::lt::I64, DType::U8),
-                ("ge", DType::I64) => (contiguous::ge::I64, DType::U8),
-                ("gt", DType::I64) => (contiguous::gt::I64, DType::U8),
-
-                ("badd", DType::U32) => (contiguous::add::U32, self.dtype),
-                ("bsub", DType::U32) => (contiguous::sub::U32, self.dtype),
-                ("bmul", DType::U32) => (contiguous::mul::U32, self.dtype),
-                ("bdiv", DType::U32) => (contiguous::div::U32, self.dtype),
-                ("bminimum", DType::U32) => (contiguous::min::U32, self.dtype),
-                ("bmaximum", DType::U32) => (contiguous::max::U32, self.dtype),
-                ("eq", DType::U32) => (contiguous::eq::U32, DType::U8),
-                ("ne", DType::U32) => (contiguous::ne::U32, DType::U8),
-                ("le", DType::U32) => (contiguous::le::U32, DType::U8),
-                ("lt", DType::U32) => (contiguous::lt::U32, DType::U8),
-                ("ge", DType::U32) => (contiguous::ge::U32, DType::U8),
-                ("gt", DType::U32) => (contiguous::gt::U32, DType::U8),
-
-                ("badd", DType::U8) => (contiguous::add::U8, self.dtype),
-                ("bsub", DType::U8) => (contiguous::sub::U8, self.dtype),
-                ("bmul", DType::U8) => (contiguous::mul::U8, self.dtype),
-                ("bdiv", DType::U8) => (contiguous::div::U8, self.dtype),
-                ("bminimum", DType::U8) => (contiguous::min::U8, self.dtype),
-                ("bmaximum", DType::U8) => (contiguous::max::U8, self.dtype),
-                ("eq", DType::U8) => (contiguous::eq::U8, DType::U8),
-                ("ne", DType::U8) => (contiguous::ne::U8, DType::U8),
-                ("le", DType::U8) => (contiguous::le::U8, DType::U8),
-                ("lt", DType::U8) => (contiguous::lt::U8, DType::U8),
-                ("ge", DType::U8) => (contiguous::ge::U8, DType::U8),
-                ("gt", DType::U8) => (contiguous::gt::U8, DType::U8),
-
-                (name, dtype) => {
-                    crate::bail!("Metal contiguous binary {name} {dtype:?} not implemented")
-                }
-            };
+        let buffer = if lhs_contiguous && rhs_contiguous {
+            let kernel = kernel_name(op, &self.dtype, "");
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_contiguous(
                 &device.device,
                 &encoder,
                 &device.kernels,
-                kernel_name,
+                kernel,
                 self.dtype.size_in_bytes(),
                 el_count,
                 lhs,
@@ -1892,99 +1819,23 @@ impl MetalStorage {
                 &buffer,
             )
             .map_err(MetalError::from)?;
-            (buffer, dtype)
+            buffer
         } else {
-            use candle_metal_kernels::kernels::binary::strided;
-
-            let (kernel_name, dtype) = match (op, self.dtype) {
-                ("badd", DType::F32) => (strided::add::FLOAT, self.dtype),
-                ("bsub", DType::F32) => (strided::sub::FLOAT, self.dtype),
-                ("bmul", DType::F32) => (strided::mul::FLOAT, self.dtype),
-                ("bdiv", DType::F32) => (strided::div::FLOAT, self.dtype),
-                ("bminimum", DType::F32) => (strided::min::FLOAT, self.dtype),
-                ("bmaximum", DType::F32) => (strided::max::FLOAT, self.dtype),
-                ("eq", DType::F32) => (strided::eq::FLOAT, DType::U8),
-                ("ne", DType::F32) => (strided::ne::FLOAT, DType::U8),
-                ("le", DType::F32) => (strided::le::FLOAT, DType::U8),
-                ("lt", DType::F32) => (strided::lt::FLOAT, DType::U8),
-                ("ge", DType::F32) => (strided::ge::FLOAT, DType::U8),
-                ("gt", DType::F32) => (strided::gt::FLOAT, DType::U8),
-
-                ("badd", DType::F16) => (strided::add::HALF, self.dtype),
-                ("bsub", DType::F16) => (strided::sub::HALF, self.dtype),
-                ("bmul", DType::F16) => (strided::mul::HALF, self.dtype),
-                ("bdiv", DType::F16) => (strided::div::HALF, self.dtype),
-                ("bminimum", DType::F16) => (strided::min::HALF, self.dtype),
-                ("bmaximum", DType::F16) => (strided::max::HALF, self.dtype),
-                ("eq", DType::F16) => (strided::eq::HALF, DType::U8),
-                ("ne", DType::F16) => (strided::ne::HALF, DType::U8),
-                ("le", DType::F16) => (strided::le::HALF, DType::U8),
-                ("lt", DType::F16) => (strided::lt::HALF, DType::U8),
-                ("ge", DType::F16) => (strided::ge::HALF, DType::U8),
-                ("gt", DType::F16) => (strided::gt::HALF, DType::U8),
-
-                ("badd", DType::BF16) => (strided::add::BFLOAT, self.dtype),
-                ("bsub", DType::BF16) => (strided::sub::BFLOAT, self.dtype),
-                ("bmul", DType::BF16) => (strided::mul::BFLOAT, self.dtype),
-                ("bdiv", DType::BF16) => (strided::div::BFLOAT, self.dtype),
-                ("bminimum", DType::BF16) => (strided::min::BFLOAT, self.dtype),
-                ("bmaximum", DType::BF16) => (strided::max::BFLOAT, self.dtype),
-                ("eq", DType::BF16) => (strided::eq::BFLOAT, DType::U8),
-                ("ne", DType::BF16) => (strided::ne::BFLOAT, DType::U8),
-                ("le", DType::BF16) => (strided::le::BFLOAT, DType::U8),
-                ("lt", DType::BF16) => (strided::lt::BFLOAT, DType::U8),
-                ("ge", DType::BF16) => (strided::ge::BFLOAT, DType::U8),
-                ("gt", DType::BF16) => (strided::gt::BFLOAT, DType::U8),
-
-                ("badd", DType::I64) => (strided::add::I64, self.dtype),
-                ("bsub", DType::I64) => (strided::sub::I64, self.dtype),
-                ("bmul", DType::I64) => (strided::mul::I64, self.dtype),
-                ("bdiv", DType::I64) => (strided::div::I64, self.dtype),
-                ("bminimum", DType::I64) => (strided::min::I64, self.dtype),
-                ("bmaximum", DType::I64) => (strided::max::I64, self.dtype),
-                ("eq", DType::I64) => (strided::eq::I64, DType::U8),
-                ("ne", DType::I64) => (strided::ne::I64, DType::U8),
-                ("le", DType::I64) => (strided::le::I64, DType::U8),
-                ("lt", DType::I64) => (strided::lt::I64, DType::U8),
-                ("ge", DType::I64) => (strided::ge::I64, DType::U8),
-                ("gt", DType::I64) => (strided::gt::I64, DType::U8),
-
-                ("badd", DType::U32) => (strided::add::U32, self.dtype),
-                ("bsub", DType::U32) => (strided::sub::U32, self.dtype),
-                ("bmul", DType::U32) => (strided::mul::U32, self.dtype),
-                ("bdiv", DType::U32) => (strided::div::U32, self.dtype),
-                ("bminimum", DType::U32) => (strided::min::U32, self.dtype),
-                ("bmaximum", DType::U32) => (strided::max::U32, self.dtype),
-                ("eq", DType::U32) => (strided::eq::U32, DType::U8),
-                ("ne", DType::U32) => (strided::ne::U32, DType::U8),
-                ("le", DType::U32) => (strided::le::U32, DType::U8),
-                ("lt", DType::U32) => (strided::lt::U32, DType::U8),
-                ("ge", DType::U32) => (strided::ge::U32, DType::U8),
-                ("gt", DType::U32) => (strided::gt::U32, DType::U8),
-
-                ("badd", DType::U8) => (strided::add::U8, self.dtype),
-                ("bsub", DType::U8) => (strided::sub::U8, self.dtype),
-                ("bmul", DType::U8) => (strided::mul::U8, self.dtype),
-                ("bdiv", DType::U8) => (strided::div::U8, self.dtype),
-                ("bminimum", DType::U8) => (strided::min::U8, self.dtype),
-                ("bmaximum", DType::U8) => (strided::max::U8, self.dtype),
-                ("eq", DType::U8) => (strided::eq::U8, DType::U8),
-                ("ne", DType::U8) => (strided::ne::U8, DType::U8),
-                ("le", DType::U8) => (strided::le::U8, DType::U8),
-                ("lt", DType::U8) => (strided::lt::U8, DType::U8),
-                ("ge", DType::U8) => (strided::ge::U8, DType::U8),
-                ("gt", DType::U8) => (strided::gt::U8, DType::U8),
-
-                (name, dtype) => {
-                    crate::bail!("Metal strided binary {name} {dtype:?} not implemented")
-                }
+            let strided_suffix = if lhs_contiguous {
+                "_rstrided"
+            } else if rhs_contiguous {
+                "_lstrided"
+            } else {
+                "_strided"
             };
+            let kernel = kernel_name(op, &self.dtype, strided_suffix);
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_strided(
                 &device.device,
                 &encoder,
                 &device.kernels,
-                kernel_name,
+                kernel,
+                self.dtype.size_in_bytes(),
                 lhs_l.dims(),
                 lhs,
                 lhs_l.stride(),
@@ -1993,7 +1844,7 @@ impl MetalStorage {
                 &buffer,
             )
             .map_err(MetalError::from)?;
-            (buffer, dtype)
+            buffer
         };
         encoder.set_label("binary");
         Ok(Self::new(buffer, device.clone(), el_count, dtype))
