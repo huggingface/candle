@@ -4,6 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+use candle_nn::kv_cache::DefaultKvCache;
 use clap::{Parser, ValueEnum};
 use std::io::Write;
 use tokenizers::Tokenizer;
@@ -175,7 +176,7 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
 
-    let mut model = {
+    let mut model: ModelWeights<DefaultKvCache> = {
         let model = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(&model_path))?;
         let mut total_size_in_bytes = 0;
         for (_, tensor) in model.tensor_infos.iter() {
