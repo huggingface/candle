@@ -17,18 +17,19 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
-METAL_FUNC uint nonzero(uint n) {
-    return n == 0 ? 1 : n;
+template<uint Y>
+constexpr uint div_ceil(uint x) {
+    return x / Y + (x % Y > 0);
 }
 
-template<uint N>
-constexpr uint nonzero() {
-    return N == 0 ? 1 : N;
+template<uint X, uint Y>
+constexpr uint div_ceil() {
+    return X / Y + (X % Y > 0);
 }
 
 template<typename T>
 constexpr uint work_per_thread() {
-    return nonzero<8 / sizeof(T)>();
+    return div_ceil<8, sizeof(T)>();
 }
 
 // Kernels
@@ -41,7 +42,7 @@ template <typename T, int W = work_per_thread<T>()>
     device T *output,
     uint tid [[thread_position_in_grid]]
 ) {
-    const uint step = nonzero(dim/W);
+    const uint step = div_ceil<W>(dim);
     #pragma clang loop unroll(full)
     for (uint i = tid; i < dim; i += step) {
         output[i] = static_cast<T>(fma(float(input[i]), mul, add));
@@ -74,7 +75,7 @@ template <typename T, int W = work_per_thread<T>()>
     device T *output,
     uint tid [[thread_position_in_grid]]
 ) {
-    const uint step = nonzero(dim/W);
+    const uint step = div_ceil<W>(dim);
     #pragma clang loop unroll(full)
     for (uint i = tid; i < dim; i += step) {
         output[i] = static_cast<T>(pow(static_cast<float>(input[i]), mul));
@@ -105,7 +106,7 @@ template <typename T, int W = work_per_thread<T>()>
     device T *output,
     uint tid [[thread_position_in_grid]]
 ) {
-    const uint step = nonzero(dim/W);
+    const uint step = div_ceil<W>(dim);
     #pragma clang loop unroll(full)
     for (uint i = tid; i < dim; i += step) {
         const T x = input[i];
