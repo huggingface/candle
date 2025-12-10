@@ -67,7 +67,7 @@ fn run_cast_benchmark(
         b.iter_custom(|iters| {
             let start = Instant::now();
             for _i in 0..iters {
-                run_cast(black_box(&tensor), black_box(to_dtype.clone()));
+                run_cast(black_box(&tensor), black_box(to_dtype));
             }
             device.sync().unwrap();
             start.elapsed()
