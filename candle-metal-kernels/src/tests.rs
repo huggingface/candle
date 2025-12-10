@@ -333,6 +333,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
         &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         v.len(),
         BufferOffset::zero_offset(&input),
         &output,
