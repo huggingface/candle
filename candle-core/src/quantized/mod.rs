@@ -308,21 +308,66 @@ impl GgmlDType {
     /// The block dtype
     pub fn cpu_zeros(&self, elem_count: usize) -> Box<dyn QuantizedType> {
         match self {
-            Self::F32 => Box::new(vec![f32::zeros(); elem_count]),
-            Self::F16 => Box::new(vec![f16::zeros(); elem_count]),
-            Self::Q4_0 => Box::new(vec![BlockQ4_0::zeros(); elem_count / BlockQ4_0::BLCK_SIZE]),
-            Self::Q4_1 => Box::new(vec![BlockQ4_1::zeros(); elem_count / BlockQ4_1::BLCK_SIZE]),
-            Self::Q5_0 => Box::new(vec![BlockQ5_0::zeros(); elem_count / BlockQ5_0::BLCK_SIZE]),
-            Self::Q5_1 => Box::new(vec![BlockQ5_1::zeros(); elem_count / BlockQ5_1::BLCK_SIZE]),
-            Self::Q8_0 => Box::new(vec![BlockQ8_0::zeros(); elem_count / BlockQ8_0::BLCK_SIZE]),
-            Self::Q8_1 => Box::new(vec![BlockQ8_1::zeros(); elem_count / BlockQ8_1::BLCK_SIZE]),
-            Self::Q2K => Box::new(vec![BlockQ2K::zeros(); elem_count / BlockQ2K::BLCK_SIZE]),
-            Self::Q3K => Box::new(vec![BlockQ3K::zeros(); elem_count / BlockQ3K::BLCK_SIZE]),
-            Self::Q4K => Box::new(vec![BlockQ4K::zeros(); elem_count / BlockQ4K::BLCK_SIZE]),
-            Self::Q5K => Box::new(vec![BlockQ5K::zeros(); elem_count / BlockQ5K::BLCK_SIZE]),
-            Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
-            Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
-            Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
+            Self::F32 => {
+                let v: Vec<f32> = (0..elem_count).map(|_| f32::zeros()).collect();
+                Box::new(v)
+            }
+            Self::F16 => {
+                let v: Vec<f16> = (0..elem_count).map(|_| f16::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q4_0 => {
+                let v: Vec<BlockQ4_0> = (0..elem_count / BlockQ4_0::BLCK_SIZE).map(|_| BlockQ4_0::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q4_1 => {
+                let v: Vec<BlockQ4_1> = (0..elem_count / BlockQ4_1::BLCK_SIZE).map(|_| BlockQ4_1::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q5_0 => {
+                let v: Vec<BlockQ5_0> = (0..elem_count / BlockQ5_0::BLCK_SIZE).map(|_| BlockQ5_0::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q5_1 => {
+                let v: Vec<BlockQ5_1> = (0..elem_count / BlockQ5_1::BLCK_SIZE).map(|_| BlockQ5_1::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q8_0 => {
+                let v: Vec<BlockQ8_0> = (0..elem_count / BlockQ8_0::BLCK_SIZE).map(|_| BlockQ8_0::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q8_1 => {
+                let v: Vec<BlockQ8_1> = (0..elem_count / BlockQ8_1::BLCK_SIZE).map(|_| BlockQ8_1::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q2K => {
+                let v: Vec<BlockQ2K> = (0..elem_count / BlockQ2K::BLCK_SIZE).map(|_| BlockQ2K::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q3K => {
+                let v: Vec<BlockQ3K> = (0..elem_count / BlockQ3K::BLCK_SIZE).map(|_| BlockQ3K::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q4K => {
+                let v: Vec<BlockQ4K> = (0..elem_count / BlockQ4K::BLCK_SIZE).map(|_| BlockQ4K::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q5K => {
+                let v: Vec<BlockQ5K> = (0..elem_count / BlockQ5K::BLCK_SIZE).map(|_| BlockQ5K::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q6K => {
+                let v: Vec<BlockQ6K> = (0..elem_count / BlockQ6K::BLCK_SIZE).map(|_| BlockQ6K::zeros()).collect();
+                Box::new(v)
+            }
+            Self::Q8K => {
+                let v: Vec<BlockQ8K> = (0..elem_count / BlockQ8K::BLCK_SIZE).map(|_| BlockQ8K::zeros()).collect();
+                Box::new(v)
+            }
+            Self::BF16 => {
+                let v: Vec<bf16> = (0..elem_count).map(|_| bf16::zeros()).collect();
+                Box::new(v)
+            }
         }
     }
 
@@ -429,8 +474,12 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
     }
 
     fn dequantize(&self, elem_count: usize) -> Result<CpuStorage> {
-        let mut ys = vec![0.0f32; elem_count];
-        T::to_float(self.as_slice(), &mut ys);
+        let mut ys_std: std::vec::Vec<f32> = (0..elem_count).map(|_| 0.0f32).collect();
+        T::to_float(self.as_slice(), &mut ys_std);
+        #[cfg(not(feature = "cuda-pinned-memory"))]
+        let ys = ys_std;
+        #[cfg(feature = "cuda-pinned-memory")]
+        let ys: crate::cpu_backend::StorageVec<f32> = ys_std.into_iter().collect();
         Ok(CpuStorage::F32(ys))
     }
 
@@ -788,7 +837,7 @@ impl crate::CustomOp1 for QTensor {
                 let slice = storage.as_slice::<f32>()?;
                 let slice =
                     &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
-                let mut dst_storage = vec![0f32; dst_shape.elem_count()];
+                let mut dst_storage = crate::storage_vec![0f32; dst_shape.elem_count()];
                 self_storage.matmul_t(
                     (dst_shape.elem_count() / n, k, n),
                     slice,
@@ -800,7 +849,7 @@ impl crate::CustomOp1 for QTensor {
                 let slice = storage.as_slice::<f16>()?;
                 let slice =
                     &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
-                let mut dst_storage = vec![f16::ZERO; dst_shape.elem_count()];
+                let mut dst_storage = crate::storage_vec![f16::ZERO; dst_shape.elem_count()];
                 self_storage.matmul_t_f16(
                     (dst_shape.elem_count() / n, k, n),
                     slice,

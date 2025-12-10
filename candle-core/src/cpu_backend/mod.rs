@@ -1,15 +1,19 @@
 //! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::vec::Vec;
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
 use rayon::prelude::*;
 
+pub use crate::vec::{to_storage_vec, StorageVec};
+
 mod utils;
 pub use utils::{
     binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2InPlace, Map2U8,
 };
+
 mod conv2d;
 use conv2d::Conv2D;
 
@@ -18,7 +22,7 @@ const USE_COL2IM_CONV1D_TR: bool = true;
 
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
 // intercept the oom errors to avoid panicking and provide a proper error.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum CpuStorage {
     U8(Vec<u8>),
     U32(Vec<u32>),
@@ -35,6 +39,27 @@ pub enum CpuStorage {
     F6E3M2(Vec<u8>),
     F4(Vec<u8>),
     F8E8M0(Vec<u8>),
+}
+
+impl Clone for CpuStorage {
+    fn clone(&self) -> Self {
+        match self {
+            Self::U8(v) => Self::U8(v.clone()),
+            Self::U32(v) => Self::U32(v.clone()),
+            Self::I16(v) => Self::I16(v.clone()),
+            Self::I32(v) => Self::I32(v.clone()),
+            Self::I64(v) => Self::I64(v.clone()),
+            Self::BF16(v) => Self::BF16(v.clone()),
+            Self::F16(v) => Self::F16(v.clone()),
+            Self::F32(v) => Self::F32(v.clone()),
+            Self::F64(v) => Self::F64(v.clone()),
+            Self::F8E4M3(v) => Self::F8E4M3(v.clone()),
+            Self::F6E2M3(v) => Self::F6E2M3(v.clone()),
+            Self::F6E3M2(v) => Self::F6E3M2(v.clone()),
+            Self::F4(v) => Self::F4(v.clone()),
+            Self::F8E8M0(v) => Self::F8E8M0(v.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -240,7 +265,7 @@ impl ReduceSum<'_> {
     where
         T: WithDType,
     {
-        let mut dst = vec![start_elt; self.dst_shape.elem_count()];
+        let mut dst = crate::storage_vec![start_elt; self.dst_shape.elem_count()];
         match src_l.contiguous_offsets() {
             Some((o1, o2)) => {
                 let src = &src[o1..o2];
@@ -329,7 +354,7 @@ impl Map1 for AvgPool2D {
         let h_out = (h - k_h) / s_h + 1;
         let w_out = (w - k_w) / s_w + 1;
         let src_index = layout.start_offset();
-        let mut dst = vec![T::zero(); b_sz * c * h_out * w_out];
+        let mut dst = crate::storage_vec![T::zero(); b_sz * c * h_out * w_out];
         let scale = 1f64 / (k_h * k_w) as f64;
         let scale = T::from_f64(scale);
         for b_idx in 0..b_sz {
@@ -370,7 +395,7 @@ impl Map1 for MaxPool2D {
         let h_out = (h - k_h) / s_h + 1;
         let w_out = (w - k_w) / s_w + 1;
         let src_index = layout.start_offset();
-        let mut dst = vec![T::zero(); b_sz * c * h_out * w_out];
+        let mut dst = crate::storage_vec![T::zero(); b_sz * c * h_out * w_out];
         for b_idx in 0..b_sz {
             let dst = &mut dst[b_idx * c * h_out * w_out..];
             let src_index = src_index + b_idx * stride[0];
@@ -410,7 +435,7 @@ impl Map1 for UpsampleNearest1D {
         let stride_sz = stride[2];
         let src_index = layout.start_offset();
         let scale_sz = src_sz as f64 / dst_sz as f64;
-        let mut dst = vec![T::zero(); b_sz * c * dst_sz];
+        let mut dst = crate::storage_vec![T::zero(); b_sz * c * dst_sz];
         let src_idxs = (0..dst_sz)
             .map(|idx| usize::min(src_sz - 1, (idx as f64 * scale_sz) as usize))
             .collect::<Vec<_>>();
@@ -441,7 +466,7 @@ impl Map1 for UpsampleNearest2D {
         let src_index = layout.start_offset();
         let scale_h = src_h as f64 / dst_h as f64;
         let scale_w = src_w as f64 / dst_w as f64;
-        let mut dst = vec![T::zero(); b_sz * c * dst_h * dst_w];
+        let mut dst = crate::storage_vec![T::zero(); b_sz * c * dst_h * dst_w];
         let src_h_idxs = (0..dst_h)
             .map(|h_idx| usize::min(src_h - 1, (h_idx as f64 * scale_h) as usize))
             .collect::<Vec<_>>();
@@ -493,7 +518,7 @@ impl<I: IntDType> Map1 for Gather<'_, I> {
         let src_dim_len = src_dims[dim];
         let src_right_len: usize = src_dims[dim + 1..].iter().product();
 
-        let mut dst = vec![T::zero(); dst_len];
+        let mut dst = crate::storage_vec![T::zero(); dst_len];
         for left_i in 0..dst_left_len {
             let start_src_idx = left_i * src_right_len * src_dim_len;
             let start_dst_idx = left_i * dst_right_len * dst_dim_len;
@@ -553,7 +578,7 @@ impl<I: IntDType> Map1 for IndexSelect<'_, I> {
         let dst_len: usize = dst_dims.iter().product();
         let left_len: usize = dst_dims[..dim].iter().product();
         let right_len: usize = dst_dims[dim + 1..].iter().product();
-        let mut dst = vec![T::zero(); dst_len];
+        let mut dst = crate::storage_vec![T::zero(); dst_len];
         for left_i in 0..left_len {
             let start_src_idx = left_i * right_len * src_dim;
             let start_dst_idx = left_i * right_len * n_ids;
@@ -693,7 +718,7 @@ impl<I: IntDType> Map2 for IndexAdd<'_, I> {
     // v1, l1 -> self
     fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         let dst_len = l1.shape().elem_count();
-        let mut dst = vec![T::zero(); dst_len];
+        let mut dst = crate::storage_vec![T::zero(); dst_len];
         copy_strided_src_(v1, &mut dst, 0, l1);
         let src = match src_l.contiguous_offsets() {
             None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
@@ -824,10 +849,10 @@ impl Map2 for Conv1D<'_> {
         let l_out = p.l_out();
         let dst_elems = p.c_out * l_out * p.b_size;
         // The output shape is [b_size, c_out, l_out]
-        let dst = vec![T::zero(); dst_elems];
+        let dst = crate::storage_vec![T::zero(); dst_elems];
 
         // TODO: Avoid making this copy if `inp` already has the appropriate layout.
-        let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.l_in];
+        let mut inp_cont = crate::storage_vec![T::zero(); p.b_size * p.c_in * p.l_in];
         for b_idx in 0..p.b_size {
             for src_l in 0..p.l_in {
                 for src_c_idx in 0..p.c_in {
@@ -897,7 +922,7 @@ impl Map1 for Im2Col1D {
         let (b, c, l) = layout.shape().dims3()?;
         let l_out = self.l_out(l);
         let src = &vs[layout.start_offset()..];
-        let mut dst = vec![T::zero(); b * l_out * c * l_k];
+        let mut dst = crate::storage_vec![T::zero(); b * l_out * c * l_k];
         let (src_s0, src_s1, src_s2) = {
             let s = layout.stride();
             (s[0], s[1], s[2])
@@ -960,7 +985,7 @@ impl Map1 for Im2Col {
         let (b, c, h, w) = layout.shape().dims4()?;
         let (h_out, w_out) = self.hw_out(h, w);
         let src = &vs[layout.start_offset()..];
-        let mut dst = vec![T::zero(); b * h_out * w_out * c * h_k * w_k];
+        let mut dst = crate::storage_vec![T::zero(); b * h_out * w_out * c * h_k * w_k];
         let (src_s0, src_s1, src_s2, src_s3) = {
             let s = layout.stride();
             (s[0], s[1], s[2], s[3])
@@ -1016,7 +1041,7 @@ impl Map1 for Col2Im1D {
         let (b_size, l_in, c_out, k_size) = l.shape().dims4()?;
         let stride = self.stride;
         let l_out = (l_in - 1) * stride + k_size;
-        let mut im = vec![T::zero(); b_size * c_out * l_out];
+        let mut im = crate::storage_vec![T::zero(); b_size * c_out * l_out];
         let (dst_s0, dst_s1) = (c_out * l_out, l_out);
         let (src_s0, src_s1, src_s2) = (c_out * k_size * l_in, c_out * k_size, k_size);
         for l_in_i in 0..l_in {
@@ -1049,13 +1074,13 @@ impl Map2 for ConvTranspose1D<'_> {
 
         // Output shape: [b_size, c_out, l_out].
         let dst_elems = p.c_out * l_out * p.b_size;
-        let dst = vec![T::zero(); dst_elems];
+        let dst = crate::storage_vec![T::zero(); dst_elems];
         let dst_s0 = p.c_out * l_out;
         let dst_s1 = l_out;
         let dst_s2 = 1;
 
         // TODO: Avoid making this copy if `inp` already has the appropriate layout.
-        let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.l_in];
+        let mut inp_cont = crate::storage_vec![T::zero(); p.b_size * p.c_in * p.l_in];
         let cont_s0 = p.l_in * p.c_in;
         let cont_s1 = p.c_in;
         for b_idx in 0..p.b_size {
@@ -1117,14 +1142,14 @@ impl Map2 for ConvTranspose2D<'_> {
         let (out_h, out_w) = (p.out_h(), p.out_w());
 
         // Output shape: [b_size, c_out, out_h, out_w].
-        let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
+        let dst = crate::storage_vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
         let dst_s0 = p.c_out * out_h * out_w;
         let dst_s1 = out_h * out_w;
         let dst_s2 = out_w;
         let dst_s3 = 1;
 
         // TODO: Avoid making this copy if `inp` already has the appropriate layout.
-        let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
+        let mut inp_cont = crate::storage_vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
         let cont_s0 = p.i_h * p.i_w * p.c_in;
         let cont_s1 = p.i_w * p.c_in;
         let cont_s2 = p.c_in;
@@ -1271,7 +1296,7 @@ impl Map2 for MatMul {
         let dst_rs = dst_strides[0];
         let dst_cs = dst_strides[1];
 
-        let mut dst = vec![T::zero(); b * m * n];
+        let mut dst = crate::storage_vec![T::zero(); b * m * n];
         let num_threads = crate::utils::get_num_threads();
         let parallelism = if num_threads > 1 {
             Parallelism::Rayon(num_threads)
@@ -1357,7 +1382,7 @@ impl Map2 for MatMul {
             Err(self.striding_error(lhs_l, rhs_l, "non-contiguous lhs"))?
         };
 
-        let mut dst = vec![T::zero(); b * m * n];
+        let mut dst = crate::storage_vec![T::zero(); b * m * n];
         match T::DTYPE {
             DType::F16 => {
                 crate::bail!("the accelerate backend does not support f16 matmul")
@@ -1448,7 +1473,7 @@ impl Map2 for MatMul {
             Err(self.striding_error(lhs_l, rhs_l, "non-contiguous lhs"))?
         };
 
-        let mut dst = vec![T::zero(); b * m * n];
+        let mut dst = crate::storage_vec![T::zero(); b * m * n];
         match T::DTYPE {
             DType::F16 => {
                 for step in 0..b {
@@ -1545,29 +1570,35 @@ impl CpuStorage {
         let storage0 = &storages[0];
         let s = match storage0 {
             Self::U8(_) => {
-                let storages = storages
+                let storages: Vec<u8> = storages
                     .iter()
                     .map(|s| match s {
                         Self::U8(s) => Ok(s.as_slice()),
                         _ => crate::bail!("dtype mismatch"),
                     })
                     .collect::<Result<Vec<_>>>()?
-                    .concat();
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
                 Self::U8(storages)
             }
             Self::U32(_) => {
-                let storages = storages
+                let storages: Vec<u32> = storages
                     .iter()
                     .map(|s| match s {
                         Self::U32(s) => Ok(s.as_slice()),
                         _ => crate::bail!("dtype mismatch"),
                     })
                     .collect::<Result<Vec<_>>>()?
-                    .concat();
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
                 Self::U32(storages)
             }
             Self::I16(_) => {
-                let storages = storages
+                let storages: std::vec::Vec<i16> = storages
                     .iter()
                     .map(|s| match s {
                         Self::I16(s) => Ok(s.as_slice()),
@@ -1575,10 +1606,10 @@ impl CpuStorage {
                     })
                     .collect::<Result<Vec<_>>>()?
                     .concat();
-                Self::I16(storages)
+                Self::I16(crate::vec::to_storage_vec(storages))
             }
             Self::I32(_) => {
-                let storages = storages
+                let storages: std::vec::Vec<i32> = storages
                     .iter()
                     .map(|s| match s {
                         Self::I32(s) => Ok(s.as_slice()),
@@ -1586,76 +1617,94 @@ impl CpuStorage {
                     })
                     .collect::<Result<Vec<_>>>()?
                     .concat();
-                Self::I32(storages)
+                Self::I32(crate::vec::to_storage_vec(storages))
             }
             Self::I64(_) => {
-                let storages = storages
+                let storages: Vec<i64> = storages
                     .iter()
                     .map(|s| match s {
                         Self::I64(s) => Ok(s.as_slice()),
                         _ => crate::bail!("dtype mismatch"),
                     })
                     .collect::<Result<Vec<_>>>()?
-                    .concat();
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
                 Self::I64(storages)
             }
             Self::BF16(_) => {
-                let storages = storages
+                let storages: Vec<bf16> = storages
                     .iter()
                     .map(|s| match s {
                         Self::BF16(s) => Ok(s.as_slice()),
                         _ => crate::bail!("dtype mismatch"),
                     })
                     .collect::<Result<Vec<_>>>()?
-                    .concat();
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
                 Self::BF16(storages)
             }
             Self::F16(_) => {
-                let storages = storages
+                let storages: Vec<f16> = storages
                     .iter()
                     .map(|s| match s {
                         Self::F16(s) => Ok(s.as_slice()),
                         _ => crate::bail!("dtype mismatch"),
                     })
                     .collect::<Result<Vec<_>>>()?
-                    .concat();
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
                 Self::F16(storages)
             }
             Self::F32(_) => {
-                let storages = storages
+                let storages: Vec<f32> = storages
                     .iter()
                     .map(|s| match s {
                         Self::F32(s) => Ok(s.as_slice()),
                         _ => crate::bail!("dtype mismatch"),
                     })
                     .collect::<Result<Vec<_>>>()?
-                    .concat();
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
                 Self::F32(storages)
             }
             Self::F64(_) => {
-                let storages = storages
+                let storages: Vec<f64> = storages
                     .iter()
                     .map(|s| match s {
                         Self::F64(s) => Ok(s.as_slice()),
                         _ => crate::bail!("dtype mismatch"),
                     })
                     .collect::<Result<Vec<_>>>()?
-                    .concat();
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
                 Self::F64(storages)
             }
             Self::F8E4M3(_) => {
-                let storages = storages
+                let storages: Vec<F8E4M3> = storages
                     .iter()
                     .map(|s| match s {
                         Self::F8E4M3(s) => Ok(s.as_slice()),
                         _ => crate::bail!("dtype mismatch"),
                     })
                     .collect::<Result<Vec<_>>>()?
-                    .concat();
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect();
                 Self::F8E4M3(storages)
             }
             Self::F6E2M3(_) => {
-                let storages = storages
+                let storages: std::vec::Vec<u8> = storages
                     .iter()
                     .map(|s| match s {
                         Self::F6E2M3(s) => Ok(s.as_slice()),
@@ -1663,10 +1712,10 @@ impl CpuStorage {
                     })
                     .collect::<Result<Vec<_>>>()?
                     .concat();
-                Self::F6E2M3(storages)
+                Self::F6E2M3(crate::vec::to_storage_vec(storages))
             }
             Self::F6E3M2(_) => {
-                let storages = storages
+                let storages: std::vec::Vec<u8> = storages
                     .iter()
                     .map(|s| match s {
                         Self::F6E3M2(s) => Ok(s.as_slice()),
@@ -1674,10 +1723,10 @@ impl CpuStorage {
                     })
                     .collect::<Result<Vec<_>>>()?
                     .concat();
-                Self::F6E3M2(storages)
+                Self::F6E3M2(crate::vec::to_storage_vec(storages))
             }
             Self::F4(_) => {
-                let storages = storages
+                let storages: std::vec::Vec<u8> = storages
                     .iter()
                     .map(|s| match s {
                         Self::F4(s) => Ok(s.as_slice()),
@@ -1685,10 +1734,10 @@ impl CpuStorage {
                     })
                     .collect::<Result<Vec<_>>>()?
                     .concat();
-                Self::F4(storages)
+                Self::F4(crate::vec::to_storage_vec(storages))
             }
             Self::F8E8M0(_) => {
-                let storages = storages
+                let storages: std::vec::Vec<u8> = storages
                     .iter()
                     .map(|s| match s {
                         Self::F8E8M0(s) => Ok(s.as_slice()),
@@ -1696,7 +1745,7 @@ impl CpuStorage {
                     })
                     .collect::<Result<Vec<_>>>()?
                     .concat();
-                Self::F8E8M0(storages)
+                Self::F8E8M0(crate::vec::to_storage_vec(storages))
             }
         };
         Ok(s)
@@ -3113,16 +3162,16 @@ impl BackendDevice for CpuDevice {
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<CpuStorage> {
         let elem_count = shape.elem_count();
         let storage = match dtype {
-            DType::U8 => CpuStorage::U8(vec![0u8; elem_count]),
-            DType::U32 => CpuStorage::U32(vec![0u32; elem_count]),
-            DType::I16 => CpuStorage::I16(vec![0i16; elem_count]),
-            DType::I32 => CpuStorage::I32(vec![0i32; elem_count]),
-            DType::I64 => CpuStorage::I64(vec![0i64; elem_count]),
-            DType::BF16 => CpuStorage::BF16(vec![bf16::ZERO; elem_count]),
-            DType::F16 => CpuStorage::F16(vec![f16::ZERO; elem_count]),
-            DType::F32 => CpuStorage::F32(vec![0f32; elem_count]),
-            DType::F64 => CpuStorage::F64(vec![0f64; elem_count]),
-            DType::F8E4M3 => CpuStorage::F8E4M3(vec![F8E4M3::ZERO; elem_count]),
+            DType::U8 => CpuStorage::U8(crate::storage_vec![0u8; elem_count]),
+            DType::U32 => CpuStorage::U32(crate::storage_vec![0u32; elem_count]),
+            DType::I16 => CpuStorage::I16(crate::storage_vec![0i16; elem_count]),
+            DType::I32 => CpuStorage::I32(crate::storage_vec![0i32; elem_count]),
+            DType::I64 => CpuStorage::I64(crate::storage_vec![0i64; elem_count]),
+            DType::BF16 => CpuStorage::BF16(crate::storage_vec![bf16::ZERO; elem_count]),
+            DType::F16 => CpuStorage::F16(crate::storage_vec![f16::ZERO; elem_count]),
+            DType::F8E4M3 => CpuStorage::F8E4M3(crate::storage_vec![F8E4M3::ZERO; elem_count]),
+            DType::F32 => CpuStorage::F32(crate::storage_vec![0f32; elem_count]),
+            DType::F64 => CpuStorage::F64(crate::storage_vec![0f64; elem_count]),
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
                 return Err(Error::UnsupportedDTypeForOp(dtype, "zeros").bt())
             }
