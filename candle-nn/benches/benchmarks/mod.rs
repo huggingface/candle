@@ -61,8 +61,9 @@ impl BenchDeviceHandler {
             devices.push(Device::new_metal(0)?);
         } else if cfg!(feature = "cuda") {
             devices.push(Device::new_cuda(0)?);
+        } else {
+            devices.push(Device::Cpu);
         }
-        devices.push(Device::Cpu);
         Ok(Self { devices })
     }
 }

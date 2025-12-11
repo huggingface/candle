@@ -837,7 +837,6 @@ struct MDReduceOp {
     }
 };
 
-
 template<typename T, ushort BLOCKSIZE>
 struct finalize_softmax {
     Divide fast_divide;
@@ -947,12 +946,12 @@ kernel void NAME(                                       \
 
 template<typename T>
 METAL_FUNC void rmsnorm(
-    constant size_t & src_numel,
-    constant size_t & el_to_sum_per_block,
-    device const T * src,
-    device T * dst,
-    device const T * alpha,
-    constant float & eps,
+    constant size_t &src_numel,
+    constant size_t &el_to_sum_per_block,
+    device const T *src,
+    device T *dst,
+    device const T *alpha,
+    constant float &eps,
     uint id,
     uint tid,
     uint dst_id,
@@ -1055,6 +1054,136 @@ METAL_FUNC void layernorm(
 }
 
 constant int THREADGROUP_SIZE = 2048;
+
+template<typename T>
+struct RmsOp {
+    static constexpr METAL_FUNC T init() {
+        return 1;
+    }
+    static METAL_FUNC T simd_op(T a) {
+        return simd_product(a);
+    }
+
+    template<typename V>
+    METAL_FUNC V operator()(V a, V b) {
+        return a * b;
+    }
+};
+
+template<uint Y>
+constexpr uint div_ceil(uint x) {
+    return x / Y + (x % Y > 0);
+}
+
+template<uint X, uint Y>
+constexpr uint div_ceil() {
+    return X / Y + (X % Y > 0);
+}
+
+template<typename T>
+constexpr uint work_per_thread() {
+    return div_ceil<8, sizeof(T)>();
+}
+
+// Kernels
+template<
+    typename T,
+    ushort BLOCKSIZE,
+    bool STRIDED = false
+>
+METAL_FUNC void rms_norm(
+    constant uint &src_numel,
+    constant uint &el_per_block,
+    device const T *src,
+    device T *dst,
+    device const T *alpha,
+    constant float &eps,
+    threadgroup float shared[BLOCKSIZE],
+    threadgroup float &total,
+
+    uint tid [[ thread_index_in_threadgroup ]],
+    uint dst_id [[ threadgroup_position_in_grid ]]
+) {
+    block_reducer<float, Sum<float>, BLOCKSIZE> reduce(shared);
+
+    // Calculate offset for the threadgroup of current thread
+    const uint offset = dst_id * el_per_block;
+    const uint stop_idx = min(el_per_block + offset, src_numel);
+    const uint idx = tid + offset;
+
+    // Load with reduction from global memory into shared memory
+    float value = 0;
+    #pragma clang loop unroll(full)
+    for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
+        float m = static_cast<float>(src[i]);
+        value += m * m;
+    }
+
+    // Complete reduction
+    float result = reduce(value, tid);
+    if (tid == 0) total = result;
+    threadgroup_barrier(mem_flags::mem_none);
+
+    float norm = sqrt(total / float(el_per_block) + eps);
+    float inv_norm = 1.0f / norm;
+
+    #pragma clang loop unroll(full)
+    for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
+        float val = static_cast<float>(src[i]) * inv_norm;
+        if (alpha != nullptr) {
+            val *= static_cast<float>(alpha[i - offset]);
+        }
+        dst[i] = static_cast<T>(val);
+    }
+}
+
+
+#define rms_norm_case(T, N)                             \
+case N: {                                               \
+    threadgroup float shared[N];                        \
+    threadgroup float total;                            \
+    rms_norm<T, N, STRIDED>(                            \
+        src_numel,                                      \
+        el_per_block,                                   \
+        src,                                            \
+        dst,                                            \
+        alpha,                                          \
+        eps,                                            \
+        shared,                                         \
+        total,                                          \
+        tid,                                            \
+        dst_id);                                        \
+    break;                                              \
+}
+
+#define impl_rms_norm(NAME, T)                          \
+kernel void NAME(                                       \
+    constant uint &src_numel,                           \
+    constant uint &el_per_block,                        \
+    device const T *src,                                \
+    device T *dst,                                      \
+    device const T *alpha,                              \
+    constant float &eps,                                \
+    uint tid [[ thread_index_in_threadgroup ]],         \
+    uint dst_id [[ threadgroup_position_in_grid ]],     \
+    uint block_dim [[ threads_per_threadgroup ]]        \
+) {                                                     \
+    const bool STRIDED = false;                         \
+    switch (max_shared_mem<float>(block_dim)) {             \
+        rms_norm_case(T, 2048);        \
+        rms_norm_case(T, 1024);        \
+        rms_norm_case(T,  512);        \
+        rms_norm_case(T,  256);        \
+        rms_norm_case(T,  128);        \
+        rms_norm_case(T,   64);        \
+        rms_norm_case(T,   32);        \
+        rms_norm_case(T,   16);        \
+        rms_norm_case(T,    8);        \
+        rms_norm_case(T,    4);        \
+        rms_norm_case(T,    2);        \
+        rms_norm_case(T,    1);        \
+    }                                                   \
+}
 
 #define RMSNORM(NAME, T) \
 kernel void NAME( \
@@ -1223,8 +1352,10 @@ kernel void FN_NAME_THD( \
     rope_thd<TYPENAME>(b, t, h, d, stride_b, src, cos, sin, dst, idx); \
 }\
 
-RMSNORM(rmsnorm_f32, float)
-RMSNORM(rmsnorm_f16, half)
+impl_rms_norm(rmsnorm_f32, float)
+impl_rms_norm(rmsnorm_f16, half)
+//RMSNORM(rmsnorm_f32, float)
+//RMSNORM(rmsnorm_f16, half)
 LAYERNORM(layernorm_f32, float)
 LAYERNORM(layernorm_f16, half)
 ROPE(rope_f32, rope_i_f32, rope_thd_f32, float)
@@ -1284,7 +1415,8 @@ impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
 
 impl_softmax(softmax_bf16, bfloat)
 
-RMSNORM(rmsnorm_bf16, bfloat)
+impl_rms_norm(rmsnorm_bf16, bfloat)
+//RMSNORM(rmsnorm_bf16, bfloat)
 LAYERNORM(layernorm_bf16, bfloat)
 ROPE(rope_bf16, rope_i_bf16, rope_thd_bf16, bfloat)
 #endif

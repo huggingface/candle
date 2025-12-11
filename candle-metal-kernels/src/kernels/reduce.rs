@@ -1,5 +1,5 @@
-use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
+use crate::{get_tile_size, linear_split};
 use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
 use objc2_metal::{MTLResourceUsage, MTLSize};
 
@@ -168,6 +168,7 @@ pub fn call_rms_norm(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     kernel_name: &'static str,
+    dtype_size: usize,
     length: usize,
     elements_to_sum: usize,
     eps: f32,
@@ -177,6 +178,8 @@ pub fn call_rms_norm(
     alpha_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    let work_per_threadgroup = elements_to_sum; // ... get_tile_size(dtype_size);
+
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
@@ -194,7 +197,7 @@ pub fn call_rms_norm(
         )
     );
 
-    let out_length = length / elements_to_sum;
+    let out_length = length / work_per_threadgroup;
 
     let thread_group_count = MTLSize {
         width: out_length,
@@ -204,9 +207,8 @@ pub fn call_rms_norm(
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum,
-    )
-    .next_power_of_two();
+        (work_per_threadgroup / 2).next_power_of_two(),
+    );
 
     let thread_group_size = MTLSize {
         width,
@@ -216,7 +218,7 @@ pub fn call_rms_norm(
 
     encoder.use_resource(input, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.set_threadgroup_memory_length(0, (width * 4).max(16));
+    //encoder.set_threadgroup_memory_length(0, (width * 4).max(16));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
