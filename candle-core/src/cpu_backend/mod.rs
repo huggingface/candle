@@ -466,6 +466,127 @@ impl Map1 for UpsampleNearest2D {
     }
 }
 
+struct UpsampleBilinear2D {
+    target_h: usize,
+    target_w: usize,
+    align_corners: bool,
+    scale_h_factor: Option<f64>,
+    scale_w_factor: Option<f64>,
+}
+
+impl Map1 for UpsampleBilinear2D {
+    fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
+        let (batch, channels, height_in, width_in) = layout.shape().dims4()?;
+        let height_out = self.target_h;
+        let width_out = self.target_w;
+        
+        // Early return for identity case
+        if height_in == height_out && width_in == width_out {
+            return Ok(src.to_vec());
+        }
+        
+        let stride = layout.stride();
+        let src_offset = layout.start_offset();
+        
+        // Calculate scale factors following PyTorch's area_pixel_compute_scale logic
+        let scale_h = if self.align_corners {
+            if height_out > 1 {
+                (height_in - 1) as f64 / (height_out - 1) as f64
+            } else {
+                0.0
+            }
+        } else {
+            // PyTorch's compute_scales_value logic:
+            // If scale_factor was provided, use 1.0 / scale_factor
+            // Otherwise, use input_size / output_size
+            if let Some(scale_factor) = self.scale_h_factor {
+                1.0 / scale_factor
+            } else {
+                height_in as f64 / height_out as f64
+            }
+        };
+        
+        let scale_w = if self.align_corners {
+            if width_out > 1 {
+                (width_in - 1) as f64 / (width_out - 1) as f64
+            } else {
+                0.0
+            }
+        } else {
+            if let Some(scale_factor) = self.scale_w_factor {
+                1.0 / scale_factor
+            } else {
+                width_in as f64 / width_out as f64
+            }
+        };
+        
+        // Precompute indices and weights for height
+        let mut h_indices = Vec::with_capacity(height_out);
+        for h_out in 0..height_out {
+            let src_h = if self.align_corners {
+                scale_h * h_out as f64
+            } else {
+                scale_h * (h_out as f64 + 0.5) - 0.5
+            };
+            let src_h_clamped = src_h.max(0.0);
+            let h0 = src_h_clamped.floor() as usize;
+            let h1 = (h0 + 1).min(height_in - 1);
+            let weight_h = (src_h_clamped - h0 as f64).clamp(0.0, 1.0);
+            h_indices.push((h0, h1, weight_h));
+        }
+        
+        // Precompute indices and weights for width
+        let mut w_indices = Vec::with_capacity(width_out);
+        for w_out in 0..width_out {
+            let src_w = if self.align_corners {
+                scale_w * w_out as f64
+            } else {
+                scale_w * (w_out as f64 + 0.5) - 0.5
+            };
+            let src_w_clamped = src_w.max(0.0);
+            let w0 = src_w_clamped.floor() as usize;
+            let w1 = (w0 + 1).min(width_in - 1);
+            let weight_w = (src_w_clamped - w0 as f64).clamp(0.0, 1.0);
+            w_indices.push((w0, w1, weight_w));
+        }
+        
+        // Allocate output
+        let mut dst = vec![T::zero(); batch * channels * height_out * width_out];
+        
+        // Perform bilinear interpolation
+        for b in 0..batch {
+            for c in 0..channels {
+                let base_idx = src_offset + b * stride[0] + c * stride[1];
+                let dst_base = (b * channels + c) * height_out * width_out;
+                
+                for (h_out, &(h0, h1, weight_h)) in h_indices.iter().enumerate() {
+                    for (w_out, &(w0, w1, weight_w)) in w_indices.iter().enumerate() {
+                        // Get four neighboring pixels
+                        let idx_00 = base_idx + h0 * stride[2] + w0 * stride[3];
+                        let idx_10 = base_idx + h0 * stride[2] + w1 * stride[3];
+                        let idx_01 = base_idx + h1 * stride[2] + w0 * stride[3];
+                        let idx_11 = base_idx + h1 * stride[2] + w1 * stride[3];
+                        
+                        let v00 = src[idx_00].to_f64();
+                        let v10 = src[idx_10].to_f64();
+                        let v01 = src[idx_01].to_f64();
+                        let v11 = src[idx_11].to_f64();
+                        
+                        // Bilinear interpolation
+                        let v_top = v00 * (1.0 - weight_w) + v10 * weight_w;
+                        let v_bottom = v01 * (1.0 - weight_w) + v11 * weight_w;
+                        let value = v_top * (1.0 - weight_h) + v_bottom * weight_h;
+                        
+                        dst[dst_base + h_out * width_out + w_out] = T::from_f64(value);
+                    }
+                }
+            }
+        }
+        
+        Ok(dst)
+    }
+}
+
 struct Gather<'a, I: IntDType> {
     ids: &'a [I],
     ids_l: &'a Layout,
@@ -2235,6 +2356,25 @@ impl BackendStorage for CpuStorage {
 
     fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
         UpsampleNearest2D(h, w).map(self, layout)
+    }
+
+    fn upsample_bilinear2d(
+        &self,
+        layout: &Layout,
+        h: usize,
+        w: usize,
+        align_corners: bool,
+        scale_h: Option<f64>,
+        scale_w: Option<f64>,
+    ) -> Result<Self> {
+        UpsampleBilinear2D {
+            target_h: h,
+            target_w: w,
+            align_corners,
+            scale_h_factor: scale_h,
+            scale_w_factor: scale_w,
+        }
+        .map(self, layout)
     }
 
     fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {
