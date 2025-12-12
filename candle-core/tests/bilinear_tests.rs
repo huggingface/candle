@@ -209,6 +209,143 @@ fn bilinear_pytorch_scale_factor(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/* Test corresponds to PyTorch:
+import torch
+import torch.nn.functional as F
+input = torch.arange(24, dtype=torch.float32).reshape(1, 1, 4, 6)
+output = F.interpolate(input, size=(8, 12), mode='bilinear', align_corners=False)
+*/
+fn bilinear_pytorch_non_square_exact(dev: &Device) -> Result<()> {
+    let input = Tensor::arange(0f32, 24f32, dev)?.reshape((1, 1, 4, 6))?;
+    let output = input.upsample_bilinear2d(8, 12, false)?;
+    
+    // PyTorch expected output (verified from PyTorch 2.10.0)
+    #[rustfmt::skip]
+    let expected = Tensor::new(
+        &[
+            0.0f32, 0.25, 0.75, 1.25, 1.75, 2.25, 2.75, 3.25, 3.75, 4.25, 4.75, 5.0,
+            1.5, 1.75, 2.25, 2.75, 3.25, 3.75, 4.25, 4.75, 5.25, 5.75, 6.25, 6.5,
+            4.5, 4.75, 5.25, 5.75, 6.25, 6.75, 7.25, 7.75, 8.25, 8.75, 9.25, 9.5,
+            7.5, 7.75, 8.25, 8.75, 9.25, 9.75, 10.25, 10.75, 11.25, 11.75, 12.25, 12.5,
+            10.5, 10.75, 11.25, 11.75, 12.25, 12.75, 13.25, 13.75, 14.25, 14.75, 15.25, 15.5,
+            13.5, 13.75, 14.25, 14.75, 15.25, 15.75, 16.25, 16.75, 17.25, 17.75, 18.25, 18.5,
+            16.5, 16.75, 17.25, 17.75, 18.25, 18.75, 19.25, 19.75, 20.25, 20.75, 21.25, 21.5,
+            18.0, 18.25, 18.75, 19.25, 19.75, 20.25, 20.75, 21.25, 21.75, 22.25, 22.75, 23.0,
+        ],
+        dev,
+    )?
+    .reshape((1, 1, 8, 12))?;
+    
+    let diff = (&output - &expected)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0::<f32>()?;
+    
+    assert!(
+        max_diff < 1e-4,
+        "Max difference {} exceeds threshold 1e-4",
+        max_diff
+    );
+    Ok(())
+}
+
+/* Test corresponds to PyTorch:
+import torch
+import torch.nn.functional as F
+input = torch.tensor([[[[5.0]]]], dtype=torch.float32)
+output = F.interpolate(input, size=(3, 3), mode='bilinear', align_corners=False)
+*/
+fn bilinear_pytorch_tiny_1x1_to_3x3(dev: &Device) -> Result<()> {
+    let input = Tensor::new(&[5.0f32], dev)?.reshape((1, 1, 1, 1))?;
+    let output = input.upsample_bilinear2d(3, 3, false)?;
+    
+    // PyTorch expected output: all values should be 5.0
+    let expected = Tensor::new(
+        &[5.0f32, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0],
+        dev,
+    )?
+    .reshape((1, 1, 3, 3))?;
+    
+    let diff = (&output - &expected)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0::<f32>()?;
+    
+    assert!(
+        max_diff < 1e-6,
+        "Max difference {} exceeds threshold 1e-6",
+        max_diff
+    );
+    Ok(())
+}
+
+/* Test corresponds to PyTorch:
+import torch
+import torch.nn.functional as F
+input = torch.tensor([[[[2.0, 8.0]]]], dtype=torch.float32)
+output = F.interpolate(input, size=(3, 6), mode='bilinear', align_corners=False)
+*/
+fn bilinear_pytorch_tiny_1x2_to_3x6(dev: &Device) -> Result<()> {
+    let input = Tensor::new(&[2.0f32, 8.0], dev)?.reshape((1, 1, 1, 2))?;
+    let output = input.upsample_bilinear2d(3, 6, false)?;
+    
+    // PyTorch expected output
+    #[rustfmt::skip]
+    let expected = Tensor::new(
+        &[
+            2.0f32, 2.0, 4.0, 6.0, 8.0, 8.0,
+            2.0, 2.0, 4.0, 6.0, 8.0, 8.0,
+            2.0, 2.0, 4.0, 6.0, 8.0, 8.0,
+        ],
+        dev,
+    )?
+    .reshape((1, 1, 3, 6))?;
+    
+    let diff = (&output - &expected)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0::<f32>()?;
+    
+    assert!(
+        max_diff < 1e-6,
+        "Max difference {} exceeds threshold 1e-6",
+        max_diff
+    );
+    Ok(())
+}
+
+/* Test corresponds to PyTorch:
+import torch
+import torch.nn.functional as F
+torch.manual_seed(123)
+input = torch.randn(1, 1, 64, 64, dtype=torch.float32)
+output = F.interpolate(input, size=(128, 128), mode='bilinear', align_corners=False)
+*/
+fn bilinear_pytorch_large_64x64_to_128x128(dev: &Device) -> Result<()> {
+    // Test large tensor for numerical stability
+    // We'll just verify dimensions and that output is finite
+    use candle_core::DType;
+    
+    let input = Tensor::randn(0f32, 1f32, (1, 1, 64, 64), dev)?;
+    let output = input.upsample_bilinear2d(128, 128, false)?;
+    
+    assert_eq!(output.dims(), &[1, 1, 128, 128]);
+    assert_eq!(output.dtype(), DType::F32);
+    
+    // Verify all values are finite
+    let output_vec = output.flatten_all()?.to_vec1::<f32>()?;
+    for &val in &output_vec {
+        assert!(val.is_finite(), "Large tensor output contains non-finite value");
+    }
+    
+    // Verify output is in reasonable range (should be similar to input range)
+    let min_val = output_vec.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_val = output_vec.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    
+    assert!(
+        min_val > -10.0 && max_val < 10.0,
+        "Large tensor output values out of expected range: min={}, max={}",
+        min_val,
+        max_val
+    );
+    
+    Ok(())
+}
+
 // ============================================================================
 // Dimension and Shape Tests (Consolidated)
 // ============================================================================
@@ -315,6 +452,34 @@ test_device!(
     bilinear_pytorch_scale_factor_cpu,
     bilinear_pytorch_scale_factor_gpu,
     bilinear_pytorch_scale_factor_metal
+);
+
+test_device!(
+    bilinear_pytorch_non_square_exact,
+    bilinear_pytorch_non_square_exact_cpu,
+    bilinear_pytorch_non_square_exact_gpu,
+    bilinear_pytorch_non_square_exact_metal
+);
+
+test_device!(
+    bilinear_pytorch_tiny_1x1_to_3x3,
+    bilinear_pytorch_tiny_1x1_to_3x3_cpu,
+    bilinear_pytorch_tiny_1x1_to_3x3_gpu,
+    bilinear_pytorch_tiny_1x1_to_3x3_metal
+);
+
+test_device!(
+    bilinear_pytorch_tiny_1x2_to_3x6,
+    bilinear_pytorch_tiny_1x2_to_3x6_cpu,
+    bilinear_pytorch_tiny_1x2_to_3x6_gpu,
+    bilinear_pytorch_tiny_1x2_to_3x6_metal
+);
+
+test_device!(
+    bilinear_pytorch_large_64x64_to_128x128,
+    bilinear_pytorch_large_64x64_to_128x128_cpu,
+    bilinear_pytorch_large_64x64_to_128x128_gpu,
+    bilinear_pytorch_large_64x64_to_128x128_metal
 );
 
 // Dimension tests (consolidated)
