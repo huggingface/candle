@@ -1258,6 +1258,7 @@ fn run_where_cond<I: Clone, T: Clone>(
         &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         shape,
         cond,
         &cond_stride,
