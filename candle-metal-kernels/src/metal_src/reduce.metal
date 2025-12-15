@@ -2,6 +2,21 @@
 #include <metal_limits>
 using namespace metal;
 
+template<uint Y>
+constexpr uint div_ceil(uint x) {
+    return x / Y + (x % Y > 0);
+}
+
+template<uint X, uint Y>
+constexpr uint div_ceil() {
+    return X / Y + (X % Y > 0);
+}
+
+template<typename T>
+constexpr uint work_per_thread() {
+    return div_ceil<8, sizeof(T)>();
+}
+
 METAL_FUNC uint nonzero(uint n) {
     return n == 0 ? 1 : n;
 }
@@ -28,7 +43,7 @@ constant uint MAX_SHARED_MEM = 32767;
 
 template<typename T>
 METAL_FUNC uint max_shared_mem(uint n) {
-    return min(n, prev_p2(MAX_SHARED_MEM / sizeof(T)));
+    return min(n, div_ceil<MAX_SHARED_MEM, sizeof(T)>());
 }
 
 METAL_FUNC uint get_strided_index(
@@ -856,6 +871,7 @@ struct finalize_softmax {
     }
 };
 
+
 // Welford's algorithm approach for an online softmax implementation.
 // Same as the Online normalizer calculation for softmax: https://arxiv.org/pdf/1805.02867.pdf
 template<typename T, ushort BLOCKSIZE>
@@ -1056,40 +1072,75 @@ METAL_FUNC void layernorm(
 constant int THREADGROUP_SIZE = 2048;
 
 template<typename T>
-struct RmsOp {
-    static constexpr METAL_FUNC T init() {
-        return 1;
-    }
-    static METAL_FUNC T simd_op(T a) {
-        return simd_product(a);
+struct RMS {
+    uint count;
+    T mean;
+
+    constexpr RMS<T>() = default;
+    constexpr RMS<T>() threadgroup = default;
+};
+
+template<typename T>
+struct RMSLoadOp {
+    static constexpr METAL_FUNC RMS<T> init() {
+        return { 0, 0 };
     }
 
-    template<typename V>
-    METAL_FUNC V operator()(V a, V b) {
-        return a * b;
+    METAL_FUNC RMS<T> operator()(RMS<T> a, RMS<T> b) {
+        a.mean += (b.mean * b.mean);
+        a.count += 1;
+        return a;
     }
 };
 
-template<uint Y>
-constexpr uint div_ceil(uint x) {
-    return x / Y + (x % Y > 0);
-}
-
-template<uint X, uint Y>
-constexpr uint div_ceil() {
-    return X / Y + (X % Y > 0);
-}
-
 template<typename T>
-constexpr uint work_per_thread() {
-    return div_ceil<8, sizeof(T)>();
+struct RMSReduceOp {
+    static constexpr METAL_FUNC RMS<T> init() {
+        return { 0, 0 };
+    }
+
+    METAL_FUNC RMS<T> operator()(RMS<T> a, RMS<T> b) {
+        uint new_count = a.count + b.count;
+        uint nb_over_n = b.count / new_count;
+        T delta = b.mean - a.mean;
+        //a.mean += delta * nb_over_n;
+        a.mean += b.mean + delta * delta * a.count * nb_over_n;
+        // *m2 += b_m2 + delta * delta * (*count) * nb_over_n;
+        a.count = new_count;
+        return a;
+    }
+};
+
+template<typename OP, typename T>
+struct operation<OP, RMS<T>> {
+    OP op;
+
+    METAL_FUNC RMS<T> operator()(RMS<T> a, RMS<T> b) {
+        return op(a, b);
+    }
+
+    METAL_FUNC RMS<T> operator()(RMS<T> a, T b) {
+        return this->operator()(a, RMS<T>{ 0, b });
+    }
+};
+
+template <typename T>
+METAL_FUNC RMS<T> simd_shuffle_down(RMS<T> rms, ushort delta) {
+    return RMS<T> {
+        simd_shuffle_down(rms.count, delta),
+        simd_shuffle_down(rms.mean, delta)
+    };
 }
+
+template <typename T>
+struct is_valid_simd_type<RMS<T>, typename metal::enable_if_t<is_valid_simd_t<T>>> {
+    static constant constexpr bool value = true;
+};
 
 // Kernels
 template<
     typename T,
-    ushort BLOCKSIZE,
-    bool STRIDED = false
+    ushort BLOCKSIZE
 >
 METAL_FUNC void rms_norm(
     constant uint &src_numel,
@@ -1098,13 +1149,15 @@ METAL_FUNC void rms_norm(
     device T *dst,
     device const T *alpha,
     constant float &eps,
-    threadgroup float shared[BLOCKSIZE],
+    threadgroup RMS<float> shared[BLOCKSIZE],
     threadgroup float &total,
 
     uint tid [[ thread_index_in_threadgroup ]],
     uint dst_id [[ threadgroup_position_in_grid ]]
 ) {
-    block_reducer<float, Sum<float>, BLOCKSIZE> reduce(shared);
+    Divide fast_divide;
+    loader<T, RMS<T>, RMSLoadOp<T>, BLOCKSIZE> load;
+    block_reducer<RMS<float>, RMSReduceOp<float>, BLOCKSIZE> reduce(shared);
 
     // Calculate offset for the threadgroup of current thread
     const uint offset = dst_id * el_per_block;
@@ -1112,37 +1165,44 @@ METAL_FUNC void rms_norm(
     const uint idx = tid + offset;
 
     // Load with reduction from global memory into shared memory
-    float value = 0;
-    #pragma clang loop unroll(full)
-    for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
-        float m = static_cast<float>(src[i]);
-        value += m * m;
-    }
+    RMS<T> value = load(
+        RMSLoadOp<T>::init(),
+        src_numel,
+        el_per_block,
+        src,
+        offset,
+        tid
+    );
+    RMS<float> result = RMS<float> { value.count, static_cast<float>(value.mean) };
 
     // Complete reduction
-    float result = reduce(value, tid);
-    if (tid == 0) total = result;
-    threadgroup_barrier(mem_flags::mem_none);
+    result = reduce(result, tid);
+    if (tid == 0) {
+        total = rsqrt(fast_divide(result.mean, float(el_per_block)) + eps);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float norm = sqrt(total / float(el_per_block) + eps);
-    float inv_norm = 1.0f / norm;
-
-    #pragma clang loop unroll(full)
-    for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
-        float val = static_cast<float>(src[i]) * inv_norm;
-        if (alpha != nullptr) {
-            val *= static_cast<float>(alpha[i - offset]);
+    if (alpha == nullptr) {
+        #pragma clang loop unroll(full)
+        for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
+            dst[i] = src[i] * static_cast<T>(total);
         }
-        dst[i] = static_cast<T>(val);
+    } else {
+        #pragma clang loop unroll(full)
+        for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
+            T val = src[i] * static_cast<T>(total);
+            val *= alpha[i - offset];
+            dst[i] = val;
+        }
     }
 }
 
 
 #define rms_norm_case(T, N)                             \
 case N: {                                               \
-    threadgroup float shared[N];                        \
+    threadgroup RMS<float> shared[N];                   \
     threadgroup float total;                            \
-    rms_norm<T, N, STRIDED>(                            \
+    rms_norm<T, N>(                                     \
         src_numel,                                      \
         el_per_block,                                   \
         src,                                            \
@@ -1168,20 +1228,19 @@ kernel void NAME(                                       \
     uint dst_id [[ threadgroup_position_in_grid ]],     \
     uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
-    const bool STRIDED = false;                         \
-    switch (max_shared_mem<float>(block_dim)) {             \
-        rms_norm_case(T, 2048);        \
-        rms_norm_case(T, 1024);        \
-        rms_norm_case(T,  512);        \
-        rms_norm_case(T,  256);        \
-        rms_norm_case(T,  128);        \
-        rms_norm_case(T,   64);        \
-        rms_norm_case(T,   32);        \
-        rms_norm_case(T,   16);        \
-        rms_norm_case(T,    8);        \
-        rms_norm_case(T,    4);        \
-        rms_norm_case(T,    2);        \
-        rms_norm_case(T,    1);        \
+    switch (max_shared_mem<float>(block_dim)) {         \
+        rms_norm_case(T, 2048);                         \
+        rms_norm_case(T, 1024);                         \
+        rms_norm_case(T,  512);                         \
+        rms_norm_case(T,  256);                         \
+        rms_norm_case(T,  128);                         \
+        rms_norm_case(T,   64);                         \
+        rms_norm_case(T,   32);                         \
+        rms_norm_case(T,   16);                         \
+        rms_norm_case(T,    8);                         \
+        rms_norm_case(T,    4);                         \
+        rms_norm_case(T,    2);                         \
+        rms_norm_case(T,    1);                         \
     }                                                   \
 }
 

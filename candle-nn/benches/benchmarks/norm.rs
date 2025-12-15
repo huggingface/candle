@@ -1,7 +1,7 @@
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
 use candle::{DType, Device, Module, Tensor};
 use candle_nn::{LayerNorm, RmsNorm};
-use criterion::{criterion_group, Criterion};
+use criterion::{criterion_group, Criterion, Throughput};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -27,7 +27,9 @@ fn run_layer_norm_benchmark(c: &mut Criterion, device: &Device, dtype: DType, na
     let bias = weight.ones_like().unwrap();
     let input = weight.ones_like().unwrap();
 
+    let flops = elements * dtype.size_in_bytes();
     let mut group = c.benchmark_group(device.bench_name(name));
+    group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();
@@ -50,7 +52,9 @@ fn run_rms_norm_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name
         .unwrap();
     let input = weight.ones_like().unwrap();
 
+    let flops = elements * dtype.size_in_bytes();
     let mut group = c.benchmark_group(device.bench_name(name));
+    group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();

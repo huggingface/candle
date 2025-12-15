@@ -604,7 +604,6 @@ impl candle::CustomOp2 for RmsNorm {
             &encoder,
             kernels,
             name,
-            s1.dtype().size_in_bytes(),
             elem_count,
             last_dim,
             self.eps,

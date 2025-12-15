@@ -1,5 +1,5 @@
+use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{get_tile_size, linear_split};
 use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
 use objc2_metal::{MTLResourceUsage, MTLSize};
 
@@ -168,7 +168,6 @@ pub fn call_rms_norm(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     kernel_name: &'static str,
-    dtype_size: usize,
     length: usize,
     elements_to_sum: usize,
     eps: f32,
@@ -178,8 +177,6 @@ pub fn call_rms_norm(
     alpha_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let work_per_threadgroup = elements_to_sum; // ... get_tile_size(dtype_size);
-
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
@@ -196,6 +193,7 @@ pub fn call_rms_norm(
             eps
         )
     );
+    let work_per_threadgroup = elements_to_sum;
 
     let out_length = length / work_per_threadgroup;
 
@@ -215,7 +213,6 @@ pub fn call_rms_norm(
         height: 1,
         depth: 1,
     };
-
     encoder.use_resource(input, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
     //encoder.set_threadgroup_memory_length(0, (width * 4).max(16));

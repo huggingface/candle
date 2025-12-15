@@ -1,5 +1,5 @@
 pub(crate) mod conv;
-pub(crate) mod layer_norm;
+pub(crate) mod norm;
 pub(crate) mod softmax;
 
 use candle::{Device, Result};
