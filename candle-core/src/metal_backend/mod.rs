@@ -859,6 +859,7 @@ impl BackendStorage for MetalStorage {
             &encoder,
             &device.kernels,
             name,
+            dtype.size_in_bytes(),
             dims,
             src,
             layout.stride(),
