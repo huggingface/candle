@@ -139,7 +139,13 @@ impl Attention {
             Some(mask) => attn_weights.broadcast_add(mask)?,
         };
 
+        // Force softmax computation in F32 for numerical stability, matching PyTorch behavior:
+        // attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+        // let original_dtype = attn_weights.dtype();
+        // let attn_weights = attn_weights.to_dtype(DType::F32)?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        // let attn_weights = attn_weights.to_dtype(original_dtype)?;
+
         attn_weights
             .matmul(&value_states)?
             .transpose(1, 2)?
