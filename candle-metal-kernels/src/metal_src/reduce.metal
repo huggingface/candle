@@ -1244,24 +1244,6 @@ kernel void NAME(                                       \
     }                                                   \
 }
 
-#define RMSNORM(NAME, T) \
-kernel void NAME( \
-    constant size_t &src_numel, \
-    constant size_t &el_to_sum_per_block, \
-    device const T *src, \
-    device T *dst, \
-    device const T *alpha, \
-    constant float &eps, \
-    uint id [[ thread_position_in_grid ]], \
-    uint tid [[ thread_index_in_threadgroup ]], \
-    uint dst_id [[ threadgroup_position_in_grid ]], \
-    uint block_dim [[ threads_per_threadgroup ]] \
-) { \
-    threadgroup float shared_memory[THREADGROUP_SIZE]; \
-    shared_memory[tid] = 0; \
-    rmsnorm<T>(src_numel, el_to_sum_per_block, src, dst, alpha, eps, id, tid, dst_id, block_dim, shared_memory); \
-} \
-
 #define LAYERNORM(NAME, T) \
 kernel void NAME( \
     constant size_t &src_numel, \
@@ -1413,8 +1395,6 @@ kernel void FN_NAME_THD( \
 
 impl_rms_norm(rmsnorm_f32, float)
 impl_rms_norm(rmsnorm_f16, half)
-//RMSNORM(rmsnorm_f32, float)
-//RMSNORM(rmsnorm_f16, half)
 LAYERNORM(layernorm_f32, float)
 LAYERNORM(layernorm_f16, half)
 ROPE(rope_f32, rope_i_f32, rope_thd_f32, float)
@@ -1475,7 +1455,6 @@ impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
 impl_softmax(softmax_bf16, bfloat)
 
 impl_rms_norm(rmsnorm_bf16, bfloat)
-//RMSNORM(rmsnorm_bf16, bfloat)
 LAYERNORM(layernorm_bf16, bfloat)
 ROPE(rope_bf16, rope_i_bf16, rope_thd_bf16, bfloat)
 #endif
