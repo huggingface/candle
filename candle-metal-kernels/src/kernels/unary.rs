@@ -1,6 +1,6 @@
 use crate::kernels::macros::ops;
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{get_block_dims, linear_split};
+use crate::{get_block_dims, get_tile_size, linear_split};
 use crate::{
     set_params, Buffer, ComputeCommandEncoder, Device, EncoderParam, Kernels, MetalKernelError,
     Source,
@@ -18,6 +18,7 @@ pub fn call_unary_contiguous(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     kernel_name: contiguous::Kernel,
+    dtype_size: usize,
     length: usize,
     input: BufferOffset,
     output: &Buffer,
@@ -30,33 +31,8 @@ pub fn call_unary_contiguous(
 
     set_params!(encoder, (length, &input, output));
 
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn call_unary_contiguous_tiled(
-    device: &Device,
-    ep: impl EncoderProvider,
-    kernels: &Kernels,
-    kernel_name: contiguous_tiled::Kernel,
-    length: usize,
-    input: BufferOffset,
-    output: &Buffer,
-) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
-    let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoder = encoder.as_ref();
-    let tile_size = 2;
+    let tile_size = get_tile_size(dtype_size);
     let tiles = length.div_ceil(tile_size);
-
-    encoder.set_compute_pipeline_state(&pipeline);
-
-    set_params!(encoder, (length, &input, output));
-
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
@@ -92,37 +68,12 @@ pub fn call_unary_strided(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_const_set_contiguous_tiled(
-    device: &Device,
-    ep: impl EncoderProvider,
-    kernels: &Kernels,
-    kernel_name: contiguous_tiled::Kernel,
-    length: usize,
-    input: impl EncoderParam,
-    output: BufferOffset,
-) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
-    let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoder = encoder.as_ref();
-    let tile_size = 2;
-    let tiles = length.div_ceil(tile_size);
-
-    encoder.set_compute_pipeline_state(&pipeline);
-
-    set_params!(encoder, (length, input, &output));
-
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
-    encoder.use_resource(output.buffer, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
 pub fn call_const_set_contiguous(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
     kernel_name: contiguous::Kernel,
+    dtype_size: usize,
     length: usize,
     input: impl EncoderParam,
     output: BufferOffset,
@@ -132,10 +83,11 @@ pub fn call_const_set_contiguous(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
-
     set_params!(encoder, (length, input, &output));
 
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
     encoder.use_resource(output.buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
