@@ -459,6 +459,38 @@ impl Model {
             .apply(&self.lm_head)
     }
 
+    /// Returns hidden states (without lm_head) for multimodal models like Mistral3.
+    ///
+    /// Unlike `forward_embeds` which returns logits for the last token only,
+    /// this method returns the full sequence hidden states after normalization.
+    ///
+    /// Returns: (batch_size, seq_len, hidden_size)
+    pub fn forward_embeds_hidden(
+        &mut self,
+        xs: &Tensor,
+        attn_mask: Option<&Tensor>,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        let (_b_size, seq_len, _) = xs.dims3()?;
+        let attention_mask = match attn_mask {
+            Some(mask) => Some(mask.clone()),
+            None => {
+                if seq_len <= 1 {
+                    None
+                } else {
+                    let mask = self.prepare_decoder_attention_mask(seq_len, seqlen_offset)?;
+                    Some(mask)
+                }
+            }
+        };
+        let mut xs = xs.clone();
+        for layer in self.layers.iter_mut() {
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
+        }
+        // Only apply norm, not lm_head - return full sequence hidden states
+        xs.apply(&self.norm)
+    }
+
     pub fn clear_kv_cache(&mut self) {
         for layer in self.layers.iter_mut() {
             layer.clear_kv_cache()
