@@ -188,18 +188,27 @@ impl Mistral3Model {
     /// Vector of feature tensors, one per image
     ///
     /// # Note
-    /// Pixtral Vision Model returns 2D tensor: (patches, hidden_size)
-    /// This is passed directly to the projector without dimension changes.
+    /// Uses `forward_with_hidden_states` to get output with batch dimension preserved,
+    /// matching PyTorch Transformers behavior. The last hidden state is then processed
+    /// through the multi-modal projector.
     pub fn get_image_features(
         &self,
         pixel_values: &Tensor,
         image_sizes: &[(usize, usize)],
     ) -> Result<Vec<Tensor>> {
-        // 1. Vision tower forward
-        // Pixtral may return (batch, patches, hidden_size) or (patches, hidden_size)
-        let image_outputs = self.vision_tower.forward(pixel_values)?;
-        
-        // Squeeze batch dimension if present (for single image)
+        // 1. Vision tower forward with hidden states support
+        // Returns (batch, patches, hidden_size) with batch dimension preserved
+        let vision_output = self.vision_tower.forward_with_hidden_states(pixel_values, true)?;
+
+        // Get the last hidden state: (batch, patches, hidden_size)
+        // For Mistral3, we use hidden_states[-1] which equals last_hidden_state
+        let image_outputs = vision_output
+            .hidden_states
+            .as_ref()
+            .and_then(|hs| hs.last().cloned())
+            .unwrap_or(vision_output.last_hidden_state);
+
+        // Squeeze batch dimension for projector: (batch, patches, hidden_size) -> (patches, hidden_size)
         let image_outputs = if image_outputs.dims().len() == 3 && image_outputs.dim(0)? == 1 {
             image_outputs.squeeze(0)?
         } else {

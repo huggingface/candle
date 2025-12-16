@@ -5,6 +5,19 @@ fn default_act() -> candle_nn::Activation {
     candle_nn::Activation::Silu
 }
 
+/// Output structure for vision model forward pass with hidden states support.
+///
+/// This matches the structure of PyTorch Transformers' `BaseModelOutput`.
+#[derive(Debug, Clone)]
+pub struct VisionModelOutput {
+    /// Last hidden state from the transformer.
+    /// Shape: `(batch_size, num_patches, hidden_size)`
+    pub last_hidden_state: Tensor,
+    /// Optional tuple of hidden states from all layers.
+    /// Each tensor has shape: `(batch_size, num_patches, hidden_size)`
+    pub hidden_states: Option<Vec<Tensor>>,
+}
+
 fn default_hidden_size() -> usize {
     1024
 }
@@ -237,6 +250,35 @@ impl Transformer {
         }
         Ok(xs)
     }
+
+    /// Forward pass with optional hidden states collection.
+    ///
+    /// When `output_hidden_states` is true, collects hidden states from all layers
+    /// (including the initial input and after each layer).
+    fn forward_with_hidden_states(
+        &self,
+        xs: &Tensor,
+        emb: &RotaryEmbedding,
+        subsampled_positions: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+        output_hidden_states: bool,
+    ) -> Result<(Tensor, Option<Vec<Tensor>>)> {
+        let mut xs = xs.clone();
+        let mut hidden_states = if output_hidden_states {
+            Some(vec![xs.clone()])
+        } else {
+            None
+        };
+
+        for layer in self.layers.iter() {
+            xs = layer.forward(&xs, emb, subsampled_positions, attention_mask)?;
+            if let Some(ref mut hs) = hidden_states {
+                hs.push(xs.clone());
+            }
+        }
+
+        Ok((xs, hidden_states))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -347,7 +389,59 @@ impl Model {
     }
 }
 
+impl Model {
+    /// Forward pass with batch dimension preserved and optional hidden states.
+    ///
+    /// This method is designed for multimodal models (like Mistral3) that need:
+    /// 1. Batch dimension in output: `(batch, patches, hidden_size)`
+    /// 2. Optional access to intermediate hidden states
+    ///
+    /// # Arguments
+    /// * `xs` - Input tensor of shape `(batch, channels, height, width)`
+    /// * `output_hidden_states` - Whether to return hidden states from all layers
+    ///
+    /// # Returns
+    /// `VisionModelOutput` containing:
+    /// - `last_hidden_state`: Shape `(batch, patches, hidden_size)`
+    /// - `hidden_states`: Optional vec of tensors, each `(batch, patches, hidden_size)`
+    pub fn forward_with_hidden_states(
+        &self,
+        xs: &Tensor,
+        output_hidden_states: bool,
+    ) -> Result<VisionModelOutput> {
+        let patch_embeds = xs.apply(&self.patch_conv)?;
+        let (_batch_size, _channels, h, w) = patch_embeds.dims4()?;
+
+        let subsampled_positions =
+            Some(self.position_ids_in_meshgrid(h, w, patch_embeds.device())?);
+
+        // Preserve batch dimension: (batch, hidden_size, H, W) -> (batch, H*W, hidden_size)
+        // This matches PyTorch: torch.cat([p.flatten(1).T for p in patch_embeds_list], dim=0).unsqueeze(0)
+        let patch_embeds = patch_embeds
+            .flatten_from(2)? // (batch, hidden_size, H*W)
+            .transpose(1, 2)? // (batch, H*W, hidden_size)
+            .apply(&self.ln_pre)?;
+
+        let (last_hidden_state, hidden_states) = self.transformer.forward_with_hidden_states(
+            &patch_embeds,
+            &self.patch_positional_embedding,
+            subsampled_positions.as_ref(),
+            None,
+            output_hidden_states,
+        )?;
+
+        Ok(VisionModelOutput {
+            last_hidden_state,
+            hidden_states,
+        })
+    }
+}
+
 impl Module for Model {
+    /// Standard forward pass for backward compatibility.
+    ///
+    /// Returns tensor of shape `(patches, hidden_size)` without batch dimension.
+    /// For multimodal models that need batch dimension, use `forward_with_hidden_states`.
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let patch_embeds = xs.apply(&self.patch_conv)?;
         let subsampled_positions = Some(self.position_ids_in_meshgrid(
