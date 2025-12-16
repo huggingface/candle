@@ -151,19 +151,26 @@ impl Mistral3Model {
     /// - `vision_tower.*` → vb.pp("vision_tower")
     /// - `multi_modal_projector.*` → vb.pp("multi_modal_projector")
     /// - `language_model.*` → vb.pp("language_model")
+    ///
+    /// All components use the dtype specified in VarBuilder (e.g., BF16).
+    /// This matches HuggingFace Transformers behavior where all components
+    /// share the same dtype, with only specific operations (RMSNorm, Softmax, RoPE)
+    /// temporarily using F32 for numerical stability.
     pub fn new(cfg: &Mistral3Config, vb: VarBuilder) -> Result<Self> {
-        // Vision Tower (Pixtral) - use F32 precision for vision
+        // Vision Tower (Pixtral) - uses VarBuilder's dtype
+        // let vision_tower = PixtralVisionModel::new(&cfg.vision_config, vb.pp("vision_tower"))?;
         let vision_tower = PixtralVisionModel::new(
             &cfg.vision_config,
             vb.pp("vision_tower").to_dtype(DType::F32),
         )?;
 
-        // Multi-Modal Projector - use F32 precision
+        // Multi-Modal Projector - uses VarBuilder's dtype
+        // let multi_modal_projector =
+        //     MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
         let multi_modal_projector = MultiModalProjector::new(
             cfg,
             vb.pp("multi_modal_projector").to_dtype(DType::F32),
         )?;
-
         // Language Model (Mistral)
         // Note: mistral::Model::new internally adds "model" prefix
         let language_model = MistralModel::new(&cfg.text_config, vb.pp("language_model"))?;
