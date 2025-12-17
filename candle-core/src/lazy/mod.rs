@@ -3,21 +3,24 @@ use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
 #[derive(Debug, Clone)]
-pub struct LazyStorage;
+pub struct LazyStorage {
+    shape: Shape,
+    dtype: DType,
+}
 
 impl BackendStorage for LazyStorage {
     type Device = LazyDevice;
 
     fn try_clone(&self, _: &Layout) -> Result<Self> {
-        todo!()
+        Ok(self.clone())
     }
 
     fn dtype(&self) -> DType {
-        todo!()
+        self.dtype
     }
 
     fn device(&self) -> &Self::Device {
-        todo!()
+        &LazyDevice
     }
 
     // Maybe this should return a Cow instead so that no copy is done on the cpu case.
@@ -200,19 +203,19 @@ impl BackendDevice for LazyDevice {
     type Storage = LazyStorage;
 
     fn new(_ordinal: usize) -> Result<Self> {
-        todo!()
+        Ok(LazyDevice)
     }
 
     fn location(&self) -> crate::DeviceLocation {
-        todo!()
+        crate::DeviceLocation::Lazy
     }
 
     fn same_device(&self, _rhs: &Self) -> bool {
         true
     }
 
-    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
-        todo!()
+    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+        Ok(LazyStorage { shape: shape.clone(), dtype })
     }
 
     fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {

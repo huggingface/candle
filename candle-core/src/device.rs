@@ -9,6 +9,7 @@ pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
     Metal { gpu_id: usize },
+    Lazy
 }
 
 /// Cpu, Cuda, or Metal
