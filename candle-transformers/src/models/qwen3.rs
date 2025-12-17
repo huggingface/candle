@@ -228,7 +228,7 @@ impl Qwen3Attention {
 
         if self.use_flash_attn && offset == 0 {
             // Flash attention path - only used during prefill (offset == 0)
-            self.forward_flash_attn(&q, &k, &v, attn_mask, b, l)
+            self.forward_flash_attn(&q, &k, &v, offset, b, l)
         } else {
             // Standard attention path - used during decode or when flash attn is disabled
             self.forward_standard_attn(&q, &k, &v, attn_mask, b, l)
@@ -241,7 +241,7 @@ impl Qwen3Attention {
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
-        attn_mask: Option<&Tensor>,
+        _offset: usize,
         b: usize,
         l: usize,
     ) -> Result<Tensor> {
@@ -264,7 +264,7 @@ impl Qwen3Attention {
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
-        attn_mask: Option<&Tensor>,
+        offset: usize,
         b: usize,
         l: usize,
     ) -> Result<Tensor> {
@@ -278,20 +278,18 @@ impl Qwen3Attention {
         // Call CPU flash attention based on dtype
         let ctx = match q.dtype() {
             DType::F32 => cpu_flash_attention::run_flash_attn_cpu::<f32>(
-                &q, &k, &v, attn_mask, scale, None, None,
+                &q, &k, &v, scale, true, offset, None, None,
             )?,
             DType::F64 => cpu_flash_attention::run_flash_attn_cpu::<f64>(
-                &q, &k, &v, attn_mask, scale, None, None,
+                &q, &k, &v, scale, true, offset, None, None,
             )?,
             DType::BF16 => {
-                // Convert to F32 for computation
                 let q_f32 = q.to_dtype(DType::F32)?;
                 let k_f32 = k.to_dtype(DType::F32)?;
                 let v_f32 = v.to_dtype(DType::F32)?;
                 let ctx_f32 = cpu_flash_attention::run_flash_attn_cpu::<f32>(
-                    &q_f32, &k_f32, &v_f32, attn_mask, scale, None, None,
+                    &q_f32, &k_f32, &v_f32, scale, true, offset, None, None,
                 )?;
-                // Convert back to BF16
                 ctx_f32.to_dtype(DType::BF16)?
             }
             dtype => candle::bail!("Unsupported dtype for CPU flash attention: {:?}", dtype),
@@ -384,6 +382,7 @@ pub struct Model {
     norm: RmsNorm,
     device: Device,
     dtype: DType,
+    use_flash_attn: bool,
 }
 
 impl Model {
@@ -402,6 +401,7 @@ impl Model {
             norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?,
             device: vb.device().clone(),
             dtype: vb.dtype(),
+            use_flash_attn: cfg.use_flash_attn,
         })
     }
 
@@ -442,7 +442,7 @@ impl Model {
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
 
-        let causal = if l == 1 {
+        let causal = if l == 1 || self.use_flash_attn {
             None
         } else {
             Some(self.causal_mask(b, l, offset, None)?)

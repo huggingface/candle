@@ -10,10 +10,7 @@ use rayon::ThreadPool;
 #[cfg(target_os = "macos")]
 /// Elevate the thread QoS so macOS prefers running it on Performance (P) cores.
 unsafe fn set_thread_affinity() {
-    // USER_INTERACTIVE has the highest scheduling priority that user code
-    // can request and is most likely to be scheduled on P‑cores.
     use libc::{pthread_set_qos_class_self_np, qos_class_t::QOS_CLASS_USER_INTERACTIVE};
-    // The second argument is a relative priority within the QoS class (0 = default).
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 }
 
@@ -61,30 +58,35 @@ fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[
 
 /// Fused attention optimized for CPU.
 ///
-/// Computes softmax(qk^T*scale)v.
+/// Computes softmax(qk^T * scale) * v
 ///
-/// **Inputs shapes:**
-/// - `q`: (bs, seq, qhead, hidden)
-/// - `k`: (bs, kv_seq, v_head, hidden)
-/// - `k`: (bs, kv_seq, kv_head_seq, v_hidden)
-/// - `scale` is applied before softmax.
+/// **Input shapes:**
+/// - `q`: (B, S, H, D)
+/// - `k`: (B, KV_S, KV_H, D)
+/// - `v`: (B, KV_S, KV_H, D)
 ///
-/// - This supports ALiBi with `max_bias` as well as softcapping with `softcap`.
+/// **Output shape:** (B, H, S, D)
 ///
-/// **Output shape:** (bs, qhead, seq, v_hidden)
+/// **Parameters:**
+/// - `softmax_scale`: Scale factor applied before softmax (typically 1/sqrt(head_dim))
+/// - `is_causal`: If true, applies causal masking via loop bounds (more efficient than explicit mask)
+/// - `kv_offset`: Number of prior KV positions (for decode with KV cache)
+/// - `max_bias`: ALiBi max bias (0.0 to disable)
+/// - `softcap`: Logit soft-capping value (0.0 to disable)
 pub fn run_flash_attn_cpu<T>(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
-    mask: Option<&Tensor>,
     softmax_scale: f32,
+    is_causal: bool,
+    kv_offset: usize,
     max_bias: Option<f32>,
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
     T: WithDType + Sum + num_traits::real::Real,
 {
-    // Inline CPU slice extraction for q, k, v, and optional mask
+    // Extract CPU slices for q, k, v
     let (q_guard, q_layout) = q.storage_and_layout();
     let q_data: &[T] = if let Storage::Cpu(cpu) = &*q_guard {
         let data = cpu.as_slice::<T>()?;
@@ -92,6 +94,7 @@ where
     } else {
         return Err(candle::Error::Msg("Expected CPU storage for q".into()));
     };
+
     let (k_guard, k_layout) = k.storage_and_layout();
     let k_data: &[T] = if let Storage::Cpu(cpu) = &*k_guard {
         let data = cpu.as_slice::<T>()?;
@@ -99,6 +102,7 @@ where
     } else {
         return Err(candle::Error::Msg("Expected CPU storage for k".into()));
     };
+
     let (v_guard, v_layout) = v.storage_and_layout();
     let v_data: &[T] = if let Storage::Cpu(cpu) = &*v_guard {
         let data = cpu.as_slice::<T>()?;
@@ -106,20 +110,6 @@ where
     } else {
         return Err(candle::Error::Msg("Expected CPU storage for v".into()));
     };
-    let mask_guard = mask.map(|mask| mask.storage_and_layout().0);
-    let mask_data: Option<&[T]> = if let Some(mask_guard) = &mask_guard {
-        let mask = mask.as_ref().unwrap();
-
-        if let Storage::Cpu(cpu) = &**mask_guard {
-            let data = cpu.as_slice::<T>()?;
-            Some(&data[mask.layout().start_offset()..])
-        } else {
-            return Err(candle::Error::Msg("Expected CPU storage for mask".into()));
-        }
-    } else {
-        None
-    };
-    // q_guard, k_guard, v_guard, and m_guard (if any) are kept in scope to hold storage alive
 
     let q_stride = q.stride();
     let k_stride = k.stride();
@@ -131,7 +121,6 @@ where
             q_data,
             k_data,
             v_data,
-            mask_data,
             q.shape().dims(),
             k.shape().dims(),
             v.shape().dims(),
@@ -148,7 +137,6 @@ where
         q_data,
         k_data,
         v_data,
-        mask_data,
         q.shape().dims(),
         k.shape().dims(),
         v.shape().dims(),
@@ -156,19 +144,23 @@ where
         k_stride,
         v_stride,
         softmax_scale,
+        is_causal,
+        kv_offset,
         max_bias.unwrap_or(0.0),
         softcap.unwrap_or(0.0),
     )
 }
 
-/// Optimised path for the common decode case: q_len == 1 but kv_len ≫ 1.
+/// Optimised path for the common decode case: q_len == 1 but kv_len >> 1.
 /// We drop the inner q‑position loop and parallelise over `(batch, head)`.
+///
+/// For decode, the single query is at the end of the sequence, so it can
+/// attend to ALL prior KV positions regardless of causal setting.
 #[allow(clippy::too_many_arguments)]
 fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
-    mask_vec: Option<&[T]>,
     qshape: &[usize],
     kshape: &[usize],
     vshape: &[usize],
@@ -180,10 +172,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     logit_softcap: f32,
 ) -> Result<Tensor> {
     // Shapes: (B, 1, H, D)
-    let (b, _q_len, h, d) = (
-        qshape[0], qshape[1], // == 1
-        qshape[2], qshape[3],
-    );
+    let (b, _q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
     let k_h = kshape[2];
     let v_h = vshape[2];
@@ -200,8 +189,6 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     // fit in the last‑level cache and let Rayon schedule them.
     let kv_tiles = kv_len.div_ceil(TILE_KV);
 
-    // SAFETY: `par_chunks_mut` hands out non‑overlapping &mut slices, so no two
-    // threads write the same output area.
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
             .with_min_len(64)
@@ -214,92 +201,88 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                 let slope = if max_bias > 0.0 {
                     2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
                 } else {
-                    1.0
+                    0.0
                 };
 
                 // For grouped‑KV we collapse multiple query heads into the same K/V head.
                 let k_head = h_i / rk2;
                 let v_head = h_i / rv2;
 
-                // ------------------------------------------------------------------
-                // Nested parallelism: each KV tile is mapped independently, then we
-                // reduce the partial results with the correct soft‑max algebra.
-                // ------------------------------------------------------------------
-                let (vkq, s_tot, _m_tot) = (0..kv_tiles)
+                // Gather Q row (strided)
+                let q_base = b_i * qstride[0] + 0 * qstride[1] + h_i * qstride[2];
+                let mut q_row: Vec<T> = Vec::with_capacity(d);
+                for di in 0..d {
+                    q_row.push(q_data[q_base + di * qstride[3]]);
+                }
+
+                // Parallel reduce over KV tiles
+                let (vkq, s_tot, _m_final) = (0..kv_tiles)
                     .into_par_iter()
-                    .map(|tile_idx| {
-                        // ---- per‑tile scratch -------------------------------------------------
-                        let start = tile_idx * TILE_KV;
-                        let end = (start + TILE_KV).min(kv_len);
+                    .fold(
+                        || (vec![0f32; dv], 0.0f32, f32::NEG_INFINITY),
+                        |(mut vkq, mut s, mut m), tile_idx| {
+                            let kv_start = tile_idx * TILE_KV;
+                            let kv_end = (kv_start + TILE_KV).min(kv_len);
 
-                        let mut vkq = vec![0f32; dv];
-                        let mut s = 0.0f32;
-                        let mut m = f32::NEG_INFINITY;
+                            let mut k_row: Vec<T> = Vec::with_capacity(d);
 
-                        // ---------------- single‑Q row (already contiguous) -------------------
-                        let q_base =
-                            b_i * qstride[0] /*batch*/ + h_i * qstride[2] /*head*/;
-                        let q_row = &q_data[q_base..q_base + d];
+                            for kv_pos in kv_start..kv_end {
+                                // ALiBi bias based on position
+                                let alibi_bias = if max_bias > 0.0 {
+                                    slope * (kv_pos as f32 - (kv_len - 1) as f32)
+                                } else {
+                                    0.0
+                                };
 
-                        // ---------------- iterate over this KV slice --------------------------
-                        for kv_pos in start..end {
-                            // Mask
-                            let mv = if let Some(mv_vec) = mask_vec {
-                                let mval = mv_vec[(b_i * kv_len) + kv_pos];
-                                slope * mval.to_f64() as f32
-                            } else {
-                                0.0
-                            };
-                            if mv == f32::NEG_INFINITY {
-                                continue;
-                            }
-
-                            // K row
-                            let k_base =
-                                b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                            let k_row = &k_data[k_base..k_base + d];
-
-                            // dot(Q, K)
-                            let mut s_val = vec_dot::<T>(q_row, k_row).to_f64() as f32;
-
-                            let mut scale_applied = scale;
-                            if logit_softcap != 0.0 {
-                                scale_applied /= logit_softcap;
-                            }
-                            s_val *= scale_applied;
-                            if logit_softcap != 0.0 {
-                                s_val = logit_softcap * s_val.tanh();
-                            }
-                            s_val += mv;
-
-                            // Tile‑local online softmax ------------------------------------------
-                            let m_old = m;
-                            let mut ms = 1.0f32;
-                            let mut vs = 1.0f32;
-                            if s_val > m {
-                                m = s_val;
-                                ms = (m_old - m).exp();
-                                for v in vkq.iter_mut() {
-                                    *v *= ms;
+                                // K row (strided)
+                                let k_base =
+                                    b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
+                                k_row.clear();
+                                for di in 0..d {
+                                    k_row.push(k_data[k_base + di * kstride[3]]);
                                 }
-                            } else {
-                                vs = (s_val - m).exp();
+
+                                // dot(Q, K)
+                                let mut s_val = vec_dot::<T>(&q_row, &k_row).to_f64() as f32;
+                                let mut scale_applied = scale;
+                                if logit_softcap != 0.0 {
+                                    scale_applied /= logit_softcap;
+                                }
+                                s_val *= scale_applied;
+                                if logit_softcap != 0.0 {
+                                    s_val = logit_softcap * s_val.tanh();
+                                }
+                                s_val += alibi_bias;
+
+                                // Tile‑local online softmax
+                                let m_old = m;
+                                let mut ms = 1.0f32;
+                                let mut vs = 1.0f32;
+                                if s_val > m {
+                                    m = s_val;
+                                    ms = (m_old - m).exp();
+                                    for v in vkq.iter_mut() {
+                                        *v *= ms;
+                                    }
+                                } else {
+                                    vs = (s_val - m).exp();
+                                }
+
+                                // V row
+                                let v_base =
+                                    b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
+                                for d_i in 0..dv {
+                                    vkq[d_i] +=
+                                        v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
+                                }
+
+                                s = s * ms + vs;
                             }
 
-                            // V row
-                            let v_base =
-                                b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
-                            for d_i in 0..dv {
-                                vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
-                            }
-
-                            s = s * ms + vs;
-                        }
-
-                        // Return per‑tile accumulator + softmax stats
-                        (vkq, s, m)
-                    })
-                    // -------- reduce two tiles -----------------------------------------------
+                            (vkq, s, m)
+                        },
+                    )
+                    // Reduce two tiles
                     .reduce(
                         || (vec![0f32; dv], 0.0f32, f32::NEG_INFINITY),
                         |mut a, b| {
@@ -323,7 +306,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                         },
                     );
 
-                // ---------------- final normalisation ---------------------------------------
+                // Final normalisation
                 let inv_s = 1.0 / s_tot;
                 for v in out_chunk.iter_mut().zip(vkq.iter()) {
                     *v.0 = *v.1 * inv_s;
@@ -335,14 +318,13 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     Tensor::from_vec(out, out_shape, &Device::Cpu)
 }
 
-/// Main forward flash-attention CPU routine.
+/// Main forward flash-attention CPU routine (prefill path).
 /// Shapes follow Candle convention: (B, S, H, D)
 #[allow(clippy::too_many_arguments)]
 fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
-    mask_vec: Option<&[T]>,
     qshape: &[usize],
     kshape: &[usize],
     vshape: &[usize],
@@ -350,33 +332,27 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     kstride: &[usize],
     vstride: &[usize],
     scale: f32,
+    is_causal: bool,
+    kv_offset: usize,
     max_bias: f32,
     logit_softcap: f32,
 ) -> Result<Tensor> {
     let (b, q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
-    // --- Head broadcasting factors ----------------------------------------------------
-    // Allows K and V to have fewer heads than Q (grouped‑KV); the ratio is an
-    // integer factor.  rk2 = #Q‑heads / #K‑heads,  rv2 = #Q‑heads / #V‑heads.
+
+    // Head broadcasting factors for grouped-query attention
     let k_h = kshape[2];
     let v_h = vshape[2];
-    let rk2 = h / k_h; // must divide exactly; panic otherwise
+    let rk2 = h / k_h;
     let rv2 = h / v_h;
-    let dv = d; // value dim = key dim in this kernel
+    let dv = d;
 
     // Precompute value for ALiBi slope calculation
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
     let mut out = vec![0f32; b * q_len * h * dv];
 
-    // ------------------------------------------------------------------
-    // Rayon‑parallel version: each (b_i, h_i, q_pos) row is independent.
-    // ------------------------------------------------------------------
-
-    let _rows = b * h * q_len; // total independent work items
-
-    // SAFETY: `par_chunks_mut` hands out non‑overlapping &mut [f32] slices,
-    // so no two threads can write the same output area.
+    // Rayon‑parallel: each (b_i, h_i, q_pos) row is independent.
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
             .with_min_len(64)
@@ -392,7 +368,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                 let slope = if max_bias > 0.0 {
                     2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
                 } else {
-                    1.0
+                    0.0
                 };
 
                 // For grouped‑KV we collapse multiple query heads into the same K/V head.
@@ -404,29 +380,31 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                 let mut s = 0.0f32;
                 let mut m = f32::NEG_INFINITY;
 
-                // Allocate q_row and k_row once per row
                 let mut q_row: Vec<T> = Vec::with_capacity(d);
                 let mut k_row: Vec<T> = Vec::with_capacity(d);
 
-                // ------------------- gather Q (strided) --------------------
+                // Gather Q (strided)
                 let q_base = b_i * qstride[0] + q_pos * qstride[1] + h_i * qstride[2];
                 q_row.clear();
                 for di in 0..d {
                     q_row.push(q_data[q_base + di * qstride[3]]);
                 }
 
-                // ---------------- iterate over keys/values -----------------
-                for kv_pos in 0..kv_len {
-                    // Mask (optional)
-                    let mv = if let Some(mv_vec) = mask_vec {
-                        let mval = mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos];
-                        slope * mval.to_f64() as f32
+                // Causal bound: only attend to positions <= current position
+                let kv_end = if is_causal {
+                    (q_pos + kv_offset + 1).min(kv_len)
+                } else {
+                    kv_len
+                };
+
+                // Iterate over keys/values up to causal bound
+                for kv_pos in 0..kv_end {
+                    // ALiBi bias based on relative position
+                    let alibi_bias = if max_bias > 0.0 {
+                        slope * (kv_pos as i64 - (q_pos + kv_offset) as i64) as f32
                     } else {
                         0.0
                     };
-                    if mv == f32::NEG_INFINITY {
-                        continue;
-                    }
 
                     // K row (strided)
                     let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
@@ -445,9 +423,9 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                     if logit_softcap != 0.0 {
                         s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
                     }
-                    s_val += T::from_f64(mv as f64);
+                    s_val += T::from_f64(alibi_bias as f64);
 
-                    // online softmax
+                    // Online softmax
                     let m_old = m;
                     let mut ms = 1.0f32;
                     let mut vs = 1.0f32;
@@ -470,7 +448,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                     s = s * ms + vs;
                 }
 
-                // ------------------- normalise & write out ------------------
+                // Normalise & write out
                 let inv_s = 1.0 / s;
                 for v in vkq.iter_mut() {
                     *v *= inv_s;
@@ -479,7 +457,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
             });
     });
 
-    // Build output tensor with shape (B, H, S, D) to match standard (permute 0,2,1,3)
+    // Output shape: (B, H, S, D)
     let out_shape = (b, h, q_len, dv);
     Tensor::from_vec(out, out_shape, &Device::Cpu)
 }
