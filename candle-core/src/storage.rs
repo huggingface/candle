@@ -28,7 +28,10 @@ impl Storage {
                 let storage = storage.try_clone(layout)?;
                 Ok(Self::Metal(storage))
             }
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(storage) => {
+                let storage = storage.try_clone(layout)?;
+                Ok(Self::Lazy(storage))
+            }
         }
     }
 
@@ -37,7 +40,7 @@ impl Storage {
             Self::Cpu(_) => Device::Cpu,
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
             Self::Metal(storage) => Device::Metal(storage.device().clone()),
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(_storage) => todo!(), //Device::Lazy(storage.device().clone()),
         }
     }
 
@@ -46,7 +49,7 @@ impl Storage {
             Self::Cpu(storage) => storage.dtype(),
             Self::Cuda(storage) => storage.dtype(),
             Self::Metal(storage) => storage.dtype(),
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(storage) => storage.dtype(),
         }
     }
 
@@ -85,7 +88,7 @@ impl Storage {
             Storage::Cpu(storage) => storage.const_set(v, l),
             Storage::Cuda(storage) => storage.const_set(v, l),
             Storage::Metal(storage) => storage.const_set(v, l),
-            Self::Lazy(_) => todo!(),
+            Storage::Lazy(storage) => storage.const_set(v, l),
         }
     }
 
@@ -103,7 +106,10 @@ impl Storage {
                 let storage = storage.affine(layout, mul, add)?;
                 Ok(Self::Metal(storage))
             }
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(storage) => {
+                let storage = storage.affine(layout, mul, add)?;
+                Ok(Self::Lazy(storage))
+            }
         }
     }
 
@@ -121,7 +127,10 @@ impl Storage {
                 let storage = storage.powf(layout, alpha)?;
                 Ok(Self::Metal(storage))
             }
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(storage) => {
+                let storage = storage.powf(layout, alpha)?;
+                Ok(Self::Lazy(storage))
+            }
         }
     }
 
@@ -139,7 +148,10 @@ impl Storage {
                 let storage = storage.elu(layout, alpha)?;
                 Ok(Self::Metal(storage))
             }
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(storage) => {
+                let storage = storage.elu(layout, alpha)?;
+                Ok(Self::Lazy(storage))
+            }
         }
     }
 
@@ -165,7 +177,10 @@ impl Storage {
                 let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
             }
-            (Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(lhs), Self::Lazy(rhs)) => {
+                let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Lazy(storage))
+            }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
                 // anyway.
@@ -193,7 +208,10 @@ impl Storage {
                 let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Metal(storage))
             }
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(storage) => {
+                let storage = storage.reduce_op(op, layout, s)?;
+                Ok(Self::Lazy(storage))
+            }
         }
     }
 
@@ -211,7 +229,10 @@ impl Storage {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Metal(storage))
             }
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(storage) => {
+                let storage = storage.to_dtype(layout, dtype)?;
+                Ok(Self::Lazy(storage))
+            }
         }
     }
 
@@ -229,7 +250,11 @@ impl Storage {
                 let (storage, shape) = c.metal_fwd(storage, l)?;
                 Ok((Self::Metal(storage), shape))
             }
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(_storage) => {
+                // let storage = storage.lazy_fwd(layout, dtype)?;
+                // Ok(Self::Lazy(storage))
+                todo!()
+            }
         }
     }
 
@@ -254,7 +279,11 @@ impl Storage {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
                 Ok((Self::Metal(s), shape))
             }
-            (Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(_s1), Self::Lazy(_s2)) => {
+                // let (s, shape) = c.lazy_fwd(s1, l1, s2, l2)?;
+                // Ok((Self::Lazy(s), shape))
+                todo!()
+            }
             _ => unreachable!(),
         }
     }
@@ -283,7 +312,11 @@ impl Storage {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Metal(s), shape))
             }
-            (Self::Lazy(_), Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(_s1), Self::Lazy(_s2), Self::Lazy(_s3)) => {
+                // let (s, shape) = c.lazy_fwd(s1, l1, s2, l2, s3, l3)?;
+                // Ok((Self::Metal(s), shape))
+                todo!()
+            }
             _ => unreachable!(),
         }
     }
@@ -350,7 +383,10 @@ impl Storage {
                 let storage = storage.unary_impl::<B>(layout)?;
                 Ok(Self::Metal(storage))
             }
-            Self::Lazy(_) => todo!(),
+            Self::Lazy(storage) => {
+                let storage = storage.unary_impl::<B>(layout)?;
+                Ok(Self::Lazy(storage))
+            }
         }
     }
 
@@ -375,7 +411,10 @@ impl Storage {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
             }
-            (Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(lhs), Self::Lazy(rhs)) => {
+                let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Lazy(storage))
+            }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
                 // anyway.
@@ -411,7 +450,10 @@ impl Storage {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
-            (Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(inp), Self::Lazy(kernel)) => {
+                let s = inp.conv1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Lazy(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -443,7 +485,10 @@ impl Storage {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
-            (Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(inp), Storage::Lazy(kernel)) => {
+                let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Lazy(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
