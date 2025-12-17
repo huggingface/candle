@@ -61,14 +61,6 @@ mod cuda {
     use crate::cuda_backend::{kernel_name, kernels, CudaStorageSlice as S, WrapErr};
     use crate::{CudaDevice, WithDType};
 
-    fn next_power_of_2(x: usize) -> usize {
-        let mut n = 1;
-        while n < x {
-            n *= 2
-        }
-        n
-    }
-
     impl crate::cuda_backend::Map1Any for ArgSort {
         fn f<T: DeviceRepr + WithDType + ValidAsZeroBits, W: Fn(CudaSlice<T>) -> S>(
             &self,
@@ -122,12 +114,33 @@ impl crate::CustomOp1 for ArgSort {
         let sort_indexes = match storage {
             crate::CpuStorage::U8(vs) => self.asort(vs, layout),
             crate::CpuStorage::U32(vs) => self.asort(vs, layout),
+            crate::CpuStorage::I16(vs) => self.asort(vs, layout),
+            crate::CpuStorage::I32(vs) => self.asort(vs, layout),
             crate::CpuStorage::I64(vs) => self.asort(vs, layout),
             crate::CpuStorage::BF16(vs) => self.asort(vs, layout),
             crate::CpuStorage::F16(vs) => self.asort(vs, layout),
             crate::CpuStorage::F32(vs) => self.asort(vs, layout),
             crate::CpuStorage::F64(vs) => self.asort(vs, layout),
             crate::CpuStorage::F8E4M3(vs) => self.asort(vs, layout),
+            // Dummy types don't support sorting
+            crate::CpuStorage::F6E2M3(_) => {
+                return Err(
+                    crate::Error::UnsupportedDTypeForOp(crate::DType::F6E2M3, "argsort").bt(),
+                )
+            }
+            crate::CpuStorage::F6E3M2(_) => {
+                return Err(
+                    crate::Error::UnsupportedDTypeForOp(crate::DType::F6E3M2, "argsort").bt(),
+                )
+            }
+            crate::CpuStorage::F4(_) => {
+                return Err(crate::Error::UnsupportedDTypeForOp(crate::DType::F4, "argsort").bt())
+            }
+            crate::CpuStorage::F8E8M0(_) => {
+                return Err(
+                    crate::Error::UnsupportedDTypeForOp(crate::DType::F8E8M0, "argsort").bt(),
+                )
+            }
         };
         let sort_indexes = crate::CpuStorage::U32(sort_indexes);
         Ok((sort_indexes, layout.shape().into()))
@@ -168,8 +181,15 @@ impl crate::CustomOp1 for ArgSort {
                     DType::F64 => "asort_asc_f64",
                     DType::U8 => "asort_asc_u8",
                     DType::U32 => "asort_asc_u32",
+                    DType::I16 => "asort_asc_i16",
+                    DType::I32 => "asort_asc_i32",
                     DType::I64 => "asort_asc_i64",
                     DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
+                    DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                        return Err(
+                            crate::Error::UnsupportedDTypeForOp(storage.dtype(), "argsort").bt(),
+                        )
+                    }
                 }
             } else {
                 match storage.dtype() {
@@ -179,14 +199,21 @@ impl crate::CustomOp1 for ArgSort {
                     DType::F64 => "asort_desc_f64",
                     DType::U8 => "asort_desc_u8",
                     DType::U32 => "asort_desc_u32",
+                    DType::I16 => "asort_desc_i16",
+                    DType::I32 => "asort_desc_i32",
                     DType::I64 => "asort_desc_i64",
                     DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
+                    DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                        return Err(
+                            crate::Error::UnsupportedDTypeForOp(storage.dtype(), "argsort").bt(),
+                        )
+                    }
                 }
             }
         };
         let device = storage.device();
         let kernels = device.kernels();
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
         let el = layout.shape().elem_count();
         let ncols = self.last_dim;
         let nrows = el / ncols;
@@ -198,7 +225,7 @@ impl crate::CustomOp1 for ArgSort {
         }
         candle_metal_kernels::call_arg_sort(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             nrows,
@@ -211,6 +238,15 @@ impl crate::CustomOp1 for ArgSort {
         let dst = crate::MetalStorage::new(dst, device.clone(), el, DType::U32);
         Ok((dst, layout.shape().clone()))
     }
+}
+
+#[allow(unused)]
+fn next_power_of_2(x: usize) -> usize {
+    let mut n = 1;
+    while n < x {
+        n *= 2
+    }
+    n
 }
 
 impl Tensor {

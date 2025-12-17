@@ -327,6 +327,21 @@ fn binary_op(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn ternary_op(device: &Device) -> Result<()> {
+    let data = &[[0u8, 1, 0, 1, 0], [1, 1, 1, 0, 0]];
+    let ids = Tensor::new(data, device)?;
+    let data = &[[0f32, 1., 2., 3., 4.], [5., 6., 7., 8., 9.]];
+    let a = Tensor::new(data, device)?;
+    let data = &[[10f32, 11., 12., 13., 14.], [15., 16., 17., 18., 19.]];
+    let b = Tensor::new(data, device)?;
+    let tensor = ids.where_cond(&a, &b)?;
+    let dims = tensor.dims();
+    assert_eq!(dims, [2, 5]);
+    let result: Vec<f32> = tensor.flatten_all()?.to_vec1()?;
+    assert_eq!(result, [10., 1., 12., 3., 14., 5., 6., 7., 18., 19.]);
+    Ok(())
+}
+
 fn transpose(device: &Device) -> Result<()> {
     let data = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
     let tensor = Tensor::new(data, device)?.t()?;
@@ -1665,6 +1680,7 @@ test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal);
 test_device!(transpose, transpose_cpu, transpose_gpu, transpose_metal);
 test_device!(unary_op, unary_op_cpu, unary_op_gpu, unary_op_metal);
 test_device!(binary_op, binary_op_cpu, binary_op_gpu, binary_op_metal);
+test_device!(ternary_op, ternary_op_cpu, ternary_op_gpu, ternary_op_metal);
 test_device!(embeddings, embeddings_cpu, embeddings_gpu, embeddings_metal);
 test_device!(cmp, cmp_cpu, cmp_gpu, cmp_metal);
 test_device!(
@@ -1705,6 +1721,21 @@ fn tensor_send_sync(device: &Device) -> Result<()> {
             assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
         });
     }
+    let result: Vec<f32> = tensor.to_vec1().unwrap();
+    assert_eq!(result, vec![1.0f32, 2.0, 3.0]);
+
+    let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
+    tensor.device().synchronize().unwrap();
+
+    let new = std::thread::spawn(move || {
+        let new = tensor.add(&tensor).unwrap();
+        new.device().synchronize().unwrap();
+        new
+    })
+    .join()
+    .unwrap();
+    let result: Vec<f32> = new.to_vec1().unwrap();
+    assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
 
     Ok(())
 }
