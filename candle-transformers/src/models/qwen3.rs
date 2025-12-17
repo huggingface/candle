@@ -3,6 +3,7 @@ use crate::{
     utils::repeat_kv,
 };
 use candle::{DType, Device, Module, Result, Tensor};
+use candle_nn::cpu_flash_attention::AttnMask;
 use candle_nn::{kv_cache::ConcatKvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
@@ -278,17 +279,35 @@ impl Qwen3Attention {
         // Call CPU flash attention based on dtype
         let ctx = match q.dtype() {
             DType::F32 => cpu_flash_attention::run_flash_attn_cpu::<f32>(
-                &q, &k, &v, scale, true, offset, None, None,
+                &q,
+                &k,
+                &v,
+                scale,
+                AttnMask::Causal { kv_offset: offset },
+                None,
+                None,
             )?,
             DType::F64 => cpu_flash_attention::run_flash_attn_cpu::<f64>(
-                &q, &k, &v, scale, true, offset, None, None,
+                &q,
+                &k,
+                &v,
+                scale,
+                AttnMask::Causal { kv_offset: offset },
+                None,
+                None,
             )?,
             DType::BF16 => {
                 let q_f32 = q.to_dtype(DType::F32)?;
                 let k_f32 = k.to_dtype(DType::F32)?;
                 let v_f32 = v.to_dtype(DType::F32)?;
                 let ctx_f32 = cpu_flash_attention::run_flash_attn_cpu::<f32>(
-                    &q_f32, &k_f32, &v_f32, scale, true, offset, None, None,
+                    &q_f32,
+                    &k_f32,
+                    &v_f32,
+                    scale,
+                    AttnMask::Causal { kv_offset: offset },
+                    None,
+                    None,
                 )?;
                 ctx_f32.to_dtype(DType::BF16)?
             }

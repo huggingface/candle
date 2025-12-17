@@ -36,6 +36,43 @@ const DOT_CHUNK: usize = 4;
 /// Size (in KV positions) processed by each inner‑tile job.
 const TILE_KV: usize = 16;
 
+/// Attention mask specification for CPU flash attention.
+///
+/// Determines how masking is applied during attention computation.
+#[derive(Debug, Clone, Copy)]
+pub enum AttnMask<'a> {
+    /// No masking - full bidirectional attention.
+    /// All query positions can attend to all key/value positions.
+    None,
+
+    /// Causal masking via efficient loop bounds.
+    /// Each query position can only attend to positions at or before it.
+    /// This is more efficient than an explicit mask tensor as it avoids
+    /// iterating over masked positions entirely.
+    ///
+    /// `kv_offset`: Number of prior KV positions when using KV cache (for decode).
+    Causal { kv_offset: usize },
+
+    /// Custom mask tensor for arbitrary attention patterns.
+    /// Supports sliding window, block-sparse, or any custom masking.
+    ///
+    /// Expected shape: `(B, Q_LEN, KV_LEN)` or broadcastable.
+    /// Values should be 0.0 for positions to attend, `NEG_INFINITY` for masked.
+    Mask(&'a Tensor),
+}
+
+impl<'a> AttnMask<'a> {
+    /// Create a causal mask with no KV offset (for prefill).
+    pub fn causal() -> Self {
+        AttnMask::Causal { kv_offset: 0 }
+    }
+
+    /// Create a causal mask with the specified KV offset (for decode with KV cache).
+    pub fn causal_with_offset(kv_offset: usize) -> Self {
+        AttnMask::Causal { kv_offset }
+    }
+}
+
 #[inline]
 fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[T]) -> T {
     let mut sum = T::zero();
@@ -58,7 +95,7 @@ fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[
 
 /// Fused attention optimized for CPU.
 ///
-/// Computes softmax(qk^T * scale) * v
+/// Computes `softmax(Q @ K^T * scale) @ V`
 ///
 /// **Input shapes:**
 /// - `q`: (B, S, H, D)
@@ -68,18 +105,32 @@ fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[
 /// **Output shape:** (B, H, S, D)
 ///
 /// **Parameters:**
-/// - `softmax_scale`: Scale factor applied before softmax (typically 1/sqrt(head_dim))
-/// - `is_causal`: If true, applies causal masking via loop bounds (more efficient than explicit mask)
-/// - `kv_offset`: Number of prior KV positions (for decode with KV cache)
-/// - `max_bias`: ALiBi max bias (0.0 to disable)
-/// - `softcap`: Logit soft-capping value (0.0 to disable)
+/// - `softmax_scale`: Scale factor applied before softmax (typically `1/sqrt(head_dim)`)
+/// - `attn_mask`: Masking strategy - `None`, `Causal`, or custom `Mask` tensor
+/// - `max_bias`: ALiBi max bias (None or Some(0.0) to disable)
+/// - `softcap`: Logit soft-capping value (None or Some(0.0) to disable)
+///
+/// # Examples
+///
+/// ```ignore
+/// // Causal attention (optimized loop bounds)
+/// run_flash_attn_cpu::<f32>(&q, &k, &v, scale, AttnMask::Causal { kv_offset: 0 }, None, None)?;
+///
+/// // With KV cache offset for decode
+/// run_flash_attn_cpu::<f32>(&q, &k, &v, scale, AttnMask::causal_with_offset(512), None, None)?;
+///
+/// // Custom mask tensor
+/// run_flash_attn_cpu::<f32>(&q, &k, &v, scale, AttnMask::Mask(&mask), None, None)?;
+///
+/// // Full attention (no masking)
+/// run_flash_attn_cpu::<f32>(&q, &k, &v, scale, AttnMask::None, None, None)?;
+/// ```
 pub fn run_flash_attn_cpu<T>(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
     softmax_scale: f32,
-    is_causal: bool,
-    kv_offset: usize,
+    attn_mask: AttnMask<'_>,
     max_bias: Option<f32>,
     softcap: Option<f32>,
 ) -> Result<Tensor>
@@ -111,16 +162,41 @@ where
         return Err(candle::Error::Msg("Expected CPU storage for v".into()));
     };
 
+    // Extract mask data if provided
+    let _mask_guard;
+    let mask_data: Option<&[T]> = match &attn_mask {
+        AttnMask::Mask(mask) => {
+            _mask_guard = Some(mask.storage_and_layout());
+            if let Some((ref guard, ref layout)) = _mask_guard {
+                if let Storage::Cpu(cpu) = &**guard {
+                    let data = cpu.as_slice::<T>()?;
+                    Some(&data[layout.start_offset()..])
+                } else {
+                    return Err(candle::Error::Msg("Expected CPU storage for mask".into()));
+                }
+            } else {
+                None
+            }
+        }
+        _ => {
+            _mask_guard = None;
+            None
+        }
+    };
+
     let q_stride = q.stride();
     let k_stride = k.stride();
     let v_stride = v.stride();
 
+    let q_len = q.shape().dims()[1];
+
     // Fast path for decode: q_len == 1
-    if q.shape().dims()[1] == 1 {
+    if q_len == 1 {
         return flash_attn_cpu_single_q(
             q_data,
             k_data,
             v_data,
+            mask_data,
             q.shape().dims(),
             k.shape().dims(),
             v.shape().dims(),
@@ -128,6 +204,7 @@ where
             k_stride,
             v_stride,
             softmax_scale,
+            &attn_mask,
             max_bias.unwrap_or(0.0),
             softcap.unwrap_or(0.0),
         );
@@ -137,6 +214,7 @@ where
         q_data,
         k_data,
         v_data,
+        mask_data,
         q.shape().dims(),
         k.shape().dims(),
         v.shape().dims(),
@@ -144,8 +222,7 @@ where
         k_stride,
         v_stride,
         softmax_scale,
-        is_causal,
-        kv_offset,
+        &attn_mask,
         max_bias.unwrap_or(0.0),
         softcap.unwrap_or(0.0),
     )
@@ -153,14 +230,12 @@ where
 
 /// Optimised path for the common decode case: q_len == 1 but kv_len >> 1.
 /// We drop the inner q‑position loop and parallelise over `(batch, head)`.
-///
-/// For decode, the single query is at the end of the sequence, so it can
-/// attend to ALL prior KV positions regardless of causal setting.
 #[allow(clippy::too_many_arguments)]
 fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
+    mask_data: Option<&[T]>,
     qshape: &[usize],
     kshape: &[usize],
     vshape: &[usize],
@@ -168,6 +243,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     kstride: &[usize],
     vstride: &[usize],
     scale: f32,
+    attn_mask: &AttnMask<'_>,
     max_bias: f32,
     logit_softcap: f32,
 ) -> Result<Tensor> {
@@ -185,8 +261,9 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     // Output buffer: (B, H, 1, D)
     let mut out = vec![0f32; b * h * dv];
 
-    // Expose a second dimension of work: split the KV axis into tiles that
-    // fit in the last‑level cache and let Rayon schedule them.
+    // For decode with q_len == 1, the single query is at the end of the sequence.
+    // It can attend to ALL prior KV positions regardless of causal setting.
+    // So causal masking has no effect here - we iterate all kv_len positions.
     let kv_tiles = kv_len.div_ceil(TILE_KV);
 
     FLASH_ATTN_POOL.install(|| {
@@ -227,6 +304,20 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                             let mut k_row: Vec<T> = Vec::with_capacity(d);
 
                             for kv_pos in kv_start..kv_end {
+                                // Get mask value based on mask type
+                                let mask_val = match (attn_mask, mask_data) {
+                                    (AttnMask::Mask(_), Some(mv)) => {
+                                        let mval = mv[(b_i * kv_len) + kv_pos];
+                                        mval.to_f64() as f32
+                                    }
+                                    _ => 0.0, // No masking for None or Causal (decode sees all)
+                                };
+
+                                // Skip fully masked positions
+                                if mask_val == f32::NEG_INFINITY {
+                                    continue;
+                                }
+
                                 // ALiBi bias based on position
                                 let alibi_bias = if max_bias > 0.0 {
                                     slope * (kv_pos as f32 - (kv_len - 1) as f32)
@@ -252,7 +343,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                                 if logit_softcap != 0.0 {
                                     s_val = logit_softcap * s_val.tanh();
                                 }
-                                s_val += alibi_bias;
+                                s_val += alibi_bias + mask_val;
 
                                 // Tile‑local online softmax
                                 let m_old = m;
@@ -325,6 +416,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
+    mask_data: Option<&[T]>,
     qshape: &[usize],
     kshape: &[usize],
     vshape: &[usize],
@@ -332,8 +424,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     kstride: &[usize],
     vstride: &[usize],
     scale: f32,
-    is_causal: bool,
-    kv_offset: usize,
+    attn_mask: &AttnMask<'_>,
     max_bias: f32,
     logit_softcap: f32,
 ) -> Result<Tensor> {
@@ -349,6 +440,12 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
 
     // Precompute value for ALiBi slope calculation
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
+
+    // Extract kv_offset for causal masking
+    let kv_offset = match attn_mask {
+        AttnMask::Causal { kv_offset } => *kv_offset,
+        _ => 0,
+    };
 
     let mut out = vec![0f32; b * q_len * h * dv];
 
@@ -390,15 +487,31 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                     q_row.push(q_data[q_base + di * qstride[3]]);
                 }
 
-                // Causal bound: only attend to positions <= current position
-                let kv_end = if is_causal {
-                    (q_pos + kv_offset + 1).min(kv_len)
-                } else {
-                    kv_len
+                // Determine KV iteration bounds based on mask type
+                let kv_end = match attn_mask {
+                    AttnMask::Causal { kv_offset } => {
+                        // Causal: only attend to positions <= current position
+                        (q_pos + kv_offset + 1).min(kv_len)
+                    }
+                    _ => kv_len, // None or Mask: iterate all (Mask filters via values)
                 };
 
-                // Iterate over keys/values up to causal bound
+                // Iterate over keys/values
                 for kv_pos in 0..kv_end {
+                    // Get mask value based on mask type
+                    let mask_val = match (attn_mask, mask_data) {
+                        (AttnMask::Mask(_), Some(mv)) => {
+                            let mval = mv[((b_i * q_len + q_pos) * kv_len) + kv_pos];
+                            slope * mval.to_f64() as f32
+                        }
+                        _ => 0.0, // No additional mask value for None or Causal
+                    };
+
+                    // Skip fully masked positions (for explicit masks)
+                    if mask_val == f32::NEG_INFINITY {
+                        continue;
+                    }
+
                     // ALiBi bias based on relative position
                     let alibi_bias = if max_bias > 0.0 {
                         slope * (kv_pos as i64 - (q_pos + kv_offset) as i64) as f32
@@ -423,7 +536,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
                     if logit_softcap != 0.0 {
                         s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
                     }
-                    s_val += T::from_f64(alibi_bias as f64);
+                    s_val += T::from_f64((alibi_bias + mask_val) as f64);
 
                     // Online softmax
                     let m_old = m;
@@ -460,4 +573,17 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     // Output shape: (B, H, S, D)
     let out_shape = (b, h, q_len, dv);
     Tensor::from_vec(out, out_shape, &Device::Cpu)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_attn_mask_variants() {
+        // Test that enum variants can be created
+        let _none = AttnMask::None;
+        let _causal = AttnMask::causal();
+        let _causal_offset = AttnMask::causal_with_offset(512);
+    }
 }
