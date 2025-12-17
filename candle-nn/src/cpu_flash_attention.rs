@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle::{Device, Result, Storage, Tensor, WithDType};
+use candle::{DType, Device, Result, Storage, Tensor, WithDType};
 use std::sync::LazyLock;
 use std::{f32, iter::Sum};
 
@@ -286,8 +286,8 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                 let v_head = h_i / rv2;
 
                 // Gather Q row (strided)
-                let q_base = b_i * qstride[0] + 0 * qstride[1] + h_i * qstride[2];
                 let mut q_row: Vec<T> = Vec::with_capacity(d);
+                let q_base = b_i * qstride[0] + 0 * qstride[1] + h_i * qstride[2];
                 for di in 0..d {
                     q_row.push(q_data[q_base + di * qstride[3]]);
                 }
@@ -573,6 +573,135 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     // Output shape: (B, H, S, D)
     let out_shape = (b, h, q_len, dv);
     Tensor::from_vec(out, out_shape, &Device::Cpu)
+}
+
+/// Hybrid flash attention using Candle tensor operations.
+///
+/// Uses tiled computation with Candle's optimized matmul (BLAS-backed)
+/// while maintaining online softmax fusion for memory efficiency.
+///
+/// **Input shapes:**
+/// - `q`: (B, S, H, D)
+/// - `k`: (B, KV_S, KV_H, D)  
+/// - `v`: (B, KV_S, KV_H, D)
+///
+/// **Output shape:** (B, H, S, D)
+pub fn run_flash_attn_cpu_hybrid(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    attn_mask: AttnMask<'_>,
+) -> Result<Tensor> {
+    let (b, q_len, h, d) = q.dims4()?;
+    let kv_len = k.dims4()?.1;
+    let dtype = q.dtype();
+    let device = q.device();
+
+    const TILE_KV: usize = 64;
+
+    let kv_offset = match attn_mask {
+        AttnMask::Causal { kv_offset } => kv_offset,
+        _ => 0,
+    };
+    let is_causal = matches!(attn_mask, AttnMask::Causal { .. });
+
+    // Reshape: (B, S, H, D) -> (B, H, S, D) for batched matmul
+    let q = q.transpose(1, 2)?.contiguous()?;
+    let k = k.transpose(1, 2)?.contiguous()?;
+    let v = v.transpose(1, 2)?.contiguous()?;
+
+    // Online softmax accumulators
+    let mut output = Tensor::zeros((b, h, q_len, d), dtype, device)?;
+    let mut m_i = Tensor::full(f32::NEG_INFINITY, (b, h, q_len, 1), device)?.to_dtype(dtype)?;
+    let mut l_i = Tensor::zeros((b, h, q_len, 1), dtype, device)?;
+
+    for kv_start in (0..kv_len).step_by(TILE_KV) {
+        let kv_end = (kv_start + TILE_KV).min(kv_len);
+        let tile_len = kv_end - kv_start;
+
+        // For causal: skip tiles entirely past the causal boundary
+        if is_causal && kv_start > q_len + kv_offset {
+            break;
+        }
+
+        // Views into K, V for this tile (no copy if contiguous)
+        let k_tile = k.narrow(2, kv_start, tile_len)?;
+        let v_tile = v.narrow(2, kv_start, tile_len)?;
+
+        // Q @ K^T: (B, H, S, D) @ (B, H, D, tile) -> (B, H, S, tile)
+        let scores = q.matmul(&k_tile.transpose(2, 3)?)?;
+        let scores = (scores * softmax_scale as f64)?;
+
+        // Apply mask
+        let scores = if is_causal {
+            apply_causal_mask_tile(&scores, kv_start, kv_offset, dtype)?
+        } else if let AttnMask::Mask(mask) = attn_mask {
+            let mask_tile = mask.narrow(2, kv_start, tile_len)?;
+            scores.broadcast_add(&mask_tile)?
+        } else {
+            scores
+        };
+
+        // Online softmax update
+        // m_ij = rowmax(scores)
+        let m_ij = scores.max_keepdim(candle::D::Minus1)?;
+
+        // m_new = max(m_i, m_ij)
+        let m_new = m_i.maximum(&m_ij)?;
+
+        // Correction factor for previous accumulator
+        let alpha = (&m_i - &m_new)?.exp()?;
+
+        // P_ij = exp(scores - m_new)
+        let p_ij = scores.broadcast_sub(&m_new)?.exp()?;
+
+        // l_ij = rowsum(P_ij)
+        let l_ij = p_ij.sum_keepdim(candle::D::Minus1)?;
+
+        // l_new = alpha * l_i + l_ij
+        let l_new = ((&alpha * &l_i)? + &l_ij)?;
+
+        // O_new = alpha * O_i + P_ij @ V_tile
+        let pv = p_ij.matmul(&v_tile)?;
+        output = ((&alpha * &output)? + pv)?;
+
+        // Update state
+        m_i = m_new;
+        l_i = l_new;
+    }
+
+    // Final normalization: O = O / l
+    let output = output.broadcast_div(&l_i)?;
+
+    Ok(output)
+}
+
+/// Build and apply causal mask for a KV tile.
+fn apply_causal_mask_tile(
+    scores: &Tensor,
+    kv_start: usize,
+    kv_offset: usize,
+    dtype: DType,
+) -> Result<Tensor> {
+    let (_, _, q_len, tile_len) = scores.dims4()?;
+    let device = scores.device();
+
+    let mask: Vec<f32> = (0..q_len)
+        .flat_map(|q_pos| {
+            (0..tile_len).map(move |kv_pos| {
+                let kv_abs = kv_start + kv_pos;
+                if kv_abs <= q_pos + kv_offset {
+                    0.0
+                } else {
+                    f32::NEG_INFINITY
+                }
+            })
+        })
+        .collect();
+
+    let mask = Tensor::from_vec(mask, (1, 1, q_len, tile_len), device)?.to_dtype(dtype)?;
+    scores.broadcast_add(&mask)
 }
 
 #[cfg(test)]

@@ -278,36 +278,30 @@ impl Qwen3Attention {
 
         // Call CPU flash attention based on dtype
         let ctx = match q.dtype() {
-            DType::F32 => cpu_flash_attention::run_flash_attn_cpu::<f32>(
+            DType::F32 => cpu_flash_attention::run_flash_attn_cpu_hybrid(
                 &q,
                 &k,
                 &v,
                 scale,
                 AttnMask::Causal { kv_offset: offset },
-                None,
-                None,
             )?,
-            DType::F64 => cpu_flash_attention::run_flash_attn_cpu::<f64>(
+            DType::F64 => cpu_flash_attention::run_flash_attn_cpu_hybrid(
                 &q,
                 &k,
                 &v,
                 scale,
                 AttnMask::Causal { kv_offset: offset },
-                None,
-                None,
             )?,
             DType::BF16 => {
                 let q_f32 = q.to_dtype(DType::F32)?;
                 let k_f32 = k.to_dtype(DType::F32)?;
                 let v_f32 = v.to_dtype(DType::F32)?;
-                let ctx_f32 = cpu_flash_attention::run_flash_attn_cpu::<f32>(
+                let ctx_f32 = cpu_flash_attention::run_flash_attn_cpu_hybrid(
                     &q_f32,
                     &k_f32,
                     &v_f32,
                     scale,
                     AttnMask::Causal { kv_offset: offset },
-                    None,
-                    None,
                 )?;
                 ctx_f32.to_dtype(DType::BF16)?
             }
