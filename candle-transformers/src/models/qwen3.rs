@@ -252,7 +252,7 @@ impl Qwen3Attention {
 
         let scale = 1.0 / (self.head_dim as f32).sqrt();
 
-        let ctx = candle_flash_attn::flash_attn(&q, &k, &v, scale, false)?;
+        let ctx = candle_flash_attn::flash_attn(&q, &k, &v, scale, true)?;
 
         // Output: (B, S, H, D) -> (B, L, hidden_size)
         ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
@@ -314,8 +314,8 @@ impl Qwen3Attention {
         l: usize,
     ) -> Result<Tensor> {
         // 6. GQA repeat_kv
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
+        let k = repeat_kv(k.clone(), self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v.clone(), self.num_kv_groups)?.contiguous()?;
 
         // 7. Attention score
         let scale = 1.0 / (self.head_dim as f64).sqrt();
