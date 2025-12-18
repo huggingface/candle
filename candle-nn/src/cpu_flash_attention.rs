@@ -2,9 +2,9 @@
 
 use candle::DType;
 use candle::{Device, Result, Storage, Tensor, WithDType};
+use half::f16;
 use std::sync::LazyLock;
 use std::{f32, iter::Sum};
-use half::f16;
 
 use rayon::prelude::*;
 use rayon::ThreadPool;
