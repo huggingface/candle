@@ -562,7 +562,6 @@ fn key_range(
 // assumes these are already in your module:
 /// - FLASH_ATTN_POOL
 /// - dot_f32, alibi_bias, key_range
-
 #[allow(clippy::too_many_arguments)]
 pub fn flash_attn_varlen_cpu(
     q: &Tensor,                    // [total_q, Hq, D]
