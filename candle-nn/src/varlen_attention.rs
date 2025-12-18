@@ -9,7 +9,7 @@ use candle::Tensor;
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 #[allow(clippy::needless_range_loop)]
-pub fn flash_attn_varlen_compat(
+pub fn flash_attn_varlen_unfused(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
