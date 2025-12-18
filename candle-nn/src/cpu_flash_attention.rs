@@ -694,6 +694,7 @@ pub fn flash_attn_varlen_cpu(
 
             #[inline(always)]
             fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
+                // TODO: use candle::cpu::kernels::{vec_dot_f32};
                 let mut s = 0.0f32;
                 let mut i = 0;
                 while i + 4 <= a.len() {
@@ -832,6 +833,7 @@ pub fn flash_attn_varlen_cpu(
 
             #[inline(always)]
             fn dot_qf32_kf16(q: &[f32], k: &[half::f16]) -> f32 {
+                // TODO: use candle::cpu::kernels::{vec_dot_f16};
                 let mut s = 0.0f32;
                 let mut i = 0usize;
                 while i + 8 <= q.len() {
