@@ -80,35 +80,20 @@ impl QuantizedAttention {
         let attention_bk = gg.tensor(&format!("{prefix}.attn_k.bias"));
         let attention_bv = gg.tensor(&format!("{prefix}.attn_v.bias"));
 
-        let attention_bq = if attention_bq.is_ok() {
-            Some(
-                attention_bq
-                    .unwrap()
-                    .dequantize(device)?
-                    .to_dtype(DType::F32)?,
-            )
+        let attention_bq = if let Ok(attention_bq) = attention_bq {
+            Some(attention_bq.dequantize(device)?.to_dtype(DType::F32)?)
         } else {
             None
         };
 
-        let attention_bk = if attention_bk.is_ok() {
-            Some(
-                attention_bk
-                    .unwrap()
-                    .dequantize(device)?
-                    .to_dtype(DType::F32)?,
-            )
+        let attention_bk = if let Ok(attention_bk) = attention_bk {
+            Some(attention_bk.dequantize(device)?.to_dtype(DType::F32)?)
         } else {
             None
         };
 
-        let attention_bv = if attention_bv.is_ok() {
-            Some(
-                attention_bv
-                    .unwrap()
-                    .dequantize(device)?
-                    .to_dtype(DType::F32)?,
-            )
+        let attention_bv = if let Ok(attention_bv) = attention_bv {
+            Some(attention_bv.dequantize(device)?.to_dtype(DType::F32)?)
         } else {
             None
         };
@@ -278,8 +263,8 @@ impl GGUFQWenMoE {
         let head_dim = md_get(format!("{arch}.attention.key_length").as_str());
         let embedding_length =
             md_get(format!("{arch}.embedding_length").as_str())?.to_u32()? as usize;
-        let head_dim = if head_dim.is_ok() {
-            head_dim.unwrap().to_u32()? as usize
+        let head_dim = if let Ok(head_dim) = head_dim {
+            head_dim.to_u32()? as usize
         } else {
             embedding_length / head_count
         };
