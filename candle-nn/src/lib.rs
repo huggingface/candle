@@ -16,6 +16,7 @@
 //!
 
 pub mod activation;
+pub mod attention;
 pub mod batch_norm;
 pub mod conv;
 pub mod cpu_flash_attention;
