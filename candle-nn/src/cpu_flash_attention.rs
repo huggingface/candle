@@ -579,6 +579,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
 ///
 /// Uses tiled computation with Candle's optimized matmul (BLAS-backed)
 /// while maintaining online softmax fusion for memory efficiency.
+/// Handles grouped-query attention (GQA) via broadcasting without memory expansion.
 ///
 /// **Input shapes:**
 /// - `q`: (B, S, H, D)
@@ -593,8 +594,9 @@ pub fn run_flash_attn_cpu_hybrid(
     softmax_scale: f32,
     attn_mask: AttnMask<'_>,
 ) -> Result<Tensor> {
+    eprintln!(">>> HYBRID CALLED: q={:?}, k={:?}", q.shape(), k.shape());
     let (b, q_len, h, d) = q.dims4()?;
-    let kv_len = k.dims4()?.1;
+    let (_, kv_len, kv_h, _) = k.dims4()?;
     let dtype = q.dtype();
     let device = q.device();
 
@@ -606,15 +608,45 @@ pub fn run_flash_attn_cpu_hybrid(
     };
     let is_causal = matches!(attn_mask, AttnMask::Causal { .. });
 
-    // Reshape: (B, S, H, D) -> (B, H, S, D) for batched matmul
+    // GQA: number of Q heads per KV head
+    let num_kv_groups = h / kv_h;
+
+    // Reshape: (B, S, H, D) -> (B, H, S, D)
     let q = q.transpose(1, 2)?.contiguous()?;
     let k = k.transpose(1, 2)?.contiguous()?;
     let v = v.transpose(1, 2)?.contiguous()?;
 
-    // Online softmax accumulators
-    let mut output = Tensor::zeros((b, h, q_len, d), dtype, device)?;
-    let mut m_i = Tensor::full(f32::NEG_INFINITY, (b, h, q_len, 1), device)?.to_dtype(dtype)?;
-    let mut l_i = Tensor::zeros((b, h, q_len, 1), dtype, device)?;
+    // For GQA, reshape Q to expose group dimension and unsqueeze K, V for broadcast
+    // Q: (B, H, S, D) -> (B, KV_H, groups, S, D)
+    // K: (B, KV_H, KV_S, D) -> (B, KV_H, 1, KV_S, D)
+    // V: (B, KV_H, KV_S, D) -> (B, KV_H, 1, KV_S, D)
+    let (q, k, v) = if num_kv_groups > 1 {
+        let q = q
+            .reshape((b, kv_h, num_kv_groups, q_len, d))?
+            .contiguous()?;
+        let k = k.unsqueeze(2)?.contiguous()?;
+        let v = v.unsqueeze(2)?.contiguous()?;
+        (q, k, v)
+    } else {
+        // No GQA - add dummy group dimension for uniform handling
+        let q = q.unsqueeze(2)?.contiguous()?; // (B, H, 1, S, D)
+        let k = k.unsqueeze(2)?.contiguous()?; // (B, H, 1, KV_S, D)
+        let v = v.unsqueeze(2)?.contiguous()?; // (B, H, 1, KV_S, D)
+        (q, k, v)
+    };
+
+    // Shapes are now:
+    // Q: (B, KV_H, groups, S, D)
+    // K: (B, KV_H, 1, KV_S, D)
+    // V: (B, KV_H, 1, KV_S, D)
+    let groups = if num_kv_groups > 1 { num_kv_groups } else { 1 };
+
+    // Online softmax accumulators - shape matches Q's leading dims
+    // (B, KV_H, groups, S, 1) for broadcasting with attention outputs
+    let mut output = Tensor::zeros((b, kv_h, groups, q_len, d), dtype, device)?;
+    let mut m_i =
+        Tensor::full(f32::NEG_INFINITY, (b, kv_h, groups, q_len, 1), device)?.to_dtype(dtype)?;
+    let mut l_i = Tensor::zeros((b, kv_h, groups, q_len, 1), dtype, device)?;
 
     for kv_start in (0..kv_len).step_by(TILE_KV) {
         let kv_end = (kv_start + TILE_KV).min(kv_len);
@@ -626,25 +658,70 @@ pub fn run_flash_attn_cpu_hybrid(
         }
 
         // Views into K, V for this tile (no copy if contiguous)
-        let k_tile = k.narrow(2, kv_start, tile_len)?;
-        let v_tile = v.narrow(2, kv_start, tile_len)?;
+        // K_tile: (B, KV_H, 1, tile, D)
+        let k_tile = k.narrow(3, kv_start, tile_len)?;
+        let v_tile = v.narrow(3, kv_start, tile_len)?;
 
-        // Q @ K^T: (B, H, S, D) @ (B, H, D, tile) -> (B, H, S, tile)
-        let scores = q.matmul(&k_tile.transpose(2, 3)?)?;
+        // Q @ K^T: (B, KV_H, groups, S, D) @ (B, KV_H, 1, D, tile) -> (B, KV_H, groups, S, tile)
+        // Broadcasting: K's dim 2 (size 1) broadcasts against Q's dim 2 (size groups)
+        //let scores = q.broadcast_matmul(&k_tile.transpose(3, 4)?.contiguous()?)?;
+        let k_tile_t = k_tile.transpose(3, 4)?.contiguous()?;
+        eprintln!(
+            "k_tile_t shape: {:?}, stride: {:?}",
+            k_tile_t.shape(),
+            k_tile_t.stride()
+        );
+
+        let k_expanded = k_tile_t
+            .broadcast_as((b, kv_h, groups, d, tile_len))?
+            .contiguous()?;
+
+        eprintln!(
+            "k_expanded shape: {:?}, stride: {:?}",
+            k_expanded.shape(),
+            k_expanded.stride()
+        );
+        eprintln!("q shape: {:?}, stride: {:?}", q.shape(), q.stride());
+        //let scores = q.matmul(&k_expanded)?;
+        let batch = b * kv_h * groups;
+        let q_3d = q.reshape((batch, q_len, d))?.contiguous()?;
+        let k_3d = k_expanded.reshape((batch, d, tile_len))?.contiguous()?;
+        let scores_3d = q_3d.matmul(&k_3d)?;
+        let scores = scores_3d.reshape((b, kv_h, groups, q_len, tile_len))?;
+        eprintln!(
+            "scores shape: {:?}, stride: {:?}",
+            scores.shape(),
+            scores.stride()
+        );
+
         let scores = (scores * softmax_scale as f64)?;
+        eprintln!(
+            "after softmax scores shape: {:?}, stride: {:?}",
+            scores.shape(),
+            scores.stride()
+        );
 
         // Apply mask
         let scores = if is_causal {
-            apply_causal_mask_tile(&scores, kv_start, kv_offset, dtype)?
+            apply_causal_mask_tile_5d(&scores, kv_start, kv_offset, dtype)?
         } else if let AttnMask::Mask(mask) = attn_mask {
+            // Mask shape: (B, Q_LEN, KV_LEN) -> need to reshape for broadcast
             let mask_tile = mask.narrow(2, kv_start, tile_len)?;
+            // Reshape to (B, 1, 1, Q_LEN, tile) for broadcast
+            let mask_tile = mask_tile.unsqueeze(1)?.unsqueeze(1)?;
             scores.broadcast_add(&mask_tile)?
         } else {
             scores
         };
 
+        eprintln!(
+            "after mask scores shape: {:?}, stride: {:?}",
+            scores.shape(),
+            scores.stride()
+        );
+
         // Online softmax update
-        // m_ij = rowmax(scores)
+        // m_ij = rowmax(scores) -> (B, KV_H, groups, S, 1)
         let m_ij = scores.max_keepdim(candle::D::Minus1)?;
 
         // m_new = max(m_i, m_ij)
@@ -663,8 +740,35 @@ pub fn run_flash_attn_cpu_hybrid(
         let l_new = ((&alpha * &l_i)? + &l_ij)?;
 
         // O_new = alpha * O_i + P_ij @ V_tile
-        let pv = p_ij.matmul(&v_tile)?;
-        output = ((&alpha * &output)? + pv)?;
+        // P_ij: (B, KV_H, groups, S, tile)
+        // V_tile: (B, KV_H, 1, tile, D)
+        // Result: (B, KV_H, groups, S, D) - broadcasts on dim 2
+        //let pv = p_ij.contiguous()?.broadcast_matmul(&v_tile)?;
+
+        let v_expanded = v_tile
+            .broadcast_as((b, kv_h, groups, tile_len, d))?
+            .contiguous()?;
+        eprintln!(
+            "v_expanded shape: {:?}, stride: {:?}",
+            v_expanded.shape(),
+            v_expanded.stride()
+        );
+
+        //let pv = p_ij.contiguous()?.matmul(&v_expanded)?;
+
+        let v_3d = v_expanded.reshape((batch, tile_len, d))?.contiguous()?;
+        let p_ij_3d = p_ij.reshape((batch, q_len, tile_len))?.contiguous()?;
+        let pv_3d = p_ij_3d.matmul(&v_3d)?;
+        let pv = pv_3d.reshape((b, kv_h, groups, q_len, d))?;
+        eprintln!("pv shape: {:?}, stride: {:?}", pv.shape(), pv.stride());
+
+        //output = ((&alpha * &output)? + pv)?;
+        output = (alpha.broadcast_mul(&output)? + pv)?;
+        eprintln!(
+            "output shape: {:?}, stride: {:?}",
+            output.shape(),
+            output.stride()
+        );
 
         // Update state
         m_i = m_new;
@@ -674,17 +778,22 @@ pub fn run_flash_attn_cpu_hybrid(
     // Final normalization: O = O / l
     let output = output.broadcast_div(&l_i)?;
 
+    // Reshape back to (B, H, S, D)
+    let output = output.reshape((b, h, q_len, d))?;
+
     Ok(output)
 }
 
-/// Build and apply causal mask for a KV tile.
-fn apply_causal_mask_tile(
-    scores: &Tensor,
+/// Build and apply causal mask for a KV tile (5D version for GQA broadcast).
+fn apply_causal_mask_tile_5d(
+    scores: &Tensor, // (B, KV_H, groups, S, tile)
     kv_start: usize,
     kv_offset: usize,
     dtype: DType,
 ) -> Result<Tensor> {
-    let (_, _, q_len, tile_len) = scores.dims4()?;
+    let dims = scores.dims();
+    let q_len = dims[3];
+    let tile_len = dims[4];
     let device = scores.device();
 
     let mask: Vec<f32> = (0..q_len)
@@ -700,7 +809,8 @@ fn apply_causal_mask_tile(
         })
         .collect();
 
-    let mask = Tensor::from_vec(mask, (1, 1, q_len, tile_len), device)?.to_dtype(dtype)?;
+    // Shape: (1, 1, 1, S, tile) for broadcasting
+    let mask = Tensor::from_vec(mask, (1, 1, 1, q_len, tile_len), device)?.to_dtype(dtype)?;
     scores.broadcast_add(&mask)
 }
 
