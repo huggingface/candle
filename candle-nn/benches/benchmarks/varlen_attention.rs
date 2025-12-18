@@ -5,7 +5,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use candle_nn::cpu_flash_attention::flash_attn_varlen_cpu_fast_f32;
-use candle_nn::varlen_attention::flash_attn_varlen_unfused; // TODO: implement for every 
+use candle_nn::varlen_attention::flash_attn_varlen_unfused; // TODO: implement for every
 
 // Use the shared helper (moved out of #[cfg(test)]).
 use rand::prelude::*;
