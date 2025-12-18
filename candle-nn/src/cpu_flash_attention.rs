@@ -568,7 +568,7 @@ pub fn flash_attn_varlen_cpu_fast_f32(
     seqlens_k: &Tensor,            // [B]
     _max_seqlen_q: usize,
     _max_seqlen_k: usize,
-    softmax_scale: f64,
+    softmax_scale: f32,
     causal: bool,
     window_left: Option<usize>,
     window_right: Option<usize>,
@@ -579,7 +579,6 @@ pub fn flash_attn_varlen_cpu_fast_f32(
     if q.dtype() != DType::F32 || k.dtype() != DType::F32 || v.dtype() != DType::F32 {
         candle::bail!("f32 only");
     }
-    let softmax_scale = softmax_scale as f32;
 
     let (total_q, hq, d) = q.dims3()?;
     let (total_k, hk, dk) = k.dims3()?;

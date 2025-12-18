@@ -141,7 +141,7 @@ fn bench_case(
     wl: Option<usize>,
     wr: Option<usize>,
 ) {
-    let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+    let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
     // One group per scenario; two functions inside: fast + unfused.
     let mut group = c.benchmark_group(device.bench_name(name));
