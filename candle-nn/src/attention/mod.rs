@@ -16,8 +16,7 @@
 
 pub mod cpu_flash;
 
-use candle::{Result, Tensor, WithDType};
-use std::iter::Sum;
+use candle::Tensor;
 
 // Re-export main API
 pub use cpu_flash::flash_attn;

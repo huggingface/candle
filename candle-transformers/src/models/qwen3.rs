@@ -227,7 +227,7 @@ impl Qwen3Attention {
         // 5. Accumulate KV cache
         let (k, v) = self.kv_cache.append(&k, &v)?;
 
-        if self.use_flash_attn && offset == 0 {
+        if self.use_flash_attn || l == 1 {
             // Flash attention path - only used during prefill (offset == 0)
             self.forward_flash_attn(&q, &k, &v, offset, b, l)
         } else {

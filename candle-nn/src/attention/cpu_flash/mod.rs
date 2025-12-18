@@ -42,8 +42,15 @@ where
 {
     let q_len = q.dims()[1];
 
+    eprintln!(
+        ">>> flash_attn dispatch: q_len={}, is_causal={}",
+        q_len,
+        attn_mask.is_causal()
+    ); // Add this
+
     // Fast path: decode with causal mask
     if q_len == 1 && attn_mask.is_causal() {
+        eprintln!(">>> taking generative path");
         return generative::flash_attn_generative::<T>(
             q,
             k,
@@ -69,11 +76,7 @@ where
 }
 
 /// Convert [`AttnMask`] to `Option<Tensor>` for the standard implementation.
-fn attn_mask_to_tensor(
-    attn_mask: &AttnMask<'_>,
-    q: &Tensor,
-    k: &Tensor,
-) -> Result<Option<Tensor>> {
+fn attn_mask_to_tensor(attn_mask: &AttnMask<'_>, q: &Tensor, k: &Tensor) -> Result<Option<Tensor>> {
     match attn_mask {
         AttnMask::None => Ok(None),
         AttnMask::Mask(t) => Ok(Some((*t).clone())),

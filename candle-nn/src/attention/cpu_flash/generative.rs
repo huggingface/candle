@@ -31,6 +31,7 @@ pub fn flash_attn_generative<T>(
 where
     T: WithDType + Sum + num_traits::real::Real,
 {
+    eprintln!(">>> GENERATIVE PATH: q_len={}", q.dims()[1]);
     // Extract CPU slices
     let (q_guard, q_layout) = q.storage_and_layout();
     let q_data: &[T] = match &*q_guard {
