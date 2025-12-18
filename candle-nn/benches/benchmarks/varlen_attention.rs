@@ -202,7 +202,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             bench_case(
                 c,
                 &dev,
-                format!("fa_varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_noncausal"),
+                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_noncausal"),
                 q,
                 k,
                 v,
@@ -227,7 +227,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             bench_case(
                 c,
                 &dev,
-                format!("fa_varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_causal"),
+                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_causal"),
                 q,
                 k,
                 v,
@@ -252,7 +252,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             bench_case(
                 c,
                 &dev,
-                format!("fa_varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_causal_wl128"),
+                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_causal_wl128"),
                 q,
                 k,
                 v,
@@ -277,7 +277,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             bench_case(
                 c,
                 &dev,
-                format!("fa_varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_gqa_noncausal"),
+                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_gqa_noncausal"),
                 q,
                 k,
                 v,
@@ -303,7 +303,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             bench_case(
                 c,
                 &dev,
-                format!("fa_varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_alibi_causal"),
+                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_alibi_causal"),
                 q,
                 k,
                 v,
