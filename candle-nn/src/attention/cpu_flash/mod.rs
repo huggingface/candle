@@ -1,9 +1,9 @@
 //! CPU flash attention implementations.
 //!
-//! - `standard`: General-purpose implementation (original)
-//! - `generative`: Optimized for decode (q_len=1)
+//! - `standard`: General-purpose with explicit mask tensor
+//! - `causal`: Optimized loop-bound causal masking (no tensor allocation)
 
-pub mod generative;
+pub mod causal;
 pub mod standard;
 
 use candle::{Result, Tensor, WithDType};
@@ -14,8 +14,8 @@ use super::AttnMask;
 /// Flash attention with automatic dispatch.
 ///
 /// Selects optimal implementation:
-/// - `q_len == 1` + `AttnMask::Causal` → generative (optimized decode)
-/// - Otherwise → standard
+/// - `AttnMask::Causal` → `causal.rs` (loop-bound, no mask tensor)
+/// - `AttnMask::None` or `AttnMask::Mask` → `standard.rs`
 ///
 /// # Arguments
 /// * `q` - Query tensor, shape `(B, S, H, D)`
@@ -40,68 +40,42 @@ pub fn flash_attn<T>(
 where
     T: WithDType + Sum + num_traits::real::Real,
 {
-    let q_len = q.dims()[1];
-
-    eprintln!(
-        ">>> flash_attn dispatch: q_len={}, is_causal={}",
-        q_len,
-        attn_mask.is_causal()
-    ); // Add this
-
-    // Fast path: decode with causal mask
-    if q_len == 1 && attn_mask.is_causal() {
-        eprintln!(">>> taking generative path");
-        return generative::flash_attn_generative::<T>(
-            q,
-            k,
-            v,
-            softmax_scale,
-            &attn_mask,
-            max_bias.unwrap_or(0.0),
-            softcap.unwrap_or(0.0),
-        );
-    }
-
-    // Standard path: convert AttnMask to Option<Tensor>
-    let mask_tensor = attn_mask_to_tensor(&attn_mask, q, k)?;
-    standard::run_flash_attn_cpu::<T>(
-        q,
-        k,
-        v,
-        mask_tensor.as_ref(),
-        softmax_scale,
-        max_bias,
-        softcap,
-    )
-}
-
-/// Convert [`AttnMask`] to `Option<Tensor>` for the standard implementation.
-fn attn_mask_to_tensor(attn_mask: &AttnMask<'_>, q: &Tensor, k: &Tensor) -> Result<Option<Tensor>> {
     match attn_mask {
-        AttnMask::None => Ok(None),
-        AttnMask::Mask(t) => Ok(Some((*t).clone())),
         AttnMask::Causal { kv_offset } => {
-            let (b, q_len, _, _) = q.dims4()?;
-            let kv_len = k.dims()[1];
-            let device = q.device();
-            let dtype = q.dtype();
-
-            let mask: Vec<f32> = (0..b)
-                .flat_map(|_| {
-                    (0..q_len).flat_map(|q_pos| {
-                        (0..kv_len).map(move |kv_pos| {
-                            if kv_pos <= q_pos + kv_offset {
-                                0.0
-                            } else {
-                                f32::NEG_INFINITY
-                            }
-                        })
-                    })
-                })
-                .collect();
-
-            let mask = Tensor::from_vec(mask, (b, q_len, kv_len), device)?.to_dtype(dtype)?;
-            Ok(Some(mask))
+            // Optimized path: loop-bound causal masking
+            causal::run_causal_attn_cpu::<T>(
+                q,
+                k,
+                v,
+                softmax_scale,
+                kv_offset,
+                max_bias,
+                softcap,
+            )
+        }
+        AttnMask::None => {
+            // No masking
+            standard::run_flash_attn_cpu::<T>(
+                q,
+                k,
+                v,
+                None,
+                softmax_scale,
+                max_bias,
+                softcap,
+            )
+        }
+        AttnMask::Mask(mask) => {
+            // Explicit mask tensor
+            standard::run_flash_attn_cpu::<T>(
+                q,
+                k,
+                v,
+                Some(mask),
+                softmax_scale,
+                max_bias,
+                softcap,
+            )
         }
     }
 }

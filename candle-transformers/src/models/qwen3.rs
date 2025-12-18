@@ -10,9 +10,6 @@ use std::sync::Arc;
 #[cfg(feature = "flash-attn")]
 use candle_flash_attn;
 
-#[cfg(not(feature = "flash-attn"))]
-use candle_nn::cpu_flash_attention;
-
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,

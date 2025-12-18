@@ -5,11 +5,18 @@
 //! ```ignore
 //! use candle_nn::attention::{flash_attn, AttnMask};
 //!
-//! // Decode with causal mask (uses optimized generative path)
+//! // Causal attention (uses optimized loop-bound path)
 //! let out = flash_attn::<f32>(
 //!     &q, &k, &v,
 //!     1.0 / (head_dim as f32).sqrt(),
 //!     AttnMask::causal_with_offset(kv_cache_len),
+//!     None, None,
+//! )?;
+//!
+//! // Custom mask tensor
+//! let out = flash_attn::<f32>(
+//!     &q, &k, &v, scale,
+//!     AttnMask::Mask(&mask_tensor),
 //!     None, None,
 //! )?;
 //! ```
@@ -23,8 +30,10 @@ pub use cpu_flash::flash_attn;
 
 /// Attention mask specification.
 ///
-/// Using an enum instead of raw tensors enables optimizations like computing
-/// causal masks via loop bounds rather than materializing mask tensors.
+/// Using an enum instead of raw tensors enables optimizations:
+/// - `Causal`: Loop-bound masking (skips ~50% of positions, no tensor allocation)
+/// - `Mask`: Explicit tensor for arbitrary patterns (sliding window, block-sparse)
+/// - `None`: Full bidirectional attention
 #[derive(Debug, Clone, Copy)]
 pub enum AttnMask<'a> {
     /// No masking — full bidirectional attention.
@@ -37,7 +46,7 @@ pub enum AttnMask<'a> {
     /// - Decode: `kv_offset = cached_kv_len`
     Causal { kv_offset: usize },
 
-    /// Custom mask tensor for arbitrary patterns (sliding window, block-sparse, etc).
+    /// Custom mask tensor for arbitrary patterns.
     ///
     /// Shape: `(B, Q_LEN, KV_LEN)` or broadcastable.
     /// Values: `0.0` to attend, `NEG_INFINITY` to mask.
