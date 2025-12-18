@@ -1805,6 +1805,7 @@ struct AttnParams {
 
   int gqa_factor; ///< Group Query factor
   float scale; ///< Attention scale
+  float softcapping; ///< Softcapping value (1.0 = disabled)
 
   int NQ; ///< Number of query blocks
   int NK; ///< Number of key/value blocks

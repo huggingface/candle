@@ -1,5 +1,5 @@
-use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
+use crate::{get_tile_size, linear_split};
 use crate::{
     set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, Kernels, MetalKernelError,
     Source, Value,
@@ -12,6 +12,7 @@ pub fn call_where_cond(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     name: &'static str,
+    dtype_size: usize,
     shape: &[usize],
     cond: BufferOffset,
     cond_stride: &[usize],
@@ -55,7 +56,9 @@ pub fn call_where_cond(
         )
     );
 
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = size.div_ceil(tile_size);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
 
     encoder.use_resource(cond.buffer, MTLResourceUsage::Read);
     encoder.use_resource(left.buffer, MTLResourceUsage::Read);
