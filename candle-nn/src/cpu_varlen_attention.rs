@@ -1,4 +1,5 @@
 use candle::Tensor;
+use crate::ops;
 
 /// Cuda-free fallback implementation for variable length flash attention 
 //  https://github.com/Dao-AILab/flash-attention/blob/ac9b5f107f2f19cd0ca6e01548d20d072a46335c/csrc/flash_attn/flash_api.cpp#L515
@@ -143,7 +144,7 @@ pub fn flash_attn_varlen_cpu(
         }
 
         // Apply softmax along the last dimension (seq_len_k)
-        let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?; // [num_heads, seq_len_q, seq_len_k]
+        let attention_probs = ops::softmax_last_dim(&attention_scores)?; // [num_heads, seq_len_q, seq_len_k]
 
         // Compute attention output for all heads at once
         let context_layer = attention_probs.matmul(&v_seq)?; // [num_heads, seq_len_q, head_dim]

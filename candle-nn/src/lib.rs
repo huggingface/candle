@@ -19,7 +19,7 @@ pub mod activation;
 pub mod batch_norm;
 pub mod conv;
 pub mod cpu_flash_attention;
-pub mod cpu_varlen_attn;
+pub mod cpu_varlen_attention;
 pub mod embedding;
 pub mod encoding;
 pub mod func;
@@ -59,5 +59,6 @@ pub use rnn::{gru, lstm, GRUConfig, LSTMConfig, GRU, LSTM, RNN};
 pub use sequential::{seq, Sequential};
 pub use var_builder::VarBuilder;
 pub use var_map::VarMap;
+pub use cpu_varlen_attention::flash_attn_varlen_cpu;
 
 pub use candle::{Module, ModuleT};
