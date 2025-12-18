@@ -9,7 +9,6 @@ use candle_nn::varlen_attention::flash_attn_varlen_unfused;
 
 use rand::prelude::*;
 
-/// Prefill-style varlen: seqlens_q == seqlens_k per batch element.
 #[allow(clippy::type_complexity)]
 pub fn make_varlen_inputs_prefill(
     batch_size: usize,
@@ -32,7 +31,6 @@ pub fn make_varlen_inputs_prefill(
         max_l = max_l.max(l);
     }
 
-    // Q: [total, Hq, D], K/V: [total, Hk, D]
     let q_data: Vec<f32> = (0..total * num_heads * head_dim)
         .map(|_| rng.random_range(-1.0..1.0))
         .collect();
@@ -115,7 +113,7 @@ fn run_varlen_impl(
                 seqlens_k,
                 max_q,
                 max_k,
-                softmax_scale as f32,
+                softmax_scale,
                 causal,
                 wl,
                 wr,
