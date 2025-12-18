@@ -487,77 +487,6 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
 }
 
 // varlen
-
-#[inline(always)]
-fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
-    let mut s = 0.0f32;
-    let mut i = 0;
-    while i + 4 <= a.len() {
-        s += a[i] * b[i] + a[i + 1] * b[i + 1] + a[i + 2] * b[i + 2] + a[i + 3] * b[i + 3];
-        i += 4;
-    }
-    while i < a.len() {
-        s += a[i] * b[i];
-        i += 1;
-    }
-    s
-}
-
-#[inline(always)]
-fn alibi_bias(slope: f32, i_k: isize, j: isize, causal: bool) -> f32 {
-    let dist = if causal {
-        (i_k - j).max(0) as f32
-    } else {
-        (j - i_k).abs() as f32
-    };
-    -slope * dist
-}
-
-#[inline(always)]
-fn key_range(
-    q_pos: usize,
-    seq_len_k: usize,
-    offset: isize,
-    causal: bool,
-    wl: Option<usize>,
-    wr: Option<usize>,
-) -> Option<(usize, usize)> {
-    if seq_len_k == 0 {
-        return Some((1, 0));
-    }
-
-    let lk = seq_len_k as isize;
-    let i_k = q_pos as isize + offset;
-
-    let mut lo: isize = 0;
-    let mut hi: isize = lk - 1;
-
-    if causal {
-        hi = hi.min(i_k);
-    }
-
-    match (wl, wr) {
-        (Some(left), Some(right)) => {
-            lo = lo.max(i_k - left as isize);
-            hi = hi.min(i_k + right as isize);
-        }
-        (Some(left), None) => {
-            hi = hi.min(i_k);
-            lo = lo.max(i_k - left as isize);
-        }
-        (None, None) => {}
-        (None, Some(_)) => return None, // invalid config
-    }
-
-    lo = lo.max(0);
-    hi = hi.min(lk - 1);
-
-    if lo > hi {
-        Some((1, 0))
-    } else {
-        Some((lo as usize, hi as usize))
-    }
-}
 #[allow(clippy::too_many_arguments)]
 pub fn flash_attn_varlen_cpu(
     q: &Tensor,                    // [total_q, Hq, D]
@@ -675,6 +604,62 @@ pub fn flash_attn_varlen_cpu(
         }
     }
 
+    #[inline(always)]
+    fn alibi_bias(slope: f32, i_k: isize, j: isize, causal: bool) -> f32 {
+        let dist = if causal {
+            (i_k - j).max(0) as f32
+        } else {
+            (j - i_k).abs() as f32
+        };
+        -slope * dist
+    }
+
+    #[inline(always)]
+    fn key_range(
+        q_pos: usize,
+        seq_len_k: usize,
+        offset: isize,
+        causal: bool,
+        wl: Option<usize>,
+        wr: Option<usize>,
+    ) -> Option<(usize, usize)> {
+        if seq_len_k == 0 {
+            return Some((1, 0));
+        }
+
+        let lk = seq_len_k as isize;
+        let i_k = q_pos as isize + offset;
+
+        let mut lo: isize = 0;
+        let mut hi: isize = lk - 1;
+
+        if causal {
+            hi = hi.min(i_k);
+        }
+
+        match (wl, wr) {
+            (Some(left), Some(right)) => {
+                lo = lo.max(i_k - left as isize);
+                hi = hi.min(i_k + right as isize);
+            }
+            (Some(left), None) => {
+                hi = hi.min(i_k);
+                lo = lo.max(i_k - left as isize);
+            }
+            (None, None) => {}
+            (None, Some(_)) => return None, // invalid config
+        }
+
+        lo = lo.max(0);
+        hi = hi.min(lk - 1);
+
+        if lo > hi {
+            Some((1, 0))
+        } else {
+            Some((lo as usize, hi as usize))
+        }
+    }
+
     match dt {
         DType::F32 => {
             // ---- slices (keep guards alive) ----
@@ -707,9 +692,27 @@ pub fn flash_attn_varlen_cpu(
 
             let mut out = vec![0f32; total_q * hq * d];
 
+            #[inline(always)]
+            fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
+                let mut s = 0.0f32;
+                let mut i = 0;
+                while i + 4 <= a.len() {
+                    s += a[i] * b[i]
+                        + a[i + 1] * b[i + 1]
+                        + a[i + 2] * b[i + 2]
+                        + a[i + 3] * b[i + 3];
+                    i += 4;
+                }
+                while i < a.len() {
+                    s += a[i] * b[i];
+                    i += 1;
+                }
+                s
+            }
+
             FLASH_ATTN_POOL.install(|| {
                 out.par_chunks_mut(d).enumerate().for_each_init(
-                    || vec![0f32; d], // per-thread scratch
+                    || vec![0f32; d], // per-thread accumulator
                     |acc, (row, out_row)| {
                         let q_idx = row / hq;
                         let h = row % hq;
@@ -827,6 +830,46 @@ pub fn flash_attn_varlen_cpu(
                 _ => candle::bail!("v not cpu"),
             };
 
+            #[inline(always)]
+            fn dot_qf32_kf16(q: &[f32], k: &[half::f16]) -> f32 {
+                let mut s = 0.0f32;
+                let mut i = 0usize;
+                while i + 8 <= q.len() {
+                    let q0 = q[i];
+                    let q1 = q[i + 1];
+                    let q2 = q[i + 2];
+                    let q3 = q[i + 3];
+                    let q4 = q[i + 4];
+                    let q5 = q[i + 5];
+                    let q6 = q[i + 6];
+                    let q7 = q[i + 7];
+
+                    let k0 = k[i].to_f32();
+                    let k1 = k[i + 1].to_f32();
+                    let k2 = k[i + 2].to_f32();
+                    let k3 = k[i + 3].to_f32();
+                    let k4 = k[i + 4].to_f32();
+                    let k5 = k[i + 5].to_f32();
+                    let k6 = k[i + 6].to_f32();
+                    let k7 = k[i + 7].to_f32();
+
+                    s += q0 * k0
+                        + q1 * k1
+                        + q2 * k2
+                        + q3 * k3
+                        + q4 * k4
+                        + q5 * k5
+                        + q6 * k6
+                        + q7 * k7;
+                    i += 8;
+                }
+                while i < q.len() {
+                    s += q[i] * k[i].to_f32();
+                    i += 1;
+                }
+                s
+            }
+
             let mut out = vec![half::f16::from_f32(0.0); total_q * hq * d];
 
             FLASH_ATTN_POOL.install(|| {
@@ -880,30 +923,9 @@ pub fn flash_attn_varlen_cpu(
 
                         for j in j0..=j1 {
                             let k_base = ((start_k + j) * hk + k_head) * d;
+                            let k_row = &k_data[k_base..k_base + d];
 
-                            // dot(q_row_f32, k_row_f16) in f32, unroll by 4
-                            let mut score = 0.0f32;
-                            let mut t = 0usize;
-                            while t + 4 <= d {
-                                let q0 = q_row_f32[t];
-                                let q1 = q_row_f32[t + 1];
-                                let q2 = q_row_f32[t + 2];
-                                let q3 = q_row_f32[t + 3];
-
-                                let k0 = k_data[k_base + t].to_f32();
-                                let k1 = k_data[k_base + t + 1].to_f32();
-                                let k2 = k_data[k_base + t + 2].to_f32();
-                                let k3 = k_data[k_base + t + 3].to_f32();
-
-                                score += q0 * k0 + q1 * k1 + q2 * k2 + q3 * k3;
-                                t += 4;
-                            }
-                            while t < d {
-                                score += q_row_f32[t] * k_data[k_base + t].to_f32();
-                                t += 1;
-                            }
-
-                            score *= softmax_scale;
+                            let mut score = dot_qf32_kf16(q_row_f32, k_row) * softmax_scale;
                             if slopes.is_some() {
                                 score += alibi_bias(slope, i_k, j as isize, causal);
                             }
