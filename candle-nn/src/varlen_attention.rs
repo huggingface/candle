@@ -107,13 +107,14 @@ pub fn flash_attn_varlen_unfused(
         let attention_scores = q_seq.matmul(&k_seq_t)?; // [num_heads, seq_len_q, seq_len_k]
 
         // Apply softmax scale
-        let scale_tensor = Tensor::new(softmax_scale, device)?;
+        let scale_tensor = Tensor::new(softmax_scale, device)?.to_dtype(attention_scores.dtype())?;
         let mut attention_scores =
             attention_scores.mul(&scale_tensor.broadcast_as(attention_scores.shape())?)?; // [num_heads, seq_len_q, seq_len_k]
 
         // Apply causal mask if requested
         if causal {
-            let causal_mask = create_causal_mask_batch(seq_len_q, seq_len_k, num_heads, device)?;
+            let causal_mask = create_causal_mask_batch(seq_len_q, seq_len_k, num_heads, device)?
+                .to_dtype(attention_scores.dtype())?;
             attention_scores = attention_scores.add(&causal_mask)?;
         }
 
@@ -126,7 +127,7 @@ pub fn flash_attn_varlen_unfused(
                 window_size_left,
                 window_size_right,
                 device,
-            )?;
+            )?.to_dtype(attention_scores.dtype())?;
             attention_scores = attention_scores.add(&window_mask)?;
         }
 
@@ -139,7 +140,7 @@ pub fn flash_attn_varlen_unfused(
                 alibi_slopes,
                 causal,
                 device,
-            )?;
+            )?.to_dtype(attention_scores.dtype())?;
             attention_scores = attention_scores.add(&alibi_bias)?;
         }
 
