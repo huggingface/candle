@@ -1,4 +1,5 @@
-
+use candle::{DType, Device, Result, Tensor};
+use candle_nn::cpu_flash_attention::run_flash_attn_cpu;
 
 const FA_FEATURE_ENABLED: bool = cfg!(any(feature = "flash-attn", feature = "flash-attn-v1"));
 
@@ -349,7 +350,7 @@ mod tests {
             println!("Skipping GPU test: CUDA not available");
             return Ok(());
         }
-        let flash_attn_enabled = cfg!(any(feature = "flash-attn"));
+        let flash_attn_enabled = FA_FEATURE_ENABLED;
         if !flash_attn_enabled {
             println!("Skipping GPU comparison test: flash-attn features not enabled");
             return Ok(());
@@ -505,7 +506,7 @@ mod tests {
     fn test_flash_attn_cpu_vs_gpu_prefill_gqa() -> Result<(), candle::Error> {
         skip_test_if!(!candle::utils::cuda_is_available(), "CUDA not available");
         skip_test_if!(
-            !FA_FEATURE_ENABLED
+            !FA_FEATURE_ENABLED,
             "flash-attn features not enabled"
         );
 
