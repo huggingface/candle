@@ -85,8 +85,8 @@ mod tests {
     /// Get tolerance values based on precision
     fn get_tolerances(precision: DType) -> (f32, f32) {
         match precision {
-            DType::F32 => (1e-4, 1e-4), // (mae_tolerance, rmse_tolerance)
-            DType::F16 => (1e-3, 1e-2), // More relaxed tolerances for fp16
+            DType::F32 => (1e-5, 5e-5), // (mae_tolerance, rmse_tolerance)
+            DType::F16 => (1e-3, 5e-4), // More relaxed tolerances for fp16
             _ => (1e-4, 1e-4),
         }
     }
