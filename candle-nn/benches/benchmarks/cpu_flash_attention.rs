@@ -33,8 +33,16 @@ pub fn make_attention_inputs(
                 .collect();
 
             let q = Tensor::from_vec(q_data, (batch_size, seq_len, num_heads, head_dim), device)?;
-            let k = Tensor::from_vec(k_data, (batch_size, seq_len, num_kv_heads, head_dim), device)?;
-            let v = Tensor::from_vec(v_data, (batch_size, seq_len, num_kv_heads, head_dim), device)?;
+            let k = Tensor::from_vec(
+                k_data,
+                (batch_size, seq_len, num_kv_heads, head_dim),
+                device,
+            )?;
+            let v = Tensor::from_vec(
+                v_data,
+                (batch_size, seq_len, num_kv_heads, head_dim),
+                device,
+            )?;
             Ok((q, k, v))
         }
         DType::F16 => {
@@ -49,15 +57,28 @@ pub fn make_attention_inputs(
                 .collect();
 
             let q = Tensor::from_vec(q_data, (batch_size, seq_len, num_heads, head_dim), device)?;
-            let k = Tensor::from_vec(k_data, (batch_size, seq_len, num_kv_heads, head_dim), device)?;
-            let v = Tensor::from_vec(v_data, (batch_size, seq_len, num_kv_heads, head_dim), device)?;
+            let k = Tensor::from_vec(
+                k_data,
+                (batch_size, seq_len, num_kv_heads, head_dim),
+                device,
+            )?;
+            let v = Tensor::from_vec(
+                v_data,
+                (batch_size, seq_len, num_kv_heads, head_dim),
+                device,
+            )?;
             Ok((q, k, v))
         }
         _ => candle::bail!("Unsupported dtype for benchmark: {:?}", dtype),
     }
 }
 
-pub fn make_causal_mask(batch_size: usize, seq_len: usize, device: &Device, dtype: DType) -> Result<Tensor> {
+pub fn make_causal_mask(
+    batch_size: usize,
+    seq_len: usize,
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
     match dtype {
         DType::F32 => {
             let mut mask_data = vec![0.0f32; batch_size * seq_len * seq_len];
@@ -75,7 +96,8 @@ pub fn make_causal_mask(batch_size: usize, seq_len: usize, device: &Device, dtyp
             for b in 0..batch_size {
                 for i in 0..seq_len {
                     for j in (i + 1)..seq_len {
-                        mask_data[(b * seq_len + i) * seq_len + j] = half::f16::from_f32(f32::NEG_INFINITY);
+                        mask_data[(b * seq_len + i) * seq_len + j] =
+                            half::f16::from_f32(f32::NEG_INFINITY);
                     }
                 }
             }
@@ -98,8 +120,13 @@ fn run_flash_attention(
 ) -> Result<Tensor> {
     match dtype {
         DType::F32 => run_flash_attn_cpu::<f32>(q, k, v, mask, softmax_scale, max_bias, softcap),
-        DType::F16 => run_flash_attn_cpu::<half::f16>(q, k, v, mask, softmax_scale, max_bias, softcap),
-        _ => candle::bail!("Unsupported dtype for flash attention benchmark: {:?}", dtype),
+        DType::F16 => {
+            run_flash_attn_cpu::<half::f16>(q, k, v, mask, softmax_scale, max_bias, softcap)
+        }
+        _ => candle::bail!(
+            "Unsupported dtype for flash attention benchmark: {:?}",
+            dtype
+        ),
     }
 }
 

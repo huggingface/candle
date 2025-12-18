@@ -558,10 +558,6 @@ fn key_range(
         Some((lo as usize, hi as usize))
     }
 }
-
-// assumes these are already in your module:
-/// - FLASH_ATTN_POOL
-/// - dot_f32, alibi_bias, key_range
 #[allow(clippy::too_many_arguments)]
 pub fn flash_attn_varlen_cpu(
     q: &Tensor,                    // [total_q, Hq, D]
@@ -581,7 +577,7 @@ pub fn flash_attn_varlen_cpu(
         candle::bail!("flash_attn_varlen_cpu is CPU only");
     }
 
-    // For now: require all Q/K/V to be the same dtype, and only f32/f16.
+    // Require Q/K/V same dtype; support f32/f16.
     let dt = q.dtype();
     if k.dtype() != dt || v.dtype() != dt {
         candle::bail!(
@@ -640,7 +636,7 @@ pub fn flash_attn_varlen_cpu(
     }
 
     // slopes (always f32)
-    let slopes = if let Some(s) = alibi_slopes {
+    let slopes: Option<Vec<f32>> = if let Some(s) = alibi_slopes {
         let v = s.to_vec1::<f32>()?;
         if v.len() != hq {
             candle::bail!("alibi_slopes len {} != Hq {}", v.len(), hq);
@@ -650,7 +646,7 @@ pub fn flash_attn_varlen_cpu(
         None
     };
 
-    // Make contiguous ONCE (important for fast indexing)
+    // Make contiguous once (important for fast indexing)
     let q = if q.is_contiguous() {
         q.clone()
     } else {
@@ -667,7 +663,7 @@ pub fn flash_attn_varlen_cpu(
         v.contiguous()?
     };
 
-    // Precompute mapping q_idx -> (batch, pos_in_batch)
+    // Precompute q_idx -> (batch, q_pos)
     let mut batch_of_q = vec![0usize; total_q];
     let mut pos_in_b = vec![0usize; total_q];
     for b in 0..bsz {
@@ -681,7 +677,7 @@ pub fn flash_attn_varlen_cpu(
 
     match dt {
         DType::F32 => {
-            // ---- slices ----
+            // ---- slices (keep guards alive) ----
             let (q_g, q_l) = q.storage_and_layout();
             let q_data: &[f32] = match &*q_g {
                 Storage::Cpu(cpu) => {
@@ -712,11 +708,9 @@ pub fn flash_attn_varlen_cpu(
             let mut out = vec![0f32; total_q * hq * d];
 
             FLASH_ATTN_POOL.install(|| {
-                out.par_chunks_mut(d)
-                    .enumerate()
-                    .for_each(|(row, out_row)| {
-                        // row corresponds to (q_idx, h)
-
+                out.par_chunks_mut(d).enumerate().for_each_init(
+                    || vec![0f32; d], // per-thread scratch
+                    |acc, (row, out_row)| {
                         let q_idx = row / hq;
                         let h = row % hq;
 
@@ -736,8 +730,6 @@ pub fn flash_attn_varlen_cpu(
                         let Some((j0, j1)) =
                             key_range(q_pos, lk, offset, causal, window_left, window_right)
                         else {
-                            // invalid config
-
                             out_row.fill(0.0);
                             return;
                         };
@@ -751,12 +743,12 @@ pub fn flash_attn_varlen_cpu(
 
                         let slope = slopes.as_ref().map(|s| s[h]).unwrap_or(0.0);
                         let i_k = q_pos as isize + offset;
-                        // q row is contiguous: [D]
+
                         let q_base = (q_idx * hq + h) * d;
                         let q_row = &q_data[q_base..q_base + d];
 
                         // online softmax
-                        let mut acc = vec![0f32; d];
+                        acc.fill(0.0);
                         let mut m = f32::NEG_INFINITY;
                         let mut ssum = 0.0f32;
 
@@ -799,47 +791,48 @@ pub fn flash_attn_varlen_cpu(
                         for t in 0..d {
                             out_row[t] = acc[t] * inv;
                         }
-                    });
+                    },
+                );
             });
 
             Tensor::from_vec(out, (total_q, hq, d), &Device::Cpu)
         }
 
         DType::F16 => {
-            // ---- slices ----
+            // ---- slices (keep guards alive) ----
             let (q_g, q_l) = q.storage_and_layout();
-            let q_data: &[f16] = match &*q_g {
+            let q_data: &[half::f16] = match &*q_g {
                 Storage::Cpu(cpu) => {
-                    let s = cpu.as_slice::<f16>()?;
+                    let s = cpu.as_slice::<half::f16>()?;
                     &s[q_l.start_offset()..]
                 }
                 _ => candle::bail!("q not cpu"),
             };
 
             let (k_g, k_l) = k.storage_and_layout();
-            let k_data: &[f16] = match &*k_g {
+            let k_data: &[half::f16] = match &*k_g {
                 Storage::Cpu(cpu) => {
-                    let s = cpu.as_slice::<f16>()?;
+                    let s = cpu.as_slice::<half::f16>()?;
                     &s[k_l.start_offset()..]
                 }
                 _ => candle::bail!("k not cpu"),
             };
 
             let (v_g, v_l) = v.storage_and_layout();
-            let v_data: &[f16] = match &*v_g {
+            let v_data: &[half::f16] = match &*v_g {
                 Storage::Cpu(cpu) => {
-                    let s = cpu.as_slice::<f16>()?;
+                    let s = cpu.as_slice::<half::f16>()?;
                     &s[v_l.start_offset()..]
                 }
                 _ => candle::bail!("v not cpu"),
             };
 
-            let mut out = vec![f16::from_f32(0.0); total_q * hq * d];
+            let mut out = vec![half::f16::from_f32(0.0); total_q * hq * d];
 
             FLASH_ATTN_POOL.install(|| {
-                out.par_chunks_mut(d)
-                    .enumerate()
-                    .for_each(|(row, out_row)| {
+                out.par_chunks_mut(d).enumerate().for_each_init(
+                    || (vec![0f32; d], vec![0f32; d]), // (q_row_f32, acc) per-thread scratch
+                    |(q_row_f32, acc), (row, out_row)| {
                         let q_idx = row / hq;
                         let h = row % hq;
 
@@ -875,13 +868,13 @@ pub fn flash_attn_varlen_cpu(
 
                         let q_base = (q_idx * hq + h) * d;
 
-                        // Convert Q row once to f32 (big win vs converting per dot)
-                        let mut q_row_f32 = vec![0f32; d];
+                        // Convert Q row once into per-thread scratch
                         for t in 0..d {
                             q_row_f32[t] = q_data[q_base + t].to_f32();
                         }
 
-                        let mut acc = vec![0f32; d];
+                        // online softmax
+                        acc.fill(0.0);
                         let mut m = f32::NEG_INFINITY;
                         let mut ssum = 0.0f32;
 
@@ -915,11 +908,10 @@ pub fn flash_attn_varlen_cpu(
                                 score += alibi_bias(slope, i_k, j as isize, causal);
                             }
 
-                            // online softmax + accumulate V (convert V to f32 on the fly)
                             if score > m {
                                 let scale_old = (m - score).exp();
-                                for x in acc.iter_mut() {
-                                    *x *= scale_old;
+                                for t in 0..d {
+                                    acc[t] *= scale_old;
                                 }
                                 ssum *= scale_old;
                                 m = score;
@@ -943,7 +935,8 @@ pub fn flash_attn_varlen_cpu(
                         for t in 0..d {
                             out_row[t] = f16::from_f32(acc[t] * inv);
                         }
-                    });
+                    },
+                );
             });
 
             Tensor::from_vec(out, (total_q, hq, d), &Device::Cpu)
