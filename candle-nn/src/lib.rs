@@ -19,7 +19,6 @@ pub mod activation;
 pub mod batch_norm;
 pub mod conv;
 pub mod cpu_flash_attention;
-pub mod cpu_varlen_attention;
 pub mod embedding;
 pub mod encoding;
 pub mod func;
@@ -37,6 +36,7 @@ pub mod sampling;
 pub mod sequential;
 pub mod var_builder;
 pub mod var_map;
+pub mod varlen_attention;
 
 pub use activation::{prelu, Activation, PReLU};
 pub use batch_norm::{batch_norm, BatchNorm, BatchNormConfig};
@@ -45,7 +45,6 @@ pub use conv::{
     conv_transpose2d, conv_transpose2d_no_bias, Conv1d, Conv1dConfig, Conv2d, Conv2dConfig,
     ConvTranspose1d, ConvTranspose1dConfig, ConvTranspose2d, ConvTranspose2dConfig,
 };
-pub use varlen_attention::flash_attn_varlen_compat;
 pub use embedding::{embedding, Embedding};
 pub use func::{func, func_t, Func, FuncT};
 pub use group_norm::{group_norm, GroupNorm};

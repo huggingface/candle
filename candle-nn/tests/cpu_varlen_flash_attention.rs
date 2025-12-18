@@ -1,5 +1,5 @@
 use candle::Result;
-use candle_nn::varlen_attention::flash_attn_varlen_compat;
+use candle_nn::cpu_flash_attention::flash_attn_varlen_cpu_fast_f32;
 
 const FA_FEATURE_ENABLED: bool = false; // flash-attn features not available in this workspace
                                         // may set to true and import the flash-attn varlen kernels thats missing in candle-nn testing harness.
@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefill_varlen_matches_padded_reference_noncausal() -> Result<()> {
+    fn test_cpuflashprefill_varlen_matches_padded_reference_noncausal() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
@@ -133,7 +133,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let out_var = flash_attn_varlen_compat(
+        let out_var = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -175,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefill_varlen_matches_padded_reference_causal() -> Result<()> {
+    fn test_cpuflashprefill_varlen_matches_padded_reference_causal() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
@@ -190,7 +190,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let out_var = flash_attn_varlen_compat(
+        let out_var = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefill_varlen_matches_padded_reference_gqa() -> Result<()> {
+    fn test_cpuflashprefill_varlen_matches_padded_reference_gqa() -> Result<()> {
         let device = Device::Cpu;
         // GQA prefill: Hq > Hk, but seq lengths identical between Q and K
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (3, 12, 4, 64, 64);
@@ -245,7 +245,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let out_var = flash_attn_varlen_compat(
+        let out_var = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -284,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefill_varlen_matches_padded_reference_alibi() -> Result<()> {
+    fn test_cpuflashprefill_varlen_matches_padded_reference_alibi() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (2, 8, 8, 64, 64);
 
@@ -304,7 +304,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let out_var = flash_attn_varlen_compat(
+        let out_var = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_vs_gpu_prefill_basic() -> Result<()> {
+    fn test_cpuflashflash_attn_cpu_vs_gpu_prefill_basic() -> Result<()> {
         if !candle::utils::cuda_is_available() {
             println!("Skipping GPU test: CUDA not available");
             return Ok(());
@@ -386,7 +386,7 @@ mod tests {
             let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
             // Non-causal
-            let cpu_out = flash_attn_varlen_compat(
+            let cpu_out = flash_attn_varlen_cpu_fast_f32(
                 &q_cpu,
                 &k_cpu,
                 &v_cpu,
@@ -443,7 +443,7 @@ mod tests {
             }
 
             // Causal (prefill)
-            let cpu_out_causal = flash_attn_varlen_compat(
+            let cpu_out_causal = flash_attn_varlen_cpu_fast_f32(
                 &q_cpu,
                 &k_cpu,
                 &v_cpu,
@@ -504,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_vs_gpu_prefill_gqa() -> Result<()> {
+    fn test_cpuflashflash_attn_cpu_vs_gpu_prefill_gqa() -> Result<()> {
         skip_test_if!(!candle::utils::cuda_is_available(), "CUDA not available");
         skip_test_if!(!FA_FEATURE_ENABLED, "flash-attn features not enabled");
 
@@ -526,7 +526,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let cpu_out = flash_attn_varlen_compat(
+        let cpu_out = flash_attn_varlen_cpu_fast_f32(
             &q_cpu,
             &k_cpu,
             &v_cpu,
@@ -586,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_vs_gpu_prefill_alibi() -> Result<()> {
+    fn test_cpuflashflash_attn_cpu_vs_gpu_prefill_alibi() -> Result<()> {
         skip_test_if!(!candle::utils::cuda_is_available(), "CUDA not available");
         // ALiBi path usually requires flash-attn (not v1) in your earlier tests
         skip_test_if!(!FA_FEATURE_ENABLED, "flash-attn feature not enabled");
@@ -614,7 +614,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let cpu_out = flash_attn_varlen_compat(
+        let cpu_out = flash_attn_varlen_cpu_fast_f32(
             &q_cpu,
             &k_cpu,
             &v_cpu,
@@ -683,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_vs_gpu_basic() -> Result<()> {
+    fn test_cpuflashflash_attn_cpu_vs_gpu_basic() -> Result<()> {
         if !candle::utils::cuda_is_available() {
             println!("Skipping GPU test: CUDA not available");
             return Ok(());
@@ -717,7 +717,7 @@ mod tests {
             let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
             // CPU expects lengths (your cpu impl uses to_vec1 and builds cumsums)
-            let cpu_result = flash_attn_varlen_compat(
+            let cpu_result = flash_attn_varlen_cpu_fast_f32(
                 &q_cpu,
                 &k_cpu,
                 &v_cpu,
@@ -777,7 +777,7 @@ mod tests {
             }
 
             // Causal
-            let cpu_result_causal = flash_attn_varlen_compat(
+            let cpu_result_causal = flash_attn_varlen_cpu_fast_f32(
                 &q_cpu,
                 &k_cpu,
                 &v_cpu,
@@ -845,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_gqa() -> Result<()> {
+    fn test_cpuflashflash_attn_cpu_gqa() -> Result<()> {
         skip_test_if!(!candle::utils::cuda_is_available(), "CUDA not available");
 
         let flash_attn_enabled = FA_FEATURE_ENABLED;
@@ -871,7 +871,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let cpu_result = flash_attn_varlen_compat(
+        let cpu_result = flash_attn_varlen_cpu_fast_f32(
             &q_cpu,
             &k_cpu,
             &v_cpu,
@@ -935,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_windowing() -> Result<()> {
+    fn test_cpuflashflash_attn_cpu_windowing() -> Result<()> {
         skip_test_if!(!candle::utils::cuda_is_available(), "CUDA not available");
 
         let flash_attn_enabled = FA_FEATURE_ENABLED;
@@ -957,7 +957,7 @@ mod tests {
         let window_left = 8;
         let window_right = 8;
 
-        let cpu_result = flash_attn_varlen_compat(
+        let cpu_result = flash_attn_varlen_cpu_fast_f32(
             &q_cpu,
             &k_cpu,
             &v_cpu,
@@ -1024,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_windowing_patterns() -> Result<()> {
+    fn test_cpuflashflash_attn_cpu_windowing_patterns() -> Result<()> {
         let device = Device::Cpu;
 
         // Test different windowing patterns
@@ -1035,7 +1035,7 @@ mod tests {
         let seqlens_k = Tensor::from_vec(vec![2u32], 1, &device)?;
 
         // Test 1: Standard windowing (both left and right)
-        let result1 = flash_attn_varlen_compat(
+        let result1 = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -1052,7 +1052,7 @@ mod tests {
         assert_eq!(result1.dims(), &[2, 4, 32]);
 
         // Test 2: Mistral-style windowing (only left)
-        let result2 = flash_attn_varlen_compat(
+        let result2 = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -1069,7 +1069,7 @@ mod tests {
         assert_eq!(result2.dims(), &[2, 4, 32]);
 
         // Test 3: No windowing
-        let result3 = flash_attn_varlen_compat(
+        let result3 = flash_attn_varlen_cpu_fast_f32(
             &q, &k, &v, None, &seqlens_q, &seqlens_k, 2, 2, 0.125, false, None, None,
         )?;
         assert_eq!(result3.dims(), &[2, 4, 32]);
@@ -1078,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_edge_cases() -> Result<()> {
+    fn test_cpuflashflash_attn_cpu_edge_cases() -> Result<()> {
         let device = Device::Cpu;
 
         // Test empty batch
@@ -1088,7 +1088,7 @@ mod tests {
         let seqlens_q = Tensor::zeros((0,), DType::U32, &device)?;
         let seqlens_k = Tensor::zeros((0,), DType::U32, &device)?;
 
-        let result = flash_attn_varlen_compat(
+        let result = flash_attn_varlen_cpu_fast_f32(
             &q, &k, &v, None, &seqlens_q, &seqlens_k, 32, 32, 0.125, false, None, None,
         )?;
 
@@ -1101,7 +1101,7 @@ mod tests {
         let seqlens_q = Tensor::from_vec(vec![16u32], 1, &device)?;
         let seqlens_k = Tensor::from_vec(vec![16u32], 1, &device)?;
 
-        let result = flash_attn_varlen_compat(
+        let result = flash_attn_varlen_cpu_fast_f32(
             &q, &k, &v, None, &seqlens_q, &seqlens_k, 16, 16, 0.125, false, None, None,
         )?;
 
@@ -1483,7 +1483,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_noncausal() -> Result<()> {
+    fn test_cpuflashvarlen_matches_padded_reference_noncausal() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
@@ -1498,7 +1498,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let out_var = flash_attn_varlen_compat(
+        let out_var = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -1538,7 +1538,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_causal() -> Result<()> {
+    fn test_cpuflashvarlen_matches_padded_reference_causal() -> Result<()> {
         let device = Device::Cpu;
         let (_, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
@@ -1554,7 +1554,7 @@ mod tests {
 
             let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-            let out_var = flash_attn_varlen_compat(
+            let out_var = flash_attn_varlen_cpu_fast_f32(
                 &q,
                 &k,
                 &v,
@@ -1595,7 +1595,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_gqa() -> Result<()> {
+    fn test_cpuflashvarlen_matches_padded_reference_gqa() -> Result<()> {
         let device = Device::Cpu;
         // GQA: more Q heads than KV heads
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (3, 12, 4, 64, 64);
@@ -1611,7 +1611,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let out_var = flash_attn_varlen_compat(
+        let out_var = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -1651,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_alibi() -> Result<()> {
+    fn test_cpuflashvarlen_matches_padded_reference_alibi() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (2, 8, 8, 64, 64);
 
@@ -1672,7 +1672,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-        let out_var = flash_attn_varlen_compat(
+        let out_var = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -1712,7 +1712,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_windowing() -> Result<()> {
+    fn test_cpuflashvarlen_matches_padded_reference_windowing() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (2, 8, 8, 64, 64);
 
@@ -1729,7 +1729,7 @@ mod tests {
         let wl = Some(8usize);
         let wr = Some(8usize);
 
-        let out_var = flash_attn_varlen_compat(
+        let out_var = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -1769,7 +1769,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_vs_padded_edge_cases() -> Result<()> {
+    fn test_cpuflashvarlen_vs_padded_edge_cases() -> Result<()> {
         let device = Device::Cpu;
 
         // Test edge cases: very short sequences, single tokens, etc.
@@ -1797,7 +1797,7 @@ mod tests {
             let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
             // Test non-causal
-            let out_var = flash_attn_varlen_compat(
+            let out_var = flash_attn_varlen_cpu_fast_f32(
                 &q,
                 &k,
                 &v,
@@ -1834,7 +1834,7 @@ mod tests {
 
             // Test causal - skip for very short sequences due to known numerical precision issues
             if max_seq > 3 {
-                let out_var_causal = flash_attn_varlen_compat(
+                let out_var_causal = flash_attn_varlen_cpu_fast_f32(
                     &q,
                     &k,
                     &v,
@@ -1880,7 +1880,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_vs_padded_mixed_lengths() -> Result<()> {
+    fn test_cpuflashvarlen_vs_padded_mixed_lengths() -> Result<()> {
         let device = Device::Cpu;
 
         // Test with highly variable sequence lengths in the same batch
@@ -1924,7 +1924,7 @@ mod tests {
         );
 
         // Test non-causal
-        let out_var = flash_attn_varlen_compat(
+        let out_var = flash_attn_varlen_cpu_fast_f32(
             &q,
             &k,
             &v,
@@ -1969,7 +1969,7 @@ mod tests {
         // Test causal - skip when there are very short sequences due to known precision issues
         let has_very_short = seqlens_q.iter().any(|&x| x <= 1) || seqlens_k.iter().any(|&x| x <= 1);
         if !has_very_short {
-            let out_var_causal = flash_attn_varlen_compat(
+            let out_var_causal = flash_attn_varlen_cpu_fast_f32(
                 &q,
                 &k,
                 &v,
@@ -2070,7 +2070,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_vs_padded_different_head_dims() -> Result<()> {
+    fn test_cpuflashvarlen_vs_padded_different_head_dims() -> Result<()> {
         let device = Device::Cpu;
 
         // Test various head dimensions that are commonly used
@@ -2106,7 +2106,7 @@ mod tests {
 
                 let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
-                let out_var = flash_attn_varlen_compat(
+                let out_var = flash_attn_varlen_cpu_fast_f32(
                     &q,
                     &k,
                     &v,
@@ -2155,7 +2155,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_vs_padded_gqa_variants() -> Result<()> {
+    fn test_cpuflashvarlen_vs_padded_gqa_variants() -> Result<()> {
         let device = Device::Cpu;
 
         // Test various GQA configurations
@@ -2187,7 +2187,7 @@ mod tests {
             println!("Testing GQA {}:{} configuration", num_heads, num_kv_heads);
 
             // Test non-causal
-            let out_var = flash_attn_varlen_compat(
+            let out_var = flash_attn_varlen_cpu_fast_f32(
                 &q,
                 &k,
                 &v,
