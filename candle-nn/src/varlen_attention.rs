@@ -18,7 +18,7 @@ pub fn flash_attn_varlen_unfused(
     seqlens_k: &Tensor,
     _max_seqlen_q: usize,
     _max_seqlen_k: usize,
-    softmax_scale: f64,
+    softmax_scale: f32,
     causal: bool,
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
@@ -107,7 +107,7 @@ pub fn flash_attn_varlen_unfused(
         let attention_scores = q_seq.matmul(&k_seq_t)?; // [num_heads, seq_len_q, seq_len_k]
 
         // Apply softmax scale
-        let scale_tensor = Tensor::new(softmax_scale as f32, device)?;
+        let scale_tensor = Tensor::new(softmax_scale, device)?;
         let mut attention_scores =
             attention_scores.mul(&scale_tensor.broadcast_as(attention_scores.shape())?)?; // [num_heads, seq_len_q, seq_len_k]
 

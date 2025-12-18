@@ -131,7 +131,7 @@ mod tests {
             &device,
         )?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = flash_attn_varlen_unfused(
             &q,
@@ -188,7 +188,7 @@ mod tests {
             &device,
         )?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = flash_attn_varlen_unfused(
             &q,
@@ -243,7 +243,7 @@ mod tests {
             &device,
         )?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = flash_attn_varlen_unfused(
             &q,
@@ -302,7 +302,7 @@ mod tests {
             .collect();
         let alibi_slopes = Tensor::from_vec(slopes, num_heads, &device)?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = flash_attn_varlen_unfused(
             &q,
@@ -383,7 +383,7 @@ mod tests {
                     &cpu_device,
                 )?;
 
-            let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+            let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
             // Non-causal
             let cpu_out = flash_attn_varlen_unfused(
@@ -524,7 +524,7 @@ mod tests {
                 &cpu_device,
             )?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let cpu_out = flash_attn_varlen_unfused(
             &q_cpu,
@@ -612,7 +612,7 @@ mod tests {
             .collect();
         let alibi_slopes_cpu = Tensor::from_vec(slopes, num_heads, &cpu_device)?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let cpu_out = flash_attn_varlen_unfused(
             &q_cpu,
@@ -714,7 +714,7 @@ mod tests {
             let (q_cpu, k_cpu, v_cpu, seqlens_q_cpu, seqlens_k_cpu) =
                 create_test_tensors(batch_size, num_heads, head_dim, max_seq_len, &cpu_device)?;
 
-            let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+            let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
             // CPU expects lengths (your cpu impl uses to_vec1 and builds cumsums)
             let cpu_result = flash_attn_varlen_unfused(
@@ -869,7 +869,7 @@ mod tests {
             .collect();
         let alibi_slopes_cpu = Tensor::from_vec(alibi_slopes_data, num_heads, &cpu_device)?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let cpu_result = flash_attn_varlen_unfused(
             &q_cpu,
@@ -953,7 +953,7 @@ mod tests {
         let (q_cpu, k_cpu, v_cpu, seqlens_q_cpu, seqlens_k_cpu) =
             create_test_tensors(batch_size, num_heads, head_dim, max_seq_len, &cpu_device)?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
         let window_left = 8;
         let window_right = 8;
 
@@ -1282,7 +1282,7 @@ mod tests {
         seqlens_k: &Tensor,
         max_q: usize,
         max_k: usize,
-        softmax_scale: f64,
+        softmax_scale: f32,
         causal: bool,
         window_left: Option<usize>,
         window_right: Option<usize>,
@@ -1377,7 +1377,7 @@ mod tests {
         // Scores: [B,H,max_q,max_k] - ensure k transpose is contiguous
         let k_t = k.transpose(2, 3)?.contiguous()?;
         let mut scores = q.matmul(&k_t)?;
-        scores = (scores * softmax_scale)?;
+        scores = (scores * softmax_scale as f64)?;
 
         // Bias: [B,H,max_q,max_k]
         let bias = build_reference_bias(
@@ -1496,7 +1496,7 @@ mod tests {
             &device,
         )?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = flash_attn_varlen_unfused(
             &q,
@@ -1552,7 +1552,7 @@ mod tests {
                 &device,
             )?;
 
-            let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+            let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
             let out_var = flash_attn_varlen_unfused(
                 &q,
@@ -1609,7 +1609,7 @@ mod tests {
             &device,
         )?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = flash_attn_varlen_unfused(
             &q,
@@ -1670,7 +1670,7 @@ mod tests {
             .collect();
         let alibi_slopes = Tensor::from_vec(slopes, num_heads, &device)?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = flash_attn_varlen_unfused(
             &q,
@@ -1725,7 +1725,7 @@ mod tests {
             &device,
         )?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
         let wl = Some(8usize);
         let wr = Some(8usize);
 
@@ -1794,7 +1794,7 @@ mod tests {
                 &device,
             )?;
 
-            let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+            let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
             // Test non-causal
             let out_var = flash_attn_varlen_unfused(
@@ -1916,7 +1916,7 @@ mod tests {
         let seqlens_q_tensor = Tensor::from_vec(seqlens_q.clone(), batch_size, &device)?;
         let seqlens_k_tensor = Tensor::from_vec(seqlens_k.clone(), batch_size, &device)?;
 
-        let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         println!(
             "Testing mixed lengths: Q={:?}, K={:?}",
@@ -2104,7 +2104,7 @@ mod tests {
                     )?
                 };
 
-                let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+                let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
                 let out_var = flash_attn_varlen_unfused(
                     &q,
@@ -2182,7 +2182,7 @@ mod tests {
                 &device,
             )?;
 
-            let softmax_scale = 1.0 / (head_dim as f64).sqrt();
+            let softmax_scale = 1.0 / (head_dim as f32).sqrt() as f32;
 
             println!("Testing GQA {}:{} configuration", num_heads, num_kv_heads);
 

@@ -5,12 +5,10 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use candle_nn::cpu_flash_attention::flash_attn_varlen_cpu_fast_f32;
-use candle_nn::varlen_attention::flash_attn_varlen_unfused; // TODO: implement for every
+use candle_nn::varlen_attention::flash_attn_varlen_unfused;
 
-// Use the shared helper (moved out of #[cfg(test)]).
 use rand::prelude::*;
 
-/// Same helper you already have (copied out of #[cfg(test)]).
 /// Prefill-style varlen: seqlens_q == seqlens_k per batch element.
 #[allow(clippy::type_complexity)]
 pub fn make_varlen_inputs_prefill(
@@ -52,7 +50,6 @@ pub fn make_varlen_inputs_prefill(
     let seqlens_q = Tensor::from_vec(seqlens.clone(), batch_size, device)?;
     let seqlens_k = Tensor::from_vec(seqlens, batch_size, device)?;
 
-    // max_q == max_k == max_l for prefill
     Ok((q, k, v, seqlens_q, seqlens_k, max_l, max_l))
 }
 
@@ -63,8 +60,15 @@ pub fn make_alibi_slopes(num_heads: usize, device: &Device) -> Result<Tensor> {
     Tensor::from_vec(slopes, num_heads, device)
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Impl {
+    Fast,
+    Unfused,
+}
+
 #[inline(never)]
-fn run_varlen(
+fn run_varlen_impl(
+    which: Impl,
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
@@ -73,25 +77,51 @@ fn run_varlen(
     seqlens_k: &Tensor,
     max_q: usize,
     max_k: usize,
-    softmax_scale: f64,
+    softmax_scale: f32,
     causal: bool,
     wl: Option<usize>,
     wr: Option<usize>,
 ) -> Result<Tensor> {
-    flash_attn_varlen_cpu_fast_f32(
-        q,
-        k,
-        v,
-        alibi,
-        seqlens_q,
-        seqlens_k,
-        max_q,
-        max_k,
-        softmax_scale,
-        causal,
-        wl,
-        wr,
-    )
+    match which {
+        Impl::Fast => flash_attn_varlen_cpu_fast_f32(
+            q,
+            k,
+            v,
+            alibi,
+            seqlens_q,
+            seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            causal,
+            wl,
+            wr,
+        ),
+
+        Impl::Unfused => {
+            // ⚠️ Adjust here if your `flash_attn_varlen_unfused` signature differs.
+            //
+            // Common Candle variants look like:
+            //   flash_attn_varlen_unfused(q, k, v, alibi, seqlens_q, seqlens_k, max_q, max_k,
+            //                            softmax_scale: f32, causal, window_left, window_right)
+            //
+            // If your version uses f64, drop the cast.
+            flash_attn_varlen_unfused(
+                q,
+                k,
+                v,
+                alibi,
+                seqlens_q,
+                seqlens_k,
+                max_q,
+                max_k,
+                softmax_scale as f32,
+                causal,
+                wl,
+                wr,
+            )
+        }
+    }
 }
 
 fn bench_case(
@@ -113,32 +143,45 @@ fn bench_case(
 ) {
     let softmax_scale = 1.0 / (head_dim as f64).sqrt();
 
+    // One group per scenario; two functions inside: fast + unfused.
     let mut group = c.benchmark_group(device.bench_name(name));
-    group.bench_function("iter", move |b| {
-        b.iter_custom(|iters| {
-            let start = Instant::now();
-            for _ in 0..iters {
-                let _out = run_varlen(
-                    black_box(&q),
-                    black_box(&k),
-                    black_box(&v),
-                    alibi.as_ref(),
-                    black_box(&seqlens_q),
-                    black_box(&seqlens_k),
-                    max_q,
-                    max_k,
-                    softmax_scale,
-                    causal,
-                    wl,
-                    wr,
-                )
-                .unwrap();
-                std::hint::black_box(_out);
-            }
-            device.sync().unwrap();
-            start.elapsed()
-        })
-    });
+
+    for (which, label) in [(Impl::Fast, "fast"), (Impl::Unfused, "unfused")] {
+        let q = q.clone();
+        let k = k.clone();
+        let v = v.clone();
+        let seqlens_q = seqlens_q.clone();
+        let seqlens_k = seqlens_k.clone();
+        let alibi = alibi.clone();
+
+        group.bench_function(label, move |b| {
+            b.iter_custom(|iters| {
+                let start = Instant::now();
+                for _ in 0..iters {
+                    let out = run_varlen_impl(
+                        which,
+                        black_box(&q),
+                        black_box(&k),
+                        black_box(&v),
+                        alibi.as_ref(),
+                        black_box(&seqlens_q),
+                        black_box(&seqlens_k),
+                        max_q,
+                        max_k,
+                        softmax_scale,
+                        causal,
+                        wl,
+                        wr,
+                    )
+                    .unwrap();
+                    std::hint::black_box(out);
+                }
+                device.sync().unwrap();
+                start.elapsed()
+            })
+        });
+    }
+
     group.finish();
 }
 
@@ -146,10 +189,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for dev in handler.devices {
         if !dev.is_cpu() {
-            continue; // this kernel is CPU-only
+            continue;
         }
 
-        // Keep dtype fixed to f32 because flash_attn_varlen_cpu_fast_f32 is f32-only.
+        // Fixed to f32 inputs (both impls are effectively f32 here).
         let dtype = DType::F32;
 
         // Prefill baseline
