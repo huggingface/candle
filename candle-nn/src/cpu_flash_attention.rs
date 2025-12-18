@@ -594,7 +594,7 @@ pub fn run_flash_attn_cpu_hybrid(
     softmax_scale: f32,
     attn_mask: AttnMask<'_>,
 ) -> Result<Tensor> {
-    eprintln!(">>> HYBRID CALLED: q={:?}, k={:?}", q.shape(), k.shape());
+    // eprintln!(">>> HYBRID CALLED: q={:?}, k={:?}", q.shape(), k.shape());
     let (b, q_len, h, d) = q.dims4()?;
     let (_, kv_len, kv_h, _) = k.dims4()?;
     let dtype = q.dtype();
@@ -665,41 +665,27 @@ pub fn run_flash_attn_cpu_hybrid(
         // Q @ K^T: (B, KV_H, groups, S, D) @ (B, KV_H, 1, D, tile) -> (B, KV_H, groups, S, tile)
         // Broadcasting: K's dim 2 (size 1) broadcasts against Q's dim 2 (size groups)
         //let scores = q.broadcast_matmul(&k_tile.transpose(3, 4)?.contiguous()?)?;
-        let k_tile_t = k_tile.transpose(3, 4)?.contiguous()?;
-        eprintln!(
-            "k_tile_t shape: {:?}, stride: {:?}",
-            k_tile_t.shape(),
-            k_tile_t.stride()
-        );
+        let k_tile_t = k_tile.squeeze(2)?.transpose(2, 3)?.contiguous()?; // (B, KV_H, D, tile)
 
-        let k_expanded = k_tile_t
-            .broadcast_as((b, kv_h, groups, d, tile_len))?
-            .contiguous()?;
-
-        eprintln!(
-            "k_expanded shape: {:?}, stride: {:?}",
-            k_expanded.shape(),
-            k_expanded.stride()
-        );
-        eprintln!("q shape: {:?}, stride: {:?}", q.shape(), q.stride());
-        //let scores = q.matmul(&k_expanded)?;
-        let batch = b * kv_h * groups;
-        let q_3d = q.reshape((batch, q_len, d))?.contiguous()?;
-        let k_3d = k_expanded.reshape((batch, d, tile_len))?.contiguous()?;
-        let scores_3d = q_3d.matmul(&k_3d)?;
-        let scores = scores_3d.reshape((b, kv_h, groups, q_len, tile_len))?;
-        eprintln!(
-            "scores shape: {:?}, stride: {:?}",
-            scores.shape(),
-            scores.stride()
-        );
-
+        let scores = if groups > 1 {
+            let scores_list: Vec<Tensor> = (0..groups)
+                .map(|g| {
+                    let q_g = q.narrow(2, g, 1)?.squeeze(2)?; // (B, KV_H, q_len, D)
+                    q_g.matmul(&k_tile_t) // (B, KV_H, q_len, tile)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Tensor::stack(&scores_list, 2)? // (B, KV_H, groups, q_len, tile)
+        } else {
+            let q_sq = q.squeeze(2)?;
+            q_sq.matmul(&k_tile_t)?.unsqueeze(2)?
+        };
         let scores = (scores * softmax_scale as f64)?;
-        eprintln!(
-            "after softmax scores shape: {:?}, stride: {:?}",
-            scores.shape(),
-            scores.stride()
-        );
+
+        // eprintln!(
+        //     "after softmax scores shape: {:?}, stride: {:?}",
+        //     scores.shape(),
+        //     scores.stride()
+        // );
 
         // Apply mask
         let scores = if is_causal {
@@ -714,11 +700,11 @@ pub fn run_flash_attn_cpu_hybrid(
             scores
         };
 
-        eprintln!(
-            "after mask scores shape: {:?}, stride: {:?}",
-            scores.shape(),
-            scores.stride()
-        );
+        //eprintln!(
+        //    "after mask scores shape: {:?}, stride: {:?}",
+        //    scores.shape(),
+        //     scores.stride()
+        // );
 
         // Online softmax update
         // m_ij = rowmax(scores) -> (B, KV_H, groups, S, 1)
@@ -745,30 +731,29 @@ pub fn run_flash_attn_cpu_hybrid(
         // Result: (B, KV_H, groups, S, D) - broadcasts on dim 2
         //let pv = p_ij.contiguous()?.broadcast_matmul(&v_tile)?;
 
-        let v_expanded = v_tile
-            .broadcast_as((b, kv_h, groups, tile_len, d))?
-            .contiguous()?;
-        eprintln!(
-            "v_expanded shape: {:?}, stride: {:?}",
-            v_expanded.shape(),
-            v_expanded.stride()
-        );
+        let v_tile_sq = v_tile.squeeze(2)?; // (B, KV_H, tile, D)
 
-        //let pv = p_ij.contiguous()?.matmul(&v_expanded)?;
-
-        let v_3d = v_expanded.reshape((batch, tile_len, d))?.contiguous()?;
-        let p_ij_3d = p_ij.reshape((batch, q_len, tile_len))?.contiguous()?;
-        let pv_3d = p_ij_3d.matmul(&v_3d)?;
-        let pv = pv_3d.reshape((b, kv_h, groups, q_len, d))?;
-        eprintln!("pv shape: {:?}, stride: {:?}", pv.shape(), pv.stride());
+        let pv = if groups > 1 {
+            let pv_list: Vec<Tensor> = (0..groups)
+                .map(|g| {
+                    let p_g = p_ij.narrow(2, g, 1)?.squeeze(2)?; // (B, KV_H, q_len, tile)
+                    p_g.matmul(&v_tile_sq) // (B, KV_H, q_len, D)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Tensor::stack(&pv_list, 2)? // (B, KV_H, groups, q_len, D)
+        } else {
+            let p_sq = p_ij.squeeze(2)?;
+            p_sq.matmul(&v_tile_sq)?.unsqueeze(2)?
+        };
+        // eprintln!("pv shape: {:?}, stride: {:?}", pv.shape(), pv.stride());
 
         //output = ((&alpha * &output)? + pv)?;
         output = (alpha.broadcast_mul(&output)? + pv)?;
-        eprintln!(
-            "output shape: {:?}, stride: {:?}",
-            output.shape(),
-            output.stride()
-        );
+        // eprintln!(
+        //     "output shape: {:?}, stride: {:?}",
+        //     output.shape(),
+        //     output.stride()
+        // );
 
         // Update state
         m_i = m_new;
