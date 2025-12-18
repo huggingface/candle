@@ -58,7 +58,7 @@ pub fn make_alibi_slopes(num_heads: usize, device: &Device) -> Result<Tensor> {
     Tensor::from_vec(slopes, num_heads, device)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Impl {
     Fast,
     Unfused,
@@ -138,6 +138,7 @@ fn bench_case(
     causal: bool,
     wl: Option<usize>,
     wr: Option<usize>,
+    _dtype: DType,
 ) {
     let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
@@ -190,133 +191,137 @@ fn criterion_benchmark(c: &mut Criterion) {
             continue;
         }
 
-        // Fixed to f32 inputs (both impls are effectively f32 here).
-        let dtype = DType::F32;
+        for dtype in [DType::F16, DType::F32] {
+            // Prefill baseline
+            {
+                let (b, hq, hk, d, max_seq) = (4usize, 8usize, 8usize, 64usize, 256usize);
+                let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
+                    make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
 
-        // Prefill baseline
-        {
-            let (b, hq, hk, d, max_seq) = (4usize, 8usize, 8usize, 64usize, 256usize);
-            let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-                make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
+                bench_case(
+                    c,
+                    &dev,
+                    format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_noncausal"),
+                    q,
+                    k,
+                    v,
+                    None,
+                    seqlens_q,
+                    seqlens_k,
+                    max_q,
+                    max_k,
+                    d,
+                    false,
+                    None,
+                    None,
+                    dtype,
+                );
+            }
 
-            bench_case(
-                c,
-                &dev,
-                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_noncausal"),
-                q,
-                k,
-                v,
-                None,
-                seqlens_q,
-                seqlens_k,
-                max_q,
-                max_k,
-                d,
-                false,
-                None,
-                None,
-            );
-        }
+            // Prefill causal
+            {
+                let (b, hq, hk, d, max_seq) = (4usize, 8usize, 8usize, 64usize, 256usize);
+                let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
+                    make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
 
-        // Prefill causal
-        {
-            let (b, hq, hk, d, max_seq) = (4usize, 8usize, 8usize, 64usize, 256usize);
-            let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-                make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
+                bench_case(
+                    c,
+                    &dev,
+                    format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_causal"),
+                    q,
+                    k,
+                    v,
+                    None,
+                    seqlens_q,
+                    seqlens_k,
+                    max_q,
+                    max_k,
+                    d,
+                    true,
+                    None,
+                    None,
+                    dtype,
+                );
+            }
 
-            bench_case(
-                c,
-                &dev,
-                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_causal"),
-                q,
-                k,
-                v,
-                None,
-                seqlens_q,
-                seqlens_k,
-                max_q,
-                max_k,
-                d,
-                true,
-                None,
-                None,
-            );
-        }
+            // Prefill sliding-window (Mistral-style: only left, causal=true, right=None)
+            {
+                let (b, hq, hk, d, max_seq) = (4usize, 8usize, 8usize, 64usize, 256usize);
+                let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
+                    make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
 
-        // Prefill sliding-window (Mistral-style: only left, causal=true, right=None)
-        {
-            let (b, hq, hk, d, max_seq) = (4usize, 8usize, 8usize, 64usize, 256usize);
-            let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-                make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
+                bench_case(
+                    c,
+                    &dev,
+                    format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_causal_wl128"),
+                    q,
+                    k,
+                    v,
+                    None,
+                    seqlens_q,
+                    seqlens_k,
+                    max_q,
+                    max_k,
+                    d,
+                    true,
+                    Some(128),
+                    None,
+                    dtype,
+                );
+            }
 
-            bench_case(
-                c,
-                &dev,
-                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_causal_wl128"),
-                q,
-                k,
-                v,
-                None,
-                seqlens_q,
-                seqlens_k,
-                max_q,
-                max_k,
-                d,
-                true,
-                Some(128),
-                None,
-            );
-        }
+            // Prefill GQA (hq > hk == hv)
+            {
+                let (b, hq, hk, d, max_seq) = (3usize, 12usize, 4usize, 64usize, 256usize);
+                let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
+                    make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
 
-        // Prefill GQA (hq > hk == hv)
-        {
-            let (b, hq, hk, d, max_seq) = (3usize, 12usize, 4usize, 64usize, 256usize);
-            let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-                make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
+                bench_case(
+                    c,
+                    &dev,
+                    format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_gqa_noncausal"),
+                    q,
+                    k,
+                    v,
+                    None,
+                    seqlens_q,
+                    seqlens_k,
+                    max_q,
+                    max_k,
+                    d,
+                    false,
+                    None,
+                    None,
+                    dtype,
+                );
+            }
 
-            bench_case(
-                c,
-                &dev,
-                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_gqa_noncausal"),
-                q,
-                k,
-                v,
-                None,
-                seqlens_q,
-                seqlens_k,
-                max_q,
-                max_k,
-                d,
-                false,
-                None,
-                None,
-            );
-        }
+            // Prefill ALiBi (causal)
+            {
+                let (b, hq, hk, d, max_seq) = (2usize, 8usize, 8usize, 64usize, 256usize);
+                let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
+                    make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
+                let alibi = Some(make_alibi_slopes(hq, &dev).unwrap());
 
-        // Prefill ALiBi (causal)
-        {
-            let (b, hq, hk, d, max_seq) = (2usize, 8usize, 8usize, 64usize, 256usize);
-            let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-                make_varlen_inputs_prefill(b, hq, hk, d, max_seq, &dev).unwrap();
-            let alibi = Some(make_alibi_slopes(hq, &dev).unwrap());
-
-            bench_case(
-                c,
-                &dev,
-                format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_alibi_causal"),
-                q,
-                k,
-                v,
-                alibi,
-                seqlens_q,
-                seqlens_k,
-                max_q,
-                max_k,
-                d,
-                true,
-                None,
-                None,
-            );
+                bench_case(
+                    c,
+                    &dev,
+                    format!("varlen_prefill_{dtype:?}_b{b}_hq{hq}_hk{hk}_d{d}_alibi_causal"),
+                    q,
+                    k,
+                    v,
+                    alibi,
+                    seqlens_q,
+                    seqlens_k,
+                    max_q,
+                    max_k,
+                    d,
+                    true,
+                    None,
+                    None,
+                    dtype,
+                );
+            }
         }
     }
 }

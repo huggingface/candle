@@ -285,6 +285,66 @@ mod tests {
     }
 
     #[test]
+    fn test_cpuflashprefill_varlen_matches_padded_reference_gqa_f16() -> Result<()> {
+        // f16 test
+        let device = Device::Cpu;
+        // GQA prefill: Hq > Hk, but seq lengths identical between Q and K
+        let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (3, 12, 4, 64, 64);
+
+        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) = make_varlen_inputs_prefill(
+            batch_size,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            max_seq,
+            &device,
+        )?;
+        
+        let q = q.to_dtype(DType::F16)?;
+        let k = k.to_dtype(DType::F16)?;
+        let v = v.to_dtype(DType::F16)?;
+
+        let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
+
+        let out_var = flash_attn_varlen_cpu(
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            false,
+            None,
+            None,
+        )?;
+        let out_ref = reference_padded_attention(
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            false,
+            None,
+            None,
+        )?;
+
+        let mae = max_abs_diff(&out_var, &out_ref)?;
+        let e = rmse(&out_var, &out_ref)?;
+        println!("prefill gqa: max_abs_diff={:.6e}, rmse={:.6e}", mae, e);
+
+        assert!(mae < 1e-4);
+        assert!(e < 1e-4);
+        Ok(())
+    }
+
+    #[test]
     fn test_cpuflashprefill_varlen_matches_padded_reference_alibi() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (2, 8, 8, 64, 64);

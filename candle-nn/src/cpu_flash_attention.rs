@@ -4,6 +4,7 @@ use candle::DType;
 use candle::{Device, Result, Storage, Tensor, WithDType};
 use std::sync::LazyLock;
 use std::{f32, iter::Sum};
+use half::f16;
 
 use rayon::prelude::*;
 use rayon::ThreadPool;
@@ -558,7 +559,11 @@ fn key_range(
     }
 }
 
-#[clippy::too_many_arguments]
+// assumes these are already in your module:
+/// - FLASH_ATTN_POOL
+/// - dot_f32, alibi_bias, key_range
+
+#[allow(clippy::too_many_arguments)]
 pub fn flash_attn_varlen_cpu(
     q: &Tensor,                    // [total_q, Hq, D]
     k: &Tensor,                    // [total_k, Hk, D]
@@ -574,11 +579,21 @@ pub fn flash_attn_varlen_cpu(
     window_right: Option<usize>,
 ) -> Result<Tensor> {
     if !q.device().is_cpu() {
-        candle::bail!("CPU only");
+        candle::bail!("flash_attn_varlen_cpu is CPU only");
     }
-    /// TODO support also f16 below
-    if (q.dtype() != DType::F32 || k.dtype() != DType::F32 || v.dtype() != DType::F32) && (q.dtype() != DType::F16 || k.dtype() != DType::F16 || v.dtype() != DType::F16) {
-        candle::bail!("f32 or f16 only for now");
+
+    // For now: require all Q/K/V to be the same dtype, and only f32/f16.
+    let dt = q.dtype();
+    if k.dtype() != dt || v.dtype() != dt {
+        candle::bail!(
+            "q/k/v must have the same dtype (got q={:?}, k={:?}, v={:?})",
+            dt,
+            k.dtype(),
+            v.dtype()
+        );
+    }
+    if dt != DType::F32 && dt != DType::F16 {
+        candle::bail!("flash_attn_varlen_cpu supports f32 or f16 only for now");
     }
 
     let (total_q, hq, d) = q.dims3()?;
@@ -625,7 +640,7 @@ pub fn flash_attn_varlen_cpu(
         candle::bail!("total_q/total_k mismatch with seqlens");
     }
 
-    // slopes
+    // slopes (always f32)
     let slopes = if let Some(s) = alibi_slopes {
         let v = s.to_vec1::<f32>()?;
         if v.len() != hq {
@@ -653,39 +668,7 @@ pub fn flash_attn_varlen_cpu(
         v.contiguous()?
     };
 
-    // Keep guards alive for the whole kernel
-    let (q_g, q_l) = q.storage_and_layout();
-    let q_data: &[f32] = match &*q_g {
-        Storage::Cpu(cpu) => {
-            let s = cpu.as_slice::<f32>()?;
-            &s[q_l.start_offset()..]
-        }
-        _ => candle::bail!("q not cpu"),
-    };
-
-    let (k_g, k_l) = k.storage_and_layout();
-    let k_data: &[f32] = match &*k_g {
-        Storage::Cpu(cpu) => {
-            let s = cpu.as_slice::<f32>()?;
-            &s[k_l.start_offset()..]
-        }
-        _ => candle::bail!("k not cpu"),
-    };
-
-    let (v_g, v_l) = v.storage_and_layout();
-    let v_data: &[f32] = match &*v_g {
-        Storage::Cpu(cpu) => {
-            let s = cpu.as_slice::<f32>()?;
-            &s[v_l.start_offset()..]
-        }
-        _ => candle::bail!("v not cpu"),
-    };
-
-    // Row count = total_q * hq, each row is D floats
-    let mut out = vec![0f32; total_q * hq * d];
-
-    // Precompute for mapping q_idx -> batch
-    // batch_of_q[q_idx] = b, pos_in_b[q_idx] = q_pos within that sequence
+    // Precompute mapping q_idx -> (batch, pos_in_batch)
     let mut batch_of_q = vec![0usize; total_q];
     let mut pos_in_b = vec![0usize; total_q];
     for b in 0..bsz {
@@ -697,95 +680,276 @@ pub fn flash_attn_varlen_cpu(
         }
     }
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d)
-            .enumerate()
-            .for_each(|(row, out_row)| {
-                // row corresponds to (q_idx, h)
-                let q_idx = row / hq;
-                let h = row % hq;
-
-                let b = batch_of_q[q_idx];
-                let q_pos = pos_in_b[q_idx];
-
-                let lq = seqlens_q_vec[b] as usize;
-                let lk = seqlens_k_vec[b] as usize;
-                if lq == 0 || lk == 0 {
-                    out_row.fill(0.0);
-                    return;
+    match dt {
+        DType::F32 => {
+            // ---- slices ----
+            let (q_g, q_l) = q.storage_and_layout();
+            let q_data: &[f32] = match &*q_g {
+                Storage::Cpu(cpu) => {
+                    let s = cpu.as_slice::<f32>()?;
+                    &s[q_l.start_offset()..]
                 }
+                _ => candle::bail!("q not cpu"),
+            };
 
-                let start_k = cumsum_k[b];
-                let offset = lk as isize - lq as isize;
-
-                let Some((j0, j1)) =
-                    key_range(q_pos, lk, offset, causal, window_left, window_right)
-                else {
-                    // invalid config
-                    out_row.fill(0.0);
-                    return;
-                };
-                if j0 > j1 {
-                    out_row.fill(0.0);
-                    return;
+            let (k_g, k_l) = k.storage_and_layout();
+            let k_data: &[f32] = match &*k_g {
+                Storage::Cpu(cpu) => {
+                    let s = cpu.as_slice::<f32>()?;
+                    &s[k_l.start_offset()..]
                 }
+                _ => candle::bail!("k not cpu"),
+            };
 
-                let k_head = h / rk;
-                let v_head = h / rv;
+            let (v_g, v_l) = v.storage_and_layout();
+            let v_data: &[f32] = match &*v_g {
+                Storage::Cpu(cpu) => {
+                    let s = cpu.as_slice::<f32>()?;
+                    &s[v_l.start_offset()..]
+                }
+                _ => candle::bail!("v not cpu"),
+            };
 
-                let slope = slopes.as_ref().map(|s| s[h]).unwrap_or(0.0);
-                let i_k = q_pos as isize + offset;
+            let mut out = vec![0f32; total_q * hq * d];
 
-                // q row is contiguous: [D]
-                let q_base = (q_idx * hq + h) * d;
-                let q_row = &q_data[q_base..q_base + d];
+            FLASH_ATTN_POOL.install(|| {
+                out.par_chunks_mut(d)
+                    .enumerate()
+                    .for_each(|(row, out_row)| {
+                        // row corresponds to (q_idx, h)
 
-                // online softmax
-                let mut acc = vec![0f32; d];
-                let mut m = f32::NEG_INFINITY;
-                let mut ssum = 0.0f32;
+                        let q_idx = row / hq;
+                        let h = row % hq;
 
-                for j in j0..=j1 {
-                    let k_base = ((start_k + j) * hk + k_head) * d;
-                    let k_row = &k_data[k_base..k_base + d];
+                        let b = batch_of_q[q_idx];
+                        let q_pos = pos_in_b[q_idx];
 
-                    let mut score = dot_f32(q_row, k_row) * softmax_scale;
-                    if slopes.is_some() {
-                        score += alibi_bias(slope, i_k, j as isize, causal);
-                    }
-
-                    if score > m {
-                        let scale_old = (m - score).exp();
-                        #[warn(clippy::needless_range_loop)]
-                        for t in 0..d {
-                            acc[t] *= scale_old;
+                        let lq = seqlens_q_vec[b] as usize;
+                        let lk = seqlens_k_vec[b] as usize;
+                        if lq == 0 || lk == 0 {
+                            out_row.fill(0.0);
+                            return;
                         }
-                        ssum *= scale_old;
-                        m = score;
 
-                        let v_base = ((start_k + j) * hv + v_head) * d;
-                        let v_row = &v_data[v_base..v_base + d];
-                        for t in 0..d {
-                            acc[t] += v_row[t];
-                        }
-                        ssum += 1.0;
-                    } else {
-                        let w = (score - m).exp();
-                        let v_base = ((start_k + j) * hv + v_head) * d;
-                        let v_row = &v_data[v_base..v_base + d];
-                        for t in 0..d {
-                            acc[t] += v_row[t] * w;
-                        }
-                        ssum += w;
-                    }
-                }
+                        let start_k = cumsum_k[b];
+                        let offset = lk as isize - lq as isize;
 
-                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                for t in 0..d {
-                    out_row[t] = acc[t] * inv;
-                }
+                        let Some((j0, j1)) =
+                            key_range(q_pos, lk, offset, causal, window_left, window_right)
+                        else {
+                            // invalid config
+
+                            out_row.fill(0.0);
+                            return;
+                        };
+                        if j0 > j1 {
+                            out_row.fill(0.0);
+                            return;
+                        }
+
+                        let k_head = h / rk;
+                        let v_head = h / rv;
+
+                        let slope = slopes.as_ref().map(|s| s[h]).unwrap_or(0.0);
+                        let i_k = q_pos as isize + offset;
+                        // q row is contiguous: [D]
+                        let q_base = (q_idx * hq + h) * d;
+                        let q_row = &q_data[q_base..q_base + d];
+
+                        // online softmax
+                        let mut acc = vec![0f32; d];
+                        let mut m = f32::NEG_INFINITY;
+                        let mut ssum = 0.0f32;
+
+                        for j in j0..=j1 {
+                            let k_base = ((start_k + j) * hk + k_head) * d;
+                            let k_row = &k_data[k_base..k_base + d];
+
+                            let mut score = dot_f32(q_row, k_row) * softmax_scale;
+                            if slopes.is_some() {
+                                score += alibi_bias(slope, i_k, j as isize, causal);
+                            }
+
+                            if score > m {
+                                let scale_old = (m - score).exp();
+                                #[warn(clippy::needless_range_loop)]
+                                for t in 0..d {
+                                    acc[t] *= scale_old;
+                                }
+                                ssum *= scale_old;
+                                m = score;
+
+                                let v_base = ((start_k + j) * hv + v_head) * d;
+                                let v_row = &v_data[v_base..v_base + d];
+                                for t in 0..d {
+                                    acc[t] += v_row[t];
+                                }
+                                ssum += 1.0;
+                            } else {
+                                let w = (score - m).exp();
+                                let v_base = ((start_k + j) * hv + v_head) * d;
+                                let v_row = &v_data[v_base..v_base + d];
+                                for t in 0..d {
+                                    acc[t] += v_row[t] * w;
+                                }
+                                ssum += w;
+                            }
+                        }
+
+                        let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                        for t in 0..d {
+                            out_row[t] = acc[t] * inv;
+                        }
+                    });
             });
-    });
 
-    Tensor::from_vec(out, (total_q, hq, d), &Device::Cpu)
+            Tensor::from_vec(out, (total_q, hq, d), &Device::Cpu)
+        }
+
+        DType::F16 => {
+            // ---- slices ----
+            let (q_g, q_l) = q.storage_and_layout();
+            let q_data: &[f16] = match &*q_g {
+                Storage::Cpu(cpu) => {
+                    let s = cpu.as_slice::<f16>()?;
+                    &s[q_l.start_offset()..]
+                }
+                _ => candle::bail!("q not cpu"),
+            };
+
+            let (k_g, k_l) = k.storage_and_layout();
+            let k_data: &[f16] = match &*k_g {
+                Storage::Cpu(cpu) => {
+                    let s = cpu.as_slice::<f16>()?;
+                    &s[k_l.start_offset()..]
+                }
+                _ => candle::bail!("k not cpu"),
+            };
+
+            let (v_g, v_l) = v.storage_and_layout();
+            let v_data: &[f16] = match &*v_g {
+                Storage::Cpu(cpu) => {
+                    let s = cpu.as_slice::<f16>()?;
+                    &s[v_l.start_offset()..]
+                }
+                _ => candle::bail!("v not cpu"),
+            };
+
+            let mut out = vec![f16::from_f32(0.0); total_q * hq * d];
+
+            FLASH_ATTN_POOL.install(|| {
+                out.par_chunks_mut(d)
+                    .enumerate()
+                    .for_each(|(row, out_row)| {
+                        let q_idx = row / hq;
+                        let h = row % hq;
+
+                        let b = batch_of_q[q_idx];
+                        let q_pos = pos_in_b[q_idx];
+
+                        let lq = seqlens_q_vec[b] as usize;
+                        let lk = seqlens_k_vec[b] as usize;
+                        if lq == 0 || lk == 0 {
+                            out_row.fill(f16::from_f32(0.0));
+                            return;
+                        }
+
+                        let start_k = cumsum_k[b];
+                        let offset = lk as isize - lq as isize;
+
+                        let Some((j0, j1)) =
+                            key_range(q_pos, lk, offset, causal, window_left, window_right)
+                        else {
+                            out_row.fill(f16::from_f32(0.0));
+                            return;
+                        };
+                        if j0 > j1 {
+                            out_row.fill(f16::from_f32(0.0));
+                            return;
+                        }
+
+                        let k_head = h / rk;
+                        let v_head = h / rv;
+
+                        let slope = slopes.as_ref().map(|s| s[h]).unwrap_or(0.0);
+                        let i_k = q_pos as isize + offset;
+
+                        let q_base = (q_idx * hq + h) * d;
+
+                        // Convert Q row once to f32 (big win vs converting per dot)
+                        let mut q_row_f32 = vec![0f32; d];
+                        for t in 0..d {
+                            q_row_f32[t] = q_data[q_base + t].to_f32();
+                        }
+
+                        let mut acc = vec![0f32; d];
+                        let mut m = f32::NEG_INFINITY;
+                        let mut ssum = 0.0f32;
+
+                        for j in j0..=j1 {
+                            let k_base = ((start_k + j) * hk + k_head) * d;
+
+                            // dot(q_row_f32, k_row_f16) in f32, unroll by 4
+                            let mut score = 0.0f32;
+                            let mut t = 0usize;
+                            while t + 4 <= d {
+                                let q0 = q_row_f32[t];
+                                let q1 = q_row_f32[t + 1];
+                                let q2 = q_row_f32[t + 2];
+                                let q3 = q_row_f32[t + 3];
+
+                                let k0 = k_data[k_base + t].to_f32();
+                                let k1 = k_data[k_base + t + 1].to_f32();
+                                let k2 = k_data[k_base + t + 2].to_f32();
+                                let k3 = k_data[k_base + t + 3].to_f32();
+
+                                score += q0 * k0 + q1 * k1 + q2 * k2 + q3 * k3;
+                                t += 4;
+                            }
+                            while t < d {
+                                score += q_row_f32[t] * k_data[k_base + t].to_f32();
+                                t += 1;
+                            }
+
+                            score *= softmax_scale;
+                            if slopes.is_some() {
+                                score += alibi_bias(slope, i_k, j as isize, causal);
+                            }
+
+                            // online softmax + accumulate V (convert V to f32 on the fly)
+                            if score > m {
+                                let scale_old = (m - score).exp();
+                                for x in acc.iter_mut() {
+                                    *x *= scale_old;
+                                }
+                                ssum *= scale_old;
+                                m = score;
+
+                                let v_base = ((start_k + j) * hv + v_head) * d;
+                                for t in 0..d {
+                                    acc[t] += v_data[v_base + t].to_f32();
+                                }
+                                ssum += 1.0;
+                            } else {
+                                let w = (score - m).exp();
+                                let v_base = ((start_k + j) * hv + v_head) * d;
+                                for t in 0..d {
+                                    acc[t] += v_data[v_base + t].to_f32() * w;
+                                }
+                                ssum += w;
+                            }
+                        }
+
+                        let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                        for t in 0..d {
+                            out_row[t] = f16::from_f32(acc[t] * inv);
+                        }
+                    });
+            });
+
+            Tensor::from_vec(out, (total_q, hq, d), &Device::Cpu)
+        }
+
+        _ => unreachable!("dtype checked above"),
+    }
 }
