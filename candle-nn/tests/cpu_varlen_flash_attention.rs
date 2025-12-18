@@ -1,5 +1,6 @@
 use candle::Result;
-use candle_nn::cpu_flash_attention::flash_attn_varlen_cpu_fast_f32;
+use candle_nn::cpu_flash_attention::flash_attn_varlen_cpu;
+use candle_nn::varlen_attention::flash_attn_varlen_unfused;
 
 const FA_FEATURE_ENABLED: bool = false; // flash-attn features not available in this workspace
                                         // may set to true and import the flash-attn varlen kernels thats missing in candle-nn testing harness.
@@ -133,7 +134,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let out_var = flash_attn_varlen_cpu_fast_f32(
+        let out_var = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -190,7 +191,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let out_var = flash_attn_varlen_cpu_fast_f32(
+        let out_var = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -245,7 +246,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let out_var = flash_attn_varlen_cpu_fast_f32(
+        let out_var = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -304,7 +305,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let out_var = flash_attn_varlen_cpu_fast_f32(
+        let out_var = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -386,7 +387,7 @@ mod tests {
             let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
             // Non-causal
-            let cpu_out = flash_attn_varlen_cpu_fast_f32(
+            let cpu_out = flash_attn_varlen_cpu(
                 &q_cpu,
                 &k_cpu,
                 &v_cpu,
@@ -443,7 +444,7 @@ mod tests {
             }
 
             // Causal (prefill)
-            let cpu_out_causal = flash_attn_varlen_cpu_fast_f32(
+            let cpu_out_causal = flash_attn_varlen_cpu(
                 &q_cpu,
                 &k_cpu,
                 &v_cpu,
@@ -526,7 +527,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let cpu_out = flash_attn_varlen_cpu_fast_f32(
+        let cpu_out = flash_attn_varlen_cpu(
             &q_cpu,
             &k_cpu,
             &v_cpu,
@@ -614,7 +615,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let cpu_out = flash_attn_varlen_cpu_fast_f32(
+        let cpu_out = flash_attn_varlen_cpu(
             &q_cpu,
             &k_cpu,
             &v_cpu,
@@ -717,7 +718,7 @@ mod tests {
             let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
             // CPU expects lengths (your cpu impl uses to_vec1 and builds cumsums)
-            let cpu_result = flash_attn_varlen_cpu_fast_f32(
+            let cpu_result = flash_attn_varlen_cpu(
                 &q_cpu,
                 &k_cpu,
                 &v_cpu,
@@ -777,7 +778,7 @@ mod tests {
             }
 
             // Causal
-            let cpu_result_causal = flash_attn_varlen_cpu_fast_f32(
+            let cpu_result_causal = flash_attn_varlen_cpu(
                 &q_cpu,
                 &k_cpu,
                 &v_cpu,
@@ -871,7 +872,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let cpu_result = flash_attn_varlen_cpu_fast_f32(
+        let cpu_result = flash_attn_varlen_cpu(
             &q_cpu,
             &k_cpu,
             &v_cpu,
@@ -957,7 +958,7 @@ mod tests {
         let window_left = 8;
         let window_right = 8;
 
-        let cpu_result = flash_attn_varlen_cpu_fast_f32(
+        let cpu_result = flash_attn_varlen_cpu(
             &q_cpu,
             &k_cpu,
             &v_cpu,
@@ -1035,7 +1036,7 @@ mod tests {
         let seqlens_k = Tensor::from_vec(vec![2u32], 1, &device)?;
 
         // Test 1: Standard windowing (both left and right)
-        let result1 = flash_attn_varlen_cpu_fast_f32(
+        let result1 = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -1052,7 +1053,7 @@ mod tests {
         assert_eq!(result1.dims(), &[2, 4, 32]);
 
         // Test 2: Mistral-style windowing (only left)
-        let result2 = flash_attn_varlen_cpu_fast_f32(
+        let result2 = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -1069,7 +1070,7 @@ mod tests {
         assert_eq!(result2.dims(), &[2, 4, 32]);
 
         // Test 3: No windowing
-        let result3 = flash_attn_varlen_cpu_fast_f32(
+        let result3 = flash_attn_varlen_cpu(
             &q, &k, &v, None, &seqlens_q, &seqlens_k, 2, 2, 0.125, false, None, None,
         )?;
         assert_eq!(result3.dims(), &[2, 4, 32]);
@@ -1088,7 +1089,7 @@ mod tests {
         let seqlens_q = Tensor::zeros((0,), DType::U32, &device)?;
         let seqlens_k = Tensor::zeros((0,), DType::U32, &device)?;
 
-        let result = flash_attn_varlen_cpu_fast_f32(
+        let result = flash_attn_varlen_cpu(
             &q, &k, &v, None, &seqlens_q, &seqlens_k, 32, 32, 0.125, false, None, None,
         )?;
 
@@ -1101,7 +1102,7 @@ mod tests {
         let seqlens_q = Tensor::from_vec(vec![16u32], 1, &device)?;
         let seqlens_k = Tensor::from_vec(vec![16u32], 1, &device)?;
 
-        let result = flash_attn_varlen_cpu_fast_f32(
+        let result = flash_attn_varlen_cpu(
             &q, &k, &v, None, &seqlens_q, &seqlens_k, 16, 16, 0.125, false, None, None,
         )?;
 
@@ -1498,7 +1499,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let out_var = flash_attn_varlen_cpu_fast_f32(
+        let out_var = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -1554,7 +1555,7 @@ mod tests {
 
             let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-            let out_var = flash_attn_varlen_cpu_fast_f32(
+            let out_var = flash_attn_varlen_cpu(
                 &q,
                 &k,
                 &v,
@@ -1611,7 +1612,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let out_var = flash_attn_varlen_cpu_fast_f32(
+        let out_var = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -1672,7 +1673,7 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-        let out_var = flash_attn_varlen_cpu_fast_f32(
+        let out_var = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -1729,7 +1730,7 @@ mod tests {
         let wl = Some(8usize);
         let wr = Some(8usize);
 
-        let out_var = flash_attn_varlen_cpu_fast_f32(
+        let out_var = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -1797,7 +1798,7 @@ mod tests {
             let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
             // Test non-causal
-            let out_var = flash_attn_varlen_cpu_fast_f32(
+            let out_var = flash_attn_varlen_cpu(
                 &q,
                 &k,
                 &v,
@@ -1834,7 +1835,7 @@ mod tests {
 
             // Test causal - skip for very short sequences due to known numerical precision issues
             if max_seq > 3 {
-                let out_var_causal = flash_attn_varlen_cpu_fast_f32(
+                let out_var_causal = flash_attn_varlen_cpu(
                     &q,
                     &k,
                     &v,
@@ -1924,7 +1925,7 @@ mod tests {
         );
 
         // Test non-causal
-        let out_var = flash_attn_varlen_cpu_fast_f32(
+        let out_var = flash_attn_varlen_cpu(
             &q,
             &k,
             &v,
@@ -1969,7 +1970,7 @@ mod tests {
         // Test causal - skip when there are very short sequences due to known precision issues
         let has_very_short = seqlens_q.iter().any(|&x| x <= 1) || seqlens_k.iter().any(|&x| x <= 1);
         if !has_very_short {
-            let out_var_causal = flash_attn_varlen_cpu_fast_f32(
+            let out_var_causal = flash_attn_varlen_cpu(
                 &q,
                 &k,
                 &v,
@@ -2106,7 +2107,7 @@ mod tests {
 
                 let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
-                let out_var = flash_attn_varlen_cpu_fast_f32(
+                let out_var = flash_attn_varlen_cpu(
                     &q,
                     &k,
                     &v,
@@ -2187,7 +2188,7 @@ mod tests {
             println!("Testing GQA {}:{} configuration", num_heads, num_kv_heads);
 
             // Test non-causal
-            let out_var = flash_attn_varlen_cpu_fast_f32(
+            let out_var = flash_attn_varlen_cpu(
                 &q,
                 &k,
                 &v,

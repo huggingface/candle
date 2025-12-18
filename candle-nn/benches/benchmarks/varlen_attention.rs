@@ -4,7 +4,7 @@ use criterion::{criterion_group, Criterion};
 use std::hint::black_box;
 use std::time::Instant;
 
-use candle_nn::cpu_flash_attention::flash_attn_varlen_cpu_fast_f32;
+use candle_nn::cpu_flash_attention::flash_attn_varlen_cpu;
 use candle_nn::varlen_attention::flash_attn_varlen_unfused;
 
 use rand::prelude::*;
@@ -81,7 +81,7 @@ fn run_varlen_impl(
     wr: Option<usize>,
 ) -> Result<Tensor> {
     match which {
-        Impl::Fast => flash_attn_varlen_cpu_fast_f32(
+        Impl::Fast => flash_attn_varlen_cpu(
             q,
             k,
             v,

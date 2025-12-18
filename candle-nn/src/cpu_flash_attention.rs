@@ -559,7 +559,7 @@ fn key_range(
 }
 
 #[clippy::too_many_arguments]
-pub fn flash_attn_varlen_cpu_fast_f32(
+pub fn flash_attn_varlen_cpu(
     q: &Tensor,                    // [total_q, Hq, D]
     k: &Tensor,                    // [total_k, Hk, D]
     v: &Tensor,                    // [total_k, Hv, D]
@@ -576,8 +576,9 @@ pub fn flash_attn_varlen_cpu_fast_f32(
     if !q.device().is_cpu() {
         candle::bail!("CPU only");
     }
-    if q.dtype() != DType::F32 || k.dtype() != DType::F32 || v.dtype() != DType::F32 {
-        candle::bail!("f32 only");
+    /// TODO support also f16 below
+    if (q.dtype() != DType::F32 || k.dtype() != DType::F32 || v.dtype() != DType::F32) && (q.dtype() != DType::F16 || k.dtype() != DType::F16 || v.dtype() != DType::F16) {
+        candle::bail!("f32 or f16 only for now");
     }
 
     let (total_q, hq, d) = q.dims3()?;
