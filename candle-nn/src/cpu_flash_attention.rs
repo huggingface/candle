@@ -771,7 +771,7 @@ pub fn flash_attn_varlen_cpu(
 
                             if score > m {
                                 let scale_old = (m - score).exp();
-                                #[warn(clippy::needless_range_loop)]
+                                #[allow(clippy::needless_range_loop)]
                                 for t in 0..d {
                                     acc[t] *= scale_old;
                                 }
