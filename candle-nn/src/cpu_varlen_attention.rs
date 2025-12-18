@@ -1,11 +1,10 @@
-use candle::Tensor;
 use crate::ops;
+use candle::Tensor;
 
-/// Cuda-free fallback implementation for variable length flash attention 
+/// Cuda-free fallback implementation for variable length flash attention
 //  https://github.com/Dao-AILab/flash-attention/blob/ac9b5f107f2f19cd0ca6e01548d20d072a46335c/csrc/flash_attn/flash_api.cpp#L515
 /// No fused attention is used, "flash" fused, but allows for padding-free variable length attention on CPU.
 
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 #[allow(clippy::needless_range_loop)]

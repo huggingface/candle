@@ -1,7 +1,7 @@
-use candle::{DType, Device, Result, Tensor};
-use candle_nn::cpu_flash_attention::run_flash_attn_cpu;
+use candle::Result;
+use candle_nn::flash_attn_varlen_cpu;
 
-const FA_FEATURE_ENABLED: bool = cfg!(any(feature = "flash-attn", feature = "flash-attn-v1"));
+const FA_FEATURE_ENABLED: bool = cfg!(any(feature = "flash-attn"));
 
 #[cfg(test)]
 mod tests {
@@ -32,7 +32,7 @@ mod tests {
         head_dim: usize,
         max_seq_len: usize,
         device: &Device,
-    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor), candle::Error> {
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
         let mut rng = StdRng::seed_from_u64(42);
 
         // Create variable sequence lengths
@@ -42,9 +42,9 @@ mod tests {
         let mut total_k = 0;
 
         for _ in 0..batch_size {
-            let seq_len_q = rng.gen_range(4..=max_seq_len);
+            let seq_len_q = rng.random_range(4..=max_seq_len);
             // k needs to be at least as long as q for causal attention
-            let seq_len_k = rng.gen_range(seq_len_q..=max_seq_len);
+            let seq_len_k = rng.random_range(seq_len_q..=max_seq_len);
             seqlens_q.push(seq_len_q as u32);
             seqlens_k.push(seq_len_k as u32);
             total_q += seq_len_q;
@@ -53,13 +53,13 @@ mod tests {
 
         // Create Q, K, V tensors
         let q_data: Vec<f32> = (0..total_q * num_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let k_data: Vec<f32> = (0..total_k * num_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let v_data: Vec<f32> = (0..total_k * num_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
 
         let q = Tensor::from_vec(q_data, (total_q, num_heads, head_dim), device)?;
@@ -80,7 +80,7 @@ mod tests {
         head_dim: usize,
         max_seq: usize,
         device: &Device,
-    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor, usize, usize), candle::Error> {
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor, usize, usize)> {
         let mut rng = StdRng::seed_from_u64(456);
 
         let mut seqlens = Vec::<u32>::with_capacity(batch_size);
@@ -88,7 +88,7 @@ mod tests {
         let mut max_l = 0usize;
 
         for _ in 0..batch_size {
-            let l = rng.gen_range(4..=max_seq);
+            let l = rng.random_range(4..=max_seq);
             seqlens.push(l as u32);
             total += l;
             max_l = max_l.max(l);
@@ -96,13 +96,13 @@ mod tests {
 
         // Q: [total, Hq, D], K/V: [total, Hk, D]
         let q_data: Vec<f32> = (0..total * num_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let k_data: Vec<f32> = (0..total * num_kv_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let v_data: Vec<f32> = (0..total * num_kv_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
 
         let q = Tensor::from_vec(q_data, (total, num_heads, head_dim), device)?;
@@ -117,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefill_varlen_matches_padded_reference_noncausal() -> Result<(), candle::Error> {
+    fn test_prefill_varlen_matches_padded_reference_noncausal() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefill_varlen_matches_padded_reference_causal() -> Result<(), candle::Error> {
+    fn test_prefill_varlen_matches_padded_reference_causal() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
@@ -228,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefill_varlen_matches_padded_reference_gqa() -> Result<(), candle::Error> {
+    fn test_prefill_varlen_matches_padded_reference_gqa() -> Result<()> {
         let device = Device::Cpu;
         // GQA prefill: Hq > Hk, but seq lengths identical between Q and K
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (3, 12, 4, 64, 64);
@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefill_varlen_matches_padded_reference_alibi() -> Result<(), candle::Error> {
+    fn test_prefill_varlen_matches_padded_reference_alibi() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (2, 8, 8, 64, 64);
 
@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_vs_gpu_prefill_basic() -> Result<(), candle::Error> {
+    fn test_flash_attn_cpu_vs_gpu_prefill_basic() -> Result<()> {
         if !candle::utils::cuda_is_available() {
             println!("Skipping GPU test: CUDA not available");
             return Ok(());
@@ -503,12 +503,9 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_vs_gpu_prefill_gqa() -> Result<(), candle::Error> {
+    fn test_flash_attn_cpu_vs_gpu_prefill_gqa() -> Result<()> {
         skip_test_if!(!candle::utils::cuda_is_available(), "CUDA not available");
-        skip_test_if!(
-            !FA_FEATURE_ENABLED,
-            "flash-attn features not enabled"
-        );
+        skip_test_if!(!FA_FEATURE_ENABLED, "flash-attn features not enabled");
 
         let cpu_device = Device::Cpu;
         #[cfg(feature = "cuda")]
@@ -588,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_vs_gpu_prefill_alibi() -> Result<(), candle::Error> {
+    fn test_flash_attn_cpu_vs_gpu_prefill_alibi() -> Result<()> {
         skip_test_if!(!candle::utils::cuda_is_available(), "CUDA not available");
         // ALiBi path usually requires flash-attn (not v1) in your earlier tests
         skip_test_if!(
@@ -680,7 +677,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn tensor_distance(cpu_result: &Tensor, gpu_result: &Tensor) -> Result<f32, candle::Error> {
+    fn tensor_distance(cpu_result: &Tensor, gpu_result: &Tensor) -> Result<f32> {
         let diff = cpu_result.sub(gpu_result)?;
         let squared = diff.sqr()?;
         let mean_squared = squared.mean_all()?;
@@ -688,13 +685,13 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_vs_gpu_basic() -> Result<(), candle::Error> {
+    fn test_flash_attn_cpu_vs_gpu_basic() -> Result<()> {
         if !candle::utils::cuda_is_available() {
             println!("Skipping GPU test: CUDA not available");
             return Ok(());
         }
 
-        let flash_attn_enabled = cfg!(any(feature = "flash-attn", feature = "flash-attn-v1"));
+        let flash_attn_enabled = FA_FEATURE_ENABLED;
         if !flash_attn_enabled {
             println!("Skipping GPU comparison test: flash-attn features not enabled");
             return Ok(());
@@ -850,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_gqa() -> Result<(), candle::Error> {
+    fn test_flash_attn_cpu_gqa() -> Result<()> {
         skip_test_if!(!candle::utils::cuda_is_available(), "CUDA not available");
 
         let flash_attn_enabled = cfg!(any(feature = "flash-attn", feature = "flash-attn-v1"));
@@ -946,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_windowing() -> Result<(), candle::Error> {
+    fn test_flash_attn_cpu_windowing() -> Result<()> {
         skip_test_if!(!candle::utils::cuda_is_available(), "CUDA not available");
 
         let flash_attn_enabled = cfg!(feature = "flash-attn");
@@ -1035,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_windowing_patterns() -> Result<(), candle::Error> {
+    fn test_flash_attn_cpu_windowing_patterns() -> Result<()> {
         let device = Device::Cpu;
 
         // Test different windowing patterns
@@ -1089,7 +1086,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flash_attn_cpu_edge_cases() -> Result<(), candle::Error> {
+    fn test_flash_attn_cpu_edge_cases() -> Result<()> {
         let device = Device::Cpu;
 
         // Test empty batch
@@ -1123,7 +1120,7 @@ mod tests {
 
     // below are helper functions for PADDED inference tests
 
-    fn rmse(a: &Tensor, b: &Tensor) -> Result<f32, candle::Error> {
+    fn rmse(a: &Tensor, b: &Tensor) -> Result<f32> {
         let diff = a.sub(b)?;
         let mse = diff.sqr()?.mean_all()?.to_scalar::<f32>()?;
         if mse.is_nan() || mse < 0.0 {
@@ -1133,18 +1130,14 @@ mod tests {
         }
     }
 
-    fn max_abs_diff(a: &Tensor, b: &Tensor) -> Result<f32, candle::Error> {
+    fn max_abs_diff(a: &Tensor, b: &Tensor) -> Result<f32> {
         // Simple + robust for tests: pull to vec and compute max |diff|
         let diff = a.sub(b)?.to_dtype(DType::F32)?;
         let v = diff.flatten_all()?.to_vec1::<f32>()?;
         Ok(v.into_iter().map(|x| x.abs()).fold(0.0f32, f32::max))
     }
 
-    fn repeat_kv_for_gqa(
-        k: &Tensor,
-        v: &Tensor,
-        num_heads: usize,
-    ) -> Result<(Tensor, Tensor), candle::Error> {
+    fn repeat_kv_for_gqa(k: &Tensor, v: &Tensor, num_heads: usize) -> Result<(Tensor, Tensor)> {
         let (total_k, num_kv_heads, head_dim) = k.dims3()?;
         if num_heads == num_kv_heads {
             return Ok((k.clone(), v.clone()));
@@ -1190,7 +1183,7 @@ mod tests {
         window_right: Option<usize>,
         alibi_slopes: Option<&Tensor>,
         device: &Device,
-    ) -> Result<Tensor, candle::Error> {
+    ) -> Result<Tensor> {
         let bsz = seqlens_q.len();
         let slopes = if let Some(s) = alibi_slopes {
             let v = s.to_vec1::<f32>()?;
@@ -1301,7 +1294,7 @@ mod tests {
         causal: bool,
         window_left: Option<usize>,
         window_right: Option<usize>,
-    ) -> Result<Tensor, candle::Error> {
+    ) -> Result<Tensor> {
         let device = q_var.device();
         let (total_q, num_heads, head_dim) = q_var.dims3()?;
         let (_total_k, num_kv_heads, _hd2) = k_var.dims3()?;
@@ -1425,7 +1418,7 @@ mod tests {
     // Convert per-sequence lengths [B] into FlashAttention-style cu_seqlens [B+1]:
     ///   cu[0]=0, cu[i+1]=cu[i]+seqlens[i]
     #[allow(dead_code)]
-    fn seqlens_to_cu_seqlens_tensor(seqlens: &Tensor) -> Result<Tensor, candle::Error> {
+    fn seqlens_to_cu_seqlens_tensor(seqlens: &Tensor) -> Result<Tensor> {
         let device = seqlens.device();
         let lens = seqlens.to_vec1::<u32>()?;
 
@@ -1443,7 +1436,7 @@ mod tests {
 
     /// Max length from a [B] seqlens tensor.
     #[allow(dead_code)]
-    fn max_len_from_seqlens(seqlens: &Tensor) -> Result<usize, candle::Error> {
+    fn max_len_from_seqlens(seqlens: &Tensor) -> Result<usize> {
         let lens = seqlens.to_vec1::<u32>()?;
         Ok(lens.into_iter().max().unwrap_or(0) as usize)
     }
@@ -1456,7 +1449,7 @@ mod tests {
         head_dim: usize,
         max_seq: usize,
         device: &Device,
-    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor, usize, usize), candle::Error> {
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor, usize, usize)> {
         let mut rng = StdRng::seed_from_u64(123);
 
         let mut seqlens_q = Vec::<u32>::with_capacity(batch_size);
@@ -1467,8 +1460,8 @@ mod tests {
         let mut max_k = 0usize;
 
         for _ in 0..batch_size {
-            let lq = rng.gen_range(1..=max_seq);
-            let lk = rng.gen_range(1..=max_seq);
+            let lq = rng.random_range(1..=max_seq);
+            let lk = rng.random_range(1..=max_seq);
             seqlens_q.push(lq as u32);
             seqlens_k.push(lk as u32);
             total_q += lq;
@@ -1478,13 +1471,13 @@ mod tests {
         }
 
         let q_data: Vec<f32> = (0..total_q * num_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let k_data: Vec<f32> = (0..total_k * num_kv_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let v_data: Vec<f32> = (0..total_k * num_kv_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
 
         let q = Tensor::from_vec(q_data, (total_q, num_heads, head_dim), device)?;
@@ -1498,7 +1491,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_noncausal() -> Result<(), candle::Error> {
+    fn test_varlen_matches_padded_reference_noncausal() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
@@ -1553,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_causal() -> Result<(), candle::Error> {
+    fn test_varlen_matches_padded_reference_causal() -> Result<()> {
         let device = Device::Cpu;
         let (_, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
@@ -1610,7 +1603,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_gqa() -> Result<(), candle::Error> {
+    fn test_varlen_matches_padded_reference_gqa() -> Result<()> {
         let device = Device::Cpu;
         // GQA: more Q heads than KV heads
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (3, 12, 4, 64, 64);
@@ -1666,7 +1659,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_alibi() -> Result<(), candle::Error> {
+    fn test_varlen_matches_padded_reference_alibi() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (2, 8, 8, 64, 64);
 
@@ -1727,7 +1720,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_matches_padded_reference_windowing() -> Result<(), candle::Error> {
+    fn test_varlen_matches_padded_reference_windowing() -> Result<()> {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (2, 8, 8, 64, 64);
 
@@ -1784,7 +1777,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_vs_padded_edge_cases() -> Result<(), candle::Error> {
+    fn test_varlen_vs_padded_edge_cases() -> Result<()> {
         let device = Device::Cpu;
 
         // Test edge cases: very short sequences, single tokens, etc.
@@ -1895,7 +1888,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_vs_padded_mixed_lengths() -> Result<(), candle::Error> {
+    fn test_varlen_vs_padded_mixed_lengths() -> Result<()> {
         let device = Device::Cpu;
 
         // Test with highly variable sequence lengths in the same batch
@@ -1916,13 +1909,13 @@ mod tests {
         // Create test data
         let mut rng = StdRng::seed_from_u64(42);
         let q_data: Vec<f32> = (0..total_q * num_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let k_data: Vec<f32> = (0..total_k * num_kv_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let v_data: Vec<f32> = (0..total_k * num_kv_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
 
         let q = Tensor::from_vec(q_data, (total_q, num_heads, head_dim), &device)?;
@@ -2044,7 +2037,7 @@ mod tests {
         head_dim: usize,
         max_seq: usize,
         device: &Device,
-    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor, usize, usize), candle::Error> {
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor, usize, usize)> {
         let mut rng = StdRng::seed_from_u64(123);
 
         let mut seqlens_q = Vec::<u32>::with_capacity(batch_size);
@@ -2055,8 +2048,8 @@ mod tests {
         let mut max_k = 0usize;
 
         for _ in 0..batch_size {
-            let lq = rng.gen_range(1..=max_seq);
-            let lk = rng.gen_range(lq..=max_seq); // ✅ enforce k >= q
+            let lq = rng.random_range(1..=max_seq);
+            let lk = rng.random_range(lq..=max_seq); // ✅ enforce k >= q
             seqlens_q.push(lq as u32);
             seqlens_k.push(lk as u32);
             total_q += lq;
@@ -2066,13 +2059,13 @@ mod tests {
         }
 
         let q_data: Vec<f32> = (0..total_q * num_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let k_data: Vec<f32> = (0..total_k * num_kv_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
         let v_data: Vec<f32> = (0..total_k * num_kv_heads * head_dim)
-            .map(|_| rng.gen_range(-1.0..1.0))
+            .map(|_| rng.random_range(-1.0..1.0))
             .collect();
 
         let q = Tensor::from_vec(q_data, (total_q, num_heads, head_dim), device)?;
@@ -2085,7 +2078,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_vs_padded_different_head_dims() -> Result<(), candle::Error> {
+    fn test_varlen_vs_padded_different_head_dims() -> Result<()> {
         let device = Device::Cpu;
 
         // Test various head dimensions that are commonly used
@@ -2170,7 +2163,7 @@ mod tests {
     }
 
     #[test]
-    fn test_varlen_vs_padded_gqa_variants() -> Result<(), candle::Error> {
+    fn test_varlen_vs_padded_gqa_variants() -> Result<()> {
         let device = Device::Cpu;
 
         // Test various GQA configurations
