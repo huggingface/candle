@@ -1,5 +1,5 @@
 use candle::Result;
-use candle_nn::cpu_varlen_attention::flash_attn_varlen_compat;
+use candle_nn::varlen_attention::flash_attn_varlen_compat;
 
 const FA_FEATURE_ENABLED: bool = false; // flash-attn features not available in this workspace
 // may set to true and import the flash-attn varlen kernels thats missing in candle-nn testing harness.
