@@ -2,19 +2,34 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NodeId(usize);
+
+impl NodeId {
+    fn new() -> Self {
+        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
+        use std::sync::atomic;
+        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LazyStorage {
+    node_id: NodeId,
+    graph: Graph,
     shape: Shape,
     dtype: DType,
-    graph: Graph
 }
 
 impl LazyStorage {
     fn new(shape: Shape, dtype: DType) -> LazyStorage {
         LazyStorage {
+            node_id: NodeId::new(),
+            graph: Default::default(),
             shape,
             dtype,
-            graph: Default::default()
         }
     }
 
@@ -28,6 +43,7 @@ impl LazyStorage {
 // We want to be able to run "deferred eager" before we start working on actual lazy optimizations.
 #[derive(Debug, Clone)]
 enum LazyOp {
+    Const(CpuStorage),
     ToCpu,
     Affine(Layout, f64, f64),
     Powf(Layout, f64),
@@ -359,16 +375,22 @@ impl BackendDevice for LazyDevice {
         Ok(storage)
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, _s: &[T]) -> Result<Self::Storage> {
-        todo!()
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+        let s = T::to_cpu_storage(s);
+        self.storage_from_cpu_storage_owned(s)
     }
 
-    fn storage_from_cpu_storage(&self, _storage: &CpuStorage) -> Result<Self::Storage> {
-        todo!()
+    fn storage_from_cpu_storage(&self, s: &CpuStorage) -> Result<Self::Storage> {
+        self.storage_from_cpu_storage_owned(s.clone())
     }
 
-    fn storage_from_cpu_storage_owned(&self, _storage: CpuStorage) -> Result<Self::Storage> {
-        todo!()
+    fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<Self::Storage> {
+        let shape = Shape::from(s.len());
+        let dtype = s.dtype();
+        let mut storage = unsafe { self.alloc_uninit(&shape, dtype)? };
+        let op = LazyOp::Const(s);
+        storage.graph_mut().push_node(op);
+        Ok(storage)
     }
 
     fn rand_uniform(

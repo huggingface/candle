@@ -1541,6 +1541,25 @@ impl CpuStorage {
         D::cpu_storage_as_slice(self)
     }
 
+    pub fn len(&self) -> usize {
+        match self {
+            Self::U8(s) => s.len(),
+            Self::U32(s) => s.len(),
+            Self::I16(s) => s.len(),
+            Self::I32(s) => s.len(),
+            Self::I64(s) => s.len(),
+            Self::BF16(s) => s.len(),
+            Self::F16(s) => s.len(),
+            Self::F32(s) => s.len(),
+            Self::F64(s) => s.len(),
+            Self::F8E4M3(s) => s.len(),
+            Self::F6E2M3(s) => s.len(),
+            Self::F6E3M2(s) => s.len(),
+            Self::F4(s) => s.len(),
+            Self::F8E8M0(s) => s.len()
+        }
+    }
+
     pub fn concat(storages: &[CpuStorage]) -> Result<CpuStorage> {
         let storage0 = &storages[0];
         let s = match storage0 {
