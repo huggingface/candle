@@ -16,6 +16,30 @@ pub enum Storage {
     Lazy(LazyStorage),
 }
 
+impl From<CpuStorage> for Storage {
+    fn from(s: CpuStorage) -> Storage {
+        Storage::Cpu(s)
+    }
+}
+
+impl From<CudaStorage> for Storage {
+    fn from(s: CudaStorage) -> Storage {
+        Storage::Cuda(s)
+    }
+}
+
+impl From<MetalStorage> for Storage {
+    fn from(s: MetalStorage) -> Storage {
+        Storage::Metal(s)
+    }
+}
+
+impl From<LazyStorage> for Storage {
+    fn from(s: LazyStorage) -> Storage {
+        Storage::Lazy(s)
+    }
+}
+
 impl Storage {
     pub fn try_clone(&self, layout: &Layout) -> Result<Self> {
         match self {
@@ -865,10 +889,8 @@ impl Storage {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
-            (Self::Metal(src), Self::Metal(dst)) => {
-                Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
-            }
-            (Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Metal(src), Self::Metal(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
+            (Self::Lazy(src), Self::Lazy(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
