@@ -1,7 +1,6 @@
 //! Tensor ops.
 //!
-
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{CpuStorage, op::BackpropOp, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -616,6 +615,25 @@ impl candle::CustomOp2 for RmsNorm {
         .map_err(candle::Error::wrap)?;
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
+    }
+
+    fn lazy_fwd(
+        &self,
+        s1: &candle::LazyStorage,
+        l1: &Layout,
+        s2: &candle::LazyStorage,
+        l2: &Layout,
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let x = Tensor::from_storage(s1.clone().into(), l1.shape(), BackpropOp::none(), false);
+        let alpha = Tensor::from_storage(s2.clone().into(), l2.shape(), BackpropOp::none(), false);
+        let result = rms_norm_slow(&x, &alpha, self.eps)?;
+        let (storage, layout) = result.storage_and_layout();
+        let storage = storage.try_clone(layout)?;
+        let inner = match storage {
+            candle::Storage::Lazy(lazy) => lazy,
+            _ => unreachable!()
+        };
+        Ok((inner, layout.shape().clone()))
     }
 }
 
