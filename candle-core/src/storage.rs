@@ -40,7 +40,7 @@ impl Storage {
             Self::Cpu(_) => Device::Cpu,
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
             Self::Metal(storage) => Device::Metal(storage.device().clone()),
-            Self::Lazy(_storage) => todo!(), //Device::Lazy(storage.device().clone()),
+            Self::Lazy(storage) => Device::Lazy(storage.device().clone()),
         }
     }
 
@@ -808,7 +808,10 @@ impl Storage {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
                 Ok(Self::Metal(storage))
             }
-            (Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(lhs), Self::Lazy(rhs)) =>  {
+                let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
+                Ok(Self::Lazy(storage))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -840,7 +843,10 @@ impl Storage {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
             }
-            (Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(lhs), Self::Lazy(rhs)) => {
+                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                Ok(Self::Lazy(storage))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
