@@ -335,7 +335,7 @@ impl Storage {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Metal(s), shape))
             }
-            (Self::Lazy(_s1), Self::Lazy(_s2), Self::Lazy(_s3)) => {
+            (Self::Lazy(s1), Self::Lazy(s2), Self::Lazy(s3)) => {
                 let (s, shape) = c.lazy_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Lazy(s), shape))
             }
