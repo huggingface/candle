@@ -274,6 +274,7 @@ impl Tensor {
                     Device::Metal(_) => {
                         return Err(Error::Msg("Metal support not compiled".to_string()));
                     }
+                    Device::Lazy(device) => todo!()
                 };
 
                 let op = BackpropOp::none();
@@ -370,6 +371,7 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         Device::Metal(_) => {
             return Err(Error::Msg("Metal support not compiled".to_string()));
         }
+        Device::Lazy(device) => todo!()
     };
 
     // Create tensor with correct dtype
