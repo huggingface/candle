@@ -6,7 +6,7 @@ use float8::F8E4M3 as f8e4m3;
 use half::{bf16, f16};
 use num_traits::float::Float;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {
     Eq,
     Ne,

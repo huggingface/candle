@@ -6,6 +6,66 @@ use crate::{CpuStorage, DType, Layout, Result, Shape};
 pub struct LazyStorage {
     shape: Shape,
     dtype: DType,
+    graph: Graph
+}
+
+impl LazyStorage {
+    fn new(shape: Shape, dtype: DType) -> LazyStorage {
+        LazyStorage {
+            shape,
+            dtype,
+            graph: Default::default()
+        }
+    }
+
+    fn graph_mut(&mut self) -> &mut Graph {
+        &mut self.graph
+    }
+}
+
+
+// Very much WIP.
+// We want to be able to run "deferred eager" before we start working on actual lazy optimizations.
+#[derive(Debug, Clone)]
+enum LazyOp {
+    ToCpu,
+    Affine(Layout, f64, f64),
+    Powf(Layout, f64),
+    Elu(Layout, f64),
+    Reduce(ReduceOp, Layout, Vec<usize>),
+    Cmp(CmpOp, LazyStorage, Layout, Layout),
+    ToDType(Layout, DType),
+    Unary(Layout, &'static str),
+    Binary(Layout, LazyStorage, Layout, &'static str),
+    WhereCond(Layout, LazyStorage, Layout, LazyStorage, Layout),
+    Conv1D(Layout, LazyStorage, Layout, crate::conv::ParamsConv1D),
+    ConvTranspose1D(Layout, LazyStorage, Layout, crate::conv::ParamsConvTranspose1D),
+    Conv2D(Layout, LazyStorage, Layout, crate::conv::ParamsConv2D),
+    ConvTranspose2D(Layout, LazyStorage, Layout, crate::conv::ParamsConvTranspose2D),
+    AvgPool2D(Layout, (usize, usize), (usize, usize)),
+    MaxPool2D(Layout, (usize, usize), (usize, usize)),
+    UpsampleNearest1D(Layout, usize),
+    UpsampleNearest2D(Layout, usize, usize),
+    Gather(Layout, LazyStorage, Layout, usize),
+    ScatterSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
+    ScatterAddSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
+    IndexSelect(Layout, LazyStorage, Layout, usize),
+    IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
+    Matmul(LazyStorage, (usize, usize, usize, usize), Layout, Layout),
+    CopyStridedSrc(LazyStorage, usize, Layout),
+    Copy2D(LazyStorage, usize, usize, usize, usize, usize, usize),
+    ConstSet(crate::scalar::Scalar, Layout)
+}
+
+#[derive(Debug, Clone, Default)]
+struct Graph {
+    operations: Vec<LazyOp>
+}
+
+impl Graph {
+    fn push_node(&mut self, op: LazyOp) {
+        self.operations.push(op)
+    }
 }
 
 impl BackendStorage for LazyStorage {
@@ -23,174 +83,249 @@ impl BackendStorage for LazyStorage {
         &LazyDevice
     }
 
-    // Maybe this should return a Cow instead so that no copy is done on the cpu case.
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        let mut next = self.clone();
+        next.graph_mut().push_node(LazyOp::ToCpu);
         todo!()
     }
 
-    fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self> {
-        todo!()
+    fn affine(&self, l: &Layout, mul: f64, add: f64) -> Result<Self> {
+        let op = LazyOp::Affine(l.clone(), mul, add);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn powf(&self, _: &Layout, _: f64) -> Result<Self> {
-        todo!()
+    fn powf(&self, l: &Layout, pow: f64) -> Result<Self> {
+        let op = LazyOp::Powf(l.clone(), pow);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn elu(&self, _: &Layout, _: f64) -> Result<Self> {
-        todo!()
+    fn elu(&self, l: &Layout, alpha: f64) -> Result<Self> {
+        let op = LazyOp::Elu(l.clone(), alpha);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn reduce_op(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
-        todo!()
+    fn reduce_op(&self, reduce: ReduceOp, l: &Layout, dims: &[usize]) -> Result<Self> {
+        let op = LazyOp::Reduce(reduce, l.clone(), dims.to_vec());
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
-        todo!()
+    fn cmp(&self, cmp_op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
+        let op = LazyOp::Cmp(cmp_op, rhs.clone(), lhs_l.clone(), rhs_l.clone());
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn to_dtype(&self, _: &Layout, _: DType) -> Result<Self> {
-        todo!()
+    fn to_dtype(&self, l: &Layout, dtype: DType) -> Result<Self> {
+        let op = LazyOp::ToDType(l.clone(), dtype);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn unary_impl<B: UnaryOpT>(&self, _: &Layout) -> Result<Self> {
-        todo!()
+    fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
+        let op = LazyOp::Unary(l.clone(), B::KERNEL);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn binary_impl<B: BinaryOpT>(&self, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
-        todo!()
+    fn binary_impl<B: BinaryOpT>(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
+        let op = LazyOp::Binary(lhs_l.clone(), rhs.clone(), rhs_l.clone(), B::KERNEL);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn where_cond(&self, _: &Layout, _: &Self, _: &Layout, _: &Self, _: &Layout) -> Result<Self> {
-        todo!()
+    fn where_cond(&self, l: &Layout, t: &Self, t_l: &Layout, f: &Self, f_l: &Layout) -> Result<Self> {
+        let op = LazyOp::WhereCond(l.clone(), t.clone(), t_l.clone(), f.clone(), f_l.clone());
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
     fn conv1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
-        todo!()
+        let op = LazyOp::Conv1D(l.clone(), kernel.clone(), kernel_l.clone(), params.clone());
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
     fn conv_transpose1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConvTranspose1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
-        todo!()
+        let op = LazyOp::ConvTranspose1D(l.clone(), kernel.clone(), kernel_l.clone(), params.clone());
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
     fn conv2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        todo!()
+        let op = LazyOp::Conv2D(l.clone(), kernel.clone(), kernel_l.clone(), params.clone());
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
     fn conv_transpose2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConvTranspose2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self> {
-        todo!()
+        let op = LazyOp::ConvTranspose2D(l.clone(), kernel.clone(), kernel_l.clone(), params.clone());
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        todo!()
+    fn avg_pool2d(&self, l: &Layout, (w_k, h_k): (usize, usize), (w_stride, h_stride): (usize, usize)) -> Result<Self> {
+        let op = LazyOp::AvgPool2D(l.clone(), (w_k, h_k), (w_stride, h_stride));
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        todo!()
-    }
-    fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
-        todo!()
-    }
-    fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
-        todo!()
+    fn max_pool2d(&self, l: &Layout, (w_k, h_k): (usize, usize), (w_stride, h_stride): (usize, usize)) -> Result<Self> {
+        let op = LazyOp::MaxPool2D(l.clone(), (w_k, h_k), (w_stride, h_stride));
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self> {
-        todo!()
+    fn upsample_nearest1d(&self, l: &Layout, sz: usize) -> Result<Self> {
+        let op = LazyOp::UpsampleNearest1D(l.clone(), sz);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
+    }
+
+    fn upsample_nearest2d(&self, l: &Layout, out_w: usize, out_h: usize) -> Result<Self> {
+        let op = LazyOp::UpsampleNearest2D(l.clone(), out_w, out_h);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
+    }
+
+    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
+        let op = LazyOp::Gather(l.clone(), ids.clone(), ids_l.clone(), dim);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
     fn scatter_set(
         &mut self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()> {
-        todo!()
+        let op = LazyOp::ScatterSet(l.clone(), ids.clone(), ids_l.clone(), src.clone(), src_l.clone(), dim);
+        self.graph_mut().push_node(op);
+        Ok(())
     }
 
     fn scatter_add_set(
         &mut self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()> {
-        todo!()
+        let op = LazyOp::ScatterAddSet(l.clone(), ids.clone(), ids_l.clone(), src.clone(), src_l.clone(), dim);
+        self.graph_mut().push_node(op);
+        Ok(())
     }
 
-    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
-        todo!()
+    fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
+        let op = LazyOp::IndexSelect(src_l.clone(), ids.clone(), ids_l.clone(), dim);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
+
     fn index_add(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self> {
-        todo!()
+        let op = LazyOp::IndexAdd(l.clone(), ids.clone(), ids_l.clone(), src.clone(), src_l.clone(), dim);
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
     fn matmul(
         &self,
-        _: &Self,
-        _: (usize, usize, usize, usize),
-        _: &Layout,
-        _: &Layout,
+        rhs: &Self,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
     ) -> Result<Self> {
-        todo!()
+        let op = LazyOp::Matmul(rhs.clone(), (b, m, n, k), lhs_l.clone(), rhs_l.clone());
+        let mut next = self.clone();
+        next.graph_mut().push_node(op);
+        Ok(next)
     }
 
-    fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
-        todo!()
+    fn copy_strided_src(&self, rhs: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
+        let op = LazyOp::CopyStridedSrc(self.clone(), dst_offset, src_l.clone());
+        rhs.graph_mut().push_node(op);
+        Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    // Similar to cudaMemcpy2D, though values are in elements and not in bytes.
     fn copy2d(
         &self,
-        _: &mut Self,
-        _d1: usize,
-        _d2: usize,
-        _src_stride1: usize,
-        _dst_stride1: usize,
-        _src_offset: usize,
-        _dst_offset: usize,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
     ) -> Result<()> {
-        todo!()
+        let op = LazyOp::Copy2D(self.clone(), d1, d2, src_s, dst_s, src_o, dst_o);
+        dst.graph_mut().push_node(op);
+        Ok(())
     }
 
-    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
-        todo!()
+    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        let op = LazyOp::ConstSet(s, l.clone());
+        self.graph_mut().push_node(op);
+        Ok(())
     }
 }
 
@@ -215,11 +350,13 @@ impl BackendDevice for LazyDevice {
     }
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        Ok(LazyStorage { shape: shape.clone(), dtype })
+        Ok(LazyStorage::new(shape.clone(), dtype))
     }
 
-    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
-        todo!()
+    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+        let mut storage = unsafe { self.alloc_uninit(shape, dtype)? };
+        storage.const_set(crate::scalar::Scalar::zero(dtype), &Layout::contiguous(shape.clone()))?;
+        Ok(storage)
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, _s: &[T]) -> Result<Self::Storage> {
