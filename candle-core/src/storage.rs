@@ -279,10 +279,9 @@ impl Storage {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
                 Ok((Self::Metal(s), shape))
             }
-            (Self::Lazy(_s1), Self::Lazy(_s2)) => {
-                // let (s, shape) = c.lazy_fwd(s1, l1, s2, l2)?;
-                // Ok((Self::Lazy(s), shape))
-                todo!()
+            (Self::Lazy(s1), Self::Lazy(s2)) => {
+                let (s, shape) = c.lazy_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Lazy(s), shape))
             }
             _ => unreachable!(),
         }
