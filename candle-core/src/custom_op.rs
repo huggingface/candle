@@ -152,6 +152,21 @@ pub trait CustomOp3 {
         ))
     }
 
+    /// The forward pass tracked in the lazy backend
+    fn lazy_fwd(
+        &self,
+        _: &LazyStorage,
+        _: &Layout,
+        _: &LazyStorage,
+        _: &Layout,
+        _: &LazyStorage,
+        _: &Layout,
+    ) -> Result<(LazyStorage, Shape)> {
+        Err(crate::Error::Msg(
+            format!("no lazy implementation for {}", self.name()).into(),
+        ))
+    }
+
     fn bwd(
         &self,
         _arg1: &Tensor,
