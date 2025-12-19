@@ -92,7 +92,17 @@ impl BackendStorage for LazyStorage {
     }
 
     fn dtype(&self) -> DType {
-        self.dtype
+        let mut dtype_head = self.dtype;
+        for op in self.graph.operations.iter().rev() {
+            match op {
+                LazyOp::ToDType(_, dtype) => {
+                    dtype_head = *dtype;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        dtype_head
     }
 
     fn device(&self) -> &Self::Device {
