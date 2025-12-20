@@ -3,12 +3,14 @@ use crate::{
     utils::repeat_kv,
 };
 use candle::{DType, Device, Module, Result, Tensor};
-use candle_nn::attention::{flash_attn, AttnMask};
 use candle_nn::{kv_cache::ConcatKvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
 #[cfg(feature = "flash-attn")]
 use candle_flash_attn;
+
+#[cfg(not(feature = "flash-attn"))]
+use candle_nn::attention::{flash_attn, AttnMask};
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
@@ -210,8 +212,8 @@ impl Qwen3Attention {
             .reshape((b, l, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        // 3. Per‑head RMSNorm
-        let q_flat = q.flatten(0, 2)?; // (B*H, L, D) -> (BHL, D) after transpose later
+        // 3. Per-head RMSNorm
+        let q_flat = q.flatten(0, 2)?;
         let k_flat = k.flatten(0, 2)?;
         let q_flat = self.q_norm.forward(&q_flat)?;
         let k_flat = self.k_norm.forward(&k_flat)?;
@@ -224,15 +226,27 @@ impl Qwen3Attention {
         // 5. Accumulate KV cache
         let (k, v) = self.kv_cache.append(&k, &v)?;
 
-        if self.use_flash_attn || l == 1 {
-            // Flash attention path - only used during prefill (offset == 0)
+        // 6. Attention dispatch based on device and features
+        let on_cpu = x.device().is_cpu();
+
+        if on_cpu {
+            if self.use_flash_attn {
+                // CPU with flash flag: use optimized CPU flash attention
+                self.forward_cpu_flash_attn(&q, &k, &v, offset, b, l)
+            } else {
+                // CPU without flash flag: use standard matmul (for comparison/testing)
+                self.forward_standard_attn(&q, &k, &v, attn_mask, b, l)
+            }
+        } else if self.use_flash_attn {
+            // GPU with flash-attn flag: use GPU flash attention
             self.forward_flash_attn(&q, &k, &v, offset, b, l)
         } else {
-            // Standard attention path - used during decode or when flash attn is disabled
+            // GPU without flash-attn: use standard matmul attention
             self.forward_standard_attn(&q, &k, &v, attn_mask, b, l)
         }
     }
 
+    /// GPU flash attention path (requires flash-attn feature)
     #[cfg(feature = "flash-attn")]
     fn forward_flash_attn(
         &self,
@@ -256,8 +270,26 @@ impl Qwen3Attention {
         ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
     }
 
+    /// Fallback when flash-attn feature not enabled but use_flash_attn was requested
     #[cfg(not(feature = "flash-attn"))]
     fn forward_flash_attn(
+        &self,
+        _q: &Tensor,
+        _k: &Tensor,
+        _v: &Tensor,
+        _offset: usize,
+        _b: usize,
+        _l: usize,
+    ) -> Result<Tensor> {
+        candle::bail!(
+            "use_flash_attn=true requires compiling with --features flash-attn. \
+             For CPU, omit --use-flash-attn flag to use optimized CPU attention."
+        )
+    }
+
+    /// CPU flash attention - optimized fused kernel for CPU
+    #[cfg(not(feature = "flash-attn"))]
+    fn forward_cpu_flash_attn(
         &self,
         q: &Tensor,
         k: &Tensor,
@@ -273,7 +305,6 @@ impl Qwen3Attention {
 
         let scale = 1.0 / (self.head_dim as f32).sqrt();
 
-        // Call CPU flash attention based on dtype
         let ctx = match q.dtype() {
             DType::F32 => flash_attn::<f32>(
                 &q,
@@ -314,10 +345,26 @@ impl Qwen3Attention {
         // Output from CPU flash attention is (B, H, S, D), transpose to (B, S, H, D)
         let ctx = ctx.transpose(1, 2)?;
 
-        // Reshape and apply output projection
         ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
     }
 
+    /// Stub for when flash-attn is enabled (CPU path not needed)
+    #[cfg(feature = "flash-attn")]
+    fn forward_cpu_flash_attn(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        _offset: usize,
+        b: usize,
+        l: usize,
+    ) -> Result<Tensor> {
+        // When flash-attn feature is enabled, fall back to standard attention for CPU
+        // This path is rarely hit since GPU is typically used with flash-attn
+        self.forward_standard_attn(q, k, v, None, b, l)
+    }
+
+    /// Standard matmul-based attention (works on any device)
     fn forward_standard_attn(
         &self,
         q: &Tensor,
@@ -327,11 +374,11 @@ impl Qwen3Attention {
         b: usize,
         l: usize,
     ) -> Result<Tensor> {
-        // 6. GQA repeat_kv
+        // GQA repeat_kv
         let k = repeat_kv(k.clone(), self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v.clone(), self.num_kv_groups)?.contiguous()?;
 
-        // 7. Attention score
+        // Attention score
         let scale = 1.0 / (self.head_dim as f64).sqrt();
         let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
         if let Some(m) = attn_mask {
@@ -340,7 +387,7 @@ impl Qwen3Attention {
         let probs = candle_nn::ops::softmax_last_dim(&scores)?;
         let ctx = probs.matmul(&v)?; // (B, H, L, D)
 
-        // 8. Output proj
+        // Output proj
         ctx.transpose(1, 2)?
             .reshape((b, l, self.hidden_size))?
             .apply(&self.o_proj)
@@ -458,10 +505,13 @@ impl Model {
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
 
-        let causal = if l == 1 || self.use_flash_attn {
-            None
-        } else {
+        // Build causal mask for standard attention path
+        // Flash attention (CPU or GPU) handles masking internally
+        let needs_mask = !self.use_flash_attn && l > 1;
+        let causal = if needs_mask {
             Some(self.causal_mask(b, l, offset, None)?)
+        } else {
+            None
         };
 
         for layer in &mut self.layers {
