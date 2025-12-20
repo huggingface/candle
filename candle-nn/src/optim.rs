@@ -53,7 +53,7 @@ struct VarSGD {
 
 /// Optimizer for Stochastic Gradient Descent.
 /// By Default,the update rule of SGD is
-/// ```
+/// ```tex
 /// \theta_{t+1} = \theta_{t} - \eta \cdot g_{t}
 /// ```
 /// # momentum
@@ -61,7 +61,7 @@ struct VarSGD {
 /// updates in consistent directions and dampen oscillations.
 ///
 /// you can specify the momentum by `momentum = Some(mu)`
-/// ```
+/// ```tex
 /// v_t = \mu * v_{t-1} + g_t
 /// \theta_t = \theta_{t-1} - lr * v_t
 /// ```
@@ -70,7 +70,7 @@ struct VarSGD {
 /// at a predicted future position, rather than the current position.
 ///
 /// you can specify the momentum by `nesterov = true`
-/// ```
+/// ```tex
 /// v_t = \mu * v_{t-1} + g_t
 /// \theta_t = \theta_{t-1} - lr * (g_t + \mu * v_{t-1})
 /// ```
