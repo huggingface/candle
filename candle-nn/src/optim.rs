@@ -28,54 +28,135 @@ pub trait Optimizer: Sized {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ParamsSGD {
+    pub lr: f64,
+    pub momentum: Option<f64>,
+    pub nesterov: bool,
+}
+
+impl Default for ParamsSGD {
+    fn default() -> Self {
+        Self {
+            lr: 0.01,
+            momentum: None,
+            nesterov: false,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct VarSGD {
+    var: Var,
+    velocity: Option<Var>,
+}
+
 /// Optimizer for Stochastic Gradient Descent.
+/// By Default,the update rule of SGD is
+/// ```
+/// \theta_{t+1} = \theta_{t} - \eta \cdot g_{t}
+/// ```
+/// # momentum
+/// Momentum accumulates a moving average of past gradients to accelerate
+/// updates in consistent directions and dampen oscillations.
 ///
-/// Contrary to the PyTorch implementation of SGD, this version does not support momentum.
+/// you can specify the momentum by `momentum = Some(mu)`
+/// ```
+/// v_t = \mu * v_{t-1} + g_t
+/// \theta_t = \theta_{t-1} - lr * v_t
+/// ```
+/// # Nesterov
+/// Nesterov momentum improves upon standard momentum by computing the gradient
+/// at a predicted future position, rather than the current position.
+///
+/// you can specify the momentum by `nesterov = true`
+/// ```
+/// v_t = \mu * v_{t-1} + g_t
+/// \theta_t = \theta_{t-1} - lr * (g_t + \mu * v_{t-1})
+/// ```
 #[derive(Debug)]
 pub struct SGD {
-    vars: Vec<Var>,
-    learning_rate: f64,
+    vars: Vec<VarSGD>,
+    params: ParamsSGD,
 }
 
 impl Optimizer for SGD {
-    type Config = f64;
+    type Config = ParamsSGD;
 
-    fn new(vars: Vec<Var>, learning_rate: f64) -> Result<Self> {
+    fn new(vars: Vec<Var>, params: ParamsSGD) -> Result<Self> {
         let vars = vars
             .into_iter()
             .filter(|var| var.dtype().is_float())
-            .collect();
-        Ok(Self {
-            vars,
-            learning_rate,
-        })
+            .map(|v| {
+                let velocity = params
+                    .momentum
+                    .map(|_| Var::zeros(v.shape(), v.dtype(), v.device()))
+                    .transpose()?;
+                Ok(VarSGD { var: v, velocity })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { vars, params })
     }
 
     fn learning_rate(&self) -> f64 {
-        self.learning_rate
-    }
-
-    fn step(&mut self, grads: &candle::backprop::GradStore) -> Result<()> {
-        for var in self.vars.iter() {
-            if let Some(grad) = grads.get(var) {
-                var.set(&var.sub(&(grad * self.learning_rate)?)?)?;
-            }
-        }
-        Ok(())
+        self.params.lr
     }
 
     fn set_learning_rate(&mut self, lr: f64) {
-        self.learning_rate = lr
+        self.params.lr = lr
+    }
+
+    fn step(&mut self, grads: &candle::backprop::GradStore) -> Result<()> {
+        let lr = self.params.lr;
+        for var in self.vars.iter_mut() {
+            let theta = &var.var;
+            if let Some(g) = grads.get(theta) {
+                match (&mut var.velocity, self.params.momentum) {
+                    (None, None) => {
+                        let next = theta.sub(&(g * lr)?)?;
+                        theta.set(&next)?;
+                    }
+                    (Some(v), Some(mu)) => {
+                        let buf = v.as_tensor();
+                        let next_v = ((buf * mu)? + g)?;
+                        v.set(&next_v)?;
+
+                        let update = if self.params.nesterov {
+                            (g + buf * mu)?
+                        } else {
+                            next_v
+                        };
+
+                        let next_theta = theta.sub(&(update * lr)?)?;
+                        theta.set(&next_theta)?;
+                    }
+                    _ => {
+                        unreachable!("velocity and momentum must be consistent")
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
 impl SGD {
     pub fn into_inner(self) -> Vec<Var> {
-        self.vars
+        self.vars.into_iter().map(|v| v.var).collect()
     }
 
-    pub fn push(&mut self, var: &Var) {
-        self.vars.push(var.clone())
+    pub fn push(&mut self, var: &Var) -> Result<()> {
+        let velocity = self
+            .params
+            .momentum
+            .map(|_| Var::zeros(var.shape(), var.dtype(), var.device()))
+            .transpose()?;
+
+        self.vars.push(VarSGD {
+            var: var.clone(),
+            velocity,
+        });
+        Ok(())
     }
 }
 
