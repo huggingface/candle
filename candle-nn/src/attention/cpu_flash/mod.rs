@@ -43,39 +43,15 @@ where
     match attn_mask {
         AttnMask::Causal { kv_offset } => {
             // Optimized path: loop-bound causal masking
-            causal::run_causal_attn_cpu::<T>(
-                q,
-                k,
-                v,
-                softmax_scale,
-                kv_offset,
-                max_bias,
-                softcap,
-            )
+            causal::run_causal_attn_cpu::<T>(q, k, v, softmax_scale, kv_offset, max_bias, softcap)
         }
         AttnMask::None => {
             // No masking
-            standard::run_flash_attn_cpu::<T>(
-                q,
-                k,
-                v,
-                None,
-                softmax_scale,
-                max_bias,
-                softcap,
-            )
+            standard::run_flash_attn_cpu::<T>(q, k, v, None, softmax_scale, max_bias, softcap)
         }
         AttnMask::Mask(mask) => {
             // Explicit mask tensor
-            standard::run_flash_attn_cpu::<T>(
-                q,
-                k,
-                v,
-                Some(mask),
-                softmax_scale,
-                max_bias,
-                softcap,
-            )
+            standard::run_flash_attn_cpu::<T>(q, k, v, Some(mask), softmax_scale, max_bias, softcap)
         }
     }
 }
