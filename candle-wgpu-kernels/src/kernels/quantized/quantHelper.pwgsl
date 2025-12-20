@@ -1,6 +1,6 @@
 #ifdef f32
-#include "util.pwgsl"
-
+#define QUANTIZED
+#include "../util.pwgsl"
 #ifndef D_SIZE
     #define D_SIZE 2
 #endif
@@ -8,32 +8,9 @@
     #define D_OFFSET 0
 #endif
 
-#definec DATA_SIZE (BIT_SIZE*BLOCK_SIZE/16)
+//TODO: Why /16 ?
+#definec DATA_SIZE (BIT_SIZE*BLOCK_SIZE/16) 
 
-// fn select(d : bool, value : u32, other : u32) -> u32{
-//     if d{
-//         return value;
-//     }
-//     else{
-//         return other;
-//     }
-// }
-
-
-#define DTYPE f32
-#define ZERO 0.0
-
-@group(0) @binding(0)
-var<storage, read_write> v_dest: array<f32>;
-
-@group(0) @binding(1)
-var<storage> op_meta : array<u32>;
-
-@group(0) @binding(2) var<storage, read> v_input_u32: array<u32>;
-
-@group(0) @binding(2) var<storage, read> v_input1: array<DTYPE>;
-
-@group(0) @binding(3) var<storage, read> quantizedBlocks: array<u32>;
 
 #define M_OFFSET_SIZE 0
 #ifdef M_OFFSET
@@ -43,9 +20,25 @@ var<storage> op_meta : array<u32>;
     #define BSUMS_SIZE 0
 #endif
 
-#ifndef BLOCK_BYTE_SIZE
-    #definec BLOCK_BYTE_SIZE (BLOCK_SIZE * BIT_SIZE) / 8 + M_OFFSET_SIZE + D_SIZE + BSUMS_SIZE
+#ifndef HEADER_BYTE_SIZE
+    #definec HEADER_BYTE_SIZE M_OFFSET_SIZE + D_SIZE + BSUMS_SIZE
 #endif
+
+#ifndef BLOCK_BYTE_SIZE
+    #definec BLOCK_BYTE_SIZE (BLOCK_SIZE * BIT_SIZE) / 8 + HEADER_BYTE_SIZE
+#endif
+
+#define load_u32(data, idx) (data[idx])
+#define load_data(data,idx,bit_mask) (data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask
+#define load_i8(data,idx,bit_mask) i32(((data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask) << 24) >> 24
+
+#ifndef TID_SIZE
+    #define TID_SIZE 8
+#endif
+#definec VALUES_PER_THREAD BLOCK_SIZE / TID_SIZE
+
+#definec INVERSE_BIT_SIZE 32 - BIT_SIZE
+#definec BLOCK_SIZE_MINUS_1 BLOCK_SIZE - 1
 
 override CONSTV_0 : bool = true;
 override CONSTV_1 : bool = true;
@@ -67,21 +60,28 @@ override CONSTV_2 : bool = true;
 
 #define op_matmul_use_batch   CONSTV_2
 
-
+#define load_u32(data, idx) (data[idx])
 #define load_data(data,idx,bit_mask) (data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask
 #define load_i8(data,idx,bit_mask) i32(((data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask) << 24) >> 24
 
 #define op_dequantize_size               op_meta[0]
+
+#ifndef SGEMM
 @compute @workgroup_size(64,1,1)
 fn dequantize_block_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let block_index = global_id.x;
     if(block_index < (op_dequantize_size / BLOCK_SIZE)){
-        #define data v_input_u32
         #define CALLBACK(idx,value) v_dest[idx + block_index * BLOCK_SIZE] = value;
-        #include "dequantize_block_Helper.pwgsl"
+        LOAD_HEADER(v_input1_u32)
+
+        for(var tid = 0u; tid < TID_SIZE; tid += 1u){
+            LOAD_SINGLE(v_input1_u32, tid, VALUES_PER_THREAD)
+        }
     }
 }
+#endif
 
+#ifndef SGEMM
 @compute @workgroup_size(16,16,1)
 fn matmul_naive_block(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = global_id.x;
@@ -111,43 +111,15 @@ fn matmul_naive_block(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var k = 0u; k < op_matmul_k; k+=u32(BLOCK_SIZE)){
         let block_index = blk+m_input2_offset ;
         #define CALLBACK(idx,value) sum += v_input1[op_matmul_input1_stride_k * (k + (idx)) + m_input1_offset] * (value);
-        #define data quantizedBlocks
-        #include "dequantize_block_Helper.pwgsl"
+        LOAD_HEADER(v_input2_u32)
+
+        for(var tid = 0u; tid < TID_SIZE; tid += 1u){
+            LOAD_SINGLE(v_input2_u32, tid, VALUES_PER_THREAD)
+        }
+
         blk += 1u;
     }
     v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
 }
-
-// @compute @workgroup_size(16,16,1)
-// fn matmul_naive(@builtin(global_invocation_id) global_id: vec3<u32>) {
-//     let x = global_id.x;
-//     let y = global_id.y;
-//     let b = global_id.z;
-
-//     if(x >= op_matmul_n){
-//         return;
-//     }
-//     if(y >= op_matmul_m){
-//         return;
-//     }
-
-//     let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n, op_matmul_use_batch); 
-
-//     let input1_offset = op_matmul_input1_offset;
-//     let input2_offset = op_matmul_input2_offset;
-
-//     let input1_stride_b = select(0u, op_matmul_input1_stride_b, op_matmul_use_batch); 
-//     let input2_stride_b = select(0u, op_matmul_k * op_matmul_n, op_matmul_use_batch); 
-    
-//     let m_input1_offset = input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b;
-//     let m_input2_offset = input2_offset + op_matmul_k * x + b * op_matmul_k * op_matmul_n;
-
-//     var sum = ZERO;
-//     for (var i = 0u; i < op_matmul_k; i++){
-//         sum += v_input1[op_matmul_input1_stride_k * i + m_input1_offset] *
-//                 dequantized_single2(i + m_input2_offset);
-//     }
-    
-//     v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
-// }
+#endif
 #endif

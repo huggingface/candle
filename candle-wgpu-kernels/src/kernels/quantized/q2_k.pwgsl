@@ -15,5 +15,119 @@
 
 #define TS 1
 #define WGS 1
+#define TID_SIZE 1
+
+#pp_begin LOAD_HEADER(data)
+let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
+let block_qs_byte = block_starting_byte + QS_OFFSET;
+
+// single header word load (contains header bytes and possibly first data bytes)
+let block_starting_word = block_starting_byte / 4u;
+let sc_offset = block_starting_byte+SCALES_OFFSET;
+let sc_word_index = sc_offset / 4u;
+//let w0 = load_u32(data, sc_word_index + 0u); 
+//let w1 = load_u32(data, sc_word_index + 1u);
+//let w2 = load_u32(data, sc_word_index + 2u); 
+//let w3 = load_u32(data, sc_word_index + 3u);
+let header_data1 = load_u32(data, block_starting_word + D_OFFSET / 4u);
+let d = half_to_float(header_data1 & 0xFFFF);
+let dmin = half_to_float((header_data1 >> 16) & 0xFFFF);
+#pp_end
+
+#pp_begin LOAD_SINGLE (data,tid, VALUES_PER_THREAD)
+    let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
+    let loads_per_thread = (VALUES_PER_THREAD / 4u); //we load 4 values (u32) at the same time
+    let a = tid * loads_per_thread;
+    let start = block_qs_byte / 4u + a;
+    var is = 0u;
+    let sc_offset = block_starting_byte+SCALES_OFFSET;
+    var y_block_index = 0u;
+    for(var qs_index = 0u; qs_index < 64; qs_index += 32u){
+        let qs_offset = block_starting_byte + QS_OFFSET + qs_index;
+        // Step by 32 over q.
+        var shift = 0u;
+        for(var _j = 0u; _j < 4u; _j += 1u) {
+            var sc = load_data(data,sc_offset + is,0xFF);
+            is += 1u;
+            var dl = d * f32(sc & 0xF);
+            var ml = dmin * f32(sc >> 4);
+            
+            // for(var q_index = 0u; q_index < 16u; q_index++){
+            //     let q = load_data(data,qs_offset + q_index,0xFF);
+            //     let y = dl * f32((q >> shift) & 3) - ml;
+            //     CALLBACK(y_block_index, y);
+            //     y_block_index += 1;
+            // }
+
+            for (var i = 0u; i < 16u; i += 4u) {
+                let w = load_u32(data, (qs_offset + i) / 4u);  // loads q[i..i+3]
+
+                // Extract the 4 bytes
+                let b0 =  w        & 0xFFu;
+                let b1 = (w >> 8)  & 0xFFu;
+                let b2 = (w >> 16) & 0xFFu;
+                let b3 = (w >> 24) & 0xFFu;
+
+                let v0 = (b0 >> shift) & 3u;
+                let v1 = (b1 >> shift) & 3u;
+                let v2 = (b2 >> shift) & 3u;
+                let v3 = (b3 >> shift) & 3u;
+
+                CALLBACK(y_block_index + 0u, dl * f32(v0) - ml);
+                CALLBACK(y_block_index + 1u, dl * f32(v1) - ml);
+                CALLBACK(y_block_index + 2u, dl * f32(v2) - ml);
+                CALLBACK(y_block_index + 3u, dl * f32(v3) - ml);
+
+                y_block_index += 4u;
+            }
+
+
+            sc = load_data(data,sc_offset + is,0xFF);
+            is += 1u;
+            dl = d * f32(sc & 0xF);
+            ml = dmin * f32(sc >> 4);
+            // for(var q_index = 16u; q_index < 32u; q_index++){
+            //     let q = load_data(data,qs_offset + q_index,0xFF);
+            //     let y = dl * f32((q >> shift) & 3) - ml;
+            //     CALLBACK(y_block_index, y);
+            //     y_block_index += 1;
+            // }
+
+            for (var i = 16u; i < 32u; i += 4u) {
+                let w = load_u32(data, (qs_offset + i) / 4u);  // loads q[i..i+3]
+
+                // Extract the 4 bytes
+                let b0 =  w        & 0xFFu;
+                let b1 = (w >> 8)  & 0xFFu;
+                let b2 = (w >> 16) & 0xFFu;
+                let b3 = (w >> 24) & 0xFFu;
+
+                let v0 = (b0 >> shift) & 3u;
+                let v1 = (b1 >> shift) & 3u;
+                let v2 = (b2 >> shift) & 3u;
+                let v3 = (b3 >> shift) & 3u;
+
+                CALLBACK(y_block_index + 0u, dl * f32(v0) - ml);
+                CALLBACK(y_block_index + 1u, dl * f32(v1) - ml);
+                CALLBACK(y_block_index + 2u, dl * f32(v2) - ml);
+                CALLBACK(y_block_index + 3u, dl * f32(v3) - ml);
+
+                y_block_index += 4u;
+            }
+
+            shift += 2u;
+        }
+    }
+#pp_end
 
 #include "quantHelper.pwgsl"
+
+#ifdef SGEMM
+#include "matmulHelperSgemm.pwgsl"
+
+#define WIDTHA 4u
+#definec WIDTHB VALUES_PER_THREAD 
+
+MATMUL(matmul_sgemm)
+#endif
+

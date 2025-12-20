@@ -18,5 +18,173 @@
 
 #define TS 1
 #define WGS 1
+#define TID_SIZE 1
+
+#pp_begin LOAD_HEADER(data)
+let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
+let block_qs_byte = block_starting_byte + QS_OFFSET;
+
+// single header word load (contains header bytes and possibly first data bytes)
+let block_starting_word = block_starting_byte / 4u;
+let header_data1 = load_u32(data, block_starting_word);
+let d = half_to_float(header_data1 & 0xFFFF);
+let dmin = half_to_float((header_data1 >> 16) & 0xFFFF);
+
+let sc_offset = block_starting_byte+SCALES_OFFSET;
+let sc_word_index = sc_offset / 4u;
+let w0 = load_u32(data, sc_word_index + 0u); // bytes b0..b3
+let w1 = load_u32(data, sc_word_index + 1u); // bytes b4..b7
+let w2 = load_u32(data, sc_word_index + 2u); // bytes b8..b11
+
+#pp_end
+
+#pp_begin LOAD_SINGLE (data,tid, VALUES_PER_THREAD)
+    let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
+    let loads_per_thread = (VALUES_PER_THREAD / 4u); //we load 4 values (u32) at the same time
+    let a = tid * loads_per_thread;
+    
+    let start = block_qs_byte / 4u + a;
+
+    var is = 0u;
+    var ys_index = 0u;
+    var u1 = 1u;
+    var u2 = 2u;
+    let qh_offset = block_starting_byte+QH_OFFSET;
+    var scs : array<u32, 8>;
+    var mns : array<u32, 8>;
+
+    // extract bytes (unsigned 8-bit values)
+    let b0  =  w0         & 0xFFu;
+    let b1  = (w0 >> 8u)  & 0xFFu;
+    let b2  = (w0 >> 16u) & 0xFFu;
+    let b3  = (w0 >> 24u) & 0xFFu;
+
+    let b4  =  w1         & 0xFFu;
+    let b5  = (w1 >> 8u)  & 0xFFu;
+    let b6  = (w1 >> 16u) & 0xFFu;
+    let b7  = (w1 >> 24u) & 0xFFu;
+
+    let b8  =  w2         & 0xFFu;
+    let b9  = (w2 >> 8u)  & 0xFFu;
+    let b10 = (w2 >> 16u) & 0xFFu;
+    let b11 = (w2 >> 24u) & 0xFFu;
+
+    // for is = 0..3: sc = b_is & 0x3F; m = b_{is+4} & 0x3F
+    scs[0] = b0  & 0x3Fu;
+    scs[1] = b1  & 0x3Fu;
+    scs[2] = b2  & 0x3Fu;
+    scs[3] = b3  & 0x3Fu;
+
+    mns[0] = b4  & 0x3Fu;
+    mns[1] = b5  & 0x3Fu;
+    mns[2] = b6  & 0x3Fu;
+    mns[3] = b7  & 0x3Fu;
+
+    // for is = 4..7:
+    // let q_is4_v = b_{is+4}      // b8..b11
+    // sc = (q_is4_v & 0xF) | (((q_is4n) >> 6) << 4)
+    //     where q_is4n = b_{is-4}  // b0..b3
+    // m_load = (q_is4_v >> 4) | (((q_is) >> 6) << 4)
+    //     where q_is = b_{is}      // b4..b7  (CHECK: original uses q_is = load_data(sc_offset + is) so for is>=4 q_is is b4..b7)
+    //
+    // Translating exactly:
+
+    // is = 4:
+    scs[4] = ((b8  & 0xFu) | (((b0  >> 6u) & 0x3u) << 4u));
+    mns[4] = (((b8  >> 4u) & 0xFu) | (((b4  >> 6u) & 0x3u) << 4u));
+
+    // is = 5:
+    scs[5] = ((b9  & 0xFu) | (((b1  >> 6u) & 0x3u) << 4u));
+    mns[5] = (((b9  >> 4u) & 0xFu) | (((b5  >> 6u) & 0x3u) << 4u));
+
+    // is = 6:
+    scs[6] = ((b10 & 0xFu) | (((b2  >> 6u) & 0x3u) << 4u));
+    mns[6] = (((b10 >> 4u) & 0xFu) | (((b6  >> 6u) & 0x3u) << 4u));
+
+    // is = 7:
+    scs[7] = ((b11 & 0xFu) | (((b3  >> 6u) & 0x3u) << 4u));
+    mns[7] = (((b11 >> 4u) & 0xFu) | (((b7  >> 6u) & 0x3u) << 4u));
+
+ 
+    for(var j = 0u; j < BLOCK_SIZE; j += 64u) {
+        let qs_offset = block_qs_byte + j / 2; // let q = &q[j / 2..j / 2 + 32];
+        let ql_offset = block_starting_byte+QS_OFFSET + j / 2;  //let ql = &ql[j / 2..j / 2 + 32];
+
+        var sc = 0u;
+        var m_load = 0u;
+        sc = scs[is];
+        m_load = mns[is];
+        // #define q_is load_data(data,sc_offset + is,0xFF)
+        // #define q_is4 load_data(data,sc_offset + is + 4,0xFF)
+        // #define q_is4n load_data(data,sc_offset + is - 4,0xFF)
+        // if(is < 4)
+        // {
+        //     sc = (q_is) & 63;
+        //     m_load = (q_is4) & 63;
+        // }
+        // else{
+        //     let q_is4_v = (q_is4);
+        //     sc = (q_is4_v & 0xF) | (((q_is4n) >> 6) << 4);
+        //     m_load = (q_is4_v >> 4) | (((q_is) >> 6) << 4);
+        // }
+        let d1 = d * f32(sc);
+        let m1 = dmin * f32(m_load);
+
+        is += 1u;
+
+        sc = scs[is];
+        m_load = mns[is];
+        // #define q_is load_data(data,sc_offset + is,0xFF)
+        // #define q_is4 load_data(data,sc_offset + is + 4,0xFF)
+        // #define q_is4n load_data(data,sc_offset + is - 4,0xFF)
+        // if(is < 4)
+        // {
+        //     sc = (q_is) & 63;
+        //     m_load = (q_is4) & 63;
+        // }
+        // else{
+        //     let q_is4_v = (q_is4);
+        //     sc = (q_is4_v & 0xF) | (((q_is4n) >> 6) << 4);
+        //     m_load = (q_is4_v >> 4) | (((q_is) >> 6) << 4);
+        // }
+
+        let d2 = d * f32(sc);
+        let m2 = dmin * f32(m_load);
+        for(var q_index = 0u; q_index < 32u; q_index++){
+            let ql = load_data(data,ql_offset + q_index,0xFF);
+            let qh = load_data(data,qh_offset + q_index,0xFF);
+
+            let ql1 = ql & 0xF;
+            let ql2 = (ql >> 4);
+            if((qh & u1) != 0u){
+                CALLBACK(ys_index, d1 * (f32(ql1) + 16.0) - m1);
+            }
+            else{
+                CALLBACK(ys_index, d1 * (f32(ql1)) - m1);
+            }
+            if((qh & u2) != 0u){
+                CALLBACK(ys_index+32u, d2 * (f32(ql2) + 16.0) - m2);
+            }
+            else{
+                CALLBACK(ys_index+32u, d2 * (f32(ql2)) - m2);
+            }
+            ys_index += 1u;
+        }
+        ys_index += 32u;
+        is += 1u;
+        u1 <<= 2u;
+        u2 <<= 2u;
+    }
+#pp_end
 
 #include "quantHelper.pwgsl"
+
+#ifdef SGEMM
+#include "matmulHelperSgemm.pwgsl"
+
+#define WIDTHA 4u
+#definec WIDTHB VALUES_PER_THREAD 
+
+MATMUL(matmul_sgemm)
+#endif
+

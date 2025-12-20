@@ -178,9 +178,6 @@ pub fn create_loader_internal(input: TokenStream) -> TokenStream {
 
     // Generate the loader code with a unique index
     let expanded = quote! {
-        #[derive(Debug)]
-        pub struct #loader_name;
-
         impl #loader_name {
             pub const LOADER_INDEX : crate::LoaderIndex = crate::LoaderIndex(#new_index);
         }

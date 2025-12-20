@@ -8,6 +8,7 @@ use tracing::instrument;
 use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
 
 use crate::backend::{BackendDevice, BackendStorage};
+use crate::wgpu_backend::wgpu_functions::matmul::sgemm::GenericDynamicMatmulShaderSettings;
 use crate::{notImplemented, wrongType, DType, Layout};
 
 #[cfg(feature = "wgpu_debug")]
@@ -112,6 +113,7 @@ pub struct WgpuDeviceInner {
     pub configuration: crate::WgpuDeviceConfig,
 
     pub matmul_alg: Mutex<MatmulAlgorithm>, //MatMul algorithm override, used for testing and benchmarking.
+    pub quantized_matmul_alg: Mutex<Option<GenericDynamicMatmulShaderSettings>>, //Quantized MatMul algorithm override, used for testing and benchmarking.
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +277,7 @@ impl WgpuDevice {
                 bindgroup_layouts,
                 staging_probe_buffer: staging_buffer,
                 matmul_alg: Mutex::new(MatmulAlgorithm::MatmulX),
+                quantized_matmul_alg : Mutex::new(None),
                 configuration,
             }),
         })

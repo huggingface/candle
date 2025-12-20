@@ -17,5 +17,81 @@
 
 #define TS 1
 #define WGS 1
+#define TID_SIZE 1
+
+#pp_begin LOAD_HEADER(data)
+let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
+let block_qs_byte = block_starting_byte + QS_OFFSET;
+let d = half_to_float(load_data(data,block_starting_byte + D_OFFSET,0xFFFF));
+#pp_end
+
+const KMASK1: u32 = 0x03030303;
+const KMASK2: u32 = 0x0f0f0f0f;
+#pp_begin LOAD_SINGLE (data,tid, VALUES_PER_THREAD)
+    let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
+    let loads_per_thread = (VALUES_PER_THREAD / 4u); //we load 4 values (u32) at the same time
+    let a = tid * loads_per_thread;
+
+    var aux = vec4<u32>(
+        load_data(data,block_starting_byte+SCALES_OFFSET,0xFFFF)      | (load_data(data,block_starting_byte+SCALES_OFFSET+2,0xFFFF)) << 16, 
+        load_data(data,block_starting_byte+SCALES_OFFSET + 4u,0xFFFF) | (load_data(data,block_starting_byte+SCALES_OFFSET+6u,0xFFFF)) << 16,
+        load_data(data,block_starting_byte+SCALES_OFFSET + 8u,0xFFFF) | (load_data(data,block_starting_byte+SCALES_OFFSET+10u,0xFFFF)) << 16,0u);
+
+    let tmp = aux[2];
+    aux[2] = ((aux[0] >> 4) & KMASK2) | (((tmp >> 4) & KMASK1) << 4);
+    aux[3] = ((aux[1] >> 4) & KMASK2) | (((tmp >> 6) & KMASK1) << 4);
+    aux[0] = (aux[0] & KMASK2) | (((tmp) & KMASK1) << 4);
+    aux[1] = (aux[1] & KMASK2) | (((tmp >> 2) & KMASK1) << 4);
+
+    //Transfer the scales into an i8 array
+    let d_all = d;
+    var m = 1u;
+    var is = 0u;
+
+    // Dequantize both 128 long blocks
+    // 32 qs values per 128 long block
+    // Each 16 elements get a scale
+    for(var qs_index=0u;qs_index < 64u; qs_index+=32u){
+        let y_index = (qs_index / 32) * 128;
+        var shift = 0u;
+
+        for(var shift_scoped_y_index=0u; shift_scoped_y_index < 128u; shift_scoped_y_index += 32u){
+            var scale_index = 0u;
+            for(var scale_scoped_y_index=0u;scale_scoped_y_index < 32u; scale_scoped_y_index += 16u){
+                let dl = d_all * (f32(load_i8(aux,is,0xFF)) - 32.0);
+
+                for(var inner_y_index = 0u; inner_y_index < 16u; inner_y_index += 1u){
+                    let qs_value = load_data(data,block_starting_byte + QS_OFFSET + qs_index + inner_y_index + 16 * scale_index,0xFF);
+                    let h_value = load_data(data,block_starting_byte + HMASK_OFFSET          + inner_y_index + 16 * scale_index,0xFF);
+
+                    if((h_value & m) == 0){
+                        let new_y = dl* f32(i32((qs_value >> shift) & 3) - 4);
+                        CALLBACK(inner_y_index + scale_scoped_y_index + shift_scoped_y_index + y_index, new_y)
+                    }
+                    else{
+                        let new_y = dl * f32((qs_value >> shift) & 3);
+                        CALLBACK(inner_y_index + scale_scoped_y_index + shift_scoped_y_index + y_index, new_y)
+                    }
+                } 
+                // 16 block finished => advance scale index
+                is += 1u;
+                scale_index += 1u;
+            }
+            // 32 block finished => increase shift and m
+            shift += 2u;
+            m <<= 1u;
+        }
+    }
+#pp_end
 
 #include "quantHelper.pwgsl"
+
+#ifdef SGEMM
+#include "matmulHelperSgemm.pwgsl"
+
+#define WIDTHA 4u
+#definec WIDTHB VALUES_PER_THREAD 
+
+MATMUL(matmul_sgemm)
+#endif
+

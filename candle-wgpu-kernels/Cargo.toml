@@ -13,10 +13,10 @@ license = "MIT OR Apache-2.0"
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 candle-wgpu-kernels-macro = {path = "./candle-wgpu-kernels-macro"}
+candle-pwgsl = {path = "./candle-pwgsl"}
 
 [build-dependencies]
-fancy-regex = "0.13.0"
-evalexpr = "11.3.0"
+candle-pwgsl = {path = "./candle-pwgsl"}
 
 [features]
 wgpu_debug_serialize = ["dep:serde", "dep:serde_json"]

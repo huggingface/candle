@@ -1,0 +1,8 @@
+[package]
+name = "candle-pwgsl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fancy-regex = "0.13.0"
+evalexpr = "11.3.0"

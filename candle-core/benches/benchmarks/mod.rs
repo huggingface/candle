@@ -6,6 +6,7 @@ pub(crate) mod conv_transpose2d;
 pub(crate) mod copy;
 pub(crate) mod matmul;
 pub(crate) mod matmul_wgpu;
+pub(crate) mod matmul_quantized;
 pub(crate) mod qmatmul;
 pub(crate) mod random;
 pub(crate) mod reduce;

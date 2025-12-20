@@ -3,9 +3,6 @@
 #define op_gather_dim    op_meta[0]
 #define op_index_input_layout1     1u
 
-@group(0) @binding(3)
-var<storage> v_input2_u32: array<u32>;
-
 @compute
 @workgroup_size(64,1,1)
 fn gather(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -52,7 +49,7 @@ fn gather(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let gather_idx = v_input2_u32[new_index2];
         // treat u32::MAX as sentinel -> write zero to output
         if (gather_idx == 0xffffffffu) {
-            v_dest[new_index_out] = 0.0;
+            v_dest[new_index_out] = ZERO;
         } else {
             new_index1 += gather_idx * op_meta[start_shape_offset1 + dims1 + dim]; // s_dim * stride_dim
             v_dest[new_index_out] = v_input1[new_index1];

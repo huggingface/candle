@@ -1,3 +1,5 @@
+#ifndef UTILDEFINE
+#define UTILDEFINE
 #ifdef f32
 #define DTYPE f32 
 #endif
@@ -68,6 +70,8 @@ var<storage> v_input2: array<DTYPE>;
 @group(0) @binding(3)
 var<storage> v_input2_4: array<vec4<DTYPE>>;
 
+@group(0) @binding(3)
+var<storage> v_input2_u32: array<u32>;
 
 @group(0) @binding(4)
 var<storage> v_input3: array<DTYPE>;
@@ -242,3 +246,4 @@ fn get_size2() -> u32{
 fn get_size3() -> u32{
     return get_size(CONST_DIMS3, CONST_IS_CONTIGUOUS3, CONST_IS_STARTOFFSET_ZERO3);
 }
+#endif

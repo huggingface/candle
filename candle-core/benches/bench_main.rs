@@ -10,6 +10,7 @@ criterion_main!(
     benchmarks::matmul::benches,
     benchmarks::qmatmul::benches,
     benchmarks::matmul_wgpu::benches,
+    benchmarks::matmul_quantized::benches,
     benchmarks::random::benches,
     benchmarks::reduce::benches,
     benchmarks::unary::benches,

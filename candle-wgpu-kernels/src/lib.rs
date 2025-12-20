@@ -1,8 +1,15 @@
+pub use candle_pwgsl::shader_loader::{DefineDefinition, DefinesDefinitions};
+use candle_pwgsl::{ParseState, ShaderStore, shader_loader};
 mod generated {
    include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 }
 
-use std::sync::Arc;
+use std::any::Any;
+use std::borrow::Borrow;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::hash::Hasher;
+use std::hash::Hash;
 
 use candle_wgpu_kernels_macro::create_loader_internal;
 pub use generated::kernels::*;
@@ -146,7 +153,7 @@ impl From<PipelineIndex> for LoaderIndex {
 }
 
 /// generic trait to load a shader
-pub trait ShaderLoader: std::fmt::Debug {
+pub trait ShaderLoader : std::fmt::Debug + std::any::Any {
     /// loads the wgsl shader code
     /// a shader loader may handle multiple shader files, one can use the index to differentiate between shaders
     /// # Examples
@@ -213,7 +220,7 @@ pub struct ShaderLoaderCache {
 
 #[derive(Debug)]
 struct CustomLoader {
-    shader_loader: Arc<dyn ShaderLoader + Send + Sync>,
+    shader_loader: Box<dyn ShaderLoader + Send + Sync>,
 }
 
 impl ShaderLoaderCache {
@@ -235,9 +242,27 @@ impl ShaderLoaderCache {
         if self.loader[index.0 as usize].is_none() {
             let loader = shader_loader();
             self.loader[index.0 as usize] = Some(CustomLoader {
-                shader_loader: Arc::new(loader),
+                shader_loader: Box::new(loader),
             });
         }
+    }
+
+    pub fn get_loader<T: ShaderLoader + 'static>(
+        &self,
+        index: LoaderIndex,
+    ) -> Option<&T> {
+        let loader = self.loader.get(index.0 as usize)?.as_ref()?;
+        let any = loader.shader_loader.as_ref() as &dyn Any;
+        any.downcast_ref::<T>()
+    }
+
+    pub fn get_loader_mut<T: ShaderLoader + 'static>(
+        &mut self,
+        index: LoaderIndex,
+    ) -> Option<&mut T> {
+        let loader = self.loader.get_mut(index.0 as usize)?.as_mut()?;
+        let any = loader.shader_loader.as_mut() as &mut dyn Any;
+        any.downcast_mut::<T>()
     }
 
     pub fn get_shader(&self, shader: impl Into<ShaderIndex>) -> &str {
@@ -277,6 +302,9 @@ impl Default for ShaderLoaderCache {
     }
 }
 
+#[derive(Debug)]
+pub struct DefaultWgpuShader{}
+
 create_loader_internal!(DefaultWgpuShader);
 
 impl ShaderLoader for DefaultWgpuShader {
@@ -293,5 +321,209 @@ impl ShaderLoader for DefaultWgpuShader {
     fn get_debug_name(&self, index: ShaderIndex) -> Option<String> {
         let shader: Shaders = index.into();
         Some(format!("{:?}", shader))
+    }
+}
+
+
+
+
+//Dynamic ShaderLoader Implementation
+#[derive(Hash, PartialEq, Eq, Debug)]
+struct ShaderKey {
+    path: PathBuf,
+    defines: Vec<(String, DefineDefinition)>,
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone)]
+struct ShaderKeyRef< 'a>{
+    path: &'a Path,
+    defines: &'a [(&'a str, DefineDefinition)],
+}
+
+enum ShaderKeyRefOrOwned<'a>{
+    Ref(ShaderKeyRef<'a>),
+    Owned(&'a ShaderKey)
+}
+
+trait ShaderKeyTrait {
+    fn key<'a>(&'a self) -> ShaderKeyRefOrOwned<'a>;
+    fn key_eq(&self, other : &dyn ShaderKeyTrait) -> bool;
+}
+
+impl ShaderKeyTrait for ShaderKey{
+    fn key<'a>(&'a self) -> ShaderKeyRefOrOwned<'a> {
+        ShaderKeyRefOrOwned::Owned(self)
+    }
+    fn key_eq(&self, other: &dyn ShaderKeyTrait) -> bool {
+        match other.key() {
+            ShaderKeyRefOrOwned::Owned(o) => {
+                self.path == o.path
+                    && self.defines.len() == o.defines.len()
+                    && self.defines.iter().zip(&o.defines).all(|((a_name, a_def), (b_name, b_def))| a_name == b_name && a_def == b_def)
+            }
+            ShaderKeyRefOrOwned::Ref(r) => {
+                self.path == r.path
+                    && self.defines.len() == r.defines.len()
+                    && self.defines.iter().zip(r.defines).all(|((a_name, a_def), (b_name, b_def))| a_name == b_name && a_def == b_def)
+            }
+        }
+    }
+}
+
+impl<'a> ShaderKeyTrait for ShaderKeyRef<'a>{
+    fn key<'b>(&'b self) ->  ShaderKeyRefOrOwned<'b> {
+        ShaderKeyRefOrOwned::Ref(*self)
+    }
+     fn key_eq(&self, other: &dyn ShaderKeyTrait) -> bool {
+        match other.key() {
+            ShaderKeyRefOrOwned::Owned(o) => {
+                self.path == o.path
+                    && self.defines.len() == o.defines.len()
+                    && self.defines.iter().zip(&o.defines).all(|((a_name, a_def), (b_name, b_def))| a_name == b_name && a_def == b_def)
+            }
+            ShaderKeyRefOrOwned::Ref(r) => {
+                self.path == r.path
+                    && self.defines.len() == r.defines.len()
+                    && self.defines.iter().zip(r.defines).all(|((a_name, a_def), (b_name, b_def))| a_name == b_name && a_def == b_def)
+            }
+        }
+    }
+}
+
+impl<'a> Borrow<dyn ShaderKeyTrait + 'a> for ShaderKey {
+    fn borrow(&self) -> &(dyn ShaderKeyTrait + 'a) {
+        self
+    }
+}
+
+impl<'a> Eq for dyn ShaderKeyTrait + 'a {}
+
+impl<'a> PartialEq for dyn ShaderKeyTrait + 'a {
+    fn eq(&self, other: &dyn ShaderKeyTrait) -> bool {
+        self.key_eq(other)
+    }
+}
+
+impl<'a> Hash for dyn ShaderKeyTrait + 'a {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match &self.key(){
+            ShaderKeyRefOrOwned::Ref(shader_key_ref) => shader_key_ref.hash(state),
+            ShaderKeyRefOrOwned::Owned(shader_key) => shader_key.hash(state),
+        }
+    }
+}
+
+
+#[derive(Debug)]
+struct DynamicShaderEntry{
+    dynamic_shader: String, //the shader content after the preprocessor run
+    debug_name : Option<String>, //debug name of the shader
+    entry_points : Vec<String> //PipelineIndex to EntryPoint Name
+}
+
+#[derive(Debug)]
+pub struct DefaultWgpuDynamicShader {
+    shader_store: ShaderStore, // build-time embedded shaders
+    shader_index_mapping: HashMap<ShaderKey, ShaderIndex>,
+    shader_cache : Vec<DynamicShaderEntry>,
+}
+
+create_loader_internal!(DefaultWgpuDynamicShader);
+
+impl DefaultWgpuDynamicShader{
+    pub fn new() -> Self{
+        DefaultWgpuDynamicShader{ 
+            shader_store: embedded_shader_store(), 
+            shader_index_mapping : HashMap::new(),
+            shader_cache: Vec::new()
+        }
+    }
+
+    pub fn get_shader_index(
+        &mut self,
+        path: PathBuf,
+        defines: &[(&str, DefineDefinition)],
+    ) -> ShaderIndex {
+        let key_ref = ShaderKeyRef {
+            path: path.as_path(),
+            defines,
+        };
+
+        if let Some(&idx) = self.shader_index_mapping.get(&key_ref as &dyn ShaderKeyTrait) {
+            return idx;
+        }
+
+        let key = ShaderKey {
+            path: path.clone(),
+            defines: defines.iter().map(|c| (c.0.to_string(), c.1.clone())).collect(),
+        };
+
+        let mut parse_state = ParseState::new();
+        parse_state.set_path(path.clone());
+        parse_state.set_defines(key.defines.clone().into_iter().collect());
+        let processed = shader_loader::load_shader(&mut parse_state, &self.shader_store);
+
+        let entry = DynamicShaderEntry
+        {   dynamic_shader: processed, 
+            debug_name: Some(path.display().to_string()), 
+            entry_points: parse_state.info().global_functions.iter().map(|c| c.1.clone()).collect() 
+        };
+
+        let shader_id = self.shader_cache.len() as u16;
+        let shader_index = ShaderIndex(DefaultWgpuDynamicShader::LOADER_INDEX, shader_id);
+
+        self.shader_cache.push(entry);
+        self.shader_index_mapping.insert(key, shader_index);
+
+        shader_index
+    }
+
+    pub fn get_pipeline_index(
+        &self,
+        shader_index: ShaderIndex,
+        entry_name: &str,
+    ) -> PipelineIndex {
+        let entries = &self.shader_cache[shader_index.1 as usize].entry_points;
+
+        let entry_idx = entries.iter().position(|s| s == entry_name).unwrap_or_else(|| {
+            panic!(
+                r#"
+    Failed to find shader entry point
+
+    Shader index: {:?}
+    Requested:    {}
+    Available:   [{}]
+
+    "#,
+            shader_index,
+            entry_name,
+            entries.join(", "),
+        )
+    });
+
+    PipelineIndex(shader_index, entry_idx as u8)
+    }
+}
+
+impl Default for DefaultWgpuDynamicShader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ShaderLoader for DefaultWgpuDynamicShader  {
+    fn load(&self, index: ShaderIndex) -> &str {
+        let ShaderIndex(_, shader_id) = index;
+        &self.shader_cache[shader_id as usize].dynamic_shader
+    }
+
+    fn get_entry_point(&self, index: PipelineIndex) -> &str {
+        let PipelineIndex(ShaderIndex(_, shader_id), entry_id) = index;
+        &self.shader_cache[shader_id as usize].entry_points[entry_id as usize]
+    }
+
+    fn get_debug_name(&self, index: ShaderIndex) -> Option<String> {
+        let ShaderIndex(_, shader_id) = index;
+        self.shader_cache[shader_id as usize].debug_name.clone()
     }
 }

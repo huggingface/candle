@@ -118,11 +118,6 @@ impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V> HashMapMulti<K, V> {
     pub fn add_mapping(&mut self, key: K, value: V) {
         self.map.entry(key).or_default().push(value);
     }
-
-    #[instrument(skip(self, key))]
-    pub fn get(&self, key: &K) -> &Vec<V> {
-        self.map.get(key).unwrap_or(&self._empty)
-    }
 }
 
 impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V: PartialEq> HashMapMulti<K, V> {

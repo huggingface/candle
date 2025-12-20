@@ -23,6 +23,11 @@ impl ShaderCache {
             .add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX, || {
                 candle_wgpu_kernels::DefaultWgpuShader {}
             });
+
+        loader_cache
+            .add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX, || {
+                candle_wgpu_kernels::DefaultWgpuDynamicShader::new()
+            });
         Self {
             loader_cache,
             shaders: HashMap::default(),

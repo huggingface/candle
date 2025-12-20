@@ -1,3 +1,4 @@
+#define QUANTIZED
 #define BLOCK_SIZE 32
 #define BIT_SIZE 8
 
@@ -6,5 +7,76 @@
 
 #define TS 1
 #define WGS 1
+#define TID_SIZE 8
+
+#pp_begin LOAD_HEADER(data)
+    let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
+    let block_qs_byte = block_starting_byte + QS_OFFSET;
+    let header_data1 = load_u32(data, block_starting_byte / 4u);
+    let d = half_to_float((header_data1 >> (((block_starting_byte) % 4) * 8)) & 0xFFFF);
+#pp_end
+
+#pp_begin LOAD_SINGLE (data, tid, VALUES_PER_THREAD)
+    let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
+    let loads_per_thread = (VALUES_PER_THREAD / 4u); //we load 4 values (u32) at the same time
+    let j = tid * loads_per_thread;
+    
+    let start = block_qs_byte / 4u + j;
+
+    //naive solution
+    // for(var m = 0u; m < VALUES_PER_THREAD;m++){
+    //         let x_u8 = load_data(data,block_qs_byte + j * VALUES_PER_THREAD + m,0xFF);
+    //         let x_unsigned = i32(x_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
+    //         CALLBACK(j * VALUES_PER_THREAD + m, f32(x_unsigned)*d)
+    // }
+
+    for(var l = 0u; l < loads_per_thread; l += 1u){
+        let base_word   = (block_qs_byte + 3u) / 4u;
+        let shift_bytes = block_qs_byte & 3u;
+        //let shift_bits  = shift_bytes * 8u;
+        let out_base = (shift_bytes + tid * 4u);
+        let word_index = base_word + j + l * loads_per_thread;
+        let w = load_u32(data, word_index); //every thread loads only one word
+        let is_last_u = (tid + 1u) / THREADS_PER_BLOCK;
+        
+        let is_even_block = 1u - (block_index & 1u);
+        let include_header = is_last_u & is_even_block;
+
+        let full_mask = (0u - include_header) & 0xFFFFFFFF;
+
+        let AND_W_VALUE      = 0x0000FFFFu | (~full_mask);
+        let AND_HEADER_VALUE = full_mask & 0xFFFF0000u;
+
+        let high = w & AND_W_VALUE;
+        let low  = header_data1 & AND_HEADER_VALUE;
+
+        let combined = low | high; //tid0-6 use the complete low part, tid7 uses the high part to complete the last u32
+        let x_u32 = combined;
+       
+        let x1_u8 = x_u32 & 0xFF;
+        let x2_u8 = (x_u32 >> 8)  & 0xFF;
+        let x3_u8 = (x_u32 >> 16) & 0xFF;
+        let x4_u8 = (x_u32 >> 24) & 0xFF;
+
+        let x1_unsigned = i32(x1_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
+        let x2_unsigned = i32(x2_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
+        let x3_unsigned = i32(x3_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
+        let x4_unsigned = i32(x4_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
+
+        CALLBACK(out_base + 0, f32(x1_unsigned)*d)
+        CALLBACK(out_base + 1, f32(x2_unsigned)*d)
+        CALLBACK((out_base + 2) & BLOCK_SIZE_MINUS_1, f32(x3_unsigned)*d)
+        CALLBACK((out_base + 3) & BLOCK_SIZE_MINUS_1, f32(x4_unsigned)*d)
+    }
+#pp_end
 
 #include "quantHelper.pwgsl"
+
+#ifdef SGEMM
+#include "matmulHelperSgemm.pwgsl"
+
+#define WIDTHA 4u
+#definec WIDTHB VALUES_PER_THREAD 
+
+MATMUL(matmul_sgemm)
+#endif

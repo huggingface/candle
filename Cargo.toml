@@ -10,6 +10,7 @@ members = [
     "candle-wasm-tests",
     "tensor-tools",
     "candle-wgpu-kernels",
+    "candle-wgpu-kernels/candle-pwgsl"
 ]
 exclude = [
     "candle-book",

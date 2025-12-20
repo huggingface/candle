@@ -6,4 +6,94 @@
 
 #define TS 1
 #define WGS 1
+#define TID_SIZE 4
+
+#pp_begin LOAD_HEADER(data)
+let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
+let block_qs_byte = block_starting_byte + QS_OFFSET;
+let header_data1 = load_u32(data, block_starting_byte / 4u);
+let d = half_to_float((header_data1 >> (((block_starting_byte) % 4) * 8)) & 0xFFFF);
+#pp_end
+
+#pp_begin LOAD_SINGLE (data, tid, VALUES_PER_THREAD)
+    let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
+    let loads_per_thread = (VALUES_PER_THREAD / 8u); //we load 8 values (u32) at the same time
+    let j = tid * loads_per_thread;
+    
+    let start = block_qs_byte / 4u + j;
+
+    //naive solution
+    //for(var m = 0u; m < VALUES_PER_THREAD;m++){
+    //      let x_u8 = load_data(data,block_qs_byte + j * VALUES_PER_THREAD + m,0xFF);
+    //      let x0 = x_u8 & 0x0F;
+    //      let x1 = x_u8 >> 4;
+    //      #define DEFAULT_M_OFFSET 8
+    //      CALLBACK(j * VALUES_PER_THREAD + m          , f32(i32(x0) - DEFAULT_M_OFFSET)*d)
+    //      CALLBACK(j * VALUES_PER_THREAD + m + 16, f32(i32(x1) - DEFAULT_M_OFFSET)*d)
+    // }
+
+    for(var l = 0u; l < loads_per_thread; l += 1u){
+        let base_word   = (block_qs_byte + 3u) / 4u;
+        let shift_bytes = block_qs_byte & 3u;
+        //let shift_bits  = shift_bytes * 8u;
+        let out_base = (shift_bytes + tid * 4u);
+        let word_index = base_word + j + l * loads_per_thread;
+        let w = load_u32(data, word_index); //every thread loads only one word
+        let is_last_u = (tid + 1u) / THREADS_PER_BLOCK;
+        
+        let is_even_block = 1u - (block_index & 1u);
+        let include_header = is_last_u & is_even_block;
+
+        let full_mask = (0u - include_header) & 0xFFFFFFFF;
+
+        let AND_W_VALUE      = 0x0000FFFFu | (~full_mask);
+        let AND_HEADER_VALUE = full_mask & 0xFFFF0000u;
+
+        let high = w & AND_W_VALUE;
+        let low  = header_data1 & AND_HEADER_VALUE;
+
+        let combined = low | high; //tid0-6 use the complete low part, tid7 uses the high part to complete the last u32
+        let x_u32 = combined;
+       
+        let x12_u8 = x_u32 & 0xFF;
+        let x34_u8 = (x_u32 >> 8)  & 0xFF;
+        let x56_u8 = (x_u32 >> 16) & 0xFF;
+        let x78_u8 = (x_u32 >> 24) & 0xFF;
+
+        let x0 = x12_u8 & 0x0F;
+        let x1 = x12_u8 >> 4;
+        let x2 = x34_u8 & 0x0F;
+        let x3 = x34_u8 >> 4;
+        let x4 = x56_u8 & 0x0F;
+        let x5 = x56_u8 >> 4;
+        let x6 = x78_u8 & 0x0F;
+        let x7 = x78_u8 >> 4;
+        #define DEFAULT_M_OFFSET 8
+        #definec BLOCK_SIZE_HALF_MINUS_1 (BLOCK_SIZE/2-1)
+        let index12 = (out_base + 0) & BLOCK_SIZE_HALF_MINUS_1;
+        let index34 = (out_base + 1) & BLOCK_SIZE_HALF_MINUS_1;
+        let index56 = (out_base + 2) & BLOCK_SIZE_HALF_MINUS_1;
+        let index78 = (out_base + 3) & BLOCK_SIZE_HALF_MINUS_1;
+        CALLBACK(index12, f32(i32(x0) - DEFAULT_M_OFFSET)*d)
+        CALLBACK(index12 + 16, f32(i32(x1) - DEFAULT_M_OFFSET)*d)
+        CALLBACK(index34, f32(i32(x2) - DEFAULT_M_OFFSET)*d)
+        CALLBACK(index34 + 16, f32(i32(x3) - DEFAULT_M_OFFSET)*d)
+        CALLBACK(index56, f32(i32(x4) - DEFAULT_M_OFFSET)*d)
+        CALLBACK(index56 + 16, f32(i32(x5) - DEFAULT_M_OFFSET)*d)
+        CALLBACK(index78, f32(i32(x6) - DEFAULT_M_OFFSET)*d)
+        CALLBACK(index78 + 16, f32(i32(x7) - DEFAULT_M_OFFSET)*d)
+    }
+#pp_end
+
+
 #include "quantHelper.pwgsl"
+
+#ifdef SGEMM
+#include "matmulHelperSgemm.pwgsl"
+
+#define WIDTHA 4u
+#definec WIDTHB VALUES_PER_THREAD 
+
+MATMUL(matmul_sgemm)
+#endif
+

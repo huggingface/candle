@@ -10,3 +10,9 @@ wasm-pack test --chrome --test all
 If you get an "invalid session id" failure in headless mode, check that logs and
 it may well be that your ChromeDriver is not at the same version as your
 browser.
+
+
+to use wgpu use:
+```bash
+wasm-pack test --chrome --test all
+```

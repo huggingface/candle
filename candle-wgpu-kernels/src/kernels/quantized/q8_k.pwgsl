@@ -11,5 +11,51 @@
 
 #define TS 1
 #define WGS 1
+#define TID_SIZE 64
+
+#pp_begin LOAD_HEADER(data)
+let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
+let block_qs_byte = block_starting_byte + QS_OFFSET;
+let d = as_float(load_u32(data, block_starting_byte / 4u));
+#pp_end
+
+#pp_begin LOAD_SINGLE (data,tid, VALUES_PER_THREAD)
+    let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
+    let loads_per_thread = (VALUES_PER_THREAD / 4u); //we load 4 values (u32) at the same time
+    let j = tid * loads_per_thread;
+    
+    let start = block_qs_byte / 4u + j;
+
+    for(var l = 0u; l < loads_per_thread; l += 1u){
+        let x_u32 = load_u32(data, start + l * loads_per_thread);
+        let out_base = j * 4u + l * 4u;
+    
+        let x1_u8 = x_u32 & 0xFF;
+        let x2_u8 = (x_u32 >> 8)  & 0xFF;
+        let x3_u8 = (x_u32 >> 16) & 0xFF;
+        let x4_u8 = (x_u32 >> 24) & 0xFF;
+
+        let x1_unsigned = i32(x1_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
+        let x2_unsigned = i32(x2_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
+        let x3_unsigned = i32(x3_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
+        let x4_unsigned = i32(x4_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
+
+        CALLBACK(out_base + 0, f32(x1_unsigned)*d)
+        CALLBACK(out_base + 1, f32(x2_unsigned)*d)
+        CALLBACK(out_base + 2, f32(x3_unsigned)*d)
+        CALLBACK(out_base + 3, f32(x4_unsigned)*d)
+    }
+#pp_end 
+
 
 #include "quantHelper.pwgsl"
+
+#ifdef SGEMM
+#include "matmulHelperSgemm.pwgsl"
+
+#define WIDTHA 4u
+#definec WIDTHB VALUES_PER_THREAD 
+
+MATMUL(matmul_sgemm)
+#endif
+

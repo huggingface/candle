@@ -95,7 +95,11 @@ mod transpose {
     }
 }
 
-mod sgemm {
+pub mod sgemm {
+
+    use std::path::Path;
+
+    use candle_wgpu_kernels::DefineDefinition;
 
     use super::*;
     use crate::Shape;
@@ -208,13 +212,14 @@ mod sgemm {
     }
 
     #[derive(Debug)]
-    pub(crate) enum StrideOptimization {
+    pub enum StrideOptimization {
         None,           //no stride preferred
         StrideK(bool),  //if true stride must be 1, if false stride is preferred to 1
         StrideNM(bool), //if true stride must be 1, if false stride is preferred to 1
     }
 
-    pub(crate) struct GenericMatmulSettings {
+    #[derive(Debug)]
+    pub struct GenericMatmulSettings {
         pub m_tile: u32,
         pub n_tile: u32,
         pub k_tile: u32,
@@ -226,8 +231,27 @@ mod sgemm {
         pub alignment: bool,
     }
 
+    #[derive(Debug)]
+    pub struct GenericDynamicMatmulShaderSettings{
+        pub settings : GenericMatmulSettings,
+        pub wptm : u32,
+        pub wptn : u32,
+        pub prefatch : bool 
+    }
+
+    impl GenericDynamicMatmulShaderSettings{
+        pub fn new(settings : GenericMatmulSettings, wptm : u32, wptn : u32, prefatch : bool) -> Self{
+            Self{
+                settings,
+                wptm,
+                wptn,
+                prefatch,
+            }
+        }  
+    }
+
     impl GenericMatmulSettings {
-        pub(crate) fn new(
+        pub fn new(
             m_tile: u32,
             n_tile: u32,
             k_tile: u32,
@@ -291,7 +315,7 @@ mod sgemm {
         params: SGEMMParams,
         dtype: crate::DType,
         settings: GenericMatmulSettings,
-        pipeline: Pipelines,
+        pipeline: Pipelines
     ) -> crate::Result<()> {
         let m_tile = settings.m_tile;
         let n_tile = settings.n_tile;
@@ -599,6 +623,328 @@ mod sgemm {
         }
 
         let pipeline = queue.get_pipeline_const(pipeline, const_vec.clone());
+        let input_alignment: BindgroupAlignment = dtype.into();
+        if input_alignment != BindgroupAlignment::Aligned4 {
+            panic!("matmul can only be performed with f32 and i32");
+        }
+
+        let bind_group = dev.create_bind_group_input2_with_alignment(
+            buffer_dest_padded,
+            buffer_input1_padded,
+            buffer_input2_padded,
+            BindgroupAlignmentLayout::Bindgroup2(
+                BindgroupAlignment::Aligned4,
+                BindgroupAlignment::Aligned16,
+                BindgroupAlignment::Aligned16,
+            ),
+        );
+
+        let lx;
+        let ly;
+        if NON_PADDED {
+            lx = new_n.div_ceil(n_tile);
+            ly = new_m.div_ceil(m_tile);
+        } else {
+            lx = (new_n) / n_tile;
+            ly = (new_m) / m_tile;
+        }
+
+        queue.enqueue_workgroups_extra(
+            pipeline,
+            bind_group,
+            lx,
+            ly,
+            params.b,
+            params.k as usize * params.m as usize * params.n as usize,
+            #[cfg(feature = "wgpu_debug")]
+            Some(get_debug_string(&params)),
+        );
+
+        if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT {
+            let dest_padding_layout = crate::Layout::contiguous(Shape::from((
+                params.b as usize,
+                new_m as usize,
+                new_n as usize,
+            )));
+            let dest_layout = crate::Layout::contiguous(Shape::from((
+                params.b as usize,
+                params.m as usize,
+                params.n as usize,
+            )));
+
+            super::queue_copy3d(
+                dev,
+                buffer_dest,
+                buffer_dest_padded,
+                dtype,
+                &dest_padding_layout,
+                (params.b, params.m, params.n),
+                &dest_layout,
+            )?;
+        }
+
+        Ok(())
+    }
+
+
+     #[allow(clippy::too_many_arguments)]
+    pub fn queue_matmul_quantized(
+        dev: &WgpuDevice,
+        buffer_dest: BufferReferenceId,
+        input1: WgpuTensor,
+        input2: WgpuTensor,
+        params: SGEMMParams,
+        kernel_path : &str,
+        shader_settings : &GenericDynamicMatmulShaderSettings
+    ) -> crate::Result<()> {
+        let dtype = crate::DType::F32;
+        let m_tile = shader_settings.settings.m_tile;
+        let n_tile = shader_settings.settings.n_tile;
+        let k_tile = shader_settings.settings.k_tile;
+
+        const NON_PADDED: bool = false;
+
+        let new_m;
+        let new_n;
+        let new_k;
+
+        if NON_PADDED {
+            new_m = params.m;
+            new_n = params.n;
+            new_k = params.k;
+        } else {
+            new_m = round_to_next_divisible(params.m, m_tile);
+            new_n = round_to_next_divisible(params.n, n_tile);
+            new_k = round_to_next_divisible(params.k, k_tile);
+        }
+
+        const USE_DIFFERENT_PADDED_OUTPUT: bool = true;
+
+        let need_different_output_buffer = params.m != new_m || params.n != new_n;
+
+        let mut input1_stride = input1.layout().stride().iter().rev();
+        let mut input2_stride = input2.layout().stride().iter().rev();
+
+        let input1_stride_k = *input1_stride.next().unwrap_or(&1);
+        let input1_stride_m = *input1_stride.next().unwrap_or(&1);
+
+        let input2_stride_n = *input2_stride.next().unwrap_or(&1);
+        let input2_stride_k = *input2_stride.next().unwrap_or(&1);
+
+        assert!(k_tile.is_multiple_of(4));
+
+        let no_padding_needed_input1_tile = ((params.m.is_multiple_of(m_tile) && params.k.is_multiple_of(k_tile)) || NON_PADDED)
+            && input1.layout().start_offset().is_multiple_of(4) //input will be loaded 16 bytes aligned
+            && !(input1_stride_m != 1 && input1_stride_k != 1);
+
+        let no_padding_needed_input1_stride =
+            !shader_settings.settings.need_padding_input1(input1_stride_k, input1_stride_m);
+        let no_padding_needed_input1 =
+            no_padding_needed_input1_tile && no_padding_needed_input1_stride;
+
+        let no_padding_needed_input2_tile = ((params.n.is_multiple_of(n_tile) && params.k.is_multiple_of(k_tile))
+            || NON_PADDED)
+            && input2.layout().start_offset().is_multiple_of(4)
+            && !(input2_stride_n != 1 && input2_stride_k != 1);
+
+        if !no_padding_needed_input2_tile{
+            panic!("Quantized matmul requires padding for input2: tile_size: {}, offset: {}, stride: {}", 
+            ((params.n.is_multiple_of(n_tile) && params.k.is_multiple_of(k_tile)) || NON_PADDED)
+            , input2.layout().start_offset().is_multiple_of(4)
+            , !(input2_stride_n != 1 && input2_stride_k != 1)
+        );
+        }
+
+        let no_padding_needed_input2_stride =
+            !shader_settings.settings.need_padding_input2(input2_stride_n, input2_stride_k);
+
+        if !no_padding_needed_input2_stride{
+            panic!("Quantized matmul requires padding for input2: stride n: {}, stride k: {}", input2_stride_n, input2_stride_k);
+        }   
+
+        let (buffer_input1_padded, layout_input1_padded) = if no_padding_needed_input1 {
+            (input1.buffer(), input1.layout().clone())
+        } else {
+            let mut cache = dev.cache.lock().unwrap();
+            let buffer_input1_padded;
+            let mut dest_layout;
+            //we need to realy pad the input:
+            let can_transpose = (input1_stride_k == 1) != (input1_stride_m == 1); //either stride k or m (but not both) must be one for the transpose shader to work.
+
+            let should_transpose_while_padding = !no_padding_needed_input1_stride && !can_transpose;
+
+            if !no_padding_needed_input1_tile || should_transpose_while_padding {
+                buffer_input1_padded = cache.create_buffer_reference(
+                    params.b * (new_m * new_k) * dtype.size_in_bytes() as u32,
+                    false,
+                );
+
+                let is_contiguous = if should_transpose_while_padding
+                    || ((input1_stride_k == 1) && (input1_stride_m == 1))
+                {
+                    !matches!(shader_settings.settings.input1_stride, StrideOptimization::StrideNM(_))
+                } else {
+                    input1_stride_k == 1
+                };
+
+                if is_contiguous {
+                    dest_layout = crate::Layout::contiguous(Shape::from((
+                        params.b as usize,
+                        new_m as usize,
+                        new_k as usize,
+                    )));
+                } else {
+                    dest_layout = crate::Layout::new(
+                        Shape::from((params.b as usize, new_m as usize, new_k as usize)),
+                        vec![(new_m * new_k) as usize, 1, new_m as usize],
+                        0,
+                    );
+                }
+                super::queue_copy3d_padded(
+                    dev,
+                    buffer_input1_padded,
+                    input1,
+                    dtype,
+                    (params.b, params.m, params.k),
+                    &dest_layout,
+                    Some(format!("{}: input1", get_debug_string(&params))),
+                )?;
+            } else {
+                buffer_input1_padded = input1.buffer();
+                dest_layout = input1.layout().clone();
+            }
+
+            //we need to transpose the input matrix
+            if !no_padding_needed_input1_stride && can_transpose {
+                let buffer_input1_tranposed = cache.create_buffer_reference(
+                    params.b * (new_m * new_k) * dtype.size_in_bytes() as u32,
+                    false,
+                );
+                let width;
+                let height;
+                let start_offset = dest_layout.start_offset();
+                let batch_stride = *dest_layout.stride().iter().rev().nth(2).unwrap_or(&1);
+                if let StrideOptimization::StrideNM(_) = shader_settings.settings.input1_stride {
+                    dest_layout = crate::Layout::new(
+                        Shape::from((params.b as usize, new_m as usize, new_k as usize)),
+                        vec![(new_m * new_k) as usize, 1, new_m as usize],
+                        0,
+                    );
+                    width = new_k;
+                    height = new_m;
+                } else {
+                    dest_layout = crate::Layout::contiguous_with_offset(
+                        Shape::from((params.b as usize, new_m as usize, new_k as usize)),
+                        0,
+                    );
+                    width = new_m;
+                    height = new_k;
+                }
+                transpose::queue_transpose3d_generic(
+                    dev,
+                    buffer_input1_tranposed,
+                    buffer_input1_padded,
+                    dtype,
+                    (params.b, width, height),
+                    start_offset,
+                    batch_stride,
+                )?;
+
+                (buffer_input1_tranposed, dest_layout)
+            } else {
+                (buffer_input1_padded, dest_layout)
+            }
+        };
+
+        let (buffer_input2_padded, layout_input2_padded) = 
+        (input2.buffer(), input2.layout().clone());
+
+        let buffer_dest_padded = if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT {
+            let mut cache = dev.cache.lock().unwrap();
+            cache.create_buffer_reference(
+                params.b * (new_m * new_n) * dtype.size_in_bytes() as u32,
+                false,
+            )
+        } else {
+            buffer_dest
+        };
+
+        let mut input1_stride = layout_input1_padded.stride().iter().rev();
+        let mut input2_stride = layout_input2_padded.stride().iter().rev();
+
+        let input1_stride_k = *input1_stride.next().unwrap_or(&1);
+        let input1_stride_m = *input1_stride.next().unwrap_or(&1);
+        let input1_stride_b = *input1_stride.next().unwrap_or(&1);
+
+        let input2_stride_n = *input2_stride.next().unwrap_or(&1);
+        let input2_stride_k = *input2_stride.next().unwrap_or(&1);
+        let input2_stride_b = *input2_stride.next().unwrap_or(&1);
+
+        let use_batch = params.b != 1;
+        
+        let const_vec = vec![
+            (input1_stride_k == 1) as usize,
+            (input1_stride_m == 1) as usize,
+            (input2_stride_n == 1) as usize,
+            (input2_stride_k == 1) as usize,
+            use_batch as usize,
+        ];
+
+        let mut queue = dev.get_queue();
+        queue.add(params.b);
+        queue.add(if USE_DIFFERENT_PADDED_OUTPUT {
+            new_m
+        } else {
+            params.m
+        });
+        queue.add(if USE_DIFFERENT_PADDED_OUTPUT {
+            new_k
+        } else {
+            params.k
+        });
+        queue.add(if USE_DIFFERENT_PADDED_OUTPUT {
+            new_n
+        } else {
+            params.n
+        });
+
+        queue.add(input1_stride_b); //input1_stride_b
+        queue.add(layout_input1_padded.start_offset()); //input1_offset
+
+        queue.add(input2_stride_b); //input2_stride_b
+        queue.add(layout_input2_padded.start_offset()); //input2_offset
+
+        queue.add(input1_stride_k);
+        queue.add(input1_stride_m);
+        queue.add(input2_stride_n);
+        queue.add(input2_stride_k);
+
+        if need_different_output_buffer && !USE_DIFFERENT_PADDED_OUTPUT {
+            queue.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
+        }
+
+        let mut cache = dev.cache.lock().unwrap();
+        let loader = cache
+            .shader
+            .loader_cache
+            .get_loader_mut::<candle_wgpu_kernels::DefaultWgpuDynamicShader>(candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX).unwrap();
+
+        let mut defines = 
+            vec![("TSM",  DefineDefinition::value(shader_settings.settings.m_tile)),
+            ("TSN",  DefineDefinition::value(shader_settings.settings.n_tile)),
+            ("TSK",  DefineDefinition::value(shader_settings.settings.k_tile)),
+            ("WPTM",  DefineDefinition::value(shader_settings.wptm)),
+            ("WPTN",  DefineDefinition::value(shader_settings.wptn)),
+            ("SGEMM",  DefineDefinition::new_empty()),
+            ("f32",  DefineDefinition::new_empty())];
+        if shader_settings.prefatch{
+            defines.push(("PREFATCH", DefineDefinition::new_empty()));
+        }
+
+        let shader_index = loader.get_shader_index(Path::new(kernel_path).to_path_buf(), &defines);
+        let pipeline_index = loader.get_pipeline_index(shader_index, "matmul_sgemm");
+
+        let pipeline = queue.get_pipeline_const(pipeline_index, const_vec.clone());
         let input_alignment: BindgroupAlignment = dtype.into();
         if input_alignment != BindgroupAlignment::Aligned4 {
             panic!("matmul can only be performed with f32 and i32");
