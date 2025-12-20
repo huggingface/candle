@@ -14,16 +14,18 @@ pub trait Loss: Sized {
 /// - When the absolute element-wise error is less than `delta`, it uses a squared term (MSE loss).
 /// - When the absolute element-wise error is greater than or equal to `delta`, it uses a linear term (MAE loss scaled by `delta`).
 /// # Formula
-/// ```
-/// HuberLoss =
-/// \begin{cases}
-/// 0.5(x_n - y_n)^2, & |x_n - y_n| < delta
 ///
+/// HuberLoss =
+/// 0.5(x_n - y_n)^2, & |x_n - y_n| < delta
 /// delta(|x_n - y_n| - 0.5delta), & |x_n - y_n| >= delta
-/// \end{cases}
-/// ```
+///
 pub struct HuberLoss {
     delta: f64,
+}
+impl Default for HuberLoss {
+    fn default() -> Self {
+        Self { delta: 1.0 }
+    }
 }
 impl Loss for HuberLoss {
     type Config = f64;
