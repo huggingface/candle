@@ -120,9 +120,6 @@ pub fn create_loader(input: TokenStream) -> TokenStream {
 
     // Generate the loader code with a unique index
     let expanded = quote! {
-        #[derive(Debug)]
-        pub struct #loader_name;
-
         impl #loader_name {
             pub const LOADER_INDEX : candle_wgpu_kernels::LoaderIndex = candle_wgpu_kernels::LoaderIndex(#new_index);
         }

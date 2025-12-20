@@ -3,6 +3,9 @@ use candle_core::{backend::BackendStorage, CustomOp1, Device, Tensor};
 use candle_wgpu_kernels::{PipelineIndex, ShaderIndex};
 
 //this demonstrates, how a custom wgpu kernel can be used:
+#[derive(Debug)]
+struct MyCustomLoader{}
+
 candle_wgpu_kernels::create_loader!(MyCustomLoader);
 
 impl candle_wgpu_kernels::ShaderLoader for MyCustomLoader {
@@ -42,6 +45,7 @@ fn main2() {
     }
 }
 
+#[cfg(feature = "wgpu")]
 fn main() -> Result<()> {
     let device = &Device::new_wgpu(0)?;
     let wgpu_device= device.as_wgpu_device()?;
@@ -50,7 +54,7 @@ fn main() -> Result<()> {
     wgpu_device.add_wgpu_shader_loader(MyCustomLoader::LOADER_INDEX, || MyCustomLoader {});
 
     let mut queue = wgpu_device.get_queue();
-    let output_buffer = wgpu_device.alloc_uninit_size(candle_core::DType::F32, 1);
+    let output_buffer = wgpu_device.alloc_uninit_size(candle_core::DType::U32, 1);
     
     //1. add optional data for the next shader call
     queue.add(42);
