@@ -2,6 +2,51 @@
 //!
 use candle::{Result, Tensor};
 
+pub trait Loss: Sized {
+    type Config: Sized;
+    fn new(config: Self::Config) -> Result<Self>;
+    fn forward(&mut self, inp: &Tensor, target: &Tensor) -> Result<Tensor>;
+}
+
+/// HuberLoss
+///
+/// A robust loss function that combines `MAE` and `MSE` losses:
+/// - When the absolute element-wise error is less than `delta`, it uses a squared term (MSE loss).
+/// - When the absolute element-wise error is greater than or equal to `delta`, it uses a linear term (MAE loss scaled by `delta`).
+/// # Formula
+/// ```
+/// HuberLoss =
+/// \begin{cases}
+/// 0.5(x_n - y_n)^2, & |x_n - y_n| < delta
+///
+/// delta(|x_n - y_n| - 0.5delta), & |x_n - y_n| >= delta
+/// \end{cases}
+/// ```
+pub struct HuberLoss {
+    delta: f64,
+}
+impl Loss for HuberLoss {
+    type Config = f64;
+    fn new(delta: f64) -> Result<Self> {
+        Ok(Self { delta: delta })
+    }
+    fn forward(&mut self, inp: &Tensor, target: &Tensor) -> Result<Tensor> {
+        if inp.dims() != target.dims() {
+            candle::bail!(
+                "input and target must have the same shape, got inp: {:?}, target: {:?}",
+                inp.dims(),
+                target.dims()
+            );
+        }
+        let diff = (inp - target)?;
+        let abs_diff = diff.abs()?;
+        let mask = abs_diff.le(self.delta)?;
+        let squared_loss = ((&diff * &diff)? * 0.5)?;
+        let linear_loss = ((abs_diff * self.delta)? - 0.5 * self.delta.powi(2))?;
+        let loss = mask.where_cond(&squared_loss, &linear_loss)?;
+        loss.mean_all()
+    }
+}
 /// The negative log likelihood loss.
 ///
 /// Arguments
