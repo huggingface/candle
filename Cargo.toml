@@ -32,6 +32,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 ab_glyph = "0.2.23"
 accelerate-src = { version = "0.3.2" }
+allocator-api2 = "0.2"
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
 candle = { path = "./candle-core", package = "candle-core", version = "0.9.2-alpha.2" }

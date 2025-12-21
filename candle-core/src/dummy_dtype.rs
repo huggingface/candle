@@ -59,7 +59,9 @@ macro_rules! dummy_with_dtype {
                 )
             }
 
-            fn to_cpu_storage_owned(_data: Vec<Self>) -> crate::CpuStorage {
+            fn to_cpu_storage_owned(
+                _data: crate::cpu_backend::StorageVec<Self>,
+            ) -> crate::CpuStorage {
                 panic!(
                     "{} is a dummy type and does not support storage",
                     stringify!($ty)

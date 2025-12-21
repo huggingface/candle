@@ -1,28 +1,30 @@
 /// Helper functions to write CPU kernels.
 use crate::backend::BackendStorage;
-use crate::{Error, Layout, Result, WithDType};
+use crate::vec::Vec;
+use crate::{DType, Error, Layout, Result, WithDType};
 
 type C = super::CpuStorage;
+
 pub trait Map1 {
     fn f<T: WithDType>(&self, vs: &[T], layout: &Layout) -> Result<Vec<T>>;
 
     fn map(&self, vs: &C, layout: &Layout) -> Result<C> {
         match vs {
-            C::U8(vs) => Ok(C::U8(self.f(vs, layout)?)),
-            C::U32(vs) => Ok(C::U32(self.f(vs, layout)?)),
-            C::I16(vs) => Ok(C::I16(self.f(vs, layout)?)),
-            C::I32(vs) => Ok(C::I32(self.f(vs, layout)?)),
-            C::I64(vs) => Ok(C::I64(self.f(vs, layout)?)),
-            C::BF16(vs) => Ok(C::BF16(self.f(vs, layout)?)),
-            C::F16(vs) => Ok(C::F16(self.f(vs, layout)?)),
-            C::F32(vs) => Ok(C::F32(self.f(vs, layout)?)),
-            C::F64(vs) => Ok(C::F64(self.f(vs, layout)?)),
-            C::F8E4M3(vs) => Ok(C::F8E4M3(self.f(vs, layout)?)),
+            C::U8(vs) => Ok(C::U8(self.f(vs.as_slice(), layout)?)),
+            C::U32(vs) => Ok(C::U32(self.f(vs.as_slice(), layout)?)),
+            C::I16(vs) => Ok(C::I16(self.f(vs.as_slice(), layout)?)),
+            C::I32(vs) => Ok(C::I32(self.f(vs.as_slice(), layout)?)),
+            C::I64(vs) => Ok(C::I64(self.f(vs.as_slice(), layout)?)),
+            C::BF16(vs) => Ok(C::BF16(self.f(vs.as_slice(), layout)?)),
+            C::F16(vs) => Ok(C::F16(self.f(vs.as_slice(), layout)?)),
+            C::F32(vs) => Ok(C::F32(self.f(vs.as_slice(), layout)?)),
+            C::F64(vs) => Ok(C::F64(self.f(vs.as_slice(), layout)?)),
+            C::F8E4M3(vs) => Ok(C::F8E4M3(self.f(vs.as_slice(), layout)?)),
             // Dummy types don't support Map1 operations
-            C::F6E2M3(_) => Err(Error::UnsupportedDTypeForOp(vs.dtype(), "map1").bt()),
-            C::F6E3M2(_) => Err(Error::UnsupportedDTypeForOp(vs.dtype(), "map1").bt()),
-            C::F4(_) => Err(Error::UnsupportedDTypeForOp(vs.dtype(), "map1").bt()),
-            C::F8E8M0(_) => Err(Error::UnsupportedDTypeForOp(vs.dtype(), "map1").bt()),
+            C::F6E2M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F6E2M3, "map1").bt()),
+            C::F6E3M2(_) => Err(Error::UnsupportedDTypeForOp(DType::F6E3M2, "map1").bt()),
+            C::F4(_) => Err(Error::UnsupportedDTypeForOp(DType::F4, "map1").bt()),
+            C::F8E8M0(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E8M0, "map1").bt()),
         }
     }
 }
@@ -43,10 +45,10 @@ pub trait Map1Any {
             C::F64(vs) => Ok(self.f(vs, layout, C::F64)?),
             C::F8E4M3(vs) => Ok(self.f(vs, layout, C::F8E4M3)?),
             // Dummy types don't support Map1Any operations
-            C::F6E2M3(_) => Err(Error::UnsupportedDTypeForOp(vs.dtype(), "map1any").bt()),
-            C::F6E3M2(_) => Err(Error::UnsupportedDTypeForOp(vs.dtype(), "map1any").bt()),
-            C::F4(_) => Err(Error::UnsupportedDTypeForOp(vs.dtype(), "map1any").bt()),
-            C::F8E8M0(_) => Err(Error::UnsupportedDTypeForOp(vs.dtype(), "map1any").bt()),
+            C::F6E2M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F6E2M3, "map1any").bt()),
+            C::F6E3M2(_) => Err(Error::UnsupportedDTypeForOp(DType::F6E3M2, "map1any").bt()),
+            C::F4(_) => Err(Error::UnsupportedDTypeForOp(DType::F4, "map1any").bt()),
+            C::F8E8M0(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E8M0, "map1any").bt()),
         }
     }
 }
@@ -142,7 +144,7 @@ pub fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
             .iter()
             .zip(rhs[o_r1..o_r2].iter())
             .map(|(&l, &r)| f(l, r))
-            .collect(),
+            .collect::<Vec<U>>(),
         (Some((o_l1, o_l2)), None) => {
             // TODO: Maybe we want to avoid going through the layout twice.
             match rhs_l.offsets_b() {
@@ -163,13 +165,13 @@ pub fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
                             }
                             f(l, *r)
                         })
-                        .collect()
+                        .collect::<Vec<U>>()
                 }
                 None => lhs_l
                     .strided_index()
                     .zip(rhs_l.strided_index())
                     .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                    .collect(),
+                    .collect::<Vec<U>>(),
             }
         }
         (None, Some((o_r1, o_r2))) => {
@@ -192,20 +194,20 @@ pub fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
                             }
                             f(*l, r)
                         })
-                        .collect()
+                        .collect::<Vec<U>>()
                 }
                 None => lhs_l
                     .strided_index()
                     .zip(rhs_l.strided_index())
                     .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                    .collect(),
+                    .collect::<Vec<U>>(),
             }
         }
         _ => lhs_l
             .strided_index()
             .zip(rhs_l.strided_index())
             .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-            .collect(),
+            .collect::<Vec<U>>(),
     }
 }
 
@@ -254,7 +256,7 @@ pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [
             }
             Some(ob) => {
                 let rhs = &rhs[ob.start..ob.start + ob.len];
-                let mut ys = lhs[o_l1..o_l2].to_vec();
+                let mut ys: Vec<T> = lhs[o_l1..o_l2].iter().copied().collect::<Vec<T>>();
                 for idx_l in 0..ob.left_broadcast {
                     let start = idx_l * ob.len * ob.right_broadcast;
                     for (i, &r) in rhs.iter().enumerate() {
@@ -270,7 +272,7 @@ pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [
                 .strided_index()
                 .zip(rhs_l.strided_index())
                 .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                .collect(),
+                .collect::<Vec<T>>(),
         },
         (None, Some((o_r1, o_r2))) => match lhs_l.offsets_b() {
             Some(ob) if ob.right_broadcast == 1 => {
@@ -295,7 +297,7 @@ pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [
             }
             Some(ob) => {
                 let lhs = &lhs[ob.start..ob.start + ob.len];
-                let mut ys = rhs[o_r1..o_r2].to_vec();
+                let mut ys: Vec<T> = rhs[o_r1..o_r2].iter().copied().collect::<Vec<T>>();
                 for idx_l in 0..ob.left_broadcast {
                     let start = idx_l * ob.len * ob.right_broadcast;
                     for (i, &l) in lhs.iter().enumerate() {
@@ -311,13 +313,13 @@ pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [
                 .strided_index()
                 .zip(rhs_l.strided_index())
                 .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                .collect(),
+                .collect::<Vec<T>>(),
         },
         _ => lhs_l
             .strided_index()
             .zip(rhs_l.strided_index())
             .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-            .collect(),
+            .collect::<Vec<T>>(),
     }
 }
 
@@ -331,7 +333,7 @@ pub fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(
             [start_offset..start_offset + len]
             .iter()
             .map(|&v| f(v))
-            .collect(),
+            .collect::<Vec<U>>(),
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
             block_len,

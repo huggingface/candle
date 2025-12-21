@@ -57,6 +57,8 @@ pub mod cpu;
 pub mod cpu_backend;
 #[cfg(feature = "cuda")]
 pub mod cuda_backend;
+#[cfg(feature = "cuda")]
+pub use cudarc::driver::PinnedHostSlice;
 mod custom_op;
 mod device;
 pub mod display;
@@ -80,6 +82,7 @@ pub mod scalar;
 pub mod shape;
 mod sort;
 mod storage;
+pub mod vec;
 pub mod streaming;
 mod strided_index;
 mod tensor;

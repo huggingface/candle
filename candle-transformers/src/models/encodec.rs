@@ -232,8 +232,9 @@ impl candle::CustomOp2 for CodebookEncode {
                 }
                 where_min as u32
             })
-            .collect();
-        let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            .collect::<std::vec::Vec<u32>>();
+        let dst_storage = candle::cpu_backend::to_storage_vec(dst);
+        let storage = candle::WithDType::to_cpu_storage_owned(dst_storage);
         Ok((storage, (lhs_dim1,).into()))
     }
 }

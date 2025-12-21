@@ -15,6 +15,8 @@ use half::{bf16, f16};
 pub mod cudnn;
 mod device;
 mod error;
+#[cfg(feature = "cuda-pinned-memory")]
+pub mod pinned_allocator;
 mod utils;
 pub use device::{CudaDevice, DeviceId};
 pub use error::{CudaError, WrapErr};
@@ -1562,43 +1564,53 @@ impl BackendStorage for CudaStorage {
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         match &self.slice {
             CudaStorageSlice::U8(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::U8(cpu_storage))
             }
             CudaStorageSlice::U32(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::U32(cpu_storage))
             }
             CudaStorageSlice::I16(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::I16(cpu_storage))
             }
             CudaStorageSlice::I32(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::I32(cpu_storage))
             }
             CudaStorageSlice::I64(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::I64(cpu_storage))
             }
             CudaStorageSlice::BF16(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::BF16(cpu_storage))
             }
             CudaStorageSlice::F16(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::F16(cpu_storage))
             }
             CudaStorageSlice::F32(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::F32(cpu_storage))
             }
             CudaStorageSlice::F64(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::F64(cpu_storage))
             }
             CudaStorageSlice::F8E4M3(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage_std = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = crate::cpu_backend::to_storage_vec(cpu_storage_std);
                 Ok(CpuStorage::F8E4M3(cpu_storage))
             }
             CudaStorageSlice::F4(_)

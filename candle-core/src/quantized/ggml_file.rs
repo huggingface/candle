@@ -108,7 +108,7 @@ impl Vocab {
         let mut token_score_pairs = Vec::with_capacity(n_vocab);
         for _index in 0..n_vocab {
             let len = reader.read_u32::<LittleEndian>()? as usize;
-            let mut word = vec![0u8; len];
+            let mut word: Vec<u8> = (0..len).map(|_| 0u8).collect();
             reader.read_exact(&mut word)?;
             let score = reader.read_f32::<LittleEndian>()?;
             token_score_pairs.push((word, score))
@@ -127,7 +127,10 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     let n_blocks = size_in_bytes / std::mem::size_of::<T>();
     let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
     let data: QStorage = match device {
-        Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
+        Device::Cpu => {
+            let vec = data.to_vec();
+            QStorage::Cpu(Box::new(vec))
+        }
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
         Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
     };
