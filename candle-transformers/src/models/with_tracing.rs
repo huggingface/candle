@@ -122,6 +122,11 @@ impl QMatMul {
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         Ok(Self { inner, span })
     }
+
+    pub fn indexed_moe_forward(&self, xs: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        self.inner.indexed_moe_forward(xs, ids)
+    }
 }
 
 impl Module for QMatMul {
