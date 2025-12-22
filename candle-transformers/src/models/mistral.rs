@@ -426,6 +426,12 @@ impl Model {
         &self.embed_tokens
     }
 
+    /// Returns a reference to the lm_head linear layer.
+    /// This is useful for multimodal models like Mistral3 that need to share the lm_head.
+    pub fn lm_head(&self) -> &Linear {
+        &self.lm_head
+    }
+
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {

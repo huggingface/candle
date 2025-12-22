@@ -7,7 +7,6 @@ use candle_nn::VarBuilder;
 
 use crate::models::mistral::Model as MistralModel;
 use crate::models::pixtral::vision_model::Model as PixtralVisionModel;
-use crate::models::with_tracing::linear_no_bias;
 
 use super::config::Mistral3Config;
 use super::projector::MultiModalProjector;
@@ -289,15 +288,22 @@ impl Mistral3Model {
     pub fn clear_kv_cache(&mut self) {
         self.language_model.clear_kv_cache();
     }
+
+    /// Returns a reference to the underlying language model.
+    /// This is useful for accessing the lm_head without loading it twice.
+    pub fn language_model(&self) -> &MistralModel {
+        &self.language_model
+    }
 }
 
 /// Mistral3ForConditionalGeneration - complete model with lm_head.
 ///
 /// This is the main entry point for Mistral3 inference.
+/// Note: The lm_head is shared with the underlying MistralModel to avoid
+/// loading the same weights twice (saves ~1.34 GB for 24B model).
 #[derive(Debug, Clone)]
 pub struct Mistral3ForConditionalGeneration {
     model: Mistral3Model,
-    lm_head: crate::models::with_tracing::Linear,
     dtype: DType,
     device: Device,
 }
@@ -307,20 +313,15 @@ impl Mistral3ForConditionalGeneration {
     ///
     /// Weight paths in safetensors:
     /// - `vision_tower.*`, `multi_modal_projector.*`, `language_model.*` at root level
-    /// - `lm_head` is at `language_model.lm_head.weight`
+    /// - `lm_head` is at `language_model.lm_head.weight` (loaded by MistralModel)
+    ///
+    /// Note: The lm_head is reused from the underlying MistralModel to avoid
+    /// duplicate memory allocation.
     pub fn new(cfg: &Mistral3Config, vb: VarBuilder) -> Result<Self> {
         let model = Mistral3Model::new(cfg, vb.clone())?;
 
-        // lm_head path: language_model.lm_head.weight
-        let lm_head = linear_no_bias(
-            cfg.text_config.hidden_size,
-            cfg.text_config.vocab_size,
-            vb.pp("language_model.lm_head"),
-        )?;
-
         Ok(Self {
             model,
-            lm_head,
             dtype: vb.dtype(),
             device: vb.device().clone(),
         })
@@ -340,7 +341,8 @@ impl Mistral3ForConditionalGeneration {
         let hidden_states = self
             .model
             .forward(input_ids, pixel_values, image_sizes, seqlen_offset)?;
-        self.lm_head.forward(&hidden_states)
+        // Reuse lm_head from the underlying MistralModel
+        self.model.language_model().lm_head().forward(&hidden_states)
     }
 
     /// Forward pass optimized for generation - returns only last token logits.
@@ -362,7 +364,8 @@ impl Mistral3ForConditionalGeneration {
         let seq_len = hidden_states.dim(1)?;
         let last_hidden = hidden_states.narrow(1, seq_len - 1, 1)?;
 
-        self.lm_head.forward(&last_hidden)
+        // Reuse lm_head from the underlying MistralModel
+        self.model.language_model().lm_head().forward(&last_hidden)
     }
 
     pub fn clear_kv_cache(&mut self) {
