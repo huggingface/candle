@@ -248,6 +248,7 @@ fn normalize_image(image: &Tensor) -> Result<Tensor> {
 fn load_image(
     path: &str,
     patch_size: usize,
+    spatial_merge_size: usize,
     device: &Device,
 ) -> Result<(Tensor, Vec<(usize, usize)>)> {
     let img = image::ImageReader::open(path)?
@@ -256,14 +257,16 @@ fn load_image(
 
     let (width, height) = (img.width() as usize, img.height() as usize);
 
-    // Ensure dimensions are multiples of patch_size
-    let new_height = (height / patch_size) * patch_size;
-    let new_width = (width / patch_size) * patch_size;
+    // Ensure dimensions are multiples of (patch_size * spatial_merge_size)
+    // This is required by the multi-modal projector's reshape operation
+    let align_size = patch_size * spatial_merge_size;
+    let new_height = (height / align_size) * align_size;
+    let new_width = (width / align_size) * align_size;
 
     let img = if new_height != height || new_width != width {
         println!(
-            "Resizing image from {}x{} to {}x{} (patch_size={})",
-            width, height, new_width, new_height, patch_size
+            "Resizing image from {}x{} to {}x{} (align_size={})",
+            width, height, new_width, new_height, align_size
         );
         img.resize_exact(
             new_width as u32,
@@ -576,11 +579,19 @@ fn main() -> Result<()> {
     println!("  Spatial merge size: {}", config.spatial_merge_size);
 
     // Load image if provided
+    // Image will be converted to model dtype (e.g., BF16) to match vision_tower weights
     let (pixel_values, image_sizes) = if let Some(ref image_path) = args.image {
         println!("\nLoading image: {}", image_path);
-        let (pixels, sizes) = load_image(image_path, config.vision_config.patch_size, &device)?;
+        let (pixels, sizes) = load_image(
+            image_path,
+            config.vision_config.patch_size,
+            config.spatial_merge_size,
+            &device,
+        )?;
+        // Convert pixels to model dtype (BF16/F16/F32) to match vision_tower weights
         let pixels = pixels.to_dtype(dtype)?;
         println!("  Image shape: {:?}", pixels.dims());
+        println!("  Image dtype: {:?}", pixels.dtype());
         println!("  Image sizes: {:?}", sizes);
         (Some(pixels), Some(sizes))
     } else {
@@ -601,8 +612,8 @@ fn main() -> Result<()> {
         println!("Loaded vision model in {:?}", start.elapsed());
 
         if let Some(ref pixels) = pixel_values {
-            let pixels = pixels.to_dtype(DType::F32)?;
-            let embs = vision_model.forward(&pixels)?;
+            // pixels already converted to model dtype above
+            let embs = vision_model.forward(pixels)?;
             println!("Vision embeddings shape: {:?}", embs.dims());
             println!("Vision embeddings (first 5 values): {:?}", embs.i((0, 0, ..5))?);
         } else {

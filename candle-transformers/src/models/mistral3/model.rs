@@ -158,19 +158,19 @@ impl Mistral3Model {
     /// temporarily using F32 for numerical stability.
     pub fn new(cfg: &Mistral3Config, vb: VarBuilder) -> Result<Self> {
         // Vision Tower (Pixtral) - uses VarBuilder's dtype
-        // let vision_tower = PixtralVisionModel::new(&cfg.vision_config, vb.pp("vision_tower"))?;
-        let vision_tower = PixtralVisionModel::new(
-            &cfg.vision_config,
-            vb.pp("vision_tower").to_dtype(DType::F32),
-        )?;
+        let vision_tower = PixtralVisionModel::new(&cfg.vision_config, vb.pp("vision_tower"))?;
+        // let vision_tower = PixtralVisionModel::new(
+        //     &cfg.vision_config,
+        //     vb.pp("vision_tower").to_dtype(DType::F32),
+        // )?;
 
         // Multi-Modal Projector - uses VarBuilder's dtype
-        // let multi_modal_projector =
-        //     MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
-        let multi_modal_projector = MultiModalProjector::new(
-            cfg,
-            vb.pp("multi_modal_projector").to_dtype(DType::F32),
-        )?;
+        let multi_modal_projector =
+            MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
+        // let multi_modal_projector = MultiModalProjector::new(
+        //     cfg,
+        //     vb.pp("multi_modal_projector").to_dtype(DType::F32),
+        // )?;
         // Language Model (Mistral)
         // Note: mistral::Model::new internally adds "model" prefix
         let language_model = MistralModel::new(&cfg.text_config, vb.pp("language_model"))?;
