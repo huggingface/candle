@@ -152,12 +152,12 @@ pub fn call_upsample_bilinear_2d(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Conv, name)?;
     let dst_el = out_w * out_h * shape[0] * shape[1];
-    
+
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
-    
+
     set_params!(
         encoder,
         (
@@ -174,7 +174,7 @@ pub fn call_upsample_bilinear_2d(
             output
         )
     );
-    
+
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);

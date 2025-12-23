@@ -1003,19 +1003,17 @@ impl Map1 for UpsampleBilinear2D {
         } else {
             crate::bail!("unexpected input shape for upsample_bilinear2d {dims:?}")
         };
-        
+
         let (out_w, out_h) = (self.out_w, self.out_h);
         let dst_el = out_w * out_h * dims[0] * dims[1];
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(
-            &kernel_name::<T>("upsample_bilinear2d"), 
-            &kernels::CONV
-        )?;
-        
+        let func =
+            dev.get_or_load_func(&kernel_name::<T>("upsample_bilinear2d"), &kernels::CONV)?;
+
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
         let ds = dev.memcpy_stod(&ds)?;
-        
+
         let mut builder = func.builder();
         barg!(builder, out_w);
         barg!(builder, out_h);
@@ -1027,7 +1025,7 @@ impl Map1 for UpsampleBilinear2D {
         builder.arg(&ds);
         builder.arg(inp);
         builder.arg(&out);
-        
+
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
         Ok(out)

@@ -581,15 +581,18 @@ impl Storage {
     ) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
-                let storage = storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
+                let storage =
+                    storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
                 Ok(Self::Cpu(storage))
             }
             Self::Cuda(storage) => {
-                let storage = storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
+                let storage =
+                    storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
                 Ok(Self::Cuda(storage))
             }
             Self::Metal(storage) => {
-                let storage = storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
+                let storage =
+                    storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
                 Ok(Self::Metal(storage))
             }
         }

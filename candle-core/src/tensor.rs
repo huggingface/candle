@@ -1255,9 +1255,14 @@ impl Tensor {
             align_corners,
         });
         // Pass None for scale factors (size mode)
-        let storage = self
-            .storage()
-            .upsample_bilinear2d(self.layout(), target_h, target_w, align_corners, None, None)?;
+        let storage = self.storage().upsample_bilinear2d(
+            self.layout(),
+            target_h,
+            target_w,
+            align_corners,
+            None,
+            None,
+        )?;
         Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
     }
 
@@ -1291,36 +1296,39 @@ impl Tensor {
         align_corners: bool,
     ) -> Result<Self> {
         let (n, c, height_in, width_in) = self.dims4()?;
-        
+
         // Calculate output size (floor, matching PyTorch)
         let height_out = (height_in as f64 * scale_h).floor() as usize;
         let width_out = (width_in as f64 * scale_w).floor() as usize;
-        
+
         // Early return if size unchanged
         if height_in == height_out && width_in == width_out {
             return Ok(self.clone());
         }
-        
+
         let op = BackpropOp::new1(self, |arg| Op::UpsampleBilinear2D {
             arg,
             target_h: height_out,
             target_w: width_out,
             align_corners,
         });
-        
+
         // Pass original scale factors (scale_factor mode)
         // This ensures PyTorch-compatible scale calculation
-        let storage = self
-            .storage()
-            .upsample_bilinear2d(
-                self.layout(),
-                height_out,
-                width_out,
-                align_corners,
-                Some(scale_h),
-                Some(scale_w),
-            )?;
-        Ok(from_storage(storage, (n, c, height_out, width_out), op, false))
+        let storage = self.storage().upsample_bilinear2d(
+            self.layout(),
+            height_out,
+            width_out,
+            align_corners,
+            Some(scale_h),
+            Some(scale_w),
+        )?;
+        Ok(from_storage(
+            storage,
+            (n, c, height_out, width_out),
+            op,
+            false,
+        ))
     }
 
     /// 2D average pooling over an input tensor with multiple channels.
