@@ -452,7 +452,49 @@ impl Storage {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            // FIXME can this branch be avoided? we already check for same device above...
+            //   or, alternatively, can this branch be the one that checks for same device?
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "conv2d",
+            }
+            .bt()),
+        }
+    }
+
+    pub(crate) fn conv2d_with_bias(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        bias: &Self,
+        bias_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        self.same_device(kernel, "conv2d")?;
+        self.same_device(bias, "conv2d")?;
+        self.same_dtype(kernel, "conv2d")?;
+        self.same_dtype(bias, "conv2d")?;
+        match (self, &kernel, &bias) {
+            (Storage::Cpu(inp), Storage::Cpu(kernel), Storage::Cpu(bias)) => {
+                todo!("fused bias impl");
+                let s = inp.conv2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Cpu(s))
+            }
+            (Storage::Cuda(inp), Storage::Cuda(kernel), Storage::Cuda(bias)) => {
+                todo!("fused bias impl");
+                let s = inp.conv2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Cuda(s))
+            }
+            (Storage::Metal(inp), Storage::Metal(kernel), Storage::Metal(bias)) => {
+                todo!("fused bias impl");
+                let s = inp.conv2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Metal(s))
+            }
+            // FIXME can this branch be avoided? we already check for same device above...
+            //   or, alternatively, can this branch be the one that checks for same device?
+            (lhs, rhs, _bias) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
                 op: "conv2d",

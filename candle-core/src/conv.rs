@@ -285,6 +285,32 @@ impl Tensor {
         Ok(crate::tensor::from_storage(storage, out_dims, op, false))
     }
 
+    fn conv2d_single_group_with_bias(
+        &self,
+        kernel: &Self,
+        bias: &Self,
+        params: &ParamsConv2D,
+    ) -> Result<Self> {
+        let storage = self.storage().conv2d_with_bias(
+            self.layout(),
+            &kernel.storage(),
+            kernel.layout(),
+            &bias.storage(),
+            bias.layout(),
+            params,
+        )?;
+        // FIXME in case of conv2d + bias, it's probably a new op for backprop purposes?
+        let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::Conv2D {
+            arg,
+            kernel,
+            padding: params.padding,
+            stride: params.stride,
+            dilation: params.dilation,
+        });
+        let out_dims = params.out_dims();
+        Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+    }
+
     /// Applies a 2D convolution over the input tensor.
     pub fn conv2d(
         &self,
@@ -294,9 +320,10 @@ impl Tensor {
         dilation: usize,
         groups: usize,
     ) -> Result<Self> {
-        self.conv2d_with_algo(kernel, padding, stride, dilation, groups, None)
+        self.conv2d_with_algo(kernel, padding, stride, dilation, groups, None, &None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn conv2d_with_algo(
         &self,
         kernel: &Self,
@@ -305,6 +332,7 @@ impl Tensor {
         dilation: usize,
         groups: usize,
         cudnn_fwd_algo: Option<CudnnFwdAlgo>,
+        bias: &Option<Tensor>,
     ) -> Result<Self> {
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_out, c_in_k, k_h, k_w) = kernel.dims4()?;
@@ -326,18 +354,47 @@ impl Tensor {
             dilation,
             cudnn_fwd_algo,
         };
-        if groups == 1 {
-            self.conv2d_single_group(kernel, &params)
-        } else {
-            let blocks = self.chunk(groups, 1)?;
-            let kernel = kernel.chunk(groups, 0)?;
-            let blocks = blocks
-                .iter()
-                .zip(&kernel)
-                .map(|(block, kernel)| block.conv2d_single_group(kernel, &params))
-                .collect::<Result<Vec<_>>>()?;
-            Tensor::cat(&blocks, 1)
+        // FIXME should bias be reshaped here already?
+        match (groups == 1, bias) {
+            // Single group.
+            (true, Some(bias)) => self.conv2d_single_group_with_bias(kernel, bias, &params),
+            (true, None) => self.conv2d_single_group(kernel, &params),
+            // Mutliple groups.
+            (false, Some(_bias)) => {
+                todo!("hmmm")
+                // crate::bail!("conv2d with bias is only supported for groups=1")
+            }
+            (false, None) => {
+                let blocks = self.chunk(groups, 1)?;
+                let kernel = kernel.chunk(groups, 0)?;
+                let blocks = blocks
+                    .iter()
+                    .zip(&kernel)
+                    .map(|(block, kernel)| block.conv2d_single_group(kernel, &params))
+                    .collect::<Result<Vec<_>>>()?;
+                Tensor::cat(&blocks, 1)
+            }
         }
+        // let res = if groups == 1 {
+        //     self.conv2d_single_group(kernel, &params)?
+        // } else {
+        //     let blocks = self.chunk(groups, 1)?;
+        //     let kernel = kernel.chunk(groups, 0)?;
+        //     let blocks = blocks
+        //         .iter()
+        //         .zip(&kernel)
+        //         .map(|(block, kernel)| block.conv2d_single_group(kernel, &params))
+        //         .collect::<Result<Vec<_>>>()?;
+        //     Tensor::cat(&blocks, 1)?
+        // };
+        // // Add bias if provided.
+        // if let Some(bias) = bias {
+        //     let b = bias.dims1()?;
+        //     let bias = bias.reshape((1, b, 1, 1))?;
+        //     Ok(res.broadcast_add(&bias)?)
+        // } else {
+        //     Ok(res)
+        // }
     }
 
     /// Applies a 2D transposed convolution over the input tensor.

@@ -197,7 +197,7 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
 
         let num_tiles = total_out_pixels.div_ceil(TILE_SIZE);
         (0..num_tiles).into_par_iter().try_for_each(|tile_idx| {
-            // Determine actual tile size (may be smaller at the end) {
+            // Determine actual tile size (may be smaller at the end).
             let tile_start = tile_idx * TILE_SIZE;
             let tile_end = (tile_start + TILE_SIZE).min(total_out_pixels);
             let tile_size = tile_end - tile_start;
