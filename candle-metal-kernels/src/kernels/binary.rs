@@ -1,23 +1,24 @@
 use crate::kernels::macros::ops;
-use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
+use crate::{get_tile_size, linear_split};
 use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
 use objc2_metal::MTLResourceUsage;
 
-ops!(add, sub, mul, div, min, max, eq, ne, le, lt, ge, gt);
+ops!(badd, bsub, bmul, bdiv, bminimum, bmaximum, eq, ne, le, lt, ge, gt);
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_binary_contiguous(
+pub fn call_binary_contiguous<S: ToString>(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    kernel_name: contiguous::Kernel,
+    kernel_name: S,
+    dtype_size: usize,
     length: usize,
     left: BufferOffset,
     right: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.0)?;
+    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.to_string())?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
@@ -25,7 +26,9 @@ pub fn call_binary_contiguous(
 
     set_params!(encoder, (length, &left, &right, output));
 
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
 
     encoder.use_resource(left.buffer, MTLResourceUsage::Read);
     encoder.use_resource(right.buffer, MTLResourceUsage::Read);
@@ -35,11 +38,12 @@ pub fn call_binary_contiguous(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_binary_strided(
+pub fn call_binary_strided<S: ToString>(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    name: strided::Kernel,
+    kernel_name: S,
+    dtype_size: usize,
     shape: &[usize],
     left_input: BufferOffset,
     left_strides: &[usize],
@@ -47,14 +51,15 @@ pub fn call_binary_strided(
     right_strides: &[usize],
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Binary, name.0)?;
+    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.to_string())?;
 
     let num_dims: usize = shape.len();
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
-    let width: usize = shape.iter().product();
     let length: usize = shape.iter().product();
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
 
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
@@ -74,6 +79,5 @@ pub fn call_binary_strided(
     encoder.use_resource(right_input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-
     Ok(())
 }
