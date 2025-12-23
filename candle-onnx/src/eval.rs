@@ -2,7 +2,7 @@ use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
 use candle::Module;
-use candle::{bail, DType, Device, Result, Tensor};
+use candle::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::activation::PReLU;
 use std::collections::{HashMap, HashSet};
 
@@ -363,7 +363,7 @@ fn simple_eval_(
                 let input1 = get(&node.input[1])?;
                 // HACK: current implementation of broadcast_pow cannot handle negative base,
                 // so we use powf where we can, which *does* correctly handle negative base.
-                if let Ok(exp) = (|| input1.to_dtype(DType::F64)?.to_scalar::<f64>())() {
+                if let Ok(exp) = to_scalar_flexible::<f64>(&input1.to_dtype(DType::F64)?) {
                     let output = input0.powf(exp)?;
                     values.insert(node.output[0].clone(), output);
                 } else {
@@ -757,9 +757,9 @@ fn simple_eval_(
                 macro_rules! arange_step {
                     ($t: ty) => {
                         Tensor::arange_step(
-                            start.to_vec0::<$t>()?,
-                            limit.to_vec0::<$t>()?,
-                            delta.to_vec0::<$t>()?,
+                            to_vec0_flexible::<$t>(start)?,
+                            to_vec0_flexible::<$t>(limit)?,
+                            to_vec0_flexible::<$t>(delta)?,
                             &Device::Cpu,
                         )?
                     };
@@ -800,6 +800,22 @@ fn simple_eval_(
                 let b = get(&node.input[1])?;
 
                 let output = a.broadcast_lt(b)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#LessOrEqual
+            "LessOrEqual" => {
+                let a = get(&node.input[0])?;
+                let b = get(&node.input[1])?;
+
+                let output = a.broadcast_le(b)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#GreaterOrEqual
+            "GreaterOrEqual" => {
+                let a = get(&node.input[0])?;
+                let b = get(&node.input[1])?;
+
+                let output = a.broadcast_ge(b)?;
                 values.insert(node.output[0].clone(), output);
             }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Log
@@ -959,8 +975,31 @@ fn simple_eval_(
                 if inputs.is_empty() {
                     bail!("empty concat")
                 };
+                // Find minimum rank among inputs and squeeze trailing singleton dims to match
+                let min_rank = inputs.iter().map(|t| t.rank()).min().unwrap();
+                let inputs: Vec<_> = inputs
+                    .into_iter()
+                    .map(|t| {
+                        let mut t = t;
+                        while t.rank() > min_rank {
+                            let last_dim = t.rank() - 1;
+                            if t.dims()[last_dim] == 1 {
+                                t = t.squeeze(last_dim).unwrap_or(t);
+                            } else {
+                                break;
+                            }
+                        }
+                        t
+                    })
+                    .collect();
                 let axis = inputs[0].normalize_axis(axis)?;
-                let output = Tensor::cat(&inputs, axis)?;
+                let output = Tensor::cat(&inputs, axis).map_err(|e| {
+                    let shapes: Vec<_> = inputs.iter().map(|t| format!("{:?}", t.dims())).collect();
+                    candle::Error::Msg(format!(
+                        "Concat failed for node '{}': {} (input shapes: {:?})",
+                        node.name, e, shapes
+                    ))
+                })?;
                 values.insert(node.output[0].clone(), output);
             }
             "Abs" => {
@@ -980,7 +1019,13 @@ fn simple_eval_(
             }
             "Neg" => {
                 let input = get(&node.input[0])?;
-                let output = input.neg()?;
+                // neg() not implemented for i64, work around with multiply by -1
+                let output = if input.dtype() == DType::I64 {
+                    let minus_one = Tensor::new(&[-1i64], input.device())?.broadcast_as(input.shape())?;
+                    input.mul(&minus_one)?
+                } else {
+                    input.neg()?
+                };
                 values.insert(node.output[0].clone(), output);
             }
             "Erf" => {
@@ -1077,9 +1122,7 @@ fn simple_eval_(
                     bail!("only reverse == 0 is supported in CumSum")
                 }
                 let input = get(&node.input[0])?;
-                let axis = get(&node.input[1])?
-                    .to_dtype(DType::U32)?
-                    .to_vec0::<u32>()?;
+                let axis = to_vec0_flexible::<u32>(&get(&node.input[1])?.to_dtype(DType::U32)?)?;
                 let output = input.cumsum(axis as usize)?;
                 values.insert(node.output[0].clone(), output);
             }
@@ -1101,7 +1144,7 @@ fn simple_eval_(
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#if
             "If" => {
                 // protobuf encodes boolean false as 0 and true as 1
-                let cond = get(&node.input[0])?.get(0)?.to_scalar::<u8>()?;
+                let cond = to_scalar_flexible::<u8>(&get(&node.input[0])?.get(0)?)?;
                 let attr_name = if cond != 0 {
                     "then_branch"
                 } else {
@@ -1225,8 +1268,8 @@ fn simple_eval_(
                     } as usize;
 
                     let data_dim = data.dims()[axis] as i64;
-                    let mut s = starts.get(i)?.to_scalar::<i64>()?;
-                    let mut e = ends.get(i)?.to_scalar::<i64>()?;
+                    let mut s = to_scalar_flexible::<i64>(&starts.get(i)?)?;
+                    let mut e = to_scalar_flexible::<i64>(&ends.get(i)?)?;
                     // All negative values in starts[i] and ends[i] have
                     // dims[axes[i]] added to them, where dims are the
                     // dimensions of input.
@@ -1237,7 +1280,7 @@ fn simple_eval_(
                         e += data_dim;
                     }
 
-                    let p = steps.get(i)?.to_scalar::<i64>()?;
+                    let p = to_scalar_flexible::<i64>(&steps.get(i)?)?;
                     // starts[i] is clamped into the range [0, dims[axes[i]]]
                     // for positive stepping and [0, dims[axes[i]]-1] for
                     // negative stepping.
@@ -1528,6 +1571,21 @@ fn simple_eval_(
                 let expanded_tensor = input_tensor.broadcast_as(target_shape)?;
 
                 values.insert(node.output[0].clone(), expanded_tensor);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Tile
+            "Tile" => {
+                let input = get(&node.input[0])?;
+                let repeats = get(&node.input[1])?.to_vec1::<i64>()?;
+
+                let mut result = input.clone();
+                for (dim, &repeat) in repeats.iter().enumerate() {
+                    if repeat > 1 {
+                        let repeat = repeat as usize;
+                        let tensors: Vec<_> = (0..repeat).map(|_| result.clone()).collect();
+                        result = Tensor::cat(&tensors, dim)?;
+                    }
+                }
+                values.insert(node.output[0].clone(), result);
             }
             //https://github.com/onnx/onnx/blob/main/docs/Operators.md#ReduceSum
             // Version 13 impl
@@ -2108,6 +2166,24 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), out);
             }
+            // https://onnx.ai/onnx/operators/onnx__And.html
+            "And" => {
+                let a = get(&node.input[0])?.gt(0_u8)?;
+                let b = get(&node.input[1])?.gt(0_u8)?;
+
+                let out = a.broadcast_mul(&b)?;
+
+                values.insert(node.output[0].clone(), out);
+            }
+            // https://onnx.ai/onnx/operators/onnx__Or.html
+            "Or" => {
+                let a = get(&node.input[0])?.gt(0_u8)?;
+                let b = get(&node.input[1])?.gt(0_u8)?;
+
+                let out = a.broadcast_add(&b)?.gt(0_u8)?;
+
+                values.insert(node.output[0].clone(), out);
+            }
             // https://onnx.ai/onnx/operators/onnx__Sign.html
             "Sign" => {
                 let input = get(&node.input[0])?;
@@ -2134,7 +2210,7 @@ fn simple_eval_(
                 let depth_tensor = get(&node.input[1])?;
                 let values_tensor = get(&node.input[2])?;
 
-                let depth = depth_tensor.to_scalar::<i64>()? as usize;
+                let depth = to_scalar_flexible::<i64>(depth_tensor)? as usize;
                 let values_vec = values_tensor.to_vec1::<f32>()?;
                 if values_vec.len() != 2 {
                     return Err(candle::Error::Msg(
@@ -2276,7 +2352,7 @@ fn simple_eval_(
 
                 // Get the diagonal offset 'k' from the second input if provided
                 let k = if node.input.len() > 1 && !node.input[1].is_empty() {
-                    get(&node.input[1])?.to_vec0::<i64>()?
+                    to_vec0_flexible::<i64>(get(&node.input[1])?)?
                 } else {
                     0
                 };
@@ -2513,3 +2589,24 @@ fn broadcast_shape_from_many(shapes: &[&[usize]]) -> Result<Vec<usize>> {
     }
     Ok(shape_out)
 }
+
+/// Extract scalar from tensors that may be wrapped in extra dimensions.
+/// Some ONNX exports use shape [1] or [1,1] where scalars are expected.
+/// Only accepts single-element tensors; multi-element tensors still fail.
+fn to_scalar_flexible<T: candle::WithDType>(t: &Tensor) -> Result<T> {
+    if t.rank() > 0 && t.elem_count() == 1 {
+        t.flatten_all()?.i(0)?.to_scalar::<T>()
+    } else {
+        t.to_scalar::<T>()
+    }
+}
+
+/// Same as to_scalar_flexible but returns via to_vec0 for types that need it.
+fn to_vec0_flexible<T: candle::WithDType>(t: &Tensor) -> Result<T> {
+    if t.rank() > 0 && t.elem_count() == 1 {
+        t.flatten_all()?.i(0)?.to_vec0::<T>()
+    } else {
+        t.to_vec0::<T>()
+    }
+}
+
