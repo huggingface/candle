@@ -25,30 +25,6 @@ macro_rules! ops{
             }
         }
 
-        pub mod contiguous_tiled {
-        pub struct Kernel(pub &'static str);
-        $(
-        pub mod $name {
-            use super::Kernel;
-            pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_f32_tiled"));
-            pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16_tiled"));
-            pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16_tiled"));
-            pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64_tiled"));
-            pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32_tiled"));
-            pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8_tiled"));
-        }
-        )+
-            pub mod copy {
-                use super::Kernel;
-                pub const FLOAT: Kernel = Kernel("copy_f32_tiled");
-                pub const HALF: Kernel = Kernel("copy_f16_tiled");
-                pub const BFLOAT: Kernel = Kernel("copy_bf16_tiled");
-                pub const I64: Kernel = Kernel("copy_i64_tiled");
-                pub const U32: Kernel = Kernel("copy_u32_tiled");
-                pub const U8: Kernel = Kernel("copy_u8_tiled");
-            }
-        }
-
         pub mod strided {
         pub struct Kernel(pub &'static str);
         $(
