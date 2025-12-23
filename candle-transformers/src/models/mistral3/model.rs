@@ -112,10 +112,11 @@ pub fn replace_image_tokens(
             .to_dtype(inputs_embeds.dtype())?;
 
         // Broadcast image embedding to full tensor shape
-        let image_embed_broadcast = image_embed
-            .unsqueeze(0)?
-            .unsqueeze(0)?
-            .broadcast_as((batch_size, seq_len, hidden_size))?;
+        let image_embed_broadcast = image_embed.unsqueeze(0)?.unsqueeze(0)?.broadcast_as((
+            batch_size,
+            seq_len,
+            hidden_size,
+        ))?;
 
         // Update result: mask=0 keeps original, mask=1 uses image embedding
         let inverse_mask = (1.0 - &position_mask)?;
@@ -164,8 +165,7 @@ impl Mistral3Model {
         // )?;
 
         // Multi-Modal Projector - uses VarBuilder's dtype
-        let multi_modal_projector =
-            MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
+        let multi_modal_projector = MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
         // let multi_modal_projector = MultiModalProjector::new(
         //     cfg,
         //     vb.pp("multi_modal_projector").to_dtype(DType::F32),
@@ -204,7 +204,9 @@ impl Mistral3Model {
     ) -> Result<Vec<Tensor>> {
         // 1. Vision tower forward with hidden states support
         // Returns (batch, patches, hidden_size) with batch dimension preserved
-        let vision_output = self.vision_tower.forward_with_hidden_states(pixel_values, true)?;
+        let vision_output = self
+            .vision_tower
+            .forward_with_hidden_states(pixel_values, true)?;
 
         // Get the last hidden state: (batch, patches, hidden_size)
         // For Mistral3, we use hidden_states[-1] which equals last_hidden_state
@@ -338,11 +340,14 @@ impl Mistral3ForConditionalGeneration {
         image_sizes: Option<&[(usize, usize)]>,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        let hidden_states = self
-            .model
-            .forward(input_ids, pixel_values, image_sizes, seqlen_offset)?;
+        let hidden_states =
+            self.model
+                .forward(input_ids, pixel_values, image_sizes, seqlen_offset)?;
         // Reuse lm_head from the underlying MistralModel
-        self.model.language_model().lm_head().forward(&hidden_states)
+        self.model
+            .language_model()
+            .lm_head()
+            .forward(&hidden_states)
     }
 
     /// Forward pass optimized for generation - returns only last token logits.
@@ -356,9 +361,9 @@ impl Mistral3ForConditionalGeneration {
         image_sizes: Option<&[(usize, usize)]>,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        let hidden_states = self
-            .model
-            .forward(input_ids, pixel_values, image_sizes, seqlen_offset)?;
+        let hidden_states =
+            self.model
+                .forward(input_ids, pixel_values, image_sizes, seqlen_offset)?;
 
         // Only take last token's hidden states
         let seq_len = hidden_states.dim(1)?;

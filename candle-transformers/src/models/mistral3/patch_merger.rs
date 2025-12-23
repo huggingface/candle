@@ -39,12 +39,7 @@ impl PatchMerger {
     ///
     /// Input: (h * w, hidden_size) where h, w are patch grid dimensions
     /// Output: (h/k * w/k, hidden_size) where k = spatial_merge_size
-    fn merge_single_image(
-        &self,
-        image_tokens: &Tensor,
-        h: usize,
-        w: usize,
-    ) -> Result<Tensor> {
+    fn merge_single_image(&self, image_tokens: &Tensor, h: usize, w: usize) -> Result<Tensor> {
         let d = image_tokens.dim(1)?; // hidden_size
         let k = self.spatial_merge_size;
 

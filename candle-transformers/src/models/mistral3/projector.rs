@@ -34,7 +34,12 @@ impl MultiModalProjector {
         let norm = rms_norm(vision_hidden_size, rms_norm_eps, vb.pp("norm"))?;
         let patch_merger = PatchMerger::new(cfg, vb.pp("patch_merger"))?;
 
-        let linear_1 = linear_b(vision_hidden_size, text_hidden_size, bias, vb.pp("linear_1"))?;
+        let linear_1 = linear_b(
+            vision_hidden_size,
+            text_hidden_size,
+            bias,
+            vb.pp("linear_1"),
+        )?;
         let linear_2 = linear_b(text_hidden_size, text_hidden_size, bias, vb.pp("linear_2"))?;
 
         Ok(Self {

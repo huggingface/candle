@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 // CLIP normalization constants (used by Pixtral/Mistral3)
 const IMAGE_MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
-const IMAGE_STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
+const IMAGE_STD: [f32; 3] = [0.26862954, 0.261_302_6, 0.275_777_1];
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum WhichModel {
@@ -52,7 +52,7 @@ enum DTypeArg {
 }
 
 impl DTypeArg {
-    fn to_dtype(&self, device: &Device) -> DType {
+    fn as_dtype(self, device: &Device) -> DType {
         match self {
             Self::F32 => DType::F32,
             Self::F16 => DType::F16,
@@ -219,7 +219,10 @@ fn load_tokenizer(path: &std::path::Path) -> Result<Box<dyn TokenizerWrapper>> {
                 return Ok(Box::new(TekkenTokenizer(t)));
             }
             Err(e) => {
-                println!("Failed to load as Tekken tokenizer: {}, trying HF format", e);
+                println!(
+                    "Failed to load as Tekken tokenizer: {}, trying HF format",
+                    e
+                );
             }
         }
     }
@@ -368,7 +371,8 @@ impl TextGeneration {
             let patch_size = 14; // Pixtral default
             let spatial_merge = 2; // Mistral3 default
             let (h, w) = sizes[0];
-            let num_image_tokens = (h / patch_size / spatial_merge) * (w / patch_size / spatial_merge);
+            let num_image_tokens =
+                (h / patch_size / spatial_merge) * (w / patch_size / spatial_merge);
 
             // Build prompt with image tokens
             // Format: [INST] <image tokens> prompt [/INST]
@@ -378,7 +382,10 @@ impl TextGeneration {
             let prompt_tokens = self.tokenizer.encode(prompt, false)?;
 
             let mut input_ids = vec![inst_start];
-            input_ids.extend(std::iter::repeat(self.image_token_index as u32).take(num_image_tokens));
+            input_ids.extend(std::iter::repeat_n(
+                self.image_token_index as u32,
+                num_image_tokens,
+            ));
             input_ids.extend(prompt_tokens);
             input_ids.push(inst_end);
 
@@ -389,18 +396,28 @@ impl TextGeneration {
             (tokens, 0)
         };
 
-        println!("Input tokens: {} (including {} image tokens)", input_ids.len(), num_image_tokens);
+        println!(
+            "Input tokens: {} (including {} image tokens)",
+            input_ids.len(),
+            num_image_tokens
+        );
 
         let mut tokens = input_ids.clone();
         let input_tensor = Tensor::new(
-            input_ids.iter().map(|&x| x as i64).collect::<Vec<_>>().as_slice(),
+            input_ids
+                .iter()
+                .map(|&x| x as i64)
+                .collect::<Vec<_>>()
+                .as_slice(),
             &self.device,
         )?
         .unsqueeze(0)?;
 
         // First forward pass with image
         let start_gen = std::time::Instant::now();
-        let logits = self.model.forward(&input_tensor, pixel_values, image_sizes, 0)?;
+        let logits = self
+            .model
+            .forward(&input_tensor, pixel_values, image_sizes, 0)?;
 
         let logits = logits.squeeze(0)?.i(logits.dim(1)? - 1..)?.squeeze(0)?;
         let logits = logits.to_dtype(DType::F32)?;
@@ -418,7 +435,8 @@ impl TextGeneration {
 
         // Continue generation
         for _ in 1..sample_len {
-            let input = Tensor::new(&[tokens[tokens.len() - 1] as i64], &self.device)?.unsqueeze(0)?;
+            let input =
+                Tensor::new(&[tokens[tokens.len() - 1] as i64], &self.device)?.unsqueeze(0)?;
 
             let logits = self.model.forward(&input, None, None, tokens.len() - 1)?;
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
@@ -489,7 +507,7 @@ fn main() -> Result<()> {
     );
 
     let device = candle_examples::device(args.cpu)?;
-    let dtype = args.dtype.to_dtype(&device);
+    let dtype = args.dtype.as_dtype(&device);
     println!("Device: {:?}, dtype: {:?}", device, dtype);
 
     let start = std::time::Instant::now();
@@ -499,7 +517,9 @@ fn main() -> Result<()> {
         // Local model directory
         println!("Loading from local directory: {:?}", model_dir);
 
-        let config_path = args.config_file.unwrap_or_else(|| model_dir.join("config.json"));
+        let config_path = args
+            .config_file
+            .unwrap_or_else(|| model_dir.join("config.json"));
 
         let tokenizer_path = args.tokenizer_file.unwrap_or_else(|| {
             let tekken = model_dir.join("tekken.json");
@@ -516,11 +536,7 @@ fn main() -> Result<()> {
             // Find all safetensors files
             std::fs::read_dir(model_dir)?
                 .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .map_or(false, |ext| ext == "safetensors")
-                })
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "safetensors"))
                 .map(|e| e.path())
                 .collect()
         };
@@ -615,7 +631,10 @@ fn main() -> Result<()> {
             // pixels already converted to model dtype above
             let embs = vision_model.forward(pixels)?;
             println!("Vision embeddings shape: {:?}", embs.dims());
-            println!("Vision embeddings (first 5 values): {:?}", embs.i((0, 0, ..5))?);
+            println!(
+                "Vision embeddings (first 5 values): {:?}",
+                embs.i((0, 0, ..5))?
+            );
         } else {
             println!("No image provided for vision-only mode");
         }
