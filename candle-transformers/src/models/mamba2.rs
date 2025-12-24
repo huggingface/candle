@@ -27,16 +27,18 @@ fn default_pad_vocab_size_multiple() -> usize {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
+    #[serde(alias = "hidden_size")]
     pub d_model: usize,
+    #[serde(alias = "num_hidden_layers")]
     pub n_layer: usize,
     pub vocab_size: usize,
-    #[serde(default = "default_d_state")]
+    #[serde(alias = "state_size", default = "default_d_state")]
     pub d_state: usize,
     #[serde(default = "default_expand")]
     pub expand: usize,
-    #[serde(default = "default_headdim")]
+    #[serde(alias = "head_dim", default = "default_headdim")]
     pub headdim: usize,
-    #[serde(default = "default_ngroups")]
+    #[serde(alias = "n_groups", default = "default_ngroups")]
     pub ngroups: usize,
     #[serde(default = "default_pad_vocab_size_multiple")]
     pub pad_vocab_size_multiple: usize,
@@ -259,7 +261,7 @@ impl Mamba2Block {
 
         // y = C^T @ h
         let c_unsq = c.unsqueeze(2)?;
-        let y = (h * &c_unsq)?.sum(D::Minus1)?;
+        let y = (&*h * &c_unsq)?.sum(D::Minus1)?;
 
         Ok(y)
     }
