@@ -261,7 +261,10 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
+    // Config contains `Infinity` which is not valid JSON, replace with a large number
+    let config_str = std::fs::read_to_string(config_filename)?;
+    let config_str = config_str.replace("Infinity", "1e30");
+    let config: Config = serde_json::from_str(&config_str)?;
     let device = candle_examples::device(args.cpu)?;
     let dtype = DType::from_str(&args.dtype)?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };

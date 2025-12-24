@@ -178,7 +178,8 @@ impl Mamba2Block {
         )?;
 
         // Softplus on dt
-        let dt = ((&dt + &self.dt_bias)?.exp()? + 1.)?.log()?;
+        let dt_bias = self.dt_bias.broadcast_as(dt.shape())?;
+        let dt = ((&dt + &dt_bias)?.exp()? + 1.)?.log()?;
 
         let a = self.a_log.exp()?.neg()?;
 
@@ -190,9 +191,9 @@ impl Mamba2Block {
         let y = (&y + x_skip.broadcast_mul(&d.unsqueeze(D::Minus1)?)?)?;
         let y = y.reshape((b_sz, self.d_inner))?;
 
-        // Norm and gate
-        let y = self.norm.forward(&y)?;
+        // Gate then norm (MambaRMSNormGated: gate is applied before normalization)
         let y = (y * candle_nn::ops::silu(&z)?)?;
+        let y = self.norm.forward(&y)?;
 
         self.out_proj.forward(&y)
     }
@@ -261,7 +262,8 @@ impl Mamba2Block {
 
         // y = C^T @ h
         let c_unsq = c.unsqueeze(2)?;
-        let y = (&*h * &c_unsq)?.sum(D::Minus1)?;
+        let c_broadcast = c_unsq.broadcast_as(h.shape())?;
+        let y = (&*h * &c_broadcast)?.sum(D::Minus1)?;
 
         Ok(y)
     }
@@ -296,7 +298,7 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let embedding = candle_nn::embedding(cfg.vocab_size(), cfg.d_model, vb.pp("embedding"))?;
+        let embedding = candle_nn::embedding(cfg.vocab_size(), cfg.d_model, vb.pp("embeddings"))?;
         let mut layers = Vec::with_capacity(cfg.n_layer);
         let vb_l = vb.pp("layers");
         for layer_idx in 0..cfg.n_layer {
