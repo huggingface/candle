@@ -32,7 +32,7 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
 
     let flops = b * m * n * k;
 
-    let mut group = c.benchmark_group(device.bench_name(format!("qmatmul_{:?}", dtype)));
+    let mut group = c.benchmark_group(device.bench_name(format!("qmatmul_{dtype:?}")));
     group.sample_size(200);
     group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
