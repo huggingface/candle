@@ -52,6 +52,10 @@ impl Config {
         self.d_model * self.expand
     }
 
+    fn d_xbc(&self) -> usize {
+        self.d_inner() + 2 * self.ngroups * self.d_state
+    }
+
     fn nheads(&self) -> usize {
         self.d_inner() / self.headdim
     }
@@ -65,7 +69,7 @@ pub struct State {
 
 impl State {
     pub fn new(batch_size: usize, cfg: &Config, dtype: DType, device: &Device) -> Result<Self> {
-        let d_inner = cfg.d_inner();
+        let d_xbc = cfg.d_xbc();
         let nheads = cfg.nheads();
         let mut hs = Vec::with_capacity(cfg.n_layer);
         let mut conv_states = Vec::with_capacity(cfg.n_layer);
@@ -75,7 +79,7 @@ impl State {
                 dtype,
                 device,
             )?;
-            let conv = Tensor::zeros((batch_size, d_inner, D_CONV), dtype, device)?;
+            let conv = Tensor::zeros((batch_size, d_xbc, D_CONV), dtype, device)?;
             hs.push(h);
             conv_states.push(conv);
         }
@@ -99,6 +103,7 @@ pub struct Mamba2Block {
     norm: RmsNorm,
     d_inner: usize,
     d_state: usize,
+    d_xbc: usize,
     headdim: usize,
     nheads: usize,
     ngroups: usize,
@@ -111,13 +116,15 @@ impl Mamba2Block {
         let nheads = cfg.nheads();
         let ngroups = cfg.ngroups;
         let d_state = cfg.d_state;
+        let d_xbc = d_inner + 2 * ngroups * d_state;
 
-        // Mamba2 projects: z, x, B, C, dt in parallel
-        let proj_size = 2 * d_inner + 2 * ngroups * d_state + nheads;
+        // Mamba2 projects: z, xBC, dt in parallel
+        let proj_size = d_inner + d_xbc + nheads;
         let in_proj = linear_no_bias(cfg.d_model, proj_size, vb.pp("in_proj"))?;
 
-        let conv1d_weight = vb.get((d_inner, 1, D_CONV), "conv1d.weight")?;
-        let conv1d_bias = vb.get(d_inner, "conv1d.bias")?;
+        // Conv operates on combined xBC (x + B + C)
+        let conv1d_weight = vb.get((d_xbc, 1, D_CONV), "conv1d.weight")?;
+        let conv1d_bias = vb.get(d_xbc, "conv1d.bias")?;
 
         let a_log = vb.get(nheads, "A_log")?;
         let d = vb.get(nheads, "D")?;
@@ -137,6 +144,7 @@ impl Mamba2Block {
             norm,
             d_inner,
             d_state,
+            d_xbc,
             headdim: cfg.headdim,
             nheads,
             ngroups,
@@ -149,25 +157,23 @@ impl Mamba2Block {
 
         let proj = self.in_proj.forward(xs)?;
 
-        // Split: z, x, B, C, dt
+        // Split: z, xBC, dt
         let z = proj.narrow(D::Minus1, 0, self.d_inner)?;
-        let x = proj.narrow(D::Minus1, self.d_inner, self.d_inner)?;
-        let bc_start = 2 * self.d_inner;
-        let b = proj.narrow(D::Minus1, bc_start, self.ngroups * self.d_state)?;
-        let c = proj.narrow(
+        let xbc = proj.narrow(D::Minus1, self.d_inner, self.d_xbc)?;
+        let dt = proj.narrow(D::Minus1, self.d_inner + self.d_xbc, self.nheads)?;
+
+        // Causal conv on combined xBC
+        let xbc_conv = self.apply_conv1d(&xbc, &mut state.conv_states[self.layer_idx])?;
+        let xbc_conv = candle_nn::ops::silu(&xbc_conv)?;
+
+        // Split xBC into x, B, C after conv
+        let x_conv = xbc_conv.narrow(D::Minus1, 0, self.d_inner)?;
+        let b = xbc_conv.narrow(D::Minus1, self.d_inner, self.ngroups * self.d_state)?;
+        let c = xbc_conv.narrow(
             D::Minus1,
-            bc_start + self.ngroups * self.d_state,
+            self.d_inner + self.ngroups * self.d_state,
             self.ngroups * self.d_state,
         )?;
-        let dt = proj.narrow(
-            D::Minus1,
-            bc_start + 2 * self.ngroups * self.d_state,
-            self.nheads,
-        )?;
-
-        // Causal conv
-        let x_conv = self.apply_conv1d(&x, &mut state.conv_states[self.layer_idx])?;
-        let x_conv = candle_nn::ops::silu(&x_conv)?;
 
         // Softplus on dt
         let dt = ((&dt + &self.dt_bias)?.exp()? + 1.)?.log()?;
@@ -189,20 +195,20 @@ impl Mamba2Block {
         self.out_proj.forward(&y)
     }
 
-    fn apply_conv1d(&self, x: &Tensor, conv_state: &mut Tensor) -> Result<Tensor> {
-        let (b_sz, d_inner) = x.dims2()?;
+    fn apply_conv1d(&self, xbc: &Tensor, conv_state: &mut Tensor) -> Result<Tensor> {
+        let (b_sz, d_xbc) = xbc.dims2()?;
 
         // Shift state left, add new token
         let shifted = conv_state.narrow(D::Minus1, 1, D_CONV - 1)?;
-        let x_expanded = x.unsqueeze(D::Minus1)?;
-        *conv_state = Tensor::cat(&[shifted, x_expanded], D::Minus1)?;
+        let xbc_expanded = xbc.unsqueeze(D::Minus1)?;
+        *conv_state = Tensor::cat(&[shifted, xbc_expanded], D::Minus1)?;
 
         // Depthwise conv
-        let mut result = self.conv1d_bias.broadcast_as((b_sz, d_inner))?;
+        let mut result = self.conv1d_bias.broadcast_as((b_sz, d_xbc))?;
         for i in 0..D_CONV {
             let w = self.conv1d_weight.i((.., 0, i))?;
-            let x_i = conv_state.i((.., .., i))?;
-            result = (result + w.broadcast_mul(&x_i)?)?;
+            let xbc_i = conv_state.i((.., .., i))?;
+            result = (result + w.broadcast_mul(&xbc_i)?)?;
         }
         Ok(result)
     }
