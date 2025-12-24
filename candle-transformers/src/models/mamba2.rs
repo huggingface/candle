@@ -9,51 +9,23 @@ use candle_nn::{RmsNorm, VarBuilder};
 
 const D_CONV: usize = 4;
 
-/// Cumsum that handles non-contiguous tensors from permute/transpose.
-/// Workaround for Candle's cumsum which uses broadcast_matmul internally.
-fn cumsum_contiguous(x: &Tensor, dim: usize) -> Result<Tensor> {
-    let x = x.contiguous()?;
-    let len = x.dim(dim)?;
-    if len == 0 {
-        return Ok(x);
-    }
-    let mut result = x.narrow(dim, 0, 1)?;
-    for i in 1..len {
-        let prev_sum = result.narrow(dim, i - 1, 1)?;
-        let curr_val = x.narrow(dim, i, 1)?;
-        result = Tensor::cat(&[&result, &(&prev_sum + &curr_val)?], dim)?;
-    }
-    result.contiguous()
-}
-
-/// Stable segment sum for SSD algorithm. Input [..., T] -> output [..., T, T] lower triangular.
-/// Computes L[i,j] = sum_{k=j}^{i-1} x_k for i >= j, -inf otherwise.
 fn segsum(x: &Tensor) -> Result<Tensor> {
     let device = x.device();
     let dtype = x.dtype();
     let t = x.dim(D::Minus1)?;
 
-    let x_cumsum = cumsum_contiguous(x, x.rank() - 1)?;
+    let x_cumsum = x.cumsum(D::Minus1)?;
 
-    // x_segsum[..., i, j] = x_cumsum[..., i] - x_cumsum[..., j]
-    // This gives sum_{k=j}^{i-1} x_k = cumsum[i-1] - cumsum[j-1] but with 0-indexing adjustments
-    // Actually: cumsum[i] - cumsum[j] = x_0 + ... + x_i - (x_0 + ... + x_j) = x_{j+1} + ... + x_i
-    // But we want sum from j to i-1, so we need to be careful.
-    // Reference does: x_cumsum[:, None] - x_cumsum[None, :] which is cumsum[i] - cumsum[j]
     let target_shape: Vec<usize> = {
         let mut shape = x.dims().to_vec();
         shape.push(t);
         shape
     };
 
-    // cumsum[i] for each row (broadcast along columns)
     let x_cumsum_row = x_cumsum.unsqueeze(D::Minus1)?.broadcast_as(target_shape.as_slice())?;
-    // cumsum[j] for each column (broadcast along rows)
     let x_cumsum_col = x_cumsum.unsqueeze(x.rank() - 1)?.broadcast_as(target_shape.as_slice())?;
-
     let x_segsum = (&x_cumsum_row - &x_cumsum_col)?;
 
-    // Apply lower triangular mask (diagonal=0), fill upper triangle with -inf
     let mask_lower = Tensor::tril2(t, DType::U8, device)?;
     let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?
         .to_dtype(dtype)?
@@ -64,7 +36,6 @@ fn segsum(x: &Tensor) -> Result<Tensor> {
         .where_cond(&x_segsum, &neg_inf)
 }
 
-/// Pad tensor along dimension 1 to make it divisible by chunk_size. Returns (padded_tensor, pad_len).
 fn pad_to_chunk_size(x: &Tensor, chunk_size: usize) -> Result<(Tensor, usize)> {
     let seq_len = x.dim(1)?;
     let pad_len = (chunk_size - (seq_len % chunk_size)) % chunk_size;
@@ -78,7 +49,6 @@ fn pad_to_chunk_size(x: &Tensor, chunk_size: usize) -> Result<(Tensor, usize)> {
     Ok((Tensor::cat(&[x, &padding], 1)?, pad_len))
 }
 
-/// Reshape [B, L, ...] -> [B, C, K, ...] where C = num_chunks, K = chunk_size.
 fn reshape_into_chunks(x: &Tensor, chunk_size: usize) -> Result<Tensor> {
     let dims = x.dims();
     let b = dims[0];
@@ -90,7 +60,6 @@ fn reshape_into_chunks(x: &Tensor, chunk_size: usize) -> Result<Tensor> {
     x.reshape(new_shape)
 }
 
-/// Reshape [B, C, K, ...] -> [B, L, ...] where L = C * K.
 fn reshape_from_chunks(x: &Tensor) -> Result<Tensor> {
     let dims = x.dims();
     let b = dims[0];
@@ -213,11 +182,9 @@ impl Mamba2Block {
         let d_state = cfg.d_state;
         let d_xbc = d_inner + 2 * ngroups * d_state;
 
-        // Mamba2 projects: z, xBC, dt in parallel
         let proj_size = d_inner + d_xbc + nheads;
         let in_proj = linear_no_bias(cfg.d_model, proj_size, vb.pp("in_proj"))?;
 
-        // Conv operates on combined xBC (x + B + C)
         let conv1d_weight = vb.get((d_xbc, 1, D_CONV), "conv1d.weight")?;
         let conv1d_bias = vb.get(d_xbc, "conv1d.bias")?;
 
@@ -252,16 +219,13 @@ impl Mamba2Block {
 
         let proj = self.in_proj.forward(xs)?;
 
-        // Split: z, xBC, dt
         let z = proj.narrow(D::Minus1, 0, self.d_inner)?;
         let xbc = proj.narrow(D::Minus1, self.d_inner, self.d_xbc)?;
         let dt = proj.narrow(D::Minus1, self.d_inner + self.d_xbc, self.nheads)?;
 
-        // Causal conv on combined xBC
         let xbc_conv = self.apply_conv1d(&xbc, &mut state.conv_states[self.layer_idx])?;
         let xbc_conv = candle_nn::ops::silu(&xbc_conv)?;
 
-        // Split xBC into x, B, C after conv
         let x_conv = xbc_conv.narrow(D::Minus1, 0, self.d_inner)?;
         let b = xbc_conv.narrow(D::Minus1, self.d_inner, self.ngroups * self.d_state)?;
         let c = xbc_conv.narrow(
@@ -270,7 +234,6 @@ impl Mamba2Block {
             self.ngroups * self.d_state,
         )?;
 
-        // Softplus on dt
         let dt_bias = self.dt_bias.broadcast_as(dt.shape())?;
         let dt = ((&dt + &dt_bias)?.exp()? + 1.)?.log()?;
 
@@ -278,13 +241,11 @@ impl Mamba2Block {
 
         let y = self.ssm_step(&x_conv, &a, &b, &c, &dt, state)?;
 
-        // Skip connection
         let d = self.d.broadcast_as((b_sz, self.nheads))?;
         let x_skip = x_conv.reshape((b_sz, self.nheads, self.headdim))?;
         let y = (&y + x_skip.broadcast_mul(&d.unsqueeze(D::Minus1)?)?)?;
         let y = y.reshape((b_sz, self.d_inner))?;
 
-        // Gate then norm (MambaRMSNormGated: gate is applied before normalization)
         let y = (y * candle_nn::ops::silu(&z)?)?;
         let y = self.norm.forward(&y)?;
 
@@ -294,12 +255,10 @@ impl Mamba2Block {
     fn apply_conv1d(&self, xbc: &Tensor, conv_state: &mut Tensor) -> Result<Tensor> {
         let (b_sz, d_xbc) = xbc.dims2()?;
 
-        // Shift state left, add new token
         let shifted = conv_state.narrow(D::Minus1, 1, D_CONV - 1)?;
         let xbc_expanded = xbc.unsqueeze(D::Minus1)?;
         *conv_state = Tensor::cat(&[shifted, xbc_expanded], D::Minus1)?;
 
-        // Depthwise conv
         let mut result = self.conv1d_bias.broadcast_as((b_sz, d_xbc))?;
         for i in 0..D_CONV {
             let w = self.conv1d_weight.i((.., 0, i))?;
@@ -323,7 +282,6 @@ impl Mamba2Block {
 
         let x = x.reshape((b_sz, self.nheads, self.headdim))?;
 
-        // Expand B, C from groups to heads
         let b = b.reshape((b_sz, self.ngroups, self.d_state))?;
         let c = c.reshape((b_sz, self.ngroups, self.d_state))?;
         let heads_per_group = self.nheads / self.ngroups;
@@ -336,13 +294,11 @@ impl Mamba2Block {
                 .broadcast_as((b_sz, self.ngroups, heads_per_group, self.d_state))?;
         let c = c.reshape((b_sz, self.nheads, self.d_state))?;
 
-        // decay = exp(A * dt)
         let dt_a = dt.broadcast_mul(a)?;
         let decay = dt_a.exp()?;
         let decay = decay.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?;
         let decay = decay.broadcast_as((b_sz, self.nheads, self.headdim, self.d_state))?;
 
-        // h = decay * h + dt * outer(x, B)
         let x_unsq = x.unsqueeze(D::Minus1)?;
         let b_unsq = b.unsqueeze(2)?;
         let x_b = x_unsq.broadcast_mul(&b_unsq)?;
@@ -353,7 +309,6 @@ impl Mamba2Block {
 
         *h = ((&*h * &decay)? + (&dt_expanded * &x_b)?)?;
 
-        // y = C^T @ h
         let c_unsq = c.unsqueeze(2)?;
         let c_broadcast = c_unsq.broadcast_as(h.shape())?;
         let y = (&*h * &c_broadcast)?.sum(D::Minus1)?;
@@ -361,7 +316,6 @@ impl Mamba2Block {
         Ok(y)
     }
 
-    /// Chunked SSD algorithm for parallel prefill.
     fn ssd_chunked(
         &self,
         x: &Tensor,
@@ -383,9 +337,8 @@ impl Mamba2Block {
         let c = reshape_into_chunks(c, chunk_size)?;
 
         let a = a.permute((0, 3, 1, 2))?;
-        let a_cumsum = cumsum_contiguous(&a, a.rank() - 1)?;
+        let a_cumsum = a.cumsum(D::Minus1)?;
 
-        // 1. Intra-chunk output (diagonal blocks): Y_diag
         let l = segsum(&a)?.exp()?;
 
         let c_expanded = c.unsqueeze(3)?;
@@ -404,7 +357,6 @@ impl Mamba2Block {
             .sum(4)?
             .permute((0, 1, 3, 2, 4))?;
 
-        // 2. Intra-chunk states
         let a_last = a_cumsum.narrow(D::Minus1, chunk_size - 1, 1)?;
         let decay_states = (a_last.broadcast_as(a_cumsum.shape())? - &a_cumsum)?.exp()?;
 
@@ -418,7 +370,6 @@ impl Mamba2Block {
             * b_weighted.unsqueeze(4)?.broadcast_as(states_shape)?)?
             .sum(3)?;
 
-        // 3. Inter-chunk recurrence
         let init_state = match initial_state {
             Some(s) => s.unsqueeze(1)?,
             None => Tensor::zeros((batch, 1, nheads, headdim, d_state), dtype, device)?,
@@ -440,7 +391,6 @@ impl Mamba2Block {
         let states_out = new_states.narrow(1, 0, n_chunks)?;
         let final_state = new_states.narrow(1, n_chunks, 1)?.squeeze(1)?;
 
-        // 4. State-to-output (off-diagonal blocks): Y_off
         let state_decay_out = a_cumsum.exp()?;
 
         let c_t2 = c.permute((0, 1, 3, 2, 4))?;
@@ -458,8 +408,6 @@ impl Mamba2Block {
         Ok((y, final_state))
     }
 
-    /// Forward pass for multiple tokens (prefill mode).
-    /// xs: [B, L, D] where L is sequence length
     pub fn forward_prefill(
         &self,
         xs: &Tensor,
@@ -468,25 +416,18 @@ impl Mamba2Block {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = xs.dims3()?;
 
-        // Pad sequence to be divisible by chunk_size
         let (xs, pad_len) = pad_to_chunk_size(xs, chunk_size)?;
         let padded_len = xs.dim(1)?;
 
-        // Project: [B, L, D] -> [B, L, proj_size]
         let proj = xs.apply(&self.in_proj)?;
 
-        // Split: z, xBC, dt
         let z = proj.narrow(D::Minus1, 0, self.d_inner)?;
         let xbc = proj.narrow(D::Minus1, self.d_inner, self.d_xbc)?;
         let dt = proj.narrow(D::Minus1, self.d_inner + self.d_xbc, self.nheads)?;
 
-        // Causal conv1d over sequence: [B, L, d_xbc] -> [B, L, d_xbc]
-        // Transpose to [B, d_xbc, L] for conv1d
         let xbc_t = xbc.transpose(1, 2)?;
-        // Left-pad for causal conv
         let pad = Tensor::zeros((b_sz, self.d_xbc, D_CONV - 1), xbc.dtype(), xbc.device())?;
         let xbc_padded = Tensor::cat(&[&pad, &xbc_t], D::Minus1)?;
-        // Depthwise conv1d with groups=d_xbc
         let xbc_conv = xbc_padded.conv1d(
             &self.conv1d_weight,
             0,
@@ -496,14 +437,13 @@ impl Mamba2Block {
         )?;
         let xbc_conv = xbc_conv
             .broadcast_add(&self.conv1d_bias.reshape((1, self.d_xbc, 1))?)?
-            .transpose(1, 2)?; // [B, L, d_xbc]
+            .transpose(1, 2)?;
         let xbc_conv = candle_nn::ops::silu(&xbc_conv)?;
 
-        // Update conv_state with last D_CONV tokens from REAL sequence (not padding)
         let start = seq_len.saturating_sub(D_CONV);
         let count = D_CONV.min(seq_len);
         let last_tokens = xbc.narrow(1, start, count)?;
-        let last_tokens = last_tokens.transpose(1, 2)?; // [B, d_xbc, count]
+        let last_tokens = last_tokens.transpose(1, 2)?;
         if count >= D_CONV {
             state.conv_states[self.layer_idx] = last_tokens.contiguous()?;
         } else {
@@ -511,24 +451,19 @@ impl Mamba2Block {
             state.conv_states[self.layer_idx] = Tensor::cat(&[&existing, &last_tokens], D::Minus1)?;
         }
 
-        // Split xBC into x, B, C
         let x_conv = xbc_conv.narrow(D::Minus1, 0, self.d_inner)?;
         let bc = xbc_conv.narrow(D::Minus1, self.d_inner, 2 * self.ngroups * self.d_state)?;
         let b = bc.narrow(D::Minus1, 0, self.ngroups * self.d_state)?;
         let c = bc.narrow(D::Minus1, self.ngroups * self.d_state, self.ngroups * self.d_state)?;
 
-        // Softplus on dt: [B, L, nheads]
         let dt_bias = self.dt_bias.broadcast_as(dt.shape())?;
         let dt = ((&dt + &dt_bias)?.exp()? + 1.)?.log()?;
 
-        // Compute A*dt: [nheads] * [B, L, nheads] -> [B, L, nheads]
         let a = self.a_log.exp()?.neg()?;
         let mut a_dt = dt.broadcast_mul(&a)?;
 
-        // Reshape for SSD: x to [B, L, H, P], B/C to [B, L, H, N]
         let mut x_ssd = x_conv.reshape((b_sz, padded_len, self.nheads, self.headdim))?;
 
-        // Zero out padding positions to prevent corrupting chunk states and decay
         if pad_len > 0 {
             let mask_ones = Tensor::ones((b_sz, seq_len, self.nheads, self.headdim), x_ssd.dtype(), x_ssd.device())?;
             let mask_zeros = Tensor::zeros((b_sz, pad_len, self.nheads, self.headdim), x_ssd.dtype(), x_ssd.device())?;
@@ -541,14 +476,12 @@ impl Mamba2Block {
             a_dt = a_dt.broadcast_mul(&mask_a)?;
         }
 
-        // Expand B, C from groups to heads and scale B by dt (discrete B_bar = dt * B)
         let heads_per_group = self.nheads / self.ngroups;
         let b = b.reshape((b_sz, padded_len, self.ngroups, self.d_state))?;
         let b = b
             .unsqueeze(3)?
             .broadcast_as((b_sz, padded_len, self.ngroups, heads_per_group, self.d_state))?
             .reshape((b_sz, padded_len, self.nheads, self.d_state))?;
-        // Scale B by dt for the discretization: dt is [B, L, H], b is [B, L, H, N]
         let b = b.broadcast_mul(&dt.unsqueeze(D::Minus1)?)?;
         let c = c.reshape((b_sz, padded_len, self.ngroups, self.d_state))?;
         let c = c
@@ -556,31 +489,25 @@ impl Mamba2Block {
             .broadcast_as((b_sz, padded_len, self.ngroups, heads_per_group, self.d_state))?
             .reshape((b_sz, padded_len, self.nheads, self.d_state))?;
 
-        // Run chunked SSD
         let initial_state = Some(&state.hs[self.layer_idx]);
         let (y, final_state) = self.ssd_chunked(&x_ssd, &a_dt, &b, &c, chunk_size, initial_state)?;
         state.hs[self.layer_idx] = final_state;
 
-        // y: [B, L, H, P] -> [B, L, d_inner]
         let y = y.reshape((b_sz, padded_len, self.d_inner))?;
 
-        // Skip connection
-        let d = self.d.unsqueeze(0)?.unsqueeze(0)?; // [1, 1, nheads]
+        let d = self.d.unsqueeze(0)?.unsqueeze(0)?;
         let x_skip = x_conv.reshape((b_sz, padded_len, self.nheads, self.headdim))?;
         let y = (&y.reshape((b_sz, padded_len, self.nheads, self.headdim))?
             + x_skip.broadcast_mul(&d.unsqueeze(D::Minus1)?)?)?;
         let y = y.reshape((b_sz, padded_len, self.d_inner))?;
 
-        // Gate then norm
         let y = (y * candle_nn::ops::silu(&z)?)?;
         let y = y.reshape((b_sz * padded_len, self.d_inner))?;
         let y = self.norm.forward(&y)?;
         let y = y.reshape((b_sz, padded_len, self.d_inner))?;
 
-        // Output projection
         let y = y.apply(&self.out_proj)?;
 
-        // Remove padding
         if pad_len > 0 {
             y.narrow(1, 0, seq_len)
         } else {
@@ -655,9 +582,6 @@ impl Model {
         xs.apply(&self.norm_f)?.apply(&self.lm_head)
     }
 
-    /// Forward pass for multiple tokens (prefill mode).
-    /// input_ids: [B, L] where L is sequence length
-    /// Returns logits for all positions: [B, L, vocab_size]
     pub fn forward_prefill(
         &self,
         input_ids: &Tensor,
@@ -670,7 +594,6 @@ impl Model {
             xs = layer.forward_prefill(&xs, state, chunk_size)?;
         }
         state.pos += seq_len;
-        // Apply final norm and lm_head to all positions
         let xs = xs.reshape((b_sz * seq_len, xs.dim(D::Minus1)?))?;
         let logits = xs.apply(&self.norm_f)?.apply(&self.lm_head)?;
         logits.reshape((b_sz, seq_len, logits.dim(D::Minus1)?))
