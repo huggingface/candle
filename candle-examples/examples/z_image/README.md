@@ -2,8 +2,8 @@
 
 Z-Image is a ~24B parameter text-to-image generation model developed by Alibaba,
 using flow matching for high-quality image synthesis.
-[ModelScope](https://modelscope.cn/models/Tongyi-Wanx/Z-Image-Turbo),
-[HuggingFace](https://huggingface.co/Tongyi-Wanx/Z-Image-Turbo).
+[ModelScope](https://www.modelscope.cn/models/Tongyi-MAI/Z-Image-Turbo),
+[HuggingFace](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo).
 
 ## Model Architecture
 
