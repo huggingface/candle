@@ -9,22 +9,19 @@ use candle_nn::{RmsNorm, VarBuilder};
 
 const D_CONV: usize = 4;
 
-/// Manual cumsum implementation that doesn't use matmul.
-/// Computes cumulative sum along the specified dimension.
-fn manual_cumsum(x: &Tensor, dim: usize) -> Result<Tensor> {
+/// Cumsum that handles non-contiguous tensors from permute/transpose.
+/// Workaround for Candle's cumsum which uses broadcast_matmul internally.
+fn cumsum_contiguous(x: &Tensor, dim: usize) -> Result<Tensor> {
     let x = x.contiguous()?;
     let len = x.dim(dim)?;
     if len == 0 {
         return Ok(x);
     }
-
-    // Build cumsum by progressively adding slices
     let mut result = x.narrow(dim, 0, 1)?;
     for i in 1..len {
         let prev_sum = result.narrow(dim, i - 1, 1)?;
         let curr_val = x.narrow(dim, i, 1)?;
-        let new_sum = (&prev_sum + &curr_val)?;
-        result = Tensor::cat(&[&result, &new_sum], dim)?;
+        result = Tensor::cat(&[&result, &(&prev_sum + &curr_val)?], dim)?;
     }
     result.contiguous()
 }
@@ -36,8 +33,7 @@ fn segsum(x: &Tensor) -> Result<Tensor> {
     let dtype = x.dtype();
     let t = x.dim(D::Minus1)?;
 
-    // cumsum along last dimension
-    let x_cumsum = manual_cumsum(&x, x.rank() - 1)?;
+    let x_cumsum = cumsum_contiguous(x, x.rank() - 1)?;
 
     // x_segsum[..., i, j] = x_cumsum[..., i] - x_cumsum[..., j]
     // This gives sum_{k=j}^{i-1} x_k = cumsum[i-1] - cumsum[j-1] but with 0-indexing adjustments
@@ -387,7 +383,7 @@ impl Mamba2Block {
         let c = reshape_into_chunks(c, chunk_size)?;
 
         let a = a.permute((0, 3, 1, 2))?;
-        let a_cumsum = manual_cumsum(&a, a.rank() - 1)?;
+        let a_cumsum = cumsum_contiguous(&a, a.rank() - 1)?;
 
         // 1. Intra-chunk output (diagonal blocks): Y_diag
         let l = segsum(&a)?.exp()?;
