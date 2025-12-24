@@ -44,8 +44,8 @@ use candle::{DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::z_image::{
     calculate_shift, get_noise, postprocess_image, AutoEncoderKL, Config,
-    FlowMatchEulerDiscreteScheduler, SchedulerConfig, TextEncoderConfig,
-    VaeConfig, ZImageTextEncoder, ZImageTransformer2DModel,
+    FlowMatchEulerDiscreteScheduler, SchedulerConfig, TextEncoderConfig, VaeConfig,
+    ZImageTextEncoder, ZImageTransformer2DModel,
 };
 use clap::Parser;
 use tokenizers::Tokenizer;
@@ -60,7 +60,10 @@ const MAX_SHIFT: f64 = 1.15;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// The prompt to be used for image generation.
-    #[arg(long, default_value = "A beautiful landscape with mountains and a lake")]
+    #[arg(
+        long,
+        default_value = "A beautiful landscape with mountains and a lake"
+    )]
     prompt: String,
 
     /// The negative prompt (for CFG).
@@ -160,7 +163,10 @@ fn run(args: Args) -> Result<()> {
             .collect();
 
         if files.is_empty() {
-            anyhow::bail!("Text encoder weights not found in {}/text_encoder/", args.model_path);
+            anyhow::bail!(
+                "Text encoder weights not found in {}/text_encoder/",
+                args.model_path
+            );
         }
 
         let files: Vec<&str> = files.iter().map(|p| p.to_str().unwrap()).collect();
@@ -224,8 +230,9 @@ fn run(args: Args) -> Result<()> {
         anyhow::bail!("VAE weights not found at {:?}", vae_path);
     }
 
-    let vae_weights =
-        unsafe { VarBuilder::from_mmaped_safetensors(&[vae_path.to_str().unwrap()], dtype, &device)? };
+    let vae_weights = unsafe {
+        VarBuilder::from_mmaped_safetensors(&[vae_path.to_str().unwrap()], dtype, &device)?
+    };
     let vae = AutoEncoderKL::new(&vae_cfg, vae_weights)?;
 
     // ==================== Initialize Scheduler ====================
@@ -251,7 +258,8 @@ fn run(args: Args) -> Result<()> {
     let cap_mask = Tensor::ones((1, tokens.len()), DType::U8, &device)?;
 
     // Process negative prompt for CFG
-    let (neg_cap_feats, neg_cap_mask) = if !args.negative_prompt.is_empty() && args.guidance_scale > 1.0
+    let (neg_cap_feats, neg_cap_mask) = if !args.negative_prompt.is_empty()
+        && args.guidance_scale > 1.0
     {
         let formatted_neg = format_prompt_for_qwen3(&args.negative_prompt);
         let neg_tokens = tokenizer
@@ -272,18 +280,22 @@ fn run(args: Args) -> Result<()> {
     // This ensures: latent is divisible by patch_size=2, and VAE decode (8x) gives correct size
     let patch_size = transformer_cfg.all_patch_size[0];
     let vae_align = 16; // vae_scale_factor * 2 = 8 * 2 = 16
-    
+
     // Validate input dimensions
-    if args.height % vae_align != 0 || args.width % vae_align != 0 {
+    if !args.height.is_multiple_of(vae_align) || !args.width.is_multiple_of(vae_align) {
         anyhow::bail!(
             "Image dimensions must be divisible by {}. Got {}x{}. \
              Try {}x{} or {}x{} instead.",
-            vae_align, args.width, args.height,
-            (args.width / vae_align) * vae_align, (args.height / vae_align) * vae_align,
-            ((args.width / vae_align) + 1) * vae_align, ((args.height / vae_align) + 1) * vae_align
+            vae_align,
+            args.width,
+            args.height,
+            (args.width / vae_align) * vae_align,
+            (args.height / vae_align) * vae_align,
+            ((args.width / vae_align) + 1) * vae_align,
+            ((args.height / vae_align) + 1) * vae_align
         );
     }
-    
+
     // Correct latent size formula: 2 * (image_size // 16)
     let latent_h = 2 * (args.height / vae_align);
     let latent_w = 2 * (args.width / vae_align);

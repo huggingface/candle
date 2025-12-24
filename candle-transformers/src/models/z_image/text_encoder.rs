@@ -119,8 +119,7 @@ impl RotaryEmbedding {
             .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
-        let inv_freq =
-            Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(DType::F32)?;
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(DType::F32)?;
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
             .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
@@ -330,11 +329,7 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(
-        cfg: &TextEncoderConfig,
-        rotary: Arc<RotaryEmbedding>,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    fn new(cfg: &TextEncoderConfig, rotary: Arc<RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
         let self_attn = Attention::new(cfg, rotary, vb.pp("self_attn"))?;
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         let ln1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -381,11 +376,8 @@ impl ZImageTextEncoder {
         // Note: weights have "model." prefix
         let vb_model = vb.pp("model");
 
-        let embed_tokens = candle_nn::embedding(
-            cfg.vocab_size,
-            cfg.hidden_size,
-            vb_model.pp("embed_tokens"),
-        )?;
+        let embed_tokens =
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_model.pp("embed_tokens"))?;
 
         let rotary = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
 
@@ -412,13 +404,7 @@ impl ZImageTextEncoder {
         let minf = f32::NEG_INFINITY;
         let mask: Vec<_> = (0..tgt)
             .flat_map(|i| {
-                (0..(tgt + offset)).map(move |j| {
-                    if j <= i + offset {
-                        0.0
-                    } else {
-                        minf
-                    }
-                })
+                (0..(tgt + offset)).map(move |j| if j <= i + offset { 0.0 } else { minf })
             })
             .collect();
         Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)

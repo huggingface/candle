@@ -456,7 +456,11 @@ impl ZImageTransformerBlock {
 
         let adaln_modulation = if modulation {
             let adaln_dim = dim.min(ADALN_EMBED_DIM);
-            Some(linear(adaln_dim, 4 * dim, vb.pp("adaLN_modulation").pp("0"))?)
+            Some(linear(
+                adaln_dim,
+                4 * dim,
+                vb.pp("adaLN_modulation").pp("0"),
+            )?)
         } else {
             None
         };
@@ -614,21 +618,21 @@ pub fn patchify(
     if f == 1 && pf == 1 {
         // Step 1: Squeeze F dimension: (B, C, 1, H, W) -> (B, C, H, W)
         let x = x.squeeze(2)?;
-        
+
         // Step 2: Reshape H into (H_tokens, pH): (B, C, H, W) -> (B, C, H_t, pH, W)
         let x = x.reshape((b, c, h_tokens, ph, w))?;
-        
+
         // Step 3: Reshape W into (W_tokens, pW): (B, C, H_t, pH, W) -> (B, C, H_t, pH, W_t, pW)
         let x = x.reshape((b, c, h_tokens, ph, w_tokens, pw))?;
-        
+
         // Step 4: Permute to match Python: (C, H_t, pH, W_t, pW) -> (H_t, W_t, pH, pW, C)
         // For batch: (B, C, H_t, pH, W_t, pW) -> (B, H_t, W_t, pH, pW, C)
         // Permutation: (0, 2, 4, 3, 5, 1)
         let x = x.permute((0, 2, 4, 3, 5, 1))?;
-        
+
         // Step 5: Reshape to patches: (B, H_t, W_t, pH, pW, C) -> (B, H_t*W_t, pH*pW*C)
         let x = x.reshape((b, num_patches, patch_dim))?;
-        
+
         Ok((x, (f, h, w)))
     } else {
         // General case: use contiguous + reshape approach
@@ -671,18 +675,18 @@ pub fn unpatchify(
     if f == 1 && pf == 1 {
         // Step 1: Reshape to (B, H_t, W_t, pH, pW, C)
         let x = x.reshape((b, h_tokens, w_tokens, ph, pw, out_channels))?;
-        
+
         // Step 2: Permute to match Python: (H_t, W_t, pH, pW, C) -> (C, H_t, pH, W_t, pW)
         // For batch: (B, H_t, W_t, pH, pW, C) -> (B, C, H_t, pH, W_t, pW)
         // Permutation: (0, 5, 1, 3, 2, 4)
         let x = x.permute((0, 5, 1, 3, 2, 4))?;
-        
+
         // Step 3: Reshape to combine H and W: (B, C, H_t, pH, W_t, pW) -> (B, C, H, W)
         let x = x.reshape((b, out_channels, h, w))?;
-        
+
         // Step 4: Add back F dimension: (B, C, H, W) -> (B, C, 1, H, W)
         let x = x.unsqueeze(2)?;
-        
+
         Ok(x)
     } else {
         // General case
@@ -751,19 +755,25 @@ impl ZImageTransformer2DModel {
         let t_embedder = TimestepEmbedder::new(adaln_dim, 1024, vb.pp("t_embedder"))?;
 
         // Caption embedder
-        let cap_embedder_norm =
-            RmsNorm::new(cfg.cap_feat_dim, cfg.norm_eps, vb.pp("cap_embedder").pp("0"))?;
-        let cap_embedder_linear =
-            linear(cfg.cap_feat_dim, cfg.dim, vb.pp("cap_embedder").pp("1"))?;
+        let cap_embedder_norm = RmsNorm::new(
+            cfg.cap_feat_dim,
+            cfg.norm_eps,
+            vb.pp("cap_embedder").pp("0"),
+        )?;
+        let cap_embedder_linear = linear(cfg.cap_feat_dim, cfg.dim, vb.pp("cap_embedder").pp("1"))?;
 
         // Patch embedder (assuming patch_size=2, f_patch_size=1)
-        let patch_dim =
-            cfg.all_f_patch_size[0] * cfg.all_patch_size[0] * cfg.all_patch_size[0] * cfg.in_channels;
+        let patch_dim = cfg.all_f_patch_size[0]
+            * cfg.all_patch_size[0]
+            * cfg.all_patch_size[0]
+            * cfg.in_channels;
         let x_embedder = linear(patch_dim, cfg.dim, vb.pp("all_x_embedder").pp("2-1"))?;
 
         // Final layer
-        let out_channels =
-            cfg.all_patch_size[0] * cfg.all_patch_size[0] * cfg.all_f_patch_size[0] * cfg.in_channels;
+        let out_channels = cfg.all_patch_size[0]
+            * cfg.all_patch_size[0]
+            * cfg.all_f_patch_size[0]
+            * cfg.in_channels;
         let final_layer =
             FinalLayer::new(cfg.dim, out_channels, vb.pp("all_final_layer").pp("2-1"))?;
 
@@ -794,7 +804,11 @@ impl ZImageTransformer2DModel {
         // Main layers (with modulation)
         let mut layers = Vec::with_capacity(cfg.n_layers);
         for i in 0..cfg.n_layers {
-            layers.push(ZImageTransformerBlock::new(cfg, true, vb.pp("layers").pp(i))?);
+            layers.push(ZImageTransformerBlock::new(
+                cfg,
+                true,
+                vb.pp("layers").pp(i),
+            )?);
         }
 
         // RoPE embedder

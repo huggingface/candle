@@ -469,8 +469,12 @@ impl Encoder {
         let mid_channels = *cfg.block_out_channels.last().unwrap();
         let mid_block = UNetMidBlock2D::new(mid_channels, cfg.norm_num_groups, vb.pp("mid_block"))?;
 
-        let conv_norm_out =
-            group_norm(cfg.norm_num_groups, mid_channels, 1e-6, vb.pp("conv_norm_out"))?;
+        let conv_norm_out = group_norm(
+            cfg.norm_num_groups,
+            mid_channels,
+            1e-6,
+            vb.pp("conv_norm_out"),
+        )?;
         let conv_out = conv2d(
             mid_channels,
             2 * cfg.latent_channels,
@@ -554,9 +558,19 @@ impl Decoder {
         }
 
         let final_channels = *reversed_channels.last().unwrap();
-        let conv_norm_out =
-            group_norm(cfg.norm_num_groups, final_channels, 1e-6, vb.pp("conv_norm_out"))?;
-        let conv_out = conv2d(final_channels, cfg.out_channels, 3, conv_cfg, vb.pp("conv_out"))?;
+        let conv_norm_out = group_norm(
+            cfg.norm_num_groups,
+            final_channels,
+            1e-6,
+            vb.pp("conv_norm_out"),
+        )?;
+        let conv_out = conv2d(
+            final_channels,
+            cfg.out_channels,
+            3,
+            conv_cfg,
+            vb.pp("conv_out"),
+        )?;
 
         Ok(Self {
             conv_in,

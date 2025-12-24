@@ -66,10 +66,7 @@ impl FlowMatchEulerDiscreteScheduler {
         let shift = config.shift;
 
         // Generate initial sigmas
-        let timesteps: Vec<f64> = (1..=num_train_timesteps)
-            .rev()
-            .map(|t| t as f64)
-            .collect();
+        let timesteps: Vec<f64> = (1..=num_train_timesteps).rev().map(|t| t as f64).collect();
 
         let sigmas: Vec<f64> = timesteps
             .iter()
