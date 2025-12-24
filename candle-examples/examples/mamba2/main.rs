@@ -24,6 +24,8 @@ struct TextGeneration {
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
+    use_prefill: bool,
+    chunk_size: usize,
 }
 
 impl TextGeneration {
@@ -37,6 +39,8 @@ impl TextGeneration {
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
+        use_prefill: bool,
+        chunk_size: usize,
         device: &Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
@@ -47,6 +51,8 @@ impl TextGeneration {
             logits_processor,
             repeat_penalty,
             repeat_last_n,
+            use_prefill,
+            chunk_size,
             device: device.clone(),
         }
     }
@@ -69,12 +75,33 @@ impl TextGeneration {
         };
         let mut state = State::new(1, &self.config, dtype, &self.device)?;
         let mut next_logits = None;
-        for &t in tokens.iter() {
-            let input = Tensor::new(&[t], &self.device)?;
-            let logits = self.model.forward(&input, &mut state)?;
-            next_logits = Some(logits);
-            if let Some(t) = self.tokenizer.next_token(t)? {
-                print!("{t}")
+
+        let prefill_start = std::time::Instant::now();
+        if self.use_prefill && tokens.len() > 1 {
+            // Prefill mode: process all tokens at once
+            let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
+            let logits = self.model.forward_prefill(&input, &mut state, self.chunk_size)?;
+            // Get logits for last position
+            next_logits = Some(logits.narrow(1, tokens.len() - 1, 1)?.squeeze(1)?);
+            for &t in tokens.iter() {
+                if let Some(t) = self.tokenizer.next_token(t)? {
+                    print!("{t}")
+                }
+            }
+            println!(
+                "\n[Prefill {} tokens in {:.2}ms]",
+                tokens.len(),
+                prefill_start.elapsed().as_secs_f64() * 1000.0
+            );
+        } else {
+            // Step-by-step mode
+            for &t in tokens.iter() {
+                let input = Tensor::new(&[t], &self.device)?;
+                let logits = self.model.forward(&input, &mut state)?;
+                next_logits = Some(logits);
+                if let Some(t) = self.tokenizer.next_token(t)? {
+                    print!("{t}")
+                }
             }
         }
         std::io::stdout().flush()?;
@@ -205,6 +232,14 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
+
+    /// Use chunked prefill for processing the initial prompt.
+    #[arg(long)]
+    use_prefill: bool,
+
+    /// Chunk size for prefill (default 256).
+    #[arg(long, default_value_t = 256)]
+    chunk_size: usize,
 }
 
 fn main() -> Result<()> {
@@ -280,6 +315,8 @@ fn main() -> Result<()> {
         args.top_p,
         args.repeat_penalty,
         args.repeat_last_n,
+        args.use_prefill,
+        args.chunk_size,
         &device,
     );
     pipeline.run(&args.prompt, args.sample_len)?;
