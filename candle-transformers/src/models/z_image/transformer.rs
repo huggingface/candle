@@ -589,12 +589,11 @@ impl FinalLayer {
 // ==================== Patchify / Unpatchify ====================
 
 /// Convert image to patch sequence
-/// input: (B, C, F, H, W) where F=1 for images
-/// output: (B, num_patches, patch_dim), (F, H, W) original size
+/// Matches Python: image.view(C, F_t, pF, H_t, pH, W_t, pW).permute(1,3,5,2,4,6,0)
 ///
-/// For F=1, patch_size=2:
-/// - Input: (B, 16, 1, 64, 64)
-/// - After reshape to patches: (B, 32, 32, 2, 2, 16) -> (B, 1024, 64)
+/// For Z-Image with F=1, pF=1, we optimize to use 6D operations.
+/// input: (B, C, 1, H, W)
+/// output: (B, num_patches, patch_dim), (F, H, W) original size
 pub fn patchify(
     x: &Tensor,
     patch_size: usize,
@@ -611,33 +610,41 @@ pub fn patchify(
     let num_patches = f_tokens * h_tokens * w_tokens;
     let patch_dim = pf * ph * pw * c;
 
-    // Simplified approach: use unfold-like operations
-    // For Z-Image with f_patch_size=1, F dimension stays as-is
-    
-    // Step 1: (B, C, F, H, W) -> (B, F, H, W, C)
-    let x = x.permute((0, 2, 3, 4, 1))?;
-    
-    // Step 2: Reshape H: (B, F, H, W, C) -> (B, F, h_tokens, ph, W, C)
-    let x = x.reshape((b, f, h_tokens, ph, w, c))?;
-    
-    // Step 3: Permute to (B, F, h_tokens, W, ph, C)
-    let x = x.permute((0, 1, 2, 4, 3, 5))?;
-    
-    // Step 4: Reshape W and merge ph*C: (B, F, h_tokens, w_tokens, pw, ph*C)
-    let x = x.reshape((b, f, h_tokens, w_tokens, pw, ph * c))?;
-    
-    // Step 5: Permute to (B, F, h_tokens, w_tokens, ph*C, pw) - not needed
-    // Step 6: Merge to patches: (B, F*h_tokens*w_tokens, pw*ph*C)
-    let x = x.reshape((b, f * h_tokens * w_tokens, pw * ph * c))?;
-    
-    // For f_patch_size=1, patch_dim = pf * ph * pw * c = ph * pw * c
-    // Ensure final shape
-    let x = x.reshape((b, num_patches, patch_dim))?;
-
-    Ok((x, (f, h, w)))
+    // For F=1, pF=1 case (image generation), use optimized 6D path
+    if f == 1 && pf == 1 {
+        // Step 1: Squeeze F dimension: (B, C, 1, H, W) -> (B, C, H, W)
+        let x = x.squeeze(2)?;
+        
+        // Step 2: Reshape H into (H_tokens, pH): (B, C, H, W) -> (B, C, H_t, pH, W)
+        let x = x.reshape((b, c, h_tokens, ph, w))?;
+        
+        // Step 3: Reshape W into (W_tokens, pW): (B, C, H_t, pH, W) -> (B, C, H_t, pH, W_t, pW)
+        let x = x.reshape((b, c, h_tokens, ph, w_tokens, pw))?;
+        
+        // Step 4: Permute to match Python: (C, H_t, pH, W_t, pW) -> (H_t, W_t, pH, pW, C)
+        // For batch: (B, C, H_t, pH, W_t, pW) -> (B, H_t, W_t, pH, pW, C)
+        // Permutation: (0, 2, 4, 3, 5, 1)
+        let x = x.permute((0, 2, 4, 3, 5, 1))?;
+        
+        // Step 5: Reshape to patches: (B, H_t, W_t, pH, pW, C) -> (B, H_t*W_t, pH*pW*C)
+        let x = x.reshape((b, num_patches, patch_dim))?;
+        
+        Ok((x, (f, h, w)))
+    } else {
+        // General case: use contiguous + reshape approach
+        // This is less common for Z-Image image generation
+        let x = x.permute((0, 2, 3, 4, 1))?.contiguous()?; // (B, F, H, W, C)
+        let x = x.reshape((b, f_tokens, pf, h_tokens, ph, w_tokens * pw * c))?;
+        let x = x.permute((0, 1, 3, 5, 2, 4))?.contiguous()?;
+        let x = x.reshape((b, num_patches, patch_dim))?;
+        Ok((x, (f, h, w)))
+    }
 }
 
 /// Convert patch sequence back to image
+/// Matches Python: x.view(F_t, H_t, W_t, pF, pH, pW, C).permute(6,0,3,1,4,2,5)
+///
+/// For Z-Image with F=1, pF=1, we optimize to use 6D operations.
 /// input: (B, seq_len, patch_dim)
 /// output: (B, C, F, H, W)
 pub fn unpatchify(
@@ -660,30 +667,31 @@ pub fn unpatchify(
     let (b, _, _) = x.dims3()?;
     let x = x.narrow(1, 0, ori_len)?; // Remove padding
 
-    // Reverse of patchify using <=6D operations
-    // (B, num_patches, patch_dim) -> (B, C, F, H, W)
-    
-    // Step 1: (B, num_patches, patch_dim) -> (B, f*h_tokens*w_tokens, pw, ph*C)
-    // patch_dim = pf * ph * pw * C, for pf=1: patch_dim = ph * pw * C
-    let x = x.reshape((b, f_tokens * h_tokens * w_tokens, pw, ph * out_channels))?;
-    
-    // Step 2: Reshape to (B, f_tokens, h_tokens, w_tokens, pw, ph*C)
-    let x = x.reshape((b, f_tokens, h_tokens, w_tokens, pw, ph * out_channels))?;
-    
-    // Step 3: Permute to (B, f_tokens, h_tokens, w_tokens, ph*C, pw) -> not needed
-    // Step 4: Reshape to split ph from C: (B, f_tokens, h_tokens, w_tokens*pw, ph, C)
-    let x = x.reshape((b, f_tokens, h_tokens, w_tokens * pw, ph, out_channels))?;
-    
-    // Step 5: Permute to (B, f_tokens, h_tokens, ph, w_tokens*pw, C)
-    let x = x.permute((0, 1, 2, 4, 3, 5))?;
-    
-    // Step 6: Reshape to (B, f_tokens, h_tokens*ph, w_tokens*pw, C) = (B, F, H, W, C)
-    let x = x.reshape((b, f_tokens, h, w, out_channels))?;
-    
-    // Step 7: Permute to (B, C, F, H, W)
-    let x = x.permute((0, 4, 1, 2, 3))?;
-    
-    Ok(x)
+    // For F=1, pF=1 case (image generation), use optimized 6D path
+    if f == 1 && pf == 1 {
+        // Step 1: Reshape to (B, H_t, W_t, pH, pW, C)
+        let x = x.reshape((b, h_tokens, w_tokens, ph, pw, out_channels))?;
+        
+        // Step 2: Permute to match Python: (H_t, W_t, pH, pW, C) -> (C, H_t, pH, W_t, pW)
+        // For batch: (B, H_t, W_t, pH, pW, C) -> (B, C, H_t, pH, W_t, pW)
+        // Permutation: (0, 5, 1, 3, 2, 4)
+        let x = x.permute((0, 5, 1, 3, 2, 4))?;
+        
+        // Step 3: Reshape to combine H and W: (B, C, H_t, pH, W_t, pW) -> (B, C, H, W)
+        let x = x.reshape((b, out_channels, h, w))?;
+        
+        // Step 4: Add back F dimension: (B, C, H, W) -> (B, C, 1, H, W)
+        let x = x.unsqueeze(2)?;
+        
+        Ok(x)
+    } else {
+        // General case
+        let x = x.reshape((b, f_tokens, h_tokens, w_tokens, pf * ph * pw * out_channels))?;
+        let x = x.reshape((b, f_tokens, h_tokens, w_tokens * pf, ph, pw * out_channels))?;
+        let x = x.permute((0, 5, 1, 3, 2, 4))?.contiguous()?;
+        let x = x.reshape((b, out_channels, f, h, w))?;
+        Ok(x)
+    }
 }
 
 /// Create 3D coordinate grid for RoPE position IDs

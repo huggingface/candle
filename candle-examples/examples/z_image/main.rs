@@ -268,15 +268,25 @@ fn run(args: Args) -> Result<()> {
     };
 
     // ==================== Calculate Latent Dimensions ====================
-    // VAE downsamples by 16x, and latent size must be divisible by patch_size
-    // Formula from Python: latent_h = 2 * (height // (vae_scale_factor * 2))
-    // where vae_scale_factor = 8, so vae_scale_factor * 2 = 16
+    // Formula from Python pipeline: latent = 2 * (image_size // 16)
+    // This ensures: latent is divisible by patch_size=2, and VAE decode (8x) gives correct size
     let patch_size = transformer_cfg.all_patch_size[0];
-    let vae_spatial_scale = 16; // VAE downsamples by 16x
+    let vae_align = 16; // vae_scale_factor * 2 = 8 * 2 = 16
     
-    // Ensure latent dimensions are divisible by patch_size (2)
-    let latent_h = patch_size * (args.height / (vae_spatial_scale * patch_size));
-    let latent_w = patch_size * (args.width / (vae_spatial_scale * patch_size));
+    // Validate input dimensions
+    if args.height % vae_align != 0 || args.width % vae_align != 0 {
+        anyhow::bail!(
+            "Image dimensions must be divisible by {}. Got {}x{}. \
+             Try {}x{} or {}x{} instead.",
+            vae_align, args.width, args.height,
+            (args.width / vae_align) * vae_align, (args.height / vae_align) * vae_align,
+            ((args.width / vae_align) + 1) * vae_align, ((args.height / vae_align) + 1) * vae_align
+        );
+    }
+    
+    // Correct latent size formula: 2 * (image_size // 16)
+    let latent_h = 2 * (args.height / vae_align);
+    let latent_w = 2 * (args.width / vae_align);
     println!("Latent size: {}x{}", latent_w, latent_h);
 
     // Calculate image sequence length for shift
