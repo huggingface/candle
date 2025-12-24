@@ -53,7 +53,7 @@ impl RotaryEmbedding {
             .collect();
         let inv_freq_len = inv_freq.len();
 
-        // Keep in f32 for precision (Python keeps inv_freq as float32)
+        // Keep in f32 for precision
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?; // f32
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
             .to_dtype(DType::F32)? // f32, not model dtype
@@ -62,7 +62,7 @@ impl RotaryEmbedding {
         // Compute freqs, sin, cos all in f32 for precision
         let freqs = t.matmul(&inv_freq)?; // f32 matmul
 
-        // Only cast to model dtype at the very end (matches Python's return statement)
+        // Only cast to model dtype at the very end
         Ok(Self {
             sin: freqs.sin()?.to_dtype(dtype)?,
             cos: freqs.cos()?.to_dtype(dtype)?,
@@ -206,13 +206,10 @@ impl Attention {
                 None => attn_weights,
                 Some(mask) => attn_weights.broadcast_add(mask)?,
             };
-            // CRITICAL: Match Python's behavior - compute softmax in float32 then cast back
-            // Python: attn_weights = softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-            let attn_weights = {
-                let original_dtype = attn_weights.dtype();
-                let attn_f32 = attn_weights.to_dtype(DType::F32)?;
-                candle_nn::ops::softmax_last_dim(&attn_f32)?.to_dtype(original_dtype)?
-            };
+            // Metal uses online softmax which handles numerical stability internally.
+            // CUDA accumulates in float for f16/bf16 inputs.
+            // TODO: Implement online softmax for CUDA to match Metal's single-pass approach.
+            let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&value_states)?
         };
         attn_output
@@ -340,7 +337,7 @@ impl Model {
         // For each query at absolute position (seqlen_offset + i):
         // - Causal: can attend to key positions j where j <= seqlen_offset + i
         // - Sliding window: can attend to key positions j where j >= (seqlen_offset + i) - sliding_window
-        // Use f32::MIN (finite large negative) like Python's torch.finfo(dtype).min
+        // Use f32::MIN (finite large negative) like PyTorch's torch.finfo(dtype).min
         // This is consistent with prepare_4d_causal_attention_mask_with_cache_position
         let min_dtype = f32::MIN;
 
@@ -378,7 +375,7 @@ impl Model {
         }
         let mask = Tensor::cat(&mask, 0)?;
         let on_true = mask.zeros_like()?.to_dtype(self.dtype)?;
-        // Use f32::MIN like Python's torch.finfo(dtype).min for consistency
+        // Use f32::MIN like PyTorch's torch.finfo(dtype).min for consistency
         let on_false = Tensor::new(f32::MIN, &self.device)?
             .broadcast_as(mask.shape())?
             .to_dtype(self.dtype)?;
@@ -388,7 +385,7 @@ impl Model {
     /// Creates a 4D causal attention mask that properly handles cached decoding with
     /// selective attention (e.g., only attending to specific positions).
     ///
-    /// This matches Python's `_prepare_4d_causal_attention_mask_with_cache_position`.
+    /// This matches PyTorch's `_prepare_4d_causal_attention_mask_with_cache_position`.
     ///
     /// # Arguments
     /// * `attention_mask` - Optional 2D mask [batch, total_seq_len] where 1=attend, 0=mask
@@ -415,7 +412,7 @@ impl Model {
         // where j <= cache_position[i] (causal) and j >= cache_position[i] - sliding_window
         let mut mask_data: Vec<f32> = Vec::with_capacity(query_length * key_length);
 
-        // Use f32::MIN (finite large negative) like Python's torch.finfo(dtype).min
+        // Use f32::MIN (finite large negative) like PyTorch's torch.finfo(dtype).min
         // This avoids 0 * -inf = NaN issues when combining masks
         let min_dtype = f32::MIN;
 
@@ -438,7 +435,7 @@ impl Model {
         let causal_mask = Tensor::from_slice(&mask_data, (query_length, key_length), &self.device)?;
 
         // If attention_mask is provided (2D), combine with causal mask
-        // Matching Python lines 722-728:
+        // Matching PyTorch lines 722-728:
         //   padding_mask = causal_mask + attention_mask[:, None, None, :]
         //   padding_mask = padding_mask == 0
         //   causal_mask.masked_fill(padding_mask, min_dtype)
@@ -466,8 +463,8 @@ impl Model {
             // padding_mask = True where sum == 0 (causal allows but attention denies)
             let padding_mask = sum.eq(0.0)?;
 
-            // Set those positions to MIN using where_cond (like Python's masked_fill)
-            // CRITICAL: Use causal_4d as fallback, NOT sum! Python's masked_fill keeps original
+            // Set those positions to MIN using where_cond (like PyTorch's masked_fill)
+            // CRITICAL: Use causal_4d as fallback, NOT sum! PyTorch's masked_fill keeps original
             // causal values where padding_mask is False, not the sum of causal + attn.
             let min_val = Tensor::new(min_dtype, &self.device)?.broadcast_as(causal_4d.shape())?;
             let combined = padding_mask.where_cond(&min_val, &causal_4d)?;
