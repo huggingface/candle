@@ -1,5 +1,7 @@
 #include <metal_stdlib>
+using namespace metal;
 
+// Utils
 METAL_FUNC uint get_strided_index(
     uint idx,
     constant size_t &num_dims,
@@ -15,117 +17,88 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
+template<uint Y>
+constexpr uint div_ceil(uint x) {
+    return x / Y + (x % Y > 0);
+}
 
-using namespace metal;
+template<uint X, uint Y>
+constexpr uint div_ceil() {
+    return X / Y + (X % Y > 0);
+}
 
-#define CAST(FN_NAME, FN_NAME_STRIDED, LEFT_TYPENAME, RIGHT_TYPENAME) \
-kernel void FN_NAME( \
-    constant size_t &dim, \
-    device const LEFT_TYPENAME *input,  \
-    device RIGHT_TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    if (tid >= dim) { \
-        return; \
-    } \
-    output[tid] = static_cast<RIGHT_TYPENAME>(input[tid]); \
-} \
-kernel void FN_NAME_STRIDED( \
-    constant size_t &dim, \
-    constant size_t &num_dims, \
-    constant size_t *dims, \
-    constant size_t *strides, \
-    device const LEFT_TYPENAME *input,  \
-    device RIGHT_TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    if (tid >= dim) { \
-        return; \
-    } \
-    output[tid] = static_cast<RIGHT_TYPENAME>(input[get_strided_index(tid, num_dims, dims, strides)]); \
-} \
+template<typename T>
+constexpr uint work_per_thread() {
+    return div_ceil<8, sizeof(T)>();
+}
 
-#define CAST_THROUGH(FN_NAME, FN_NAME_STRIDED, LEFT_TYPENAME, RIGHT_TYPENAME, IR_TYPENAME) \
-kernel void FN_NAME( \
-    constant size_t &dim, \
-    device const LEFT_TYPENAME *input,  \
-    device RIGHT_TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    if (tid >= dim) { \
-        return; \
-    } \
-    output[tid] = static_cast<RIGHT_TYPENAME>(static_cast<IR_TYPENAME>(input[tid])); \
-} \
-kernel void FN_NAME_STRIDED( \
-    constant size_t &dim, \
-    constant size_t &num_dims, \
-    constant size_t *dims, \
-    constant size_t *strides, \
-    device const LEFT_TYPENAME *input,  \
-    device RIGHT_TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    if (tid >= dim) { \
-        return; \
-    } \
-    output[tid] = static_cast<RIGHT_TYPENAME>(static_cast<IR_TYPENAME>(input[get_strided_index(tid, num_dims, dims, strides)])); \
-} \
+// Kernels
+template <
+    typename T,
+    typename U,
+    typename IR = T,
+    int W = work_per_thread<T>()
+>
+[[kernel]] void cast_kernel(
+    constant size_t &dim,
+    device const T* input,
+    device U* output,
+    uint tid [[thread_position_in_grid]]
+) {
+    const uint step = div_ceil<W>(dim);
+    #pragma clang loop unroll(full)
+    for (uint i = tid; i < dim; i += step) {
+        output[i] = static_cast<U>(static_cast<IR>(input[i]));
+    }
+}
 
-// u32
-CAST(cast_u32_f32, cast_u32_f32_strided, uint32_t, float)
-CAST(cast_u32_u8, cast_u32_u8_strided, uint32_t, uint8_t)
-CAST(cast_u32_f16, cast_u32_f16_strided, uint32_t, half)
-#if __METAL_VERSION__ >= 220
-CAST(cast_u32_i64, cast_u32_i64_strided, uint32_t, int64_t)
-#endif
+template <typename T, typename U, typename IR = T>
+[[kernel]] void cast_kernel_strided(
+    constant size_t &dim,
+    constant size_t &num_dims,
+    constant size_t *dims,
+    constant size_t *strides,
+    constant const T *input,
+    device U *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dim) return;
+    output[tid] = static_cast<U>(
+        static_cast<IR>(input[get_strided_index(tid, num_dims, dims, strides)])
+    );
+}
+
+// Macros to help initialize kernels
+#define init_kernel(name, func, ...) \
+  template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
+
+#define init_cast(tname, t, uname, u)                                           \
+    init_kernel("cast_" #tname "_" #uname, cast_kernel, t, u)                   \
+    init_kernel("cast_" #tname "_" #uname "_strided", cast_kernel_strided, t, u)
+
 #if defined(__HAVE_BFLOAT__)
-CAST(cast_u32_bf16, cast_u32_bf16_strided, uint32_t, bfloat)
+#define init_cast_all(tname, t)         \
+    init_cast(tname, t, f32, float)     \
+    init_cast(tname, t, f16, half)      \
+    init_cast(tname, t, bf16, bfloat)   \
+    init_cast(tname, t, i64, int64_t)   \
+    init_cast(tname, t, u32, uint32_t)  \
+    init_cast(tname, t, u8, uint8_t)
+#else
+#define init_cast_all(tname, t)         \
+    init_cast(tname, t, f32, float)     \
+    init_cast(tname, t, f16, half)      \
+    init_cast(tname, t, i64, int64_t)   \
+    init_cast(tname, t, u32, uint32_t)  \
+    init_cast(tname, t, u8, uint8_t)
 #endif
 
-// u8
-CAST(cast_u8_u32, cast_u8_u32_strided, uint8_t, uint32_t)
-CAST(cast_u8_f32, cast_u8_f32_strided, uint8_t, float)
-CAST(cast_u8_f16, cast_u8_f16_strided, uint8_t, half)
-#if __METAL_VERSION__ >= 220
-CAST(cast_u8_i64, cast_u8_i64_strided, uint8_t, int64_t)
-#endif
-#if defined(__HAVE_BFLOAT__)
-CAST(cast_u8_bf16, cast_u8_bf16_strided, uint8_t, bfloat)
-#endif
 
-// f16
-CAST(cast_f16_f32, cast_f16_f32_strided, half, float)
-CAST(cast_f16_u8, cast_f16_u8_strided, half, uint8_t)
-CAST(cast_f16_u32, cast_f16_u32_strided, half, uint32_t)
-CAST(cast_f16_i64, cast_f16_i64_strided, half, int64_t)
+init_cast_all(f32, float);
+init_cast_all(f16, half);
 #if defined(__HAVE_BFLOAT__)
-CAST_THROUGH(cast_f16_bf16, cast_f16_bf16_strided, half, bfloat, float)
+init_cast_all(bf16, bfloat);
 #endif
-
-// i64
-CAST(cast_i64_f32, cast_i64_f32_strided, int64_t, float)
-CAST(cast_i64_u8, cast_i64_u8_strided, int64_t, uint8_t)
-CAST(cast_i64_u32, cast_i64_u32_strided, int64_t, uint32_t)
-CAST(cast_i64_f16, cast_i64_f16_strided, int64_t, half)
-#if defined(__HAVE_BFLOAT__)
-CAST_THROUGH(cast_i64_bf16, cast_i64_bf16_strided, int64_t, bfloat, float)
-#endif
-
-// f32
-CAST(cast_f32_f16, cast_f32_f16_strided, float, half)
-CAST(cast_f32_u32, cast_f32_u32_strided, float, uint32_t)
-CAST(cast_f32_u8, cast_f32_u8_strided, float, uint8_t)
-CAST(cast_f32_i64, cast_f32_i64_strided, float, int64_t)
-#if defined(__HAVE_BFLOAT__)
-CAST(cast_f32_bf16, cast_f32_bf16_strided, float, bfloat)
-#endif
-
-// bf16
-#if defined(__HAVE_BFLOAT__)
-CAST(cast_bf16_u32, cast_bf16_u32_strided, bfloat, uint32_t)
-CAST(cast_bf16_i64, cast_bf16_i64_strided, bfloat, int64_t)
-CAST(cast_bf16_f32, cast_bf16_f32_strided, bfloat, float)
-CAST_THROUGH(cast_bf16_u8, cast_bf16_u8_strided, bfloat, uint8_t, float)
-CAST_THROUGH(cast_bf16_f16, cast_bf16_f16_strided, bfloat, half, float)
-#endif
+init_cast_all(i64, int64_t);
+init_cast_all(u32, uint32_t);
+init_cast_all(u8, uint8_t);
