@@ -212,7 +212,7 @@ fn causal_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
                     })
                     .reduce(
                         || (vec![0f32; dv], 0.0f32, f32::NEG_INFINITY),
-                        |a, b| merge_softmax_accumulators(a, b),
+                        merge_softmax_accumulators,
                     );
 
                 // Final normalization

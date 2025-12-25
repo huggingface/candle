@@ -34,9 +34,10 @@ pub use cpu_flash::flash_attn;
 /// - `Causal`: Loop-bound masking (skips ~50% of positions, no tensor allocation)
 /// - `Mask`: Explicit tensor for arbitrary patterns (sliding window, block-sparse)
 /// - `None`: Full bidirectional attention
-#[derive(Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy)]
 pub enum AttnMask<'a> {
     /// No masking — full bidirectional attention.
+    #[default]
     None,
 
     /// Causal masking via efficient loop bounds (no tensor allocation).
@@ -51,12 +52,6 @@ pub enum AttnMask<'a> {
     /// Shape: `(B, Q_LEN, KV_LEN)` or broadcastable.
     /// Values: `0.0` to attend, `NEG_INFINITY` to mask.
     Mask(&'a Tensor),
-}
-
-impl Default for AttnMask<'_> {
-    fn default() -> Self {
-        AttnMask::None
-    }
 }
 
 impl<'a> AttnMask<'a> {
