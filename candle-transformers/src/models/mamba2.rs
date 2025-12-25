@@ -9,6 +9,8 @@ use candle_nn::{RmsNorm, VarBuilder};
 
 const D_CONV: usize = 4;
 
+/// Segment sum for SSD: computes cumsum[i] - cumsum[j] with lower triangular mask.
+/// See Algorithm 1 in the Mamba2 paper.
 fn segsum(x: &Tensor) -> Result<Tensor> {
     let device = x.device();
     let dtype = x.dtype();
@@ -235,7 +237,7 @@ impl Mamba2Block {
         )?;
 
         let dt_bias = self.dt_bias.broadcast_as(dt.shape())?;
-        let dt = ((&dt + &dt_bias)?.exp()? + 1.)?.log()?;
+        let dt = ((&dt + &dt_bias)?.exp()? + 1.)?.log()?; // softplus
 
         let a = self.a_log.exp()?.neg()?;
 
@@ -246,6 +248,7 @@ impl Mamba2Block {
         let y = (&y + x_skip.broadcast_mul(&d.unsqueeze(D::Minus1)?)?)?;
         let y = y.reshape((b_sz, self.d_inner))?;
 
+        // Mamba2 applies gate before norm (MambaRMSNormGated)
         let y = (y * candle_nn::ops::silu(&z)?)?;
         let y = self.norm.forward(&y)?;
 
@@ -307,6 +310,7 @@ impl Mamba2Block {
         let dt_expanded =
             dt_expanded.broadcast_as((b_sz, self.nheads, self.headdim, self.d_state))?;
 
+        // SSM recurrence: h = exp(A*dt) * h + dt * (x ⊗ B)
         *h = ((&*h * &decay)? + (&dt_expanded * &x_b)?)?;
 
         let c_unsq = c.unsqueeze(2)?;
@@ -316,6 +320,7 @@ impl Mamba2Block {
         Ok(y)
     }
 
+    /// Chunked SSD algorithm for parallel prefill (Algorithm 1 in Mamba2 paper).
     fn ssd_chunked(
         &self,
         x: &Tensor,
@@ -339,6 +344,7 @@ impl Mamba2Block {
         let a = a.permute((0, 3, 1, 2))?;
         let a_cumsum = a.cumsum(D::Minus1)?;
 
+        // Intra-chunk (diagonal blocks)
         let l = segsum(&a)?.exp()?;
 
         let c_expanded = c.unsqueeze(3)?;
@@ -357,6 +363,7 @@ impl Mamba2Block {
             .sum(4)?
             .permute((0, 1, 3, 2, 4))?;
 
+        // Intra-chunk states
         let a_last = a_cumsum.narrow(D::Minus1, chunk_size - 1, 1)?;
         let decay_states = (a_last.broadcast_as(a_cumsum.shape())? - &a_cumsum)?.exp()?;
 
@@ -370,6 +377,7 @@ impl Mamba2Block {
             * b_weighted.unsqueeze(4)?.broadcast_as(states_shape)?)?
             .sum(3)?;
 
+        // Inter-chunk recurrence
         let init_state = match initial_state {
             Some(s) => s.unsqueeze(1)?,
             None => Tensor::zeros((batch, 1, nheads, headdim, d_state), dtype, device)?,
@@ -391,6 +399,7 @@ impl Mamba2Block {
         let states_out = new_states.narrow(1, 0, n_chunks)?;
         let final_state = new_states.narrow(1, n_chunks, 1)?.squeeze(1)?;
 
+        // State-to-output (off-diagonal blocks)
         let state_decay_out = a_cumsum.exp()?;
 
         let c_t2 = c.permute((0, 1, 3, 2, 4))?;
@@ -440,6 +449,7 @@ impl Mamba2Block {
             .transpose(1, 2)?;
         let xbc_conv = candle_nn::ops::silu(&xbc_conv)?;
 
+        // Update conv_state from real sequence tokens (not padding) for correct autoregressive behavior
         let start = seq_len.saturating_sub(D_CONV);
         let count = D_CONV.min(seq_len);
         let last_tokens = xbc.narrow(1, start, count)?;
@@ -464,6 +474,7 @@ impl Mamba2Block {
 
         let mut x_ssd = x_conv.reshape((b_sz, padded_len, self.nheads, self.headdim))?;
 
+        // Zero out padding to prevent it from affecting chunk state computation
         if pad_len > 0 {
             let mask_ones = Tensor::ones((b_sz, seq_len, self.nheads, self.headdim), x_ssd.dtype(), x_ssd.device())?;
             let mask_zeros = Tensor::zeros((b_sz, pad_len, self.nheads, self.headdim), x_ssd.dtype(), x_ssd.device())?;
@@ -482,6 +493,7 @@ impl Mamba2Block {
             .unsqueeze(3)?
             .broadcast_as((b_sz, padded_len, self.ngroups, heads_per_group, self.d_state))?
             .reshape((b_sz, padded_len, self.nheads, self.d_state))?;
+        // Discretize B: B_bar = dt * B (ZOH discretization absorbed into ssd_chunked)
         let b = b.broadcast_mul(&dt.unsqueeze(D::Minus1)?)?;
         let c = c.reshape((b_sz, padded_len, self.ngroups, self.d_state))?;
         let c = c
