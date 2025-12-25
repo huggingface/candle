@@ -76,8 +76,8 @@ impl TextGeneration {
         let mut state = State::new(1, &self.config, dtype, &self.device)?;
         let mut next_logits = None;
 
-        let prefill_start = std::time::Instant::now();
         if self.use_prefill && tokens.len() > 1 {
+            let prefill_start = std::time::Instant::now();
             // Prefill mode: process all tokens at once
             let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward_prefill(&input, &mut state, self.chunk_size)?;

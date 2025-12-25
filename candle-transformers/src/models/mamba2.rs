@@ -182,7 +182,7 @@ impl Mamba2Block {
         let nheads = cfg.nheads();
         let ngroups = cfg.ngroups;
         let d_state = cfg.d_state;
-        let d_xbc = d_inner + 2 * ngroups * d_state;
+        let d_xbc = cfg.d_xbc();
 
         let proj_size = d_inner + d_xbc + nheads;
         let in_proj = linear_no_bias(cfg.d_model, proj_size, vb.pp("in_proj"))?;
@@ -333,7 +333,7 @@ impl Mamba2Block {
         let device = x.device();
         let dtype = x.dtype();
         let (batch, seq_len, nheads, headdim) = x.dims4()?;
-        let (_, _, _, d_state) = b.dims4()?;
+        let d_state = self.d_state;
         let n_chunks = seq_len / chunk_size;
 
         let x = reshape_into_chunks(x, chunk_size)?;
@@ -589,7 +589,6 @@ impl Model {
     }
 
     pub fn forward(&self, input_ids: &Tensor, state: &mut State) -> Result<Tensor> {
-        let _b_size = input_ids.dims1()?;
         let mut xs = self.embedding.forward(input_ids)?;
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, state)?;
