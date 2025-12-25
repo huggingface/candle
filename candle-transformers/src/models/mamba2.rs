@@ -341,7 +341,7 @@ impl Mamba2Block {
         let b = reshape_into_chunks(b, chunk_size)?;
         let c = reshape_into_chunks(c, chunk_size)?;
 
-        let a = a.permute((0, 3, 1, 2))?;
+        let a = a.permute((0, 3, 1, 2))?.contiguous()?;
         let a_cumsum = a.cumsum(D::Minus1)?;
 
         // Intra-chunk (diagonal blocks)
@@ -351,31 +351,33 @@ impl Mamba2Block {
         let b_expanded = b.unsqueeze(2)?;
         let cb_shape = (batch, n_chunks, chunk_size, chunk_size, nheads, d_state);
         let cb = (c_expanded.broadcast_as(cb_shape)? * b_expanded.broadcast_as(cb_shape)?)?.sum(D::Minus1)?;
-        let cb = cb.permute((0, 1, 4, 2, 3))?;
+        let cb = cb.permute((0, 1, 4, 2, 3))?.contiguous()?;
 
-        let l_t = l.permute((0, 2, 1, 3, 4))?;
+        let l_t = l.permute((0, 2, 1, 3, 4))?.contiguous()?;
         let cb_l = (&cb * &l_t)?;
 
-        let x_t = x.permute((0, 1, 3, 2, 4))?;
+        let x_t = x.permute((0, 1, 3, 2, 4))?.contiguous()?;
         let y_diag_shape = (batch, n_chunks, nheads, chunk_size, chunk_size, headdim);
         let y_diag = (cb_l.unsqueeze(D::Minus1)?.broadcast_as(y_diag_shape)?
             * x_t.unsqueeze(3)?.broadcast_as(y_diag_shape)?)?
             .sum(4)?
-            .permute((0, 1, 3, 2, 4))?;
+            .permute((0, 1, 3, 2, 4))?
+            .contiguous()?;
 
         // Intra-chunk states
         let a_last = a_cumsum.narrow(D::Minus1, chunk_size - 1, 1)?;
         let decay_states = (a_last.broadcast_as(a_cumsum.shape())? - &a_cumsum)?.exp()?;
 
-        let decay_s = decay_states.permute((0, 2, 1, 3))?.unsqueeze(D::Minus1)?;
-        let b_t = b.permute((0, 1, 3, 2, 4))?;
+        let decay_s = decay_states.permute((0, 2, 1, 3))?.contiguous()?.unsqueeze(D::Minus1)?;
+        let b_t = b.permute((0, 1, 3, 2, 4))?.contiguous()?;
         let b_weighted = b_t.broadcast_mul(&decay_s)?;
 
-        let x_t2 = x.permute((0, 1, 3, 2, 4))?;
+        let x_t2 = x.permute((0, 1, 3, 2, 4))?.contiguous()?;
         let states_shape = (batch, n_chunks, nheads, chunk_size, headdim, d_state);
         let states = (x_t2.unsqueeze(D::Minus1)?.broadcast_as(states_shape)?
             * b_weighted.unsqueeze(4)?.broadcast_as(states_shape)?)?
-            .sum(3)?;
+            .sum(3)?
+            .contiguous()?;
 
         // Inter-chunk recurrence
         let init_state = match initial_state {
@@ -389,12 +391,13 @@ impl Mamba2Block {
         let a_chunk_padded = Tensor::cat(&[&zeros, &a_chunk], D::Minus1)?;
         let decay_chunk = segsum(&a_chunk_padded)?.exp()?;
 
-        let states_p = states_with_init.permute((0, 2, 1, 3, 4))?;
+        let states_p = states_with_init.permute((0, 2, 1, 3, 4))?.contiguous()?;
         let inter_shape = (batch, nheads, n_chunks + 1, n_chunks + 1, headdim, d_state);
         let new_states = (decay_chunk.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?.broadcast_as(inter_shape)?
             * states_p.unsqueeze(2)?.broadcast_as(inter_shape)?)?
             .sum(3)?
-            .permute((0, 2, 1, 3, 4))?;
+            .permute((0, 2, 1, 3, 4))?
+            .contiguous()?;
 
         let states_out = new_states.narrow(1, 0, n_chunks)?;
         let final_state = new_states.narrow(1, n_chunks, 1)?.squeeze(1)?;
@@ -402,14 +405,15 @@ impl Mamba2Block {
         // State-to-output (off-diagonal blocks)
         let state_decay_out = a_cumsum.exp()?;
 
-        let c_t2 = c.permute((0, 1, 3, 2, 4))?;
+        let c_t2 = c.permute((0, 1, 3, 2, 4))?.contiguous()?;
         let off_shape = (batch, n_chunks, nheads, chunk_size, headdim, d_state);
         let c_states = (c_t2.unsqueeze(4)?.broadcast_as(off_shape)?
             * states_out.unsqueeze(3)?.broadcast_as(off_shape)?)?
-            .sum(D::Minus1)?;
+            .sum(D::Minus1)?
+            .contiguous()?;
 
-        let decay_out = state_decay_out.permute((0, 2, 1, 3))?.unsqueeze(D::Minus1)?;
-        let y_off = c_states.broadcast_mul(&decay_out)?.permute((0, 1, 3, 2, 4))?;
+        let decay_out = state_decay_out.permute((0, 2, 1, 3))?.contiguous()?.unsqueeze(D::Minus1)?;
+        let y_off = c_states.broadcast_mul(&decay_out)?.permute((0, 1, 3, 2, 4))?.contiguous()?;
 
         let y = (&y_diag + &y_off)?;
         let y = reshape_from_chunks(&y)?;
