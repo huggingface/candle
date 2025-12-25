@@ -19,12 +19,17 @@ pub trait Map1 {
         let out = match s {
             S::U8(s) => S::U8(self.f(s, d, l)?),
             S::U32(s) => S::U32(self.f(s, d, l)?),
+            S::I16(s) => S::I16(self.f(s, d, l)?),
+            S::I32(s) => S::I32(self.f(s, d, l)?),
             S::I64(s) => S::I64(self.f(s, d, l)?),
             S::BF16(s) => S::BF16(self.f(s, d, l)?),
             S::F16(s) => S::F16(self.f(s, d, l)?),
             S::F32(s) => S::F32(self.f(s, d, l)?),
             S::F64(s) => S::F64(self.f(s, d, l)?),
             S::F8E4M3(s) => S::F8E4M3(self.f(s, d, l)?),
+            S::F4(_) | S::F6E2M3(_) | S::F6E3M2(_) | S::F8E8M0(_) => {
+                crate::bail!("Map1 does not uspport this dtype.");
+            }
         };
         Ok(out)
     }
@@ -44,6 +49,8 @@ pub trait Map2 {
         let out = match (s1, s2) {
             (S::U8(s1), S::U8(s2)) => S::U8(self.f(s1, l1, s2, l2, d)?),
             (S::U32(s1), S::U32(s2)) => S::U32(self.f(s1, l1, s2, l2, d)?),
+            (S::I16(s1), S::I16(s2)) => S::I16(self.f(s1, l1, s2, l2, d)?),
+            (S::I32(s1), S::I32(s2)) => S::I32(self.f(s1, l1, s2, l2, d)?),
             (S::I64(s1), S::I64(s2)) => S::I64(self.f(s1, l1, s2, l2, d)?),
             (S::BF16(s1), S::BF16(s2)) => S::BF16(self.f(s1, l1, s2, l2, d)?),
             (S::F16(s1), S::F16(s2)) => S::F16(self.f(s1, l1, s2, l2, d)?),
@@ -118,6 +125,8 @@ pub trait Map2InPlace {
         match (dst, src) {
             (S::U8(dst), S::U8(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::U32(dst), S::U32(src)) => self.f(dst, dst_l, src, src_l, d),
+            (S::I16(dst), S::I16(src)) => self.f(dst, dst_l, src, src_l, d),
+            (S::I32(dst), S::I32(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::I64(dst), S::I64(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::BF16(dst), S::BF16(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::F16(dst), S::F16(src)) => self.f(dst, dst_l, src, src_l, d),
@@ -142,12 +151,17 @@ pub trait Map1Any {
         let out = match s {
             S::U8(s) => self.f(s, d, l, S::U8)?,
             S::U32(s) => self.f(s, d, l, S::U32)?,
+            S::I16(s) => self.f(s, d, l, S::I16)?,
+            S::I32(s) => self.f(s, d, l, S::I32)?,
             S::I64(s) => self.f(s, d, l, S::I64)?,
             S::BF16(s) => self.f(s, d, l, S::BF16)?,
             S::F16(s) => self.f(s, d, l, S::F16)?,
             S::F32(s) => self.f(s, d, l, S::F32)?,
             S::F64(s) => self.f(s, d, l, S::F64)?,
             S::F8E4M3(s) => self.f(s, d, l, S::F8E4M3)?,
+            S::F4(_) | S::F6E2M3(_) | S::F6E3M2(_) | S::F8E8M0(_) => {
+                crate::bail!("Map1 does not uspport this dtype.");
+            }
         };
         Ok(out)
     }

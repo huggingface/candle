@@ -54,6 +54,10 @@ impl QCudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub fn device_ptr(&self) -> Result<*const u8> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub fn storage_size_in_bytes(&self) -> usize {
         0
     }
@@ -68,6 +72,17 @@ impl QCudaStorage {
     }
 
     pub fn data(&self) -> Result<Vec<u8>> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn indexed_moe_forward(
+        &self,
+        _: &crate::Shape,
+        _: &CudaStorage,
+        _: &crate::Layout,
+        _: &CudaStorage,
+        _: &crate::Layout,
+    ) -> Result<(CudaStorage, crate::Shape)> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }

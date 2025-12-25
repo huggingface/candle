@@ -14,7 +14,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
@@ -31,10 +31,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
     steps:
-      - name: Delete huge unnecessary tools folder
+      - name: Free disk space (Linux)
         if: runner.os == 'Linux'
-        run: rm -rf /opt/hostedtoolcache
-      - uses: actions/checkout@v5
+        run: |
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          df -h
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
@@ -42,13 +47,23 @@ jobs:
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace
+      - name: Install lld (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y lld
+      - name: Run tests (with lld on Linux)
+        if: runner.os == 'Linux'
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+        run: cargo test --workspace
+      - name: Run tests (Windows & macOS)
+        if: runner.os != 'Linux'
+        run: cargo test --workspace
 
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -58,7 +73,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
