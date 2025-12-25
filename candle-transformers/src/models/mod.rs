@@ -14,6 +14,7 @@
 //! The implementations aim to be readable while maintaining good performance. For more information
 //! on each model see the model's module docs in the links below.
 
+pub mod bart;
 pub mod based;
 pub mod beit;
 pub mod bert;
