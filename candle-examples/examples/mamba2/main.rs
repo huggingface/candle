@@ -80,7 +80,9 @@ impl TextGeneration {
             let prefill_start = std::time::Instant::now();
             // Prefill mode: process all tokens at once
             let input = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward_prefill(&input, &mut state, self.chunk_size)?;
+            let logits = self
+                .model
+                .forward_prefill(&input, &mut state, self.chunk_size)?;
             // Get logits for last position
             next_logits = Some(logits.narrow(1, tokens.len() - 1, 1)?.squeeze(1)?);
             for &t in tokens.iter() {

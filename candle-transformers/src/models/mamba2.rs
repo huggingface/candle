@@ -24,8 +24,12 @@ fn segsum(x: &Tensor) -> Result<Tensor> {
         shape
     };
 
-    let x_cumsum_row = x_cumsum.unsqueeze(D::Minus1)?.broadcast_as(target_shape.as_slice())?;
-    let x_cumsum_col = x_cumsum.unsqueeze(x.rank() - 1)?.broadcast_as(target_shape.as_slice())?;
+    let x_cumsum_row = x_cumsum
+        .unsqueeze(D::Minus1)?
+        .broadcast_as(target_shape.as_slice())?;
+    let x_cumsum_col = x_cumsum
+        .unsqueeze(x.rank() - 1)?
+        .broadcast_as(target_shape.as_slice())?;
     let x_segsum = (&x_cumsum_row - &x_cumsum_col)?;
 
     let mask_lower = Tensor::tril2(t, DType::U8, device)?;
@@ -351,7 +355,8 @@ impl Mamba2Block {
         let c_expanded = c.unsqueeze(3)?;
         let b_expanded = b.unsqueeze(2)?;
         let cb_shape = (batch, n_chunks, chunk_size, chunk_size, nheads, d_state);
-        let cb = (c_expanded.broadcast_as(cb_shape)? * b_expanded.broadcast_as(cb_shape)?)?.sum(D::Minus1)?;
+        let cb = (c_expanded.broadcast_as(cb_shape)? * b_expanded.broadcast_as(cb_shape)?)?
+            .sum(D::Minus1)?;
         let cb = cb.permute((0, 1, 4, 2, 3))?;
 
         let l_t = l.permute((0, 2, 1, 3, 4))?;
@@ -361,8 +366,8 @@ impl Mamba2Block {
         let y_diag_shape = (batch, n_chunks, nheads, chunk_size, chunk_size, headdim);
         let y_diag = (cb_l.unsqueeze(D::Minus1)?.broadcast_as(y_diag_shape)?
             * x_t.unsqueeze(3)?.broadcast_as(y_diag_shape)?)?
-            .sum(4)?
-            .permute((0, 1, 3, 2, 4))?;
+        .sum(4)?
+        .permute((0, 1, 3, 2, 4))?;
 
         // Intra-chunk states
         let a_last = a_cumsum.narrow(D::Minus1, chunk_size - 1, 1)?;
@@ -376,7 +381,7 @@ impl Mamba2Block {
         let states_shape = (batch, n_chunks, nheads, chunk_size, headdim, d_state);
         let states = (x_t2.unsqueeze(D::Minus1)?.broadcast_as(states_shape)?
             * b_weighted.unsqueeze(4)?.broadcast_as(states_shape)?)?
-            .sum(3)?;
+        .sum(3)?;
 
         // Inter-chunk recurrence
         let init_state = match initial_state {
@@ -385,17 +390,22 @@ impl Mamba2Block {
         };
         let states_with_init = Tensor::cat(&[&init_state, &states], 1)?;
 
-        let a_chunk = a_cumsum.narrow(D::Minus1, chunk_size - 1, 1)?.squeeze(D::Minus1)?;
+        let a_chunk = a_cumsum
+            .narrow(D::Minus1, chunk_size - 1, 1)?
+            .squeeze(D::Minus1)?;
         let zeros = Tensor::zeros((batch, nheads, 1), dtype, device)?;
         let a_chunk_padded = Tensor::cat(&[&zeros, &a_chunk], D::Minus1)?;
         let decay_chunk = segsum(&a_chunk_padded)?.exp()?;
 
         let states_p = states_with_init.permute((0, 2, 1, 3, 4))?;
         let inter_shape = (batch, nheads, n_chunks + 1, n_chunks + 1, headdim, d_state);
-        let new_states = (decay_chunk.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?.broadcast_as(inter_shape)?
+        let new_states = (decay_chunk
+            .unsqueeze(D::Minus1)?
+            .unsqueeze(D::Minus1)?
+            .broadcast_as(inter_shape)?
             * states_p.unsqueeze(2)?.broadcast_as(inter_shape)?)?
-            .sum(3)?
-            .permute((0, 2, 1, 3, 4))?;
+        .sum(3)?
+        .permute((0, 2, 1, 3, 4))?;
 
         let states_out = new_states.narrow(1, 0, n_chunks)?;
         let final_state = new_states.narrow(1, n_chunks, 1)?.squeeze(1)?;
@@ -407,10 +417,14 @@ impl Mamba2Block {
         let off_shape = (batch, n_chunks, nheads, chunk_size, headdim, d_state);
         let c_states = (c_t2.unsqueeze(4)?.broadcast_as(off_shape)?
             * states_out.unsqueeze(3)?.broadcast_as(off_shape)?)?
-            .sum(D::Minus1)?;
+        .sum(D::Minus1)?;
 
-        let decay_out = state_decay_out.permute((0, 2, 1, 3))?.unsqueeze(D::Minus1)?;
-        let y_off = c_states.broadcast_mul(&decay_out)?.permute((0, 1, 3, 2, 4))?;
+        let decay_out = state_decay_out
+            .permute((0, 2, 1, 3))?
+            .unsqueeze(D::Minus1)?;
+        let y_off = c_states
+            .broadcast_mul(&decay_out)?
+            .permute((0, 1, 3, 2, 4))?;
 
         let y = (&y_diag + &y_off)?;
         let y = reshape_from_chunks(&y)?;
@@ -438,13 +452,7 @@ impl Mamba2Block {
         let xbc_t = xbc.transpose(1, 2)?;
         let pad = Tensor::zeros((b_sz, self.d_xbc, D_CONV - 1), xbc.dtype(), xbc.device())?;
         let xbc_padded = Tensor::cat(&[&pad, &xbc_t], D::Minus1)?;
-        let xbc_conv = xbc_padded.conv1d(
-            &self.conv1d_weight,
-            0,
-            1,
-            1,
-            self.d_xbc,
-        )?;
+        let xbc_conv = xbc_padded.conv1d(&self.conv1d_weight, 0, 1, 1, self.d_xbc)?;
         let xbc_conv = xbc_conv
             .broadcast_add(&self.conv1d_bias.reshape((1, self.d_xbc, 1))?)?
             .transpose(1, 2)?;
@@ -458,7 +466,8 @@ impl Mamba2Block {
         if count >= D_CONV {
             state.conv_states[self.layer_idx] = last_tokens.contiguous()?;
         } else {
-            let existing = state.conv_states[self.layer_idx].narrow(D::Minus1, count, D_CONV - count)?;
+            let existing =
+                state.conv_states[self.layer_idx].narrow(D::Minus1, count, D_CONV - count)?;
             state.conv_states[self.layer_idx] = Tensor::cat(&[&existing, &last_tokens], D::Minus1)?;
         }
 
@@ -480,13 +489,23 @@ impl Mamba2Block {
 
         // Zero out padding to prevent it from affecting chunk state computation
         if pad_len > 0 {
-            let mask_ones = Tensor::ones((b_sz, seq_len, self.nheads, self.headdim), x_ssd.dtype(), x_ssd.device())?;
-            let mask_zeros = Tensor::zeros((b_sz, pad_len, self.nheads, self.headdim), x_ssd.dtype(), x_ssd.device())?;
+            let mask_ones = Tensor::ones(
+                (b_sz, seq_len, self.nheads, self.headdim),
+                x_ssd.dtype(),
+                x_ssd.device(),
+            )?;
+            let mask_zeros = Tensor::zeros(
+                (b_sz, pad_len, self.nheads, self.headdim),
+                x_ssd.dtype(),
+                x_ssd.device(),
+            )?;
             let mask = Tensor::cat(&[&mask_ones, &mask_zeros], 1)?;
             x_ssd = x_ssd.broadcast_mul(&mask)?;
 
-            let mask_ones_a = Tensor::ones((b_sz, seq_len, self.nheads), a_dt.dtype(), a_dt.device())?;
-            let mask_zeros_a = Tensor::zeros((b_sz, pad_len, self.nheads), a_dt.dtype(), a_dt.device())?;
+            let mask_ones_a =
+                Tensor::ones((b_sz, seq_len, self.nheads), a_dt.dtype(), a_dt.device())?;
+            let mask_zeros_a =
+                Tensor::zeros((b_sz, pad_len, self.nheads), a_dt.dtype(), a_dt.device())?;
             let mask_a = Tensor::cat(&[&mask_ones_a, &mask_zeros_a], 1)?;
             a_dt = a_dt.broadcast_mul(&mask_a)?;
         }
@@ -495,18 +514,31 @@ impl Mamba2Block {
         let b = b.reshape((b_sz, padded_len, self.ngroups, self.d_state))?;
         let b = b
             .unsqueeze(3)?
-            .broadcast_as((b_sz, padded_len, self.ngroups, heads_per_group, self.d_state))?
+            .broadcast_as((
+                b_sz,
+                padded_len,
+                self.ngroups,
+                heads_per_group,
+                self.d_state,
+            ))?
             .reshape((b_sz, padded_len, self.nheads, self.d_state))?;
         // Discretize B: B_bar = dt * B (ZOH discretization absorbed into ssd_chunked)
         let b = b.broadcast_mul(&dt.unsqueeze(D::Minus1)?)?;
         let c = c.reshape((b_sz, padded_len, self.ngroups, self.d_state))?;
         let c = c
             .unsqueeze(3)?
-            .broadcast_as((b_sz, padded_len, self.ngroups, heads_per_group, self.d_state))?
+            .broadcast_as((
+                b_sz,
+                padded_len,
+                self.ngroups,
+                heads_per_group,
+                self.d_state,
+            ))?
             .reshape((b_sz, padded_len, self.nheads, self.d_state))?;
 
         let initial_state = Some(&state.hs[self.layer_idx]);
-        let (y, final_state) = self.ssd_chunked(&x_ssd, &a_dt, &b, &c, chunk_size, initial_state)?;
+        let (y, final_state) =
+            self.ssd_chunked(&x_ssd, &a_dt, &b, &c, chunk_size, initial_state)?;
         state.hs[self.layer_idx] = final_state;
 
         let y = y.reshape((b_sz, padded_len, self.d_inner))?;
@@ -549,12 +581,7 @@ impl ResidualBlock {
         self.mixer.forward(&xs.apply(&self.norm)?, state)? + xs
     }
 
-    fn forward_prefill(
-        &self,
-        xs: &Tensor,
-        state: &mut State,
-        chunk_size: usize,
-    ) -> Result<Tensor> {
+    fn forward_prefill(&self, xs: &Tensor, state: &mut State, chunk_size: usize) -> Result<Tensor> {
         let normed = xs.apply(&self.norm)?;
         self.mixer.forward_prefill(&normed, state, chunk_size)? + xs
     }
