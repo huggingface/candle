@@ -146,6 +146,12 @@ pub enum Op {
         target_h: usize,
         target_w: usize,
     },
+    UpsampleBilinear2D {
+        arg: Tensor,
+        target_h: usize,
+        target_w: usize,
+        align_corners: bool,
+    },
 
     Cat(Vec<Tensor>, usize),
 
@@ -1031,7 +1037,7 @@ impl UnaryOpT for Relu {
 pub struct BackpropOp(Option<Op>);
 
 impl BackpropOp {
-    pub(crate) fn none() -> Self {
+    pub fn none() -> Self {
         BackpropOp(None)
     }
 

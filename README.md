@@ -92,6 +92,7 @@ We also provide some command line based examples using state of the art models:
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
+- [Quantized Qwen3 MoE](./candle-examples/examples/quantized-qwen3-moe/): support gguf quantized models of Qwen3 MoE models.
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/quantized/assets/aoc.gif" width="600">
   
@@ -190,6 +191,7 @@ And then head over to
 - [`candle-einops`](https://github.com/tomsanbear/candle-einops): A pure rust implementation of the python [einops](https://github.com/arogozhnikov/einops) library.
 - [`atoma-infer`](https://github.com/atoma-network/atoma-infer): A Rust library for fast inference at scale, leveraging FlashAttention2 for efficient attention computation, PagedAttention for efficient KV-cache memory management, and multi-GPU support. It is OpenAI api compatible.
 - [`llms-from-scratch-rs`](https://github.com/nerdai/llms-from-scratch-rs): A comprehensive Rust translation of the code from Sebastian Raschka's Build an LLM from Scratch book.
+- [`vllm.rs`](https://github.com/guoqingbao/vllm.rs): A minimalist vLLM implementation in Rust based on Candle.
 
 If you have an addition to this list, please submit a pull request.
 
@@ -220,7 +222,7 @@ If you have an addition to this list, please submit a pull request.
         - Replit-code-v1.5-3B.
         - Bert.
         - Yi-6B and Yi-34B.
-        - Qwen1.5, Qwen1.5 MoE.
+        - Qwen1.5, Qwen1.5 MoE, Qwen3 MoE.
         - RWKV v5 and v6.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
@@ -228,6 +230,7 @@ If you have an addition to this list, please submit a pull request.
         - Mixtral 8x7b.
         - Zephyr 7b a and b (Mistral-7b based).
         - OpenChat 3.5 (Mistral-7b based).
+        - Qwen3 MoE (16B-A3B, 32B-A3B)
     - Text to text.
         - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
