@@ -121,7 +121,7 @@ mod tests {
     where
         F: FnOnce(VarlenImpl, DType) -> Result<()>,
     {
-        let impl_name = impl_fn.name();
+        let _impl_name = impl_fn.name();
         let precision_name = match precision {
             DType::F32 => "f32",
             DType::F16 => "f16",
