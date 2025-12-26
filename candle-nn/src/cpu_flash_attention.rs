@@ -575,22 +575,9 @@ pub fn flash_attn_varlen_cpu(
         None
     };
 
-    // Make contiguous once (important for fast indexing)
-    let q = if q.is_contiguous() {
-        q.clone()
-    } else {
-        q.contiguous()?
-    };
-    let k = if k.is_contiguous() {
-        k.clone()
-    } else {
-        k.contiguous()?
-    };
-    let v = if v.is_contiguous() {
-        v.clone()
-    } else {
-        v.contiguous()?
-    };
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
 
     // Precompute q_idx -> (batch, q_pos)
     let mut batch_of_q = vec![0usize; total_q];
