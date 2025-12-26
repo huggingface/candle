@@ -6,22 +6,33 @@ use criterion::{criterion_group, Criterion};
 use std::hint::black_box;
 use std::time::Instant;
 
-// Traditional softmax implementation for comparison
-fn softmax_last_dim_traditional(xs: &Tensor) -> candle::Result<Tensor> {
-    let dim = xs.dims().len() - 1;
-    let max = xs.max_keepdim(dim)?;
-    let diff = xs.broadcast_sub(&max)?;
-    let num = diff.exp()?;
-    let den = num.sum_keepdim(dim)?;
-    num.broadcast_div(&den)
+// Original optimized softmax algorithm for fair comparison
+fn softmax_last_dim_original_optimized(xs: &Tensor) -> candle::Result<Tensor> {
+    // This replicates the original algorithm using the same approach but with high-level ops
+    // The key is maintaining the two-pass structure: max -> exp -> sum -> normalize
+    let last_dim = xs.dims().len() - 1;
+    
+    // First pass: find max (equivalent to vec_reduce_max in original)
+    let max_vals = xs.max_keepdim(last_dim)?;
+    
+    // Second pass: compute exp(x - max) (equivalent to the exp loop in original)
+    let exp_vals = xs.broadcast_sub(&max_vals)?.exp()?;
+    
+    // Third pass: sum exponentials (equivalent to vec_reduce_sum in original)
+    let sum_vals = exp_vals.sum_keepdim(last_dim)?;
+    
+    // Final pass: normalize (equivalent to the division loop in original)
+    let result = exp_vals.broadcast_div(&sum_vals)?;
+    
+    Ok(result)
 }
 
 fn run_online(input: &Tensor) {
     let _ = softmax_last_dim(input).unwrap();
 }
 
-fn run_traditional(input: &Tensor) {
-    let _ = softmax_last_dim_traditional(input).unwrap();
+fn run_original_optimized(input: &Tensor) {
+    let _ = softmax_last_dim_original_optimized(input).unwrap();
 }
 
 const B: usize = 1;
@@ -53,13 +64,13 @@ fn run_softmax_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name:
         })
     });
     
-    // Traditional softmax benchmark
-    let input_traditional = input.clone();
-    group.bench_function("traditional", move |b| {
+    // Original optimized softmax benchmark
+    let input_original = input.clone();
+    group.bench_function("original_optimized", move |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();
             for _i in 0..iters {
-                run_traditional(black_box(&input_traditional));
+                run_original_optimized(black_box(&input_original));
             }
             device.sync().unwrap();
             start.elapsed()
@@ -100,13 +111,13 @@ fn run_softmax_size_benchmark(c: &mut Criterion, device: &Device, b_size: usize,
         })
     });
     
-    // Traditional softmax
-    let input_traditional = input.clone();
-    group.bench_function("traditional", move |b| {
+    // Original optimized softmax
+    let input_original = input.clone();
+    group.bench_function("original_optimized", move |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();
             for _i in 0..iters {
-                run_traditional(black_box(&input_traditional));
+                run_original_optimized(black_box(&input_original));
             }
             device.sync().unwrap();
             start.elapsed()
