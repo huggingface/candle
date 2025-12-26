@@ -127,10 +127,6 @@ mod tests {
             DType::F16 => "f16",
             _ => "unknown",
         };
-        println!(
-            "Running {} with {} implementation in {} precision",
-            test_desc, impl_name, precision_name
-        );
 
         test_fn(impl_fn, precision)
     }
@@ -139,7 +135,6 @@ mod tests {
     macro_rules! skip_test_if {
         ($condition:expr, $reason:expr) => {
             if $condition {
-                println!("SKIPPED: {}", $reason);
                 return Ok(());
             }
         };
@@ -289,10 +284,6 @@ mod tests {
 
         let mae = max_abs_diff(&out_var, &out_ref)?;
         let e = rmse(&out_var, &out_ref)?;
-        println!(
-            "prefill noncausal: max_abs_diff={:.6e}, rmse={:.6e}",
-            mae, e
-        );
 
         let (mae_tol, rmse_tol) = get_tolerances(precision);
         assert!(
@@ -404,7 +395,6 @@ mod tests {
 
         let mae = max_abs_diff(&out_var, &out_ref)?;
         let e = rmse(&out_var, &out_ref)?;
-        println!("prefill causal: max_abs_diff={:.6e}, rmse={:.6e}", mae, e);
 
         let (mae_tol, rmse_tol) = get_tolerances(precision);
         assert!(
@@ -517,7 +507,6 @@ mod tests {
 
         let mae = max_abs_diff(&out_var, &out_ref)?;
         let e = rmse(&out_var, &out_ref)?;
-        println!("prefill gqa: max_abs_diff={:.6e}, rmse={:.6e}", mae, e);
 
         let (mae_tol, rmse_tol) = get_tolerances(precision);
         assert!(
@@ -630,7 +619,6 @@ mod tests {
 
         let mae = max_abs_diff(&out_var, &out_ref)?;
         let e = rmse(&out_var, &out_ref)?;
-        println!("prefill gqa: max_abs_diff={:.6e}, rmse={:.6e}", mae, e);
 
         assert!(mae < 1e-3);
         assert!(e < 1e-4);
@@ -689,10 +677,6 @@ mod tests {
 
         let mae = max_abs_diff(&out_var, &out_ref)?;
         let e = rmse(&out_var, &out_ref)?;
-        println!(
-            "prefill alibi causal: max_abs_diff={:.6e}, rmse={:.6e}",
-            mae, e
-        );
 
         assert!(mae < 1e-4);
         assert!(e < 1e-4);
@@ -702,12 +686,10 @@ mod tests {
     #[test]
     fn test_flash_attn_cpu_vs_gpu_prefill_basic() -> Result<()> {
         if !candle::utils::cuda_is_available() {
-            println!("Skipping GPU test: CUDA not available");
             return Ok(());
         }
         let flash_attn_enabled = FA_FEATURE_ENABLED;
         if !flash_attn_enabled {
-            println!("Skipping GPU comparison test: flash-attn features not enabled");
             return Ok(());
         }
 
@@ -757,7 +739,6 @@ mod tests {
 
             #[cfg(not(feature = "cuda"))]
             {
-                println!("Skipping GPU comparison test: crate not compiled with CUDA support");
                 // Use the CPU result to avoid unused variable warning
                 let _used = cpu_out.dims();
             }
@@ -792,7 +773,7 @@ mod tests {
                     .to_device(&cpu_device)?
                     .to_dtype(candle::DType::F32)?;
                 let dist = tensor_distance(&cpu_out, &gpu_out_cpu)?;
-                println!("  Prefill non-causal distance: {:.6}", dist);
+
                 assert!(dist < 1e-4, "distance too large: {:.6}", dist);
             }
 
@@ -814,7 +795,6 @@ mod tests {
 
             #[cfg(not(feature = "cuda"))]
             {
-                println!("Skipping GPU comparison test: crate not compiled with CUDA support");
                 // Use the CPU result to avoid unused variable warning
                 let _used = cpu_out_causal.dims();
             }
@@ -849,7 +829,7 @@ mod tests {
                     .to_device(&cpu_device)?
                     .to_dtype(candle::DType::F32)?;
                 let dist = tensor_distance(&cpu_out_causal, &gpu_out_causal_cpu)?;
-                println!("  Prefill causal distance: {:.6}", dist);
+
                 assert!(dist < 1e-4, "causal distance too large: {:.6}", dist);
             }
         }
@@ -897,7 +877,6 @@ mod tests {
 
         #[cfg(not(feature = "cuda"))]
         {
-            println!("Skipping GPU comparison test: crate not compiled with CUDA support");
             // Use the CPU result to avoid unused variable warning
             let _used = cpu_out.dims();
         }
@@ -932,7 +911,7 @@ mod tests {
                 .to_device(&cpu_device)?
                 .to_dtype(candle::DType::F32)?;
             let dist = tensor_distance(&cpu_out, &gpu_out_cpu)?;
-            println!("Prefill GQA causal distance: {:.6}", dist);
+
             assert!(dist < 1e-4, "distance too large: {:.6}", dist);
         }
 
@@ -1014,13 +993,12 @@ mod tests {
                 .to_device(&cpu_device)?
                 .to_dtype(candle::DType::F32)?;
             let dist = tensor_distance(&cpu_out, &gpu_out_cpu)?;
-            println!("Prefill ALiBi causal distance: {:.6}", dist);
+
             assert!(dist < 1e-4, "distance too large: {:.6}", dist);
         }
         // If not compiled with CUDA, skip the GPU comparison test
         #[cfg(not(feature = "cuda"))]
         {
-            println!("Skipping GPU comparison test: crate not compiled with CUDA support");
             // Use the CPU result to avoid unused variable warning
             let _used = cpu_out.dims();
         }
@@ -1039,13 +1017,11 @@ mod tests {
     #[test]
     fn test_flash_attn_cpu_vs_gpu_basic() -> Result<()> {
         if !candle::utils::cuda_is_available() {
-            println!("Skipping GPU test: CUDA not available");
             return Ok(());
         }
 
         let flash_attn_enabled = FA_FEATURE_ENABLED;
         if !flash_attn_enabled {
-            println!("Skipping GPU comparison test: flash-attn features not enabled");
             return Ok(());
         }
 
@@ -1088,7 +1064,6 @@ mod tests {
 
             #[cfg(not(feature = "cuda"))]
             {
-                println!("Skipping GPU comparison test: crate not compiled with CUDA support");
                 // Use the CPU result to avoid unused variable warning
                 let _used = cpu_result.dims();
             }
@@ -1126,7 +1101,7 @@ mod tests {
                     .to_device(&cpu_device)?
                     .to_dtype(candle::DType::F32)?;
                 let distance = tensor_distance(&cpu_result, &gpu_result_cpu)?;
-                println!("  Non-causal distance: {:.6}", distance);
+
                 assert!(distance < 1e-4, "Distance too large: {:.6}", distance);
             }
 
@@ -1148,7 +1123,6 @@ mod tests {
 
             #[cfg(not(feature = "cuda"))]
             {
-                println!("Skipping GPU comparison test: crate not compiled with CUDA support");
                 // Use the CPU result to avoid unused variable warning
                 let _used = cpu_result_causal.dims();
             }
@@ -1186,7 +1160,7 @@ mod tests {
                     .to_dtype(candle::DType::F32)?;
 
                 let distance_causal = tensor_distance(&cpu_result_causal, &gpu_result_causal_cpu)?;
-                println!("  Causal distance: {:.6}", distance_causal);
+
                 assert!(
                     distance_causal < 1e-4,
                     "Causal distance too large: {:.6}",
@@ -1242,7 +1216,6 @@ mod tests {
 
         #[cfg(not(feature = "cuda"))]
         {
-            println!("Skipping GPU comparison test: crate not compiled with CUDA support");
             // Use the CPU result to avoid unused variable warning
             let _used = cpu_result.dims();
         }
@@ -1281,7 +1254,7 @@ mod tests {
                 .to_device(&cpu_device)?
                 .to_dtype(candle::DType::F32)?;
             let distance = tensor_distance(&cpu_result, &gpu_result_cpu)?;
-            println!("ALiBi distance: {:.6}", distance);
+
             assert!(distance < 1e-4, "ALiBi distance too large: {:.6}", distance);
         }
 
@@ -1328,7 +1301,6 @@ mod tests {
 
         #[cfg(not(feature = "cuda"))]
         {
-            println!("Skipping GPU comparison test: crate not compiled with CUDA support");
             // Use the CPU result to avoid unused variable warning
             let _used = cpu_result.dims();
         }
@@ -1366,7 +1338,7 @@ mod tests {
                 .to_device(&cpu_device)?
                 .to_dtype(candle::DType::F32)?;
             let distance = tensor_distance(&cpu_result, &gpu_result_cpu)?;
-            println!("Windowing distance: {:.6}", distance);
+
             assert!(
                 distance < 1e-4,
                 "Windowing distance too large: {:.6}",
@@ -2404,7 +2376,6 @@ mod tests {
 
         let mae = max_abs_diff(&out_var, &out_ref)?;
         let e = rmse(&out_var, &out_ref)?;
-        println!("varlen noncausal: max_abs_diff={:.6e}, rmse={:.6e}", mae, e);
 
         let (mae_tol, rmse_tol) = get_tolerances(precision);
         assert!(
@@ -2636,7 +2607,6 @@ mod tests {
 
         let mae = max_abs_diff(&out_var, &out_ref)?;
         let e = rmse(&out_var, &out_ref)?;
-        println!("varlen gqa: max_abs_diff={:.6e}, rmse={:.6e}", mae, e);
 
         let (mae_tol, rmse_tol) = get_tolerances(precision);
         assert!(
@@ -2756,7 +2726,6 @@ mod tests {
 
         let mae = max_abs_diff(&out_var, &out_ref)?;
         let e = rmse(&out_var, &out_ref)?;
-        println!("varlen alibi: max_abs_diff={:.6e}, rmse={:.6e}", mae, e);
 
         // ALiBi has higher numerical error, especially in F16
         let (mae_tol, rmse_tol) = match precision {
@@ -2840,8 +2809,6 @@ mod tests {
 
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
         let (mae_tol, rmse_tol) = get_tolerances(precision);
-
-        println!("Testing {} concrete windowing scenarios", test_cases.len());
 
         for (case_idx, (q, k, v, seqlens_q, seqlens_k, max_q, max_k, case_name, wl, wr)) in
             test_cases.iter().enumerate()
@@ -3563,8 +3530,6 @@ mod tests {
             // Convert to target precision
             let (q, k, v) = convert_to_precision(&q, &k, &v, precision)?;
             let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
-
-            println!("Testing GQA {}:{} configuration", num_heads, num_kv_heads);
 
             let out_var = impl_fn.forward(
                 &q,
