@@ -1,30 +1,64 @@
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
 use candle::{DType, Device, Tensor};
 use candle_nn::ops::softmax_last_dim;
+use rayon::prelude::*;
 use criterion::Throughput;
 use criterion::{criterion_group, Criterion};
 use std::hint::black_box;
 use std::time::Instant;
 
-// Original optimized softmax algorithm for fair comparison
+// Original optimized softmax algorithm - EXACT replica with vec_reduce_max/vec_reduce_sum
 fn softmax_last_dim_original_optimized(xs: &Tensor) -> candle::Result<Tensor> {
-    // This replicates the original algorithm using the same approach but with high-level ops
-    // The key is maintaining the two-pass structure: max -> exp -> sum -> normalize
-    let last_dim = xs.dims().len() - 1;
+    // Create a custom op that implements the EXACT original pattern
+    struct OriginalSoftmaxLastDim;
     
-    // First pass: find max (equivalent to vec_reduce_max in original)
-    let max_vals = xs.max_keepdim(last_dim)?;
+    impl candle::CustomOp1 for OriginalSoftmaxLastDim {
+        fn name(&self) -> &'static str {
+            "original-softmax-last-dim"
+        }
+        
+        fn cpu_fwd(&self, storage: &candle::CpuStorage, layout: &candle::Layout) -> candle::Result<(candle::CpuStorage, candle::Shape)> {
+            fn softmax<T: candle::WithDType + num_traits::Float>(
+                src: &[T],
+                layout: &candle::Layout,
+            ) -> candle::Result<(candle::CpuStorage, candle::Shape)> {
+                let src = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => &src[o1..o2],
+                };
+                let el_count = layout.shape().elem_count();
+                let dims = layout.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let mut dst = vec![T::zero(); el_count];
+                src.par_chunks(dim_m1)
+                    .zip(dst.par_chunks_mut(dim_m1))
+                    .for_each(|(src, dst): (&[T], &mut [T])| {
+                        let mut max = T::neg_infinity();
+                        unsafe { T::vec_reduce_max(src.as_ptr(), &mut max, dim_m1) };
+                        for (s, d) in src.iter().zip(dst.iter_mut()) {
+                            *d = (*s - max).exp();
+                        }
+                        let mut sum_exp = T::zero();
+                        unsafe { T::vec_reduce_sum(dst.as_ptr(), &mut sum_exp, dim_m1) };
+                        for d in dst.iter_mut() {
+                            *d /= sum_exp;
+                        }
+                    });
+                let storage = candle::WithDType::to_cpu_storage_owned(dst);
+                Ok((storage, candle::Shape::from_dims(dims)))
+            }
+
+            match storage {
+                candle::CpuStorage::BF16(slice) => softmax::<half::bf16>(slice, layout),
+                candle::CpuStorage::F16(slice) => softmax::<half::f16>(slice, layout),
+                candle::CpuStorage::F32(slice) => softmax::<f32>(slice, layout),
+                candle::CpuStorage::F64(slice) => softmax::<f64>(slice, layout),
+                _ => candle::bail!("unsupported dtype for softmax {:?}", storage),
+            }
+        }
+    }
     
-    // Second pass: compute exp(x - max) (equivalent to the exp loop in original)
-    let exp_vals = xs.broadcast_sub(&max_vals)?.exp()?;
-    
-    // Third pass: sum exponentials (equivalent to vec_reduce_sum in original)
-    let sum_vals = exp_vals.sum_keepdim(last_dim)?;
-    
-    // Final pass: normalize (equivalent to the division loop in original)
-    let result = exp_vals.broadcast_div(&sum_vals)?;
-    
-    Ok(result)
+    xs.apply_op1_no_bwd(&OriginalSoftmaxLastDim)
 }
 
 fn run_online(input: &Tensor) {
@@ -33,6 +67,22 @@ fn run_online(input: &Tensor) {
 
 fn run_original_optimized(input: &Tensor) {
     let _ = softmax_last_dim_original_optimized(input).unwrap();
+}
+
+#[test]
+fn test_original_optimized_correctness() {
+    let device = Device::Cpu;
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let tensor = Tensor::new(data, device).unwrap();
+    
+    let online_result = softmax_last_dim(&tensor).unwrap();
+    let original_result = softmax_last_dim_original_optimized(&tensor).unwrap();
+    
+    // They should be very close
+    let diff = (online_result - original_result).unwrap().abs().sum_all().unwrap().to_vec0::<f32>().unwrap();
+    assert!(diff < 1e-6, "Results differ too much: {}", diff);
+    
+    println!("✅ Original implementation correctness verified - difference: {}", diff);
 }
 
 const B: usize = 1;
