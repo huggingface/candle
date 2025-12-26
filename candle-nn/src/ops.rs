@@ -278,6 +278,42 @@ impl candle::ModuleT for Dropout {
     }
 }
 
+/// Online softmax state for single-pass computation
+/// Based on Welford's algorithm for online softmax normalization
+/// Reference: https://arxiv.org/pdf/1805.02867.pdf
+#[derive(Debug, Clone, Copy)]
+struct OnlineSoftmaxState<T> {
+    max_val: T,
+    sum_exp: T,
+}
+
+impl<T: candle::WithDType + num_traits::Float> OnlineSoftmaxState<T> {
+    #[inline(always)]
+    fn new() -> Self {
+        Self {
+            max_val: T::neg_infinity(),
+            sum_exp: T::zero(),
+        }
+    }
+
+    #[inline(always)]
+    fn update(&mut self, x: T) {
+        if x > self.max_val {
+            // New maximum found - rescale previous sum
+            self.sum_exp = self.sum_exp * (self.max_val - x).exp() + T::one();
+            self.max_val = x;
+        } else {
+            // Add to existing sum
+            self.sum_exp += (x - self.max_val).exp();
+        }
+    }
+
+    #[inline(always)]
+    fn finalize(&self, x: T) -> T {
+        (x - self.max_val).exp() / self.sum_exp
+    }
+}
+
 struct SoftmaxLastDim;
 
 impl candle::CustomOp1 for SoftmaxLastDim {
@@ -298,20 +334,24 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             let dims = layout.shape().dims();
             let dim_m1 = dims[dims.len() - 1];
             let mut dst = vec![T::zero(); el_count];
+            
+            // Online softmax implementation - single pass through data
             src.par_chunks(dim_m1)
                 .zip(dst.par_chunks_mut(dim_m1))
                 .for_each(|(src, dst)| {
-                    let mut max = T::neg_infinity();
-                    unsafe { T::vec_reduce_max(src.as_ptr(), &mut max, dim_m1) };
-                    for (s, d) in src.iter().zip(dst.iter_mut()) {
-                        *d = (*s - max).exp();
+                    let mut state = OnlineSoftmaxState::new();
+                    
+                    // First pass: compute max and sum of exponentials online
+                    for &s in src.iter() {
+                        state.update(s);
                     }
-                    let mut sum_exp = T::zero();
-                    unsafe { T::vec_reduce_sum(dst.as_ptr(), &mut sum_exp, dim_m1) };
-                    for d in dst.iter_mut() {
-                        *d /= sum_exp
+                    
+                    // Second pass: finalize softmax values
+                    for (i, &s) in src.iter().enumerate() {
+                        dst[i] = state.finalize(s);
                     }
                 });
+            
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
             Ok((storage, Shape::from_dims(dims)))
         }
