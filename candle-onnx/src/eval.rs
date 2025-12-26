@@ -1021,7 +1021,8 @@ fn simple_eval_(
                 let input = get(&node.input[0])?;
                 // neg() not implemented for i64, work around with multiply by -1
                 let output = if input.dtype() == DType::I64 {
-                    let minus_one = Tensor::new(&[-1i64], input.device())?.broadcast_as(input.shape())?;
+                    let minus_one =
+                        Tensor::new(&[-1i64], input.device())?.broadcast_as(input.shape())?;
                     input.mul(&minus_one)?
                 } else {
                     input.neg()?
@@ -2609,4 +2610,3 @@ fn to_vec0_flexible<T: candle::WithDType>(t: &Tensor) -> Result<T> {
         t.to_vec0::<T>()
     }
 }
-
