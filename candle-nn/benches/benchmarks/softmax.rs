@@ -132,10 +132,75 @@ fn run_softmax_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name:
 
 fn criterion_benchmark(c: &mut Criterion) {
     let device = BenchDeviceHandler::new().unwrap();
-    for d in device.devices {
-        run_softmax_benchmark(c, &d, DType::F32, "softmax_f32");
-        run_softmax_benchmark(c, &d, DType::BF16, "softmax_bf16");
-        run_softmax_benchmark(c, &d, DType::F16, "softmax_f16");
+    for d in &device.devices {
+        run_softmax_benchmark(c, d, DType::F32, "softmax_f32");
+        run_softmax_benchmark(c, d, DType::BF16, "softmax_bf16");
+        run_softmax_benchmark(c, d, DType::F16, "softmax_f16");
+    }
+    
+    // Additional shape benchmarks
+    run_shape_benchmarks(c, &device.devices[0]);
+}
+
+fn run_shape_benchmarks(c: &mut Criterion, device: &Device) {
+    let shapes = [
+        // Standard square (baseline)
+        (1, 1024, 1024, "square_standard"),
+        
+        // Long and thin tensors
+        (1, 65536, 16, "long_thin_64k"),
+        
+        // Very long single dimension
+        (1, 1, 65536, "very_long_1d"),
+        
+        // Wide and short tensors
+        (1, 64, 16384, "wide_short_16k"),
+        
+        // Multiple batches
+        (8, 512, 512, "batch_8x512x512"),
+
+        // Large last dimension
+        (1, 128, 8192, "large_last_8k"),
+    ];
+    
+    for (b, m, k, name) in shapes.iter() {
+        let elements = b * m * k;
+        let input = Tensor::rand(-1000.0f32, 1000.0f32, (*b, *m, *k), device)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap();
+        
+        let flops = elements * std::mem::size_of::<f32>();
+        let mut group = c.benchmark_group(format!("shape_{}", name));
+        group.throughput(Throughput::Bytes(flops as u64));
+        
+        // Online softmax
+        let input_online = input.clone();
+        group.bench_function("online", move |b| {
+            b.iter_custom(|iters| {
+                let start = Instant::now();
+                for _i in 0..iters {
+                    run_online(black_box(&input_online));
+                }
+                device.sync().unwrap();
+                start.elapsed()
+            })
+        });
+        
+        // Original optimized softmax
+        let input_original = input.clone();
+        group.bench_function("original_optimized", move |b| {
+            b.iter_custom(|iters| {
+                let start = Instant::now();
+                for _i in 0..iters {
+                    run_original_optimized(black_box(&input_original));
+                }
+                device.sync().unwrap();
+                start.elapsed()
+            })
+        });
+        
+        group.finish();
     }
 }
 

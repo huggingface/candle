@@ -429,3 +429,27 @@ test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal);
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+
+#[test]
+fn test_original_optimized_correctness() -> Result<()> {
+    let device = Device::Cpu;
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let tensor = Tensor::new(data, &device)?;
+    
+    let online_result = candle_nn::ops::softmax_last_dim(&tensor)?;
+    let original_result = {
+        // Use the original algorithm pattern for comparison
+        let last_dim = tensor.dims().len() - 1;
+        let max_vals = tensor.max_keepdim(last_dim)?;
+        let exp_vals = tensor.broadcast_sub(&max_vals)?.exp()?;
+        let sum_vals = exp_vals.sum_keepdim(last_dim)?;
+        exp_vals.broadcast_div(&sum_vals)?
+    };
+    
+    // They should be very close
+    let diff = (online_result - original_result)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert!(diff < 1e-6, "Results differ too much: {}", diff);
+    
+    println!("✅ Original implementation correctness verified - difference: {}", diff);
+    Ok(())
+}
