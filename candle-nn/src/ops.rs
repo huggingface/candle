@@ -334,24 +334,24 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             let dims = layout.shape().dims();
             let dim_m1 = dims[dims.len() - 1];
             let mut dst = vec![T::zero(); el_count];
-            
+
             // Online softmax implementation - single pass through data
             src.par_chunks(dim_m1)
                 .zip(dst.par_chunks_mut(dim_m1))
                 .for_each(|(src, dst)| {
                     let mut state = OnlineSoftmaxState::new();
-                    
+
                     // First pass: compute max and sum of exponentials online
                     for &s in src.iter() {
                         state.update(s);
                     }
-                    
+
                     // Second pass: finalize softmax values
                     for (i, &s) in src.iter().enumerate() {
                         dst[i] = state.finalize(s);
                     }
                 });
-            
+
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
             Ok((storage, Shape::from_dims(dims)))
         }
