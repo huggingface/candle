@@ -1012,7 +1012,7 @@ impl Map1 for UpsampleBilinear2D {
 
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
-        let ds = dev.memcpy_stod(&ds)?;
+        let ds = dev.clone_htod(&ds)?;
 
         let mut builder = func.builder();
         barg!(builder, out_w);
