@@ -22,8 +22,22 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
+template<uint Y>
+constexpr uint div_ceil(uint x) {
+    return x / Y + (x % Y > 0);
+}
 
-template<typename T, typename ID>
+template<uint X, uint Y>
+constexpr uint div_ceil() {
+    return X / Y + (X % Y > 0);
+}
+
+template<typename T>
+constexpr uint work_per_thread() {
+    return div_ceil<8, sizeof(T)>();
+}
+
+template<typename T, typename ID, uint W = work_per_thread<T>()>
 METAL_FUNC void where_cond(
     constant size_t &numel,
     constant size_t &num_dims,
@@ -35,25 +49,33 @@ METAL_FUNC void where_cond(
     device const T *t,
     device const T *f,
     device T *out,
-    uint i [[ thread_position_in_grid ]]
+    uint tid [[ thread_position_in_grid ]]
 ) {
-    if (i >= numel){
-       return;
-    }
-    uint idx = i;
-    uint t_idx = i;
-    uint f_idx = i;
-    if (!IDS_CONTIGUOUS) {
-        idx = get_strided_index(i, num_dims, dims, strides);
-    }
-    if (!T_CONTIGUOUS) {
-        t_idx = get_strided_index(i, num_dims, dims, strides_t);
-    }
-    if (!F_CONTIGUOUS) {
-        f_idx = get_strided_index(i, num_dims, dims, strides_f);
+    uint idx = 0;
+    uint t_idx = 0;
+    uint f_idx = 0;
+
+    const uint step = div_ceil<W>(numel);
+    #pragma clang loop unroll(full)
+    for (uint i = tid; i < numel; i += step) {
+        if (IDS_CONTIGUOUS) {
+            idx = i;
+        } else {
+            idx = get_strided_index(i, num_dims, dims, strides);
+        }
+        if (T_CONTIGUOUS) {
+            t_idx = i;
+        } else {
+            t_idx = get_strided_index(i, num_dims, dims, strides_t);
+        }
+        if (F_CONTIGUOUS) {
+            f_idx = i;
+        } else {
+            f_idx = get_strided_index(i, num_dims, dims, strides_f);
+        }
+        out[i] = select(f[f_idx], t[t_idx], ids[idx]);
     }
 
-    out[i] = select(f[f_idx], t[t_idx], ids[idx]);
 }
 
 #define WHERE_OP(T, ID, FN_NAME)                                                                \

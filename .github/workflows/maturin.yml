@@ -28,7 +28,7 @@ jobs:
       matrix:
         target: [x86_64, x86, aarch64, s390x, ppc64le]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -41,7 +41,7 @@ jobs:
           manylinux: auto
           working-directory: ./candle-pyo3
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-linux-${{ matrix.target }}
           path: ./candle-pyo3/dist
@@ -52,7 +52,7 @@ jobs:
       matrix:
         target: [x64, x86]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -70,7 +70,7 @@ jobs:
           sccache: 'true'
           working-directory: ./candle-pyo3
       - name: Upload wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-windows-${{ matrix.target }}
           path: ./candle-pyo3/dist
@@ -81,7 +81,7 @@ jobs:
       matrix:
         target: [x86_64, aarch64]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -98,7 +98,7 @@ jobs:
           sccache: 'true'
           working-directory: ./candle-pyo3
       - name: Upload wheels
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-macos-${{ matrix.target }}
           path: ./candle-pyo3/dist
@@ -106,7 +106,7 @@ jobs:
   sdist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install Protoc
         uses: arduino/setup-protoc@v2
         with:
@@ -119,7 +119,7 @@ jobs:
           args: --out dist
           working-directory: ./candle-pyo3
       - name: Upload sdist
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-sdist
           path: ./candle-pyo3/dist
