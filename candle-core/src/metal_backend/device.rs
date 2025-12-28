@@ -88,14 +88,14 @@ impl std::ops::Deref for MetalDevice {
 }
 
 impl MetalDevice {
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), feature = "ug"))]
     pub fn compile(
         &self,
         func_name: &'static str,
-        kernel: ug::lang::ssa::Kernel,
+        kernel: candle_ug::lang::ssa::Kernel,
     ) -> Result<ComputePipeline> {
         let mut buf = vec![];
-        ug_metal::code_gen::gen(&mut buf, func_name, &kernel)?;
+        candle_ug::metal::code_gen::gen(&mut buf, func_name, &kernel)?;
         let metal_code = String::from_utf8(buf)?;
         let lib = self
             .device
