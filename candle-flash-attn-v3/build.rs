@@ -132,7 +132,7 @@ fn main() -> Result<()> {
     // Ensure we set CUDA_INCLUDE_DIR for our crates that might rely on it.
     // Fetch cutlass headers on-demand
     let cutlass_dir = fetch_cutlass(&out_dir, CUTLASS_COMMIT)?;
-    let cutlass_include = cutlass_include_arg(&cutlass_dir);
+    let cutlass_include: &'static str = Box::leak(cutlass_include_arg(&cutlass_dir).into_boxed_str());
 
     set_cuda_include_dir()?;
 
