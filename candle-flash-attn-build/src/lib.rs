@@ -44,8 +44,8 @@ pub fn fetch_cutlass(out_dir: &PathBuf, commit: &str) -> Result<PathBuf> {
         let status = Command::new("git")
             .args([
                 "clone",
-                "--filter=blob:none",
-                "--sparse",
+                "--depth",
+                "1",
                 CUTLASS_REPO,
                 cutlass_dir.to_str().unwrap(),
             ])
@@ -100,4 +100,3 @@ pub fn fetch_cutlass(out_dir: &PathBuf, commit: &str) -> Result<PathBuf> {
 pub fn cutlass_include_arg(cutlass_dir: &PathBuf) -> String {
     format!("-I{}/include", cutlass_dir.display())
 }
-
