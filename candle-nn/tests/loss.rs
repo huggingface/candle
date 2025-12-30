@@ -1,4 +1,5 @@
 #[cfg(feature = "mkl")]
+
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
@@ -6,7 +7,6 @@ extern crate accelerate_src;
 
 use candle::test_utils::to_vec0_round;
 use candle::{Device, Result, Tensor};
-use candle_nn::loss::Loss;
 /* Equivalent python code:
 import torch
 import torch.nn.functional as F
@@ -127,11 +127,9 @@ fn huber_loss() -> Result<()> {
 
     let inp = Tensor::new(&inp, &cpu)?;
     let target = Tensor::new(&target, &cpu)?;
-    let mut loss_func = candle_nn::loss::HuberLoss::default();
-    let loss = loss_func.forward(&inp, &target)?;
+    let loss = candle_nn::loss::huber(&inp, &target,1.0)?;
     assert_eq!(to_vec0_round(&loss, 4)?, 0.4734);
-    let mut loss_func = candle_nn::loss::HuberLoss::new(0.88)?;
-    let loss = loss_func.forward(&inp, &target)?;
+    let loss = candle_nn::loss::huber(&inp, &target,0.88)?;
     assert_eq!(to_vec0_round(&loss, 4)?, 0.4483);
     Ok(())
 }
