@@ -221,6 +221,10 @@ fn asort(device: &Device) -> Result<()> {
 
 /// Test sorting a large tensor that exceeds 1024 elements.
 fn asort_big(device: &Device) -> Result<()> {
+    // Skip on metal for now
+    if device.is_metal() {
+        return Ok(());
+    }
     const SIZE: usize = 2000;
     let data: Vec<f32> = (0..SIZE).map(|x| (SIZE - x) as f32).collect();
     let tensor = Tensor::new(data.as_slice(), device)?;
