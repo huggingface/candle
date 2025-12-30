@@ -76,7 +76,7 @@ pub fn binary_cross_entropy_with_logit(inp: &Tensor, target: &Tensor) -> Result<
 /// HuberLoss
 ///
 /// A robust loss function that combines `MAE` and `MSE` losses:
-/// 
+///
 /// - When the absolute element-wise error is less than `delta`, it uses a squared term (MSE loss).
 /// - When the absolute element-wise error is greater than or equal to `delta`, it uses a linear term (MAE loss scaled by `delta`).
 /// # Formula
@@ -86,7 +86,7 @@ pub fn binary_cross_entropy_with_logit(inp: &Tensor, target: &Tensor) -> Result<
 /// 0.5(x_n - y_n)^2, & |x_n - y_n| < delta
 /// delta(|x_n - y_n| - 0.5delta), & |x_n - y_n| >= delta
 /// ```
-pub fn huber(inp: &Tensor,target: &Tensor,delta: f64) -> Result<Tensor> {
+pub fn huber(inp: &Tensor, target: &Tensor, delta: f64) -> Result<Tensor> {
     if inp.dims() != target.dims() {
         candle::bail!(
             "input and target must have the same shape, got inp: {:?}, target: {:?}",

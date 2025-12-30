@@ -1,5 +1,4 @@
 #[cfg(feature = "mkl")]
-
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
@@ -127,9 +126,9 @@ fn huber_loss() -> Result<()> {
 
     let inp = Tensor::new(&inp, &cpu)?;
     let target = Tensor::new(&target, &cpu)?;
-    let loss = candle_nn::loss::huber(&inp, &target,1.0)?;
+    let loss = candle_nn::loss::huber(&inp, &target, 1.0)?;
     assert_eq!(to_vec0_round(&loss, 4)?, 0.4734);
-    let loss = candle_nn::loss::huber(&inp, &target,0.88)?;
+    let loss = candle_nn::loss::huber(&inp, &target, 0.88)?;
     assert_eq!(to_vec0_round(&loss, 4)?, 0.4483);
     Ok(())
 }
