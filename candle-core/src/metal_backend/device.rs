@@ -1,13 +1,17 @@
 use crate::{DType, Result};
+
+#[cfg(feature = "ug")]
+use candle_metal_kernels::metal::ComputePipeline;
 use candle_metal_kernels::{
     metal::{
-        BlitCommandEncoder, Buffer, BufferMap, Commands, ComputeCommandEncoder, ComputePipeline,
-        Device, MTLResourceOptions,
+        BlitCommandEncoder, Buffer, BufferMap, Commands, ComputeCommandEncoder, Device,
+        MTLResourceOptions,
     },
     Kernels,
 };
 use objc2_foundation::NSURL;
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
+
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -88,7 +92,7 @@ impl std::ops::Deref for MetalDevice {
 }
 
 impl MetalDevice {
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), feature = "ug"))]
+    #[cfg(all(feature = "ug", not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn compile(
         &self,
         func_name: &'static str,
