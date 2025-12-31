@@ -1,4 +1,5 @@
 pub(crate) mod affine;
+pub(crate) mod binary;
 pub(crate) mod broadcast;
 pub(crate) mod conv_transpose2d;
 pub(crate) mod copy;
@@ -28,13 +29,13 @@ impl BenchDevice for Device {
                     return Ok(device.synchronize()?);
                 }
                 #[cfg(not(feature = "cuda"))]
-                panic!("Cuda device without cuda feature enabled: {:?}", device)
+                panic!("Cuda device without cuda feature enabled: {device:?}")
             }
             Device::Metal(device) => {
                 #[cfg(feature = "metal")]
-                return Ok(device.wait_until_completed()?);
+                return device.wait_until_completed();
                 #[cfg(not(feature = "metal"))]
-                panic!("Metal device without metal feature enabled: {:?}", device)
+                panic!("Metal device without metal feature enabled: {device:?}")
             }
         }
     }

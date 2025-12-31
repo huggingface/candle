@@ -16,10 +16,10 @@ use metal::{
     BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline,
     ConstantValues, Device, Function, Library, MTLResourceOptions, Value,
 };
-use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLMathFloatingPointFunctions, MTLMathMode, MTLSize};
 use source::Source;
 pub use utils::BufferOffset;
-use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
+use utils::{get_block_dims, get_tile_size, linear_split, EncoderParam, EncoderProvider};
 
 pub const RESOURCE_OPTIONS: MTLResourceOptions =
     objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
