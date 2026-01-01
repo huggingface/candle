@@ -7,7 +7,6 @@ use std::io::Cursor;
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
 
-use crate::console_log;
 use crate::profiler::ProfileGuard;
 use candle_transformers::models::quantized_qwen3::ModelWeights as QuantizedQwen3;
 
