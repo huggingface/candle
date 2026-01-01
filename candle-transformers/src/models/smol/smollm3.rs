@@ -49,7 +49,7 @@ impl Config {
         // With interval=4: layers 0,1,2 use RoPE; layer 3 skips RoPE (NoPE)
         // Pattern: every 4th layer (3,7,11...) skips RoPE
         if let Some(interval) = self.no_rope_layer_interval {
-            return (layer_idx + 1) % interval == 0;
+            return (layer_idx + 1).is_multiple_of(interval);
         }
 
         // Default: use RoPE on all layers (standard Llama behavior)

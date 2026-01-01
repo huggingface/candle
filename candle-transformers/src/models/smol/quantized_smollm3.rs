@@ -118,7 +118,7 @@ impl QuantizedConfig {
 
     pub fn should_skip_rope(&self, layer_idx: usize) -> bool {
         if let Some(interval) = self.no_rope_layer_interval {
-            return (layer_idx + 1) % interval == 0;
+            return (layer_idx + 1).is_multiple_of(interval);
         }
         false
     }

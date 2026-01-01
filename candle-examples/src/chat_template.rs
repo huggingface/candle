@@ -6,7 +6,8 @@
 //! # Example
 //!
 //! ```no_run
-//! use candle_examples::chat_template::{ChatTemplate, Message, Conversation};
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use candle_examples::chat_template::{ChatTemplate, ChatTemplateOptions, Message, Conversation};
 //!
 //! // Load template from a model's tokenizer_config.json
 //! let template = ChatTemplate::from_tokenizer_config("path/to/tokenizer_config.json")?;
@@ -19,7 +20,7 @@
 //!     Message::system("You are helpful."),
 //!     Message::user("Hello!"),
 //! ];
-//! let prompt = template.apply(&messages, true)?;
+//! let prompt = template.apply_for_generation(&messages)?;
 //!
 //! // Multi-turn conversation
 //! let mut conv = Conversation::new(template, "You are helpful.");
@@ -27,6 +28,8 @@
 //! // ... generate response ...
 //! conv.assistant_response("Hi there!");
 //! let prompt = conv.user_turn("How are you?")?;
+//! # Ok(())
+//! # }
 //! ```
 
 use minijinja::{context, Environment};
