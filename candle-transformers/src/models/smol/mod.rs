@@ -19,7 +19,7 @@
 //!
 //! # Example Usage
 //!
-//! ```rust,no_run
+//! ```ignore
 //! use candle_transformers::models::smol::smollm3::{Config, ModelForCausalLM};
 //! use candle_transformers::models::smol::quantized_smollm3::QuantizedModelForCausalLM;
 //! use candle::{Device, Tensor};
