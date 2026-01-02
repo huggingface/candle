@@ -531,7 +531,7 @@ impl ZImageAttention {
         candle_nn::ops::sdpa(q, k, v, sdpa_mask.as_ref(), false, scale as f32, 1.0)
     }
 
-    /// CPU: Basic step-by-step implementation
+    /// Fallback implementation
     fn attention_basic(
         &self,
         q: &Tensor,
