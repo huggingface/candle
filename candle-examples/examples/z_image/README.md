@@ -18,11 +18,11 @@ Download the model weights from HuggingFace:
 
 ```bash
 # Using huggingface-cli
-huggingface-cli download Tongyi-Wanx/Z-Image-Turbo --local-dir weights/Z-Image-Turbo
+hf download Tongyi-MAI/Z-Image-Turbo
 
 # Or using git-lfs
 git lfs install
-git clone https://huggingface.co/Tongyi-Wanx/Z-Image-Turbo weights/Z-Image-Turbo
+git clone https://huggingface.co/Tongyi-MAI/Z-Image-Turbo weights/Z-Image-Turbo
 ```
 
 ## Running the Model
@@ -75,7 +75,6 @@ If an invalid size is provided, the program will suggest valid alternatives.
 
 - **Turbo Version**: Z-Image-Turbo is optimized for fast inference, requiring only 8-9 steps
 - **Memory Usage**: The 24B model requires significant GPU memory. Reduce image dimensions if encountering OOM errors
-- **Metal Backend**: Fully supported on macOS with Apple Silicon
 
 ## Example Outputs
 

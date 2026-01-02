@@ -21,23 +21,7 @@
 //!
 //! # Model Files
 //!
-//! Download from: https://huggingface.co/Z-a-o/Z-Image-Turbo
-//!
-//! Expected directory structure:
-//! ```
-//! weights/Z-Image-Turbo/
-//! ├── transformer/
-//! │   ├── config.json
-//! │   └── diffusion_pytorch_model-*.safetensors (3 shards)
-//! ├── text_encoder/
-//! │   ├── config.json
-//! │   └── model-*.safetensors (3 shards)
-//! ├── vae/
-//! │   ├── config.json
-//! │   └── diffusion_pytorch_model.safetensors
-//! └── tokenizer/
-//!     └── tokenizer.json
-//! ```
+//! Download from: https://huggingface.co/Tongyi-MAI/Z-Image-Turbo
 
 use anyhow::{Error as E, Result};
 use candle::{DType, IndexOp, Tensor};

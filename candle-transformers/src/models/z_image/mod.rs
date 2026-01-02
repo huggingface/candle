@@ -1,8 +1,17 @@
+/*
+ * @Author: SpenserCai
+ * @Date: 2026-01-02 11:35:48
+ * @version: 
+ * @LastEditors: SpenserCai
+ * @LastEditTime: 2026-01-02 11:48:26
+ * @Description: file content
+ */
 //! Z-Image Model
 //!
 //! Z-Image is a text-to-image generation model from Alibaba using Flow Matching.
 //!
-//! - 🤗 [Hugging Face Model](https://huggingface.co/Z-a-o/Z-Image-Turbo)
+//! - 🤗 [Hugging Face Model](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo)
+//! - [Official Website](https://z-image-turbo.org/)
 //!
 //! # Example
 //!
