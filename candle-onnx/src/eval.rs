@@ -2545,6 +2545,141 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
+            // CosyVoice3 GRU operator support
+            "GRU" => {
+                // === 1. Parse attributes ===
+                let direction = get_attr_opt::<str>(node, "direction")?
+                    .unwrap_or("forward");
+                if direction != "forward" {
+                    bail!("GRU currently only supports direction == \"forward\"");
+                }
+                let num_directions = 1usize;
+                let hidden_size: i64 = *get_attr(node, "hidden_size")?;
+                let hidden_size = hidden_size as usize;
+
+                // linear_before_reset: 0 = r_t * (H_prev * R + Rb), 1 = (r_t * H_prev) * R + Rb
+                let linear_before_reset = get_attr_opt::<i64>(node, "linear_before_reset")?
+                    .copied()
+                    .unwrap_or(0);
+                if linear_before_reset != 0 {
+                    bail!("GRU currently only supports linear_before_reset == 0");
+                }
+
+                let layout = get_attr_opt::<i64>(node, "layout")?
+                    .copied()
+                    .unwrap_or(0);
+                if layout != 0 {
+                    bail!("GRU currently only supports layout == 0");
+                }
+
+                // === 2. Get input tensors ===
+                // X: [seq_length, batch_size, input_size]
+                let x = get(&node.input[0])?;
+                let (seq_length, batch_size, input_size) = x.dims3()?;
+
+                // W: [num_directions, 3*hidden_size, input_size] - input weights
+                let w = get(&node.input[1])?;
+
+                // R: [num_directions, 3*hidden_size, hidden_size] - recurrent weights
+                let r = get(&node.input[2])?;
+
+                // B: [num_directions, 6*hidden_size] - optional bias
+                let b = if node.input.len() > 3 && !node.input[3].is_empty() {
+                    get(&node.input[3])?.clone()
+                } else {
+                    Tensor::zeros(
+                        (num_directions, 6 * hidden_size),
+                        x.dtype(),
+                        x.device(),
+                    )?
+                };
+
+                // initial_h: [num_directions, batch_size, hidden_size] - optional initial hidden state
+                let initial_h = if node.input.len() > 5 && !node.input[5].is_empty() {
+                    get(&node.input[5])?.clone()
+                } else {
+                    Tensor::zeros(
+                        (num_directions, batch_size, hidden_size),
+                        x.dtype(),
+                        x.device(),
+                    )?
+                };
+
+                // === 3. Extract single direction weights (assuming forward) ===
+                let w = w.get(0)?; // [3*hidden_size, input_size]
+                let r = r.get(0)?; // [3*hidden_size, hidden_size]
+                let b = b.get(0)?; // [6*hidden_size]
+                let h = initial_h.get(0)?; // [batch_size, hidden_size]
+
+                // === 4. Separate biases: Wb and Rb ===
+                let wb = b.narrow(0, 0, 3 * hidden_size)?;
+                let rb = b.narrow(0, 3 * hidden_size, 3 * hidden_size)?;
+
+                // === 5. Reorder weights: ONNX (zrh) -> candle-nn (rzn) ===
+                // ONNX order: z(update), r(reset), h(hidden)
+                // candle-nn order: r(reset), z(update), n(hidden)
+                let w_z = w.narrow(0, 0, hidden_size)?;
+                let w_r = w.narrow(0, hidden_size, hidden_size)?;
+                let w_h = w.narrow(0, 2 * hidden_size, hidden_size)?;
+                let w = Tensor::cat(&[&w_r, &w_z, &w_h], 0)?; // [3*hidden_size, input_size]
+
+                let r_z = r.narrow(0, 0, hidden_size)?;
+                let r_r = r.narrow(0, hidden_size, hidden_size)?;
+                let r_h = r.narrow(0, 2 * hidden_size, hidden_size)?;
+                let r = Tensor::cat(&[&r_r, &r_z, &r_h], 0)?; // [3*hidden_size, hidden_size]
+
+                let wb_z = wb.narrow(0, 0, hidden_size)?;
+                let wb_r = wb.narrow(0, hidden_size, hidden_size)?;
+                let wb_h = wb.narrow(0, 2 * hidden_size, hidden_size)?;
+                let wb = Tensor::cat(&[&wb_r, &wb_z, &wb_h], 0)?;
+
+                let rb_z = rb.narrow(0, 0, hidden_size)?;
+                let rb_r = rb.narrow(0, hidden_size, hidden_size)?;
+                let rb_h = rb.narrow(0, 2 * hidden_size, hidden_size)?;
+                let rb = Tensor::cat(&[&rb_r, &rb_z, &rb_h], 0)?;
+
+                // === 6. Build candle-nn GRU ===
+                let vmap = candle_nn::VarMap::new();
+                {
+                    let mut data = vmap.data().lock().unwrap();
+                    data.insert("weight_ih_l0".to_string(), candle::Var::from_tensor(&w)?);
+                    data.insert("weight_hh_l0".to_string(), candle::Var::from_tensor(&r)?);
+                    data.insert("bias_ih_l0".to_string(), candle::Var::from_tensor(&wb)?);
+                    data.insert("bias_hh_l0".to_string(), candle::Var::from_tensor(&rb)?);
+                }
+
+                use candle_nn::rnn::RNN as _;
+                let gru = candle_nn::rnn::gru(
+                    input_size,
+                    hidden_size,
+                    candle_nn::rnn::GRUConfig::default(),
+                    candle_nn::VarBuilder::from_varmap(&vmap, w.dtype(), w.device()),
+                )?;
+
+                // === 7. Execute GRU sequence ===
+                let mut gru_state = candle_nn::rnn::GRUState { h };
+                let mut h_outputs: Vec<Tensor> = Vec::new();
+
+                for t in 0..seq_length {
+                    let x_t = x.get(t)?; // [batch_size, input_size]
+                    gru_state = gru.step(&x_t, &gru_state)?;
+                    h_outputs.push(gru_state.h.clone());
+                }
+
+                // === 8. Build outputs ===
+                // Y: [seq_length, num_directions, batch_size, hidden_size]
+                if !node.output.is_empty() && !node.output[0].is_empty() {
+                    let y = Tensor::stack(&h_outputs, 0)?; // [seq_length, batch_size, hidden_size]
+                    let y = y.unsqueeze(1)?; // [seq_length, 1, batch_size, hidden_size]
+                    values.insert(node.output[0].clone(), y);
+                }
+
+                // Y_h: [num_directions, batch_size, hidden_size]
+                if node.output.len() > 1 && !node.output[1].is_empty() {
+                    let y_h = gru_state.h.unsqueeze(0)?; // [1, batch_size, hidden_size]
+                    values.insert(node.output[1].clone(), y_h);
+                }
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
