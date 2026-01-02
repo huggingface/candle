@@ -12,26 +12,13 @@ using flow matching for high-quality image synthesis.
 - **VAE**: AutoEncoderKL with diffusers format weights
 - **Scheduler**: FlowMatchEulerDiscreteScheduler with dynamic shifting
 
-## Getting the Weights
-
-Download the model weights from HuggingFace:
-
-```bash
-# Using huggingface-cli
-hf download Tongyi-MAI/Z-Image-Turbo
-
-# Or using git-lfs
-git lfs install
-git clone https://huggingface.co/Tongyi-MAI/Z-Image-Turbo weights/Z-Image-Turbo
-```
-
 ## Running the Model
 
-### Basic Usage
+### Basic Usage (Auto-download from HuggingFace)
 
 ```bash
 cargo run --features cuda --example z_image --release -- \
-    --model-path weights/Z-Image-Turbo \
+    --model turbo \
     --prompt "A beautiful landscape with mountains and a lake" \
     --width 1024 --height 768 \
     --num-steps 8
@@ -41,22 +28,38 @@ cargo run --features cuda --example z_image --release -- \
 
 ```bash
 cargo run --features metal --example z_image --release -- \
-    --model-path weights/Z-Image-Turbo \
+    --model turbo \
     --prompt "A futuristic city at night with neon lights" \
     --width 1024 --height 1024 \
     --num-steps 9
+```
+
+### Using Local Weights
+
+If you prefer to use locally downloaded weights:
+
+```bash
+# Download weights first
+hf download Tongyi-MAI/Z-Image-Turbo --local-dir weights/Z-Image-Turbo
+
+# Run with local path
+cargo run --features cuda --example z_image --release -- \
+    --model turbo \
+    --model-path weights/Z-Image-Turbo \
+    --prompt "A beautiful landscape with mountains and a lake"
 ```
 
 ### Command-line Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--model-path` | Path to the model weights directory | `weights/Z-Image-Turbo` |
+| `--model` | Model variant to use (`turbo`) | `turbo` |
+| `--model-path` | Override path to local weights (optional) | Auto-download |
 | `--prompt` | The text prompt for image generation | Required |
 | `--negative-prompt` | Negative prompt for CFG guidance | `""` |
 | `--width` | Width of the generated image (must be divisible by 16) | `1024` |
 | `--height` | Height of the generated image (must be divisible by 16) | `1024` |
-| `--num-steps` | Number of denoising steps | `9` |
+| `--num-steps` | Number of denoising steps | Model default (9 for turbo) |
 | `--guidance-scale` | Classifier-free guidance scale | `5.0` |
 | `--seed` | Random seed for reproducibility | Random |
 | `--output` | Output image filename | `z_image_output.png` |
@@ -81,19 +84,19 @@ If an invalid size is provided, the program will suggest valid alternatives.
 ```bash
 # Landscape (16:9)
 cargo run --features metal --example z_image -r -- \
-    --model-path weights/Z-Image-Turbo \
+    --model turbo \
     --prompt "A serene mountain lake at sunset, photorealistic, 4k" \
     --width 1280 --height 720 --num-steps 8
 
 # Portrait (3:4)
 cargo run --features metal --example z_image -r -- \
-    --model-path weights/Z-Image-Turbo \
+    --model turbo \
     --prompt "A portrait of a wise elderly scholar, oil painting style" \
     --width 768 --height 1024 --num-steps 9
 
 # Square (1:1)
 cargo run --features metal --example z_image -r -- \
-    --model-path weights/Z-Image-Turbo \
+    --model turbo \
     --prompt "A cute robot holding a candle, digital art" \
     --width 1024 --height 1024 --num-steps 8
 ```

@@ -5,23 +5,32 @@
 //! # Running the example
 //!
 //! ```bash
-//! # With Metal (Apple Silicon)
+//! # With Metal (Apple Silicon) - auto-download from HuggingFace
 //! cargo run --features metal --example z_image --release -- \
+//!     --model turbo \
 //!     --prompt "A beautiful landscape with mountains" \
 //!     --height 1024 --width 1024 --num-steps 9
 //!
 //! # With CUDA
 //! cargo run --features cuda --example z_image --release -- \
+//!     --model turbo \
 //!     --prompt "A beautiful landscape" --height 1024 --width 1024
+//!
+//! # With local weights
+//! cargo run --features metal --example z_image --release -- \
+//!     --model turbo --model-path weights/Z-Image-Turbo \
+//!     --prompt "A cat" --height 512 --width 512
 //!
 //! # On CPU (slow)
 //! cargo run --example z_image --release -- --cpu \
+//!     --model turbo \
 //!     --prompt "A cat" --height 512 --width 512
 //! ```
 //!
 //! # Model Files
 //!
-//! Download from: https://huggingface.co/Tongyi-MAI/Z-Image-Turbo
+//! Models are automatically downloaded from HuggingFace, or you can download manually:
+//! <https://huggingface.co/Tongyi-MAI/Z-Image-Turbo>
 
 use anyhow::{Error as E, Result};
 use candle::{DType, IndexOp, Tensor};
@@ -32,6 +41,7 @@ use candle_transformers::models::z_image::{
     ZImageTextEncoder, ZImageTransformer2DModel,
 };
 use clap::Parser;
+use hf_hub::api::sync::Api;
 use tokenizers::Tokenizer;
 
 /// Z-Image scheduler constants
@@ -39,6 +49,26 @@ const BASE_IMAGE_SEQ_LEN: usize = 256;
 const MAX_IMAGE_SEQ_LEN: usize = 4096;
 const BASE_SHIFT: f64 = 0.5;
 const MAX_SHIFT: f64 = 1.15;
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+enum Model {
+    /// Z-Image-Turbo: optimized for fast inference (8-9 steps)
+    Turbo,
+}
+
+impl Model {
+    fn repo(&self) -> &'static str {
+        match self {
+            Self::Turbo => "Tongyi-MAI/Z-Image-Turbo",
+        }
+    }
+
+    fn default_steps(&self) -> usize {
+        match self {
+            Self::Turbo => 9,
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -67,8 +97,8 @@ struct Args {
     width: usize,
 
     /// Number of inference steps.
-    #[arg(long, default_value_t = 9)]
-    num_steps: usize,
+    #[arg(long)]
+    num_steps: Option<usize>,
 
     /// Guidance scale for CFG.
     #[arg(long, default_value_t = 5.0)]
@@ -78,9 +108,13 @@ struct Args {
     #[arg(long)]
     seed: Option<u64>,
 
-    /// Path to the model weights directory.
-    #[arg(long, default_value = "weights/Z-Image-Turbo")]
-    model_path: String,
+    /// Which model variant to use.
+    #[arg(long, value_enum, default_value = "turbo")]
+    model: Model,
+
+    /// Override path to the model weights directory (uses HuggingFace by default).
+    #[arg(long)]
+    model_path: Option<String>,
 
     /// Output image filename.
     #[arg(long, default_value = "z_image_output.png")]
@@ -102,11 +136,14 @@ fn format_prompt_for_qwen3(prompt: &str) -> String {
 }
 
 fn run(args: Args) -> Result<()> {
+    let num_steps = args.num_steps.unwrap_or_else(|| args.model.default_steps());
+
     println!("Z-Image Text-to-Image Generation");
     println!("================================");
+    println!("Model: {:?}", args.model);
     println!("Prompt: {}", args.prompt);
     println!("Size: {}x{}", args.width, args.height);
-    println!("Steps: {}", args.num_steps);
+    println!("Steps: {}", num_steps);
     println!("Guidance scale: {}", args.guidance_scale);
 
     let device = candle_examples::device(args.cpu)?;
@@ -116,20 +153,48 @@ fn run(args: Args) -> Result<()> {
     }
     let dtype = device.bf16_default_to_f32();
 
-    println!("\nLoading models from: {}", args.model_path);
+    // Resolve model: use provided path or download from HuggingFace
+    let api = Api::new()?;
+    let repo = api.model(args.model.repo().to_string());
+    let use_local = args.model_path.is_some();
+    let model_path = args.model_path.map(std::path::PathBuf::from);
+
+    if use_local {
+        println!(
+            "\nLoading models from local path: {}",
+            model_path.as_ref().unwrap().display()
+        );
+    } else {
+        println!(
+            "\nDownloading model from HuggingFace: {}",
+            args.model.repo()
+        );
+    }
 
     // ==================== Load Tokenizer ====================
     println!("Loading tokenizer...");
-    let tokenizer_path = std::path::PathBuf::from(&args.model_path)
-        .join("tokenizer")
-        .join("tokenizer.json");
+    let tokenizer_path = if use_local {
+        model_path
+            .as_ref()
+            .unwrap()
+            .join("tokenizer")
+            .join("tokenizer.json")
+    } else {
+        repo.get("tokenizer/tokenizer.json")?
+    };
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(E::msg)?;
 
     // ==================== Load Text Encoder ====================
     println!("Loading text encoder...");
-    let text_encoder_config_path = std::path::PathBuf::from(&args.model_path)
-        .join("text_encoder")
-        .join("config.json");
+    let text_encoder_config_path = if use_local {
+        model_path
+            .as_ref()
+            .unwrap()
+            .join("text_encoder")
+            .join("config.json")
+    } else {
+        repo.get("text_encoder/config.json")?
+    };
     let text_encoder_cfg: TextEncoderConfig = if text_encoder_config_path.exists() {
         serde_json::from_reader(std::fs::File::open(&text_encoder_config_path)?)?
     } else {
@@ -137,20 +202,26 @@ fn run(args: Args) -> Result<()> {
     };
 
     let text_encoder_weights = {
-        let files: Vec<std::path::PathBuf> = (1..=3)
-            .map(|i| {
-                std::path::PathBuf::from(&args.model_path)
-                    .join("text_encoder")
-                    .join(format!("model-{:05}-of-00003.safetensors", i))
-            })
-            .filter(|p| p.exists())
-            .collect();
+        let files: Vec<std::path::PathBuf> = if use_local {
+            (1..=3)
+                .map(|i| {
+                    model_path
+                        .as_ref()
+                        .unwrap()
+                        .join("text_encoder")
+                        .join(format!("model-{:05}-of-00003.safetensors", i))
+                })
+                .filter(|p| p.exists())
+                .collect()
+        } else {
+            (1..=3)
+                .map(|i| repo.get(&format!("text_encoder/model-{:05}-of-00003.safetensors", i)))
+                .filter_map(|r| r.ok())
+                .collect()
+        };
 
         if files.is_empty() {
-            anyhow::bail!(
-                "Text encoder weights not found in {}/text_encoder/",
-                args.model_path
-            );
+            anyhow::bail!("Text encoder weights not found");
         }
 
         let files: Vec<&str> = files.iter().map(|p| p.to_str().unwrap()).collect();
@@ -161,9 +232,15 @@ fn run(args: Args) -> Result<()> {
 
     // ==================== Load Transformer ====================
     println!("Loading transformer...");
-    let transformer_config_path = std::path::PathBuf::from(&args.model_path)
-        .join("transformer")
-        .join("config.json");
+    let transformer_config_path = if use_local {
+        model_path
+            .as_ref()
+            .unwrap()
+            .join("transformer")
+            .join("config.json")
+    } else {
+        repo.get("transformer/config.json")?
+    };
     let transformer_cfg: Config = if transformer_config_path.exists() {
         serde_json::from_reader(std::fs::File::open(&transformer_config_path)?)?
     } else {
@@ -171,23 +248,34 @@ fn run(args: Args) -> Result<()> {
     };
 
     let transformer_weights = {
-        let files: Vec<std::path::PathBuf> = (1..=3)
-            .map(|i| {
-                std::path::PathBuf::from(&args.model_path)
-                    .join("transformer")
-                    .join(format!(
-                        "diffusion_pytorch_model-{:05}-of-00003.safetensors",
+        let files: Vec<std::path::PathBuf> = if use_local {
+            (1..=3)
+                .map(|i| {
+                    model_path
+                        .as_ref()
+                        .unwrap()
+                        .join("transformer")
+                        .join(format!(
+                            "diffusion_pytorch_model-{:05}-of-00003.safetensors",
+                            i
+                        ))
+                })
+                .filter(|p| p.exists())
+                .collect()
+        } else {
+            (1..=3)
+                .map(|i| {
+                    repo.get(&format!(
+                        "transformer/diffusion_pytorch_model-{:05}-of-00003.safetensors",
                         i
                     ))
-            })
-            .filter(|p| p.exists())
-            .collect();
+                })
+                .filter_map(|r| r.ok())
+                .collect()
+        };
 
         if files.is_empty() {
-            anyhow::bail!(
-                "Transformer weights not found in {}/transformer/",
-                args.model_path
-            );
+            anyhow::bail!("Transformer weights not found");
         }
 
         let files: Vec<&str> = files.iter().map(|p| p.to_str().unwrap()).collect();
@@ -198,21 +286,30 @@ fn run(args: Args) -> Result<()> {
 
     // ==================== Load VAE ====================
     println!("Loading VAE...");
-    let vae_config_path = std::path::PathBuf::from(&args.model_path)
-        .join("vae")
-        .join("config.json");
+    let vae_config_path = if use_local {
+        model_path.as_ref().unwrap().join("vae").join("config.json")
+    } else {
+        repo.get("vae/config.json")?
+    };
     let vae_cfg: VaeConfig = if vae_config_path.exists() {
         serde_json::from_reader(std::fs::File::open(&vae_config_path)?)?
     } else {
         VaeConfig::z_image()
     };
 
-    let vae_path = std::path::PathBuf::from(&args.model_path)
-        .join("vae")
-        .join("diffusion_pytorch_model.safetensors");
-    if !vae_path.exists() {
-        anyhow::bail!("VAE weights not found at {:?}", vae_path);
-    }
+    let vae_path = if use_local {
+        let path = model_path
+            .as_ref()
+            .unwrap()
+            .join("vae")
+            .join("diffusion_pytorch_model.safetensors");
+        if !path.exists() {
+            anyhow::bail!("VAE weights not found at {:?}", path);
+        }
+        path
+    } else {
+        repo.get("vae/diffusion_pytorch_model.safetensors")?
+    };
 
     let vae_weights = unsafe {
         VarBuilder::from_mmaped_safetensors(&[vae_path.to_str().unwrap()], dtype, &device)?
@@ -297,7 +394,7 @@ fn run(args: Args) -> Result<()> {
     println!("Image sequence length: {}, mu: {:.4}", image_seq_len, mu);
 
     // Set timesteps
-    scheduler.set_timesteps(args.num_steps, Some(mu));
+    scheduler.set_timesteps(num_steps, Some(mu));
 
     // ==================== Generate Initial Noise ====================
     println!("\nGenerating initial noise...");
@@ -307,9 +404,9 @@ fn run(args: Args) -> Result<()> {
     latents = latents.unsqueeze(2)?;
 
     // ==================== Denoising Loop ====================
-    println!("\nStarting denoising loop ({} steps)...", args.num_steps);
+    println!("\nStarting denoising loop ({} steps)...", num_steps);
 
-    for step in 0..args.num_steps {
+    for step in 0..num_steps {
         let t = scheduler.current_timestep_normalized();
         let t_tensor = Tensor::from_vec(vec![t as f32], (1,), &device)?.to_dtype(dtype)?;
 
@@ -347,7 +444,7 @@ fn run(args: Args) -> Result<()> {
         println!(
             "Step {}/{}: t = {:.4}, sigma = {:.4}",
             step + 1,
-            args.num_steps,
+            num_steps,
             t,
             scheduler.current_sigma()
         );
