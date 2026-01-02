@@ -217,6 +217,62 @@ fn is_hallucination(text: &str) -> bool {
     false
 }
 
+/// Smart resize algorithm matching PyTorch's PaddleOCRVLImageProcessor.
+///
+/// Rescales the image so that:
+/// 1. Both dimensions are divisible by `factor` (patch_size × merge_size = 28)
+/// 2. Total pixels are within [min_pixels, max_pixels] range
+/// 3. Aspect ratio is maintained as closely as possible
+fn smart_resize(
+    height: usize,
+    width: usize,
+    factor: usize,
+    min_pixels: usize,
+    max_pixels: usize,
+) -> Result<(usize, usize)> {
+    let mut h = height;
+    let mut w = width;
+
+    // Handle tiny images by scaling up to minimum factor
+    if h < factor {
+        w = (w * factor + h / 2) / h;
+        h = factor;
+    }
+    if w < factor {
+        h = (h * factor + w / 2) / w;
+        w = factor;
+    }
+
+    // Check aspect ratio constraint
+    let aspect = if h > w { h as f64 / w as f64 } else { w as f64 / h as f64 };
+    if aspect > 200.0 {
+        return Err(E::msg(format!(
+            "Aspect ratio {:.1} exceeds maximum of 200",
+            aspect
+        )));
+    }
+
+    // Round to nearest multiple of factor
+    let mut h_bar = ((h + factor / 2) / factor) * factor;
+    let mut w_bar = ((w + factor / 2) / factor) * factor;
+
+    let total_pixels = h_bar * w_bar;
+
+    if total_pixels > max_pixels {
+        // Scale down to fit within max_pixels
+        let beta = ((h * w) as f64 / max_pixels as f64).sqrt();
+        h_bar = ((h as f64 / beta / factor as f64).floor() as usize) * factor;
+        w_bar = ((w as f64 / beta / factor as f64).floor() as usize) * factor;
+    } else if total_pixels < min_pixels {
+        // Scale up to meet min_pixels
+        let beta = (min_pixels as f64 / (h * w) as f64).sqrt();
+        h_bar = ((h as f64 * beta / factor as f64).ceil() as usize) * factor;
+        w_bar = ((w as f64 * beta / factor as f64).ceil() as usize) * factor;
+    }
+
+    Ok((h_bar, w_bar))
+}
+
 /// Load and preprocess image for PaddleOCR-VL.
 fn load_image(path: &str, device: &Device, dtype: DType) -> Result<(Tensor, Tensor)> {
     let img = image::ImageReader::open(path)?
@@ -228,14 +284,15 @@ fn load_image(path: &str, device: &Device, dtype: DType) -> Result<(Tensor, Tens
 
     // PaddleOCR-VL uses dynamic resolution with patch size 14
     // Resize to be divisible by factor (patch_size * spatial_merge = 28)
-    // Use round() to match PyTorch processor's smart_resize behavior
+    // Use smart_resize to match PyTorch processor's preprocessing exactly
     let patch_size = 14;
     let spatial_merge = 2;
     let factor = patch_size * spatial_merge; // 28
+    let min_pixels = 147384; // from preprocessor_config.json
+    let max_pixels = 2822400; // from preprocessor_config.json
 
-    // round(dim / factor) * factor
-    let new_height = ((height + factor / 2) / factor) * factor;
-    let new_width = ((width + factor / 2) / factor) * factor;
+    // Use smart_resize to match PyTorch's preprocessing exactly
+    let (new_height, new_width) = smart_resize(height, width, factor, min_pixels, max_pixels)?;
 
     // Note: PyTorch uses PIL's BICUBIC resampling which differs slightly from
     // Rust's CatmullRom. This causes minor pixel differences which may cascade
@@ -293,6 +350,8 @@ fn load_images_separate(
     let patch_size = 14;
     let spatial_merge = 2;
     let factor = patch_size * spatial_merge; // 28
+    let min_pixels = 147384; // from preprocessor_config.json
+    let max_pixels = 2822400; // from preprocessor_config.json
 
     let mut all_pixels = Vec::new();
     let mut all_grids = Vec::new();
@@ -305,9 +364,8 @@ fn load_images_separate(
         let img = img.to_rgb8();
         let (width, height) = (img.width() as usize, img.height() as usize);
 
-        // Resize to be divisible by factor
-        let new_height = ((height + factor / 2) / factor) * factor;
-        let new_width = ((width + factor / 2) / factor) * factor;
+        // Use smart_resize to match PyTorch's preprocessing
+        let (new_height, new_width) = smart_resize(height, width, factor, min_pixels, max_pixels)?;
 
         let resized = image::imageops::resize(
             &img,
@@ -429,6 +487,8 @@ fn load_video_frames(
     let patch_size = 14;
     let spatial_merge = 2;
     let factor = patch_size * spatial_merge; // 28
+    let min_pixels = 147384; // from preprocessor_config.json
+    let max_pixels = 2822400; // from preprocessor_config.json
 
     // Load first frame to determine dimensions
     let first_img = image::ImageReader::open(&frame_paths[0])?
@@ -437,9 +497,8 @@ fn load_video_frames(
     let first_img = first_img.to_rgb8();
     let (width, height) = (first_img.width() as usize, first_img.height() as usize);
 
-    // Resize dimensions (same for all frames)
-    let new_height = ((height + factor / 2) / factor) * factor;
-    let new_width = ((width + factor / 2) / factor) * factor;
+    // Use smart_resize to match PyTorch's preprocessing (same for all frames)
+    let (new_height, new_width) = smart_resize(height, width, factor, min_pixels, max_pixels)?;
     let h_patches = new_height / patch_size;
     let w_patches = new_width / patch_size;
 

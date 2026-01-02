@@ -296,6 +296,96 @@ fn apply_rotary_pos_emb_vision(
     Ok((q_embed, k_embed))
 }
 
+/// Tile size for chunked attention (KV positions per tile).
+/// Balances memory usage vs throughput. 512 keeps peak memory under ~500MB per tile.
+const ATTENTION_TILE_SIZE: usize = 512;
+
+/// Chunked attention with online softmax for memory efficiency.
+///
+/// For large sequences that would exceed GPU memory limits (e.g., 14K+ patches from
+/// high-resolution images), this processes K/V in tiles using the Flash Attention
+/// online softmax algorithm. This is mathematically equivalent to standard attention
+/// but never materializes the full (seq × seq) attention matrix.
+///
+/// # Arguments
+/// * `q` - Query tensor, shape (1, heads, q_seq, head_dim)
+/// * `k` - Key tensor, shape (1, heads, kv_seq, head_dim)
+/// * `v` - Value tensor, shape (1, heads, kv_seq, head_dim)
+/// * `scale` - Attention scale factor (typically 1/sqrt(head_dim))
+///
+/// # Returns
+/// Output tensor, shape (1, heads, q_seq, head_dim)
+fn chunked_attention(q: &Tensor, k: &Tensor, v: &Tensor, scale: f64) -> Result<Tensor> {
+    let (_, num_heads, q_seq, head_dim) = q.dims4()?;
+    let kv_seq = k.dim(2)?;
+    let device = q.device();
+    let dtype = q.dtype();
+
+    // For small sequences, use standard attention (fits in memory)
+    if kv_seq <= ATTENTION_TILE_SIZE {
+        let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        return attn_weights.matmul(v);
+    }
+
+    // Chunked attention for large sequences using online softmax
+    let num_tiles = kv_seq.div_ceil(ATTENTION_TILE_SIZE);
+
+    // Initialize accumulators in F32 for numerical stability.
+    // Use from_vec() to create properly contiguous tensors that work correctly
+    // with repeated broadcast operations across many loop iterations.
+    let output_accum_data = vec![0f32; num_heads * q_seq * head_dim];
+    let mut output_accum =
+        Tensor::from_vec(output_accum_data, (1, num_heads, q_seq, head_dim), device)?;
+    let max_scores_data = vec![-f32::INFINITY; num_heads * q_seq];
+    let mut max_scores = Tensor::from_vec(max_scores_data, (1, num_heads, q_seq, 1), device)?;
+    let sum_exps_data = vec![0f32; num_heads * q_seq];
+    let mut sum_exps = Tensor::from_vec(sum_exps_data, (1, num_heads, q_seq, 1), device)?;
+
+    let q_f32 = q.to_dtype(DType::F32)?;
+
+    for tile_idx in 0..num_tiles {
+        let tile_start = tile_idx * ATTENTION_TILE_SIZE;
+        let tile_len = (kv_seq - tile_start).min(ATTENTION_TILE_SIZE);
+
+        // Make tiles contiguous before dtype conversion (narrow creates a view)
+        let k_tile = k
+            .narrow(2, tile_start, tile_len)?
+            .contiguous()?
+            .to_dtype(DType::F32)?;
+        let v_tile = v
+            .narrow(2, tile_start, tile_len)?
+            .contiguous()?
+            .to_dtype(DType::F32)?;
+
+        // Compute scores for this tile: (1, heads, q_seq, tile_len)
+        let scores_tile = (q_f32.matmul(&k_tile.transpose(2, 3)?)? * scale)?;
+
+        // Get tile max: (1, heads, q_seq, 1)
+        let tile_max = scores_tile.max_keepdim(D::Minus1)?;
+
+        // New running max
+        let new_max = max_scores.maximum(&tile_max)?;
+
+        // Rescale previous accumulator: exp(old_max - new_max)
+        let rescale = (&max_scores - &new_max)?.exp()?;
+        output_accum = output_accum.broadcast_mul(&rescale)?;
+        sum_exps = sum_exps.broadcast_mul(&rescale)?;
+
+        // Compute exp(scores - new_max) for this tile
+        let exp_scores = scores_tile.broadcast_sub(&new_max)?.exp()?;
+
+        // Update accumulators
+        output_accum = (output_accum + exp_scores.matmul(&v_tile)?)?;
+        sum_exps = (sum_exps + exp_scores.sum_keepdim(D::Minus1)?)?;
+
+        max_scores = new_max;
+    }
+
+    // Final normalization and convert back to original dtype
+    output_accum.broadcast_div(&sum_exps)?.to_dtype(dtype)
+}
+
 /// Vision MLP block.
 struct VisionMlp {
     fc1: Linear,
@@ -431,9 +521,8 @@ impl VisionAttention {
 
         // Process each image sequence separately (variable length)
         let mut outputs = Vec::new();
-        let mut first_chunk_attn_weights = None;
 
-        for (chunk_idx, window) in cu_seqlens.windows(2).enumerate() {
+        for window in cu_seqlens.windows(2) {
             let start = window[0];
             let end = window[1];
             if end <= start {
@@ -449,36 +538,17 @@ impl VisionAttention {
                 let k = k_chunk.unsqueeze(0)?;
                 let v = v_chunk.unsqueeze(0)?;
 
-                let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.scale)?;
-                // Compute softmax in F32 for numerical stability (matches PyTorch's
-                // softmax(..., dtype=torch.float32).to(query.dtype) pattern)
-                let original_dtype = attn_weights.dtype();
-                let attn_weights = if original_dtype != DType::F32 {
-                    let attn_weights = attn_weights.to_dtype(DType::F32)?;
-                    let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-                    attn_weights.to_dtype(original_dtype)?
-                } else {
-                    candle_nn::ops::softmax_last_dim(&attn_weights)?
-                };
-
-                // Capture first chunk's attention weights for debugging
-                if chunk_idx == 0 && exports.is_some() {
-                    first_chunk_attn_weights = Some(attn_weights.clone());
-                }
-
-                attn_weights.matmul(&v)?
+                // Use chunked attention with online softmax for memory efficiency.
+                // For small sequences (<= 512), falls back to standard attention.
+                // For large sequences (14K+ patches), uses tiled computation to avoid OOM.
+                chunked_attention(&q, &k, &v, self.scale)?
             };
 
             chunk_out = chunk_out.squeeze(0)?.transpose(0, 1)?;
+            // Synchronize GPU before CPU accesses tensor data (critical for Metal correctness)
+            chunk_out.device().synchronize()?;
             chunk_out = chunk_out.reshape((len, self.num_heads * self.head_dim))?;
             outputs.push(chunk_out.to_dtype(xs.dtype())?);
-        }
-
-        // Export attention weights (first chunk only, as full would be huge)
-        if let Some(ref mut exp) = exports {
-            if let Some(attn_w) = first_chunk_attn_weights {
-                exp.insert("attn_weights_chunk0".to_string(), attn_w);
-            }
         }
 
         let attn_output = Tensor::cat(&outputs, 0)?;
