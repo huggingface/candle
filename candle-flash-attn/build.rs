@@ -77,7 +77,8 @@ fn main() -> Result<()> {
 
     // Fetch cutlass headers on-demand
     let cutlass_dir = fetch_cutlass(&out_dir, CUTLASS_COMMIT)?;
-    let cutlass_include: &'static str = Box::leak(cutlass_include_arg(&cutlass_dir).into_boxed_str());
+    let cutlass_include: &'static str =
+        Box::leak(cutlass_include_arg(&cutlass_dir).into_boxed_str());
 
     let kernels = KERNEL_FILES.iter().collect();
     let mut builder = bindgen_cuda::Builder::default()
