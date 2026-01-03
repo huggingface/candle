@@ -2,7 +2,10 @@
 // The cuda build time is very long so one can set the CANDLE_FLASH_ATTN_BUILD_DIR environment
 // variable in order to cache the compiled artifacts and avoid recompiling too often.
 use anyhow::{Context, Result};
+use candle_flash_attn_build::{cutlass_include_arg, fetch_cutlass};
 use std::path::PathBuf;
+
+const CUTLASS_COMMIT: &str = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
 
 const KERNEL_FILES: [&str; 33] = [
     "kernels/flash_api.cu",
@@ -72,6 +75,11 @@ fn main() -> Result<()> {
         }
     };
 
+    // Fetch cutlass headers on-demand
+    let cutlass_dir = fetch_cutlass(&out_dir, CUTLASS_COMMIT)?;
+    let cutlass_include: &'static str =
+        Box::leak(cutlass_include_arg(&cutlass_dir).into_boxed_str());
+
     let kernels = KERNEL_FILES.iter().collect();
     let mut builder = bindgen_cuda::Builder::default()
         .kernel_paths(kernels)
@@ -82,7 +90,7 @@ fn main() -> Result<()> {
         .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
         .arg("-U__CUDA_NO_HALF2_OPERATORS__")
         .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
-        .arg("-Icutlass/include")
+        .arg(&cutlass_include)
         .arg("--expt-relaxed-constexpr")
         .arg("--expt-extended-lambda")
         .arg("--use_fast_math")
