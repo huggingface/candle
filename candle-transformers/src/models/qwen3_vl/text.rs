@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{
-    embedding, kv_cache::KvCache, linear, linear_b, rms_norm, Activation, Embedding, Linear,
-    Module, RmsNorm, VarBuilder,
+    embedding, kv_cache::IncrementalKvCache, linear, linear_b, rms_norm, Activation, Embedding,
+    Linear, Module, RmsNorm, VarBuilder,
 };
 
 use super::config::TextConfig;
@@ -104,7 +104,7 @@ struct Attention {
     rotary_emb: Arc<RotaryEmbedding>,
     n_kv_groups: usize,
     softmax_scale: f64,
-    kv_cache: Arc<Mutex<KvCache>>,
+    kv_cache: Arc<Mutex<IncrementalKvCache>>,
 }
 
 impl Attention {
@@ -141,7 +141,10 @@ impl Attention {
             rotary_emb,
             n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
             softmax_scale: 1.0 / (cfg.head_dim as f64).sqrt(),
-            kv_cache: Arc::new(Mutex::new(KvCache::new(2, cfg.max_position_embeddings))),
+            kv_cache: Arc::new(Mutex::new(IncrementalKvCache::new(
+                2,
+                cfg.max_position_embeddings,
+            ))),
         })
     }
 
