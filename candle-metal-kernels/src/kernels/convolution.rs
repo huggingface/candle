@@ -195,6 +195,7 @@ pub fn call_pool2d(
     h_k: usize,
     w_stride: usize,
     h_stride: usize,
+    padding: usize,
     input: &Buffer,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
@@ -206,13 +207,14 @@ pub fn call_pool2d(
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
-        (w_k, h_k, w_stride, h_stride, shape, strides, input, output)
+        (w_k, h_k, w_stride, h_stride, padding, shape, strides, input, output)
     );
     encoder.use_resource(input, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
+
 
 #[allow(clippy::too_many_arguments)]
 pub fn call_conv_transpose1d(
