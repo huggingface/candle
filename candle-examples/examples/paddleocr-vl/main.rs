@@ -35,6 +35,14 @@
 //! cargo run --example paddleocr-vl --release -- \
 //!     --image page1.png --image page2.png
 //!
+//! # Batch mode - process multiple images sequentially without reloading model
+//! cargo run --example paddleocr-vl --release -- \
+//!     --batch doc1.png doc2.png doc3.png
+//!
+//! # Batch mode with glob pattern (shell expansion)
+//! cargo run --example paddleocr-vl --release -- \
+//!     --batch ./documents/*.png
+//!
 //! # Video OCR (requires ffmpeg)
 //! cargo run --example paddleocr-vl --release -- \
 //!     --video clip.mp4 \
@@ -89,6 +97,13 @@ struct Args {
     /// Path to document image(s). Can specify multiple times for multi-image processing.
     #[arg(long, num_args = 1..)]
     image: Vec<String>,
+
+    /// Batch mode: process multiple images sequentially without reloading model.
+    /// Each image is processed independently with separate output.
+    /// Unlike --image which combines multiple images into one prompt,
+    /// --batch processes each image as a separate inference run.
+    #[arg(long, num_args = 1..)]
+    batch: Vec<String>,
 
     /// Path to video file. Mutually exclusive with --image.
     #[arg(long)]
@@ -338,80 +353,6 @@ fn load_image(path: &str, device: &Device, dtype: DType) -> Result<(Tensor, Tens
     Ok((pixel_values, grid_thw))
 }
 
-/// Load and preprocess multiple images for PaddleOCR-VL.
-///
-/// Returns separate pixel_values tensors and grid_thw tensors for each image.
-/// This allows handling images of different resolutions.
-fn load_images_separate(
-    paths: &[String],
-    device: &Device,
-    dtype: DType,
-) -> Result<(Vec<Tensor>, Vec<Tensor>)> {
-    let patch_size = 14;
-    let spatial_merge = 2;
-    let factor = patch_size * spatial_merge; // 28
-    let min_pixels = 147384; // from preprocessor_config.json
-    let max_pixels = 2822400; // from preprocessor_config.json
-
-    let mut all_pixels = Vec::new();
-    let mut all_grids = Vec::new();
-
-    for (i, path) in paths.iter().enumerate() {
-        let img = image::ImageReader::open(path)?
-            .decode()
-            .map_err(|e| E::msg(format!("Failed to decode image {}: {}", path, e)))?;
-
-        let img = img.to_rgb8();
-        let (width, height) = (img.width() as usize, img.height() as usize);
-
-        // Use smart_resize to match PyTorch's preprocessing
-        let (new_height, new_width) = smart_resize(height, width, factor, min_pixels, max_pixels)?;
-
-        let resized = image::imageops::resize(
-            &img,
-            new_width as u32,
-            new_height as u32,
-            image::imageops::FilterType::CatmullRom,
-        );
-
-        // Normalize to [-1, 1] range
-        let mut normalized = vec![0f32; 3 * new_height * new_width];
-        for c in 0..3 {
-            for y in 0..new_height {
-                for x in 0..new_width {
-                    let pixel = resized.get_pixel(x as u32, y as u32);
-                    let idx = c * new_height * new_width + y * new_width + x;
-                    normalized[idx] = pixel[c] as f32 / 255.0 * 2.0 - 1.0;
-                }
-            }
-        }
-
-        // Create tensor: (1, 3, H, W)
-        let pixel_values =
-            Tensor::from_vec(normalized, (1, 3, new_height, new_width), device)?.to_dtype(dtype)?;
-        all_pixels.push(pixel_values);
-
-        // Grid THW as single-row tensor
-        let h_patches = (new_height / patch_size) as u32;
-        let w_patches = (new_width / patch_size) as u32;
-        let grid_thw = Tensor::new(&[[1u32, h_patches, w_patches]], device)?;
-        all_grids.push(grid_thw);
-
-        println!(
-            "Image {}: {}x{} -> {}x{} ({} x {} patches)",
-            i + 1,
-            width,
-            height,
-            new_width,
-            new_height,
-            h_patches,
-            w_patches
-        );
-    }
-
-    Ok((all_pixels, all_grids))
-}
-
 /// Load and preprocess video frames for PaddleOCR-VL.
 ///
 /// Extracts frames from a video file at the specified fps and preprocesses them
@@ -471,7 +412,7 @@ fn load_video_frames(
     // Find all extracted frames
     let mut frame_paths: Vec<_> = std::fs::read_dir(&temp_dir)?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "png"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
         .map(|e| e.path())
         .collect();
     frame_paths.sort();
@@ -642,67 +583,6 @@ fn build_input_tokens(
     Ok(tensor)
 }
 
-/// Build input tokens for multi-image processing.
-///
-/// Format: <BOS>User: <IMG_START><IMG>×N1<IMG_END> <IMG_START><IMG>×N2<IMG_END> ... [task]\nAssistant:
-///
-/// Each image gets its own <IMAGE_START>...<IMAGE_END> block with the correct
-/// number of placeholder tokens for that image's resolution.
-fn build_multi_image_input_tokens(
-    tokenizer: &Tokenizer,
-    task: Task,
-    image_token_counts: &[usize], // Number of tokens for each image
-    image_token_id: u32,
-    vision_start_token_id: u32,
-    vision_end_token_id: u32,
-    device: &Device,
-) -> Result<Tensor> {
-    // Get BOS token
-    let bos_token_id = tokenizer.token_to_id("<|begin_of_sentence|>").unwrap_or(1);
-
-    // Build prompt parts
-    let user_prefix = "User: ";
-    let task_text = task.prompt();
-    let assistant_prefix = "\nAssistant: ";
-
-    // Tokenize parts
-    let user_encoding = tokenizer
-        .encode(user_prefix, false)
-        .map_err(|e| E::msg(format!("Tokenization error: {}", e)))?;
-    let task_encoding = tokenizer
-        .encode(task_text, false)
-        .map_err(|e| E::msg(format!("Tokenization error: {}", e)))?;
-    let assistant_encoding = tokenizer
-        .encode(assistant_prefix, false)
-        .map_err(|e| E::msg(format!("Tokenization error: {}", e)))?;
-
-    // Build full input:
-    // <BOS> + "User: " + [<IMAGE_START> + <IMAGE_PLACEHOLDER>... + <IMAGE_END>] × num_images + task + "\nAssistant: "
-    let mut input_ids: Vec<u32> = vec![bos_token_id];
-    input_ids.extend(user_encoding.get_ids());
-
-    // Add each image block
-    for (i, &num_tokens) in image_token_counts.iter().enumerate() {
-        input_ids.push(vision_start_token_id);
-        input_ids.extend(vec![image_token_id; num_tokens]);
-        input_ids.push(vision_end_token_id);
-
-        // Add space between images (but not after the last one)
-        if i < image_token_counts.len() - 1 {
-            // Tokenize a space
-            if let Ok(space_enc) = tokenizer.encode(" ", false) {
-                input_ids.extend(space_enc.get_ids());
-            }
-        }
-    }
-
-    input_ids.extend(task_encoding.get_ids());
-    input_ids.extend(assistant_encoding.get_ids());
-
-    let tensor = Tensor::new(input_ids.as_slice(), device)?.unsqueeze(0)?;
-    Ok(tensor)
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -742,7 +622,7 @@ fn main() -> Result<()> {
     };
 
     println!("Loading weights from {:?}...", model_file);
-    let vb = if model_file.extension().map_or(false, |ext| ext == "bin") {
+    let vb = if model_file.extension().is_some_and(|ext| ext == "bin") {
         VarBuilder::from_pth(&model_file, dtype, &device)?
     } else {
         unsafe { VarBuilder::from_mmaped_safetensors(&[&model_file], dtype, &device)? }
@@ -751,13 +631,21 @@ fn main() -> Result<()> {
     let mut model = PaddleOCRVLModel::new(&config, vb)?;
     println!("Model loaded successfully");
 
-    // Validate input: either image(s) or video, but not both
+    // Validate input: either image(s), batch, or video - but not multiple
     let is_video = args.video.is_some();
-    if is_video && !args.image.is_empty() {
-        return Err(E::msg("Cannot specify both --image and --video"));
+    let is_batch = !args.batch.is_empty();
+    let is_image = !args.image.is_empty();
+
+    let input_count = is_video as u8 + is_batch as u8 + is_image as u8;
+    if input_count == 0 {
+        return Err(E::msg(
+            "Either --image, --batch, or --video must be specified",
+        ));
     }
-    if !is_video && args.image.is_empty() {
-        return Err(E::msg("Either --image or --video must be specified"));
+    if input_count > 1 {
+        return Err(E::msg(
+            "Cannot combine --image, --batch, and --video. Use only one input mode.",
+        ));
     }
 
     // Handle video input separately
@@ -807,7 +695,7 @@ fn main() -> Result<()> {
             // Find all extracted frames
             let mut frame_paths: Vec<_> = std::fs::read_dir(&temp_dir)?
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map_or(false, |ext| ext == "png"))
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "png"))
                 .map(|e| e.path())
                 .collect();
             frame_paths.sort();
@@ -1019,95 +907,243 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Image processing path
-    let is_multi_image = args.image.len() > 1;
+    // Handle batch mode - process multiple images sequentially
+    if is_batch {
+        println!(
+            "Batch mode: processing {} images sequentially...",
+            args.batch.len()
+        );
+        println!("{:=<60}\n", "");
 
-    // Load and preprocess image(s)
-    // For multi-image, we use separate tensors to handle different resolutions
-    let (pixel_values, grid_thw, pixel_values_list, grid_thw_list) = if is_multi_image {
-        println!("Processing {} images...", args.image.len());
-        let (pv_list, gt_list) = load_images_separate(&args.image, &device, dtype)?;
-        let pv = pv_list[0].clone();
-        let gt = gt_list[0].clone();
-        (pv, gt, Some(pv_list), Some(gt_list))
-    } else {
-        println!("Processing image: {}", args.image[0]);
-        let (pv, gt) = load_image(&args.image[0], &device, dtype)?;
-        (pv, gt, None, None)
-    };
+        // Get EOS token ID
+        let eos_token_id = tokenizer
+            .token_to_id("</s>")
+            .or_else(|| tokenizer.token_to_id("<|end_of_sentence|>"))
+            .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
+            .unwrap_or(2);
 
-    // Calculate number of image tokens after spatial merge
-    let spatial_merge = config.vision_config.spatial_merge_size;
+        let spatial_merge = config.vision_config.spatial_merge_size;
+        let total_start = std::time::Instant::now();
+        let mut total_tokens = 0usize;
+        let mut successful = 0usize;
+        let mut failed = 0usize;
 
-    // Calculate token counts for each image
-    let image_token_counts: Vec<usize> = if let Some(ref gt_list) = grid_thw_list {
-        // Multi-image: calculate from separate grid tensors
-        gt_list
-            .iter()
-            .map(|gt| {
-                let grid_vec: Vec<Vec<u32>> = gt.to_vec2().unwrap();
+        for (idx, image_path) in args.batch.iter().enumerate() {
+            println!(
+                "[{}/{}] Processing: {}",
+                idx + 1,
+                args.batch.len(),
+                image_path
+            );
+
+            // Load and preprocess this image
+            let result = (|| -> Result<(String, usize, std::time::Duration)> {
+                let (pixel_values, grid_thw) = load_image(image_path, &device, dtype)?;
+
+                // Calculate number of image tokens after spatial merge
+                let grid_vec = grid_thw.to_vec2::<u32>()?;
                 let g = &grid_vec[0];
                 let h_patches = g[1] as usize;
                 let w_patches = g[2] as usize;
-                (h_patches / spatial_merge) * (w_patches / spatial_merge)
-            })
-            .collect()
-    } else {
-        // Single image
-        let grid_vec = grid_thw.to_vec2::<u32>()?;
-        grid_vec
-            .iter()
-            .map(|g| {
-                let h_patches = g[1] as usize;
-                let w_patches = g[2] as usize;
-                (h_patches / spatial_merge) * (w_patches / spatial_merge)
-            })
-            .collect()
-    };
+                let num_image_tokens = (h_patches / spatial_merge) * (w_patches / spatial_merge);
 
-    let total_image_tokens: usize = image_token_counts.iter().sum();
+                // Build input tokens for this single image
+                let input_ids = build_input_tokens(
+                    &tokenizer,
+                    args.task,
+                    num_image_tokens,
+                    config.image_token_id,
+                    config.vision_start_token_id,
+                    config.vision_end_token_id,
+                    &device,
+                )?;
 
-    if is_multi_image {
+                // Clear KV cache for fresh generation
+                model.clear_kv_cache();
+
+                // Generate output
+                let start = std::time::Instant::now();
+                let generated_tokens = model.generate(
+                    &input_ids,
+                    &pixel_values,
+                    &grid_thw,
+                    args.max_length,
+                    eos_token_id,
+                )?;
+                let elapsed = start.elapsed();
+
+                // Decode tokens
+                let output_text = tokenizer
+                    .decode(&generated_tokens, true)
+                    .map_err(|e| E::msg(format!("Decoding error: {}", e)))?;
+
+                Ok((output_text.trim().to_string(), generated_tokens.len(), elapsed))
+            })();
+
+            match result {
+                Ok((text, tokens, elapsed)) => {
+                    println!("  └─ {} tokens in {:.2}s", tokens, elapsed.as_secs_f32());
+                    println!("{:-<60}", "");
+                    println!("{}", text);
+                    println!("{:-<60}\n", "");
+                    total_tokens += tokens;
+                    successful += 1;
+                }
+                Err(e) => {
+                    println!("  └─ Error: {}", e);
+                    println!();
+                    failed += 1;
+                }
+            }
+        }
+
+        let total_elapsed = total_start.elapsed();
+        println!("{:=<60}", "");
+        println!("Batch Summary:");
+        println!("  Images processed: {} successful, {} failed", successful, failed);
         println!(
-            "Image tokens: {:?} = {} total (after {}x{} merge)",
-            image_token_counts, total_image_tokens, spatial_merge, spatial_merge
+            "  Total tokens: {} in {:.2}s ({:.1} tokens/sec)",
+            total_tokens,
+            total_elapsed.as_secs_f32(),
+            total_tokens as f32 / total_elapsed.as_secs_f32()
         );
-    } else {
-        println!(
-            "Image tokens: {} (after {}x{} merge)",
-            total_image_tokens, spatial_merge, spatial_merge
-        );
+        println!("{:=<60}", "");
+
+        return Ok(());
     }
 
-    // Build input tokens
-    let input_ids = if is_multi_image {
-        build_multi_image_input_tokens(
-            &tokenizer,
-            args.task,
-            &image_token_counts,
-            config.image_token_id,
-            config.vision_start_token_id,
-            config.vision_end_token_id,
-            &device,
-        )?
-    } else {
-        build_input_tokens(
-            &tokenizer,
-            args.task,
-            image_token_counts[0],
-            config.image_token_id,
-            config.vision_start_token_id,
-            config.vision_end_token_id,
-            &device,
-        )?
-    };
-    println!("Input shape: {:?}", input_ids.dims());
+    // Image processing path
+    let is_multi_image = args.image.len() > 1;
 
     // Get EOS token ID
     let eos_token_id = tokenizer
         .token_to_id("</s>")
+        .or_else(|| tokenizer.token_to_id("<|end_of_sentence|>"))
         .or_else(|| tokenizer.token_to_id("<|endoftext|>"))
         .unwrap_or(2);
+
+    let spatial_merge = config.vision_config.spatial_merge_size;
+
+    // Multi-image: Process each image sequentially (like official PaddleOCR-VL)
+    // The model's attention is optimized for single-image input, so we process
+    // each image independently and concatenate the text outputs.
+    if is_multi_image {
+        println!(
+            "Multi-page mode: Processing {} images sequentially...",
+            args.image.len()
+        );
+        println!("{:=<60}\n", "");
+
+        let total_start = std::time::Instant::now();
+        let mut all_results: Vec<String> = Vec::new();
+        let mut total_tokens = 0usize;
+
+        for (idx, image_path) in args.image.iter().enumerate() {
+            println!(
+                "[Page {}/{}] Processing: {}",
+                idx + 1,
+                args.image.len(),
+                image_path
+            );
+
+            // Load and preprocess this image
+            let (pixel_values, grid_thw) = load_image(image_path, &device, dtype)?;
+
+            // Calculate number of image tokens after spatial merge
+            let grid_vec = grid_thw.to_vec2::<u32>()?;
+            let g = &grid_vec[0];
+            let h_patches = g[1] as usize;
+            let w_patches = g[2] as usize;
+            let num_image_tokens = (h_patches / spatial_merge) * (w_patches / spatial_merge);
+
+            // Build input tokens for this single image
+            let input_ids = build_input_tokens(
+                &tokenizer,
+                args.task,
+                num_image_tokens,
+                config.image_token_id,
+                config.vision_start_token_id,
+                config.vision_end_token_id,
+                &device,
+            )?;
+
+            // Clear KV cache for fresh generation
+            model.clear_kv_cache();
+
+            // Generate output
+            let start = std::time::Instant::now();
+            let generated_tokens = model.generate(
+                &input_ids,
+                &pixel_values,
+                &grid_thw,
+                args.max_length,
+                eos_token_id,
+            )?;
+            let elapsed = start.elapsed();
+
+            // Decode tokens
+            let output_text = tokenizer
+                .decode(&generated_tokens, true)
+                .map_err(|e| E::msg(format!("Decoding error: {}", e)))?;
+
+            let text = output_text.trim().to_string();
+            println!("  └─ {} tokens in {:.2}s", generated_tokens.len(), elapsed.as_secs_f32());
+            println!("{:-<60}", "");
+            println!("{}", text);
+            println!("{:-<60}\n", "");
+
+            all_results.push(text);
+            total_tokens += generated_tokens.len();
+        }
+
+        let total_elapsed = total_start.elapsed();
+
+        // Print combined output
+        println!("{:=<60}", "");
+        println!("Combined {} Output ({} pages):", args.task.prompt(), args.image.len());
+        println!("{:=<60}", "");
+        for (idx, result) in all_results.iter().enumerate() {
+            if idx > 0 {
+                println!("\n--- Page {} ---\n", idx + 1);
+            }
+            println!("{}", result);
+        }
+        println!("{:=<60}", "");
+        println!(
+            "Total: {} tokens in {:.2}s ({:.1} tokens/sec)",
+            total_tokens,
+            total_elapsed.as_secs_f32(),
+            total_tokens as f32 / total_elapsed.as_secs_f32()
+        );
+
+        return Ok(());
+    }
+
+    // Single image processing path
+    println!("Processing image: {}", args.image[0]);
+    let (pixel_values, grid_thw) = load_image(&args.image[0], &device, dtype)?;
+
+    // Calculate number of image tokens after spatial merge
+    let grid_vec = grid_thw.to_vec2::<u32>()?;
+    let g = &grid_vec[0];
+    let num_image_tokens = (g[1] as usize / spatial_merge) * (g[2] as usize / spatial_merge);
+
+    println!(
+        "Image tokens: {} (after {}x{} merge)",
+        num_image_tokens, spatial_merge, spatial_merge
+    );
+
+    // Build input tokens
+    let input_ids = build_input_tokens(
+        &tokenizer,
+        args.task,
+        num_image_tokens,
+        config.image_token_id,
+        config.vision_start_token_id,
+        config.vision_end_token_id,
+        &device,
+    )?;
+    println!("Input shape: {:?}", input_ids.dims());
 
     // Generate output
     println!(
@@ -1117,26 +1153,13 @@ fn main() -> Result<()> {
     );
     let start = std::time::Instant::now();
 
-    let generated_tokens = if is_multi_image {
-        // Use separate image processing for variable resolutions
-        let pv_list = pixel_values_list.as_ref().unwrap();
-        let gt_list = grid_thw_list.as_ref().unwrap();
-        model.generate_multi_image_separate(
-            &input_ids,
-            pv_list,
-            gt_list,
-            args.max_length,
-            eos_token_id,
-        )?
-    } else {
-        model.generate(
-            &input_ids,
-            &pixel_values,
-            &grid_thw,
-            args.max_length,
-            eos_token_id,
-        )?
-    };
+    let generated_tokens = model.generate(
+        &input_ids,
+        &pixel_values,
+        &grid_thw,
+        args.max_length,
+        eos_token_id,
+    )?;
 
     let elapsed = start.elapsed();
 

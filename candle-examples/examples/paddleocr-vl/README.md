@@ -67,6 +67,29 @@ cargo run --example paddleocr-vl --release -- \
     --task chart
 ```
 
+### Multi-Image (combined output)
+
+Multi-Image OCR works with any task and uses `--task ocr` by default.
+
+```bash
+# Process multiple images with combined output
+cargo run --example paddleocr-vl --release -- \
+    --image candle-examples/examples/paddleocr-vl/test_ocr.png \
+    --image candle-examples/examples/paddleocr-vl/test_ocr_page2.png
+```
+
+### Mutli-Image (batch)
+
+```bash
+# Process chosen images sequentially with distinct output
+cargo run --example paddleocr-vl --release -- \
+    --batch candle-examples/examples/paddleocr-vl/test_ocr.png candle-examples/examples/paddleocr-vl/test_ocr_page2.png
+
+# With shell glob expansion
+cargo run --example paddleocr-vl --release -- \
+    --batch candle-examples/examples/paddleocr-vl/test_ocr*.png
+```
+
 ### Video OCR
 
 ```bash
@@ -76,12 +99,4 @@ cargo run --example paddleocr-vl --release -- \
     --fps 0.6 \
     --max-frames 64 \
     --max-length 2048
-```
-
-### Multi-Image
-
-```bash
-cargo run --example paddleocr-vl --release -- \
-    --image path/to/contract_page1.png \
-    --image path/to/contract_page2.png
 ```
