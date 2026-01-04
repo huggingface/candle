@@ -7,7 +7,7 @@ The Swin implementation in candle-transformers also serves as the vision encoder
 ## Running the example
 
 ```bash
-cargo run --example swin --release -- --image strawberry.jpg
+cargo run --example swin --release -- --image candle-examples/examples/swin/strawberry.jpg
 ```
 
 ### Command-line options
