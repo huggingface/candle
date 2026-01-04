@@ -165,3 +165,6 @@ required-features = ["buildtime-download"]
 [[example]]
 name = "cosyvoice3"
 required-features = ["symphonia"]
+
+# Note: wetext-rs is optional for text normalization
+# Add wetext-rs = "0.1.2" to dependencies if text normalization is needed

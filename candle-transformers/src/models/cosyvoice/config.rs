@@ -178,7 +178,7 @@ impl Default for CFMConfig {
         Self {
             sigma_min: 1e-6,
             t_scheduler: "cosine".to_string(),
-            inference_cfg_rate: 0.7,
+            inference_cfg_rate: 0.0, // Temporarily disabled for debugging
             n_timesteps: 10,
         }
     }

@@ -89,11 +89,53 @@ fn upsample_nearest1d_manual(x: &Tensor, scale_factor: usize) -> Result<Tensor> 
     x.index_select(&indices, 2)
 }
 
+/// Reflection padding for 1D tensors
+/// Input: [B, C, T], pads `left` elements on the left and `right` elements on the right
+/// using reflection (mirrors the edge values)
+///
+/// For example, with input [1, 2, 3, 4] and left=1, right=0:
+/// Output: [2, 1, 2, 3, 4] (reflects the second element to the left)
+fn reflection_pad_1d(x: &Tensor, left: usize, right: usize) -> Result<Tensor> {
+    if left == 0 && right == 0 {
+        return Ok(x.clone());
+    }
+
+    let (_batch, _channels, time) = x.dims3()?;
+    
+    // Build indices for reflection padding
+    // Left padding: reflect from position 1, 2, ... (not 0)
+    // Right padding: reflect from position time-2, time-3, ...
+    let mut indices: Vec<u32> = Vec::with_capacity(left + time + right);
+    
+    // Left reflection: indices go left-1, left-2, ..., 0 -> positions 1, 2, ..., left
+    for i in 0..left {
+        let idx = left - i; // 1, 2, ..., left
+        indices.push(idx.min(time - 1) as u32);
+    }
+    
+    // Original content
+    for i in 0..time {
+        indices.push(i as u32);
+    }
+    
+    // Right reflection: positions time-2, time-3, ...
+    for i in 0..right {
+        let idx = time.saturating_sub(2 + i);
+        indices.push(idx as u32);
+    }
+    
+    let indices = Tensor::from_vec(indices, left + time + right, x.device())?;
+    x.index_select(&indices, 2)
+}
+
 /// ResBlock with Snake activation
+/// 
+/// For CausalHiFTGenerator, uses CausalConv1d with causal_type='left' for causal inference.
+/// The causal padding ensures the output only depends on past inputs.
 #[derive(Debug)]
 pub struct ResBlock {
-    convs1: Vec<Conv1d>,
-    convs2: Vec<Conv1d>,
+    convs1: Vec<CausalConv1d>,
+    convs2: Vec<CausalConv1d>,
     activations1: Vec<Snake>,
     activations2: Vec<Snake>,
 }
@@ -111,37 +153,24 @@ impl ResBlock {
         let mut activations2 = Vec::new();
 
         for (i, &dilation) in dilations.iter().enumerate() {
-            // Calculate padding to maintain sequence length
-            let padding = (kernel_size - 1) * dilation / 2;
-
-            let conv1_config = Conv1dConfig {
-                padding,
-                stride: 1,
-                dilation,
-                groups: 1,
-                cudnn_fwd_algo: None,
-            };
-            let conv1 = candle_nn::conv1d(
+            // Use CausalConv1d with causal_type='left' (matching Python implementation)
+            let conv1 = CausalConv1d::new(
                 channels,
                 channels,
                 kernel_size,
-                conv1_config,
+                dilation,
+                CausalType::Left,
                 vb.pp(format!("convs1.{}", i)),
             )?;
             convs1.push(conv1);
 
-            let conv2_config = Conv1dConfig {
-                padding: (kernel_size - 1) / 2,
-                stride: 1,
-                dilation: 1,
-                groups: 1,
-                cudnn_fwd_algo: None,
-            };
-            let conv2 = candle_nn::conv1d(
+            // convs2 always uses dilation=1
+            let conv2 = CausalConv1d::new(
                 channels,
                 channels,
                 kernel_size,
-                conv2_config,
+                1, // dilation=1 for convs2
+                CausalType::Left,
                 vb.pp(format!("convs2.{}", i)),
             )?;
             convs2.push(conv2);
@@ -188,9 +217,10 @@ pub struct CausalHiFTGenerator {
     conv_pre: CausalConv1d,
     ups: Vec<CausalConv1dUpsample>,
     source_downs: Vec<Conv1d>,
+    source_down_causal_paddings: Vec<usize>,
     source_resblocks: Vec<ResBlock>,
     resblocks: Vec<Vec<ResBlock>>,
-    conv_post: Conv1d,
+    conv_post: CausalConv1d,
     stft: HiFTSTFT,
     istft: HiFTiSTFT,
     lrelu: LeakyReLU,
@@ -200,12 +230,18 @@ pub struct CausalHiFTGenerator {
 
 impl CausalHiFTGenerator {
     pub fn new(config: HiFTConfig, vb: VarBuilder) -> Result<Self> {
-        // Calculate total upsampling ratio
-        let upsample_scale: usize = config.upsample_rates.iter().product();
+        // Calculate total upsampling ratio (including iSTFT hop length)
+        let upsample_scale: usize =
+            config.upsample_rates.iter().product::<usize>() * config.istft_hop_len;
 
         // F0 Predictor
-        // Note: force_cpu=false because weights are on the same device as VarBuilder.
-        // If force_cpu=true, input would be moved to CPU but weights stay on Metal, causing mismatch.
+        // NOTE: The official Python implementation moves F0 predictor to CPU for precision:
+        // "NOTE f0_predictor precision is crucial for causal inference, move self.f0_predictor to cpu if necessary"
+        // See: refs/CosyVoice/cosyvoice/hifigan/generator.py line 715-717
+        //
+        // However, in Candle, moving weights to a different device after loading is complex.
+        // For now, we keep force_cpu=false but ensure F32 precision is used in the forward pass.
+        // TODO: Implement proper CPU fallback by loading F0 predictor weights on CPU device.
         let f0_predictor =
             CausalConvRNNF0Predictor::new(config.in_channels, 512, false, vb.pp("f0_predictor"))?;
 
@@ -266,6 +302,7 @@ impl CausalHiFTGenerator {
         // Then reversed for the loop
         let source_input_ch = (config.istft_n_fft / 2 + 1) * 2; // 18 for n_fft=16
         let mut source_downs = Vec::new();
+        let mut source_down_causal_paddings = Vec::new();
         let mut source_resblocks_vec = Vec::new();
 
         // Calculate downsample_cum_rates following Python logic
@@ -293,15 +330,17 @@ impl CausalHiFTGenerator {
             let out_ch = channel_sizes[i + 1];
             let u = downsample_cum_rates[i];
 
-            // Source downsampling: kernel_size = u * 2 if u != 1, else 1
-            let (kernel_size, stride, padding) = if u == 1 {
+            // Source downsampling with causal padding
+            // For u == 1: CausalConv1d with kernel_size=1
+            // For u != 1: CausalConv1dDownSample with kernel_size=u*2, stride=u, causal_padding=stride-1
+            let (kernel_size, stride, causal_padding) = if u == 1 {
                 (1, 1, 0)
             } else {
-                (u * 2, u, u / 2)
+                (u * 2, u, u - 1) // causal_padding = stride - 1
             };
 
             let down_config = Conv1dConfig {
-                padding,
+                padding: 0, // No symmetric padding, we'll do causal padding manually
                 stride,
                 dilation: 1,
                 groups: 1,
@@ -315,6 +354,7 @@ impl CausalHiFTGenerator {
                 vb.pp(format!("source_downs.{}", i)),
             )?;
             source_downs.push(source_down);
+            source_down_causal_paddings.push(causal_padding);
 
             // Source ResBlock - use config parameters
             if i < config.source_resblock_kernel_sizes.len() {
@@ -353,21 +393,15 @@ impl CausalHiFTGenerator {
             resblocks.push(stage_resblocks);
         }
 
-        // Conv Post
+        // Conv Post - CausalConv1d with causal_type='left'
         let final_ch = *channel_sizes.last().unwrap();
         let post_out_ch = (config.istft_n_fft / 2 + 1) * 2; // 18
-        let conv_post_config = Conv1dConfig {
-            padding: 3,
-            stride: 1,
-            dilation: 1,
-            groups: 1,
-            cudnn_fwd_algo: None,
-        };
-        let conv_post = candle_nn::conv1d(
+        let conv_post = CausalConv1d::new(
             final_ch,
             post_out_ch,
-            7,
-            conv_post_config,
+            7, // kernel_size
+            1, // dilation
+            CausalType::Left,
             vb.pp("conv_post"),
         )?;
 
@@ -384,6 +418,7 @@ impl CausalHiFTGenerator {
             conv_pre,
             ups,
             source_downs,
+            source_down_causal_paddings,
             source_resblocks: source_resblocks_vec,
             resblocks,
             conv_post,
@@ -414,7 +449,8 @@ impl CausalHiFTGenerator {
         let f0 = f0.to_device(target_device)?.to_dtype(target_dtype)?;
 
         // 2. F0 upsample to audio sample rate
-        let upsample_scale: usize = self.config.upsample_rates.iter().product();
+        let upsample_scale: usize =
+            self.config.upsample_rates.iter().product::<usize>() * self.config.istft_hop_len;
         let f0_up = self.upsample_f0(&f0, upsample_scale)?; // [B, T*scale, 1]
 
         // 3. Source signal generation
@@ -439,8 +475,21 @@ impl CausalHiFTGenerator {
             x = self.lrelu.forward(&x)?;
             x = self.ups[i].forward(&x)?;
 
-            // Downsample source signal
-            let si = self.source_downs[i].forward(&s_stft)?;
+            // Apply reflection padding at the last upsample stage
+            // Following Python: if i == self.num_upsamples - 1: x = self.reflection_pad(x)
+            // ReflectionPad1d((1, 0)) pads 1 element on the left using reflection
+            if i == self.ups.len() - 1 {
+                x = reflection_pad_1d(&x, 1, 0)?;
+            }
+
+            // Downsample source signal with causal padding
+            // Apply left padding before conv (causal_padding = stride - 1 for downsample)
+            let s_stft_padded = if self.source_down_causal_paddings[i] > 0 {
+                s_stft.pad_with_zeros(2, self.source_down_causal_paddings[i], 0)?
+            } else {
+                s_stft.clone()
+            };
+            let si = self.source_downs[i].forward(&s_stft_padded)?;
             // Apply source_resblock only if it exists (last layer doesn't have one)
             let si = if i < self.source_resblocks.len() {
                 self.source_resblocks[i].forward(&si)?
@@ -469,12 +518,19 @@ impl CausalHiFTGenerator {
         }
 
         // 7. Post-processing
-        x = self.lrelu.forward(&x)?;
+        // NOTE: Python uses default leaky_relu slope (0.01) here, not self.lrelu_slope (0.1)
+        // This is different from the loop where self.lrelu_slope is used
+        let lrelu_post = LeakyReLU::new(0.01);
+        x = lrelu_post.forward(&x)?;
         x = self.conv_post.forward(&x)?;
 
         // 8. Separate magnitude and phase
+        // Clip the log-magnitude to prevent exp() explosion
+        // Python clips magnitude after exp() to 100, which corresponds to log(100) ≈ 4.6
+        // We clip to a slightly higher value to allow some headroom
         let n_fft_half = self.config.istft_n_fft / 2 + 1;
-        let magnitude = x.narrow(1, 0, n_fft_half)?.exp()?;
+        let log_magnitude = x.narrow(1, 0, n_fft_half)?.clamp(-10.0, 5.0)?;
+        let magnitude = log_magnitude.exp()?;
         let phase = x.narrow(1, n_fft_half, n_fft_half)?;
         // Note: In original implementation phase goes through sin, simplified here
         let phase = phase.sin()?;
@@ -484,6 +540,249 @@ impl CausalHiFTGenerator {
 
         // 10. Clip
         waveform.clamp(-0.99, 0.99)
+    }
+
+    /// Debug inference: returns intermediate outputs for comparison
+    ///
+    /// Returns: (f0, f0_up, source, waveform)
+    #[allow(dead_code)]
+    pub fn inference_debug(
+        &self,
+        mel: &Tensor,
+        finalize: bool,
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor)> {
+        let target_device = &self.device;
+        let target_dtype = self.dtype;
+
+        let mel = mel.to_device(target_device)?.to_dtype(target_dtype)?;
+
+        // 1. F0 prediction
+        let f0 = self.f0_predictor.forward(&mel, finalize)?;
+        let f0 = f0.to_device(target_device)?.to_dtype(target_dtype)?;
+
+        // 2. F0 upsample
+        let upsample_scale: usize =
+            self.config.upsample_rates.iter().product::<usize>() * self.config.istft_hop_len;
+        let f0_up = self.upsample_f0(&f0, upsample_scale)?;
+
+        // 3. Source signal generation
+        let (source, _noise, _uv) = self.m_source.forward(&f0_up)?;
+
+        // Run full inference for waveform
+        let waveform = self.inference(&mel, finalize)?;
+
+        Ok((f0, f0_up, source, waveform))
+    }
+
+    /// Detailed debug inference: returns all intermediate outputs
+    ///
+    /// Returns a vector of (name, tensor) pairs for each stage
+    #[allow(dead_code)]
+    pub fn inference_debug_detailed(
+        &self,
+        mel: &Tensor,
+        finalize: bool,
+    ) -> Result<Vec<(String, Tensor)>> {
+        let target_device = &self.device;
+        let target_dtype = self.dtype;
+        let mut outputs = Vec::new();
+
+        let mel = mel.to_device(target_device)?.to_dtype(target_dtype)?;
+
+        // 1. F0 prediction
+        let f0 = self.f0_predictor.forward(&mel, finalize)?;
+        let f0 = f0.to_device(target_device)?.to_dtype(target_dtype)?;
+        outputs.push(("f0".to_string(), f0.clone()));
+
+        // 2. F0 upsample
+        let upsample_scale: usize =
+            self.config.upsample_rates.iter().product::<usize>() * self.config.istft_hop_len;
+        let f0_up = self.upsample_f0(&f0, upsample_scale)?;
+        outputs.push(("f0_up".to_string(), f0_up.clone()));
+
+        // 3. Source signal generation
+        let (source, _noise, _uv) = self.m_source.forward(&f0_up)?;
+        let source_t = source.transpose(1, 2)?;
+        let source_squeezed = source_t.squeeze(1)?;
+        outputs.push(("source".to_string(), source.clone()));
+
+        // 4. STFT source signal
+        let (s_stft_real, s_stft_imag) = self.stft.forward(&source_squeezed)?;
+        let s_stft = Tensor::cat(&[&s_stft_real, &s_stft_imag], 1)?;
+        outputs.push(("s_stft".to_string(), s_stft.clone()));
+
+        // 5. Mel encoding
+        let mut x = self.conv_pre.forward(&mel)?;
+        outputs.push(("conv_pre".to_string(), x.clone()));
+
+        // 6. Upsample + source fusion + ResBlocks
+        for i in 0..self.ups.len() {
+            x = self.lrelu.forward(&x)?;
+            x = self.ups[i].forward(&x)?;
+
+            // Apply reflection padding at the last upsample stage
+            if i == self.ups.len() - 1 {
+                x = reflection_pad_1d(&x, 1, 0)?;
+            }
+
+            // Downsample source signal with causal padding
+            let s_stft_padded = if self.source_down_causal_paddings[i] > 0 {
+                s_stft.pad_with_zeros(2, self.source_down_causal_paddings[i], 0)?
+            } else {
+                s_stft.clone()
+            };
+            let si = self.source_downs[i].forward(&s_stft_padded)?;
+            let si = if i < self.source_resblocks.len() {
+                self.source_resblocks[i].forward(&si)?
+            } else {
+                si
+            };
+
+            // Adjust sizes and add
+            let x_len = x.dim(2)?;
+            let si_len = si.dim(2)?;
+            let min_len = x_len.min(si_len);
+            let x_trimmed = x.narrow(2, 0, min_len)?;
+            let si_trimmed = si.narrow(2, 0, min_len)?;
+            x = (&x_trimmed + &si_trimmed)?;
+
+            // ResBlocks
+            let mut xs: Option<Tensor> = None;
+            for resblock in &self.resblocks[i] {
+                let xj = resblock.forward(&x)?;
+                xs = Some(match xs {
+                    None => xj,
+                    Some(acc) => (acc + xj)?,
+                });
+            }
+            x = (xs.unwrap() / self.resblocks[i].len() as f64)?;
+            outputs.push((format!("stage_{}", i), x.clone()));
+        }
+
+        // 7. Post-processing
+        // NOTE: Python uses default leaky_relu slope (0.01) here, not self.lrelu_slope (0.1)
+        let lrelu_post = LeakyReLU::new(0.01);
+        x = lrelu_post.forward(&x)?;
+        outputs.push(("after_lrelu".to_string(), x.clone()));
+        x = self.conv_post.forward(&x)?;
+        outputs.push(("conv_post".to_string(), x.clone()));
+
+        // 8. Separate magnitude and phase
+        let n_fft_half = self.config.istft_n_fft / 2 + 1;
+        let log_magnitude_raw = x.narrow(1, 0, n_fft_half)?;
+        outputs.push(("log_magnitude_raw".to_string(), log_magnitude_raw.clone()));
+        let log_magnitude = log_magnitude_raw.clamp(-10.0, 5.0)?;
+        let magnitude = log_magnitude.exp()?;
+        let phase_raw = x.narrow(1, n_fft_half, n_fft_half)?;
+        outputs.push(("phase_raw".to_string(), phase_raw.clone()));
+        let phase = phase_raw.sin()?;
+        outputs.push(("magnitude".to_string(), magnitude.clone()));
+        outputs.push(("phase".to_string(), phase.clone()));
+
+        // 9. iSTFT
+        let waveform = self.istft.forward(&magnitude, &phase)?;
+        outputs.push(("waveform_before_clamp".to_string(), waveform.clone()));
+
+        // 10. Clip
+        let waveform = waveform.clamp(-0.99, 0.99)?;
+        outputs.push(("waveform".to_string(), waveform));
+
+        Ok(outputs)
+    }
+
+    /// Debug stage 0 in detail
+    #[allow(dead_code)]
+    pub fn debug_stage_0(&self, mel: &Tensor, finalize: bool) -> Result<()> {
+        let target_device = &self.device;
+        let target_dtype = self.dtype;
+
+        let mel = mel.to_device(target_device)?.to_dtype(target_dtype)?;
+
+        // F0 and source
+        let f0 = self.f0_predictor.forward(&mel, finalize)?;
+        let f0 = f0.to_device(target_device)?.to_dtype(target_dtype)?;
+        let upsample_scale: usize =
+            self.config.upsample_rates.iter().product::<usize>() * self.config.istft_hop_len;
+        let f0_up = self.upsample_f0(&f0, upsample_scale)?;
+        let (source, _noise, _uv) = self.m_source.forward(&f0_up)?;
+        let source_t = source.transpose(1, 2)?;
+        let source_squeezed = source_t.squeeze(1)?;
+        let source_squeezed = source_squeezed.to_device(target_device)?.to_dtype(target_dtype)?;
+
+        // STFT
+        let (s_stft_real, s_stft_imag) = self.stft.forward(&source_squeezed)?;
+        let s_stft = Tensor::cat(&[&s_stft_real, &s_stft_imag], 1)?;
+
+        // Conv pre
+        let x = self.conv_pre.forward(&mel)?;
+        println!("conv_pre: mean={:.6}, max={:.6}", 
+            x.mean_all()?.to_scalar::<f32>()?,
+            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+
+        // Stage 0 detailed
+        let i = 0;
+        let x = self.lrelu.forward(&x)?;
+        println!("after lrelu: mean={:.6}, max={:.6}",
+            x.mean_all()?.to_scalar::<f32>()?,
+            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+
+        let x = self.ups[i].forward(&x)?;
+        println!("after ups[0]: mean={:.6}, max={:.6}, shape={:?}",
+            x.mean_all()?.to_scalar::<f32>()?,
+            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?,
+            x.dims());
+
+        // Source fusion
+        let s_stft_padded = if self.source_down_causal_paddings[i] > 0 {
+            s_stft.pad_with_zeros(2, self.source_down_causal_paddings[i], 0)?
+        } else {
+            s_stft.clone()
+        };
+        let si = self.source_downs[i].forward(&s_stft_padded)?;
+        println!("source_downs[0]: mean={:.6}, max={:.6}, shape={:?}",
+            si.mean_all()?.to_scalar::<f32>()?,
+            si.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?,
+            si.dims());
+
+        let si = if i < self.source_resblocks.len() {
+            self.source_resblocks[i].forward(&si)?
+        } else {
+            si
+        };
+        println!("source_resblocks[0]: mean={:.6}, max={:.6}",
+            si.mean_all()?.to_scalar::<f32>()?,
+            si.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+
+        // Adjust sizes and add
+        let x_len = x.dim(2)?;
+        let si_len = si.dim(2)?;
+        let min_len = x_len.min(si_len);
+        let x_trimmed = x.narrow(2, 0, min_len)?;
+        let si_trimmed = si.narrow(2, 0, min_len)?;
+        let x = (&x_trimmed + &si_trimmed)?;
+        println!("after fusion: mean={:.6}, max={:.6}",
+            x.mean_all()?.to_scalar::<f32>()?,
+            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+
+        // ResBlocks
+        let mut xs: Option<Tensor> = None;
+        for (j, resblock) in self.resblocks[i].iter().enumerate() {
+            let xj = resblock.forward(&x)?;
+            xs = Some(match xs {
+                None => xj.clone(),
+                Some(acc) => (acc + &xj)?,
+            });
+            println!("resblock[{}]: mean={:.6}, max={:.6}",
+                j,
+                xs.as_ref().unwrap().mean_all()?.to_scalar::<f32>()?,
+                xs.as_ref().unwrap().max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+        }
+        let x = (xs.unwrap() / self.resblocks[i].len() as f64)?;
+        println!("stage_0 final: mean={:.6}, max={:.6}",
+            x.mean_all()?.to_scalar::<f32>()?,
+            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+
+        Ok(())
     }
 
     /// F0 upsampling

@@ -10,6 +10,21 @@
 //!     --model-dir /path/to/CosyVoice3-0.5B-2512-Candle \
 //!     --output output.wav
 //! ```
+//!
+//! # Text Normalization
+//!
+//! For better TTS quality, text normalization is recommended. The official Python
+//! implementation uses WeText for this purpose. You can integrate wetext-rs:
+//!
+//! 1. Add to Cargo.toml: `wetext-rs = "0.1.2"`
+//! 2. Use `wetext_rs::Normalizer` to normalize text before tokenization
+//!
+//! Example:
+//! ```rust,ignore
+//! use wetext_rs::Normalizer;
+//! let normalizer = Normalizer::new(false)?; // remove_erhua = false
+//! let normalized_text = normalizer.normalize(text)?;
+//! ```
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;

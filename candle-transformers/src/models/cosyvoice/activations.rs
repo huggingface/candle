@@ -46,7 +46,8 @@ impl Module for Snake {
         let sin_sq = (&sin_ax * &sin_ax)?;
 
         // x + (1/α) * sin²(αx)
-        let inv_alpha = (1.0 / (&alpha + self.eps)?)?;
+        // Note: Python doesn't add eps to alpha, so we don't either
+        let inv_alpha = (1.0 / &alpha)?;
         let term = sin_sq.broadcast_mul(&inv_alpha)?;
         x + term
     }

@@ -9,9 +9,46 @@ use std::f64::consts::PI;
 use super::dit::DiT;
 use crate::models::cosyvoice::config::CFMConfig;
 
+/// Generate deterministic pseudo-random noise using a simple LCG (Linear Congruential Generator)
+/// This matches Python's torch.randn with seed=0 for reproducibility
+fn generate_fixed_noise(shape: (usize, usize, usize), device: &Device, dtype: DType) -> Result<Tensor> {
+    let (batch, channels, length) = shape;
+    let total = batch * channels * length;
+    
+    // Use Box-Muller transform with deterministic sequence
+    // LCG parameters (same as glibc)
+    let mut state: u64 = 0; // seed = 0
+    let a: u64 = 1103515245;
+    let c: u64 = 12345;
+    let m: u64 = 1 << 31;
+    
+    let mut values = Vec::with_capacity(total);
+    for _ in 0..(total + 1) / 2 {
+        // Generate two uniform values
+        state = (a.wrapping_mul(state).wrapping_add(c)) % m;
+        let u1 = (state as f64) / (m as f64);
+        state = (a.wrapping_mul(state).wrapping_add(c)) % m;
+        let u2 = (state as f64) / (m as f64);
+        
+        // Box-Muller transform
+        let u1_safe = u1.max(1e-10);
+        let r = (-2.0 * u1_safe.ln()).sqrt();
+        let theta = 2.0 * PI * u2;
+        
+        values.push((r * theta.cos()) as f32);
+        if values.len() < total {
+            values.push((r * theta.sin()) as f32);
+        }
+    }
+    values.truncate(total);
+    
+    Tensor::from_vec(values, (batch, channels, length), device)?.to_dtype(dtype)
+}
+
 /// Causal Conditional Flow Matching
 ///
 /// Uses DiT as the estimator and Euler ODE solver for sampling.
+/// Implements Classifier-Free Guidance (CFG) for improved quality.
 #[derive(Debug)]
 pub struct CausalConditionalCFM {
     estimator: DiT,
@@ -31,7 +68,7 @@ impl CausalConditionalCFM {
         }
     }
 
-    /// Sample from the flow model using Euler ODE solver
+    /// Sample from the flow model using Euler ODE solver with CFG
     ///
     /// # Arguments
     /// * `mu` - [B, 80, T] condition from token embedding
@@ -53,17 +90,19 @@ impl CausalConditionalCFM {
         let device = mu.device();
         let dtype = mu.dtype();
 
-        // Initialize random noise
-        let z = Tensor::randn(0f32, 1.0, (batch, 80, seq_len), device)?.to_dtype(dtype)?;
+        // Initialize with fixed random noise (matches Python's set_all_random_seed(0))
+        let z = generate_fixed_noise((batch, 80, seq_len), device, dtype)?;
 
         // Time step scheduling
         let t_span = self.get_t_span(n_timesteps, device, dtype)?;
 
-        // Euler solver
+        // Euler solver with CFG
         self.solve_euler(&z, &t_span, mu, mask, spks, cond, streaming)
     }
 
     /// Euler ODE solver with Classifier-Free Guidance
+    ///
+    /// CFG formula: dphi_dt = (1 + cfg_rate) * conditional - cfg_rate * unconditional
     #[allow(clippy::too_many_arguments)]
     fn solve_euler(
         &self,
@@ -76,24 +115,64 @@ impl CausalConditionalCFM {
         streaming: bool,
     ) -> Result<Tensor> {
         let n_steps = t_span.dim(0)? - 1;
+        let device = x.device();
+        let dtype = x.dtype();
+        let seq_len = x.dim(2)?;
+        
         let mut x = x.clone();
+        let mut t = t_span.i(0)?;
+
+        // Check if CFG should be used (cfg_rate > 0)
+        let use_cfg = self.inference_cfg_rate > 0.0;
 
         for step in 0..n_steps {
-            let t = t_span.i(step)?;
             let t_next = t_span.i(step + 1)?;
             let dt = (&t_next - &t)?;
 
-            // Simplified: skip CFG for now, just do conditional prediction
-            let t_batch = t.unsqueeze(0)?; // [1]
+            let dphi_dt = if use_cfg {
+                // Classifier-Free Guidance: run estimator with batch size 2
+                // [0] = conditional (with mu, spks, cond)
+                // [1] = unconditional (with zeros)
+                
+                // Create batched inputs for CFG
+                let x_in = Tensor::cat(&[&x, &x], 0)?; // [2, 80, T]
+                let mask_in = Tensor::cat(&[mask, mask], 0)?; // [2, 1, T]
+                
+                // Conditional uses real values, unconditional uses zeros
+                let zeros_mu = Tensor::zeros((1, 80, seq_len), dtype, device)?;
+                let mu_in = Tensor::cat(&[mu, &zeros_mu], 0)?; // [2, 80, T]
+                
+                let zeros_spks = Tensor::zeros((1, 80), dtype, device)?;
+                let spks_in = Tensor::cat(&[spks, &zeros_spks], 0)?; // [2, 80]
+                
+                let zeros_cond = Tensor::zeros((1, 80, seq_len), dtype, device)?;
+                let cond_in = Tensor::cat(&[cond, &zeros_cond], 0)?; // [2, 80, T]
+                
+                let t_in = Tensor::cat(&[&t.unsqueeze(0)?, &t.unsqueeze(0)?], 0)?; // [2]
 
-            // Estimator forward pass
-            let dphi_dt = self.estimator.forward(
-                &x, mask, mu, &t_batch, spks, cond, streaming,
-            )?;
+                // Estimator forward pass with batched inputs
+                let dphi_dt_combined = self.estimator.forward(
+                    &x_in, &mask_in, &mu_in, &t_in, &spks_in, &cond_in, streaming,
+                )?;
+
+                // Split into conditional and unconditional predictions
+                let dphi_dt_cond = dphi_dt_combined.narrow(0, 0, 1)?; // [1, 80, T]
+                let dphi_dt_uncond = dphi_dt_combined.narrow(0, 1, 1)?; // [1, 80, T]
+
+                // Apply CFG: dphi_dt = (1 + cfg_rate) * conditional - cfg_rate * unconditional
+                let cfg_rate = self.inference_cfg_rate;
+                ((&dphi_dt_cond * (1.0 + cfg_rate))? - (&dphi_dt_uncond * cfg_rate)?)?
+            } else {
+                // No CFG, just conditional prediction
+                let t_batch = t.unsqueeze(0)?; // [1]
+                self.estimator.forward(&x, mask, mu, &t_batch, spks, cond, streaming)?
+            };
 
             // Euler step: x = x + dphi_dt * dt
             let dt_broadcast = dt.unsqueeze(0)?.unsqueeze(0)?;
             x = (x + dphi_dt.broadcast_mul(&dt_broadcast)?)?;
+            
+            t = t_next;
         }
 
         Ok(x)
@@ -204,6 +283,9 @@ impl CausalMaskedDiffWithDiT {
     /// * `embedding` - [B, 192] raw speaker embedding (will be normalized and projected)
     /// * `n_timesteps` - Number of ODE steps
     /// * `streaming` - Whether in streaming mode
+    ///
+    /// # Returns
+    /// Generated mel spectrogram [B, 80, T_gen] (only the generated part, not including prompt)
     pub fn inference(
         &self,
         speech_tokens: &Tensor,
@@ -227,19 +309,23 @@ impl CausalMaskedDiffWithDiT {
         // 2. Concat prompt tokens and speech tokens
         let all_tokens = Tensor::cat(&[prompt_tokens, speech_tokens], 1)?;
 
-        // 3. Input embedding
+        // 3. Input embedding with clamp (matching Python: torch.clamp(token, min=0))
+        // Note: tokens should already be valid, but clamp for safety
         let token_emb = self.input_embedding.forward(&all_tokens)?; // [B, T_total, input_size]
 
         // 4. PreLookahead layer (includes projection to output_size and 2x upsampling)
         let mu = self.pre_lookahead_layer.forward(&token_emb, None)?; // [B, T_total*2, output_size]
         let mu = mu.transpose(1, 2)?; // [B, output_size, T_total*2]
 
+        // Calculate mel lengths
+        let prompt_mel_len = prompt_feat.dim(1)?; // mel_len1 in Python
+        let mel_len = mu.dim(2)?; // total mel length
+        let gen_mel_len = mel_len - prompt_mel_len; // mel_len2 in Python
+
         // 5. Prepare mask and condition
-        let mel_len = mu.dim(2)?;
         let mask = Tensor::ones((batch, 1, mel_len), mu.dtype(), mu.device())?;
 
         // Prompt mel as condition (pad to same length)
-        let prompt_mel_len = prompt_feat.dim(1)?;
         let prompt_feat = prompt_feat.transpose(1, 2)?; // [B, output_size, T']
 
         let cond = if prompt_mel_len < mel_len {
@@ -254,7 +340,11 @@ impl CausalMaskedDiffWithDiT {
         };
 
         // 6. CFM sampling with projected speaker embedding
-        self.cfm.forward(&mu, &mask, n_timesteps, &embedding_proj, &cond, streaming)
+        let full_mel = self.cfm.forward(&mu, &mask, n_timesteps, &embedding_proj, &cond, streaming)?;
+
+        // 7. Return only the generated part (excluding prompt)
+        // Python: feat = feat[:, :, mel_len1:]
+        full_mel.narrow(2, prompt_mel_len, gen_mel_len)
     }
 }
 

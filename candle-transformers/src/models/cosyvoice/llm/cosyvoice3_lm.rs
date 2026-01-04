@@ -433,7 +433,8 @@ impl CosyVoice3LM {
         // 3. Build input sequence
         let lm_input = Tensor::cat(&[&sos_emb, &text_emb, &task_id_emb, &prompt_speech_emb], 1)?;
 
-        // 4. Autoregressive generation
+        // 4. Calculate min/max length (matching Python implementation)
+        let min_len = (text_len - prompt_text_len) * 2;
         let max_len = (text_len - prompt_text_len) * 20;
         let mut out_tokens = Vec::new();
 
@@ -444,7 +445,9 @@ impl CosyVoice3LM {
         let seq_len = hidden.dim(1)?;
         let last_hidden = hidden.narrow(1, seq_len - 1, 1)?;
         let logits = self.llm_decoder.forward(&last_hidden)?.squeeze(1)?;
-        let next_token = self.sample(&logits, sampling_config, &out_tokens)?;
+        
+        // ignore_eos = true for first token (step 0 < min_len)
+        let next_token = self.sampling_ids(&logits, sampling_config, &out_tokens, true)?;
 
         if next_token >= self.speech_token_size as u32 {
             return Ok(out_tokens);
@@ -454,14 +457,16 @@ impl CosyVoice3LM {
         let mut seqlen_offset = lm_input.dim(1)?;
 
         // Subsequent tokens
-        for _step in 1..max_len {
+        for step in 1..max_len {
             let next_id = Tensor::from_slice(&[*out_tokens.last().unwrap()], (1, 1), &self.device)?;
             let current_input = self.speech_embedding.forward(&next_id)?;
 
             let hidden = self.forward_embeds(&current_input, seqlen_offset)?;
             let logits = self.llm_decoder.forward(&hidden)?.squeeze(1)?;
 
-            let next_token = self.sample(&logits, sampling_config, &out_tokens)?;
+            // ignore_eos = true if we haven't reached min_len
+            let ignore_eos = step < min_len;
+            let next_token = self.sampling_ids(&logits, sampling_config, &out_tokens, ignore_eos)?;
 
             if next_token >= self.speech_token_size as u32 {
                 break;
@@ -474,11 +479,13 @@ impl CosyVoice3LM {
         Ok(out_tokens)
     }
 
-    fn sample(
+    /// Sampling with ignore_eos support (matching Python's sampling_ids)
+    fn sampling_ids(
         &self,
         logits: &Tensor,
         config: &SamplingConfig,
         decoded_tokens: &[u32],
+        ignore_eos: bool,
     ) -> Result<u32> {
         let logits = if config.temperature != 1.0 {
             (logits / config.temperature as f64)?
@@ -492,16 +499,69 @@ impl CosyVoice3LM {
             logits
         };
 
-        let probs = candle_nn::ops::softmax_last_dim(&logits)?;
+        // Retry sampling until we get a valid token (matching Python behavior)
+        let max_trials = 100;
+        for _ in 0..max_trials {
+            let top_ids = self.nucleus_sampling(&logits, config.top_k, config.top_p)?;
+            
+            // If ignore_eos is false, or the token is a valid speech token
+            if !ignore_eos || top_ids < self.speech_token_size as u32 {
+                return Ok(top_ids);
+            }
+            // Otherwise retry
+        }
+
+        // Fallback: if we exceed max_trials, just return any token
+        // This matches Python's behavior of raising an error, but we just return the last sample
+        self.nucleus_sampling(&logits, config.top_k, config.top_p)
+    }
+
+    /// Nucleus sampling implementation matching Python's cosyvoice.utils.common.nucleus_sampling
+    fn nucleus_sampling(&self, logits: &Tensor, top_k: usize, top_p: f32) -> Result<u32> {
+        let probs = candle_nn::ops::softmax_last_dim(logits)?;
         let probs_vec: Vec<f32> = probs.flatten_all()?.to_vec1()?;
 
-        // Argmax for simplicity (can be extended to top-k/top-p sampling)
-        Ok(probs_vec
+        // Sort by probability descending
+        let mut indexed: Vec<(usize, f32)> = probs_vec.iter().cloned().enumerate().collect();
+        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Collect candidates until we reach top_p or top_k
+        let mut cum_prob = 0.0f32;
+        let mut candidates: Vec<(usize, f32)> = Vec::new();
+
+        for (idx, prob) in indexed.iter() {
+            if cum_prob < top_p && candidates.len() < top_k {
+                cum_prob += prob;
+                candidates.push((*idx, *prob));
+            } else {
+                break;
+            }
+        }
+
+        if candidates.is_empty() {
+            // Fallback to argmax if no candidates
+            return Ok(indexed.first().map(|(i, _)| *i as u32).unwrap_or(0));
+        }
+
+        // Normalize probabilities for sampling
+        let total_prob: f32 = candidates.iter().map(|(_, p)| p).sum();
+        let normalized: Vec<(usize, f32)> = candidates
             .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-            .map(|(i, _)| i as u32)
-            .unwrap_or(0))
+            .map(|(i, p)| (*i, p / total_prob))
+            .collect();
+
+        // Multinomial sampling
+        let random_val: f32 = rand::random();
+        let mut cumulative = 0.0f32;
+        for (idx, prob) in normalized.iter() {
+            cumulative += prob;
+            if random_val < cumulative {
+                return Ok(*idx as u32);
+            }
+        }
+
+        // Fallback to last candidate
+        Ok(candidates.last().map(|(i, _)| *i as u32).unwrap_or(0))
     }
 
     fn apply_repetition_penalty(

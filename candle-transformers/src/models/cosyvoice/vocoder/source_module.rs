@@ -2,6 +2,17 @@
 //!
 //! Generates harmonic source signals from F0 (fundamental frequency).
 //! Used in HiFT vocoder for high-quality audio synthesis.
+//!
+//! ## Causal Mode and Deterministic Inference
+//!
+//! In causal/inference mode, the Python implementation uses pre-generated fixed random values
+//! for both initial phase and noise generation. This ensures deterministic output for the same
+//! input, which is crucial for streaming inference where consistency matters.
+//!
+//! Key differences from training mode:
+//! - `rand_ini`: Fixed random initial phase (instead of fresh random each call)
+//! - `sine_waves`: Pre-generated random values for noise in SineGen2
+//! - `uv`: Pre-generated random values for noise in SourceModuleHnNSF
 
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Linear, VarBuilder};
@@ -9,22 +20,33 @@ use std::f64::consts::PI;
 
 use crate::models::cosyvoice::activations::Tanh;
 
+/// Maximum audio length supported (300 seconds at 24kHz)
+const MAX_AUDIO_SAMPLES: usize = 300 * 24000;
+
 /// Sine wave generator
 ///
 /// Following the official implementation, SineGen2 takes **upsampled** f0 as input,
 /// then internally downsamples for efficient cumsum computation, and upsamples phase after.
 /// This avoids creating huge matrices for the cumsum operation.
+///
+/// ## Causal Mode
+///
+/// In causal mode (inference), uses pre-generated fixed random values:
+/// - `rand_ini`: Fixed initial phase for each harmonic
+/// - `sine_waves`: Pre-generated noise values (used in noise generation)
 #[derive(Debug, Clone)]
 pub struct SineGen2 {
     sampling_rate: usize,
     upsample_scale: usize,
     harmonic_num: usize,
     sine_amp: f64,
-    #[allow(dead_code)]
     noise_std: f64,
     voiced_threshold: f64,
     /// Fixed random phase initial values used during inference
     rand_ini: Option<Tensor>,
+    /// Pre-generated random values for noise (causal mode only)
+    /// Shape: [1, MAX_AUDIO_SAMPLES, harmonic_num + 1]
+    sine_waves_noise: Option<Tensor>,
 }
 
 impl SineGen2 {
@@ -44,6 +66,11 @@ impl SineGen2 {
         let zeros = Tensor::zeros((1, 1), DType::F32, device)?;
         rand_ini = Tensor::cat(&[&zeros, &rand_ini.narrow(1, 1, harmonic_num)?], 1)?;
 
+        // Pre-generate noise values for causal mode
+        // In Python: self.sine_waves = torch.rand(1, 300 * 24000, 9)
+        let sine_waves_noise =
+            Tensor::rand(0.0f32, 1.0, (1, MAX_AUDIO_SAMPLES, harmonic_num + 1), device)?;
+
         Ok(Self {
             sampling_rate,
             upsample_scale,
@@ -52,6 +79,7 @@ impl SineGen2 {
             noise_std,
             voiced_threshold: 10.0,
             rand_ini: Some(rand_ini),
+            sine_waves_noise: Some(sine_waves_noise),
         })
     }
 
@@ -67,8 +95,8 @@ impl SineGen2 {
     /// * `f0` - [B, T, 1] or [B, T] - Fundamental frequency sequence (already upsampled to audio rate)
     ///
     /// # Returns
-    /// * `(sine_waves, uv)` - Sine waves and voiced/unvoiced mask
-    pub fn forward(&self, f0: &Tensor) -> Result<(Tensor, Tensor)> {
+    /// * `(sine_waves, uv, noise)` - Sine waves, voiced/unvoiced mask, and noise
+    pub fn forward(&self, f0: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
         let target_device = f0.device();
         let target_dtype = f0.dtype();
 
@@ -92,10 +120,11 @@ impl SineGen2 {
         let harmonics_broadcast = harmonics.broadcast_as((batch, time, self.harmonic_num + 1))?;
         let fn_mat = (&f0_broadcast * &harmonics_broadcast)?; // [B, T, H]
 
-        // Calculate normalized frequency
-        // Note: In PyTorch impl they use % 1 to avoid large values, but since sin is periodic
-        // we can skip this. The cumsum accumulates phase which sin handles correctly.
-        let rad_values = (fn_mat / self.sampling_rate as f64)?;
+        // Calculate normalized frequency with modulo 1 (matching Python: % 1)
+        // This prevents phase accumulation issues
+        // Implement x % 1.0 as x - floor(x)
+        let rad_values_raw = (fn_mat / self.sampling_rate as f64)?;
+        let rad_values = (&rad_values_raw - rad_values_raw.floor()?)?;
 
         // === KEY OPTIMIZATION: Downsample before cumsum, upsample after ===
         // Following official implementation's _f02sine:
@@ -139,9 +168,36 @@ impl SineGen2 {
         // UV mask (voiced/unvoiced)
         let f0_squeezed = f0.squeeze(D::Minus1)?; // [B, T]
         let uv = f0_squeezed.gt(self.voiced_threshold)?;
-        let uv = uv.to_dtype(target_dtype)?;
+        let uv = uv.to_dtype(target_dtype)?.unsqueeze(D::Minus1)?; // [B, T, 1] to match sine_waves dims
 
-        Ok((sine_waves, uv))
+        // Generate noise
+        // In causal mode: use pre-generated noise values
+        // noise_amp = uv * noise_std + (1 - uv) * sine_amp / 3
+        let uv_broadcast = uv.broadcast_as(sine_waves.shape())?;
+        let noise_amp = ((&uv_broadcast * self.noise_std)?
+            + ((1.0 - &uv_broadcast)? * (self.sine_amp / 3.0))?)?;
+
+        let noise = if let Some(ref sine_waves_noise) = self.sine_waves_noise {
+            // Causal mode: use pre-generated noise values
+            // Python: noise = noise_amp * self.sine_waves[:, :sine_waves.shape[1]].to(sine_waves.device)
+            let noise_slice = sine_waves_noise
+                .narrow(1, 0, time.min(MAX_AUDIO_SAMPLES))?
+                .to_device(target_device)?
+                .to_dtype(target_dtype)?;
+            let noise_slice = noise_slice.broadcast_as((batch, time, self.harmonic_num + 1))?;
+            (&noise_amp * &noise_slice)?
+        } else {
+            // Training mode: generate fresh random noise
+            (&noise_amp * sine_waves.randn_like(0.0, 1.0)?)?
+        };
+
+        // Apply UV mask: sine_waves = sine_waves * uv + noise
+        let sine_waves = ((&sine_waves * &uv_broadcast)? + &noise)?;
+
+        // Return uv squeezed back to [B, T]
+        let uv = uv.squeeze(D::Minus1)?;
+
+        Ok((sine_waves, uv, noise))
     }
 
     /// Downsample using linear interpolation (simplified average pooling)
@@ -204,12 +260,22 @@ impl SineGen2 {
 }
 
 /// Harmonic Noise Source Module
+///
+/// ## Causal Mode
+///
+/// In causal/inference mode, uses pre-generated fixed random values for noise:
+/// - `uv_noise`: Pre-generated random values [1, MAX_AUDIO_SAMPLES, 1]
+///
+/// This ensures deterministic output for the same input.
 #[derive(Debug)]
 pub struct SourceModuleHnNSF {
     sine_gen: SineGen2,
     linear: Linear,
     tanh: Tanh,
     sine_amp: f64,
+    /// Pre-generated random values for noise in causal mode
+    /// Shape: [1, MAX_AUDIO_SAMPLES, 1]
+    uv_noise: Option<Tensor>,
 }
 
 impl SourceModuleHnNSF {
@@ -233,11 +299,16 @@ impl SourceModuleHnNSF {
         // Linear layer: [harmonic_num + 1] -> [1]
         let linear = candle_nn::linear(harmonic_num + 1, 1, vb.pp("l_linear"))?;
 
+        // Pre-generate noise values for causal mode
+        // In Python: self.uv = torch.rand(1, 300 * 24000, 1)
+        let uv_noise = Tensor::rand(0.0f32, 1.0, (1, MAX_AUDIO_SAMPLES, 1), vb.device())?;
+
         Ok(Self {
             sine_gen,
             linear,
             tanh: Tanh,
             sine_amp,
+            uv_noise: Some(uv_noise),
         })
     }
 
@@ -252,9 +323,11 @@ impl SourceModuleHnNSF {
         let target_device = f0.device().clone();
         let target_dtype = f0.dtype();
 
-        // Generate sine waves
-        let (sine_wavs, uv) = self.sine_gen.forward(f0)?;
+        // Generate sine waves (SineGen2 now handles noise internally)
+        let (sine_wavs, uv, _sine_noise) = self.sine_gen.forward(f0)?;
         // sine_wavs: [B, T*scale, H], uv: [B, T*scale]
+
+        let (batch, time, _) = sine_wavs.dims3()?;
 
         // Ensure sine_wavs is on the target device for linear layer
         let sine_wavs = sine_wavs.to_device(&target_device)?.to_dtype(target_dtype)?;
@@ -263,8 +336,20 @@ impl SourceModuleHnNSF {
         let sine_merge = self.linear.forward(&sine_wavs)?; // [B, T*scale, 1]
         let sine_merge = self.tanh.forward(&sine_merge)?;
 
-        // Noise source
-        let noise = (sine_merge.randn_like(0.0, 1.0)? * (self.sine_amp / 3.0))?;
+        // Noise source - use pre-generated values in causal mode
+        // In Python: noise = self.uv[:, :uv.shape[1]] * self.sine_amp / 3
+        let noise = if let Some(ref uv_noise) = self.uv_noise {
+            // Causal mode: use pre-generated noise values
+            let noise_slice = uv_noise
+                .narrow(1, 0, time.min(MAX_AUDIO_SAMPLES))?
+                .to_device(&target_device)?
+                .to_dtype(target_dtype)?;
+            let noise_slice = noise_slice.broadcast_as((batch, time, 1))?;
+            (&noise_slice * (self.sine_amp / 3.0))?
+        } else {
+            // Training mode: generate fresh random noise
+            (sine_merge.randn_like(0.0, 1.0)? * (self.sine_amp / 3.0))?
+        };
 
         // Ensure outputs are on target device
         let sine_merge = sine_merge.to_device(&target_device)?.to_dtype(target_dtype)?;
@@ -295,7 +380,7 @@ mod tests {
         // With upsample_scale=4, this means mel frames would be 10
         let f0 = Tensor::full(220.0f32, (2, 40, 1), &device)?;
 
-        let (sine_waves, uv) = sine_gen.forward(&f0)?;
+        let (sine_waves, uv, _noise) = sine_gen.forward(&f0)?;
 
         // Output shape matches input time dimension (f0 is already upsampled)
         assert_eq!(sine_waves.dims(), &[2, 40, 9]); // 9 = 8 harmonics + 1
@@ -309,16 +394,14 @@ mod tests {
         let device = Device::Cpu;
 
         // Test manual upsample via SineGen2's method
-        let sine_gen = SineGen2::new(24000, 4, 8, 0.1, 0.003, &device)?;
+        let _sine_gen = SineGen2::new(24000, 4, 8, 0.1, 0.003, &device)?;
 
         // Create test tensor [B, C, T] format
         let x = Tensor::from_slice(&[1.0f32, 2.0, 3.0], (1, 1, 3), &device)?;
 
         // Use index_select for upsampling (same as our manual implementation)
         let target_len = 12;
-        let indices: Vec<u32> = (0..target_len)
-            .map(|i| (i / 4) as u32)
-            .collect();
+        let indices: Vec<u32> = (0..target_len).map(|i| (i / 4) as u32).collect();
         let indices = Tensor::from_vec(indices, target_len, &device)?;
         let y = x.index_select(&indices, 2)?;
 
@@ -328,6 +411,47 @@ mod tests {
         assert_eq!(
             y_vec,
             vec![1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_deterministic_noise() -> Result<()> {
+        let device = Device::Cpu;
+
+        // Test that noise is deterministic in causal mode
+        let sine_gen = SineGen2::new(24000, 4, 8, 0.1, 0.003, &device)?;
+
+        let f0 = Tensor::full(220.0f32, (1, 40, 1), &device)?;
+
+        let (sine_waves1, _, noise1) = sine_gen.forward(&f0)?;
+        let (sine_waves2, _, noise2) = sine_gen.forward(&f0)?;
+
+        // Sine waves should be identical (same phase initialization)
+        let diff_sine: f32 = (sine_waves1 - sine_waves2)?
+            .abs()?
+            .max(D::Minus1)?
+            .max(D::Minus1)?
+            .max(D::Minus1)?
+            .to_scalar()?;
+        assert!(
+            diff_sine < 1e-6,
+            "Sine waves should be deterministic, diff={}",
+            diff_sine
+        );
+
+        // Noise should also be identical (pre-generated values)
+        let diff_noise: f32 = (noise1 - noise2)?
+            .abs()?
+            .max(D::Minus1)?
+            .max(D::Minus1)?
+            .max(D::Minus1)?
+            .to_scalar()?;
+        assert!(
+            diff_noise < 1e-6,
+            "Noise should be deterministic, diff={}",
+            diff_noise
         );
 
         Ok(())

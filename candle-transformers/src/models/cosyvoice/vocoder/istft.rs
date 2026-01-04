@@ -80,6 +80,10 @@ impl HiFTiSTFT {
     ///
     /// # Returns
     /// * `waveform` - [B, output_len]
+    ///
+    /// # Note
+    /// This implementation matches PyTorch's istft with center=True (default).
+    /// The output is trimmed by n_fft//2 on both ends to match PyTorch behavior.
     pub fn forward(&self, magnitude: &Tensor, phase: &Tensor) -> Result<Tensor> {
         let (batch, freq_bins, n_frames) = magnitude.dims3()?;
         assert_eq!(freq_bins, self.n_fft / 2 + 1); // 9
@@ -123,8 +127,19 @@ impl HiFTiSTFT {
         // 7. Overlap-Add
         let output = self.overlap_add(&windowed_frames, batch, n_frames)?;
 
+        // 8. Trim edges to match PyTorch's istft with center=True (default)
+        // PyTorch adds n_fft//2 padding on both ends during STFT with center=True,
+        // and removes it during iSTFT. We need to trim the same amount.
+        let trim = self.n_fft / 2; // 8 for n_fft=16
+        let output_len = output.dim(1)?;
+        let trimmed_output = if output_len > 2 * trim {
+            output.narrow(1, trim, output_len - 2 * trim)?
+        } else {
+            output
+        };
+
         // Convert back to original device
-        output.to_device(&original_device)?.to_dtype(dtype)
+        trimmed_output.to_device(&original_device)?.to_dtype(dtype)
     }
 
     /// CPU version of build_full_spectrum, simplified to avoid contiguous issues
@@ -270,8 +285,9 @@ mod tests {
 
         let output = istft.forward(&magnitude, &phase)?;
 
-        // Output length: (10 - 1) * 4 + 16 = 52
-        assert_eq!(output.dims(), &[2, 52]);
+        // Output length: (10 - 1) * 4 + 16 = 52, then trim n_fft/2 (8) from both ends
+        // Final: 52 - 16 = 36
+        assert_eq!(output.dims(), &[2, 36]);
         Ok(())
     }
 

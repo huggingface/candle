@@ -74,20 +74,29 @@ impl HiFTSTFT {
     ///
     /// # Returns
     /// * `(real, imag)` - Each is [B, n_fft/2+1, n_frames] = [B, 9, n_frames]
+    ///
+    /// # Note
+    /// This implementation uses center=True (PyTorch default), which pads n_fft//2
+    /// on both sides of the input before computing STFT.
     pub fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
         let original_device = x.device().clone();
         let original_dtype = x.dtype();
         let (_batch, samples) = x.dims2()?;
 
-        // Calculate number of frames (no padding, consistent with HiFT)
-        if samples < self.n_fft {
+        // Add center padding (n_fft // 2 on both sides) to match PyTorch's center=True
+        let pad_size = self.n_fft / 2;
+        let x = x.pad_with_zeros(1, pad_size, pad_size)?;
+        let padded_samples = samples + 2 * pad_size;
+
+        // Calculate number of frames
+        if padded_samples < self.n_fft {
             candle::bail!(
                 "Input samples {} is less than n_fft {}",
-                samples,
+                padded_samples,
                 self.n_fft
             );
         }
-        let n_frames = (samples - self.n_fft) / self.hop_length + 1;
+        let n_frames = (padded_samples - self.n_fft) / self.hop_length + 1;
 
         // Ensure input is on the same device as DFT matrices
         let x = x.to_device(self.dft_real.device())?.to_dtype(self.dft_real.dtype())?;

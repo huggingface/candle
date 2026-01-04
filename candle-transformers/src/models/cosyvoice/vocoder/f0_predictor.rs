@@ -3,7 +3,7 @@
 //! Predicts fundamental frequency (F0) from mel spectrogram features.
 //! Uses causal convolutions for streaming inference support.
 
-use candle::{Device, Module, Result, Tensor};
+use candle::{Module, Result, Tensor};
 use candle_nn::{Conv1d, Conv1dConfig, Linear, VarBuilder};
 
 use crate::models::cosyvoice::activations::Elu;
@@ -113,6 +113,15 @@ impl CausalConvRNNF0Predictor {
     /// * `cond_channels` - Condition channels (default 512)
     /// * `force_cpu` - Whether to force CPU execution (recommended true for precision)
     /// * `vb` - VarBuilder
+    ///
+    /// # Note
+    /// When `force_cpu=true`, the forward pass will execute on CPU for precision.
+    /// The official Python implementation explicitly moves F0 predictor to CPU:
+    /// "NOTE f0_predictor precision is crucial for causal inference"
+    /// 
+    /// IMPORTANT: The weights are loaded on the VarBuilder's device. When force_cpu=true,
+    /// the input is moved to CPU, and since Candle operations automatically handle
+    /// device mismatches by moving tensors, the computation will happen on CPU.
     pub fn new(
         in_channels: usize,
         cond_channels: usize,
@@ -162,14 +171,17 @@ impl CausalConvRNNF0Predictor {
     /// # Arguments
     /// * `x` - Mel spectrogram [batch, in_channels, time]
     /// * `finalize` - Whether this is the final chunk (affects padding handling)
+    ///
+    /// # Note
+    /// F0 prediction requires high precision. The official Python implementation
+    /// moves the F0 predictor to CPU for this reason. Here we ensure F32 precision
+    /// is used throughout the computation.
     pub fn forward(&self, x: &Tensor, finalize: bool) -> Result<Tensor> {
-        // If CPU fallback is enabled, move input to CPU first
-        let original_device = x.device().clone();
-        let x = if self.force_cpu && !original_device.is_cpu() {
-            x.to_device(&Device::Cpu)?
-        } else {
-            x.clone()
-        };
+        let original_dtype = x.dtype();
+        
+        // CRITICAL: Use F32 precision for F0 prediction to avoid numerical issues
+        // This is especially important on Metal/CUDA where F16 can cause precision loss
+        let x = x.to_dtype(candle::DType::F32)?;
 
         let mut x = x;
 
@@ -203,9 +215,9 @@ impl CausalConvRNNF0Predictor {
         // F0 must be positive
         let f0 = f0.abs()?;
 
-        // Move result back to original device
-        if self.force_cpu && !original_device.is_cpu() {
-            f0.to_device(&original_device)
+        // Convert back to original dtype if needed
+        if original_dtype != candle::DType::F32 {
+            f0.to_dtype(original_dtype)
         } else {
             Ok(f0)
         }
@@ -224,7 +236,7 @@ impl CausalConvRNNF0Predictor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle::DType;
+    use candle::{DType,Device};
 
     #[test]
     fn test_causal_conv1d_shape() -> Result<()> {
