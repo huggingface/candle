@@ -38,14 +38,17 @@ impl TimestepEmbedding {
     }
 
     /// Generate sinusoidal position encoding
+    /// Matches Python's SinusPositionEmbedding with scale=1000
     fn sinusoidal_embedding(&self, t: &Tensor) -> Result<Tensor> {
         let device = t.device();
         let dtype = t.dtype();
         let half_dim = self.sinusoidal_dim / 2;
 
-        // Calculate frequencies
+        // Python: emb = math.log(10000) / (half_dim - 1)
+        //         emb = torch.exp(torch.arange(half_dim, device=device).float() * -emb)
+        let log_10000 = 10000f64.ln();
         let inv_freq: Vec<f32> = (0..half_dim)
-            .map(|i| (1.0f64 / 10000f64.powf(i as f64 / half_dim as f64)) as f32)
+            .map(|i| (-(i as f64) * log_10000 / (half_dim as f64 - 1.0)).exp() as f32)
             .collect();
         let inv_freq = Tensor::from_vec(inv_freq, half_dim, device)?;
 
@@ -53,8 +56,10 @@ impl TimestepEmbedding {
         let t = t.unsqueeze(D::Minus1)?;
         let t = t.to_dtype(DType::F32)?;
 
-        // [B, 1] * [half_dim] -> [B, half_dim]
-        let freqs = t.broadcast_mul(&inv_freq.unsqueeze(0)?)?;
+        // Python: emb = scale * x.unsqueeze(1) * emb.unsqueeze(0)
+        // scale = 1000
+        let scale = 1000.0;
+        let freqs = (t * scale)?.broadcast_mul(&inv_freq.unsqueeze(0)?)?;
 
         // [B, dim] = [sin, cos]
         let sin_emb = freqs.sin()?;
