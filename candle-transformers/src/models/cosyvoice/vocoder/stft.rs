@@ -203,8 +203,8 @@ mod tests {
         assert_eq!(imag.len(), 256);
 
         // First row should be all 1s (cos(0) = 1)
-        for i in 0..16 {
-            assert!((real[i] - 1.0).abs() < 1e-6);
+        for val in real.iter().take(16) {
+            assert!((val - 1.0).abs() < 1e-6);
         }
     }
 

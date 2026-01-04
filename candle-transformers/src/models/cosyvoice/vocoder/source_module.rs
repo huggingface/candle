@@ -148,7 +148,7 @@ impl SineGen2 {
         // Downsample rad_values for efficient cumsum
         // [B, T, H] -> [B, H, T] for interpolation, then back
         let rad_values_transposed = rad_values.transpose(1, 2)?; // [B, H, T]
-        let downsampled_len = (time + self.upsample_scale - 1) / self.upsample_scale;
+        let downsampled_len = time.div_ceil(self.upsample_scale);
         let rad_values_down = self.downsample_linear(&rad_values_transposed, downsampled_len)?;
         let rad_values_down = rad_values_down.transpose(1, 2)?; // [B, T_down, H]
 

@@ -14,6 +14,7 @@ use candle_nn::VarBuilder;
 #[derive(Debug, Clone)]
 pub struct Snake {
     alpha: Tensor,
+    #[allow(dead_code)]
     eps: f64,
 }
 

@@ -102,6 +102,7 @@ pub struct CausalConvRNNF0Predictor {
     /// Condition channels
     cond_channels: usize,
     /// Whether to force CPU execution (recommended: true)
+    #[allow(dead_code)]
     force_cpu: bool,
 }
 

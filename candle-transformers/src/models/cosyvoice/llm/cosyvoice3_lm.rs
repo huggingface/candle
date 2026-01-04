@@ -557,8 +557,8 @@ impl CosyVoice3LM {
             let mut indexed: Vec<(usize, f32)> = probs_vec.iter().cloned().enumerate().collect();
             indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             println!("Top 10 tokens:");
-            for i in 0..10 {
-                println!("  {}. token={}, prob={:.6}", i+1, indexed[i].0, indexed[i].1);
+            for (i, (token_id, prob)) in indexed.iter().take(10).enumerate() {
+                println!("  {}. token={}, prob={:.6}", i+1, token_id, prob);
             }
         }
         

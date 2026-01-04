@@ -47,6 +47,7 @@ use tokenizers::Tokenizer;
 /// Special token IDs
 #[allow(dead_code)]
 const LLM_EOS_TOKEN: u32 = 151643;
+#[allow(dead_code)]
 const LLM_TASK_TOKEN: u32 = 151665;
 #[allow(dead_code)]
 const LLM_PAD_TOKEN: u32 = 151643;

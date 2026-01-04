@@ -23,7 +23,7 @@ fn generate_fixed_noise(shape: (usize, usize, usize), device: &Device, dtype: DT
     let m: u64 = 1 << 31;
     
     let mut values = Vec::with_capacity(total);
-    for _ in 0..(total + 1) / 2 {
+    for _ in 0..total.div_ceil(2) {
         // Generate two uniform values
         state = (a.wrapping_mul(state).wrapping_add(c)) % m;
         let u1 = (state as f64) / (m as f64);

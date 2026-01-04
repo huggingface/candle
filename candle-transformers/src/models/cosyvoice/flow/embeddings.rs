@@ -5,7 +5,7 @@
 //! - AdaLayerNormZero: Adaptive layer normalization with modulation
 //! - InputEmbedding: Combines multiple inputs for DiT
 
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, Linear, VarBuilder};
 
 use crate::models::cosyvoice::activations::{Mish, Swish};
@@ -197,7 +197,7 @@ impl CausalConvPositionEmbedding {
             cudnn_fwd_algo: None,
         };
         // Weight path: conv1.0 and conv2.0 (the .0 is from nn.Sequential)
-        let conv1 = candle_nn::conv1d(dim, dim, kernel_size, conv_config.clone(), vb.pp("conv1.0"))?;
+        let conv1 = candle_nn::conv1d(dim, dim, kernel_size, conv_config, vb.pp("conv1.0"))?;
         let conv2 = candle_nn::conv1d(dim, dim, kernel_size, conv_config, vb.pp("conv2.0"))?;
 
         Ok(Self {
@@ -288,7 +288,7 @@ impl InputEmbedding {
         // Project and add position embedding (residual)
         let x = self.proj.forward(&combined)?;
         let pos_embed = self.conv_pos_embed.forward(&x)?;
-        (x + pos_embed)
+        x + pos_embed
     }
 }
 
@@ -397,7 +397,7 @@ pub fn apply_rotary_pos_emb_3d(t: &Tensor, freqs: &Tensor) -> Result<Tensor> {
 /// freqs: [1, seq_len, dim] or [batch, seq_len, dim]
 /// q, k: [batch, heads, seq_len, head_dim]
 pub fn apply_rotary_emb(q: &Tensor, k: &Tensor, freqs: &Tensor) -> Result<(Tensor, Tensor)> {
-    let (batch, heads, seq_len, head_dim) = q.dims4()?;
+    let (batch, _heads, seq_len, head_dim) = q.dims4()?;
     let rot_dim = freqs.dim(D::Minus1)?;
 
     // Get freqs for this sequence length
