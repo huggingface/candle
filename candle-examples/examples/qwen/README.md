@@ -50,3 +50,8 @@ $ cargo run --example qwen --features metal --release  -- --prompt "Write a poem
 > Their beauty lives where hearts can fly.
 > 161 tokens generated (3.00 token/s)
 ```
+
+```shell
+# Local unquantized 32B MoE model (with Fused MoE kernel) (~80GB GPU memory)
+cargo run --example qwen --features cuda --release  -- --prompt "Write a poem about butterflies. <think></think>." --model "3-moe-a3b" --weight-path /path/Qwen3-30B-A3B-Instruct-2507
+```
