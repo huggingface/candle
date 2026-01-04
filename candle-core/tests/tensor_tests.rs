@@ -219,6 +219,26 @@ fn asort(device: &Device) -> Result<()> {
     Ok(())
 }
 
+/// Test sorting a large tensor that exceeds 1024 elements.
+fn asort_big(device: &Device) -> Result<()> {
+    // Skip on metal for now
+    if device.is_metal() {
+        return Ok(());
+    }
+    const SIZE: usize = 2000;
+    let data: Vec<f32> = (0..SIZE).map(|x| (SIZE - x) as f32).collect();
+    let tensor = Tensor::new(data.as_slice(), device)?;
+
+    let indexes = tensor.arg_sort_last_dim(true)?;
+    let expected_indexes: Vec<u32> = (0..SIZE).rev().map(|x| x as u32).collect();
+    assert_eq!(indexes.to_vec1::<u32>()?, expected_indexes);
+
+    let indexes = tensor.arg_sort_last_dim(false)?;
+    let expected_indexes: Vec<u32> = (0..SIZE).map(|x| x as u32).collect();
+    assert_eq!(indexes.to_vec1::<u32>()?, expected_indexes);
+    Ok(())
+}
+
 fn unary_op(device: &Device) -> Result<()> {
     let data = &[[-3f32, 1., 4., -0.1, 0.5], [2.7, -1.8, -0.28, 1.8, 2.8]];
     let tensor = Tensor::new(data, device)?;
@@ -1707,6 +1727,7 @@ test_device!(
 test_device!(randn, randn_cpu, randn_gpu, randn_metal);
 test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
 test_device!(asort, asort_cpu, asort_gpu, asort_metal);
+test_device!(asort_big, asort_big_cpu, asort_big_gpu, asort_big_metal);
 test_device!(var, var_cpu, var_gpu, var_metal);
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
 
