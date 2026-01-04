@@ -160,9 +160,10 @@ impl AdaLayerNormZeroFinal {
         let emb = self.swish.forward(emb)?;
         let emb = self.linear.forward(&emb)?;
 
+        // Python: scale, shift = torch.chunk(emb, 2, dim=1)
         let chunks = emb.chunk(2, D::Minus1)?;
-        let shift = chunks[0].clone().unsqueeze(1)?;
-        let scale = chunks[1].clone().unsqueeze(1)?;
+        let scale = chunks[0].clone().unsqueeze(1)?;
+        let shift = chunks[1].clone().unsqueeze(1)?;
 
         let scale_factor = (scale + 1.0)?;
         x_norm.broadcast_mul(&scale_factor)?.broadcast_add(&shift)

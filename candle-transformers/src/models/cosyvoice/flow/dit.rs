@@ -133,18 +133,41 @@ impl Attention {
 pub struct DiTBlock {
     attn_norm: AdaLayerNormZero,
     attn: Attention,
+    ff_norm: LayerNormNoAffine,
     ff: FeedForward,
+}
+
+/// LayerNorm without learnable parameters (elementwise_affine=False)
+#[derive(Debug, Clone)]
+struct LayerNormNoAffine {
+    eps: f64,
+}
+
+impl LayerNormNoAffine {
+    fn new() -> Self {
+        Self { eps: 1e-6 }
+    }
+    
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let mean = x.mean_keepdim(D::Minus1)?;
+        let x_centered = x.broadcast_sub(&mean)?;
+        let var = x_centered.sqr()?.mean_keepdim(D::Minus1)?;
+        let std = (var + self.eps)?.sqrt()?;
+        x_centered.broadcast_div(&std)
+    }
 }
 
 impl DiTBlock {
     pub fn new(config: &DiTConfig, vb: VarBuilder) -> Result<Self> {
         let attn_norm = AdaLayerNormZero::new(config.dim, vb.pp("attn_norm"))?;
         let attn = Attention::new(config.dim, config.heads, config.dim_head, vb.pp("attn"))?;
+        let ff_norm = LayerNormNoAffine::new();
         let ff = FeedForward::new(config.dim, config.ff_mult, vb.pp("ff"))?;
 
         Ok(Self {
             attn_norm,
             attn,
+            ff_norm,
             ff,
         })
     }
@@ -165,11 +188,13 @@ impl DiTBlock {
         let x = (x + gate_msa.unsqueeze(1)?.broadcast_mul(&attn_out)?)?;
 
         // FeedForward with modulation
+        // Python: ff_norm = self.ff_norm(x) * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+        let ff_norm = self.ff_norm.forward(&x)?;
         let scale_mlp = scale_mlp.unsqueeze(1)?;
         let shift_mlp = shift_mlp.unsqueeze(1)?;
         let scale_factor = (scale_mlp + 1.0)?;
-        let x_modulated = x.broadcast_mul(&scale_factor)?.broadcast_add(&shift_mlp)?;
-        let ff_out = self.ff.forward(&x_modulated)?;
+        let ff_input = ff_norm.broadcast_mul(&scale_factor)?.broadcast_add(&shift_mlp)?;
+        let ff_out = self.ff.forward(&ff_input)?;
 
         x + gate_mlp.unsqueeze(1)?.broadcast_mul(&ff_out)?
     }
