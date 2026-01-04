@@ -46,7 +46,9 @@ fn main() {
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=moe");
     println!("cargo:rustc-link-lib=dylib=cudart");
-    println!("cargo:rustc-link-lib=stdc++");
+    if !is_target_msvc {
+        println!("cargo:rustc-link-lib=stdc++");
+    }
 }
 
 fn remove_lines<P: AsRef<std::path::Path>>(file: P, patterns: &[&str]) {

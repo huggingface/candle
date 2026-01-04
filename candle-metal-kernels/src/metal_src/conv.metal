@@ -199,6 +199,90 @@ METAL_FUNC void upsample_nearest2d(
   dst[tid] = src[src_i];
 }
 
+template <typename T>
+METAL_FUNC void upsample_bilinear2d(
+    constant size_t &w_out,
+    constant size_t &h_out,
+    constant bool &align_corners,
+    constant bool &has_scale_h,
+    constant float &scale_h_factor,
+    constant bool &has_scale_w,
+    constant float &scale_w_factor,
+    constant size_t *src_dims,
+    constant size_t *src_s,
+    device const T *src,
+    device T *dst,
+    uint tid [[thread_position_in_grid]]
+) {
+    // src: (b_size, c_in, h_in, w_in)  // Standard NCHW layout
+    const size_t c = src_dims[1];
+    const size_t h_in = src_dims[2];  // dims[2] = height
+    const size_t w_in = src_dims[3];  // dims[3] = width
+    
+    if (tid >= src_dims[0] * c * h_out * w_out) {
+        return;
+    }
+    
+    // Compute output position (NCHW layout)
+    const size_t b_idx = tid / (h_out * w_out * c);
+    const size_t c_idx = (tid / (h_out * w_out)) % c;
+    const size_t dst_h = (tid / w_out) % h_out;
+    const size_t dst_w = tid % w_out;
+    
+    // Calculate scale factors following PyTorch's area_pixel_compute_scale logic
+    float h_scale, w_scale;
+    if (align_corners) {
+        h_scale = (h_out > 1) ? static_cast<float>(h_in - 1) / (h_out - 1) : 0.0f;
+        w_scale = (w_out > 1) ? static_cast<float>(w_in - 1) / (w_out - 1) : 0.0f;
+    } else {
+        // PyTorch's compute_scales_value logic
+        h_scale = has_scale_h ? (1.0f / scale_h_factor) : (static_cast<float>(h_in) / h_out);
+        w_scale = has_scale_w ? (1.0f / scale_w_factor) : (static_cast<float>(w_in) / w_out);
+    }
+    
+    // Compute source position
+    float src_h_fp, src_w_fp;
+    if (align_corners) {
+        src_h_fp = h_scale * dst_h;
+        src_w_fp = w_scale * dst_w;
+    } else {
+        src_h_fp = h_scale * (dst_h + 0.5f) - 0.5f;
+        src_w_fp = w_scale * (dst_w + 0.5f) - 0.5f;
+    }
+    
+    // Clamp to valid range
+    src_h_fp = max(0.0f, src_h_fp);
+    src_w_fp = max(0.0f, src_w_fp);
+    
+    // Get integer indices
+    size_t h0 = static_cast<size_t>(floor(src_h_fp));
+    size_t w0 = static_cast<size_t>(floor(src_w_fp));
+    size_t h1 = min(h0 + 1, h_in - 1);
+    size_t w1 = min(w0 + 1, w_in - 1);
+    
+    // Compute interpolation weights
+    float weight_h = src_h_fp - h0;
+    float weight_w = src_w_fp - w0;
+    weight_h = clamp(weight_h, 0.0f, 1.0f);
+    weight_w = clamp(weight_w, 0.0f, 1.0f);
+    
+    // Get base index
+    const size_t base = b_idx * src_s[0] + c_idx * src_s[1];
+    
+    // Read four neighboring pixels
+    const T v00 = src[base + h0 * src_s[2] + w0 * src_s[3]];
+    const T v10 = src[base + h0 * src_s[2] + w1 * src_s[3]];
+    const T v01 = src[base + h1 * src_s[2] + w0 * src_s[3]];
+    const T v11 = src[base + h1 * src_s[2] + w1 * src_s[3]];
+    
+    // Bilinear interpolation
+    const float v_top = float(v00) * (1.0f - weight_w) + float(v10) * weight_w;
+    const float v_bottom = float(v01) * (1.0f - weight_w) + float(v11) * weight_w;
+    const float value = v_top * (1.0f - weight_h) + v_bottom * weight_h;
+    
+    dst[tid] = T(value);
+}
+
 #define IM2COL_OP(T, FN_NAME) \
 kernel void FN_NAME(  \
     constant size_t &dst_numel, \
@@ -263,6 +347,24 @@ kernel void FN_NAME(  \
     uint tid [[ thread_position_in_grid ]] \
 ) {  \
   upsample_nearest2d<TYPENAME>(w_out, h_out, w_scale, h_scale, dims, strides, src, dst, tid); \
+} \
+
+#define UPSAMPLE_BILINEAR2D_OP(TYPENAME, FN_NAME) \
+kernel void FN_NAME(  \
+    constant size_t &w_out [[buffer(0)]], \
+    constant size_t &h_out [[buffer(1)]], \
+    constant bool &align_corners [[buffer(2)]], \
+    constant bool &has_scale_h [[buffer(3)]], \
+    constant float &scale_h_factor [[buffer(4)]], \
+    constant bool &has_scale_w [[buffer(5)]], \
+    constant float &scale_w_factor [[buffer(6)]], \
+    constant size_t *src_dims [[buffer(7)]], \
+    constant size_t *src_s [[buffer(8)]], \
+    device const TYPENAME *src [[buffer(9)]], \
+    device TYPENAME *dst [[buffer(10)]], \
+    uint tid [[thread_position_in_grid]] \
+) {  \
+  upsample_bilinear2d<TYPENAME>(w_out, h_out, align_corners, has_scale_h, scale_h_factor, has_scale_w, scale_w_factor, src_dims, src_s, src, dst, tid); \
 } \
 
 template <typename T, typename A>
@@ -574,6 +676,14 @@ UPSAMPLE_NEAREST2D_OP(uint8_t, upsample_nearest2d_u8)
 UPSAMPLE_NEAREST2D_OP(uint32_t, upsample_nearest2d_u32)
 #if defined(__HAVE_BFLOAT__)
 UPSAMPLE_NEAREST2D_OP(bfloat, upsample_nearest2d_bf16)
+#endif
+
+UPSAMPLE_BILINEAR2D_OP(float, upsample_bilinear2d_f32)
+UPSAMPLE_BILINEAR2D_OP(half, upsample_bilinear2d_f16)
+UPSAMPLE_BILINEAR2D_OP(uint8_t, upsample_bilinear2d_u8)
+UPSAMPLE_BILINEAR2D_OP(uint32_t, upsample_bilinear2d_u32)
+#if defined(__HAVE_BFLOAT__)
+UPSAMPLE_BILINEAR2D_OP(bfloat, upsample_bilinear2d_bf16)
 #endif
 
 MAXPOOL2D_OP(float, max_pool2d_f32)

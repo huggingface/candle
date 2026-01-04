@@ -980,6 +980,58 @@ impl Map1 for UpsampleNearest2D {
     }
 }
 
+struct UpsampleBilinear2D {
+    out_w: usize,
+    out_h: usize,
+    align_corners: bool,
+    scale_h_factor: Option<f64>,
+    scale_w_factor: Option<f64>,
+}
+
+impl Map1 for UpsampleBilinear2D {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        inp: &CudaSlice<T>,
+        dev: &CudaDevice,
+        inp_l: &Layout,
+    ) -> Result<CudaSlice<T>> {
+        let inp = &inp.slice(inp_l.start_offset()..);
+        let shape = inp_l.shape();
+        let dims = shape.dims();
+        let ds = if dims.len() == 4 {
+            [dims, inp_l.stride()].concat()
+        } else {
+            crate::bail!("unexpected input shape for upsample_bilinear2d {dims:?}")
+        };
+
+        let (out_w, out_h) = (self.out_w, self.out_h);
+        let dst_el = out_w * out_h * dims[0] * dims[1];
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let func =
+            dev.get_or_load_func(&kernel_name::<T>("upsample_bilinear2d"), &kernels::CONV)?;
+
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(dst_el)? };
+        let ds = dev.clone_htod(&ds)?;
+
+        let mut builder = func.builder();
+        barg!(builder, out_w);
+        barg!(builder, out_h);
+        barg!(builder, self.align_corners);
+        barg!(builder, self.scale_h_factor.is_some());
+        barg!(builder, self.scale_h_factor.unwrap_or(0.0));
+        barg!(builder, self.scale_w_factor.is_some());
+        barg!(builder, self.scale_w_factor.unwrap_or(0.0));
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(&out);
+
+        // SAFETY: ffi.
+        unsafe { builder.launch(cfg) }.w()?;
+        Ok(out)
+    }
+}
+
 struct WhereCond<'a>(&'a CudaStorage, &'a Layout);
 impl Map2 for WhereCond<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -1978,6 +2030,27 @@ impl BackendStorage for CudaStorage {
     fn upsample_nearest2d(&self, l: &Layout, out_w: usize, out_h: usize) -> Result<Self> {
         let device = self.device().clone();
         let slice = UpsampleNearest2D(out_w, out_h).map(&self.slice, &device, l)?;
+        Ok(Self { slice, device })
+    }
+
+    fn upsample_bilinear2d(
+        &self,
+        l: &Layout,
+        out_h: usize,
+        out_w: usize,
+        align_corners: bool,
+        scale_h: Option<f64>,
+        scale_w: Option<f64>,
+    ) -> Result<Self> {
+        let device = self.device().clone();
+        let slice = UpsampleBilinear2D {
+            out_w,
+            out_h,
+            align_corners,
+            scale_h_factor: scale_h,
+            scale_w_factor: scale_w,
+        }
+        .map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
 
