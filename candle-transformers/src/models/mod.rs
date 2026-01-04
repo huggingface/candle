@@ -61,6 +61,7 @@ pub mod marian;
 pub mod metavoice;
 pub mod mimi;
 pub mod mistral;
+pub mod mistral3;
 pub mod mixformer;
 pub mod mixtral;
 pub mod mmdit;
