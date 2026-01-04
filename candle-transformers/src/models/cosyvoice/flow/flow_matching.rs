@@ -56,6 +56,8 @@ pub struct CausalConditionalCFM {
     sigma_min: f64,
     t_scheduler: String,
     inference_cfg_rate: f64,
+    /// Pre-generated random noise for reproducibility (matches Python's set_all_random_seed(0))
+    rand_noise: Option<Tensor>,
 }
 
 impl CausalConditionalCFM {
@@ -65,6 +67,18 @@ impl CausalConditionalCFM {
             sigma_min: config.sigma_min,
             t_scheduler: config.t_scheduler,
             inference_cfg_rate: config.inference_cfg_rate,
+            rand_noise: None,
+        }
+    }
+
+    /// Create with pre-generated random noise for exact reproducibility
+    pub fn new_with_rand_noise(estimator: DiT, config: CFMConfig, rand_noise: Tensor) -> Self {
+        Self {
+            estimator,
+            sigma_min: config.sigma_min,
+            t_scheduler: config.t_scheduler,
+            inference_cfg_rate: config.inference_cfg_rate,
+            rand_noise: Some(rand_noise),
         }
     }
 
@@ -90,8 +104,18 @@ impl CausalConditionalCFM {
         let device = mu.device();
         let dtype = mu.dtype();
 
-        // Initialize with fixed random noise (matches Python's set_all_random_seed(0))
-        let z = generate_fixed_noise((batch, 80, seq_len), device, dtype)?;
+        // Use pre-generated noise if available, otherwise generate fixed noise
+        let z = if let Some(ref rand_noise) = self.rand_noise {
+            // Use pre-generated noise (matches Python's CausalConditionalCFM)
+            // rand_noise shape: [1, 80, 15000], we need [batch, 80, seq_len]
+            rand_noise
+                .narrow(2, 0, seq_len)?
+                .to_device(device)?
+                .to_dtype(dtype)?
+        } else {
+            // Fallback to generated noise (not recommended for exact reproducibility)
+            generate_fixed_noise((batch, 80, seq_len), device, dtype)?
+        };
 
         // Time step scheduling
         let t_span = self.get_t_span(n_timesteps, device, dtype)?;
@@ -239,6 +263,34 @@ impl CausalMaskedDiffWithDiT {
         cfm_config: CFMConfig,
         vb: candle_nn::VarBuilder,
     ) -> Result<Self> {
+        Self::new_with_rand_noise(
+            vocab_size,
+            input_size,
+            output_size,
+            spk_embed_dim,
+            token_mel_ratio,
+            pre_lookahead_len,
+            estimator,
+            cfm_config,
+            vb,
+            None,
+        )
+    }
+
+    /// Create with pre-generated random noise for exact reproducibility
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_rand_noise(
+        vocab_size: usize,
+        input_size: usize,
+        output_size: usize,
+        spk_embed_dim: usize,
+        token_mel_ratio: usize,
+        pre_lookahead_len: usize,
+        estimator: DiT,
+        cfm_config: CFMConfig,
+        vb: candle_nn::VarBuilder,
+        rand_noise: Option<Tensor>,
+    ) -> Result<Self> {
         // Input embedding: vocab_size -> input_size (not output_size)
         let input_embedding = candle_nn::embedding(vocab_size, input_size, vb.pp("input_embedding"))?;
 
@@ -259,8 +311,12 @@ impl CausalMaskedDiffWithDiT {
             vb.pp("pre_lookahead_layer"),
         )?;
 
-        // CFM
-        let cfm = CausalConditionalCFM::new(estimator, cfm_config);
+        // CFM with optional pre-generated noise
+        let cfm = if let Some(noise) = rand_noise {
+            CausalConditionalCFM::new_with_rand_noise(estimator, cfm_config, noise)
+        } else {
+            CausalConditionalCFM::new(estimator, cfm_config)
+        };
 
         Ok(Self {
             input_embedding,
@@ -345,6 +401,96 @@ impl CausalMaskedDiffWithDiT {
         // 7. Return only the generated part (excluding prompt)
         // Python: feat = feat[:, :, mel_len1:]
         full_mel.narrow(2, prompt_mel_len, gen_mel_len)
+    }
+
+    /// Debug version of inference with intermediate value logging
+    pub fn inference_debug(
+        &self,
+        speech_tokens: &Tensor,
+        prompt_tokens: &Tensor,
+        prompt_feat: &Tensor,
+        embedding: &Tensor,
+        n_timesteps: usize,
+        streaming: bool,
+    ) -> Result<Tensor> {
+        let (batch, _token_len) = speech_tokens.dims2()?;
+
+        // 1. Speaker embedding: normalize and project
+        let embedding_norm = {
+            let norm = embedding.sqr()?.sum_keepdim(1)?.sqrt()?;
+            embedding.broadcast_div(&norm.clamp(1e-12, f64::INFINITY)?)?
+        };
+        Self::print_tensor_stats("1. embedding_normalized", &embedding_norm)?;
+        
+        let embedding_proj = self.spk_embed_affine_layer.forward(&embedding_norm)?;
+        Self::print_tensor_stats("2. embedding_projected", &embedding_proj)?;
+
+        // 2. Concat prompt tokens and speech tokens
+        let all_tokens = Tensor::cat(&[prompt_tokens, speech_tokens], 1)?;
+        println!("3. token_concat: shape={:?}", all_tokens.dims());
+
+        // 3. Input embedding
+        let token_emb = self.input_embedding.forward(&all_tokens)?;
+        Self::print_tensor_stats("4. token_emb", &token_emb)?;
+
+        // 4. PreLookahead layer (includes 2x upsampling)
+        let mu = self.pre_lookahead_layer.forward(&token_emb, None)?;
+        Self::print_tensor_stats("5. pre_lookahead_output (after upsampling)", &mu)?;
+
+        let mu = mu.transpose(1, 2)?;
+        Self::print_tensor_stats("6. mu (transposed)", &mu)?;
+
+        // Calculate mel lengths
+        let prompt_mel_len = prompt_feat.dim(1)?;
+        let mel_len = mu.dim(2)?;
+        let gen_mel_len = mel_len - prompt_mel_len;
+        println!("7. mel_len1={}, mel_len2={}", prompt_mel_len, gen_mel_len);
+
+        // 5. Prepare mask and condition
+        let mask = Tensor::ones((batch, 1, mel_len), mu.dtype(), mu.device())?;
+
+        let prompt_feat = prompt_feat.transpose(1, 2)?;
+        let cond = if prompt_mel_len < mel_len {
+            let pad = Tensor::zeros(
+                (batch, self.output_size, mel_len - prompt_mel_len),
+                prompt_feat.dtype(),
+                prompt_feat.device(),
+            )?;
+            Tensor::cat(&[&prompt_feat, &pad], 2)?
+        } else {
+            prompt_feat.narrow(2, 0, mel_len)?
+        };
+        Self::print_tensor_stats("8. conds", &cond)?;
+
+        // 6. CFM sampling
+        let full_mel = self.cfm.forward(&mu, &mask, n_timesteps, &embedding_proj, &cond, streaming)?;
+        Self::print_tensor_stats("9. decoder_output (full)", &full_mel)?;
+
+        // 7. Return only the generated part
+        let result = full_mel.narrow(2, prompt_mel_len, gen_mel_len)?;
+        Self::print_tensor_stats("10. decoder_output (generated only)", &result)?;
+        
+        Ok(result)
+    }
+
+    fn print_tensor_stats(name: &str, t: &Tensor) -> Result<()> {
+        let t_f32 = t.to_dtype(DType::F32)?;
+        let flat = t_f32.flatten_all()?;
+        let mean = flat.mean_all()?.to_scalar::<f32>()?;
+        let min = flat.min(0)?.to_scalar::<f32>()?;
+        let max = flat.max(0)?.to_scalar::<f32>()?;
+        let variance = flat.broadcast_sub(&flat.mean_all()?)?.sqr()?.mean_all()?.to_scalar::<f32>()?;
+        let std = variance.sqrt();
+        println!(
+            "{}: shape={:?}, mean={:.4}, min={:.4}, max={:.4}, std={:.4}",
+            name,
+            t.dims(),
+            mean,
+            min,
+            max,
+            std
+        );
+        Ok(())
     }
 }
 

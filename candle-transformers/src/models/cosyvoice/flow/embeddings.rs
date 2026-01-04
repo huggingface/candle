@@ -190,6 +190,7 @@ impl CausalConvPositionEmbedding {
             groups,
             cudnn_fwd_algo: None,
         };
+        // Weight path: conv1.0 and conv2.0 (the .0 is from nn.Sequential)
         let conv1 = candle_nn::conv1d(dim, dim, kernel_size, conv_config.clone(), vb.pp("conv1.0"))?;
         let conv2 = candle_nn::conv1d(dim, dim, kernel_size, conv_config, vb.pp("conv2.0"))?;
 
@@ -207,7 +208,8 @@ impl Module for CausalConvPositionEmbedding {
         // x: [B, T, dim]
         let x = x.transpose(1, 2)?; // [B, dim, T]
 
-        // Causal padding (left side only)
+        // Causal padding (left side only): F.pad(x, (kernel_size - 1, 0, 0, 0))
+        // In PyTorch, F.pad for 1D is (left, right) for the last dimension
         let x = x.pad_with_zeros(2, self.kernel_size - 1, 0)?;
         let x = self.conv1.forward(&x)?;
         let x = self.mish.forward(&x)?;
@@ -279,14 +281,15 @@ impl InputEmbedding {
 
         // Project and add position embedding (residual)
         let x = self.proj.forward(&combined)?;
-        // Temporarily skip conv_pos_embed due to Metal groups conv issue
-        // let pos_embed = self.conv_pos_embed.forward(&x)?;
-        // x + pos_embed
-        Ok(x)
+        let pos_embed = self.conv_pos_embed.forward(&x)?;
+        (x + pos_embed)
     }
 }
 
 /// Rotary Position Embedding for DiT
+/// 
+/// Matches x_transformers.RotaryEmbedding implementation.
+/// Returns freqs tensor that will be used with cos/sin in attention.
 #[derive(Debug, Clone)]
 pub struct RotaryEmbedding {
     dim: usize,
@@ -298,69 +301,186 @@ impl RotaryEmbedding {
         Self { dim, theta }
     }
 
-    /// Generate RoPE embedding
+    /// Generate RoPE frequencies
     ///
-    /// # Arguments
-    /// * `seq_len` - Sequence length
-    /// * `device` - Device
-    /// * `dtype` - Data type
+    /// Returns freqs tensor of shape [1, seq_len, dim]
+    /// This matches x_transformers.RotaryEmbedding.forward_from_seq_len
     pub fn forward(&self, seq_len: usize, device: &Device, dtype: DType) -> Result<Tensor> {
         let half_dim = self.dim / 2;
 
-        // Calculate frequencies
+        // Calculate inverse frequencies: 1 / (theta^(2i/dim))
+        // This matches: inv_freq = 1. / (base ** (arange(0, dim, 2).float() / dim))
         let inv_freq: Vec<f32> = (0..half_dim)
             .map(|i| (1.0 / self.theta.powf(2.0 * i as f64 / self.dim as f64)) as f32)
             .collect();
         let inv_freq = Tensor::from_vec(inv_freq, half_dim, device)?;
 
-        // Position indices
+        // Position indices: [0, 1, 2, ..., seq_len-1]
         let t = Tensor::arange(0u32, seq_len as u32, device)?.to_dtype(DType::F32)?;
 
+        // freqs = einsum('i, j -> i j', t, inv_freq) = outer product
         // [seq_len] * [half_dim] -> [seq_len, half_dim]
         let freqs = t.unsqueeze(1)?.broadcast_mul(&inv_freq.unsqueeze(0)?)?;
 
-        // [seq_len, dim] = [cos, sin]
-        let cos = freqs.cos()?;
-        let sin = freqs.sin()?;
+        // Stack to get [seq_len, dim]: freqs = stack((freqs, freqs), dim=-1).reshape(...)
+        // This duplicates each frequency: [f0, f0, f1, f1, ...]
+        // Python: freqs = stack((freqs, freqs), dim = -1)
+        //         freqs = rearrange(freqs, '... d r -> ... (d r)')
+        // This means: [seq_len, half_dim] -> [seq_len, half_dim, 2] -> [seq_len, dim]
+        // Result pattern: [f0, f0, f1, f1, f2, f2, ...]
+        let freqs = freqs.unsqueeze(D::Minus1)?; // [seq_len, half_dim, 1]
+        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?; // [seq_len, half_dim, 2]
+        let freqs = freqs.reshape((seq_len, self.dim))?; // [seq_len, dim]
 
-        // Combine into [seq_len, dim, 2]
-        let rope = Tensor::stack(&[&cos, &sin], D::Minus1)?;
-        rope.to_dtype(dtype)
+        // Add batch dimension: [1, seq_len, dim]
+        let freqs = freqs.unsqueeze(0)?;
+
+        freqs.to_dtype(dtype)
     }
 }
 
-/// Apply rotary embedding to query and key
-pub fn apply_rotary_emb(q: &Tensor, k: &Tensor, rope: &Tensor) -> Result<(Tensor, Tensor)> {
+/// Apply rotary position embedding to a 3D tensor (before reshape to heads)
+/// 
+/// Matches Python's apply_rotary_pos_emb function.
+/// t: [batch, seq_len, dim] - query or key tensor
+/// freqs: [1, seq_len, rot_dim] - frequency tensor
+/// 
+/// Returns: [batch, seq_len, dim] with rotary embedding applied to first rot_dim dimensions
+pub fn apply_rotary_pos_emb_3d(t: &Tensor, freqs: &Tensor) -> Result<Tensor> {
+    let rot_dim = freqs.dim(D::Minus1)?;
+    let seq_len = t.dim(1)?;
+    let orig_dtype = t.dtype();
+    
+    // Get freqs for this sequence length
+    let freqs = if freqs.dim(1)? > seq_len {
+        freqs.narrow(1, freqs.dim(1)? - seq_len, seq_len)?
+    } else {
+        freqs.clone()
+    };
+    
+    // Partial rotary: only rotate first rot_dim dimensions
+    let t_rot = t.narrow(D::Minus1, 0, rot_dim)?;
+    let t_pass = if t.dim(D::Minus1)? > rot_dim {
+        Some(t.narrow(D::Minus1, rot_dim, t.dim(D::Minus1)? - rot_dim)?)
+    } else {
+        None
+    };
+    
+    // Compute cos and sin
+    let cos = freqs.cos()?;
+    let sin = freqs.sin()?;
+    
+    // rotate_half
+    let t_rot_half = rotate_half(&t_rot)?;
+    
+    // Apply rotation: t * cos + rotate_half(t) * sin
+    let t_out = (t_rot.broadcast_mul(&cos)? + t_rot_half.broadcast_mul(&sin)?)?;
+    
+    // Concatenate with unrotated part if exists
+    let out = match t_pass {
+        Some(pass) => Tensor::cat(&[&t_out, &pass], D::Minus1)?,
+        None => t_out,
+    };
+    
+    out.to_dtype(orig_dtype)
+}
+
+/// Apply rotary position embedding to query and key (4D tensors after reshape)
+/// 
+/// Matches x_transformers apply_rotary_pos_emb function.
+/// freqs: [1, seq_len, dim] or [batch, seq_len, dim]
+/// q, k: [batch, heads, seq_len, head_dim]
+pub fn apply_rotary_emb(q: &Tensor, k: &Tensor, freqs: &Tensor) -> Result<(Tensor, Tensor)> {
     let (batch, heads, seq_len, head_dim) = q.dims4()?;
-    let half_dim = head_dim / 2;
+    let rot_dim = freqs.dim(D::Minus1)?;
 
-    // rope: [seq_len, half_dim, 2]
-    // Extract cos and sin using narrow instead of indexing
-    let cos = rope.narrow(2, 0, 1)?.squeeze(2)?.contiguous()?; // [seq_len, half_dim]
-    let sin = rope.narrow(2, 1, 1)?.squeeze(2)?.contiguous()?; // [seq_len, half_dim]
+    // Get freqs for this sequence length
+    let freqs = if freqs.dim(1)? > seq_len {
+        freqs.narrow(1, freqs.dim(1)? - seq_len, seq_len)?
+    } else {
+        freqs.clone()
+    };
 
-    // Split q, k into two halves
-    let q1 = q.narrow(D::Minus1, 0, half_dim)?.contiguous()?;
-    let q2 = q.narrow(D::Minus1, half_dim, half_dim)?.contiguous()?;
-    let k1 = k.narrow(D::Minus1, 0, half_dim)?.contiguous()?;
-    let k2 = k.narrow(D::Minus1, half_dim, half_dim)?.contiguous()?;
+    // Expand freqs to [batch, 1, seq_len, rot_dim] for broadcasting
+    let freqs = if freqs.dim(0)? == 1 && batch > 1 {
+        freqs.broadcast_as((batch, 1, seq_len, rot_dim))?
+    } else {
+        freqs.unsqueeze(1)?  // [batch, 1, seq_len, dim]
+    };
 
-    // Broadcast cos, sin to [batch, heads, seq_len, half_dim]
-    let cos = cos.unsqueeze(0)?.unsqueeze(0)?;
-    let sin = sin.unsqueeze(0)?.unsqueeze(0)?;
-    let cos = cos.broadcast_as((batch, heads, seq_len, half_dim))?.contiguous()?;
-    let sin = sin.broadcast_as((batch, heads, seq_len, half_dim))?.contiguous()?;
+    // Partial rotary: only rotate first rot_dim dimensions
+    let q_rot = q.narrow(D::Minus1, 0, rot_dim)?;
+    let q_pass = if head_dim > rot_dim {
+        Some(q.narrow(D::Minus1, rot_dim, head_dim - rot_dim)?)
+    } else {
+        None
+    };
+    
+    let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
+    let k_pass = if head_dim > rot_dim {
+        Some(k.narrow(D::Minus1, rot_dim, head_dim - rot_dim)?)
+    } else {
+        None
+    };
 
-    // Apply rotation: [q1*cos - q2*sin, q1*sin + q2*cos]
-    let q_rot1 = (q1.broadcast_mul(&cos)? - q2.broadcast_mul(&sin)?)?;
-    let q_rot2 = (q1.broadcast_mul(&sin)? + q2.broadcast_mul(&cos)?)?;
-    let k_rot1 = (k1.broadcast_mul(&cos)? - k2.broadcast_mul(&sin)?)?;
-    let k_rot2 = (k1.broadcast_mul(&sin)? + k2.broadcast_mul(&cos)?)?;
+    // Compute cos and sin
+    let cos = freqs.cos()?;
+    let sin = freqs.sin()?;
 
-    let q_out = Tensor::cat(&[&q_rot1, &q_rot2], D::Minus1)?;
-    let k_out = Tensor::cat(&[&k_rot1, &k_rot2], D::Minus1)?;
+    // rotate_half: [-x2, x1, -x4, x3, ...]
+    // For [f0, f0, f1, f1, ...] pattern, we need to rotate pairs
+    let q_rot_half = rotate_half(&q_rot)?;
+    let k_rot_half = rotate_half(&k_rot)?;
+
+    // Apply rotation: t * cos + rotate_half(t) * sin
+    let q_out = (q_rot.broadcast_mul(&cos)? + q_rot_half.broadcast_mul(&sin)?)?;
+    let k_out = (k_rot.broadcast_mul(&cos)? + k_rot_half.broadcast_mul(&sin)?)?;
+
+    // Concatenate with unrotated part if exists
+    let q_out = match q_pass {
+        Some(pass) => Tensor::cat(&[&q_out, &pass], D::Minus1)?,
+        None => q_out,
+    };
+    let k_out = match k_pass {
+        Some(pass) => Tensor::cat(&[&k_out, &pass], D::Minus1)?,
+        None => k_out,
+    };
 
     Ok((q_out, k_out))
+}
+
+/// Rotate half of the tensor
+/// 
+/// Python implementation:
+/// x = rearrange(x, '... (d r) -> ... d r', r = 2)
+/// x1, x2 = x.unbind(dim = -1)
+/// x = stack((-x2, x1), dim = -1)
+/// return rearrange(x, '... d r -> ... (d r)')
+/// 
+/// This means: [a0, a1, b0, b1, ...] -> [-a1, a0, -b1, b0, ...]
+fn rotate_half(x: &Tensor) -> Result<Tensor> {
+    let shape = x.dims();
+    let last_dim = shape[shape.len() - 1];
+    let half = last_dim / 2;
+    
+    // Reshape to [..., half, 2]
+    let mut new_shape: Vec<usize> = shape[..shape.len()-1].to_vec();
+    new_shape.push(half);
+    new_shape.push(2);
+    let x = x.reshape(new_shape)?;
+    
+    // Split into x1, x2 (unbind on last dim)
+    let x1 = x.narrow(D::Minus1, 0, 1)?.squeeze(D::Minus1)?; // [..., half]
+    let x2 = x.narrow(D::Minus1, 1, 1)?.squeeze(D::Minus1)?; // [..., half]
+    
+    // Stack (-x2, x1) on last dim
+    let neg_x2 = x2.neg()?;
+    let rotated = Tensor::stack(&[&neg_x2, &x1], D::Minus1)?; // [..., half, 2]
+    
+    // Reshape back to [..., dim]
+    let mut final_shape: Vec<usize> = shape[..shape.len()-1].to_vec();
+    final_shape.push(last_dim);
+    rotated.reshape(final_shape)
 }
 
 #[cfg(test)]
@@ -374,7 +494,8 @@ mod tests {
         let rope_emb = RotaryEmbedding::new(64, 10000.0);
         let rope = rope_emb.forward(10, &device, DType::F32)?;
 
-        assert_eq!(rope.dims(), &[10, 32, 2]); // [seq_len, half_dim, 2]
+        // Should be [1, seq_len, dim] to match x_transformers
+        assert_eq!(rope.dims(), &[1, 10, 64]);
         Ok(())
     }
 

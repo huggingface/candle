@@ -7,7 +7,7 @@ use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Linear, VarBuilder};
 
 use super::embeddings::{
-    apply_rotary_emb, AdaLayerNormZero, AdaLayerNormZeroFinal, InputEmbedding, RotaryEmbedding,
+    apply_rotary_pos_emb_3d, AdaLayerNormZero, AdaLayerNormZeroFinal, InputEmbedding, RotaryEmbedding,
     TimestepEmbedding,
 };
 use crate::models::cosyvoice::config::DiTConfig;
@@ -79,9 +79,15 @@ impl Attention {
         let (batch, seq_len, _) = x.dims3()?;
 
         // QKV projections
-        let q = self.to_q.forward(x)?;
-        let k = self.to_k.forward(x)?;
-        let v = self.to_v.forward(x)?;
+        let q = self.to_q.forward(x)?;  // [B, T, H*D]
+        let k = self.to_k.forward(x)?;  // [B, T, H*D]
+        let v = self.to_v.forward(x)?;  // [B, T, H*D]
+
+        // Apply RoPE BEFORE reshape (matching Python implementation)
+        // Python: query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)
+        // where query is [B, T, H*D] and freqs is [1, T, rot_dim]
+        let q = apply_rotary_pos_emb_3d(&q, rope)?;
+        let k = apply_rotary_pos_emb_3d(&k, rope)?;
 
         // Reshape to [B, H, T, D]
         let q = q
@@ -96,9 +102,6 @@ impl Attention {
             .reshape((batch, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-
-        // Apply RoPE
-        let (q, k) = apply_rotary_emb(&q, &k, rope)?;
 
         // Attention
         let attn_weights = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * self.scale)?;

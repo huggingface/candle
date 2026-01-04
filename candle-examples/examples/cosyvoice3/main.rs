@@ -599,13 +599,20 @@ fn main() -> Result<()> {
         println!("Warning: Using placeholder speech tokens and speaker embedding");
         println!("         Full ONNX support needed for proper voice cloning");
         
-        let prompt_speech_tokens: Vec<u32> = (0..50).map(|i| (i * 100) as u32 % 6561).collect();
+        // Calculate number of tokens based on mel length
+        // mel_len = tokens * token_mel_ratio, so tokens = mel_len / token_mel_ratio
+        let mel_t = prompt_mel.dim(2)?;
+        let num_tokens = mel_t / 2; // token_mel_ratio = 2
+        let prompt_speech_tokens: Vec<u32> = (0..num_tokens).map(|i| (i * 100) as u32 % 6561).collect();
+        println!("Generated {} placeholder speech tokens for {} mel frames", num_tokens, mel_t);
+        
         let speaker_embedding = Tensor::randn(0f32, 1.0, (1, 192), &device)?.to_dtype(dtype)?;
         
         // Reshape mel for flow decoder: [1, 80, T] -> [1, T*2, 80]
-        let mel_t = prompt_mel.dim(2)?;
+        // Note: We need to match the expected prompt_mel shape which is [1, T*token_mel_ratio, 80]
+        // where T is the number of tokens
         let prompt_mel = prompt_mel.transpose(1, 2)?; // [1, T, 80]
-        // Upsample by token_mel_ratio (2x)
+        // Upsample by token_mel_ratio (2x) to match expected shape
         let prompt_mel = prompt_mel.unsqueeze(2)?; // [1, T, 1, 80]
         let prompt_mel = prompt_mel.broadcast_as((1, mel_t, 2, 80))?;
         let prompt_mel = prompt_mel.reshape((1, mel_t * 2, 80))?.to_dtype(dtype)?;
