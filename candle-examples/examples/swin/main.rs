@@ -131,7 +131,7 @@ pub fn main() -> anyhow::Result<()> {
         Some(model) => model.into(),
     };
 
-    let vb = if model_file.extension().map_or(false, |ext| ext == "bin") {
+    let vb = if model_file.extension().is_some_and(|ext| ext == "bin") {
         println!("loading pytorch weights from {:?}", model_file);
         VarBuilder::from_pth(&model_file, DType::F32, &device)?
     } else {

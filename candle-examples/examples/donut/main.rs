@@ -241,7 +241,7 @@ fn main() -> Result<()> {
         Ok(f) => f,
         Err(_) => repo.get("pytorch_model.bin")?,
     };
-    let vb = if model_file.extension().map_or(false, |ext| ext == "bin") {
+    let vb = if model_file.extension().is_some_and(|ext| ext == "bin") {
         VarBuilder::from_pth(&model_file, DType::F32, &device)?
     } else {
         unsafe { VarBuilder::from_mmaped_safetensors(&[&model_file], DType::F32, &device)? }
