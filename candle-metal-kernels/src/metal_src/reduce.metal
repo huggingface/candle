@@ -1014,31 +1014,49 @@ METAL_FUNC void layernorm(
     size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);
     size_t idx = start_idx + tid;
 
-    float tmp1 = 0;
-    float tmp2 = 0;
+    // Pass 1: Compute Mean
+    float local_sum = 0;
     while (idx < stop_idx) {
-        tmp1 += float(src[idx]);
-        tmp2 += float(src[idx]) * float(src[idx]);
+        local_sum += float(src[idx]);
         idx += block_dim;
     }
-    shared_memory[tid] = tmp1;
-    shared_memory[tid + block_dim] = tmp2;
-
+    shared_memory[tid] = local_sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
+    // Reduce Sum
     for (uint s = block_dim / 2; s > 0; s >>= 1) {
         if (tid < s) {
-            shared_memory[tid] = shared_memory[tid] + shared_memory[tid + s];
-            shared_memory[block_dim + tid] = shared_memory[block_dim + tid] + shared_memory[block_dim + tid + s];
+            shared_memory[tid] += shared_memory[tid + s];
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
+    if (tid == 0) {
+        shared_memory[0] /= float(el_to_sum_per_block); // Store Mean
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float mean = shared_memory[0];
 
-    /* wait for shared_memory[0] to be filled */
+    // Pass 2: Compute Variance
+    idx = start_idx + tid; // Reset index
+    float local_sq_diff = 0;
+    while (idx < stop_idx) {
+        float diff = float(src[idx]) - mean;
+        local_sq_diff += diff * diff;
+        idx += block_dim;
+    }
+    shared_memory[tid] = local_sq_diff;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    float mean = shared_memory[0] / float(el_to_sum_per_block);
-    float var = shared_memory[block_dim] / float(el_to_sum_per_block) - mean * mean;
+    // Reduce Variance
+    for (uint s = block_dim / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            shared_memory[tid] += shared_memory[tid + s];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    
+    // Compute Inv Norm
+    float var = shared_memory[0] / float(el_to_sum_per_block);
     float inv_norm = 1.0f / sqrt(var + eps);
     idx = start_idx + tid;
     while (idx < stop_idx) {

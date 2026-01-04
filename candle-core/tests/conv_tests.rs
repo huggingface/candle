@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{test_device, test_utils, Device, IndexOp, Tensor};
+use candle_core::{test_device, test_utils, DType, Device, IndexOp, Tensor};
 
 /* This test is based on the following script.
 import torch
@@ -892,3 +892,79 @@ test_device!(
     conv2d_grad_gpu,
     conv2_grad_metal
 );
+
+/// Test that conv_transpose2d works correctly with BF16 tensors.
+/// This test was added to catch a bug where the Metal kernel for BF16 conv_transpose2d
+/// was incorrectly using the 1D convolution kernel (CONVT1D_OP) instead of 2D (CONVT2D_OP).
+/// The bug was in candle-metal-kernels/src/metal_src/conv.metal line 606.
+#[allow(dead_code)] // Only used when metal feature is enabled
+fn conv_transpose2d_bf16(dev: &Device) -> Result<()> {
+    // Skip if BF16 is not supported on this device
+    if !dev.supports_bf16() {
+        return Ok(());
+    }
+
+    // Create test tensors in F32 first (for reference)
+    let t_f32 = Tensor::new(
+        &[
+            0.4056f32, -0.8689, 0.6843, 0.2395, 1.2279, -0.9287, -1.7030, 0.1370, 0.1866, 0.4145,
+            -0.6266, 0.3529, 2.2013, -0.6836, 0.2477, 1.3127, -0.6957, 0.3278,
+        ],
+        dev,
+    )?
+    .reshape((1, 2, 3, 3))?;
+
+    let w_f32 = Tensor::new(&[-0.9259f32, 1.3017], dev)?.reshape((2, 1, 1, 1))?;
+
+    // Run conv_transpose2d in F32 as reference
+    let res_f32 = t_f32.conv_transpose2d(&w_f32, 0, 0, 1, 1)?;
+    assert_eq!(res_f32.dims(), [1, 1, 3, 3]);
+
+    // Convert to BF16 and run the same operation
+    let t_bf16 = t_f32.to_dtype(DType::BF16)?;
+    let w_bf16 = w_f32.to_dtype(DType::BF16)?;
+
+    let res_bf16 = t_bf16.conv_transpose2d(&w_bf16, 0, 0, 1, 1)?;
+    assert_eq!(res_bf16.dims(), [1, 1, 3, 3]);
+
+    // Convert BF16 result back to F32 for comparison
+    let res_bf16_as_f32 = res_bf16.to_dtype(DType::F32)?;
+
+    // Check that the results are close (BF16 has lower precision, so use larger tolerance)
+    let diff = (res_f32.clone() - res_bf16_as_f32)?.abs()?.max_all()?;
+    let max_diff: f32 = diff.to_scalar()?;
+
+    // BF16 should give results within 1% of F32 for this simple operation
+    assert!(
+        max_diff < 0.1,
+        "BF16 conv_transpose2d result differs too much from F32: max_diff = {}",
+        max_diff
+    );
+
+    // Also verify the actual values make sense (not garbage from wrong kernel)
+    let res_f32_vals = test_utils::to_vec1_round(&res_f32.flatten_all()?, 4)?;
+    let res_bf16_vals =
+        test_utils::to_vec1_round(&res_bf16.to_dtype(DType::F32)?.flatten_all()?, 4)?;
+
+    // The values should be close element-wise
+    for (f32_val, bf16_val) in res_f32_vals.iter().zip(res_bf16_vals.iter()) {
+        let elem_diff = (f32_val - bf16_val).abs();
+        assert!(
+            elem_diff < 0.1,
+            "Element differs too much: F32={}, BF16={}, diff={}",
+            f32_val,
+            bf16_val,
+            elem_diff
+        );
+    }
+
+    Ok(())
+}
+
+// Note: This test only runs on Metal since that's where the BF16 bug was
+#[cfg(feature = "metal")]
+#[test]
+fn conv_transpose2d_bf16_metal() -> Result<()> {
+    let dev = Device::new_metal(0)?;
+    conv_transpose2d_bf16(&dev)
+}

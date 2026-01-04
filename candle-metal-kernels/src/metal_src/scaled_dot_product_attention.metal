@@ -325,7 +325,7 @@ template <typename T, int D>
     uint simd_lid [[thread_index_in_simdgroup]]) {
   constexpr int BN = 32;
   constexpr int BD = 32;
-  constexpr int elem_per_thread = D / BD;
+  constexpr int elem_per_thread = (D + BD - 1) / BD;
   constexpr int stride = BN * D;
 
   typedef float U;
@@ -351,7 +351,11 @@ template <typename T, int D>
 
   // Read the query and 0 the output accumulator
   for (int i = 0; i < elem_per_thread; i++) {
-    q[i] = static_cast<U>(scale) * queries[i];
+    if (simd_lid * elem_per_thread + i < D) {
+      q[i] = static_cast<U>(scale) * queries[i];
+    } else {
+      q[i] = 0;
+    }
   }
   for (int i = 0; i < elem_per_thread; i++) {
     o[i] = 0;
@@ -365,7 +369,11 @@ template <typename T, int D>
     if (!sdpa_vector_has_mask || mask[0]) {
       // Read the key
       for (int j = 0; j < elem_per_thread; j++) {
-        k[j] = keys[j];
+        if (simd_lid * elem_per_thread + j < D) {
+          k[j] = keys[j];
+        } else {
+          k[j] = 0;
+        }
       }
 
       // Compute the i-th score
@@ -389,7 +397,11 @@ template <typename T, int D>
 
       // Update the output accumulator
       for (int j = 0; j < elem_per_thread; j++) {
-        o[j] = o[j] * factor + exp_score * values[j];
+        if (simd_lid * elem_per_thread + j < D) {
+          o[j] = o[j] * factor + exp_score * values[j];
+        } else {
+          o[j] = o[j] * factor;
+        }
       }
     }
 
@@ -425,7 +437,9 @@ template <typename T, int D>
   // And write the output
   if (simd_lid == 0) {
     for (int i = 0; i < elem_per_thread; i++) {
-      out[i] = static_cast<T>(o[i]);
+      if (simd_gid * elem_per_thread + i < D) {
+        out[i] = static_cast<T>(o[i]);
+      }
     }
   }
 }
@@ -452,7 +466,7 @@ template <typename T, int D>
     uint simd_lid [[thread_index_in_simdgroup]]) {
   constexpr int BN = 8;
   constexpr int BD = 32;
-  constexpr int elem_per_thread = D / BD;
+  constexpr int elem_per_thread = (D + BD - 1) / BD;
   constexpr int stride = BN * D;
   constexpr int blocks = 32;
 
@@ -485,7 +499,11 @@ template <typename T, int D>
 
   // Read the query and 0 the output accumulator
   for (int i = 0; i < elem_per_thread; i++) {
-    q[i] = static_cast<U>(scale) * queries[i];
+    if (simd_lid * elem_per_thread + i < D) {
+      q[i] = static_cast<U>(scale) * queries[i];
+    } else {
+      q[i] = 0;
+    }
   }
   for (int i = 0; i < elem_per_thread; i++) {
     o[i] = 0;
@@ -499,7 +517,11 @@ template <typename T, int D>
     if (!sdpa_vector_has_mask || mask[0]) {
       // Read the key
       for (int i = 0; i < elem_per_thread; i++) {
-        k[i] = keys[i];
+        if (simd_lid * elem_per_thread + i < D) {
+          k[i] = keys[i];
+        } else {
+          k[i] = 0;
+        }
       }
 
       // Compute the i-th score
@@ -523,7 +545,11 @@ template <typename T, int D>
 
       // Update the output accumulator
       for (int i = 0; i < elem_per_thread; i++) {
-        o[i] = o[i] * factor + exp_score * values[i];
+        if (simd_lid * elem_per_thread + i < D) {
+          o[i] = o[i] * factor + exp_score * values[i];
+        } else {
+          o[i] = o[i] * factor;
+        }
       }
     }
 
@@ -567,7 +593,9 @@ template <typename T, int D>
       for (int j = 1; j < BN; j++) {
         output += outputs[simd_lid * BN + j];
       }
-      out[i] = static_cast<T>(output);
+      if (simd_lid * elem_per_thread + i < D) {
+          out[i] = static_cast<T>(output);
+      }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
@@ -584,7 +612,7 @@ template <typename T, int D>
     uint simd_lid [[thread_index_in_simdgroup]]) {
   constexpr int BN = 32;
   constexpr int BD = 32;
-  constexpr int elem_per_thread = D / BD;
+  constexpr int elem_per_thread = (D + BD - 1) / BD;
   constexpr int blocks = 32;
 
   typedef float U;
@@ -608,7 +636,11 @@ template <typename T, int D>
   // Now read the block into registers and then use shared memory to transpose
   // it
   for (int i = 0; i < elem_per_thread; i++) {
-    o[i] = partials[i];
+    if (simd_lid * elem_per_thread + i < D) {
+      o[i] = partials[i];
+    } else {
+      o[i] = 0;
+    }
   }
   for (int i = 0; i < elem_per_thread; i++) {
     outputs[simd_lid * BD + simd_gid] = o[i];
@@ -620,7 +652,9 @@ template <typename T, int D>
   // And write the output
   if (simd_lid == 0) {
     for (int i = 0; i < elem_per_thread; i++) {
-      out[i] = static_cast<T>(o[i]);
+      if (simd_gid * elem_per_thread + i < D) {
+        out[i] = static_cast<T>(o[i]);
+      }
     }
   }
 }
@@ -2190,6 +2224,8 @@ template <
       loader_v.load_unsafe();
     }
 
+
+
     // Do softmax
 
     // Temp variables
@@ -2287,6 +2323,384 @@ template <
   }
 }
 
+// Attention with Relative Positional Encoding from auxiliary buffers (term_h, term_w)
+template <
+    typename T,
+    int BQ,
+    int BK,
+    int BD,
+    int WM,
+    int WN,
+    typename MaskType = float,
+    typename AccumType = float>
+[[kernel, max_total_threads_per_threadgroup(WM * WN * 32)]] void attention_rel_pos(
+    const device T* Q [[buffer(0)]],
+    const device T* K [[buffer(1)]],
+    const device T* V [[buffer(2)]],
+    device T* O [[buffer(3)]],
+    const constant AttnParams* params [[buffer(4)]],
+    const device T* term_h [[buffer(5)]],
+    const device T* term_w [[buffer(6)]],
+    const constant int& h_dim [[buffer(7)]],
+    const constant int& w_dim [[buffer(8)]],
+    uint simd_lane_id [[thread_index_in_simdgroup]],
+    uint simd_group_id [[simdgroup_index_in_threadgroup]],
+    uint3 tid [[threadgroup_position_in_grid]]) {
+
+  // Move to correct block
+  ulong3 tidl{tid.x, tid.y, tid.z};
+
+  Q += tidl.z * params->Q_strides[0] + // Batch
+      tidl.y * params->Q_strides[1] + // Head
+      tidl.x * BQ * params->Q_strides[2]; // Seqeunce
+
+  ulong kv_head_idx = int(tid.y) / params->gqa_factor;
+  K += tidl.z * params->K_strides[0] + // Batch
+      kv_head_idx * params->K_strides[1]; // Head
+
+  V += tidl.z * params->V_strides[0] + // Batch
+      kv_head_idx * params->V_strides[1]; // Head
+
+  O += tidl.z * params->O_strides[0] + // Batch
+      tidl.y * params->O_strides[1] + // Head
+      tidl.x * BQ * params->O_strides[2]; // Seqeunce
+
+  // Prepare threadgroup memory
+  constexpr short padQ = 16 / sizeof(T);
+  constexpr short padK = 16 / sizeof(T);
+  constexpr short padV = 16 / sizeof(T);
+
+  constexpr short LDQ_tgp = BD + padQ;
+  constexpr short LDK_tgp = BK + padK;
+  constexpr short LDV_tgp = BD + padV;
+
+  constexpr short tgp_mem_0 = (BK + padK) * (BD);
+  constexpr short tgp_mem_1 = BK * (BD + padV);
+  constexpr short tgp_mem_s = tgp_mem_0 > tgp_mem_1 ? tgp_mem_0 : tgp_mem_1;
+
+  threadgroup T Q_smem[BQ * (BD + padQ)];
+  threadgroup T KV_smem[tgp_mem_s];
+
+  threadgroup T* Qs = Q_smem;
+  threadgroup T* Ks = KV_smem;
+  threadgroup T* Vs = KV_smem;
+
+  // Prepare block loaders
+  using QBlockLoader = BlockLoaderT<
+      /* typename T = */ T,
+      /* short BROWS = */ BQ,
+      /* short BCOLS = */ BD,
+      /* short kDstStrRow = */ LDQ_tgp,
+      /* short kDstStrCol = */ 1,
+      /* short reduction_dim = */ 1,
+      /* short tgp_size = */ WM * WN * 32>;
+
+  // K is loaded in transposed
+  using KBlockLoader = BlockLoaderT<
+      /* typename T = */ T,
+      /* short BROWS = */ BK,
+      /* short BCOLS = */ BD,
+      /* short kDstStrRow = */ 1,
+      /* short kDstStrCol = */ LDK_tgp,
+      /* short reduction_dim = */ 0,
+      /* short tgp_size = */ WM * WN * 32>;
+
+  using VBlockLoader = BlockLoaderT<
+      /* typename T = */ T,
+      /* short BROWS = */ BK,
+      /* short BCOLS = */ BD,
+      /* short kDstStrRow = */ LDV_tgp,
+      /* short kDstStrCol = */ 1,
+      /* short reduction_dim = */ 0,
+      /* short tgp_size = */ WM * WN * 32>;
+
+  QBlockLoader loader_q(
+      Q, params->Q_strides[2], Qs, simd_group_id, simd_lane_id);
+  KBlockLoader loader_k(
+      K, params->K_strides[2], Ks, simd_group_id, simd_lane_id);
+  VBlockLoader loader_v(
+      V, params->V_strides[2], Vs, simd_group_id, simd_lane_id);
+
+  TransformScale<T> ts(static_cast<T>(params->scale * 1.44269504089));
+
+  // Prepare MMA tiles
+  constexpr short kFragSize = 8; // MMAFrag size
+  using MMAFrag_acc_t = BaseMMAFrag<AccumType, kFragSize, kFragSize>;
+
+  constexpr int kNWarps = WM * WN;
+  static_assert(
+      BQ >= (kNWarps * kFragSize) && BQ % (kNWarps * kFragSize) == 0,
+      "Each simdgroup must host atleast 1 simdgroup matrix along Q sequence.");
+
+  // Q seq frags per warp
+  constexpr int TQ = BQ / (kNWarps * kFragSize);
+  // KV sequence frags (all warps load the same frags)
+  constexpr int TK = BK / kFragSize;
+  // HeadDim frags (all warps load the same frags)
+  constexpr int TD = BD / kFragSize;
+
+  static_assert(TQ == 1, "Check TQ");
+
+  MMATile<AccumType, TQ, 1, MMAFrag_acc_t> Qtile;
+  MMATile<AccumType, 1, TK, MMAFrag_acc_t> Ktile;
+  MMATile<AccumType, TQ, TK, MMAFrag_acc_t> Stile;
+  MMATile<AccumType, 1, 1, MMAFrag_acc_t> Vtile;
+  MMATile<AccumType, TQ, TD, MMAFrag_acc_t> Otile;
+
+  Otile.clear();
+
+  // Prepare mma tile offsets
+  const short2 simd_coord = MMAFrag_acc_t::get_coord(simd_lane_id);
+  const short sm = simd_coord.y;
+  const short sn = simd_coord.x;
+  const short tm = kFragSize * TQ * simd_group_id;
+
+  const short Qs_offset = (tm + sm) * LDQ_tgp + sn;
+  const short Ks_offset = sm * LDK_tgp + sn;
+  const short Vs_offset = sm * LDV_tgp + sn;
+
+  constexpr short Qs_tile_stride = kFragSize;
+  constexpr short Ks_tile_stride = kFragSize * LDK_tgp;
+
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  // Load Q blocks apply scale
+  if (!align_Q && int(tid.x) == (params->NQ_aligned)) {
+    loader_q.load_safe(short2(BD, params->qL_rem));
+  } else {
+    loader_q.load_unsafe();
+  }
+  loader_q.apply_inplace_op(ts);
+
+  // Init row reduction variables
+  constexpr short kRowsPT = decltype(Stile)::kRowsPerThread;
+
+  AccumType max_score[kRowsPT];
+  AccumType sum_score[kRowsPT] = {0};
+
+  // Init to -Inf
+  STEEL_PRAGMA_UNROLL
+  for (short i = 0; i < kRowsPT; ++i) {
+    max_score[i] = Limits<AccumType>::min;
+  }
+
+  int kb_lim = params->NK;
+
+  if (do_causal) {
+    int q_max = (tid.x + 1) * BQ + params->qL_off;
+    kb_lim = (q_max + BK - 1) / BK;
+  }
+
+  // Loop over KV seq length
+  for (int kb = 0; kb < kb_lim; kb++) {
+    // Load K block and apply scale
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (!align_K && kb == (params->NK_aligned)) {
+      loader_k.load_safe(short2(BD, params->kL_rem));
+    } else {
+      loader_k.load_unsafe();
+    }
+
+    // Do S = Q @ K.T
+    Stile.clear();
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    STEEL_PRAGMA_UNROLL
+    for (short dd = 0; dd < TD; dd++) {
+      simdgroup_barrier(mem_flags::mem_none);
+
+      Qtile.template load<T, 1, 1, LDQ_tgp, 1>(
+          &Qs[Qs_offset + dd * Qs_tile_stride]);
+      Ktile.template load<T, 1, 1, LDK_tgp, 1>(
+          &Ks[Ks_offset + dd * Ks_tile_stride]);
+
+      simdgroup_barrier(mem_flags::mem_none);
+
+      tile_matmad(Stile, Qtile, Ktile, Stile);
+    }
+    
+    // START Relative Positional Encoding Injection
+    {
+        using stile_t = decltype(Stile);
+        using selem_t = typename stile_t::elem_type;
+        
+        // Stride constants
+        int HH = h_dim * h_dim;
+        int WW = w_dim * w_dim;
+        int WHH = w_dim * HH;
+        int HWW = h_dim * WW;
+        
+        // Base batch index
+        // Correctly stride by Batch * Heads + HeadIdx
+        int b_idx = tid.z;
+        int head_idx = tid.y;
+        int batch_head_idx = b_idx * params->H + head_idx;
+        
+        int offset_h_base_batch = batch_head_idx * WHH;
+        int offset_w_base_batch = batch_head_idx * HWW;
+
+        STEEL_PRAGMA_UNROLL
+        for (short i = 0; i < stile_t::kTileRows; i++) {
+            const int row_pos = tid.x * BQ + params->qL_off + tm + sm + (i * stile_t::kFragRows);
+            const int y1 = row_pos / w_dim;
+            const int x1 = row_pos % w_dim;
+            
+            int offset_h_row = offset_h_base_batch + x1 * HH + y1 * h_dim;
+            int offset_w_row = offset_w_base_batch + y1 * WW + x1 * w_dim;
+
+            STEEL_PRAGMA_UNROLL
+            for (short j = 0; j < stile_t::kTileCols; j++) {
+                const int col_pos_base = kb * BK + sn + (j * stile_t::kFragCols);
+
+                STEEL_PRAGMA_UNROLL
+                for (short jj = 0; jj < stile_t::MMAFrag_t::kElemCols; jj++) {
+                    int c = col_pos_base + jj;
+                    int y2 = c / w_dim;
+                    int x2 = c % w_dim;
+                    
+                    int idx_h = offset_h_row + y2;
+                    int idx_w = offset_w_row + x2;
+                    
+                    T th = term_h[idx_h];
+                    T tw = term_w[idx_w];
+                    
+                    T val = (th + tw) * static_cast<T>(1.44269504089);
+                    
+                    Stile.frag_at(i, j)[jj] += val;
+                }
+            }
+        }
+    }
+    // END Relative Positional Encoding Injection
+
+    // Mask out length sequence
+    if (!align_K && kb == (params->NK_aligned)) {
+      using stile_t = decltype(Stile);
+      using selem_t = typename stile_t::elem_type;
+      constexpr auto neg_inf = -metal::numeric_limits<selem_t>::infinity();
+
+      STEEL_PRAGMA_UNROLL
+      for (short i = 0; i < stile_t::kTileRows; i++) {
+        STEEL_PRAGMA_UNROLL
+        for (short j = 0; j < stile_t::kTileCols; j++) {
+          short col_pos = sn + (j * stile_t::kFragCols);
+          STEEL_PRAGMA_UNROLL
+          for (short jj = 0; jj < stile_t::MMAFrag_t::kElemCols; jj++) {
+            if ((col_pos + jj) >= params->kL_rem) {
+              Stile.frag_at(i, j)[jj] = neg_inf;
+            }
+          }
+        }
+      }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Load V blocks
+    if (!align_K && kb == (params->NK_aligned)) {
+      loader_v.load_safe(short2(BD, params->kL_rem));
+    } else {
+      loader_v.load_unsafe();
+    }
+
+    // Do softmax
+
+    // Temp variables
+    AccumType new_max[kRowsPT];
+    AccumType factor[kRowsPT];
+    STEEL_PRAGMA_UNROLL
+    for (short i = 0; i < kRowsPT; ++i) {
+      new_max[i] = max_score[i];
+    }
+
+    // Row max
+    Stile.template row_reduce<MaxOp>(new_max);
+
+    // exp(Si - rowmax(Si))
+    Stile.template row_bin_op<ExpSubOp>(new_max);
+
+    // Factor exp(rowmax(Si) - rowmax(Si-1))
+    STEEL_PRAGMA_UNROLL
+    for (short i = 0; i < kRowsPT; ++i) {
+      factor[i] = fast::exp2(max_score[i] - new_max[i]);
+    }
+
+    // Save max for next iteration
+    STEEL_PRAGMA_UNROLL
+    for (short i = 0; i < kRowsPT; ++i) {
+      max_score[i] = new_max[i];
+    }
+
+    // Row Sum
+    AccumType sum_score_tmp[kRowsPT] = {0};
+    Stile.template row_reduce<SumOp>(sum_score_tmp);
+
+    // Update norm
+    STEEL_PRAGMA_UNROLL
+    for (short i = 0; i < kRowsPT; ++i) {
+      sum_score[i] = sum_score[i] * factor[i] + sum_score_tmp[i];
+    }
+
+    // Update O
+    Otile.template row_bin_op<MulOp>(factor);
+
+    // Load V into registers
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    STEEL_PRAGMA_UNROLL
+    for (short iq = 0; iq < TQ; iq++) {
+      STEEL_PRAGMA_UNROLL
+      for (short id = 0; id < TD; id++) {
+        STEEL_PRAGMA_UNROLL
+        for (short ik = 0; ik < TK; ik++) {
+          if constexpr (BD == 128) {
+            simdgroup_barrier(mem_flags::mem_none);
+          }
+
+          const short kk = ik * kFragSize;
+          const short dd = id * kFragSize;
+
+          Vtile.template load<T, 1, 1, LDV_tgp, 1>(
+              &Vs[Vs_offset + kk * LDV_tgp + dd]);
+
+          if constexpr (BD == 128) {
+            simdgroup_barrier(mem_flags::mem_none);
+          }
+
+          MMAFrag_acc_t::mma(
+              Otile.frag_at(iq, id),
+              Stile.frag_at(iq, ik),
+              Vtile.frag_at(0, 0),
+              Otile.frag_at(iq, id));
+        }
+      }
+    }
+    
+    // Prepare for next iteration
+    loader_k.next();
+    loader_v.next();
+  }
+
+  // Normalize output
+  Otile.template row_bin_op<DivOp>(sum_score);
+  threadgroup_barrier(mem_flags::mem_none);
+
+  // Store results
+  O += (tm + sm) * params->O_strides[2] + sn;
+
+  if (!align_Q && int(tid.x) == (params->NQ_aligned)) {
+    auto dst_tile_dims = short2(BD - sn, params->qL_rem - (tm + sm));
+
+    if (dst_tile_dims.x <= 0 || dst_tile_dims.y <= 0)
+      return;
+
+    Otile.template store_safe<T, 1, 1>(O, params->O_strides[2], dst_tile_dims);
+  } else {
+    Otile.template store<T, 1, 1>(O, params->O_strides[2]);
+  }
+}
+
 // clang-format off
 
 // SDPA full instantiations
@@ -2312,7 +2726,10 @@ template <
     instantiate_attn(iname, itype, 32, 32,  80, 4, 1, mname, mtype) \
     instantiate_attn(iname, itype, 32, 32,  72, 4, 1, mname, mtype) \
     instantiate_attn(iname, itype, 32, 32,  64, 4, 1, mname, mtype) \
-    instantiate_attn(iname, itype, 32, 32,  32, 4, 1, mname, mtype)
+    instantiate_attn(iname, itype, 32, 32,  32, 4, 1, mname, mtype) \
+    instantiate_attn(iname, itype, 64, 32,  64, 8, 1, mname, mtype) \
+    instantiate_attn(iname, itype, 64, 32,  32, 8, 1, mname, mtype) \
+    instantiate_attn(iname, itype, 64, 32,  16, 8, 1, mname, mtype)
 
 #define instantiate_attn_mask_helper(iname, itype) \
     instantiate_attn_shapes_helper(iname, itype, iname, itype) \
@@ -2321,6 +2738,146 @@ template <
 instantiate_attn_mask_helper(float16, half);
 instantiate_attn_mask_helper(bfloat16, bfloat16_t);
 instantiate_attn_mask_helper(float32, float);
+
+// Helper for xor reduction
+template<typename T>
+METAL_FUNC T simd_sum_xor_16(T val) {
+    val += simd_shuffle_xor(val, 8);
+    val += simd_shuffle_xor(val, 4);
+    val += simd_shuffle_xor(val, 2);
+    val += simd_shuffle_xor(val, 1);
+    return val;
+}
+
+// Packed vector kernel for head_dim=16
+// Processes 2 heads per SIMD group (32 threads)
+// Threads 0..15 -> Head 0
+// Threads 16..31 -> Head 1
+template <typename T>
+[[kernel]] void sdpa_vector_p16(
+    const device T* queries [[buffer(0)]],
+    const device T* keys [[buffer(1)]],
+    const device T* values [[buffer(2)]],
+    device T* out [[buffer(3)]],
+    const constant int& gqa_factor,
+    const constant int& N,
+    const constant size_t& k_stride,
+    const constant size_t& v_stride,
+    const constant float& scale,
+    const constant float& softcapping,
+    const device bool* mask [[function_constant(sdpa_vector_has_mask)]],
+    const constant int& mask_seq_stride [[function_constant(sdpa_vector_has_mask)]],
+    const constant int& mask_head_stride [[function_constant(sdpa_vector_has_mask)]],
+    uint3 tid [[threadgroup_position_in_grid]],
+    uint simd_gid [[simdgroup_index_in_threadgroup]],
+    uint simd_lid [[thread_index_in_simdgroup]]) {
+    
+    constexpr int D = 16;
+    
+    // Determine which head this thread is processing
+    // tid.y is the packed group index
+    // simd_lid / 16 determines sub-head (0 or 1)
+    const int sub_head = simd_lid / 16; // 0 or 1
+    const int lane = simd_lid % 16;     // 0..15
+    const int head_idx = tid.y * 2 + sub_head;
+    const int kv_head_idx = head_idx / gqa_factor;
+
+    // Adjust pointers
+    // Queries: Each head is contiguous with D=16
+    // queries ptr -> start of specific head's specific element
+    queries += head_idx * D + lane;
+    
+    // Keys/Values: Stride based
+    // K/V ptr -> start of specific KV head's specific element
+    keys += kv_head_idx * k_stride + lane;
+    values += kv_head_idx * v_stride + lane;
+    
+    if (sdpa_vector_has_mask) {
+        mask += head_idx * mask_head_stride; 
+    }
+    
+    out += head_idx * D + lane;
+    
+    typedef float U;
+    
+    // Load Query
+    // Each thread holds exactly one element of Q
+    U q = static_cast<U>(scale) * static_cast<U>(queries[0]);
+    
+    // Accumulators
+    U max_score = -INFINITY;
+    U sum_exp_score = 0;
+    U o = 0;
+    
+    // Loop over keys
+    for (int i = 0; i < N; i++) {
+        bool masked = false;
+        if (sdpa_vector_has_mask) {
+            // Check mask for current token i
+            if (!mask[i * mask_seq_stride]) {
+                masked = true;
+            }
+        }
+        
+        if (!masked) {
+            // Load K
+            U val = static_cast<U>(keys[i * 16]); 
+            
+            U score = q * val;
+            
+            // Reduce score across 16 lanes
+            score = simd_sum_xor_16(score);
+            
+            // Softcapping
+             if (softcapping != 1.0f) {
+                score = precise::tanh(score * (1.0f / softcapping)) * softcapping; 
+            }
+            
+            // Update Max/Sum
+            U new_max = max(max_score, score);
+            U factor = fast::exp2(max_score - new_max);
+            U exp_score = fast::exp2(score - new_max);
+            
+            max_score = new_max;
+            sum_exp_score = sum_exp_score * factor + exp_score;
+            
+            // Accumulate V
+            U v_val = static_cast<U>(values[i * 16]);
+            o = o * factor + exp_score * v_val;
+        }
+    }
+    
+    // Finalize
+    o = o / sum_exp_score;
+    
+    // Store
+    out[0] = static_cast<T>(o);
+}
+
+#define instantiate_sdpa_vector_p16(type) \
+  template [[host_name("sdpa_vector_p16_" #type)]] \
+  [[kernel]] void sdpa_vector_p16<type>( \
+      const device type* queries [[buffer(0)]], \
+      const device type* keys [[buffer(1)]], \
+      const device type* values [[buffer(2)]], \
+      device type* out [[buffer(3)]], \
+      const constant int& gqa_factor, \
+      const constant int& N, \
+      const constant size_t& k_stride, \
+      const constant size_t& v_stride, \
+      const constant float& scale, \
+      const constant float& softcapping, \
+      const device bool* mask [[function_constant(sdpa_vector_has_mask)]], \
+      const constant int& mask_seq_stride [[function_constant(sdpa_vector_has_mask)]], \
+      const constant int& mask_head_stride [[function_constant(sdpa_vector_has_mask)]], \
+      uint3 tid [[threadgroup_position_in_grid]], \
+      uint simd_gid [[simdgroup_index_in_threadgroup]], \
+      uint simd_lid [[thread_index_in_simdgroup]]);
+
+instantiate_sdpa_vector_p16(float)
+instantiate_sdpa_vector_p16(float16_t)
+instantiate_sdpa_vector_p16(bfloat16_t)
+
 
 // SDPA vector instantiations
 #define instantiate_sdpa_vector(type, head_dim)                              \
@@ -2373,6 +2930,7 @@ instantiate_attn_mask_helper(float32, float);
       uint simd_lid [[thread_index_in_simdgroup]]);                          \
 
 #define instantiate_sdpa_vector_heads(type) \
+  instantiate_sdpa_vector(type, 16)         \
   instantiate_sdpa_vector(type, 32)         \
   instantiate_sdpa_vector(type, 64)         \
   instantiate_sdpa_vector(type, 72)         \
@@ -2384,4 +2942,26 @@ instantiate_attn_mask_helper(float32, float);
 instantiate_sdpa_vector_heads(float)
 instantiate_sdpa_vector_heads(bfloat16_t)
 instantiate_sdpa_vector_heads(float16_t)
+
+#define instantiate_attn_rel_pos(tname, dtype, bq, bk, bd, wm, wn) \
+  instantiate_kernel(                                                    \
+      "steel_attention_rel_pos_" #tname "_bq" #bq "_bk" #bk "_bd" #bd            \
+      "_wm" #wm "_wn" #wn,                                \
+  attention_rel_pos, dtype, bq, bk, bd, wm, wn, float, float)
+
+#define instantiate_attn_rel_pos_shapes_helper(iname, itype)  \
+    instantiate_attn_rel_pos(iname, itype, 32, 16, 256, 4, 1) \
+    instantiate_attn_rel_pos(iname, itype, 32, 16, 128, 4, 1) \
+    instantiate_attn_rel_pos(iname, itype, 32, 32,  96, 4, 1) \
+    instantiate_attn_rel_pos(iname, itype, 32, 32,  80, 4, 1) \
+    instantiate_attn_rel_pos(iname, itype, 32, 32,  72, 4, 1) \
+    instantiate_attn_rel_pos(iname, itype, 32, 32,  64, 4, 1) \
+    instantiate_attn_rel_pos(iname, itype, 32, 32,  32, 4, 1) \
+    instantiate_attn_rel_pos(iname, itype, 64, 32,  64, 8, 1) \
+    instantiate_attn_rel_pos(iname, itype, 64, 32,  32, 8, 1) \
+    instantiate_attn_rel_pos(iname, itype, 64, 32,  16, 8, 1)
+
+instantiate_attn_rel_pos_shapes_helper(float16, half);
+instantiate_attn_rel_pos_shapes_helper(bfloat16, bfloat16_t);
+instantiate_attn_rel_pos_shapes_helper(float32, float);
     // clang-format on

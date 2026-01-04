@@ -75,7 +75,6 @@ METAL_FUNC void where_cond(
         }
         out[i] = select(f[f_idx], t[t_idx], ids[idx]);
     }
-
 }
 
 #define WHERE_OP(T, ID, FN_NAME)                                                                \

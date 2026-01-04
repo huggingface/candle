@@ -1029,7 +1029,8 @@ impl candle::CustomOp3 for Sdpa {
         let k_seq = k_l.dim(2)?;
 
         let mut implementation_supports_use_case = q_head == k_head;
-        let supported_head_dim = q_head == 32
+        let supported_head_dim = q_head == 16
+            || q_head == 32
             || q_head == 64
             || q_head == 72
             || q_head == 80
@@ -1152,6 +1153,7 @@ impl candle::CustomOp3 for Sdpa {
         } else if supports_sdpa_full {
             encoder.set_label("full_attention");
             if self.softcapping != 1. {
+                println!("DEBUG: metal_fwd softcapping={}", self.softcapping);
                 candle::bail!("SDPA full requires softcapping to be disabled (1.0)");
             }
 
@@ -1196,15 +1198,15 @@ impl candle::CustomOp3 for Sdpa {
                 q.device().device(),
                 &encoder,
                 q.device().kernels(),
-                q_l.start_offset(),
+                q_l.start_offset() * q.dtype().size_in_bytes(),
                 q_l.dims(),
                 q_l.stride(),
                 q.buffer(),
-                k_l.start_offset(),
+                k_l.start_offset() * k.dtype().size_in_bytes(),
                 k_l.dims(),
                 k_l.stride(),
                 k.buffer(),
-                v_l.start_offset(),
+                v_l.start_offset() * v.dtype().size_in_bytes(),
                 v.buffer(),
                 v_l.stride(),
                 mask_type,
@@ -1213,6 +1215,7 @@ impl candle::CustomOp3 for Sdpa {
                 &output,
                 out_layout.stride(),
                 self.scale,
+                self.softcapping,
                 self.do_causal,
                 itype,
             )
@@ -1273,4 +1276,147 @@ pub fn sdpa(
             do_causal,
         },
     )
+}
+
+#[cfg(feature = "metal")]
+pub fn sdpa_with_rel_pos(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    term_h: &Tensor,
+    term_w: &Tensor,
+    h: usize,
+    w: usize,
+    scale: f32,
+    softcapping: f32,
+) -> Result<Tensor> {
+    struct SdpaWithRelPos {
+        term_h: Tensor,
+        term_w: Tensor,
+        h: usize,
+        w: usize,
+        scale: f32,
+        softcapping: f32,
+    }
+
+    impl candle::CustomOp3 for SdpaWithRelPos {
+        fn name(&self) -> &'static str {
+            "sdpa-rel-pos"
+        }
+
+        fn cpu_fwd(
+            &self,
+            _: &candle::CpuStorage,
+            _: &Layout,
+            _: &candle::CpuStorage,
+            _: &Layout,
+            _: &candle::CpuStorage,
+            _: &Layout,
+        ) -> Result<(candle::CpuStorage, Shape)> {
+            candle::bail!("sdpa-rel-pos not implemented for cpu")
+        }
+
+        fn metal_fwd(
+            &self,
+            q: &candle::MetalStorage,
+            q_l: &Layout,
+            k: &candle::MetalStorage,
+            k_l: &Layout,
+            v: &candle::MetalStorage,
+            v_l: &Layout,
+        ) -> Result<(candle::MetalStorage, Shape)> {
+            use candle::backend::BackendStorage;
+            use candle_metal_kernels::SdpaDType;
+
+            let (th_s, _th_l) = self.term_h.storage_and_layout();
+            let (tw_s, _tw_l) = self.term_w.storage_and_layout();
+
+            let th_m = match &*th_s {
+                candle::Storage::Metal(m) => m,
+                _ => candle::bail!("term_h must be on metal"),
+            };
+            let tw_m = match &*tw_s {
+                candle::Storage::Metal(m) => m,
+                _ => candle::bail!("term_w must be on metal"),
+            };
+
+            let device = q.device();
+            let out_dims = vec![q_l.dim(0)?, q_l.dim(1)?, q_l.dim(2)?, v_l.dim(3)?];
+            let elem_count: usize = out_dims.iter().product();
+            let out_shape = Shape::from_dims(&out_dims);
+            let out_layout = Layout::contiguous(out_shape.clone());
+
+            let output = device.new_buffer(elem_count, q.dtype(), "sdpa_o")?;
+
+            let itype = match q.dtype() {
+                DType::BF16 => SdpaDType::BF16,
+                DType::F16 => SdpaDType::F16,
+                DType::F32 => SdpaDType::F32,
+                other => candle::bail!("unsupported sdpa type {other:?}"),
+            };
+
+            let encoder = device.command_encoder()?;
+            encoder.set_label("sdpa_rel_pos");
+
+            candle_metal_kernels::call_sdpa_full_with_rel_pos(
+                device.device(),
+                &encoder,
+                device.kernels(),
+                q_l.start_offset() * q.dtype().size_in_bytes(),
+                q_l.dims(),
+                q_l.stride(),
+                q.buffer(),
+                k_l.start_offset() * k.dtype().size_in_bytes(),
+                k_l.dims(),
+                k_l.stride(),
+                k.buffer(),
+                v_l.start_offset() * v.dtype().size_in_bytes(),
+                v.buffer(),
+                v_l.stride(),
+                &output,
+                out_layout.stride(),
+                th_m.buffer(),
+                tw_m.buffer(),
+                self.h as i32,
+                self.w as i32,
+                self.scale,
+                // self.softcapping, // Not supported yet
+                // false, // do_causal
+                itype,
+            )
+            .map_err(candle::Error::wrap)?;
+
+            let newstorage =
+                candle::MetalStorage::new(output, device.clone(), elem_count, q.dtype());
+            Ok((newstorage, out_shape))
+        }
+    }
+
+    q.apply_op3_no_bwd(
+        k,
+        v,
+        &SdpaWithRelPos {
+            term_h: term_h.clone(),
+            term_w: term_w.clone(),
+            h,
+            w,
+            scale,
+            softcapping,
+        },
+    )
+}
+
+#[cfg(not(feature = "metal"))]
+pub fn sdpa_with_rel_pos(
+    _q: &Tensor,
+    _k: &Tensor,
+    _v: &Tensor,
+    _term_h: &Tensor,
+    _term_w: &Tensor,
+    _h: usize,
+    _w: usize,
+    _scale: f32,
+    _softcapping: f32,
+) -> Result<Tensor> {
+    candle::bail!("sdpa_with_rel_pos is only available on metal")
 }
