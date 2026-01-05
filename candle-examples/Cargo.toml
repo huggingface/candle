@@ -84,7 +84,7 @@ mkl = [
     "candle-transformers/mkl",
 ]
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
-onnx = ["candle-onnx"]
+onnx = ["candle-onnx", "candle-transformers/onnx"]
 metal = ["candle/metal", "candle-nn/metal"]
 microphone = ["cpal", "rubato"]
 encodec = ["cpal", "symphonia", "rubato"]

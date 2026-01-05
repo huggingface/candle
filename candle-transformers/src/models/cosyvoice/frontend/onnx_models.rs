@@ -181,11 +181,21 @@ impl CosyVoice3Frontend {
         //    Output: [T, 80] (num_mel_bins=80)
         let fbank = self.kaldi_fbank.forward(audio_16k)?;
 
-        // 2. Mean normalization (subtract mean along time axis)
+        // 2. Truncate to maximum supported length
+        //    The campplus ONNX model has a hardcoded maximum of ~200 frames
+        //    (due to CAM layer positional encoding)
+        let max_frames = 200;
+        let fbank = if fbank.dim(0)? > max_frames {
+            fbank.narrow(0, 0, max_frames)?
+        } else {
+            fbank
+        };
+
+        // 3. Mean normalization (subtract mean along time axis)
         let mean = fbank.mean(0)?;
         let fbank_normalized = fbank.broadcast_sub(&mean)?;
 
-        // 3. Add batch dimension: [T, 80] -> [1, T, 80]
+        // 4. Add batch dimension: [T, 80] -> [1, T, 80]
         let fbank_batched = fbank_normalized.unsqueeze(0)?;
 
         // 4. Prepare ONNX inputs
