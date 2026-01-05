@@ -103,7 +103,7 @@ impl BufferReferenceStorage {
     #[instrument(skip(self, referece))]
     pub(crate) fn insert(&mut self, referece: BufferReference) -> BufferReferenceId {
         let id = self.storage.insert(referece);
-        return id;
+        id
     }
 
     pub fn get(&self, id: &BufferReferenceId) -> Option<&BufferReference> {

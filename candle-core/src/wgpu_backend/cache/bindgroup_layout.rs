@@ -208,6 +208,6 @@ impl BindgroupLayouts {
             }
         });
 
-        return BindgroupLayouts { data };
+        BindgroupLayouts { data }
     }
 }

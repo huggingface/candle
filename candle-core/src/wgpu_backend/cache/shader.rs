@@ -78,7 +78,7 @@ impl ShaderCache {
         }
 
         if let Some(p) = pipelines.get(pipeline) {
-            return Ok(p.clone());
+            Ok(p.clone())
         } else {
             panic!("Not expected")
         }
@@ -102,12 +102,12 @@ fn load_pipeline(
             zero_initialize_workgroup_memory: true,
         }
     };
-    return device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
         layout: Some(pipeline_layout),
         module: &shader,
         entry_point: Some(entry_point),
         compilation_options,
         cache: None,
-    });
+    })
 }

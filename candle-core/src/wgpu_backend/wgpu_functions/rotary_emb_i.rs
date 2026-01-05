@@ -42,7 +42,7 @@ pub fn queue_rotary_emb_i(
     let num_invocations_y = t * (d / 2);
 
     fn ceil_div(a: u32, b: u32) -> u32 {
-        if a == 0 { 0 } else { (a + b - 1) / b }
+        if a == 0 { 0 } else { a.div_ceil(b) }
     }
 
     let workgroup_count_x = ceil_div(num_invocations_x, workgroup_size_x);

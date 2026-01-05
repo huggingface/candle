@@ -340,7 +340,7 @@ impl ModelCache {
         }
 
         let buffer_reference = BufferReference::new(size, referenced_by_candle_storage);
-        return self.buffer_reference.insert(buffer_reference);
+        self.buffer_reference.insert(buffer_reference)
     }
 
     #[instrument(skip(self, dev, data))]
@@ -380,7 +380,7 @@ impl ModelCache {
 
         let buffer_reference =
             BufferReference::new_with_storage(length as u64, buffer, referenced_by_candle_storage);
-        return self.buffer_reference.insert(buffer_reference);
+        self.buffer_reference.insert(buffer_reference)
     }
 
     /// returns, wheter we should stop the command_queue and delete not used buffers
@@ -713,13 +713,13 @@ impl ModelCache {
             .cloned()
         {
             self.bindgroups.cached_bindgroup_use_counter_inc();
-            return bg;
+            bg
         } else {
             //create new bindgroup:
             let bindgroup_reference =
                 get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
             let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
-            return bindgroup_id;
+            bindgroup_id
         }
     }
 
@@ -733,6 +733,6 @@ impl ModelCache {
         let bindgroup = wgpu_functions::create_bindgroup(dev, bindgroup_d.clone(), self);
         let bindgroup = CachedBindgroup::new(bindgroup, bindgroup_d.clone());
 
-        return self.bindgroups.insert_bindgroup(bindgroup);
+        self.bindgroups.insert_bindgroup(bindgroup)
     }
 }

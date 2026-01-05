@@ -1147,7 +1147,7 @@ pub fn get_shader(device: &wgpu::Device, shader: &str) -> wgpu::ShaderModule {
             label: None,
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
         }, wgpu::ShaderRuntimeChecks { bounds_checks: false, force_loop_bounding: false });
-        return cs_module;
+        cs_module
     }
 }
 
