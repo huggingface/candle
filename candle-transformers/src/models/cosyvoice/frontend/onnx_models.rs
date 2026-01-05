@@ -102,10 +102,14 @@ impl CosyVoice3Frontend {
     /// # Returns
     /// * `speech_tokens` - Speech token sequence [1, T]
     pub fn extract_speech_tokens(&self, audio_16k: &Tensor) -> Result<Tensor> {
-        // 1. Extract whisper-style mel spectrogram
+        // 1. Extract whisper-style mel spectrogram using whisper-compatible method
+        //    This matches whisper.log_mel_spectrogram() exactly:
+        //    - Uses center padding (like torch.stft)
+        //    - Drops the last frame (magnitudes[..., :-1])
+        //    - Uses librosa-compatible mel filters
         //    Input: [samples] @ 16kHz
         //    Output: [1, 128, T] (n_mels=128)
-        let mel = self.whisper_mel.forward(audio_16k)?;
+        let mel = self.whisper_mel.forward_whisper(audio_16k)?;
 
         // Apply whisper-style log normalization
         let mel = Self::whisper_log_normalize(&mel)?;
@@ -235,16 +239,20 @@ impl CosyVoice3Frontend {
 
     /// Extract speech feat (mel spectrogram for flow decoder)
     ///
+    /// Uses Matcha-TTS style reflect padding to match Python implementation.
+    ///
     /// # Arguments
     /// * `audio_24k` - 24kHz sampled audio waveform [samples]
     ///
     /// # Returns
     /// * `speech_feat` - Mel spectrogram [1, T, 80]
     pub fn extract_speech_feat(&self, audio_24k: &Tensor) -> Result<Tensor> {
-        // 1. Extract mel spectrogram
+        // 1. Extract mel spectrogram with Matcha-TTS style padding
+        //    Matcha adds (n_fft - hop_size) / 2 reflect padding on each side
+        //    This ensures frame count matches Python exactly
         //    Input: [samples] @ 24kHz
         //    Output: [1, 80, T]
-        let mel = self.speech_feat_mel.forward(audio_24k)?;
+        let mel = self.speech_feat_mel.forward_cosyvoice(audio_24k)?;
 
         // 2. Transpose to [1, T, 80] format
         let mel = mel.transpose(1, 2)?;

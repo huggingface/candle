@@ -27,8 +27,43 @@ impl MelSpectrogram {
     }
 
     /// Create Whisper format configuration (for speech tokenizer)
+    ///
+    /// Uses librosa-compatible mel filters matching OpenAI Whisper's mel_filters.npz.
+    /// This ensures speech tokens match the Python implementation exactly.
     pub fn new_whisper_format(device: &Device) -> Result<Self> {
-        Self::new(16000, 400, 160, 128, device)
+        Self::new_whisper_with_librosa_filters(16000, 400, 160, 128, device)
+    }
+
+    /// Create Whisper format with librosa-compatible mel filters
+    ///
+    /// This matches OpenAI Whisper's mel spectrogram exactly by using
+    /// Slaney-normalized mel filters computed the same way as librosa.
+    fn new_whisper_with_librosa_filters(
+        sample_rate: usize,
+        n_fft: usize,
+        hop_length: usize,
+        n_mels: usize,
+        device: &Device,
+    ) -> Result<Self> {
+        let hann_window: Vec<f32> = (0..n_fft)
+            .map(|i| {
+                let x = (2.0 * PI * i as f64) / n_fft as f64;
+                (0.5 * (1.0 - x.cos())) as f32
+            })
+            .collect();
+
+        // Use librosa-compatible mel filters (Slaney normalization)
+        let mel_filters = Self::create_librosa_mel_filters(sample_rate, n_fft, n_mels);
+
+        Ok(Self {
+            sample_rate,
+            n_fft,
+            hop_length,
+            n_mels,
+            mel_filters,
+            hann_window,
+            target_device: device.clone(),
+        })
     }
 
     pub fn new(
@@ -58,6 +93,91 @@ impl MelSpectrogram {
             hann_window,
             target_device: device.clone(),
         })
+    }
+
+    /// Create librosa-compatible mel filter bank with Slaney normalization
+    ///
+    /// This matches `librosa.filters.mel(sr, n_fft, n_mels)` which is used by OpenAI Whisper.
+    /// Key differences from HTK-style:
+    /// 1. Uses Slaney formula for mel scale (not HTK)
+    /// 2. Applies area normalization (Slaney norm)
+    fn create_librosa_mel_filters(sample_rate: usize, n_fft: usize, n_mels: usize) -> Vec<f32> {
+        let n_freqs = n_fft / 2 + 1;
+        let mut filters = vec![0.0f32; n_mels * n_freqs];
+
+        // Slaney-style mel conversion (librosa default)
+        // f_mel = 15 * log2(1 + f / 700) for f >= 1000
+        // f_mel = 3 * f / 200 for f < 1000
+        let f_min = 0.0f64;
+        let f_max = sample_rate as f64 / 2.0;
+
+        // Compute mel breakpoint
+        let min_log_hz = 1000.0f64;
+        let min_log_mel = 15.0f64; // 3 * 1000 / 200
+        let logstep = 6.4f64.ln() / 27.0; // log(6.4) / 27 ≈ 0.0687
+
+        let hz_to_mel_slaney = |hz: f64| -> f64 {
+            if hz >= min_log_hz {
+                min_log_mel + (hz / min_log_hz).ln() / logstep
+            } else {
+                3.0 * hz / 200.0
+            }
+        };
+
+        let mel_to_hz_slaney = |mel: f64| -> f64 {
+            if mel >= min_log_mel {
+                min_log_hz * ((mel - min_log_mel) * logstep).exp()
+            } else {
+                200.0 * mel / 3.0
+            }
+        };
+
+        let mel_min = hz_to_mel_slaney(f_min);
+        let mel_max = hz_to_mel_slaney(f_max);
+
+        // Create n_mels + 2 equally spaced points in mel space
+        let mel_points: Vec<f64> = (0..=n_mels + 1)
+            .map(|i| mel_min + (mel_max - mel_min) * i as f64 / (n_mels + 1) as f64)
+            .collect();
+
+        // Convert back to Hz
+        let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz_slaney(m)).collect();
+
+        // Convert to FFT bin indices (using floor like librosa)
+        let fft_freqs: Vec<f64> = (0..n_freqs)
+            .map(|i| i as f64 * sample_rate as f64 / n_fft as f64)
+            .collect();
+
+        // Build triangular filters
+        for m in 0..n_mels {
+            let left_hz = hz_points[m];
+            let center_hz = hz_points[m + 1];
+            let right_hz = hz_points[m + 2];
+
+            // Compute filter weights for each frequency bin
+            for k in 0..n_freqs {
+                let freq = fft_freqs[k];
+
+                let weight = if freq >= left_hz && freq < center_hz {
+                    (freq - left_hz) / (center_hz - left_hz).max(1e-10)
+                } else if freq >= center_hz && freq <= right_hz {
+                    (right_hz - freq) / (right_hz - center_hz).max(1e-10)
+                } else {
+                    0.0
+                };
+
+                filters[m * n_freqs + k] = weight as f32;
+            }
+
+            // Apply Slaney normalization: normalize by bandwidth
+            // enorm = 2.0 / (hz_points[m+2] - hz_points[m])
+            let enorm = 2.0 / (right_hz - left_hz).max(1e-10);
+            for k in 0..n_freqs {
+                filters[m * n_freqs + k] *= enorm as f32;
+            }
+        }
+
+        filters
     }
 
     fn create_mel_filters(sample_rate: usize, n_fft: usize, n_mels: usize) -> Vec<f32> {
@@ -113,6 +233,26 @@ impl MelSpectrogram {
     /// * `mel` - [1, n_mels, T] Mel spectrogram
     #[allow(clippy::needless_range_loop)]
     pub fn forward(&self, audio: &Tensor) -> Result<Tensor> {
+        self.forward_internal(audio, false)
+    }
+
+    /// Extract Mel Spectrogram with CosyVoice/Matcha-TTS style padding
+    ///
+    /// This matches the Matcha-TTS mel_spectrogram function which adds
+    /// reflect padding of (n_fft - hop_size) / 2 on each side before STFT.
+    ///
+    /// # Arguments
+    /// * `audio` - [samples] or [1, samples] audio waveform
+    ///
+    /// # Returns
+    /// * `mel` - [1, n_mels, T] Mel spectrogram
+    #[allow(clippy::needless_range_loop)]
+    pub fn forward_cosyvoice(&self, audio: &Tensor) -> Result<Tensor> {
+        self.forward_internal(audio, true)
+    }
+
+    #[allow(clippy::needless_range_loop)]
+    fn forward_internal(&self, audio: &Tensor, use_matcha_padding: bool) -> Result<Tensor> {
         // Ensure 1D input
         let audio = if audio.dims().len() == 2 {
             audio.squeeze(0)?
@@ -123,8 +263,36 @@ impl MelSpectrogram {
         // Convert to CPU f32 for processing
         let samples: Vec<f32> = audio.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.to_vec1()?;
 
+        // Apply Matcha-TTS style reflect padding if requested
+        // pad_size = (n_fft - hop_length) / 2 on each side
+        let padded_samples = if use_matcha_padding {
+            let pad_size = (self.n_fft - self.hop_length) / 2;
+            let padded_len = samples.len() + 2 * pad_size;
+            let mut padded = vec![0.0f32; padded_len];
+
+            // Reflect padding on left side
+            for i in 0..pad_size {
+                padded[pad_size - 1 - i] = samples[(i + 1).min(samples.len() - 1)];
+            }
+
+            // Copy original samples
+            for (i, &s) in samples.iter().enumerate() {
+                padded[pad_size + i] = s;
+            }
+
+            // Reflect padding on right side
+            for i in 0..pad_size {
+                let src_idx = samples.len().saturating_sub(2 + i);
+                padded[pad_size + samples.len() + i] = samples[src_idx];
+            }
+
+            padded
+        } else {
+            samples.clone()
+        };
+
         // Calculate number of frames
-        let n_samples = samples.len();
+        let n_samples = padded_samples.len();
         let n_frames = if n_samples >= self.n_fft {
             (n_samples - self.n_fft) / self.hop_length + 1
         } else {
@@ -146,7 +314,7 @@ impl MelSpectrogram {
             let mut fft_input = vec![0.0f32; self.n_fft * 2]; // Complex representation
             for i in 0..self.n_fft {
                 if start + i < n_samples {
-                    fft_input[i * 2] = samples[start + i] * self.hann_window[i];
+                    fft_input[i * 2] = padded_samples[start + i] * self.hann_window[i];
                 }
             }
 
@@ -168,6 +336,97 @@ impl MelSpectrogram {
                     sum += power_spectrum[k] * self.mel_filters[m * n_freqs + k];
                 }
                 // Log-mel
+                mel_output[m * n_frames + frame_idx] = (sum.max(1e-10)).log10();
+            }
+        }
+
+        // Transfer to target device
+        let mel = Tensor::from_vec(mel_output, (self.n_mels, n_frames), &Device::Cpu)?;
+        mel.unsqueeze(0)?.to_device(&self.target_device)
+    }
+
+    /// Extract Mel Spectrogram matching OpenAI Whisper's implementation
+    ///
+    /// This method matches `whisper.log_mel_spectrogram()` exactly:
+    /// 1. Uses center=True padding (like torch.stft default)
+    /// 2. Drops the last frame (magnitudes[..., :-1])
+    /// 3. Uses librosa-compatible mel filters (Slaney normalization)
+    ///
+    /// # Arguments
+    /// * `audio` - [samples] or [1, samples] audio waveform at 16kHz
+    ///
+    /// # Returns
+    /// * `mel` - [1, n_mels, T] Mel spectrogram matching whisper output
+    #[allow(clippy::needless_range_loop)]
+    pub fn forward_whisper(&self, audio: &Tensor) -> Result<Tensor> {
+        // Ensure 1D input
+        let audio = if audio.dims().len() == 2 {
+            audio.squeeze(0)?
+        } else {
+            audio.clone()
+        };
+
+        // Convert to CPU f32 for processing
+        let samples: Vec<f32> = audio.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.to_vec1()?;
+        let n_samples = samples.len();
+
+        // Apply center padding (like torch.stft with center=True)
+        // Pad n_fft // 2 on each side
+        let pad_len = self.n_fft / 2;
+        let padded_len = n_samples + 2 * pad_len;
+        let mut padded_samples = vec![0.0f32; padded_len];
+        for i in 0..n_samples {
+            padded_samples[pad_len + i] = samples[i];
+        }
+
+        // Calculate number of frames (torch.stft formula with center=True)
+        // n_frames = 1 + n_samples // hop_length
+        let n_frames_stft = 1 + n_samples / self.hop_length;
+
+        // Whisper drops the last frame: magnitudes[..., :-1]
+        let n_frames = if n_frames_stft > 0 {
+            n_frames_stft - 1
+        } else {
+            0
+        };
+
+        if n_frames == 0 {
+            return Tensor::zeros((1, self.n_mels, 0), DType::F32, &self.target_device);
+        }
+
+        let n_freqs = self.n_fft / 2 + 1;
+        let mut mel_output = vec![0.0f32; self.n_mels * n_frames];
+
+        // Process frame by frame
+        for frame_idx in 0..n_frames {
+            let start = frame_idx * self.hop_length;
+
+            // Apply window + FFT
+            let mut fft_input = vec![0.0f32; self.n_fft * 2]; // Complex representation
+            for i in 0..self.n_fft {
+                if start + i < padded_len {
+                    fft_input[i * 2] = padded_samples[start + i] * self.hann_window[i];
+                }
+            }
+
+            // Use Cooley-Tukey FFT
+            let fft_out = Self::fft_complex(&fft_input);
+
+            // Calculate power spectrum (|STFT|^2)
+            let mut power_spectrum = vec![0.0f32; n_freqs];
+            for k in 0..n_freqs {
+                let re = fft_out[k * 2];
+                let im = fft_out[k * 2 + 1];
+                power_spectrum[k] = re * re + im * im;
+            }
+
+            // Apply Mel filters
+            for m in 0..self.n_mels {
+                let mut sum = 0.0f32;
+                for k in 0..n_freqs {
+                    sum += power_spectrum[k] * self.mel_filters[m * n_freqs + k];
+                }
+                // Log-mel (log10)
                 mel_output[m * n_frames + frame_idx] = (sum.max(1e-10)).log10();
             }
         }

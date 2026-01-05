@@ -277,6 +277,11 @@ struct Args {
     /// Enable tracing
     #[arg(long)]
     tracing: bool,
+
+    /// Save extracted features to a safetensors file (for debugging/comparison)
+    /// Only works with --prompt-wav
+    #[arg(long)]
+    save_features: Option<PathBuf>,
 }
 
 /// CosyVoice3 model wrapper
@@ -598,6 +603,29 @@ fn main() -> Result<()> {
             println!("Extracted {} speech tokens", prompt_tokens.len());
             println!("Speech feat shape: {:?}", feat.dims());
             println!("Speaker embedding shape: {:?}", embedding.dims());
+            
+            // Save features if requested
+            if let Some(save_path) = &args.save_features {
+                use candle::safetensors::save;
+                use std::collections::HashMap;
+                
+                println!("\nSaving extracted features to {:?}", save_path);
+                
+                // Convert tokens to i32 tensor (matching Python's format)
+                let tokens_i32: Vec<i32> = prompt_tokens.iter().map(|&x| x as i32).collect();
+                let tokens_tensor = Tensor::from_vec(tokens_i32.clone(), tokens_i32.len(), &Device::Cpu)?;
+                
+                let mut tensors: HashMap<String, Tensor> = HashMap::new();
+                tensors.insert("prompt_speech_tokens".to_string(), tokens_tensor);
+                tensors.insert("prompt_mel".to_string(), feat.to_dtype(DType::F32)?);
+                tensors.insert("speaker_embedding".to_string(), embedding.to_dtype(DType::F32)?);
+                
+                save(&tensors, save_path)?;
+                println!("Features saved successfully!");
+                println!("  prompt_speech_tokens: [{}] (i32)", prompt_tokens.len());
+                println!("  prompt_mel: {:?} (f32)", feat.dims());
+                println!("  speaker_embedding: {:?} (f32)", embedding.dims());
+            }
             
             // Move tensors to target device and dtype
             let prompt_mel = feat.to_device(&device)?.to_dtype(dtype)?;
