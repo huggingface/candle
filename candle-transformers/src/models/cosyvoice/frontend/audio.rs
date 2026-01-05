@@ -22,8 +22,41 @@ pub struct MelSpectrogram {
 
 impl MelSpectrogram {
     /// Create CosyVoice Speech Feat configuration
+    ///
+    /// Uses librosa-compatible mel filters matching Matcha-TTS mel_spectrogram.
+    /// This ensures prompt_mel matches the Python implementation exactly.
     pub fn new_cosyvoice_speech_feat(device: &Device) -> Result<Self> {
-        Self::new(24000, 1920, 480, 80, device)
+        // Matcha-TTS uses: librosa_mel_fn(sr=24000, n_fft=1920, n_mels=80, fmin=0, fmax=None)
+        Self::new_with_librosa_filters(24000, 1920, 480, 80, device)
+    }
+
+    /// Create MelSpectrogram with librosa-compatible mel filters
+    fn new_with_librosa_filters(
+        sample_rate: usize,
+        n_fft: usize,
+        hop_length: usize,
+        n_mels: usize,
+        device: &Device,
+    ) -> Result<Self> {
+        let hann_window: Vec<f32> = (0..n_fft)
+            .map(|i| {
+                let x = (2.0 * PI * i as f64) / n_fft as f64;
+                (0.5 * (1.0 - x.cos())) as f32
+            })
+            .collect();
+
+        // Use librosa-compatible mel filters (Slaney normalization)
+        let mel_filters = Self::create_librosa_mel_filters(sample_rate, n_fft, n_mels);
+
+        Ok(Self {
+            sample_rate,
+            n_fft,
+            hop_length,
+            n_mels,
+            mel_filters,
+            hann_window,
+            target_device: device.clone(),
+        })
     }
 
     /// Create Whisper format configuration (for speech tokenizer)
@@ -321,22 +354,24 @@ impl MelSpectrogram {
             // Use Cooley-Tukey FFT
             let fft_out = Self::fft_complex(&fft_input);
 
-            // Calculate power spectrum
-            let mut power_spectrum = vec![0.0f32; n_freqs];
+            // Calculate magnitude spectrum (not power!)
+            // Matcha-TTS uses: spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-9)
+            let mut magnitude_spectrum = vec![0.0f32; n_freqs];
             for k in 0..n_freqs {
                 let re = fft_out[k * 2];
                 let im = fft_out[k * 2 + 1];
-                power_spectrum[k] = re * re + im * im;
+                magnitude_spectrum[k] = (re * re + im * im + 1e-9).sqrt();
             }
 
             // Apply Mel filters
             for m in 0..self.n_mels {
                 let mut sum = 0.0f32;
                 for k in 0..n_freqs {
-                    sum += power_spectrum[k] * self.mel_filters[m * n_freqs + k];
+                    sum += magnitude_spectrum[k] * self.mel_filters[m * n_freqs + k];
                 }
-                // Log-mel
-                mel_output[m * n_frames + frame_idx] = (sum.max(1e-10)).log10();
+                // Log-mel (natural log, matching PyTorch's .log())
+                // spectral_normalize_torch: torch.log(torch.clamp(x, min=1e-5))
+                mel_output[m * n_frames + frame_idx] = (sum.max(1e-5)).ln();
             }
         }
 
@@ -562,10 +597,17 @@ impl KaldiFbank {
         }
     }
 
+    /// Create Povey window matching torchaudio.compliance.kaldi
+    ///
+    /// torchaudio uses: torch.hann_window(size, periodic=False).pow(0.85)
+    /// The non-periodic (symmetric) hann window formula is:
+    ///   w[i] = 0.5 * (1 - cos(2*pi*i / (N-1)))
+    /// Note: denominator is (N-1), not N
     fn create_povey_window(size: usize) -> Vec<f32> {
         (0..size)
             .map(|i| {
-                let hann = 0.5 - 0.5 * (2.0 * PI * i as f64 / size as f64).cos();
+                // Non-periodic hann window: denominator is (size - 1)
+                let hann = 0.5 - 0.5 * (2.0 * PI * i as f64 / (size - 1) as f64).cos();
                 hann.powf(0.85) as f32
             })
             .collect()
