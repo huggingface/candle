@@ -578,56 +578,65 @@ impl KaldiFbank {
         low_freq: f64,
         high_freq: f64,
     ) -> Vec<f32> {
-        let n_fft = padded_window_size / 2;
-        let mut filters = vec![0.0f32; n_mels * n_fft];
+        // Kaldi/torchaudio uses n_fft/2 bins (excluding Nyquist)
+        // The Nyquist bin is handled separately by padding with 0
+        let n_fft_bins = padded_window_size / 2;
+        // We store n_fft_bins + 1 to include the Nyquist bin (which will be 0)
+        let mut filters = vec![0.0f32; n_mels * (n_fft_bins + 1)];
 
+        // Kaldi/HTK mel scale
         let hz_to_mel = |hz: f64| -> f64 { 1127.0 * (1.0 + hz / 700.0).ln() };
-        let mel_to_hz = |mel: f64| -> f64 { 700.0 * ((mel / 1127.0).exp() - 1.0) };
 
         let mel_low = hz_to_mel(low_freq);
         let mel_high = hz_to_mel(high_freq);
 
-        let mel_points: Vec<f64> = (0..=n_mels + 1)
-            .map(|i| mel_low + (mel_high - mel_low) * i as f64 / (n_mels + 1) as f64)
-            .collect();
+        // Mel frequency delta between filter centers
+        let mel_freq_delta = (mel_high - mel_low) / (n_mels + 1) as f64;
 
-        let bin_points: Vec<f64> = mel_points
-            .iter()
-            .map(|&m| {
-                let hz = mel_to_hz(m);
-                (padded_window_size as f64 + 1.0) * hz / sample_rate as f64
-            })
-            .collect();
+        // FFT bin width in Hz
+        let fft_bin_width = sample_rate as f64 / padded_window_size as f64;
 
+        // Build triangular mel filters (matching torchaudio/Kaldi exactly)
+        // Filter m has:
+        //   left_mel = mel_low + m * mel_freq_delta
+        //   center_mel = mel_low + (m + 1) * mel_freq_delta
+        //   right_mel = mel_low + (m + 2) * mel_freq_delta
         for m in 0..n_mels {
-            let left = bin_points[m];
-            let center = bin_points[m + 1];
-            let right = bin_points[m + 2];
+            let left_mel = mel_low + m as f64 * mel_freq_delta;
+            let center_mel = mel_low + (m + 1) as f64 * mel_freq_delta;
+            let right_mel = mel_low + (m + 2) as f64 * mel_freq_delta;
 
-            for k in 0..n_fft {
-                let k_f = k as f64;
-                if k_f > left && k_f < center {
-                    filters[m * n_fft + k] = ((k_f - left) / (center - left)) as f32;
-                } else if k_f >= center && k_f < right {
-                    filters[m * n_fft + k] = ((right - k_f) / (right - center)) as f32;
-                }
+            for k in 0..n_fft_bins {
+                // Convert bin to mel: mel(k * fft_bin_width)
+                let k_mel = hz_to_mel(k as f64 * fft_bin_width);
+
+                // Compute triangular filter weight in mel domain
+                // up_slope = (mel - left_mel) / (center_mel - left_mel)
+                // down_slope = (right_mel - mel) / (right_mel - center_mel)
+                // weight = max(0, min(up_slope, down_slope))
+                let up_slope = (k_mel - left_mel) / (center_mel - left_mel);
+                let down_slope = (right_mel - k_mel) / (right_mel - center_mel);
+                let weight = up_slope.min(down_slope).max(0.0);
+
+                filters[m * (n_fft_bins + 1) + k] = weight as f32;
             }
+            // Nyquist bin (k = n_fft_bins) is left as 0
         }
 
         filters
     }
 
     /// Extract Fbank features
+    ///
+    /// Matches torchaudio.compliance.kaldi.fbank exactly:
+    /// Per-frame processing order: DC removal → pre-emphasis → window → FFT
     #[allow(clippy::needless_range_loop)]
     pub fn forward(&self, audio: &Tensor) -> Result<Tensor> {
         let samples: Vec<f32> = audio.flatten_all()?.to_dtype(DType::F32)?.to_vec1()?;
 
-        // Pre-emphasis
-        let preemphasized = self.apply_preemphasis(&samples);
-
         // Calculate number of frames
-        let n_frames = if preemphasized.len() >= self.window_size {
-            1 + (preemphasized.len() - self.window_size) / self.hop_length
+        let n_frames = if samples.len() >= self.window_size {
+            1 + (samples.len() - self.window_size) / self.hop_length
         } else {
             0
         };
@@ -636,67 +645,66 @@ impl KaldiFbank {
             return Tensor::zeros((0, self.n_mels), DType::F32, audio.device());
         }
 
-        let n_fft = self.padded_window_size / 2;
+        // rfft output has n_fft/2 + 1 bins (DC to Nyquist)
+        let n_fft_bins = self.padded_window_size / 2 + 1;
         let mut fbank = vec![0.0f32; n_frames * self.n_mels];
+        let alpha = self.preemphasis as f32;
 
         for frame_idx in 0..n_frames {
             let start = frame_idx * self.hop_length;
 
-            // Extract frame
+            // 1. Extract raw frame
             let mut frame: Vec<f32> = (0..self.window_size)
-                .map(|i| preemphasized.get(start + i).copied().unwrap_or(0.0))
+                .map(|i| samples.get(start + i).copied().unwrap_or(0.0))
                 .collect();
 
-            // Remove DC offset
+            // 2. DC offset removal (per-frame, before pre-emphasis)
             let mean: f32 = frame.iter().sum::<f32>() / frame.len() as f32;
             for x in frame.iter_mut() {
                 *x -= mean;
             }
 
-            // Apply Povey window
+            // 3. Pre-emphasis (per-frame, replicate padding style like torchaudio)
+            // frame[i] = frame[i] - alpha * frame[i-1], with frame[-1] = frame[0] (replicate)
+            if alpha != 0.0 {
+                let mut prev = frame[0]; // replicate padding: frame[-1] = frame[0]
+                for i in 0..self.window_size {
+                    let current = frame[i];
+                    frame[i] = current - alpha * prev;
+                    prev = current;
+                }
+            }
+
+            // 4. Apply Povey window
             for (i, x) in frame.iter_mut().enumerate() {
                 *x *= self.povey_window[i];
             }
 
-            // Zero padding
+            // 5. Zero padding
             frame.resize(self.padded_window_size, 0.0);
 
-            // FFT
+            // 6. FFT (returns n_fft_bins complex values as interleaved [re, im, re, im, ...])
             let fft_out = self.rfft(&frame);
 
-            // Power spectrum
-            let mut power = vec![0.0f32; n_fft];
-            for k in 0..n_fft {
+            // 7. Power spectrum from rfft output (all n_fft_bins including Nyquist)
+            let mut power = vec![0.0f32; n_fft_bins];
+            for k in 0..n_fft_bins {
                 let re = fft_out[k * 2];
                 let im = fft_out[k * 2 + 1];
                 power[k] = re * re + im * im;
             }
 
-            // Mel filter + log
+            // 8. Mel filter + log
             for m in 0..self.n_mels {
                 let mut sum = 0.0f32;
-                for k in 0..n_fft {
-                    sum += power[k] * self.mel_filters[m * n_fft + k];
+                for k in 0..n_fft_bins {
+                    sum += power[k] * self.mel_filters[m * n_fft_bins + k];
                 }
                 fbank[frame_idx * self.n_mels + m] = sum.max(f32::EPSILON).ln();
             }
         }
 
         Tensor::from_vec(fbank, (n_frames, self.n_mels), audio.device())
-    }
-
-    fn apply_preemphasis(&self, samples: &[f32]) -> Vec<f32> {
-        if samples.is_empty() || self.preemphasis == 0.0 {
-            return samples.to_vec();
-        }
-
-        let alpha = self.preemphasis as f32;
-        let mut result = Vec::with_capacity(samples.len());
-        result.push(samples[0]);
-        for i in 1..samples.len() {
-            result.push(samples[i] - alpha * samples[i - 1]);
-        }
-        result
     }
 
     fn rfft(&self, input: &[f32]) -> Vec<f32> {
