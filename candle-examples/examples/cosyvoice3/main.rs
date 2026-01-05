@@ -49,12 +49,12 @@ use std::path::PathBuf;
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
+#[cfg(feature = "onnx")]
+use candle_transformers::models::cosyvoice::CosyVoice3Frontend;
 use candle_transformers::models::cosyvoice::{
     CausalHiFTGenerator, CausalMaskedDiffWithDiT, CosyVoice3LM, DiT, FlowConfig, HiFTConfig,
     MelSpectrogram, SamplingConfig,
 };
-#[cfg(feature = "onnx")]
-use candle_transformers::models::cosyvoice::CosyVoice3Frontend;
 use tokenizers::Tokenizer;
 
 /// Special token IDs
@@ -210,7 +210,10 @@ struct Args {
     text: String,
 
     /// Prompt text for zero-shot mode
-    #[arg(long, default_value = "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。")]
+    #[arg(
+        long,
+        default_value = "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
+    )]
     prompt_text: String,
 
     /// Prompt audio file path (WAV format)
@@ -319,7 +322,7 @@ impl CosyVoice3Model {
         // input_embedding maps vocab -> output_size (mel_dim), not dit.dim
         let flow_decoder = CausalMaskedDiffWithDiT::new(
             flow_config.vocab_size,
-            flow_config.output_size,  // input_size = mel_dim (80), not dit.dim
+            flow_config.output_size, // input_size = mel_dim (80), not dit.dim
             flow_config.output_size,
             config.spk_embed_dim,
             flow_config.token_mel_ratio,
@@ -380,9 +383,12 @@ impl CosyVoice3Model {
         let text_tokens_tensor =
             Tensor::from_slice(&text_tokens, (1, text_tokens.len()), &self.device)?
                 .to_dtype(DType::U32)?;
-        let prompt_text_tensor =
-            Tensor::from_slice(&prompt_text_tokens, (1, prompt_text_tokens.len()), &self.device)?
-                .to_dtype(DType::U32)?;
+        let prompt_text_tensor = Tensor::from_slice(
+            &prompt_text_tokens,
+            (1, prompt_text_tokens.len()),
+            &self.device,
+        )?
+        .to_dtype(DType::U32)?;
         let prompt_speech_tensor = Tensor::from_slice(
             prompt_speech_tokens,
             (1, prompt_speech_tokens.len()),
@@ -478,8 +484,8 @@ fn main() -> Result<()> {
     // Load configuration
     let config_path = args.model_dir.join("config.json");
     println!("Loading config from {:?}", config_path);
-    let config: RuntimeConfig =
-        serde_json::from_reader(std::fs::File::open(&config_path)?).context("Failed to load config.json")?;
+    let config: RuntimeConfig = serde_json::from_reader(std::fs::File::open(&config_path)?)
+        .context("Failed to load config.json")?;
 
     if args.verbose {
         println!("Config: {:#?}", config);
@@ -488,7 +494,7 @@ fn main() -> Result<()> {
     // Load tokenizer
     let tokenizer_path = args.model_dir.join("tokenizer");
     println!("Loading tokenizer from {:?}", tokenizer_path);
-    
+
     // Try to load tokenizer.json first, then fall back to building from vocab.json
     let tokenizer = if tokenizer_path.join("tokenizer.json").exists() {
         Tokenizer::from_file(tokenizer_path.join("tokenizer.json")).map_err(E::msg)?
@@ -497,21 +503,24 @@ fn main() -> Result<()> {
         println!("tokenizer.json not found, building from vocab.json + merges.txt...");
         let vocab_path = tokenizer_path.join("vocab.json");
         let merges_path = tokenizer_path.join("merges.txt");
-        
+
         // Read vocab and parse merges
-        let vocab_str = std::fs::read_to_string(&vocab_path)
-            .context("Failed to read vocab.json")?;
+        let vocab_str =
+            std::fs::read_to_string(&vocab_path).context("Failed to read vocab.json")?;
         let _vocab: std::collections::HashMap<String, u32> = serde_json::from_str(&vocab_str)?;
-        
-        let _merges_str = std::fs::read_to_string(&merges_path)
-            .context("Failed to read merges.txt")?;
-        
+
+        let _merges_str =
+            std::fs::read_to_string(&merges_path).context("Failed to read merges.txt")?;
+
         // Use tokenizers' BPE from_file
         use tokenizers::models::bpe::BPE;
-        let bpe = BPE::from_file(&vocab_path.to_string_lossy(), &merges_path.to_string_lossy())
-            .build()
-            .map_err(E::msg)?;
-        
+        let bpe = BPE::from_file(
+            &vocab_path.to_string_lossy(),
+            &merges_path.to_string_lossy(),
+        )
+        .build()
+        .map_err(E::msg)?;
+
         Tokenizer::new(bpe)
     };
 
@@ -523,24 +532,15 @@ fn main() -> Result<()> {
     let flow_path = args.model_dir.join("flow.safetensors");
     let hift_path = args.model_dir.join("hift.safetensors");
 
-    let llm_vb =
-        unsafe { VarBuilder::from_mmaped_safetensors(&[&llm_path], dtype, &device)? };
-    let flow_vb =
-        unsafe { VarBuilder::from_mmaped_safetensors(&[&flow_path], dtype, &device)? };
-    let hift_vb =
-        unsafe { VarBuilder::from_mmaped_safetensors(&[&hift_path], dtype, &device)? };
+    let llm_vb = unsafe { VarBuilder::from_mmaped_safetensors(&[&llm_path], dtype, &device)? };
+    let flow_vb = unsafe { VarBuilder::from_mmaped_safetensors(&[&flow_path], dtype, &device)? };
+    let hift_vb = unsafe { VarBuilder::from_mmaped_safetensors(&[&hift_path], dtype, &device)? };
 
     println!("Weights loaded in {:?}", start.elapsed());
 
     // Create model
-    let mut model = CosyVoice3Model::new(
-        config,
-        llm_vb,
-        flow_vb,
-        hift_vb,
-        tokenizer,
-        device.clone(),
-    )?;
+    let mut model =
+        CosyVoice3Model::new(config, llm_vb, flow_vb, hift_vb, tokenizer, device.clone())?;
 
     println!("Model initialized");
 
@@ -555,21 +555,33 @@ fn main() -> Result<()> {
     // Prepare prompt data
     // With ONNX feature enabled, we can extract features directly from audio
     // Without ONNX, use pre-extracted features or placeholder data
-    
+
     // Load prompt features
-    let (prompt_speech_tokens, prompt_mel, speaker_embedding) = if let Some(features_path) = &args.prompt_features {
+    let (prompt_speech_tokens, prompt_mel, speaker_embedding) = if let Some(features_path) =
+        &args.prompt_features
+    {
         println!("Loading prompt features from {:?}", features_path);
         let features = candle::safetensors::load(features_path, &device)?;
-        
+
         // Load speech tokens - may be saved as I32, convert to U32
         let prompt_tokens_tensor = features
             .get("prompt_speech_tokens")
             .context("Missing prompt_speech_tokens in features file")?;
         let prompt_tokens: Vec<u32> = if prompt_tokens_tensor.dtype() == DType::I64 {
-            prompt_tokens_tensor.flatten_all()?.to_vec1::<i64>()?.into_iter().map(|x| x as u32).collect()
+            prompt_tokens_tensor
+                .flatten_all()?
+                .to_vec1::<i64>()?
+                .into_iter()
+                .map(|x| x as u32)
+                .collect()
         } else {
             // Assume I32
-            prompt_tokens_tensor.flatten_all()?.to_vec1::<i32>()?.into_iter().map(|x| x as u32).collect()
+            prompt_tokens_tensor
+                .flatten_all()?
+                .to_vec1::<i32>()?
+                .into_iter()
+                .map(|x| x as u32)
+                .collect()
         };
         let prompt_mel = features
             .get("prompt_mel")
@@ -579,7 +591,7 @@ fn main() -> Result<()> {
             .get("speaker_embedding")
             .context("Missing speaker_embedding in features file")?
             .clone();
-        
+
         (prompt_tokens, prompt_mel, spk_embed)
     } else if let Some(wav_path) = &args.prompt_wav {
         // Extract features from audio
@@ -587,67 +599,80 @@ fn main() -> Result<()> {
         {
             println!("Loading CosyVoice3Frontend for prompt feature extraction...");
             let frontend = CosyVoice3Frontend::load(&args.model_dir, &Device::Cpu)?;
-            
+
             println!("Loading prompt audio from {:?}", wav_path);
             let (pcm_data, sample_rate) = candle_examples::audio::pcm_decode(wav_path)
                 .context("Failed to decode prompt audio")?;
-            
+
             let audio_tensor = Tensor::from_vec(pcm_data.clone(), pcm_data.len(), &Device::Cpu)?;
-            
+
             println!("Extracting prompt features using ONNX models...");
-            let (tokens, feat, embedding) = frontend.extract_prompt_features(&audio_tensor, sample_rate as usize)?;
-            
+            let (tokens, feat, embedding) =
+                frontend.extract_prompt_features(&audio_tensor, sample_rate as usize)?;
+
             // Convert tokens to Vec<u32>
-            let prompt_tokens: Vec<u32> = tokens.flatten_all()?.to_vec1::<i64>()?
-                .into_iter().map(|x| x as u32).collect();
-            
+            let prompt_tokens: Vec<u32> = tokens
+                .flatten_all()?
+                .to_vec1::<i64>()?
+                .into_iter()
+                .map(|x| x as u32)
+                .collect();
+
             println!("Extracted {} speech tokens", prompt_tokens.len());
             println!("Speech feat shape: {:?}", feat.dims());
             println!("Speaker embedding shape: {:?}", embedding.dims());
-            
+
             // Save features if requested
             if let Some(save_path) = &args.save_features {
                 use candle::safetensors::save;
                 use std::collections::HashMap;
-                
+
                 println!("\nSaving extracted features to {:?}", save_path);
-                
+
                 // Convert tokens to i32 tensor (matching Python's format)
                 let tokens_i32: Vec<i32> = prompt_tokens.iter().map(|&x| x as i32).collect();
-                let tokens_tensor = Tensor::from_vec(tokens_i32.clone(), tokens_i32.len(), &Device::Cpu)?;
-                
+                let tokens_tensor =
+                    Tensor::from_vec(tokens_i32.clone(), tokens_i32.len(), &Device::Cpu)?;
+
                 let mut tensors: HashMap<String, Tensor> = HashMap::new();
                 tensors.insert("prompt_speech_tokens".to_string(), tokens_tensor);
                 tensors.insert("prompt_mel".to_string(), feat.to_dtype(DType::F32)?);
-                tensors.insert("speaker_embedding".to_string(), embedding.to_dtype(DType::F32)?);
-                
+                tensors.insert(
+                    "speaker_embedding".to_string(),
+                    embedding.to_dtype(DType::F32)?,
+                );
+
                 save(&tensors, save_path)?;
                 println!("Features saved successfully!");
                 println!("  prompt_speech_tokens: [{}] (i32)", prompt_tokens.len());
                 println!("  prompt_mel: {:?} (f32)", feat.dims());
                 println!("  speaker_embedding: {:?} (f32)", embedding.dims());
             }
-            
+
             // Move tensors to target device and dtype
             let prompt_mel = feat.to_device(&device)?.to_dtype(dtype)?;
             let speaker_embedding = embedding.to_device(&device)?.to_dtype(dtype)?;
-            
+
             (prompt_tokens, prompt_mel, speaker_embedding)
         }
-        
+
         #[cfg(not(feature = "onnx"))]
         {
             // Fallback: extract mel but use placeholder for tokens and embedding
             println!("Loading prompt audio from {:?}", wav_path);
             println!("Warning: ONNX feature not enabled, using placeholder speech tokens and speaker embedding");
             println!("         For full voice cloning, compile with --features onnx");
-            
+
             let (pcm_data, sample_rate) = candle_examples::audio::pcm_decode(wav_path)
                 .context("Failed to decode prompt audio")?;
-            
+
             // Resample to 24kHz if needed
             let pcm_data = if sample_rate != model.sample_rate() as u32 {
-                println!("Resampling from {} to {} Hz", sample_rate, model.sample_rate());
+                println!(
+                    "Resampling from {} to {} Hz",
+                    sample_rate,
+                    model.sample_rate()
+                );
                 candle_transformers::models::cosyvoice::resample(
                     &Tensor::from_vec(pcm_data.clone(), pcm_data.len(), &device)?,
                     sample_rate as usize,
@@ -657,37 +682,41 @@ fn main() -> Result<()> {
             } else {
                 pcm_data
             };
-            
+
             // Extract mel spectrogram
             let audio_tensor = Tensor::from_vec(pcm_data.clone(), pcm_data.len(), &device)?;
             let prompt_mel = model.mel_extractor.forward(&audio_tensor)?;
             println!("Extracted prompt mel shape: {:?}", prompt_mel.shape());
-            
+
             // Calculate number of tokens based on mel length
             let mel_t = prompt_mel.dim(2)?;
             let num_tokens = mel_t / 2; // token_mel_ratio = 2
-            let prompt_speech_tokens: Vec<u32> = (0..num_tokens).map(|i| (i * 100) as u32 % 6561).collect();
-            println!("Generated {} placeholder speech tokens for {} mel frames", num_tokens, mel_t);
-            
+            let prompt_speech_tokens: Vec<u32> =
+                (0..num_tokens).map(|i| (i * 100) as u32 % 6561).collect();
+            println!(
+                "Generated {} placeholder speech tokens for {} mel frames",
+                num_tokens, mel_t
+            );
+
             let speaker_embedding = Tensor::randn(0f32, 1.0, (1, 192), &device)?.to_dtype(dtype)?;
-            
+
             // Reshape mel for flow decoder: [1, 80, T] -> [1, T*2, 80]
             let prompt_mel = prompt_mel.transpose(1, 2)?; // [1, T, 80]
             let prompt_mel = prompt_mel.unsqueeze(2)?; // [1, T, 1, 80]
             let prompt_mel = prompt_mel.broadcast_as((1, mel_t, 2, 80))?;
             let prompt_mel = prompt_mel.reshape((1, mel_t * 2, 80))?.to_dtype(dtype)?;
-            
+
             (prompt_speech_tokens, prompt_mel, speaker_embedding)
         }
     } else {
         // Use placeholder data
         println!("No prompt audio provided, using placeholder data");
         println!("Note: For voice cloning, provide --prompt-wav or --prompt-features");
-        
+
         let prompt_speech_tokens: Vec<u32> = (0..50).map(|i| (i * 100) as u32 % 6561).collect();
         let prompt_mel = Tensor::randn(0f32, 1.0, (1, 100, 80), &device)?.to_dtype(dtype)?;
         let speaker_embedding = Tensor::randn(0f32, 1.0, (1, 192), &device)?.to_dtype(dtype)?;
-        
+
         (prompt_speech_tokens, prompt_mel, speaker_embedding)
     };
 
@@ -711,7 +740,7 @@ fn main() -> Result<()> {
             // Cross-lingual uses the same flow but without prompt text tokens
             model.inference_zero_shot(
                 &args.text,
-                "",  // Empty prompt text for cross-lingual
+                "", // Empty prompt text for cross-lingual
                 &prompt_speech_tokens,
                 &prompt_mel,
                 &speaker_embedding,
@@ -720,7 +749,10 @@ fn main() -> Result<()> {
             )?
         }
         Mode::Instruct => {
-            let instruct_text = args.instruct.as_deref().unwrap_or("You are a helpful assistant.<|endofprompt|>");
+            let instruct_text = args
+                .instruct
+                .as_deref()
+                .unwrap_or("You are a helpful assistant.<|endofprompt|>");
             model.inference_zero_shot(
                 &args.text,
                 instruct_text,
@@ -743,7 +775,7 @@ fn main() -> Result<()> {
     } else {
         waveform
     };
-    
+
     let pcm_data: Vec<f32> = pcm.to_dtype(DType::F32)?.to_vec1()?;
 
     // Calculate audio duration

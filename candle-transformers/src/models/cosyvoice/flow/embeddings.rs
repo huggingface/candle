@@ -104,7 +104,11 @@ impl AdaLayerNormZero {
     ///
     /// # Returns
     /// * `(x, gate_msa, shift_mlp, scale_mlp, gate_mlp)` - modulation parameters
-    pub fn forward(&self, x: &Tensor, emb: &Tensor) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
+    pub fn forward(
+        &self,
+        x: &Tensor,
+        emb: &Tensor,
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
         // Apply LayerNorm first (elementwise_affine=False)
         let x_norm = layer_norm_no_affine(x)?;
 
@@ -125,7 +129,9 @@ impl AdaLayerNormZero {
         let scale_msa_expanded = scale_msa.unsqueeze(1)?;
         let shift_msa_expanded = shift_msa.unsqueeze(1)?;
         let scale_factor = (scale_msa_expanded + 1.0)?;
-        let x_modulated = x_norm.broadcast_mul(&scale_factor)?.broadcast_add(&shift_msa_expanded)?;
+        let x_modulated = x_norm
+            .broadcast_mul(&scale_factor)?
+            .broadcast_add(&shift_msa_expanded)?;
 
         Ok((x_modulated, gate_msa, shift_mlp, scale_mlp, gate_mlp))
     }
@@ -190,7 +196,7 @@ pub struct CausalConvPositionEmbedding {
 impl CausalConvPositionEmbedding {
     pub fn new(dim: usize, kernel_size: usize, groups: usize, vb: VarBuilder) -> Result<Self> {
         let conv_config = Conv1dConfig {
-            padding: 0,  // Manual causal padding
+            padding: 0, // Manual causal padding
             stride: 1,
             dilation: 1,
             groups,
@@ -247,12 +253,8 @@ impl InputEmbedding {
         let proj = candle_nn::linear(in_dim, out_dim, vb.pp("proj"))?;
 
         // Causal conv position embedding: kernel_size=31, groups=16
-        let conv_pos_embed = CausalConvPositionEmbedding::new(
-            out_dim,
-            31,
-            16,
-            vb.pp("conv_pos_embed"),
-        )?;
+        let conv_pos_embed =
+            CausalConvPositionEmbedding::new(out_dim, 31, 16, vb.pp("conv_pos_embed"))?;
 
         Ok(Self {
             proj,
@@ -269,13 +271,7 @@ impl InputEmbedding {
     /// * `cond` - [B, T, mel_dim] condition (prompt mel)
     /// * `mu` - [B, T, mel_dim] mu from token embedding
     /// * `spks` - [B, spk_dim] speaker embedding
-    pub fn forward(
-        &self,
-        x: &Tensor,
-        cond: &Tensor,
-        mu: &Tensor,
-        spks: &Tensor,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor, cond: &Tensor, mu: &Tensor, spks: &Tensor) -> Result<Tensor> {
         let (batch, seq_len, _) = x.dims3()?;
 
         // Expand spks to sequence length: [B, spk_dim] -> [B, T, spk_dim]
@@ -293,7 +289,7 @@ impl InputEmbedding {
 }
 
 /// Rotary Position Embedding for DiT
-/// 
+///
 /// Matches x_transformers.RotaryEmbedding implementation.
 /// Returns freqs tensor that will be used with cos/sin in attention.
 #[derive(Debug, Clone)]
@@ -346,24 +342,24 @@ impl RotaryEmbedding {
 }
 
 /// Apply rotary position embedding to a 3D tensor (before reshape to heads)
-/// 
+///
 /// Matches Python's apply_rotary_pos_emb function.
 /// t: [batch, seq_len, dim] - query or key tensor
 /// freqs: [1, seq_len, rot_dim] - frequency tensor
-/// 
+///
 /// Returns: [batch, seq_len, dim] with rotary embedding applied to first rot_dim dimensions
 pub fn apply_rotary_pos_emb_3d(t: &Tensor, freqs: &Tensor) -> Result<Tensor> {
     let rot_dim = freqs.dim(D::Minus1)?;
     let seq_len = t.dim(1)?;
     let orig_dtype = t.dtype();
-    
+
     // Get freqs for this sequence length
     let freqs = if freqs.dim(1)? > seq_len {
         freqs.narrow(1, freqs.dim(1)? - seq_len, seq_len)?
     } else {
         freqs.clone()
     };
-    
+
     // Partial rotary: only rotate first rot_dim dimensions
     let t_rot = t.narrow(D::Minus1, 0, rot_dim)?;
     let t_pass = if t.dim(D::Minus1)? > rot_dim {
@@ -371,28 +367,28 @@ pub fn apply_rotary_pos_emb_3d(t: &Tensor, freqs: &Tensor) -> Result<Tensor> {
     } else {
         None
     };
-    
+
     // Compute cos and sin
     let cos = freqs.cos()?;
     let sin = freqs.sin()?;
-    
+
     // rotate_half
     let t_rot_half = rotate_half(&t_rot)?;
-    
+
     // Apply rotation: t * cos + rotate_half(t) * sin
     let t_out = (t_rot.broadcast_mul(&cos)? + t_rot_half.broadcast_mul(&sin)?)?;
-    
+
     // Concatenate with unrotated part if exists
     let out = match t_pass {
         Some(pass) => Tensor::cat(&[&t_out, &pass], D::Minus1)?,
         None => t_out,
     };
-    
+
     out.to_dtype(orig_dtype)
 }
 
 /// Apply rotary position embedding to query and key (4D tensors after reshape)
-/// 
+///
 /// Matches x_transformers apply_rotary_pos_emb function.
 /// freqs: [1, seq_len, dim] or [batch, seq_len, dim]
 /// q, k: [batch, heads, seq_len, head_dim]
@@ -411,7 +407,7 @@ pub fn apply_rotary_emb(q: &Tensor, k: &Tensor, freqs: &Tensor) -> Result<(Tenso
     let freqs = if freqs.dim(0)? == 1 && batch > 1 {
         freqs.broadcast_as((batch, 1, seq_len, rot_dim))?
     } else {
-        freqs.unsqueeze(1)?  // [batch, 1, seq_len, dim]
+        freqs.unsqueeze(1)? // [batch, 1, seq_len, dim]
     };
 
     // Partial rotary: only rotate first rot_dim dimensions
@@ -421,7 +417,7 @@ pub fn apply_rotary_emb(q: &Tensor, k: &Tensor, freqs: &Tensor) -> Result<(Tenso
     } else {
         None
     };
-    
+
     let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
     let k_pass = if head_dim > rot_dim {
         Some(k.narrow(D::Minus1, rot_dim, head_dim - rot_dim)?)
@@ -456,35 +452,35 @@ pub fn apply_rotary_emb(q: &Tensor, k: &Tensor, freqs: &Tensor) -> Result<(Tenso
 }
 
 /// Rotate half of the tensor
-/// 
+///
 /// Python implementation:
 /// x = rearrange(x, '... (d r) -> ... d r', r = 2)
 /// x1, x2 = x.unbind(dim = -1)
 /// x = stack((-x2, x1), dim = -1)
 /// return rearrange(x, '... d r -> ... (d r)')
-/// 
+///
 /// This means: [a0, a1, b0, b1, ...] -> [-a1, a0, -b1, b0, ...]
 fn rotate_half(x: &Tensor) -> Result<Tensor> {
     let shape = x.dims();
     let last_dim = shape[shape.len() - 1];
     let half = last_dim / 2;
-    
+
     // Reshape to [..., half, 2]
-    let mut new_shape: Vec<usize> = shape[..shape.len()-1].to_vec();
+    let mut new_shape: Vec<usize> = shape[..shape.len() - 1].to_vec();
     new_shape.push(half);
     new_shape.push(2);
     let x = x.reshape(new_shape)?;
-    
+
     // Split into x1, x2 (unbind on last dim)
     let x1 = x.narrow(D::Minus1, 0, 1)?.squeeze(D::Minus1)?; // [..., half]
     let x2 = x.narrow(D::Minus1, 1, 1)?.squeeze(D::Minus1)?; // [..., half]
-    
+
     // Stack (-x2, x1) on last dim
     let neg_x2 = x2.neg()?;
     let rotated = Tensor::stack(&[&neg_x2, &x1], D::Minus1)?; // [..., half, 2]
-    
+
     // Reshape back to [..., dim]
-    let mut final_shape: Vec<usize> = shape[..shape.len()-1].to_vec();
+    let mut final_shape: Vec<usize> = shape[..shape.len() - 1].to_vec();
     final_shape.push(last_dim);
     rotated.reshape(final_shape)
 }
@@ -509,10 +505,10 @@ mod tests {
     fn test_sinusoidal_embedding_shape() -> Result<()> {
         let device = Device::Cpu;
         let dtype = DType::F32;
-    
+
         let varmap = candle_nn::VarMap::new();
         let vb = candle_nn::VarBuilder::from_varmap(&varmap, dtype, &device);
-    
+
         // Need to initialize weights matching official structure:
         // sinusoidal_dim=256 -> dim=1024
         varmap.data().lock().unwrap().insert(
@@ -531,14 +527,13 @@ mod tests {
             "time_mlp.2.bias".to_string(),
             candle::Var::from_tensor(&Tensor::zeros((1024,), dtype, &device)?)?,
         );
-    
+
         let te = TimestepEmbedding::new(1024, vb)?;
-    
+
         let t = Tensor::from_slice(&[0.1f32, 0.5, 0.9], 3, &device)?;
         let emb = te.forward(&t)?;
-    
+
         assert_eq!(emb.dims(), &[3, 1024]);
         Ok(())
     }
 }
-

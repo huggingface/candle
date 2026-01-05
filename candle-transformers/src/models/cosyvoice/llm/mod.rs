@@ -5,4 +5,3 @@
 pub mod cosyvoice3_lm;
 
 pub use cosyvoice3_lm::CosyVoice3LM;
-

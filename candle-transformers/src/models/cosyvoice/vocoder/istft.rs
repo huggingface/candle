@@ -94,8 +94,14 @@ impl HiFTiSTFT {
         // Execute on CPU to avoid contiguous issues
         let magnitude = magnitude.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
         let phase = phase.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
-        let idft_real = self.idft_real.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
-        let idft_imag = self.idft_imag.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
+        let idft_real = self
+            .idft_real
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        let idft_imag = self
+            .idft_imag
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
         let window = self.window.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
 
         // 1. Clip magnitude to prevent numerical overflow
@@ -118,7 +124,8 @@ impl HiFTiSTFT {
         let imag_full = imag_full.transpose(1, 2)?.contiguous()?;
 
         // 5. 16-point IDFT (matrix multiplication implementation)
-        let frames = (real_full.broadcast_matmul(&idft_real)? - imag_full.broadcast_matmul(&idft_imag)?)?;
+        let frames =
+            (real_full.broadcast_matmul(&idft_real)? - imag_full.broadcast_matmul(&idft_imag)?)?;
 
         // 6. Apply window
         let window = window.unsqueeze(0)?.unsqueeze(0)?;
@@ -244,7 +251,12 @@ impl HiFTiSTFT {
     }
 
     #[allow(clippy::needless_range_loop)]
-    fn compute_window_sum(&self, n_frames: usize, output_len: usize, device: &Device) -> Result<Tensor> {
+    fn compute_window_sum(
+        &self,
+        n_frames: usize,
+        output_len: usize,
+        device: &Device,
+    ) -> Result<Tensor> {
         let window_data: Vec<f32> = self.window.to_dtype(DType::F32)?.to_vec1()?;
 
         let mut sum = vec![0.0f32; output_len];
@@ -303,4 +315,3 @@ mod tests {
         }
     }
 }
-

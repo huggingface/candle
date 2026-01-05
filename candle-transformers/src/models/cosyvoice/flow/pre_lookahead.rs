@@ -69,7 +69,7 @@ impl PreLookaheadLayer {
         Ok(Self {
             conv1,
             conv2,
-            lrelu: LeakyReLU::new(0.01),  // Python F.leaky_relu default is 0.01
+            lrelu: LeakyReLU::new(0.01), // Python F.leaky_relu default is 0.01
             pre_lookahead_len,
             token_mel_ratio,
         })
@@ -204,4 +204,3 @@ mod tests {
         Ok(())
     }
 }
-

@@ -14,4 +14,3 @@ pub mod pre_lookahead;
 pub use dit::DiT;
 pub use flow_matching::CausalConditionalCFM;
 pub use pre_lookahead::PreLookaheadLayer;
-

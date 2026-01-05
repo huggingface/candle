@@ -7,8 +7,8 @@ use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Linear, VarBuilder};
 
 use super::embeddings::{
-    apply_rotary_pos_emb_3d, AdaLayerNormZero, AdaLayerNormZeroFinal, InputEmbedding, RotaryEmbedding,
-    TimestepEmbedding,
+    apply_rotary_pos_emb_3d, AdaLayerNormZero, AdaLayerNormZeroFinal, InputEmbedding,
+    RotaryEmbedding, TimestepEmbedding,
 };
 use crate::models::cosyvoice::config::DiTConfig;
 
@@ -70,18 +70,13 @@ impl Attention {
         })
     }
 
-    pub fn forward(
-        &self,
-        x: &Tensor,
-        mask: Option<&Tensor>,
-        rope: &Tensor,
-    ) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor, mask: Option<&Tensor>, rope: &Tensor) -> Result<Tensor> {
         let (batch, seq_len, _) = x.dims3()?;
 
         // QKV projections
-        let q = self.to_q.forward(x)?;  // [B, T, H*D]
-        let k = self.to_k.forward(x)?;  // [B, T, H*D]
-        let v = self.to_v.forward(x)?;  // [B, T, H*D]
+        let q = self.to_q.forward(x)?; // [B, T, H*D]
+        let k = self.to_k.forward(x)?; // [B, T, H*D]
+        let v = self.to_v.forward(x)?; // [B, T, H*D]
 
         // Apply RoPE BEFORE reshape (matching Python implementation)
         // Python: query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)
@@ -120,9 +115,11 @@ impl Attention {
         let attn_output = attn_weights.matmul(&v)?;
 
         // Reshape back
-        let attn_output = attn_output
-            .transpose(1, 2)?
-            .reshape((batch, seq_len, self.num_heads * self.head_dim))?;
+        let attn_output = attn_output.transpose(1, 2)?.reshape((
+            batch,
+            seq_len,
+            self.num_heads * self.head_dim,
+        ))?;
 
         self.to_out.forward(&attn_output)
     }
@@ -147,7 +144,7 @@ impl LayerNormNoAffine {
     fn new() -> Self {
         Self { eps: 1e-6 }
     }
-    
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let mean = x.mean_keepdim(D::Minus1)?;
         let x_centered = x.broadcast_sub(&mean)?;
@@ -193,7 +190,9 @@ impl DiTBlock {
         let scale_mlp = scale_mlp.unsqueeze(1)?;
         let shift_mlp = shift_mlp.unsqueeze(1)?;
         let scale_factor = (scale_mlp + 1.0)?;
-        let ff_input = ff_norm.broadcast_mul(&scale_factor)?.broadcast_add(&shift_mlp)?;
+        let ff_input = ff_norm
+            .broadcast_mul(&scale_factor)?
+            .broadcast_add(&shift_mlp)?;
         let ff_out = self.ff.forward(&ff_input)?;
 
         x + gate_mlp.unsqueeze(1)?.broadcast_mul(&ff_out)?
@@ -360,4 +359,3 @@ mod tests {
         Ok(())
     }
 }
-

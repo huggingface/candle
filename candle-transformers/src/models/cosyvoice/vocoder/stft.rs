@@ -99,7 +99,9 @@ impl HiFTSTFT {
         let n_frames = (padded_samples - self.n_fft) / self.hop_length + 1;
 
         // Ensure input is on the same device as DFT matrices
-        let x = x.to_device(self.dft_real.device())?.to_dtype(self.dft_real.dtype())?;
+        let x = x
+            .to_device(self.dft_real.device())?
+            .to_dtype(self.dft_real.dtype())?;
 
         // 1. Frame signal: [B, samples] -> [B, n_frames, n_fft]
         let frames = self.frame_signal(&x, n_frames)?;
@@ -230,4 +232,3 @@ mod tests {
         Ok(())
     }
 }
-

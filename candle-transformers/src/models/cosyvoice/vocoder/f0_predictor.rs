@@ -119,7 +119,7 @@ impl CausalConvRNNF0Predictor {
     /// When `force_cpu=true`, the forward pass will execute on CPU for precision.
     /// The official Python implementation explicitly moves F0 predictor to CPU:
     /// "NOTE f0_predictor precision is crucial for causal inference"
-    /// 
+    ///
     /// IMPORTANT: The weights are loaded on the VarBuilder's device. When force_cpu=true,
     /// the input is moved to CPU, and since Candle operations automatically handle
     /// device mismatches by moving tensors, the computation will happen on CPU.
@@ -179,7 +179,7 @@ impl CausalConvRNNF0Predictor {
     /// is used throughout the computation.
     pub fn forward(&self, x: &Tensor, finalize: bool) -> Result<Tensor> {
         let original_dtype = x.dtype();
-        
+
         // CRITICAL: Use F32 precision for F0 prediction to avoid numerical issues
         // This is especially important on Metal/CUDA where F16 can cause precision loss
         let x = x.to_dtype(candle::DType::F32)?;
@@ -237,7 +237,7 @@ impl CausalConvRNNF0Predictor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle::{DType,Device};
+    use candle::{DType, Device};
 
     #[test]
     fn test_causal_conv1d_shape() -> Result<()> {
@@ -269,4 +269,3 @@ mod tests {
         Ok(())
     }
 }
-

@@ -290,4 +290,3 @@ impl Default for InferenceConfig {
         }
     }
 }
-

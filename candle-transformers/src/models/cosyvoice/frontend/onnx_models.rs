@@ -158,7 +158,10 @@ impl CosyVoice3Frontend {
         let tokens = outputs
             .get(*output_name)
             .ok_or_else(|| {
-                candle::Error::Msg(format!("Missing output '{}' from speech_tokenizer", output_name))
+                candle::Error::Msg(format!(
+                    "Missing output '{}' from speech_tokenizer",
+                    output_name
+                ))
             })?
             .clone();
 
@@ -207,7 +210,9 @@ impl CosyVoice3Frontend {
         if !input_names.is_empty() {
             inputs.insert(
                 input_names[0].to_string(),
-                fbank_batched.to_device(&Device::Cpu)?.to_dtype(DType::F32)?,
+                fbank_batched
+                    .to_device(&Device::Cpu)?
+                    .to_dtype(DType::F32)?,
             );
         }
 

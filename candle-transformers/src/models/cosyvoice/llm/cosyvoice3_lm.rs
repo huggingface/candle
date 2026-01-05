@@ -177,14 +177,10 @@ impl Attention {
         vb: VarBuilder,
     ) -> Result<Self> {
         // CosyVoice3 uses bias for q_proj, k_proj, v_proj but no bias for o_proj
-        let q_proj =
-            candle_nn::linear(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj =
-            candle_nn::linear(hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj =
-            candle_nn::linear(hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj =
-            candle_nn::linear_no_bias(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?;
+        let q_proj = candle_nn::linear(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
+        let k_proj = candle_nn::linear(hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
+        let v_proj = candle_nn::linear(hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
+        let o_proj = candle_nn::linear_no_bias(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?;
         Ok(Self {
             q_proj,
             k_proj,
@@ -224,9 +220,9 @@ impl Attention {
             .transpose(1, 2)?;
 
         // Apply RoPE
-        let (query_states, key_states) = self
-            .rotary_emb
-            .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
+        let (query_states, key_states) =
+            self.rotary_emb
+                .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
 
         // KV Cache
         let (key_states, value_states) = match &self.kv_cache {
@@ -280,8 +276,7 @@ impl Mlp {
     fn new(hidden_size: usize, intermediate_size: usize, vb: VarBuilder) -> Result<Self> {
         let gate_proj =
             candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?;
-        let up_proj =
-            candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?;
+        let up_proj = candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?;
         let down_proj =
             candle_nn::linear_no_bias(intermediate_size, hidden_size, vb.pp("down_proj"))?;
         Ok(Self {
@@ -382,13 +377,7 @@ impl CosyVoice3LM {
         let mask = if seq_len > 1 {
             let mask: Vec<f32> = (0..seq_len)
                 .flat_map(|i| {
-                    (0..seq_len).map(move |j| {
-                        if j > i {
-                            f32::NEG_INFINITY
-                        } else {
-                            0.0
-                        }
-                    })
+                    (0..seq_len).map(move |j| if j > i { f32::NEG_INFINITY } else { 0.0 })
                 })
                 .collect();
             Some(
@@ -445,7 +434,7 @@ impl CosyVoice3LM {
         let seq_len = hidden.dim(1)?;
         let last_hidden = hidden.narrow(1, seq_len - 1, 1)?;
         let logits = self.llm_decoder.forward(&last_hidden)?.squeeze(1)?;
-        
+
         // ignore_eos = true for first token (step 0 < min_len)
         let next_token = self.sampling_ids(&logits, sampling_config, &out_tokens, true)?;
 
@@ -466,7 +455,8 @@ impl CosyVoice3LM {
 
             // ignore_eos = true if we haven't reached min_len
             let ignore_eos = step < min_len;
-            let next_token = self.sampling_ids(&logits, sampling_config, &out_tokens, ignore_eos)?;
+            let next_token =
+                self.sampling_ids(&logits, sampling_config, &out_tokens, ignore_eos)?;
 
             if next_token >= self.speech_token_size as u32 {
                 break;
@@ -516,41 +506,68 @@ impl CosyVoice3LM {
 
         // First forward pass with full context
         let hidden = self.forward_embeds(&lm_input, 0)?;
-        
+
         // Debug: print hidden stats
         {
             let h_f32 = hidden.to_dtype(candle::DType::F32)?;
             let flat = h_f32.flatten_all()?;
             let mean = flat.mean_all()?.to_scalar::<f32>()?;
-            let var = flat.broadcast_sub(&flat.mean_all()?)?.sqr()?.mean_all()?.to_scalar::<f32>()?;
+            let var = flat
+                .broadcast_sub(&flat.mean_all()?)?
+                .sqr()?
+                .mean_all()?
+                .to_scalar::<f32>()?;
             let std = var.sqrt();
-            println!("hidden_states: shape={:?}, mean={:.6}, std={:.6}", hidden.shape().dims(), mean, std);
+            println!(
+                "hidden_states: shape={:?}, mean={:.6}, std={:.6}",
+                hidden.shape().dims(),
+                mean,
+                std
+            );
         }
-        
+
         let seq_len = hidden.dim(1)?;
         let last_hidden = hidden.narrow(1, seq_len - 1, 1)?;
-        
+
         // Debug: print last_hidden stats
         {
             let h_f32 = last_hidden.to_dtype(candle::DType::F32)?;
             let flat = h_f32.flatten_all()?;
             let mean = flat.mean_all()?.to_scalar::<f32>()?;
-            let var = flat.broadcast_sub(&flat.mean_all()?)?.sqr()?.mean_all()?.to_scalar::<f32>()?;
+            let var = flat
+                .broadcast_sub(&flat.mean_all()?)?
+                .sqr()?
+                .mean_all()?
+                .to_scalar::<f32>()?;
             let std = var.sqrt();
-            println!("last_hidden: shape={:?}, mean={:.6}, std={:.6}", last_hidden.shape().dims(), mean, std);
+            println!(
+                "last_hidden: shape={:?}, mean={:.6}, std={:.6}",
+                last_hidden.shape().dims(),
+                mean,
+                std
+            );
         }
-        
+
         let logits = self.llm_decoder.forward(&last_hidden)?.squeeze(1)?;
-        
+
         // Debug: print logits stats
         {
             let l_f32 = logits.to_dtype(candle::DType::F32)?;
             let flat = l_f32.flatten_all()?;
             let mean = flat.mean_all()?.to_scalar::<f32>()?;
-            let var = flat.broadcast_sub(&flat.mean_all()?)?.sqr()?.mean_all()?.to_scalar::<f32>()?;
+            let var = flat
+                .broadcast_sub(&flat.mean_all()?)?
+                .sqr()?
+                .mean_all()?
+                .to_scalar::<f32>()?;
             let std = var.sqrt();
-            println!("logits: shape={:?}, mean={:.6}, std={:.6}", logits.shape().dims(), mean, std);
-            
+            println!(
+                "logits: shape={:?}, mean={:.6}, std={:.6}",
+                logits.shape().dims(),
+                mean,
+                std
+            );
+
             // Print top 10 tokens
             let probs = candle_nn::ops::softmax_last_dim(&l_f32)?;
             let probs_vec: Vec<f32> = probs.flatten_all()?.to_vec1()?;
@@ -558,10 +575,10 @@ impl CosyVoice3LM {
             indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             println!("Top 10 tokens:");
             for (i, (token_id, prob)) in indexed.iter().take(10).enumerate() {
-                println!("  {}. token={}, prob={:.6}", i+1, token_id, prob);
+                println!("  {}. token={}, prob={:.6}", i + 1, token_id, prob);
             }
         }
-        
+
         // ignore_eos = true for first token (step 0 < min_len)
         let next_token = self.sampling_ids_debug(&logits, sampling_config, &out_tokens, true, 0)?;
 
@@ -582,7 +599,8 @@ impl CosyVoice3LM {
 
             // ignore_eos = true if we haven't reached min_len
             let ignore_eos = step < min_len;
-            let next_token = self.sampling_ids_debug(&logits, sampling_config, &out_tokens, ignore_eos, step)?;
+            let next_token =
+                self.sampling_ids_debug(&logits, sampling_config, &out_tokens, ignore_eos, step)?;
 
             if next_token >= self.speech_token_size as u32 {
                 break;
@@ -618,37 +636,50 @@ impl CosyVoice3LM {
         };
 
         // Use RAS (Repetition Aware Sampling) like Python
-        let top_ids = self.ras_sampling_debug(&logits, decoded_tokens, config.top_k, config.top_p, step)?;
-        
-        println!("  Step {}: token {} (ignore_eos={})", step, top_ids, ignore_eos);
-        
+        let top_ids =
+            self.ras_sampling_debug(&logits, decoded_tokens, config.top_k, config.top_p, step)?;
+
+        println!(
+            "  Step {}: token {} (ignore_eos={})",
+            step, top_ids, ignore_eos
+        );
+
         Ok(top_ids)
     }
 
     /// Debug version of RAS sampling
     #[allow(dead_code)]
-    fn ras_sampling_debug(&self, logits: &Tensor, decoded_tokens: &[u32], top_k: usize, top_p: f32, step: usize) -> Result<u32> {
+    fn ras_sampling_debug(
+        &self,
+        logits: &Tensor,
+        decoded_tokens: &[u32],
+        top_k: usize,
+        top_p: f32,
+        step: usize,
+    ) -> Result<u32> {
         let win_size = 10;
         let tau_r = 0.1;
-        
+
         // First try nucleus sampling
         let top_ids = self.nucleus_sampling(logits, top_k, top_p)?;
-        
+
         // Check repetition in recent window (matching Python: decoded_tokens[-win_size:])
         let recent_tokens = if decoded_tokens.len() > win_size {
             &decoded_tokens[decoded_tokens.len() - win_size..]
         } else {
             decoded_tokens
         };
-        
+
         let rep_num = recent_tokens.iter().filter(|&&t| t == top_ids).count();
         let threshold = (win_size as f32 * tau_r) as usize;
-        
+
         if step < 15 {
-            println!("    RAS: nucleus_token={}, recent_tokens={:?}, rep_num={}, threshold={}", 
-                     top_ids, recent_tokens, rep_num, threshold);
+            println!(
+                "    RAS: nucleus_token={}, recent_tokens={:?}, rep_num={}, threshold={}",
+                top_ids, recent_tokens, rep_num, threshold
+            );
         }
-        
+
         // If repetition exceeds threshold, use random sampling
         if rep_num >= threshold {
             let random_token = self.random_sampling(logits)?;
@@ -657,7 +688,7 @@ impl CosyVoice3LM {
             }
             return Ok(random_token);
         }
-        
+
         Ok(top_ids)
     }
 
@@ -686,7 +717,7 @@ impl CosyVoice3LM {
         for _ in 0..max_trials {
             // Use RAS (Repetition Aware Sampling) like Python
             let top_ids = self.ras_sampling(&logits, decoded_tokens, config.top_k, config.top_p)?;
-            
+
             // If ignore_eos is false, or the token is a valid speech token
             if !ignore_eos || top_ids < self.speech_token_size as u32 {
                 return Ok(top_ids);
@@ -700,28 +731,34 @@ impl CosyVoice3LM {
 
     /// Repetition Aware Sampling (RAS) from VALL-E 2
     /// If a token appears too frequently in recent history, use random sampling instead
-    fn ras_sampling(&self, logits: &Tensor, decoded_tokens: &[u32], top_k: usize, top_p: f32) -> Result<u32> {
+    fn ras_sampling(
+        &self,
+        logits: &Tensor,
+        decoded_tokens: &[u32],
+        top_k: usize,
+        top_p: f32,
+    ) -> Result<u32> {
         let win_size = 10;
         let tau_r = 0.1;
-        
+
         // First try nucleus sampling
         let top_ids = self.nucleus_sampling(logits, top_k, top_p)?;
-        
+
         // Check repetition in recent window (matching Python: decoded_tokens[-win_size:])
         let recent_tokens = if decoded_tokens.len() > win_size {
             &decoded_tokens[decoded_tokens.len() - win_size..]
         } else {
             decoded_tokens
         };
-        
+
         let rep_num = recent_tokens.iter().filter(|&&t| t == top_ids).count();
-        
+
         // If repetition exceeds threshold, use random sampling
         // Python: if rep_num >= win_size * tau_r (i.e., >= 1.0 when win_size=10, tau_r=0.1)
         if rep_num >= (win_size as f32 * tau_r) as usize {
             return self.random_sampling(logits);
         }
-        
+
         Ok(top_ids)
     }
 
@@ -729,7 +766,7 @@ impl CosyVoice3LM {
     fn random_sampling(&self, logits: &Tensor) -> Result<u32> {
         let probs = candle_nn::ops::softmax_last_dim(logits)?;
         let probs_vec: Vec<f32> = probs.flatten_all()?.to_vec1()?;
-        
+
         let random_val: f32 = rand::random();
         let mut cumulative = 0.0f32;
         for (idx, &prob) in probs_vec.iter().enumerate() {
@@ -738,7 +775,7 @@ impl CosyVoice3LM {
                 return Ok(idx as u32);
             }
         }
-        
+
         // Fallback to last token
         Ok((probs_vec.len() - 1) as u32)
     }

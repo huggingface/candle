@@ -242,14 +242,12 @@ impl MelSpectrogram {
 
             for k in left..center {
                 if k < n_freqs {
-                    filters[m * n_freqs + k] =
-                        (k - left) as f32 / (center - left).max(1) as f32;
+                    filters[m * n_freqs + k] = (k - left) as f32 / (center - left).max(1) as f32;
                 }
             }
             for k in center..right {
                 if k < n_freqs {
-                    filters[m * n_freqs + k] =
-                        (right - k) as f32 / (right - center).max(1) as f32;
+                    filters[m * n_freqs + k] = (right - k) as f32 / (right - center).max(1) as f32;
                 }
             }
         }
@@ -294,7 +292,10 @@ impl MelSpectrogram {
         };
 
         // Convert to CPU f32 for processing
-        let samples: Vec<f32> = audio.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.to_vec1()?;
+        let samples: Vec<f32> = audio
+            .to_dtype(DType::F32)?
+            .to_device(&Device::Cpu)?
+            .to_vec1()?;
 
         // Apply Matcha-TTS style reflect padding if requested
         // pad_size = (n_fft - hop_length) / 2 on each side
@@ -402,7 +403,10 @@ impl MelSpectrogram {
         };
 
         // Convert to CPU f32 for processing
-        let samples: Vec<f32> = audio.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.to_vec1()?;
+        let samples: Vec<f32> = audio
+            .to_dtype(DType::F32)?
+            .to_device(&Device::Cpu)?
+            .to_vec1()?;
         let n_samples = samples.len();
 
         // Apply center padding (like torch.stft with center=True)
@@ -410,9 +414,7 @@ impl MelSpectrogram {
         let pad_len = self.n_fft / 2;
         let padded_len = n_samples + 2 * pad_len;
         let mut padded_samples = vec![0.0f32; padded_len];
-        for i in 0..n_samples {
-            padded_samples[pad_len + i] = samples[i];
-        }
+        padded_samples[pad_len..(n_samples + pad_len)].copy_from_slice(&samples[..n_samples]);
 
         // Calculate number of frames (torch.stft formula with center=True)
         // n_frames = 1 + n_samples // hop_length
@@ -840,7 +842,9 @@ pub fn resample_sinc(
             let t_clamped = t.clamp(-(lowpass_filter_width as f64), lowpass_filter_width as f64);
 
             // Hann window: cos²(π * t / (2 * width))
-            let window = (t_clamped * PI / (2.0 * lowpass_filter_width as f64)).cos().powi(2);
+            let window = (t_clamped * PI / (2.0 * lowpass_filter_width as f64))
+                .cos()
+                .powi(2);
 
             // Sinc function: sin(π * t) / (π * t), with sinc(0) = 1
             let t_pi = t_clamped * PI;
@@ -865,7 +869,7 @@ pub fn resample_sinc(
     }
 
     // Calculate output length
-    let output_len = (samples.len() * new_freq + orig_freq - 1) / orig_freq;
+    let output_len = (samples.len() * new_freq).div_ceil(orig_freq);
 
     // Apply resampling via strided convolution
     let mut resampled = Vec::with_capacity(output_len);
@@ -943,4 +947,3 @@ mod tests {
         Ok(())
     }
 }
-

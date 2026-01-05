@@ -1,7 +1,7 @@
 /*
  * @Author: SpenserCai
  * @Date: 2026-01-04 10:00:56
- * @version: 
+ * @version:
  * @LastEditors: SpenserCai
  * @LastEditTime: 2026-01-05 11:19:04
  * @Description: file content
@@ -21,4 +21,3 @@ pub mod onnx_models;
 pub use audio::{kaldi_fbank, resample, KaldiFbank, MelSpectrogram};
 #[cfg(feature = "onnx")]
 pub use onnx_models::CosyVoice3Frontend;
-

@@ -68,8 +68,12 @@ impl SineGen2 {
 
         // Pre-generate noise values for causal mode
         // In Python: self.sine_waves = torch.rand(1, 300 * 24000, 9)
-        let sine_waves_noise =
-            Tensor::rand(0.0f32, 1.0, (1, MAX_AUDIO_SAMPLES, harmonic_num + 1), device)?;
+        let sine_waves_noise = Tensor::rand(
+            0.0f32,
+            1.0,
+            (1, MAX_AUDIO_SAMPLES, harmonic_num + 1),
+            device,
+        )?;
 
         Ok(Self {
             sampling_rate,
@@ -114,7 +118,10 @@ impl SineGen2 {
             .map(|i| i as f32)
             .collect();
         let harmonics = Tensor::from_vec(harmonics, self.harmonic_num + 1, target_device)?;
-        let harmonics = harmonics.to_dtype(target_dtype)?.unsqueeze(0)?.unsqueeze(0)?; // [1, 1, H]
+        let harmonics = harmonics
+            .to_dtype(target_dtype)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?; // [1, 1, H]
 
         let f0_broadcast = f0.broadcast_as((batch, time, self.harmonic_num + 1))?;
         let harmonics_broadcast = harmonics.broadcast_as((batch, time, self.harmonic_num + 1))?;
@@ -330,7 +337,9 @@ impl SourceModuleHnNSF {
         let (batch, time, _) = sine_wavs.dims3()?;
 
         // Ensure sine_wavs is on the target device for linear layer
-        let sine_wavs = sine_wavs.to_device(&target_device)?.to_dtype(target_dtype)?;
+        let sine_wavs = sine_wavs
+            .to_device(&target_device)?
+            .to_dtype(target_dtype)?;
 
         // Linear combination of harmonics
         let sine_merge = self.linear.forward(&sine_wavs)?; // [B, T*scale, 1]
@@ -352,7 +361,9 @@ impl SourceModuleHnNSF {
         };
 
         // Ensure outputs are on target device
-        let sine_merge = sine_merge.to_device(&target_device)?.to_dtype(target_dtype)?;
+        let sine_merge = sine_merge
+            .to_device(&target_device)?
+            .to_dtype(target_dtype)?;
         let noise = noise.to_device(&target_device)?.to_dtype(target_dtype)?;
         let uv = uv.to_device(&target_device)?.to_dtype(target_dtype)?;
 
@@ -457,4 +468,3 @@ mod tests {
         Ok(())
     }
 }
-

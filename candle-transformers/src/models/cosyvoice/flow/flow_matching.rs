@@ -11,17 +11,21 @@ use crate::models::cosyvoice::config::CFMConfig;
 
 /// Generate deterministic pseudo-random noise using a simple LCG (Linear Congruential Generator)
 /// This matches Python's torch.randn with seed=0 for reproducibility
-fn generate_fixed_noise(shape: (usize, usize, usize), device: &Device, dtype: DType) -> Result<Tensor> {
+fn generate_fixed_noise(
+    shape: (usize, usize, usize),
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
     let (batch, channels, length) = shape;
     let total = batch * channels * length;
-    
+
     // Use Box-Muller transform with deterministic sequence
     // LCG parameters (same as glibc)
     let mut state: u64 = 0; // seed = 0
     let a: u64 = 1103515245;
     let c: u64 = 12345;
     let m: u64 = 1 << 31;
-    
+
     let mut values = Vec::with_capacity(total);
     for _ in 0..total.div_ceil(2) {
         // Generate two uniform values
@@ -29,19 +33,19 @@ fn generate_fixed_noise(shape: (usize, usize, usize), device: &Device, dtype: DT
         let u1 = (state as f64) / (m as f64);
         state = (a.wrapping_mul(state).wrapping_add(c)) % m;
         let u2 = (state as f64) / (m as f64);
-        
+
         // Box-Muller transform
         let u1_safe = u1.max(1e-10);
         let r = (-2.0 * u1_safe.ln()).sqrt();
         let theta = 2.0 * PI * u2;
-        
+
         values.push((r * theta.cos()) as f32);
         if values.len() < total {
             values.push((r * theta.sin()) as f32);
         }
     }
     values.truncate(total);
-    
+
     Tensor::from_vec(values, (batch, channels, length), device)?.to_dtype(dtype)
 }
 
@@ -142,7 +146,7 @@ impl CausalConditionalCFM {
         let device = x.device();
         let dtype = x.dtype();
         let seq_len = x.dim(2)?;
-        
+
         let mut x = x.clone();
         let mut t = t_span.i(0)?;
 
@@ -157,21 +161,21 @@ impl CausalConditionalCFM {
                 // Classifier-Free Guidance: run estimator with batch size 2
                 // [0] = conditional (with mu, spks, cond)
                 // [1] = unconditional (with zeros)
-                
+
                 // Create batched inputs for CFG
                 let x_in = Tensor::cat(&[&x, &x], 0)?; // [2, 80, T]
                 let mask_in = Tensor::cat(&[mask, mask], 0)?; // [2, 1, T]
-                
+
                 // Conditional uses real values, unconditional uses zeros
                 let zeros_mu = Tensor::zeros((1, 80, seq_len), dtype, device)?;
                 let mu_in = Tensor::cat(&[mu, &zeros_mu], 0)?; // [2, 80, T]
-                
+
                 let zeros_spks = Tensor::zeros((1, 80), dtype, device)?;
                 let spks_in = Tensor::cat(&[spks, &zeros_spks], 0)?; // [2, 80]
-                
+
                 let zeros_cond = Tensor::zeros((1, 80, seq_len), dtype, device)?;
                 let cond_in = Tensor::cat(&[cond, &zeros_cond], 0)?; // [2, 80, T]
-                
+
                 let t_in = Tensor::cat(&[&t.unsqueeze(0)?, &t.unsqueeze(0)?], 0)?; // [2]
 
                 // Estimator forward pass with batched inputs
@@ -189,13 +193,14 @@ impl CausalConditionalCFM {
             } else {
                 // No CFG, just conditional prediction
                 let t_batch = t.unsqueeze(0)?; // [1]
-                self.estimator.forward(&x, mask, mu, &t_batch, spks, cond, streaming)?
+                self.estimator
+                    .forward(&x, mask, mu, &t_batch, spks, cond, streaming)?
             };
 
             // Euler step: x = x + dphi_dt * dt
             let dt_broadcast = dt.unsqueeze(0)?.unsqueeze(0)?;
             x = (x + dphi_dt.broadcast_mul(&dt_broadcast)?)?;
-            
+
             t = t_next;
         }
 
@@ -206,9 +211,7 @@ impl CausalConditionalCFM {
     fn get_t_span(&self, n_steps: usize, device: &Device, dtype: DType) -> Result<Tensor> {
         // Uniformly distributed time points [0, 1]
         let step = 1.0 / n_steps as f64;
-        let t_values: Vec<f32> = (0..=n_steps)
-            .map(|i| (i as f64 * step) as f32)
-            .collect();
+        let t_values: Vec<f32> = (0..=n_steps).map(|i| (i as f64 * step) as f32).collect();
         let t = Tensor::from_vec(t_values, n_steps + 1, device)?.to_dtype(dtype)?;
 
         if self.t_scheduler == "cosine" {
@@ -292,14 +295,12 @@ impl CausalMaskedDiffWithDiT {
         rand_noise: Option<Tensor>,
     ) -> Result<Self> {
         // Input embedding: vocab_size -> input_size (not output_size)
-        let input_embedding = candle_nn::embedding(vocab_size, input_size, vb.pp("input_embedding"))?;
+        let input_embedding =
+            candle_nn::embedding(vocab_size, input_size, vb.pp("input_embedding"))?;
 
         // Speaker embedding affine layer: spk_embed_dim(192) -> output_size(80)
-        let spk_embed_affine_layer = candle_nn::linear(
-            spk_embed_dim,
-            output_size,
-            vb.pp("spk_embed_affine_layer"),
-        )?;
+        let spk_embed_affine_layer =
+            candle_nn::linear(spk_embed_dim, output_size, vb.pp("spk_embed_affine_layer"))?;
 
         // PreLookahead layer
         let pre_lookahead_layer = super::pre_lookahead::PreLookaheadLayer::new(
@@ -358,7 +359,7 @@ impl CausalMaskedDiffWithDiT {
         // embedding = self.spk_embed_affine_layer(embedding)
         let embedding_norm = {
             let norm = embedding.sqr()?.sum_keepdim(1)?.sqrt()?;
-            embedding.broadcast_div(&norm.clamp(1e-12, f64::INFINITY)?)?  // L2 normalize
+            embedding.broadcast_div(&norm.clamp(1e-12, f64::INFINITY)?)? // L2 normalize
         };
         let embedding_proj = self.spk_embed_affine_layer.forward(&embedding_norm)?; // [B, 80]
 
@@ -396,7 +397,9 @@ impl CausalMaskedDiffWithDiT {
         };
 
         // 6. CFM sampling with projected speaker embedding
-        let full_mel = self.cfm.forward(&mu, &mask, n_timesteps, &embedding_proj, &cond, streaming)?;
+        let full_mel =
+            self.cfm
+                .forward(&mu, &mask, n_timesteps, &embedding_proj, &cond, streaming)?;
 
         // 7. Return only the generated part (excluding prompt)
         // Python: feat = feat[:, :, mel_len1:]
@@ -421,7 +424,7 @@ impl CausalMaskedDiffWithDiT {
             embedding.broadcast_div(&norm.clamp(1e-12, f64::INFINITY)?)?
         };
         Self::print_tensor_stats("1. embedding_normalized", &embedding_norm)?;
-        
+
         let embedding_proj = self.spk_embed_affine_layer.forward(&embedding_norm)?;
         Self::print_tensor_stats("2. embedding_projected", &embedding_proj)?;
 
@@ -463,13 +466,15 @@ impl CausalMaskedDiffWithDiT {
         Self::print_tensor_stats("8. conds", &cond)?;
 
         // 6. CFM sampling
-        let full_mel = self.cfm.forward(&mu, &mask, n_timesteps, &embedding_proj, &cond, streaming)?;
+        let full_mel =
+            self.cfm
+                .forward(&mu, &mask, n_timesteps, &embedding_proj, &cond, streaming)?;
         Self::print_tensor_stats("9. decoder_output (full)", &full_mel)?;
 
         // 7. Return only the generated part
         let result = full_mel.narrow(2, prompt_mel_len, gen_mel_len)?;
         Self::print_tensor_stats("10. decoder_output (generated only)", &result)?;
-        
+
         Ok(result)
     }
 
@@ -479,7 +484,11 @@ impl CausalMaskedDiffWithDiT {
         let mean = flat.mean_all()?.to_scalar::<f32>()?;
         let min = flat.min(0)?.to_scalar::<f32>()?;
         let max = flat.max(0)?.to_scalar::<f32>()?;
-        let variance = flat.broadcast_sub(&flat.mean_all()?)?.sqr()?.mean_all()?.to_scalar::<f32>()?;
+        let variance = flat
+            .broadcast_sub(&flat.mean_all()?)?
+            .sqr()?
+            .mean_all()?
+            .to_scalar::<f32>()?;
         let std = variance.sqrt();
         println!(
             "{}: shape={:?}, mean={:.4}, min={:.4}, max={:.4}, std={:.4}",
@@ -516,9 +525,7 @@ mod tests {
 
         let n_steps = 10;
         let step = 1.0 / n_steps as f64;
-        let t_values: Vec<f32> = (0..=n_steps)
-            .map(|i| (i as f64 * step) as f32)
-            .collect();
+        let t_values: Vec<f32> = (0..=n_steps).map(|i| (i as f64 * step) as f32).collect();
         let t = Tensor::from_vec(t_values, n_steps + 1, &device)?;
 
         assert_eq!(t.dim(0)?, 11);
@@ -530,4 +537,3 @@ mod tests {
         Ok(())
     }
 }
-

@@ -17,4 +17,3 @@ pub use hift_generator::CausalHiFTGenerator;
 pub use istft::HiFTiSTFT;
 pub use source_module::SourceModuleHnNSF;
 pub use stft::HiFTSTFT;
-

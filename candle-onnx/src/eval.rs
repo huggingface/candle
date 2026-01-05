@@ -496,7 +496,10 @@ fn simple_eval_(
                 let pads = get_attr_opt::<[i64]>(node, "pads")?;
                 let strides = get_attr_opt::<[i64]>(node, "strides")?;
                 let auto_pad = get_attr_opt::<str>(node, "auto_pad")?;
-                let ceil_mode = get_attr_opt::<i64>(node, "ceil_mode")?.copied().unwrap_or(0) == 1;
+                let ceil_mode = get_attr_opt::<i64>(node, "ceil_mode")?
+                    .copied()
+                    .unwrap_or(0)
+                    == 1;
                 match auto_pad {
                     None | Some("NOTSET") => (),
                     Some(s) => bail!("unsupported auto_pad {s}"),
@@ -524,7 +527,7 @@ fn simple_eval_(
                         };
                         // xs shape: [N, C, L]
                         let (_n, _c, l) = xs.dims3()?;
-                        
+
                         // Handle case where kernel is larger than input
                         if k > l {
                             // Global average pooling over the entire sequence
@@ -538,7 +541,7 @@ fn simple_eval_(
                                 // floor((l - k) / stride) + 1
                                 (l - k) / stride + 1
                             };
-                            
+
                             if out_len == 0 {
                                 // Return empty tensor with correct shape
                                 let mut shape = xs.dims().to_vec();
@@ -575,7 +578,9 @@ fn simple_eval_(
                             Some(strides) => bail!("unexpected strides for 2d AvgPool {strides:?}"),
                         }
                     }
-                    _ => bail!("only 1d and 2d AvgPool is supported, kernel shape {kernel_shape:?}"),
+                    _ => {
+                        bail!("only 1d and 2d AvgPool is supported, kernel shape {kernel_shape:?}")
+                    }
                 };
                 values.insert(node.output[0].clone(), ys);
             }
@@ -992,27 +997,40 @@ fn simple_eval_(
                             // For asymmetric strides, we do conv with stride 1, then subsample
                             let min_stride = stride_h.min(stride_w);
                             let min_dilation = dilation_h.min(dilation_w);
-                            
+
                             // Perform conv2d with minimum stride/dilation
-                            let conv_result = xs.conv2d(ws, pads, min_stride, min_dilation, groups as usize)?;
-                            
+                            let conv_result =
+                                xs.conv2d(ws, pads, min_stride, min_dilation, groups as usize)?;
+
                             // Now subsample to achieve the desired asymmetric stride
                             // conv_result shape: [N, C, H_out, W_out]
                             let (_, _, h_out, w_out) = conv_result.dims4()?;
-                            
+
                             // Calculate subsampling factors
                             let subsample_h = stride_h / min_stride;
                             let subsample_w = stride_w / min_stride;
-                            
+
                             // Create indices for subsampling
-                            let h_indices: Vec<i64> = (0..h_out).step_by(subsample_h).map(|x| x as i64).collect();
-                            let w_indices: Vec<i64> = (0..w_out).step_by(subsample_w).map(|x| x as i64).collect();
-                            
-                            let h_idx = Tensor::from_vec(h_indices.clone(), (h_indices.len(),), conv_result.device())?;
-                            let w_idx = Tensor::from_vec(w_indices.clone(), (w_indices.len(),), conv_result.device())?;
-                            
+                            let h_indices: Vec<i64> =
+                                (0..h_out).step_by(subsample_h).map(|x| x as i64).collect();
+                            let w_indices: Vec<i64> =
+                                (0..w_out).step_by(subsample_w).map(|x| x as i64).collect();
+
+                            let h_idx = Tensor::from_vec(
+                                h_indices.clone(),
+                                (h_indices.len(),),
+                                conv_result.device(),
+                            )?;
+                            let w_idx = Tensor::from_vec(
+                                w_indices.clone(),
+                                (w_indices.len(),),
+                                conv_result.device(),
+                            )?;
+
                             // Subsample along H and W dimensions
-                            let result = conv_result.index_select(&h_idx, 2)?.index_select(&w_idx, 3)?;
+                            let result = conv_result
+                                .index_select(&h_idx, 2)?
+                                .index_select(&w_idx, 3)?;
                             result
                         } else {
                             xs.conv2d(ws, pads, stride_h, dilation_h, groups as usize)?
@@ -1290,25 +1308,28 @@ fn simple_eval_(
                             post_shape[i] = post;
 
                             let pre_pad = if pre > 0 {
-                                Some(Tensor::full(constant_value, pre_shape, out.device())?.to_dtype(out.dtype())?)
+                                Some(
+                                    Tensor::full(constant_value, pre_shape, out.device())?
+                                        .to_dtype(out.dtype())?,
+                                )
                             } else {
                                 None
                             };
                             let post_pad = if post > 0 {
-                                Some(Tensor::full(constant_value, post_shape, out.device())?.to_dtype(out.dtype())?)
+                                Some(
+                                    Tensor::full(constant_value, post_shape, out.device())?
+                                        .to_dtype(out.dtype())?,
+                                )
                             } else {
                                 None
                             };
 
                             // Concatenate along axis i
-                            let tensors: Vec<&Tensor> = [
-                                pre_pad.as_ref(),
-                                Some(&out),
-                                post_pad.as_ref(),
-                            ]
-                            .into_iter()
-                            .flatten()
-                            .collect();
+                            let tensors: Vec<&Tensor> =
+                                [pre_pad.as_ref(), Some(&out), post_pad.as_ref()]
+                                    .into_iter()
+                                    .flatten()
+                                    .collect();
 
                             out = Tensor::cat(&tensors, i)?;
                         }
@@ -1775,7 +1796,7 @@ fn simple_eval_(
                 let mut sorted_axes = axes.clone();
                 sorted_axes.sort();
                 sorted_axes.reverse(); // Process from highest to lowest to avoid index shifting
-                
+
                 for axis in sorted_axes {
                     // Get the size of this axis
                     let axis_size = output.dim(axis)?;
@@ -2382,9 +2403,7 @@ fn simple_eval_(
             // https://onnx.ai/onnx/operators/onnx__Elu.html
             "Elu" => {
                 let input = get(&node.input[0])?;
-                let alpha = get_attr_opt::<f32>(node, "alpha")?
-                    .copied()
-                    .unwrap_or(1.0) as f64;
+                let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0) as f64;
                 // Elu: f(x) = x if x > 0, alpha * (exp(x) - 1) if x <= 0
                 // Equivalent to: max(0, x) + min(0, alpha * (exp(x) - 1))
                 let zeros = input.zeros_like()?;
@@ -2767,8 +2786,7 @@ fn simple_eval_(
             // CosyVoice3 GRU operator support
             "GRU" => {
                 // === 1. Parse attributes ===
-                let direction = get_attr_opt::<str>(node, "direction")?
-                    .unwrap_or("forward");
+                let direction = get_attr_opt::<str>(node, "direction")?.unwrap_or("forward");
                 if direction != "forward" {
                     bail!("GRU currently only supports direction == \"forward\"");
                 }
@@ -2784,9 +2802,7 @@ fn simple_eval_(
                     bail!("GRU currently only supports linear_before_reset == 0");
                 }
 
-                let layout = get_attr_opt::<i64>(node, "layout")?
-                    .copied()
-                    .unwrap_or(0);
+                let layout = get_attr_opt::<i64>(node, "layout")?.copied().unwrap_or(0);
                 if layout != 0 {
                     bail!("GRU currently only supports layout == 0");
                 }
@@ -2806,11 +2822,7 @@ fn simple_eval_(
                 let b = if node.input.len() > 3 && !node.input[3].is_empty() {
                     get(&node.input[3])?.clone()
                 } else {
-                    Tensor::zeros(
-                        (num_directions, 6 * hidden_size),
-                        x.dtype(),
-                        x.device(),
-                    )?
+                    Tensor::zeros((num_directions, 6 * hidden_size), x.dtype(), x.device())?
                 };
 
                 // initial_h: [num_directions, batch_size, hidden_size] - optional initial hidden state

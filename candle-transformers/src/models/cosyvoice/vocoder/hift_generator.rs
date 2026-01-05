@@ -6,7 +6,7 @@
 //! - HiFi-GAN style upsampling with residual blocks
 //! - iSTFT for final waveform synthesis
 
-use candle::{Device, DType, Module, Result, Tensor, D};
+use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, VarBuilder};
 
 use super::f0_predictor::{CausalConv1d, CausalConvRNNF0Predictor, CausalType};
@@ -46,7 +46,7 @@ impl CausalConv1dUpsample {
         };
         let conv = candle_nn::conv1d(in_channels, out_channels, kernel_size, conv_config, vb)?;
         let causal_padding = kernel_size - 1;
-        
+
         Ok(Self {
             conv,
             scale_factor,
@@ -59,10 +59,10 @@ impl Module for CausalConv1dUpsample {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // 1. Nearest neighbor upsample (manual implementation for Metal compatibility)
         let x = upsample_nearest1d_manual(x, self.scale_factor)?;
-        
+
         // 2. Left pad for causal convolution
         let x = x.pad_with_zeros(2, self.causal_padding, 0)?;
-        
+
         // 3. Apply Conv1d
         self.conv.forward(&x)
     }
@@ -80,9 +80,7 @@ fn upsample_nearest1d_manual(x: &Tensor, scale_factor: usize) -> Result<Tensor> 
 
     // Create indices for gather operation
     // For each target position i, pick from source position i / scale_factor
-    let indices: Vec<u32> = (0..target_len)
-        .map(|i| (i / scale_factor) as u32)
-        .collect();
+    let indices: Vec<u32> = (0..target_len).map(|i| (i / scale_factor) as u32).collect();
     let indices = Tensor::from_vec(indices, target_len, x.device())?;
 
     // Use index_select on the time dimension
@@ -101,35 +99,35 @@ fn reflection_pad_1d(x: &Tensor, left: usize, right: usize) -> Result<Tensor> {
     }
 
     let (_batch, _channels, time) = x.dims3()?;
-    
+
     // Build indices for reflection padding
     // Left padding: reflect from position 1, 2, ... (not 0)
     // Right padding: reflect from position time-2, time-3, ...
     let mut indices: Vec<u32> = Vec::with_capacity(left + time + right);
-    
+
     // Left reflection: indices go left-1, left-2, ..., 0 -> positions 1, 2, ..., left
     for i in 0..left {
         let idx = left - i; // 1, 2, ..., left
         indices.push(idx.min(time - 1) as u32);
     }
-    
+
     // Original content
     for i in 0..time {
         indices.push(i as u32);
     }
-    
+
     // Right reflection: positions time-2, time-3, ...
     for i in 0..right {
         let idx = time.saturating_sub(2 + i);
         indices.push(idx as u32);
     }
-    
+
     let indices = Tensor::from_vec(indices, left + time + right, x.device())?;
     x.index_select(&indices, 2)
 }
 
 /// ResBlock with Snake activation
-/// 
+///
 /// For CausalHiFTGenerator, uses CausalConv1d with causal_type='left' for causal inference.
 /// The causal padding ensures the output only depends on past inputs.
 #[derive(Debug)]
@@ -445,7 +443,7 @@ impl CausalHiFTGenerator {
 
         // 1. F0 prediction
         let f0 = self.f0_predictor.forward(&mel, finalize)?; // [B, T]
-        // Ensure f0 is on the same device
+                                                             // Ensure f0 is on the same device
         let f0 = f0.to_device(target_device)?.to_dtype(target_dtype)?;
 
         // 2. F0 upsample to audio sample rate
@@ -457,14 +455,18 @@ impl CausalHiFTGenerator {
         let (source, _noise, _uv) = self.m_source.forward(&f0_up)?; // [B, T*scale, 1]
         let source = source.transpose(1, 2)?; // [B, 1, T*scale]
         let source = source.squeeze(1)?; // [B, T*scale]
-        // Ensure source is on target device
+                                         // Ensure source is on target device
         let source = source.to_device(target_device)?.to_dtype(target_dtype)?;
 
         // 4. STFT source signal
         let (s_stft_real, s_stft_imag) = self.stft.forward(&source)?;
         // Ensure STFT output is on target device
-        let s_stft_real = s_stft_real.to_device(target_device)?.to_dtype(target_dtype)?;
-        let s_stft_imag = s_stft_imag.to_device(target_device)?.to_dtype(target_dtype)?;
+        let s_stft_real = s_stft_real
+            .to_device(target_device)?
+            .to_dtype(target_dtype)?;
+        let s_stft_imag = s_stft_imag
+            .to_device(target_device)?
+            .to_dtype(target_dtype)?;
         let s_stft = Tensor::cat(&[&s_stft_real, &s_stft_imag], 1)?; // [B, 18, T']
 
         // 5. Mel encoding
@@ -707,7 +709,9 @@ impl CausalHiFTGenerator {
         let (source, _noise, _uv) = self.m_source.forward(&f0_up)?;
         let source_t = source.transpose(1, 2)?;
         let source_squeezed = source_t.squeeze(1)?;
-        let source_squeezed = source_squeezed.to_device(target_device)?.to_dtype(target_dtype)?;
+        let source_squeezed = source_squeezed
+            .to_device(target_device)?
+            .to_dtype(target_dtype)?;
 
         // STFT
         let (s_stft_real, s_stft_imag) = self.stft.forward(&source_squeezed)?;
@@ -715,22 +719,37 @@ impl CausalHiFTGenerator {
 
         // Conv pre
         let x = self.conv_pre.forward(&mel)?;
-        println!("conv_pre: mean={:.6}, max={:.6}", 
+        println!(
+            "conv_pre: mean={:.6}, max={:.6}",
             x.mean_all()?.to_scalar::<f32>()?,
-            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+            x.max(D::Minus1)?
+                .max(D::Minus1)?
+                .max(D::Minus1)?
+                .to_scalar::<f32>()?
+        );
 
         // Stage 0 detailed
         let i = 0;
         let x = self.lrelu.forward(&x)?;
-        println!("after lrelu: mean={:.6}, max={:.6}",
+        println!(
+            "after lrelu: mean={:.6}, max={:.6}",
             x.mean_all()?.to_scalar::<f32>()?,
-            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+            x.max(D::Minus1)?
+                .max(D::Minus1)?
+                .max(D::Minus1)?
+                .to_scalar::<f32>()?
+        );
 
         let x = self.ups[i].forward(&x)?;
-        println!("after ups[0]: mean={:.6}, max={:.6}, shape={:?}",
+        println!(
+            "after ups[0]: mean={:.6}, max={:.6}, shape={:?}",
             x.mean_all()?.to_scalar::<f32>()?,
-            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?,
-            x.dims());
+            x.max(D::Minus1)?
+                .max(D::Minus1)?
+                .max(D::Minus1)?
+                .to_scalar::<f32>()?,
+            x.dims()
+        );
 
         // Source fusion
         let s_stft_padded = if self.source_down_causal_paddings[i] > 0 {
@@ -739,19 +758,29 @@ impl CausalHiFTGenerator {
             s_stft.clone()
         };
         let si = self.source_downs[i].forward(&s_stft_padded)?;
-        println!("source_downs[0]: mean={:.6}, max={:.6}, shape={:?}",
+        println!(
+            "source_downs[0]: mean={:.6}, max={:.6}, shape={:?}",
             si.mean_all()?.to_scalar::<f32>()?,
-            si.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?,
-            si.dims());
+            si.max(D::Minus1)?
+                .max(D::Minus1)?
+                .max(D::Minus1)?
+                .to_scalar::<f32>()?,
+            si.dims()
+        );
 
         let si = if i < self.source_resblocks.len() {
             self.source_resblocks[i].forward(&si)?
         } else {
             si
         };
-        println!("source_resblocks[0]: mean={:.6}, max={:.6}",
+        println!(
+            "source_resblocks[0]: mean={:.6}, max={:.6}",
             si.mean_all()?.to_scalar::<f32>()?,
-            si.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+            si.max(D::Minus1)?
+                .max(D::Minus1)?
+                .max(D::Minus1)?
+                .to_scalar::<f32>()?
+        );
 
         // Adjust sizes and add
         let x_len = x.dim(2)?;
@@ -760,9 +789,14 @@ impl CausalHiFTGenerator {
         let x_trimmed = x.narrow(2, 0, min_len)?;
         let si_trimmed = si.narrow(2, 0, min_len)?;
         let x = (&x_trimmed + &si_trimmed)?;
-        println!("after fusion: mean={:.6}, max={:.6}",
+        println!(
+            "after fusion: mean={:.6}, max={:.6}",
             x.mean_all()?.to_scalar::<f32>()?,
-            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+            x.max(D::Minus1)?
+                .max(D::Minus1)?
+                .max(D::Minus1)?
+                .to_scalar::<f32>()?
+        );
 
         // ResBlocks
         let mut xs: Option<Tensor> = None;
@@ -772,15 +806,27 @@ impl CausalHiFTGenerator {
                 None => xj.clone(),
                 Some(acc) => (acc + &xj)?,
             });
-            println!("resblock[{}]: mean={:.6}, max={:.6}",
+            println!(
+                "resblock[{}]: mean={:.6}, max={:.6}",
                 j,
                 xs.as_ref().unwrap().mean_all()?.to_scalar::<f32>()?,
-                xs.as_ref().unwrap().max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+                xs.as_ref()
+                    .unwrap()
+                    .max(D::Minus1)?
+                    .max(D::Minus1)?
+                    .max(D::Minus1)?
+                    .to_scalar::<f32>()?
+            );
         }
         let x = (xs.unwrap() / self.resblocks[i].len() as f64)?;
-        println!("stage_0 final: mean={:.6}, max={:.6}",
+        println!(
+            "stage_0 final: mean={:.6}, max={:.6}",
             x.mean_all()?.to_scalar::<f32>()?,
-            x.max(D::Minus1)?.max(D::Minus1)?.max(D::Minus1)?.to_scalar::<f32>()?);
+            x.max(D::Minus1)?
+                .max(D::Minus1)?
+                .max(D::Minus1)?
+                .to_scalar::<f32>()?
+        );
 
         Ok(())
     }
@@ -823,4 +869,3 @@ mod tests {
         Ok(())
     }
 }
-
