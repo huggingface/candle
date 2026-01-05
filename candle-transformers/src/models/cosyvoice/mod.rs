@@ -95,6 +95,8 @@ pub use flow::pre_lookahead::PreLookaheadLayer;
 
 // Re-export frontend components
 pub use frontend::audio::{kaldi_fbank, resample, KaldiFbank, MelSpectrogram};
+#[cfg(feature = "onnx")]
+pub use frontend::onnx_models::CosyVoice3Frontend;
 
 // Re-export LLM
 pub use llm::cosyvoice3_lm::CosyVoice3LM;
