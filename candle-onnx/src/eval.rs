@@ -496,6 +496,7 @@ fn simple_eval_(
                 let pads = get_attr_opt::<[i64]>(node, "pads")?;
                 let strides = get_attr_opt::<[i64]>(node, "strides")?;
                 let auto_pad = get_attr_opt::<str>(node, "auto_pad")?;
+                let ceil_mode = get_attr_opt::<i64>(node, "ceil_mode")?.copied().unwrap_or(0) == 1;
                 match auto_pad {
                     None | Some("NOTSET") => (),
                     Some(s) => bail!("unsupported auto_pad {s}"),
@@ -529,7 +530,14 @@ fn simple_eval_(
                             // Global average pooling over the entire sequence
                             xs.mean(2)?.unsqueeze(2)?
                         } else {
-                            let out_len = (l - k) / stride + 1;
+                            // Calculate output length based on ceil_mode
+                            let out_len = if ceil_mode {
+                                // ceil((l - k) / stride) + 1
+                                (l - k + stride - 1) / stride + 1
+                            } else {
+                                // floor((l - k) / stride) + 1
+                                (l - k) / stride + 1
+                            };
                             
                             if out_len == 0 {
                                 // Return empty tensor with correct shape
@@ -541,7 +549,10 @@ fn simple_eval_(
                                 let mut pools = Vec::with_capacity(out_len);
                                 for i in 0..out_len {
                                     let start = i * stride;
-                                    let slice = xs.narrow(2, start, k)?;
+                                    // In ceil_mode, the last window might extend beyond input
+                                    // We need to handle partial windows
+                                    let actual_k = k.min(l - start);
+                                    let slice = xs.narrow(2, start, actual_k)?;
                                     let avg = slice.mean(2)?;
                                     pools.push(avg);
                                 }
@@ -552,6 +563,10 @@ fn simple_eval_(
                     [k1, k2] => {
                         // 2D average pooling
                         let (k1, k2) = (*k1 as usize, *k2 as usize);
+                        // Note: 2D pooling with ceil_mode not yet implemented
+                        if ceil_mode {
+                            bail!("ceil_mode not yet supported for 2D AveragePool")
+                        }
                         match strides {
                             None => xs.avg_pool2d((k1, k2))?,
                             Some([s1, s2]) => {
