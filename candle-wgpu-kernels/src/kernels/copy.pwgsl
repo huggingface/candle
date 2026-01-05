@@ -89,7 +89,7 @@ fn copy2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 @compute
 @workgroup_size(16,16,1)
-fn copy2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn copy2d_row_major(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let i1 = global_id.y;
     let i2 = global_id.x + select(0u, global_id.z * 65535 * 16,USE_Z);
 

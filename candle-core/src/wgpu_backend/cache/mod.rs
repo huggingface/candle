@@ -162,6 +162,35 @@ pub enum BindgroupInputBase<T> {
 }
 
 impl<T: Clone> BindgroupInputBase<T> {
+
+    pub fn get_input1(&self) -> Option<&T>{
+        match self{
+            BindgroupInputBase::Bindgroup0(_) => None,
+            BindgroupInputBase::Bindgroup1(input1, _) => Some(input1),
+            BindgroupInputBase::Bindgroup2(input1, _, _) => Some(input1),
+            BindgroupInputBase::Bindgroup3(input1, _, _, _) => Some(input1),
+        }
+    }
+
+    pub fn get_input2(&self) -> Option<&T>{
+        match self{
+            BindgroupInputBase::Bindgroup0(_) => None,
+            BindgroupInputBase::Bindgroup1(_, _) => None,
+            BindgroupInputBase::Bindgroup2(_, input2, _) => Some(input2),
+            BindgroupInputBase::Bindgroup3(_, input2, _, _) => Some(input2),
+        }
+    }
+
+    pub fn get_input3(&self) -> Option<&T>{
+        match self{
+            BindgroupInputBase::Bindgroup0(_) => None,
+            BindgroupInputBase::Bindgroup1(_, _) => None,
+            BindgroupInputBase::Bindgroup2(_, _, _) => None,
+            BindgroupInputBase::Bindgroup3(_, _, input3, _) => Some(input3),
+        }
+    } 
+  
+
     pub fn fold<TOut>(&self, mut f: impl FnMut(&T) -> TOut) -> BindgroupInputBase<TOut> {
         match self {
             super::cache::BindgroupInputBase::Bindgroup0(alignment) => {
@@ -217,6 +246,36 @@ pub type CachedBindgroupFull = BindgroupFullBase<CachedBufferId>;
 pub type BindgroupReferenceInput = BindgroupInputBase<BufferReferenceId>;
 pub type BindgroupReferenceFull = BindgroupFullBase<BufferReferenceId>;
 
+
+#[derive(Debug, Eq, PartialEq, Clone)]
+#[cfg_attr(
+    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub struct AverageBufferInfo {
+    pub size: u32,
+    pub is_free: bool,
+    pub count: u32,
+}
+
+
+#[derive(Debug, Eq, PartialEq, Clone)]
+#[cfg_attr(
+    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub struct DebugBufferUsage {
+    pub memory_alloc : u64,
+
+    pub memory_free : u64,
+    
+    pub buffers: Vec<AverageBufferInfo>, // (size, is_free) -> count
+
+    /// Identifier of the command buffer / queue pass this snapshot belongs to.
+    pub command_buffer_id: u32,
+}
+
+
 #[derive(Debug)]
 pub struct ModelCache {
     pub(crate) buffer_reference: BufferReferenceStorage,
@@ -236,6 +295,12 @@ pub struct ModelCache {
         super::device::DebugPipelineRecording,
         super::device::DebugPipelineRecording,
     >, //stores all queed commands (e.g. used to test performance in the browser so we can measure the performance of each unnique operation alone)
+
+    #[cfg(feature = "wgpu_debug")]
+    pub(crate) debug_buffer_info: Vec<DebugBufferUsage>,
+
+    #[cfg(feature = "wgpu_debug")]
+    pub(crate) full_recording: super::debug_info::DebugRecordingWithData, 
 }
 
 impl ModelCache {
@@ -253,6 +318,10 @@ impl ModelCache {
             max_memory_size,
             #[cfg(feature = "wgpu_debug")]
             debug: std::collections::HashMap::new(),
+            #[cfg(feature = "wgpu_debug")]
+            debug_buffer_info: Vec::new(),
+            #[cfg(feature = "wgpu_debug")]
+            full_recording : super::debug_info::DebugRecordingWithData{recordings : Vec::new(), should_record : false}
         }
     }
 
@@ -322,14 +391,20 @@ impl ModelCache {
         if current_memory > memory_margin {
             return self.buffers.has_free_buffers();
         }
-        return false;
+        false
     }
 
     #[instrument(skip(self))]
     pub fn remove_unused(&mut self) -> bool {
+        let remove_older_then = *self.mappings.last_command_indexes.deque.front().unwrap_or(&u32::MAX);
         let current_memory = self.buffers.buffer_memory();
         let memory_margin = self.buffers.max_memory_allowed();
         let delete_until_margin = (memory_margin * 4) / 5;
+        const CHECK_MEMORY_EVERY : u32 = 10;
+
+        if current_memory <= memory_margin && !self.buffers.inc_remove_test_counter().is_multiple_of(CHECK_MEMORY_EVERY) {
+            return false;
+        }
 
         //remove buffers, that
         // 1. were not used for a long time
@@ -353,13 +428,12 @@ impl ModelCache {
 
             buffers.sort_by_key(|f| f.1);
 
-            for (id, _) in buffers {
+            for (id, last_used_counter) in buffers {
+                if last_used_counter > remove_older_then && self.buffers.buffer_memory() <= delete_until_margin {
+                    break;
+                }
                 check_bindgroups = true;
                 self.buffers.delete_buffer(&id);
-
-                if self.buffers.buffer_memory() <= delete_until_margin {
-                    break; //deleted enaugh
-                }
             }
             let current_memory = self.buffers.buffer_memory();
             log::debug!(
@@ -373,6 +447,7 @@ impl ModelCache {
                 self.buffers.get_buffer_count(),
                 self.buffers.max_memory_allowed()
             );
+
         }
 
         //remove bindgroups:
@@ -407,7 +482,7 @@ impl ModelCache {
                 true
             });
         }
-        return false;
+        false
     }
 
     #[instrument(skip(self, dev, bindgroup_reference, command_id, pipeline))]

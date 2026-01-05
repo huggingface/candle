@@ -113,7 +113,7 @@ impl Default for WgpuDeviceConfig {
         WgpuDeviceConfig {
             meta_buffer_size : 10*1024*1024,
             max_workload_size :  1024u64*1024*1024*2, 
-            buffer_cached_max_allowed_size : 1024*1024*1024*8,                                        
+            buffer_cached_max_allowed_size : ((1024.0*1024.0*1024.0)*(7.3)) as u64,                                        
             use_cache : true,
             flush_gpu_before_buffer_init : true,
             buffer_mapping_size : 3,

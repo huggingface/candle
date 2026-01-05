@@ -8,6 +8,13 @@
 #define TS 1
 #define WGS 1
 #define TID_SIZE 8
+#define STRIDE_WIDTHB 4
+#define SIZE_AREG 6
+
+#define CUSTOM_QUANTIZED_INDEX(i, base) ((base / 32) * 32) + (base % 32 + i) % 32
+//block_start = (base / 32) * 32
+//offset      = (base % 32 + i) % 32
+//result      = block_start + offset
 
 #pp_begin LOAD_HEADER(data)
     let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
@@ -16,7 +23,7 @@
     let d = half_to_float((header_data1 >> (((block_starting_byte) % 4) * 8)) & 0xFFFF);
 #pp_end
 
-#pp_begin LOAD_SINGLE (data, tid, VALUES_PER_THREAD)
+#pp_begin LOAD_SINGLE (data, tid)
     let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
     let loads_per_thread = (VALUES_PER_THREAD / 4u); //we load 4 values (u32) at the same time
     let j = tid * loads_per_thread;
@@ -39,7 +46,7 @@
         let w = load_u32(data, word_index); //every thread loads only one word
         let is_last_u = (tid + 1u) / THREADS_PER_BLOCK;
         
-        let is_even_block = 1u - (block_index & 1u);
+        let is_even_block = 1u - (block_index & 1u); //1 or 0
         let include_header = is_last_u & is_even_block;
 
         let full_mask = (0u - include_header) & 0xFFFFFFFF;
@@ -63,20 +70,21 @@
         let x3_unsigned = i32(x3_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
         let x4_unsigned = i32(x4_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
 
-        CALLBACK(out_base + 0, f32(x1_unsigned)*d)
-        CALLBACK(out_base + 1, f32(x2_unsigned)*d)
-        CALLBACK((out_base + 2) & BLOCK_SIZE_MINUS_1, f32(x3_unsigned)*d)
-        CALLBACK((out_base + 3) & BLOCK_SIZE_MINUS_1, f32(x4_unsigned)*d)
+        CALLBACK(out_base + 0, f32(x1_unsigned)*d, 0 + is_even_block * 2)
+        CALLBACK(out_base + 1, f32(x2_unsigned)*d, 1 + is_even_block * 2)
+        CALLBACK((out_base + 2) & BLOCK_SIZE_MINUS_1, f32(x3_unsigned)*d, 2 + is_even_block * 2)
+        CALLBACK((out_base + 3) & BLOCK_SIZE_MINUS_1, f32(x4_unsigned)*d, 3 + is_even_block * 2)
     }
 #pp_end
 
 #include "quantHelper.pwgsl"
 
 #ifdef SGEMM
-#include "matmulHelperSgemm.pwgsl"
 
 #define WIDTHA 4u
 #definec WIDTHB VALUES_PER_THREAD 
+
+#include "matmulHelperSgemm.pwgsl"
 
 MATMUL(matmul_sgemm)
 #endif

@@ -42,8 +42,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         if device.is_dtype_available(DType::BF16) {
             run_affine_benchmark(c, &device, DType::BF16, "affine_bf16");
         }
-        #[cfg(not(feature = "metal"))]
-        run_affine_benchmark(c, &device, DType::F8E4M3, "affine_fp8");
+        if device.is_dtype_available(DType::F8E4M3) {
+            #[cfg(not(feature = "metal"))]
+            run_affine_benchmark(c, &device, DType::F8E4M3, "affine_fp8");
+        }
     }
 }
 

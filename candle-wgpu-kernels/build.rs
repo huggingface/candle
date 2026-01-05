@@ -65,9 +65,12 @@ pub fn main() {
         store.insert(file,  Cow::Owned(shader_code));
     }
 
+    let mut files: Vec<&PathBuf> = store.keys().collect();
+    files.sort();
+
     //2. generate .wgsl files for all files in the store
     println!("Create Shader Files for Store:");
-    for file in store.keys(){
+    for file in files{
         println!("Found File: {:?}", file);
         parse_state.set_path(file.clone());
         let original_file_name = file.file_name().unwrap().to_str().unwrap();

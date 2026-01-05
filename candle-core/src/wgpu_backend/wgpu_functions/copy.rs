@@ -174,20 +174,22 @@ pub fn queue_copy2d(
     let x = d1.div_ceil(16);
     let y = d2.div_ceil(16);
     
-    if y > crate::wgpu_backend::queue_buffer::MAX_DISPATCH_SIZE {
+    if x <= crate::wgpu_backend::queue_buffer::MAX_DISPATCH_SIZE {
         queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
 
         let pipeline = queue.get_pipeline_const(
-            Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy2dTranspose),
+            Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy2dRowMajor),
             const_vec,
         );
-        queue.enqueue_workgroups(
+        queue.enqueue_workgroups_extra(
             pipeline,
             bind_group,
             y.min(65535),
             x,
             y.div_ceil(65535),
             (d1 * d2) as usize,
+            #[cfg(feature = "wgpu_debug")]
+            Some(format!("d1: {d1}, d2: {d2}, input: ({input_stride1}*x + {input_offset}), dest: ({dest_stride1}*x + {dest_offset})")),
         );
     } else {
         if x > 65535 {
@@ -197,13 +199,15 @@ pub fn queue_copy2d(
             Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy2d),
             const_vec,
         );
-        queue.enqueue_workgroups(
+        queue.enqueue_workgroups_extra(
             pipeline,
             bind_group,
             x.min(65535),
             y,
             x.div_ceil(65535),
             (d1 * d2) as usize,
+            #[cfg(feature = "wgpu_debug")]
+            Some(format!("d1: {d1}, d2: {d2}, input: ({input_stride1}*x + {input_offset}), dest: ({dest_stride1}*x + {dest_offset})")),
         );
     }
     Ok(())
@@ -258,13 +262,16 @@ pub fn queue_copy3d(
         Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy3d),
         const_vec,
     );
-    queue.enqueue_workgroups(
+    queue.enqueue_workgroups_extra(
         pipeline,
         bind_group,
         input_shape.2.div_ceil(16_u32),
         input_shape.1.div_ceil(16_u32),
         input_shape.0,
         input_layout.shape().elem_count(),
+        #[cfg(feature = "wgpu_debug")]
+        Some(format!("input_shape: {:?}, input: {:?}, dest: {:?}", input_shape, input_layout, dest_layout)),
+        
     );
     Ok(())
 }

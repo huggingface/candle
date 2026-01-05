@@ -9,6 +9,8 @@
 #define TS 1
 #define WGS 1
 #define TID_SIZE 4
+#define STRIDE_WIDTHB 4
+#define CUSTOM_QUANTIZED_INDEX(i, base) base + i % 4 + (i / 4u) * 16u
 
 #pp_begin LOAD_HEADER(data)
 let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
@@ -23,7 +25,7 @@ let m = half_to_float((header_data1>> 16) & 0xFFFF);
 #endif
 #pp_end
 
-#pp_begin LOAD_SINGLE (data, tid, VALUES_PER_THREAD)
+#pp_begin LOAD_SINGLE (data, tid)
     let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
     let loads_per_thread = (VALUES_PER_THREAD / 8u); //we load 8 values (u32) at the same time
     let j = tid * loads_per_thread;
@@ -63,14 +65,14 @@ let m = half_to_float((header_data1>> 16) & 0xFFFF);
         let index34 = (out_base + 1) & BLOCK_SIZE_HALF_MINUS_1;
         let index56 = (out_base + 2) & BLOCK_SIZE_HALF_MINUS_1;
         let index78 = (out_base + 3) & BLOCK_SIZE_HALF_MINUS_1;
-        CALLBACK(index12, f32(x0)*d+m)
-        CALLBACK(index12 + 16, f32(x1)*d+m)
-        CALLBACK(index34, f32(x2)*d+m)
-        CALLBACK(index34 + 16, f32(x3)*d+m)
-        CALLBACK(index56, f32(x4)*d+m)
-        CALLBACK(index56 + 16, f32(x5)*d+m)
-        CALLBACK(index78, f32(x6)*d+m)
-        CALLBACK(index78 + 16, f32(x7)*d+m)
+        CALLBACK(index12, f32(x0)*d+m, 0u)
+        CALLBACK(index12 + 16, f32(x1)*d+m, 4u)
+        CALLBACK(index34, f32(x2)*d+m, 1u)
+        CALLBACK(index34 + 16, f32(x3)*d+m, 5u)
+        CALLBACK(index56, f32(x4)*d+m, 2u)
+        CALLBACK(index56 + 16, f32(x5)*d+m, 6u)
+        CALLBACK(index78, f32(x6)*d+m, 3u)
+        CALLBACK(index78 + 16, f32(x7)*d+m, 7u)
     }
 #pp_end
 
@@ -78,10 +80,11 @@ let m = half_to_float((header_data1>> 16) & 0xFFFF);
 #include "quantHelper.pwgsl"
 
 #ifdef SGEMM
-#include "matmulHelperSgemm.pwgsl"
 
 #define WIDTHA 4u
 #definec WIDTHB VALUES_PER_THREAD 
+
+#include "matmulHelperSgemm.pwgsl"
 
 MATMUL(matmul_sgemm)
 #endif

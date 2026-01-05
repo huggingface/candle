@@ -1,4 +1,3 @@
-use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use std::hash::Hash;
@@ -8,7 +7,7 @@ use tracing::instrument;
 use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
 
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::wgpu_backend::wgpu_functions::matmul::sgemm::GenericDynamicMatmulShaderSettings;
+use crate::wgpu_backend::{MatmulAlgorithm, QuantizedMatmulAlgorithm};
 use crate::{notImplemented, wrongType, DType, Layout};
 
 #[cfg(feature = "wgpu_debug")]
@@ -26,6 +25,12 @@ use crate::wgpu_backend::queue_buffer::QueueBufferInner;
     any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
     derive(serde::Serialize, serde::Deserialize)
 )]
+/// Records a single pipeline invocation for debugging and replay purposes.
+///
+/// This structure captures the dispatch parameters along with the
+/// pipeline and bind group references used at the time of execution. When
+/// debug features are enabled, it can be serialized to allow inspection,
+/// logging, or offline analysis of GPU command streams.
 pub struct DebugPipelineRecording {
     pub x: u32,
     pub y: u32,
@@ -34,55 +39,6 @@ pub struct DebugPipelineRecording {
     pub meta: Vec<u32>,
     pub bindgroup: BindGroupReference,
     pub count: u32,
-}
-
-#[derive(Clone)]
-pub enum MatmulAlgorithm {
-    MatmulX, //select best fitting kernel automatically
-    Matmul7,
-    Matmul1,
-    Matmul1_4,
-    Matmul16_16,
-    Matmul32_64,
-    Matmul32_64B,
-    Matmul32_32,
-    Matmul64_64,
-    Matmul64_64_8_8,
-    Matmul64_64_4_8,
-    Matmul1_64,
-    Matmul1_64B,
-    Matmul1_64_32B,
-    Matmul1_32_32B,
-    Matmul24_24,
-    Matmul24_48,
-    Matmul24_24B,
-    Matmul24_48B,
-}
-
-impl fmt::Debug for MatmulAlgorithm {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MatmulX => write!(f, "MatmulX"),
-            Self::Matmul7 => write!(f, "Matmul7"),
-            Self::Matmul1 => write!(f, "Matmul1"),
-            Self::Matmul1_4 => write!(f, "Matmul1_4"),
-            Self::Matmul16_16 => write!(f, "Matmul_16_16"),
-            Self::Matmul32_64 => write!(f, "Matmul_32_64"),
-            Self::Matmul32_64B => write!(f, "Matmul_32_64B"),
-            Self::Matmul32_32 => write!(f, "Matmul_32_32"),
-            Self::Matmul64_64 => write!(f, "Matuml_64_64"),
-            Self::Matmul64_64_8_8 => write!(f, "Matmul_64_64_8_8"),
-            Self::Matmul64_64_4_8 => write!(f, "Matmul_64_64_4_8"),
-            Self::Matmul1_64 => write!(f, "Matmul_1_64"),
-            Self::Matmul1_64B => write!(f, "Matmul_1_64B"),
-            Self::Matmul1_64_32B => write!(f, "Matmul_1_64_32B"),
-            Self::Matmul1_32_32B => write!(f, "Matmul_1_32_32B"),
-            Self::Matmul24_24 => write!(f, "Matmul_24_24"),
-            Self::Matmul24_48 => write!(f, "Matmul_24_48"),
-            Self::Matmul24_24B => write!(f, "Matmul_24_24B"),
-            Self::Matmul24_48B => write!(f, "Matmul_24_48B"),
-        }
-    }
 }
 
 static DEVICE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -113,7 +69,7 @@ pub struct WgpuDeviceInner {
     pub configuration: crate::WgpuDeviceConfig,
 
     pub matmul_alg: Mutex<MatmulAlgorithm>, //MatMul algorithm override, used for testing and benchmarking.
-    pub quantized_matmul_alg: Mutex<Option<GenericDynamicMatmulShaderSettings>>, //Quantized MatMul algorithm override, used for testing and benchmarking.
+    pub quantized_matmul_alg: Mutex<QuantizedMatmulAlgorithm>, //Quantized MatMul algorithm override, used for testing and benchmarking.
 }
 
 #[derive(Debug, Clone)]
@@ -277,7 +233,7 @@ impl WgpuDevice {
                 bindgroup_layouts,
                 staging_probe_buffer: staging_buffer,
                 matmul_alg: Mutex::new(MatmulAlgorithm::MatmulX),
-                quantized_matmul_alg : Mutex::new(None),
+                quantized_matmul_alg : Mutex::new(QuantizedMatmulAlgorithm::None),
                 configuration,
             }),
         })
@@ -364,6 +320,13 @@ impl WgpuDevice {
             pipelines,
         )?;
         std::fs::write(format!("{folder}wgpu_{name}_test_{version}_used_consts.json"), consts)?;
+
+        let cache = self.cache.lock().unwrap();
+        crate::wgpu::debug_info::save_list(
+            &cache.debug_buffer_info,
+            &format!("{folder}wgpu_{name}_test_{version}_buffers.json"),
+        )
+        .unwrap();
         Ok(())
     }
 
@@ -521,7 +484,7 @@ impl WgpuDevice {
 
         let queue = self.command_queue.lock().unwrap();
 
-        return Ok(shaders
+        Ok(shaders
             .shaders
             .iter()
             .map(|(k, v)| {
@@ -540,7 +503,7 @@ impl WgpuDevice {
                 };
                 s
             })
-            .collect());
+            .collect())
     }
 
     pub(crate) async fn synchronize_async(&self) -> crate::Result<()> {
@@ -574,7 +537,7 @@ impl WgpuDevice {
             let mut cache = self.cache.lock().unwrap();
             buffer = cache.create_buffer_reference(size, true);
         }
-        return WgpuStorage::new(buffer, self.clone(), dtype, size);
+        WgpuStorage::new(buffer, self.clone(), dtype, size)
     }
 
     
@@ -603,7 +566,7 @@ impl WgpuDevice {
             let mut cache = self.cache.lock().unwrap();
             buffer = cache.create_buffer_reference_init(self, data, true);
         }
-        return Ok(WgpuStorage::new(buffer, self.clone(), dtype, size as u64));
+        Ok(WgpuStorage::new(buffer, self.clone(), dtype, size as u64))
     }
 
 
@@ -713,6 +676,25 @@ impl WgpuDevice {
     }
 
     
+}
+
+impl WgpuDevice{
+
+    #[cfg(feature = "wgpu_debug")]
+    pub fn start_recording_commands(&self){
+        let mut model_cache = self.cache.lock().unwrap();
+        model_cache.full_recording.should_record = true;
+        println!("start_recording_commands");
+    }
+
+    #[cfg(feature = "wgpu_debug")]
+    pub fn stop_recording_commands(&self, output_path: &str) -> crate::Result<()> {
+        println!("stop_recording_commands");
+        let mut model_cache = self.cache.lock().unwrap();
+        model_cache.full_recording.should_record = false;
+        drop(model_cache);
+        crate::wgpu_backend::debug_info::create_dispatch_zip(self, output_path)
+    }
 }
 
 impl crate::backend::BackendDevice for WgpuDevice {

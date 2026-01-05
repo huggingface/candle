@@ -1,5 +1,5 @@
 use super::GgmlDType;
-use crate::{DType, Result, Shape, WgpuDevice, WgpuStorage, backend::{BackendDevice, BackendStorage}, quantized::QStorage, wgpu_backend::wgpu_functions::{self, WgpuTensor, matmul::{SGEMMParams, sgemm::{GenericDynamicMatmulShaderSettings, GenericMatmulSettings, StrideOptimization}}}};
+use crate::{DType, Result, Shape, WgpuDevice, WgpuStorage, backend::{BackendDevice, BackendStorage}, quantized::QStorage, wgpu_backend::{QuantizedMatmulAlgorithm, wgpu_functions::{self, WgpuTensor, matmul::{SGEMMParams, sgemm::{GenericDynamicMatmulShaderSettings, GenericMatmulSettings, StrideOptimization}}}}};
 use crate::wgpu_backend::cache::BufferReferenceId;
 
 pub struct QWgpuStorage {
@@ -80,6 +80,75 @@ impl QWgpuStorage {
         Ok(())
     }
 
+    fn get_best_algorithm(&self,dtype : GgmlDType, 
+        (_, m,n,k) : (usize, usize, usize, usize),
+        input1_stride_k : usize) -> QuantizedMatmulAlgorithm{
+        
+        match dtype{
+            GgmlDType::Q4_0 | 
+            GgmlDType::Q4_1 |
+            GgmlDType::Q5_0 |
+            GgmlDType::Q5_1 |
+            GgmlDType::Q8_0 |
+            GgmlDType::Q8_1=> {
+                if k % 32 == 0 && m % 32 == 0 && n % 32 == 0{
+                    //the fastes configuration seen in benchmarks on q8_0:
+                    if m % 128 == 0 && n % 64 == 0{
+                        QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new( 
+                            GenericMatmulSettings::new(128, 64, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
+                            16, 4, false))
+                    }
+                    else if m % 64 == 0 && n % 128 == 0{
+                        QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new( 
+                            GenericMatmulSettings::new(64, 128, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
+                            16, 2, false))
+                    }
+                    else if m % 64 == 0 && n % 64 == 0{
+                        QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new( 
+                            GenericMatmulSettings::new(64, 64, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
+                            8, 4, false))
+                    }
+                    else if m % 32 == 0 && n % 64 == 0{
+                        QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new( 
+                            GenericMatmulSettings::new(32, 64, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
+                            4, 4, false))
+                    }
+                    else if m % 64 == 0 && n % 32 == 0{
+                        QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new( 
+                            GenericMatmulSettings::new(64, 32, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
+                            8, 4, false))
+                    }
+                    else{
+                        QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new( 
+                            GenericMatmulSettings::new(32, 32, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
+                            8, 2, false))
+                    }
+                }
+                else if m == 1 && k % 32 == 0 && input1_stride_k == 1{
+                    match dtype{
+                        GgmlDType::Q8_1 => {
+                            if n % 128 == 0{
+                                QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new_tiled_small( 
+                            GenericMatmulSettings::new(1, 32, 128, StrideOptimization::StrideK(true), StrideOptimization::StrideK(true)), 
+                            1, 32, false))
+                            }
+                            else{
+                                QuantizedMatmulAlgorithm::Naive
+                            }
+                        }
+                        _ => QuantizedMatmulAlgorithm::Naive
+                    }
+                }
+                else{
+                    QuantizedMatmulAlgorithm::Naive
+                }
+            }
+            _ => {QuantizedMatmulAlgorithm::Naive}
+        }
+            
+    }
+
+
     pub fn fwd(
         &self,
         self_shape: &Shape,
@@ -108,151 +177,147 @@ impl QWgpuStorage {
         dst_shape.push(n);
 
 
-        let dst_shape = Shape::from(dst_shape);
-        let dev = storage.device();
-        let dst = dev.alloc_uninit_size(DType::F32, dst_shape.elem_count());
-        
-        match self.dtype{
-            GgmlDType::Q4_0 | 
-            GgmlDType::Q4_1 |
-            GgmlDType::Q5_0 |
-            GgmlDType::Q5_1 |
-            GgmlDType::Q8_0 |
-            GgmlDType::Q8_1=> {
-                if k % 32 == 0 && m % 32 == 0 && n % 32 == 0{
-                    let matmul_alg = dev.quantized_matmul_alg.lock().unwrap();
-                    let matmul_alg = match &*matmul_alg{
-                        Some(alg) => alg,
-                        None => 
-                        {
-                            //the fastes configuration seen in benchmarks on q8_0:
-                            if m % 128 == 0 && n % 64 == 0{
-                                &GenericDynamicMatmulShaderSettings::new( 
-                                    GenericMatmulSettings::new(128, 64, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
-                                    16, 4, false)
-                            }
-                            else if m % 64 == 0 && n % 128 == 0{
-                                &GenericDynamicMatmulShaderSettings::new( 
-                                    GenericMatmulSettings::new(64, 128, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
-                                    16, 2, false)
-                            }
-                            else if m % 64 == 0 && n % 64 == 0{
-                                &GenericDynamicMatmulShaderSettings::new( 
-                                    GenericMatmulSettings::new(64, 64, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
-                                    8, 4, false)
-                            }
-                            else if m % 32 == 0 && n % 64 == 0{
-                                &GenericDynamicMatmulShaderSettings::new( 
-                                    GenericMatmulSettings::new(32, 64, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
-                                    4, 4, false)
-                            }
-                            else if m % 64 == 0 && n % 32 == 0{
-                                &GenericDynamicMatmulShaderSettings::new( 
-                                    GenericMatmulSettings::new(64, 32, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
-                                    8, 4, false)
-                            }
-                            else{
-                                &GenericDynamicMatmulShaderSettings::new( 
-                                    GenericMatmulSettings::new(32, 32, 32, StrideOptimization::None, StrideOptimization::StrideK(true)), 
-                                    8, 2, false)
-                            }
-                        }
-                    };
-
-
-                    let path = match self.dtype{
-                        GgmlDType::Q4_0 => "kernels/quantized/q4_0.pwgsl",
-                        GgmlDType::Q4_1 => "kernels/quantized/q4_1.pwgsl",
-                        GgmlDType::Q5_0 => "kernels/quantized/q5_0.pwgsl",
-                        GgmlDType::Q5_1 => "kernels/quantized/q5_1.pwgsl",
-                        GgmlDType::Q8_0 => "kernels/quantized/q8_0.pwgsl",
-                        GgmlDType::Q8_1 => "kernels/quantized/q8_1.pwgsl",
-                        GgmlDType::Q2K => "kernels/quantized/q2k.pwgsl",
-                        GgmlDType::Q3K => "kernels/quantized/q3k.pwgsl",
-                        GgmlDType::Q4K => "kernels/quantized/q4k.pwgsl",
-                        GgmlDType::Q5K => "kernels/quantized/q5k.pwgsl",
-                        GgmlDType::Q6K => "kernels/quantized/q6k.pwgsl",
-                        GgmlDType::Q8K => "kernels/quantized/q8k.pwgsl",
-                        _ => todo!()
-                    };
-
-                    wgpu_functions::matmul::sgemm::queue_matmul_quantized(
-                        dev,
-                        *dst.buffer(),
-                        WgpuTensor::new(layout, *storage.buffer()),
-                        WgpuTensor::new(&crate::Layout::new(self_shape.clone(), [1, k].to_vec(), 0), *self.storage.buffer()),
-                        SGEMMParams::new(b, m, k, n),
-                        path,
-                        matmul_alg
-                    )?;
-                    return Ok((dst, dst_shape));
-                }
-            }
-            // GgmlDType::Q2K => todo!(),
-            // GgmlDType::Q3K => todo!(),
-            // GgmlDType::Q4K => todo!(),
-            // GgmlDType::Q5K => todo!(),
-            // GgmlDType::Q6K => todo!(),
-            // GgmlDType::Q8K => todo!(),
-             _ => {}
-        }
-
-       
-        //naive matmul
         let mut input1_stride = layout.stride().iter().rev();
 
         let input1_stride_k = *input1_stride.next().unwrap_or(&1);
         let input1_stride_m = *input1_stride.next().unwrap_or(&1);
-        let input1_stride_b = *input1_stride.next().unwrap_or(&1);
+        //let input1_stride_b = *input1_stride.next().unwrap_or(&1);
 
-        let mut queue = dev.get_queue();
-        queue.add(b);
-        queue.add(m);
-        queue.add(k);
-        queue.add(n);
+        let dst_shape = Shape::from(dst_shape);
+        let dev = storage.device();
+        let dst = dev.alloc_uninit_size(DType::F32, dst_shape.elem_count());
+        
+        let matmul_alg = dev.quantized_matmul_alg.lock().unwrap();
 
-        queue.add(input1_stride_b); //input1_stride_b
-        queue.add(layout.start_offset()); //input1_offset
-        queue.add(0); //input2_stride_b
-        queue.add(0); //input2_ofset
-        queue.add(input1_stride_k);
-        queue.add(input1_stride_m);
-
-        let pipeline = match self.dtype(){
-            GgmlDType::Q4_0 => candle_wgpu_kernels::Pipelines::Q40(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q4_0::Functions::MatmulNaiveBlock),
-            GgmlDType::Q4_1 => candle_wgpu_kernels::Pipelines::Q41(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q4_1::Functions::MatmulNaiveBlock),
-            GgmlDType::Q5_0 => candle_wgpu_kernels::Pipelines::Q50(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q5_0::Functions::MatmulNaiveBlock),
-            GgmlDType::Q5_1 => candle_wgpu_kernels::Pipelines::Q51(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q5_1::Functions::MatmulNaiveBlock),
-            GgmlDType::Q8_0 => candle_wgpu_kernels::Pipelines::Q80(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q8_0::Functions::MatmulNaiveBlock),
-            GgmlDType::Q8_1 => candle_wgpu_kernels::Pipelines::Q81(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q8_1::Functions::MatmulNaiveBlock),
-            GgmlDType::Q2K => candle_wgpu_kernels::Pipelines::Q2K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q2_k::Functions::MatmulNaiveBlock),
-            GgmlDType::Q3K => candle_wgpu_kernels::Pipelines::Q3K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q3_k::Functions::MatmulNaiveBlock),
-            GgmlDType::Q4K => candle_wgpu_kernels::Pipelines::Q4K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q4_k::Functions::MatmulNaiveBlock),
-            GgmlDType::Q5K => candle_wgpu_kernels::Pipelines::Q5K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q5_k::Functions::MatmulNaiveBlock),
-            GgmlDType::Q6K => candle_wgpu_kernels::Pipelines::Q6K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q6_k::Functions::MatmulNaiveBlock),
-            GgmlDType::Q8K => candle_wgpu_kernels::Pipelines::Q8K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q8_k::Functions::MatmulNaiveBlock),
-            _ => todo!()
+        let matmul_alg : QuantizedMatmulAlgorithm = match &*matmul_alg{
+            QuantizedMatmulAlgorithm::None => self.get_best_algorithm(self.dtype, (b,m,n,k), input1_stride_k),
+            QuantizedMatmulAlgorithm::Naive =>  QuantizedMatmulAlgorithm::Naive,
+            QuantizedMatmulAlgorithm::Some(setting) => QuantizedMatmulAlgorithm::Some(setting.to_owned())
         };
 
-        let const_vec = vec![
-            (input1_stride_k == 1) as usize,
-            (input1_stride_m == 1) as usize,
-            (b != 1) as usize,
-        ];
-        
-        let pipeline = queue.get_pipeline_const(pipeline, const_vec);
-        let bind_group = dev.create_bind_group_input2(*dst.buffer(), *storage.buffer(),*self.buffer(), DType::F32.into());
+        match matmul_alg{
+            
+            QuantizedMatmulAlgorithm::Naive => {
+                //naive matmul
 
-        queue.enqueue_workgroups(
-            pipeline,
-            bind_group,
-            (n as u32).div_ceil(16),
-            (m as u32).div_ceil(16),
-            b as u32,
-            k * m * n * b,
-        );
-    
-        
+                let mut queue = dev.get_queue();
+                //queue.add(b);
+                queue.add(m);
+                queue.add(k);
+                queue.add(n);
+
+                //queue.add(input1_stride_b); //input1_stride_b
+                queue.add(layout.start_offset()); //input1_offset
+                //queue.add(0); //input2_stride_b
+                //queue.add(0); //input2_ofset
+                queue.add(input1_stride_k);
+                queue.add(input1_stride_m);
+
+                if m == 1{
+                    let pipeline = match self.dtype(){
+                        GgmlDType::Q4_0 => candle_wgpu_kernels::Pipelines::Q40(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q4_0::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q4_1 => candle_wgpu_kernels::Pipelines::Q41(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q4_1::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q5_0 => candle_wgpu_kernels::Pipelines::Q50(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q5_0::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q5_1 => candle_wgpu_kernels::Pipelines::Q51(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q5_1::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q8_0 => candle_wgpu_kernels::Pipelines::Q80(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q8_0::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q8_1 => candle_wgpu_kernels::Pipelines::Q81(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q8_1::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q2K => candle_wgpu_kernels::Pipelines::Q2K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q2_k::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q3K => candle_wgpu_kernels::Pipelines::Q3K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q3_k::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q4K => candle_wgpu_kernels::Pipelines::Q4K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q4_k::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q5K => candle_wgpu_kernels::Pipelines::Q5K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q5_k::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q6K => candle_wgpu_kernels::Pipelines::Q6K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q6_k::Functions::MatmulNaiveBlockM1),
+                        GgmlDType::Q8K => candle_wgpu_kernels::Pipelines::Q8K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q8_k::Functions::MatmulNaiveBlockM1),
+                        _ => todo!()
+                    };
+
+                    let const_vec = vec![
+                        (input1_stride_k == 1) as usize,
+                        (input1_stride_m == 1) as usize,
+                        (b != 1) as usize,
+                    ];
+                    
+                    let pipeline = queue.get_pipeline_const(pipeline, const_vec);
+                    let bind_group = dev.create_bind_group_input2(*dst.buffer(), *storage.buffer(),*self.buffer(), DType::F32.into());
+
+                    queue.enqueue_workgroups_extra(
+                        pipeline,
+                        bind_group,
+                        (n as u32).div_ceil(32),
+                        1,
+                        b as u32,
+                        k * m * n * b,
+                        #[cfg(feature = "wgpu_debug")]
+                        Some(wgpu_functions::matmul::sgemm::get_debug_string(&SGEMMParams::new(b, m, k, n))),
+                    );
+                }
+                else{
+                    let pipeline = match self.dtype(){
+                        GgmlDType::Q4_0 => candle_wgpu_kernels::Pipelines::Q40(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q4_0::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q4_1 => candle_wgpu_kernels::Pipelines::Q41(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q4_1::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q5_0 => candle_wgpu_kernels::Pipelines::Q50(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q5_0::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q5_1 => candle_wgpu_kernels::Pipelines::Q51(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q5_1::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q8_0 => candle_wgpu_kernels::Pipelines::Q80(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q8_0::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q8_1 => candle_wgpu_kernels::Pipelines::Q81(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q8_1::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q2K => candle_wgpu_kernels::Pipelines::Q2K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q2_k::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q3K => candle_wgpu_kernels::Pipelines::Q3K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q3_k::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q4K => candle_wgpu_kernels::Pipelines::Q4K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q4_k::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q5K => candle_wgpu_kernels::Pipelines::Q5K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q5_k::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q6K => candle_wgpu_kernels::Pipelines::Q6K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q6_k::Functions::MatmulNaiveBlock),
+                        GgmlDType::Q8K => candle_wgpu_kernels::Pipelines::Q8K(candle_wgpu_kernels::DType::F32, candle_wgpu_kernels::quantized::q8_k::Functions::MatmulNaiveBlock),
+                        _ => todo!()
+                    };
+
+                    let const_vec = vec![
+                        (input1_stride_k == 1) as usize,
+                        (input1_stride_m == 1) as usize,
+                        (b != 1) as usize,
+                    ];
+                    
+                    let pipeline = queue.get_pipeline_const(pipeline, const_vec);
+                    let bind_group = dev.create_bind_group_input2(*dst.buffer(), *storage.buffer(),*self.buffer(), DType::F32.into());
+
+                    queue.enqueue_workgroups_extra(
+                        pipeline,
+                        bind_group,
+                        (n as u32).div_ceil(16),
+                        (m as u32).div_ceil(16),
+                        b as u32,
+                        k * m * n * b,
+                        #[cfg(feature = "wgpu_debug")]
+                        Some(wgpu_functions::matmul::sgemm::get_debug_string(&SGEMMParams::new(b, m, k, n))),
+                    );
+                }
+            },
+            QuantizedMatmulAlgorithm::Some(generic_dynamic_matmul_shader_settings) => {
+                let path = match self.dtype{
+                    GgmlDType::Q4_0 => "kernels/quantized/q4_0.pwgsl",
+                    GgmlDType::Q4_1 => "kernels/quantized/q4_1.pwgsl",
+                    GgmlDType::Q5_0 => "kernels/quantized/q5_0.pwgsl",
+                    GgmlDType::Q5_1 => "kernels/quantized/q5_1.pwgsl",
+                    GgmlDType::Q8_0 => "kernels/quantized/q8_0.pwgsl",
+                    GgmlDType::Q8_1 => "kernels/quantized/q8_1.pwgsl",
+                    GgmlDType::Q2K => "kernels/quantized/q2k.pwgsl",
+                    GgmlDType::Q3K => "kernels/quantized/q3k.pwgsl",
+                    GgmlDType::Q4K => "kernels/quantized/q4k.pwgsl",
+                    GgmlDType::Q5K => "kernels/quantized/q5k.pwgsl",
+                    GgmlDType::Q6K => "kernels/quantized/q6k.pwgsl",
+                    GgmlDType::Q8K => "kernels/quantized/q8k.pwgsl",
+                    _ => todo!()
+                };
+
+                wgpu_functions::matmul::sgemm::queue_matmul_quantized(
+                    dev,
+                    *dst.buffer(),
+                    WgpuTensor::new(layout, *storage.buffer()),
+                    WgpuTensor::new(&crate::Layout::new(self_shape.clone(), [1, k].to_vec(), 0), *self.storage.buffer()),
+                    SGEMMParams::new(b, m, k, n),
+                    path,
+                    &generic_dynamic_matmul_shader_settings
+                )?;
+            },
+            QuantizedMatmulAlgorithm::None => panic!(),
+        }
+
         Ok((dst, dst_shape))
     }
 

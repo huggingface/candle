@@ -1,0 +1,272 @@
+#include "../util.pwgsl"
+
+
+// override CONSTV_0 : bool = true;
+// override CONSTV_1 : bool = true;
+// override CONSTV_2 : bool = true;
+override CONSTV_3 : bool = true;
+override CONSTV_4 : bool = true;
+override CONSTV_5 : u32 = 0u;
+
+#define op_matmul_input1_stride_k   CONSTV_0
+#define op_matmul_input1_stride_m   CONSTV_1
+
+#define op_matmul_input2_stride_n   CONSTV_2
+#define op_matmul_input2_stride_k   CONSTV_3
+
+#define op_matmul_use_batch   CONSTV_4
+#define op_matmul_dest_offset CONSTV_5
+
+//#define op_matmul_b                 op_meta[0]
+//#define op_matmul_m                 op_meta[1]
+#define op_matmul_k                 op_meta[0]
+#define op_matmul_n                 op_meta[1]
+
+#define op_matmul_m 1u
+
+//#define op_matmul_input1_stride_b   op_meta[4]
+#define op_matmul_input1_offset     op_meta[2]
+
+#define op_matmul_input1_stride_b 0u
+
+//#define op_matmul_input2_stride_b   op_meta[6]
+//#define op_matmul_input2_offset     op_meta[3]
+#define op_matmul_input2_offset     0u
+
+#define op_matmul_input1_stride_k   1u // select(op_meta[8], 1u,CONSTV_0)
+#define op_matmul_input1_stride_m   1u // select(op_meta[9], 1u,CONSTV_1) 
+
+#define op_matmul_input2_stride_n   op_matmul_k
+#define op_matmul_input2_stride_k   1u //select(op_meta[11], 1u,CONSTV_3)
+
+#ifndef STRIDE_WIDTHB
+#define STRIDE_WIDTHB WIDTHB
+#endif
+
+//as different threads might need to load different values based on the block_index (e.g. 0-3) or (2-5), we might want to store more values in areg (e.g. 0-5) so each wn calculateion of a thread can access the values it needed (0-3 or 2-5)
+#ifndef SIZE_AREG
+#define SIZE_AREG WIDTHB
+#endif
+
+
+#ifdef QUANTIZED
+#define op_matmul_input2_stride_k   1u
+#endif
+
+#define WPTK WIDTHB
+#definec THREADS_PER_K TSK / WPTK
+//#assert (THREADS_PER_K * WPTK) == TSK
+
+#ifndef RTSM
+#definec RTSM 1
+#endif
+#ifndef RTSN
+#definec RTSN (TSN / WPTN) * THREADS_PER_K
+#endif
+
+#definec THREADS RTSM * RTSN
+
+#definec WPTN_DEST TSN / THREADS
+
+#assert ((TSN)%(THREADS)) == 0
+
+#assert ((TSK*TSN)%(THREADS)) == 0
+#assert RTSM > 0
+#assert RTSN > 0
+#assert TSM % WPTM == 0
+#assert TSN % WPTN == 0
+
+
+#ifndef WIDTHA
+#define WIDTHA WPTK
+#endif
+
+#ifndef WIDTHB
+#define WIDTHB WPTK
+#endif
+
+#if WIDTHA == 1
+#define ARRAY_TYPEA DTYPE
+#elif WIDTHA == 2
+#define ARRAY_TYPEA vec2<DTYPE>
+#elif WIDTHA == 4
+#define ARRAY_TYPEA vec4<DTYPE>
+#endif
+
+#if WIDTHB == 1
+#define ARRAY_TYPEB DTYPE
+#elif WIDTHB == 2
+#define ARRAY_TYPEB vec2<DTYPE>
+#elif WIDTHB == 4
+#define ARRAY_TYPEB vec4<DTYPE>
+#endif
+
+
+@group(0) @binding(2)
+var<storage> v_input_a: array<ARRAY_TYPEA>;
+
+#ifdef QUANTIZED
+@group(0) @binding(3)
+var<storage> v_input_b: array<u32>;
+#else
+@group(0) @binding(3)
+var<storage> v_input_b: array<ARRAY_TYPEB>;
+#endif
+
+
+var<workgroup> SharedResult: array<array<DTYPE, THREADS_PER_K>, TSN>;
+
+#if WIDTHA < WIDTHB || SIZE_AREG != WIDTHA
+var<workgroup> SharedA : array<DTYPE, TSK>;
+#endif
+
+//This is an optimized shader for m = 1 and B k_stride = 1:
+//this shader will dispatch multiple threads (THREADS_PER_K) to a single matmul k sum (so that adjacent threads will load adjacent memory from A and B). 
+//Each thread will compute only a part of the total sum, but will compute many columns (wptn is higher (e.g. 32)).
+//all partial results are stored in sharedResults
+//At the end, each thread will sum one column of the partial results and write it to memory.
+@compute @workgroup_size(RTSN, RTSM, 1)
+//MxK * KxN = MxN
+fn matmul_sgemm(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
+
+    let lk = local_id.x % THREADS_PER_K;
+    let local_x = local_id.x / THREADS_PER_K;
+
+    let lx = local_x * WPTN;
+
+    let m_input1_offset = op_matmul_input1_offset;
+    let m_input2_offset = (op_matmul_input2_offset + op_matmul_input2_stride_n * TSN * group_id.x);
+
+    let max_k = op_matmul_k;
+    //var acc = array<DTYPE, WPTN>();
+    // for (var i = 0u; i < WPTN; i++) {
+    //     acc[i] = ZERO;
+    // }
+    for(var k_part = 0u; k_part < max_k; k_part += TSK){
+        let k = k_part + lk * WPTK;
+        let id_a = m_input1_offset + k * op_matmul_input1_stride_k;
+        let id_b = m_input2_offset + k * op_matmul_input2_stride_k + lx * op_matmul_input2_stride_n;
+
+
+        #assert WPTK == WIDTHB
+        #assert WIDTHB >= WIDTHA
+        #if WIDTHA == WIDTHB && SIZE_AREG == WIDTHA
+        #assert WPTK == WIDTHA
+        let a_reg : ARRAY_TYPEA = v_input_a[id_a / WIDTHA];
+        
+        #elif STRIDE_WIDTHB == 4 && SIZE_AREG == 8
+        //we need 2 loads to get WIDTHB values, but we can load adjacent  values of A at the same time 
+        var a_reg : array<DTYPE, 8>;
+        let base_k = k_part + lk * STRIDE_WIDTHB;
+        // first half: 0–3
+        let a0 = v_input_a[
+            (m_input1_offset + base_k * op_matmul_input1_stride_k) / WIDTHA
+        ];
+        a_reg[0] = a0[0];
+        a_reg[1] = a0[1];
+        a_reg[2] = a0[2];
+        a_reg[3] = a0[3];
+
+        // second half: 16–19
+        let a1 = v_input_a[
+            (m_input1_offset + (base_k + 16u) * op_matmul_input1_stride_k) / WIDTHA
+        ];
+
+        a_reg[4] = a1[0];
+        a_reg[5] = a1[1];
+        a_reg[6] = a1[2];
+        a_reg[7] = a1[3];
+        #else
+        //we use all threads to load the current TSK Block, so TSK % (THREADS * WIDTHA) == 0
+#definec WPTK_DEST TSK / (THREADS * WIDTHA)
+#assert TSK % (THREADS * WIDTHA) == 0
+        var a_reg : array<DTYPE, SIZE_AREG>;
+        // ---- SHARED MEMORY PATH ----
+        // We need WIDTHB values but can only load WIDTHA at once
+
+        //load TSK of A:
+        
+        workgroupBarrier();
+        let tid = local_id.x;
+        for (var t=0u; t < WPTK_DEST; t++) {
+            let wk_local = (tid + t * THREADS) * WIDTHA;
+            let id_a_part = m_input1_offset + wk_local * op_matmul_input1_stride_k;
+            let vec_value = v_input_a[(id_a_part + k_part * op_matmul_input1_stride_k) / WIDTHA];
+            for(var i = 0u; i < WIDTHA; i ++){
+                SharedA[wk_local + i] = vec_value[i];
+            }
+        }
+       
+        workgroupBarrier();
+
+        // Read back this thread’s slice
+        let base = lk * STRIDE_WIDTHB;
+        #ifdef PRE_CUSTOM_QUANTIZED_INDEX_INSTRUCTIONS
+            PRE_CUSTOM_QUANTIZED_INDEX_INSTRUCTIONS
+        #endif
+        for (var i = 0u; i < SIZE_AREG; i++) {
+            #ifdef CUSTOM_QUANTIZED_INDEX
+            a_reg[i] = SharedA[(CUSTOM_QUANTIZED_INDEX(i, base))];
+            #else
+            a_reg[i] = SharedA[base + i];
+            #endif
+        }
+
+        #endif
+        //TODO: currently a_reg holds WIDTHA values(e.g. a_reg may be vec4<f32> so may contain up to 4 values)
+        //      but now I want to allow quantized values for b, in this case we may need to read B values per block e.g. min 4 Values for q8, or 8 values for q4, or up to 256 values for qxk variants.
+       
+
+        for (var wn=0u; wn<WPTN; wn++) {
+            let id_b2 = id_b + wn * op_matmul_input2_stride_n;
+
+        #ifdef QUANTIZED
+            #assert THREADS % TID_SIZE == 0
+            #assert TSK % (TID_SIZE * WIDTHB) == 0
+            let index = id_b2 / WIDTHB;
+            let block_tid = index % TID_SIZE;
+            let block_index = index / TID_SIZE;
+            var sum = ZERO;
+            #define CALLBACK(idx, value, idx2) sum += a_reg[idx2] * (value);
+            
+            LOAD_HEADER(v_input_b)
+            LOAD_SINGLE(v_input_b, block_tid) //multiple threads may participate in the same load(e.g. for q4 one threads needs to min load 8 values(8 values inside a u32), so 4 threads can load one complete block)
+            SharedResult[wn + lx][lk] += sum;
+            //acc[wn] += sum;
+        #else
+            let b_reg : ARRAY_TYPEB = v_input_b[id_b2 / WIDTHB];
+
+            #if WPTK == 1
+                acc[wn] += a_reg* b_reg;
+            #else
+                #ifdef f32
+                  acc[wn] += dot(a_reg, b_reg);
+                #else
+                    for(var ki=0u; ki < WPTK; ki++){
+                        acc[wn] += a_reg[ki] * b_reg[ki];
+                    }
+                #endif 
+            #endif
+        #endif
+        }
+    }
+    // for (var wn=0u; wn<WPTN; wn++) {
+    //     SharedResult[wn + lx][lk] = acc[wn];
+    // }
+    
+    workgroupBarrier();
+
+    let gx = TSN*group_id.x;
+    let gy = TSM*group_id.y;
+
+    let dest_index =  gy * op_matmul_n + gx + op_matmul_dest_offset;
+    let tid = local_id.x;
+    for (var t=0u; t<WPTN_DEST; t++) {
+        let wn = tid + t * THREADS;
+        var sum : DTYPE = ZERO;
+        for (var li =0u; li<THREADS_PER_K; li++) {
+            sum += SharedResult[wn][li];
+        }
+        v_dest[dest_index + wn] = sum;
+    }
+}

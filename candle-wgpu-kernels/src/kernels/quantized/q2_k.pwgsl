@@ -34,7 +34,7 @@ let d = half_to_float(header_data1 & 0xFFFF);
 let dmin = half_to_float((header_data1 >> 16) & 0xFFFF);
 #pp_end
 
-#pp_begin LOAD_SINGLE (data,tid, VALUES_PER_THREAD)
+#pp_begin LOAD_SINGLE (data,tid)
     let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
     let loads_per_thread = (VALUES_PER_THREAD / 4u); //we load 4 values (u32) at the same time
     let a = tid * loads_per_thread;
@@ -73,10 +73,10 @@ let dmin = half_to_float((header_data1 >> 16) & 0xFFFF);
                 let v2 = (b2 >> shift) & 3u;
                 let v3 = (b3 >> shift) & 3u;
 
-                CALLBACK(y_block_index + 0u, dl * f32(v0) - ml);
-                CALLBACK(y_block_index + 1u, dl * f32(v1) - ml);
-                CALLBACK(y_block_index + 2u, dl * f32(v2) - ml);
-                CALLBACK(y_block_index + 3u, dl * f32(v3) - ml);
+                CALLBACK(y_block_index + 0u, dl * f32(v0) - ml, y_block_index + 0u);
+                CALLBACK(y_block_index + 1u, dl * f32(v1) - ml, y_block_index + 1u);
+                CALLBACK(y_block_index + 2u, dl * f32(v2) - ml, y_block_index + 2u);
+                CALLBACK(y_block_index + 3u, dl * f32(v3) - ml, y_block_index + 3u);
 
                 y_block_index += 4u;
             }
@@ -107,10 +107,10 @@ let dmin = half_to_float((header_data1 >> 16) & 0xFFFF);
                 let v2 = (b2 >> shift) & 3u;
                 let v3 = (b3 >> shift) & 3u;
 
-                CALLBACK(y_block_index + 0u, dl * f32(v0) - ml);
-                CALLBACK(y_block_index + 1u, dl * f32(v1) - ml);
-                CALLBACK(y_block_index + 2u, dl * f32(v2) - ml);
-                CALLBACK(y_block_index + 3u, dl * f32(v3) - ml);
+                CALLBACK(y_block_index + 0u, dl * f32(v0) - ml, y_block_index + 0u);
+                CALLBACK(y_block_index + 1u, dl * f32(v1) - ml, y_block_index + 1u);
+                CALLBACK(y_block_index + 2u, dl * f32(v2) - ml, y_block_index + 2u);
+                CALLBACK(y_block_index + 3u, dl * f32(v3) - ml, y_block_index + 3u);
 
                 y_block_index += 4u;
             }
@@ -123,11 +123,9 @@ let dmin = half_to_float((header_data1 >> 16) & 0xFFFF);
 #include "quantHelper.pwgsl"
 
 #ifdef SGEMM
-#include "matmulHelperSgemm.pwgsl"
-
 #define WIDTHA 4u
 #definec WIDTHB VALUES_PER_THREAD 
-
+#include "matmulHelperSgemm.pwgsl"
 MATMUL(matmul_sgemm)
 #endif
 

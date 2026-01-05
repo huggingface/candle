@@ -19,7 +19,7 @@ let block_qs_byte = block_starting_byte + QS_OFFSET;
 let d = as_float(load_u32(data, block_starting_byte / 4u));
 #pp_end
 
-#pp_begin LOAD_SINGLE (data,tid, VALUES_PER_THREAD)
+#pp_begin LOAD_SINGLE (data,tid)
     let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
     let loads_per_thread = (VALUES_PER_THREAD / 4u); //we load 4 values (u32) at the same time
     let j = tid * loads_per_thread;
@@ -40,10 +40,10 @@ let d = as_float(load_u32(data, block_starting_byte / 4u));
         let x3_unsigned = i32(x3_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
         let x4_unsigned = i32(x4_u8 << INVERSE_BIT_SIZE) >> INVERSE_BIT_SIZE;
 
-        CALLBACK(out_base + 0, f32(x1_unsigned)*d)
-        CALLBACK(out_base + 1, f32(x2_unsigned)*d)
-        CALLBACK(out_base + 2, f32(x3_unsigned)*d)
-        CALLBACK(out_base + 3, f32(x4_unsigned)*d)
+        CALLBACK(out_base + 0, f32(x1_unsigned)*d, out_base + 0)
+        CALLBACK(out_base + 1, f32(x2_unsigned)*d, out_base + 1)
+        CALLBACK(out_base + 2, f32(x3_unsigned)*d, out_base + 2)
+        CALLBACK(out_base + 3, f32(x4_unsigned)*d, out_base + 3)
     }
 #pp_end 
 
@@ -51,10 +51,11 @@ let d = as_float(load_u32(data, block_starting_byte / 4u));
 #include "quantHelper.pwgsl"
 
 #ifdef SGEMM
-#include "matmulHelperSgemm.pwgsl"
 
 #define WIDTHA 4u
 #definec WIDTHB VALUES_PER_THREAD 
+
+#include "matmulHelperSgemm.pwgsl"
 
 MATMUL(matmul_sgemm)
 #endif

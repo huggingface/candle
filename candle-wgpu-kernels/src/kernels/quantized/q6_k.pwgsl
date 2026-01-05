@@ -27,7 +27,7 @@ let d = half_to_float(load_data(data,block_starting_byte + D_OFFSET,0xFFFF));
 
 //TODO: the BLOCK_BYTE_SIZE is not divisible by 4, so we cannot do u32 loads for everything in a "simple way", 
 // but every odd block has 2 bytes offset at the start.
-#pp_begin LOAD_SINGLE (data,tid, VALUES_PER_THREAD)
+#pp_begin LOAD_SINGLE (data,tid)
     let THREADS_PER_BLOCK = BLOCK_SIZE / VALUES_PER_THREAD;
     let loads_per_thread = (VALUES_PER_THREAD / 4u); //we load 4 values (u32) at the same time
     let a = tid * loads_per_thread;
@@ -52,10 +52,10 @@ let d = half_to_float(load_data(data,block_starting_byte + D_OFFSET,0xFFFF));
             let q3 = i32((ql1 >> 4) | (((qh1 >> 4) & 3) << 4)) - 32;
             let q4 = i32((ql2 >> 4) | (((qh1 >> 6) & 3) << 4)) - 32;
 
-            CALLBACK(n + l,      d * scale0 * f32(q1))
-            CALLBACK(n + l + 32, d * scale1 * f32(q2))
-            CALLBACK(n + l + 64, d * scale2 * f32(q3))
-            CALLBACK(n + l + 96, d * scale3 * f32(q4))
+            CALLBACK(n + l,      d * scale0 * f32(q1), n + l)
+            CALLBACK(n + l + 32, d * scale1 * f32(q2), n + l + 32)
+            CALLBACK(n + l + 64, d * scale2 * f32(q3), n + l + 64)
+            CALLBACK(n + l + 96, d * scale3 * f32(q4), n + l + 96)
         }
 
         scale0 = f32(load_i8(data,sc_offset+1,0xFF));
@@ -73,10 +73,10 @@ let d = half_to_float(load_data(data,block_starting_byte + D_OFFSET,0xFFFF));
             let q3 = i32((ql1 >> 4) | (((qh1 >> 4) & 3) << 4)) - 32;
             let q4 = i32((ql2 >> 4) | (((qh1 >> 6) & 3) << 4)) - 32;
 
-            CALLBACK(n + l,      d * scale0 * f32(q1))
-            CALLBACK(n + l + 32, d * scale1 * f32(q2))
-            CALLBACK(n + l + 64, d * scale2 * f32(q3))
-            CALLBACK(n + l + 96, d * scale3 * f32(q4))
+            CALLBACK(n + l,      d * scale0 * f32(q1), n + l)
+            CALLBACK(n + l + 32, d * scale1 * f32(q2), n + l + 32)
+            CALLBACK(n + l + 64, d * scale2 * f32(q3), n + l + 64)
+            CALLBACK(n + l + 96, d * scale3 * f32(q4), n + l + 96)
         }
     }
 #pp_end
@@ -84,10 +84,11 @@ let d = half_to_float(load_data(data,block_starting_byte + D_OFFSET,0xFFFF));
 #include "quantHelper.pwgsl"
 
 #ifdef SGEMM
-#include "matmulHelperSgemm.pwgsl"
-
 #define WIDTHA 4u
 #definec WIDTHB VALUES_PER_THREAD 
+
+#include "matmulHelperSgemm.pwgsl"
+
 
 MATMUL(matmul_sgemm)
 #endif

@@ -65,6 +65,38 @@ fn matmul1(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 
+@compute
+@workgroup_size(32,1,1)
+fn matmul1_m1(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x;
+    let y = global_id.y;
+    let b = global_id.z;
+
+    if(x >= op_matmul_n){
+        return;
+    }
+
+    let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n,op_matmul_use_batch); 
+
+    let input1_offset = op_matmul_input1_offset;
+    let input2_offset = op_matmul_input2_offset;
+
+    let input1_stride_b = select(0u, op_matmul_input1_stride_b,op_matmul_use_batch); 
+    let input2_stride_b = select(0u, op_matmul_input2_stride_b,op_matmul_use_batch); 
+    
+    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b;
+    let m_input2_offset = input2_offset + op_matmul_input2_stride_n * x + b * input2_stride_b;
+
+    var sum = ZERO;
+    for (var i = 0u; i < op_matmul_k; i++){
+        sum +=  v_input1[op_matmul_input1_stride_k * i + m_input1_offset] 
+                * v_input2[op_matmul_input2_stride_k * i + m_input2_offset];
+    }
+    
+    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
+}
+
+
 @group(0) @binding(2)
 var<storage> v_input_a: array<vec4<DTYPE>>;
 

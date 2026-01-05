@@ -202,7 +202,7 @@ impl WgpuDevice{
 ///Prepares Buffers
 fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBufferInner, cache: &mut ModelCache) {
     let global_index = queue_buffer.global_command_index();
-
+    cache.mappings.set_global_command_index(global_index);
     let queue = &mut queue_buffer.command_queue;
     {
         let mut hasher = FxHasher::default();
@@ -351,32 +351,32 @@ fn get_command_buffer(
                             .expect("bindgroup could not be found!");
 
                         let buffers = bindgroup.buffer();
-                        let vd = buffers.get_dest();
+                        let vd = *buffers.get_dest();
                         match buffers.get_input() {
                             BindgroupInputBase::Bindgroup0(_) => {}
                             BindgroupInputBase::Bindgroup1(v1, _) => {
-                                if v1 == vd {
+                                if v1 == &vd {
                                     panic!("B1: output and input are equal");
                                 }
                             }
                             BindgroupInputBase::Bindgroup2(v1, v2, _) => {
-                                if v1 == vd {
+                                if v1 == &vd {
                                     panic!("B2: output and input1 are equal");
                                 }
-                                if v2 == vd {
+                                if v2 == &vd {
                                     panic!("B2: output and input2 are equal");
                                 }
                             }
                             BindgroupInputBase::Bindgroup3(v1, v2, v3, _) => {
-                                if v1 == vd {
+                                if v1 == &vd {
                                     panic!("B3: output and input1 are equal");
                                 }
 
-                                if v2 == vd {
+                                if v2 == &vd {
                                     panic!("B3: output and input2 are equal");
                                 }
 
-                                if v3 == vd {
+                                if v3 == &vd {
                                     panic!("B3: input3 and output are equal");
                                 }
                             }
@@ -409,6 +409,64 @@ fn get_command_buffer(
                                 },
                             );
                             debug_index += 2;
+                        
+                        
+                            if cache.full_recording.should_record
+                            {
+                                use crate::wgpu_backend::wgpu_functions;
+
+                                let debug_info = crate::wgpu_backend::device::DebugPipelineRecording {
+                                    x: q.x,
+                                    y: q.y,
+                                    z: q.z,
+                                    pipeline: q.pipeline.clone(),
+                                    meta : meta_array[meta as usize..].to_vec(),
+                                    bindgroup: q.bindgroup.clone(),
+                                    count: 1,
+                                };
+
+                                fn get_buffer_data(dev: &WgpuDevice, buffer_reference : CachedBufferId, cache: &mut ModelCache) -> crate::Result<super::debug_info::NumericArray>{
+                                    #[cfg(not(target_arch = "wasm32"))]{
+                                        let staging_buffer;
+                                        if buffer_reference.is_valid() {
+                                            if let Some(buffer) = cache.buffers.get_buffer(&buffer_reference) {
+                                                staging_buffer =  wgpu_functions::copy_buffer_to_staging_buffer(dev, buffer.buffer());
+                                            } else {
+                                                panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
+                                            }
+                                        } else {
+                                            panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
+                                        }
+                                    
+
+                                        let data = pollster::block_on(wgpu_functions::read_from_staging_buffer_async::<u8>(dev, staging_buffer))?;
+                                        //let data = pollster::block_on(wgpu_functions::read_from_buffer_reference_async::<u32>(dev, buffer_reference))?;
+                                        Ok(super::debug_info::NumericArray::U8(data))
+                                    }
+                                    #[cfg(target_arch = "wasm32")]{
+                                        crate::bail!("Synchronous read not supported on wasm32");
+                                    }
+                                }
+
+                                let buffer_input1 = buffers.get_input().get_input1().cloned();
+                                let buffer_input2 = buffers.get_input().get_input2().cloned();
+                                let buffer_input3 = buffers.get_input().get_input3().cloned();
+                                let vd1 = get_buffer_data(dev, vd, cache).expect("Expect to Read the Buffer");
+                                let v_input1 = buffer_input1.map(|buffer| get_buffer_data(dev, buffer, cache).expect("Expect to Read the Buffer"));
+                                let v_input2 = buffer_input2.map(|buffer| get_buffer_data(dev, buffer, cache).expect("Expect to Read the Buffer"));
+                                let v_input3 = buffer_input3.map(|buffer| get_buffer_data(dev, buffer, cache).expect("Expect to Read the Buffer"));
+
+
+                                let data = super::debug_info::DebugPipelineRecordingWithData{
+                                    recording : debug_info,
+                                    v_dest : vd1,
+                                    v_input1,
+                                    v_input2,
+                                    v_input3
+                                };
+
+                                cache.full_recording.recordings.push(data);
+                            }
                         }
                     }
                 }
@@ -442,7 +500,7 @@ fn get_command_buffer(
     let _enter1 = span1.enter();
     let result = encoder.finish();
     drop(_enter1);
-    return result;
+    result
 }
 
 
@@ -457,6 +515,29 @@ fn set_buffers(
     cache: &mut ModelCache,
 ) -> crate::Result<(bool, u64)> {
     let global_index = command_buffer.global_command_index();
+    
+    #[cfg(feature = "wgpu_debug")]
+    {
+        use crate::wgpu_backend::cache::AverageBufferInfo;
+
+        let mut buffers: std::collections::HashMap<(u32,bool),u32>  = std::collections::HashMap::new();
+        for (_id, cached_buffer) in cache.buffers.iter_buffers() {
+            let size = cached_buffer.buffer().size() as u32;
+
+            // Adjust this depending on how you detect "free"
+            let is_free = cached_buffer.is_free();
+
+            *buffers.entry((size, is_free)).or_insert(0) += 1;
+        }
+
+        let debug_buffer_info = crate::wgpu_backend::cache::DebugBufferUsage{ 
+            memory_alloc : cache.buffers.buffer_memory(),
+            memory_free : cache.buffers.buffer_free_memory(),
+            buffers : buffers.into_iter().map(|(key, value)| AverageBufferInfo{count : value, is_free : key.1, size: key.0}).collect(),
+            command_buffer_id : global_index
+        };
+        cache.debug_buffer_info.push(debug_buffer_info);
+    }
     let queue = &mut command_buffer.command_queue;
     let mut cache_limit = false;
     let mut total_workload = 0u64; //we only allow a certain amount of workload per commandBuffer
@@ -467,6 +548,9 @@ fn set_buffers(
         {
             let ele_size = *index - start_index;
             if ele_size >= wgpu::QUERY_SET_MAX_QUERIES as usize / 2 - 1{
+                break;
+            } 
+            if cache.full_recording.should_record && ele_size > 1{
                 break;
             }
         }
@@ -736,11 +820,35 @@ fn set_buffers(
             }
         }
     }
+    
+    #[cfg(feature = "wgpu_debug")]
+    {
+        use crate::wgpu_backend::cache::AverageBufferInfo;
+
+        let mut buffers: std::collections::HashMap<(u32,bool),u32>  = std::collections::HashMap::new();
+        for (_id, cached_buffer) in cache.buffers.iter_buffers() {
+            let size = cached_buffer.buffer().size() as u32;
+
+            // Adjust this depending on how you detect "free"
+            let is_free = cached_buffer.is_free();
+
+            *buffers.entry((size, is_free)).or_insert(0) += 1;
+        }
+
+        let debug_buffer_info = crate::wgpu_backend::cache::DebugBufferUsage{ 
+            memory_alloc : cache.buffers.buffer_memory(),
+            memory_free : cache.buffers.buffer_free_memory(),
+            buffers : buffers.into_iter().map(|(key, value)| AverageBufferInfo{count : value, is_free : key.1, size: key.0}).collect(),
+            command_buffer_id : global_index
+        };
+        cache.debug_buffer_info.push(debug_buffer_info);
+    }
+
     let meta_size = (*last_meta - current_meta) * 4 + 256 * 3;
     let ele_size = *index - start_index;
     log::trace!("queue {ele_size}, Meta: {meta_size}, workload: {total_workload}, cache_limit: {cache_limit}");
 
-    return Ok((cache_limit, total_workload));
+    Ok((cache_limit, total_workload))
 }
 
 #[instrument(skip(dev, queue_buffer))]

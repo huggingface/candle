@@ -45,18 +45,19 @@ override CONSTV_1 : bool = true;
 override CONSTV_2 : bool = true;
 
 
-#define op_matmul_b                 op_meta[0]
-#define op_matmul_m                 op_meta[1]
-#define op_matmul_k                 op_meta[2]
-#define op_matmul_n                 op_meta[3]
+//#define op_matmul_b                 op_meta[0]
+#define op_matmul_m                 op_meta[0]
+#define op_matmul_k                 op_meta[1]
+#define op_matmul_n                 op_meta[2]
 
-#define op_matmul_input1_stride_b   op_meta[4]
-#define op_matmul_input1_offset     op_meta[5]
-#define op_matmul_input2_stride_b   op_meta[6]
-#define op_matmul_input2_offset     op_meta[7]
+//#define op_matmul_input1_stride_b   op_meta[3]
+#define op_matmul_input1_offset     op_meta[3]
+//#define op_matmul_input2_stride_b   op_meta[5]
+//#define op_matmul_input2_offset     op_meta[4]
+#define op_matmul_input2_offset     0u
 
-#define op_matmul_input1_stride_k   select(op_meta[8], 1u, CONSTV_0)
-#define op_matmul_input1_stride_m   select(op_meta[9], 1u, CONSTV_1) 
+#define op_matmul_input1_stride_k   select(op_meta[4], 1u, CONSTV_0)
+#define op_matmul_input1_stride_m   select(op_meta[5], 1u, CONSTV_1) 
 
 #define op_matmul_use_batch   CONSTV_2
 
@@ -71,11 +72,11 @@ override CONSTV_2 : bool = true;
 fn dequantize_block_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let block_index = global_id.x;
     if(block_index < (op_dequantize_size / BLOCK_SIZE)){
-        #define CALLBACK(idx,value) v_dest[idx + block_index * BLOCK_SIZE] = value;
+        #define CALLBACK(idx,value, idx2) v_dest[idx + block_index * BLOCK_SIZE] = value;
         LOAD_HEADER(v_input1_u32)
 
         for(var tid = 0u; tid < TID_SIZE; tid += 1u){
-            LOAD_SINGLE(v_input1_u32, tid, VALUES_PER_THREAD)
+            LOAD_SINGLE(v_input1_u32, tid)
         }
     }
 }
@@ -86,7 +87,7 @@ fn dequantize_block_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) 
 fn matmul_naive_block(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = global_id.x;
     let y = global_id.y;
-    let b = global_id.z;
+    //let b = global_id.z;
 
     if(x >= op_matmul_n){
         return;
@@ -95,31 +96,73 @@ fn matmul_naive_block(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n, op_matmul_use_batch); 
+    //let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n, op_matmul_use_batch); 
 
     let input1_offset = op_matmul_input1_offset;
     let input2_offset = op_matmul_input2_offset;
 
-    let input1_stride_b = select(0u, op_matmul_input1_stride_b, op_matmul_use_batch); 
-    let input2_stride_b = select(0u, op_matmul_input2_stride_b, op_matmul_use_batch); 
+    //let input1_stride_b = select(0u, op_matmul_input1_stride_b, op_matmul_use_batch); 
+    //let input2_stride_b = select(0u, op_matmul_input2_stride_b, op_matmul_use_batch); 
     
-    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b;
-    let m_input2_offset = (input2_offset + op_matmul_k * x + b * input2_stride_b) / BLOCK_SIZE;
+    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * y;// + b * input1_stride_b;
+    let m_input2_offset = (input2_offset + op_matmul_k * x//+ b * input2_stride_b
+        ) / BLOCK_SIZE;
 
     var sum = ZERO;
     var blk = 0u;
     for (var k = 0u; k < op_matmul_k; k+=u32(BLOCK_SIZE)){
         let block_index = blk+m_input2_offset ;
-        #define CALLBACK(idx,value) sum += v_input1[op_matmul_input1_stride_k * (k + (idx)) + m_input1_offset] * (value);
+        #define CALLBACK(idx,value, idx2) sum += v_input1[op_matmul_input1_stride_k * (k + (idx)) + m_input1_offset] * (value);
         LOAD_HEADER(v_input2_u32)
 
         for(var tid = 0u; tid < TID_SIZE; tid += 1u){
-            LOAD_SINGLE(v_input2_u32, tid, VALUES_PER_THREAD)
+            LOAD_SINGLE(v_input2_u32, tid)
         }
 
         blk += 1u;
     }
-    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
+    v_dest[//b * output_size_of_one_batch + 
+    y * op_matmul_n + x] = sum;
+}
+
+@compute @workgroup_size(32,1,1)
+fn matmul_naive_block_m1(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x;
+    //let y = global_id.y; //m==1
+    //let b = global_id.z;
+
+    // if(x >= op_matmul_n){
+    //    return;
+    // }
+
+    //let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n, op_matmul_use_batch); 
+
+    let input1_offset = op_matmul_input1_offset;
+    let input2_offset = op_matmul_input2_offset;
+
+    //let input1_stride_b = select(0u, op_matmul_input1_stride_b, op_matmul_use_batch); 
+    //let input2_stride_b = select(0u, op_matmul_input2_stride_b, op_matmul_use_batch); 
+    
+    let m_input1_offset = input1_offset;// + op_matmul_input1_stride_m * y;// + b * input1_stride_b;
+    let m_input2_offset = (input2_offset + op_matmul_k * x// + b * input2_stride_b
+    ) / BLOCK_SIZE;
+
+    var sum = ZERO;
+    var blk = 0u;
+    for (var k = 0u; k < op_matmul_k; k+=u32(BLOCK_SIZE)){
+        let block_index = blk+m_input2_offset ;
+        #define CALLBACK(idx,value, idx2) sum += v_input1[op_matmul_input1_stride_k * (k + (idx)) + m_input1_offset] * (value);
+        LOAD_HEADER(v_input2_u32)
+
+        for(var tid = 0u; tid < TID_SIZE; tid += 1u){
+            LOAD_SINGLE(v_input2_u32, tid)
+        }
+
+        blk += 1u;
+    }
+    v_dest[//b * output_size_of_one_batch +
+     //y * op_matmul_n +
+      x] = sum;
 }
 #endif
 #endif

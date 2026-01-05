@@ -837,12 +837,17 @@ pub mod shader_loader{
 
                         match_whitespace(tokens);
                         let mut condition = String::new();
-                        match_until_char(tokens, '\n', &mut condition);
+                        match_until_newline_no_comment(tokens, &mut condition);
                         let condition_parsed = apply_defines(&condition, state, store);
                         let condition_parsed = condition_parsed.replace("u", "");
 
                         //validate if condition is true:
-                        let result_exp = eval(&condition_parsed).unwrap();
+                         
+                        let result_exp =
+                        match eval(&condition_parsed){
+                            Ok(c) => c,
+                            Err(err) => panic!("Error while checking #{w}: '{condition}': {err}")
+                        }; //remove u, e.g. "32u > 42u"        ->  "32 > 42"  
                         if let Value::Boolean(result_exp) = result_exp{
                             if result_exp{
                                 if is_new_block{

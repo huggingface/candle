@@ -1,3 +1,7 @@
+#ifdef TILED_SMALL
+#include "matmulHelperTiledSmall.pwgsl"
+#else
+
 #include "../util.pwgsl"
 
 #pp_begin MATMUL(NAME)
@@ -7,27 +11,30 @@ override CONSTV_4 : bool = true;
 
 #define op_matmul_use_batch   CONSTV_4
 
-#define op_matmul_b                 op_meta[0]
-#define op_matmul_m                 op_meta[1]
-#define op_matmul_k                 op_meta[2]
-#define op_matmul_n                 op_meta[3]
+//#define op_matmul_b                 op_meta[0]
+#define op_matmul_m                 op_meta[0]
+#define op_matmul_k                 op_meta[1]
+#define op_matmul_n                 op_meta[2]
 
-#define op_matmul_input1_stride_b   op_meta[4]
-#define op_matmul_input1_offset     op_meta[5]
+//#define op_matmul_input1_stride_b   op_meta[4]
+#define op_matmul_input1_offset     op_meta[3]
 
-#define op_matmul_input2_stride_b   op_meta[6]
-#define op_matmul_input2_offset     op_meta[7]
+//#define op_matmul_input2_stride_b   op_meta[6]
+//#define op_matmul_input2_offset     op_meta[4]
+#define op_matmul_input2_offset     0u
 
 #define op_matmul_is_input1_stride_k_one CONSTV_0
 #define op_matmul_is_input1_stride_m_one CONSTV_1
 #define op_matmul_is_input2_stride_n_one CONSTV_2
 #define op_matmul_is_input2_stride_k_one CONSTV_3
 
-#define op_matmul_input1_stride_k   select(op_meta[8], 1u,op_matmul_is_input1_stride_k_one)
-#define op_matmul_input1_stride_m   select(op_meta[9], 1u,op_matmul_is_input1_stride_m_one) 
+#define op_matmul_input1_stride_k   select(op_meta[4], 1u,op_matmul_is_input1_stride_k_one)
+#define op_matmul_input1_stride_m   select(op_meta[5], 1u,op_matmul_is_input1_stride_m_one) 
 
-#define op_matmul_input2_stride_n   select(op_meta[10], 1u,op_matmul_is_input2_stride_n_one)
-#define op_matmul_input2_stride_k   select(op_meta[11], 1u,op_matmul_is_input2_stride_k_one)
+// #define op_matmul_input2_stride_n   select(op_meta[7], 1u,op_matmul_is_input2_stride_n_one)
+// #define op_matmul_input2_stride_k   select(op_meta[8], 1u,op_matmul_is_input2_stride_k_one)
+#define op_matmul_input2_stride_n  op_matmul_k
+#define op_matmul_input2_stride_k 1u
 
 #ifdef QUANTIZED
 #define op_matmul_input2_stride_k   1u
@@ -168,10 +175,10 @@ fn loadB_q(tile : u32, tid : u32, t_offset2 : u32) {
 
         let block_tid = index % TID_SIZE;
         let block_index = index / TID_SIZE;
-        #define CALLBACK(idx,value) Bsub[tile][idx][id_n] = (value);
+        #define CALLBACK(idx,value, idx2) Bsub[tile][idx][id_n] = (value);
 
         LOAD_HEADER(v_input_b)
-        LOAD_SINGLE(v_input_b, block_tid, WIDTHB)
+        LOAD_SINGLE(v_input_b, block_tid)
     }
 }
     #else
@@ -237,11 +244,13 @@ fn NAME(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id
     let gx = TSN*group_id.x + lx;
     let gy = TSM*group_id.y + ly;
 
-    let input1_stride_b = select(0u, op_matmul_input1_stride_b,op_matmul_use_batch); 
-    let input2_stride_b = select(0u, op_matmul_input2_stride_b,op_matmul_use_batch); 
+    //let input1_stride_b = select(0u, op_matmul_input1_stride_b,op_matmul_use_batch); 
+    //let input2_stride_b = select(0u, op_matmul_input2_stride_b,op_matmul_use_batch); 
 
-    let m_input1_offset = (op_matmul_input1_offset + op_matmul_input1_stride_m * TSM * group_id.y + group_id.z * input1_stride_b);
-    let m_input2_offset = (op_matmul_input2_offset + op_matmul_input2_stride_n * TSN * group_id.x + group_id.z * input2_stride_b);
+    let m_input1_offset = (op_matmul_input1_offset + op_matmul_input1_stride_m * TSM * group_id.y//+group_id.z * input1_stride_b
+    );
+    let m_input2_offset = (op_matmul_input2_offset + op_matmul_input2_stride_n * TSN * group_id.x// + group_id.z * input2_stride_b
+    );
 
     let max_k = op_matmul_k;
 
@@ -376,7 +385,8 @@ fn NAME(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id
         workgroupBarrier();
     }
    
-    let dest_index = group_id.z * select(0u, op_matmul_m * op_matmul_n,op_matmul_use_batch) + gy * op_matmul_n + gx;
+    let dest_index = //group_id.z * select(0u, op_matmul_m * op_matmul_n,op_matmul_use_batch) + 
+        gy * op_matmul_n + gx;
 
     for (var wm=0u; wm<WPTM; wm++) {
         let globalRow = dest_index + wm * op_matmul_n;
@@ -387,3 +397,5 @@ fn NAME(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id
     }
 }
 ##pp_end
+
+#endif
