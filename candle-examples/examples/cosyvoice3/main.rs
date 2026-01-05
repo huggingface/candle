@@ -289,6 +289,7 @@ struct CosyVoice3Model {
     llm: CosyVoice3LM,
     flow_decoder: CausalMaskedDiffWithDiT,
     vocoder: CausalHiFTGenerator,
+    #[allow(dead_code)]
     mel_extractor: MelSpectrogram,
     tokenizer: Tokenizer,
     config: RuntimeConfig,
