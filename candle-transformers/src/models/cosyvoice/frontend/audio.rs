@@ -458,29 +458,143 @@ pub fn kaldi_fbank(audio: &Tensor, n_mels: usize) -> Result<Tensor> {
     extractor.forward(audio)
 }
 
-/// Audio resampling (linear interpolation)
+/// High-quality audio resampling using windowed sinc interpolation
+///
+/// This implementation matches torchaudio.functional.resample with sinc_interp_hann method.
+/// The algorithm uses bandlimited interpolation with a Hann-windowed sinc function.
+///
+/// # Algorithm
+/// The sinc interpolation formula reconstructs the continuous signal:
+///   x(t) = sum_i x[i] * sinc(π * orig_freq * (i/orig_freq - t))
+///
+/// We then sample at the new rate:
+///   y[j] = x(j / new_freq)
+///
+/// A Hann window is applied to limit the filter width and reduce ringing artifacts.
+///
+/// # Parameters
+/// - `lowpass_filter_width`: Controls sharpness (default: 6, matching torchaudio)
+/// - `rolloff`: Anti-aliasing rolloff frequency (default: 0.99)
 #[allow(clippy::needless_range_loop)]
 pub fn resample(audio: &Tensor, from_sr: usize, to_sr: usize) -> Result<Tensor> {
+    resample_sinc(audio, from_sr, to_sr, 6, 0.99)
+}
+
+/// Sinc interpolation resampling with configurable parameters
+///
+/// # Arguments
+/// * `audio` - Input audio tensor [samples]
+/// * `from_sr` - Original sample rate
+/// * `to_sr` - Target sample rate
+/// * `lowpass_filter_width` - Filter width in zero crossings (higher = sharper but slower)
+/// * `rolloff` - Anti-aliasing rolloff (0.0-1.0, lower = more anti-aliasing)
+#[allow(clippy::needless_range_loop)]
+pub fn resample_sinc(
+    audio: &Tensor,
+    from_sr: usize,
+    to_sr: usize,
+    lowpass_filter_width: usize,
+    rolloff: f64,
+) -> Result<Tensor> {
     if from_sr == to_sr {
         return Ok(audio.clone());
     }
 
     let samples: Vec<f32> = audio.to_dtype(DType::F32)?.to_vec1()?;
-    let ratio = to_sr as f64 / from_sr as f64;
-    let new_len = (samples.len() as f64 * ratio) as usize;
+    let device = audio.device();
 
-    let mut resampled = vec![0.0f32; new_len];
-    for i in 0..new_len {
-        let src_idx = i as f64 / ratio;
-        let idx0 = src_idx.floor() as usize;
-        let idx1 = (idx0 + 1).min(samples.len() - 1);
-        let frac = src_idx - idx0 as f64;
+    // Compute GCD to reduce the resampling ratio
+    let gcd = gcd(from_sr, to_sr);
+    let orig_freq = from_sr / gcd;
+    let new_freq = to_sr / gcd;
 
-        resampled[i] =
-            ((1.0 - frac) * samples[idx0] as f64 + frac * samples[idx1] as f64) as f32;
+    // Base frequency for anti-aliasing
+    let base_freq = (orig_freq.min(new_freq) as f64) * rolloff;
+
+    // Filter width (number of input samples to consider on each side)
+    let width = ((lowpass_filter_width as f64 * orig_freq as f64 / base_freq).ceil()) as usize;
+
+    // Build resampling kernels for each phase
+    // We need new_freq different kernels (one for each output phase)
+    let kernel_size = 2 * width + orig_freq;
+    let mut kernels: Vec<Vec<f64>> = Vec::with_capacity(new_freq);
+
+    for phase in 0..new_freq {
+        let mut kernel = Vec::with_capacity(kernel_size);
+        let phase_offset = -(phase as f64) / new_freq as f64;
+
+        for k in 0..kernel_size {
+            let idx = (k as i64 - width as i64) as f64 / orig_freq as f64;
+            let t = (phase_offset + idx) * base_freq;
+
+            // Clamp t for numerical stability
+            let t_clamped = t.clamp(-(lowpass_filter_width as f64), lowpass_filter_width as f64);
+
+            // Hann window: cos²(π * t / (2 * width))
+            let window = (t_clamped * PI / (2.0 * lowpass_filter_width as f64)).cos().powi(2);
+
+            // Sinc function: sin(π * t) / (π * t), with sinc(0) = 1
+            let t_pi = t_clamped * PI;
+            let sinc = if t_pi.abs() < 1e-10 {
+                1.0
+            } else {
+                t_pi.sin() / t_pi
+            };
+
+            // Combined kernel with scaling
+            let scale = base_freq / orig_freq as f64;
+            kernel.push(sinc * window * scale);
+        }
+        kernels.push(kernel);
     }
 
-    Tensor::from_vec(resampled, new_len, audio.device())
+    // Pad input signal
+    let padded_len = samples.len() + 2 * width + orig_freq;
+    let mut padded = vec![0.0f64; padded_len];
+    for (i, &s) in samples.iter().enumerate() {
+        padded[width + i] = s as f64;
+    }
+
+    // Calculate output length
+    let output_len = (samples.len() * new_freq + orig_freq - 1) / orig_freq;
+
+    // Apply resampling via strided convolution
+    let mut resampled = Vec::with_capacity(output_len);
+
+    for out_idx in 0..output_len {
+        // Determine which kernel to use (phase)
+        let phase = out_idx % new_freq;
+        let kernel = &kernels[phase];
+
+        // Determine input position (stride by orig_freq in the rational resampling sense)
+        let in_base = (out_idx / new_freq) * orig_freq;
+
+        // Convolve
+        let mut sum = 0.0f64;
+        for (k, &w) in kernel.iter().enumerate() {
+            let in_idx = in_base + k;
+            if in_idx < padded_len {
+                sum += padded[in_idx] * w;
+            }
+        }
+        resampled.push(sum as f32);
+    }
+
+    // Trim to expected length
+    let expected_len = (samples.len() as f64 * to_sr as f64 / from_sr as f64).round() as usize;
+    resampled.truncate(expected_len);
+
+    let len = resampled.len();
+    Tensor::from_vec(resampled, len, device)
+}
+
+/// Greatest Common Divisor using Euclidean algorithm
+fn gcd(a: usize, b: usize) -> usize {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
 }
 
 #[cfg(test)]
