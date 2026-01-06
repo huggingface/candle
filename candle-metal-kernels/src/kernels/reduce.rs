@@ -3,6 +3,62 @@ use crate::utils::{BufferOffset, EncoderProvider};
 use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
 use objc2_metal::{MTLResourceUsage, MTLSize};
 
+#[derive(Clone, Copy)]
+enum IndexType {
+    U16,
+    U32,
+    U64,
+}
+
+impl IndexType {
+    fn select(shape: &[usize], strides: &[usize]) -> Self {
+        let max_dim = shape.iter().copied().max().unwrap_or(0);
+        let max_stride = strides.iter().copied().max().unwrap_or(0);
+        if max_dim <= u16::MAX as usize && max_stride <= u16::MAX as usize {
+            IndexType::U16
+        } else if max_dim <= u32::MAX as usize && max_stride <= u32::MAX as usize {
+            IndexType::U32
+        } else {
+            IndexType::U64
+        }
+    }
+
+    fn kernel_suffix(self) -> &'static str {
+        match self {
+            IndexType::U16 => "_u16",
+            IndexType::U32 => "",
+            IndexType::U64 => "_u64",
+        }
+    }
+}
+
+struct Pow2Meta {
+    is_pow2: Vec<u8>,
+    masks: Vec<u32>,
+    shifts: Vec<u8>,
+}
+
+impl Pow2Meta {
+    fn compute(shape: &[usize]) -> Self {
+        let mut is_pow2 = Vec::with_capacity(shape.len());
+        let mut masks = Vec::with_capacity(shape.len());
+        let mut shifts = Vec::with_capacity(shape.len());
+
+        for &dim in shape {
+            let pow2 = dim.is_power_of_two() && dim > 1;
+            is_pow2.push(pow2 as u8);
+            if pow2 {
+                masks.push((dim - 1) as u32);
+                shifts.push(dim.trailing_zeros() as u8);
+            } else {
+                masks.push(0);
+                shifts.push(0);
+            }
+        }
+        Self { is_pow2, masks, shifts }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_reduce_contiguous(
     device: &Device,
@@ -23,38 +79,19 @@ pub fn call_reduce_contiguous(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(
-        encoder,
-        (
-            length,
-            num_dims,
-            shape,
-            work_per_threadgroup,
-            &input,
-            output
-        )
-    );
-
-    let thread_group_count = MTLSize {
-        width: out_length,
-        height: 1,
-        depth: 1,
-    };
+    let shape_u32: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
+    set_params!(encoder, (length, num_dims, shape_u32.as_slice(), work_per_threadgroup, &input, output));
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
         (work_per_threadgroup / 2).next_power_of_two(),
     );
-
-    let thread_group_size = MTLSize {
-        width,
-        height: 1,
-        depth: 1,
-    };
-
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.dispatch_thread_groups(
+        MTLSize { width: out_length, height: 1, depth: 1 },
+        MTLSize { width, height: 1, depth: 1 },
+    );
     Ok(())
 }
 
@@ -73,44 +110,51 @@ pub fn call_reduce_strided(
     let length: usize = shape.iter().product();
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let index_type = IndexType::select(shape, strides);
+
+    let kernel = format!("{}{}", kernel_name, index_type.kernel_suffix());
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(
-        encoder,
-        (
-            length,
-            num_dims,
-            shape,
-            strides,
-            work_per_threadgroup,
-            &input,
-            output
-        )
-    );
+    let pow2 = Pow2Meta::compute(shape);
 
-    let thread_group_count = MTLSize {
-        width: out_length,
-        height: 1,
-        depth: 1,
-    };
+    match index_type {
+        IndexType::U16 => {
+            let dims: Vec<u16> = shape.iter().map(|&x| x as u16).collect();
+            let strs: Vec<u16> = strides.iter().map(|&x| x as u16).collect();
+            set_params!(encoder, (
+                length, num_dims, dims.as_slice(), strs.as_slice(),
+                pow2.is_pow2.as_slice(), pow2.masks.as_slice(), pow2.shifts.as_slice(),
+                work_per_threadgroup, &input, output
+            ));
+        }
+        IndexType::U32 => {
+            let dims: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
+            let strs: Vec<u32> = strides.iter().map(|&x| x as u32).collect();
+            set_params!(encoder, (
+                length, num_dims, dims.as_slice(), strs.as_slice(),
+                pow2.is_pow2.as_slice(), pow2.masks.as_slice(), pow2.shifts.as_slice(),
+                work_per_threadgroup, &input, output
+            ));
+        }
+        IndexType::U64 => {
+            set_params!(encoder, (length, num_dims, shape, strides, work_per_threadgroup, &input, output));
+        }
+    }
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
         (work_per_threadgroup / 2).next_power_of_two(),
     );
-
-    let thread_group_size = MTLSize {
-        width,
-        height: 1,
-        depth: 1,
-    };
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.dispatch_thread_groups(
+        MTLSize { width: out_length, height: 1, depth: 1 },
+        MTLSize { width, height: 1, depth: 1 },
+    );
     Ok(())
 }
 
