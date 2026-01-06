@@ -9,8 +9,8 @@ Pre-converted weights are available on Hugging Face:
 **[spensercai/CosyVoice3-0.5B-Candle](https://huggingface.co/spensercai/CosyVoice3-0.5B-Candle)**
 
 ```bash
-# Download using huggingface-cli
-huggingface-cli download spensercai/CosyVoice3-0.5B-Candle --local-dir weights/CosyVoice3-0.5B-Candle
+# Download using hf CLI
+hf download spensercai/CosyVoice3-0.5B-Candle --local-dir weights/CosyVoice3-0.5B-Candle
 ```
 
 Or manually convert from the original PyTorch weights:
