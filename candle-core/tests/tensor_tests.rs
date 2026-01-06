@@ -236,6 +236,26 @@ fn asort(device: &Device) -> Result<()> {
     Ok(())
 }
 
+/// Test sorting a large tensor that exceeds 1024 elements.
+fn asort_big(device: &Device) -> Result<()> {
+    // Skip on metal for now
+    if device.is_metal() {
+        return Ok(());
+    }
+    const SIZE: usize = 2000;
+    let data: Vec<f32> = (0..SIZE).map(|x| (SIZE - x) as f32).collect();
+    let tensor = Tensor::new(data.as_slice(), device)?;
+
+    let indexes = tensor.arg_sort_last_dim(true)?;
+    let expected_indexes: Vec<u32> = (0..SIZE).rev().map(|x| x as u32).collect();
+    assert_eq!(indexes.to_vec1::<u32>()?, expected_indexes);
+
+    let indexes = tensor.arg_sort_last_dim(false)?;
+    let expected_indexes: Vec<u32> = (0..SIZE).map(|x| x as u32).collect();
+    assert_eq!(indexes.to_vec1::<u32>()?, expected_indexes);
+    Ok(())
+}
+
 fn unary_op(device: &Device) -> Result<()> {
     let data = &[[-3f32, 1., 4., -0.1, 0.5], [2.7, -1.8, -0.28, 1.8, 2.8]];
     let tensor = Tensor::new(data, device)?;
@@ -344,6 +364,21 @@ fn binary_op(device: &Device) -> Result<()> {
         max.to_vec2::<f32>()?,
         [[3.0, 2.5, 4.0, 2.5, 5.0], [2.0, 1.0, 7.0, 8.0, 2.0]]
     );
+    Ok(())
+}
+
+fn ternary_op(device: &Device) -> Result<()> {
+    let data = &[[0u8, 1, 0, 1, 0], [1, 1, 1, 0, 0]];
+    let ids = Tensor::new(data, device)?;
+    let data = &[[0f32, 1., 2., 3., 4.], [5., 6., 7., 8., 9.]];
+    let a = Tensor::new(data, device)?;
+    let data = &[[10f32, 11., 12., 13., 14.], [15., 16., 17., 18., 19.]];
+    let b = Tensor::new(data, device)?;
+    let tensor = ids.where_cond(&a, &b)?;
+    let dims = tensor.dims();
+    assert_eq!(dims, [2, 5]);
+    let result: Vec<f32> = tensor.flatten_all()?.to_vec1()?;
+    assert_eq!(result, [10., 1., 12., 3., 14., 5., 6., 7., 18., 19.]);
     Ok(())
 }
 
@@ -1773,6 +1808,7 @@ test_device!(
     binary_op_metal,
     binary_op_wgpu
 );
+test_device!(ternary_op, ternary_op_cpu, ternary_op_gpu, ternary_op_metal);
 test_device!(
     embeddings,
     embeddings_cpu,
@@ -1816,6 +1852,7 @@ test_device!(
 test_device!(randn, randn_cpu, randn_gpu, randn_metal, randn_wgpu);
 test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal, clamp_wgpu);
 test_device!(asort, asort_cpu, asort_gpu, asort_metal);
+test_device!(asort_big, asort_big_cpu, asort_big_gpu, asort_big_metal);
 test_device!(var, var_cpu, var_gpu, var_metal, var_wgpu);
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal, zero_dim_wgpu);
 

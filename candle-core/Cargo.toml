@@ -49,9 +49,7 @@ serde = { workspace = true, optional = true }
 
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
-ug = { workspace = true }
-ug-cuda = { workspace = true, optional = true }
-ug-metal = { workspace = true, optional = true }
+candle-ug = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -59,7 +57,7 @@ clap = { workspace = true }
 criterion = { workspace = true }
 
 [features]
-cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda", "float8/cuda"]
+cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda", "float8/cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
@@ -68,8 +66,9 @@ metal = [
     "dep:objc2-metal",
     "dep:objc2-foundation",
     "dep:candle-metal-kernels",
-    "dep:ug-metal",
+    "candle-ug?/metal",
 ]
+ug = ["dep:candle-ug"]
 wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing", "dep:rustc-hash"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]
 wgpu_debug_serialize = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]

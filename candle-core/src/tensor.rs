@@ -270,6 +270,51 @@ impl Tensor {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
     }
 
+    // Do not expose outside of the crate, the `is_variable=true` case should only be accessed from
+    // the variable module.
+    pub(crate) unsafe fn empty_impl<S: Into<Shape>>(
+        shape: S,
+        dtype: DType,
+        device: &Device,
+        is_variable: bool,
+    ) -> Result<Self> {
+        let none = BackpropOp::none();
+        let shape = shape.into();
+        let storage = device.alloc_uninit(&shape, dtype)?;
+        Ok(from_storage(storage, shape, none, is_variable))
+    }
+
+    /// Creates a new tensor filled with uninitialized memory.
+    ///
+    /// # Safety
+    /// This returns uninitialized memory.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = unsafe { Tensor::empty((2, 3), DType::F32, &Device::Cpu)? };
+    /// // a == b
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub unsafe fn empty<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+        Self::empty_impl(shape, dtype, device, false)
+    }
+
+    /// Creates a new tensor filled with uninitialized memory of the same shape, dtype, and device as the other
+    /// tensor.
+    ///
+    /// # Safety
+    /// This returns uninitialized memory.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// let b = unsafe { a.empty_like()? };
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub unsafe fn empty_like(&self) -> Result<Self> {
+        Tensor::empty(self.shape(), self.dtype(), self.device())
+    }
+
     pub(crate) fn rand_impl<S: Into<Shape>, T: crate::FloatDType>(
         lo: T,
         up: T,
@@ -1217,6 +1262,119 @@ impl Tensor {
     /// Alias for `interpolate2d`.
     pub fn upsample_nearest2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
         self.interpolate2d(target_h, target_w)
+    }
+
+    /// Bilinear interpolation to resize the input tensor to the specified size.
+    ///
+    /// The input tensor should have four dimensions: `(batch, channels, h, w)`.
+    /// The returned tensor also has four dimensions: `(batch, channels, target_h, target_w)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_h` - Target height
+    /// * `target_w` - Target width  
+    /// * `align_corners` - If true, corner pixels are aligned. If false (default),
+    ///   pixels are treated as areas (matches PyTorch default behavior).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// # fn main() -> candle_core::Result<()> {
+    /// let t = Tensor::arange(0f32, 16f32, &Device::Cpu)?.reshape((1, 1, 4, 4))?;
+    /// let upsampled = t.upsample_bilinear2d(8, 8, false)?;
+    /// assert_eq!(upsampled.dims(), &[1, 1, 8, 8]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn upsample_bilinear2d(
+        &self,
+        target_h: usize,
+        target_w: usize,
+        align_corners: bool,
+    ) -> Result<Self> {
+        let (n, c, _h, _w) = self.dims4()?;
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleBilinear2D {
+            arg,
+            target_h,
+            target_w,
+            align_corners,
+        });
+        // Pass None for scale factors (size mode)
+        let storage = self.storage().upsample_bilinear2d(
+            self.layout(),
+            target_h,
+            target_w,
+            align_corners,
+            None,
+            None,
+        )?;
+        Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
+    }
+
+    /// Bilinear interpolation using scale factors.
+    ///
+    /// Similar to `upsample_bilinear2d` but uses scale factors instead of absolute sizes.
+    /// This matches PyTorch's `interpolate(scale_factor=...)` behavior.
+    ///
+    /// # Arguments
+    ///
+    /// * `scale_h` - Height scaling factor
+    /// * `scale_w` - Width scaling factor
+    /// * `align_corners` - If true, corner pixels are aligned
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// # fn main() -> candle_core::Result<()> {
+    /// let t = Tensor::arange(0f32, 16f32, &Device::Cpu)?.reshape((1, 1, 4, 4))?;
+    /// // Scale by 2x in both dimensions
+    /// let upsampled = t.upsample_bilinear2d_with_scale(2.0, 2.0, false)?;
+    /// assert_eq!(upsampled.dims(), &[1, 1, 8, 8]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn upsample_bilinear2d_with_scale(
+        &self,
+        scale_h: f64,
+        scale_w: f64,
+        align_corners: bool,
+    ) -> Result<Self> {
+        let (n, c, height_in, width_in) = self.dims4()?;
+
+        // Calculate output size (floor, matching PyTorch)
+        let height_out = (height_in as f64 * scale_h).floor() as usize;
+        let width_out = (width_in as f64 * scale_w).floor() as usize;
+
+        // Early return if size unchanged
+        if height_in == height_out && width_in == width_out {
+            return Ok(self.clone());
+        }
+
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleBilinear2D {
+            arg,
+            target_h: height_out,
+            target_w: width_out,
+            align_corners,
+        });
+
+        // Pass original scale factors (scale_factor mode)
+        // This ensures PyTorch-compatible scale calculation
+        let storage = self.storage().upsample_bilinear2d(
+            self.layout(),
+            height_out,
+            width_out,
+            align_corners,
+            Some(scale_h),
+            Some(scale_w),
+        )?;
+        Ok(from_storage(
+            storage,
+            (n, c, height_out, width_out),
+            op,
+            false,
+        ))
     }
 
     /// 2D average pooling over an input tensor with multiple channels.
@@ -2976,6 +3134,49 @@ impl Tensor {
             result = result.index_select(&indices_tensor, dim)?;
         }
         Ok(result)
+    }
+
+    /// Returns a view of which contains all slices of size `size` from self tensor in the dimension
+    /// `dim` and stepped by `step`.
+    pub fn unfold<D: Dim>(&self, dim: D, size: usize, step: usize) -> Result<Self> {
+        // https://github.com/pytorch/pytorch/blob/75b0720a97ac5d82e8a7a1a6ae7c5f7a87d7183d/aten/src/ATen/native/TensorShape.cpp#L3785-L3804
+        let mut sizes = self.dims().to_vec();
+        let mut strides = self.stride().to_vec();
+
+        let dim = dim.to_index(self.shape(), "unfold")?;
+
+        let max_len = if self.dims().is_empty() {
+            1
+        } else {
+            sizes[dim]
+        };
+        if size > max_len {
+            bail!(
+                "unsqueeze: maximum size for tensor at dimension {dim} is {max_len} but size is {size}"
+            )
+        }
+        sizes.push(size);
+        strides.push(if self.dims().is_empty() {
+            1
+        } else {
+            strides[dim]
+        });
+
+        if !self.dims().is_empty() {
+            sizes[dim] = ((sizes[dim] as f32 - size as f32) / step as f32 + 1.) as usize;
+            strides[dim] *= step;
+        }
+
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            layout: Layout::new(sizes.into(), strides, self.layout.start_offset()),
+            op: BackpropOp::new1(self, Op::Reshape),
+            is_variable: false,
+            dtype: self.dtype,
+            device: self.device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
     }
 }
 

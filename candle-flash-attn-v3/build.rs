@@ -1,5 +1,18 @@
 // build.rs
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2024 Michael Feil
+// adapted from https://github.com/huggingface/candle-flash-attn-v1 , Oliver Dehaene
+// adapted further in 2025 by Eric Buehler for candle repo.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
 use anyhow::{anyhow, Context, Result};
+use candle_flash_attn_build::{cutlass_include_arg, fetch_cutlass};
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -71,6 +84,8 @@ const KERNEL_FILES: &[&str] = &[
     // "flash_fwd_hdim256_e4m3_gqa32_sm90.cu",
 ];
 
+const CUTLASS_COMMIT: &str = "4c42f73fdab5787e3bb57717f35a8cb1b3c0dc6d";
+
 fn main() -> Result<()> {
     // Use RAYON_NUM_THREADS or else default to the number of physical CPUs
     let num_cpus = std::env::var("RAYON_NUM_THREADS").map_or_else(
@@ -115,6 +130,10 @@ fn main() -> Result<()> {
     };
 
     // Ensure we set CUDA_INCLUDE_DIR for our crates that might rely on it.
+    // Fetch cutlass headers on-demand
+    let cutlass_dir = fetch_cutlass(&out_dir, CUTLASS_COMMIT)?;
+    let cutlass_include: &'static str = Box::leak(cutlass_include_arg(&cutlass_dir).into_boxed_str());
+
     set_cuda_include_dir()?;
 
     // If set, pass along the custom compiler for NVCC
@@ -178,7 +197,7 @@ fn main() -> Result<()> {
                 command.args(["--default-stream", "per-thread"]);
 
                 // Include path
-                command.arg("-Icutlass/include");
+                command.arg(&cutlass_include);
 
                 // Undefine CUDA “no half/bfloat” macros
                 command.arg("-U__CUDA_NO_HALF_OPERATORS__");

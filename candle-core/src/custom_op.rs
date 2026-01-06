@@ -462,6 +462,7 @@ impl Tensor {
     }
 }
 
+#[cfg(feature = "ug")]
 pub struct UgIOp1 {
     name: &'static str,
     #[cfg(feature = "cuda")]
@@ -470,12 +471,13 @@ pub struct UgIOp1 {
     func: candle_metal_kernels::metal::ComputePipeline,
 }
 
+#[cfg(feature = "ug")]
 impl UgIOp1 {
     #[allow(unused)]
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn new(
         name: &'static str,
-        kernel: ug::lang::ssa::Kernel,
+        kernel: candle_ug::lang::ssa::Kernel,
         device: &crate::Device,
     ) -> Result<Self> {
         #[cfg(feature = "cuda")]
@@ -500,6 +502,7 @@ impl UgIOp1 {
     }
 }
 
+#[cfg(feature = "ug")]
 impl InplaceOp1 for UgIOp1 {
     fn name(&self) -> &'static str {
         self.name
