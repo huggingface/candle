@@ -713,5 +713,5 @@ CONVT1D_OP(bfloat, float, conv_transpose1d_bf16)
 CONVT2D_OP(float, float, conv_transpose2d_f32)
 CONVT2D_OP(half, float, conv_transpose2d_f16)
 #if defined(__HAVE_BFLOAT__)
-CONVT1D_OP(bfloat, float, conv_transpose2d_bf16)
+CONVT2D_OP(bfloat, float, conv_transpose2d_bf16)
 #endif
