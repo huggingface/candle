@@ -698,5 +698,15 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    #[cfg(feature = "wgpu_debug")]
+    {
+        device
+            .as_wgpu_device()
+            .unwrap()
+            .log_debuginfo_to_file("benchmarks", "QUANTIZED", "1.0")?;
+        // Example:
+        // log_debuginfo_to_file("", "llama2c", "5.0")?;
+    }
+
     Ok(())
 }

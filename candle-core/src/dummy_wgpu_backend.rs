@@ -336,6 +336,18 @@ impl crate::backend::BackendStorage for WgpuStorage {
     fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
+    
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithWgpuSupport)
+    }
 }
 
 impl WgpuDevice{
@@ -396,6 +408,10 @@ impl crate::backend::BackendDevice for WgpuDevice {
 
     fn synchronize(&self) -> Result<()> {
         Ok(())
+    }
+    
+    fn get_current_seed(&self) -> Result<u64> {
+        Err(Error::NotCompiledWithWgpuSupport)
     }
 }
 

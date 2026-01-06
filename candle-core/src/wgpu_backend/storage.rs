@@ -1048,6 +1048,18 @@ impl crate::backend::BackendStorage for WgpuStorage {
             )
         }
     }
+    
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> crate::Result<Self> {
+        todo!()
+    }
 }
 
 impl Drop for WgpuStorage {

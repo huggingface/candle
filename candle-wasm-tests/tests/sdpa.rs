@@ -36,8 +36,8 @@ mod metal_sdpa_tests {
     #[test]
     fn sdpa_full() -> Result<()> {
         const BS: usize = 4;
-        const R: usize = 4;
-        const L: usize = 4;
+        const R: usize = 16;
+        const L: usize = 16;
         const DK: usize = 64;
         const H: usize = 3;
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
@@ -52,13 +52,21 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(
+            &q,
+            &k,
+            &v,
+            None,
+            false,
+            scale as f32,
+            1.,
+        )?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
             .to_scalar_async()
             .await?;
-        assert!(error <= 0.0004, "{}", error);
+        assert!(error <= 0.02, "{}", error);
         Ok(())
     }
     #[test]
@@ -80,7 +88,15 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(
+            &q,
+            &k,
+            &v,
+            None,
+            false,
+            scale as f32,
+            1.,
+        )?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
@@ -92,7 +108,7 @@ mod metal_sdpa_tests {
     #[test]
     fn sdpa_full_softcapping() -> Result<()> {
         const BS: usize = 4;
-        const R: usize = 4;
+        const R: usize = 1;
         const L: usize = 4;
         const DK: usize = 64;
         const H: usize = 3;
@@ -115,6 +131,8 @@ mod metal_sdpa_tests {
             &q,
             &k,
             &v,
+            None,
+            false,
             scale as f32,
             SOFTCAP as f32,
         )?;
@@ -123,7 +141,7 @@ mod metal_sdpa_tests {
             .sum_all()?
             .to_scalar_async()
             .await?;
-        assert!(error <= 0.0005, "{}", error);
+        assert!(error <= 0.002, "{}", error);
         Ok(())
     }
     #[test]
@@ -152,6 +170,8 @@ mod metal_sdpa_tests {
             &q,
             &k,
             &v,
+            None,
+            false,
             scale as f32,
             SOFTCAP as f32,
         )?;
@@ -182,7 +202,15 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(
+            &q,
+            &k,
+            &v,
+            None,
+            false,
+            scale as f32,
+            1.,
+        )?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?

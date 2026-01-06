@@ -139,19 +139,19 @@ async fn inplace_op1() -> Result<()> {
     );
     Ok(())
 }
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(all(feature = "ug", any(feature = "cuda", feature = "metal")))]
 #[allow(clippy::approx_constant)]
 #[test]
 async fn ug_op() -> Result<()> {
     let kernel = {
-        use ug::lang::op;
-        let layout = ug::Layout::from_shape(&[12]);
-        let ptr = op::Arg::ptr(ug::DType::F32);
-        let src = op::load(ptr.id(), layout.clone(), ug::DType::F32)?;
+        use candle_ug::lang::op;
+        let layout = candle_ug::Layout::from_shape(&[12]);
+        let ptr = op::Arg::ptr(candle_ug::DType::F32);
+        let src = op::load(ptr.id(), layout.clone(), candle_ug::DType::F32)?;
         let src = op::unary(op::UnaryOp::Exp, src)?;
         let st = op::store(ptr.id(), layout, src)?;
         let kernel = op::Kernel::new("exp".to_string(), vec![ptr], vec![st]);
-        let opts: ug::lower_op::Opts = Default::default();
+        let opts: candle_ug::lower_op::Opts = Default::default();
         kernel.lower(&opts)?
     };
     let device = if candle::utils::cuda_is_available() {

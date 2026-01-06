@@ -183,14 +183,18 @@ impl WgpuDevice{
             (crate::DType::I64, true) => Ok(DType::I64),
             (crate::DType::F64, true) => Ok(DType::F64),
             (crate::DType::F16, true) => Ok(DType::F16),
-            (crate::DType::BF16, _) | (crate::DType::U8, _) | (crate::DType::F8E4M3, _) => Err(crate::Error::Wgpu(WgpuError::from(format!(
+            (crate::DType::BF16, _) | (crate::DType::U8, _) |
+             (crate::DType::F8E4M3, _) | (crate::DType::F8E8M0, _) | 
+             (crate::DType::F6E2M3, _) | (crate::DType::F6E3M2, _) |
+             (crate::DType::I16, _) | (crate::DType::I32, _) |
+             (crate::DType::F4, _) => Err(crate::Error::Wgpu(WgpuError::from(format!(
                 "Dtype {:?} not supported on wgpu",
                 dtype
             )))),
             (_, false) => Err(crate::Error::Wgpu(WgpuError::from(format!(
                 "Dtype {:?} not supported on this wgpu device",
                 dtype
-            )))),
+            ))))
         }
     }
     

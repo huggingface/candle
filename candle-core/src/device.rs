@@ -318,6 +318,7 @@ impl Device {
             Self::Cpu => CpuDevice.get_current_seed(),
             Self::Cuda(c) => c.get_current_seed(),
             Self::Metal(m) => m.get_current_seed(),
+            Self::Wgpu(w) => w.get_current_seed(),
         }
     }
 

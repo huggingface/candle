@@ -520,6 +520,12 @@ impl WgpuDevice {
             DType::F16 => self.device_features.contains(wgpu::Features::SHADER_F16),
             DType::BF16 => false,
             DType::F8E4M3 => false,
+            DType::I16 => false,
+            DType::I32 => false,
+            DType::F6E2M3 => false,
+            DType::F6E3M2 => false,
+            DType::F4 => false,
+            DType::F8E8M0 => false,
         }
     }
 
@@ -831,10 +837,14 @@ impl crate::backend::BackendDevice for WgpuDevice {
         Ok(buffer)
     }
 
-    fn set_seed(&self, _: u64) -> crate::Result<()> {
-        notImplemented!(set_seed)
+    fn set_seed(&self, seed: u64) -> crate::Result<()> {
+        *self.rand_state.lock().unwrap() = rand::rngs::StdRng::seed_from_u64(seed);
+        Ok(())
     }
-
+    
+     fn get_current_seed(&self) -> crate::Result<u64> {
+        notImplemented!(get_current_seed)
+    }
     #[cfg(target_arch = "wasm32")]
     fn synchronize(&self) -> crate::Result<()> {
         panic!("Synchronize is not possible on wasm. (on_submitted_work_done is currently not implemented in wgpu). In addition synchronize can only be handled async");
