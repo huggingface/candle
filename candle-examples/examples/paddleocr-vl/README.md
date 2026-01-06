@@ -39,7 +39,7 @@ maintaining fast inference speeds.
 
 ```bash
 cargo run --example paddleocr-vl --release -- \
-    --image candle-examples/examples/paddleocr-vl/test_ocr.jpg \
+    --image candle-examples/examples/paddleocr-vl/test_ocr.png \
     --task ocr
 ```
 
