@@ -1244,6 +1244,207 @@ kernel void NAME(                                       \
     }                                                   \
 }
 
+template<typename T>
+struct LayerNormValue {
+    uint count;
+    T mean;
+    T m2;
+
+    constexpr LayerNormValue<T>() = default;
+    constexpr LayerNormValue<T>() threadgroup = default;
+};
+
+template<typename T>
+struct LNLoadOp {
+    static constexpr METAL_FUNC LayerNormValue<T> init() {
+        return { 0, 0, 0 };
+    }
+
+    METAL_FUNC LayerNormValue<T> operator()(LayerNormValue<T> a, LayerNormValue<T> b) {
+        a.count += 1;
+        T delta1 = b.mean - a.mean;
+        a.mean += delta1 / a.count;
+        T delta2 = b.mean - a.mean;
+        a.m2 += delta1 * delta2;
+        return a;
+    }
+};
+
+template<typename T>
+struct LNReduceOp {
+    static constexpr METAL_FUNC LayerNormValue<T> init() {
+        return { 0, 0, 0 };
+    }
+
+    METAL_FUNC LayerNormValue<T> operator()(LayerNormValue<T> a, LayerNormValue<T> b) {
+        if (b.count == 0) {
+            return a;
+        }
+        uint new_count = a.count + b.count;
+        T nb_over_n = b.count / T(new_count);
+        T delta = b.mean - a.mean;
+        a.mean += delta * nb_over_n;
+        a.m2 += b.m2 + delta * delta * a.count * nb_over_n;
+        a.count = new_count;
+        return a;
+    }
+};
+
+template<typename OP, typename T>
+struct operation<OP, LayerNormValue<T>> {
+    OP op;
+
+    METAL_FUNC LayerNormValue<T> operator()(LayerNormValue<T> a, LayerNormValue<T> b) {
+        return op(a, b);
+    }
+
+    METAL_FUNC LayerNormValue<T> operator()(LayerNormValue<T> a, T b) {
+        return this->operator()(a, LayerNormValue<T>{ 0, b, b });
+    }
+};
+
+template <typename T>
+METAL_FUNC LayerNormValue<T> simd_shuffle_down(LayerNormValue<T> lnv, ushort delta) {
+    return LayerNormValue<T> {
+        simd_shuffle_down(lnv.count, delta),
+        simd_shuffle_down(lnv.mean, delta),
+        simd_shuffle_down(lnv.m2, delta)
+    };
+}
+
+template <typename T>
+struct is_valid_simd_type<LayerNormValue<T>, typename metal::enable_if_t<is_valid_simd_t<T>>> {
+    static constant constexpr bool value = true;
+};
+
+// Kernels
+template<
+    typename T,
+    ushort BLOCKSIZE
+>
+METAL_FUNC void layer_norm(
+    constant uint &src_numel,
+    constant uint &el_per_block,
+    device const T *src,
+    device T *dst,
+    device const T *alpha,
+    device const T *beta,
+    constant float &eps,
+    threadgroup LayerNormValue<float> shared[BLOCKSIZE],
+    threadgroup float &mu,
+    threadgroup float &sigma,
+
+    uint tid [[ thread_index_in_threadgroup ]],
+    uint dst_id [[ threadgroup_position_in_grid ]],
+    uint lane_id [[thread_index_in_simdgroup]]
+) {
+    Divide fast_divide;
+    loader<T, LayerNormValue<T>, LNLoadOp<T>, BLOCKSIZE> load;
+    block_reducer<LayerNormValue<float>, LNReduceOp<float>, BLOCKSIZE> reduce(shared);
+
+    // Calculate offset for the threadgroup of current thread
+    const uint offset = dst_id * el_per_block;
+    const uint stop_idx = min(el_per_block + offset, src_numel);
+    const uint idx = tid + offset;
+
+    // Load with reduction from global memory into shared memory
+    LayerNormValue<T> value = load(
+        LNReduceOp<T>::init(),
+        src_numel,
+        el_per_block,
+        src,
+        offset,
+        tid
+    );
+    LayerNormValue<float> result = LayerNormValue<float> { value.count, static_cast<float>(value.mean), static_cast<float>(value.m2) };
+
+    // Complete reduction
+    result = reduce(result, tid);
+    if (tid == 0) {
+        mu = result.mean;
+        sigma = rsqrt(fast_divide(result.m2, float(result.count)) + eps);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (alpha == nullptr || beta == nullptr) {
+        if (alpha == nullptr) {
+            #pragma clang loop unroll(full)
+            for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
+                T val = src[i];
+                T normalized = (val - static_cast<T>(mu)) * static_cast<T>(sigma);
+                dst[i] = normalized + beta[i - offset];
+            }
+        } else {
+            #pragma clang loop unroll(full)
+            for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
+                T val = src[i];
+                T normalized = (val - static_cast<T>(mu)) * static_cast<T>(sigma);
+                dst[i] = normalized * alpha[i - offset];
+            }
+        }
+    } else {
+        #pragma clang loop unroll(full)
+        for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
+            T val = src[i];
+            T normalized = (val - static_cast<T>(mu)) * static_cast<T>(sigma);
+            dst[i] = static_cast<T>(fma(normalized, alpha[i - offset], beta[i - offset]));
+        }
+    }
+}
+
+#define layer_norm_case(T, N)                           \
+case N: {                                               \
+    threadgroup LayerNormValue<float> shared[N];        \
+    threadgroup float mu;                               \
+    threadgroup float sigma;                            \
+    layer_norm<T, N>(                                   \
+        src_numel,                                      \
+        el_per_block,                                   \
+        src,                                            \
+        dst,                                            \
+        alpha,                                          \
+        beta,                                           \
+        eps,                                            \
+        shared,                                         \
+        mu,                                             \
+        sigma,                                          \
+        tid,                                            \
+        dst_id,                                         \
+        lane_id);                                       \
+    break;                                              \
+}
+
+#define impl_layer_norm(NAME, T)                        \
+kernel void NAME(                                       \
+    constant uint &src_numel,                           \
+    constant uint &el_per_block,                        \
+    device const T *src,                                \
+    device T *dst,                                      \
+    device const T *alpha,                              \
+    device const T *beta,                               \
+    constant float &eps,                                \
+    uint tid [[ thread_index_in_threadgroup ]],         \
+    uint dst_id [[ threadgroup_position_in_grid ]],     \
+    uint lane_id [[thread_index_in_simdgroup]],         \
+    uint block_dim [[ threads_per_threadgroup ]]        \
+) {                                                     \
+    switch (max_shared_mem<float>(block_dim)) {         \
+        layer_norm_case(T, 2048);                       \
+        layer_norm_case(T, 1024);                       \
+        layer_norm_case(T,  512);                       \
+        layer_norm_case(T,  256);                       \
+        layer_norm_case(T,  128);                       \
+        layer_norm_case(T,   64);                       \
+        layer_norm_case(T,   32);                       \
+        layer_norm_case(T,   16);                       \
+        layer_norm_case(T,    8);                       \
+        layer_norm_case(T,    4);                       \
+        layer_norm_case(T,    2);                       \
+        layer_norm_case(T,    1);                       \
+    }                                                   \
+}
+
+
 #define LAYERNORM(NAME, T) \
 kernel void NAME( \
     constant size_t &src_numel, \
@@ -1395,8 +1596,8 @@ kernel void FN_NAME_THD( \
 
 impl_rms_norm(rmsnorm_f32, float)
 impl_rms_norm(rmsnorm_f16, half)
-LAYERNORM(layernorm_f32, float)
-LAYERNORM(layernorm_f16, half)
+impl_layer_norm(layernorm_f32, float)
+impl_layer_norm(layernorm_f16, half)
 ROPE(rope_f32, rope_i_f32, rope_thd_f32, float)
 ROPE(rope_f16, rope_i_f16, rope_thd_f16, half)
 
@@ -1455,6 +1656,6 @@ impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
 impl_softmax(softmax_bf16, bfloat)
 
 impl_rms_norm(rmsnorm_bf16, bfloat)
-LAYERNORM(layernorm_bf16, bfloat)
+impl_layer_norm(layernorm_bf16, bfloat)
 ROPE(rope_bf16, rope_i_bf16, rope_thd_bf16, bfloat)
 #endif
