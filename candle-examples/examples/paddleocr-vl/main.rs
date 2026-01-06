@@ -259,7 +259,11 @@ fn smart_resize(
     }
 
     // Check aspect ratio constraint
-    let aspect = if h > w { h as f64 / w as f64 } else { w as f64 / h as f64 };
+    let aspect = if h > w {
+        h as f64 / w as f64
+    } else {
+        w as f64 / h as f64
+    };
     if aspect > 200.0 {
         return Err(E::msg(format!(
             "Aspect ratio {:.1} exceeds maximum of 200",
@@ -977,7 +981,11 @@ fn main() -> Result<()> {
                     .decode(&generated_tokens, true)
                     .map_err(|e| E::msg(format!("Decoding error: {}", e)))?;
 
-                Ok((output_text.trim().to_string(), generated_tokens.len(), elapsed))
+                Ok((
+                    output_text.trim().to_string(),
+                    generated_tokens.len(),
+                    elapsed,
+                ))
             })();
 
             match result {
@@ -1000,7 +1008,10 @@ fn main() -> Result<()> {
         let total_elapsed = total_start.elapsed();
         println!("{:=<60}", "");
         println!("Batch Summary:");
-        println!("  Images processed: {} successful, {} failed", successful, failed);
+        println!(
+            "  Images processed: {} successful, {} failed",
+            successful, failed
+        );
         println!(
             "  Total tokens: {} in {:.2}s ({:.1} tokens/sec)",
             total_tokens,
@@ -1087,7 +1098,11 @@ fn main() -> Result<()> {
                 .map_err(|e| E::msg(format!("Decoding error: {}", e)))?;
 
             let text = output_text.trim().to_string();
-            println!("  └─ {} tokens in {:.2}s", generated_tokens.len(), elapsed.as_secs_f32());
+            println!(
+                "  └─ {} tokens in {:.2}s",
+                generated_tokens.len(),
+                elapsed.as_secs_f32()
+            );
             println!("{:-<60}", "");
             println!("{}", text);
             println!("{:-<60}\n", "");
@@ -1100,7 +1115,11 @@ fn main() -> Result<()> {
 
         // Print combined output
         println!("{:=<60}", "");
-        println!("Combined {} Output ({} pages):", args.task.prompt(), args.image.len());
+        println!(
+            "Combined {} Output ({} pages):",
+            args.task.prompt(),
+            args.image.len()
+        );
         println!("{:=<60}", "");
         for (idx, result) in all_results.iter().enumerate() {
             if idx > 0 {
