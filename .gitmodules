@@ -1,6 +1,0 @@
-[submodule "candle-examples/examples/flash-attn/cutlass"]
-	path = candle-flash-attn/cutlass
-	url = https://github.com/NVIDIA/cutlass.git
-[submodule "candle-flash-attn-v3/cutlass"]
-	path = candle-flash-attn-v3/cutlass
-	url = https://github.com/NVIDIA/cutlass
