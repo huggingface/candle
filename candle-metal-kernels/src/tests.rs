@@ -84,6 +84,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
         &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         v.len(),
         input,
         &output,
@@ -94,7 +95,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     read_to_vec(&output, v.len())
 }
 
-fn run_binary<T: Clone>(x: &[T], y: &[T], name: kernels::binary::contiguous::Kernel) -> Vec<T> {
+fn run_binary<T: Clone, S: ToString>(x: &[T], y: &[T], name: S) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
@@ -111,6 +112,7 @@ fn run_binary<T: Clone>(x: &[T], y: &[T], name: kernels::binary::contiguous::Ker
         &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         x.len(),
         BufferOffset::zero_offset(&left),
         BufferOffset::zero_offset(&right),
@@ -265,9 +267,9 @@ fn gelu_f16() {
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect();
-    let expected: Vec<f32> = vec![-0.0, -0.16, 0.0, 0.84, 1.96, 3.0, 10.0, 20.0];
+    let expected: Vec<f32> = vec![-0.0, -0.159, 0.0, 0.841, 1.954, 2.996, 10.0, 20.0];
     let results = run(&v, unary::contiguous::gelu::HALF);
-    assert_eq!(approx_f16(results, 2), expected);
+    assert_eq!(approx_f16(results, 3), expected);
 }
 
 #[test]
@@ -301,7 +303,7 @@ fn silu_f32() {
 fn binary_add_f32() {
     let left = vec![1.0f32, 2.0, 3.0];
     let right = vec![2.0f32, 3.1, 4.2];
-    let results = run_binary(&left, &right, kernels::binary::contiguous::add::FLOAT);
+    let results = run_binary(&left, &right, "badd_f32");
     let expected: Vec<_> = left
         .iter()
         .zip(right.iter())
@@ -320,23 +322,26 @@ fn binary_ops_bf16() {
         .collect();
 
     macro_rules! binary_op {
-        ($opname:ident, $opexpr:expr) => {{
-            let results = run_binary(&lhs, &rhs, kernels::binary::contiguous::$opname::BFLOAT);
+        ($opname:ident, $dtype:ident, $opexpr:expr) => {{
+            let results = run_binary(
+                &lhs,
+                &rhs,
+                concat!(stringify!($opname), "_", stringify!($dtype)),
+            );
             let expected: Vec<bf16> = lhs
                 .iter()
                 .zip(rhs.iter())
-                .map(|(x, y): (&bf16, &bf16)| $opexpr(*x, *y))
+                .map(|(x, y): (&$dtype, &$dtype)| $opexpr(*x, *y))
                 .collect();
             assert_eq!(results, expected);
         }};
     }
-
-    binary_op!(add, |x, y| x + y);
-    binary_op!(sub, |x, y| x - y);
-    binary_op!(mul, |x, y| x * y);
-    binary_op!(div, |x, y| x / y);
-    binary_op!(min, |x: bf16, y| x.min(y));
-    binary_op!(max, |x: bf16, y| x.max(y));
+    binary_op!(badd, bf16, |x, y| x + y);
+    binary_op!(bsub, bf16, |x, y| x - y);
+    binary_op!(bmul, bf16, |x, y| x * y);
+    binary_op!(bdiv, bf16, |x, y| x / y);
+    binary_op!(bminimum, bf16, |x: bf16, y| x.min(y));
+    binary_op!(bmaximum, bf16, |x: bf16, y| x.max(y));
 }
 
 fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
@@ -355,6 +360,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
         &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         v.len(),
         BufferOffset::zero_offset(&input),
         &output,
@@ -568,6 +574,7 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
         &command_buffer,
         &kernels,
         "affine_f32",
+        size_of::<T>(),
         size,
         BufferOffset::zero_offset(&input),
         &output,
@@ -1278,6 +1285,7 @@ fn run_where_cond<I: Clone, T: Clone>(
         &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         shape,
         cond,
         &cond_stride,

@@ -97,4 +97,12 @@ impl Device {
         let raw = self.as_ref().newCommandQueue().unwrap();
         Ok(raw)
     }
+
+    pub fn recommended_max_working_set_size(&self) -> usize {
+        self.as_ref().recommendedMaxWorkingSetSize() as usize
+    }
+
+    pub fn current_allocated_size(&self) -> usize {
+        self.as_ref().currentAllocatedSize()
+    }
 }

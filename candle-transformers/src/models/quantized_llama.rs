@@ -225,7 +225,15 @@ impl LayerWeights {
 
         let y = if q.device().is_metal() && seq_len == 1 {
             // SDPA will do MQA for us
-            candle_nn::ops::sdpa(&q, &k, &v, 1. / (self.head_dim as f32).sqrt(), 1.)?
+            candle_nn::ops::sdpa(
+                &q,
+                &k,
+                &v,
+                None,
+                false,
+                1. / (self.head_dim as f32).sqrt(),
+                1.,
+            )?
         } else {
             // Support for MQA, useful for 70B models and mistral.
             let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
