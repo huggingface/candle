@@ -55,7 +55,11 @@ impl Pow2Meta {
                 shifts.push(0);
             }
         }
-        Self { is_pow2, masks, shifts }
+        Self {
+            is_pow2,
+            masks,
+            shifts,
+        }
     }
 }
 
@@ -80,7 +84,17 @@ pub fn call_reduce_contiguous(
     encoder.set_compute_pipeline_state(&pipeline);
 
     let shape_u32: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
-    set_params!(encoder, (length, num_dims, shape_u32.as_slice(), work_per_threadgroup, &input, output));
+    set_params!(
+        encoder,
+        (
+            length,
+            num_dims,
+            shape_u32.as_slice(),
+            work_per_threadgroup,
+            &input,
+            output
+        )
+    );
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
@@ -89,8 +103,16 @@ pub fn call_reduce_contiguous(
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(
-        MTLSize { width: out_length, height: 1, depth: 1 },
-        MTLSize { width, height: 1, depth: 1 },
+        MTLSize {
+            width: out_length,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width,
+            height: 1,
+            depth: 1,
+        },
     );
     Ok(())
 }
@@ -125,23 +147,54 @@ pub fn call_reduce_strided(
         IndexType::U16 => {
             let dims: Vec<u16> = shape.iter().map(|&x| x as u16).collect();
             let strs: Vec<u16> = strides.iter().map(|&x| x as u16).collect();
-            set_params!(encoder, (
-                length, num_dims, dims.as_slice(), strs.as_slice(),
-                pow2.is_pow2.as_slice(), pow2.masks.as_slice(), pow2.shifts.as_slice(),
-                work_per_threadgroup, &input, output
-            ));
+            set_params!(
+                encoder,
+                (
+                    length,
+                    num_dims,
+                    dims.as_slice(),
+                    strs.as_slice(),
+                    pow2.is_pow2.as_slice(),
+                    pow2.masks.as_slice(),
+                    pow2.shifts.as_slice(),
+                    work_per_threadgroup,
+                    &input,
+                    output
+                )
+            );
         }
         IndexType::U32 => {
             let dims: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
             let strs: Vec<u32> = strides.iter().map(|&x| x as u32).collect();
-            set_params!(encoder, (
-                length, num_dims, dims.as_slice(), strs.as_slice(),
-                pow2.is_pow2.as_slice(), pow2.masks.as_slice(), pow2.shifts.as_slice(),
-                work_per_threadgroup, &input, output
-            ));
+            set_params!(
+                encoder,
+                (
+                    length,
+                    num_dims,
+                    dims.as_slice(),
+                    strs.as_slice(),
+                    pow2.is_pow2.as_slice(),
+                    pow2.masks.as_slice(),
+                    pow2.shifts.as_slice(),
+                    work_per_threadgroup,
+                    &input,
+                    output
+                )
+            );
         }
         IndexType::U64 => {
-            set_params!(encoder, (length, num_dims, shape, strides, work_per_threadgroup, &input, output));
+            set_params!(
+                encoder,
+                (
+                    length,
+                    num_dims,
+                    shape,
+                    strides,
+                    work_per_threadgroup,
+                    &input,
+                    output
+                )
+            );
         }
     }
 
@@ -152,8 +205,16 @@ pub fn call_reduce_strided(
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(
-        MTLSize { width: out_length, height: 1, depth: 1 },
-        MTLSize { width, height: 1, depth: 1 },
+        MTLSize {
+            width: out_length,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width,
+            height: 1,
+            depth: 1,
+        },
     );
     Ok(())
 }
