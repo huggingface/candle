@@ -404,10 +404,14 @@ impl CosyVoice3LM {
         prompt_speech_tokens: &Tensor,
         sampling_config: &SamplingConfig,
     ) -> Result<Vec<u32>> {
-        // 1. Concatenate text tokens
-        let text = Tensor::cat(&[prompt_text_tokens, text_tokens], 1)?;
-        let text_len = text.dim(1)?;
+        // 1. Handle text tokens - concatenate if prompt_text is not empty
         let prompt_text_len = prompt_text_tokens.dim(1)?;
+        let text = if prompt_text_len == 0 {
+            text_tokens.clone()
+        } else {
+            Tensor::cat(&[prompt_text_tokens, text_tokens], 1)?
+        };
+        let text_len = text.dim(1)?;
 
         // 2. Embedding
         let text_emb = self.text_embedding.forward(&text)?;
@@ -417,10 +421,16 @@ impl CosyVoice3LM {
 
         let sos_emb = self.speech_embedding.forward(&sos_id)?;
         let task_id_emb = self.speech_embedding.forward(&task_id)?;
-        let prompt_speech_emb = self.speech_embedding.forward(prompt_speech_tokens)?;
 
         // 3. Build input sequence
-        let lm_input = Tensor::cat(&[&sos_emb, &text_emb, &task_id_emb, &prompt_speech_emb], 1)?;
+        // Handle empty prompt_speech_tokens (for cross-lingual/instruct modes)
+        let lm_input = if prompt_speech_tokens.dim(1)? == 0 {
+            // No prompt speech tokens - just use sos + text + task_id
+            Tensor::cat(&[&sos_emb, &text_emb, &task_id_emb], 1)?
+        } else {
+            let prompt_speech_emb = self.speech_embedding.forward(prompt_speech_tokens)?;
+            Tensor::cat(&[&sos_emb, &text_emb, &task_id_emb, &prompt_speech_emb], 1)?
+        };
 
         // 4. Calculate min/max length (matching Python implementation)
         let min_len = (text_len - prompt_text_len) * 2;
@@ -477,10 +487,14 @@ impl CosyVoice3LM {
         prompt_speech_tokens: &Tensor,
         sampling_config: &SamplingConfig,
     ) -> Result<Vec<u32>> {
-        // 1. Concatenate text tokens
-        let text = Tensor::cat(&[prompt_text_tokens, text_tokens], 1)?;
-        let text_len = text.dim(1)?;
+        // 1. Handle text tokens - concatenate if prompt_text is not empty
         let prompt_text_len = prompt_text_tokens.dim(1)?;
+        let text = if prompt_text_len == 0 {
+            text_tokens.clone()
+        } else {
+            Tensor::cat(&[prompt_text_tokens, text_tokens], 1)?
+        };
+        let text_len = text.dim(1)?;
 
         // 2. Embedding
         let text_emb = self.text_embedding.forward(&text)?;
@@ -490,10 +504,16 @@ impl CosyVoice3LM {
 
         let sos_emb = self.speech_embedding.forward(&sos_id)?;
         let task_id_emb = self.speech_embedding.forward(&task_id)?;
-        let prompt_speech_emb = self.speech_embedding.forward(prompt_speech_tokens)?;
 
         // 3. Build input sequence
-        let lm_input = Tensor::cat(&[&sos_emb, &text_emb, &task_id_emb, &prompt_speech_emb], 1)?;
+        // Handle empty prompt_speech_tokens (for cross-lingual/instruct modes)
+        let lm_input = if prompt_speech_tokens.dim(1)? == 0 {
+            // No prompt speech tokens - just use sos + text + task_id
+            Tensor::cat(&[&sos_emb, &text_emb, &task_id_emb], 1)?
+        } else {
+            let prompt_speech_emb = self.speech_embedding.forward(prompt_speech_tokens)?;
+            Tensor::cat(&[&sos_emb, &text_emb, &task_id_emb, &prompt_speech_emb], 1)?
+        };
 
         // 4. Calculate min/max length (matching Python implementation)
         let min_len = (text_len - prompt_text_len) * 2;

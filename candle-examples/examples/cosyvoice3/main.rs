@@ -357,11 +357,22 @@ impl CosyVoice3Model {
     }
 
     /// Run zero-shot inference
+    ///
+    /// # Arguments
+    /// * `text` - Text to synthesize
+    /// * `prompt_text` - Prompt text for LLM (empty for cross-lingual mode)
+    /// * `llm_prompt_speech_tokens` - Speech tokens for LLM (empty for cross-lingual/instruct modes)
+    /// * `flow_prompt_speech_tokens` - Speech tokens for Flow decoder (always provided)
+    /// * `prompt_mel` - Mel spectrogram of prompt audio
+    /// * `speaker_embedding` - Speaker embedding
+    /// * `sampling_config` - Sampling configuration
+    /// * `n_timesteps` - Number of CFM sampling steps
     fn inference_zero_shot(
         &mut self,
         text: &str,
         prompt_text: &str,
-        prompt_speech_tokens: &[u32],
+        llm_prompt_speech_tokens: &[u32],
+        flow_prompt_speech_tokens: &[u32],
         prompt_mel: &Tensor,
         speaker_embedding: &Tensor,
         sampling_config: &SamplingConfig,
@@ -378,20 +389,43 @@ impl CosyVoice3Model {
             text_tokens.len(),
             prompt_text_tokens.len()
         );
+        println!(
+            "LLM prompt speech tokens: {}, Flow prompt speech tokens: {}",
+            llm_prompt_speech_tokens.len(),
+            flow_prompt_speech_tokens.len()
+        );
 
         // 2. Convert to tensors - pass them separately, LLM will concatenate
         let text_tokens_tensor =
             Tensor::from_slice(&text_tokens, (1, text_tokens.len()), &self.device)?
                 .to_dtype(DType::U32)?;
-        let prompt_text_tensor = Tensor::from_slice(
-            &prompt_text_tokens,
-            (1, prompt_text_tokens.len()),
-            &self.device,
-        )?
-        .to_dtype(DType::U32)?;
-        let prompt_speech_tensor = Tensor::from_slice(
-            prompt_speech_tokens,
-            (1, prompt_speech_tokens.len()),
+        // Handle empty prompt_text_tokens for cross-lingual mode
+        let prompt_text_tensor = if prompt_text_tokens.is_empty() {
+            Tensor::zeros((1, 0), DType::U32, &self.device)?
+        } else {
+            Tensor::from_slice(
+                &prompt_text_tokens,
+                (1, prompt_text_tokens.len()),
+                &self.device,
+            )?
+            .to_dtype(DType::U32)?
+        };
+        // LLM prompt speech tokens (may be empty for cross-lingual/instruct modes)
+        // Note: We need to handle empty tensors carefully for Metal backend
+        let llm_prompt_speech_tensor = if llm_prompt_speech_tokens.is_empty() {
+            Tensor::zeros((1, 0), DType::U32, &self.device)?
+        } else {
+            Tensor::from_slice(
+                llm_prompt_speech_tokens,
+                (1, llm_prompt_speech_tokens.len()),
+                &self.device,
+            )?
+            .to_dtype(DType::U32)?
+        };
+        // Flow prompt speech tokens (always provided)
+        let flow_prompt_speech_tensor = Tensor::from_slice(
+            flow_prompt_speech_tokens,
+            (1, flow_prompt_speech_tokens.len()),
             &self.device,
         )?
         .to_dtype(DType::U32)?;
@@ -401,7 +435,7 @@ impl CosyVoice3Model {
         let speech_tokens = self.llm.inference(
             &text_tokens_tensor,
             &prompt_text_tensor,
-            &prompt_speech_tensor,
+            &llm_prompt_speech_tensor,
             sampling_config,
         )?;
 
@@ -419,7 +453,7 @@ impl CosyVoice3Model {
 
         let mel = self.flow_decoder.inference(
             &speech_tokens_tensor,
-            &prompt_speech_tensor,
+            &flow_prompt_speech_tensor,
             prompt_mel,
             speaker_embedding,
             n_timesteps,
@@ -730,18 +764,21 @@ fn main() -> Result<()> {
         Mode::ZeroShot => model.inference_zero_shot(
             &args.text,
             &args.prompt_text,
-            &prompt_speech_tokens,
+            &prompt_speech_tokens, // LLM gets speech tokens
+            &prompt_speech_tokens, // Flow gets speech tokens
             &prompt_mel,
             &speaker_embedding,
             &sampling_config,
             args.n_timesteps,
         )?,
         Mode::CrossLingual => {
-            // Cross-lingual uses the same flow but without prompt text tokens
+            // Cross-lingual: LLM gets NO prompt_text and NO prompt_speech_tokens
+            // Flow still gets prompt_speech_tokens for voice cloning
             model.inference_zero_shot(
                 &args.text,
-                "", // Empty prompt text for cross-lingual
-                &prompt_speech_tokens,
+                "",                    // Empty prompt text for cross-lingual
+                &[],                   // Empty LLM prompt speech tokens
+                &prompt_speech_tokens, // Flow still gets speech tokens
                 &prompt_mel,
                 &speaker_embedding,
                 &sampling_config,
@@ -749,14 +786,17 @@ fn main() -> Result<()> {
             )?
         }
         Mode::Instruct => {
+            // Instruct: LLM gets instruct_text but NO prompt_speech_tokens
+            // Flow still gets prompt_speech_tokens for voice cloning
             let instruct_text = args
                 .instruct
                 .as_deref()
                 .unwrap_or("You are a helpful assistant.<|endofprompt|>");
             model.inference_zero_shot(
                 &args.text,
-                instruct_text,
-                &prompt_speech_tokens,
+                instruct_text,         // Instruct text as prompt
+                &[],                   // Empty LLM prompt speech tokens
+                &prompt_speech_tokens, // Flow still gets speech tokens
                 &prompt_mel,
                 &speaker_embedding,
                 &sampling_config,
