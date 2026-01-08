@@ -833,9 +833,6 @@ kernel void NAME##_strided##SUFFIX(                                     \
     constant IndexT &num_dims,                                          \
     constant IndexT *dims,                                              \
     constant IndexT *strides,                                           \
-    constant uchar *is_pow2,                                            \
-    constant uint *masks,                                               \
-    constant uchar *shifts,                                             \
     constant SizeT &el_per_block,                                       \
     device const T *src,                                                \
     device T *dst,                                                      \
@@ -853,9 +850,6 @@ kernel void NAME##_strided##SUFFIX(                                     \
     constant IndexT &num_dims,                                          \
     constant IndexT *dims,                                              \
     constant IndexT *strides,                                           \
-    constant uchar *is_pow2,                                            \
-    constant uint *masks,                                               \
-    constant uchar *shifts,                                             \
     constant SizeT &el_per_block,                                       \
     device const T *src,                                                \
     device uint *dst,                                                   \

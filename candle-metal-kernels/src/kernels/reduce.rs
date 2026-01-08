@@ -111,10 +111,6 @@ pub fn call_reduce_strided(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    let is_pow2 = vec![0u8; shape.len()];
-    let masks = vec![0u32; shape.len()];
-    let shifts = vec![0u8; shape.len()];
-
     match index_type {
         IndexType::U16 => {
             let dims: Vec<u16> = shape.iter().map(|&x| x as u16).collect();
@@ -126,9 +122,6 @@ pub fn call_reduce_strided(
                     num_dims,
                     dims.as_slice(),
                     strs.as_slice(),
-                    is_pow2.as_slice(),
-                    masks.as_slice(),
-                    shifts.as_slice(),
                     work_per_threadgroup,
                     &input,
                     output
@@ -145,9 +138,6 @@ pub fn call_reduce_strided(
                     num_dims,
                     dims.as_slice(),
                     strs.as_slice(),
-                    is_pow2.as_slice(),
-                    masks.as_slice(),
-                    shifts.as_slice(),
                     work_per_threadgroup,
                     &input,
                     output
