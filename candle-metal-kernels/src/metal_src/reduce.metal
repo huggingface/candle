@@ -757,21 +757,6 @@ METAL_FUNC IndexT get_strided_index_t(
     }
 }
 
-METAL_FUNC size_t get_strided_index_u64(
-    size_t idx,
-    constant size_t &num_dims,
-    constant size_t *dims,
-    constant size_t *strides
-) {
-    size_t strided_i = 0;
-    for (size_t d = 0; d < num_dims; d++) {
-        size_t k = num_dims - 1 - d;
-        strided_i += (idx % dims[k]) * strides[k];
-        idx /= dims[k];
-    }
-    return strided_i;
-}
-
 template<typename IndexT = uint>
 struct contiguous_indexer {
     METAL_FUNC IndexT operator()(IndexT i) const {
