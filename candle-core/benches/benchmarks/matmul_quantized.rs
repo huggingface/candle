@@ -68,8 +68,11 @@ fn test_matmul(
         #[cfg(feature = "wgpu")]
         if let Device::Wgpu(wgpu) = device {
             {
-                const TILE_SIZES: &[u32] = &[32, 64, 128];
-                const WPT_VALUES: &[u32] = &[2, 4, 8, 16];
+                // const TILE_SIZES: &[u32] = &[32, 64, 128];
+                // const WPT_VALUES: &[u32] = &[2, 4, 8, 16];
+
+                const TILE_SIZES: &[u32] = &[32];
+                const WPT_VALUES: &[u32] = &[16];
 
                 let tid_size = match typ{
                     GgmlDType::Q4_0 | GgmlDType::Q4_1 => 4,
@@ -112,8 +115,10 @@ fn test_matmul(
 
                 //test tiled
                 {
-                    const TILE_SIZES: &[u32] = &[32, 64, 128, 256, 512];
-                    const WPT_VALUES: &[u32] = &[2, 4, 8, 16, 32, 64, 128];
+                    // const TILE_SIZES: &[u32] = &[32, 64, 128, 256, 512];
+                    // const WPT_VALUES: &[u32] = &[2, 4, 8, 16, 32, 64, 128];
+                    const TILE_SIZES: &[u32] = &[32];
+                    const WPT_VALUES: &[u32] = &[32];
                     let tile_m = 1;
                     let wptm = 1;
                     for &tile_n in TILE_SIZES {

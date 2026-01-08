@@ -1,5 +1,4 @@
 pub(crate) mod affine;
-pub(crate) mod binary;
 pub(crate) mod broadcast;
 pub(crate) mod binary;
 pub(crate) mod conv2d;

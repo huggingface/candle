@@ -1,4 +1,525 @@
-pub mod convert_tests {
+pub mod bilinear_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_test::wasm_bindgen_test as test;
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::test as test;
+use candle_wasm_tests::{
+    to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
+};
+use candle::{test_device, Device, IndexOp, Result, Tensor};
+async fn bilinear_pytorch_2x_upscale(dev: &Device) -> Result<()> {
+    let input = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
+    let output = input.upsample_bilinear2d(8, 8, false)?;
+    let expected = Tensor::new(
+            &[
+                0.0000f32,
+                0.2500,
+                0.7500,
+                1.2500,
+                1.7500,
+                2.2500,
+                2.7500,
+                3.0000,
+                1.0000,
+                1.2500,
+                1.7500,
+                2.2500,
+                2.7500,
+                3.2500,
+                3.7500,
+                4.0000,
+                3.0000,
+                3.2500,
+                3.7500,
+                4.2500,
+                4.7500,
+                5.2500,
+                5.7500,
+                6.0000,
+                5.0000,
+                5.2500,
+                5.7500,
+                6.2500,
+                6.7500,
+                7.2500,
+                7.7500,
+                8.0000,
+                7.0000,
+                7.2500,
+                7.7500,
+                8.2500,
+                8.7500,
+                9.2500,
+                9.7500,
+                10.0000,
+                9.0000,
+                9.2500,
+                9.7500,
+                10.2500,
+                10.7500,
+                11.2500,
+                11.7500,
+                12.0000,
+                11.0000,
+                11.2500,
+                11.7500,
+                12.2500,
+                12.7500,
+                13.2500,
+                13.7500,
+                14.0000,
+                12.0000,
+                12.2500,
+                12.7500,
+                13.2500,
+                13.7500,
+                14.2500,
+                14.7500,
+                15.0000,
+            ],
+            dev,
+        )?
+        .reshape((1, 1, 8, 8))?;
+    let diff = (&output - &expected)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0_async::<f32>().await?;
+    assert!(max_diff < 1e-4, "Max difference {} exceeds threshold 1e-4", max_diff);
+    Ok(())
+}
+async fn bilinear_pytorch_downscale(dev: &Device) -> Result<()> {
+    let input = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
+    let output = input.upsample_bilinear2d(4, 4, false)?;
+    let expected = Tensor::new(
+            &[
+                4.5f32,
+                6.5,
+                8.5,
+                10.5,
+                20.5,
+                22.5,
+                24.5,
+                26.5,
+                36.5,
+                38.5,
+                40.5,
+                42.5,
+                52.5,
+                54.5,
+                56.5,
+                58.5,
+            ],
+            dev,
+        )?
+        .reshape((1, 1, 4, 4))?;
+    let diff = (&output - &expected)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0_async::<f32>().await?;
+    assert!(max_diff < 1e-4, "Max difference {} exceeds threshold 1e-4", max_diff);
+    Ok(())
+}
+async fn bilinear_pytorch_multi_channel(dev: &Device) -> Result<()> {
+    let input = Tensor::new(
+            &[
+                1.9269f32,
+                1.4873,
+                0.9007,
+                -2.1055,
+                0.6784,
+                -1.2345,
+                -0.0431,
+                -1.6047,
+                -0.7521,
+                1.6487,
+                -0.3925,
+                -1.4036,
+                -0.7279,
+                -0.5594,
+                -0.7688,
+                0.7624,
+                1.6423f32,
+                -0.1596,
+                -0.4974,
+                0.4396,
+                -0.7581,
+                1.0783,
+                0.8008,
+                1.6806,
+                1.2791,
+                1.2964,
+                0.6105,
+                1.3347,
+                -0.2316,
+                0.0418,
+                -0.2516,
+                0.8599,
+            ],
+            dev,
+        )?
+        .reshape((1, 2, 4, 4))?;
+    let output = input.upsample_bilinear2d(8, 8, false)?;
+    assert_eq!(output.dims(), & [1, 2, 8, 8]);
+    let output_vec = output.flatten_all()?.to_vec1_async::<f32>().await?;
+    for &val in &output_vec {
+        assert!(val.is_finite(), "Output contains non-finite value");
+    }
+    let output_ch0_row0 = output.i((0, 0, 0, ..))?.to_vec1_async::<f32>().await?;
+    let expected_ch0_row0 = [
+        1.9269f32,
+        1.8170,
+        1.5972,
+        1.3406,
+        1.0474,
+        0.1492,
+        -1.3540,
+        -2.1055,
+    ];
+    for (i, (&out, &exp)) in output_ch0_row0
+        .iter()
+        .zip(expected_ch0_row0.iter())
+        .enumerate()
+    {
+        let diff = (out - exp).abs();
+        assert!(
+            diff < 1e-3,
+            "Channel 0, row 0, index {} differs: got {}, expected {}, diff {}", i, out,
+            exp, diff
+        );
+    }
+    let output_ch1_row0 = output.i((0, 1, 0, ..))?.to_vec1_async::<f32>().await?;
+    let expected_ch1_row0 = [
+        1.6423f32,
+        1.1918,
+        0.2909,
+        -0.2440,
+        -0.4129,
+        -0.2632,
+        0.2053,
+        0.4396,
+    ];
+    for (i, (&out, &exp)) in output_ch1_row0
+        .iter()
+        .zip(expected_ch1_row0.iter())
+        .enumerate()
+    {
+        let diff = (out - exp).abs();
+        assert!(
+            diff < 1e-3,
+            "Channel 1, row 0, index {} differs: got {}, expected {}, diff {}", i, out,
+            exp, diff
+        );
+    }
+    Ok(())
+}
+async fn bilinear_pytorch_align_corners_true(dev: &Device) -> Result<()> {
+    let input = Tensor::from_vec(vec![1.0f32, 2.0, 3.0, 4.0], (1, 1, 2, 2), dev)?;
+    let output = input.upsample_bilinear2d(4, 4, true)?;
+    let expected = Tensor::new(
+            &[
+                1.0f32,
+                1.3333,
+                1.6667,
+                2.0,
+                1.6667,
+                2.0,
+                2.3333,
+                2.6667,
+                2.3333,
+                2.6667,
+                3.0,
+                3.3333,
+                3.0,
+                3.3333,
+                3.6667,
+                4.0,
+            ],
+            dev,
+        )?
+        .reshape((1, 1, 4, 4))?;
+    let diff = (&output - &expected)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0_async::<f32>().await?;
+    assert!(max_diff < 1e-3, "Max difference {} exceeds threshold 1e-3", max_diff);
+    let output_vec = output.flatten_all()?.to_vec1_async::<f32>().await?;
+    assert!((output_vec[0] - 1.0).abs() < 1e-5, "Top-left corner not preserved");
+    assert!((output_vec[3] - 2.0).abs() < 1e-5, "Top-right corner not preserved");
+    assert!((output_vec[12] - 3.0).abs() < 1e-5, "Bottom-left corner not preserved");
+    assert!((output_vec[15] - 4.0).abs() < 1e-5, "Bottom-right corner not preserved");
+    Ok(())
+}
+async fn bilinear_pytorch_scale_factor(dev: &Device) -> Result<()> {
+    let input = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
+    let output_scale = input.upsample_bilinear2d_with_scale(2.0, 2.0, false)?;
+    let output_size = input.upsample_bilinear2d(8, 8, false)?;
+    let diff = (&output_scale - &output_size)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0_async::<f32>().await?;
+    assert!(max_diff < 1e-6, "scale_factor and size methods differ by {}", max_diff);
+    Ok(())
+}
+async fn bilinear_pytorch_non_square_exact(dev: &Device) -> Result<()> {
+    let input = Tensor::arange(0f32, 24f32, dev)?.reshape((1, 1, 4, 6))?;
+    let output = input.upsample_bilinear2d(8, 12, false)?;
+    #[rustfmt::skip]
+    let expected = Tensor::new(
+            &[
+                0.0f32,
+                0.25,
+                0.75,
+                1.25,
+                1.75,
+                2.25,
+                2.75,
+                3.25,
+                3.75,
+                4.25,
+                4.75,
+                5.0,
+                1.5,
+                1.75,
+                2.25,
+                2.75,
+                3.25,
+                3.75,
+                4.25,
+                4.75,
+                5.25,
+                5.75,
+                6.25,
+                6.5,
+                4.5,
+                4.75,
+                5.25,
+                5.75,
+                6.25,
+                6.75,
+                7.25,
+                7.75,
+                8.25,
+                8.75,
+                9.25,
+                9.5,
+                7.5,
+                7.75,
+                8.25,
+                8.75,
+                9.25,
+                9.75,
+                10.25,
+                10.75,
+                11.25,
+                11.75,
+                12.25,
+                12.5,
+                10.5,
+                10.75,
+                11.25,
+                11.75,
+                12.25,
+                12.75,
+                13.25,
+                13.75,
+                14.25,
+                14.75,
+                15.25,
+                15.5,
+                13.5,
+                13.75,
+                14.25,
+                14.75,
+                15.25,
+                15.75,
+                16.25,
+                16.75,
+                17.25,
+                17.75,
+                18.25,
+                18.5,
+                16.5,
+                16.75,
+                17.25,
+                17.75,
+                18.25,
+                18.75,
+                19.25,
+                19.75,
+                20.25,
+                20.75,
+                21.25,
+                21.5,
+                18.0,
+                18.25,
+                18.75,
+                19.25,
+                19.75,
+                20.25,
+                20.75,
+                21.25,
+                21.75,
+                22.25,
+                22.75,
+                23.0,
+            ],
+            dev,
+        )?
+        .reshape((1, 1, 8, 12))?;
+    let diff = (&output - &expected)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0_async::<f32>().await?;
+    assert!(max_diff < 1e-4, "Max difference {} exceeds threshold 1e-4", max_diff);
+    Ok(())
+}
+async fn bilinear_pytorch_tiny_1x1_to_3x3(dev: &Device) -> Result<()> {
+    let input = Tensor::new(&[5.0f32], dev)?.reshape((1, 1, 1, 1))?;
+    let output = input.upsample_bilinear2d(3, 3, false)?;
+    let expected = Tensor::new(&[5.0f32, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0], dev)?
+        .reshape((1, 1, 3, 3))?;
+    let diff = (&output - &expected)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0_async::<f32>().await?;
+    assert!(max_diff < 1e-6, "Max difference {} exceeds threshold 1e-6", max_diff);
+    Ok(())
+}
+async fn bilinear_pytorch_tiny_1x2_to_3x6(dev: &Device) -> Result<()> {
+    let input = Tensor::new(&[2.0f32, 8.0], dev)?.reshape((1, 1, 1, 2))?;
+    let output = input.upsample_bilinear2d(3, 6, false)?;
+    #[rustfmt::skip]
+    let expected = Tensor::new(
+            &[
+                2.0f32,
+                2.0,
+                4.0,
+                6.0,
+                8.0,
+                8.0,
+                2.0,
+                2.0,
+                4.0,
+                6.0,
+                8.0,
+                8.0,
+                2.0,
+                2.0,
+                4.0,
+                6.0,
+                8.0,
+                8.0,
+            ],
+            dev,
+        )?
+        .reshape((1, 1, 3, 6))?;
+    let diff = (&output - &expected)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0_async::<f32>().await?;
+    assert!(max_diff < 1e-6, "Max difference {} exceeds threshold 1e-6", max_diff);
+    Ok(())
+}
+async fn bilinear_pytorch_large_64x64_to_128x128(dev: &Device) -> Result<()> {
+    use candle::DType;
+    let input = Tensor::randn(0f32, 1f32, (1, 1, 64, 64), dev)?;
+    let output = input.upsample_bilinear2d(128, 128, false)?;
+    assert_eq!(output.dims(), & [1, 1, 128, 128]);
+    assert_eq!(output.dtype(), DType::F32);
+    let output_vec = output.flatten_all()?.to_vec1_async::<f32>().await?;
+    for &val in &output_vec {
+        assert!(val.is_finite(), "Large tensor output contains non-finite value");
+    }
+    let min_val = output_vec.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_val = output_vec.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        min_val > - 10.0 && max_val < 10.0,
+        "Large tensor output values out of expected range: min={}, max={}", min_val,
+        max_val
+    );
+    Ok(())
+}
+async fn bilinear_output_dimensions(dev: &Device) -> Result<()> {
+    let t1 = Tensor::arange(0f32, 32f32, dev)?.reshape((1, 1, 4, 8))?;
+    let out1 = t1.upsample_bilinear2d(6, 12, false)?;
+    assert_eq!(out1.dims(), & [1, 1, 6, 12], "Non-square upscale failed");
+    let t2 = Tensor::arange(0f32, 192f32, dev)?.reshape((4, 3, 4, 4))?;
+    let out2 = t2.upsample_bilinear2d(8, 8, false)?;
+    assert_eq!(out2.dims(), & [4, 3, 8, 8], "Batch processing failed");
+    let t3 = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
+    let out3 = t3.upsample_bilinear2d_with_scale(2.0, 3.0, false)?;
+    assert_eq!(out3.dims(), & [1, 1, 8, 12], "Asymmetric scale failed");
+    let t4 = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
+    let out4 = t4.upsample_bilinear2d_with_scale(1.5, 1.5, false)?;
+    assert_eq!(out4.dims(), & [1, 1, 6, 6], "Fractional scale failed");
+    let t5 = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
+    let out5 = t5.upsample_bilinear2d(1, 1, false)?;
+    assert_eq!(out5.dims(), & [1, 1, 1, 1], "Single pixel output failed");
+    let val = out5.flatten_all()?.to_vec1_async::<f32>().await?[0];
+    assert!(val.is_finite(), "Single pixel value is not finite");
+    let t6 = Tensor::arange(0f32, 4f32, dev)?.reshape((1, 1, 2, 2))?;
+    let out6 = t6.upsample_bilinear2d_with_scale(5.0, 5.0, false)?;
+    assert_eq!(out6.dims(), & [1, 1, 10, 10], "Large scale factor failed");
+    Ok(())
+}
+async fn bilinear_identity(dev: &Device) -> Result<()> {
+    let t = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
+    let output = t.upsample_bilinear2d(4, 4, false)?;
+    let diff = (&t - &output)?.abs()?.flatten_all()?.max(0)?;
+    assert!(diff.to_vec0_async::< f32 > (). await ? < 1e-6);
+    Ok(())
+}
+async fn bilinear_align_corners_difference(dev: &Device) -> Result<()> {
+    let t = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
+    let output_false = t.upsample_bilinear2d(8, 8, false)?;
+    let output_true = t.upsample_bilinear2d(8, 8, true)?;
+    let diff = (&output_false - &output_true)?.abs()?.sum_all()?;
+    assert!(diff.to_vec0_async::< f32 > (). await ? > 0.1);
+    Ok(())
+}
+candle_wasm_tests::test_device!(
+    bilinear_pytorch_2x_upscale, bilinear_pytorch_2x_upscale_cpu,
+    bilinear_pytorch_2x_upscale_gpu, bilinear_pytorch_2x_upscale_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_pytorch_downscale, bilinear_pytorch_downscale_cpu,
+    bilinear_pytorch_downscale_gpu, bilinear_pytorch_downscale_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_pytorch_multi_channel, bilinear_pytorch_multi_channel_cpu,
+    bilinear_pytorch_multi_channel_gpu, bilinear_pytorch_multi_channel_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_pytorch_align_corners_true, bilinear_pytorch_align_corners_true_cpu,
+    bilinear_pytorch_align_corners_true_gpu, bilinear_pytorch_align_corners_true_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_pytorch_scale_factor, bilinear_pytorch_scale_factor_cpu,
+    bilinear_pytorch_scale_factor_gpu, bilinear_pytorch_scale_factor_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_pytorch_non_square_exact, bilinear_pytorch_non_square_exact_cpu,
+    bilinear_pytorch_non_square_exact_gpu, bilinear_pytorch_non_square_exact_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_pytorch_tiny_1x1_to_3x3, bilinear_pytorch_tiny_1x1_to_3x3_cpu,
+    bilinear_pytorch_tiny_1x1_to_3x3_gpu, bilinear_pytorch_tiny_1x1_to_3x3_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_pytorch_tiny_1x2_to_3x6, bilinear_pytorch_tiny_1x2_to_3x6_cpu,
+    bilinear_pytorch_tiny_1x2_to_3x6_gpu, bilinear_pytorch_tiny_1x2_to_3x6_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_pytorch_large_64x64_to_128x128, bilinear_pytorch_large_64x64_to_128x128_cpu,
+    bilinear_pytorch_large_64x64_to_128x128_gpu,
+    bilinear_pytorch_large_64x64_to_128x128_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_output_dimensions, bilinear_output_dimensions_cpu,
+    bilinear_output_dimensions_gpu, bilinear_output_dimensions_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_identity, bilinear_identity_cpu, bilinear_identity_gpu,
+    bilinear_identity_metal
+);
+candle_wasm_tests::test_device!(
+    bilinear_align_corners_difference, bilinear_align_corners_difference_cpu,
+    bilinear_align_corners_difference_gpu, bilinear_align_corners_difference_metal
+);
+}pub mod convert_tests {
 // ============================================================================
 // === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
@@ -1344,19 +1865,19 @@ async fn inplace_op1() -> Result<()> {
     );
     Ok(())
 }
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(all(feature = "ug", any(feature = "cuda", feature = "metal")))]
 #[allow(clippy::approx_constant)]
 #[test]
 async fn ug_op() -> Result<()> {
     let kernel = {
-        use ug::lang::op;
-        let layout = ug::Layout::from_shape(&[12]);
-        let ptr = op::Arg::ptr(ug::DType::F32);
-        let src = op::load(ptr.id(), layout.clone(), ug::DType::F32)?;
+        use candle_ug::lang::op;
+        let layout = candle_ug::Layout::from_shape(&[12]);
+        let ptr = op::Arg::ptr(candle_ug::DType::F32);
+        let src = op::load(ptr.id(), layout.clone(), candle_ug::DType::F32)?;
         let src = op::unary(op::UnaryOp::Exp, src)?;
         let st = op::store(ptr.id(), layout, src)?;
         let kernel = op::Kernel::new("exp".to_string(), vec![ptr], vec![st]);
-        let opts: ug::lower_op::Opts = Default::default();
+        let opts: candle_ug::lower_op::Opts = Default::default();
         kernel.lower(&opts)?
     };
     let device = if candle::utils::cuda_is_available() {
@@ -2835,6 +3356,22 @@ async fn asort(device: &Device) -> Result<()> {
     );
     Ok(())
 }
+/// Test sorting a large tensor that exceeds 1024 elements.
+async fn asort_big(device: &Device) -> Result<()> {
+    if device.is_metal() {
+        return Ok(());
+    }
+    const SIZE: usize = 2000;
+    let data: Vec<f32> = (0..SIZE).map(|x| (SIZE - x) as f32).collect();
+    let tensor = Tensor::new(data.as_slice(), device)?;
+    let indexes = tensor.arg_sort_last_dim(true)?;
+    let expected_indexes: Vec<u32> = (0..SIZE).rev().map(|x| x as u32).collect();
+    assert_eq!(indexes.to_vec1_async::< u32 > (). await ?, expected_indexes);
+    let indexes = tensor.arg_sort_last_dim(false)?;
+    let expected_indexes: Vec<u32> = (0..SIZE).map(|x| x as u32).collect();
+    assert_eq!(indexes.to_vec1_async::< u32 > (). await ?, expected_indexes);
+    Ok(())
+}
 async fn unary_op(device: &Device) -> Result<()> {
     let data = &[[-3f32, 1., 4., -0.1, 0.5], [2.7, -1.8, -0.28, 1.8, 2.8]];
     let tensor = Tensor::new(data, device)?;
@@ -2922,6 +3459,20 @@ async fn binary_op(device: &Device) -> Result<()> {
         max.to_vec2_async::< f32 > (). await ?, [[3.0, 2.5, 4.0, 2.5, 5.0], [2.0, 1.0,
         7.0, 8.0, 2.0]]
     );
+    Ok(())
+}
+async fn ternary_op(device: &Device) -> Result<()> {
+    let data = &[[0u8, 1, 0, 1, 0], [1, 1, 1, 0, 0]];
+    let ids = Tensor::new(data, device)?;
+    let data = &[[0f32, 1., 2., 3., 4.], [5., 6., 7., 8., 9.]];
+    let a = Tensor::new(data, device)?;
+    let data = &[[10f32, 11., 12., 13., 14.], [15., 16., 17., 18., 19.]];
+    let b = Tensor::new(data, device)?;
+    let tensor = ids.where_cond(&a, &b)?;
+    let dims = tensor.dims();
+    assert_eq!(dims, [2, 5]);
+    let result: Vec<f32> = tensor.flatten_all()?.to_vec1_async().await?;
+    assert_eq!(result, [10., 1., 12., 3., 14., 5., 6., 7., 18., 19.]);
     Ok(())
 }
 async fn transpose(device: &Device) -> Result<()> {
@@ -4011,6 +4562,9 @@ candle_wasm_tests::test_device!(
     binary_op, binary_op_cpu, binary_op_gpu, binary_op_metal, binary_op_wgpu
 );
 candle_wasm_tests::test_device!(
+    ternary_op, ternary_op_cpu, ternary_op_gpu, ternary_op_metal
+);
+candle_wasm_tests::test_device!(
     embeddings, embeddings_cpu, embeddings_gpu, embeddings_metal, embeddings_wgpu
 );
 candle_wasm_tests::test_device!(cmp, cmp_cpu, cmp_gpu, cmp_metal, cmp_wgpu);
@@ -4041,6 +4595,9 @@ candle_wasm_tests::test_device!(
 candle_wasm_tests::test_device!(randn, randn_cpu, randn_gpu, randn_metal, randn_wgpu);
 candle_wasm_tests::test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal, clamp_wgpu);
 candle_wasm_tests::test_device!(asort, asort_cpu, asort_gpu, asort_metal);
+candle_wasm_tests::test_device!(
+    asort_big, asort_big_cpu, asort_big_gpu, asort_big_metal
+);
 candle_wasm_tests::test_device!(var, var_cpu, var_gpu, var_metal, var_wgpu);
 candle_wasm_tests::test_device!(
     zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal, zero_dim_wgpu
@@ -4845,6 +5402,31 @@ async fn binary_cross_entropy_with_logit() -> Result<()> {
     assert_eq!(to_vec0_round_async(& loss, 4). await ?, 0.8224);
     Ok(())
 }
+#[test]
+async fn huber_loss() -> Result<()> {
+    let cpu = Device::Cpu;
+    let inp = [
+        [2.3611f32, -0.8813, -0.5006, -0.2178],
+        [0.0419, 0.0763, -1.0457, -1.6692],
+        [-1.0494, 0.8111, 1.5723, 1.2315],
+        [1.3081, 0.6641, 1.1802, -0.2547],
+        [0.5292, 0.7636, 0.3692, -0.8318],
+    ];
+    let target = [
+        [0.0f32, 1., 0., 0.],
+        [0., 1., 0., 0.],
+        [0., 0., 0., 1.],
+        [1., 0., 0., 0.],
+        [0., 0., 1., 0.],
+    ];
+    let inp = Tensor::new(&inp, &cpu)?;
+    let target = Tensor::new(&target, &cpu)?;
+    let loss = candle_nn::loss::huber(&inp, &target, 1.0)?;
+    assert_eq!(to_vec0_round_async(& loss, 4). await ?, 0.4734);
+    let loss = candle_nn::loss::huber(&inp, &target, 0.88)?;
+    assert_eq!(to_vec0_round_async(& loss, 4). await ?, 0.4483);
+    Ok(())
+}
 }pub mod one_hot {
 // ============================================================================
 // === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
@@ -5013,6 +5595,9 @@ async fn rms_norml(device: &Device) -> Result<()> {
     let alpha = Tensor::ones(head_dim, candle::DType::F32, device)?;
     let t = candle_nn::ops::rms_norm(&tensor, &alpha, 1e-5)?;
     let t2 = candle_nn::ops::rms_norm_slow(&tensor, &alpha, 1e-5)?;
+    assert_eq!(
+        to_vec3_round_async(& t, 2). await ?, to_vec3_round_async(& t2, 2). await ?
+    );
     let diff = (t - t2)?
         .abs()?
         .flatten_all()?
@@ -5484,8 +6069,8 @@ mod metal_sdpa_tests {
     #[test]
     fn sdpa_full() -> Result<()> {
         const BS: usize = 4;
-        const R: usize = 4;
-        const L: usize = 4;
+        const R: usize = 16;
+        const L: usize = 16;
         const DK: usize = 64;
         const H: usize = 3;
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
@@ -5500,13 +6085,21 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(
+            &q,
+            &k,
+            &v,
+            None,
+            false,
+            scale as f32,
+            1.,
+        )?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
             .to_scalar_async()
             .await?;
-        assert!(error <= 0.0004, "{}", error);
+        assert!(error <= 0.02, "{}", error);
         Ok(())
     }
     #[test]
@@ -5528,7 +6121,15 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(
+            &q,
+            &k,
+            &v,
+            None,
+            false,
+            scale as f32,
+            1.,
+        )?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
@@ -5540,7 +6141,7 @@ mod metal_sdpa_tests {
     #[test]
     fn sdpa_full_softcapping() -> Result<()> {
         const BS: usize = 4;
-        const R: usize = 4;
+        const R: usize = 1;
         const L: usize = 4;
         const DK: usize = 64;
         const H: usize = 3;
@@ -5563,6 +6164,8 @@ mod metal_sdpa_tests {
             &q,
             &k,
             &v,
+            None,
+            false,
             scale as f32,
             SOFTCAP as f32,
         )?;
@@ -5571,7 +6174,7 @@ mod metal_sdpa_tests {
             .sum_all()?
             .to_scalar_async()
             .await?;
-        assert!(error <= 0.0005, "{}", error);
+        assert!(error <= 0.002, "{}", error);
         Ok(())
     }
     #[test]
@@ -5600,6 +6203,8 @@ mod metal_sdpa_tests {
             &q,
             &k,
             &v,
+            None,
+            false,
             scale as f32,
             SOFTCAP as f32,
         )?;
@@ -5630,7 +6235,15 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(
+            &q,
+            &k,
+            &v,
+            None,
+            false,
+            scale as f32,
+            1.,
+        )?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
