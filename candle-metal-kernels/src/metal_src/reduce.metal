@@ -696,95 +696,66 @@ kernel void NAME(                                       \
 impl_reduce_inner(OP, NAME, T)                          \
 impl_reduce_strided(OP, NAME, T)                        \
 
-template<typename IndexT, uint D>
+template<ushort D, typename IndexT>
 struct strided_indexer {
-    METAL_FUNC uint operator()(
-        uint idx,
-        constant const IndexT *dims,
-        constant const IndexT *strides,
-        constant const uchar *is_pow2,
-        constant const uint *masks,
-        constant const uchar *shifts
-    ) const {
-        strided_indexer<IndexT, D - 1> next;
+    constant const IndexT *dims;
+    constant const IndexT *strides;
+    strided_indexer<D - 1, IndexT> next {dims, strides};
 
-        if (is_pow2[D - 1]) {
-            uint i = (idx & masks[D - 1]) * strides[D - 1];
-            idx = idx >> shifts[D - 1];
-            return i + next(idx, dims, strides, is_pow2, masks, shifts);
-        } else {
-            IndexT dim = dims[D - 1];
-            uint i = (idx % dim) * strides[D - 1];
-            idx /= dim;
-            return i + next(idx, dims, strides, is_pow2, masks, shifts);
-        }
+    METAL_FUNC IndexT operator()(IndexT idx) const {
+        IndexT dim = dims[D - 1];
+        IndexT i = (idx % dim) * strides[D - 1];
+        idx /= dim;
+        return i + next(idx);
     }
 };
 
 template<typename IndexT>
-struct strided_indexer<IndexT, 1> {
-    METAL_FUNC uint operator()(
-        uint idx,
-        constant const IndexT *dims,
-        constant const IndexT *strides,
-        constant const uchar *is_pow2,
-        constant const uint *masks,
-        constant const uchar *shifts
-    ) const {
+struct strided_indexer<1, IndexT> {
+    constant const IndexT *dims;
+    constant const IndexT *strides;
+
+    METAL_FUNC IndexT operator()(IndexT idx) const {
         return idx * strides[0];
     }
 };
 
-template<typename IndexT>
-METAL_FUNC ulong get_strided_idx_fallback(
-    uint idx,
+template<ushort D, typename IndexT>
+METAL_FUNC IndexT get_strided_idx_fallback(
+    IndexT idx,
     constant const IndexT &num_dims,
     constant const IndexT *dims,
-    constant const IndexT *strides,
-    constant const uchar *is_pow2,
-    constant const uint *masks,
-    constant const uchar *shifts
+    constant const IndexT *strides
 ) {
-     strided_indexer<IndexT, 4> next;
+    strided_indexer<D, IndexT> next {dims, strides};
 
-     uint strided_i = 0;
-     for (IndexT d = 4; d < num_dims; d++) {
-         IndexT k = num_dims - 1 - d;
-         uint r;
-         if (is_pow2[k]) {
-             r = idx & masks[k];
-             idx = idx >> shifts[k];
-         } else {
-             IndexT dim = dims[k];
-             r = idx % dim;
-             idx /= dim;
-         }
-         strided_i += uint(r) * uint(strides[k]);
-     }
-     return strided_i + next(idx, dims, strides, is_pow2, masks, shifts);
+    IndexT strided_i = 0;
+    for (IndexT d = D; d < num_dims; d++) {
+        IndexT dim_idx = num_dims - 1 - d;
+        IndexT dim = dims[dim_idx];
+        strided_i += (idx % dim) * strides[dim_idx];
+        idx /= dim;
+    }
+    return strided_i + next(idx);
 }
 
 template<typename IndexT>
-METAL_FUNC uint get_strided_index_t(
-    uint idx,
+METAL_FUNC IndexT get_strided_index_t(
+    IndexT idx,
     constant const IndexT &num_dims,
     constant const IndexT *dims,
-    constant const IndexT *strides,
-    constant const uchar *is_pow2,
-    constant const uint *masks,
-    constant const uchar *shifts
+    constant const IndexT *strides
 ) {
     switch (num_dims) {
-        case 1: return strided_indexer<IndexT, 1>{}(idx, dims, strides, is_pow2, masks, shifts);
-        case 2: return strided_indexer<IndexT, 2>{}(idx, dims, strides, is_pow2, masks, shifts);
-        case 3: return strided_indexer<IndexT, 3>{}(idx, dims, strides, is_pow2, masks, shifts);
-        case 4: return strided_indexer<IndexT, 4>{}(idx, dims, strides, is_pow2, masks, shifts);
-        //case 5: return strided_indexer<IndexT, 5>{}(idx, dims, strides, is_pow2, masks, shifts);
-        //case 6: return strided_indexer<IndexT, 6>{}(idx, dims, strides, is_pow2, masks, shifts);
-        default: return get_strided_idx_fallback<IndexT>(idx, num_dims, dims, strides, is_pow2, masks, shifts);
+        case 1: return strided_indexer<1, IndexT>{dims, strides}(idx);
+        case 2: return strided_indexer<2, IndexT>{dims, strides}(idx);
+        case 3: return strided_indexer<3, IndexT>{dims, strides}(idx);
+        case 4: return strided_indexer<4, IndexT>{dims, strides}(idx);
+        //case 5: return strided_indexer<5, IndexT>{dims, strides}(idx);
+        //case 6: return strided_indexer<6, IndexT>{dims, strides}(idx);
+        default: return get_strided_idx_fallback<4, IndexT>(idx, num_dims, dims, strides);
     }
 }
-
 
 METAL_FUNC size_t get_strided_index_u64(
     size_t idx,
@@ -801,30 +772,23 @@ METAL_FUNC size_t get_strided_index_u64(
     return strided_i;
 }
 
-template<typename IndexT, typename SizeT>
-struct indexer_pow2 {
+template<typename IndexT = uint>
+struct contiguous_indexer {
+    METAL_FUNC IndexT operator()(IndexT i) const {
+        return i;
+    }
+};
+
+template<typename IndexT = uint>
+struct indexer_t {
     constant const IndexT &num_dims;
     constant const IndexT *dims;
     constant const IndexT *strides;
-    constant const uchar *is_pow2;
-    constant const uint *masks;
-    constant const uchar *shifts;
 
-    METAL_FUNC ulong operator()(SizeT i) const {
-        return get_strided_index_t(uint(i), num_dims, dims, strides, is_pow2, masks, shifts);
+    METAL_FUNC IndexT operator()(IndexT i) const {
+        return get_strided_index_t(i, num_dims, dims, strides);
     }
-    METAL_FUNC SizeT last_dim() const { return SizeT(dims[num_dims - 1]); }
-};
-
-struct indexer_u64 {
-    constant size_t &num_dims;
-    constant size_t *dims;
-    constant size_t *strides;
-
-    METAL_FUNC size_t operator()(size_t i) const {
-        return get_strided_index_u64(i, num_dims, dims, strides);
-    }
-    METAL_FUNC size_t last_dim() const { return dims[num_dims - 1]; }
+    METAL_FUNC IndexT last_dim() const { return dims[num_dims - 1]; }
 };
 
 template<typename T, typename R, typename OP, ushort BLOCKSIZE, typename Indexer, typename SizeT>
@@ -962,7 +926,7 @@ kernel void NAME##_strided##SUFFIX(                                     \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_pow2<IndexT, SizeT> indexer{num_dims, dims, strides, is_pow2, masks, shifts}; \
+    indexer_t<IndexT> indexer{num_dims, dims, strides};                 \
     REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, SizeT)           \
 }
 
@@ -982,7 +946,7 @@ kernel void NAME##_strided##SUFFIX(                                     \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_pow2<IndexT, SizeT> indexer{num_dims, dims, strides, is_pow2, masks, shifts}; \
+    indexer_t<IndexT> indexer{num_dims, dims, strides};                 \
     REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, SizeT)           \
 }
 
@@ -999,7 +963,7 @@ kernel void NAME##_strided_u64(                                         \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_pow2<uint64_t, uint64_t> indexer{num_dims, dims, strides};         \
+    indexer_t<uint64_t> indexer{num_dims, dims, strides};               \
     REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, size_t)          \
 }
 
@@ -1016,7 +980,7 @@ kernel void NAME##_strided_u64(                                         \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_u64 indexer{num_dims, dims, strides};                       \
+    indexer_t<uint64_t> indexer{num_dims, dims, strides};               \
     REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, size_t)          \
 }
 
