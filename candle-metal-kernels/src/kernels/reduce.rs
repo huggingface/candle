@@ -3,7 +3,7 @@ use crate::utils::{BufferOffset, EncoderProvider};
 use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
 use objc2_metal::{MTLResourceUsage, MTLSize};
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum IndexType {
     U16,
     U32,
@@ -28,37 +28,6 @@ impl IndexType {
             IndexType::U16 => "_u16",
             IndexType::U32 => "",
             IndexType::U64 => "_u64",
-        }
-    }
-}
-
-struct Pow2Meta {
-    is_pow2: Vec<u8>,
-    masks: Vec<u32>,
-    shifts: Vec<u8>,
-}
-
-impl Pow2Meta {
-    fn compute(shape: &[usize]) -> Self {
-        let mut is_pow2 = Vec::with_capacity(shape.len());
-        let mut masks = Vec::with_capacity(shape.len());
-        let mut shifts = Vec::with_capacity(shape.len());
-
-        for &dim in shape {
-            let pow2 = dim.is_power_of_two() && dim > 1;
-            is_pow2.push(pow2 as u8);
-            if pow2 {
-                masks.push((dim - 1) as u32);
-                shifts.push(dim.trailing_zeros() as u8);
-            } else {
-                masks.push(0);
-                shifts.push(0);
-            }
-        }
-        Self {
-            is_pow2,
-            masks,
-            shifts,
         }
     }
 }
@@ -137,11 +106,14 @@ pub fn call_reduce_strided(
     let kernel = format!("{}{}", kernel_name, index_type.kernel_suffix());
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel)?;
 
+    //println!("{kernel_name} - {length} - {strides:?} - {index_type:?}");
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    let pow2 = Pow2Meta::compute(shape);
+    let is_pow2 = vec![0u8; shape.len()];
+    let masks = vec![0u32; shape.len()];
+    let shifts = vec![0u8; shape.len()];
 
     match index_type {
         IndexType::U16 => {
@@ -154,9 +126,9 @@ pub fn call_reduce_strided(
                     num_dims,
                     dims.as_slice(),
                     strs.as_slice(),
-                    pow2.is_pow2.as_slice(),
-                    pow2.masks.as_slice(),
-                    pow2.shifts.as_slice(),
+                    is_pow2.as_slice(),
+                    masks.as_slice(),
+                    shifts.as_slice(),
                     work_per_threadgroup,
                     &input,
                     output
@@ -173,9 +145,9 @@ pub fn call_reduce_strided(
                     num_dims,
                     dims.as_slice(),
                     strs.as_slice(),
-                    pow2.is_pow2.as_slice(),
-                    pow2.masks.as_slice(),
-                    pow2.shifts.as_slice(),
+                    is_pow2.as_slice(),
+                    masks.as_slice(),
+                    shifts.as_slice(),
                     work_per_threadgroup,
                     &input,
                     output
