@@ -46,79 +46,91 @@ METAL_FUNC uint max_shared_mem(uint n) {
     return min(n, div_ceil<MAX_SHARED_MEM, sizeof(T)>());
 }
 
-METAL_FUNC uint get_strided_index_1d(
-    uint idx,
-    constant const uint *dims,
-    constant const uint *strides
-) {
-    return idx * strides[0];
-}
 
-METAL_FUNC uint get_strided_index_2d(
-    uint idx,
-    constant const uint *dims,
-    constant const uint *strides
-) {
-    uint i1 = idx % dims[1];
-    uint i0 = idx / dims[1];
-    return i0 * strides[0] + i1 * strides[1];
-}
+template<ushort D, typename IndexT>
+struct strided_indexer {
+    constant const IndexT *dims;
+    constant const IndexT *strides;
+    strided_indexer<D - 1, IndexT> next {dims, strides};
 
-METAL_FUNC uint get_strided_index_3d(
-    uint idx,
-    constant const uint *dims,
-    constant const uint *strides
-) {
-    uint i2 = idx % dims[2];
-    idx /= dims[2];
-    uint i1 = idx % dims[1];
-    uint i0 = idx / dims[1];
-    return i0 * strides[0] + i1 * strides[1] + i2 * strides[2];
-}
-
-METAL_FUNC uint get_strided_index_4d(
-    uint idx,
-    constant const uint *dims,
-    constant const uint *strides
-) {
-    uint i3 = idx % dims[3];
-    idx /= dims[3];
-    uint i2 = idx % dims[2];
-    idx /= dims[2];
-    uint i1 = idx % dims[1];
-    uint i0 = idx / dims[1];
-    return i0 * strides[0] + i1 * strides[1] + i2 * strides[2] + i3 * strides[3];
-}
-
-METAL_FUNC uint get_strided_index_generic(
-    uint idx,
-    constant const uint &num_dims,
-    constant const uint *dims,
-    constant const uint *strides
-) {
-    uint strided_i = 0;
-    for (uint d = 0; d < num_dims; d++) {
-        uint dim_idx = num_dims - 1 - d;
-        strided_i += (idx % dims[dim_idx]) * strides[dim_idx];
-        idx /= dims[dim_idx];
+    METAL_FUNC IndexT operator()(IndexT idx) const {
+        IndexT dim = dims[D - 1];
+        IndexT i = (idx % dim) * strides[D - 1];
+        idx /= dim;
+        return i + next(idx);
     }
-    return strided_i;
+};
+
+template<typename IndexT>
+struct strided_indexer<1, IndexT> {
+    constant const IndexT *dims;
+    constant const IndexT *strides;
+
+    METAL_FUNC IndexT operator()(IndexT idx) const {
+        return idx * strides[0];
+    }
+};
+
+template<ushort D, typename IndexT>
+METAL_FUNC IndexT get_strided_idx_fallback(
+    IndexT idx,
+    constant const IndexT &num_dims,
+    constant const IndexT *dims,
+    constant const IndexT *strides
+) {
+    strided_indexer<D, IndexT> next {dims, strides};
+
+    IndexT strided_i = 0;
+    for (IndexT d = D; d < num_dims; d++) {
+        IndexT dim_idx = num_dims - 1 - d;
+        IndexT dim = dims[dim_idx];
+        strided_i += (idx % dim) * strides[dim_idx];
+        idx /= dim;
+    }
+    return strided_i + next(idx);
 }
 
-METAL_FUNC uint get_strided_index(
-    uint idx,
-    constant const uint &num_dims,
-    constant const uint *dims,
-    constant const uint *strides
+template<typename IndexT>
+METAL_FUNC IndexT get_strided_index_t(
+    IndexT idx,
+    constant const IndexT &num_dims,
+    constant const IndexT *dims,
+    constant const IndexT *strides
 ) {
     switch (num_dims) {
-        case 1: return get_strided_index_1d(idx, dims, strides);
-        case 2: return get_strided_index_2d(idx, dims, strides);
-        case 3: return get_strided_index_3d(idx, dims, strides);
-        case 4: return get_strided_index_4d(idx, dims, strides);
-        default: return get_strided_index_generic(idx, num_dims, dims, strides);
+        case 1: return strided_indexer<1, IndexT>{dims, strides}(idx);
+        case 2: return strided_indexer<2, IndexT>{dims, strides}(idx);
+        case 3: return strided_indexer<3, IndexT>{dims, strides}(idx);
+        case 4: return strided_indexer<4, IndexT>{dims, strides}(idx);
+        //case 5: return strided_indexer<5, IndexT>{dims, strides}(idx);
+        //case 6: return strided_indexer<6, IndexT>{dims, strides}(idx);
+        default: return get_strided_idx_fallback<4, IndexT>(idx, num_dims, dims, strides);
     }
 }
+
+template<typename IndexT, bool STRIDED>
+struct indexer_t {};
+
+template<typename IndexT>
+struct indexer_t<IndexT, false> {
+    const IndexT last_dim;
+
+    METAL_FUNC IndexT operator()(IndexT i) const {
+        return i;
+    }
+};
+
+template<typename IndexT>
+struct indexer_t<IndexT, true> {
+    constant const IndexT &num_dims;
+    constant const IndexT *dims;
+    constant const IndexT *strides;
+    const IndexT last_dim;
+
+    METAL_FUNC IndexT operator()(IndexT i) const {
+        return get_strided_index_t(i, num_dims, dims, strides);
+    }
+};
 
 struct Divide {
     template<typename T>
@@ -459,7 +471,7 @@ struct loader<T, R, OP, BLOCKSIZE, true, typename metal::enable_if_t<not_indexed
 
         #pragma clang loop unroll(full)
         for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
-            value = operate(value, src[get_strided_index(i, num_dims, dims, strides)]);
+            value = operate(value, src[get_strided_index_t(i, num_dims, dims, strides)]);
         }
         return value;
     }
@@ -523,7 +535,7 @@ struct loader<T, R, OP, BLOCKSIZE, true, typename metal::enable_if_t<is_indexed_
 
         #pragma clang loop unroll(full)
         for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
-            value = operate(value, src[get_strided_index(i, num_dims, dims, strides)], i % dims[num_dims - 1]);
+            value = operate(value, src[get_strided_index_t(i, num_dims, dims, strides)], i % dims[num_dims - 1]);
         }
         return value;
     }
@@ -695,91 +707,6 @@ kernel void NAME(                                       \
 #define impl_reduce(OP, NAME, T)                        \
 impl_reduce_inner(OP, NAME, T)                          \
 impl_reduce_strided(OP, NAME, T)                        \
-
-template<ushort D, typename IndexT>
-struct strided_indexer {
-    constant const IndexT *dims;
-    constant const IndexT *strides;
-    strided_indexer<D - 1, IndexT> next {dims, strides};
-
-    METAL_FUNC IndexT operator()(IndexT idx) const {
-        IndexT dim = dims[D - 1];
-        IndexT i = (idx % dim) * strides[D - 1];
-        idx /= dim;
-        return i + next(idx);
-    }
-};
-
-template<typename IndexT>
-struct strided_indexer<1, IndexT> {
-    constant const IndexT *dims;
-    constant const IndexT *strides;
-
-    METAL_FUNC IndexT operator()(IndexT idx) const {
-        return idx * strides[0];
-    }
-};
-
-template<ushort D, typename IndexT>
-METAL_FUNC IndexT get_strided_idx_fallback(
-    IndexT idx,
-    constant const IndexT &num_dims,
-    constant const IndexT *dims,
-    constant const IndexT *strides
-) {
-    strided_indexer<D, IndexT> next {dims, strides};
-
-    IndexT strided_i = 0;
-    for (IndexT d = D; d < num_dims; d++) {
-        IndexT dim_idx = num_dims - 1 - d;
-        IndexT dim = dims[dim_idx];
-        strided_i += (idx % dim) * strides[dim_idx];
-        idx /= dim;
-    }
-    return strided_i + next(idx);
-}
-
-template<typename IndexT>
-METAL_FUNC IndexT get_strided_index_t(
-    IndexT idx,
-    constant const IndexT &num_dims,
-    constant const IndexT *dims,
-    constant const IndexT *strides
-) {
-    switch (num_dims) {
-        case 1: return strided_indexer<1, IndexT>{dims, strides}(idx);
-        case 2: return strided_indexer<2, IndexT>{dims, strides}(idx);
-        case 3: return strided_indexer<3, IndexT>{dims, strides}(idx);
-        case 4: return strided_indexer<4, IndexT>{dims, strides}(idx);
-        //case 5: return strided_indexer<5, IndexT>{dims, strides}(idx);
-        //case 6: return strided_indexer<6, IndexT>{dims, strides}(idx);
-        default: return get_strided_idx_fallback<4, IndexT>(idx, num_dims, dims, strides);
-    }
-}
-
-template<typename IndexT, bool STRIDED>
-struct indexer_t {};
-
-template<typename IndexT>
-struct indexer_t<IndexT, false> {
-    const IndexT last_dim;
-
-    METAL_FUNC IndexT operator()(IndexT i) const {
-        return i;
-    }
-};
-
-template<typename IndexT>
-struct indexer_t<IndexT, true> {
-    constant const IndexT &num_dims;
-    constant const IndexT *dims;
-    constant const IndexT *strides;
-    const IndexT last_dim;
-
-    METAL_FUNC IndexT operator()(IndexT i) const {
-        return get_strided_index_t(i, num_dims, dims, strides);
-    }
-};
 
 template<typename T, typename R, typename OP, ushort BLOCKSIZE, typename Indexer, typename SizeT>
 struct loader_strided {
