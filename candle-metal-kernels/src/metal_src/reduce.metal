@@ -764,16 +764,28 @@ struct contiguous_indexer {
     }
 };
 
-template<typename IndexT = uint>
-struct indexer_t {
+template<typename IndexT, bool STRIDED>
+struct indexer_t {};
+
+template<typename IndexT>
+struct indexer_t<IndexT, false> {
+    const IndexT last_dim;
+
+    METAL_FUNC IndexT operator()(IndexT i) const {
+        return i;
+    }
+};
+
+template<typename IndexT>
+struct indexer_t<IndexT, true> {
     constant const IndexT &num_dims;
     constant const IndexT *dims;
     constant const IndexT *strides;
+    const IndexT last_dim;
 
     METAL_FUNC IndexT operator()(IndexT i) const {
         return get_strided_index_t(i, num_dims, dims, strides);
     }
-    METAL_FUNC IndexT last_dim() const { return dims[num_dims - 1]; }
 };
 
 template<typename T, typename R, typename OP, ushort BLOCKSIZE, typename Indexer, typename SizeT>
@@ -818,7 +830,7 @@ struct loader_indexed {
 
         #pragma clang loop unroll(full)
         for (SizeT i = idx; i < stop_idx; i += BLOCKSIZE) {
-            value = operate(value, src[indexer(i)], i % indexer.last_dim());
+            value = operate(value, src[indexer(i)], i % indexer.last_dim);
         }
         return value;
     }
@@ -911,7 +923,7 @@ kernel void NAME##_strided##SUFFIX(                                     \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_t<IndexT> indexer{num_dims, dims, strides};                 \
+    indexer_t<IndexT, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
     REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, SizeT)           \
 }
 
@@ -931,7 +943,7 @@ kernel void NAME##_strided##SUFFIX(                                     \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_t<IndexT> indexer{num_dims, dims, strides};                 \
+    indexer_t<IndexT, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
     REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, SizeT)           \
 }
 
@@ -948,7 +960,7 @@ kernel void NAME##_strided_u64(                                         \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_t<uint64_t> indexer{num_dims, dims, strides};               \
+    indexer_t<uint64_t, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
     REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, size_t)          \
 }
 
@@ -965,7 +977,7 @@ kernel void NAME##_strided_u64(                                         \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_t<uint64_t> indexer{num_dims, dims, strides};               \
+    indexer_t<uint64_t, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
     REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, size_t)          \
 }
 
