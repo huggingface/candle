@@ -757,13 +757,6 @@ METAL_FUNC IndexT get_strided_index_t(
     }
 }
 
-template<typename IndexT = uint>
-struct contiguous_indexer {
-    METAL_FUNC IndexT operator()(IndexT i) const {
-        return i;
-    }
-};
-
 template<typename IndexT, bool STRIDED>
 struct indexer_t {};
 
