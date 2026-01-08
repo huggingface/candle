@@ -696,32 +696,95 @@ kernel void NAME(                                       \
 impl_reduce_inner(OP, NAME, T)                          \
 impl_reduce_strided(OP, NAME, T)                        \
 
-template<typename IndexT>
-METAL_FUNC ulong get_strided_index_t(
-    uint idx,
-    constant IndexT &num_dims,
-    constant IndexT *dims,
-    constant IndexT *strides,
-    constant uchar *is_pow2,
-    constant uint *masks,
-    constant uchar *shifts
-) {
-    ulong strided_i = 0;
-    for (IndexT d = 0; d < num_dims; d++) {
-        IndexT k = num_dims - 1 - d;
-        uint r;
-        if (is_pow2[k]) {
-            r = idx & masks[k];
-            idx = idx >> shifts[k];
+template<typename IndexT, uint D>
+struct strided_indexer {
+    METAL_FUNC uint operator()(
+        uint idx,
+        constant const IndexT *dims,
+        constant const IndexT *strides,
+        constant const uchar *is_pow2,
+        constant const uint *masks,
+        constant const uchar *shifts
+    ) const {
+        strided_indexer<IndexT, D - 1> next;
+
+        if (is_pow2[D - 1]) {
+            uint i = (idx & masks[D - 1]) * strides[D - 1];
+            idx = idx >> shifts[D - 1];
+            return i + next(idx, dims, strides, is_pow2, masks, shifts);
         } else {
-            uint dim = uint(dims[k]);
-            r = idx % dim;
+            IndexT dim = dims[D - 1];
+            uint i = (idx % dim) * strides[D - 1];
             idx /= dim;
+            return i + next(idx, dims, strides, is_pow2, masks, shifts);
         }
-        strided_i += ulong(r) * ulong(strides[k]);
     }
-    return strided_i;
+};
+
+template<typename IndexT>
+struct strided_indexer<IndexT, 1> {
+    METAL_FUNC uint operator()(
+        uint idx,
+        constant const IndexT *dims,
+        constant const IndexT *strides,
+        constant const uchar *is_pow2,
+        constant const uint *masks,
+        constant const uchar *shifts
+    ) const {
+        return idx * strides[0];
+    }
+};
+
+template<typename IndexT>
+METAL_FUNC ulong get_strided_idx_fallback(
+    uint idx,
+    constant const IndexT &num_dims,
+    constant const IndexT *dims,
+    constant const IndexT *strides,
+    constant const uchar *is_pow2,
+    constant const uint *masks,
+    constant const uchar *shifts
+) {
+     strided_indexer<IndexT, 4> next;
+
+     uint strided_i = 0;
+     for (IndexT d = 4; d < num_dims; d++) {
+         IndexT k = num_dims - 1 - d;
+         uint r;
+         if (is_pow2[k]) {
+             r = idx & masks[k];
+             idx = idx >> shifts[k];
+         } else {
+             IndexT dim = dims[k];
+             r = idx % dim;
+             idx /= dim;
+         }
+         strided_i += uint(r) * uint(strides[k]);
+     }
+     return strided_i + next(idx, dims, strides, is_pow2, masks, shifts);
 }
+
+template<typename IndexT>
+METAL_FUNC uint get_strided_index_t(
+    uint idx,
+    constant const IndexT &num_dims,
+    constant const IndexT *dims,
+    constant const IndexT *strides,
+    constant const uchar *is_pow2,
+    constant const uint *masks,
+    constant const uchar *shifts
+) {
+    switch (num_dims) {
+        case 1: return strided_indexer<IndexT, 1>{}(idx, dims, strides, is_pow2, masks, shifts);
+        case 2: return strided_indexer<IndexT, 2>{}(idx, dims, strides, is_pow2, masks, shifts);
+        case 3: return strided_indexer<IndexT, 3>{}(idx, dims, strides, is_pow2, masks, shifts);
+        case 4: return strided_indexer<IndexT, 4>{}(idx, dims, strides, is_pow2, masks, shifts);
+        //case 5: return strided_indexer<IndexT, 5>{}(idx, dims, strides, is_pow2, masks, shifts);
+        //case 6: return strided_indexer<IndexT, 6>{}(idx, dims, strides, is_pow2, masks, shifts);
+        default: return get_strided_idx_fallback<IndexT>(idx, num_dims, dims, strides, is_pow2, masks, shifts);
+    }
+}
+
 
 METAL_FUNC size_t get_strided_index_u64(
     size_t idx,
@@ -740,12 +803,12 @@ METAL_FUNC size_t get_strided_index_u64(
 
 template<typename IndexT, typename SizeT>
 struct indexer_pow2 {
-    constant IndexT &num_dims;
-    constant IndexT *dims;
-    constant IndexT *strides;
-    constant uchar *is_pow2;
-    constant uint *masks;
-    constant uchar *shifts;
+    constant const IndexT &num_dims;
+    constant const IndexT *dims;
+    constant const IndexT *strides;
+    constant const uchar *is_pow2;
+    constant const uint *masks;
+    constant const uchar *shifts;
 
     METAL_FUNC ulong operator()(SizeT i) const {
         return get_strided_index_t(uint(i), num_dims, dims, strides, is_pow2, masks, shifts);
@@ -936,7 +999,7 @@ kernel void NAME##_strided_u64(                                         \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_u64 indexer{num_dims, dims, strides};                       \
+    indexer_pow2<uint64_t, uint64_t> indexer{num_dims, dims, strides};         \
     REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, size_t)          \
 }
 
