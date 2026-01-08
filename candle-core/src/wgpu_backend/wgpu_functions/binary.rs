@@ -69,7 +69,6 @@ pub fn queue_binary_buffer_from_buffer(
     let bind_group =
         dev.create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
 
-
     queue.enqueue_64_big_extra(
         pipeline,
         bind_group,

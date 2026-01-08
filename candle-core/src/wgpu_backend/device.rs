@@ -13,7 +13,10 @@ use crate::{notImplemented, wrongType, DType, Layout};
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, MInfo, Measurements, ShaderInfo};
 
-use super::cache::{BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase, BindgroupLayouts, BufferReferenceId, ModelCache};
+use super::cache::{
+    BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase, BindgroupLayouts,
+    BufferReferenceId, ModelCache,
+};
 use super::queue_buffer::{BindGroupReference, MlQueue, MlQueueDispatch, PipelineReference};
 use super::util::ToU64;
 use super::wgpu_functions::{self, unary::UnaryOperation};
@@ -120,7 +123,7 @@ impl WgpuDevice {
         let instance = wgpu::Instance::new(&InstanceDescriptor {
             backends: backend,
             flags: InstanceFlags::default(),
-            backend_options: wgpu::BackendOptions{
+            backend_options: wgpu::BackendOptions {
                 dx12: wgpu::Dx12BackendOptions {
                     shader_compiler: wgpu::Dx12Compiler::Fxc,
                     ..Default::default()
@@ -176,15 +179,13 @@ impl WgpuDevice {
         log::debug!("Features: {:?}", features);
         log::debug!("Limits: {:?}", limits);
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: features,
-                    required_limits: limits,
-                    memory_hints: wgpu::MemoryHints::Performance,
-                    ..Default::default()
-                }
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: features,
+                required_limits: limits,
+                memory_hints: wgpu::MemoryHints::Performance,
+                ..Default::default()
+            })
             .await
             .map_err(|err| crate::Error::Wgpu(err.to_string().into()))?;
         log::info!("Device Requested");
@@ -233,7 +234,7 @@ impl WgpuDevice {
                 bindgroup_layouts,
                 staging_probe_buffer: staging_buffer,
                 matmul_alg: Mutex::new(MatmulAlgorithm::MatmulX),
-                quantized_matmul_alg : Mutex::new(QuantizedMatmulAlgorithm::None),
+                quantized_matmul_alg: Mutex::new(QuantizedMatmulAlgorithm::None),
                 configuration,
             }),
         })
@@ -319,7 +320,10 @@ impl WgpuDevice {
             format!("{folder}wgpu_{name}_test_{version}_used_pipelines.json"),
             pipelines,
         )?;
-        std::fs::write(format!("{folder}wgpu_{name}_test_{version}_used_consts.json"), consts)?;
+        std::fs::write(
+            format!("{folder}wgpu_{name}_test_{version}_used_consts.json"),
+            consts,
+        )?;
 
         let cache = self.cache.lock().unwrap();
         crate::wgpu::debug_info::save_list(
@@ -495,7 +499,8 @@ impl WgpuDevice {
                         .iter()
                         .map(|(pk, _)| debug_info::PipelineInfo {
                             name: shaders.loader_cache.get_entry_point(pk.0).to_owned(),
-                            consts: queue.id_to_const_array[pk.1].iter()
+                            consts: queue.id_to_const_array[pk.1]
+                                .iter()
                                 .map(|(s, x)| (s.to_string(), *x))
                                 .collect(),
                         })
@@ -529,14 +534,8 @@ impl WgpuDevice {
         }
     }
 
-
-    
     #[instrument(skip(self, size))]
-    pub fn alloc_uninit_size<T: ToU64>(
-        &self,
-        dtype: crate::DType,
-        size: T,
-    ) -> WgpuStorage {
+    pub fn alloc_uninit_size<T: ToU64>(&self, dtype: crate::DType, size: T) -> WgpuStorage {
         let size = size.to_u64() * dtype.size_in_bytes() as u64;
         let buffer;
         {
@@ -546,7 +545,6 @@ impl WgpuDevice {
         WgpuStorage::new(buffer, self.clone(), dtype, size)
     }
 
-    
     #[instrument(skip(self, data))]
     pub fn alloc_from_slice<T: bytemuck::Pod>(
         &self,
@@ -558,11 +556,7 @@ impl WgpuDevice {
     }
 
     #[instrument(skip(self, data))]
-    pub fn alloc_from_bytes(
-        &self,
-        dtype: crate::DType,
-        data: &[u8],
-    ) -> crate::Result<WgpuStorage> {
+    pub fn alloc_from_bytes(&self, dtype: crate::DType, data: &[u8]) -> crate::Result<WgpuStorage> {
         let size = data.len();
         let buffer;
         {
@@ -575,15 +569,11 @@ impl WgpuDevice {
         Ok(WgpuStorage::new(buffer, self.clone(), dtype, size as u64))
     }
 
-
-    pub fn allocate_zeros(&self, size_in_bytes : u32) -> crate::Result<WgpuStorage>{
-        self.zeros_impl(&((size_in_bytes/4) as usize,).into(), DType::U32)
+    pub fn allocate_zeros(&self, size_in_bytes: u32) -> crate::Result<WgpuStorage> {
+        self.zeros_impl(&((size_in_bytes / 4) as usize,).into(), DType::U32)
     }
 
-
-
-    
-    /**************** Virtual Bindgroups: ****************/ 
+    /**************** Virtual Bindgroups: ****************/
     pub fn create_bind_group_input0(
         &self,
         buffer_dest: BufferReferenceId,
@@ -662,7 +652,7 @@ impl WgpuDevice {
             buffer_input1,
             buffer_input2,
             buffer_input3,
-            BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment,alignment),
+            BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment, alignment),
         )
     }
 
@@ -680,14 +670,11 @@ impl WgpuDevice {
             BindgroupInputBase::Bindgroup3(buffer_input1, buffer_input2, buffer_input3, alignment),
         )
     }
-
-    
 }
 
-impl WgpuDevice{
-
+impl WgpuDevice {
     #[cfg(feature = "wgpu_debug")]
-    pub fn start_recording_commands(&self){
+    pub fn start_recording_commands(&self) {
         let mut model_cache = self.cache.lock().unwrap();
         model_cache.full_recording.should_record = true;
         println!("start_recording_commands");
@@ -756,8 +743,12 @@ impl crate::backend::BackendDevice for WgpuDevice {
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> crate::Result<Self::Storage> {
-        let data =
-                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * T::DTYPE.size_in_bytes()) };
+        let data = unsafe {
+            std::slice::from_raw_parts(
+                data.as_ptr() as *const u8,
+                data.len() * T::DTYPE.size_in_bytes(),
+            )
+        };
         let buffer = self.alloc_from_bytes(T::DTYPE, data)?;
         Ok(buffer)
     }
@@ -781,18 +772,10 @@ impl crate::backend::BackendDevice for WgpuDevice {
         storage: crate::CpuStorage,
     ) -> crate::Result<Self::Storage> {
         match storage {
-            crate::CpuStorage::F32(data) => {
-                self.alloc_from_slice(crate::DType::F32, &data)
-            }
-            crate::CpuStorage::U32(data) => {
-                self.alloc_from_slice(crate::DType::U32, &data)
-            }
-            crate::CpuStorage::I64(data) => {
-                self.alloc_from_slice(crate::DType::I64, &data)
-            }
-            crate::CpuStorage::F64(data) => {
-                self.alloc_from_slice(crate::DType::F64, &data)
-            }
+            crate::CpuStorage::F32(data) => self.alloc_from_slice(crate::DType::F32, &data),
+            crate::CpuStorage::U32(data) => self.alloc_from_slice(crate::DType::U32, &data),
+            crate::CpuStorage::I64(data) => self.alloc_from_slice(crate::DType::I64, &data),
+            crate::CpuStorage::F64(data) => self.alloc_from_slice(crate::DType::F64, &data),
             _ => wrongType!(storage_from_cpu_storage_owned, storage.dtype()),
         }
     }
@@ -841,8 +824,8 @@ impl crate::backend::BackendDevice for WgpuDevice {
         *self.rand_state.lock().unwrap() = rand::rngs::StdRng::seed_from_u64(seed);
         Ok(())
     }
-    
-     fn get_current_seed(&self) -> crate::Result<u64> {
+
+    fn get_current_seed(&self) -> crate::Result<u64> {
         notImplemented!(get_current_seed)
     }
     #[cfg(target_arch = "wasm32")]

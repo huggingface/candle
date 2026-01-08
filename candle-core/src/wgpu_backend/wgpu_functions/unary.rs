@@ -101,17 +101,15 @@ pub fn queue_unary_inplace_op(
             || op == UnaryOperation::RandNormal
             || op == UnaryOperation::RandUniform
         {
-            if is_contiguous4{
+            if is_contiguous4 {
                 queue.add(layout.start_offset() / 4);
-            }
-            else{
+            } else {
                 queue.add(layout.start_offset());
             }
         }
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
             queue.add(dev.rand_state.lock().unwrap().next_u32());
         }
-
 
         let length = if is_contiguous4 {
             (layout.shape().elem_count() / 4) as u32
@@ -157,12 +155,10 @@ pub fn queue_unary_inplace_op(
         };
 
         let length = layout.shape().elem_count() as u32;
-   
+
         let pipeline = queue.get_pipeline_const(pipeline, const_vec);
 
-        let bind_group = dev.create_bind_group_input0(
-            buffer, dtype.into(),
-        );
+        let bind_group = dev.create_bind_group_input0(buffer, dtype.into());
 
         queue.enqueue_64_big_extra(
             pipeline,

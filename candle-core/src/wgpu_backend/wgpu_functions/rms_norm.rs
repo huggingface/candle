@@ -28,7 +28,10 @@ pub fn queue_rms_norm(
     queue.add(alpha_offset);
     queue.add(eps);
 
-    let pipeline = queue.get_pipeline(Pipelines::RmsNorm(dev.get_dtype(dtype)?, Functions::RmsNorm));
+    let pipeline = queue.get_pipeline(Pipelines::RmsNorm(
+        dev.get_dtype(dtype)?,
+        Functions::RmsNorm,
+    ));
 
     let bind_group =
         dev.create_bind_group_input2(buffer_dest, buffer_input1, buffer_alpha, dtype.into());
@@ -72,7 +75,10 @@ pub fn queue_layer_norm(
     queue.add(eps);
     queue.add(beta_offset);
 
-    let pipeline = queue.get_pipeline(Pipelines::RmsNorm(dev.get_dtype(dtype)?, Functions::LayerNorm));
+    let pipeline = queue.get_pipeline(Pipelines::RmsNorm(
+        dev.get_dtype(dtype)?,
+        Functions::LayerNorm,
+    ));
 
     let bind_group = dev.create_bind_group_input3(
         buffer_dest,

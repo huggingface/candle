@@ -66,8 +66,6 @@ pub fn queue_scatter_add_inplace(
     Ok(())
 }
 
-
-
 pub fn queue_scatter_set_inplace(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,

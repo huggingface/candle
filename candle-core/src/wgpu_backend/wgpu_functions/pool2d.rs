@@ -39,7 +39,10 @@ pub fn queue_max_pool2d(
     queue.add(stride.0);
     queue.add(layout.start_offset());
 
-    let pipeline = queue.get_pipeline(Pipelines::Pool2d(dev.get_dtype(dtype)?, Functions::MaxPool2d));
+    let pipeline = queue.get_pipeline(Pipelines::Pool2d(
+        dev.get_dtype(dtype)?,
+        Functions::MaxPool2d,
+    ));
 
     let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
     queue.enqueue_workgroups(
@@ -89,7 +92,10 @@ pub fn queue_avg_pool2d(
     queue.add(stride.0);
     queue.add(layout.start_offset());
 
-    let pipeline = queue.get_pipeline(Pipelines::Pool2d(dev.get_dtype(dtype)?, Functions::AvgPool2d));
+    let pipeline = queue.get_pipeline(Pipelines::Pool2d(
+        dev.get_dtype(dtype)?,
+        Functions::AvgPool2d,
+    ));
 
     let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
     queue.enqueue_workgroups(

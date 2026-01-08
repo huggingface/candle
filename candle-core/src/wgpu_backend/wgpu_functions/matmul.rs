@@ -4,15 +4,14 @@ use sgemm::{GenericMatmulSettings, StrideOptimization};
 
 use super::*;
 
-
 #[derive(Clone)]
 pub enum MatmulAlgorithm {
     MatmulX, //select best fitting kernel automatically
     Matmul7,
-    Matmul1, //Matmul Naive
+    Matmul1,   //Matmul Naive
     Matmul1_4, //Matmul Naive with vec4 loads for input A and input B
     Matmul1M1, //Matmul Naive but 32 Threads along X (Y) axis and 1 Thread along Y (M)
-    Matmul16_16, 
+    Matmul16_16,
     Matmul32_64,
     Matmul32_64B,
     Matmul32_32,
@@ -57,12 +56,11 @@ impl fmt::Debug for MatmulAlgorithm {
 }
 
 #[derive(Debug)]
-pub enum QuantizedMatmulAlgorithm{
-    None, 
+pub enum QuantizedMatmulAlgorithm {
+    None,
     Naive,
-    Some(sgemm::GenericDynamicMatmulShaderSettings)
+    Some(sgemm::GenericDynamicMatmulShaderSettings),
 }
-
 
 pub struct SGEMMParams {
     pub b: u32,
@@ -188,7 +186,7 @@ pub mod sgemm {
         dtype: crate::DType,
         pipeline: Pipelines,
         is_16bytes_aligned: bool,
-        is_m_1 : bool
+        is_m_1: bool,
     ) -> crate::Result<()> {
         let mut input1_stride = input1.layout().stride().iter().rev();
         let mut input2_stride = input2.layout().stride().iter().rev();
@@ -253,7 +251,7 @@ pub mod sgemm {
             )
         };
 
-        if is_m_1{
+        if is_m_1 {
             queue.enqueue_workgroups_extra(
                 pipeline,
                 bind_group,
@@ -264,8 +262,7 @@ pub mod sgemm {
                 #[cfg(feature = "wgpu_debug")]
                 Some(get_debug_string(&params)),
             );
-        }
-        else{
+        } else {
             queue.enqueue_workgroups_extra(
                 pipeline,
                 bind_group,
@@ -308,48 +305,59 @@ pub mod sgemm {
     }
 
     #[derive(Debug, Clone)]
-    pub struct GenericDynamicMatmulShaderSettings{
-        pub settings : GenericMatmulSettings,
-        pub wptm : u32,
-        pub wptn : u32,
-        pub prefatch : bool,
-        pub tiled_small : bool,
-        pub wont_load_use_a : bool
+    pub struct GenericDynamicMatmulShaderSettings {
+        pub settings: GenericMatmulSettings,
+        pub wptm: u32,
+        pub wptn: u32,
+        pub prefatch: bool,
+        pub tiled_small: bool,
+        pub wont_load_use_a: bool,
     }
 
-    impl GenericDynamicMatmulShaderSettings{
-        pub fn new(settings : GenericMatmulSettings, wptm : u32, wptn : u32, prefatch : bool) -> Self{
-            Self{
+    impl GenericDynamicMatmulShaderSettings {
+        pub fn new(settings: GenericMatmulSettings, wptm: u32, wptn: u32, prefatch: bool) -> Self {
+            Self {
                 settings,
                 wptm,
                 wptn,
                 prefatch,
-                tiled_small : false,
-                wont_load_use_a : false
+                tiled_small: false,
+                wont_load_use_a: false,
             }
         }
 
-        pub fn new_with_a(settings : GenericMatmulSettings, wptm : u32, wptn : u32, prefatch : bool, wont_load_use_a : bool) -> Self{
-            Self{
+        pub fn new_with_a(
+            settings: GenericMatmulSettings,
+            wptm: u32,
+            wptn: u32,
+            prefatch: bool,
+            wont_load_use_a: bool,
+        ) -> Self {
+            Self {
                 settings,
                 wptm,
                 wptn,
                 prefatch,
-                tiled_small : false,
-                wont_load_use_a
+                tiled_small: false,
+                wont_load_use_a,
             }
         }
 
-        pub fn new_tiled_small(settings : GenericMatmulSettings, wptm : u32, wptn : u32, prefatch : bool) -> Self{
-            Self{
+        pub fn new_tiled_small(
+            settings: GenericMatmulSettings,
+            wptm: u32,
+            wptn: u32,
+            prefatch: bool,
+        ) -> Self {
+            Self {
                 settings,
                 wptm,
                 wptn,
                 prefatch,
-                tiled_small : true,
-                wont_load_use_a : false
+                tiled_small: true,
+                wont_load_use_a: false,
             }
-        }  
+        }
     }
 
     impl GenericMatmulSettings {
@@ -417,7 +425,7 @@ pub mod sgemm {
         params: SGEMMParams,
         dtype: crate::DType,
         settings: GenericMatmulSettings,
-        pipeline: Pipelines
+        pipeline: Pipelines,
     ) -> crate::Result<()> {
         let m_tile = settings.m_tile;
         let n_tile = settings.n_tile;
@@ -463,10 +471,10 @@ pub mod sgemm {
         let no_padding_needed_input1 =
             no_padding_needed_input1_tile && no_padding_needed_input1_stride;
 
-        let no_padding_needed_input2_tile = ((params.n.is_multiple_of(n_tile) && params.k.is_multiple_of(k_tile))
-            || NON_PADDED)
-            && input2.layout().start_offset().is_multiple_of(4)
-            && !(input2_stride_n != 1 && input2_stride_k != 1);
+        let no_padding_needed_input2_tile =
+            ((params.n.is_multiple_of(n_tile) && params.k.is_multiple_of(k_tile)) || NON_PADDED)
+                && input2.layout().start_offset().is_multiple_of(4)
+                && !(input2_stride_n != 1 && input2_stride_k != 1);
 
         let no_padding_needed_input2_stride =
             !settings.need_padding_input2(input2_stride_n, input2_stride_k);
@@ -788,16 +796,15 @@ pub mod sgemm {
         Ok(())
     }
 
-
-     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn queue_matmul_quantized(
         dev: &WgpuDevice,
         buffer_dest: BufferReferenceId,
         input1: WgpuTensor,
         input2: WgpuTensor,
         params: SGEMMParams,
-        kernel_path : &str,
-        shader_settings : &GenericDynamicMatmulShaderSettings
+        kernel_path: &str,
+        shader_settings: &GenericDynamicMatmulShaderSettings,
     ) -> crate::Result<()> {
         let dtype = crate::DType::F32;
         let m_tile = shader_settings.settings.m_tile;
@@ -839,17 +846,18 @@ pub mod sgemm {
             && input1.layout().start_offset().is_multiple_of(4) //input will be loaded 16 bytes aligned
             && !(input1_stride_m != 1 && input1_stride_k != 1);
 
-        let no_padding_needed_input1_stride =
-            !shader_settings.settings.need_padding_input1(input1_stride_k, input1_stride_m);
+        let no_padding_needed_input1_stride = !shader_settings
+            .settings
+            .need_padding_input1(input1_stride_k, input1_stride_m);
         let no_padding_needed_input1 =
             no_padding_needed_input1_tile && no_padding_needed_input1_stride;
 
-        let no_padding_needed_input2_tile = ((params.n.is_multiple_of(n_tile) && params.k.is_multiple_of(k_tile))
-            || NON_PADDED)
-            && input2.layout().start_offset().is_multiple_of(4)
-            && !(input2_stride_n != 1 && input2_stride_k != 1);
+        let no_padding_needed_input2_tile =
+            ((params.n.is_multiple_of(n_tile) && params.k.is_multiple_of(k_tile)) || NON_PADDED)
+                && input2.layout().start_offset().is_multiple_of(4)
+                && !(input2_stride_n != 1 && input2_stride_k != 1);
 
-        if !no_padding_needed_input2_tile{
+        if !no_padding_needed_input2_tile {
             panic!("Quantized matmul requires padding for input2: tile_size: {}, offset: {}, stride: {}", 
             ((params.n.is_multiple_of(n_tile) && params.k.is_multiple_of(k_tile)) || NON_PADDED)
             , input2.layout().start_offset().is_multiple_of(4)
@@ -857,12 +865,16 @@ pub mod sgemm {
         );
         }
 
-        let no_padding_needed_input2_stride =
-            !shader_settings.settings.need_padding_input2(input2_stride_n, input2_stride_k);
+        let no_padding_needed_input2_stride = !shader_settings
+            .settings
+            .need_padding_input2(input2_stride_n, input2_stride_k);
 
-        if !no_padding_needed_input2_stride{
-            panic!("Quantized matmul requires padding for input2: stride n: {}, stride k: {}", input2_stride_n, input2_stride_k);
-        }   
+        if !no_padding_needed_input2_stride {
+            panic!(
+                "Quantized matmul requires padding for input2: stride n: {}, stride k: {}",
+                input2_stride_n, input2_stride_k
+            );
+        }
 
         let (buffer_input1_padded, layout_input1_padded) = if no_padding_needed_input1 {
             (input1.buffer(), input1.layout().clone())
@@ -884,7 +896,10 @@ pub mod sgemm {
                 let is_contiguous = if should_transpose_while_padding
                     || ((input1_stride_k == 1) && (input1_stride_m == 1))
                 {
-                    !matches!(shader_settings.settings.input1_stride, StrideOptimization::StrideNM(_))
+                    !matches!(
+                        shader_settings.settings.input1_stride,
+                        StrideOptimization::StrideNM(_)
+                    )
                 } else {
                     input1_stride_k == 1
                 };
@@ -958,8 +973,8 @@ pub mod sgemm {
             }
         };
 
-        let (buffer_input2_padded, layout_input2_padded) = 
-        (input2.buffer(), input2.layout().clone());
+        let (buffer_input2_padded, layout_input2_padded) =
+            (input2.buffer(), input2.layout().clone());
 
         let buffer_dest_padded = if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT {
             let mut cache = dev.cache.lock().unwrap();
@@ -983,7 +998,7 @@ pub mod sgemm {
         //let input2_stride_b = *input2_stride.next().unwrap_or(&1);
 
         let use_batch = params.b != 1;
-        
+
         let const_vec = vec![
             (input1_stride_k == 1) as usize,
             (input1_stride_m == 1) as usize,
@@ -994,8 +1009,7 @@ pub mod sgemm {
 
         let mut queue = dev.get_queue();
 
-        if shader_settings.tiled_small
-        {
+        if shader_settings.tiled_small {
             //queue.add(params.b); //for quantized matmul we dont need to pass b for now
             // queue.add(if USE_DIFFERENT_PADDED_OUTPUT {
             //     new_m
@@ -1027,8 +1041,7 @@ pub mod sgemm {
             if need_different_output_buffer && !USE_DIFFERENT_PADDED_OUTPUT {
                 queue.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
             }
-        }
-        else{
+        } else {
             //queue.add(params.b); //for quantized matmul we dont need to pass b for now
             queue.add(if USE_DIFFERENT_PADDED_OUTPUT {
                 new_m
@@ -1061,30 +1074,43 @@ pub mod sgemm {
                 queue.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
             }
         }
-        
+
         let mut cache = dev.cache.lock().unwrap();
         let loader = cache
             .shader
             .loader_cache
-            .get_loader_mut::<candle_wgpu_kernels::DefaultWgpuDynamicShader>(candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX).unwrap();
+            .get_loader_mut::<candle_wgpu_kernels::DefaultWgpuDynamicShader>(
+                candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX,
+            )
+            .unwrap();
 
-        let mut defines = 
-            vec![("TSM",  DefineDefinition::value(shader_settings.settings.m_tile)),
-            ("TSN",  DefineDefinition::value(shader_settings.settings.n_tile)),
-            ("TSK",  DefineDefinition::value(shader_settings.settings.k_tile)),
-            ("WPTM",  DefineDefinition::value(shader_settings.wptm)),
-            ("WPTN",  DefineDefinition::value(shader_settings.wptn)),
-            ("SGEMM",  DefineDefinition::new_empty()),
-            ("f32",  DefineDefinition::new_empty())];
-        if shader_settings.prefatch{
+        let mut defines = vec![
+            (
+                "TSM",
+                DefineDefinition::value(shader_settings.settings.m_tile),
+            ),
+            (
+                "TSN",
+                DefineDefinition::value(shader_settings.settings.n_tile),
+            ),
+            (
+                "TSK",
+                DefineDefinition::value(shader_settings.settings.k_tile),
+            ),
+            ("WPTM", DefineDefinition::value(shader_settings.wptm)),
+            ("WPTN", DefineDefinition::value(shader_settings.wptn)),
+            ("SGEMM", DefineDefinition::new_empty()),
+            ("f32", DefineDefinition::new_empty()),
+        ];
+        if shader_settings.prefatch {
             defines.push(("PREFATCH", DefineDefinition::new_empty()));
         }
-        if shader_settings.tiled_small{
+        if shader_settings.tiled_small {
             defines.push(("TILED_SMALL", DefineDefinition::new_empty()));
             //defines.push(("THREADS_PER_K", DefineDefinition::value(shader_settings.threads_per_k)));
             //defines.push(("WPTK", DefineDefinition::value(shader_settings.wptk)));
         }
-        if shader_settings.wont_load_use_a{
+        if shader_settings.wont_load_use_a {
             defines.push(("WONT_USE_LOADA", DefineDefinition::new_empty()));
         }
 
@@ -1117,7 +1143,7 @@ pub mod sgemm {
             lx = (new_n) / n_tile;
             ly = (new_m) / m_tile;
         }
-        
+
         queue.enqueue_workgroups_extra(
             pipeline,
             bind_group,
@@ -1336,7 +1362,7 @@ pub fn queue_matmul_buffer_alg(
                 cdtype,
                 Pipelines::Matmul(dtype, matmul::Functions::Matmul116),
                 true,
-                false
+                false,
             )
         }
         MatmulAlgorithm::Matmul7 => {
@@ -1349,7 +1375,7 @@ pub fn queue_matmul_buffer_alg(
                 cdtype,
                 Pipelines::Matmul(dtype, matmul::Functions::Matmul7),
                 false,
-                false
+                false,
             )
         }
         MatmulAlgorithm::Matmul1 => {
@@ -1362,7 +1388,7 @@ pub fn queue_matmul_buffer_alg(
                 cdtype,
                 Pipelines::Matmul(dtype, matmul::Functions::Matmul1),
                 false,
-                false
+                false,
             )
         }
         MatmulAlgorithm::Matmul1M1 => {
@@ -1375,7 +1401,7 @@ pub fn queue_matmul_buffer_alg(
                 cdtype,
                 Pipelines::Matmul(dtype, matmul::Functions::Matmul1M1),
                 false,
-                true
+                true,
             )
         }
         _ => {}
@@ -1453,7 +1479,7 @@ pub fn queue_matmul_buffer_alg(
 }
 
 fn get_matmul_naive(
-    m : usize,
+    m: usize,
     k: usize,
     input1: WgpuTensor,
     input2: WgpuTensor,
@@ -1475,10 +1501,9 @@ fn get_matmul_naive(
         }
     }
 
-    if m == 1{
+    if m == 1 {
         crate::wgpu_backend::MatmulAlgorithm::Matmul1M1
-    }
-    else{
+    } else {
         crate::wgpu_backend::MatmulAlgorithm::Matmul1
     }
 }
@@ -1507,11 +1532,23 @@ pub fn queue_matmul_buffer_best(
     let alg;
     if m <= 2 || n <= 2 {
         if m <= 2 {
-            if k.is_multiple_of(64) && n.is_multiple_of(128) && input2_stride_k == 1 && input1_stride_k == 1 {
+            if k.is_multiple_of(64)
+                && n.is_multiple_of(128)
+                && input2_stride_k == 1
+                && input1_stride_k == 1
+            {
                 alg = MatmulAlgorithm::Matmul1_64B;
-            } else if k.is_multiple_of(32) && n.is_multiple_of(64) && input2_stride_k == 1 && input1_stride_k == 1 {
+            } else if k.is_multiple_of(32)
+                && n.is_multiple_of(64)
+                && input2_stride_k == 1
+                && input1_stride_k == 1
+            {
                 alg = MatmulAlgorithm::Matmul1_64_32B;
-            } else if k.is_multiple_of(32) && n.is_multiple_of(32) && input2_stride_k == 1 && input1_stride_k == 1 {
+            } else if k.is_multiple_of(32)
+                && n.is_multiple_of(32)
+                && input2_stride_k == 1
+                && input1_stride_k == 1
+            {
                 alg = MatmulAlgorithm::Matmul1_32_32B;
             } else if k.is_multiple_of(64) && n.is_multiple_of(64) && input2_stride_n == 1 {
                 alg = MatmulAlgorithm::Matmul1_64;

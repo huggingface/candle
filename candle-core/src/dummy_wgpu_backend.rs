@@ -8,7 +8,6 @@ pub struct WgpuDevice;
 #[derive(Debug)]
 pub struct WgpuStorage;
 
-
 pub enum Backend {
     /// Dummy backend, used for testing.
     Empty = 0,
@@ -27,32 +26,32 @@ pub enum Backend {
 #[derive(Debug, Clone, std::marker::Copy)]
 pub struct WgpuBackends(u32);
 
-impl WgpuBackends{
-    pub fn vulkan() -> Self{
+impl WgpuBackends {
+    pub fn vulkan() -> Self {
         WgpuBackends(1 << Backend::Vulkan as u32)
     }
 
-    pub fn gl() -> Self{
+    pub fn gl() -> Self {
         WgpuBackends(1 << Backend::Gl as u32)
     }
 
-    pub fn metal() -> Self{
+    pub fn metal() -> Self {
         WgpuBackends(1 << Backend::Metal as u32)
     }
 
-    pub fn dx12() -> Self{
+    pub fn dx12() -> Self {
         WgpuBackends(1 << Backend::Dx12 as u32)
     }
 
-    pub fn browser_webgpu() -> Self{
+    pub fn browser_webgpu() -> Self {
         WgpuBackends(1 << Backend::BrowserWebGpu as u32)
     }
 
-    pub fn primary() -> Self{
+    pub fn primary() -> Self {
         Self::vulkan() | Self::metal() | Self::dx12() | Self::browser_webgpu()
     }
 
-    pub fn secondary() -> Self{
+    pub fn secondary() -> Self {
         Self::gl()
     }
 }
@@ -63,7 +62,7 @@ impl Default for WgpuBackends {
     }
 }
 
-impl std::ops::BitOr for WgpuBackends{
+impl std::ops::BitOr for WgpuBackends {
     type Output = WgpuBackends;
 
     fn bitor(self, rhs: Self) -> Self::Output {
@@ -71,7 +70,7 @@ impl std::ops::BitOr for WgpuBackends{
     }
 }
 
-impl std::ops::BitAnd for WgpuBackends{
+impl std::ops::BitAnd for WgpuBackends {
     type Output = bool;
 
     fn bitand(self, rhs: Self) -> Self::Output {
@@ -79,50 +78,49 @@ impl std::ops::BitAnd for WgpuBackends{
     }
 }
 
-
 #[derive(Debug)]
-pub struct WgpuDeviceConfig{
+pub struct WgpuDeviceConfig {
     ///the size of the buffer used for storing meta information (e.g. input layouts)
-    pub meta_buffer_size : u32,
-    ///specifies the maximum number of floating point operations to be queued in a single command buffer. 
-    ///(For example, a matrix multiplication of 1000x1000 * 1000x1000 would be 1,000,000 operations, 
-    ///so only 2 of these multiplications can be queued in a command buffer if max_workload_size is set to 2,000,000). 
-    pub max_workload_size : u64,
-    ///Maximum size for cached wgpu::buffers. When this size is reached, free buffers will be deleted until only 75% of this maximum size is used. 
+    pub meta_buffer_size: u32,
+    ///specifies the maximum number of floating point operations to be queued in a single command buffer.
+    ///(For example, a matrix multiplication of 1000x1000 * 1000x1000 would be 1,000,000 operations,
+    ///so only 2 of these multiplications can be queued in a command buffer if max_workload_size is set to 2,000,000).
+    pub max_workload_size: u64,
+    ///Maximum size for cached wgpu::buffers. When this size is reached, free buffers will be deleted until only 75% of this maximum size is used.
     ///if this value is too low for the desired model, performance may drop significantly (e.g. the model requires at least 2gb of data, if this value is e.g. 100mb, all free buffers will be cleared after every command).
-    pub buffer_cached_max_allowed_size : u64,
+    pub buffer_cached_max_allowed_size: u64,
 
-    ///Whether created buffers are cached and reused. 
+    ///Whether created buffers are cached and reused.
     ///If set to false, a new wgpu::Buffer is created for each tensor used.
-    pub use_cache : bool, 
+    pub use_cache: bool,
 
-    ///When data is copied from the CPU to the WGPU device, all previous commands may be flushed to free up other buffers for reuse. 
-    ///However, on a webGPU this may not be optimal as we cannot wait for commands to finish (as this function is not asynchronous). 
-    pub flush_gpu_before_buffer_init : bool,
+    ///When data is copied from the CPU to the WGPU device, all previous commands may be flushed to free up other buffers for reuse.
+    ///However, on a webGPU this may not be optimal as we cannot wait for commands to finish (as this function is not asynchronous).
+    pub flush_gpu_before_buffer_init: bool,
 
     ///The buffers used for previously flushed gpu commands are cached to improve performance when finding buffers for future calls of the same model.  
     ///buffer_mapping_size' specifies how many previously flushed gpu commands are cached.
-    pub buffer_mapping_size : u32,
+    pub buffer_mapping_size: u32,
 
     ///Defines the backend to use (Vulkan, Metal, Dx12,GL or WebGpu)
-    pub backend : WgpuBackends
+    pub backend: WgpuBackends,
 }
 
 impl Default for WgpuDeviceConfig {
     fn default() -> WgpuDeviceConfig {
         WgpuDeviceConfig {
-            meta_buffer_size : 10*1024*1024,
-            max_workload_size :  1024u64*1024*1024*2, 
-            buffer_cached_max_allowed_size : ((1024.0*1024.0*1024.0)*(7.3)) as u64,                                        
-            use_cache : true,
-            flush_gpu_before_buffer_init : true,
-            buffer_mapping_size : 3,
-            backend: WgpuBackends::metal() | WgpuBackends::vulkan() | WgpuBackends::browser_webgpu(), //directx shader compilation is much slower than vulkan. (like 300secs vs 5s there is a faster copmiler, but this would need additional .dlls, and with this compilations needs 30s as well)
+            meta_buffer_size: 10 * 1024 * 1024,
+            max_workload_size: 1024u64 * 1024 * 1024 * 2,
+            buffer_cached_max_allowed_size: ((1024.0 * 1024.0 * 1024.0) * (7.3)) as u64,
+            use_cache: true,
+            flush_gpu_before_buffer_init: true,
+            buffer_mapping_size: 3,
+            backend: WgpuBackends::metal()
+                | WgpuBackends::vulkan()
+                | WgpuBackends::browser_webgpu(), //directx shader compilation is much slower than vulkan. (like 300secs vs 5s there is a faster copmiler, but this would need additional .dlls, and with this compilations needs 30s as well)
         }
     }
 }
-
-
 
 #[derive(thiserror::Error, Debug)]
 pub enum WgpuError {
@@ -142,12 +140,12 @@ macro_rules! fail {
     };
 }
 
-impl WgpuStorage{
+impl WgpuStorage {
     pub async fn to_cpu_storage_async(&self) -> crate::Result<crate::CpuStorage> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
 
-    pub (crate) fn temporary_clone(&self) -> Self{
+    pub(crate) fn temporary_clone(&self) -> Self {
         Self
     }
 }
@@ -308,7 +306,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
-    
+
     fn scatter_set(
         &mut self,
         _: &Layout,
@@ -320,7 +318,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> Result<()> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
-    
+
     fn scatter_add_set(
         &mut self,
         _: &Layout,
@@ -332,11 +330,11 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> Result<()> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
-    
+
     fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
-    
+
     fn upsample_bilinear2d(
         &self,
         _: &Layout,
@@ -350,12 +348,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
     }
 }
 
-impl WgpuDevice{
-    pub (crate) async fn create(_: usize, _ : WgpuDeviceConfig) -> crate::Result<Self>{
+impl WgpuDevice {
+    pub(crate) async fn create(_: usize, _: WgpuDeviceConfig) -> crate::Result<Self> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
 
-    pub (crate) async fn synchronize_async(&self) -> crate::Result<()> {
+    pub(crate) async fn synchronize_async(&self) -> crate::Result<()> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
 }
@@ -409,7 +407,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
     fn synchronize(&self) -> Result<()> {
         Ok(())
     }
-    
+
     fn get_current_seed(&self) -> Result<u64> {
         Err(Error::NotCompiledWithWgpuSupport)
     }

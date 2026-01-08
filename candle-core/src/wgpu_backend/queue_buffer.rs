@@ -13,9 +13,12 @@ use candle_wgpu_kernels::Constants;
 
 use crate::Layout;
 
-use super::cache::{BindgroupAlignment, BindgroupAlignmentLayout,BufferReferenceId, CachedBindgroupId, CachedBufferId,BindgroupInputBase};
+use super::cache::{
+    BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase, BufferReferenceId,
+    CachedBindgroupId, CachedBufferId,
+};
 use super::util::{ObjectToIdMapper, ToU32};
-use super::wgpu_functions::{MetaArray, ConstArray, ToKernelParameterMeta};
+use super::wgpu_functions::{ConstArray, MetaArray, ToKernelParameterMeta};
 
 pub const MAX_DISPATCH_SIZE: u32 = 65535;
 
@@ -53,7 +56,7 @@ pub struct PipelineReference(
         any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
         serde(skip)
     )]
-    pub OpIsInplaceable, 
+    pub OpIsInplaceable,
 );
 
 pub(crate) type BindGroupReference = crate::wgpu_backend::cache::BindgroupReferenceFull;
@@ -73,8 +76,6 @@ pub(crate) struct MlQueueDispatch {
     pub(crate) debug: Option<String>,
 }
 
-
-
 ///a struct, where all operations are cached
 #[derive(Debug)]
 pub struct QueueBufferInner {
@@ -84,7 +85,7 @@ pub struct QueueBufferInner {
     ///u32 MetaArray for parameters of kernels
     meta_array: MetaArray,
 
-    ///ConstArray is used to store the pipeline constants for the next pipeline call 
+    ///ConstArray is used to store the pipeline constants for the next pipeline call
     const_array: ConstArray,
 
     ///ConstArray To Id, maps a set of constants of a pipeline to an unique id.
@@ -97,13 +98,11 @@ pub struct QueueBufferInner {
 
     ///Current position inside the MetaArray
     pub(crate) current_meta: u32,
-    
-    ///The last destination bufffer, of the last call 
+
+    ///The last destination bufffer, of the last call
     ///will be used as a workaround to wait for the last command queue
-    pub(crate) last_buffer: Option<CachedBufferId>, 
+    pub(crate) last_buffer: Option<CachedBufferId>,
 }
-
-
 
 impl QueueBufferInner {
     pub fn new(size: u32) -> Self {
@@ -300,7 +299,7 @@ impl QueueBufferInner {
     pub fn load_simulation_consts(&mut self, consts: Vec<Vec<(&'static str, f64)>>) {
         self.id_to_const_array = consts;
         self.const_id_map.next_id = self.id_to_const_array.len();
-    } 
+    }
 }
 
 pub struct QueueBuffer<'a>(MutexGuard<'a, QueueBufferInner>);
@@ -310,7 +309,7 @@ impl<'a> QueueBuffer<'a> {
         QueueBuffer(inner)
     }
 
-    /**************** Enqueue Helper: ****************/ 
+    /**************** Enqueue Helper: ****************/
     ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
     pub fn enqueue_64(
         self,
@@ -331,7 +330,7 @@ impl<'a> QueueBuffer<'a> {
     }
 
     ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
-    ///With extra debug Info when `wgpu_debug` is enabled 
+    ///With extra debug Info when `wgpu_debug` is enabled
     pub fn enqueue_64_extra(
         self,
         pipeline: PipelineReference,
@@ -372,7 +371,7 @@ impl<'a> QueueBuffer<'a> {
 
     ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
     ///If the length is greater than 65535, more elements will be enqueued in the Y dimension.
-    ///With extra debug Info when `wgpu_debug` is enabled 
+    ///With extra debug Info when `wgpu_debug` is enabled
     pub fn enqueue_64_big_extra(
         self,
         pipeline: PipelineReference,
@@ -383,7 +382,7 @@ impl<'a> QueueBuffer<'a> {
         let id = length.div_ceil(64);
         let x = id.min(65535);
         let y = id.div_ceil(65535);
-        self.enqueue_workgroups_extra(     
+        self.enqueue_workgroups_extra(
             pipeline,
             bind_group,
             x,
@@ -420,7 +419,7 @@ impl<'a> QueueBuffer<'a> {
 
     #[allow(clippy::too_many_arguments)]
     ///Enqueues a command with x, y and z dimension.
-    ///With extra debug Info when `wgpu_debug` is enabled 
+    ///With extra debug Info when `wgpu_debug` is enabled
     pub fn enqueue_workgroups_extra(
         mut self,
         pipeline: PipelineReference,
@@ -454,8 +453,7 @@ impl<'a> QueueBuffer<'a> {
         self.command_queue.push(q);
     }
 
-
-    /**************** Virtual Bindgroups: ****************/ 
+    /**************** Virtual Bindgroups: ****************/
     pub fn create_bind_group_input0(
         buffer_dest: BufferReferenceId,
         alignment: BindgroupAlignment,
@@ -528,7 +526,7 @@ impl<'a> QueueBuffer<'a> {
             buffer_input1,
             buffer_input2,
             buffer_input3,
-            BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment,alignment),
+            BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment, alignment),
         )
     }
 

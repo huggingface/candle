@@ -1,4 +1,4 @@
-use candle_wgpu_kernels::{Constants};
+use candle_wgpu_kernels::Constants;
 
 use super::*;
 
@@ -42,7 +42,11 @@ pub fn queue_rotary_emb_i(
     let num_invocations_y = t * (d / 2);
 
     fn ceil_div(a: u32, b: u32) -> u32 {
-        if a == 0 { 0 } else { a.div_ceil(b) }
+        if a == 0 {
+            0
+        } else {
+            a.div_ceil(b)
+        }
     }
 
     let workgroup_count_x = ceil_div(num_invocations_x, workgroup_size_x);
@@ -68,8 +72,13 @@ pub fn queue_rotary_emb_i(
     ));
 
     // dest + 3 inputs (src, cos, sin)
-    let bind_group =
-        dev.create_bind_group_input3(buffer_dest, buffer_src, buffer_cos, buffer_sin, dtype.into());
+    let bind_group = dev.create_bind_group_input3(
+        buffer_dest,
+        buffer_src,
+        buffer_cos,
+        buffer_sin,
+        dtype.into(),
+    );
 
     queue.enqueue_workgroups(
         pipeline,

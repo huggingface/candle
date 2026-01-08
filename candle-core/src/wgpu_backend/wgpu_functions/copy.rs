@@ -48,8 +48,10 @@ pub fn queue_copy_strided(
             queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
-        let pipeline =
-            queue.get_pipeline(Pipelines::Copy(dev.get_dtype(dtype)?, Functions::CopyStrided));
+        let pipeline = queue.get_pipeline(Pipelines::Copy(
+            dev.get_dtype(dtype)?,
+            Functions::CopyStrided,
+        ));
 
         let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
         queue.enqueue_64_big_extra(
@@ -173,7 +175,7 @@ pub fn queue_copy2d(
 
     let x = d1.div_ceil(16);
     let y = d2.div_ceil(16);
-    
+
     if x <= crate::wgpu_backend::queue_buffer::MAX_DISPATCH_SIZE {
         queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
 
@@ -270,8 +272,10 @@ pub fn queue_copy3d(
         input_shape.0,
         input_layout.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")]
-        Some(format!("input_shape: {:?}, input: {:?}, dest: {:?}", input_shape, input_layout, dest_layout)),
-        
+        Some(format!(
+            "input_shape: {:?}, input: {:?}, dest: {:?}",
+            input_shape, input_layout, dest_layout
+        )),
     );
     Ok(())
 }

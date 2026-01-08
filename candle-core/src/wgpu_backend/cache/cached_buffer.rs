@@ -17,7 +17,7 @@ use super::CachedBufferId;
 pub struct CachedBuffer {
     buffer: wgpu::Buffer,
     is_free: bool, //wheter this buffer is currently free
-    last_used_counter: u32
+    last_used_counter: u32,
 }
 
 impl CachedBuffer {
@@ -25,7 +25,7 @@ impl CachedBuffer {
         Self {
             buffer,
             is_free: false,
-            last_used_counter: 0
+            last_used_counter: 0,
         }
     }
 
@@ -90,7 +90,7 @@ impl BufferCacheStorage {
             buffer_memory: 0,
             buffer_memory_free: 0,
             max_memory_allowed: 0,
-            remove_test_counter : 0
+            remove_test_counter: 0,
         }
     }
 
@@ -242,8 +242,7 @@ impl BufferCacheStorage {
 
     #[instrument(skip(self))]
     pub fn get_free_buffers(&self) -> Vec<(CachedBufferId, u32)> {
-        self
-            .order
+        self.order
             .iter()
             .map(|entry| {
                 let (id, val) = self
@@ -256,18 +255,17 @@ impl BufferCacheStorage {
             .collect()
     }
 
-
     #[cfg(feature = "wgpu_debug")]
     pub(crate) fn buffer_free_memory(&self) -> u64 {
         self.buffer_memory_free
     }
 
     #[cfg(feature = "wgpu_debug")]
-    pub fn iter_buffers(&self) ->  impl Iterator<Item = (CachedBufferId, &CachedBuffer)> {
+    pub fn iter_buffers(&self) -> impl Iterator<Item = (CachedBufferId, &CachedBuffer)> {
         self.storage.enumerate_option()
     }
-    
-    pub fn inc_remove_test_counter(&mut self) -> u32{
+
+    pub fn inc_remove_test_counter(&mut self) -> u32 {
         self.remove_test_counter += 1;
         self.remove_test_counter
     }
