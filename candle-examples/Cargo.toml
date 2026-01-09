@@ -41,6 +41,7 @@ tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.15.2", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
 tekken-rs = { version = "0.1.1", optional = true }
+wetext-rs = { version = "0.1.2", optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -92,6 +93,7 @@ mimi = ["cpal", "symphonia", "rubato"]
 snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
+wetext = ["dep:wetext-rs"]
 buildtime-download = []
 
 [[example]]
@@ -165,6 +167,3 @@ required-features = ["buildtime-download"]
 [[example]]
 name = "cosyvoice3"
 required-features = ["symphonia"]
-
-# Note: wetext-rs is optional for text normalization
-# Add wetext-rs = "0.1.2" to dependencies if text normalization is needed

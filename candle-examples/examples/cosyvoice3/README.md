@@ -85,7 +85,7 @@ cargo run --release --example cosyvoice3 --features="symphonia,onnx" -- \
 | `--text` | Text to synthesize | (required) |
 | `--prompt-wav` | Prompt audio file for voice cloning | - |
 | `--prompt-features` | Pre-extracted features file | - |
-| `--prompt-text` | Prompt text for zero-shot mode | "You are a helpful assistant..." |
+| `--prompt-text` | Prompt text for zero-shot mode (see below) | "You are a helpful assistant..." |
 | `--model-dir` | Model directory path | (required) |
 | `--output` | Output audio file path | `output.wav` |
 | `--mode` | Inference mode: `zero-shot`, `cross-lingual`, `instruct` | `zero-shot` |
@@ -99,6 +99,28 @@ cargo run --release --example cosyvoice3 --features="symphonia,onnx" -- \
 | `--cpu` | Run on CPU | `false` |
 | `--f16` | Use f16 precision (GPU only) | `false` |
 | `--verbose` | Enable verbose output | `false` |
+| `--text-normalize` | Enable text normalization (requires `wetext` feature) | `false` |
+| `--wetext-dir` | Path to wetext FST files directory | - |
+| `--remove-erhua` | Remove erhua (儿化音) during normalization | `false` |
+
+### About `--prompt-text`
+
+In zero-shot mode, `--prompt-text` should follow this format:
+
+```
+You are a helpful assistant.<|endofprompt|>[transcript of prompt audio]
+```
+
+- **Fixed prefix**: `You are a helpful assistant.<|endofprompt|>` - This is required by CosyVoice3's LLM
+- **Transcript**: The actual text content spoken in the `--prompt-wav` audio file
+
+**Example**: If your prompt audio says "希望你以后能够做的比我还好呦", use:
+
+```bash
+--prompt-text "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
+```
+
+**Note**: For best voice cloning quality, the transcript should accurately match the audio content. Mismatched text may result in degraded synthesis quality.
 
 ## Synthesis Modes
 
@@ -111,6 +133,7 @@ cargo run --release --example cosyvoice3 --features="symphonia,onnx" -- \
     --mode zero-shot \
     --text "This is synthesized speech." \
     --prompt-wav reference_voice.wav \
+    --prompt-text "You are a helpful assistant.<|endofprompt|>Hello, this is my voice sample." \
     --model-dir weights/CosyVoice3-0.5B-Candle \
     --output output.wav
 ```
@@ -167,18 +190,66 @@ Note: This file is optional. Without it, the model generates its own determinist
 
 ## Text Normalization
 
-For better TTS quality, text normalization is recommended. You can integrate [wetext-rs](https://crates.io/crates/wetext-rs):
+For better TTS quality, text normalization is recommended. It converts numbers, dates, currencies, and other non-standard text to spoken form.
 
-```toml
-# Cargo.toml
-wetext-rs = "0.1.2"
+### Enable Text Normalization
+
+First, compile with the `wetext` feature:
+
+```bash
+cargo run --release --example cosyvoice3 --features="symphonia,wetext" -- \
+    --text "2024年1月15日，价格是$100.50" \
+    --text-normalize \
+    --wetext-dir /path/to/wetext/fsts \
+    --model-dir weights/CosyVoice3-0.5B-Candle \
+    --output output.wav
 ```
 
-```rust
-use wetext_rs::Normalizer;
-let normalizer = Normalizer::new(false)?;
-let normalized_text = normalizer.normalize(text)?;
+### Download WeText FST Files
+
+WeText FST files are available on Hugging Face:
+
+```bash
+# Download using hf CLI
+hf download mio/wetext --local-dir weights/wetext
 ```
+
+### Normalization Examples
+
+#### Chinese (中文)
+
+| Input | Output |
+|-------|--------|
+| `2024年` | `二零二四年` |
+| `3.14` | `三点一四` |
+| `1月15日` | `一月十五日` |
+| `$100.50` | `一百美元五十美分` |
+| `50%` | `百分之五十` |
+| `3/4` | `四分之三` |
+
+#### English
+
+| Input | Output |
+|-------|--------|
+| `$100.50` | `one hundred dollars and fifty cents` |
+| `3.14` | `three point one four` |
+| `Jan. 15` | `january fifteen` |
+| `don't` | `do not` |
+| `I'm gonna go` | `I am going to go` |
+
+#### Japanese (日本語)
+
+| Input | Output |
+|-------|--------|
+| `2024年` | `二千二十四年` |
+| `100円` | `百円` |
+| `3月15日` | `三月十五日` |
+
+### Options
+
+- `--text-normalize`: Enable text normalization
+- `--wetext-dir`: Path to wetext FST files directory (required when normalization is enabled)
+- `--remove-erhua`: Remove erhua (儿化音, e.g., "哪儿" → "哪")
 
 ## Performance
 

@@ -24,18 +24,19 @@
 //!
 //! # Text Normalization
 //!
-//! For better TTS quality, text normalization is recommended. The official Python
-//! implementation uses WeText for this purpose. You can integrate wetext-rs:
+//! For better TTS quality, text normalization is recommended. Enable the `wetext-rs`
+//! feature and use the `--text-normalize` flag:
 //!
-//! 1. Add to Cargo.toml: `wetext-rs = "0.1.2"`
-//! 2. Use `wetext_rs::Normalizer` to normalize text before tokenization
-//!
-//! Example:
-//! ```rust,ignore
-//! use wetext_rs::Normalizer;
-//! let normalizer = Normalizer::new(false)?; // remove_erhua = false
-//! let normalized_text = normalizer.normalize(text)?;
+//! ```bash
+//! cargo run --example cosyvoice3 --features="symphonia,wetext" -- \
+//!     --text "2024年1月15日，价格是$100.50" \
+//!     --text-normalize \
+//!     --wetext-dir /path/to/wetext/fsts \
+//!     --model-dir /path/to/CosyVoice3-0.5B-2512-Candle \
+//!     --output output.wav
 //! ```
+//!
+//! This converts numbers, dates, and currencies to spoken form (e.g., "2024年" → "二零二四年").
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -285,6 +286,22 @@ struct Args {
     /// Only works with --prompt-wav
     #[arg(long)]
     save_features: Option<PathBuf>,
+
+    /// Enable text normalization using wetext-rs
+    /// Converts numbers, dates, currencies to spoken form for better TTS quality
+    /// Requires the `wetext-rs` feature to be enabled
+    #[arg(long)]
+    text_normalize: bool,
+
+    /// Path to wetext FST files directory
+    /// Required when --text-normalize is enabled
+    #[arg(long)]
+    wetext_dir: Option<PathBuf>,
+
+    /// Remove erhua (儿化音) during text normalization
+    /// Only effective when --text-normalize is enabled
+    #[arg(long)]
+    remove_erhua: bool,
 }
 
 /// CosyVoice3 model wrapper
@@ -754,15 +771,60 @@ fn main() -> Result<()> {
         (prompt_speech_tokens, prompt_mel, speaker_embedding)
     };
 
+    // Text normalization
+    let text_to_synthesize = if args.text_normalize {
+        #[cfg(feature = "wetext")]
+        {
+            let wetext_dir = args.wetext_dir.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--wetext-dir is required when --text-normalize is enabled.\n\
+                     Please specify the path to wetext FST files directory.\n\
+                     You can download them from: https://huggingface.co/mio/wetext"
+                )
+            })?;
+
+            println!("Loading text normalizer from {:?}", wetext_dir);
+            let config = wetext_rs::NormalizerConfig::new()
+                .with_lang(wetext_rs::Language::Auto)
+                .with_remove_erhua(args.remove_erhua);
+            let mut normalizer = wetext_rs::Normalizer::new(wetext_dir, config);
+
+            let normalized = normalizer
+                .normalize(&args.text)
+                .map_err(|e| anyhow::anyhow!("Text normalization failed: {}", e))?;
+
+            println!("Original text: \"{}\"", args.text);
+            println!("Normalized text: \"{}\"", normalized);
+            normalized
+        }
+
+        #[cfg(not(feature = "wetext"))]
+        {
+            anyhow::bail!(
+                "Text normalization requires the `wetext` feature.\n\
+                 Please recompile with: --features=\"symphonia,wetext\"\n\
+                 Example:\n\
+                   cargo run --release --example cosyvoice3 --features=\"symphonia,wetext\" -- \\\n\
+                       --text \"你的文本\" \\\n\
+                       --text-normalize \\\n\
+                       --wetext-dir /path/to/wetext/fsts \\\n\
+                       --model-dir /path/to/model \\\n\
+                       --output output.wav"
+            );
+        }
+    } else {
+        args.text.clone()
+    };
+
     // Run inference
-    println!("\nSynthesizing: \"{}\"", args.text);
+    println!("\nSynthesizing: \"{}\"", text_to_synthesize);
     println!("Mode: {:?}", args.mode);
 
     let start = std::time::Instant::now();
 
     let waveform = match args.mode {
         Mode::ZeroShot => model.inference_zero_shot(
-            &args.text,
+            &text_to_synthesize,
             &args.prompt_text,
             &prompt_speech_tokens, // LLM gets speech tokens
             &prompt_speech_tokens, // Flow gets speech tokens
@@ -775,7 +837,7 @@ fn main() -> Result<()> {
             // Cross-lingual: LLM gets NO prompt_text and NO prompt_speech_tokens
             // Flow still gets prompt_speech_tokens for voice cloning
             model.inference_zero_shot(
-                &args.text,
+                &text_to_synthesize,
                 "",                    // Empty prompt text for cross-lingual
                 &[],                   // Empty LLM prompt speech tokens
                 &prompt_speech_tokens, // Flow still gets speech tokens
@@ -793,7 +855,7 @@ fn main() -> Result<()> {
                 .as_deref()
                 .unwrap_or("You are a helpful assistant.<|endofprompt|>");
             model.inference_zero_shot(
-                &args.text,
+                &text_to_synthesize,
                 instruct_text,         // Instruct text as prompt
                 &[],                   // Empty LLM prompt speech tokens
                 &prompt_speech_tokens, // Flow still gets speech tokens
