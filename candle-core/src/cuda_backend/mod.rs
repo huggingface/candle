@@ -2160,6 +2160,237 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn deform_conv2d(
+        &self,
+        layout: &Layout,
+        offset: &Self,
+        offset_l: &Layout,
+        weight: &Self,
+        weight_l: &Layout,
+        mask: Option<(&Self, &Layout)>,
+        params: &crate::conv::ParamsDeformConv2D,
+    ) -> Result<Self> {
+        let device = self.device.clone();
+        let (batch_sz, n_in_channels, in_h, in_w) = layout.shape().dims4()?;
+        let (out_channels, _, weight_h, weight_w) = weight_l.shape().dims4()?;
+
+        let out_h = params.out_h();
+        let out_w = params.out_w();
+
+        // Step 1: Execute deformable im2col CUDA kernel
+        let kernel_name = match self.dtype() {
+            DType::F32 => "deformable_im2col_f32",
+            DType::F64 => "deformable_im2col_f64",
+            DType::F16 => "deformable_im2col_f16",
+            DType::BF16 => "deformable_im2col_bf16",
+            dtype => crate::bail!("deform_conv2d not supported for {dtype:?}"),
+        };
+
+        // columns shape: [n_in_channels * weight_h * weight_w, batch_sz * out_h * out_w]
+        let col_rows = n_in_channels * weight_h * weight_w;
+        let col_cols = batch_sz * out_h * out_w;
+        let col_el = col_rows * col_cols;
+
+        let n = n_in_channels * out_h * out_w * batch_sz;
+        let use_mask = mask.is_some();
+
+        let func = device.get_or_load_func(kernel_name, &kernels::DEFORM_CONV2D)?;
+        let cfg = LaunchConfig::for_num_elems(n as u32);
+
+        let col_slice = match (&self.slice, &offset.slice) {
+            (S::F32(inp), S::F32(off)) => {
+                let inp = &inp.slice(layout.start_offset()..);
+                let off = &off.slice(offset_l.start_offset()..);
+                let mut col = unsafe { device.alloc::<f32>(col_el)? };
+
+                let mask_ptr = if let Some((m, ml)) = &mask {
+                    match &m.slice {
+                        S::F32(ms) => ms.slice(ml.start_offset()..),
+                        _ => return Err(CudaError::InternalError("mask dtype mismatch").into()),
+                    }
+                } else {
+                    // Dummy slice, won't be used when use_mask is false
+                    inp.slice(0..1)
+                };
+
+                let mut builder = func.builder();
+                barg!(builder, n);
+                builder.arg(inp);
+                builder.arg(off);
+                builder.arg(&mask_ptr);
+                barg!(builder, in_h, in_w, weight_h, weight_w);
+                barg!(builder, params.padding_h, params.padding_w);
+                barg!(builder, params.stride_h, params.stride_w);
+                barg!(builder, params.dilation_h, params.dilation_w);
+                barg!(builder, batch_sz, n_in_channels, params.offset_groups);
+                barg!(builder, out_h, out_w);
+                barg!(builder, use_mask);
+                builder.arg(&mut col);
+                unsafe { builder.launch(cfg) }.w()?;
+                S::F32(col)
+            }
+            (S::F64(inp), S::F64(off)) => {
+                let inp = &inp.slice(layout.start_offset()..);
+                let off = &off.slice(offset_l.start_offset()..);
+                let mut col = unsafe { device.alloc::<f64>(col_el)? };
+
+                let mask_ptr = if let Some((m, ml)) = &mask {
+                    match &m.slice {
+                        S::F64(ms) => ms.slice(ml.start_offset()..),
+                        _ => return Err(CudaError::InternalError("mask dtype mismatch").into()),
+                    }
+                } else {
+                    inp.slice(0..1)
+                };
+
+                let mut builder = func.builder();
+                barg!(builder, n);
+                builder.arg(inp);
+                builder.arg(off);
+                builder.arg(&mask_ptr);
+                barg!(builder, in_h, in_w, weight_h, weight_w);
+                barg!(builder, params.padding_h, params.padding_w);
+                barg!(builder, params.stride_h, params.stride_w);
+                barg!(builder, params.dilation_h, params.dilation_w);
+                barg!(builder, batch_sz, n_in_channels, params.offset_groups);
+                barg!(builder, out_h, out_w);
+                barg!(builder, use_mask);
+                builder.arg(&mut col);
+                unsafe { builder.launch(cfg) }.w()?;
+                S::F64(col)
+            }
+            (S::F16(inp), S::F16(off)) => {
+                let inp = &inp.slice(layout.start_offset()..);
+                let off = &off.slice(offset_l.start_offset()..);
+                let mut col = unsafe { device.alloc::<f16>(col_el)? };
+
+                let mask_ptr = if let Some((m, ml)) = &mask {
+                    match &m.slice {
+                        S::F16(ms) => ms.slice(ml.start_offset()..),
+                        _ => return Err(CudaError::InternalError("mask dtype mismatch").into()),
+                    }
+                } else {
+                    inp.slice(0..1)
+                };
+
+                let mut builder = func.builder();
+                barg!(builder, n);
+                builder.arg(inp);
+                builder.arg(off);
+                builder.arg(&mask_ptr);
+                barg!(builder, in_h, in_w, weight_h, weight_w);
+                barg!(builder, params.padding_h, params.padding_w);
+                barg!(builder, params.stride_h, params.stride_w);
+                barg!(builder, params.dilation_h, params.dilation_w);
+                barg!(builder, batch_sz, n_in_channels, params.offset_groups);
+                barg!(builder, out_h, out_w);
+                barg!(builder, use_mask);
+                builder.arg(&mut col);
+                unsafe { builder.launch(cfg) }.w()?;
+                S::F16(col)
+            }
+            (S::BF16(inp), S::BF16(off)) => {
+                let inp = &inp.slice(layout.start_offset()..);
+                let off = &off.slice(offset_l.start_offset()..);
+                let mut col = unsafe { device.alloc::<bf16>(col_el)? };
+
+                let mask_ptr = if let Some((m, ml)) = &mask {
+                    match &m.slice {
+                        S::BF16(ms) => ms.slice(ml.start_offset()..),
+                        _ => return Err(CudaError::InternalError("mask dtype mismatch").into()),
+                    }
+                } else {
+                    inp.slice(0..1)
+                };
+
+                let mut builder = func.builder();
+                barg!(builder, n);
+                builder.arg(inp);
+                builder.arg(off);
+                builder.arg(&mask_ptr);
+                barg!(builder, in_h, in_w, weight_h, weight_w);
+                barg!(builder, params.padding_h, params.padding_w);
+                barg!(builder, params.stride_h, params.stride_w);
+                barg!(builder, params.dilation_h, params.dilation_w);
+                barg!(builder, batch_sz, n_in_channels, params.offset_groups);
+                barg!(builder, out_h, out_w);
+                barg!(builder, use_mask);
+                builder.arg(&mut col);
+                unsafe { builder.launch(cfg) }.w()?;
+                S::BF16(col)
+            }
+            _ => return Err(CudaError::InternalError("dtype mismatch in deform_conv2d").into()),
+        };
+
+        let col = Self {
+            slice: col_slice,
+            device: device.clone(),
+        };
+
+        // Step 2: GEMM using matmul
+        // columns: [col_rows, col_cols] = [in_c * kH * kW, batch * out_h * out_w]
+        // weight: [out_channels, in_c/groups * kH * kW]
+        // For groups > 1, we need to handle grouped convolution
+
+        let in_channels_per_grp = n_in_channels / params.groups;
+        let out_channels_per_grp = out_channels / params.groups;
+        let col_per_grp = in_channels_per_grp * weight_h * weight_w;
+
+        if params.groups == 1 {
+            // Simple case: single group
+            // weight: [out_channels, col_per_grp]
+            // columns: [col_rows, col_cols]
+            // result: weight @ columns -> [out_channels, col_cols]
+            let col_l = Layout::contiguous((col_rows, col_cols));
+            let weight_l_t =
+                Layout::contiguous_with_offset((out_channels, col_per_grp), weight_l.start_offset());
+
+            // matmul: weight @ columns -> [out_channels, batch * out_h * out_w]
+            let res = weight.matmul(&col, (1, out_channels, col_cols, col_per_grp), &weight_l_t, &col_l)?;
+
+            // Reshape from [out_channels, batch * out_h * out_w] to [batch, out_channels, out_h, out_w]
+            let res_l = Layout::contiguous((out_channels, batch_sz, out_h, out_w))
+                .transpose(0, 1)?;
+            let mut res_t = unsafe { device.alloc_uninit(res_l.shape(), res.dtype())? };
+            res.copy_strided_src(&mut res_t, 0, &res_l)?;
+
+            Ok(res_t)
+        } else {
+            // Grouped convolution using bmm
+            // Reshape columns: [groups, col_per_grp, col_cols]
+            // Reshape weight: [groups, out_channels_per_grp, col_per_grp]
+            // bmm result: [groups, out_channels_per_grp, col_cols]
+
+            let col_l = Layout::contiguous((params.groups, col_per_grp, col_cols));
+            let weight_l_grouped = Layout::contiguous_with_offset(
+                (params.groups, out_channels_per_grp, col_per_grp),
+                weight_l.start_offset(),
+            );
+
+            // bmm: [groups, out_channels_per_grp, col_per_grp] @ [groups, col_per_grp, col_cols]
+            //   -> [groups, out_channels_per_grp, col_cols]
+            let res = weight.matmul(
+                &col,
+                (params.groups, out_channels_per_grp, col_cols, col_per_grp),
+                &weight_l_grouped,
+                &col_l,
+            )?;
+
+            // Reshape to [batch, out_channels, out_h, out_w]
+            let res_l = Layout::contiguous((
+                params.groups * out_channels_per_grp,
+                batch_sz,
+                out_h,
+                out_w,
+            ))
+            .transpose(0, 1)?;
+            let mut res_t = unsafe { device.alloc_uninit(res_l.shape(), res.dtype())? };
+            res.copy_strided_src(&mut res_t, 0, &res_l)?;
+
+            Ok(res_t)
+        }
+    }
+
     fn copy2d(
         &self,
         dst: &mut Self,
