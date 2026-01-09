@@ -1309,16 +1309,23 @@ impl BackendStorage for MetalStorage {
             // columns: [col_rows, col_cols]
             // result: weight @ columns -> [out_channels, col_cols]
             let col_l = Layout::contiguous((col_rows, col_cols));
-            let weight_l_t =
-                Layout::contiguous_with_offset((out_channels, col_per_grp), weight_l.start_offset());
+            let weight_l_t = Layout::contiguous_with_offset(
+                (out_channels, col_per_grp),
+                weight_l.start_offset(),
+            );
 
             // matmul: weight @ columns -> [out_channels, batch * out_h * out_w]
-            let res = weight.matmul(&col, (1, out_channels, col_cols, col_per_grp), &weight_l_t, &col_l)?;
+            let res = weight.matmul(
+                &col,
+                (1, out_channels, col_cols, col_per_grp),
+                &weight_l_t,
+                &col_l,
+            )?;
 
             // Reshape from [out_channels, batch * out_h * out_w] to [batch, out_channels, out_h, out_w]
             // The output is in [out_channels, batch, out_h, out_w] order, need to transpose
-            let res_l = Layout::contiguous((out_channels, batch_sz, out_h, out_w))
-                .transpose(0, 1)?;
+            let res_l =
+                Layout::contiguous((out_channels, batch_sz, out_h, out_w)).transpose(0, 1)?;
             let mut res_t = device.zeros_impl(
                 &Shape::from((batch_sz, out_channels, out_h, out_w)),
                 res.dtype(),
@@ -1348,13 +1355,9 @@ impl BackendStorage for MetalStorage {
             )?;
 
             // Reshape to [batch, out_channels, out_h, out_w]
-            let res_l = Layout::contiguous((
-                params.groups * out_channels_per_grp,
-                batch_sz,
-                out_h,
-                out_w,
-            ))
-            .transpose(0, 1)?;
+            let res_l =
+                Layout::contiguous((params.groups * out_channels_per_grp, batch_sz, out_h, out_w))
+                    .transpose(0, 1)?;
             let mut res_t = device.zeros_impl(
                 &Shape::from((batch_sz, out_channels, out_h, out_w)),
                 res.dtype(),

@@ -8,6 +8,7 @@ criterion_main!(
     benchmarks::broadcast::benches,
     benchmarks::copy::benches,
     benchmarks::conv_transpose2d::benches,
+    benchmarks::deform_conv2d::benches,
     benchmarks::matmul::benches,
     benchmarks::qmatmul::benches,
     benchmarks::random::benches,

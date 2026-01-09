@@ -1,3 +1,6 @@
+// Allow excessive precision for test data generated from PyTorch
+#![allow(clippy::excessive_precision)]
+
 use anyhow::Result;
 use candle_core::{test_device, Device, Tensor};
 
@@ -39,7 +42,6 @@ const WEIGHT_DATA: &[f32] = &[
     -0.220640, -0.075080, 0.281403, 0.035979, -0.008981, 0.045844,
 ];
 
-
 // Offset data: [1, 18, 4, 4] - torch.randn(...) * 0.5
 #[rustfmt::skip]
 const OFFSET_DATA: &[f32] = &[
@@ -80,7 +82,6 @@ const OFFSET_DATA: &[f32] = &[
     -0.160127, -0.422189, -0.275673, 0.994481, 0.423933, -0.347669, 0.152808, 0.145453,
     -0.886748, -0.352321, -0.197326, 0.943406, 0.089339, -0.019253, -0.043442, -0.590140,
 ];
-
 
 // Expected output for basic test (no mask, no bias): [1, 2, 4, 4]
 #[rustfmt::skip]
@@ -132,7 +133,6 @@ const EXPECTED_WITH_BIAS: &[f32] = &[
     -0.163059, -0.703170, -0.350020, -0.511272, -0.227400, -0.261822, -0.031738, -0.308896,
 ];
 
-
 /// Test basic deform_conv2d against PyTorch expected output
 fn deform_conv2d_basic(dev: &Device) -> Result<()> {
     let input = Tensor::new(INPUT_DATA, dev)?.reshape((1, 2, 4, 4))?;
@@ -142,43 +142,47 @@ fn deform_conv2d_basic(dev: &Device) -> Result<()> {
     let res = input.deform_conv2d(
         &offset,
         &weight,
-        None,       // mask
-        None,       // bias
-        (1, 1),     // stride
-        (1, 1),     // padding
-        (1, 1),     // dilation
-        1,          // groups
-        1,          // offset_groups
+        None,   // mask
+        None,   // bias
+        (1, 1), // stride
+        (1, 1), // padding
+        (1, 1), // dilation
+        1,      // groups
+        1,      // offset_groups
     )?;
 
     assert_eq!(res.dims(), [1, 2, 4, 4]);
 
     // Compare with PyTorch expected output
     let res_vec: Vec<f32> = res.flatten_all()?.to_vec1()?;
-    
+
     // Calculate error statistics
     let mut max_diff: f32 = 0.0;
     let mut sum_diff: f32 = 0.0;
     let mut sum_sq_diff: f32 = 0.0;
-    
+
     for (got, exp) in res_vec.iter().zip(EXPECTED_BASIC.iter()) {
         let diff = (got - exp).abs();
         max_diff = max_diff.max(diff);
         sum_diff += diff;
         sum_sq_diff += diff * diff;
     }
-    
+
     let n = res_vec.len() as f32;
     let mean_diff = sum_diff / n;
     let rmse = (sum_sq_diff / n).sqrt();
-    
+
     println!("\n=== deform_conv2d_basic ({:?}) ===", dev);
     println!("  Elements: {}", res_vec.len());
     println!("  Max absolute error: {:.2e}", max_diff);
     println!("  Mean absolute error: {:.2e}", mean_diff);
     println!("  RMSE: {:.2e}", rmse);
-    
-    assert!(max_diff < 1e-4, "Max diff {} exceeds tolerance 1e-4", max_diff);
+
+    assert!(
+        max_diff < 1e-4,
+        "Max diff {} exceeds tolerance 1e-4",
+        max_diff
+    );
 
     Ok(())
 }
@@ -194,40 +198,44 @@ fn deform_conv2d_with_mask(dev: &Device) -> Result<()> {
         &offset,
         &weight,
         Some(&mask),
-        None,       // bias
-        (1, 1),     // stride
-        (1, 1),     // padding
-        (1, 1),     // dilation
-        1,          // groups
-        1,          // offset_groups
+        None,   // bias
+        (1, 1), // stride
+        (1, 1), // padding
+        (1, 1), // dilation
+        1,      // groups
+        1,      // offset_groups
     )?;
 
     assert_eq!(res.dims(), [1, 2, 4, 4]);
 
     let res_vec: Vec<f32> = res.flatten_all()?.to_vec1()?;
-    
+
     let mut max_diff: f32 = 0.0;
     let mut sum_diff: f32 = 0.0;
     let mut sum_sq_diff: f32 = 0.0;
-    
+
     for (got, exp) in res_vec.iter().zip(EXPECTED_WITH_MASK.iter()) {
         let diff = (got - exp).abs();
         max_diff = max_diff.max(diff);
         sum_diff += diff;
         sum_sq_diff += diff * diff;
     }
-    
+
     let n = res_vec.len() as f32;
     let mean_diff = sum_diff / n;
     let rmse = (sum_sq_diff / n).sqrt();
-    
+
     println!("\n=== deform_conv2d_with_mask ({:?}) ===", dev);
     println!("  Elements: {}", res_vec.len());
     println!("  Max absolute error: {:.2e}", max_diff);
     println!("  Mean absolute error: {:.2e}", mean_diff);
     println!("  RMSE: {:.2e}", rmse);
-    
-    assert!(max_diff < 1e-4, "Max diff {} exceeds tolerance 1e-4", max_diff);
+
+    assert!(
+        max_diff < 1e-4,
+        "Max diff {} exceeds tolerance 1e-4",
+        max_diff
+    );
 
     Ok(())
 }
@@ -242,45 +250,48 @@ fn deform_conv2d_with_bias(dev: &Device) -> Result<()> {
     let res = input.deform_conv2d(
         &offset,
         &weight,
-        None,           // mask
+        None, // mask
         Some(&bias),
-        (1, 1),     // stride
-        (1, 1),     // padding
-        (1, 1),     // dilation
-        1,          // groups
-        1,          // offset_groups
+        (1, 1), // stride
+        (1, 1), // padding
+        (1, 1), // dilation
+        1,      // groups
+        1,      // offset_groups
     )?;
 
     assert_eq!(res.dims(), [1, 2, 4, 4]);
 
     let res_vec: Vec<f32> = res.flatten_all()?.to_vec1()?;
-    
+
     let mut max_diff: f32 = 0.0;
     let mut sum_diff: f32 = 0.0;
     let mut sum_sq_diff: f32 = 0.0;
-    
+
     for (got, exp) in res_vec.iter().zip(EXPECTED_WITH_BIAS.iter()) {
         let diff = (got - exp).abs();
         max_diff = max_diff.max(diff);
         sum_diff += diff;
         sum_sq_diff += diff * diff;
     }
-    
+
     let n = res_vec.len() as f32;
     let mean_diff = sum_diff / n;
     let rmse = (sum_sq_diff / n).sqrt();
-    
+
     println!("\n=== deform_conv2d_with_bias ({:?}) ===", dev);
     println!("  Elements: {}", res_vec.len());
     println!("  Max absolute error: {:.2e}", max_diff);
     println!("  Mean absolute error: {:.2e}", mean_diff);
     println!("  RMSE: {:.2e}", rmse);
-    
-    assert!(max_diff < 1e-4, "Max diff {} exceeds tolerance 1e-4", max_diff);
+
+    assert!(
+        max_diff < 1e-4,
+        "Max diff {} exceeds tolerance 1e-4",
+        max_diff
+    );
 
     Ok(())
 }
-
 
 /// Test deform_conv2d with stride=2
 fn deform_conv2d_with_stride(dev: &Device) -> Result<()> {
@@ -300,17 +311,17 @@ fn deform_conv2d_with_stride(dev: &Device) -> Result<()> {
     let res = input.deform_conv2d(
         &offset,
         &weight,
-        None,       // mask
-        None,       // bias
-        (2, 2),     // stride
-        (1, 1),     // padding
-        (1, 1),     // dilation
-        1,          // groups
-        1,          // offset_groups
+        None,   // mask
+        None,   // bias
+        (2, 2), // stride
+        (1, 1), // padding
+        (1, 1), // dilation
+        1,      // groups
+        1,      // offset_groups
     )?;
 
     assert_eq!(res.dims(), [1, 2, 4, 4]);
-    
+
     // Verify output is not all zeros
     let res_sum = res.abs()?.sum_all()?.to_scalar::<f32>()?;
     assert!(res_sum > 0.0, "Output should not be all zeros");
@@ -330,23 +341,25 @@ fn deform_conv2d_with_dilation(dev: &Device) -> Result<()> {
 
     // Output size with dilation=2, padding=2: (8 + 2*2 - (2*(3-1)+1)) / 1 + 1 = 8
     // Offset: [1, 18, 8, 8]
-    let offset_data: Vec<f32> = (0..1152).map(|i| ((i as f32 * 0.001) - 0.576) * 0.3).collect();
+    let offset_data: Vec<f32> = (0..1152)
+        .map(|i| ((i as f32 * 0.001) - 0.576) * 0.3)
+        .collect();
     let offset = Tensor::new(&offset_data[..], dev)?.reshape((1, 18, 8, 8))?;
 
     let res = input.deform_conv2d(
         &offset,
         &weight,
-        None,       // mask
-        None,       // bias
-        (1, 1),     // stride
-        (2, 2),     // padding
-        (2, 2),     // dilation
-        1,          // groups
-        1,          // offset_groups
+        None,   // mask
+        None,   // bias
+        (1, 1), // stride
+        (2, 2), // padding
+        (2, 2), // dilation
+        1,      // groups
+        1,      // offset_groups
     )?;
 
     assert_eq!(res.dims(), [1, 2, 8, 8]);
-    
+
     let res_sum = res.abs()?.sum_all()?.to_scalar::<f32>()?;
     assert!(res_sum > 0.0, "Output should not be all zeros");
 
@@ -365,18 +378,20 @@ fn deform_conv2d_offset_groups(dev: &Device) -> Result<()> {
 
     // Offset: [1, 2*offset_groups*k*k, 6, 6] = [1, 36, 6, 6]
     let offset_groups = 2;
-    let offset_data: Vec<f32> = (0..1296).map(|i| ((i as f32 * 0.001) - 0.648) * 0.3).collect();
+    let offset_data: Vec<f32> = (0..1296)
+        .map(|i| ((i as f32 * 0.001) - 0.648) * 0.3)
+        .collect();
     let offset = Tensor::new(&offset_data[..], dev)?.reshape((1, 36, 6, 6))?;
 
     let res = input.deform_conv2d(
         &offset,
         &weight,
-        None,           // mask
-        None,           // bias
-        (1, 1),         // stride
-        (1, 1),         // padding
-        (1, 1),         // dilation
-        1,              // groups
+        None,   // mask
+        None,   // bias
+        (1, 1), // stride
+        (1, 1), // padding
+        (1, 1), // dilation
+        1,      // groups
         offset_groups,
     )?;
 
@@ -396,26 +411,27 @@ fn deform_conv2d_batch(dev: &Device) -> Result<()> {
     let weight = Tensor::new(&weight_data[..], dev)?.reshape((2, 2, 3, 3))?;
 
     // Offset: [2, 18, 4, 4]
-    let offset_data: Vec<f32> = (0..576).map(|i| ((i as f32 * 0.001) - 0.288) * 0.3).collect();
+    let offset_data: Vec<f32> = (0..576)
+        .map(|i| ((i as f32 * 0.001) - 0.288) * 0.3)
+        .collect();
     let offset = Tensor::new(&offset_data[..], dev)?.reshape((2, 18, 4, 4))?;
 
     let res = input.deform_conv2d(
         &offset,
         &weight,
-        None,       // mask
-        None,       // bias
-        (1, 1),     // stride
-        (1, 1),     // padding
-        (1, 1),     // dilation
-        1,          // groups
-        1,          // offset_groups
+        None,   // mask
+        None,   // bias
+        (1, 1), // stride
+        (1, 1), // padding
+        (1, 1), // dilation
+        1,      // groups
+        1,      // offset_groups
     )?;
 
     assert_eq!(res.dims(), [2, 2, 4, 4]);
 
     Ok(())
 }
-
 
 /// Test full config (mask + bias)
 fn deform_conv2d_full(dev: &Device) -> Result<()> {
@@ -428,7 +444,9 @@ fn deform_conv2d_full(dev: &Device) -> Result<()> {
     let weight = Tensor::new(&weight_data[..], dev)?.reshape((4, 3, 3, 3))?;
 
     // Offset: [1, 18, 6, 6]
-    let offset_data: Vec<f32> = (0..648).map(|i| ((i as f32 * 0.001) - 0.324) * 0.3).collect();
+    let offset_data: Vec<f32> = (0..648)
+        .map(|i| ((i as f32 * 0.001) - 0.324) * 0.3)
+        .collect();
     let offset = Tensor::new(&offset_data[..], dev)?.reshape((1, 18, 6, 6))?;
 
     // Mask: [1, 9, 6, 6]
@@ -443,11 +461,11 @@ fn deform_conv2d_full(dev: &Device) -> Result<()> {
         &weight,
         Some(&mask),
         Some(&bias),
-        (1, 1),     // stride
-        (1, 1),     // padding
-        (1, 1),     // dilation
-        1,          // groups
-        1,          // offset_groups
+        (1, 1), // stride
+        (1, 1), // padding
+        (1, 1), // dilation
+        1,      // groups
+        1,      // offset_groups
     )?;
 
     assert_eq!(res.dims(), [1, 4, 6, 6]);
@@ -456,11 +474,51 @@ fn deform_conv2d_full(dev: &Device) -> Result<()> {
 }
 
 // Register tests using test_device! macro
-test_device!(deform_conv2d_basic, deform_conv2d_basic_cpu, deform_conv2d_basic_gpu, deform_conv2d_basic_metal);
-test_device!(deform_conv2d_with_mask, deform_conv2d_with_mask_cpu, deform_conv2d_with_mask_gpu, deform_conv2d_with_mask_metal);
-test_device!(deform_conv2d_with_bias, deform_conv2d_with_bias_cpu, deform_conv2d_with_bias_gpu, deform_conv2d_with_bias_metal);
-test_device!(deform_conv2d_with_stride, deform_conv2d_with_stride_cpu, deform_conv2d_with_stride_gpu, deform_conv2d_with_stride_metal);
-test_device!(deform_conv2d_with_dilation, deform_conv2d_with_dilation_cpu, deform_conv2d_with_dilation_gpu, deform_conv2d_with_dilation_metal);
-test_device!(deform_conv2d_offset_groups, deform_conv2d_offset_groups_cpu, deform_conv2d_offset_groups_gpu, deform_conv2d_offset_groups_metal);
-test_device!(deform_conv2d_batch, deform_conv2d_batch_cpu, deform_conv2d_batch_gpu, deform_conv2d_batch_metal);
-test_device!(deform_conv2d_full, deform_conv2d_full_cpu, deform_conv2d_full_gpu, deform_conv2d_full_metal);
+test_device!(
+    deform_conv2d_basic,
+    deform_conv2d_basic_cpu,
+    deform_conv2d_basic_gpu,
+    deform_conv2d_basic_metal
+);
+test_device!(
+    deform_conv2d_with_mask,
+    deform_conv2d_with_mask_cpu,
+    deform_conv2d_with_mask_gpu,
+    deform_conv2d_with_mask_metal
+);
+test_device!(
+    deform_conv2d_with_bias,
+    deform_conv2d_with_bias_cpu,
+    deform_conv2d_with_bias_gpu,
+    deform_conv2d_with_bias_metal
+);
+test_device!(
+    deform_conv2d_with_stride,
+    deform_conv2d_with_stride_cpu,
+    deform_conv2d_with_stride_gpu,
+    deform_conv2d_with_stride_metal
+);
+test_device!(
+    deform_conv2d_with_dilation,
+    deform_conv2d_with_dilation_cpu,
+    deform_conv2d_with_dilation_gpu,
+    deform_conv2d_with_dilation_metal
+);
+test_device!(
+    deform_conv2d_offset_groups,
+    deform_conv2d_offset_groups_cpu,
+    deform_conv2d_offset_groups_gpu,
+    deform_conv2d_offset_groups_metal
+);
+test_device!(
+    deform_conv2d_batch,
+    deform_conv2d_batch_cpu,
+    deform_conv2d_batch_gpu,
+    deform_conv2d_batch_metal
+);
+test_device!(
+    deform_conv2d_full,
+    deform_conv2d_full_cpu,
+    deform_conv2d_full_gpu,
+    deform_conv2d_full_metal
+);

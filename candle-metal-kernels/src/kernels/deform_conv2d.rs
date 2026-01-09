@@ -14,7 +14,7 @@ pub fn call_deformable_im2col(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     name: &'static str,
-    shape: &[usize],       // [batch, in_channels, height, width]
+    shape: &[usize], // [batch, in_channels, height, width]
     weight_hw: (usize, usize),
     stride: (usize, usize),
     padding: (usize, usize),

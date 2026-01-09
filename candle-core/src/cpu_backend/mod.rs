@@ -3125,9 +3125,12 @@ impl BackendStorage for CpuStorage {
                     for c in 0..out_channels {
                         for h in 0..out_h {
                             for w_idx in 0..out_w {
-                                let src_idx = c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
-                                let dst_idx =
-                                    b * out_channels * out_h * out_w + c * out_h * out_w + h * out_w + w_idx;
+                                let src_idx =
+                                    c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
+                                let dst_idx = b * out_channels * out_h * out_w
+                                    + c * out_h * out_w
+                                    + h * out_w
+                                    + w_idx;
                                 result[dst_idx] = output[src_idx];
                             }
                         }
@@ -3198,9 +3201,12 @@ impl BackendStorage for CpuStorage {
                     for c in 0..out_channels {
                         for h in 0..out_h {
                             for w_idx in 0..out_w {
-                                let src_idx = c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
-                                let dst_idx =
-                                    b * out_channels * out_h * out_w + c * out_h * out_w + h * out_w + w_idx;
+                                let src_idx =
+                                    c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
+                                let dst_idx = b * out_channels * out_h * out_w
+                                    + c * out_h * out_w
+                                    + h * out_w
+                                    + w_idx;
                                 result[dst_idx] = output[src_idx];
                             }
                         }
@@ -3271,9 +3277,12 @@ impl BackendStorage for CpuStorage {
                     for c in 0..out_channels {
                         for h in 0..out_h {
                             for w_idx in 0..out_w {
-                                let src_idx = c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
-                                let dst_idx =
-                                    b * out_channels * out_h * out_w + c * out_h * out_w + h * out_w + w_idx;
+                                let src_idx =
+                                    c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
+                                let dst_idx = b * out_channels * out_h * out_w
+                                    + c * out_h * out_w
+                                    + h * out_w
+                                    + w_idx;
                                 result[dst_idx] = output[src_idx];
                             }
                         }
@@ -3344,9 +3353,12 @@ impl BackendStorage for CpuStorage {
                     for c in 0..out_channels {
                         for h in 0..out_h {
                             for w_idx in 0..out_w {
-                                let src_idx = c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
-                                let dst_idx =
-                                    b * out_channels * out_h * out_w + c * out_h * out_w + h * out_w + w_idx;
+                                let src_idx =
+                                    c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
+                                let dst_idx = b * out_channels * out_h * out_w
+                                    + c * out_h * out_w
+                                    + h * out_w
+                                    + w_idx;
                                 result[dst_idx] = output[src_idx];
                             }
                         }

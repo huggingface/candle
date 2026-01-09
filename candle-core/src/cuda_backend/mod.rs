@@ -2342,15 +2342,22 @@ impl BackendStorage for CudaStorage {
             // columns: [col_rows, col_cols]
             // result: weight @ columns -> [out_channels, col_cols]
             let col_l = Layout::contiguous((col_rows, col_cols));
-            let weight_l_t =
-                Layout::contiguous_with_offset((out_channels, col_per_grp), weight_l.start_offset());
+            let weight_l_t = Layout::contiguous_with_offset(
+                (out_channels, col_per_grp),
+                weight_l.start_offset(),
+            );
 
             // matmul: weight @ columns -> [out_channels, batch * out_h * out_w]
-            let res = weight.matmul(&col, (1, out_channels, col_cols, col_per_grp), &weight_l_t, &col_l)?;
+            let res = weight.matmul(
+                &col,
+                (1, out_channels, col_cols, col_per_grp),
+                &weight_l_t,
+                &col_l,
+            )?;
 
             // Reshape from [out_channels, batch * out_h * out_w] to [batch, out_channels, out_h, out_w]
-            let res_l = Layout::contiguous((out_channels, batch_sz, out_h, out_w))
-                .transpose(0, 1)?;
+            let res_l =
+                Layout::contiguous((out_channels, batch_sz, out_h, out_w)).transpose(0, 1)?;
             let mut res_t = unsafe { device.alloc_uninit(res_l.shape(), res.dtype())? };
             res.copy_strided_src(&mut res_t, 0, &res_l)?;
 
@@ -2377,13 +2384,9 @@ impl BackendStorage for CudaStorage {
             )?;
 
             // Reshape to [batch, out_channels, out_h, out_w]
-            let res_l = Layout::contiguous((
-                params.groups * out_channels_per_grp,
-                batch_sz,
-                out_h,
-                out_w,
-            ))
-            .transpose(0, 1)?;
+            let res_l =
+                Layout::contiguous((params.groups * out_channels_per_grp, batch_sz, out_h, out_w))
+                    .transpose(0, 1)?;
             let mut res_t = unsafe { device.alloc_uninit(res_l.shape(), res.dtype())? };
             res.copy_strided_src(&mut res_t, 0, &res_l)?;
 

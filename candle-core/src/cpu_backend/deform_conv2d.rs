@@ -95,10 +95,8 @@ pub fn deformable_im2col_kernel<T: WithDType>(
         let grp_idx = in_c / c_per_offset_grp;
 
         // Calculate pointer offsets
-        let col_base = out_c * (batch_sz * out_h * out_w)
-            + out_b * (out_h * out_w)
-            + out_y * out_w
-            + out_x;
+        let col_base =
+            out_c * (batch_sz * out_h * out_w) + out_b * (out_h * out_w) + out_y * out_w + out_x;
 
         let input_base = out_b * (n_in_channels * height * width) + in_c * (height * width);
 
@@ -122,20 +120,18 @@ pub fn deformable_im2col_kernel<T: WithDType>(
                 };
 
                 // Get offset values
-                let offset_h =
-                    offset[offset_base + offset_idx * (out_h * out_w) + out_y * out_w + out_x]
-                        .to_f64();
+                let offset_h = offset
+                    [offset_base + offset_idx * (out_h * out_w) + out_y * out_w + out_x]
+                    .to_f64();
                 let offset_w = offset
                     [offset_base + (offset_idx + 1) * (out_h * out_w) + out_y * out_w + out_x]
                     .to_f64();
 
                 // Calculate sampling coordinates
-                let y = (out_y * stride_h) as f64 - pad_h as f64
-                    + (i * dilation_h) as f64
-                    + offset_h;
-                let x = (out_x * stride_w) as f64 - pad_w as f64
-                    + (j * dilation_w) as f64
-                    + offset_w;
+                let y =
+                    (out_y * stride_h) as f64 - pad_h as f64 + (i * dilation_h) as f64 + offset_h;
+                let x =
+                    (out_x * stride_w) as f64 - pad_w as f64 + (j * dilation_w) as f64 + offset_w;
 
                 // Bilinear interpolation sampling
                 let sampled = bilinear_interpolate(input_slice, height, width, y, x);
