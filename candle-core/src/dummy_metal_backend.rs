@@ -222,6 +222,19 @@ impl crate::backend::BackendStorage for MetalStorage {
     ) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+
+    fn deform_conv2d(
+        &self,
+        _l: &Layout,
+        _offset: &Self,
+        _offset_l: &Layout,
+        _weight: &Self,
+        _weight_l: &Layout,
+        _mask: Option<(&Self, &Layout)>,
+        _params: &crate::conv::ParamsDeformConv2D,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
 }
 
 impl crate::backend::BackendDevice for MetalDevice {

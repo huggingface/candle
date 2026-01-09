@@ -12,6 +12,7 @@ pub use utils::{
 };
 mod conv2d;
 use conv2d::Conv2D;
+mod deform_conv2d;
 
 const USE_IM2COL_CONV1D: bool = true;
 const USE_COL2IM_CONV1D_TR: bool = true;
@@ -3020,6 +3021,196 @@ impl BackendStorage for CpuStorage {
             ),
         }
         Ok(())
+    }
+
+    fn deform_conv2d(
+        &self,
+        input_l: &Layout,
+        offset: &Self,
+        offset_l: &Layout,
+        weight: &Self,
+        weight_l: &Layout,
+        mask: Option<(&Self, &Layout)>,
+        params: &crate::conv::ParamsDeformConv2D,
+    ) -> Result<Self> {
+        let (batch_sz, n_in_channels, in_h, in_w) = input_l.shape().dims4()?;
+        let (out_channels, _, weight_h, weight_w) = weight_l.shape().dims4()?;
+
+        let out_h = params.out_h();
+        let out_w = params.out_w();
+
+        // Validate parameters
+        if n_in_channels % params.groups != 0 {
+            crate::bail!("in_channels must be divisible by groups");
+        }
+        if out_channels % params.groups != 0 {
+            crate::bail!("out_channels must be divisible by groups");
+        }
+        if n_in_channels % params.offset_groups != 0 {
+            crate::bail!("in_channels must be divisible by offset_groups");
+        }
+
+        // Allocate columns buffer for im2col output
+        let col_size = n_in_channels * weight_h * weight_w * batch_sz * out_h * out_w;
+
+        match (self, offset, weight) {
+            (CpuStorage::F32(input), CpuStorage::F32(off), CpuStorage::F32(w)) => {
+                let input_slice = &input[input_l.start_offset()..];
+                let off_slice = &off[offset_l.start_offset()..];
+                let w_slice = &w[weight_l.start_offset()..];
+
+                let mut columns = vec![0f32; col_size];
+                let mask_data = mask.map(|(m, ml)| match m {
+                    CpuStorage::F32(d) => &d[ml.start_offset()..],
+                    _ => panic!("mask dtype mismatch"),
+                });
+
+                // Execute deformable im2col
+                deform_conv2d::deformable_im2col_kernel(
+                    input_slice,
+                    off_slice,
+                    mask_data,
+                    in_h,
+                    in_w,
+                    weight_h,
+                    weight_w,
+                    params.padding_h,
+                    params.padding_w,
+                    params.stride_h,
+                    params.stride_w,
+                    params.dilation_h,
+                    params.dilation_w,
+                    batch_sz,
+                    n_in_channels,
+                    params.offset_groups,
+                    out_h,
+                    out_w,
+                    &mut columns,
+                );
+
+                // GEMM: weight × columns
+                // columns shape: [n_in_channels * weight_h * weight_w, batch_sz * out_h * out_w]
+                // weight shape: [out_channels, n_in_channels / groups * weight_h * weight_w]
+                // output shape: [out_channels, batch_sz * out_h * out_w]
+
+                let in_channels_per_grp = n_in_channels / params.groups;
+                let out_channels_per_grp = out_channels / params.groups;
+                let col_per_grp = in_channels_per_grp * weight_h * weight_w;
+                let spatial_size = batch_sz * out_h * out_w;
+
+                let mut output = vec![0f32; out_channels * spatial_size];
+
+                for g in 0..params.groups {
+                    for oc in 0..out_channels_per_grp {
+                        let out_c_global = g * out_channels_per_grp + oc;
+                        for s in 0..spatial_size {
+                            let mut sum = 0.0f32;
+                            for k in 0..col_per_grp {
+                                let col_c = g * col_per_grp + k;
+                                // weight: [out_channels, in_channels/groups * kH * kW]
+                                let w_idx = out_c_global * col_per_grp + k;
+                                // columns: [in_channels * kH * kW, batch * out_h * out_w]
+                                let col_idx = col_c * spatial_size + s;
+                                sum += w_slice[w_idx] * columns[col_idx];
+                            }
+                            output[out_c_global * spatial_size + s] = sum;
+                        }
+                    }
+                }
+
+                // Reshape output from [out_channels, batch * out_h * out_w]
+                // to [batch, out_channels, out_h, out_w]
+                let mut result = vec![0f32; batch_sz * out_channels * out_h * out_w];
+                for b in 0..batch_sz {
+                    for c in 0..out_channels {
+                        for h in 0..out_h {
+                            for w_idx in 0..out_w {
+                                let src_idx = c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
+                                let dst_idx =
+                                    b * out_channels * out_h * out_w + c * out_h * out_w + h * out_w + w_idx;
+                                result[dst_idx] = output[src_idx];
+                            }
+                        }
+                    }
+                }
+
+                Ok(CpuStorage::F32(result))
+            }
+            (CpuStorage::F64(input), CpuStorage::F64(off), CpuStorage::F64(w)) => {
+                let input_slice = &input[input_l.start_offset()..];
+                let off_slice = &off[offset_l.start_offset()..];
+                let w_slice = &w[weight_l.start_offset()..];
+
+                let mut columns = vec![0f64; col_size];
+                let mask_data = mask.map(|(m, ml)| match m {
+                    CpuStorage::F64(d) => &d[ml.start_offset()..],
+                    _ => panic!("mask dtype mismatch"),
+                });
+
+                deform_conv2d::deformable_im2col_kernel(
+                    input_slice,
+                    off_slice,
+                    mask_data,
+                    in_h,
+                    in_w,
+                    weight_h,
+                    weight_w,
+                    params.padding_h,
+                    params.padding_w,
+                    params.stride_h,
+                    params.stride_w,
+                    params.dilation_h,
+                    params.dilation_w,
+                    batch_sz,
+                    n_in_channels,
+                    params.offset_groups,
+                    out_h,
+                    out_w,
+                    &mut columns,
+                );
+
+                let in_channels_per_grp = n_in_channels / params.groups;
+                let out_channels_per_grp = out_channels / params.groups;
+                let col_per_grp = in_channels_per_grp * weight_h * weight_w;
+                let spatial_size = batch_sz * out_h * out_w;
+
+                let mut output = vec![0f64; out_channels * spatial_size];
+
+                for g in 0..params.groups {
+                    for oc in 0..out_channels_per_grp {
+                        let out_c_global = g * out_channels_per_grp + oc;
+                        for s in 0..spatial_size {
+                            let mut sum = 0.0f64;
+                            for k in 0..col_per_grp {
+                                let col_c = g * col_per_grp + k;
+                                let w_idx = out_c_global * col_per_grp + k;
+                                let col_idx = col_c * spatial_size + s;
+                                sum += w_slice[w_idx] * columns[col_idx];
+                            }
+                            output[out_c_global * spatial_size + s] = sum;
+                        }
+                    }
+                }
+
+                // Reshape output
+                let mut result = vec![0f64; batch_sz * out_channels * out_h * out_w];
+                for b in 0..batch_sz {
+                    for c in 0..out_channels {
+                        for h in 0..out_h {
+                            for w_idx in 0..out_w {
+                                let src_idx = c * spatial_size + b * out_h * out_w + h * out_w + w_idx;
+                                let dst_idx =
+                                    b * out_channels * out_h * out_w + c * out_h * out_w + h * out_w + w_idx;
+                                result[dst_idx] = output[src_idx];
+                            }
+                        }
+                    }
+                }
+
+                Ok(CpuStorage::F64(result))
+            }
+            _ => crate::bail!("deform_conv2d: dtype mismatch or unsupported dtype"),
+        }
     }
 }
 

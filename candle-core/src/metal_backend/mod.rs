@@ -1217,6 +1217,154 @@ impl BackendStorage for MetalStorage {
         Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
+    fn deform_conv2d(
+        &self,
+        layout: &Layout,
+        offset: &Self,
+        offset_l: &Layout,
+        weight: &Self,
+        weight_l: &Layout,
+        mask: Option<(&Self, &Layout)>,
+        params: &crate::conv::ParamsDeformConv2D,
+    ) -> Result<Self> {
+        let device = self.device.clone();
+        let (batch_sz, n_in_channels, in_h, in_w) = layout.shape().dims4()?;
+        let (out_channels, _, weight_h, weight_w) = weight_l.shape().dims4()?;
+
+        let out_h = params.out_h();
+        let out_w = params.out_w();
+
+        // Step 1: Execute deformable im2col kernel
+        let kernel_name = match self.dtype {
+            DType::F32 => "deformable_im2col_f32",
+            DType::F16 => "deformable_im2col_f16",
+            DType::BF16 => "deformable_im2col_bf16",
+            dtype => crate::bail!("deform_conv2d not supported for {dtype:?}"),
+        };
+
+        // columns shape: [n_in_channels * weight_h * weight_w, batch_sz * out_h * out_w]
+        let col_rows = n_in_channels * weight_h * weight_w;
+        let col_cols = batch_sz * out_h * out_w;
+        let col_el = col_rows * col_cols;
+        let col_buffer = device.new_buffer(col_el, self.dtype, "deform_im2col")?;
+
+        let use_mask = mask.is_some();
+        let (mask_buffer, mask_offset) = mask
+            .map(|(m, l)| (&m.buffer, l.start_offset()))
+            .unwrap_or((&self.buffer, 0)); // placeholder when no mask
+
+        let encoder = device.command_encoder()?;
+        encoder.set_label("deform_im2col");
+
+        candle_metal_kernels::call_deformable_im2col(
+            &device.device,
+            &encoder,
+            &device.kernels,
+            kernel_name,
+            &[batch_sz, n_in_channels, in_h, in_w],
+            (weight_h, weight_w),
+            (params.stride_h, params.stride_w),
+            (params.padding_h, params.padding_w),
+            (params.dilation_h, params.dilation_w),
+            params.offset_groups,
+            (out_h, out_w),
+            use_mask,
+            BufferOffset {
+                buffer: &self.buffer,
+                offset_in_bytes: layout.start_offset() * self.dtype.size_in_bytes(),
+            },
+            BufferOffset {
+                buffer: &offset.buffer,
+                offset_in_bytes: offset_l.start_offset() * offset.dtype.size_in_bytes(),
+            },
+            BufferOffset {
+                buffer: mask_buffer,
+                offset_in_bytes: mask_offset * self.dtype.size_in_bytes(),
+            },
+            &col_buffer,
+        )
+        .map_err(MetalError::from)?;
+        drop(encoder);
+
+        // Step 2: GEMM using matmul
+        // columns: [col_rows, col_cols] = [in_c * kH * kW, batch * out_h * out_w]
+        // weight: [out_channels, in_c/groups * kH * kW]
+        // For groups > 1, we need to handle grouped convolution
+
+        let col = Self {
+            buffer: col_buffer,
+            device: device.clone(),
+            count: col_el,
+            dtype: self.dtype,
+        };
+
+        // Handle groups using reshape + bmm approach (following torchvision MPS)
+        let in_channels_per_grp = n_in_channels / params.groups;
+        let out_channels_per_grp = out_channels / params.groups;
+        let col_per_grp = in_channels_per_grp * weight_h * weight_w;
+
+        if params.groups == 1 {
+            // Simple case: single group
+            // weight: [out_channels, col_per_grp]
+            // columns: [col_rows, col_cols]
+            // result: weight @ columns -> [out_channels, col_cols]
+            let col_l = Layout::contiguous((col_rows, col_cols));
+            let weight_l_t =
+                Layout::contiguous_with_offset((out_channels, col_per_grp), weight_l.start_offset());
+
+            // matmul: weight @ columns -> [out_channels, batch * out_h * out_w]
+            let res = weight.matmul(&col, (1, out_channels, col_cols, col_per_grp), &weight_l_t, &col_l)?;
+
+            // Reshape from [out_channels, batch * out_h * out_w] to [batch, out_channels, out_h, out_w]
+            // The output is in [out_channels, batch, out_h, out_w] order, need to transpose
+            let res_l = Layout::contiguous((out_channels, batch_sz, out_h, out_w))
+                .transpose(0, 1)?;
+            let mut res_t = device.zeros_impl(
+                &Shape::from((batch_sz, out_channels, out_h, out_w)),
+                res.dtype(),
+            )?;
+            res.copy_strided_src(&mut res_t, 0, &res_l)?;
+
+            Ok(res_t)
+        } else {
+            // Grouped convolution using bmm
+            // Reshape columns: [groups, col_per_grp, col_cols]
+            // Reshape weight: [groups, out_channels_per_grp, col_per_grp]
+            // bmm result: [groups, out_channels_per_grp, col_cols]
+
+            let col_l = Layout::contiguous((params.groups, col_per_grp, col_cols));
+            let weight_l_grouped = Layout::contiguous_with_offset(
+                (params.groups, out_channels_per_grp, col_per_grp),
+                weight_l.start_offset(),
+            );
+
+            // bmm: [groups, out_channels_per_grp, col_per_grp] @ [groups, col_per_grp, col_cols]
+            //   -> [groups, out_channels_per_grp, col_cols]
+            let res = weight.matmul(
+                &col,
+                (params.groups, out_channels_per_grp, col_cols, col_per_grp),
+                &weight_l_grouped,
+                &col_l,
+            )?;
+
+            // Reshape to [batch, out_channels, out_h, out_w]
+            let res_l = Layout::contiguous((
+                params.groups * out_channels_per_grp,
+                batch_sz,
+                out_h,
+                out_w,
+            ))
+            .transpose(0, 1)?;
+            let mut res_t = device.zeros_impl(
+                &Shape::from((batch_sz, out_channels, out_h, out_w)),
+                res.dtype(),
+            )?;
+            res.copy_strided_src(&mut res_t, 0, &res_l)?;
+
+            Ok(res_t)
+        }
+    }
+
     fn avg_pool2d(
         &self,
         inp_l: &Layout,
