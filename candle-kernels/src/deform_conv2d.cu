@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 // Bilinear interpolation for deformable convolution
+// Use float for intermediate calculations to avoid type ambiguity with __half and __nv_bfloat16
 template <typename scalar_t>
 __device__ scalar_t bilinear_interpolate_deform(
     const scalar_t* in,
@@ -13,35 +14,40 @@ __device__ scalar_t bilinear_interpolate_deform(
     scalar_t h,
     scalar_t w
 ) {
-    if (h <= scalar_t(-1) || height <= h || w <= scalar_t(-1) || width <= w) {
-        return scalar_t(0);
+    // Convert to float for intermediate calculations to avoid type ambiguity
+    float h_f = static_cast<float>(h);
+    float w_f = static_cast<float>(w);
+    
+    if (h_f <= -1.0f || static_cast<float>(height) <= h_f || 
+        w_f <= -1.0f || static_cast<float>(width) <= w_f) {
+        return scalar_t(0.0f);
     }
 
-    int h_low = static_cast<int>(floor(static_cast<float>(h)));
-    int w_low = static_cast<int>(floor(static_cast<float>(w)));
+    int h_low = static_cast<int>(floor(h_f));
+    int w_low = static_cast<int>(floor(w_f));
     int h_high = h_low + 1;
     int w_high = w_low + 1;
 
-    scalar_t lh = h - scalar_t(h_low);
-    scalar_t lw = w - scalar_t(w_low);
-    scalar_t hh = scalar_t(1) - lh;
-    scalar_t hw = scalar_t(1) - lw;
+    float lh = h_f - static_cast<float>(h_low);
+    float lw = w_f - static_cast<float>(w_low);
+    float hh = 1.0f - lh;
+    float hw = 1.0f - lw;
 
-    scalar_t v1 = scalar_t(0);
+    float v1 = 0.0f;
     if (h_low >= 0 && w_low >= 0)
-        v1 = in[h_low * width + w_low];
-    scalar_t v2 = scalar_t(0);
+        v1 = static_cast<float>(in[h_low * width + w_low]);
+    float v2 = 0.0f;
     if (h_low >= 0 && w_high <= width - 1)
-        v2 = in[h_low * width + w_high];
-    scalar_t v3 = scalar_t(0);
+        v2 = static_cast<float>(in[h_low * width + w_high]);
+    float v3 = 0.0f;
     if (h_high <= height - 1 && w_low >= 0)
-        v3 = in[h_high * width + w_low];
-    scalar_t v4 = scalar_t(0);
+        v3 = static_cast<float>(in[h_high * width + w_low]);
+    float v4 = 0.0f;
     if (h_high <= height - 1 && w_high <= width - 1)
-        v4 = in[h_high * width + w_high];
+        v4 = static_cast<float>(in[h_high * width + w_high]);
 
-    scalar_t w1 = hh * hw, w2 = hh * lw, w3 = lh * hw, w4 = lh * lw;
-    return w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4;
+    float w1 = hh * hw, w2 = hh * lw, w3 = lh * hw, w4 = lh * lw;
+    return static_cast<scalar_t>(w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4);
 }
 
 // Deformable im2col kernel
@@ -101,25 +107,27 @@ __device__ void deformable_im2col_kernel(
             const size_t mask_idx = i * weight_w + j;
             const size_t offset_idx = 2 * mask_idx;
 
-            scalar_t mask_value = scalar_t(1);
+            float mask_value = 1.0f;
             if (use_mask) {
-                mask_value = mask_ptr[mask_idx * (out_h * out_w) 
-                                    + out_y * out_w + out_x];
+                mask_value = static_cast<float>(mask_ptr[mask_idx * (out_h * out_w) 
+                                    + out_y * out_w + out_x]);
             }
 
-            const scalar_t offset_h = offset_ptr[offset_idx * (out_h * out_w) 
-                                               + out_y * out_w + out_x];
-            const scalar_t offset_w = offset_ptr[(offset_idx + 1) * (out_h * out_w) 
-                                               + out_y * out_w + out_x];
+            const float offset_h = static_cast<float>(offset_ptr[offset_idx * (out_h * out_w) 
+                                               + out_y * out_w + out_x]);
+            const float offset_w = static_cast<float>(offset_ptr[(offset_idx + 1) * (out_h * out_w) 
+                                               + out_y * out_w + out_x]);
             
-            const scalar_t y = scalar_t(out_y * stride_h) - scalar_t(pad_h) 
-                             + scalar_t(i * dilation_h) + offset_h;
-            const scalar_t x = scalar_t(out_x * stride_w) - scalar_t(pad_w) 
-                             + scalar_t(j * dilation_w) + offset_w;
+            // Use float for intermediate calculations to avoid type ambiguity with __half and __nv_bfloat16
+            const float y = static_cast<float>(out_y * stride_h) - static_cast<float>(pad_h) 
+                          + static_cast<float>(i * dilation_h) + offset_h;
+            const float x = static_cast<float>(out_x * stride_w) - static_cast<float>(pad_w) 
+                          + static_cast<float>(j * dilation_w) + offset_w;
             
-            *columns_ptr = mask_value * bilinear_interpolate_deform(
-                input_ptr, static_cast<int>(height), static_cast<int>(width), y, x
-            );
+            *columns_ptr = static_cast<scalar_t>(mask_value * static_cast<float>(bilinear_interpolate_deform(
+                input_ptr, static_cast<int>(height), static_cast<int>(width), 
+                static_cast<scalar_t>(y), static_cast<scalar_t>(x)
+            )));
             columns_ptr += batch_sz * out_h * out_w;
         }
     }
