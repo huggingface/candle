@@ -106,7 +106,6 @@ pub fn call_reduce_strided(
     let kernel = format!("{}{}", kernel_name, index_type.kernel_suffix());
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel)?;
 
-    //println!("{kernel_name} - {length} - {strides:?} - {index_type:?}");
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);

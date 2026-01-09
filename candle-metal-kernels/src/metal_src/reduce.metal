@@ -863,36 +863,36 @@ kernel void NAME##_strided##SUFFIX(                                     \
 
 #define impl_reduce_strided_u64(OP, NAME, T)                            \
 kernel void NAME##_strided_u64(                                         \
-    constant size_t &src_numel,                                         \
-    constant size_t &num_dims,                                          \
-    constant size_t *dims,                                              \
-    constant size_t *strides,                                           \
-    constant size_t &el_per_block,                                      \
+    constant ulong &src_numel,                                          \
+    constant ulong &num_dims,                                           \
+    constant ulong *dims,                                               \
+    constant ulong *strides,                                            \
+    constant ulong &el_per_block,                                       \
     device const T *src,                                                \
     device T *dst,                                                      \
     uint tid [[ thread_index_in_threadgroup ]],                         \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_t<uint64_t, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
-    REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, size_t)          \
+    indexer_t<ulong, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
+    REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, ulong)           \
 }
 
 #define impl_arg_reduce_strided_u64(OP, NAME, T)                        \
 kernel void NAME##_strided_u64(                                         \
-    constant size_t &src_numel,                                         \
-    constant size_t &num_dims,                                          \
-    constant size_t *dims,                                              \
-    constant size_t *strides,                                           \
-    constant size_t &el_per_block,                                      \
+    constant ulong &src_numel,                                          \
+    constant ulong &num_dims,                                           \
+    constant ulong *dims,                                               \
+    constant ulong *strides,                                            \
+    constant ulong &el_per_block,                                       \
     device const T *src,                                                \
     device uint *dst,                                                   \
     uint tid [[ thread_index_in_threadgroup ]],                         \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
-    indexer_t<uint64_t, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
-    REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, size_t)          \
+    indexer_t<ulong, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
+    REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, ulong)           \
 }
 
 #define impl_reduce_strided_u16(OP, NAME, T) impl_reduce_strided_typed(OP, NAME, T, ushort, uint, _u16)
