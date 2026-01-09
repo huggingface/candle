@@ -51,31 +51,31 @@ inline T bilinear_interpolate_deform(
     return w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4;
 }
 
-/// Deformable im2col kernel
+/// Deformable im2col implementation
 /// Parameters are passed individually (following Candle's set_params! convention)
 template<typename T>
-kernel void deformable_im2col(
-    constant T*           input_ptr     [[ buffer(0) ]],
-    constant T*           offset_ptr    [[ buffer(1) ]],
-    constant T*           mask_ptr      [[ buffer(2) ]],
-    device T*             columns_ptr   [[ buffer(3) ]],
-    constant uint&        height        [[ buffer(4) ]],
-    constant uint&        width         [[ buffer(5) ]],
-    constant uint&        weight_h      [[ buffer(6) ]],
-    constant uint&        weight_w      [[ buffer(7) ]],
-    constant uint&        pad_h         [[ buffer(8) ]],
-    constant uint&        pad_w         [[ buffer(9) ]],
-    constant uint&        stride_h      [[ buffer(10) ]],
-    constant uint&        stride_w      [[ buffer(11) ]],
-    constant uint&        dilation_h    [[ buffer(12) ]],
-    constant uint&        dilation_w    [[ buffer(13) ]],
-    constant uint&        batch_sz      [[ buffer(14) ]],
-    constant uint&        n_in_channels [[ buffer(15) ]],
-    constant uint&        n_offset_grps [[ buffer(16) ]],
-    constant uint&        out_h         [[ buffer(17) ]],
-    constant uint&        out_w         [[ buffer(18) ]],
-    constant bool&        use_mask      [[ buffer(19) ]],
-    uint                  tid           [[ thread_position_in_grid ]]
+METAL_FUNC void deformable_im2col_impl(
+    constant T*           input_ptr,
+    constant T*           offset_ptr,
+    constant T*           mask_ptr,
+    device T*             columns_ptr,
+    constant uint&        height,
+    constant uint&        width,
+    constant uint&        weight_h,
+    constant uint&        weight_w,
+    constant uint&        pad_h,
+    constant uint&        pad_w,
+    constant uint&        stride_h,
+    constant uint&        stride_w,
+    constant uint&        dilation_h,
+    constant uint&        dilation_w,
+    constant uint&        batch_sz,
+    constant uint&        n_in_channels,
+    constant uint&        n_offset_grps,
+    constant uint&        out_h,
+    constant uint&        out_w,
+    constant bool&        use_mask,
+    uint                  tid
 ) {
     uint total = out_w * out_h * batch_sz * n_in_channels;
     if (tid >= total) {
@@ -142,32 +142,41 @@ kernel void deformable_im2col(
     }
 }
 
-// Template instantiation for F32, F16, BF16
-template [[host_name("deformable_im2col_f32")]]
-kernel void deformable_im2col<float>(
-    constant float*, constant float*, constant float*, device float*,
-    constant uint&, constant uint&, constant uint&, constant uint&,
-    constant uint&, constant uint&, constant uint&, constant uint&,
-    constant uint&, constant uint&, constant uint&, constant uint&,
-    constant uint&, constant uint&, constant uint&, constant bool&,
-    uint);
+#define DEFORM_IM2COL_OP(T, FN_NAME) \
+kernel void FN_NAME( \
+    constant T*           input_ptr     [[ buffer(0) ]], \
+    constant T*           offset_ptr    [[ buffer(1) ]], \
+    constant T*           mask_ptr      [[ buffer(2) ]], \
+    device T*             columns_ptr   [[ buffer(3) ]], \
+    constant uint&        height        [[ buffer(4) ]], \
+    constant uint&        width         [[ buffer(5) ]], \
+    constant uint&        weight_h      [[ buffer(6) ]], \
+    constant uint&        weight_w      [[ buffer(7) ]], \
+    constant uint&        pad_h         [[ buffer(8) ]], \
+    constant uint&        pad_w         [[ buffer(9) ]], \
+    constant uint&        stride_h      [[ buffer(10) ]], \
+    constant uint&        stride_w      [[ buffer(11) ]], \
+    constant uint&        dilation_h    [[ buffer(12) ]], \
+    constant uint&        dilation_w    [[ buffer(13) ]], \
+    constant uint&        batch_sz      [[ buffer(14) ]], \
+    constant uint&        n_in_channels [[ buffer(15) ]], \
+    constant uint&        n_offset_grps [[ buffer(16) ]], \
+    constant uint&        out_h         [[ buffer(17) ]], \
+    constant uint&        out_w         [[ buffer(18) ]], \
+    constant bool&        use_mask      [[ buffer(19) ]], \
+    uint                  tid           [[ thread_position_in_grid ]] \
+) { \
+    deformable_im2col_impl<T>( \
+        input_ptr, offset_ptr, mask_ptr, columns_ptr, \
+        height, width, weight_h, weight_w, \
+        pad_h, pad_w, stride_h, stride_w, \
+        dilation_h, dilation_w, batch_sz, n_in_channels, \
+        n_offset_grps, out_h, out_w, use_mask, tid \
+    ); \
+}
 
-template [[host_name("deformable_im2col_f16")]]
-kernel void deformable_im2col<half>(
-    constant half*, constant half*, constant half*, device half*,
-    constant uint&, constant uint&, constant uint&, constant uint&,
-    constant uint&, constant uint&, constant uint&, constant uint&,
-    constant uint&, constant uint&, constant uint&, constant uint&,
-    constant uint&, constant uint&, constant uint&, constant bool&,
-    uint);
-
-#if __METAL_VERSION__ >= 310
-template [[host_name("deformable_im2col_bf16")]]
-kernel void deformable_im2col<bfloat>(
-    constant bfloat*, constant bfloat*, constant bfloat*, device bfloat*,
-    constant uint&, constant uint&, constant uint&, constant uint&,
-    constant uint&, constant uint&, constant uint&, constant uint&,
-    constant uint&, constant uint&, constant uint&, constant uint&,
-    constant uint&, constant uint&, constant uint&, constant bool&,
-    uint);
+DEFORM_IM2COL_OP(float, deformable_im2col_f32)
+DEFORM_IM2COL_OP(half, deformable_im2col_f16)
+#if defined(__HAVE_BFLOAT__)
+DEFORM_IM2COL_OP(bfloat, deformable_im2col_bf16)
 #endif
