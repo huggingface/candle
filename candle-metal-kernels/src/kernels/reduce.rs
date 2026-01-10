@@ -5,7 +5,6 @@ use objc2_metal::{MTLResourceUsage, MTLSize};
 
 #[derive(Debug, Clone, Copy)]
 enum IndexType {
-    U16,
     U32,
     U64,
 }
@@ -14,9 +13,7 @@ impl IndexType {
     fn select(shape: &[usize], strides: &[usize]) -> Self {
         let max_dim = shape.iter().copied().max().unwrap_or(0);
         let max_stride = strides.iter().copied().max().unwrap_or(0);
-        if max_dim <= u16::MAX as usize && max_stride <= u16::MAX as usize {
-            IndexType::U16
-        } else if max_dim <= u32::MAX as usize && max_stride <= u32::MAX as usize {
+        if max_dim <= u32::MAX as usize && max_stride <= u32::MAX as usize {
             IndexType::U32
         } else {
             IndexType::U64
@@ -25,7 +22,6 @@ impl IndexType {
 
     fn kernel_suffix(self) -> &'static str {
         match self {
-            IndexType::U16 => "_u16",
             IndexType::U32 => "",
             IndexType::U64 => "_u64",
         }
@@ -111,22 +107,6 @@ pub fn call_reduce_strided(
     encoder.set_compute_pipeline_state(&pipeline);
 
     match index_type {
-        IndexType::U16 => {
-            let dims: Vec<u16> = shape.iter().map(|&x| x as u16).collect();
-            let strs: Vec<u16> = strides.iter().map(|&x| x as u16).collect();
-            set_params!(
-                encoder,
-                (
-                    length,
-                    num_dims,
-                    dims.as_slice(),
-                    strs.as_slice(),
-                    work_per_threadgroup,
-                    &input,
-                    output
-                )
-            );
-        }
         IndexType::U32 => {
             let dims: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
             let strs: Vec<u32> = strides.iter().map(|&x| x as u32).collect();

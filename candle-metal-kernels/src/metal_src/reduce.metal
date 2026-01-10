@@ -801,9 +801,6 @@ kernel void NAME##_strided_u64(                                         \
     REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, ulong)           \
 }
 
-#define impl_reduce_strided_u16(OP, NAME, T) impl_reduce_strided_typed(OP, NAME, T, ushort, uint, _u16)
-#define impl_arg_reduce_strided_u16(OP, NAME, T) impl_arg_reduce_strided_typed(OP, NAME, T, ushort, uint, _u16)
-
 template<
     typename T,
     typename ReductionOp,
@@ -1652,24 +1649,6 @@ impl_reduce(Min, fast_min_u32, uint)
 impl_reduce(Min, fast_min_f16, half)
 impl_reduce(Min, fast_min_u8, uint8_t)
 
-// U16 fastest path kernels for small tensors
-impl_reduce_strided_u16(Sum, fast_sum_f32, float)
-impl_reduce_strided_u16(Sum, fast_sum_u32, uint)
-impl_reduce_strided_u16(Sum, fast_sum_f16, half)
-impl_reduce_strided_u16(Sum, fast_sum_u8, uint8_t)
-impl_reduce_strided_u16(Mul, fast_mul_f32, float)
-impl_reduce_strided_u16(Mul, fast_mul_u32, uint)
-impl_reduce_strided_u16(Mul, fast_mul_f16, half)
-impl_reduce_strided_u16(Mul, fast_mul_u8, uint8_t)
-impl_reduce_strided_u16(Max, fast_max_f32, float)
-impl_reduce_strided_u16(Max, fast_max_u32, uint)
-impl_reduce_strided_u16(Max, fast_max_f16, half)
-impl_reduce_strided_u16(Max, fast_max_u8, uint8_t)
-impl_reduce_strided_u16(Min, fast_min_f32, float)
-impl_reduce_strided_u16(Min, fast_min_u32, uint)
-impl_reduce_strided_u16(Min, fast_min_f16, half)
-impl_reduce_strided_u16(Min, fast_min_u8, uint8_t)
-
 // U64 fallback kernels for large tensors
 impl_reduce_strided_u64(Sum, fast_sum_f32, float)
 impl_reduce_strided_u64(Sum, fast_sum_u32, uint)
@@ -1698,16 +1677,6 @@ impl_arg_reduce(Max, fast_argmax_f16, half)
 impl_arg_reduce(Max, fast_argmax_u32, uint)
 impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
 
-// U16 fastest path for argmin/argmax
-impl_arg_reduce_strided_u16(Min, fast_argmin_f32, float)
-impl_arg_reduce_strided_u16(Min, fast_argmin_f16, half)
-impl_arg_reduce_strided_u16(Min, fast_argmin_u32, uint)
-impl_arg_reduce_strided_u16(Min, fast_argmin_u8, uint8_t)
-impl_arg_reduce_strided_u16(Max, fast_argmax_f32, float)
-impl_arg_reduce_strided_u16(Max, fast_argmax_f16, half)
-impl_arg_reduce_strided_u16(Max, fast_argmax_u32, uint)
-impl_arg_reduce_strided_u16(Max, fast_argmax_u8, uint8_t)
-
 // U64 fallback for argmin/argmax
 impl_arg_reduce_strided_u64(Min, fast_argmin_f32, float)
 impl_arg_reduce_strided_u64(Min, fast_argmin_f16, half)
@@ -1727,11 +1696,6 @@ impl_reduce(Mul, fast_mul_i64, int64_t)
 impl_reduce(Min, fast_min_i64, int64_t)
 impl_reduce(Max, fast_max_i64, int64_t)
 
-impl_reduce_strided_u16(Sum, fast_sum_i64, int64_t)
-impl_reduce_strided_u16(Mul, fast_mul_i64, int64_t)
-impl_reduce_strided_u16(Min, fast_min_i64, int64_t)
-impl_reduce_strided_u16(Max, fast_max_i64, int64_t)
-
 impl_reduce_strided_u64(Sum, fast_sum_i64, int64_t)
 impl_reduce_strided_u64(Mul, fast_mul_i64, int64_t)
 impl_reduce_strided_u64(Min, fast_min_i64, int64_t)
@@ -1739,9 +1703,6 @@ impl_reduce_strided_u64(Max, fast_max_i64, int64_t)
 
 impl_arg_reduce(Min, fast_argmin_i64, int64_t)
 impl_arg_reduce(Max, fast_argmax_i64, int64_t)
-
-impl_arg_reduce_strided_u16(Min, fast_argmin_i64, int64_t)
-impl_arg_reduce_strided_u16(Max, fast_argmax_i64, int64_t)
 
 impl_arg_reduce_strided_u64(Min, fast_argmin_i64, int64_t)
 impl_arg_reduce_strided_u64(Max, fast_argmax_i64, int64_t)
@@ -1753,11 +1714,6 @@ impl_reduce(Mul, fast_mul_bf16, bfloat)
 impl_reduce(Max, fast_max_bf16, bfloat)
 impl_reduce(Min, fast_min_bf16, bfloat)
 
-impl_reduce_strided_u16(Sum, fast_sum_bf16, bfloat)
-impl_reduce_strided_u16(Mul, fast_mul_bf16, bfloat)
-impl_reduce_strided_u16(Max, fast_max_bf16, bfloat)
-impl_reduce_strided_u16(Min, fast_min_bf16, bfloat)
-
 impl_reduce_strided_u64(Sum, fast_sum_bf16, bfloat)
 impl_reduce_strided_u64(Mul, fast_mul_bf16, bfloat)
 impl_reduce_strided_u64(Max, fast_max_bf16, bfloat)
@@ -1765,9 +1721,6 @@ impl_reduce_strided_u64(Min, fast_min_bf16, bfloat)
 
 impl_arg_reduce(Min, fast_argmin_bf16, bfloat)
 impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
-
-impl_arg_reduce_strided_u16(Min, fast_argmin_bf16, bfloat)
-impl_arg_reduce_strided_u16(Max, fast_argmax_bf16, bfloat)
 
 impl_arg_reduce_strided_u64(Min, fast_argmin_bf16, bfloat)
 impl_arg_reduce_strided_u64(Max, fast_argmax_bf16, bfloat)
