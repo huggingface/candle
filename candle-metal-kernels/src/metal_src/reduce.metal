@@ -113,7 +113,7 @@ struct indexer_t {};
 
 template<typename IndexT>
 struct indexer_t<IndexT, false> {
-    const IndexT last_dim;
+    const IndexT last_dim = 0;
 
     METAL_FUNC IndexT operator()(IndexT i) const {
         return i;
@@ -590,7 +590,7 @@ kernel void NAME(                                           \
     uint dst_id [[ threadgroup_position_in_grid ]],         \
     uint block_dim [[ threads_per_threadgroup ]]            \
 ) {                                                         \
-    indexer_t<uint, false> indexer { dims[num_dims - 1] };  \
+    indexer_t<uint, false> indexer;                         \
     switch (max_shared_mem<T>(block_dim)) {                 \
         reduce_case(OP, ARG(T), ARG(T), 2048, indexer);     \
         reduce_case(OP, ARG(T), ARG(T), 1024, indexer);     \
@@ -991,9 +991,8 @@ METAL_FUNC void softmax(
     uint dst_id [[ threadgroup_position_in_grid ]]
 ) {
     using MDReduceOp = MDReduceOp<T>;
-
     using Indexer = indexer_t<uint, false>;
-    Indexer indexer { 0 };
+    Indexer indexer;
     loader<T, MD<T>, MDReduceOp, BLOCKSIZE, Indexer> load;
     block_reducer<MD<T>, MDReduceOp, BLOCKSIZE> reduce(shared);
     finalize_softmax<T, BLOCKSIZE> softmax_finalize;
@@ -1201,8 +1200,9 @@ METAL_FUNC void rms_norm(
     uint tid [[ thread_index_in_threadgroup ]],
     uint dst_id [[ threadgroup_position_in_grid ]]
 ) {
-    Divide fast_divide;
     using Indexer = indexer_t<uint, false>;
+    Indexer indexer;
+    Divide fast_divide;
     loader<T, RMS<T>, RMSLoadOp<T>, BLOCKSIZE, Indexer> load;
     block_reducer<RMS<float>, RMSReduceOp<float>, BLOCKSIZE> reduce(shared);
 
@@ -1214,7 +1214,7 @@ METAL_FUNC void rms_norm(
     // Load with reduction from global memory into shared memory
     RMS<T> value = load(
         RMSLoadOp<T>::init(),
-        Indexer { 0 },
+        indexer,
         src_numel,
         el_per_block,
         src,
@@ -1386,8 +1386,9 @@ METAL_FUNC void layer_norm(
     uint dst_id [[ threadgroup_position_in_grid ]],
     uint lane_id [[thread_index_in_simdgroup]]
 ) {
-    Divide fast_divide;
     using Indexer = indexer_t<uint, false>;
+    Indexer indexer;
+    Divide fast_divide;
     loader<T, LayerNormValue<T>, LNLoadOp<T>, BLOCKSIZE, Indexer> load;
     block_reducer<LayerNormValue<float>, LNReduceOp<float>, BLOCKSIZE> reduce(shared);
 
@@ -1399,7 +1400,7 @@ METAL_FUNC void layer_norm(
     // Load with reduction from global memory into shared memory
     LayerNormValue<T> value = load(
         LNReduceOp<T>::init(),
-        Indexer { 0 },
+        indexer,
         src_numel,
         el_per_block,
         src,
