@@ -1,11 +1,3 @@
-/*
- * @Author: SpenserCai
- * @Date: 2026-01-04 10:00:56
- * @version:
- * @LastEditors: SpenserCai
- * @LastEditTime: 2026-01-05 11:19:04
- * @Description: file content
- */
 //! CosyVoice3 Frontend Components
 //!
 //! Audio processing and tokenization for CosyVoice3.
