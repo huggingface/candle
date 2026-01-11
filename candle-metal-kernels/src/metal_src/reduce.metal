@@ -109,10 +109,14 @@ METAL_FUNC IndexT get_strided_index_t(
 }
 
 template<typename IndexT, bool STRIDED>
-struct indexer_t {};
+struct indexer_t {
+    typedef IndexT I;
+};
 
 template<typename IndexT>
 struct indexer_t<IndexT, false> {
+    typedef IndexT I;
+
     const IndexT last_dim = 0;
 
     METAL_FUNC IndexT operator()(IndexT i) const {
@@ -122,6 +126,8 @@ struct indexer_t<IndexT, false> {
 
 template<typename IndexT>
 struct indexer_t<IndexT, true> {
+    typedef IndexT I;
+
     constant const IndexT &num_dims;
     constant const IndexT *dims;
     constant const IndexT *strides;
@@ -396,6 +402,7 @@ template<
     typename OP,
     ushort BLOCKSIZE,
     typename Indexer,
+    typename IndexT,
     typename _E = void
 >
 struct loader;
@@ -405,25 +412,26 @@ template<
     typename R,
     typename OP,
     ushort BLOCKSIZE,
-    typename Indexer
+    typename Indexer,
+    typename IndexT
 >
-struct loader<T, R, OP, BLOCKSIZE, Indexer, typename metal::enable_if_t<not_indexed_t<R>>> {
+struct loader<T, R, OP, BLOCKSIZE, Indexer, IndexT, typename metal::enable_if_t<not_indexed_t<R>>> {
     operation<OP, R> operate;
 
     METAL_FUNC R operator()(
         R value,
         Indexer indexer,
-        constant uint &src_numel,
-        constant uint &el_per_block,
+        constant IndexT &src_numel,
+        constant IndexT &el_per_block,
         device const T *src,
-        const uint offset,
+        const IndexT offset,
         const uint tid
     ) {
-        uint idx = tid + offset;
-        const uint stop_idx = min(el_per_block + offset, src_numel);
+        const IndexT idx = tid + offset;
+        const IndexT stop_idx = min(el_per_block + offset, src_numel);
 
         #pragma clang loop unroll(full)
-        for (uint i = idx; i < stop_idx; i += BLOCKSIZE) {
+        for (IndexT i = idx; i < stop_idx; i += BLOCKSIZE) {
             value = operate(value, src[indexer(i)]);
         }
         return value;
@@ -436,25 +444,26 @@ template<
     typename R,
     typename OP,
     ushort BLOCKSIZE,
-    typename Indexer
+    typename Indexer,
+    typename IndexT
 >
-struct loader<T, R, OP, BLOCKSIZE, Indexer, typename metal::enable_if_t<is_indexed_t<R>>> {
+struct loader<T, R, OP, BLOCKSIZE, Indexer, IndexT, typename metal::enable_if_t<is_indexed_t<R>>> {
     operation<OP, R> operate;
 
     METAL_FUNC R operator()(
         R value,
         Indexer indexer,
-        constant uint &src_numel,
-        constant uint &el_per_block,
+        constant IndexT &src_numel,
+        constant IndexT &el_per_block,
         device const T *src,
-        const uint offset,
+        const IndexT offset,
         const uint tid
     ) {
-        const uint thread_id = tid + offset;
-        const uint stop_idx = min(el_per_block + offset, src_numel);
+        const IndexT idx = tid + offset;
+        const IndexT stop_idx = min(el_per_block + offset, src_numel);
 
         #pragma clang loop unroll(full)
-        for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
+        for (IndexT i = idx; i < stop_idx; i += BLOCKSIZE) {
             value = operate(value, src[indexer(i)], i % indexer.last_dim);
         }
         return value;
@@ -534,23 +543,24 @@ template<
     typename R,
     typename OP,
     ushort BLOCKSIZE,
-    typename Indexer
+    typename Indexer,
+    typename IndexT = typename Indexer::IndexT
 >
 METAL_FUNC void reduce(
     Indexer indexer,
-    constant uint &src_numel,
-    constant uint &el_per_block,
+    constant IndexT &src_numel,
+    constant IndexT &el_per_block,
     device const T *src,
     device R *dst,
     threadgroup R shared[BLOCKSIZE],
     uint tid [[ thread_index_in_threadgroup ]],
     uint dst_id [[ threadgroup_position_in_grid ]]
 ) {
-    loader<T, R, OP, BLOCKSIZE, Indexer> load;
+    loader<T, R, OP, BLOCKSIZE, Indexer, IndexT> load;
     block_reducer<T, OP, BLOCKSIZE> reduce(shared);
 
     // Calculate offset for the threadgroup of current thread
-    const uint offset = dst_id * el_per_block;
+    const IndexT offset = dst_id * el_per_block;
 
     // Load with reduction from global memory into shared memory
     auto value = load(OP::init(), indexer, src_numel, el_per_block, src, offset, tid);
@@ -608,84 +618,23 @@ kernel void NAME(                                           \
 }
 
 
-#define impl_reduce_strided(OP, NAME, T) impl_reduce_strided_typed(OP, NAME, T, uint, uint, )
+#define impl_reduce_strided(OP, NAME, T) impl_reduce_strided_typed(OP, NAME, T, uint, )
 
 #define impl_reduce(OP, NAME, T)                        \
 impl_reduce_inner(OP, NAME, T)                          \
 impl_reduce_strided(OP, NAME, T)                        \
 
-template<typename T, typename R, typename OP, ushort BLOCKSIZE, typename Indexer, typename SizeT>
-struct loader_strided {
-    operation<OP, R> operate;
-
-    METAL_FUNC R operator()(
-        R value,
-        constant SizeT &src_numel,
-        Indexer indexer,
-        constant SizeT &el_per_block,
-        device const T *src,
-        const SizeT offset,
-        const uint tid
-    ) {
-        const SizeT idx = tid + offset;
-        const SizeT stop_idx = min(el_per_block + offset, src_numel);
-
-        #pragma clang loop unroll(full)
-        for (SizeT i = idx; i < stop_idx; i += BLOCKSIZE) {
-            value = operate(value, src[indexer(i)]);
-        }
-        return value;
-    }
-};
-
-template<typename T, typename R, typename OP, ushort BLOCKSIZE, typename Indexer, typename SizeT>
-struct loader_indexed {
-    operation<OP, R> operate;
-
-    METAL_FUNC R operator()(
-        R value,
-        constant SizeT &src_numel,
-        Indexer indexer,
-        constant SizeT &el_per_block,
-        device const T *src,
-        const SizeT offset,
-        const uint tid
-    ) {
-        const SizeT idx = tid + offset;
-        const SizeT stop_idx = min(el_per_block + offset, src_numel);
-
-        #pragma clang loop unroll(full)
-        for (SizeT i = idx; i < stop_idx; i += BLOCKSIZE) {
-            value = operate(value, src[indexer(i)], i % indexer.last_dim);
-        }
-        return value;
-    }
-};
-
-template<typename T, typename ReductionOp, ushort BLOCKSIZE, typename Indexer, typename SizeT>
-METAL_FUNC void reduce_strided_impl(
-    constant SizeT &src_numel,
-    Indexer indexer,
-    constant SizeT &el_per_block,
-    device const T *src,
-    device T *dst,
-    threadgroup T shared[BLOCKSIZE],
-    uint tid,
-    uint dst_id
-) {
-    loader_strided<T, T, ReductionOp, BLOCKSIZE, Indexer, SizeT> load;
-    block_reducer<T, ReductionOp, BLOCKSIZE> reducer(shared);
-    const SizeT offset = dst_id * el_per_block;
-    T value = load(ReductionOp::init(), src_numel, indexer, el_per_block, src, offset, tid);
-    T reduced = reducer(value, tid);
-    if (tid == 0) dst[dst_id] = reduced;
-}
-
-template<typename T, typename ReductionOp, ushort BLOCKSIZE, typename Indexer, typename SizeT>
+template<
+    typename T,
+    typename OP,
+    ushort BLOCKSIZE,
+    typename Indexer,
+    typename IndexT = typename Indexer::IndexT
+>
 METAL_FUNC void reduce_indexed_impl(
-    constant SizeT &src_numel,
     Indexer indexer,
-    constant SizeT &el_per_block,
+    constant IndexT &src_numel,
+    constant IndexT &el_per_block,
     device const T *src,
     device uint *dst,
     threadgroup indexed<T> shared[BLOCKSIZE],
@@ -693,53 +642,55 @@ METAL_FUNC void reduce_indexed_impl(
     uint dst_id
 ) {
     using I = indexed<T>;
-    loader_indexed<T, I, ReductionOp, BLOCKSIZE, Indexer, SizeT> load;
-    block_reducer<I, ReductionOp, BLOCKSIZE> reducer(shared);
-    const SizeT offset = dst_id * el_per_block;
-    I value = load(ReductionOp::init(), src_numel, indexer, el_per_block, src, offset, tid);
+    loader<T, I, OP, BLOCKSIZE, Indexer, IndexT> load;
+    block_reducer<I, OP, BLOCKSIZE> reducer(shared);
+    const IndexT offset = dst_id * el_per_block;
+    I value = load(OP::init(), indexer, src_numel, el_per_block, src, offset, tid);
     I result = reducer(value, tid);
     if (tid == 0) dst[dst_id] = result.i;
 }
 
-#define REDUCE_STRIDED_CASE(OP, T, N, INDEXER, SizeT)                   \
+#define REDUCE_STRIDED_CASE(OP, T, N, INDEXER)                          \
 case N: {                                                               \
     threadgroup T shared[N];                                            \
-    reduce_strided_impl<T, OP<T>, N, decltype(INDEXER), SizeT>(         \
-        src_numel, INDEXER, el_per_block, src, dst, shared, tid, dst_id); \
+    reduce<T, T, OP<T>, N, decltype(INDEXER)>(                          \
+        INDEXER, src_numel, el_per_block, src, dst, shared, tid, dst_id \
+    );                                                                  \
     break;                                                              \
 }
 
-#define REDUCE_INDEXED_CASE(OP, T, N, INDEXER, SizeT)                   \
+#define REDUCE_INDEXED_CASE(OP, T, N, INDEXER)                          \
 case N: {                                                               \
     threadgroup indexed<T> shared[N];                                   \
-    reduce_indexed_impl<T, OP<indexed<T>>, N, decltype(INDEXER), SizeT>( \
-        src_numel, INDEXER, el_per_block, src, dst, shared, tid, dst_id); \
+    reduce_indexed_impl<T, OP<indexed<T>>, N, decltype(INDEXER)>(       \
+        INDEXER, src_numel, el_per_block, src, dst, shared, tid, dst_id \
+    );                                                                  \
     break;                                                              \
 }
 
 #define REDUCE_SWITCH(CASE_MACRO, OP, T, INDEXER, SizeT)                \
     switch (max_shared_mem<T>(block_dim)) {                             \
-        CASE_MACRO(OP, ARG(T), 2048, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T), 1024, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),  512, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),  256, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),  128, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),   64, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),   32, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),   16, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),    8, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),    4, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),    2, INDEXER, SizeT)                    \
-        CASE_MACRO(OP, ARG(T),    1, INDEXER, SizeT)                    \
+        CASE_MACRO(OP, ARG(T), 2048, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T), 1024, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),  512, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),  256, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),  128, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),   64, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),   32, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),   16, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),    8, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),    4, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),    2, INDEXER)                    \
+        CASE_MACRO(OP, ARG(T),    1, INDEXER)                    \
     }
 
-#define impl_reduce_strided_typed(OP, NAME, T, IndexT, SizeT, SUFFIX)   \
+#define impl_reduce_strided_typed(OP, NAME, T, IndexT, SUFFIX)   \
 kernel void NAME##_strided##SUFFIX(                                     \
-    constant SizeT &src_numel,                                          \
+    constant IndexT &src_numel,                                          \
     constant IndexT &num_dims,                                          \
     constant IndexT *dims,                                              \
     constant IndexT *strides,                                           \
-    constant SizeT &el_per_block,                                       \
+    constant IndexT &el_per_block,                                       \
     device const T *src,                                                \
     device T *dst,                                                      \
     uint tid [[ thread_index_in_threadgroup ]],                         \
@@ -747,24 +698,24 @@ kernel void NAME##_strided##SUFFIX(                                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
     indexer_t<IndexT, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
-    REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, SizeT)           \
+    REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, IndexT)           \
 }
 
-#define impl_arg_reduce_strided_typed(OP, NAME, T, IndexT, SizeT, SUFFIX) \
-kernel void NAME##_strided##SUFFIX(                                     \
-    constant SizeT &src_numel,                                          \
+#define impl_arg_reduce_strided_typed(OP, NAME, T, IndexT)              \
+kernel void NAME##_strided(                                             \
+    constant IndexT &src_numel,                                         \
     constant IndexT &num_dims,                                          \
     constant IndexT *dims,                                              \
     constant IndexT *strides,                                           \
-    constant SizeT &el_per_block,                                       \
+    constant IndexT &el_per_block,                                      \
     device const T *src,                                                \
-    device uint *dst,                                                   \
+    device IndexT *dst,                                                 \
     uint tid [[ thread_index_in_threadgroup ]],                         \
     uint dst_id [[ threadgroup_position_in_grid ]],                     \
     uint block_dim [[ threads_per_threadgroup ]]                        \
 ) {                                                                     \
     indexer_t<IndexT, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
-    REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, SizeT)           \
+    REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, uint)           \
 }
 
 #define impl_reduce_strided_u64(OP, NAME, T)                            \
@@ -805,12 +756,13 @@ template<
     typename T,
     typename ReductionOp,
     ushort BLOCKSIZE,
-    typename Indexer
+    typename Indexer,
+    typename IndexT = typename Indexer::IndexT
 >
 METAL_FUNC void reduce(
     Indexer indexer,
-    constant uint &src_numel,
-    constant uint &el_per_block,
+    constant IndexT &src_numel,
+    constant IndexT &el_per_block,
     device const T *src,
     device uint *dst,
     threadgroup indexed<T> shared[BLOCKSIZE],
@@ -818,14 +770,14 @@ METAL_FUNC void reduce(
     uint dst_id [[ threadgroup_position_in_grid ]]
 ) {
     using I = indexed<T>;
-    loader<T, indexed<T>, ReductionOp, BLOCKSIZE, Indexer> load;
+    loader<T, I, ReductionOp, BLOCKSIZE, Indexer, IndexT> load;
     block_reducer<I, ReductionOp, BLOCKSIZE> reduce(shared);
 
     // Calculate offset for the threadgroup of current thread
     const uint offset = dst_id * el_per_block;
 
     // Load with reduction from global memory into shared memory
-    indexed<T> value = load(
+    auto value = load(
         ReductionOp::init(),
         indexer,
         src_numel,
@@ -887,8 +839,8 @@ kernel void NAME(                                       \
 }                                                       \
 
 
-// Default u32 indexed strided reduce (with pow2 optimization)
-#define impl_arg_reduce_strided(OP, NAME, T) impl_arg_reduce_strided_typed(OP, NAME, T, uint, uint, )
+// Default u32 indexed strided reduce
+#define impl_arg_reduce_strided(OP, NAME, T) impl_arg_reduce_strided_typed(OP, NAME, T, uint)
 
 #define impl_arg_reduce(OP, NAME, T)                    \
 impl_arg_reduce_inner(OP, NAME, T)                      \
@@ -990,7 +942,7 @@ METAL_FUNC void softmax(
     using MDReduceOp = MDReduceOp<T>;
     using Indexer = indexer_t<uint, false>;
     Indexer indexer;
-    loader<T, MD<T>, MDReduceOp, BLOCKSIZE, Indexer> load;
+    loader<T, MD<T>, MDReduceOp, BLOCKSIZE, Indexer, uint> load;
     block_reducer<MD<T>, MDReduceOp, BLOCKSIZE> reduce(shared);
     finalize_softmax<T, BLOCKSIZE> softmax_finalize;
 
@@ -1200,7 +1152,7 @@ METAL_FUNC void rms_norm(
     using Indexer = indexer_t<uint, false>;
     Indexer indexer;
     Divide fast_divide;
-    loader<T, RMS<T>, RMSLoadOp<T>, BLOCKSIZE, Indexer> load;
+    loader<T, RMS<T>, RMSLoadOp<T>, BLOCKSIZE, Indexer, uint> load;
     block_reducer<RMS<float>, RMSReduceOp<float>, BLOCKSIZE> reduce(shared);
 
     // Calculate offset for the threadgroup of current thread
@@ -1386,7 +1338,7 @@ METAL_FUNC void layer_norm(
     using Indexer = indexer_t<uint, false>;
     Indexer indexer;
     Divide fast_divide;
-    loader<T, LayerNormValue<T>, LNLoadOp<T>, BLOCKSIZE, Indexer> load;
+    loader<T, LayerNormValue<T>, LNLoadOp<T>, BLOCKSIZE, Indexer, uint> load;
     block_reducer<LayerNormValue<float>, LNReduceOp<float>, BLOCKSIZE> reduce(shared);
 
     // Calculate offset for the threadgroup of current thread
