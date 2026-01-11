@@ -1,6 +1,7 @@
 pub(crate) mod conv;
 pub(crate) mod cpu_flash_attention;
 pub(crate) mod layer_norm;
+pub(crate) mod norm;
 pub(crate) mod softmax;
 pub(crate) mod varlen_attention;
 
@@ -63,8 +64,9 @@ impl BenchDeviceHandler {
             devices.push(Device::new_metal(0)?);
         } else if cfg!(feature = "cuda") {
             devices.push(Device::new_cuda(0)?);
+        } else {
+            devices.push(Device::Cpu);
         }
-        devices.push(Device::Cpu);
         Ok(Self { devices })
     }
 }
