@@ -613,29 +613,7 @@ kernel void NAME(                                           \
     uint block_dim [[ threads_per_threadgroup ]]            \
 ) {                                                         \
     indexer_t<IDX, false> indexer;                          \
-    switch (max_shared_mem<T>(block_dim)) {                 \
-        reduce_case(OP, ARG(T), ARG(T), 2048, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T), 1024, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),  512, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),  256, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),  128, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),   64, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),   32, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),   16, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),    8, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),    4, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),    2, indexer);     \
-        reduce_case(OP, ARG(T), ARG(T),    1, indexer);     \
-    }                                                       \
-}
-
-#define REDUCE_INDEXED_CASE(OP, T, R, N, INDEXER)                       \
-case N: {                                                               \
-    threadgroup indexed<T> shared[N];                                   \
-    reduce<T, OP<indexed<T>>, N, decltype(INDEXER)>(                    \
-        INDEXER, src_numel, el_per_block, src, dst, shared, tid, dst_id \
-    );                                                                  \
-    break;                                                              \
+    reduce_switch(reduce_case, OP, T, T, indexer)           \
 }
 
 #define reduce_switch(CASE_MACRO, OP, T, R, INDEXER)    \
@@ -667,7 +645,7 @@ kernel void NAME##_strided(                             \
     uint dst_id [[ threadgroup_position_in_grid ]],     \
     uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
-    indexer_t<IDX, true> indexer{                       \
+    indexer_t<IDX, true> indexer {                      \
         num_dims, dims, strides, dims[num_dims - 1]     \
     };                                                  \
     reduce_switch(reduce_case, OP, T, T, indexer)       \
@@ -690,10 +668,10 @@ kernel void NAME##_strided(                                 \
     uint dst_id [[ threadgroup_position_in_grid ]],         \
     uint block_dim [[ threads_per_threadgroup ]]            \
 ) {                                                         \
-    indexer_t<IDX, true> indexer{                           \
+    indexer_t<IDX, true> indexer {                          \
         num_dims, dims, strides, dims[num_dims - 1]         \
     };                                                      \
-    reduce_switch(REDUCE_INDEXED_CASE, OP, T, T, indexer)   \
+    reduce_switch(arg_reduce_case, OP, T, T, indexer)       \
 }
 
 #define impl_reduce_strided_u64(OP, NAME, T)                \
@@ -709,7 +687,7 @@ kernel void NAME##_strided_u64(                             \
     uint dst_id [[ threadgroup_position_in_grid ]],         \
     uint block_dim [[ threads_per_threadgroup ]]            \
 ) {                                                         \
-    indexer_t<ulong, true> indexer{                         \
+    indexer_t<ulong, true> indexer {                        \
         num_dims, dims, strides, dims[num_dims - 1]         \
     };                                                      \
     reduce_switch(reduce_case, OP, T, T, indexer)           \
@@ -728,10 +706,10 @@ kernel void NAME##_strided_u64(                             \
     uint dst_id [[ threadgroup_position_in_grid ]],         \
     uint block_dim [[ threads_per_threadgroup ]]            \
 ) {                                                         \
-    indexer_t<ulong, true> indexer{                         \
+    indexer_t<ulong, true> indexer {                        \
         num_dims, dims, strides, dims[num_dims - 1]         \
     };                                                      \
-    reduce_switch(REDUCE_INDEXED_CASE, OP, T, T, indexer)   \
+    reduce_switch(arg_reduce_case, OP, T, T, indexer)       \
 }
 
 template<
@@ -776,11 +754,11 @@ METAL_FUNC void reduce(
     if (tid == 0) dst[dst_id] = result.i;
 }
 
-#define arg_reduce_case(OP, T, N, INDEXER)              \
+#define arg_reduce_case(OP, T, R, N, INDEXER)           \
 case N: {                                               \
-    using I = indexed<T>;                               \
+    using I = indexed<R>;                               \
     threadgroup I shared[N];                            \
-    reduce<T, OP<I>, N, decltype(INDEXER)>(             \
+    reduce<T, OP<I>, N>(                                \
         indexer,                                        \
         src_numel,                                      \
         el_per_block,                                   \
@@ -804,20 +782,10 @@ kernel void NAME(                                       \
     uint dst_id [[ threadgroup_position_in_grid ]],     \
     uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
-    indexer_t<uint, false> indexer { dims[num_dims - 1] };  \
-    switch (max_shared_mem<indexed<T>>(block_dim)) {    \
-        arg_reduce_case(OP, ARG(T), 1024, indexer);     \
-        arg_reduce_case(OP, ARG(T), 512, indexer);               \
-        arg_reduce_case(OP, ARG(T), 256, indexer);               \
-        arg_reduce_case(OP, ARG(T), 128, indexer);               \
-        arg_reduce_case(OP, ARG(T), 64, indexer);                \
-        arg_reduce_case(OP, ARG(T), 32, indexer);                \
-        arg_reduce_case(OP, ARG(T), 16, indexer);                \
-        arg_reduce_case(OP, ARG(T), 8, indexer);                 \
-        arg_reduce_case(OP, ARG(T), 4, indexer);                 \
-        arg_reduce_case(OP, ARG(T), 2, indexer);                 \
-        arg_reduce_case(OP, ARG(T), 1, indexer);                 \
-    }                                                   \
+    indexer_t<uint, false> indexer {                    \
+        dims[num_dims - 1]                              \
+    };                                                  \
+    reduce_switch(arg_reduce_case, OP, T, T, indexer)   \
 }                                                       \
 
 
