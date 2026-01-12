@@ -2,10 +2,12 @@
 
 The [RWKV model](https://wiki.rwkv.com/) is a recurrent neural network model
 with performance on par with transformer architectures. Several variants are
-available, candle implements the v5 and v6 versions and can be used with
+available, candle implements the v5, v6 and v7 versions and can be used with
 Eagle 7B([blog post](https://blog.rwkv.com/p/eagle-7b-soaring-past-transformers)).
 
 ```bash
+# if want to try rwkv_v7
+# $ cargo run --example rwkv --release -- --which g1a-0b1 --prompt "User: why is the sky blue?\n\nAssistant: "
 $ cargo run --example rwkv --release -- --prompt "The smallest prime is "
 avx: true, neon: false, simd128: false, f16c: true
 temp: 0.00 repeat-penalty: 1.10 repeat-last-n: 64
