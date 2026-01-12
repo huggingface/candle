@@ -216,6 +216,21 @@ impl Decoder {
     /// # Returns
     /// Multi-scale outputs (last one is highest resolution)
     pub fn forward(&self, features: &[Tensor]) -> Result<Vec<Tensor>> {
+        // Debug helper
+        #[cfg(debug_assertions)]
+        fn print_stats(name: &str, t: &Tensor) {
+            if let Ok(t_cpu) = t.to_device(&candle::Device::Cpu) {
+                if let Ok(flat) = t_cpu.flatten_all() {
+                    if let Ok(data) = flat.to_vec1::<f32>() {
+                        let min = data.iter().cloned().fold(f32::INFINITY, f32::min);
+                        let max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                        let mean: f32 = data.iter().sum::<f32>() / data.len() as f32;
+                        eprintln!("  Decoder {}: shape={:?}, min={:.4}, max={:.4}, mean={:.4}", name, t.dims(), min, max, mean);
+                    }
+                }
+            }
+        }
+
         let (x, x1, x2, x3, x4) = (
             &features[0],
             &features[1],
@@ -234,19 +249,29 @@ impl Decoder {
             };
             let (_, _, h, w) = x4.dims4()?;
             let ipt = ipt_blk5.forward(&patches.upsample_bilinear2d(h, w, true)?)?;
+            #[cfg(debug_assertions)]
+            print_stats("ipt_blk5", &ipt);
             Tensor::cat(&[x4.clone(), ipt], 1)?
         } else {
             x4.clone()
         };
 
+        #[cfg(debug_assertions)]
+        eprintln!("  Decoder decoder_block4 input:");
         let p4 = self.decoder_block4.forward(&x4)?;
+        #[cfg(debug_assertions)]
+        print_stats("decoder_block4 output", &p4);
+        
         if let Some(conv) = &self.conv_ms_spvn_4 {
             outs.push(conv.forward(&p4)?);
         }
 
         let (_, _, h3, w3) = x3.dims4()?;
         let _p4 = p4.upsample_bilinear2d(h3, w3, true)?;
-        let _p3 = (_p4 + self.lateral_block4.forward(x3)?)?;
+        let lateral4 = self.lateral_block4.forward(x3)?;
+        #[cfg(debug_assertions)]
+        print_stats("lateral_block4", &lateral4);
+        let _p3 = (_p4 + lateral4)?;
 
         // Stage 3
         let _p3 = if let Some(ipt_blk4) = &self.ipt_blk4 {
@@ -256,19 +281,45 @@ impl Decoder {
                 x.clone()
             };
             let ipt = ipt_blk4.forward(&patches.upsample_bilinear2d(h3, w3, true)?)?;
+            #[cfg(debug_assertions)]
+            print_stats("ipt_blk4", &ipt);
             Tensor::cat(&[_p3, ipt], 1)?
         } else {
             _p3
         };
 
+        #[cfg(debug_assertions)]
+        {
+            fn print_stats_inline(name: &str, t: &Tensor) {
+                if let Ok(t_cpu) = t.to_device(&candle::Device::Cpu) {
+                    if let Ok(flat) = t_cpu.flatten_all() {
+                        if let Ok(data) = flat.to_vec1::<f32>() {
+                            let min = data.iter().cloned().fold(f32::INFINITY, f32::min);
+                            let max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                            let mean: f32 = data.iter().sum::<f32>() / data.len() as f32;
+                            eprintln!("  Decoder {}: shape={:?}, min={:.4}, max={:.4}, mean={:.4}", name, t.dims(), min, max, mean);
+                        }
+                    }
+                }
+            }
+            print_stats_inline("decoder_block3 actual input (_p3)", &_p3);
+        }
+        #[cfg(debug_assertions)]
+        eprintln!("  Decoder decoder_block3 input:");
         let p3 = self.decoder_block3.forward(&_p3)?;
+        #[cfg(debug_assertions)]
+        print_stats("decoder_block3 output", &p3);
+        
         if let Some(conv) = &self.conv_ms_spvn_3 {
             outs.push(conv.forward(&p3)?);
         }
 
         let (_, _, h2, w2) = x2.dims4()?;
         let _p3 = p3.upsample_bilinear2d(h2, w2, true)?;
-        let _p2 = (_p3 + self.lateral_block3.forward(x2)?)?;
+        let lateral3 = self.lateral_block3.forward(x2)?;
+        #[cfg(debug_assertions)]
+        print_stats("lateral_block3", &lateral3);
+        let _p2 = (_p3 + lateral3)?;
 
         // Stage 2
         let _p2 = if let Some(ipt_blk3) = &self.ipt_blk3 {
@@ -278,19 +329,29 @@ impl Decoder {
                 x.clone()
             };
             let ipt = ipt_blk3.forward(&patches.upsample_bilinear2d(h2, w2, true)?)?;
+            #[cfg(debug_assertions)]
+            print_stats("ipt_blk3", &ipt);
             Tensor::cat(&[_p2, ipt], 1)?
         } else {
             _p2
         };
 
+        #[cfg(debug_assertions)]
+        eprintln!("  Decoder decoder_block2 input:");
         let p2 = self.decoder_block2.forward(&_p2)?;
+        #[cfg(debug_assertions)]
+        print_stats("decoder_block2 output", &p2);
+        
         if let Some(conv) = &self.conv_ms_spvn_2 {
             outs.push(conv.forward(&p2)?);
         }
 
         let (_, _, h1, w1) = x1.dims4()?;
         let _p2 = p2.upsample_bilinear2d(h1, w1, true)?;
-        let _p1 = (_p2 + self.lateral_block2.forward(x1)?)?;
+        let lateral2 = self.lateral_block2.forward(x1)?;
+        #[cfg(debug_assertions)]
+        print_stats("lateral_block2", &lateral2);
+        let _p1 = (_p2 + lateral2)?;
 
         // Stage 1
         let _p1 = if let Some(ipt_blk2) = &self.ipt_blk2 {
@@ -300,12 +361,19 @@ impl Decoder {
                 x.clone()
             };
             let ipt = ipt_blk2.forward(&patches.upsample_bilinear2d(h1, w1, true)?)?;
+            #[cfg(debug_assertions)]
+            print_stats("ipt_blk2", &ipt);
             Tensor::cat(&[_p1, ipt], 1)?
         } else {
             _p1
         };
 
+        #[cfg(debug_assertions)]
+        eprintln!("  Decoder decoder_block1 input:");
         let _p1 = self.decoder_block1.forward(&_p1)?;
+        #[cfg(debug_assertions)]
+        print_stats("decoder_block1 output", &_p1);
+        
         let (_, _, h, w) = x.dims4()?;
         let _p1 = _p1.upsample_bilinear2d(h, w, true)?;
 
@@ -317,12 +385,16 @@ impl Decoder {
                 x.clone()
             };
             let ipt = ipt_blk1.forward(&patches.upsample_bilinear2d(h, w, true)?)?;
+            #[cfg(debug_assertions)]
+            print_stats("ipt_blk1", &ipt);
             Tensor::cat(&[_p1, ipt], 1)?
         } else {
             _p1
         };
 
         let p1_out = self.conv_out1.forward(&_p1)?;
+        #[cfg(debug_assertions)]
+        print_stats("conv_out1", &p1_out);
         outs.push(p1_out);
 
         Ok(outs)
