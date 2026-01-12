@@ -1,16 +1,16 @@
 use anyhow::Result;
 use candle_core::{backend::BackendStorage, CustomOp1, Device, Tensor};
-use candle_wgpu_kernels::{PipelineIndex, ShaderIndex};
+use wgpu_compute_engine::{PipelineIndex, ShaderIndex};
 
 //this demonstrates, how a custom wgpu kernel can be used:
 #[derive(Debug)]
 struct MyCustomLoader{}
 
-candle_wgpu_kernels::create_loader!(MyCustomLoader);
+wgpu_compute_engine::create_loader!(MyCustomLoader);
 
-impl candle_wgpu_kernels::ShaderLoader for MyCustomLoader {
+impl wgpu_compute_engine::ShaderLoader for MyCustomLoader {
     //define the shader:
-    fn load(&self, _: candle_wgpu_kernels::ShaderIndex) -> &str {
+    fn load(&self, _: wgpu_compute_engine::ShaderIndex) -> &str {
         "
 //Binding Order: Dest, Meta, Input1, Input2, Input3
 @group(0) @binding(0)
@@ -34,7 +34,7 @@ fn main2() {
     }
 
     //define the entry point:
-    fn get_entry_point(&self, index: candle_wgpu_kernels::PipelineIndex) -> &str {
+    fn get_entry_point(&self, index: wgpu_compute_engine::PipelineIndex) -> &str {
         match index.get_index() {
             0 => "main1",
             1 => "main2",
@@ -67,7 +67,7 @@ fn main() -> Result<()> {
    
     //3. define the bindgroup to use (defines dest, input buffer and the alignment)
     let bind_group = wgpu_device.create_bind_group_input0(
-        *output_buffer.buffer(),
+        output_buffer.buffer(),
         candle_core::DType::U32.into(),
     );
 
@@ -133,8 +133,8 @@ impl CustomOp1 for CustomExampleOp {
 
         //4. define the bindgroup to use (defines dest, input buffer and the alignment)
         let bind_group = storage.device().create_bind_group_input1(
-            *output_buffer.buffer(),
-            *storage.buffer(),
+            output_buffer.buffer(),
+            storage.buffer(),
             candle_core::DType::U32.into(),
         );
 

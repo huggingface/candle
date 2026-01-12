@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tracing::instrument;
 
 use super::PipelineReference;
-use crate::wgpu_backend::wgpu_functions;
+use crate::wgpu_functions;
 #[derive(Debug)]
 pub struct ShaderModuleComputePipelines {
     pub(crate) shader: Arc<wgpu::ShaderModule>,
@@ -12,31 +12,22 @@ pub struct ShaderModuleComputePipelines {
 
 #[derive(Debug)]
 pub(crate) struct ShaderCache {
-    pub(crate) loader_cache: candle_wgpu_kernels::ShaderLoaderCache,
-    pub(crate) shaders: HashMap<candle_wgpu_kernels::ShaderIndex, ShaderModuleComputePipelines>,
+    pub(crate) loader_cache: crate::shader_loader::ShaderLoaderCache,
+    pub(crate) shaders: HashMap<crate::shader_loader::ShaderIndex, ShaderModuleComputePipelines>,
 }
 
 impl ShaderCache {
     pub(crate) fn new() -> Self {
-        let mut loader_cache = candle_wgpu_kernels::ShaderLoaderCache::new();
-        loader_cache
-            .add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX, || {
-                candle_wgpu_kernels::DefaultWgpuShader {}
-            });
-
-        loader_cache.add_wgpu_shader_loader(
-            candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX,
-            || candle_wgpu_kernels::DefaultWgpuDynamicShader::new(),
-        );
+        let loader_cache = crate::shader_loader::ShaderLoaderCache::new();
         Self {
             loader_cache,
             shaders: HashMap::default(),
         }
     }
 
-    pub fn add_wgpu_shader_loader<T: candle_wgpu_kernels::ShaderLoader + 'static + Send + Sync>(
+    pub fn add_wgpu_shader_loader<T: crate::shader_loader::ShaderLoader + 'static + Send + Sync>(
         &mut self,
-        index: candle_wgpu_kernels::LoaderIndex,
+        index: crate::shader_loader::LoaderIndex,
         shader_loader: impl Fn() -> T,
     ) {
         self.loader_cache

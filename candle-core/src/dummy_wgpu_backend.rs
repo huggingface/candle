@@ -24,7 +24,7 @@ pub enum Backend {
 }
 
 #[derive(Debug, Clone, std::marker::Copy)]
-pub struct WgpuBackends(u32);
+pub struct WgpuBackends(pub u32);
 
 impl WgpuBackends {
     pub fn vulkan() -> Self {
@@ -118,6 +118,21 @@ impl Default for WgpuDeviceConfig {
             backend: WgpuBackends::metal()
                 | WgpuBackends::vulkan()
                 | WgpuBackends::browser_webgpu(), //directx shader compilation is much slower than vulkan. (like 300secs vs 5s there is a faster copmiler, but this would need additional .dlls, and with this compilations needs 30s as well)
+        }
+    }
+}
+
+#[cfg(feature = "wgpu")]
+impl From<WgpuDeviceConfig> for wgpu_compute_engine::WgpuDeviceConfig {
+    fn from(val: WgpuDeviceConfig) -> Self {
+        wgpu_compute_engine::WgpuDeviceConfig {
+            meta_buffer_size: val.meta_buffer_size,
+            max_workload_size: val.max_workload_size,
+            buffer_cached_max_allowed_size: val.buffer_cached_max_allowed_size,
+            use_cache: val.use_cache,
+            flush_gpu_before_buffer_init: val.flush_gpu_before_buffer_init,
+            buffer_mapping_size: val.buffer_mapping_size,
+            backend: wgpu_compute_engine::WgpuBackends(val.backend.0),
         }
     }
 }

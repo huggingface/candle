@@ -51,7 +51,7 @@ fn load_recording_consts(device : &Device) -> Result<(), Box<dyn std::error::Err
     let debug_recordings_consts :  Vec<Vec<(&'static str, f64)>> = serde_json::from_str(DEBUG_USED_CONSTS)?;
     match &device{
         Device::Wgpu(wgpu) => {
-            wgpu.load_simulation_consts(debug_recordings_consts);
+            wgpu.inner_device().load_simulation_consts(debug_recordings_consts);
            
         },
         _ => todo!(),
@@ -131,7 +131,7 @@ async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
     match &device{
         Device::Wgpu(wgpu) => {
             for alg in algs{
-                *wgpu.matmul_alg.lock().unwrap() = alg.clone();
+                wgpu.inner_device().set_extension(alg.clone());
 
                 test_func(&device, 1000, || {
                     buffer_a.matmul(&buffer_b).unwrap();
@@ -179,7 +179,7 @@ pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
     load_recording_consts(&device)?;
     let buffers = create_buffers(&device)?;
 
-    let debug_recordings : Vec<candle::wgpu_backend::DebugPipelineRecording> = serde_json::from_str(DEBUG_USED_PIPELINES)?;
+    let debug_recordings : Vec<wgpu_compute_engine::DebugPipelineRecording> = serde_json::from_str(DEBUG_USED_PIPELINES)?;
     //let debug_recordings : Vec<_> = debug_recordings.iter().filter(|v| matches!(&v.pipeline.0.into(), Pipelines::Matmul64x648x8(_,_))).collect();
 
     let mut measurements : Vec<MeasurementInfo> = vec![];

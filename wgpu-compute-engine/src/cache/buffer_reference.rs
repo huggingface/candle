@@ -2,7 +2,7 @@
 
 use tracing::instrument;
 
-use crate::wgpu_backend::util::{ReferenceTrait, Storage, StorageTrait};
+use crate::util::{ReferenceTrait, Storage, StorageTrait};
 
 use super::{BufferReferenceId, CachedBufferId};
 
@@ -102,8 +102,7 @@ impl BufferReferenceStorage {
 
     #[instrument(skip(self, referece))]
     pub(crate) fn insert(&mut self, referece: BufferReference) -> BufferReferenceId {
-        let id = self.storage.insert(referece);
-        id
+        self.storage.insert(referece)
     }
 
     pub fn get(&self, id: &BufferReferenceId) -> Option<&BufferReference> {

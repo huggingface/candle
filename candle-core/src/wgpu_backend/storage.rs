@@ -1,94 +1,88 @@
 use crate::{DType, Layout, Shape};
 
+use wgpu_compute_engine::{cache::BufferReferenceId, wgpu_functions::read_from_buffer_reference_async};
 use super::{
-    cache::BufferReferenceId,
     device::WgpuDevice,
     wgpu_functions::{
         self, binary::BinaryOperation, cmp::CmpOperation, matmul::SGEMMParams,
-        read_from_buffer_reference_async, reduce::ReduceOperations, unary::UnaryOperation,
+        reduce::ReduceOperations, unary::UnaryOperation,
         WgpuTensor,
     },
 };
 
 #[derive(Debug)]
-pub struct WgpuStorage {
-    buffer: BufferReferenceId,
-    size: u64,
-    wgpu_device: WgpuDevice,
-    dtype: crate::DType,
-    is_original: bool, //We may have a temporary representation of a buffer. Nothing happens on Drop if this is not the original object.
-}
+pub struct WgpuStorage(pub (crate)wgpu_compute_engine::WgpuStorage, pub (crate)WgpuDevice);
 
-impl WgpuStorage {
-    pub fn buffer(&self) -> &BufferReferenceId {
-        &self.buffer
-    }
-
+impl WgpuStorage{
     pub fn device(&self) -> &WgpuDevice {
-        &self.wgpu_device
+        &self.1
     }
 
     pub fn dtype(&self) -> crate::DType {
-        self.dtype
+        self.0.wgpu_dtype().into()
     }
 
+    pub fn wgpu_dtype(&self) -> wgpu_compute_engine::DType {
+        self.0.wgpu_dtype()
+    }
+
+    pub fn buffer(&self) -> BufferReferenceId {
+        self.0.buffer()
+    }
+
+    pub fn size(&self) -> u64 {
+        self.0.size_in_bytes() as u64
+    }
+
+    pub fn size_in_bytes(&self) -> usize {
+        self.0.size_in_bytes()
+    }
+}
+
+impl WgpuStorage {
     pub fn new(
         buffer: BufferReferenceId,
-        wgpu_device: WgpuDevice,
+        wgpu_device: super::WgpuDevice,
         dtype: crate::DType,
         size: u64,
     ) -> Self {
-        Self {
-            buffer,
-            wgpu_device,
-            dtype,
-            size,
-            is_original: true,
-        }
+        Self(wgpu_compute_engine::WgpuStorage::new(buffer, wgpu_device.inner_device().clone(), dtype.into(), size), wgpu_device)
     }
 
     pub(crate) fn temporary_clone(&self) -> Self {
-        Self {
-            buffer: self.buffer,
-            size: self.size,
-            wgpu_device: self.wgpu_device.clone(),
-            dtype: self.dtype,
-            is_original: false,
+        unsafe {
+            Self(self.0.temporary_clone(), self.1.clone())
         }
     }
 
     pub async fn to_cpu_storage_async(&self) -> crate::Result<crate::CpuStorage> {
-        match self.dtype {
+        match self.dtype() {
             crate::DType::U32 => Ok(crate::CpuStorage::U32(
-                read_from_buffer_reference_async(&self.wgpu_device, self.buffer).await?,
+               read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
             )),
             crate::DType::F32 => Ok(crate::CpuStorage::F32(
-                read_from_buffer_reference_async(&self.wgpu_device, self.buffer).await?,
+                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
             )),
             crate::DType::U8 => Ok(crate::CpuStorage::U8(
-                read_from_buffer_reference_async(&self.wgpu_device, self.buffer).await?,
+                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
             )),
             crate::DType::I64 => Ok(crate::CpuStorage::I64(
-                read_from_buffer_reference_async(&self.wgpu_device, self.buffer).await?,
+                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
             )),
             crate::DType::F64 => Ok(crate::CpuStorage::F64(
-                read_from_buffer_reference_async(&self.wgpu_device, self.buffer).await?,
+                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
             )),
             crate::DType::F16 => Ok(crate::CpuStorage::F16(
-                read_from_buffer_reference_async(&self.wgpu_device, self.buffer).await?,
+                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
             )),
             _ => todo!(),
         }
     }
 
-    pub fn size_in_bytes(&self) -> usize {
-        self.size as usize
-    }
-
     fn try_clone_layout(&self, layout: &crate::Layout) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, layout.shape().elem_count());
+            .alloc_uninit_size(self.dtype(), layout.shape().elem_count());
         self.copy_strided_src(&buffer_dest, 0, layout)?;
         Ok(buffer_dest)
     }
@@ -102,23 +96,23 @@ impl WgpuStorage {
         match src_l.contiguous_offsets() {
             Some((start, end)) => {
                 let len = end - start;
-                let to_copy = ((dst.size as usize / 4) - dst_offset).min(len);
+                let to_copy = ((dst.size() as usize / 4) - dst_offset).min(len);
                 wgpu_functions::queue_copy(
                     self.device(),
-                    dst.buffer,
-                    self.buffer,
+                    dst.buffer(),
+                    self.buffer(),
                     dst_offset,
                     start,
                     to_copy,
-                    self.dtype,
+                    self.dtype(),
                 )?;
             }
             None => {
                 wgpu_functions::queue_copy_strided(
                     self.device(),
-                    dst.buffer,
-                    self.buffer,
-                    self.dtype,
+                    dst.buffer(),
+                    self.buffer(),
+                    self.dtype(),
                     src_l,
                     dst_offset as u32,
                 )?;
@@ -134,26 +128,26 @@ impl crate::backend::BackendStorage for WgpuStorage {
     fn try_clone(&self, _: &crate::Layout) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, self.size / self.dtype().size_in_bytes() as u64);
+            .alloc_uninit_size(self.dtype(), self.size() / self.dtype().size_in_bytes() as u64);
         wgpu_functions::queue_copy(
             self.device(),
-            buffer_dest.buffer,
-            self.buffer,
+            buffer_dest.buffer(),
+            self.buffer(),
             0,
             0,
-            (self.size / 4) as usize,
-            self.dtype,
+            (self.size() / 4) as usize,
+            self.dtype(),
         )?;
 
         Ok(buffer_dest)
     }
 
     fn dtype(&self) -> crate::DType {
-        self.dtype
+        self.0.wgpu_dtype().into()
     }
 
     fn device(&self) -> &Self::Device {
-        &self.wgpu_device
+        &self.1
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -171,15 +165,15 @@ impl crate::backend::BackendStorage for WgpuStorage {
     fn affine(&self, layout: &crate::Layout, mul: f64, add: f64) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, layout.shape().elem_count());
+            .alloc_uninit_size(self.dtype(), layout.shape().elem_count());
         wgpu_functions::queue_unary_from_buffer_op(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(layout, self.buffer),
+            buffer_dest.buffer(),
+            WgpuTensor::new(layout, self.buffer()),
             UnaryOperation::Affine,
             mul as f32,
             add as f32,
-            self.dtype,
+            self.dtype(),
         )?;
         Ok(buffer_dest)
     }
@@ -187,15 +181,15 @@ impl crate::backend::BackendStorage for WgpuStorage {
     fn powf(&self, layout: &crate::Layout, e: f64) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, layout.shape().elem_count());
+            .alloc_uninit_size(self.dtype(), layout.shape().elem_count());
         wgpu_functions::queue_unary_from_buffer_op(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(layout, self.buffer),
+            buffer_dest.buffer(),
+            WgpuTensor::new(layout, self.buffer()),
             UnaryOperation::PowScalar,
             e as f32,
             0.0,
-            self.dtype,
+            self.dtype(),
         )?;
         Ok(buffer_dest)
     }
@@ -203,15 +197,15 @@ impl crate::backend::BackendStorage for WgpuStorage {
     fn elu(&self, layout: &crate::Layout, alpha: f64) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, layout.shape().elem_count());
+            .alloc_uninit_size(self.dtype(), layout.shape().elem_count());
         wgpu_functions::queue_unary_from_buffer_op(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(layout, self.buffer),
+            buffer_dest.buffer(),
+            WgpuTensor::new(layout, self.buffer()),
             UnaryOperation::Elu,
             alpha as f32,
             0.0,
-            self.dtype,
+            self.dtype(),
         )?;
         Ok(buffer_dest)
     }
@@ -248,7 +242,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
         let output_dtype = match reduce_op {
             crate::op::ReduceOp::ArgMin | crate::op::ReduceOp::ArgMax => crate::DType::U32,
-            _ => self.dtype,
+            _ => self.dtype(),
         };
 
         let buffer_dest = self
@@ -308,7 +302,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
                 output_buffer,
                 prev_buffer,
                 op,
-                self.dtype,
+                self.dtype(),
                 layout,
                 wgpu_functions::reduce::ReduceParams {
                     dest_size: output_size,
@@ -339,13 +333,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
                     let output_count = current_shape.iter().product::<usize>();
 
-                    let mut cache = self.device().cache.lock().unwrap();
-                    let buffer_temp = cache
-                        .create_buffer_reference(output_count * self.dtype.size_in_bytes(), false);
+                    let buffer_temp = self.device().inner_device()
+                        .create_buffer_reference(output_count * self.dtype().size_in_bytes(), false);
 
                     let (prev_buffer, l) = match current_buffer {
                         Some(buffer) => (buffer, &l),
-                        None => (self.buffer, layout),
+                        None => (self.buffer(), layout),
                     };
 
                     call_reduce(
@@ -377,11 +370,11 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
                 let (prev_buffer, l) = match current_buffer {
                     Some(buffer) => (buffer, &l),
-                    None => (self.buffer, layout),
+                    None => (self.buffer(), layout),
                 };
 
                 call_reduce(
-                    buffer_dest.buffer,
+                    buffer_dest.buffer(),
                     dst_shape.elem_count() as u32,
                     start_reduce_dim,
                     end_reduce_dim,
@@ -404,10 +397,10 @@ impl crate::backend::BackendStorage for WgpuStorage {
         lhs_l: &crate::Layout,
         rhs_l: &crate::Layout,
     ) -> crate::Result<Self> {
-        let buffer_size = lhs_l.shape().elem_count().div_ceil(4) * 4; //TODO: get next divisible by 4
+        let buffer_size = lhs_l.shape().elem_count().div_ceil(4) * 4;
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(crate::DType::U8, buffer_size);
+            .alloc_uninit_size(DType::U8, buffer_size);
 
         let op2 = match op {
             crate::op::CmpOp::Eq => CmpOperation::Eq,
@@ -420,17 +413,17 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
         wgpu_functions::queue_cmp_buffer_from_buffer(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(lhs_l, self.buffer),
-            WgpuTensor::new(rhs_l, rhs.buffer),
+            buffer_dest.buffer(),
+            WgpuTensor::new(lhs_l, self.buffer()),
+            WgpuTensor::new(rhs_l, rhs.buffer()),
             op2,
-            self.dtype,
+            self.dtype(),
         )?;
         Ok(buffer_dest)
     }
 
     fn to_dtype(&self, layout: &crate::Layout, dtype: crate::DType) -> crate::Result<Self> {
-        match (self.dtype, dtype) {
+        match (self.dtype(), dtype) {
             (DType::F32, DType::F32) => self.try_clone_layout(layout),
             (DType::U32, DType::U32) => self.try_clone_layout(layout),
             (DType::U8, DType::F32) => {
@@ -439,8 +432,8 @@ impl crate::backend::BackendStorage for WgpuStorage {
                     .alloc_uninit_size(DType::F32, layout.shape().elem_count());
                 wgpu_functions::queue_convert_u8_to_f32(
                     self.device(),
-                    buffer_dest.buffer,
-                    self.buffer,
+                    buffer_dest.buffer(),
+                    self.buffer(),
                     layout,
                 )?;
                 Ok(buffer_dest)
@@ -449,7 +442,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
                 if !layout.is_contiguous() {
                     panic!(
                         "conversion from {:?} to {:?} not suported for non contiguous matrix",
-                        self.dtype, dtype
+                        self.dtype(), dtype
                     );
                 }
                 let buffer_dest = self
@@ -457,8 +450,8 @@ impl crate::backend::BackendStorage for WgpuStorage {
                     .alloc_uninit_size(DType::U8, layout.shape().elem_count() * 4);
                 wgpu_functions::queue_convert_f32_to_u8(
                     self.device(),
-                    buffer_dest.buffer,
-                    self.buffer,
+                    buffer_dest.buffer(),
+                    self.buffer(),
                     layout.start_offset() as u32,
                     layout.shape().elem_count() as u32,
                 )?;
@@ -468,7 +461,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
                 if !layout.is_contiguous() {
                     panic!(
                         "conversion from {:?} to {:?} not suported for non contiguous matrix",
-                        self.dtype, dtype
+                        self.dtype(), dtype
                     );
                 }
                 let buffer_dest = self
@@ -476,8 +469,8 @@ impl crate::backend::BackendStorage for WgpuStorage {
                     .alloc_uninit_size(DType::F16, layout.shape().elem_count());
                 wgpu_functions::queue_convert_f32_to_f16(
                     self.device(),
-                    buffer_dest.buffer,
-                    self.buffer,
+                    buffer_dest.buffer(),
+                    self.buffer(),
                     layout.start_offset() as u32,
                     layout.shape().elem_count() as u32,
                 )?;
@@ -487,7 +480,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
                 if !layout.is_contiguous() {
                     panic!(
                         "conversion from {:?} to {:?} not suported for non contiguous matrix",
-                        self.dtype, dtype
+                        self.dtype(), dtype
                     );
                 }
                 let buffer_dest = self
@@ -495,8 +488,8 @@ impl crate::backend::BackendStorage for WgpuStorage {
                     .alloc_uninit_size(DType::F32, layout.shape().elem_count());
                 wgpu_functions::queue_convert_f16_to_f32(
                     self.device(),
-                    buffer_dest.buffer,
-                    self.buffer,
+                    buffer_dest.buffer(),
+                    self.buffer(),
                     layout.start_offset() as u32,
                     layout.shape().elem_count() as u32,
                 )?;
@@ -506,7 +499,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
                 if !layout.is_contiguous() {
                     panic!(
                         "conversion from {:?} to {:?} not suported for non contiguous matrix",
-                        self.dtype, dtype
+                        self.dtype(), dtype
                     );
                 }
                 let buffer_dest = self
@@ -514,8 +507,8 @@ impl crate::backend::BackendStorage for WgpuStorage {
                     .alloc_uninit_size(DType::U8, layout.shape().elem_count() * 4);
                 wgpu_functions::queue_convert_u32_to_u8(
                     self.device(),
-                    buffer_dest.buffer,
-                    self.buffer,
+                    buffer_dest.buffer(),
+                    self.buffer(),
                     layout.start_offset() as u32,
                     layout.shape().elem_count() as u32,
                 )?;
@@ -527,8 +520,8 @@ impl crate::backend::BackendStorage for WgpuStorage {
                     .alloc_uninit_size(output_type, layout.shape().elem_count());
                 wgpu_functions::queue_convert(
                     self.device(),
-                    buffer_dest.buffer,
-                    self.buffer,
+                    buffer_dest.buffer(),
+                    self.buffer(),
                     layout,
                     output_type,
                     input_type,
@@ -541,7 +534,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
     fn unary_impl<B: crate::op::UnaryOpT>(&self, layout: &crate::Layout) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, layout.shape().elem_count());
+            .alloc_uninit_size(self.dtype(), layout.shape().elem_count());
 
         let op = match B::NAME {
             "gelu" => UnaryOperation::Gelu,
@@ -571,12 +564,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
         };
         wgpu_functions::queue_unary_from_buffer_op(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(layout, self.buffer),
+            buffer_dest.buffer(),
+            WgpuTensor::new(layout, self.buffer()),
             op,
             0.0,
             0.0,
-            self.dtype,
+            self.dtype(),
         )?;
         Ok(buffer_dest)
     }
@@ -589,7 +582,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, lhs_layout.shape().elem_count());
+            .alloc_uninit_size(self.dtype(), lhs_layout.shape().elem_count());
 
         let op = match B::NAME {
             "add" => BinaryOperation::Add,
@@ -605,11 +598,11 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
         wgpu_functions::queue_binary_buffer_from_buffer(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(lhs_layout, self.buffer),
-            WgpuTensor::new(rhs_layout, rhs.buffer),
+            buffer_dest.buffer(),
+            WgpuTensor::new(lhs_layout, self.buffer()),
+            WgpuTensor::new(rhs_layout, rhs.buffer()),
             op,
-            self.dtype,
+            self.dtype(),
         )?;
         Ok(buffer_dest)
     }
@@ -624,16 +617,16 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(t.dtype, input_layout.shape().elem_count());
+            .alloc_uninit_size(t.dtype(), input_layout.shape().elem_count());
 
         wgpu_functions::where_cond::queue_where_cond(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(input_layout, self.buffer),
-            WgpuTensor::new(t_layout, t.buffer),
-            WgpuTensor::new(f_layout, f.buffer),
-            self.dtype,
-            t.dtype,
+            buffer_dest.buffer(),
+            WgpuTensor::new(input_layout, self.buffer()),
+            WgpuTensor::new(t_layout, t.buffer()),
+            WgpuTensor::new(f_layout, f.buffer()),
+            self.dtype(),
+            t.dtype(),
         )?;
         Ok(buffer_dest)
     }
@@ -647,14 +640,14 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, params.b_size * params.c_out * params.l_out());
+            .alloc_uninit_size(self.dtype(), params.b_size * params.c_out * params.l_out());
 
         wgpu_functions::queue_conv1d(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(l, self.buffer),
-            WgpuTensor::new(kernel_l, kernel.buffer),
-            self.dtype,
+            buffer_dest.buffer(),
+            WgpuTensor::new(l, self.buffer()),
+            WgpuTensor::new(kernel_l, kernel.buffer()),
+            self.dtype(),
             params,
         )?;
         Ok(buffer_dest)
@@ -669,13 +662,13 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, params.b_size * params.c_out * params.l_out());
+            .alloc_uninit_size(self.dtype(), params.b_size * params.c_out * params.l_out());
         wgpu_functions::queue_conv1d_transpose(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(l, self.buffer),
-            WgpuTensor::new(kernel_l, kernel.buffer),
-            self.dtype,
+            buffer_dest.buffer(),
+            WgpuTensor::new(l, self.buffer()),
+            WgpuTensor::new(kernel_l, kernel.buffer()),
+            self.dtype(),
             params,
         )?;
         Ok(buffer_dest)
@@ -689,15 +682,15 @@ impl crate::backend::BackendStorage for WgpuStorage {
         params: &crate::conv::ParamsConv2D,
     ) -> crate::Result<Self> {
         let buffer_dest = self.device().alloc_uninit_size(
-            self.dtype,
+            self.dtype(),
             params.b_size * params.c_out * params.out_h() * params.out_w(),
         );
         wgpu_functions::queue_conv2d(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(l, self.buffer),
-            WgpuTensor::new(kernel_l, kernel.buffer),
-            self.dtype,
+            buffer_dest.buffer(),
+            WgpuTensor::new(l, self.buffer()),
+            WgpuTensor::new(kernel_l, kernel.buffer()),
+            self.dtype(),
             params,
         )?;
         Ok(buffer_dest)
@@ -711,15 +704,15 @@ impl crate::backend::BackendStorage for WgpuStorage {
         params: &crate::conv::ParamsConvTranspose2D,
     ) -> crate::Result<Self> {
         let buffer_dest = self.device().alloc_uninit_size(
-            self.dtype,
+            self.dtype(),
             params.b_size * params.c_out * params.out_h() * params.out_w(),
         );
         wgpu_functions::queue_conv2d_transpose(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(l, self.buffer),
-            WgpuTensor::new(kernel_l, kernel.buffer),
-            self.dtype,
+            buffer_dest.buffer(),
+            WgpuTensor::new(l, self.buffer()),
+            WgpuTensor::new(kernel_l, kernel.buffer()),
+            self.dtype(),
             params,
         )?;
         Ok(buffer_dest)
@@ -737,12 +730,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, b * c * h_out * w_out);
+            .alloc_uninit_size(self.dtype(), b * c * h_out * w_out);
 
         wgpu_functions::queue_avg_pool2d(
             self.device(),
-            buffer_dest.buffer,
-            self.buffer,
+            buffer_dest.buffer(),
+            self.buffer(),
             layout,
             self.dtype(),
             kernel_size,
@@ -764,12 +757,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, b * c * h_out * w_out);
+            .alloc_uninit_size(self.dtype(), b * c * h_out * w_out);
 
         wgpu_functions::queue_max_pool2d(
             self.device(),
-            buffer_dest.buffer,
-            self.buffer,
+            buffer_dest.buffer(),
+            self.buffer(),
             layout,
             self.dtype(),
             kernel_size,
@@ -788,12 +781,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, b * c * target_size);
+            .alloc_uninit_size(self.dtype(), b * c * target_size);
 
         wgpu_functions::queue_upsample1d(
             self.device(),
-            buffer_dest.buffer,
-            self.buffer,
+            buffer_dest.buffer(),
+            self.buffer(),
             layout,
             self.dtype(),
             target_size,
@@ -812,12 +805,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, b * c * target_size_x * target_size_y);
+            .alloc_uninit_size(self.dtype(), b * c * target_size_x * target_size_y);
 
         wgpu_functions::queue_upsample2d(
             self.device(),
-            buffer_dest.buffer,
-            self.buffer,
+            buffer_dest.buffer(),
+            self.buffer(),
             layout,
             self.dtype(),
             (target_size_y, target_size_x),
@@ -835,13 +828,13 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, indexes_l.shape().elem_count());
+            .alloc_uninit_size(self.dtype(), indexes_l.shape().elem_count());
 
         wgpu_functions::queue_gather(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(l, self.buffer),
-            WgpuTensor::new(indexes_l, indexes.buffer),
+            buffer_dest.buffer(),
+            WgpuTensor::new(l, self.buffer()),
+            WgpuTensor::new(indexes_l, indexes.buffer()),
             self.dtype(),
             d,
         )?;
@@ -862,15 +855,15 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, new_shape.elem_count());
+            .alloc_uninit_size(self.dtype(), new_shape.elem_count());
 
         wgpu_functions::queue_index_select(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(lhs_l, self.buffer),
-            WgpuTensor::new(rhs_l, rhs.buffer),
-            self.dtype,
-            rhs.dtype,
+            buffer_dest.buffer(),
+            WgpuTensor::new(lhs_l, self.buffer()),
+            WgpuTensor::new(rhs_l, rhs.buffer()),
+            self.dtype(),
+            rhs.dtype(),
             d,
         )?;
         Ok(buffer_dest)
@@ -887,15 +880,15 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, l.shape().elem_count());
+            .alloc_uninit_size(self.dtype(), l.shape().elem_count());
 
         self.copy_strided_src(&buffer_dest, 0, l)?;
 
         wgpu_functions::queue_index_add_inplace(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(indexes_l, indexes.buffer),
-            WgpuTensor::new(source_l, source.buffer),
+            buffer_dest.buffer(),
+            WgpuTensor::new(indexes_l, indexes.buffer()),
+            WgpuTensor::new(source_l, source.buffer()),
             self.dtype(),
             &Layout::contiguous(l.shape().clone()),
             d,
@@ -913,15 +906,15 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<Self> {
         let buffer_dest = self
             .device()
-            .alloc_uninit_size(self.dtype, batching * (m * n));
+            .alloc_uninit_size(self.dtype(), batching * (m * n));
 
         wgpu_functions::queue_matmul_buffer(
             self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(layout1, self.buffer),
-            WgpuTensor::new(layout2, rhs.buffer),
+            buffer_dest.buffer(),
+            WgpuTensor::new(layout1, self.buffer()),
+            WgpuTensor::new(layout2, rhs.buffer()),
             SGEMMParams::new(batching, m, k, n),
-            self.dtype,
+            self.dtype(),
         )?;
         Ok(buffer_dest)
     }
@@ -947,9 +940,9 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<()> {
         wgpu_functions::queue_copy2d(
             self.device(),
-            (dst.buffer, dst_stride1 as u32, dst_offset as u32),
-            (self.buffer, src_stride1 as u32, src_offset as u32),
-            self.dtype,
+            (dst.buffer(), dst_stride1 as u32, dst_offset as u32),
+            (self.buffer(), src_stride1 as u32, src_offset as u32),
+            self.dtype(),
             d1 as u32,
             d2 as u32,
         )?;
@@ -967,9 +960,9 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<()> {
         wgpu_functions::queue_scatter_set_inplace(
             self.device(),
-            self.buffer,
-            WgpuTensor::new(indexes_l, indexes.buffer),
-            WgpuTensor::new(source_l, source.buffer),
+            self.buffer(),
+            WgpuTensor::new(indexes_l, indexes.buffer()),
+            WgpuTensor::new(source_l, source.buffer()),
             self.dtype(),
             &Layout::contiguous(l.shape().clone()),
             d,
@@ -989,9 +982,9 @@ impl crate::backend::BackendStorage for WgpuStorage {
     ) -> crate::Result<()> {
         wgpu_functions::queue_scatter_add_inplace(
             self.device(),
-            self.buffer,
-            WgpuTensor::new(indexes_l, indexes.buffer),
-            WgpuTensor::new(source_l, source.buffer),
+            self.buffer(),
+            WgpuTensor::new(indexes_l, indexes.buffer()),
+            WgpuTensor::new(source_l, source.buffer()),
             self.dtype(),
             &Layout::contiguous(l.shape().clone()),
             d,
@@ -1004,7 +997,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
         if scalar.to_f64() == 0.0 {
             wgpu_functions::queue_unary_inplace_op(
                 self.device(),
-                *self.buffer(),
+                self.buffer(),
                 UnaryOperation::SetZero,
                 0.0,
                 0.0,
@@ -1014,7 +1007,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
         } else if scalar.to_f64() == 1.0 {
             wgpu_functions::queue_unary_inplace_op(
                 self.device(),
-                *self.buffer(),
+                self.buffer(),
                 UnaryOperation::SetOne,
                 0.0,
                 0.0,
@@ -1024,7 +1017,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
         } else {
             wgpu_functions::queue_unary_inplace_op(
                 self.device(),
-                *self.buffer(),
+                self.buffer(),
                 UnaryOperation::SetScalar,
                 scalar.to_f64() as f32,
                 0.0,
@@ -1047,11 +1040,3 @@ impl crate::backend::BackendStorage for WgpuStorage {
     }
 }
 
-impl Drop for WgpuStorage {
-    fn drop(&mut self) {
-        if self.is_original {
-            let mut cache = self.device().cache.lock().expect("could not lock cache");
-            cache.buffer_reference.queue_for_deletion(&self.buffer);
-        }
-    }
-}

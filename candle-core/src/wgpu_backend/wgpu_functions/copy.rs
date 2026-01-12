@@ -176,7 +176,7 @@ pub fn queue_copy2d(
     let x = d1.div_ceil(16);
     let y = d2.div_ceil(16);
 
-    if x <= crate::wgpu_backend::queue_buffer::MAX_DISPATCH_SIZE {
+    if x <= wgpu_compute_engine::queue_buffer::MAX_DISPATCH_SIZE {
         queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
 
         let pipeline = queue.get_pipeline_const(

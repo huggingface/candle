@@ -668,7 +668,7 @@ impl Model {
             let result = save_image_async(&vae, &latents, vae_scale, bsize).await?;
 
             if let candle::Device::Wgpu(gpu) = &device {
-                gpu.print_bindgroup_reuseinfo2();
+                gpu.inner_device().print_bindgroup_reuseinfo2();
             };
 
             if let Some(val) = result.first() {

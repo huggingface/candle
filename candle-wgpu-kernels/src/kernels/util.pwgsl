@@ -45,6 +45,8 @@ var<storage, read_write> v_dest_i64: array<i64>;
 var<storage, read_write> v_dest_f64: array<f64>;
 
 
+//var<immediate> op_meta: array<u32, 16>;
+
 @group(0) @binding(1)
 var<storage> op_meta : array<u32>;
 

@@ -1,22 +1,15 @@
 use super::GgmlDType;
-use crate::wgpu_backend::cache::BufferReferenceId;
+use wgpu_compute_engine::cache::BufferReferenceId;
 use crate::{
-    backend::{BackendDevice, BackendStorage},
-    quantized::QStorage,
-    wgpu_backend::{
-        wgpu_functions::{
-            self,
-            matmul::{
-                sgemm::{
+    DType, Result, Shape, WgpuDevice, WgpuStorage, backend::{BackendDevice, BackendStorage}, quantized::QStorage, wgpu_backend::{
+        QuantizedMatmulAlgorithm, wgpu_functions::{
+            self, QueueLayouts, WgpuTensor, matmul::{
+                SGEMMParams, sgemm::{
                     GenericDynamicMatmulShaderSettings, GenericMatmulSettings, StrideOptimization,
-                },
-                SGEMMParams,
-            },
-            WgpuTensor,
-        },
-        QuantizedMatmulAlgorithm,
-    },
-    DType, Result, Shape, WgpuDevice, WgpuStorage,
+                }
+            }
+        }
+    }
 };
 
 pub struct QWgpuStorage {
@@ -28,7 +21,7 @@ impl QWgpuStorage {
     pub fn new(dtype: GgmlDType, storage: WgpuStorage) -> Self {
         Self { dtype, storage }
     }
-    pub fn buffer(&self) -> &BufferReferenceId {
+    pub fn buffer(&self) -> BufferReferenceId {
         self.storage.buffer()
     }
     pub fn zeros(device: &WgpuDevice, elem_count: usize, dtype: GgmlDType) -> Result<Self> {
@@ -59,8 +52,8 @@ impl QWgpuStorage {
             //no need to dequantize
             wgpu_functions::queue_copy(
                 dev,
-                *dst.buffer(),
-                *self.storage.buffer(),
+                dst.buffer(),
+                self.storage.buffer(),
                 0,
                 0,
                 self.storage.size_in_bytes() / 4,
@@ -127,7 +120,7 @@ impl QWgpuStorage {
         };
         let pipeline = queue.get_pipeline(pipeline);
         let bind_group =
-            dev.create_bind_group_input1(*dst.buffer(), *self.buffer(), DType::F32.into());
+            dev.create_bind_group_input1(dst.buffer(), self.buffer(), DType::F32.into());
         queue.enqueue_64(
             pipeline,
             bind_group,
@@ -314,9 +307,8 @@ impl QWgpuStorage {
         let dev = storage.device();
         let dst = dev.alloc_uninit_size(DType::F32, dst_shape.elem_count());
 
-        let matmul_alg = dev.quantized_matmul_alg.lock().unwrap();
-
-        let matmul_alg: QuantizedMatmulAlgorithm = match &*matmul_alg {
+        let matmul_alg = dev.inner_device().with_extension::<QuantizedMatmulAlgorithm, QuantizedMatmulAlgorithm>(|c| c.clone()).unwrap_or(QuantizedMatmulAlgorithm::None);
+        let matmul_alg: QuantizedMatmulAlgorithm = match &matmul_alg {
             QuantizedMatmulAlgorithm::None => {
                 self.get_best_algorithm(self.dtype, (b, m, n, k), input1_stride_k)
             }
@@ -404,9 +396,9 @@ impl QWgpuStorage {
 
                     let pipeline = queue.get_pipeline_const(pipeline, const_vec);
                     let bind_group = dev.create_bind_group_input2(
-                        *dst.buffer(),
-                        *storage.buffer(),
-                        *self.buffer(),
+                        dst.buffer(),
+                        storage.buffer(),
+                        self.buffer(),
                         DType::F32.into(),
                     );
 
@@ -483,9 +475,9 @@ impl QWgpuStorage {
 
                     let pipeline = queue.get_pipeline_const(pipeline, const_vec);
                     let bind_group = dev.create_bind_group_input2(
-                        *dst.buffer(),
-                        *storage.buffer(),
-                        *self.buffer(),
+                        dst.buffer(),
+                        storage.buffer(),
+                        self.buffer(),
                         DType::F32.into(),
                     );
 
@@ -522,11 +514,11 @@ impl QWgpuStorage {
 
                 wgpu_functions::matmul::sgemm::queue_matmul_quantized(
                     dev,
-                    *dst.buffer(),
-                    WgpuTensor::new(layout, *storage.buffer()),
+                    dst.buffer(),
+                    WgpuTensor::new(layout, storage.buffer()),
                     WgpuTensor::new(
                         &crate::Layout::new(self_shape.clone(), [1, k].to_vec(), 0),
-                        *self.storage.buffer(),
+                        self.storage.buffer(),
                     ),
                     SGEMMParams::new(b, m, k, n),
                     path,
@@ -540,7 +532,7 @@ impl QWgpuStorage {
     }
 
     pub async fn data_async(&self) -> Result<Vec<u8>> {
-        wgpu_functions::read_from_buffer_reference_async(self.device(), *self.buffer()).await
+        Ok(wgpu_compute_engine::wgpu_functions::read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?)
     }
 
     pub fn data(&self) -> Result<Vec<u8>> {

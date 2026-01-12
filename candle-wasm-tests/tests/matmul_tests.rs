@@ -152,7 +152,7 @@ async fn test_matmul_kernels_wgpu() -> Result<()> {
     let device = Device::new_wgpu_async(0).await?;
     if let Device::Wgpu(wgpu) = &device {
         for alg in algs {
-            (*wgpu.matmul_alg.lock().unwrap()) = alg.clone();
+            wgpu.inner_device().set_extension(alg.clone());
             for tpa in [true, false] {
                 for tpb in [true, false] {
                     for use_start_offset in [true, false] {

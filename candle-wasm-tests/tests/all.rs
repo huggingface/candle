@@ -2925,7 +2925,7 @@ async fn test_matmul_kernels_wgpu() -> Result<()> {
     let device = Device::new_wgpu_async(0).await?;
     if let Device::Wgpu(wgpu) = &device {
         for alg in algs {
-            (*wgpu.matmul_alg.lock().unwrap()) = alg.clone();
+            wgpu.inner_device().set_extension(alg.clone());
             for tpa in [true, false] {
                 for tpb in [true, false] {
                     for use_start_offset in [true, false] {
@@ -3206,13 +3206,11 @@ async fn ones(device: &Device) -> Result<()> {
         Tensor::ones((2, 3), DType::F32, device) ?.to_vec2_async::< f32 > (). await ?,
         [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
     );
-    if !device.is_metal() {
-        if device.is_dtype_available(DType::F64) {
-            assert_eq!(
-                Tensor::ones((2, 3), DType::F64, device) ?.to_vec2_async::< f64 > ().
-                await ?, [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-            );
-        }
+    if !device.is_metal() && device.is_dtype_available(DType::F64) {
+        assert_eq!(
+            Tensor::ones((2, 3), DType::F64, device) ?.to_vec2_async::< f64 > (). await
+            ?, [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        );
     }
     if device.is_dtype_available(DType::F16) {
         assert_eq!(

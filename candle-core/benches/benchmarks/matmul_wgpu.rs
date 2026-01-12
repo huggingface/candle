@@ -78,7 +78,7 @@ fn test_matmul(
                 }
 
                 for alg in algs {
-                    *(wgpu.matmul_alg.lock().unwrap()) = alg.clone();
+                    wgpu.inner_device().set_extension(alg.clone());
 
                     let func_name = device.bench_name(format!(
                         "matmul_{:?}{}{}",
@@ -170,7 +170,7 @@ fn test_functions(
     }
     #[cfg(feature = "wgpu")]
     if let candle_core::Device::Wgpu(gpu) = &device {
-        gpu.print_bindgroup_reuseinfo2();
+        gpu.inner_device().print_bindgroup_reuseinfo2();
     };
 }
 

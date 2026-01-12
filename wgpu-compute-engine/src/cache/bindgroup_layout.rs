@@ -95,6 +95,16 @@ impl BindgroupAlignmentLayout {
             _ => todo!("Bindgroup {:?} not yet implemented", self),
         }
     }
+
+    pub fn get_dest(&self) -> BindgroupAlignment{
+        match self {
+            BindgroupAlignmentLayout::Bindgroup0(a) => *a,
+            BindgroupAlignmentLayout::Bindgroup1(a, _) => *a,
+            BindgroupAlignmentLayout::Bindgroup2(a, _, _) => *a,
+            BindgroupAlignmentLayout::Bindgroup3(a,_, _, _) => *a
+        }
+    }
+
 }
 
 #[derive(Debug)]
@@ -148,7 +158,7 @@ impl BindgroupLayouts {
             let pipeline_layout = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
                 bind_group_layouts: &[&bindgroup_layout],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
             BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout)

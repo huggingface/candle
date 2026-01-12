@@ -1,5 +1,5 @@
 use super::{CachedBufferId, PipelineReference};
-use crate::wgpu_backend::util::FixedSizeQueue;
+use crate::util::FixedSizeQueue;
 
 ///Cache, that stores previously flushed Gpu Commands, we try to use the same buffers as the last time
 #[derive(Debug)]
@@ -7,7 +7,7 @@ pub(crate) struct BufferMappingCache {
     pub(crate) last_buffer_mappings: FixedSizeQueue<CachedBufferMappings>,
     pub(crate) current_buffer_mapping: Option<CachedBufferMappings>,
     pub(crate) current_index: u32,
-    pub(crate) last_command_indexes: FixedSizeQueue<u32>,
+    pub(crate) last_command_indexes : FixedSizeQueue<u32>
 }
 
 impl BufferMappingCache {
@@ -16,7 +16,7 @@ impl BufferMappingCache {
             last_buffer_mappings: FixedSizeQueue::new(size as usize),
             current_buffer_mapping: None,
             current_index: 0,
-            last_command_indexes: FixedSizeQueue::new(10),
+            last_command_indexes : FixedSizeQueue::new(10)
         }
     }
 
@@ -86,7 +86,7 @@ impl BufferMappingCache {
         self.current_index = 0;
     }
 
-    pub(crate) fn set_global_command_index(&mut self, index: u32) {
+    pub(crate) fn set_global_command_index(&mut self, index : u32){
         self.last_command_indexes.push(index);
     }
 }

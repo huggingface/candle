@@ -55,7 +55,7 @@ impl fmt::Debug for MatmulAlgorithm {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum QuantizedMatmulAlgorithm {
     None,
     Naive,
@@ -484,7 +484,7 @@ pub mod sgemm {
         let (buffer_input1_padded, layout_input1_padded) = if no_padding_needed_input1 {
             (input1.buffer(), input1.layout().clone())
         } else {
-            let mut cache = dev.cache.lock().unwrap();
+            //let mut cache = dev.inner_device().cache.lock().unwrap();
             let buffer_input1_padded;
             let mut dest_layout;
             //we need to realy pad the input:
@@ -493,7 +493,7 @@ pub mod sgemm {
             let should_transpose_while_padding = !no_padding_needed_input1_stride && !can_transpose;
 
             if !no_padding_needed_input1_tile || should_transpose_while_padding {
-                buffer_input1_padded = cache.create_buffer_reference(
+                buffer_input1_padded = dev.inner_device().create_buffer_reference(
                     params.b * (new_m * new_k) * dtype.size_in_bytes() as u32,
                     false,
                 );
@@ -535,7 +535,7 @@ pub mod sgemm {
 
             //we need to transpose the input matrix
             if !no_padding_needed_input1_stride && can_transpose {
-                let buffer_input1_tranposed = cache.create_buffer_reference(
+                let buffer_input1_tranposed = dev.inner_device().create_buffer_reference(
                     params.b * (new_m * new_k) * dtype.size_in_bytes() as u32,
                     false,
                 );
@@ -578,8 +578,6 @@ pub mod sgemm {
         let (buffer_input2_padded, layout_input2_padded) = if no_padding_needed_input2 {
             (input2.buffer(), input2.layout().clone())
         } else {
-            let mut cache = dev.cache.lock().unwrap();
-
             let mut dest_layout;
             let buffer_input2_padded;
 
@@ -589,7 +587,7 @@ pub mod sgemm {
             let should_transpose_while_padding = !no_padding_needed_input2_stride && !can_transpose;
 
             if !no_padding_needed_input2_tile || should_transpose_while_padding {
-                buffer_input2_padded = cache.create_buffer_reference(
+                buffer_input2_padded = dev.inner_device().create_buffer_reference(
                     params.b * (new_k * new_n) * dtype.size_in_bytes() as u32,
                     false,
                 );
@@ -628,7 +626,7 @@ pub mod sgemm {
             }
 
             if !no_padding_needed_input2_stride && can_transpose {
-                let buffer_input2_tranposed = cache.create_buffer_reference(
+                let buffer_input2_tranposed = dev.inner_device().create_buffer_reference(
                     params.b * (new_k * new_n) * dtype.size_in_bytes() as u32,
                     false,
                 );
@@ -670,8 +668,7 @@ pub mod sgemm {
         };
 
         let buffer_dest_padded = if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT {
-            let mut cache = dev.cache.lock().unwrap();
-            cache.create_buffer_reference(
+            dev.inner_device().create_buffer_reference(
                 params.b * (new_m * new_n) * dtype.size_in_bytes() as u32,
                 false,
             )
@@ -879,7 +876,6 @@ pub mod sgemm {
         let (buffer_input1_padded, layout_input1_padded) = if no_padding_needed_input1 {
             (input1.buffer(), input1.layout().clone())
         } else {
-            let mut cache = dev.cache.lock().unwrap();
             let buffer_input1_padded;
             let mut dest_layout;
             //we need to realy pad the input:
@@ -888,7 +884,7 @@ pub mod sgemm {
             let should_transpose_while_padding = !no_padding_needed_input1_stride && !can_transpose;
 
             if !no_padding_needed_input1_tile || should_transpose_while_padding {
-                buffer_input1_padded = cache.create_buffer_reference(
+                buffer_input1_padded = dev.inner_device().create_buffer_reference(
                     params.b * (new_m * new_k) * dtype.size_in_bytes() as u32,
                     false,
                 );
@@ -933,7 +929,7 @@ pub mod sgemm {
 
             //we need to transpose the input matrix
             if !no_padding_needed_input1_stride && can_transpose {
-                let buffer_input1_tranposed = cache.create_buffer_reference(
+                let buffer_input1_tranposed = dev.inner_device().create_buffer_reference(
                     params.b * (new_m * new_k) * dtype.size_in_bytes() as u32,
                     false,
                 );
@@ -977,8 +973,7 @@ pub mod sgemm {
             (input2.buffer(), input2.layout().clone());
 
         let buffer_dest_padded = if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT {
-            let mut cache = dev.cache.lock().unwrap();
-            cache.create_buffer_reference(
+            dev.inner_device().create_buffer_reference(
                 params.b * (new_m * new_n) * dtype.size_in_bytes() as u32,
                 false,
             )
@@ -1074,16 +1069,7 @@ pub mod sgemm {
                 queue.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
             }
         }
-
-        let mut cache = dev.cache.lock().unwrap();
-        let loader = cache
-            .shader
-            .loader_cache
-            .get_loader_mut::<candle_wgpu_kernels::DefaultWgpuDynamicShader>(
-                candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX,
-            )
-            .unwrap();
-
+    
         let mut defines = vec![
             (
                 "TSM",
@@ -1114,9 +1100,13 @@ pub mod sgemm {
             defines.push(("WONT_USE_LOADA", DefineDefinition::new_empty()));
         }
 
-        let shader_index = loader.get_shader_index(Path::new(kernel_path).to_path_buf(), &defines);
-        let pipeline_index = loader.get_pipeline_index(shader_index, "matmul_sgemm");
-
+        let pipeline_index = dev.inner_device().with_shader_loader_cache(|f| {
+            let loader = f.get_loader_mut::<candle_wgpu_kernels::DefaultWgpuDynamicShader>(
+                candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX).unwrap();
+            let shader_index = loader.get_shader_index(Path::new(kernel_path).to_path_buf(), &defines);
+            loader.get_pipeline_index(shader_index, "matmul_sgemm")
+        });
+       
         let pipeline = queue.get_pipeline_const(pipeline_index, const_vec.clone());
         let input_alignment: BindgroupAlignment = dtype.into();
         if input_alignment != BindgroupAlignment::Aligned4 {
@@ -1190,7 +1180,8 @@ pub fn queue_matmul_buffer(
     params: SGEMMParams,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let alg = dev.matmul_alg.lock().unwrap();
+    let alg = dev.matmul_alg.lock().unwrap().clone();
+    //let alg = dev.inner_device().with_extension::<MatmulAlgorithm, MatmulAlgorithm>(|c| c.clone()).unwrap_or(MatmulAlgorithm::MatmulX);
     queue_matmul_buffer_alg(dev, buffer_dest, input1, input2, params, dtype, alg.clone())
 }
 
@@ -1623,9 +1614,9 @@ pub fn queue_matmul_buffer_best(
                 let new_input2_size = b * new_k * new_n * dtype.size_in_bytes();
                 let new_output_size = b * new_m * new_n * dtype.size_in_bytes();
 
-                if new_input1_size > dev.device_limits.max_storage_buffer_binding_size as usize
-                    || new_input2_size > dev.device_limits.max_storage_buffer_binding_size as usize
-                    || new_output_size > dev.device_limits.max_storage_buffer_binding_size as usize
+                if new_input1_size > dev.inner_device().device_limits.max_storage_buffer_binding_size as usize
+                    || new_input2_size > dev.inner_device().device_limits.max_storage_buffer_binding_size as usize
+                    || new_output_size > dev.inner_device().device_limits.max_storage_buffer_binding_size as usize
                 {
                     continue;
                 }

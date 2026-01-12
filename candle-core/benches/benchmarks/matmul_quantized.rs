@@ -98,9 +98,7 @@ fn test_matmul(
 
                 //test naive
                 {
-                    let mut matmul_alg = wgpu.quantized_matmul_alg.lock().unwrap();
-                    *matmul_alg = candle_core::wgpu::QuantizedMatmulAlgorithm::Naive;
-                    drop(matmul_alg); // release lock early
+                    wgpu.inner_device().set_extension(candle_core::wgpu::QuantizedMatmulAlgorithm::Naive);
 
                     let func_name = device.bench_name(format!(
                         "matmul_naive_{:?}_{}{}",
@@ -167,9 +165,7 @@ fn test_matmul(
                                         continue;
                                     }
                                     
-                                    
-                                    let mut matmul_alg = wgpu.quantized_matmul_alg.lock().unwrap();
-                                    *matmul_alg = candle_core::wgpu::QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new_tiled_small(
+                                    wgpu.inner_device().set_extension(candle_core::wgpu::QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new_tiled_small(
                                         GenericMatmulSettings::new(
                                             tile_m,
                                             tile_n,
@@ -180,8 +176,7 @@ fn test_matmul(
                                         wptm,
                                         wptn,
                                         false,
-                                    ));
-                                    drop(matmul_alg); // release lock early
+                                    )));
 
                                     let func_name = device.bench_name(format!(
                                         "matmul_tiled_small_{:?}({},{},{})_wptm{}_wptn{}{}{}",
@@ -253,8 +248,7 @@ fn test_matmul(
                                     //continue;
                                 }
                                 
-                                let mut matmul_alg = wgpu.quantized_matmul_alg.lock().unwrap();
-                                *matmul_alg = candle_core::wgpu::QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new_with_a(
+                                wgpu.inner_device().set_extension(candle_core::wgpu::QuantizedMatmulAlgorithm::Some(GenericDynamicMatmulShaderSettings::new_with_a(
                                     GenericMatmulSettings::new(
                                         tile_m,
                                         tile_n,
@@ -266,9 +260,8 @@ fn test_matmul(
                                     wptn,
                                     false,
                                     wont_use_load_a
-                                ));
-                                drop(matmul_alg); // release lock early
-
+                                )));
+                               
                                 let func_name = device.bench_name(format!(
                                     "matmul_sgemm_{:?}({},{},{})_wptm{}_wptn{}{}{}_wont_load_a{wont_use_load_a}",
                                     typ,
@@ -398,7 +391,7 @@ fn test_functions(
     }
     #[cfg(feature = "wgpu")]
     if let candle_core::Device::Wgpu(gpu) = &device {
-        gpu.print_bindgroup_reuseinfo2();
+        gpu.inner_device().print_bindgroup_reuseinfo2();
     };
 }
 

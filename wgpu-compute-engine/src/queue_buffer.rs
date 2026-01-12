@@ -9,16 +9,13 @@ use std::sync::{Arc, MutexGuard};
 
 use std::hash::Hash;
 
-use candle_wgpu_kernels::Constants;
+use crate::cache::BindGroupReference;
+use crate::shader_loader;
+use crate::wgpu_functions::KernelConstId;
 
-use crate::Layout;
-
-use super::cache::{
-    BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase, BufferReferenceId,
-    CachedBindgroupId, CachedBufferId,
-};
+use super::cache::{BindgroupAlignment, BindgroupAlignmentLayout,BufferReferenceId, CachedBindgroupId, CachedBufferId,BindgroupInputBase};
 use super::util::{ObjectToIdMapper, ToU32};
-use super::wgpu_functions::{ConstArray, MetaArray, ToKernelParameterMeta};
+use super::wgpu_functions::{MetaArray, ConstArray, ToKernelParameterMeta};
 
 pub const MAX_DISPATCH_SIZE: u32 = 65535;
 
@@ -27,7 +24,7 @@ pub(crate) enum MlQueue {
     Dispatch(MlQueueDispatch),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Copy)]
 #[cfg_attr(feature = "wgpu_debug", derive(serde::Serialize, serde::Deserialize))]
 pub struct OpIsInplaceable {
     pub input1_inplaceable: bool,
@@ -50,16 +47,16 @@ impl OpIsInplaceable {
 )]
 ///Pipeline, Pipeline Constants, and Inplaceable Information
 pub struct PipelineReference(
-    pub candle_wgpu_kernels::PipelineIndex,
+    pub shader_loader::PipelineIndex,
     pub usize, //Index into an Array with Pipeline Constants
     #[cfg_attr(
         any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
         serde(skip)
     )]
-    pub OpIsInplaceable,
+    pub OpIsInplaceable, 
 );
 
-pub(crate) type BindGroupReference = crate::wgpu_backend::cache::BindgroupReferenceFull;
+
 
 #[derive(Debug)]
 pub(crate) struct MlQueueDispatch {
@@ -76,6 +73,8 @@ pub(crate) struct MlQueueDispatch {
     pub(crate) debug: Option<String>,
 }
 
+
+
 ///a struct, where all operations are cached
 #[derive(Debug)]
 pub struct QueueBufferInner {
@@ -85,7 +84,7 @@ pub struct QueueBufferInner {
     ///u32 MetaArray for parameters of kernels
     meta_array: MetaArray,
 
-    ///ConstArray is used to store the pipeline constants for the next pipeline call
+    ///ConstArray is used to store the pipeline constants for the next pipeline call 
     const_array: ConstArray,
 
     ///ConstArray To Id, maps a set of constants of a pipeline to an unique id.
@@ -98,11 +97,13 @@ pub struct QueueBufferInner {
 
     ///Current position inside the MetaArray
     pub(crate) current_meta: u32,
-
-    ///The last destination bufffer, of the last call
+    
+    ///The last destination bufffer, of the last call 
     ///will be used as a workaround to wait for the last command queue
-    pub(crate) last_buffer: Option<CachedBufferId>,
+    pub(crate) last_buffer: Option<CachedBufferId>, 
 }
+
+
 
 impl QueueBufferInner {
     pub fn new(size: u32) -> Self {
@@ -139,97 +140,100 @@ impl QueueBufferInner {
         &mut self.meta_array.0
     }
 
-    pub fn add_layout(
-        &mut self,
-        layout: &Layout,
-        is_contiguous: bool,
-        constant_dims: Constants,
-        constant_is_startofsset_zero: Constants,
-        constant_is_contiguous: Constants,
-    ) {
-        let shape = layout.shape().dims();
-        let stride = layout.stride();
+    // pub fn add_layout(
+    //     &mut self,
+    //     layout: &Layout,
+    //     is_contiguous: bool,
+    //     constant_dims: Constants,
+    //     constant_is_startofsset_zero: Constants,
+    //     constant_is_contiguous: Constants,
+    // ) {
+    //     let shape = layout.shape().dims();
+    //     let stride = layout.stride();
 
-        self.add_const(constant_dims, shape.len());
-        if layout.start_offset() != 0 {
-            self.add_const(constant_is_startofsset_zero, false);
-            self.add(layout.start_offset());
-        }
+    //     self.add_const(constant_dims, shape.len());
+    //     if layout.start_offset() != 0 {
+    //         self.add_const(constant_is_startofsset_zero, false);
+    //         self.add(layout.start_offset());
+    //     }
 
-        if is_contiguous {
-            self.add(layout.shape().elem_count());
-        } else {
-            self.add_const(constant_is_contiguous, false);
+    //     if is_contiguous {
+    //         self.add(layout.shape().elem_count());
+    //     } else {
+    //         self.add_const(constant_is_contiguous, false);
 
-            self.get_meta_mut().extend(shape.iter().map(|&x| x as u32));
-            self.get_meta_mut().extend(stride.iter().map(|&x| x as u32));
-        }
-    }
+    //         self.get_meta_mut().extend(shape.iter().map(|&x| x as u32));
+    //         self.get_meta_mut().extend(stride.iter().map(|&x| x as u32));
+    //     }
+    // }
 
-    pub fn add_layout1(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            layout.is_contiguous(),
-            Constants::ConstDims1,
-            Constants::ConstIsStartoffsetZero1,
-            Constants::ConstIsContiguous1,
-        );
-    }
+    // pub fn add_layout1(&mut self, layout: &Layout) {
+    //     self.add_layout(
+    //         layout,
+    //         layout.is_contiguous(),
+    //         Constants::ConstDims1,
+    //         Constants::ConstIsStartoffsetZero1,
+    //         Constants::ConstIsContiguous1,
+    //     );
+    // }
 
-    pub fn add_layout2(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            layout.is_contiguous(),
-            Constants::ConstDims2,
-            Constants::ConstIsStartoffsetZero2,
-            Constants::ConstIsContiguous2,
-        );
-    }
+    // pub fn add_layout2(&mut self, layout: &Layout) {
+    //     self.add_layout(
+    //         layout,
+    //         layout.is_contiguous(),
+    //         Constants::ConstDims2,
+    //         Constants::ConstIsStartoffsetZero2,
+    //         Constants::ConstIsContiguous2,
+    //     );
+    // }
 
-    pub fn add_layout3(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            layout.is_contiguous(),
-            Constants::ConstDims3,
-            Constants::ConstIsStartoffsetZero3,
-            Constants::ConstIsContiguous3,
-        );
-    }
+    // pub fn add_layout3(&mut self, layout: &Layout) {
+    //     self.add_layout(
+    //         layout,
+    //         layout.is_contiguous(),
+    //         Constants::ConstDims3,
+    //         Constants::ConstIsStartoffsetZero3,
+    //         Constants::ConstIsContiguous3,
+    //     );
+    // }
 
-    //forces to write the shapes and strides
-    pub fn add_layout1_non_contiguous(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            false,
-            Constants::ConstDims1,
-            Constants::ConstIsStartoffsetZero1,
-            Constants::ConstIsContiguous1,
-        );
-    }
+    // //forces to write the shapes and strides
+    // pub fn add_layout1_non_contiguous(&mut self, layout: &Layout) {
+    //     self.add_layout(
+    //         layout,
+    //         false,
+    //         Constants::ConstDims1,
+    //         Constants::ConstIsStartoffsetZero1,
+    //         Constants::ConstIsContiguous1,
+    //     );
+    // }
 
-    pub fn add_layout2_non_contiguous(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            false,
-            Constants::ConstDims2,
-            Constants::ConstIsStartoffsetZero2,
-            Constants::ConstIsContiguous2,
-        );
-    }
+    // pub fn add_layout2_non_contiguous(&mut self, layout: &Layout) {
+    //     self.add_layout(
+    //         layout,
+    //         false,
+    //         Constants::ConstDims2,
+    //         Constants::ConstIsStartoffsetZero2,
+    //         Constants::ConstIsContiguous2,
+    //     );
+    // }
 
-    pub fn add_layout3_non_contiguous(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            false,
-            Constants::ConstDims3,
-            Constants::ConstIsStartoffsetZero3,
-            Constants::ConstIsContiguous3,
-        );
-    }
+    // pub fn add_layout3_non_contiguous(&mut self, layout: &Layout) {
+    //     self.add_layout(
+    //         layout,
+    //         false,
+    //         Constants::ConstDims3,
+    //         Constants::ConstIsStartoffsetZero3,
+    //         Constants::ConstIsContiguous3,
+    //     );
+    // }
+
+
+
 
     pub fn get_pipeline(
         &mut self,
-        pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>,
+        pipeline: impl Into<shader_loader::PipelineIndex>,
     ) -> PipelineReference {
         let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
         if is_new {
@@ -239,37 +243,11 @@ impl QueueBufferInner {
         PipelineReference(pipeline.into(), index, OpIsInplaceable::new())
     }
 
-    pub fn get_pipeline_const<T: ToU32>(
+    pub fn get_pipeline_inplace(
         &mut self,
-        pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>,
-        const_vec: Vec<T>,
-    ) -> PipelineReference {
-        for (index, v) in const_vec.into_iter().enumerate() {
-            self.const_array
-                .0
-                .push((candle_wgpu_kernels::Constants::get_const(index), v.to_u32()));
-        }
-
-        let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
-        if is_new {
-            self.id_to_const_array.push(self.const_array.to_vec());
-        }
-        self.init();
-        PipelineReference(pipeline.into(), index, OpIsInplaceable::new())
-    }
-
-    pub fn get_pipeline_const_inplace<T: ToU32>(
-        &mut self,
-        pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>,
-        const_vec: Vec<T>,
+        pipeline: impl Into<shader_loader::PipelineIndex>,
         inplaceable: OpIsInplaceable,
     ) -> PipelineReference {
-        for (index, v) in const_vec.into_iter().enumerate() {
-            self.const_array
-                .0
-                .push((candle_wgpu_kernels::Constants::get_const(index), v.to_u32()));
-        }
-
         let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
         if is_new {
             self.id_to_const_array.push(self.const_array.to_vec())
@@ -283,8 +261,8 @@ impl QueueBufferInner {
         self.meta_array.add(value);
     }
 
-    pub fn add_const<T: ToU32>(&mut self, key: candle_wgpu_kernels::Constants, value: T) {
-        self.const_array.insert(key, value);
+    pub fn add_const<K: Into<KernelConstId>, T: ToU32>(&mut self, key: K, value: T) {
+        self.const_array.insert(key.into(), value);
     }
 
     pub fn global_command_index(&self) -> u32 {
@@ -299,7 +277,7 @@ impl QueueBufferInner {
     pub fn load_simulation_consts(&mut self, consts: Vec<Vec<(&'static str, f64)>>) {
         self.id_to_const_array = consts;
         self.const_id_map.next_id = self.id_to_const_array.len();
-    }
+    } 
 }
 
 pub struct QueueBuffer<'a>(MutexGuard<'a, QueueBufferInner>);
@@ -309,7 +287,7 @@ impl<'a> QueueBuffer<'a> {
         QueueBuffer(inner)
     }
 
-    /**************** Enqueue Helper: ****************/
+    /**************** Enqueue Helper: ****************/ 
     ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
     pub fn enqueue_64(
         self,
@@ -330,7 +308,7 @@ impl<'a> QueueBuffer<'a> {
     }
 
     ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
-    ///With extra debug Info when `wgpu_debug` is enabled
+    ///With extra debug Info when `wgpu_debug` is enabled 
     pub fn enqueue_64_extra(
         self,
         pipeline: PipelineReference,
@@ -371,7 +349,7 @@ impl<'a> QueueBuffer<'a> {
 
     ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
     ///If the length is greater than 65535, more elements will be enqueued in the Y dimension.
-    ///With extra debug Info when `wgpu_debug` is enabled
+    ///With extra debug Info when `wgpu_debug` is enabled 
     pub fn enqueue_64_big_extra(
         self,
         pipeline: PipelineReference,
@@ -382,7 +360,7 @@ impl<'a> QueueBuffer<'a> {
         let id = length.div_ceil(64);
         let x = id.min(65535);
         let y = id.div_ceil(65535);
-        self.enqueue_workgroups_extra(
+        self.enqueue_workgroups_extra(     
             pipeline,
             bind_group,
             x,
@@ -419,7 +397,7 @@ impl<'a> QueueBuffer<'a> {
 
     #[allow(clippy::too_many_arguments)]
     ///Enqueues a command with x, y and z dimension.
-    ///With extra debug Info when `wgpu_debug` is enabled
+    ///With extra debug Info when `wgpu_debug` is enabled 
     pub fn enqueue_workgroups_extra(
         mut self,
         pipeline: PipelineReference,
@@ -453,7 +431,8 @@ impl<'a> QueueBuffer<'a> {
         self.command_queue.push(q);
     }
 
-    /**************** Virtual Bindgroups: ****************/
+
+    /**************** Virtual Bindgroups: ****************/ 
     pub fn create_bind_group_input0(
         buffer_dest: BufferReferenceId,
         alignment: BindgroupAlignment,
@@ -526,7 +505,7 @@ impl<'a> QueueBuffer<'a> {
             buffer_input1,
             buffer_input2,
             buffer_input3,
-            BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment, alignment),
+            BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment,alignment),
         )
     }
 

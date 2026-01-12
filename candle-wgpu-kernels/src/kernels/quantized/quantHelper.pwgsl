@@ -44,6 +44,7 @@ override CONSTV_0 : bool = true;
 override CONSTV_1 : bool = true;
 override CONSTV_2 : bool = true;
 
+//var<immediate> op_immediates: array<u32, 6>;
 
 //#define op_matmul_b                 op_meta[0]
 #define op_matmul_m                 op_meta[0]
@@ -58,6 +59,10 @@ override CONSTV_2 : bool = true;
 
 #define op_matmul_input1_stride_k   select(op_meta[4], 1u, CONSTV_0)
 #define op_matmul_input1_stride_m   select(op_meta[5], 1u, CONSTV_1) 
+
+
+
+
 
 #define op_matmul_use_batch   CONSTV_2
 

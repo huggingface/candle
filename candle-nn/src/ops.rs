@@ -221,8 +221,8 @@ impl candle::CustomOp1 for Sigmoid {
 
         wgpu_functions::queue_unary_from_buffer_op(
             storage.device(),
-            *buffer_dest.buffer(),
-            WgpuTensor::new(layout, *storage.buffer()),
+            buffer_dest.buffer(),
+            WgpuTensor::new(layout, storage.buffer()),
             UnaryOperation::Sigmoid,
             0.0,
             0.0,
@@ -470,8 +470,8 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 
             wgpu_functions::queue_softmax(
                 storage.device(),
-                *output_buffer.buffer(),
-                *storage.buffer(),
+                output_buffer.buffer(),
+                storage.buffer(),
                 storage.dtype(),
                 layout.start_offset() as u32,
                 dim_m1 as u32,
@@ -702,9 +702,9 @@ impl candle::CustomOp2 for RmsNorm {
 
         wgpu_functions::queue_rms_norm(
             src.device(),
-            *output_buffer.buffer(),
-            (*src.buffer(), layout.start_offset() as u32),
-            (*alpha.buffer(), alpha_layout.start_offset() as u32),
+            output_buffer.buffer(),
+            (src.buffer(), layout.start_offset() as u32),
+            (alpha.buffer(), alpha_layout.start_offset() as u32),
             src.dtype(),
             dim_m1 as u32,
             dest_size as u32,
@@ -993,10 +993,10 @@ impl candle::CustomOp3 for LayerNorm {
 
         wgpu_functions::queue_layer_norm(
             src.device(),
-            *output_buffer.buffer(),
-            (*src.buffer(), layout.start_offset() as u32),
-            (*alpha.buffer(), alpha_layout.start_offset() as u32),
-            (*beta.buffer(), beta_layout.start_offset() as u32),
+            output_buffer.buffer(),
+            (src.buffer(), layout.start_offset() as u32),
+            (alpha.buffer(), alpha_layout.start_offset() as u32),
+            (beta.buffer(), beta_layout.start_offset() as u32),
             src.dtype(),
             dim_m1 as u32,
             dest_size as u32,

@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap as HashMap;
 
 use tracing::instrument;
 
-use crate::wgpu_backend::util::{HashMapMulti, StorageOptional, StorageTrait};
+use crate::util::{HashMapMulti, StorageOptional, StorageTrait};
 
 use super::{CachedBindgroupFull, CachedBindgroupId, CachedBindgroupInput};
 

@@ -255,11 +255,11 @@ impl candle::CustomOp3 for RotaryEmbI {
             let output_buffer = src.device().alloc_uninit_size(src.dtype(),  el);
             wgpu_functions::queue_rotary_emb_i(
                 src.device(),
-              (*src.buffer(),  l_src.start_offset() as u32),
-            (*cos.buffer(), l_cos.start_offset()  as u32),
-            (*sin.buffer(), l_sin.start_offset() as u32),
+              (src.buffer(),  l_src.start_offset() as u32),
+            (cos.buffer(), l_cos.start_offset()  as u32),
+            (sin.buffer(), l_sin.start_offset() as u32),
                 src.dtype(),
-                *output_buffer.buffer(),
+                output_buffer.buffer(),
                 l_cos.dims().len() == 3 && l_sin.dims().len() == 3,
                 (b as u32, h as u32, t as u32, d as u32),
             )?;

@@ -72,7 +72,7 @@ pub fn queue_conv2d(
         let m = params.c_out;
         let k = params.c_in * params.k_h * params.k_w;
         if (k >= 64 || m >= 16)
-            && mem_needed < dev.device_limits.max_storage_buffer_binding_size as usize
+            && mem_needed < dev.inner_device().device_limits.max_storage_buffer_binding_size as usize
         {
             return queue_conv2d_matmul(dev, buffer_dest, input, kernel, dtype, params);
         }
@@ -95,12 +95,10 @@ pub fn queue_conv2d(
         );
         let new_layout = Layout::contiguous_with_offset(Shape::from(padded_shape), 0);
 
-        let mut cache = dev.cache.lock().unwrap();
-        let tmp_buffer = cache.create_buffer_reference(
+        let tmp_buffer = dev.inner_device().create_buffer_reference(
             new_layout.shape().elem_count() * dtype.size_in_bytes(),
             false,
         );
-        drop(cache);
         queue_copy4d_padded(
             dev,
             tmp_buffer,
@@ -115,8 +113,7 @@ pub fn queue_conv2d(
     } else {
         //the performance is bad if the input is not contiguous
         if input_stride[3] != 1 && (params.c_out > 32) && (params.i_h >= 64 && params.i_w >= 64) {
-            let mut cache = dev.cache.lock().unwrap();
-            let tmp_buffer = cache.create_buffer_reference(
+            let tmp_buffer = dev.inner_device().create_buffer_reference(
                 input.layout().shape().elem_count() * dtype.size_in_bytes(),
                 false,
             );
@@ -280,9 +277,7 @@ pub fn queue_conv2d_matmul(
         const_vec,
     );
     {
-        let mut cache = dev.cache.lock().unwrap();
-
-        im2col_buffer = cache.create_buffer_reference(n * k * b * dtype.size_in_bytes(), false);
+        im2col_buffer = dev.inner_device().create_buffer_reference(n * k * b * dtype.size_in_bytes(), false);
 
         let bind_group = dev.create_bind_group_input1(im2col_buffer, input.buffer(), dtype.into());
 
