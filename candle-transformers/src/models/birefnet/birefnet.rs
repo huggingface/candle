@@ -6,9 +6,7 @@ use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::VarBuilder;
 
 use super::blocks::BasicDecBlk;
-use super::config::{
-    BackboneType, Config, MultiScaleInputType, SqueezeBlockType,
-};
+use super::config::{BackboneType, Config, MultiScaleInputType, SqueezeBlockType};
 use super::decoder::Decoder;
 use super::swin::SwinTransformer;
 
@@ -54,7 +52,7 @@ impl BiRefNet {
             SqueezeBlockType::BasicDecBlkX1 => Some(BasicDecBlk::new(
                 squeeze_in_channels,
                 channels[0],
-                config.dec_att,  // Use config's dec_att instead of None
+                config.dec_att, // Use config's dec_att instead of None
                 true,
                 vb.pp("squeeze_module.0"),
             )?),

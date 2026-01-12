@@ -120,7 +120,14 @@ impl Module for BasicDecBlk {
                         let min = data.iter().cloned().fold(f32::INFINITY, f32::min);
                         let max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
                         let mean: f32 = data.iter().sum::<f32>() / data.len() as f32;
-                        eprintln!("    {}: shape={:?}, min={:.4}, max={:.4}, mean={:.4}", name, t.dims(), min, max, mean);
+                        eprintln!(
+                            "    {}: shape={:?}, min={:.4}, max={:.4}, mean={:.4}",
+                            name,
+                            t.dims(),
+                            min,
+                            max,
+                            mean
+                        );
                     }
                 }
             }
@@ -128,11 +135,11 @@ impl Module for BasicDecBlk {
 
         #[cfg(debug_assertions)]
         eprintln!("  BasicDecBlk forward:");
-        
+
         let xs = self.conv_in.forward(xs)?;
         #[cfg(debug_assertions)]
         print_stats("After conv_in", &xs);
-        
+
         let xs = if let Some(bn) = &self.bn_in {
             bn.forward_t(&xs, false)?
         } else {
@@ -140,7 +147,7 @@ impl Module for BasicDecBlk {
         };
         #[cfg(debug_assertions)]
         print_stats("After bn_in", &xs);
-        
+
         let xs = xs.relu()?;
         #[cfg(debug_assertions)]
         print_stats("After relu", &xs);
@@ -156,7 +163,7 @@ impl Module for BasicDecBlk {
         let xs = self.conv_out.forward(&xs)?;
         #[cfg(debug_assertions)]
         print_stats("After conv_out", &xs);
-        
+
         let xs = if let Some(bn) = &self.bn_out {
             bn.forward_t(&xs, false)?
         } else {
