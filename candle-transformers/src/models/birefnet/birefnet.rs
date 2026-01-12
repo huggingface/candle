@@ -54,7 +54,7 @@ impl BiRefNet {
             SqueezeBlockType::BasicDecBlkX1 => Some(BasicDecBlk::new(
                 squeeze_in_channels,
                 channels[0],
-                DecoderAttentionType::None,
+                config.dec_att,  // Use config's dec_att instead of None
                 true,
                 vb.pp("squeeze_module.0"),
             )?),
@@ -158,9 +158,48 @@ impl Module for BiRefNet {
         // Encode
         let (x1, x2, x3, mut x4) = self.forward_enc(x)?;
 
+        // Debug: print encoder output stats
+        #[cfg(debug_assertions)]
+        {
+            fn print_stats(name: &str, t: &Tensor) {
+                if let Ok(t_cpu) = t.to_device(&candle::Device::Cpu) {
+                    if let Ok(flat) = t_cpu.flatten_all() {
+                        if let Ok(data) = flat.to_vec1::<f32>() {
+                            let min = data.iter().cloned().fold(f32::INFINITY, f32::min);
+                            let max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                            let mean: f32 = data.iter().sum::<f32>() / data.len() as f32;
+                            eprintln!("  {}: shape={:?}, min={:.4}, max={:.4}, mean={:.4}", name, t.dims(), min, max, mean);
+                        }
+                    }
+                }
+            }
+            eprintln!("Encoder outputs:");
+            print_stats("x1", &x1);
+            print_stats("x2", &x2);
+            print_stats("x3", &x3);
+            print_stats("x4", &x4);
+        }
+
         // Squeeze
         if let Some(squeeze) = &self.squeeze_module {
             x4 = squeeze.forward(&x4)?;
+            #[cfg(debug_assertions)]
+            {
+                fn print_stats(name: &str, t: &Tensor) {
+                    if let Ok(t_cpu) = t.to_device(&candle::Device::Cpu) {
+                        if let Ok(flat) = t_cpu.flatten_all() {
+                            if let Ok(data) = flat.to_vec1::<f32>() {
+                                let min = data.iter().cloned().fold(f32::INFINITY, f32::min);
+                                let max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                                let mean: f32 = data.iter().sum::<f32>() / data.len() as f32;
+                                eprintln!("  {}: shape={:?}, min={:.4}, max={:.4}, mean={:.4}", name, t.dims(), min, max, mean);
+                            }
+                        }
+                    }
+                }
+                eprintln!("After squeeze:");
+                print_stats("x4_squeezed", &x4);
+            }
         }
 
         // Decode

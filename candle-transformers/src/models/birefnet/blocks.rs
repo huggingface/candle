@@ -111,26 +111,59 @@ impl BasicDecBlk {
 
 impl Module for BasicDecBlk {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        // Debug helper
+        #[cfg(debug_assertions)]
+        fn print_stats(name: &str, t: &Tensor) {
+            if let Ok(t_cpu) = t.to_device(&candle::Device::Cpu) {
+                if let Ok(flat) = t_cpu.flatten_all() {
+                    if let Ok(data) = flat.to_vec1::<f32>() {
+                        let min = data.iter().cloned().fold(f32::INFINITY, f32::min);
+                        let max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                        let mean: f32 = data.iter().sum::<f32>() / data.len() as f32;
+                        eprintln!("    {}: shape={:?}, min={:.4}, max={:.4}, mean={:.4}", name, t.dims(), min, max, mean);
+                    }
+                }
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        eprintln!("  BasicDecBlk forward:");
+        
         let xs = self.conv_in.forward(xs)?;
+        #[cfg(debug_assertions)]
+        print_stats("After conv_in", &xs);
+        
         let xs = if let Some(bn) = &self.bn_in {
             bn.forward_t(&xs, false)?
         } else {
             xs
         };
+        #[cfg(debug_assertions)]
+        print_stats("After bn_in", &xs);
+        
         let xs = xs.relu()?;
+        #[cfg(debug_assertions)]
+        print_stats("After relu", &xs);
 
         let xs = if let Some(dec_att) = &self.dec_att {
             dec_att.forward(&xs)?
         } else {
             xs
         };
+        #[cfg(debug_assertions)]
+        print_stats("After dec_att", &xs);
 
         let xs = self.conv_out.forward(&xs)?;
+        #[cfg(debug_assertions)]
+        print_stats("After conv_out", &xs);
+        
         let xs = if let Some(bn) = &self.bn_out {
             bn.forward_t(&xs, false)?
         } else {
             xs
         };
+        #[cfg(debug_assertions)]
+        print_stats("After bn_out", &xs);
 
         Ok(xs)
     }
