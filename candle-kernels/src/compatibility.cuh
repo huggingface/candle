@@ -35,27 +35,28 @@ __device__ double atomicAdd(double* address, double val) {
 }
 #endif
 
-#if __CUDA_ARCH__ < 700
+// __half support starts at SM 5.3, native atomicAdd(__half*) at SM 7.0+
+#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 700
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#atomicadd
 // The 16-bit __half floating-point version of atomicAdd() is only supported by devices of compute capability 7.x and higher.
 // Solution adapted from https://github.com/torch/cutorch/blob/master/lib/THC/THCAtomics.cuh#L96-L119
-//__device__ __half atomicAdd(__half *address, __half val) {
-   //  unsigned int *address_as_ui = (unsigned int *) ((char *)address - ((size_t)address & 2));
-   //  unsigned int old = *address_as_ui;
-   //  unsigned int assumed;
-   //  bool unaligned = (size_t) address & 2;
-   //  do {
-   //      assumed = old;
-   //      unsigned int hsum;
-   //      hsum = unaligned ? (old >> 16) : (old & 0xffff);
-   //      hsum = __half_as_ushort(__ushort_as_half(hsum) + val); 
-   //      old = atomicCAS(address_as_ui, assumed,
-   //          unaligned ? (old & 0xffff) | (hsum << 16) : (old & 0xffff0000) | hsum
-   //      );
+__device__ __forceinline__ __half atomicAdd(__half *address, __half val) {
+    unsigned int *address_as_ui = (unsigned int *) ((char *)address - ((size_t)address & 2));
+    unsigned int old = *address_as_ui;
+    unsigned int assumed;
+    bool unaligned = (size_t) address & 2;
+    do {
+        assumed = old;
+        unsigned int hsum;
+        hsum = unaligned ? (old >> 16) : (old & 0xffff);
+        hsum = __half_as_ushort(__ushort_as_half(hsum) + val); 
+        old = atomicCAS(address_as_ui, assumed,
+            unaligned ? (old & 0xffff) | (hsum << 16) : (old & 0xffff0000) | hsum
+        );
 
-   // } while (assumed != old);
-   // return __ushort_as_half(unaligned ? (old >> 16) : (old & 0xffff));
-//}
+    } while (assumed != old);
+    return __ushort_as_half(unaligned ? (old >> 16) : (old & 0xffff));
+}
 #endif
 
 
