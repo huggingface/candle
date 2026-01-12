@@ -433,67 +433,31 @@ impl ASPPDeformable {
 
 impl Module for ASPPDeformable {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // Debug helper
-        #[cfg(debug_assertions)]
-        fn print_stats(name: &str, t: &Tensor) {
-            if let Ok(t_cpu) = t.to_device(&candle::Device::Cpu) {
-                if let Ok(flat) = t_cpu.flatten_all() {
-                    if let Ok(data) = flat.to_vec1::<f32>() {
-                        let min = data.iter().cloned().fold(f32::INFINITY, f32::min);
-                        let max = data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                        let mean: f32 = data.iter().sum::<f32>() / data.len() as f32;
-                        eprintln!("      {}: shape={:?}, min={:.4}, max={:.4}, mean={:.4}", name, t.dims(), min, max, mean);
-                    }
-                }
-            }
-        }
-
-        #[cfg(debug_assertions)]
-        eprintln!("    ASPPDeformable forward:");
-        #[cfg(debug_assertions)]
-        print_stats("input", xs);
-
         // First branch (1x1 deformable conv)
         let x1 = self.aspp1.forward(xs)?;
-        #[cfg(debug_assertions)]
-        print_stats("aspp1", &x1);
 
         // Deformable branches
         let mut features = vec![x1.clone()];
-        for (i, aspp) in self.aspp_deforms.iter().enumerate() {
-            let feat = aspp.forward(xs)?;
-            #[cfg(debug_assertions)]
-            print_stats(&format!("aspp_deforms[{}]", i), &feat);
-            features.push(feat);
+        for aspp in self.aspp_deforms.iter() {
+            features.push(aspp.forward(xs)?);
         }
 
         // Global average pooling branch
         let x_global = self.global_avg_pool.forward(xs)?;
-        #[cfg(debug_assertions)]
-        print_stats("global_avg_pool", &x_global);
-        
         let (_, _, h, w) = x1.dims4()?;
         let x_global_up = x_global.upsample_bilinear2d(h, w, true)?;
         features.push(x_global_up);
 
         // Concatenate all branches
         let xs = Tensor::cat(&features, 1)?;
-        #[cfg(debug_assertions)]
-        print_stats("after cat", &xs);
 
         // Output convolution
         let xs = self.conv1.forward(&xs)?;
-        #[cfg(debug_assertions)]
-        print_stats("after conv1", &xs);
-        
         let xs = if let Some(bn) = &self.bn1 {
             bn.forward_t(&xs, false)?
         } else {
             xs
         };
-        #[cfg(debug_assertions)]
-        print_stats("after bn1", &xs);
-        
         xs.relu()
     }
 }
