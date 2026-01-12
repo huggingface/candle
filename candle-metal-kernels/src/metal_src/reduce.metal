@@ -537,6 +537,23 @@ struct block_reducer {
     }
 };
 
+template<typename T, typename _E = void>
+struct finalize_reduce;
+
+template<typename T>
+struct finalize_reduce<T, typename metal::enable_if_t<not_indexed_t<T>>> {
+    METAL_FUNC T operator()(T value) {
+        return value;
+    }
+};
+
+template<typename T>
+struct finalize_reduce<T, typename metal::enable_if_t<is_indexed_t<T>>> {
+    METAL_FUNC uint operator()(T value) {
+        return value.i;
+    }
+};
+
 // Inspired by "Optimizing Parallel Reduction in CUDA" by Mark Harris
 template<
     typename T,
@@ -557,7 +574,8 @@ METAL_FUNC void reduce(
     uint dst_id [[ threadgroup_position_in_grid ]]
 ) {
     loader<T, R, OP, BLOCKSIZE, Indexer, IndexT> load;
-    block_reducer<T, OP, BLOCKSIZE> reduce(shared);
+    block_reducer<R, OP, BLOCKSIZE> reduce(shared);
+    finalize_reduce<R> finalize;
 
     // Calculate offset for the threadgroup of current thread
     const IndexT offset = dst_id * el_per_block;
@@ -568,39 +586,33 @@ METAL_FUNC void reduce(
     // Complete reduction
     R result = reduce(value, tid);
 
-    if (tid == 0) dst[dst_id] = result;
+    if (tid == 0) dst[dst_id] = finalize(result);
 }
 
-#define reduce_case(OP, T, R, N, INDEXER)               \
-case N: {                                               \
-    threadgroup R shared[N];                            \
-    reduce<T, R, OP<R>, N, decltype(INDEXER)>(          \
-        indexer,                                        \
-        src_numel,                                      \
-        el_per_block,                                   \
-        src,                                            \
-        dst,                                            \
-        shared,                                         \
-        tid,                                            \
-        dst_id);                                        \
-    break;                                              \
+#define reduce_case(OP, T, R, N, INDEXER)                               \
+case N: {                                                               \
+    threadgroup T shared[N];                                            \
+    reduce<T, R, OP<R>, N>(                                             \
+        INDEXER, src_numel, el_per_block, src, dst, shared, tid, dst_id \
+    );                                                                  \
+    break;                                                              \
 }
 
 #define ARG(...) __VA_ARGS__
 
-#define impl_reduce_inner(OP, NAME, T)                      \
+#define impl_reduce_inner(OP, NAME, T, IDX)                 \
 kernel void NAME(                                           \
-    constant uint &src_numel,                               \
-    constant uint &num_dims,                                \
-    constant uint *dims,                                    \
-    constant uint &el_per_block,                            \
+    constant IDX &src_numel,                                \
+    constant IDX &num_dims,                                 \
+    constant IDX *dims,                                     \
+    constant IDX &el_per_block,                             \
     device const T *src,                                    \
     device T *dst,                                          \
     uint tid [[ thread_index_in_threadgroup ]],             \
     uint dst_id [[ threadgroup_position_in_grid ]],         \
     uint block_dim [[ threads_per_threadgroup ]]            \
 ) {                                                         \
-    indexer_t<uint, false> indexer;                         \
+    indexer_t<IDX, false> indexer;                          \
     switch (max_shared_mem<T>(block_dim)) {                 \
         reduce_case(OP, ARG(T), ARG(T), 2048, indexer);     \
         reduce_case(OP, ARG(T), ARG(T), 1024, indexer);     \
@@ -614,142 +626,112 @@ kernel void NAME(                                           \
         reduce_case(OP, ARG(T), ARG(T),    4, indexer);     \
         reduce_case(OP, ARG(T), ARG(T),    2, indexer);     \
         reduce_case(OP, ARG(T), ARG(T),    1, indexer);     \
-    }                                                   \
+    }                                                       \
 }
 
-
-#define impl_reduce_strided(OP, NAME, T) impl_reduce_strided_typed(OP, NAME, T, uint, )
-
-#define impl_reduce(OP, NAME, T)                        \
-impl_reduce_inner(OP, NAME, T)                          \
-impl_reduce_strided(OP, NAME, T)                        \
-
-template<
-    typename T,
-    typename OP,
-    ushort BLOCKSIZE,
-    typename Indexer,
-    typename IndexT = typename Indexer::IndexT
->
-METAL_FUNC void reduce_indexed_impl(
-    Indexer indexer,
-    constant IndexT &src_numel,
-    constant IndexT &el_per_block,
-    device const T *src,
-    device uint *dst,
-    threadgroup indexed<T> shared[BLOCKSIZE],
-    uint tid,
-    uint dst_id
-) {
-    using I = indexed<T>;
-    loader<T, I, OP, BLOCKSIZE, Indexer, IndexT> load;
-    block_reducer<I, OP, BLOCKSIZE> reducer(shared);
-    const IndexT offset = dst_id * el_per_block;
-    I value = load(OP::init(), indexer, src_numel, el_per_block, src, offset, tid);
-    I result = reducer(value, tid);
-    if (tid == 0) dst[dst_id] = result.i;
-}
-
-#define REDUCE_STRIDED_CASE(OP, T, N, INDEXER)                          \
-case N: {                                                               \
-    threadgroup T shared[N];                                            \
-    reduce<T, T, OP<T>, N, decltype(INDEXER)>(                          \
-        INDEXER, src_numel, el_per_block, src, dst, shared, tid, dst_id \
-    );                                                                  \
-    break;                                                              \
-}
-
-#define REDUCE_INDEXED_CASE(OP, T, N, INDEXER)                          \
+#define REDUCE_INDEXED_CASE(OP, T, R, N, INDEXER)                       \
 case N: {                                                               \
     threadgroup indexed<T> shared[N];                                   \
-    reduce_indexed_impl<T, OP<indexed<T>>, N, decltype(INDEXER)>(       \
+    reduce<T, OP<indexed<T>>, N, decltype(INDEXER)>(                    \
         INDEXER, src_numel, el_per_block, src, dst, shared, tid, dst_id \
     );                                                                  \
     break;                                                              \
 }
 
-#define REDUCE_SWITCH(CASE_MACRO, OP, T, INDEXER, SizeT)                \
-    switch (max_shared_mem<T>(block_dim)) {                             \
-        CASE_MACRO(OP, ARG(T), 2048, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T), 1024, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),  512, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),  256, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),  128, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),   64, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),   32, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),   16, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),    8, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),    4, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),    2, INDEXER)                    \
-        CASE_MACRO(OP, ARG(T),    1, INDEXER)                    \
+#define reduce_switch(CASE_MACRO, OP, T, R, INDEXER)    \
+    switch (max_shared_mem<T>(block_dim)) {             \
+        CASE_MACRO(OP, ARG(T), ARG(R), 2048, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R), 1024, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),  512, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),  256, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),  128, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),   64, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),   32, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),   16, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),    8, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),    4, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),    2, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),    1, INDEXER)   \
     }
 
-#define impl_reduce_strided_typed(OP, NAME, T, IndexT, SUFFIX)   \
-kernel void NAME##_strided##SUFFIX(                                     \
-    constant IndexT &src_numel,                                          \
-    constant IndexT &num_dims,                                          \
-    constant IndexT *dims,                                              \
-    constant IndexT *strides,                                           \
-    constant IndexT &el_per_block,                                       \
-    device const T *src,                                                \
-    device T *dst,                                                      \
-    uint tid [[ thread_index_in_threadgroup ]],                         \
-    uint dst_id [[ threadgroup_position_in_grid ]],                     \
-    uint block_dim [[ threads_per_threadgroup ]]                        \
-) {                                                                     \
-    indexer_t<IndexT, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
-    REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, IndexT)           \
+#define impl_reduce_strided(OP, NAME, T, IDX)           \
+kernel void NAME##_strided(                             \
+    constant IDX &src_numel,                            \
+    constant IDX &num_dims,                             \
+    constant IDX *dims,                                 \
+    constant IDX *strides,                              \
+    constant IDX &el_per_block,                         \
+    device const T *src,                                \
+    device T *dst,                                      \
+    uint tid [[ thread_index_in_threadgroup ]],         \
+    uint dst_id [[ threadgroup_position_in_grid ]],     \
+    uint block_dim [[ threads_per_threadgroup ]]        \
+) {                                                     \
+    indexer_t<IDX, true> indexer{                       \
+        num_dims, dims, strides, dims[num_dims - 1]     \
+    };                                                  \
+    reduce_switch(reduce_case, OP, T, T, indexer)       \
 }
 
-#define impl_arg_reduce_strided_typed(OP, NAME, T, IndexT)              \
-kernel void NAME##_strided(                                             \
-    constant IndexT &src_numel,                                         \
-    constant IndexT &num_dims,                                          \
-    constant IndexT *dims,                                              \
-    constant IndexT *strides,                                           \
-    constant IndexT &el_per_block,                                      \
-    device const T *src,                                                \
-    device IndexT *dst,                                                 \
-    uint tid [[ thread_index_in_threadgroup ]],                         \
-    uint dst_id [[ threadgroup_position_in_grid ]],                     \
-    uint block_dim [[ threads_per_threadgroup ]]                        \
-) {                                                                     \
-    indexer_t<IndexT, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
-    REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, uint)           \
+#define impl_reduce(OP, NAME, T)                        \
+impl_reduce_inner(OP, NAME, T, uint)                    \
+impl_reduce_strided(OP, NAME, T, uint)                  \
+
+#define impl_arg_reduce_strided_typed(OP, NAME, T, IDX)     \
+kernel void NAME##_strided(                                 \
+    constant IDX &src_numel,                                \
+    constant IDX &num_dims,                                 \
+    constant IDX *dims,                                     \
+    constant IDX *strides,                                  \
+    constant IDX &el_per_block,                             \
+    device const T *src,                                    \
+    device IDX *dst,                                        \
+    uint tid [[ thread_index_in_threadgroup ]],             \
+    uint dst_id [[ threadgroup_position_in_grid ]],         \
+    uint block_dim [[ threads_per_threadgroup ]]            \
+) {                                                         \
+    indexer_t<IDX, true> indexer{                           \
+        num_dims, dims, strides, dims[num_dims - 1]         \
+    };                                                      \
+    reduce_switch(REDUCE_INDEXED_CASE, OP, T, T, indexer)   \
 }
 
-#define impl_reduce_strided_u64(OP, NAME, T)                            \
-kernel void NAME##_strided_u64(                                         \
-    constant ulong &src_numel,                                          \
-    constant ulong &num_dims,                                           \
-    constant ulong *dims,                                               \
-    constant ulong *strides,                                            \
-    constant ulong &el_per_block,                                       \
-    device const T *src,                                                \
-    device T *dst,                                                      \
-    uint tid [[ thread_index_in_threadgroup ]],                         \
-    uint dst_id [[ threadgroup_position_in_grid ]],                     \
-    uint block_dim [[ threads_per_threadgroup ]]                        \
-) {                                                                     \
-    indexer_t<ulong, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
-    REDUCE_SWITCH(REDUCE_STRIDED_CASE, OP, T, indexer, ulong)           \
+#define impl_reduce_strided_u64(OP, NAME, T)                \
+kernel void NAME##_strided_u64(                             \
+    constant ulong &src_numel,                              \
+    constant ulong &num_dims,                               \
+    constant ulong *dims,                                   \
+    constant ulong *strides,                                \
+    constant ulong &el_per_block,                           \
+    device const T *src,                                    \
+    device T *dst,                                          \
+    uint tid [[ thread_index_in_threadgroup ]],             \
+    uint dst_id [[ threadgroup_position_in_grid ]],         \
+    uint block_dim [[ threads_per_threadgroup ]]            \
+) {                                                         \
+    indexer_t<ulong, true> indexer{                         \
+        num_dims, dims, strides, dims[num_dims - 1]         \
+    };                                                      \
+    reduce_switch(reduce_case, OP, T, T, indexer)           \
 }
 
-#define impl_arg_reduce_strided_u64(OP, NAME, T)                        \
-kernel void NAME##_strided_u64(                                         \
-    constant ulong &src_numel,                                          \
-    constant ulong &num_dims,                                           \
-    constant ulong *dims,                                               \
-    constant ulong *strides,                                            \
-    constant ulong &el_per_block,                                       \
-    device const T *src,                                                \
-    device uint *dst,                                                   \
-    uint tid [[ thread_index_in_threadgroup ]],                         \
-    uint dst_id [[ threadgroup_position_in_grid ]],                     \
-    uint block_dim [[ threads_per_threadgroup ]]                        \
-) {                                                                     \
-    indexer_t<ulong, true> indexer{num_dims, dims, strides, dims[num_dims - 1]}; \
-    REDUCE_SWITCH(REDUCE_INDEXED_CASE, OP, T, indexer, ulong)           \
+#define impl_arg_reduce_strided_u64(OP, NAME, T)            \
+kernel void NAME##_strided_u64(                             \
+    constant ulong &src_numel,                              \
+    constant ulong &num_dims,                               \
+    constant ulong *dims,                                   \
+    constant ulong *strides,                                \
+    constant ulong &el_per_block,                           \
+    device const T *src,                                    \
+    device uint *dst,                                       \
+    uint tid [[ thread_index_in_threadgroup ]],             \
+    uint dst_id [[ threadgroup_position_in_grid ]],         \
+    uint block_dim [[ threads_per_threadgroup ]]            \
+) {                                                         \
+    indexer_t<ulong, true> indexer{                         \
+        num_dims, dims, strides, dims[num_dims - 1]         \
+    };                                                      \
+    reduce_switch(REDUCE_INDEXED_CASE, OP, T, T, indexer)   \
 }
 
 template<
