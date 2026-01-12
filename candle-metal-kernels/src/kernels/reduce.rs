@@ -3,31 +3,6 @@ use crate::utils::{BufferOffset, EncoderProvider};
 use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
 use objc2_metal::{MTLResourceUsage, MTLSize};
 
-#[derive(Debug, Clone, Copy)]
-enum IndexType {
-    U32,
-    U64,
-}
-
-impl IndexType {
-    fn select(shape: &[usize], strides: &[usize]) -> Self {
-        let max_dim = shape.iter().copied().max().unwrap_or(0);
-        let max_stride = strides.iter().copied().max().unwrap_or(0);
-        if max_dim <= u32::MAX as usize && max_stride <= u32::MAX as usize {
-            IndexType::U32
-        } else {
-            IndexType::U64
-        }
-    }
-
-    fn kernel_suffix(self) -> &'static str {
-        match self {
-            IndexType::U32 => "",
-            IndexType::U64 => "_u64",
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn call_reduce_contiguous(
     device: &Device,
@@ -42,24 +17,46 @@ pub fn call_reduce_contiguous(
     let length = shape.iter().product::<usize>();
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+
+    let is_large = length > u32::MAX as usize && !kernel_name.contains("arg");
+    let kernel = if is_large {
+        format!("{kernel_name}_large")
+    } else {
+        kernel_name.to_string()
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    let shape_u32: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
-    set_params!(
-        encoder,
-        (
-            length,
-            num_dims,
-            shape_u32.as_slice(),
-            work_per_threadgroup,
-            &input,
-            output
-        )
-    );
+    if is_large {
+        set_params!(
+            encoder,
+            (
+                length,
+                num_dims,
+                shape,
+                work_per_threadgroup,
+                &input,
+                output
+            )
+        );
+    } else {
+        let shape_u32: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
+        set_params!(
+            encoder,
+            (
+                length,
+                num_dims,
+                shape_u32.as_slice(),
+                work_per_threadgroup,
+                &input,
+                output
+            )
+        );
+    }
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
@@ -97,46 +94,48 @@ pub fn call_reduce_strided(
     let length: usize = shape.iter().product();
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
-    let index_type = IndexType::select(shape, strides);
 
-    let kernel = format!("{}{}", kernel_name, index_type.kernel_suffix());
+    let is_large = length > u32::MAX as usize && !kernel_name.contains("arg");
+    let kernel = if is_large {
+        format!("{kernel_name}_large")
+    } else {
+        kernel_name.to_string()
+    };
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    match index_type {
-        IndexType::U32 => {
-            let dims: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
-            let strs: Vec<u32> = strides.iter().map(|&x| x as u32).collect();
-            set_params!(
-                encoder,
-                (
-                    length,
-                    num_dims,
-                    dims.as_slice(),
-                    strs.as_slice(),
-                    work_per_threadgroup,
-                    &input,
-                    output
-                )
-            );
-        }
-        IndexType::U64 => {
-            set_params!(
-                encoder,
-                (
-                    length,
-                    num_dims,
-                    shape,
-                    strides,
-                    work_per_threadgroup,
-                    &input,
-                    output
-                )
-            );
-        }
+    if is_large {
+        set_params!(
+            encoder,
+            (
+                length,
+                num_dims,
+                shape,
+                strides,
+                work_per_threadgroup,
+                &input,
+                output
+            )
+        );
+    } else {
+        let dims: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
+        let strs: Vec<u32> = strides.iter().map(|&x| x as u32).collect();
+        set_params!(
+            encoder,
+            (
+                length,
+                num_dims,
+                dims.as_slice(),
+                strs.as_slice(),
+                work_per_threadgroup,
+                &input,
+                output
+            )
+        );
+
     }
 
     let width = std::cmp::min(
