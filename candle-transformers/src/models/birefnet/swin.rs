@@ -273,12 +273,13 @@ impl WindowAttention {
             .reshape((b_, n, 3, self.num_heads, c / self.num_heads))?
             .permute((2, 0, 3, 1, 4))?;
 
-        let q = qkv.i(0)?;
-        let k = qkv.i(1)?;
-        let v = qkv.i(2)?;
+        // Make tensors contiguous after indexing to ensure correct strides for matmul
+        let q = qkv.i(0)?.contiguous()?;
+        let k = qkv.i(1)?.contiguous()?;
+        let v = qkv.i(2)?.contiguous()?;
 
         let q = (q * self.scale)?;
-        let attn = q.matmul(&k.t()?)?;
+        let attn = q.matmul(&k.transpose(D::Minus2, D::Minus1)?)?;
 
         // Add relative position bias
         let wh_ww = self.window_size.0 * self.window_size.1;

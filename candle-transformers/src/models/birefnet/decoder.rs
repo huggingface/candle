@@ -118,13 +118,13 @@ impl Decoder {
         let lateral_block3 = BasicLatBlk::new(channels[2], channels[2], vb.pp("lateral_block3"))?;
         let lateral_block2 = BasicLatBlk::new(channels[3], channels[3], vb.pp("lateral_block2"))?;
 
-        // Output
+        // Output (Sequential with index 0)
         let conv_out1 = candle_nn::conv2d(
             channels[3] / 2 + ipt_cha_tuple.4,
             1,
             1,
             Default::default(),
-            vb.pp("conv_out1"),
+            vb.pp("conv_out1.0"),
         )?;
 
         // Multi-scale supervision

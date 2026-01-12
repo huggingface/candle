@@ -136,6 +136,11 @@ impl Module for ASPPModule {
 }
 
 /// Global Average Pooling branch for ASPP
+///
+/// PyTorch structure: nn.Sequential(AdaptiveAvgPool2d, Conv2d, BatchNorm2d)
+/// - Index 0: AdaptiveAvgPool2d (no parameters)
+/// - Index 1: Conv2d (weight only, no bias)
+/// - Index 2: BatchNorm2d
 #[derive(Debug, Clone)]
 pub struct GlobalAvgPool {
     conv: Conv2d,
@@ -149,7 +154,15 @@ impl GlobalAvgPool {
         use_bn: bool,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let conv = candle_nn::conv2d(in_channels, out_channels, 1, Default::default(), vb.pp("1"))?;
+        // Conv2d at index 1 (no bias in original PyTorch implementation)
+        let conv = candle_nn::conv2d_no_bias(
+            in_channels,
+            out_channels,
+            1,
+            Default::default(),
+            vb.pp("1"),
+        )?;
+        // BatchNorm at index 2
         let bn = if use_bn {
             Some(candle_nn::batch_norm(out_channels, 1e-5, vb.pp("2"))?)
         } else {
@@ -392,10 +405,10 @@ impl ASPPDeformable {
             vb.pp("global_avg_pool"),
         )?;
 
-        // Output convolution
+        // Output convolution (no bias in original PyTorch implementation)
         // channels = inter_channels * (1 + len(aspp_deforms) + 1)
         let num_branches = 2 + parallel_block_sizes.len();
-        let conv1 = candle_nn::conv2d(
+        let conv1 = candle_nn::conv2d_no_bias(
             inter_channels * num_branches,
             out_channels,
             1,
