@@ -18,6 +18,7 @@ pub mod based;
 pub mod beit;
 pub mod bert;
 pub mod bigcode;
+pub mod birefnet;
 pub mod blip;
 pub mod blip_text;
 pub mod chatglm;
