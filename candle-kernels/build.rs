@@ -12,10 +12,10 @@ fn main() {
     let compute_cap = get_compute_cap();
 
     // WMMA (Tensor Cores) require SM 7.0+ (Volta)
-    // Note: compute_cap is in format XYZ (e.g., 610 for SM 6.1, 700 for SM 7.0)
-    let has_tensor_cores = compute_cap >= 700;
+    // Note: compute_cap is in format XY (e.g., 61 for SM 6.1, 70 for SM 7.0)
+    let has_tensor_cores = compute_cap >= 70;
     if !has_tensor_cores && compute_cap > 0 {
-        println!("cargo::warning=SM {} < 700: Excluding WMMA kernels (Tensor Cores require Volta or newer)", compute_cap);
+        println!("cargo::warning=SM {} < 70: Excluding WMMA kernels (Tensor Cores require Volta or newer)", compute_cap);
     }
 
     // Define PTX kernel files - these go into the PTX build for use at runtime
@@ -37,31 +37,23 @@ fn main() {
     // Build for PTX - using explicit kernel paths to avoid auto-discovery
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");
-    let mut builder = bindgen_cuda::Builder::default()
+    let builder = bindgen_cuda::Builder::default()
+        .compute_cap(compute_cap)
         .kernel_paths(ptx_kernels)
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3")
-        .arg("--use_fast_math")
-        .arg("--compute-capability")
-        .arg(compute_cap.to_string());
+        .arg("--use_fast_math");
+
     println!("cargo::warning={builder:?}");
     let bindings = builder.build_ptx().unwrap();
     bindings.write(&ptx_path).unwrap();
 
-    // Build for FFI binding (must use custom bindgen_cuda, which supports simultaneously build PTX and lib)
+    // Build MOE library - create a new builder since build_ptx() consumed the previous one
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let mut is_target_msvc = false;
-    if let Ok(target) = std::env::var("TARGET") {
-        if target.contains("msvc") {
-            is_target_msvc = true;
-            builder = builder.arg("-D_USE_MATH_DEFINES");
-        }
-    }
-
-    if !is_target_msvc {
-        builder = builder.arg("-Xcompiler").arg("-fPIC");
-    }
+    let is_target_msvc = std::env::var("TARGET")
+        .map(|t| t.contains("msvc"))
+        .unwrap_or(false);
 
     // Select MOE kernels based on GPU capability
     let moe_kernels = if has_tensor_cores {
@@ -75,9 +67,21 @@ fn main() {
         vec!["src/moe/moe_gguf.cu"]
     };
 
-    let builder = builder.kernel_paths(moe_kernels);
-    println!("cargo::warning={builder:?}");
-    builder.build_lib(out_dir.join("libmoe.a"));
+    let mut moe_builder = bindgen_cuda::Builder::default()
+        .compute_cap(compute_cap)
+        .kernel_paths(moe_kernels)
+        .arg("--expt-relaxed-constexpr")
+        .arg("-std=c++17")
+        .arg("-O3")
+        .arg("--use_fast_math");
+    if is_target_msvc {
+        moe_builder = moe_builder.arg("-D_USE_MATH_DEFINES");
+    } else {
+        moe_builder = moe_builder.arg("-Xcompiler").arg("-fPIC");
+    }
+
+    println!("cargo::warning={moe_builder:?}");
+    moe_builder.build_lib(out_dir.join("libmoe.a"));
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=moe");
     println!("cargo:rustc-link-lib=dylib=cudart");
@@ -89,7 +93,7 @@ fn main() {
 /// Get CUDA compute capability using cudarc driver detection.
 /// Falls back to CUDA_COMPUTE_CAP env var if driver detection fails.
 /// Returns the MINIMUM compute cap to ensure compatibility with all GPUs.
-fn get_compute_cap() -> u32 {
+fn get_compute_cap() -> usize {
     println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
 
     // First try to detect from actual GPU hardware via cudarc
@@ -103,13 +107,13 @@ fn get_compute_cap() -> u32 {
                 "cargo:warning=Using detected compute cap: {} (from {:?})",
                 min_cap, caps
             );
-            return min_cap as u32;
+            return min_cap as usize;
         }
     }
 
     // Fallback to environment variable
     if let Ok(compute_cap_str) = env::var("CUDA_COMPUTE_CAP") {
-        if let Ok(cap) = compute_cap_str.parse::<u32>() {
+        if let Ok(cap) = compute_cap_str.parse::<usize>() {
             println!("cargo:warning=Using CUDA_COMPUTE_CAP from env: {}", cap);
             return cap;
         }
@@ -147,7 +151,8 @@ fn list_compute_caps() -> Result<Vec<usize>, ()> {
         };
 
         let cc = match ctx.compute_capability() {
-            Ok((major, minor)) => (major as usize) * 100 + (minor as usize) * 10,
+            // Format: XY (e.g., 61 for SM 6.1, 70 for SM 7.0) - matches nvcc's sm_XY format
+            Ok((major, minor)) => (major as usize) * 10 + (minor as usize),
             Err(e) => {
                 println!(
                     "cargo:warning=Failed to get compute cap for device {}: {:?}",
