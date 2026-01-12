@@ -538,19 +538,31 @@ struct block_reducer {
 };
 
 template<typename T, typename _E = void>
-struct finalize_reduce;
+struct storer;
 
 template<typename T>
-struct finalize_reduce<T, typename metal::enable_if_t<not_indexed_t<T>>> {
-    METAL_FUNC T operator()(T value) {
-        return value;
+struct storer<T, typename metal::enable_if_t<not_indexed_t<T>>> {
+    device T *dst;
+    const uint tid;
+    const uint dst_id;
+
+    METAL_FUNC void operator()(T value) {
+        if (tid == 0) {
+            dst[dst_id] = value;
+        }
     }
 };
 
 template<typename T>
-struct finalize_reduce<T, typename metal::enable_if_t<is_indexed_t<T>>> {
-    METAL_FUNC uint operator()(T value) {
-        return value.i;
+struct storer<T, typename metal::enable_if_t<is_indexed_t<T>>> {
+    device uint *dst;
+    const uint tid;
+    const uint dst_id;
+
+    METAL_FUNC void operator()(T value) {
+        if (tid == 0) {
+            dst[dst_id] = value.i;
+        }
     }
 };
 
@@ -575,7 +587,7 @@ METAL_FUNC void reduce(
 ) {
     loader<T, R, OP, BLOCKSIZE, Indexer, IndexT> load;
     block_reducer<R, OP, BLOCKSIZE> reduce(shared);
-    finalize_reduce<R> finalize;
+    storer<R> store { dst, tid, dst_id };
 
     // Calculate offset for the threadgroup of current thread
     const IndexT offset = dst_id * el_per_block;
@@ -586,8 +598,24 @@ METAL_FUNC void reduce(
     // Complete reduction
     R result = reduce(value, tid);
 
-    if (tid == 0) dst[dst_id] = finalize(result);
+    store(result);
 }
+
+#define reduce_switch(CASE_MACRO, OP, T, R, INDEXER)    \
+    switch (max_shared_mem<T>(block_dim)) {             \
+        CASE_MACRO(OP, ARG(T), ARG(R), 2048, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R), 1024, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),  512, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),  256, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),  128, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),   64, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),   32, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),   16, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),    8, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),    4, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),    2, INDEXER)   \
+        CASE_MACRO(OP, ARG(T), ARG(R),    1, INDEXER)   \
+    }
 
 #define reduce_case(OP, T, R, N, INDEXER)                               \
 case N: {                                                               \
@@ -615,22 +643,6 @@ kernel void NAME(                                           \
     indexer_t<IDX, false> indexer;                          \
     reduce_switch(reduce_case, OP, T, T, indexer)           \
 }
-
-#define reduce_switch(CASE_MACRO, OP, T, R, INDEXER)    \
-    switch (max_shared_mem<T>(block_dim)) {             \
-        CASE_MACRO(OP, ARG(T), ARG(R), 2048, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R), 1024, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),  512, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),  256, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),  128, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),   64, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),   32, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),   16, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),    8, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),    4, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),    2, INDEXER)   \
-        CASE_MACRO(OP, ARG(T), ARG(R),    1, INDEXER)   \
-    }
 
 #define impl_reduce_strided(OP, NAME, T, IDX)           \
 kernel void NAME##_strided(                             \
@@ -732,6 +744,7 @@ METAL_FUNC void reduce(
     using I = indexed<T>;
     loader<T, I, ReductionOp, BLOCKSIZE, Indexer, IndexT> load;
     block_reducer<I, ReductionOp, BLOCKSIZE> reduce(shared);
+    storer<I> store { dst, tid, dst_id };
 
     // Calculate offset for the threadgroup of current thread
     const uint offset = dst_id * el_per_block;
@@ -751,7 +764,7 @@ METAL_FUNC void reduce(
     I result = reduce(value, tid);
 
     // Return index of reduce result
-    if (tid == 0) dst[dst_id] = result.i;
+    store(result);
 }
 
 #define arg_reduce_case(OP, T, R, N, INDEXER)           \
