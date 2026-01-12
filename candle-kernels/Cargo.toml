@@ -9,8 +9,6 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-#cudarc = "18.1"
-#cudarc = { workspace = true, optional = true }
 
 
 [build-dependencies]
