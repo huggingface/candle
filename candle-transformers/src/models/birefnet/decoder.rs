@@ -3,10 +3,40 @@
 //! This module implements the multi-scale decoder with skip connections.
 
 use candle::{Module, Result, Tensor};
-use candle_nn::{Conv2d, VarBuilder};
+use candle_nn::{batch_norm, BatchNorm, Conv2d, VarBuilder};
 
 use super::blocks::{BasicDecBlk, BasicLatBlk, SimpleConvs};
 use super::config::Config;
+
+/// Gradient convolution block: Conv2d -> BatchNorm -> ReLU
+#[derive(Debug, Clone)]
+struct GdtConvs {
+    conv: Conv2d,
+    bn: BatchNorm,
+}
+
+impl GdtConvs {
+    fn new(in_channels: usize, out_channels: usize, vb: VarBuilder) -> Result<Self> {
+        let conv = candle_nn::conv2d(
+            in_channels,
+            out_channels,
+            3,
+            candle_nn::Conv2dConfig {
+                padding: 1,
+                ..Default::default()
+            },
+            vb.pp("0"),
+        )?;
+        let bn = batch_norm(out_channels, 1e-5, vb.pp("1"))?;
+        Ok(Self { conv, bn })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x = self.conv.forward(x)?;
+        let x = self.bn.forward_train(&x)?;
+        x.relu()
+    }
+}
 
 /// BiRefNet Decoder
 #[derive(Debug, Clone)]
@@ -38,6 +68,14 @@ pub struct Decoder {
     conv_ms_spvn_4: Option<Conv2d>,
     conv_ms_spvn_3: Option<Conv2d>,
     conv_ms_spvn_2: Option<Conv2d>,
+
+    // Gradient attention (out_ref)
+    gdt_convs_4: Option<GdtConvs>,
+    gdt_convs_3: Option<GdtConvs>,
+    gdt_convs_2: Option<GdtConvs>,
+    gdt_convs_attn_4: Option<Conv2d>,
+    gdt_convs_attn_3: Option<Conv2d>,
+    gdt_convs_attn_2: Option<Conv2d>,
 }
 
 impl Decoder {
@@ -156,6 +194,23 @@ impl Decoder {
             (None, None, None)
         };
 
+        // Gradient attention (out_ref)
+        // _N = 16 in Python
+        let gdt_n = 16;
+        let (gdt_convs_4, gdt_convs_3, gdt_convs_2, gdt_convs_attn_4, gdt_convs_attn_3, gdt_convs_attn_2) =
+            if config.out_ref {
+                (
+                    Some(GdtConvs::new(channels[1], gdt_n, vb.pp("gdt_convs_4"))?),
+                    Some(GdtConvs::new(channels[2], gdt_n, vb.pp("gdt_convs_3"))?),
+                    Some(GdtConvs::new(channels[3], gdt_n, vb.pp("gdt_convs_2"))?),
+                    Some(candle_nn::conv2d(gdt_n, 1, 1, Default::default(), vb.pp("gdt_convs_attn_4.0"))?),
+                    Some(candle_nn::conv2d(gdt_n, 1, 1, Default::default(), vb.pp("gdt_convs_attn_3.0"))?),
+                    Some(candle_nn::conv2d(gdt_n, 1, 1, Default::default(), vb.pp("gdt_convs_attn_2.0"))?),
+                )
+            } else {
+                (None, None, None, None, None, None)
+            };
+
         Ok(Self {
             config: config.clone(),
             ipt_blk5,
@@ -174,6 +229,12 @@ impl Decoder {
             conv_ms_spvn_4,
             conv_ms_spvn_3,
             conv_ms_spvn_2,
+            gdt_convs_4,
+            gdt_convs_3,
+            gdt_convs_2,
+            gdt_convs_attn_4,
+            gdt_convs_attn_3,
+            gdt_convs_attn_2,
         })
     }
 
@@ -266,6 +327,18 @@ impl Decoder {
             outs.push(conv.forward(&p4)?);
         }
 
+        // Apply gradient attention for stage 4
+        let p4 = if let (Some(gdt_convs), Some(gdt_attn)) = (&self.gdt_convs_4, &self.gdt_convs_attn_4) {
+            let p4_gdt = gdt_convs.forward(&p4)?;
+            let attn = candle_nn::ops::sigmoid(&gdt_attn.forward(&p4_gdt)?)?;
+            #[cfg(debug_assertions)]
+            print_stats("gdt_attn_4", &attn);
+            let dims = p4.dims().to_vec();
+            (p4 * attn.broadcast_as(dims)?)?
+        } else {
+            p4
+        };
+
         let (_, _, h3, w3) = x3.dims4()?;
         let _p4 = p4.upsample_bilinear2d(h3, w3, true)?;
         let lateral4 = self.lateral_block4.forward(x3)?;
@@ -314,6 +387,18 @@ impl Decoder {
             outs.push(conv.forward(&p3)?);
         }
 
+        // Apply gradient attention for stage 3
+        let p3 = if let (Some(gdt_convs), Some(gdt_attn)) = (&self.gdt_convs_3, &self.gdt_convs_attn_3) {
+            let p3_gdt = gdt_convs.forward(&p3)?;
+            let attn = candle_nn::ops::sigmoid(&gdt_attn.forward(&p3_gdt)?)?;
+            #[cfg(debug_assertions)]
+            print_stats("gdt_attn_3", &attn);
+            let dims = p3.dims().to_vec();
+            (p3 * attn.broadcast_as(dims)?)?
+        } else {
+            p3
+        };
+
         let (_, _, h2, w2) = x2.dims4()?;
         let _p3 = p3.upsample_bilinear2d(h2, w2, true)?;
         let lateral3 = self.lateral_block3.forward(x2)?;
@@ -345,6 +430,18 @@ impl Decoder {
         if let Some(conv) = &self.conv_ms_spvn_2 {
             outs.push(conv.forward(&p2)?);
         }
+
+        // Apply gradient attention for stage 2
+        let p2 = if let (Some(gdt_convs), Some(gdt_attn)) = (&self.gdt_convs_2, &self.gdt_convs_attn_2) {
+            let p2_gdt = gdt_convs.forward(&p2)?;
+            let attn = candle_nn::ops::sigmoid(&gdt_attn.forward(&p2_gdt)?)?;
+            #[cfg(debug_assertions)]
+            print_stats("gdt_attn_2", &attn);
+            let dims = p2.dims().to_vec();
+            (p2 * attn.broadcast_as(dims)?)?
+        } else {
+            p2
+        };
 
         let (_, _, h1, w1) = x1.dims4()?;
         let _p2 = p2.upsample_bilinear2d(h1, w1, true)?;
