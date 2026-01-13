@@ -16,8 +16,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     let (lo, up) = (-1000.0f32, 1000.0f32);
     for device in handler.devices {
-        run_reduce_small(c, &device, (lo, up), true);
-
         run_reduce(c, &device, (lo, up), false);
         run_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), false);
         run_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), false);
@@ -34,67 +32,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         run_arg_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), true);
         run_arg_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), true);
     }
-}
-
-fn run_reduce_small<T: candle_core::FloatDType>(
-    c: &mut Criterion,
-    device: &Device,
-    (lo, up): (T, T),
-    strided: bool,
-) {
-    let b = 1;
-    let m = 128;
-    let k = 128;
-
-    let a = if strided {
-        Tensor::rand(lo, up, (b, m, k), device)
-            .unwrap()
-            .transpose(0, 2)
-            .unwrap()
-    } else {
-        Tensor::rand(lo, up, (b, m, k), device).unwrap()
-    };
-
-    let flops = b * m * k * T::DTYPE.size_in_bytes();
-
-    let name = match T::DTYPE {
-        DType::F32 => {
-            if strided {
-                "reduce_f32_strided_small"
-            } else {
-                "reduce_f32_small"
-            }
-        }
-        DType::F16 => {
-            if strided {
-                "reduce_f16_strided_small"
-            } else {
-                "reduce_f16_small"
-            }
-        }
-        DType::BF16 => {
-            if strided {
-                "reduce_bf16_strided_small"
-            } else {
-                "reduce_bf16_small"
-            }
-        }
-        _ => "unknown",
-    };
-
-    let mut group = c.benchmark_group(device.bench_name(name));
-    group.throughput(Throughput::Bytes(flops as u64));
-    group.bench_function("iter", move |b| {
-        b.iter_custom(|iters| {
-            let start = Instant::now();
-            for _i in 0..iters {
-                run_sum(black_box(&a));
-            }
-            device.sync().unwrap();
-            start.elapsed()
-        })
-    });
-    group.finish();
 }
 
 fn run_reduce<T: candle_core::FloatDType>(
