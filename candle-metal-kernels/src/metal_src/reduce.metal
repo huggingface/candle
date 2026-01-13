@@ -603,7 +603,6 @@ METAL_FUNC void reduce(
 
 #define reduce_switch(CASE_MACRO, OP, T, R, INDEXER)    \
     switch (max_shared_mem<T>(block_dim)) {             \
-        CASE_MACRO(OP, T, R, 2048, INDEXER)             \
         CASE_MACRO(OP, T, R, 1024, INDEXER)             \
         CASE_MACRO(OP, T, R,  512, INDEXER)             \
         CASE_MACRO(OP, T, R,  256, INDEXER)             \
@@ -663,9 +662,7 @@ kernel void NAME##_strided##SUFFIX(                     \
 
 #define impl_reduce(OP, NAME, T)                            \
 impl_reduce_inner(OP, NAME, T, uint, )                      \
-impl_reduce_strided(OP, NAME, T, uint, )                    \
-impl_reduce_inner(OP, NAME, T, ulong, _large)               \
-impl_reduce_strided(OP, NAME, T, ulong, _large)
+impl_reduce_strided(OP, NAME, T, uint, )
 
 template<
     typename T,
@@ -1147,7 +1144,6 @@ kernel void NAME(                                       \
     uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
     switch (max_shared_mem<float>(block_dim)) {         \
-        rms_norm_case(T, 2048);                         \
         rms_norm_case(T, 1024);                         \
         rms_norm_case(T,  512);                         \
         rms_norm_case(T,  256);                         \
@@ -1350,7 +1346,6 @@ kernel void NAME(                                       \
     uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
     switch (max_shared_mem<float>(block_dim)) {         \
-        layer_norm_case(T, 2048);                       \
         layer_norm_case(T, 1024);                       \
         layer_norm_case(T,  512);                       \
         layer_norm_case(T,  256);                       \

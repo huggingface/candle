@@ -20,7 +20,7 @@ pub fn call_reduce_contiguous(
 
     let is_large = length > u32::MAX as usize && !kernel_name.contains("arg");
     let kernel = if is_large {
-        format!("{kernel_name}_large")
+        format!("{kernel_name}")
     } else {
         kernel_name.to_string()
     };
@@ -95,48 +95,26 @@ pub fn call_reduce_strided(
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
 
-    let is_large = length > u32::MAX as usize && !kernel_name.contains("arg");
-    let kernel = if is_large {
-        format!("{kernel_name}_large")
-    } else {
-        kernel_name.to_string()
-    };
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel)?;
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    if is_large {
-        set_params!(
-            encoder,
-            (
-                length,
-                num_dims,
-                shape,
-                strides,
-                work_per_threadgroup,
-                &input,
-                output
-            )
-        );
-    } else {
-        let dims: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
-        let strs: Vec<u32> = strides.iter().map(|&x| x as u32).collect();
-        set_params!(
-            encoder,
-            (
-                length,
-                num_dims,
-                dims.as_slice(),
-                strs.as_slice(),
-                work_per_threadgroup,
-                &input,
-                output
-            )
-        );
-
-    }
+    let dims: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
+    let strs: Vec<u32> = strides.iter().map(|&x| x as u32).collect();
+    set_params!(
+        encoder,
+        (
+            length,
+            num_dims,
+            dims.as_slice(),
+            strs.as_slice(),
+            work_per_threadgroup,
+            &input,
+            output
+        )
+    );
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
