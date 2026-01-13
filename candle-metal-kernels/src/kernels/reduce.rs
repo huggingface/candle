@@ -14,7 +14,7 @@ pub fn call_reduce_contiguous(
     input: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let length = shape.iter().product::<usize>();
+    let length: usize = shape.iter().product();
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
 
@@ -28,10 +28,10 @@ pub fn call_reduce_contiguous(
     set_params!(
         encoder,
         (
-            length,
-            num_dims,
+            length as u32,
+            num_dims as u32,
             shape.as_slice(),
-            work_per_threadgroup,
+            work_per_threadgroup as u32,
             &input,
             output
         )
@@ -85,11 +85,11 @@ pub fn call_reduce_strided(
     set_params!(
         encoder,
         (
-            length,
-            num_dims,
+            length as u32,
+            num_dims as u32,
             shape.as_slice(),
             strides.as_slice(),
-            work_per_threadgroup,
+            work_per_threadgroup as u32,
             &input,
             output
         )

@@ -723,12 +723,12 @@ case N: {                                               \
     break;                                              \
 }
 
-#define impl_arg_reduce_inner(OP, NAME, T, IDX)         \
+#define impl_arg_reduce_inner(OP, NAME, T)              \
 kernel void NAME(                                       \
-    constant IDX &src_numel,                            \
-    constant IDX &num_dims,                             \
-    constant IDX *dims,                                 \
-    constant IDX &el_per_block,                         \
+    constant uint &src_numel,                           \
+    constant uint &num_dims,                            \
+    constant uint *dims,                                \
+    constant uint &el_per_block,                        \
     device const T *src,                                \
     device uint *dst,                                   \
     uint tid [[ thread_index_in_threadgroup ]],         \
@@ -741,28 +741,28 @@ kernel void NAME(                                       \
     reduce_switch(arg_reduce_case, OP, T, T, indexer)   \
 }                                                       \
 
-#define impl_arg_reduce_strided(OP, NAME, T, IDX)       \
+#define impl_arg_reduce_strided(OP, NAME, T)            \
 kernel void NAME##_strided(                             \
-    constant IDX &src_numel,                            \
-    constant IDX &num_dims,                             \
-    constant IDX *dims,                                 \
-    constant IDX *strides,                              \
-    constant IDX &el_per_block,                         \
+    constant uint &src_numel,                           \
+    constant uint &num_dims,                            \
+    constant uint *dims,                                \
+    constant uint *strides,                             \
+    constant uint &el_per_block,                        \
     device const T *src,                                \
-    device IDX *dst,                                    \
+    device uint *dst,                                   \
     uint tid [[ thread_index_in_threadgroup ]],         \
     uint dst_id [[ threadgroup_position_in_grid ]],     \
     uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
-    indexer_t<IDX, true> indexer {                      \
+    indexer_t<uint, true> indexer {                     \
         num_dims, dims, strides, dims[num_dims - 1]     \
     };                                                  \
     reduce_switch(arg_reduce_case, OP, T, T, indexer)   \
 }
 
 #define impl_arg_reduce(OP, NAME, T)                    \
-impl_arg_reduce_inner(OP, NAME, T, uint)                \
-impl_arg_reduce_strided(OP, NAME, T, uint)
+impl_arg_reduce_inner(OP, NAME, T)                      \
+impl_arg_reduce_strided(OP, NAME, T)
 
 // Contains the intermediate results for the online softmax calculation.
 // m: max
