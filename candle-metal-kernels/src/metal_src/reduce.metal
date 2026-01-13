@@ -625,8 +625,8 @@ case N: {                                                               \
     break;                                                              \
 }
 
-#define impl_reduce_inner(OP, NAME, T, IDX, SUFFIX) \
-kernel void NAME##SUFFIX(                           \
+#define impl_reduce_inner(OP, NAME, T, IDX)         \
+kernel void NAME(                                   \
     constant IDX &src_numel,                        \
     constant IDX &num_dims,                         \
     constant IDX *dims,                             \
@@ -641,8 +641,8 @@ kernel void NAME##SUFFIX(                           \
     reduce_switch(reduce_case, OP, T, T, indexer)   \
 }
 
-#define impl_reduce_strided(OP, NAME, T, IDX, SUFFIX)   \
-kernel void NAME##_strided##SUFFIX(                     \
+#define impl_reduce_strided(OP, NAME, T, IDX)           \
+kernel void NAME##_strided(                             \
     constant IDX &src_numel,                            \
     constant IDX &num_dims,                             \
     constant IDX *dims,                                 \
@@ -660,9 +660,9 @@ kernel void NAME##_strided##SUFFIX(                     \
     reduce_switch(reduce_case, OP, T, T, indexer)       \
 }
 
-#define impl_reduce(OP, NAME, T)                            \
-impl_reduce_inner(OP, NAME, T, uint, )                      \
-impl_reduce_strided(OP, NAME, T, uint, )
+#define impl_reduce(OP, NAME, T)                        \
+impl_reduce_inner(OP, NAME, T, uint)                    \
+impl_reduce_strided(OP, NAME, T, uint)
 
 template<
     typename T,
