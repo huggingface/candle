@@ -18,45 +18,24 @@ pub fn call_reduce_contiguous(
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
 
-    let is_large = length > u32::MAX as usize && !kernel_name.contains("arg");
-    let kernel = if is_large {
-        format!("{kernel_name}")
-    } else {
-        kernel_name.to_string()
-    };
-
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel)?;
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    if is_large {
-        set_params!(
-            encoder,
-            (
-                length,
-                num_dims,
-                shape,
-                work_per_threadgroup,
-                &input,
-                output
-            )
-        );
-    } else {
-        let shape_u32: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
-        set_params!(
-            encoder,
-            (
-                length,
-                num_dims,
-                shape_u32.as_slice(),
-                work_per_threadgroup,
-                &input,
-                output
-            )
-        );
-    }
+    let shape: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
+    set_params!(
+        encoder,
+        (
+            length,
+            num_dims,
+            shape.as_slice(),
+            work_per_threadgroup,
+            &input,
+            output
+        )
+    );
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
@@ -101,15 +80,15 @@ pub fn call_reduce_strided(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    let dims: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
-    let strs: Vec<u32> = strides.iter().map(|&x| x as u32).collect();
+    let shape: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
+    let strides: Vec<u32> = strides.iter().map(|&x| x as u32).collect();
     set_params!(
         encoder,
         (
             length,
             num_dims,
-            dims.as_slice(),
-            strs.as_slice(),
+            shape.as_slice(),
+            strides.as_slice(),
             work_per_threadgroup,
             &input,
             output
