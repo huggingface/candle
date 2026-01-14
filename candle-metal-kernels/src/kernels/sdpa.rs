@@ -53,6 +53,7 @@ pub fn call_sdpa_full(
         kl: i32,
         gqa_factor: i32,
         scale: f32,
+        softcapping: f32, // Must match Metal struct layout (1.0 = disabled)
         nq: i32,
         nk: i32,
         nq_aligned: i32,
@@ -138,6 +139,7 @@ pub fn call_sdpa_full(
         kl: kl as i32,
         gqa_factor: gqa_factor as i32,
         scale,
+        softcapping: 1.0, // SDPA full doesn't support softcapping, always 1.0
         nq: nq as i32,
         nk: nk as i32,
         nq_aligned: nq_aligned as i32,
