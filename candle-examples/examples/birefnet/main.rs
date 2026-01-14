@@ -274,7 +274,12 @@ fn main() -> anyhow::Result<()> {
             let elapsed = start.elapsed();
             times.push(elapsed.as_secs_f64() * 1000.0);
             if (i + 1) % 10 == 0 {
-                println!("  [{}/{}] {:.2}ms", i + 1, args.bench, times.last().unwrap());
+                println!(
+                    "  [{}/{}] {:.2}ms",
+                    i + 1,
+                    args.bench,
+                    times.last().unwrap()
+                );
             }
         }
 
