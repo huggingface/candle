@@ -154,74 +154,49 @@ impl candle::CustomOp1 for Sigmoid {
             offset_in_bytes: layout.start_offset() * storage.dtype().size_in_bytes(),
         };
 
-        match (el_count % 2, dtype, layout.is_contiguous()) {
-            (0, DType::BF16 | DType::F16, true) => {
-                use candle_metal_kernels::unary::contiguous_tiled;
-                let kernel_name = match dtype {
-                    DType::F16 => contiguous_tiled::sigmoid::HALF,
-                    DType::F32 => contiguous_tiled::sigmoid::FLOAT,
-                    DType::BF16 => contiguous_tiled::sigmoid::BFLOAT,
-                    dtype => {
-                        candle::bail!(
-                            "Metal contiguous_tiled unary sigmoid {dtype:?} not implemented"
-                        )
-                    }
-                };
-                candle_metal_kernels::call_unary_contiguous_tiled(
-                    device.metal_device(),
-                    &encoder,
-                    device.kernels(),
-                    kernel_name,
-                    el_count,
-                    src,
-                    &buffer,
-                )
-                .map_err(MetalError::from)?;
-            }
-            (_, _, true) => {
-                use candle_metal_kernels::unary::contiguous;
-                let kernel_name = match dtype {
-                    DType::F16 => contiguous::sigmoid::HALF,
-                    DType::F32 => contiguous::sigmoid::FLOAT,
-                    DType::BF16 => contiguous::sigmoid::BFLOAT,
-                    dtype => {
-                        candle::bail!("Metal contiguous unary sigmoid {dtype:?} not implemented")
-                    }
-                };
-                candle_metal_kernels::call_unary_contiguous(
-                    device.metal_device(),
-                    &encoder,
-                    device.kernels(),
-                    kernel_name,
-                    el_count,
-                    src,
-                    &buffer,
-                )
-                .map_err(MetalError::from)?;
-            }
-            (_, _, false) => {
-                use candle_metal_kernels::unary::strided;
-                let kernel_name = match dtype {
-                    DType::F16 => strided::sigmoid::HALF,
-                    DType::F32 => strided::sigmoid::FLOAT,
-                    DType::BF16 => strided::sigmoid::BFLOAT,
-                    dtype => {
-                        candle::bail!("Metal strided unary sigmoid {dtype:?} not implemented")
-                    }
-                };
-                let dst = candle_metal_kernels::BufferOffset::zero_offset(&buffer);
-                candle_metal_kernels::call_unary_strided(
-                    device.metal_device(),
-                    &encoder,
-                    device.kernels(),
-                    kernel_name,
-                    layout.dims(),
-                    src,
-                    layout.stride(),
-                    dst,
-                )
-                .map_err(MetalError::from)?;
-            }
+        if layout.is_contiguous() {
+            use candle_metal_kernels::unary::contiguous;
+            let kernel_name = match dtype {
+                DType::F16 => contiguous::sigmoid::HALF,
+                DType::F32 => contiguous::sigmoid::FLOAT,
+                DType::BF16 => contiguous::sigmoid::BFLOAT,
+                dtype => {
+                    candle::bail!("Metal contiguous unary sigmoid {dtype:?} not implemented")
+                }
+            };
+            candle_metal_kernels::call_unary_contiguous(
+                device.metal_device(),
+                &encoder,
+                device.kernels(),
+                kernel_name,
+                dtype.size_in_bytes(),
+                el_count,
+                src,
+                &buffer,
+            )
+            .map_err(MetalError::from)?;
+        } else {
+            use candle_metal_kernels::unary::strided;
+            let kernel_name = match dtype {
+                DType::F16 => strided::sigmoid::HALF,
+                DType::F32 => strided::sigmoid::FLOAT,
+                DType::BF16 => strided::sigmoid::BFLOAT,
+                dtype => {
+                    candle::bail!("Metal strided unary sigmoid {dtype:?} not implemented")
+                }
+            };
+            let dst = candle_metal_kernels::BufferOffset::zero_offset(&buffer);
+            candle_metal_kernels::call_unary_strided(
+                device.metal_device(),
+                &encoder,
+                device.kernels(),
+                kernel_name,
+                layout.dims(),
+                src,
+                layout.stride(),
+                dst,
+            )
+            .map_err(MetalError::from)?;
         }
 
         let new_storage = candle::MetalStorage::new(buffer, device.clone(), el_count, dtype);
@@ -1062,7 +1037,7 @@ impl candle::CustomOp3 for Sdpa {
             || q_head == 128
             || q_head == 256;
 
-        let supports_sdpa_full_mask = !self.mask.is_some() || q_seq <= k_seq;
+        let supports_sdpa_full_mask = self.mask.is_none() || q_seq <= k_seq;
         let supports_sdpa_full = q_seq > 8 && supported_head_dim && supports_sdpa_full_mask;
         let supports_sdpa_vector = q_seq <= 8 && supported_head_dim && q_seq <= k_seq;
 
