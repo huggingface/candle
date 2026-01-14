@@ -1,6 +1,5 @@
 pub(crate) mod conv;
 pub(crate) mod cpu_flash_attention;
-pub(crate) mod layer_norm;
 pub(crate) mod norm;
 pub(crate) mod softmax;
 pub(crate) mod varlen_attention;
