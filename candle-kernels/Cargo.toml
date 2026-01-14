@@ -13,3 +13,8 @@ license = "MIT OR Apache-2.0"
 
 [build-dependencies]
 bindgen_cuda = { git = "https://github.com/guoqingbao/bindgen_cuda.git", version= "0.1.7" }
+cudarc = { version = "0.18.1", features = [
+    "driver",
+    "cuda-version-from-build-system",
+    "dynamic-linking",
+], default-features = false }
