@@ -468,16 +468,19 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         #[allow(unused_variables)] use_flash_attn: bool,
     ) -> Result<Tensor> {
-        let seq_len = q.dim(2)?;
+        let q_seq_len = q.dim(2)?;
 
-        // Try Flash Attention on CUDA if enabled
+        // Flash Attention optimization:
+        // - Only use Flash Attention during prefill (q_seq_len > 1)
+        // - During decode (q_seq_len == 1), standard attention is faster
+        //   due to Flash Attention's overhead (transpose, contiguous, kernel launch)
         #[cfg(feature = "flash-attn")]
-        if use_flash_attn {
-            return self.flash_attn_cuda(q, k, v, seq_len > 1);
+        if use_flash_attn && q_seq_len > 1 {
+            return self.flash_attn_cuda(q, k, v, true);
         }
 
         // Try SDPA on Metal for decode (seq_len == 1)
-        if q.device().is_metal() && seq_len == 1 {
+        if q.device().is_metal() && q_seq_len == 1 {
             return self.sdpa_metal(q, k, v);
         }
 
@@ -485,6 +488,10 @@ impl Attention {
         self.compute_standard_attention(q, k, v, attention_mask)
     }
 
+    /// CUDA Flash Attention implementation.
+    ///
+    /// Note: candle-flash-attn natively supports GQA (Grouped Query Attention),
+    /// so we don't need to call repeat_kv before flash_attn.
     #[cfg(feature = "flash-attn")]
     fn flash_attn_cuda(
         &self,
@@ -493,16 +500,14 @@ impl Attention {
         v: &Tensor,
         causal: bool,
     ) -> Result<Tensor> {
-        // Repeat KV for GQA before flash attention
-        let k = crate::utils::repeat_kv(k.clone(), self.n_kv_groups)?.contiguous()?;
-        let v = crate::utils::repeat_kv(v.clone(), self.n_kv_groups)?.contiguous()?;
-
         // candle-flash-attn expects (batch, seq_len, num_heads, head_dim)
+        // Current layout is (batch, num_heads, seq_len, head_dim)
         let q = q.transpose(1, 2)?.contiguous()?;
         let k = k.transpose(1, 2)?.contiguous()?;
         let v = v.transpose(1, 2)?.contiguous()?;
 
         let softmax_scale = self.softmax_scale as f32;
+        // Flash Attention natively supports GQA, no need for repeat_kv
         let output = candle_flash_attn::flash_attn(&q, &k, &v, softmax_scale, causal)?;
 
         // Transpose back to (batch, num_heads, seq_len, head_dim)
