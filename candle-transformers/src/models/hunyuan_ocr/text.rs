@@ -342,6 +342,7 @@ struct Attention {
     head_dim: usize,
     n_kv_groups: usize,
     softmax_scale: f64,
+    use_flash_attn: bool,
 
     q_proj: Linear,
     k_proj: Linear,
@@ -355,7 +356,12 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &TextConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &TextConfig,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -377,6 +383,7 @@ impl Attention {
             head_dim,
             n_kv_groups: num_heads / num_kv_heads,
             softmax_scale: 1.0 / (head_dim as f64).sqrt(),
+            use_flash_attn,
             q_proj,
             k_proj,
             v_proj,
@@ -440,7 +447,8 @@ impl Attention {
         *kv_cache = Some((k.clone(), v.clone()));
 
         // Compute attention
-        let attn_output = self.compute_attention(&q, &k, &v, attention_mask)?;
+        let attn_output =
+            self.compute_attention(&q, &k, &v, attention_mask, self.use_flash_attn)?;
 
         // Reshape and output projection
         let attn_output = attn_output.transpose(1, 2)?.reshape((
@@ -458,9 +466,61 @@ impl Attention {
         k: &Tensor,
         v: &Tensor,
         attention_mask: Option<&Tensor>,
+        #[allow(unused_variables)] use_flash_attn: bool,
     ) -> Result<Tensor> {
-        // Standard attention (with GQA support)
+        let seq_len = q.dim(2)?;
+
+        // Try Flash Attention on CUDA if enabled
+        #[cfg(feature = "flash-attn")]
+        if use_flash_attn {
+            return self.flash_attn_cuda(q, k, v, seq_len > 1);
+        }
+
+        // Try SDPA on Metal for decode (seq_len == 1)
+        if q.device().is_metal() && seq_len == 1 {
+            return self.sdpa_metal(q, k, v);
+        }
+
+        // Standard attention fallback
         self.compute_standard_attention(q, k, v, attention_mask)
+    }
+
+    #[cfg(feature = "flash-attn")]
+    fn flash_attn_cuda(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        causal: bool,
+    ) -> Result<Tensor> {
+        // Repeat KV for GQA before flash attention
+        let k = crate::utils::repeat_kv(k.clone(), self.n_kv_groups)?.contiguous()?;
+        let v = crate::utils::repeat_kv(v.clone(), self.n_kv_groups)?.contiguous()?;
+
+        // candle-flash-attn expects (batch, seq_len, num_heads, head_dim)
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
+
+        let softmax_scale = self.softmax_scale as f32;
+        let output = candle_flash_attn::flash_attn(&q, &k, &v, softmax_scale, causal)?;
+
+        // Transpose back to (batch, num_heads, seq_len, head_dim)
+        output.transpose(1, 2)
+    }
+
+    /// SDPA on Metal - efficient for decode phase (seq_len == 1)
+    fn sdpa_metal(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+        // SDPA handles MQA/GQA internally on Metal
+        candle_nn::ops::sdpa(
+            q,
+            k,
+            v,
+            None,
+            true, // causal
+            self.softmax_scale as f32,
+            1.0,
+        )
     }
 
     fn compute_standard_attention(
@@ -543,11 +603,16 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &TextConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &TextConfig,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let input_layernorm =
             rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
 
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+        let self_attn = Attention::new(rotary_emb, cfg, use_flash_attn, vb.pp("self_attn"))?;
 
         let post_attention_layernorm = rms_norm(
             cfg.hidden_size,
@@ -609,7 +674,7 @@ pub struct TextModel {
 }
 
 impl TextModel {
-    pub fn new(cfg: &TextConfig, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &TextConfig, use_flash_attn: bool, vb: VarBuilder) -> Result<Self> {
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
 
         let rotary_emb = Arc::new(RotaryEmbedding::new(cfg, vb.device())?);
@@ -619,6 +684,7 @@ impl TextModel {
             layers.push(DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
+                use_flash_attn,
                 vb.pp(format!("layers.{}", i)),
             )?);
         }

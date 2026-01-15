@@ -75,6 +75,10 @@ struct Args {
     /// Use bfloat16 precision
     #[arg(long)]
     bf16: bool,
+
+    /// Enable Flash Attention (requires CUDA and flash-attn feature)
+    #[arg(long)]
+    flash_attn: bool,
 }
 
 /// Smart resize algorithm matching PyTorch's HunyuanOCR processor.
@@ -316,7 +320,7 @@ fn main() -> Result<()> {
     // Load model weights
     println!("Loading weights...");
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, dtype, &device)? };
-    let mut model = HunyuanOCRModel::new(&config, vb)?;
+    let mut model = HunyuanOCRModel::new(&config, args.flash_attn, vb)?;
     println!("Model loaded in {:?}", start.elapsed());
 
     // Get EOS token ID

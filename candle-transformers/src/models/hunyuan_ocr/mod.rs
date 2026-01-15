@@ -37,11 +37,16 @@ pub struct HunyuanOCRModel {
 
 impl HunyuanOCRModel {
     /// Create a new HunyuanOCR model.
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    ///
+    /// # Arguments
+    /// * `cfg` - Model configuration
+    /// * `use_flash_attn` - Whether to use Flash Attention (CUDA) when available
+    /// * `vb` - Variable builder for loading weights
+    pub fn new(cfg: &Config, use_flash_attn: bool, vb: VarBuilder) -> Result<Self> {
         // Vision model at "vit" prefix
         let vision = VisionModel::new(&cfg.vision_config, vb.pp("vit"))?;
         // Text model at root level
-        let text = TextModel::new(&cfg.text_config, vb.clone())?;
+        let text = TextModel::new(&cfg.text_config, use_flash_attn, vb.clone())?;
 
         // Initialize cache for KV caching
         let cache = text::Cache::new(text.num_layers());
