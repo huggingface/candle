@@ -4,9 +4,16 @@
 //! for high-quality document OCR tasks.
 //!
 //! ```bash
-//! # Basic OCR
+//! # Basic OCR (greedy decoding)
 //! cargo run --example hunyuan-ocr --release --features cuda -- \
 //!     --image document.png
+//!
+//! # With sampling parameters
+//! cargo run --example hunyuan-ocr --release --features cuda -- \
+//!     --image document.png \
+//!     --temperature 0.7 \
+//!     --top-p 0.9 \
+//!     --top-k 50
 //!
 //! # Custom prompt
 //! cargo run --example hunyuan-ocr --release --features cuda -- \
@@ -29,8 +36,9 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, Tensor};
+use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
+use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::hunyuan_ocr::{Config, HunyuanOCRModel};
 use clap::Parser;
 use tokenizers::Tokenizer;
@@ -79,6 +87,30 @@ struct Args {
     /// Enable Flash Attention (requires CUDA and flash-attn feature)
     #[arg(long)]
     flash_attn: bool,
+
+    /// The temperature used to generate samples (0 = greedy decoding).
+    #[arg(long, default_value_t = 0.0)]
+    temperature: f64,
+
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
+
+    /// Only sample among the top K samples.
+    #[arg(long)]
+    top_k: Option<usize>,
+
+    /// The seed to use when generating random samples.
+    #[arg(long, default_value_t = 299792458)]
+    seed: u64,
+
+    /// Penalty to be applied for repeating tokens, 1. means no penalty.
+    #[arg(long, default_value_t = 1.0)]
+    repeat_penalty: f32,
+
+    /// The context size to consider for the repeat penalty.
+    #[arg(long, default_value_t = 64)]
+    repeat_last_n: usize,
 }
 
 /// Smart resize algorithm matching PyTorch's HunyuanOCR processor.
@@ -267,6 +299,99 @@ fn is_eos_token(token_id: u32) -> bool {
     EOS_TOKEN_IDS.contains(&token_id)
 }
 
+/// Generate text with sampling support.
+///
+/// This function implements the generation loop with:
+/// - xDRoPE position IDs for proper image token positioning
+/// - LogitsProcessor for temperature, top-k, top-p sampling
+/// - Repetition penalty support
+#[allow(clippy::too_many_arguments)]
+fn generate_with_sampling(
+    model: &mut HunyuanOCRModel,
+    input_ids: &Tensor,
+    pixel_values: &Tensor,
+    grid_thw: &[(i64, i64, i64)],
+    input_ids_vec: &[u32],
+    max_new_tokens: usize,
+    logits_processor: &mut LogitsProcessor,
+    repeat_penalty: f32,
+    repeat_last_n: usize,
+    device: &Device,
+) -> Result<Vec<u32>> {
+    let mut generated_tokens: Vec<u32> = Vec::new();
+
+    // Prefill phase: process the entire input sequence
+    let logits = model.forward_prefill(input_ids, pixel_values, grid_thw, input_ids_vec)?;
+
+    let seq_len = logits.dim(1)?;
+    let next_token_logits = logits.i((0, seq_len - 1))?.to_dtype(DType::F32)?;
+
+    // Apply repeat penalty if needed
+    let next_token_logits = apply_repeat_penalty_if_needed(
+        &next_token_logits,
+        repeat_penalty,
+        &generated_tokens,
+        repeat_last_n,
+    )?;
+
+    // Sample next token
+    let next_token = logits_processor.sample(&next_token_logits)?;
+
+    if is_eos_token(next_token) {
+        return Ok(generated_tokens);
+    }
+    generated_tokens.push(next_token);
+
+    // Decode phase: generate tokens one by one
+    let mut seqlen_offset = input_ids.dim(1)?;
+    let mut current_ids = Tensor::new(&[next_token], device)?.unsqueeze(0)?;
+
+    for _ in 1..max_new_tokens {
+        let logits = model.forward_decode(&current_ids, seqlen_offset)?;
+
+        let next_token_logits = logits.i((0, 0))?.to_dtype(DType::F32)?;
+
+        // Apply repeat penalty if needed
+        let next_token_logits = apply_repeat_penalty_if_needed(
+            &next_token_logits,
+            repeat_penalty,
+            &generated_tokens,
+            repeat_last_n,
+        )?;
+
+        // Sample next token
+        let next_token = logits_processor.sample(&next_token_logits)?;
+
+        if is_eos_token(next_token) {
+            break;
+        }
+        generated_tokens.push(next_token);
+
+        seqlen_offset += 1;
+        current_ids = Tensor::new(&[next_token], device)?.unsqueeze(0)?;
+    }
+
+    Ok(generated_tokens)
+}
+
+/// Apply repetition penalty to logits if penalty != 1.0
+fn apply_repeat_penalty_if_needed(
+    logits: &Tensor,
+    repeat_penalty: f32,
+    generated_tokens: &[u32],
+    repeat_last_n: usize,
+) -> Result<Tensor> {
+    if (repeat_penalty - 1.0).abs() < f32::EPSILON || generated_tokens.is_empty() {
+        return Ok(logits.clone());
+    }
+
+    let start_at = generated_tokens.len().saturating_sub(repeat_last_n);
+    let context = &generated_tokens[start_at..];
+
+    candle_transformers::utils::apply_repeat_penalty(logits, repeat_penalty, context)
+        .map_err(|e| E::msg(format!("Failed to apply repeat penalty: {}", e)))
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -350,7 +475,29 @@ fn main() -> Result<()> {
     let mut model = HunyuanOCRModel::new(&config, args.flash_attn, vb)?;
     println!("Model loaded in {:?}", start.elapsed());
 
-    // Get EOS token ID (check multiple EOS tokens)
+    // Create LogitsProcessor for sampling
+    let mut logits_processor = {
+        let temperature = args.temperature;
+        let sampling = if temperature <= 0. {
+            Sampling::ArgMax
+        } else {
+            match (args.top_k, args.top_p) {
+                (None, None) => Sampling::All { temperature },
+                (Some(k), None) => Sampling::TopK { k, temperature },
+                (None, Some(p)) => Sampling::TopP { p, temperature },
+                (Some(k), Some(p)) => Sampling::TopKThenTopP { k, p, temperature },
+            }
+        };
+        LogitsProcessor::from_sampling(args.seed, sampling)
+    };
+
+    // Print sampling configuration
+    println!(
+        "Sampling: temp={:.2}, top_p={:?}, top_k={:?}, repeat_penalty={:.2}",
+        args.temperature, args.top_p, args.top_k, args.repeat_penalty
+    );
+
+    // Get spatial merge size for image token calculation
     let spatial_merge = config.vision_config.spatial_merge_size;
 
     // Process images
@@ -384,17 +531,21 @@ fn main() -> Result<()> {
         // Clear KV cache for fresh generation
         model.clear_kv_cache();
 
-        // Generate with xDRoPE position IDs
+        // Generate with sampling support
         println!("Generating (max {} tokens)...", args.max_length);
         let start_gen = std::time::Instant::now();
 
-        let generated_tokens = model.generate_with_xdrope(
+        let generated_tokens = generate_with_sampling(
+            &mut model,
             &input_ids,
             &pixel_values,
             &grid_thw,
             &input_ids_vec,
             args.max_length,
-            is_eos_token,
+            &mut logits_processor,
+            args.repeat_penalty,
+            args.repeat_last_n,
+            &device,
         )?;
 
         let gen_time = start_gen.elapsed();

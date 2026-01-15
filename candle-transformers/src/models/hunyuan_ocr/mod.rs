@@ -258,6 +258,58 @@ impl HunyuanOCRModel {
         Ok(generated_tokens)
     }
 
+    /// Prefill forward pass with xDRoPE position IDs.
+    ///
+    /// This method is designed for external generation loops that need access to logits
+    /// for custom sampling strategies (temperature, top-k, top-p, etc.).
+    ///
+    /// # Arguments
+    /// * `input_ids` - Input token IDs tensor [batch, seq_len]
+    /// * `pixel_values` - Image pixel values tensor
+    /// * `grid_thw` - Grid dimensions for each image (temporal, height, width)
+    /// * `input_ids_vec` - Input token IDs as a vector (for position ID generation)
+    ///
+    /// # Returns
+    /// Logits tensor [batch, seq_len, vocab_size]
+    pub fn forward_prefill(
+        &mut self,
+        input_ids: &Tensor,
+        pixel_values: &Tensor,
+        grid_thw: &[(i64, i64, i64)],
+        input_ids_vec: &[u32],
+    ) -> Result<Tensor> {
+        // Generate xDRoPE position IDs for prefill
+        let position_ids =
+            self.generate_xdrope_position_ids(input_ids_vec, grid_thw, self.spatial_merge_size)?;
+
+        // Forward with xDRoPE position IDs
+        self.forward_with_position_ids(
+            input_ids,
+            Some(pixel_values),
+            Some(grid_thw),
+            &position_ids,
+            0,
+        )
+    }
+
+    /// Decode forward pass for autoregressive generation.
+    ///
+    /// This method is designed for external generation loops that need access to logits
+    /// for custom sampling strategies.
+    ///
+    /// # Arguments
+    /// * `input_ids` - Current token ID tensor [batch, 1]
+    /// * `seqlen_offset` - Current sequence position (for KV cache)
+    ///
+    /// # Returns
+    /// Logits tensor [batch, 1, vocab_size]
+    pub fn forward_decode(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        // Generate decode position IDs (simple sequential for decode)
+        let decode_position_ids = self.generate_position_ids(1, seqlen_offset)?;
+
+        self.forward_with_position_ids(input_ids, None, None, &decode_position_ids, seqlen_offset)
+    }
+
     /// Forward pass with explicit position IDs.
     fn forward_with_position_ids(
         &mut self,

@@ -10,11 +10,12 @@ HunyuanOCR is a Vision-Language Model optimized for document OCR tasks, develope
 - Multi-image support for multi-page documents
 - Flash Attention support on CUDA for faster inference
 - SDPA (Scaled Dot Product Attention) on Metal for efficient decode
+- Configurable sampling: temperature, top-k, top-p, repetition penalty
 
 ## Running the Example
 
 ```bash
-# Basic OCR with default prompt
+# Basic OCR with default prompt (greedy decoding)
 cargo run --example hunyuan-ocr --release --features cuda -- \
     --image document.png
 
@@ -28,6 +29,20 @@ cargo run --example hunyuan-ocr --release --features cuda,flash-attn -- \
 cargo run --example hunyuan-ocr --release --features cuda -- \
     --image document.png \
     --prompt "Extract all text from this image"
+
+# With sampling parameters (temperature, top-k, top-p)
+cargo run --example hunyuan-ocr --release --features cuda -- \
+    --image document.png \
+    --temperature 0.7 \
+    --top-p 0.9 \
+    --top-k 50
+
+# With repetition penalty
+cargo run --example hunyuan-ocr --release --features cuda -- \
+    --image document.png \
+    --temperature 0.7 \
+    --repeat-penalty 1.1 \
+    --repeat-last-n 64
 
 # Multi-page document OCR
 cargo run --example hunyuan-ocr --release --features cuda -- \
@@ -56,6 +71,17 @@ cargo run --example hunyuan-ocr --release --features cuda -- \
     --image document.png \
     --max-length 2048
 ```
+
+## Sampling Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--temperature` | 0.0 | Temperature for sampling (0 = greedy decoding) |
+| `--top-k` | None | Only sample among the top K tokens |
+| `--top-p` | None | Nucleus sampling probability cutoff |
+| `--seed` | 299792458 | Random seed for reproducible sampling |
+| `--repeat-penalty` | 1.0 | Penalty for repeating tokens (1.0 = no penalty) |
+| `--repeat-last-n` | 64 | Context size for repeat penalty |
 
 ## Model
 
