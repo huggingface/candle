@@ -18,10 +18,11 @@ HunyuanOCR is a Vision-Language Model optimized for document OCR tasks, develope
 cargo run --example hunyuan-ocr --release --features cuda -- \
     --image document.png
 
-# Enable Flash Attention for faster inference (CUDA only)
+# Enable Flash Attention for faster inference (CUDA only, requires BF16)
 cargo run --example hunyuan-ocr --release --features cuda,flash-attn -- \
     --image document.png \
-    --flash-attn
+    --flash-attn \
+    --bf16
 
 # Custom prompt
 cargo run --example hunyuan-ocr --release --features cuda -- \
