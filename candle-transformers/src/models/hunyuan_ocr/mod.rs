@@ -156,9 +156,7 @@ impl HunyuanOCRModel {
         let seq_len = logits.dim(1)?;
         // Get last position logits: [vocab_size]
         let next_token_logits = logits.i((0, seq_len - 1))?;
-        let next_token = next_token_logits
-            .argmax(D::Minus1)?
-            .to_scalar::<u32>()?;
+        let next_token = next_token_logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
         generated_tokens.push(next_token);
         if next_token == eos_token_id {
@@ -174,9 +172,7 @@ impl HunyuanOCRModel {
             let logits = self.forward(&current_ids, None, None, seqlen_offset)?;
             // Get logits for the single token: [vocab_size]
             let next_token_logits = logits.i((0, 0))?;
-            let next_token = next_token_logits
-                .argmax(D::Minus1)?
-                .to_scalar::<u32>()?;
+            let next_token = next_token_logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
             generated_tokens.push(next_token);
             if next_token == eos_token_id {
@@ -210,11 +206,8 @@ impl HunyuanOCRModel {
         let mut generated_tokens = Vec::new();
 
         // Generate xDRoPE position IDs for prefill
-        let position_ids = self.generate_xdrope_position_ids(
-            input_ids_vec,
-            grid_thw,
-            self.spatial_merge_size,
-        )?;
+        let position_ids =
+            self.generate_xdrope_position_ids(input_ids_vec, grid_thw, self.spatial_merge_size)?;
 
         // Prefill with xDRoPE position IDs
         let logits = self.forward_with_position_ids(
@@ -402,8 +395,10 @@ impl HunyuanOCRModel {
         let pos_h_tensor = Tensor::from_vec(position_ids_h, (seq_len,), &self.device)?;
         let pos_t_tensor = Tensor::from_vec(position_ids_t, (seq_len,), &self.device)?;
 
-        let stacked =
-            Tensor::stack(&[pos_ids_tensor, pos_w_tensor, pos_h_tensor, pos_t_tensor], 0)?;
+        let stacked = Tensor::stack(
+            &[pos_ids_tensor, pos_w_tensor, pos_h_tensor, pos_t_tensor],
+            0,
+        )?;
         stacked.unsqueeze(0)
     }
 

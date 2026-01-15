@@ -493,13 +493,7 @@ impl Attention {
     /// Note: candle-flash-attn natively supports GQA (Grouped Query Attention),
     /// so we don't need to call repeat_kv before flash_attn.
     #[cfg(feature = "flash-attn")]
-    fn flash_attn_cuda(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-        causal: bool,
-    ) -> Result<Tensor> {
+    fn flash_attn_cuda(&self, q: &Tensor, k: &Tensor, v: &Tensor, causal: bool) -> Result<Tensor> {
         // candle-flash-attn expects (batch, seq_len, num_heads, head_dim)
         // Current layout is (batch, num_heads, seq_len, head_dim)
         let q = q.transpose(1, 2)?.contiguous()?;
