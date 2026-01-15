@@ -31,6 +31,7 @@ pub struct HunyuanOCRModel {
     cache: text::Cache,
     image_token_id: u32,
     xdrope_x_dim: usize,
+    spatial_merge_size: usize,
     dtype: DType,
     device: Device,
 }
@@ -45,8 +46,8 @@ impl HunyuanOCRModel {
     pub fn new(cfg: &Config, use_flash_attn: bool, vb: VarBuilder) -> Result<Self> {
         // Vision model at "vit" prefix
         let vision = VisionModel::new(&cfg.vision_config, vb.pp("vit"))?;
-        // Text model at root level
-        let text = TextModel::new(&cfg.text_config, use_flash_attn, vb.clone())?;
+        // Text model at "model" prefix (matches weight file structure)
+        let text = TextModel::new(&cfg.text_config, use_flash_attn, vb.pp("model"))?;
 
         // Initialize cache for KV caching
         let cache = text::Cache::new(text.num_layers());
@@ -66,6 +67,7 @@ impl HunyuanOCRModel {
             cache,
             image_token_id: cfg.image_token_id,
             xdrope_x_dim,
+            spatial_merge_size: cfg.vision_config.spatial_merge_size,
             dtype: vb.dtype(),
             device: vb.device().clone(),
         })
@@ -149,13 +151,14 @@ impl HunyuanOCRModel {
         self.clear_kv_cache();
         let mut generated_tokens = Vec::new();
 
-        // Prefill
+        // Prefill: logits shape [batch, seq_len, vocab_size]
         let logits = self.forward(input_ids, Some(pixel_values), Some(grid_thw), 0)?;
-        let next_token = logits
-            .i((.., logits.dim(1)? - 1, ..))?
+        let seq_len = logits.dim(1)?;
+        // Get last position logits: [vocab_size]
+        let next_token_logits = logits.i((0, seq_len - 1))?;
+        let next_token = next_token_logits
             .argmax(D::Minus1)?
-            .to_dtype(DType::U32)?
-            .to_vec1::<u32>()?[0];
+            .to_scalar::<u32>()?;
 
         generated_tokens.push(next_token);
         if next_token == eos_token_id {
@@ -167,11 +170,13 @@ impl HunyuanOCRModel {
         let mut current_ids = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
 
         for _ in 1..max_new_tokens {
+            // Decode: logits shape [batch=1, seq_len=1, vocab_size]
             let logits = self.forward(&current_ids, None, None, seqlen_offset)?;
-            let next_token = logits
+            // Get logits for the single token: [vocab_size]
+            let next_token_logits = logits.i((0, 0))?;
+            let next_token = next_token_logits
                 .argmax(D::Minus1)?
-                .to_dtype(DType::U32)?
-                .to_vec1::<u32>()?[0];
+                .to_scalar::<u32>()?;
 
             generated_tokens.push(next_token);
             if next_token == eos_token_id {
@@ -183,6 +188,223 @@ impl HunyuanOCRModel {
         }
 
         Ok(generated_tokens)
+    }
+
+    /// Generate text using greedy decoding with proper xDRoPE position IDs.
+    ///
+    /// This method generates proper 4D xDRoPE position IDs for image tokens,
+    /// where each image token has row/column position information.
+    pub fn generate_with_xdrope<F>(
+        &mut self,
+        input_ids: &Tensor,
+        pixel_values: &Tensor,
+        grid_thw: &[(i64, i64, i64)],
+        input_ids_vec: &[u32],
+        max_new_tokens: usize,
+        is_eos: F,
+    ) -> Result<Vec<u32>>
+    where
+        F: Fn(u32) -> bool,
+    {
+        self.clear_kv_cache();
+        let mut generated_tokens = Vec::new();
+
+        // Generate xDRoPE position IDs for prefill
+        let position_ids = self.generate_xdrope_position_ids(
+            input_ids_vec,
+            grid_thw,
+            self.spatial_merge_size,
+        )?;
+
+        // Prefill with xDRoPE position IDs
+        let logits = self.forward_with_position_ids(
+            input_ids,
+            Some(pixel_values),
+            Some(grid_thw),
+            &position_ids,
+            0,
+        )?;
+
+        let seq_len = logits.dim(1)?;
+        let next_token_logits = logits.i((0, seq_len - 1))?;
+        let next_token = next_token_logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
+
+        if is_eos(next_token) {
+            return Ok(generated_tokens);
+        }
+        generated_tokens.push(next_token);
+
+        // Decode phase
+        let mut seqlen_offset = input_ids.dim(1)?;
+        let mut current_ids = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
+
+        for _ in 1..max_new_tokens {
+            // Generate decode position IDs (simple sequential for decode)
+            let decode_position_ids = self.generate_position_ids(1, seqlen_offset)?;
+
+            let logits = self.forward_with_position_ids(
+                &current_ids,
+                None,
+                None,
+                &decode_position_ids,
+                seqlen_offset,
+            )?;
+
+            let next_token_logits = logits.i((0, 0))?;
+            let next_token = next_token_logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
+
+            if is_eos(next_token) {
+                break;
+            }
+            generated_tokens.push(next_token);
+
+            seqlen_offset += 1;
+            current_ids = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
+        }
+
+        Ok(generated_tokens)
+    }
+
+    /// Forward pass with explicit position IDs.
+    fn forward_with_position_ids(
+        &mut self,
+        input_ids: &Tensor,
+        pixel_values: Option<&Tensor>,
+        grid_thw: Option<&[(i64, i64, i64)]>,
+        position_ids: &Tensor,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        let (batch_size, seq_len) = input_ids.dims2()?;
+
+        let mut input_embeds = self.text.embed_tokens(input_ids)?;
+        let hidden_dim = input_embeds.dim(2)?;
+
+        // Inject vision embeddings if provided
+        if let (Some(pixel_values), Some(grid_thw)) = (pixel_values, grid_thw) {
+            let image_embeds = self.encode_image(pixel_values, grid_thw)?;
+            let image_embeds = image_embeds.to_dtype(self.dtype)?;
+
+            let input_ids_vec = input_ids.flatten_all()?.to_vec1::<u32>()?;
+            let mut image_offset = 0usize;
+            let num_image_tokens = image_embeds.dim(1)?;
+
+            for batch in 0..batch_size {
+                for pos in 0..seq_len {
+                    let idx = batch * seq_len + pos;
+                    if input_ids_vec[idx] == self.image_token_id && image_offset < num_image_tokens
+                    {
+                        let img_emb = image_embeds.i((.., image_offset, ..))?.unsqueeze(1)?;
+                        input_embeds = input_embeds.slice_assign(
+                            &[batch..batch + 1, pos..pos + 1, 0..hidden_dim],
+                            &img_emb,
+                        )?;
+                        image_offset += 1;
+                    }
+                }
+            }
+        }
+
+        // Create causal mask for prefill
+        let attention_mask = if seqlen_offset == 0 && seq_len > 1 {
+            Some(self.create_causal_mask(batch_size, seq_len)?)
+        } else {
+            None
+        };
+
+        self.text.forward(
+            input_embeds,
+            attention_mask.as_ref(),
+            position_ids,
+            seqlen_offset,
+            &mut self.cache,
+        )
+    }
+
+    /// Generate xDRoPE position IDs for the input sequence.
+    ///
+    /// For xDRoPE, position_ids have 4 dimensions:
+    /// - Dimension 0: text sequential position [0, 1, 2, ..., seq_len-1]
+    /// - Dimension 1: width/column position (for image patches)
+    /// - Dimension 2: height/row position (for image patches)
+    /// - Dimension 3: time/frame position (0 for images)
+    fn generate_xdrope_position_ids(
+        &self,
+        input_ids: &[u32],
+        grid_thw: &[(i64, i64, i64)],
+        spatial_merge_size: usize,
+    ) -> Result<Tensor> {
+        let seq_len = input_ids.len();
+
+        // Initialize 4 dimensions of position_ids
+        // Default: all use sequential positions [0, 1, 2, ..., seq_len-1]
+        let position_ids: Vec<i64> = (0..seq_len as i64).collect();
+        let mut position_ids_w: Vec<i64> = (0..seq_len as i64).collect();
+        let mut position_ids_h: Vec<i64> = (0..seq_len as i64).collect();
+        let mut position_ids_t: Vec<i64> = (0..seq_len as i64).collect();
+
+        // Find all image_token positions
+        let image_token_positions: Vec<usize> = input_ids
+            .iter()
+            .enumerate()
+            .filter(|(_, &id)| id == self.image_token_id)
+            .map(|(idx, _)| idx)
+            .collect();
+
+        if !image_token_positions.is_empty() && !grid_thw.is_empty() {
+            // Calculate token count per image (excluding IM_START/IM_END)
+            let mut image_token_counts: Vec<usize> = Vec::new();
+            for (_t, h, w) in grid_thw {
+                let grid_h = (*h / spatial_merge_size as i64) as usize;
+                let grid_w = (*w / spatial_merge_size as i64) as usize;
+                // Tokens per image: grid_h * (grid_w + 1)
+                // +1 is for newline token at end of each row
+                let tokens_per_image = grid_h * (grid_w + 1);
+                image_token_counts.push(tokens_per_image);
+            }
+
+            // Set correct position_ids for each image
+            let mut image_token_offset = 0;
+            for (img_idx, (_t, _h, w)) in grid_thw.iter().enumerate() {
+                let grid_w = (*w / spatial_merge_size as i64) as usize;
+                let tokens_per_image = image_token_counts[img_idx];
+
+                let start_idx = image_token_offset;
+                let end_idx = start_idx + tokens_per_image;
+
+                if start_idx < image_token_positions.len() && end_idx <= image_token_positions.len()
+                {
+                    for (local_idx, &global_pos) in
+                        image_token_positions[start_idx..end_idx].iter().enumerate()
+                    {
+                        // Calculate 2D grid coordinates
+                        // Row: local_idx / (grid_w + 1)
+                        // Col: local_idx % (grid_w + 1)
+                        let row = (local_idx / (grid_w + 1)) as i64;
+                        let col = (local_idx % (grid_w + 1)) as i64;
+
+                        // Dimension 1: column position
+                        position_ids_w[global_pos] = col;
+                        // Dimension 2: row position
+                        position_ids_h[global_pos] = row;
+                        // Dimension 3: time position (0 for single image)
+                        position_ids_t[global_pos] = 0;
+                        // Dimension 0: keep sequential position unchanged
+                    }
+                }
+
+                image_token_offset += tokens_per_image;
+            }
+        }
+
+        // Build 4D position_ids tensor: [1, 4, seq_len]
+        let pos_ids_tensor = Tensor::from_vec(position_ids, (seq_len,), &self.device)?;
+        let pos_w_tensor = Tensor::from_vec(position_ids_w, (seq_len,), &self.device)?;
+        let pos_h_tensor = Tensor::from_vec(position_ids_h, (seq_len,), &self.device)?;
+        let pos_t_tensor = Tensor::from_vec(position_ids_t, (seq_len,), &self.device)?;
+
+        let stacked =
+            Tensor::stack(&[pos_ids_tensor, pos_w_tensor, pos_h_tensor, pos_t_tensor], 0)?;
+        stacked.unsqueeze(0)
     }
 
     /// Clear KV cache.

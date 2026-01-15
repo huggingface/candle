@@ -204,9 +204,33 @@ fn load_image(path: &str, device: &Device, dtype: DType) -> Result<ImageLoadResu
     Ok((pixel_values, grid_thw))
 }
 
-/// Build input tokens with proper chat format.
+// Special token IDs for HunyuanOCR chat template
+const BOS_TOKEN_ID: u32 = 120000; // <｜hy_begin▁of▁sentence｜>
+const SYSTEM_SUFFIX_ID: u32 = 120021; // <｜hy_place▁holder▁no▁3｜>
+const USER_TOKEN_ID: u32 = 120006; // <｜hy_User｜>
+const EOS_TOKEN_IDS: [u32; 2] = [120007, 120020]; // Assistant marker and end_of_sentence
+
+/// Calculate number of image tokens after Vision Encoder processing.
 ///
-/// Format: <BOS> prompt <IM_START> <IMAGE>×N <IM_END>
+/// Formula: grid_h * (grid_w + 1) + 2
+/// - grid_h and grid_w are patch counts after spatial_merge_size processing
+/// - +1 is for newline token at end of each row
+/// - +2 is for begin and end tokens
+fn calculate_num_image_tokens(grid_thw: &[(i64, i64, i64)], spatial_merge_size: usize) -> usize {
+    let mut total = 0;
+    for (_t, h, w) in grid_thw {
+        let grid_h = *h as usize / spatial_merge_size;
+        let grid_w = *w as usize / spatial_merge_size;
+        // Formula: grid_h * (grid_w + 1) + 2
+        let tokens_per_image = grid_h * (grid_w + 1) + 2;
+        total += tokens_per_image;
+    }
+    total
+}
+
+/// Build input tokens with proper HunyuanOCR chat template format.
+///
+/// Format: <BOS> <SYSTEM_SUFFIX> <IM_START> <IMAGE>×N <IM_END> <text> <USER_TOKEN>
 fn build_input_tokens(
     tokenizer: &Tokenizer,
     prompt: &str,
@@ -219,25 +243,28 @@ fn build_input_tokens(
     let im_end_id = config.im_end_id;
     let image_token_id = config.image_token_id;
 
-    // Get BOS token from tokenizer
-    let bos_token_id = tokenizer
-        .token_to_id("<|begin▁of▁sentence|>")
-        .unwrap_or(120000);
-
     // Tokenize prompt
     let prompt_encoding = tokenizer
         .encode(prompt, false)
         .map_err(|e| E::msg(format!("Tokenization error: {}", e)))?;
 
-    // Build full input sequence
-    let mut input_ids: Vec<u32> = vec![bos_token_id];
-    input_ids.extend(prompt_encoding.get_ids());
+    // Build full input sequence following HunyuanOCR chat template:
+    // <BOS> <SYSTEM_SUFFIX> <IM_START> <IMAGE>×N <IM_END> <text> <USER_TOKEN>
+    let mut input_ids: Vec<u32> = vec![BOS_TOKEN_ID];
+    input_ids.push(SYSTEM_SUFFIX_ID);
     input_ids.push(im_start_id);
     input_ids.extend(vec![image_token_id; num_image_tokens]);
     input_ids.push(im_end_id);
+    input_ids.extend(prompt_encoding.get_ids());
+    input_ids.push(USER_TOKEN_ID);
 
     let tensor = Tensor::new(input_ids.as_slice(), device)?.unsqueeze(0)?;
     Ok(tensor)
+}
+
+/// Check if a token is an EOS token.
+fn is_eos_token(token_id: u32) -> bool {
+    EOS_TOKEN_IDS.contains(&token_id)
 }
 
 fn main() -> Result<()> {
@@ -323,9 +350,7 @@ fn main() -> Result<()> {
     let mut model = HunyuanOCRModel::new(&config, args.flash_attn, vb)?;
     println!("Model loaded in {:?}", start.elapsed());
 
-    // Get EOS token ID
-    let eos_token_id = config.text_config.eos_token_id.unwrap_or(120020);
-
+    // Get EOS token ID (check multiple EOS tokens)
     let spatial_merge = config.vision_config.spatial_merge_size;
 
     // Process images
@@ -346,11 +371,8 @@ fn main() -> Result<()> {
         // Load and preprocess image
         let (pixel_values, grid_thw) = load_image(image_path, &device, dtype)?;
 
-        // Calculate number of image tokens after spatial merge
-        let g = &grid_thw[0];
-        let h_patches = g.1 as usize;
-        let w_patches = g.2 as usize;
-        let num_image_tokens = (h_patches / spatial_merge) * (w_patches / spatial_merge + 1);
+        // Calculate number of image tokens using correct formula
+        let num_image_tokens = calculate_num_image_tokens(&grid_thw, spatial_merge);
 
         // Build input tokens
         let input_ids =
@@ -362,16 +384,17 @@ fn main() -> Result<()> {
         // Clear KV cache for fresh generation
         model.clear_kv_cache();
 
-        // Generate
+        // Generate with xDRoPE position IDs
         println!("Generating (max {} tokens)...", args.max_length);
         let start_gen = std::time::Instant::now();
 
-        let generated_tokens = model.generate(
+        let generated_tokens = model.generate_with_xdrope(
             &input_ids,
             &pixel_values,
             &grid_thw,
+            &input_ids_vec,
             args.max_length,
-            eos_token_id,
+            is_eos_token,
         )?;
 
         let gen_time = start_gen.elapsed();
