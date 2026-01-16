@@ -1,11 +1,10 @@
-use std::collections::HashMap;
-
-use candle::quantized::QMatMul;
-use candle::quantized::gguf_file;
-use candle::{DType, Device, IndexOp, Result, Tensor, bail};
-use candle_nn::{Conv1d, Conv1dConfig, Embedding, Module};
 use crate::quantized_nn::RmsNorm;
 use crate::utils::repeat_kv;
+use candle::quantized::gguf_file;
+use candle::quantized::QMatMul;
+use candle::{bail, DType, Device, IndexOp, Result, Tensor};
+use candle_nn::{Conv1d, Conv1dConfig, Embedding, Module};
+use std::collections::HashMap;
 
 fn get_qtensor<R: std::io::Seek + std::io::Read>(
     ct: &gguf_file::Content,
