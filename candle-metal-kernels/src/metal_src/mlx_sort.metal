@@ -130,6 +130,15 @@ struct LessThan {
   }
 };
 
+template <typename T>
+struct GreaterThan {
+  static constexpr constant T init = Limits<T>::min;
+
+  METAL_FUNC bool operator()(T a, T b) {
+    return a > b;
+  }
+};
+
 template <
     typename val_t,
     typename idx_t,
@@ -381,7 +390,8 @@ template <
     typename U,
     bool ARG_SORT,
     short BLOCK_THREADS,
-    short N_PER_THREAD>
+    short N_PER_THREAD,
+    typename CompareOp = LessThan<T>>
 [[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void block_sort(
     const device T* inp [[buffer(0)]],
     device U* out [[buffer(1)]],
@@ -393,7 +403,7 @@ template <
     uint3 tid [[threadgroup_position_in_grid]],
     uint3 lid [[thread_position_in_threadgroup]]) {
   using sort_kernel =
-      KernelMergeSort<T, U, ARG_SORT, BLOCK_THREADS, N_PER_THREAD>;
+      KernelMergeSort<T, U, ARG_SORT, BLOCK_THREADS, N_PER_THREAD, CompareOp>;
   using val_t = typename sort_kernel::val_t;
   using idx_t = typename sort_kernel::idx_t;
 
@@ -436,7 +446,8 @@ template <
     typename U,
     bool ARG_SORT,
     short BLOCK_THREADS,
-    short N_PER_THREAD>
+    short N_PER_THREAD,
+    typename CompareOp = LessThan<T>>
 [[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void block_sort_nc(
     const device T* inp [[buffer(0)]],
     device U* out [[buffer(1)]],
@@ -450,7 +461,7 @@ template <
     uint3 tid [[threadgroup_position_in_grid]],
     uint3 lid [[thread_position_in_threadgroup]]) {
   using sort_kernel =
-      KernelMergeSort<T, U, ARG_SORT, BLOCK_THREADS, N_PER_THREAD>;
+      KernelMergeSort<T, U, ARG_SORT, BLOCK_THREADS, N_PER_THREAD, CompareOp>;
   using val_t = typename sort_kernel::val_t;
   using idx_t = typename sort_kernel::idx_t;
 
@@ -579,7 +590,8 @@ template <
     typename idx_t,
     bool ARG_SORT,
     short BLOCK_THREADS,
-    short N_PER_THREAD>
+    short N_PER_THREAD,
+    typename CompareOp = LessThan<val_t>>
 [[kernel, max_total_threads_per_threadgroup(BLOCK_THREADS)]] void mb_block_sort(
     const device val_t* inp [[buffer(0)]],
     device val_t* out_vals [[buffer(1)]],
@@ -596,7 +608,8 @@ template <
       idx_t,
       ARG_SORT,
       BLOCK_THREADS,
-      N_PER_THREAD>;
+      N_PER_THREAD,
+      CompareOp>;
 
   auto block_idx = elem_to_loc(tid.y, nc_shape, nc_strides, nc_dim);
   inp += block_idx;
@@ -623,7 +636,8 @@ template <
     typename idx_t,
     bool ARG_SORT,
     short BLOCK_THREADS,
-    short N_PER_THREAD>
+    short N_PER_THREAD,
+    typename CompareOp = LessThan<val_t>>
 [[kernel]] void mb_block_partition(
     device idx_t* block_partitions [[buffer(0)]],
     const device val_t* dev_vals [[buffer(1)]],
@@ -639,7 +653,8 @@ template <
       idx_t,
       ARG_SORT,
       BLOCK_THREADS,
-      N_PER_THREAD>;
+      N_PER_THREAD,
+      CompareOp>;
 
   block_partitions += tid.y * tgp_dims.x;
   dev_vals += tid.y * size_sorted_axis;
@@ -853,4 +868,59 @@ instantiate_multi_block_sort_base(bfloat16, bfloat16_t)
 #define instantiate_multi_block_sort_long(vtname, vtype) \
   instantiate_multi_block_sort(vtname, vtype, uint32, uint32_t, true, 256, 8)
 
-instantiate_multi_block_sort_long(int64, int64_t) // clang-format on
+instantiate_multi_block_sort_long(int64, int64_t)
+
+// Descending sort instantiations (using GreaterThan comparator)
+#define instantiate_block_sort_desc(                                          \
+    name, itname, itype, otname, otype, arg_sort, bn, tn)                \
+  instantiate_kernel("c" #name "_desc_" #itname "_" #otname "_bn" #bn "_tn" #tn, \
+                     block_sort, itype, otype, arg_sort, bn, tn, GreaterThan<itype>) \
+  instantiate_kernel("nc" #name "_desc_" #itname "_" #otname "_bn" #bn "_tn" #tn, \
+                     block_sort_nc, itype, otype, arg_sort, bn, tn, GreaterThan<itype>)
+
+#define instantiate_arg_block_sort_desc_base(itname, itype, bn, tn) \
+  instantiate_block_sort_desc(                                      \
+      arg_block_sort, itname, itype, uint32, uint32_t, true, bn, tn)
+
+#define instantiate_block_sort_desc_tn(itname, itype, bn) \
+  instantiate_arg_block_sort_desc_base(itname, itype, bn, 8)
+
+#define instantiate_block_sort_desc_bn(itname, itype) \
+  instantiate_block_sort_desc_tn(itname, itype, 128)  \
+  instantiate_block_sort_desc_tn(itname, itype, 256)  \
+  instantiate_block_sort_desc_tn(itname, itype, 512)
+
+instantiate_block_sort_desc_bn(uint8, uint8_t)
+instantiate_block_sort_desc_bn(uint32, uint32_t)
+instantiate_block_sort_desc_bn(float16, half)
+instantiate_block_sort_desc_bn(float32, float)
+instantiate_block_sort_desc_bn(bfloat16, bfloat16_t)
+
+#define instantiate_block_sort_desc_long(itname, itype) \
+  instantiate_block_sort_desc_tn(itname, itype, 128)    \
+  instantiate_block_sort_desc_tn(itname, itype, 256)
+
+instantiate_block_sort_desc_long(int64, int64_t)
+
+#define instantiate_multi_block_sort_desc(                                      \
+    vtname, vtype, itname, itype, arg_sort, bn, tn)                        \
+  instantiate_kernel("sort_mbsort_desc_" #vtname "_" #itname "_bn" #bn "_tn" #tn, \
+                     mb_block_sort, vtype, itype, arg_sort, bn, tn, GreaterThan<vtype>) \
+  instantiate_kernel("partition_mbsort_desc_" #vtname "_" #itname "_bn" #bn "_tn" #tn, \
+                     mb_block_partition, vtype, itype, arg_sort, bn, tn, GreaterThan<vtype>) \
+  instantiate_kernel("merge_mbsort_desc_" #vtname "_" #itname "_bn" #bn "_tn" #tn, \
+                     mb_block_merge, vtype, itype, arg_sort, bn, tn, GreaterThan<vtype>)
+
+#define instantiate_multi_block_sort_desc_base(vtname, vtype) \
+  instantiate_multi_block_sort_desc(vtname, vtype, uint32, uint32_t, true, 512, 8)
+
+instantiate_multi_block_sort_desc_base(uint8, uint8_t)
+instantiate_multi_block_sort_desc_base(uint32, uint32_t)
+instantiate_multi_block_sort_desc_base(float16, half)
+instantiate_multi_block_sort_desc_base(float32, float)
+instantiate_multi_block_sort_desc_base(bfloat16, bfloat16_t)
+
+#define instantiate_multi_block_sort_desc_long(vtname, vtype) \
+  instantiate_multi_block_sort_desc(vtname, vtype, uint32, uint32_t, true, 256, 8)
+
+instantiate_multi_block_sort_desc_long(int64, int64_t) // clang-format on

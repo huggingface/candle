@@ -625,6 +625,10 @@ fn affine_strided() {
 }
 
 fn run_mlx_sort<T: Clone>(v: &[T], ncols: usize) -> Vec<u32> {
+    run_mlx_sort_with_order(v, ncols, true)
+}
+
+fn run_mlx_sort_with_order<T: Clone>(v: &[T], ncols: usize, ascending: bool) -> Vec<u32> {
     let nrows = v.len() / ncols;
     let device = device();
     let kernels = Kernels::new();
@@ -641,6 +645,7 @@ fn run_mlx_sort<T: Clone>(v: &[T], ncols: usize) -> Vec<u32> {
         &command_buffer,
         &kernels,
         DType::F32,
+        ascending,
         nrows,
         ncols,
         BufferOffset::zero_offset(&input),
