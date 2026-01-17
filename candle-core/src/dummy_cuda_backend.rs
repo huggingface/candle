@@ -218,6 +218,19 @@ impl crate::backend::BackendStorage for CudaStorage {
     ) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    fn deform_conv2d(
+        &self,
+        _l: &Layout,
+        _offset: &Self,
+        _offset_l: &Layout,
+        _weight: &Self,
+        _weight_l: &Layout,
+        _mask: Option<(&Self, &Layout)>,
+        _params: &crate::conv::ParamsDeformConv2D,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
 
 impl crate::backend::BackendDevice for CudaDevice {
