@@ -13,8 +13,7 @@ fn main() {
     let mut builder = bindgen_cuda::Builder::default()
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
-        .arg("-O3")
-        .arg("--use_fast_math");
+        .arg("-O3");
     println!("cargo::warning={builder:?}");
     let bindings = builder.build_ptx().unwrap();
     bindings.write(&ptx_path).unwrap();

@@ -85,6 +85,8 @@ pub mod pixtral;
 pub mod quantized_blip;
 pub mod quantized_blip_text;
 pub mod quantized_gemma3;
+pub mod quantized_glm4;
+pub mod quantized_lfm2;
 pub mod quantized_llama;
 pub mod quantized_llama2_c;
 pub mod quantized_metavoice;
