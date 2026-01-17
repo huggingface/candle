@@ -26,7 +26,7 @@ impl CustomOp1 for Elu {
             "elu",
             s,
             |s| cpu_backend::unary_map(s, l, |v| fwd(v, self.alpha)),
-            (BF16, F16, F32, F64)
+            (F8E4M3, BF16, F16, F32, F64)
         );
         Ok((storage, l.shape().clone()))
     }
@@ -69,7 +69,7 @@ impl CustomOp1 for EluBackward {
             "elu-bwd",
             s,
             |s| cpu_backend::unary_map(s, l, |v| bwd(v, self.alpha)),
-            (BF16, F16, F32, F64)
+            (F8E4M3, BF16, F16, F32, F64)
         );
         Ok((storage, l.shape().clone()))
     }
@@ -121,6 +121,7 @@ impl candle_core::InplaceOp1 for Elu {
     fn cpu_fwd(&self, s: &mut CpuStorage, _l: &Layout) -> Result<()> {
         let alpha = self.alpha;
         match s {
+            CpuStorage::F8E4M3(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
             CpuStorage::BF16(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
             CpuStorage::F16(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
             CpuStorage::F32(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
@@ -144,20 +145,20 @@ fn inplace_op1() -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(all(feature = "ug", any(feature = "cuda", feature = "metal")))]
 #[allow(clippy::approx_constant)]
 #[test]
 fn ug_op() -> Result<()> {
     let kernel = {
-        use ug::lang::op;
+        use candle_ug::lang::op;
 
-        let layout = ug::Layout::from_shape(&[12]);
-        let ptr = op::Arg::ptr(ug::DType::F32);
-        let src = op::load(ptr.id(), layout.clone(), ug::DType::F32)?;
+        let layout = candle_ug::Layout::from_shape(&[12]);
+        let ptr = op::Arg::ptr(candle_ug::DType::F32);
+        let src = op::load(ptr.id(), layout.clone(), candle_ug::DType::F32)?;
         let src = op::unary(op::UnaryOp::Exp, src)?;
         let st = op::store(ptr.id(), layout, src)?;
         let kernel = op::Kernel::new("exp".to_string(), vec![ptr], vec![st]);
-        let opts: ug::lower_op::Opts = Default::default();
+        let opts: candle_ug::lower_op::Opts = Default::default();
         kernel.lower(&opts)?
     };
     let device = if candle_core::utils::cuda_is_available() {

@@ -21,6 +21,8 @@ const DEFAULT_PROMPT: &str = "Write a Rust function to calculate the factorial o
 enum Which {
     #[value(name = "0.6b")]
     W3_0_6b,
+    #[value(name = "0.6b8_0")]
+    W3_0_6b8_0,
     #[value(name = "1.7b")]
     W3_1_7b,
     #[value(name = "4b")]
@@ -103,6 +105,7 @@ impl Args {
                 let api = hf_hub::api::sync::Api::new()?;
                 let repo = match self.which {
                     Which::W3_0_6b => "Qwen/Qwen3-0.6B",
+                    Which::W3_0_6b8_0 => "Qwen/Qwen3-0.6B",
                     Which::W3_1_7b => "Qwen/Qwen3-1.7B",
                     Which::W3_4b => "Qwen/Qwen3-4B",
                     Which::W3_8b => "Qwen/Qwen3-8B",
@@ -122,6 +125,9 @@ impl Args {
             None => {
                 let (repo, filename, revision) = match self.which {
                     Which::W3_0_6b => ("unsloth/Qwen3-0.6B-GGUF", "Qwen3-0.6B-Q4_K_M.gguf", "main"),
+                    Which::W3_0_6b8_0 => {
+                        ("unsloth/Qwen3-0.6B-GGUF", "Qwen3-0.6B-Q8_0.gguf", "main")
+                    }
                     Which::W3_1_7b => ("unsloth/Qwen3-1.7B-GGUF", "Qwen3-1.7B-Q4_K_M.gguf", "main"),
                     Which::W3_4b => ("unsloth/Qwen3-4B-GGUF", "Qwen3-4B-Q4_K_M.gguf", "main"),
                     Which::W3_8b => ("unsloth/Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf", "main"),
@@ -143,7 +149,7 @@ impl Args {
 
 fn format_size(size_in_bytes: usize) -> String {
     if size_in_bytes < 1_000 {
-        format!("{}B", size_in_bytes)
+        format!("{size_in_bytes}B")
     } else if size_in_bytes < 1_000_000 {
         format!("{:.2}KB", size_in_bytes as f64 / 1e3)
     } else if size_in_bytes < 1_000_000_000 {

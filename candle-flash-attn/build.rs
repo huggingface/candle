@@ -2,7 +2,10 @@
 // The cuda build time is very long so one can set the CANDLE_FLASH_ATTN_BUILD_DIR environment
 // variable in order to cache the compiled artifacts and avoid recompiling too often.
 use anyhow::{Context, Result};
+use candle_flash_attn_build::{cutlass_include_arg, fetch_cutlass};
 use std::path::PathBuf;
+
+const CUTLASS_COMMIT: &str = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
 
 const KERNEL_FILES: [&str; 33] = [
     "kernels/flash_api.cu",
@@ -41,20 +44,20 @@ const KERNEL_FILES: [&str; 33] = [
 ];
 
 fn main() -> Result<()> {
-    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-changed=build.rs");
     for kernel_file in KERNEL_FILES.iter() {
-        println!("cargo:rerun-if-changed={kernel_file}");
+        println!("cargo::rerun-if-changed={kernel_file}");
     }
-    println!("cargo:rerun-if-changed=kernels/flash_fwd_kernel.h");
-    println!("cargo:rerun-if-changed=kernels/flash_fwd_launch_template.h");
-    println!("cargo:rerun-if-changed=kernels/flash.h");
-    println!("cargo:rerun-if-changed=kernels/philox.cuh");
-    println!("cargo:rerun-if-changed=kernels/softmax.h");
-    println!("cargo:rerun-if-changed=kernels/utils.h");
-    println!("cargo:rerun-if-changed=kernels/kernel_traits.h");
-    println!("cargo:rerun-if-changed=kernels/block_info.h");
-    println!("cargo:rerun-if-changed=kernels/static_switch.h");
-    println!("cargo:rerun-if-changed=kernels/hardware_info.h");
+    println!("cargo::rerun-if-changed=kernels/flash_fwd_kernel.h");
+    println!("cargo::rerun-if-changed=kernels/flash_fwd_launch_template.h");
+    println!("cargo::rerun-if-changed=kernels/flash.h");
+    println!("cargo::rerun-if-changed=kernels/philox.cuh");
+    println!("cargo::rerun-if-changed=kernels/softmax.h");
+    println!("cargo::rerun-if-changed=kernels/utils.h");
+    println!("cargo::rerun-if-changed=kernels/kernel_traits.h");
+    println!("cargo::rerun-if-changed=kernels/block_info.h");
+    println!("cargo::rerun-if-changed=kernels/static_switch.h");
+    println!("cargo::rerun-if-changed=kernels/hardware_info.h");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").context("OUT_DIR not set")?);
     let build_dir = match std::env::var("CANDLE_FLASH_ATTN_BUILD_DIR") {
         Err(_) =>
@@ -72,6 +75,11 @@ fn main() -> Result<()> {
         }
     };
 
+    // Fetch cutlass headers on-demand
+    let cutlass_dir = fetch_cutlass(&out_dir, CUTLASS_COMMIT)?;
+    let cutlass_include: &'static str =
+        Box::leak(cutlass_include_arg(&cutlass_dir).into_boxed_str());
+
     let kernels = KERNEL_FILES.iter().collect();
     let mut builder = bindgen_cuda::Builder::default()
         .kernel_paths(kernels)
@@ -82,7 +90,7 @@ fn main() -> Result<()> {
         .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
         .arg("-U__CUDA_NO_HALF2_OPERATORS__")
         .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
-        .arg("-Icutlass/include")
+        .arg(&cutlass_include)
         .arg("--expt-relaxed-constexpr")
         .arg("--expt-extended-lambda")
         .arg("--use_fast_math")
@@ -103,11 +111,11 @@ fn main() -> Result<()> {
     let out_file = build_dir.join("libflashattention.a");
     builder.build_lib(out_file);
 
-    println!("cargo:rustc-link-search={}", build_dir.display());
-    println!("cargo:rustc-link-lib=flashattention");
-    println!("cargo:rustc-link-lib=dylib=cudart");
+    println!("cargo::rustc-link-search={}", build_dir.display());
+    println!("cargo::rustc-link-lib=flashattention");
+    println!("cargo::rustc-link-lib=dylib=cudart");
     if !is_target_msvc {
-        println!("cargo:rustc-link-lib=dylib=stdc++");
+        println!("cargo::rustc-link-lib=dylib=stdc++");
     }
     Ok(())
 }

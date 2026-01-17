@@ -3,7 +3,7 @@ use crate::{
     utils::repeat_kv,
 };
 use candle::{DType, Device, Module, Result, Tensor};
-use candle_nn::{kv_cache::KvCache, Activation, VarBuilder};
+use candle_nn::{kv_cache::ConcatKvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -41,14 +41,14 @@ impl Qwen3RotaryEmbedding {
             .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(DType::F32)?;
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
+            .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
         Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
+            sin: freqs.sin()?.to_dtype(dtype)?,
+            cos: freqs.cos()?.to_dtype(dtype)?,
         })
     }
 
@@ -108,7 +108,7 @@ pub(crate) struct Qwen3Attention {
     hidden_size: usize,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
-    kv_cache: KvCache,
+    kv_cache: ConcatKvCache,
 }
 
 impl Qwen3Attention {
@@ -118,7 +118,7 @@ impl Qwen3Attention {
         vb: VarBuilder,
     ) -> Result<Self> {
         if cfg.use_sliding_window {
-            candle::bail!("sliding window is not suppored")
+            candle::bail!("sliding window is not supported")
         }
 
         let head_dim = cfg.head_dim;
@@ -157,9 +157,9 @@ impl Qwen3Attention {
         // Necessary because the hidden_size in the config isn't always accurate
         let hidden_size = head_dim * cfg.num_attention_heads;
 
-        // Initialize KV cache with 512 tokens capacity to reduce initial memory allocation.
-        // The cache will grow in chunks of 512 tokens when needed.
-        let kv_cache = KvCache::new(2, 512);
+        // dim=2 because we concatenate along the sequence dimension
+        // For tensors of shape [batch, heads, seq, head_dim]
+        let kv_cache = ConcatKvCache::new(2);
 
         Ok(Self {
             q_proj,
@@ -214,11 +214,11 @@ impl Qwen3Attention {
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
         // 5. Accumulate KV cache
-        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
+        let (k, v) = self.kv_cache.append(&k, &v)?;
 
         // 6. GQA repeat_kv
-        let k = repeat_kv(k, self.num_kv_groups)?;
-        let v = repeat_kv(v, self.num_kv_groups)?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         // 7. Attention score
         let scale = 1.0 / (self.head_dim as f64).sqrt();

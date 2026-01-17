@@ -118,6 +118,7 @@ impl Tensor {
                     Op::Reshape(node)
                     | Op::UpsampleNearest1D { arg: node, .. }
                     | Op::UpsampleNearest2D { arg: node, .. }
+                    | Op::UpsampleBilinear2D { arg: node, .. }
                     | Op::AvgPool2D { arg: node, .. }
                     | Op::MaxPool2D { arg: node, .. }
                     | Op::Copy(node)
@@ -406,6 +407,9 @@ impl Tensor {
                         let conv_sum = grad.conv2d(&kernel, 0, scale_h, 1, c)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = conv_sum;
+                    }
+                    Op::UpsampleBilinear2D { .. } => {
+                        crate::bail!("backward not supported for upsample_bilinear2d")
                     }
                     Op::SliceScatter0(lhs, rhs, start_rhs) => {
                         let rhs_sum_grad = grads.or_insert(rhs)?;
@@ -752,6 +756,11 @@ impl GradStore {
     /// Insert a gradient tensor associated with the given tensor, returning the previous gradient tensor if it existed
     pub fn insert(&mut self, tensor: &Tensor, grad: Tensor) -> Option<Tensor> {
         self.0.insert(tensor.id(), grad)
+    }
+
+    /// Insert a gradient tensor associated with the given tensor id, returning the previous gradient tensor if it existed
+    pub fn insert_id(&mut self, id: TensorId, grad: Tensor) -> Option<Tensor> {
+        self.0.insert(id, grad)
     }
 
     /// Get the gradient tensor associated with the given tensor, or, if it does not exist,

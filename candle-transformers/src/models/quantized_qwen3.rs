@@ -10,36 +10,36 @@ use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
+use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
-struct Gguf<R: Read + Seek> {
+pub struct Gguf<R: Read + Seek> {
     ct: gguf_file::Content,
     reader: R,
     device: Device,
 }
 
 impl<R: Read + Seek> Gguf<R> {
-    fn new(ct: gguf_file::Content, reader: R, device: Device) -> Self {
+    pub fn new(ct: gguf_file::Content, reader: R, device: Device) -> Self {
         Self { ct, reader, device }
     }
 
-    fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
+    pub fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
         QMatMul::from_weights(ws.into())
     }
 
-    fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm> {
+    pub fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
         RmsNorm::from_qtensor(ws, eps)
     }
 
-    fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value> {
+    pub fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value> {
         &self.ct.metadata
     }
 
-    fn tensor(&mut self, name: &str) -> Result<QTensor> {
+    pub fn tensor(&mut self, name: &str) -> Result<QTensor> {
         self.ct.tensor(&mut self.reader, name, &self.device)
     }
 }
@@ -81,13 +81,13 @@ impl Module for MlpWeights {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
+pub struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
 }
 
 impl RotaryEmbedding {
-    fn new(
+    pub fn new(
         dtype: DType,
         head_dim: usize,
         max_position_embeddings: usize,
@@ -113,7 +113,7 @@ impl RotaryEmbedding {
     }
 
     /// Apply RoPE (q, k shape: B x H x L x D)
-    fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
+    pub fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let sin = self.sin.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
@@ -136,7 +136,7 @@ struct AttentionWeights {
     num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: KvCache,
+    kv_cache: ConcatKvCache,
     span_attn: tracing::Span,
 }
 
@@ -160,9 +160,7 @@ impl AttentionWeights {
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
         let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
-        // Initialize KV cache with 512 tokens capacity to reduce initial memory allocation.
-        // The cache will grow in chunks of 512 tokens when needed.
-        let kv_cache = KvCache::new(2, 512);
+        let kv_cache = ConcatKvCache::new(2);
 
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
@@ -211,15 +209,7 @@ impl AttentionWeights {
 
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
-        // Reset KV cache if we're at the first position
-        if offset == 0 {
-            self.kv_cache.reset();
-        }
-        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
-
-        // Make tensor contiguous to avoid some strided copies
-        let k = k.contiguous()?;
-        let v = v.contiguous()?;
+        let (k, v) = self.kv_cache.append(&k, &v)?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
@@ -242,6 +232,10 @@ impl AttentionWeights {
             .transpose(1, 2)?
             .reshape((b, l, self.num_heads * self.head_dim))?;
         self.o_proj.forward(&reshaped_ctx)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache.reset();
     }
 }
 
@@ -292,6 +286,10 @@ impl LayerWeights {
         let h2 = self.ln2.forward(&x)?;
         let h2 = h2.apply(&self.mlp)?;
         x + h2
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache();
     }
 }
 
@@ -425,5 +423,11 @@ impl ModelWeights {
         let _enter = self.span_output.enter();
         let last_hidden = h.narrow(1, l - 1, 1)?;
         self.lm_head.forward(&last_hidden)?.squeeze(1)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.clear_kv_cache();
+        }
     }
 }

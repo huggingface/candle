@@ -206,6 +206,18 @@ impl crate::backend::BackendStorage for CudaStorage {
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
 
 impl crate::backend::BackendDevice for CudaDevice {
@@ -215,6 +227,10 @@ impl crate::backend::BackendDevice for CudaDevice {
     }
 
     fn set_seed(&self, _: u64) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

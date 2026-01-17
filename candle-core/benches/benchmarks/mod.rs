@@ -1,4 +1,6 @@
 pub(crate) mod affine;
+pub(crate) mod binary;
+pub(crate) mod broadcast;
 pub(crate) mod conv_transpose2d;
 pub(crate) mod copy;
 pub(crate) mod matmul;
@@ -22,17 +24,18 @@ impl BenchDevice for Device {
             Device::Cpu => Ok(()),
             Device::Cuda(device) => {
                 #[cfg(feature = "cuda")]
-                return Ok(device
-                    .synchronize()
-                    .map_err(|e| candle_core::Error::Cuda(Box::new(e)))?);
+                {
+                    use candle_core::backend::BackendDevice;
+                    return Ok(device.synchronize()?);
+                }
                 #[cfg(not(feature = "cuda"))]
-                panic!("Cuda device without cuda feature enabled: {:?}", device)
+                panic!("Cuda device without cuda feature enabled: {device:?}")
             }
             Device::Metal(device) => {
                 #[cfg(feature = "metal")]
-                return Ok(device.wait_until_completed()?);
+                return device.wait_until_completed();
                 #[cfg(not(feature = "metal"))]
-                panic!("Metal device without metal feature enabled: {:?}", device)
+                panic!("Metal device without metal feature enabled: {device:?}")
             }
         }
     }
@@ -66,8 +69,9 @@ impl BenchDeviceHandler {
             devices.push(Device::new_metal(0)?);
         } else if cfg!(feature = "cuda") {
             devices.push(Device::new_cuda(0)?);
+        } else {
+            devices.push(Device::Cpu);
         }
-        devices.push(Device::Cpu);
         Ok(Self { devices })
     }
 }

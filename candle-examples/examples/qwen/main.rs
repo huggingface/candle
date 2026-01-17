@@ -217,7 +217,7 @@ struct Args {
     tokenizer_file: Option<String>,
 
     #[arg(long)]
-    weight_files: Option<String>,
+    weight_path: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
@@ -288,15 +288,29 @@ fn main() -> Result<()> {
         RepoType::Model,
         args.revision,
     ));
-    let tokenizer_filename = match args.tokenizer_file {
-        Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+
+    let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer_file.as_ref()) {
+        (Some(_), Some(file)) => std::path::PathBuf::from(file),
+        (None, Some(file)) => std::path::PathBuf::from(file),
+        (Some(path), None) => std::path::Path::new(path).join("tokenizer.json"),
+        (None, None) => repo.get("tokenizer.json")?,
     };
-    let filenames = match args.weight_files {
-        Some(files) => files
-            .split(',')
-            .map(std::path::PathBuf::from)
-            .collect::<Vec<_>>(),
+    let config_file = match &args.weight_path {
+        Some(path) => std::path::Path::new(path).join("config.json"),
+        _ => repo.get("config.json")?,
+    };
+
+    let filenames = match args.weight_path {
+        Some(path) => {
+            if std::path::Path::new(&path)
+                .join("model.safetensors.index.json")
+                .exists()
+            {
+                candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
+            } else {
+                vec!["model.safetensors".into()]
+            }
+        }
         None => match args.model {
             WhichModel::W0_5b
             | WhichModel::W2_0_5b
@@ -324,9 +338,8 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config_file = repo.get("config.json")?;
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
+    let dtype = if device.is_cuda() || device.is_metal() {
         DType::BF16
     } else {
         DType::F32

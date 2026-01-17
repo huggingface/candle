@@ -30,7 +30,7 @@ impl From<String> for Activation {
             "gelu" => Activation::Gelu,
             "gelu_new" => Activation::GeluNew,
             "relu" => Activation::Relu,
-            _ => panic!("Invalid activation function: {}", value),
+            _ => panic!("Invalid activation function: {value}"),
         }
     }
 }

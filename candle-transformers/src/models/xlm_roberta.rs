@@ -128,34 +128,25 @@ impl XLMRobertaSelfAttention {
     ) -> Result<Tensor> {
         let mixed_query_layer = self.query.forward(hidden_states)?;
         let is_cross_attention = encoder_hidden_states.is_some();
-        let (key_layer, value_layer, attention_mask) = if is_cross_attention
-            && past_key_value.is_some()
-        {
-            let key_layer = past_key_value.unwrap().0.clone();
-            let value_layer = past_key_value.unwrap().1.clone();
-            let attention_mask = encoder_attention_mask.unwrap().clone();
-            (key_layer, value_layer, Some(attention_mask))
-        } else if is_cross_attention {
-            let key_layer =
-                self.transpose_for_scores(&self.key.forward(encoder_hidden_states.unwrap())?)?;
-            let value_layer =
-                self.transpose_for_scores(&self.value.forward(encoder_hidden_states.unwrap())?)?;
-            let attention_mask = encoder_attention_mask.unwrap();
-            (key_layer, value_layer, Some(attention_mask.clone()))
-        } else if past_key_value.is_some() {
+        let (key_layer, value_layer, attention_mask) = if is_cross_attention {
+            if let Some((past_key, past_value)) = past_key_value {
+                let key_layer = past_key.clone();
+                let value_layer = past_value.clone();
+                let attention_mask = encoder_attention_mask.unwrap().clone();
+                (key_layer, value_layer, Some(attention_mask))
+            } else {
+                let key_layer =
+                    self.transpose_for_scores(&self.key.forward(encoder_hidden_states.unwrap())?)?;
+                let value_layer = self
+                    .transpose_for_scores(&self.value.forward(encoder_hidden_states.unwrap())?)?;
+                let attention_mask = encoder_attention_mask.unwrap();
+                (key_layer, value_layer, Some(attention_mask.clone()))
+            }
+        } else if let Some((past_key, past_value)) = past_key_value {
             let mut key_layer = self.transpose_for_scores(&self.key.forward(hidden_states)?)?;
             let mut value_layer = self.transpose_for_scores(&self.value.forward(hidden_states)?)?;
-            key_layer = Tensor::cat(
-                &[
-                    past_key_value.clone().as_ref().unwrap().0.clone(),
-                    key_layer,
-                ],
-                2,
-            )?;
-            value_layer = Tensor::cat(
-                &[past_key_value.as_ref().unwrap().1.clone(), value_layer],
-                2,
-            )?;
+            key_layer = Tensor::cat(&[past_key.clone(), key_layer], 2)?;
+            value_layer = Tensor::cat(&[past_value.clone(), value_layer], 2)?;
             (key_layer, value_layer, Some(attention_mask.clone()))
         } else {
             let key_layer = self.transpose_for_scores(&self.key.forward(hidden_states)?)?;
@@ -336,7 +327,7 @@ struct XLMRobertaEncoder {
 impl XLMRobertaEncoder {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let layers = (0..cfg.num_hidden_layers)
-            .map(|i| XLMRobertaLayer::new(cfg, vb.pp(format!("layer.{}", i))))
+            .map(|i| XLMRobertaLayer::new(cfg, vb.pp(format!("layer.{i}"))))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { layers })
     }

@@ -86,20 +86,24 @@ fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor,
     Ok((images, labels))
 }
 
-pub fn load() -> Result<crate::vision::Dataset> {
+pub(crate) fn load_mnist_like(
+    dataset_id: &str,
+    revision: &str,
+    test_filename: &str,
+    train_filename: &str,
+) -> Result<crate::vision::Dataset> {
     let api = Api::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
-    let dataset_id = "ylecun/mnist".to_string();
     let repo = Repo::with_revision(
-        dataset_id,
+        dataset_id.to_string(),
         RepoType::Dataset,
-        "refs/convert/parquet".to_string(),
+        revision.to_string(),
     );
     let repo = api.repo(repo);
     let test_parquet_filename = repo
-        .get("mnist/test/0000.parquet")
+        .get(test_filename)
         .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
     let train_parquet_filename = repo
-        .get("mnist/train/0000.parquet")
+        .get(train_filename)
         .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
     let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)
         .map_err(|e| Error::Msg(format!("Parquet error: {e}")))?;
@@ -114,4 +118,13 @@ pub fn load() -> Result<crate::vision::Dataset> {
         test_labels,
         labels: 10,
     })
+}
+
+pub fn load() -> Result<crate::vision::Dataset> {
+    load_mnist_like(
+        "ylecun/mnist",
+        "refs/convert/parquet",
+        "mnist/test/0000.parquet",
+        "mnist/train/0000.parquet",
+    )
 }

@@ -13,21 +13,16 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        rust: [stable]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: ${{ matrix.rust }}
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --workspace
+          python-version: "3.13"
+      - name: Remove cargo config (macOS ring crate fix)
+        if: runner.os == 'macOS'
+        run: rm -f .cargo/config.toml
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --workspace
 
   test:
     name: Test Suite
@@ -35,53 +30,51 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        rust: [stable]
     steps:
-      - name: Delete huge unnecessary tools folder
+      - name: Free disk space (Linux)
         if: runner.os == 'Linux'
-        run: rm -rf /opt/hostedtoolcache
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+        run: |
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          df -h
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: ${{ matrix.rust }}
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --workspace
+          python-version: "3.13"
+      - name: Remove cargo config (macOS ring crate fix)
+        if: runner.os == 'macOS'
+        run: rm -f .cargo/config.toml
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install lld (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y lld
+      - name: Run tests (with lld on Linux)
+        if: runner.os == 'Linux'
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+        run: cargo test --workspace
+      - name: Run tests (Windows & macOS)
+        if: runner.os != 'Linux'
+        run: cargo test --workspace
 
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add rustfmt
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+          components: rustfmt
+      - run: cargo fmt --all -- --check
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add clippy
-      - uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --workspace --tests --examples -- -D warnings
+          components: clippy
+      - run: cargo clippy --workspace --tests --examples --benches -- -D warnings

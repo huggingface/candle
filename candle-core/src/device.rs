@@ -267,6 +267,14 @@ impl Device {
         }
     }
 
+    pub fn get_current_seed(&self) -> Result<u64> {
+        match self {
+            Self::Cpu => CpuDevice.get_current_seed(),
+            Self::Cuda(c) => c.get_current_seed(),
+            Self::Metal(m) => m.get_current_seed(),
+        }
+    }
+
     pub fn same_device(&self, rhs: &Self) -> bool {
         match (self, rhs) {
             (Self::Cpu, Self::Cpu) => true,
@@ -315,6 +323,14 @@ impl Device {
     pub fn cuda_if_available(ordinal: usize) -> Result<Self> {
         if crate::utils::cuda_is_available() {
             Self::new_cuda(ordinal)
+        } else {
+            Ok(Self::Cpu)
+        }
+    }
+
+    pub fn metal_if_available(ordinal: usize) -> Result<Self> {
+        if crate::utils::metal_is_available() {
+            Self::new_metal(ordinal)
         } else {
             Ok(Self::Cpu)
         }

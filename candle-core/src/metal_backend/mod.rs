@@ -3,9 +3,12 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
-use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
-use metal::{Buffer, MTLResourceOptions, NSUInteger};
+use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
+use candle_metal_kernels::{
+    metal::{Buffer, Commands, Device},
+    BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
+};
+use objc2_foundation::NSRange;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
@@ -70,7 +73,7 @@ impl From<String> for MetalError {
 #[derive(Debug, Clone)]
 pub struct MetalStorage {
     /// The actual buffer containing the data.
-    buffer: Arc<metal::Buffer>,
+    buffer: Arc<Buffer>,
     /// a reference to the device owning this buffer
     device: MetalDevice,
     /// The count of allocated elements in the buffer
@@ -98,11 +101,17 @@ impl BackendStorage for MetalStorage {
         match self.dtype {
             DType::U8 => Ok(CpuStorage::U8(self.to_cpu()?)),
             DType::U32 => Ok(CpuStorage::U32(self.to_cpu()?)),
+            DType::I16 => Ok(CpuStorage::I16(self.to_cpu()?)),
+            DType::I32 => Ok(CpuStorage::I32(self.to_cpu()?)),
             DType::I64 => Ok(CpuStorage::I64(self.to_cpu()?)),
             DType::F16 => Ok(CpuStorage::F16(self.to_cpu()?)),
             DType::BF16 => Ok(CpuStorage::BF16(self.to_cpu()?)),
             DType::F32 => Ok(CpuStorage::F32(self.to_cpu()?)),
             DType::F64 => Ok(CpuStorage::F64(self.to_cpu()?)),
+            DType::F8E4M3 => Ok(CpuStorage::F8E4M3(self.to_cpu()?)),
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                Err(crate::Error::UnsupportedDTypeForOp(self.dtype, "to_cpu_storage").bt())
+            }
         }
     }
 
@@ -114,7 +123,8 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
 
         let buffer = device.new_buffer(el, self.dtype, "affine")?;
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("affine");
         let src = buffer_o(&self.buffer, layout, dtype);
         if layout.is_contiguous() {
             let name = match self.dtype {
@@ -123,13 +133,15 @@ impl BackendStorage for MetalStorage {
                 DType::BF16 => "affine_bf16",
                 DType::U8 => "affine_u8",
                 DType::U32 => "affine_u32",
+                DType::I64 => "affine_i64",
                 dtype => crate::bail!("Metal contiguous affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
                 name,
+                self.dtype.size_in_bytes(),
                 el,
                 src,
                 &buffer,
@@ -142,11 +154,14 @@ impl BackendStorage for MetalStorage {
                 DType::F32 => "affine_f32_strided",
                 DType::F16 => "affine_f16_strided",
                 DType::BF16 => "affine_bf16_strided",
+                DType::U8 => "affine_u8_strided",
+                DType::U32 => "affine_u32_strided",
+                DType::I64 => "affine_i64_strided",
                 dtype => crate::bail!("Metal strided affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine_strided(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
                 name,
                 layout.dims(),
@@ -169,7 +184,8 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
 
         let buffer = device.new_buffer(el, self.dtype, "powf")?;
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("powf");
         let src = buffer_o(&self.buffer, layout, dtype);
         if layout.is_contiguous() {
             let name = match self.dtype {
@@ -180,9 +196,10 @@ impl BackendStorage for MetalStorage {
             };
             candle_metal_kernels::call_powf(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
                 name,
+                self.dtype.size_in_bytes(),
                 el,
                 src,
                 &buffer,
@@ -198,7 +215,7 @@ impl BackendStorage for MetalStorage {
             };
             candle_metal_kernels::call_powf_strided(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
                 name,
                 layout.dims(),
@@ -220,7 +237,8 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
 
         let buffer = device.new_buffer(el, self.dtype, "elu")?;
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("elu");
         let src = buffer_o(&self.buffer, layout, self.dtype);
         if layout.is_contiguous() {
             let name = match self.dtype {
@@ -231,9 +249,10 @@ impl BackendStorage for MetalStorage {
             };
             candle_metal_kernels::call_elu(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
                 name,
+                self.dtype.size_in_bytes(),
                 el,
                 src,
                 &buffer,
@@ -249,7 +268,7 @@ impl BackendStorage for MetalStorage {
             };
             candle_metal_kernels::call_elu_strided(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
                 name,
                 layout.dims(),
@@ -328,11 +347,12 @@ impl BackendStorage for MetalStorage {
             }
             let dtype = if return_index { DType::U32 } else { self.dtype };
             let buffer = device.new_buffer(dst_el, dtype, "reduce")?;
-            let command_buffer = self.device.command_buffer()?;
+            let encoder = self.device.command_encoder()?;
+            encoder.set_label("reduce");
             let src = buffer_o(&self.buffer, layout, self.dtype);
             candle_metal_kernels::call_reduce_contiguous(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
                 name,
                 src_dims,
@@ -383,11 +403,12 @@ impl BackendStorage for MetalStorage {
         }
         let dtype = if return_index { DType::U32 } else { self.dtype };
         let buffer = device.new_buffer(dst_el, dtype, "reduce")?;
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("reduce");
         let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_reduce_strided(
             &device.device,
-            &command_buffer,
+            &encoder,
             &device.kernels,
             name,
             &dims,
@@ -424,74 +445,72 @@ impl BackendStorage for MetalStorage {
             let dtype = self_.dtype;
             let shape = l.shape();
             let el_count = shape.elem_count();
-            let command_buffer = device.command_buffer()?;
-            command_buffer.set_label("const-set");
+            let encoder = device.command_encoder()?;
+            encoder.set_label("const-set");
             let dst = buffer_o(&self_.buffer, l, self_.dtype);
 
-            match (el_count % 2, dtype, l.is_contiguous()) {
-                (0, DType::BF16 | DType::F16, true) => {
-                    use candle_metal_kernels::unary::contiguous_tiled;
-                    let kernel_name = match dtype {
-                        DType::F16 => contiguous_tiled::const_set::HALF,
-                        DType::BF16 => contiguous_tiled::const_set::BFLOAT,
-                        _ => crate::bail!("internal bug in const_set"),
-                    };
-                    candle_metal_kernels::call_const_set_contiguous_tiled(
-                        &device.device,
-                        &command_buffer,
-                        &device.kernels,
-                        kernel_name,
-                        el_count,
-                        s,
-                        dst,
-                    )
-                    .map_err(MetalError::from)?;
-                }
-                (_, _, true) => {
-                    use candle_metal_kernels::unary::contiguous;
-                    let kernel_name = match dtype {
-                        DType::F16 => contiguous::const_set::HALF,
-                        DType::BF16 => contiguous::const_set::BFLOAT,
-                        DType::F32 => contiguous::const_set::FLOAT,
-                        DType::I64 => contiguous::const_set::I64,
-                        DType::U32 => contiguous::const_set::U32,
-                        DType::U8 => contiguous::const_set::U8,
-                        DType::F64 => crate::bail!("unsupported const-set f64"),
-                    };
-                    candle_metal_kernels::call_const_set_contiguous(
-                        &device.device,
-                        &command_buffer,
-                        &device.kernels,
-                        kernel_name,
-                        el_count,
-                        s,
-                        dst,
-                    )
-                    .map_err(MetalError::from)?;
-                }
-                (_, _, false) => {
-                    use candle_metal_kernels::unary::strided;
-                    let kernel_name = match dtype {
-                        DType::F16 => strided::const_set::HALF,
-                        DType::BF16 => strided::const_set::BFLOAT,
-                        DType::F32 => strided::const_set::FLOAT,
-                        DType::I64 => strided::const_set::I64,
-                        DType::U32 => strided::const_set::U32,
-                        DType::U8 => strided::const_set::U8,
-                        DType::F64 => crate::bail!("unsupported const-set f64"),
-                    };
-                    candle_metal_kernels::call_const_set_strided(
-                        &device.device,
-                        &command_buffer,
-                        &device.kernels,
-                        kernel_name,
-                        l.dims(),
-                        s,
-                        l.stride(),
-                        dst,
-                    )
-                    .map_err(MetalError::from)?;
-                }
+            if l.is_contiguous() {
+                use candle_metal_kernels::unary::contiguous;
+                let kernel_name = match dtype {
+                    DType::F16 => contiguous::const_set::HALF,
+                    DType::BF16 => contiguous::const_set::BFLOAT,
+                    DType::F32 => contiguous::const_set::FLOAT,
+                    DType::I64 => contiguous::const_set::I64,
+                    DType::U32 => contiguous::const_set::U32,
+                    DType::U8 => contiguous::const_set::U8,
+                    DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
+                    DType::F64 => crate::bail!("unsupported const-set f64"),
+                    DType::F4
+                    | DType::F6E2M3
+                    | DType::F6E3M2
+                    | DType::F8E8M0
+                    | DType::I16
+                    | DType::I32 => {
+                        return Err(Error::UnsupportedDTypeForOp(dtype, "const-set").bt())
+                    }
+                };
+                candle_metal_kernels::call_const_set_contiguous(
+                    &device.device,
+                    &encoder,
+                    &device.kernels,
+                    kernel_name,
+                    dtype.size_in_bytes(),
+                    el_count,
+                    s,
+                    dst,
+                )
+                .map_err(MetalError::from)?;
+            } else {
+                use candle_metal_kernels::unary::strided;
+                let kernel_name = match dtype {
+                    DType::F16 => strided::const_set::HALF,
+                    DType::BF16 => strided::const_set::BFLOAT,
+                    DType::F32 => strided::const_set::FLOAT,
+                    DType::I64 => strided::const_set::I64,
+                    DType::U32 => strided::const_set::U32,
+                    DType::U8 => strided::const_set::U8,
+                    DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
+                    DType::F64 => crate::bail!("unsupported const-set f64"),
+                    DType::F4
+                    | DType::F6E2M3
+                    | DType::F6E3M2
+                    | DType::F8E8M0
+                    | DType::I16
+                    | DType::I32 => {
+                        return Err(Error::UnsupportedDTypeForOp(dtype, "const-set").bt())
+                    }
+                };
+                candle_metal_kernels::call_const_set_strided(
+                    &device.device,
+                    &encoder,
+                    &device.kernels,
+                    kernel_name,
+                    l.dims(),
+                    s,
+                    l.stride(),
+                    dst,
+                )
+                .map_err(MetalError::from)?;
             }
             Ok(())
         }
@@ -511,8 +530,9 @@ impl BackendStorage for MetalStorage {
         let device = self.device();
         let shape = layout.shape();
         let el_count = shape.elem_count();
-        let buffer = device.new_buffer(el_count, dtype, "todtype")?;
-        let command_buffer = device.command_buffer()?;
+        let buffer = device.new_buffer(el_count, dtype, "to_dtype")?;
+        let encoder = device.command_encoder()?;
+        encoder.set_label("to_dtype");
         let src = buffer_o(&self.buffer, layout, self.dtype);
         if layout.is_contiguous() {
             let kernel_name = match (self.dtype, dtype) {
@@ -558,9 +578,10 @@ impl BackendStorage for MetalStorage {
             };
             candle_metal_kernels::call_cast_contiguous(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
                 kernel_name,
+                self.dtype.size_in_bytes(),
                 el_count,
                 src,
                 &buffer,
@@ -610,7 +631,7 @@ impl BackendStorage for MetalStorage {
             };
             candle_metal_kernels::call_cast_strided(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
                 kernel_name,
                 layout.dims(),
@@ -620,7 +641,6 @@ impl BackendStorage for MetalStorage {
             )
             .map_err(MetalError::from)?;
         }
-        command_buffer.set_label("to_dtype");
         Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
@@ -630,239 +650,160 @@ impl BackendStorage for MetalStorage {
         let shape = layout.shape();
         let el_count = shape.elem_count();
         let buffer = device.new_buffer(el_count, dtype, B::KERNEL)?;
-        let command_buffer = device.command_buffer()?;
-        command_buffer.set_label(B::KERNEL);
+        let encoder = device.command_encoder()?;
+        encoder.set_label(B::KERNEL);
         let src = buffer_o(&self.buffer, layout, self.dtype);
 
-        match (el_count % 2, dtype, layout.is_contiguous()) {
-            (0, DType::BF16 | DType::F16, true) => {
-                use candle_metal_kernels::unary::contiguous_tiled;
-                let kernel_name = match (B::KERNEL, dtype) {
-                    ("uabs", DType::F16) => contiguous_tiled::abs::HALF,
-                    ("uabs", DType::F32) => contiguous_tiled::abs::FLOAT,
-                    ("uabs", DType::BF16) => contiguous_tiled::abs::BFLOAT,
-                    ("uceil", DType::F16) => contiguous_tiled::ceil::HALF,
-                    ("uceil", DType::F32) => contiguous_tiled::ceil::FLOAT,
-                    ("uceil", DType::BF16) => contiguous_tiled::ceil::BFLOAT,
-                    ("ucos", DType::F16) => contiguous_tiled::cos::HALF,
-                    ("ucos", DType::F32) => contiguous_tiled::cos::FLOAT,
-                    ("ucos", DType::BF16) => contiguous_tiled::cos::BFLOAT,
-                    ("uerf", DType::F16) => contiguous_tiled::erf::HALF,
-                    ("uerf", DType::F32) => contiguous_tiled::erf::FLOAT,
-                    ("uerf", DType::BF16) => contiguous_tiled::erf::BFLOAT,
-                    ("uexp", DType::F16) => contiguous_tiled::exp::HALF,
-                    ("uexp", DType::F32) => contiguous_tiled::exp::FLOAT,
-                    ("uexp", DType::BF16) => contiguous_tiled::exp::BFLOAT,
-                    ("ufloor", DType::F16) => contiguous_tiled::floor::HALF,
-                    ("ufloor", DType::F32) => contiguous_tiled::floor::FLOAT,
-                    ("ufloor", DType::BF16) => contiguous_tiled::floor::BFLOAT,
-                    ("ugelu_erf", DType::F16) => contiguous_tiled::gelu_erf::HALF,
-                    ("ugelu_erf", DType::F32) => contiguous_tiled::gelu_erf::FLOAT,
-                    ("ugelu_erf", DType::BF16) => contiguous_tiled::gelu_erf::BFLOAT,
-                    ("ugelu", DType::F16) => contiguous_tiled::gelu::HALF,
-                    ("ugelu", DType::F32) => contiguous_tiled::gelu::FLOAT,
-                    ("ugelu", DType::BF16) => contiguous_tiled::gelu::BFLOAT,
-                    ("ulog", DType::F16) => contiguous_tiled::log::HALF,
-                    ("ulog", DType::F32) => contiguous_tiled::log::FLOAT,
-                    ("ulog", DType::BF16) => contiguous_tiled::log::BFLOAT,
-                    ("uneg", DType::F16) => contiguous_tiled::neg::HALF,
-                    ("uneg", DType::F32) => contiguous_tiled::neg::FLOAT,
-                    ("uneg", DType::BF16) => contiguous_tiled::neg::BFLOAT,
-                    ("urecip", DType::F16) => contiguous_tiled::recip::HALF,
-                    ("urecip", DType::F32) => contiguous_tiled::recip::FLOAT,
-                    ("urecip", DType::BF16) => contiguous_tiled::recip::BFLOAT,
-                    ("urelu", DType::F16) => contiguous_tiled::relu::HALF,
-                    ("urelu", DType::F32) => contiguous_tiled::relu::FLOAT,
-                    ("urelu", DType::BF16) => contiguous_tiled::relu::BFLOAT,
-                    ("uround", DType::F16) => contiguous_tiled::round::HALF,
-                    ("uround", DType::F32) => contiguous_tiled::round::FLOAT,
-                    ("uround", DType::BF16) => contiguous_tiled::round::BFLOAT,
-                    ("usilu", DType::F16) => contiguous_tiled::silu::HALF,
-                    ("usilu", DType::F32) => contiguous_tiled::silu::FLOAT,
-                    ("usilu", DType::BF16) => contiguous_tiled::silu::BFLOAT,
-                    ("usin", DType::F16) => contiguous_tiled::sin::HALF,
-                    ("usin", DType::F32) => contiguous_tiled::sin::FLOAT,
-                    ("usin", DType::BF16) => contiguous_tiled::sin::BFLOAT,
-                    ("usqr", DType::F16) => contiguous_tiled::sqr::HALF,
-                    ("usqr", DType::F32) => contiguous_tiled::sqr::FLOAT,
-                    ("usqr", DType::BF16) => contiguous_tiled::sqr::BFLOAT,
-                    ("usqrt", DType::F16) => contiguous_tiled::sqrt::HALF,
-                    ("usqrt", DType::F32) => contiguous_tiled::sqrt::FLOAT,
-                    ("usqrt", DType::BF16) => contiguous_tiled::sqrt::BFLOAT,
-                    ("utanh", DType::F16) => contiguous_tiled::tanh::HALF,
-                    ("utanh", DType::F32) => contiguous_tiled::tanh::FLOAT,
-                    ("utanh", DType::BF16) => contiguous_tiled::tanh::BFLOAT,
-                    ("usign", DType::F16) => contiguous_tiled::sign::HALF,
-                    ("usign", DType::F32) => contiguous_tiled::sign::FLOAT,
-                    ("usign", DType::BF16) => contiguous_tiled::sign::BFLOAT,
-                    ("usign", DType::I64) => contiguous_tiled::sign::I64,
-                    (name, dtype) => {
-                        crate::bail!(
-                            "Metal contiguous_tiled unary {name} {dtype:?} not implemented"
-                        )
-                    }
-                };
-                candle_metal_kernels::call_unary_contiguous_tiled(
-                    &device.device,
-                    &command_buffer,
-                    &device.kernels,
-                    kernel_name,
-                    el_count,
-                    src,
-                    &buffer,
-                )
-                .map_err(MetalError::from)?;
-            }
-            (_, _, true) => {
-                use candle_metal_kernels::unary::contiguous;
-                let kernel_name = match (B::KERNEL, dtype) {
-                    ("uabs", DType::F16) => contiguous::abs::HALF,
-                    ("uabs", DType::F32) => contiguous::abs::FLOAT,
-                    ("uabs", DType::BF16) => contiguous::abs::BFLOAT,
-                    ("uceil", DType::F16) => contiguous::ceil::HALF,
-                    ("uceil", DType::F32) => contiguous::ceil::FLOAT,
-                    ("uceil", DType::BF16) => contiguous::ceil::BFLOAT,
-                    ("ucos", DType::F16) => contiguous::cos::HALF,
-                    ("ucos", DType::F32) => contiguous::cos::FLOAT,
-                    ("ucos", DType::BF16) => contiguous::cos::BFLOAT,
-                    ("uerf", DType::F16) => contiguous::erf::HALF,
-                    ("uerf", DType::F32) => contiguous::erf::FLOAT,
-                    ("uerf", DType::BF16) => contiguous::erf::BFLOAT,
-                    ("uexp", DType::F16) => contiguous::exp::HALF,
-                    ("uexp", DType::F32) => contiguous::exp::FLOAT,
-                    ("uexp", DType::BF16) => contiguous::exp::BFLOAT,
-                    ("ufloor", DType::F16) => contiguous::floor::HALF,
-                    ("ufloor", DType::F32) => contiguous::floor::FLOAT,
-                    ("ufloor", DType::BF16) => contiguous::floor::BFLOAT,
-                    ("ugelu_erf", DType::F16) => contiguous::gelu_erf::HALF,
-                    ("ugelu_erf", DType::F32) => contiguous::gelu_erf::FLOAT,
-                    ("ugelu_erf", DType::BF16) => contiguous::gelu_erf::BFLOAT,
-                    ("ugelu", DType::F16) => contiguous::gelu::HALF,
-                    ("ugelu", DType::F32) => contiguous::gelu::FLOAT,
-                    ("ugelu", DType::BF16) => contiguous::gelu::BFLOAT,
-                    ("ulog", DType::F16) => contiguous::log::HALF,
-                    ("ulog", DType::F32) => contiguous::log::FLOAT,
-                    ("ulog", DType::BF16) => contiguous::log::BFLOAT,
-                    ("uneg", DType::F16) => contiguous::neg::HALF,
-                    ("uneg", DType::F32) => contiguous::neg::FLOAT,
-                    ("uneg", DType::BF16) => contiguous::neg::BFLOAT,
-                    ("urecip", DType::F16) => contiguous::recip::HALF,
-                    ("urecip", DType::F32) => contiguous::recip::FLOAT,
-                    ("urecip", DType::BF16) => contiguous::recip::BFLOAT,
-                    ("urelu", DType::F16) => contiguous::relu::HALF,
-                    ("urelu", DType::F32) => contiguous::relu::FLOAT,
-                    ("urelu", DType::BF16) => contiguous::relu::BFLOAT,
-                    ("uround", DType::F16) => contiguous::round::HALF,
-                    ("uround", DType::F32) => contiguous::round::FLOAT,
-                    ("uround", DType::BF16) => contiguous::round::BFLOAT,
-                    ("usilu", DType::F16) => contiguous::silu::HALF,
-                    ("usilu", DType::F32) => contiguous::silu::FLOAT,
-                    ("usilu", DType::BF16) => contiguous::silu::BFLOAT,
-                    ("usin", DType::F16) => contiguous::sin::HALF,
-                    ("usin", DType::F32) => contiguous::sin::FLOAT,
-                    ("usin", DType::BF16) => contiguous::sin::BFLOAT,
-                    ("usqr", DType::F16) => contiguous::sqr::HALF,
-                    ("usqr", DType::F32) => contiguous::sqr::FLOAT,
-                    ("usqr", DType::BF16) => contiguous::sqr::BFLOAT,
-                    ("usqrt", DType::F16) => contiguous::sqrt::HALF,
-                    ("usqrt", DType::F32) => contiguous::sqrt::FLOAT,
-                    ("usqrt", DType::BF16) => contiguous::sqrt::BFLOAT,
-                    ("utanh", DType::F16) => contiguous::tanh::HALF,
-                    ("utanh", DType::F32) => contiguous::tanh::FLOAT,
-                    ("utanh", DType::BF16) => contiguous::tanh::BFLOAT,
-                    ("usign", DType::F16) => contiguous::sign::HALF,
-                    ("usign", DType::F32) => contiguous::sign::FLOAT,
-                    ("usign", DType::BF16) => contiguous::sign::BFLOAT,
-                    ("usign", DType::I64) => contiguous::sign::I64,
-                    (name, dtype) => {
-                        crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
-                    }
-                };
-                candle_metal_kernels::call_unary_contiguous(
-                    &device.device,
-                    &command_buffer,
-                    &device.kernels,
-                    kernel_name,
-                    el_count,
-                    src,
-                    &buffer,
-                )
-                .map_err(MetalError::from)?;
-            }
-            (_, _, false) => {
-                use candle_metal_kernels::unary::strided;
-                let kernel_name = match (B::KERNEL, dtype) {
-                    ("ucos", DType::F32) => strided::cos::FLOAT,
-                    ("usin", DType::F32) => strided::sin::FLOAT,
-                    ("usqr", DType::F32) => strided::sqr::FLOAT,
-                    ("usqrt", DType::F32) => strided::sqrt::FLOAT,
-                    ("uneg", DType::F32) => strided::neg::FLOAT,
-                    ("uexp", DType::F32) => strided::exp::FLOAT,
-                    ("ulog", DType::F32) => strided::log::FLOAT,
-                    ("ugelu", DType::F32) => strided::gelu::FLOAT,
-                    ("ugelu_erf", DType::F32) => strided::gelu_erf::FLOAT,
-                    ("uerf", DType::F32) => strided::erf::FLOAT,
-                    ("usilu", DType::F32) => strided::silu::FLOAT,
-                    ("uabs", DType::F32) => strided::abs::FLOAT,
-                    ("uceil", DType::F32) => strided::ceil::FLOAT,
-                    ("ufloor", DType::F32) => strided::floor::FLOAT,
-                    ("urelu", DType::F32) => strided::relu::FLOAT,
-                    ("uround", DType::F32) => strided::round::FLOAT,
-                    ("utanh", DType::F32) => strided::tanh::FLOAT,
+        if layout.is_contiguous() {
+            use candle_metal_kernels::unary::contiguous;
+            let kernel_name = match (B::KERNEL, dtype) {
+                ("uabs", DType::F16) => contiguous::abs::HALF,
+                ("uabs", DType::F32) => contiguous::abs::FLOAT,
+                ("uabs", DType::BF16) => contiguous::abs::BFLOAT,
+                ("uceil", DType::F16) => contiguous::ceil::HALF,
+                ("uceil", DType::F32) => contiguous::ceil::FLOAT,
+                ("uceil", DType::BF16) => contiguous::ceil::BFLOAT,
+                ("ucos", DType::F16) => contiguous::cos::HALF,
+                ("ucos", DType::F32) => contiguous::cos::FLOAT,
+                ("ucos", DType::BF16) => contiguous::cos::BFLOAT,
+                ("uerf", DType::F16) => contiguous::erf::HALF,
+                ("uerf", DType::F32) => contiguous::erf::FLOAT,
+                ("uerf", DType::BF16) => contiguous::erf::BFLOAT,
+                ("uexp", DType::F16) => contiguous::exp::HALF,
+                ("uexp", DType::F32) => contiguous::exp::FLOAT,
+                ("uexp", DType::BF16) => contiguous::exp::BFLOAT,
+                ("ufloor", DType::F16) => contiguous::floor::HALF,
+                ("ufloor", DType::F32) => contiguous::floor::FLOAT,
+                ("ufloor", DType::BF16) => contiguous::floor::BFLOAT,
+                ("ugelu_erf", DType::F16) => contiguous::gelu_erf::HALF,
+                ("ugelu_erf", DType::F32) => contiguous::gelu_erf::FLOAT,
+                ("ugelu_erf", DType::BF16) => contiguous::gelu_erf::BFLOAT,
+                ("ugelu", DType::F16) => contiguous::gelu::HALF,
+                ("ugelu", DType::F32) => contiguous::gelu::FLOAT,
+                ("ugelu", DType::BF16) => contiguous::gelu::BFLOAT,
+                ("ulog", DType::F16) => contiguous::log::HALF,
+                ("ulog", DType::F32) => contiguous::log::FLOAT,
+                ("ulog", DType::BF16) => contiguous::log::BFLOAT,
+                ("uneg", DType::F16) => contiguous::neg::HALF,
+                ("uneg", DType::F32) => contiguous::neg::FLOAT,
+                ("uneg", DType::BF16) => contiguous::neg::BFLOAT,
+                ("urecip", DType::F16) => contiguous::recip::HALF,
+                ("urecip", DType::F32) => contiguous::recip::FLOAT,
+                ("urecip", DType::BF16) => contiguous::recip::BFLOAT,
+                ("urelu", DType::F16) => contiguous::relu::HALF,
+                ("urelu", DType::F32) => contiguous::relu::FLOAT,
+                ("urelu", DType::BF16) => contiguous::relu::BFLOAT,
+                ("uround", DType::F16) => contiguous::round::HALF,
+                ("uround", DType::F32) => contiguous::round::FLOAT,
+                ("uround", DType::BF16) => contiguous::round::BFLOAT,
+                ("usilu", DType::F16) => contiguous::silu::HALF,
+                ("usilu", DType::F32) => contiguous::silu::FLOAT,
+                ("usilu", DType::BF16) => contiguous::silu::BFLOAT,
+                ("usin", DType::F16) => contiguous::sin::HALF,
+                ("usin", DType::F32) => contiguous::sin::FLOAT,
+                ("usin", DType::BF16) => contiguous::sin::BFLOAT,
+                ("usqr", DType::F16) => contiguous::sqr::HALF,
+                ("usqr", DType::F32) => contiguous::sqr::FLOAT,
+                ("usqr", DType::BF16) => contiguous::sqr::BFLOAT,
+                ("usqrt", DType::F16) => contiguous::sqrt::HALF,
+                ("usqrt", DType::F32) => contiguous::sqrt::FLOAT,
+                ("usqrt", DType::BF16) => contiguous::sqrt::BFLOAT,
+                ("utanh", DType::F16) => contiguous::tanh::HALF,
+                ("utanh", DType::F32) => contiguous::tanh::FLOAT,
+                ("utanh", DType::BF16) => contiguous::tanh::BFLOAT,
+                ("usign", DType::F16) => contiguous::sign::HALF,
+                ("usign", DType::F32) => contiguous::sign::FLOAT,
+                ("usign", DType::BF16) => contiguous::sign::BFLOAT,
+                ("usign", DType::I64) => contiguous::sign::I64,
+                (name, dtype) => {
+                    crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
+                }
+            };
 
-                    ("ucos", DType::F16) => strided::cos::HALF,
-                    ("usin", DType::F16) => strided::sin::HALF,
-                    ("usqr", DType::F16) => strided::sqr::HALF,
-                    ("usqrt", DType::F16) => strided::sqrt::HALF,
-                    ("uneg", DType::F16) => strided::neg::HALF,
-                    ("uexp", DType::F16) => strided::exp::HALF,
-                    ("ulog", DType::F16) => strided::log::HALF,
-                    ("ugelu", DType::F16) => strided::gelu::HALF,
-                    ("ugelu_erf", DType::F16) => strided::gelu_erf::HALF,
-                    ("uerf", DType::F16) => strided::erf::HALF,
-                    ("usilu", DType::F16) => strided::silu::HALF,
-                    ("uabs", DType::F16) => strided::abs::HALF,
-                    ("uceil", DType::F16) => strided::ceil::HALF,
-                    ("ufloor", DType::F16) => strided::floor::HALF,
-                    ("urelu", DType::F16) => strided::relu::HALF,
-                    ("uround", DType::F16) => strided::round::HALF,
-                    ("utanh", DType::F16) => strided::tanh::HALF,
+            candle_metal_kernels::call_unary_contiguous(
+                &device.device,
+                &encoder,
+                &device.kernels,
+                kernel_name,
+                dtype.size_in_bytes(),
+                el_count,
+                src,
+                &buffer,
+            )
+            .map_err(MetalError::from)?;
+        } else {
+            use candle_metal_kernels::unary::strided;
+            let kernel_name = match (B::KERNEL, dtype) {
+                ("ucos", DType::F32) => strided::cos::FLOAT,
+                ("usin", DType::F32) => strided::sin::FLOAT,
+                ("usqr", DType::F32) => strided::sqr::FLOAT,
+                ("usqrt", DType::F32) => strided::sqrt::FLOAT,
+                ("uneg", DType::F32) => strided::neg::FLOAT,
+                ("uexp", DType::F32) => strided::exp::FLOAT,
+                ("ulog", DType::F32) => strided::log::FLOAT,
+                ("ugelu", DType::F32) => strided::gelu::FLOAT,
+                ("ugelu_erf", DType::F32) => strided::gelu_erf::FLOAT,
+                ("uerf", DType::F32) => strided::erf::FLOAT,
+                ("usilu", DType::F32) => strided::silu::FLOAT,
+                ("uabs", DType::F32) => strided::abs::FLOAT,
+                ("uceil", DType::F32) => strided::ceil::FLOAT,
+                ("ufloor", DType::F32) => strided::floor::FLOAT,
+                ("urelu", DType::F32) => strided::relu::FLOAT,
+                ("uround", DType::F32) => strided::round::FLOAT,
+                ("utanh", DType::F32) => strided::tanh::FLOAT,
 
-                    ("ucos", DType::BF16) => strided::cos::BFLOAT,
-                    ("usin", DType::BF16) => strided::sin::BFLOAT,
-                    ("usqr", DType::BF16) => strided::sqr::BFLOAT,
-                    ("usqrt", DType::BF16) => strided::sqrt::BFLOAT,
-                    ("uneg", DType::BF16) => strided::neg::BFLOAT,
-                    ("uexp", DType::BF16) => strided::exp::BFLOAT,
-                    ("ulog", DType::BF16) => strided::log::BFLOAT,
-                    ("ugelu", DType::BF16) => strided::gelu::BFLOAT,
-                    ("ugelu_erf", DType::BF16) => strided::gelu_erf::BFLOAT,
-                    ("uerf", DType::BF16) => strided::erf::BFLOAT,
-                    ("usilu", DType::BF16) => strided::silu::BFLOAT,
-                    ("uabs", DType::BF16) => strided::abs::BFLOAT,
-                    ("uceil", DType::BF16) => strided::ceil::BFLOAT,
-                    ("ufloor", DType::BF16) => strided::floor::BFLOAT,
-                    ("urelu", DType::BF16) => strided::relu::BFLOAT,
-                    ("uround", DType::BF16) => strided::round::BFLOAT,
-                    ("utanh", DType::BF16) => strided::tanh::BFLOAT,
+                ("ucos", DType::F16) => strided::cos::HALF,
+                ("usin", DType::F16) => strided::sin::HALF,
+                ("usqr", DType::F16) => strided::sqr::HALF,
+                ("usqrt", DType::F16) => strided::sqrt::HALF,
+                ("uneg", DType::F16) => strided::neg::HALF,
+                ("uexp", DType::F16) => strided::exp::HALF,
+                ("ulog", DType::F16) => strided::log::HALF,
+                ("ugelu", DType::F16) => strided::gelu::HALF,
+                ("ugelu_erf", DType::F16) => strided::gelu_erf::HALF,
+                ("uerf", DType::F16) => strided::erf::HALF,
+                ("usilu", DType::F16) => strided::silu::HALF,
+                ("uabs", DType::F16) => strided::abs::HALF,
+                ("uceil", DType::F16) => strided::ceil::HALF,
+                ("ufloor", DType::F16) => strided::floor::HALF,
+                ("urelu", DType::F16) => strided::relu::HALF,
+                ("uround", DType::F16) => strided::round::HALF,
+                ("utanh", DType::F16) => strided::tanh::HALF,
 
-                    (name, dtype) => {
-                        crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
-                    }
-                };
-                let dst = BufferOffset::zero_offset(&buffer);
-                candle_metal_kernels::call_unary_strided(
-                    &device.device,
-                    &command_buffer,
-                    &device.kernels,
-                    kernel_name,
-                    layout.dims(),
-                    src,
-                    layout.stride(),
-                    dst,
-                )
-                .map_err(MetalError::from)?;
-            }
+                ("ucos", DType::BF16) => strided::cos::BFLOAT,
+                ("usin", DType::BF16) => strided::sin::BFLOAT,
+                ("usqr", DType::BF16) => strided::sqr::BFLOAT,
+                ("usqrt", DType::BF16) => strided::sqrt::BFLOAT,
+                ("uneg", DType::BF16) => strided::neg::BFLOAT,
+                ("uexp", DType::BF16) => strided::exp::BFLOAT,
+                ("ulog", DType::BF16) => strided::log::BFLOAT,
+                ("ugelu", DType::BF16) => strided::gelu::BFLOAT,
+                ("ugelu_erf", DType::BF16) => strided::gelu_erf::BFLOAT,
+                ("uerf", DType::BF16) => strided::erf::BFLOAT,
+                ("usilu", DType::BF16) => strided::silu::BFLOAT,
+                ("uabs", DType::BF16) => strided::abs::BFLOAT,
+                ("uceil", DType::BF16) => strided::ceil::BFLOAT,
+                ("ufloor", DType::BF16) => strided::floor::BFLOAT,
+                ("urelu", DType::BF16) => strided::relu::BFLOAT,
+                ("uround", DType::BF16) => strided::round::BFLOAT,
+                ("utanh", DType::BF16) => strided::tanh::BFLOAT,
+
+                (name, dtype) => {
+                    crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
+                }
+            };
+            let dst = BufferOffset::zero_offset(&buffer);
+            candle_metal_kernels::call_unary_strided(
+                &device.device,
+                &encoder,
+                &device.kernels,
+                kernel_name,
+                layout.dims(),
+                src,
+                layout.stride(),
+                dst,
+            )
+            .map_err(MetalError::from)?;
         }
 
         Ok(Self::new(buffer, device.clone(), el_count, dtype))
@@ -891,7 +832,8 @@ impl BackendStorage for MetalStorage {
         let el = shape.elem_count();
         let dtype = t.dtype;
         let buffer = self.device.new_buffer(el, dtype, "where")?;
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("where");
         if t.dtype() != f.dtype() {
             crate::bail!(
                 "Invalid where: different dtypes for values {:?} != {:?}",
@@ -912,18 +854,22 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, layout, self.dtype);
         let t = buffer_o(&t.buffer, t_l, t.dtype);
         let f = buffer_o(&f.buffer, f_l, f.dtype);
-        candle_metal_kernels::call_where_cond_strided(
+        candle_metal_kernels::call_where_cond(
             &device.device,
-            &command_buffer,
+            &encoder,
             &device.kernels,
             name,
+            dtype.size_in_bytes(),
             dims,
             src,
             layout.stride(),
+            layout.is_contiguous(),
             t,
             t_l.stride(),
+            t_l.is_contiguous(),
             f,
             f_l.stride(),
+            f_l.is_contiguous(),
             &buffer,
         )
         .map_err(MetalError::from)?;
@@ -951,15 +897,20 @@ impl BackendStorage for MetalStorage {
         let dst = self
             .device
             .new_buffer(dst_el, self.dtype, "conv1d_im2col")?;
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("conv1d_im2col");
         let name = match self.dtype {
             DType::F32 => "im2col1d_f32",
+            DType::F16 => "im2col1d_f16",
+            DType::BF16 => "im2col1d_bf16",
+            DType::U8 => "im2col1d_u8",
+            DType::U32 => "im2col1d_u32",
             dtype => crate::bail!("Metal conv1d {dtype:?} not implemented"),
         };
         let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_im2col1d_strided(
             &self.device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             name,
             layout.shape().dims(),
@@ -969,6 +920,7 @@ impl BackendStorage for MetalStorage {
             &dst,
         )
         .map_err(MetalError::from)?;
+        drop(encoder);
         let col = Self {
             buffer: dst,
             device,
@@ -1033,6 +985,8 @@ impl BackendStorage for MetalStorage {
 
             let name = match self.dtype {
                 DType::F32 => "col2im1d_f32",
+                DType::F16 => "col2im1d_f16",
+                DType::BF16 => "col2im1d_bf16",
                 DType::U32 => "col2im1d_u32",
                 DType::U8 => "col2im1d_u8",
                 dtype => crate::bail!("metal col2im1d {dtype:?} not implemented"),
@@ -1051,15 +1005,16 @@ impl BackendStorage for MetalStorage {
                     &kernel_l_mm,
                 )?
             };
-            // It is important for the command buffer to be obtained *after* the matmul
-            // kernel has run, otherwise we might use a command-buffer that has been commited
+            // It is important for the command encoder to be obtained *after* the matmul
+            // kernel has run, otherwise we might use a command-buffer that has been committed
             // already resulting in the following error.
             // _status < MTLCommandBufferStatusCommitted >
             // -[IOGPUMetalCommandBuffer setCurrentCommandEncoder:]
-            let command_buffer = self.device.command_buffer()?;
+            let encoder = self.device.command_encoder()?;
+            encoder.set_label("col2im1d");
             candle_metal_kernels::call_col2im1d(
                 &self.device.device,
-                &command_buffer,
+                &encoder,
                 &self.device.kernels,
                 name,
                 &[b_size, l_in, c_out, k_size],
@@ -1075,7 +1030,8 @@ impl BackendStorage for MetalStorage {
                 .device
                 .new_buffer(dst_el, self.dtype, "conv_transpose1d")?;
 
-            let command_buffer = self.device.command_buffer()?;
+            let encoder = self.device.command_encoder()?;
+            encoder.set_label("conv_transpose1d");
             let name = match self.dtype {
                 DType::F32 => "conv_transpose1d_f32",
                 DType::F16 => "conv_transpose1d_f16",
@@ -1086,7 +1042,7 @@ impl BackendStorage for MetalStorage {
             };
             candle_metal_kernels::call_conv_transpose1d(
                 &self.device.device,
-                &command_buffer,
+                &encoder,
                 &self.device.kernels,
                 name,
                 params.dilation,
@@ -1137,7 +1093,8 @@ impl BackendStorage for MetalStorage {
         let dst = self
             .device
             .new_buffer(dst_el, self.dtype, "conv2d_im2col")?;
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("conv2d_im2col");
         let name = match self.dtype {
             DType::F32 => "im2col_f32",
             DType::F16 => "im2col_f16",
@@ -1149,7 +1106,7 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_im2col_strided(
             &self.device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             name,
             layout.shape().dims(),
@@ -1159,6 +1116,7 @@ impl BackendStorage for MetalStorage {
             &dst,
         )
         .map_err(MetalError::from)?;
+        drop(encoder);
         let col = Self {
             buffer: dst,
             device,
@@ -1220,7 +1178,8 @@ impl BackendStorage for MetalStorage {
             .device
             .new_buffer(dst_el, self.dtype, "conv_transpose2d")?;
 
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("conv_transpose2d");
 
         let name = match self.dtype {
             DType::F32 => "conv_transpose2d_f32",
@@ -1231,7 +1190,7 @@ impl BackendStorage for MetalStorage {
 
         candle_metal_kernels::call_conv_transpose2d(
             &self.device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             name,
             CallConvTranspose2dCfg {
@@ -1279,10 +1238,11 @@ impl BackendStorage for MetalStorage {
         let out_h = (height - h_k) / h_stride + 1;
         let dst_el = out_w * out_h * b_size * channels;
         let buffer = self.device.new_buffer(dst_el, self.dtype, "avg_pool2d")?;
-        let command_buffers = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("avg_pool2d");
         candle_metal_kernels::call_pool2d(
             &self.device.device,
-            &command_buffers,
+            &encoder,
             &self.device.kernels,
             name,
             inp_l.dims(),
@@ -1321,10 +1281,11 @@ impl BackendStorage for MetalStorage {
         let out_h = (height - h_k) / h_stride + 1;
         let dst_el = out_w * out_h * b_size * channels;
         let buffer = self.device.new_buffer(dst_el, self.dtype, "max_pool2d")?;
-        let command_buffers = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("max_pool2d");
         candle_metal_kernels::call_pool2d(
             &self.device.device,
-            &command_buffers,
+            &encoder,
             &self.device.kernels,
             name,
             inp_l.dims(),
@@ -1367,11 +1328,12 @@ impl BackendStorage for MetalStorage {
         let buffer = self
             .device
             .new_buffer(dst_el, self.dtype, "upsample_nearest2d")?;
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("upsample_nearest2d");
         let src = buffer_o(&self.buffer, inp_l, self.dtype);
         candle_metal_kernels::call_upsample_nearest_2d(
             &self.device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             name,
             dims,
@@ -1385,6 +1347,61 @@ impl BackendStorage for MetalStorage {
         Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
+    fn upsample_bilinear2d(
+        &self,
+        inp_l: &Layout,
+        out_h: usize,
+        out_w: usize,
+        align_corners: bool,
+        scale_h: Option<f64>,
+        scale_w: Option<f64>,
+    ) -> Result<Self> {
+        let shape = inp_l.shape();
+        let dims = shape.dims();
+        let strides = inp_l.stride();
+
+        if dims.len() != 4 {
+            crate::bail!("unexpected input shape for upsample_bilinear2d {dims:?}")
+        }
+
+        let name = match self.dtype {
+            DType::F32 => "upsample_bilinear2d_f32",
+            DType::F16 => "upsample_bilinear2d_f16",
+            DType::BF16 => "upsample_bilinear2d_bf16",
+            DType::U8 => "upsample_bilinear2d_u8",
+            DType::U32 => "upsample_bilinear2d_u32",
+            dtype => crate::bail!("Metal upsample_bilinear2d {dtype:?} not implemented"),
+        };
+
+        let dst_el = out_w * out_h * dims[0] * dims[1];
+        let buffer = self
+            .device
+            .new_buffer(dst_el, self.dtype, "upsample_bilinear2d")?;
+
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("upsample_bilinear2d");
+
+        let src = buffer_o(&self.buffer, inp_l, self.dtype);
+        candle_metal_kernels::call_upsample_bilinear_2d(
+            &self.device.device,
+            &encoder,
+            &self.device.kernels,
+            name,
+            dims,
+            strides,
+            out_w,
+            out_h,
+            align_corners,
+            scale_h,
+            scale_w,
+            src,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
+    }
+
     fn gather(&self, src_l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
         if !ids_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "gather" }.bt());
@@ -1395,6 +1412,12 @@ impl BackendStorage for MetalStorage {
         let device = self.device();
         let buffer = device.new_buffer(dst_el, dtype, "gather")?;
         let name = match (ids.dtype, self.dtype) {
+            (DType::U8, DType::U8) => "gather_u8_u8",
+            (DType::U8, DType::F32) => "gather_u8_f32",
+            (DType::U8, DType::F16) => "gather_u8_f16",
+            (DType::U8, DType::BF16) => "gather_u8_bf16",
+            (DType::U8, DType::U32) => "gather_u8_u32",
+            (DType::U8, DType::I64) => "gather_u8_i64",
             (DType::U32, DType::F32) => "gather_u32_f32",
             (DType::U32, DType::F16) => "gather_u32_f16",
             (DType::U32, DType::BF16) => "gather_u32_bf16",
@@ -1407,12 +1430,13 @@ impl BackendStorage for MetalStorage {
             (DType::I64, DType::I64) => "gather_i64_i64",
             (left, right) => crate::bail!("Metal gather {left:?} {right:?} not implemented"),
         };
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("gather");
         let src = buffer_o(&self.buffer, src_l, dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_gather(
             &device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             name,
             src_l.dims(),
@@ -1455,13 +1479,14 @@ impl BackendStorage for MetalStorage {
                 got: ids.dtype(),
             })?,
         };
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("scatter");
         let dst = buffer_o(&self.buffer, l, self.dtype);
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_scatter(
             &self.device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             name,
             src_l.dims(),
@@ -1504,13 +1529,14 @@ impl BackendStorage for MetalStorage {
                 got: ids.dtype(),
             })?,
         };
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("scatter_add");
         let dst = buffer_o(&self.buffer, l, self.dtype);
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_scatter(
             &self.device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             name,
             src_l.dims(),
@@ -1561,12 +1587,12 @@ impl BackendStorage for MetalStorage {
                 crate::bail!("Metal contiguous index_select {left:?} {right:?} not implemented")
             }
         };
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
         let src = buffer_o(&self.buffer, src_l, dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_index_select(
             &device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             name,
             src_l.dims(),
@@ -1625,12 +1651,13 @@ impl BackendStorage for MetalStorage {
                 got: ids.dtype(),
             })?,
         };
-        let command_buffer = self.device.command_buffer()?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("index_add");
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_index_add(
             &self.device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             name,
             src_l.dims(),
@@ -1653,8 +1680,8 @@ impl BackendStorage for MetalStorage {
         rhs_l: &Layout,
     ) -> Result<Self> {
         let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
-        let command_buffer = self.device.command_buffer()?;
-        command_buffer.set_label("matmul");
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("matmul");
         let dtype = match self.dtype {
             DType::F32 => candle_metal_kernels::GemmDType::F32,
             DType::F16 => candle_metal_kernels::GemmDType::F16,
@@ -1667,7 +1694,7 @@ impl BackendStorage for MetalStorage {
         };
         candle_metal_kernels::call_mlx_gemm(
             &self.device.device,
-            &command_buffer,
+            &encoder,
             &self.device.kernels,
             dtype,
             (b, m, n, k),
@@ -1706,14 +1733,12 @@ impl BackendStorage for MetalStorage {
                 dst.dtype()
             )
         }
-        let command_buffer = self.device.command_buffer()?;
         if src_s == d2 && dst_s == d2 {
-            command_buffer.set_label("copy2d_contiguous");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = self.device.blit_command_encoder()?;
             blit.set_label("copy2d_contiguous");
-            let src_offset = (src_o * self.dtype.size_in_bytes()) as NSUInteger;
-            let length = (d1 * d2 * self.dtype.size_in_bytes()) as NSUInteger;
-            let dst_offset = (dst_o * dst.dtype().size_in_bytes()) as NSUInteger;
+            let src_offset = src_o * self.dtype.size_in_bytes();
+            let length = d1 * d2 * self.dtype.size_in_bytes();
+            let dst_offset = dst_o * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
             blit.end_encoding();
         } else {
@@ -1730,9 +1755,11 @@ impl BackendStorage for MetalStorage {
                 DType::U8 => candle_metal_kernels::copy2d::U8,
                 dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
             };
+            let encoder = self.device.command_encoder()?;
+            encoder.set_label("copy2d");
             candle_metal_kernels::call_copy2d(
                 &self.device.device,
-                &command_buffer,
+                &encoder,
                 &self.device.kernels,
                 kernel_name,
                 &self.buffer,
@@ -1745,20 +1772,17 @@ impl BackendStorage for MetalStorage {
                 dst_o * self.dtype.size_in_bytes(),
             )
             .map_err(MetalError::from)?;
-            command_buffer.set_label("copy2d");
         }
         Ok(())
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
-        let command_buffer = self.device.command_buffer()?;
         if src_l.is_contiguous() && self.dtype == dst.dtype() {
-            command_buffer.set_label("copy_contiguous");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = self.device.blit_command_encoder()?;
             blit.set_label("copy_contiguous");
-            let src_offset = (src_l.start_offset() * self.dtype.size_in_bytes()) as NSUInteger;
-            let length = (src_l.shape().elem_count() * self.dtype.size_in_bytes()) as NSUInteger;
-            let dst_offset = (dst_offset * dst.dtype().size_in_bytes()) as NSUInteger;
+            let src_offset = src_l.start_offset() * self.dtype.size_in_bytes();
+            let length = src_l.shape().elem_count() * self.dtype.size_in_bytes();
+            let dst_offset = dst_offset * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
             blit.end_encoding();
         } else {
@@ -1781,9 +1805,11 @@ impl BackendStorage for MetalStorage {
                 buffer: &dst.buffer,
                 offset_in_bytes: dst_offset * dst.dtype.size_in_bytes(),
             };
+            let encoder = self.device.command_encoder()?;
+            encoder.set_label("copy_strided");
             candle_metal_kernels::call_unary_strided(
                 &self.device.device,
-                &command_buffer,
+                &encoder,
                 &self.device.kernels,
                 kernel_name,
                 src_l.dims(),
@@ -1792,7 +1818,6 @@ impl BackendStorage for MetalStorage {
                 dst,
             )
             .map_err(MetalError::from)?;
-            command_buffer.set_label("copy_strided");
         }
         Ok(())
     }
@@ -1819,191 +1844,55 @@ impl MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
+        fn kernel_name(op: &'static str, dtype: &DType, suffix: &str) -> String {
+            format!("{op}_{}{}", dtype.as_str(), suffix)
+        }
         let device = self.device();
         let shape = lhs_l.shape();
         let el_count = shape.elem_count();
-        let command_buffer = device.command_buffer()?;
+        let encoder = device.command_encoder()?;
         let lhs = buffer_o(&self.buffer, lhs_l, self.dtype);
         let rhs = buffer_o(&rhs.buffer, rhs_l, rhs.dtype);
-        let (buffer, dtype) = if lhs_l.is_contiguous() && rhs_l.is_contiguous() && &op[..1] != "b" {
-            use candle_metal_kernels::binary::contiguous;
 
-            let (kernel_name, dtype) = match (op, self.dtype) {
-                ("add", DType::F32) => (contiguous::add::FLOAT, self.dtype),
-                ("sub", DType::F32) => (contiguous::sub::FLOAT, self.dtype),
-                ("mul", DType::F32) => (contiguous::mul::FLOAT, self.dtype),
-                ("div", DType::F32) => (contiguous::div::FLOAT, self.dtype),
-                ("eq", DType::F32) => (contiguous::eq::FLOAT, DType::U8),
-                ("ne", DType::F32) => (contiguous::ne::FLOAT, DType::U8),
-                ("le", DType::F32) => (contiguous::le::FLOAT, DType::U8),
-                ("lt", DType::F32) => (contiguous::lt::FLOAT, DType::U8),
-                ("ge", DType::F32) => (contiguous::ge::FLOAT, DType::U8),
-                ("gt", DType::F32) => (contiguous::gt::FLOAT, DType::U8),
+        let dtype = match op {
+            "eq" | "ne" | "le" | "lt" | "ge" | "gt" => DType::U8,
+            _ => self.dtype,
+        };
+        let lhs_contiguous = lhs_l.is_contiguous();
+        let rhs_contiguous = rhs_l.is_contiguous();
 
-                ("add", DType::F16) => (contiguous::add::HALF, self.dtype),
-                ("sub", DType::F16) => (contiguous::sub::HALF, self.dtype),
-                ("mul", DType::F16) => (contiguous::mul::HALF, self.dtype),
-                ("div", DType::F16) => (contiguous::div::HALF, self.dtype),
-                ("eq", DType::F16) => (contiguous::eq::HALF, DType::U8),
-                ("ne", DType::F16) => (contiguous::ne::HALF, DType::U8),
-                ("le", DType::F16) => (contiguous::le::HALF, DType::U8),
-                ("lt", DType::F16) => (contiguous::lt::HALF, DType::U8),
-                ("ge", DType::F16) => (contiguous::ge::HALF, DType::U8),
-                ("gt", DType::F16) => (contiguous::gt::HALF, DType::U8),
-
-                ("add", DType::BF16) => (contiguous::add::BFLOAT, self.dtype),
-                ("sub", DType::BF16) => (contiguous::sub::BFLOAT, self.dtype),
-                ("mul", DType::BF16) => (contiguous::mul::BFLOAT, self.dtype),
-                ("div", DType::BF16) => (contiguous::div::BFLOAT, self.dtype),
-                ("eq", DType::BF16) => (contiguous::eq::BFLOAT, DType::U8),
-                ("ne", DType::BF16) => (contiguous::ne::BFLOAT, DType::U8),
-                ("le", DType::BF16) => (contiguous::le::BFLOAT, DType::U8),
-                ("lt", DType::BF16) => (contiguous::lt::BFLOAT, DType::U8),
-                ("ge", DType::BF16) => (contiguous::ge::BFLOAT, DType::U8),
-                ("gt", DType::BF16) => (contiguous::gt::BFLOAT, DType::U8),
-
-                ("add", DType::I64) => (contiguous::add::I64, self.dtype),
-                ("sub", DType::I64) => (contiguous::sub::I64, self.dtype),
-                ("mul", DType::I64) => (contiguous::mul::I64, self.dtype),
-                ("div", DType::I64) => (contiguous::div::I64, self.dtype),
-                ("eq", DType::I64) => (contiguous::eq::I64, DType::U8),
-                ("ne", DType::I64) => (contiguous::ne::I64, DType::U8),
-                ("le", DType::I64) => (contiguous::le::I64, DType::U8),
-                ("lt", DType::I64) => (contiguous::lt::I64, DType::U8),
-                ("ge", DType::I64) => (contiguous::ge::I64, DType::U8),
-                ("gt", DType::I64) => (contiguous::gt::I64, DType::U8),
-
-                ("add", DType::U32) => (contiguous::add::U32, self.dtype),
-                ("sub", DType::U32) => (contiguous::sub::U32, self.dtype),
-                ("mul", DType::U32) => (contiguous::mul::U32, self.dtype),
-                ("div", DType::U32) => (contiguous::div::U32, self.dtype),
-                ("eq", DType::U32) => (contiguous::eq::U32, DType::U8),
-                ("ne", DType::U32) => (contiguous::ne::U32, DType::U8),
-                ("le", DType::U32) => (contiguous::le::U32, DType::U8),
-                ("lt", DType::U32) => (contiguous::lt::U32, DType::U8),
-                ("ge", DType::U32) => (contiguous::ge::U32, DType::U8),
-                ("gt", DType::U32) => (contiguous::gt::U32, DType::U8),
-
-                ("add", DType::U8) => (contiguous::add::U8, self.dtype),
-                ("sub", DType::U8) => (contiguous::sub::U8, self.dtype),
-                ("mul", DType::U8) => (contiguous::mul::U8, self.dtype),
-                ("div", DType::U8) => (contiguous::div::U8, self.dtype),
-                ("eq", DType::U8) => (contiguous::eq::U8, DType::U8),
-                ("ne", DType::U8) => (contiguous::ne::U8, DType::U8),
-                ("le", DType::U8) => (contiguous::le::U8, DType::U8),
-                ("lt", DType::U8) => (contiguous::lt::U8, DType::U8),
-                ("ge", DType::U8) => (contiguous::ge::U8, DType::U8),
-                ("gt", DType::U8) => (contiguous::gt::U8, DType::U8),
-
-                (name, dtype) => {
-                    crate::bail!("Metal contiguous binary {name} {dtype:?} not implemented")
-                }
-            };
+        let buffer = if lhs_contiguous && rhs_contiguous {
+            let kernel = kernel_name(op, &self.dtype, "");
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_contiguous(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
-                kernel_name,
+                kernel,
+                self.dtype.size_in_bytes(),
                 el_count,
                 lhs,
                 rhs,
                 &buffer,
             )
             .map_err(MetalError::from)?;
-            (buffer, dtype)
+            buffer
         } else {
-            use candle_metal_kernels::binary::strided;
-
-            let (kernel_name, dtype) = match (op, self.dtype) {
-                ("badd", DType::F32) => (strided::add::FLOAT, self.dtype),
-                ("bsub", DType::F32) => (strided::sub::FLOAT, self.dtype),
-                ("bmul", DType::F32) => (strided::mul::FLOAT, self.dtype),
-                ("bdiv", DType::F32) => (strided::div::FLOAT, self.dtype),
-                ("bminimum", DType::F32) => (strided::min::FLOAT, self.dtype),
-                ("bmaximum", DType::F32) => (strided::max::FLOAT, self.dtype),
-                ("eq", DType::F32) => (strided::eq::FLOAT, DType::U8),
-                ("ne", DType::F32) => (strided::ne::FLOAT, DType::U8),
-                ("le", DType::F32) => (strided::le::FLOAT, DType::U8),
-                ("lt", DType::F32) => (strided::lt::FLOAT, DType::U8),
-                ("ge", DType::F32) => (strided::ge::FLOAT, DType::U8),
-                ("gt", DType::F32) => (strided::gt::FLOAT, DType::U8),
-
-                ("badd", DType::F16) => (strided::add::HALF, self.dtype),
-                ("bsub", DType::F16) => (strided::sub::HALF, self.dtype),
-                ("bmul", DType::F16) => (strided::mul::HALF, self.dtype),
-                ("bdiv", DType::F16) => (strided::div::HALF, self.dtype),
-                ("bminimum", DType::F16) => (strided::min::HALF, self.dtype),
-                ("bmaximum", DType::F16) => (strided::max::HALF, self.dtype),
-                ("eq", DType::F16) => (strided::eq::HALF, DType::U8),
-                ("ne", DType::F16) => (strided::ne::HALF, DType::U8),
-                ("le", DType::F16) => (strided::le::HALF, DType::U8),
-                ("lt", DType::F16) => (strided::lt::HALF, DType::U8),
-                ("ge", DType::F16) => (strided::ge::HALF, DType::U8),
-                ("gt", DType::F16) => (strided::gt::HALF, DType::U8),
-
-                ("badd", DType::BF16) => (strided::add::BFLOAT, self.dtype),
-                ("bsub", DType::BF16) => (strided::sub::BFLOAT, self.dtype),
-                ("bmul", DType::BF16) => (strided::mul::BFLOAT, self.dtype),
-                ("bdiv", DType::BF16) => (strided::div::BFLOAT, self.dtype),
-                ("bminimum", DType::BF16) => (strided::min::BFLOAT, self.dtype),
-                ("bmaximum", DType::BF16) => (strided::max::BFLOAT, self.dtype),
-                ("eq", DType::BF16) => (strided::eq::BFLOAT, DType::U8),
-                ("ne", DType::BF16) => (strided::ne::BFLOAT, DType::U8),
-                ("le", DType::BF16) => (strided::le::BFLOAT, DType::U8),
-                ("lt", DType::BF16) => (strided::lt::BFLOAT, DType::U8),
-                ("ge", DType::BF16) => (strided::ge::BFLOAT, DType::U8),
-                ("gt", DType::BF16) => (strided::gt::BFLOAT, DType::U8),
-
-                ("badd", DType::I64) => (strided::add::I64, self.dtype),
-                ("bsub", DType::I64) => (strided::sub::I64, self.dtype),
-                ("bmul", DType::I64) => (strided::mul::I64, self.dtype),
-                ("bdiv", DType::I64) => (strided::div::I64, self.dtype),
-                ("bminimum", DType::I64) => (strided::min::I64, self.dtype),
-                ("bmaximum", DType::I64) => (strided::max::I64, self.dtype),
-                ("eq", DType::I64) => (strided::eq::I64, DType::U8),
-                ("ne", DType::I64) => (strided::ne::I64, DType::U8),
-                ("le", DType::I64) => (strided::le::I64, DType::U8),
-                ("lt", DType::I64) => (strided::lt::I64, DType::U8),
-                ("ge", DType::I64) => (strided::ge::I64, DType::U8),
-                ("gt", DType::I64) => (strided::gt::I64, DType::U8),
-
-                ("badd", DType::U32) => (strided::add::U32, self.dtype),
-                ("bsub", DType::U32) => (strided::sub::U32, self.dtype),
-                ("bmul", DType::U32) => (strided::mul::U32, self.dtype),
-                ("bdiv", DType::U32) => (strided::div::U32, self.dtype),
-                ("bminimum", DType::U32) => (strided::min::U32, self.dtype),
-                ("bmaximum", DType::U32) => (strided::max::U32, self.dtype),
-                ("eq", DType::U32) => (strided::eq::U32, DType::U8),
-                ("ne", DType::U32) => (strided::ne::U32, DType::U8),
-                ("le", DType::U32) => (strided::le::U32, DType::U8),
-                ("lt", DType::U32) => (strided::lt::U32, DType::U8),
-                ("ge", DType::U32) => (strided::ge::U32, DType::U8),
-                ("gt", DType::U32) => (strided::gt::U32, DType::U8),
-
-                ("badd", DType::U8) => (strided::add::U8, self.dtype),
-                ("bsub", DType::U8) => (strided::sub::U8, self.dtype),
-                ("bmul", DType::U8) => (strided::mul::U8, self.dtype),
-                ("bdiv", DType::U8) => (strided::div::U8, self.dtype),
-                ("bminimum", DType::U8) => (strided::min::U8, self.dtype),
-                ("bmaximum", DType::U8) => (strided::max::U8, self.dtype),
-                ("eq", DType::U8) => (strided::eq::U8, DType::U8),
-                ("ne", DType::U8) => (strided::ne::U8, DType::U8),
-                ("le", DType::U8) => (strided::le::U8, DType::U8),
-                ("lt", DType::U8) => (strided::lt::U8, DType::U8),
-                ("ge", DType::U8) => (strided::ge::U8, DType::U8),
-                ("gt", DType::U8) => (strided::gt::U8, DType::U8),
-
-                (name, dtype) => {
-                    crate::bail!("Metal strided binary {name} {dtype:?} not implemented")
-                }
+            let strided_suffix = if lhs_contiguous {
+                "_rstrided"
+            } else if rhs_contiguous {
+                "_lstrided"
+            } else {
+                "_strided"
             };
+            let kernel = kernel_name(op, &self.dtype, strided_suffix);
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_strided(
                 &device.device,
-                &command_buffer,
+                &encoder,
                 &device.kernels,
-                kernel_name,
+                kernel,
+                self.dtype.size_in_bytes(),
                 lhs_l.dims(),
                 lhs,
                 lhs_l.stride(),
@@ -2012,20 +1901,17 @@ impl MetalStorage {
                 &buffer,
             )
             .map_err(MetalError::from)?;
-            (buffer, dtype)
+            buffer
         };
-        command_buffer.set_label("binary");
+        encoder.set_label("binary");
         Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
-        let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
-
-        let buffer = self.device.new_buffer_managed(size)?;
+        let size = self.count * self.dtype.size_in_bytes();
+        let buffer = self.device.allocate_buffer(size)?;
         {
-            let command_buffer = self.device.command_buffer()?;
-            command_buffer.set_label("to_cpu");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
             blit.end_encoding();
@@ -2039,15 +1925,19 @@ impl BackendDevice for MetalDevice {
     type Storage = MetalStorage;
 
     fn new(ordinal: usize) -> Result<Self> {
-        let device = metal::Device::all().swap_remove(ordinal);
-        let command_queue = device.new_command_queue();
+        let device = Device::all().swap_remove(ordinal);
+        let command_queue = device.new_command_queue().map_err(MetalError::from)?;
         let kernels = Arc::new(Kernels::new());
-        let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
-            [299792458].as_ptr() as *const c_void,
-            4,
-            MTLResourceOptions::StorageModeManaged,
-        )));
-        let commands = device::Commands::new(command_queue)?;
+        let seed = Arc::new(Mutex::new(
+            device
+                .new_buffer_with_data(
+                    [299792458u64].as_ptr() as *const c_void,
+                    4,
+                    RESOURCE_OPTIONS,
+                )
+                .map_err(MetalError::from)?,
+        ));
+        let commands = Commands::new(command_queue).map_err(MetalError::from)?;
         Ok(Self {
             id: DeviceId::new(),
             device,
@@ -2055,6 +1945,7 @@ impl BackendDevice for MetalDevice {
             buffers: Arc::new(RwLock::new(HashMap::new())),
             kernels,
             seed,
+            seed_value: Arc::new(RwLock::new(299792458)),
         })
     }
 
@@ -2093,11 +1984,20 @@ impl BackendDevice for MetalDevice {
         let (count, buffer) = match T::cpu_storage_ref(s) {
             CpuStorageRef::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::I16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::I32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F6E2M3(_)
+            | CpuStorageRef::F6E3M2(_)
+            | CpuStorageRef::F4(_)
+            | CpuStorageRef::F8E8M0(_) => {
+                return Err(Error::UnsupportedDTypeForOp(T::DTYPE, "to_dtype").bt())
+            }
         };
         Ok(Self::Storage::new(buffer?, self.clone(), count, T::DTYPE))
     }
@@ -2106,11 +2006,20 @@ impl BackendDevice for MetalDevice {
         let (count, buffer) = match storage {
             CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::I16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::I32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F6E2M3(_)
+            | CpuStorage::F6E3M2(_)
+            | CpuStorage::F4(_)
+            | CpuStorage::F8E8M0(_) => {
+                return Err(Error::UnsupportedDTypeForOp(storage.dtype(), "to_dtype").bt())
+            }
         };
         Ok(Self::Storage::new(
             buffer?,
@@ -2138,10 +2047,11 @@ impl BackendDevice for MetalDevice {
             dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
         };
         let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_uniform")?;
-        let command_buffer = self.command_buffer()?;
+        let encoder = self.command_encoder()?;
+        encoder.set_label("rand_uniform");
         candle_metal_kernels::call_random_uniform(
             &self.device,
-            &command_buffer,
+            &encoder,
             &self.kernels,
             name,
             min as f32,
@@ -2174,10 +2084,11 @@ impl BackendDevice for MetalDevice {
             dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
         };
         let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_normal")?;
-        let command_buffer = self.command_buffer()?;
+        let encoder = self.command_encoder()?;
+        encoder.set_label("rand_normal");
         candle_metal_kernels::call_random_normal(
             &self.device,
-            &command_buffer,
+            &encoder,
             &self.kernels,
             name,
             mean as f32,
@@ -2197,18 +2108,20 @@ impl BackendDevice for MetalDevice {
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {
-        let seed: u32 = seed.try_into().map_err(|_| {
-            MetalError::Message("Metal seed must be less than or equal to u32::MAX".to_string())
-        })?;
+        *self.seed_value.write().unwrap() = seed;
 
         let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
-        let contents = seed_buffer.contents();
+        let contents = seed_buffer.data();
         unsafe {
-            std::ptr::copy([seed].as_ptr(), contents as *mut u32, 1);
+            std::ptr::copy_nonoverlapping([seed].as_ptr(), contents as *mut u64, 1);
         }
-        seed_buffer.did_modify_range(metal::NSRange::new(0, 4));
+        seed_buffer.did_modify_range(NSRange::new(0, 8));
 
         Ok(())
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
+        Ok(*self.seed_value.read().unwrap())
     }
 
     fn synchronize(&self) -> Result<()> {

@@ -9,4 +9,5 @@ pub struct Dataset {
 }
 
 pub mod cifar;
+pub mod fashion_mnist;
 pub mod mnist;
