@@ -290,7 +290,13 @@ fn precomput_freqs_cis(
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, dtype: DType) -> Result<Self> {
+    /// Load model from GGML file with default F32 activations.
+    pub fn from_ggml(ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+        Self::from_ggml_with_dtype(ct, gqa, DType::F32)
+    }
+
+    /// Load model from GGML file with explicit activation dtype.
+    pub fn from_ggml_with_dtype(mut ct: ggml_file::Content, gqa: usize, dtype: DType) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
         let cos = cos.to_dtype(dtype)?;

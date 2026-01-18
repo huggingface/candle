@@ -542,7 +542,7 @@ fn main() -> anyhow::Result<()> {
                 | Which::OpenChat35
                 | Which::Starling7bAlpha => 8,
             };
-            ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa), dtype)?
+            ModelWeights::from_ggml_with_dtype(model, args.gqa.unwrap_or(default_gqa), dtype)?
         }
     };
     println!("model built");
