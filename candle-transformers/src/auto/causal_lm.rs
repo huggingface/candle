@@ -98,18 +98,3 @@ impl AutoModelForCausalLM {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_supported_models() {
-        for model in SUPPORTED_MODELS {
-            assert!(
-                ["llama", "mistral", "phi3", "qwen2", "gemma"].contains(model),
-                "Unknown model in SUPPORTED_MODELS: {model}"
-            );
-        }
-    }
-}

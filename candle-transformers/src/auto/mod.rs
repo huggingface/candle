@@ -3,14 +3,6 @@
 //! This module provides composable infrastructure for loading models dynamically,
 //! similar to Python HuggingFace Transformers' `AutoModel.from_pretrained()`.
 //!
-//! ## Architecture
-//!
-//! - [`AutoConfig`] + [`Weights`]: Shared base for config/weight loading
-//! - [`AutoModelForCausalLM`]: Task-specific loader for causal language models
-//!
-//! Future task loaders (e.g., `AutoModelForSequenceClassification`) will reuse
-//! the same base infrastructure.
-//!
 //! ## Example
 //!
 //! ```no_run
