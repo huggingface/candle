@@ -2457,21 +2457,20 @@ fn simple_eval_(
                 let y_scale = get(&node.input[1])?;
                 let y_zero_point = get_opt(2).transpose()?;
 
-                // Get attributes
-                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1);
+                let axis = get_attr_opt::<i64>(node, "axis")?
+                    .copied()
+                    .unwrap_or(if x.rank() <= 1 { 0 } else { 1 });
                 let axis = x.normalize_axis(axis)?;
 
                 let block_size = get_attr_opt::<i64>(node, "block_size")?
                     .copied()
                     .unwrap_or(0);
 
-                // saturate parameter (default: true, since ONNX v19)
                 let saturate = get_attr_opt::<i64>(node, "saturate")?
                     .copied()
                     .map(|v| v != 0)
                     .unwrap_or(true);
 
-                // Handle blocked quantization by computing indices
                 let indices = if block_size > 0 {
                     let repeats = block_size as usize;
                     let shape_dim = x.dim(axis)?;
@@ -2482,7 +2481,6 @@ fn simple_eval_(
                     None
                 };
 
-                // Reshape scale for broadcasting
                 let mut y_scale = if let Some(idx) = &indices {
                     y_scale.index_select(idx, axis)?
                 } else {
@@ -2495,7 +2493,6 @@ fn simple_eval_(
                     y_scale = y_scale.reshape(shape)?;
                 }
 
-                // Reshape zero_point for broadcasting
                 let y_zero_point = if let Some(zp) = y_zero_point {
                     let mut zp = if let Some(idx) = &indices {
                         zp.index_select(idx, axis)?
@@ -2513,7 +2510,6 @@ fn simple_eval_(
                     None
                 };
 
-                // Quantization formula: round(x / y_scale) + zero_point
                 let result = x.broadcast_div(&y_scale)?.round()?;
                 let result = if let Some(ref zp) = y_zero_point {
                     let zp_as_res = zp.to_dtype(result.dtype())?;
@@ -2522,7 +2518,6 @@ fn simple_eval_(
                     result
                 };
 
-                // Determine target dtype
                 let target_dtype = if let Some(ref zp) = y_zero_point {
                     zp.dtype()
                 } else {
@@ -2534,25 +2529,18 @@ fn simple_eval_(
                     }
                 };
 
-                // Apply clamping based on target dtype and saturate parameter
                 let result = match target_dtype {
-                    // Integer types: always clamp to valid range
                     DType::U8 => result.clamp(0., 255.)?,
-                    DType::U32 => result.clamp(0., 4294967295.)?, // u32::MAX
-                    DType::I64 => result.clamp(-9223372036854775808., 9223372036854775807.)?, // i64::MIN/MAX
+                    DType::U32 => result.clamp(0., 4294967295.)?,
+                    DType::I64 => result.clamp(-9223372036854775808., 9223372036854775807.)?,
 
-                    // Float8 type: clamp only if saturate is true
                     DType::F8E4M3 => {
                         if saturate {
-                            // F8E4M3 range is approximately -448 to 448
                             result.clamp(-448., 448.)?
                         } else {
                             result
                         }
                     }
-
-                    // Other float types: no clamping by default
-                    // (BF16, F16, F32, F64 can represent a wide range)
                     _ => result,
                 };
 
@@ -2564,15 +2552,15 @@ fn simple_eval_(
                 let x_scale = get(&node.input[1])?;
                 let x_zero_point = get_opt(2).transpose()?;
 
-                // Get attributes
-                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1);
+                let axis = get_attr_opt::<i64>(node, "axis")?
+                    .copied()
+                    .unwrap_or_else(|| if x.rank() <= 1 { 0 } else { 1 });
                 let axis = x.normalize_axis(axis)?;
 
                 let block_size = get_attr_opt::<i64>(node, "block_size")?
                     .copied()
                     .unwrap_or(0);
 
-                // Handle blocked quantization by computing indices
                 let indices = if block_size > 0 {
                     let repeats = block_size as usize;
                     let shape_dim = x.dim(axis)?;
@@ -2583,7 +2571,6 @@ fn simple_eval_(
                     None
                 };
 
-                // Reshape scale for broadcasting
                 let mut x_scale = if let Some(idx) = &indices {
                     x_scale.index_select(idx, axis)?
                 } else {
@@ -2596,7 +2583,6 @@ fn simple_eval_(
                     x_scale = x_scale.reshape(shape)?;
                 }
 
-                // Reshape zero_point for broadcasting
                 let x_zero_point = if let Some(zp) = x_zero_point {
                     let mut zp = if let Some(idx) = &indices {
                         zp.index_select(idx, axis)?
@@ -2614,11 +2600,7 @@ fn simple_eval_(
                     None
                 };
 
-                // Dequantization formula:
-                // For integer types: (x - zero_point) * scale
-                // For float8: x * scale (zero_point should be 0 or null)
                 let result = if x.dtype().is_int() {
-                    // Convert to float first
                     let x_float = x.to_dtype(DType::F32)?;
 
                     let dx = if let Some(ref zp) = x_zero_point {
@@ -2630,12 +2612,9 @@ fn simple_eval_(
 
                     dx.broadcast_mul(&x_scale)?
                 } else {
-                    // For float types (F8E4M3, etc.), just multiply by scale
-                    // zero_point should be 0 or null for float8
                     x.broadcast_mul(&x_scale)?
                 };
 
-                // Determine output dtype (default to scale's dtype)
                 let output_dtype = match get_attr_opt::<i64>(node, "output_dtype")?.copied() {
                     Some(dt_int) => DataType::try_from(dt_int as i32)
                         .ok()
@@ -2672,11 +2651,7 @@ fn simple_eval_(
                         (input, batch_size, sequence_length, head_size)
                     }
                     3 => {
-                        let dims = input.dims();
-                        let batch_size = dims[0];
-                        let sequence_length = dims[1];
-                        let hidden_size = dims[2];
-
+                        let (batch_size, sequence_length, hidden_size) = input.dims3()?;
                         let num_heads_val = match num_heads {
                             Some(&n) => n as usize,
                             None => bail!("num_heads attribute is required when input is 3D"),
@@ -2713,7 +2688,7 @@ fn simple_eval_(
                         "rotary_embedding_dim must be even, got {}",
                         rotary_embedding_dim
                     );
-                }
+                };
 
                 let rotary_embedding_dim_half = rotary_embedding_dim / 2;
 
@@ -2721,11 +2696,10 @@ fn simple_eval_(
                     let pos_ids_flat = pos_ids.flatten_all()?;
                     let cos = cos_cache.index_select(&pos_ids_flat, 0)?;
                     let sin = sin_cache.index_select(&pos_ids_flat, 0)?;
-                    let cos =
-                        cos.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?;
-                    let sin =
-                        sin.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?;
-                    (cos, sin)
+                    (
+                        cos.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?,
+                        sin.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?,
+                    )
                 } else {
                     (cos_cache.clone(), sin_cache.clone())
                 };
@@ -2749,39 +2723,36 @@ fn simple_eval_(
                     );
                 }
 
-                let output = if rotary_embedding_dim == head_size {
-                    if interleaved != 0 {
-                        let input_bhtd = input.transpose(1, 2)?.contiguous()?;
-                        let result =
-                            candle_nn::rotary_emb::rope_i(&input_bhtd, &cos_cache, &sin_cache)?;
-                        result.transpose(1, 2)?
-                    } else {
-                        candle_nn::rotary_emb::rope_thd(&input, &cos_cache, &sin_cache)?
-                    }
+                let x_rotate = if rotary_embedding_dim == head_size {
+                    input.clone()
                 } else {
-                    let x_rotate = input.narrow(3, 0, rotary_embedding_dim)?;
-                    let x_not_rotate =
-                        input.narrow(3, rotary_embedding_dim, head_size - rotary_embedding_dim)?;
-
-                    let x_rotate_result = if interleaved != 0 {
-                        let x_rotate_bhtd = x_rotate.transpose(1, 2)?.contiguous()?;
-                        let result =
-                            candle_nn::rotary_emb::rope_i(&x_rotate_bhtd, &cos_cache, &sin_cache)?;
-                        result.transpose(1, 2)?
-                    } else {
-                        candle_nn::rotary_emb::rope_thd(&x_rotate, &cos_cache, &sin_cache)?
-                    };
-
-                    Tensor::cat(&[x_rotate_result, x_not_rotate], 3)?
+                    input.narrow(3, 0, rotary_embedding_dim)?.contiguous()?
                 };
 
-                let output = if original_rank == 3 {
+                let rotated_part = if interleaved != 0 {
+                    let input_bhsd = x_rotate.transpose(1, 2)?.contiguous()?;
+                    let result =
+                        candle_nn::rotary_emb::rope_i(&input_bhsd, &cos_cache, &sin_cache)?;
+                    result.transpose(1, 2)?
+                } else {
+                    candle_nn::rotary_emb::rope_thd(&x_rotate, &cos_cache, &sin_cache)?
+                };
+
+                let output = if rotary_embedding_dim == head_size {
+                    rotated_part
+                } else {
+                    let x_unrot =
+                        input.narrow(3, rotary_embedding_dim, head_size - rotary_embedding_dim)?;
+                    Tensor::cat(&[rotated_part, x_unrot], 3)?
+                };
+
+                let final_result = if original_rank == 3 {
                     output.reshape(original_shape.as_slice())?
                 } else {
                     output.transpose(1, 2)?
                 };
 
-                values.insert(node.output[0].clone(), output);
+                values.insert(node.output[0].clone(), final_result);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }

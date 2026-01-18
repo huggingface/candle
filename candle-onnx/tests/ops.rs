@@ -7,6 +7,7 @@ use candle_onnx::onnx::{type_proto, TensorProto, TensorShapeProto, TypeProto};
 use candle_onnx::onnx::{AttributeProto, GraphProto, ModelProto, NodeProto, ValueInfoProto};
 use candle_onnx::simple_eval;
 use std::collections::HashMap;
+use std::f32;
 
 const INPUT_X: &str = "x";
 const INPUT_Y: &str = "y";
@@ -7234,81 +7235,58 @@ fn test_rotary_embedding_basic() -> Result<()> {
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "RotaryEmbedding".to_string(),
-            domain: "".to_string(),
-            attribute: vec![],
             input: vec![
                 INPUT_X.to_string(),
                 COS_CACHE.to_string(),
                 SIN_CACHE.to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
+            ..Default::default()
         }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
+        name: "rope_basic_test".to_string(),
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
+            ..Default::default()
         }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
+        ..Default::default()
     }));
 
-    let batch_size = 2;
-    let num_heads = 4;
-    let seq_len = 3;
-    let head_size = 8;
-
-    let input_data: Vec<f32> = (0..batch_size * num_heads * seq_len * head_size)
-        .map(|i| i as f32 * 0.1)
-        .collect();
     let input = Tensor::from_vec(
-        input_data,
-        (batch_size, num_heads, seq_len, head_size),
+        vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        (1, 1, 2, 4),
         &Device::Cpu,
     )?;
 
-    let cos_data: Vec<f32> = (0..seq_len * (head_size / 2))
-        .map(|i| (i as f32 * 0.1).cos())
-        .collect();
-    let cos_cache = Tensor::from_vec(cos_data, (seq_len, head_size / 2), &Device::Cpu)?;
-
-    let sin_data: Vec<f32> = (0..seq_len * (head_size / 2))
-        .map(|i| (i as f32 * 0.1).sin())
-        .collect();
-    let sin_cache = Tensor::from_vec(sin_data, (seq_len, head_size / 2), &Device::Cpu)?;
+    let cos_cache = Tensor::from_vec(vec![1.0f32, 1.0, 0.0, 0.0], (2, 2), &Device::Cpu)?;
+    let sin_cache = Tensor::from_vec(vec![0.0f32, 0.0, 1.0, 1.0], (2, 2), &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), input.clone());
+    inputs.insert(INPUT_X.to_string(), input);
     inputs.insert(COS_CACHE.to_string(), cos_cache);
     inputs.insert(SIN_CACHE.to_string(), sin_cache);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
+    let result = eval
+        .get(OUTPUT_Z)
+        .expect("Output 'z' not found")
+        .flatten_all()?
+        .to_vec1::<f32>()?;
 
-    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-    assert_eq!(z.dims(), &[batch_size, num_heads, seq_len, head_size]);
-
+    assert_eq!(result, vec![1.0, 2.0, 3.0, 4.0, -7.0, -8.0, 5.0, 6.0]);
     Ok(())
 }
 
 #[test]
 fn test_rotary_embedding_3d_input() -> Result<()> {
-    let num_heads = 4;
+    let num_heads = 2;
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "RotaryEmbedding".to_string(),
-            domain: "".to_string(),
             attribute: vec![AttributeProto {
                 name: "num_heads".to_string(),
                 r#type: AttributeType::Int.into(),
                 i: num_heads as i64,
-                ..AttributeProto::default()
+                ..Default::default()
             }],
             input: vec![
                 INPUT_X.to_string(),
@@ -7316,42 +7294,24 @@ fn test_rotary_embedding_3d_input() -> Result<()> {
                 SIN_CACHE.to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
+            ..Default::default()
         }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
+        name: "rope_3d_test".to_string(),
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
+            ..Default::default()
         }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
+        ..Default::default()
     }));
 
-    let batch_size = 2;
-    let seq_len = 3;
-    let hidden_size = 32;
-    let head_size = hidden_size / num_heads;
+    let input = Tensor::from_vec(
+        vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        (1, 2, 4),
+        &Device::Cpu,
+    )?;
 
-    let input_data: Vec<f32> = (0..batch_size * seq_len * hidden_size)
-        .map(|i| i as f32 * 0.1)
-        .collect();
-    let input = Tensor::from_vec(input_data, (batch_size, seq_len, hidden_size), &Device::Cpu)?;
-
-    let cos_data: Vec<f32> = (0..seq_len * (head_size / 2))
-        .map(|i| (i as f32 * 0.1).cos())
-        .collect();
-    let cos_cache = Tensor::from_vec(cos_data, (seq_len, head_size / 2), &Device::Cpu)?;
-
-    let sin_data: Vec<f32> = (0..seq_len * (head_size / 2))
-        .map(|i| (i as f32 * 0.1).sin())
-        .collect();
-    let sin_cache = Tensor::from_vec(sin_data, (seq_len, head_size / 2), &Device::Cpu)?;
+    let cos_cache = Tensor::from_vec(vec![1.0f32, 0.0], (2, 1), &Device::Cpu)?;
+    let sin_cache = Tensor::from_vec(vec![0.0f32, 1.0], (2, 1), &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), input.clone());
@@ -7359,11 +7319,13 @@ fn test_rotary_embedding_3d_input() -> Result<()> {
     inputs.insert(SIN_CACHE.to_string(), sin_cache);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
+    let result = eval
+        .get(OUTPUT_Z)
+        .expect("Output 'z' not found")
+        .flatten_all()?
+        .to_vec1::<f32>()?;
 
-    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-    assert_eq!(z.dims(), &[batch_size, seq_len, hidden_size]);
-
+    assert_eq!(result, vec![1.0, 2.0, 3.0, 4.0, -6.0, 5.0, -8.0, 7.0]);
     Ok(())
 }
 
@@ -7372,12 +7334,11 @@ fn test_rotary_embedding_interleaved() -> Result<()> {
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "RotaryEmbedding".to_string(),
-            domain: "".to_string(),
             attribute: vec![AttributeProto {
                 name: "interleaved".to_string(),
                 r#type: AttributeType::Int.into(),
                 i: 1,
-                ..AttributeProto::default()
+                ..Default::default()
             }],
             input: vec![
                 INPUT_X.to_string(),
@@ -7385,46 +7346,24 @@ fn test_rotary_embedding_interleaved() -> Result<()> {
                 SIN_CACHE.to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
+            ..Default::default()
         }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
+        name: "rope_interleaved_test".to_string(),
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
+            ..Default::default()
         }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
+        ..Default::default()
     }));
 
-    let batch_size = 2;
-    let num_heads = 4;
-    let seq_len = 3;
-    let head_size = 8;
-
-    let input_data: Vec<f32> = (0..batch_size * num_heads * seq_len * head_size)
-        .map(|i| i as f32 * 0.1)
-        .collect();
     let input = Tensor::from_vec(
-        input_data,
-        (batch_size, num_heads, seq_len, head_size),
+        vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        (1, 1, 2, 4),
         &Device::Cpu,
     )?;
 
-    let cos_data: Vec<f32> = (0..seq_len * (head_size / 2))
-        .map(|i| (i as f32 * 0.1).cos())
-        .collect();
-    let cos_cache = Tensor::from_vec(cos_data, (seq_len, head_size / 2), &Device::Cpu)?;
-
-    let sin_data: Vec<f32> = (0..seq_len * (head_size / 2))
-        .map(|i| (i as f32 * 0.1).sin())
-        .collect();
-    let sin_cache = Tensor::from_vec(sin_data, (seq_len, head_size / 2), &Device::Cpu)?;
+    let cos_cache = Tensor::from_vec(vec![1.0f32, 1.0, 0.0, 0.0], (2, 2), &Device::Cpu)?;
+    let sin_cache = Tensor::from_vec(vec![0.0f32, 0.0, 1.0, 1.0], (2, 2), &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), input.clone());
@@ -7432,60 +7371,146 @@ fn test_rotary_embedding_interleaved() -> Result<()> {
     inputs.insert(SIN_CACHE.to_string(), sin_cache);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
+    let result = eval
+        .get(OUTPUT_Z)
+        .expect("Output 'z' not found")
+        .flatten_all()?
+        .to_vec1::<f32>()?;
 
-    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-    assert_eq!(z.dims(), &[batch_size, num_heads, seq_len, head_size]);
-
+    assert_eq!(result, vec![1.0, 2.0, 3.0, 4.0, -6.0, 5.0, -8.0, 7.0]);
     Ok(())
 }
 
-// "QuantizeLinear" - Basic per-tensor quantization
 #[test]
-fn test_quantize_linear_basic_u8() -> Result<()> {
-    // Test: quantize [0.0, 2.0, 3.0, 5.0] with scale=2.0 to U8
-    // Expected: round([0.0, 2.0, 3.0, 5.0] / 2.0) = round([0.0, 1.0, 1.5, 2.5]) = [0, 1, 2, 3]
+fn test_rotary_embedding_with_position_ids() -> Result<()> {
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
-            op_type: "QuantizeLinear".to_string(),
-            domain: "".to_string(),
+            op_type: "RotaryEmbedding".to_string(),
             attribute: vec![AttributeProto {
-                name: "axis".to_string(),
-                ref_attr_name: "axis".to_string(),
-                i: 0,
-                doc_string: "".to_string(),
+                name: "num_heads".to_string(),
                 r#type: AttributeType::Int.into(),
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
+                i: 1 as i64,
+                ..Default::default()
             }],
-            input: vec![INPUT_X.to_string(), "y_scale".to_string()],
+            input: vec![
+                INPUT_X.to_string(),
+                COS_CACHE.to_string(),
+                SIN_CACHE.to_string(),
+                "position_ids".to_string(),
+            ],
             output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
+            ..Default::default()
         }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
+        name: "rope_pos_id_test".to_string(),
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let input = Tensor::from_vec(
+        vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        (1, 2, 4),
+        &Device::Cpu,
+    )?;
+    let cos_cache = Tensor::from_vec(vec![1.0f32, 1.0, 0.5, 0.5, 0.0, 0.0], (3, 2), &Device::Cpu)?;
+    let sin_cache = Tensor::from_vec(vec![0.0f32, 0.0, 0.5, 0.5, 1.0, 1.0], (3, 2), &Device::Cpu)?;
+    let position_ids = Tensor::from_vec(vec![2i64, 0i64], (1, 2), &Device::Cpu)?;
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), input.clone());
+    inputs.insert(COS_CACHE.to_string(), cos_cache);
+    inputs.insert(SIN_CACHE.to_string(), sin_cache);
+    inputs.insert("position_ids".to_string(), position_ids);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let result = eval
+        .get(OUTPUT_Z)
+        .expect("Output 'z' not found")
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+
+    assert_eq!(result, vec![-3.0, -4.0, 1.0, 2.0, 5.0, 6.0, 7.0, 8.0]);
+    Ok(())
+}
+
+#[test]
+fn test_rotary_embedding_partial_dim() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "RotaryEmbedding".to_string(),
+            attribute: vec![
+                AttributeProto {
+                    name: "rotary_embedding_dim".to_string(),
+                    r#type: AttributeType::Int.into(),
+                    i: 2 as i64,
+                    ..Default::default()
+                },
+                AttributeProto {
+                    name: "num_heads".to_string(),
+                    r#type: AttributeType::Int.into(),
+                    i: 1 as i64,
+                    ..Default::default()
+                },
+            ],
+            input: vec![
+                INPUT_X.to_string(),
+                COS_CACHE.to_string(),
+                SIN_CACHE.to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        name: "rope_partial_test".to_string(),
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
             doc_string: "".to_string(),
             r#type: None,
         }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
+        ..Default::default()
+    }));
+
+    let input = Tensor::from_vec(vec![10.0f32, 20.0, 30.0, 40.0], (1, 1, 4), &Device::Cpu)?;
+
+    let cos_cache = Tensor::from_vec(vec![0.0f32], (1, 1), &Device::Cpu)?;
+    let sin_cache = Tensor::from_vec(vec![1.0f32], (1, 1), &Device::Cpu)?;
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), input);
+    inputs.insert(COS_CACHE.to_string(), cos_cache);
+    inputs.insert(SIN_CACHE.to_string(), sin_cache);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let result = eval
+        .get(OUTPUT_Z)
+        .expect("Output 'z' not found")
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+
+    assert_eq!(result, vec![-20.0, 10.0, 30.0, 40.0]);
+    Ok(())
+}
+
+#[test]
+fn test_quantize_linear_basic_u8() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "QuantizeLinear".to_string(),
+            input: vec![
+                INPUT_X.to_string(),
+                "y_scale".to_string(),
+                "y_zero_point".to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        name: "quantize_basic_test".to_string(),
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -7493,14 +7518,10 @@ fn test_quantize_linear_basic_u8() -> Result<()> {
         INPUT_X.to_string(),
         Tensor::from_vec(vec![0.0f32, 2.0f32, 3.0f32, 5.0f32], &[4], &Device::Cpu)?,
     );
-    inputs.insert(
-        "y_scale".to_string(),
-        Tensor::new(&[2.0f32], &Device::Cpu)?,
-    );
+    inputs.insert("y_scale".to_string(), Tensor::new(2.0f32, &Device::Cpu)?);
+    inputs.insert("y_zero_point".to_string(), Tensor::new(0u8, &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
-
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
     assert_eq!(z.dtype(), DType::U8);
     let result = z.to_vec1::<u8>()?;
@@ -7509,565 +7530,394 @@ fn test_quantize_linear_basic_u8() -> Result<()> {
     Ok(())
 }
 
-// "QuantizeLinear" - With zero point
 #[test]
 fn test_quantize_linear_with_zero_point() -> Result<()> {
-    // Test: quantize [0.0, 2.0, 3.0, 5.0] with scale=2.0, zero_point=128 to U8
-    // Expected: round([0.0, 2.0, 3.0, 5.0] / 2.0) + 128 = [0, 1, 2, 3] + 128 = [128, 129, 130, 131]
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "QuantizeLinear".to_string(),
-            domain: "".to_string(),
-            attribute: vec![AttributeProto {
-                name: "axis".to_string(),
-                ref_attr_name: "axis".to_string(),
-                i: 0,
-                doc_string: "".to_string(),
-                r#type: AttributeType::Int.into(),
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            }],
             input: vec![
                 INPUT_X.to_string(),
                 "y_scale".to_string(),
-                "zero_point".to_string(),
+                "y_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
+            ..Default::default()
         }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
+        name: "quantize_zp_test".to_string(),
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
+            ..Default::default()
         }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
+        ..Default::default()
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(
         INPUT_X.to_string(),
-        Tensor::from_vec(vec![0.0f32, 2.0f32, 3.0f32, 5.0f32], &[4], &Device::Cpu)?,
+        Tensor::from_vec(vec![-2.0f32, 0.0f32, 2.0f32, 4.0f32], &[4], &Device::Cpu)?,
     );
+    inputs.insert("y_scale".to_string(), Tensor::new(2.0f32, &Device::Cpu)?);
     inputs.insert(
-        "y_scale".to_string(),
-        Tensor::new(&[2.0f32], &Device::Cpu)?,
-    );
-    inputs.insert(
-        "zero_point".to_string(),
-        Tensor::new(&[128u8], &Device::Cpu)?,
+        "y_zero_point".to_string(),
+        Tensor::new(128u8, &Device::Cpu)?,
     );
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
-
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
     assert_eq!(z.dtype(), DType::U8);
     let result = z.to_vec1::<u8>()?;
-    assert_eq!(result, vec![128, 129, 130, 131]);
+    assert_eq!(result, vec![127, 128, 129, 130]);
 
     Ok(())
 }
 
-// "QuantizeLinear" - Clamping test
 #[test]
 fn test_quantize_linear_clamping() -> Result<()> {
-    // Test: quantize [-100.0, 0.0, 100.0, 300.0] with scale=1.0 to U8
-    // Expected: round([-100, 0, 100, 300]) clamped to [0, 255] = [0, 0, 100, 255]
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "QuantizeLinear".to_string(),
-            domain: "".to_string(),
-            attribute: vec![AttributeProto {
-                name: "axis".to_string(),
-                ref_attr_name: "axis".to_string(),
-                i: 0,
-                doc_string: "".to_string(),
-                r#type: AttributeType::Int.into(),
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            }],
-            input: vec![INPUT_X.to_string(), "y_scale".to_string()],
-            output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
-        }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
-        output: vec![ValueInfoProto {
-            name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
-        }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
-    }));
-
-    let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(
-        INPUT_X.to_string(),
-        Tensor::from_vec(
-            vec![-100.0f32, 0.0f32, 100.0f32, 300.0f32],
-            &[4],
-            &Device::Cpu,
-        )?,
-    );
-    inputs.insert(
-        "y_scale".to_string(),
-        Tensor::new(&[1.0f32], &Device::Cpu)?,
-    );
-
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
-
-    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-    assert_eq!(z.dtype(), DType::U8);
-    let result = z.to_vec1::<u8>()?;
-    assert_eq!(result, vec![0, 0, 100, 255]);
-
-    Ok(())
-}
-
-// "QuantizeLinear" - Per-axis quantization
-#[test]
-fn test_quantize_linear_per_axis() -> Result<()> {
-    // Test: quantize [[0.0, 2.0], [4.0, 6.0]] with per-axis scale=[1.0, 2.0] along axis=1
-    // Expected: [[0/1, 2/2], [4/1, 6/2]] = [[0, 1], [4, 3]]
-    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "QuantizeLinear".to_string(),
-            domain: "".to_string(),
-            attribute: vec![AttributeProto {
-                name: "axis".to_string(),
-                ref_attr_name: "axis".to_string(),
-                i: 1,
-                doc_string: "".to_string(),
-                r#type: AttributeType::Int.into(),
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            }],
-            input: vec![INPUT_X.to_string(), "y_scale".to_string()],
-            output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
-        }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
-        output: vec![ValueInfoProto {
-            name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
-        }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
-    }));
-
-    let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(
-        INPUT_X.to_string(),
-        Tensor::from_vec(
-            vec![0.0f32, 2.0f32, 4.0f32, 6.0f32],
-            &[2, 2],
-            &Device::Cpu,
-        )?,
-    );
-    inputs.insert(
-        "y_scale".to_string(),
-        Tensor::from_vec(vec![1.0f32, 2.0f32], &[2], &Device::Cpu)?,
-    );
-
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
-
-    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-    assert_eq!(z.dtype(), DType::U8);
-    let result = z.to_vec2::<u8>()?;
-    assert_eq!(result, vec![vec![0, 1], vec![4, 3]]);
-
-    Ok(())
-}
-
-// "DequantizeLinear" - Basic per-tensor dequantization
-#[test]
-fn test_dequantize_linear_basic_u8() -> Result<()> {
-    // Test: dequantize [0, 1, 2, 3] with scale=2.0 from U8 to F32
-    // Expected: [0, 1, 2, 3] * 2.0 = [0.0, 2.0, 4.0, 6.0]
-    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "DequantizeLinear".to_string(),
-            domain: "".to_string(),
-            attribute: vec![AttributeProto {
-                name: "axis".to_string(),
-                ref_attr_name: "axis".to_string(),
-                i: 0,
-                doc_string: "".to_string(),
-                r#type: AttributeType::Int.into(),
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            }],
-            input: vec![INPUT_X.to_string(), "x_scale".to_string()],
-            output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
-        }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
-        output: vec![ValueInfoProto {
-            name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
-        }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
-    }));
-
-    let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(
-        INPUT_X.to_string(),
-        Tensor::from_vec(vec![0u8, 1u8, 2u8, 3u8], &[4], &Device::Cpu)?,
-    );
-    inputs.insert(
-        "x_scale".to_string(),
-        Tensor::new(&[2.0f32], &Device::Cpu)?,
-    );
-
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
-
-    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-    assert_eq!(z.dtype(), DType::F32);
-    let result = z.to_vec1::<f32>()?;
-    assert_eq!(result, vec![0.0, 2.0, 4.0, 6.0]);
-
-    Ok(())
-}
-
-// "DequantizeLinear" - With zero point
-#[test]
-fn test_dequantize_linear_with_zero_point() -> Result<()> {
-    // Test: dequantize [128, 129, 130, 131] with scale=2.0, zero_point=128 from U8 to F32
-    // Expected: ([128, 129, 130, 131] - 128) * 2.0 = [0, 1, 2, 3] * 2.0 = [0.0, 2.0, 4.0, 6.0]
-    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "DequantizeLinear".to_string(),
-            domain: "".to_string(),
-            attribute: vec![AttributeProto {
-                name: "axis".to_string(),
-                ref_attr_name: "axis".to_string(),
-                i: 0,
-                doc_string: "".to_string(),
-                r#type: AttributeType::Int.into(),
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            }],
             input: vec![
                 INPUT_X.to_string(),
-                "x_scale".to_string(),
-                "zero_point".to_string(),
+                "y_scale".to_string(),
+                "y_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
+            ..Default::default()
         }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
+        name: "quantize_clamping_test".to_string(),
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
+            ..Default::default()
         }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
+        ..Default::default()
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
+
     inputs.insert(
         INPUT_X.to_string(),
-        Tensor::from_vec(vec![128u8, 129u8, 130u8, 131u8], &[4], &Device::Cpu)?,
+        Tensor::from_vec(vec![-100.0f32, 500.0f32, 254.6f32], &[3], &Device::Cpu)?,
     );
-    inputs.insert(
-        "x_scale".to_string(),
-        Tensor::new(&[2.0f32], &Device::Cpu)?,
-    );
-    inputs.insert(
-        "zero_point".to_string(),
-        Tensor::new(&[128u8], &Device::Cpu)?,
-    );
+
+    inputs.insert("y_scale".to_string(), Tensor::new(1.0f32, &Device::Cpu)?);
+
+    inputs.insert("y_zero_point".to_string(), Tensor::new(0u8, &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
-
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-    assert_eq!(z.dtype(), DType::F32);
-    let result = z.to_vec1::<f32>()?;
-    assert_eq!(result, vec![0.0, 2.0, 4.0, 6.0]);
-
+    assert_eq!(z.dtype(), DType::U8);
+    let result = eval.get(OUTPUT_Z).unwrap().to_vec1::<u8>()?;
+    assert_eq!(result, vec![0, 255, 255]);
     Ok(())
 }
 
-// "DequantizeLinear" - Per-axis dequantization
 #[test]
-fn test_dequantize_linear_per_axis() -> Result<()> {
-    // Test: dequantize [[0, 1], [4, 3]] with per-axis scale=[1.0, 2.0] along axis=1
-    // Expected: [[0*1.0, 1*2.0], [4*1.0, 3*2.0]] = [[0.0, 2.0], [4.0, 6.0]]
+fn test_quantize_linear_3d_axis_1() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "QuantizeLinear".to_string(),
+            input: vec![
+                INPUT_X.to_string(),
+                "y_scale".to_string(),
+                "y_zero_point".to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            attribute: vec![AttributeProto {
+                name: "axis".to_string(),
+                i: 1,
+                r#type: AttributeType::Int.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        name: "quantize_3d_test".to_string(),
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+
+    let x = Tensor::from_vec(
+        vec![1.0f32, 2.0, 20.0, 40.0, 300.0, 600.0],
+        (1, 3, 2),
+        &Device::Cpu,
+    )?;
+    inputs.insert(INPUT_X.to_string(), x);
+
+    inputs.insert(
+        "y_scale".to_string(),
+        Tensor::from_vec(vec![1.0f32, 20.0f32, 300.0f32], (3,), &Device::Cpu)?,
+    );
+
+    inputs.insert(
+        "y_zero_point".to_string(),
+        Tensor::from_vec(vec![0u8, 1u8, 2u8], (3,), &Device::Cpu)?,
+    );
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.dtype(), DType::U8);
+    let result = z.flatten_all()?.to_vec1::<u8>()?;
+    assert_eq!(result, vec![1, 2, 2, 3, 3, 4]);
+    Ok(())
+}
+
+#[test]
+fn test_quantize_linear_blocked() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "QuantizeLinear".to_string(),
+            input: vec![
+                INPUT_X.to_string(),
+                "y_scale".to_string(),
+                "y_zero_point".to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            attribute: vec![AttributeProto {
+                name: "block_size".to_string(),
+                i: 2,
+                r#type: AttributeType::Int.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        name: "quantize_blocked_test".to_string(),
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+
+    let x = Tensor::from_vec(
+        vec![10.0f32, 20.0, 1.0, 2.0, 100.0, 200.0],
+        (6,),
+        &Device::Cpu,
+    )?;
+    inputs.insert(INPUT_X.to_string(), x);
+
+    inputs.insert(
+        "y_scale".to_string(),
+        Tensor::from_vec(vec![10.0f32, 1.0f32, 100.0f32], (3,), &Device::Cpu)?,
+    );
+
+    inputs.insert(
+        "y_zero_point".to_string(),
+        Tensor::from_vec(vec![0u8, 5u8, 10u8], (3,), &Device::Cpu)?,
+    );
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.dtype(), DType::U8);
+    let result = eval.get(OUTPUT_Z).unwrap().to_vec1::<u8>()?;
+    assert_eq!(result, vec![1, 2, 6, 7, 11, 12]);
+    Ok(())
+}
+
+#[test]
+fn test_dequantize_linear_basic() -> Result<()> {
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "DequantizeLinear".to_string(),
-            domain: "".to_string(),
-            attribute: vec![AttributeProto {
-                name: "axis".to_string(),
-                ref_attr_name: "axis".to_string(),
-                i: 1,
-                doc_string: "".to_string(),
-                r#type: AttributeType::Int.into(),
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            }],
-            input: vec![INPUT_X.to_string(), "x_scale".to_string()],
+            input: vec![
+                INPUT_X.to_string(),
+                "y_scale".to_string(),
+                "y_zero_point".to_string(),
+            ],
             output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
+            ..Default::default()
         }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
+        name: "dequant_basic_test".to_string(),
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
+            ..Default::default()
         }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
+        ..Default::default()
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
+
     inputs.insert(
         INPUT_X.to_string(),
-        Tensor::from_vec(vec![0u8, 1u8, 4u8, 3u8], &[2, 2], &Device::Cpu)?,
+        Tensor::from_vec(vec![128u8, 129u8, 127u8, 130u8], &[4], &Device::Cpu)?,
     );
+
+    inputs.insert("y_scale".to_string(), Tensor::new(2.0f32, &Device::Cpu)?);
+
     inputs.insert(
-        "x_scale".to_string(),
-        Tensor::from_vec(vec![1.0f32, 2.0f32], &[2], &Device::Cpu)?,
+        "y_zero_point".to_string(),
+        Tensor::new(128u8, &Device::Cpu)?,
     );
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
-    assert_eq!(eval.len(), 1);
-
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
     assert_eq!(z.dtype(), DType::F32);
-    let result = z.to_vec2::<f32>()?;
-    assert_eq!(result, vec![vec![0.0, 2.0], vec![4.0, 6.0]]);
+    let result = eval.get(OUTPUT_Z).unwrap().to_vec1::<f32>()?;
+    assert_eq!(result, vec![0.0, 2.0, -2.0, 4.0]);
+    Ok(())
+}
+
+#[test]
+fn test_dequantize_linear_with_zero_point() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "DequantizeLinear".to_string(),
+            input: vec![
+                INPUT_X.to_string(),
+                "y_scale".to_string(),
+                "y_zero_point".to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        name: "dequant_zp_test".to_string(),
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::from_vec(vec![128u8, 64u8, 192u8, 10u8], &[4], &Device::Cpu)?,
+    );
+
+    inputs.insert("y_scale".to_string(), Tensor::new(0.5f32, &Device::Cpu)?);
+
+    inputs.insert(
+        "y_zero_point".to_string(),
+        Tensor::new(128u8, &Device::Cpu)?,
+    );
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.dtype(), DType::F32);
+    let result = z.to_vec1::<f32>()?;
+    assert_eq!(result, vec![0.0, -32.0, 32.0, -59.0]);
 
     Ok(())
 }
 
-// "DequantizeLinear" and "QuantizeLinear" - Round-trip test
 #[test]
-fn test_quantize_dequantize_round_trip() -> Result<()> {
-    // Test: quantize then dequantize should recover approximate original values
-    // Original: [0.0, 2.0, 4.0, 6.0] -> quantize with scale=2.0 -> [0, 1, 2, 3]
-    // -> dequantize with scale=2.0 -> [0.0, 2.0, 4.0, 6.0]
-    
-    // First, quantize
-    let quant_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "QuantizeLinear".to_string(),
-            domain: "".to_string(),
-            attribute: vec![AttributeProto {
-                name: "axis".to_string(),
-                ref_attr_name: "axis".to_string(),
-                i: 0,
-                doc_string: "".to_string(),
-                r#type: AttributeType::Int.into(),
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            }],
-            input: vec![INPUT_X.to_string(), "y_scale".to_string()],
-            output: vec!["quantized".to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
-        }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
-        output: vec![ValueInfoProto {
-            name: "quantized".to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
-        }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
-    }));
-
-    let mut quant_inputs: HashMap<String, Tensor> = HashMap::new();
-    quant_inputs.insert(
-        INPUT_X.to_string(),
-        Tensor::from_vec(vec![0.0f32, 2.0f32, 4.0f32, 6.0f32], &[4], &Device::Cpu)?,
-    );
-    quant_inputs.insert(
-        "y_scale".to_string(),
-        Tensor::new(&[2.0f32], &Device::Cpu)?,
-    );
-
-    let quant_eval = candle_onnx::simple_eval(&quant_graph, quant_inputs)?;
-    let quantized = quant_eval.get("quantized").expect("Quantized output not found");
-    
-    // Now, dequantize
-    let dequant_graph = create_model_proto_with_graph(Some(GraphProto {
+fn test_dequantize_linear_blocked() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "DequantizeLinear".to_string(),
-            domain: "".to_string(),
-            attribute: vec![AttributeProto {
-                name: "axis".to_string(),
-                ref_attr_name: "axis".to_string(),
-                i: 0,
-                doc_string: "".to_string(),
-                r#type: AttributeType::Int.into(),
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            }],
-            input: vec![INPUT_X.to_string(), "x_scale".to_string()],
+            input: vec![
+                INPUT_X.to_string(),
+                "y_scale".to_string(),
+                "y_zero_point".to_string(),
+            ],
             output: vec![OUTPUT_Z.to_string()],
-            name: "".to_string(),
-            doc_string: "".to_string(),
+            attribute: vec![AttributeProto {
+                name: "block_size".to_string(),
+                r#type: AttributeType::Int.into(),
+                i: 2 as i64,
+                ..Default::default()
+            }],
+            ..Default::default()
         }],
-        name: "".to_string(),
-        initializer: vec![],
-        input: vec![],
+        name: "dequant_blocked_test".to_string(),
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
+            ..Default::default()
         }],
-        value_info: vec![],
-        doc_string: "".to_string(),
-        sparse_initializer: vec![],
-        quantization_annotation: vec![],
+        ..Default::default()
     }));
 
-    let mut dequant_inputs: HashMap<String, Tensor> = HashMap::new();
-    dequant_inputs.insert(INPUT_X.to_string(), quantized.clone());
-    dequant_inputs.insert(
-        "x_scale".to_string(),
-        Tensor::new(&[2.0f32], &Device::Cpu)?,
+    let mut inputs = HashMap::new();
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::from_vec(vec![100u8, 102u8, 10u8, 12u8], &[4], &Device::Cpu)?,
+    );
+    inputs.insert(
+        "y_scale".to_string(),
+        Tensor::from_vec(vec![1.0f32, 10.0f32], &[2], &Device::Cpu)?,
+    );
+    inputs.insert(
+        "y_zero_point".to_string(),
+        Tensor::from_vec(vec![100u8, 10u8], &[2], &Device::Cpu)?,
     );
 
-    let dequant_eval = candle_onnx::simple_eval(&dequant_graph, dequant_inputs)?;
-    let z = dequant_eval.get(OUTPUT_Z).expect("Output 'z' not found");
-    
-    assert_eq!(z.dtype(), DType::F32);
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
     let result = z.to_vec1::<f32>()?;
-    assert_eq!(result, vec![0.0, 2.0, 4.0, 6.0]);
+    assert_eq!(result, vec![0.0, 2.0, 0.0, 20.0]);
+
+    Ok(())
+}
+#[test]
+fn test_quantize_dequantize_blocked_round_trip() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![
+            NodeProto {
+                op_type: "QuantizeLinear".to_string(),
+                input: vec![
+                    INPUT_X.to_string(),
+                    "y_scale".to_string(),
+                    "y_zero_point".to_string(),
+                ],
+                output: vec!["quantized".to_string()],
+                attribute: vec![AttributeProto {
+                    name: "block_size".to_string(),
+                    r#type: AttributeType::Int.into(),
+                    i: 2 as i64,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            NodeProto {
+                op_type: "DequantizeLinear".to_string(),
+                input: vec![
+                    "quantized".to_string(),
+                    "y_scale".to_string(),
+                    "y_zero_point".to_string(),
+                ],
+                output: vec![OUTPUT_Z.to_string()],
+                attribute: vec![AttributeProto {
+                    name: "block_size".to_string(),
+                    r#type: AttributeType::Int.into(),
+                    i: 2 as i64,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ],
+        name: "round_trip_blocked".to_string(),
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::from_vec(vec![3.0f32, 3.0f32, 25.0f32, 25.0f32], &[4], &Device::Cpu)?,
+    );
+    inputs.insert(
+        "y_scale".to_string(),
+        Tensor::from_vec(vec![2.0f32, 10.0f32], &[2], &Device::Cpu)?,
+    );
+    inputs.insert(
+        "y_zero_point".to_string(),
+        Tensor::from_vec(vec![0u8, 0u8], &[2], &Device::Cpu)?,
+    );
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    let result = z.to_vec1::<f32>()?;
+
+    assert_eq!(result, vec![4.0, 4.0, 30.0, 30.0]);
 
     Ok(())
 }
