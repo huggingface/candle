@@ -13,8 +13,7 @@ fn main() {
     let mut builder = bindgen_cuda::Builder::default()
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
-        .arg("-O3")
-        .arg("--use_fast_math");
+        .arg("-O3");
     println!("cargo::warning={builder:?}");
     let bindings = builder.build_ptx().unwrap();
     bindings.write(&ptx_path).unwrap();
@@ -46,7 +45,9 @@ fn main() {
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=moe");
     println!("cargo:rustc-link-lib=dylib=cudart");
-    println!("cargo:rustc-link-lib=stdc++");
+    if !is_target_msvc {
+        println!("cargo:rustc-link-lib=stdc++");
+    }
 }
 
 fn remove_lines<P: AsRef<std::path::Path>>(file: P, patterns: &[&str]) {
