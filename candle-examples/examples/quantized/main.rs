@@ -9,7 +9,7 @@ use std::io::Write;
 use tokenizers::Tokenizer;
 
 use candle::quantized::{ggml_file, gguf_file};
-use candle::Tensor;
+use candle::{DType, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -302,6 +302,10 @@ struct Args {
     /// Use the slower dmmv cuda kernel.
     #[arg(long)]
     force_dmmv: bool,
+
+    /// The dtype for activations (f32, bf16, f16). Controls which CUDA kernels are used.
+    #[arg(long, default_value = "f32")]
+    dtype: String,
 }
 
 impl Args {
@@ -470,6 +474,14 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
 
+    let dtype = match args.dtype.as_str() {
+        "f32" => DType::F32,
+        "bf16" => DType::BF16,
+        "f16" => DType::F16,
+        other => anyhow::bail!("Unsupported dtype: {other}. Use f32, bf16, or f16."),
+    };
+    println!("dtype: {:?}", dtype);
+
     let mut model = match model_path.extension().and_then(|v| v.to_str()) {
         Some("gguf") => {
             let model = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(model_path))?;
@@ -485,7 +497,7 @@ fn main() -> anyhow::Result<()> {
                 &format_size(total_size_in_bytes),
                 start.elapsed().as_secs_f32(),
             );
-            ModelWeights::from_gguf(model, &mut file, &device)?
+            ModelWeights::from_gguf_with_dtype(model, &mut file, &device, dtype)?
         }
         Some("ggml" | "bin") | Some(_) | None => {
             let model = ggml_file::Content::read(&mut file, &device)
@@ -530,7 +542,7 @@ fn main() -> anyhow::Result<()> {
                 | Which::OpenChat35
                 | Which::Starling7bAlpha => 8,
             };
-            ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
+            ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa), dtype)?
         }
     };
     println!("model built");

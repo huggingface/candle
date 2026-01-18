@@ -1,8 +1,9 @@
 use super::{GgmlDType, QStorage};
+use crate::backend::BackendStorage;
 use crate::quantized::k_quants::GgmlType;
 use crate::{backend::BackendDevice, cuda_backend::WrapErr};
-use crate::{builder_arg as barg, CudaDevice, CudaStorage, Result};
-use half::f16;
+use crate::{builder_arg as barg, CudaDevice, CudaStorage, DType, Result};
+use half::{bf16, f16};
 
 use cudarc::driver::{CudaSlice, CudaView, PushKernelArg};
 
@@ -78,6 +79,106 @@ fn quantize_q8_1(
         let src_chunk = src.slice(src_start_elem..(src_start_elem + src_num_elems));
 
         // --- slice the destination (u8) tensor by bytes ---
+        let dst_start_byte = rows_processed * dst_row_size_bytes;
+        let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
+        let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
+
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
+            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let mut builder = func.builder();
+        builder.arg(&src_chunk);
+        builder.arg(&dst_chunk);
+        barg!(builder, k as i32, kx_padded as i32);
+        unsafe { builder.launch(cfg) }.w()?;
+
+        rows_processed += rows_in_chunk;
+    }
+
+    Ok(())
+}
+
+fn quantize_q8_1_bf16(
+    src: &CudaView<bf16>,
+    dst: &mut CudaSlice<u8>,
+    k: usize,
+    ky: usize,
+    dev: &CudaDevice,
+) -> Result<()> {
+    let kx_padded = pad(k, MATRIX_ROW_PADDING);
+    let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
+
+    let total_rows = ky;
+    let q8_1_block_size = GgmlDType::Q8_1.block_size();
+    let q8_1_type_size = GgmlDType::Q8_1.type_size();
+    let num_blocks_per_row = kx_padded / q8_1_block_size;
+    let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
+
+    const CHUNK_SIZE: usize = 65535;
+    let func = dev.get_or_load_func("quantize_q8_1_bf16", &candle_kernels::QUANTIZED)?;
+
+    let mut rows_processed = 0;
+    while rows_processed < total_rows {
+        let remaining_rows = total_rows - rows_processed;
+        let rows_in_chunk = std::cmp::min(CHUNK_SIZE, remaining_rows);
+
+        let src_start_elem = rows_processed * k;
+        let src_num_elems = rows_in_chunk * k;
+        let src_chunk = src.slice(src_start_elem..(src_start_elem + src_num_elems));
+
+        let dst_start_byte = rows_processed * dst_row_size_bytes;
+        let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
+        let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
+
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
+            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let mut builder = func.builder();
+        builder.arg(&src_chunk);
+        builder.arg(&dst_chunk);
+        barg!(builder, k as i32, kx_padded as i32);
+        unsafe { builder.launch(cfg) }.w()?;
+
+        rows_processed += rows_in_chunk;
+    }
+
+    Ok(())
+}
+
+fn quantize_q8_1_f16(
+    src: &CudaView<f16>,
+    dst: &mut CudaSlice<u8>,
+    k: usize,
+    ky: usize,
+    dev: &CudaDevice,
+) -> Result<()> {
+    let kx_padded = pad(k, MATRIX_ROW_PADDING);
+    let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
+
+    let total_rows = ky;
+    let q8_1_block_size = GgmlDType::Q8_1.block_size();
+    let q8_1_type_size = GgmlDType::Q8_1.type_size();
+    let num_blocks_per_row = kx_padded / q8_1_block_size;
+    let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
+
+    const CHUNK_SIZE: usize = 65535;
+    let func = dev.get_or_load_func("quantize_q8_1_f16", &candle_kernels::QUANTIZED)?;
+
+    let mut rows_processed = 0;
+    while rows_processed < total_rows {
+        let remaining_rows = total_rows - rows_processed;
+        let rows_in_chunk = std::cmp::min(CHUNK_SIZE, remaining_rows);
+
+        let src_start_elem = rows_processed * k;
+        let src_num_elems = rows_in_chunk * k;
+        let src_chunk = src.slice(src_start_elem..(src_start_elem + src_num_elems));
+
         let dst_start_byte = rows_processed * dst_row_size_bytes;
         let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
         let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
@@ -268,7 +369,9 @@ fn dequantize_mul_mat_vec(
 
 fn mul_mat_vec_via_q8_1(
     data: &PaddedCudaSlice,
-    y: &CudaView<f32>,
+    storage: &CudaStorage,
+    storage_offset: usize,
+    storage_len: usize,
     dtype: GgmlDType,
     ncols: usize,
     nrows: usize,
@@ -279,20 +382,43 @@ fn mul_mat_vec_via_q8_1(
     if data_elems < ncols * nrows {
         crate::bail!("unexpected data size {}, ncols {ncols} {nrows}", data_elems)
     }
-    if y.len() != ncols * b_size {
-        crate::bail!("unexpected y size {}, ncols {ncols} {nrows}", y.len())
+    if storage_len != ncols * b_size {
+        crate::bail!("unexpected y size {}, ncols {ncols} {nrows}", storage_len)
     }
     if b_size == 0 || b_size > 8 {
         crate::bail!("only bsize between 1 and 8 are supported, got {b_size}")
     }
+
+    let input_dtype = storage.dtype();
+
     // Start by quantizing y
     let ncols_padded = pad(ncols, MATRIX_ROW_PADDING);
     let y_size_in_bytes =
         b_size * ncols_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
     let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
-    quantize_q8_1(y, &mut y_q8_1, ncols, b_size, dev)?;
 
-    let kernel_name = match dtype {
+    // Quantize input based on its dtype
+    match input_dtype {
+        DType::F32 => {
+            let y = storage.as_cuda_slice::<f32>()?;
+            let y = y.slice(storage_offset..(storage_offset + storage_len));
+            quantize_q8_1(&y, &mut y_q8_1, ncols, b_size, dev)?;
+        }
+        DType::BF16 => {
+            let y = storage.as_cuda_slice::<bf16>()?;
+            let y = y.slice(storage_offset..(storage_offset + storage_len));
+            quantize_q8_1_bf16(&y, &mut y_q8_1, ncols, b_size, dev)?;
+        }
+        DType::F16 => {
+            let y = storage.as_cuda_slice::<f16>()?;
+            let y = y.slice(storage_offset..(storage_offset + storage_len));
+            quantize_q8_1_f16(&y, &mut y_q8_1, ncols, b_size, dev)?;
+        }
+        _ => crate::bail!("unsupported input dtype for quantized matmul: {input_dtype:?}"),
+    }
+
+    // Build kernel name based on weight dtype
+    let kernel_base = match dtype {
         GgmlDType::Q4_0 => "mul_mat_vec_q4_0_q8_1_cuda",
         GgmlDType::Q4_1 => "mul_mat_vec_q4_1_q8_1_cuda",
         GgmlDType::Q5_0 => "mul_mat_vec_q5_0_q8_1_cuda",
@@ -305,9 +431,17 @@ fn mul_mat_vec_via_q8_1(
         GgmlDType::Q6K => "mul_mat_vec_q6_K_q8_1_cuda",
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
-    let kernel_name = format!("{kernel_name}{b_size}");
+
+    // Append batch size and output type suffix
+    let kernel_name = match input_dtype {
+        DType::F32 => format!("{kernel_base}{b_size}"),
+        DType::BF16 => format!("{kernel_base}{b_size}_bf16"),
+        DType::F16 => format!("{kernel_base}{b_size}_f16"),
+        _ => unreachable!(),
+    };
+
     let func = dev.get_or_load_func(&kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f32>(nrows * b_size)? };
+
     // https://github.com/ggerganov/llama.cpp/blob/facb8b56f8fd3bb10a693bf0943ae9d69d0828ef/ggml-cuda/mmvq.cu#L98
     let (nblocks, nwarps) = match b_size {
         1 => (nrows as u32, 4),
@@ -321,25 +455,66 @@ fn mul_mat_vec_via_q8_1(
         shared_mem_bytes: 0,
     };
 
-    let mut builder = func.builder();
-    builder.arg(&data.inner);
-    builder.arg(&y_q8_1);
-    builder.arg(&dst);
-    barg!(
-        builder,
-        /* ncols_x */ ncols as i32,
-        /* nrows_x */ nrows as i32,
-        /* nrows_y */ ncols_padded as i32,
-        /* nrows_dst */ nrows as i32
-    );
-    unsafe { builder.launch(cfg) }.w()?;
-    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+    // Allocate output with correct dtype and launch kernel
+    match input_dtype {
+        DType::F32 => {
+            let dst = unsafe { dev.alloc::<f32>(nrows * b_size)? };
+            let mut builder = func.builder();
+            builder.arg(&data.inner);
+            builder.arg(&y_q8_1);
+            builder.arg(&dst);
+            barg!(
+                builder,
+                /* ncols_x */ ncols as i32,
+                /* nrows_x */ nrows as i32,
+                /* nrows_y */ ncols_padded as i32,
+                /* nrows_dst */ nrows as i32
+            );
+            unsafe { builder.launch(cfg) }.w()?;
+            Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+        }
+        DType::BF16 => {
+            let dst = unsafe { dev.alloc::<bf16>(nrows * b_size)? };
+            let mut builder = func.builder();
+            builder.arg(&data.inner);
+            builder.arg(&y_q8_1);
+            builder.arg(&dst);
+            barg!(
+                builder,
+                /* ncols_x */ ncols as i32,
+                /* nrows_x */ nrows as i32,
+                /* nrows_y */ ncols_padded as i32,
+                /* nrows_dst */ nrows as i32
+            );
+            unsafe { builder.launch(cfg) }.w()?;
+            Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+        }
+        DType::F16 => {
+            let dst = unsafe { dev.alloc::<f16>(nrows * b_size)? };
+            let mut builder = func.builder();
+            builder.arg(&data.inner);
+            builder.arg(&y_q8_1);
+            builder.arg(&dst);
+            barg!(
+                builder,
+                /* ncols_x */ ncols as i32,
+                /* nrows_x */ nrows as i32,
+                /* nrows_y */ ncols_padded as i32,
+                /* nrows_dst */ nrows as i32
+            );
+            unsafe { builder.launch(cfg) }.w()?;
+            Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn mul_mat_via_q8_1(
     data: &PaddedCudaSlice,
-    y: &CudaView<f32>,
+    storage: &CudaStorage,
+    storage_offset: usize,
+    storage_len: usize,
     dtype: GgmlDType,
     x_rows: usize,
     x_cols: usize,
@@ -351,21 +526,44 @@ fn mul_mat_via_q8_1(
     if data_elems < x_rows * x_cols {
         crate::bail!("unexpected lhs size {}, {x_rows} {x_cols}", data_elems)
     }
-    if y.len() != y_rows * y_cols {
-        crate::bail!("unexpected y size {}, {y_rows} {y_cols}", y.len())
+    if storage_len != y_rows * y_cols {
+        crate::bail!("unexpected y size {}, {y_rows} {y_cols}", storage_len)
     }
     if x_cols != y_rows {
         crate::bail!("unexpected x/y size {x_rows} {x_cols} {y_rows} {y_cols}")
     }
     let k = x_cols;
+
+    let input_dtype = storage.dtype();
+
     // Start by quantizing y
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let y_size_in_bytes =
         k_padded * y_cols * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
     let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
-    quantize_q8_1(y, &mut y_q8_1, k, y_cols, dev)?;
 
-    let (kernel_name, mmq_x, mmq_y) = match dtype {
+    // Quantize input based on its dtype
+    match input_dtype {
+        DType::F32 => {
+            let y = storage.as_cuda_slice::<f32>()?;
+            let y = y.slice(storage_offset..(storage_offset + storage_len));
+            quantize_q8_1(&y, &mut y_q8_1, k, y_cols, dev)?;
+        }
+        DType::BF16 => {
+            let y = storage.as_cuda_slice::<bf16>()?;
+            let y = y.slice(storage_offset..(storage_offset + storage_len));
+            quantize_q8_1_bf16(&y, &mut y_q8_1, k, y_cols, dev)?;
+        }
+        DType::F16 => {
+            let y = storage.as_cuda_slice::<f16>()?;
+            let y = y.slice(storage_offset..(storage_offset + storage_len));
+            quantize_q8_1_f16(&y, &mut y_q8_1, k, y_cols, dev)?;
+        }
+        _ => crate::bail!("unsupported input dtype for quantized matmul: {input_dtype:?}"),
+    }
+
+    // Build kernel name based on weight dtype
+    let (kernel_base, mmq_x, mmq_y) = match dtype {
         GgmlDType::Q4_0 => ("mul_mat_q4_0", 64, 128),
         GgmlDType::Q4_1 => ("mul_mat_q4_1", 64, 128),
         GgmlDType::Q5_0 => ("mul_mat_q5_0", 128, 64),
@@ -378,8 +576,16 @@ fn mul_mat_via_q8_1(
         GgmlDType::Q6K => ("mul_mat_q6_K", 64, 64),
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
-    let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f32>(x_rows * y_cols)? };
+
+    // Append output type suffix
+    let kernel_name = match input_dtype {
+        DType::F32 => kernel_base.to_string(),
+        DType::BF16 => format!("{kernel_base}_bf16"),
+        DType::F16 => format!("{kernel_base}_f16"),
+        _ => unreachable!(),
+    };
+
+    let func = dev.get_or_load_func(&kernel_name, &candle_kernels::QUANTIZED)?;
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (
             ceil_div(x_rows, mmq_y) as u32,
@@ -390,20 +596,61 @@ fn mul_mat_via_q8_1(
         shared_mem_bytes: 0,
     };
 
-    let mut builder = func.builder();
-    builder.arg(/* vx */ &data.inner);
-    builder.arg(/* vy */ &y_q8_1);
-    builder.arg(/* dst */ &dst);
-    barg!(
-        builder,
-        /* ncols_x */ x_cols as i32,
-        /* nrows_x */ x_rows as i32,
-        /* ncols_y */ y_cols as i32,
-        /* nrows_y */ k_padded as i32,
-        /* nrows_dst */ x_rows as i32
-    );
-    unsafe { builder.launch(cfg) }.w()?;
-    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+    // Allocate output with correct dtype and launch kernel
+    match input_dtype {
+        DType::F32 => {
+            let dst = unsafe { dev.alloc::<f32>(x_rows * y_cols)? };
+            let mut builder = func.builder();
+            builder.arg(&data.inner);
+            builder.arg(&y_q8_1);
+            builder.arg(&dst);
+            barg!(
+                builder,
+                /* ncols_x */ x_cols as i32,
+                /* nrows_x */ x_rows as i32,
+                /* ncols_y */ y_cols as i32,
+                /* nrows_y */ k_padded as i32,
+                /* nrows_dst */ x_rows as i32
+            );
+            unsafe { builder.launch(cfg) }.w()?;
+            Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+        }
+        DType::BF16 => {
+            let dst = unsafe { dev.alloc::<bf16>(x_rows * y_cols)? };
+            let mut builder = func.builder();
+            builder.arg(&data.inner);
+            builder.arg(&y_q8_1);
+            builder.arg(&dst);
+            barg!(
+                builder,
+                /* ncols_x */ x_cols as i32,
+                /* nrows_x */ x_rows as i32,
+                /* ncols_y */ y_cols as i32,
+                /* nrows_y */ k_padded as i32,
+                /* nrows_dst */ x_rows as i32
+            );
+            unsafe { builder.launch(cfg) }.w()?;
+            Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+        }
+        DType::F16 => {
+            let dst = unsafe { dev.alloc::<f16>(x_rows * y_cols)? };
+            let mut builder = func.builder();
+            builder.arg(&data.inner);
+            builder.arg(&y_q8_1);
+            builder.arg(&dst);
+            barg!(
+                builder,
+                /* ncols_x */ x_cols as i32,
+                /* nrows_x */ x_rows as i32,
+                /* ncols_y */ y_cols as i32,
+                /* nrows_y */ k_padded as i32,
+                /* nrows_dst */ x_rows as i32
+            );
+            unsafe { builder.launch(cfg) }.w()?;
+            Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+        }
+        _ => unreachable!(),
+    }
 }
 
 fn indexed_moe_forward_fused_q8_1_input(
@@ -729,6 +976,8 @@ impl QCudaStorage {
             [b, _k] => *b <= max_bm,
             _ => false,
         };
+
+        // Both paths now support F32, BF16, and F16 inputs
         if use_vec_kernel {
             self.dequantize_matmul_vec(self_shape, storage, layout)
         } else {
@@ -757,9 +1006,8 @@ impl QCudaStorage {
         rhs_l: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
         let (nrows, ncols) = self_shape.dims2()?;
-        let rhs = rhs.as_cuda_slice::<f32>()?;
-        let rhs = match rhs_l.contiguous_offsets() {
-            Some((o1, o2)) => rhs.slice(o1..o2),
+        let (storage_offset, storage_len) = match rhs_l.contiguous_offsets() {
+            Some((o1, o2)) => (o1, o2 - o1),
             None => Err(crate::Error::RequiresContiguous { op: "dmmv" }.bt())?,
         };
         let (b_size, k) = match rhs_l.shape().dims() {
@@ -771,12 +1019,28 @@ impl QCudaStorage {
             crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", rhs_l.shape())
         }
 
+        let input_dtype = rhs.dtype();
         let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
-            dequantize_mul_mat_vec(&self.data, &rhs, self.dtype, ncols, nrows, self.device())?
+            // Legacy path only supports F32
+            if input_dtype != DType::F32 {
+                crate::bail!("FORCE_DMMV only supports F32 input, got {input_dtype:?}")
+            }
+            let rhs_f32 = rhs.as_cuda_slice::<f32>()?;
+            let rhs_f32 = rhs_f32.slice(storage_offset..(storage_offset + storage_len));
+            dequantize_mul_mat_vec(
+                &self.data,
+                &rhs_f32,
+                self.dtype,
+                ncols,
+                nrows,
+                self.device(),
+            )?
         } else {
             mul_mat_vec_via_q8_1(
                 &self.data,
-                &rhs,
+                rhs,
+                storage_offset,
+                storage_len,
                 self.dtype,
                 ncols,
                 nrows,
@@ -807,22 +1071,29 @@ impl QCudaStorage {
             crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
         }
 
+        let (storage_offset, storage_len) = match layout.contiguous_offsets() {
+            Some((o1, o2)) => (o1, o2 - o1),
+            None => Err(crate::Error::RequiresContiguous {
+                op: "quantized-matmul",
+            }
+            .bt())?,
+        };
+
         let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
+            // Legacy path only supports F32
+            let input_dtype = storage.dtype();
+            if input_dtype != DType::F32 {
+                crate::bail!("FORCE_DMMV only supports F32 input, got {input_dtype:?}")
+            }
             let data_f32 = self.dequantize(n * k)?;
             let rhs_l = crate::Layout::new((k, n).into(), vec![1, k], 0).broadcast_as((b, k, n))?;
             storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?
         } else {
-            let storage = storage.as_cuda_slice::<f32>()?;
-            let storage = match layout.contiguous_offsets() {
-                Some((o1, o2)) => storage.slice(o1..o2),
-                None => Err(crate::Error::RequiresContiguous {
-                    op: "quantized-matmul",
-                }
-                .bt())?,
-            };
             mul_mat_via_q8_1(
                 &self.data,
-                &storage,
+                storage,
+                storage_offset,
+                storage_len,
                 self.dtype,
                 /* x_rows */ n,
                 /* x_cols */ k,
@@ -883,11 +1154,14 @@ mod test {
         let ncols = 256;
         let vs: Vec<f32> = (0..ncols).map(|v| v as f32).collect();
         let y = dev.clone_htod(&vs)?;
+        let y_storage = CudaStorage::wrap_cuda_slice(y.clone(), dev.clone());
         let mut xs = QCudaStorage::zeros(&dev, ncols, GgmlDType::Q4_0)?;
-        xs.quantize(&CudaStorage::wrap_cuda_slice(y.clone(), dev.clone()))?;
+        xs.quantize(&y_storage)?;
         let cuda_storage = mul_mat_vec_via_q8_1(
             &xs.data,
-            &y.as_view(),
+            &y_storage,
+            /* storage_offset */ 0,
+            /* storage_len */ ncols,
             /* dtype */ GgmlDType::Q4_0,
             /* ncols */ ncols,
             /* nrows */ 1,
