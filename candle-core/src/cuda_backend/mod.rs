@@ -1257,6 +1257,86 @@ impl CudaStorage {
     pub fn as_cuda_slice_mut<T: CudaDType>(&mut self) -> Result<&mut CudaSlice<T>> {
         T::as_cuda_slice_mut(self)
     }
+
+    pub fn transfer_to_device(&self, dst: &CudaDevice) -> Result<Self> {
+        let storage_slice = match self.dtype() {
+            DType::U8 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::U8(result)
+            }
+            DType::U32 => {
+                let cuda_slice = self.as_cuda_slice::<u32>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::U32(result)
+            }
+            DType::I16 => {
+                let cuda_slice = self.as_cuda_slice::<i16>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::I16(result)
+            }
+            DType::I32 => {
+                let cuda_slice = self.as_cuda_slice::<i32>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::I32(result)
+            }
+            DType::I64 => {
+                let cuda_slice = self.as_cuda_slice::<i64>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::I64(result)
+            }
+            DType::BF16 => {
+                let cuda_slice = self.as_cuda_slice::<bf16>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::BF16(result)
+            }
+            DType::F16 => {
+                let cuda_slice = self.as_cuda_slice::<f16>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::F16(result)
+            }
+            DType::F32 => {
+                let cuda_slice = self.as_cuda_slice::<f32>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::F32(result)
+            }
+            DType::F64 => {
+                let cuda_slice = self.as_cuda_slice::<f64>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::F64(result)
+            }
+            DType::F8E4M3 => {
+                let cuda_slice = self.as_cuda_slice::<float8::F8E4M3>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::F8E4M3(result)
+            }
+            DType::F6E2M3 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::F6E2M3(result)
+            }
+            DType::F6E3M2 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::F6E3M2(result)
+            }
+            DType::F4 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::F4(result)
+            }
+            DType::F8E8M0 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result: CudaSlice<u8> = dst.cuda_stream().clone_dtod(cuda_slice)?;
+                CudaStorageSlice::F8E8M0(result)
+            }
+        };
+
+        Ok(Self {
+            slice: storage_slice,
+            device: dst.clone(),
+        })
+    }
 }
 
 fn gemm_config<T>(

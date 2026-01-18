@@ -1998,3 +1998,23 @@ fn tensor_norm() -> Result<()> {
     assert_eq!(norm.to_scalar::<f64>()?, 5.);
     Ok(())
 }
+
+#[cfg(feature = "cuda")]
+#[test]
+fn transfers_cuda_to_device() -> Result<()> {
+    use candle_core::test_utils::assert_tensor_eq;
+
+    let devices = cudarc::driver::safe::CudaContext::device_count()?;
+    let (first, second) = if devices < 2 {
+        (Device::new_cuda(0)?, Device::new_cuda(0)?)
+    } else {
+        (Device::new_cuda(0)?, Device::new_cuda(1)?)
+    };
+
+    let t1 = Tensor::zeros((1, 1), DType::F32, &first)?;
+    let t1 = t1.rand_like(-50.0, 50.0)?;
+    let t2 = t1.to_device(&second)?;
+
+    assert_tensor_eq(&t1, &t2)?;
+    Ok(())
+}
