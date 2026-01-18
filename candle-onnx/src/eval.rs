@@ -2452,6 +2452,202 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
+            "QuantizeLinear" => {
+                let x = get(&node.input[0])?;
+                let y_scale = get(&node.input[1])?;
+                let y_zero_point = get_opt(2).transpose()?;
+
+                // Get attributes
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1);
+                let axis = x.normalize_axis(axis)?;
+
+                let block_size = get_attr_opt::<i64>(node, "block_size")?
+                    .copied()
+                    .unwrap_or(0);
+
+                // saturate parameter (default: true, since ONNX v19)
+                let saturate = get_attr_opt::<i64>(node, "saturate")?
+                    .copied()
+                    .map(|v| v != 0)
+                    .unwrap_or(true);
+
+                // Handle blocked quantization by computing indices
+                let indices = if block_size > 0 {
+                    let repeats = block_size as usize;
+                    let shape_dim = x.dim(axis)?;
+                    let idx = Tensor::arange(0i64, shape_dim as i64, x.device())?;
+                    let repeats_t = Tensor::new(repeats as i64, x.device())?;
+                    Some(idx.broadcast_div(&repeats_t)?)
+                } else {
+                    None
+                };
+
+                // Reshape scale for broadcasting
+                let mut y_scale = if let Some(idx) = &indices {
+                    y_scale.index_select(idx, axis)?
+                } else {
+                    y_scale.clone()
+                };
+
+                if y_scale.rank() == 1 && x.rank() > 1 {
+                    let mut shape = vec![1; x.rank()];
+                    shape[axis] = y_scale.elem_count();
+                    y_scale = y_scale.reshape(shape)?;
+                }
+
+                // Reshape zero_point for broadcasting
+                let y_zero_point = if let Some(zp) = y_zero_point {
+                    let mut zp = if let Some(idx) = &indices {
+                        zp.index_select(idx, axis)?
+                    } else {
+                        zp.clone()
+                    };
+
+                    if zp.rank() == 1 && x.rank() > 1 {
+                        let mut shape = vec![1; x.rank()];
+                        shape[axis] = zp.elem_count();
+                        zp = zp.reshape(shape)?;
+                    }
+                    Some(zp)
+                } else {
+                    None
+                };
+
+                // Quantization formula: round(x / y_scale) + zero_point
+                let result = x.broadcast_div(&y_scale)?.round()?;
+                let result = if let Some(ref zp) = y_zero_point {
+                    let zp_as_res = zp.to_dtype(result.dtype())?;
+                    result.broadcast_add(&zp_as_res)?
+                } else {
+                    result
+                };
+
+                // Determine target dtype
+                let target_dtype = if let Some(ref zp) = y_zero_point {
+                    zp.dtype()
+                } else {
+                    match get_attr_opt::<i64>(node, "output_dtype")?.copied() {
+                        Some(dt_int) => DataType::try_from(dt_int as i32)
+                            .map(|dt| dtype(dt).unwrap_or(DType::U8))
+                            .unwrap_or(DType::U8),
+                        None => DType::U8,
+                    }
+                };
+
+                // Apply clamping based on target dtype and saturate parameter
+                let result = match target_dtype {
+                    // Integer types: always clamp to valid range
+                    DType::U8 => result.clamp(0., 255.)?,
+                    DType::U32 => result.clamp(0., 4294967295.)?, // u32::MAX
+                    DType::I64 => result.clamp(-9223372036854775808., 9223372036854775807.)?, // i64::MIN/MAX
+
+                    // Float8 type: clamp only if saturate is true
+                    DType::F8E4M3 => {
+                        if saturate {
+                            // F8E4M3 range is approximately -448 to 448
+                            result.clamp(-448., 448.)?
+                        } else {
+                            result
+                        }
+                    }
+
+                    // Other float types: no clamping by default
+                    // (BF16, F16, F32, F64 can represent a wide range)
+                    _ => result,
+                };
+
+                let output = result.to_dtype(target_dtype)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "DequantizeLinear" => {
+                let x = get(&node.input[0])?;
+                let x_scale = get(&node.input[1])?;
+                let x_zero_point = get_opt(2).transpose()?;
+
+                // Get attributes
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1);
+                let axis = x.normalize_axis(axis)?;
+
+                let block_size = get_attr_opt::<i64>(node, "block_size")?
+                    .copied()
+                    .unwrap_or(0);
+
+                // Handle blocked quantization by computing indices
+                let indices = if block_size > 0 {
+                    let repeats = block_size as usize;
+                    let shape_dim = x.dim(axis)?;
+                    let idx = Tensor::arange(0i64, shape_dim as i64, x.device())?;
+                    let repeats_t = Tensor::new(repeats as i64, x.device())?;
+                    Some(idx.broadcast_div(&repeats_t)?)
+                } else {
+                    None
+                };
+
+                // Reshape scale for broadcasting
+                let mut x_scale = if let Some(idx) = &indices {
+                    x_scale.index_select(idx, axis)?
+                } else {
+                    x_scale.clone()
+                };
+
+                if x_scale.rank() == 1 && x.rank() > 1 {
+                    let mut shape = vec![1; x.rank()];
+                    shape[axis] = x_scale.elem_count();
+                    x_scale = x_scale.reshape(shape)?;
+                }
+
+                // Reshape zero_point for broadcasting
+                let x_zero_point = if let Some(zp) = x_zero_point {
+                    let mut zp = if let Some(idx) = &indices {
+                        zp.index_select(idx, axis)?
+                    } else {
+                        zp.clone()
+                    };
+
+                    if zp.rank() == 1 && x.rank() > 1 {
+                        let mut shape = vec![1; x.rank()];
+                        shape[axis] = zp.elem_count();
+                        zp = zp.reshape(shape)?;
+                    }
+                    Some(zp)
+                } else {
+                    None
+                };
+
+                // Dequantization formula:
+                // For integer types: (x - zero_point) * scale
+                // For float8: x * scale (zero_point should be 0 or null)
+                let result = if x.dtype().is_int() {
+                    // Convert to float first
+                    let x_float = x.to_dtype(DType::F32)?;
+
+                    let dx = if let Some(ref zp) = x_zero_point {
+                        let zp_float = zp.to_dtype(DType::F32)?;
+                        x_float.broadcast_sub(&zp_float)?
+                    } else {
+                        x_float
+                    };
+
+                    dx.broadcast_mul(&x_scale)?
+                } else {
+                    // For float types (F8E4M3, etc.), just multiply by scale
+                    // zero_point should be 0 or null for float8
+                    x.broadcast_mul(&x_scale)?
+                };
+
+                // Determine output dtype (default to scale's dtype)
+                let output_dtype = match get_attr_opt::<i64>(node, "output_dtype")?.copied() {
+                    Some(dt_int) => DataType::try_from(dt_int as i32)
+                        .ok()
+                        .and_then(|dt| dtype(dt))
+                        .unwrap_or_else(|| x_scale.dtype()),
+                    None => x_scale.dtype(),
+                };
+
+                let output = result.to_dtype(output_dtype)?;
+
+                values.insert(node.output[0].clone(), output);
+            }
             "RotaryEmbedding" => {
                 let interleaved = get_attr_opt::<i64>(node, "interleaved")?
                     .copied()
@@ -2495,7 +2691,12 @@ fn simple_eval_(
                         }
 
                         let head_size = hidden_size / num_heads_val;
-                        let input = input.reshape((batch_size, sequence_length, num_heads_val, head_size))?;
+                        let input = input.reshape((
+                            batch_size,
+                            sequence_length,
+                            num_heads_val,
+                            head_size,
+                        ))?;
                         (input, batch_size, sequence_length, head_size)
                     }
                     _ => bail!("Input must be 3D or 4D, got {}D", original_rank),
@@ -2508,7 +2709,10 @@ fn simple_eval_(
                 };
 
                 if rotary_embedding_dim % 2 != 0 {
-                    bail!("rotary_embedding_dim must be even, got {}", rotary_embedding_dim);
+                    bail!(
+                        "rotary_embedding_dim must be even, got {}",
+                        rotary_embedding_dim
+                    );
                 }
 
                 let rotary_embedding_dim_half = rotary_embedding_dim / 2;
@@ -2517,8 +2721,10 @@ fn simple_eval_(
                     let pos_ids_flat = pos_ids.flatten_all()?;
                     let cos = cos_cache.index_select(&pos_ids_flat, 0)?;
                     let sin = sin_cache.index_select(&pos_ids_flat, 0)?;
-                    let cos = cos.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?;
-                    let sin = sin.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?;
+                    let cos =
+                        cos.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?;
+                    let sin =
+                        sin.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?;
                     (cos, sin)
                 } else {
                     (cos_cache.clone(), sin_cache.clone())
@@ -2546,18 +2752,21 @@ fn simple_eval_(
                 let output = if rotary_embedding_dim == head_size {
                     if interleaved != 0 {
                         let input_bhtd = input.transpose(1, 2)?.contiguous()?;
-                        let result = candle_nn::rotary_emb::rope_i(&input_bhtd, &cos_cache, &sin_cache)?;
+                        let result =
+                            candle_nn::rotary_emb::rope_i(&input_bhtd, &cos_cache, &sin_cache)?;
                         result.transpose(1, 2)?
                     } else {
                         candle_nn::rotary_emb::rope_thd(&input, &cos_cache, &sin_cache)?
                     }
                 } else {
                     let x_rotate = input.narrow(3, 0, rotary_embedding_dim)?;
-                    let x_not_rotate = input.narrow(3, rotary_embedding_dim, head_size - rotary_embedding_dim)?;
+                    let x_not_rotate =
+                        input.narrow(3, rotary_embedding_dim, head_size - rotary_embedding_dim)?;
 
                     let x_rotate_result = if interleaved != 0 {
                         let x_rotate_bhtd = x_rotate.transpose(1, 2)?.contiguous()?;
-                        let result = candle_nn::rotary_emb::rope_i(&x_rotate_bhtd, &cos_cache, &sin_cache)?;
+                        let result =
+                            candle_nn::rotary_emb::rope_i(&x_rotate_bhtd, &cos_cache, &sin_cache)?;
                         result.transpose(1, 2)?
                     } else {
                         candle_nn::rotary_emb::rope_thd(&x_rotate, &cos_cache, &sin_cache)?
