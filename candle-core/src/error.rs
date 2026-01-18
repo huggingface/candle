@@ -95,7 +95,7 @@ pub enum Error {
         n_parts: usize,
     },
 
-    #[error("{op} can only be performed on a single dimension")]
+    #[error("{op} can only be performed on a single dimension, found {dims:?}")]
     OnlySingleDimension { op: &'static str, dims: Vec<usize> },
 
     #[error("empty tensor for {op}")]

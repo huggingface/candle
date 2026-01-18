@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use crate::quantized_nn::RmsNorm;
 use candle::quantized::QTensor;
-use candle::quantized::{ggml_file, gguf_file};
+use candle::quantized::{ggml_file, gguf_file, GgmlDType};
 use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module};
 
@@ -122,7 +122,8 @@ impl Module for MlpOrMoe {
                     let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
                     let selected_rws =
                         Tensor::new(selected_rws[expert_idx].as_slice(), xs.device())?
-                            .reshape(((), 1))?;
+                            .reshape(((), 1))?
+                            .to_dtype(xs.dtype())?;
                     // Index the correct hidden states and compute the expert hidden state for
                     // the current expert. We need to make sure to multiply the output hidden
                     // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
@@ -289,13 +290,15 @@ fn precomput_freqs_cis(
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, dtype: DType) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, &ct.device)?;
+        let cos = cos.to_dtype(dtype)?;
+        let sin = sin.to_dtype(dtype)?;
+        let neg_inf = Tensor::new(f32::NEG_INFINITY, &ct.device)?.to_dtype(dtype)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
-        let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
-        let norm = RmsNorm::from_qtensor(ct.remove("norm.weight")?, 1e-5)?;
+        let tok_embeddings = tok_embeddings.dequantize(&ct.device)?.to_dtype(dtype)?;
+        let norm = RmsNorm::from_qtensor_with_dtype(ct.remove("norm.weight")?, 1e-5, dtype)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
         for layer_idx in 0..ct.hparams.n_layer {
@@ -324,9 +327,9 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::from_qtensor(attention_norm, 1e-5)?,
+                attention_norm: RmsNorm::from_qtensor_with_dtype(attention_norm, 1e-5, dtype)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::from_qtensor(ffn_norm, 1e-5)?,
+                ffn_norm: RmsNorm::from_qtensor_with_dtype(ffn_norm, 1e-5, dtype)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
@@ -352,10 +355,36 @@ impl ModelWeights {
         })
     }
 
+    /// Load model from GGUF file, inferring activation dtype from tensor storage format.
+    ///
+    /// The activation dtype is inferred from the embedding tensor's storage format:
+    /// - F16 storage → F16 activations
+    /// - BF16 storage → BF16 activations
+    /// - F32 or quantized storage → F32 activations
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+    ) -> Result<Self> {
+        // Infer activation dtype from embedding tensor's storage format
+        let dtype = ct
+            .tensor_infos
+            .get("token_embd.weight")
+            .map(|info| match info.ggml_dtype {
+                GgmlDType::F16 => DType::F16,
+                GgmlDType::BF16 => DType::BF16,
+                _ => DType::F32, // F32 or any quantized type
+            })
+            .unwrap_or(DType::F32);
+        Self::from_gguf_with_dtype(ct, reader, device, dtype)
+    }
+
+    /// Load model from GGUF file with explicit activation dtype.
+    pub fn from_gguf_with_dtype<R: std::io::Seek + std::io::Read>(
+        ct: gguf_file::Content,
+        reader: &mut R,
+        device: &Device,
+        dtype: DType,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
@@ -381,13 +410,16 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
+        let cos = cos.to_dtype(dtype)?;
+        let sin = sin.to_dtype(dtype)?;
+        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?.to_dtype(dtype)?;
 
         let tok_embeddings_q = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings_q.dequantize(device)?;
-        let norm = RmsNorm::from_qtensor(
+        let tok_embeddings = tok_embeddings_q.dequantize(device)?.to_dtype(dtype)?;
+        let norm = RmsNorm::from_qtensor_with_dtype(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
+            dtype,
         )?;
         let output = match ct.tensor(reader, "output.weight", device) {
             Ok(tensor) => tensor,
@@ -447,9 +479,13 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::from_qtensor(attention_norm, rms_norm_eps)?,
+                attention_norm: RmsNorm::from_qtensor_with_dtype(
+                    attention_norm,
+                    rms_norm_eps,
+                    dtype,
+                )?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::from_qtensor(ffn_norm, rms_norm_eps)?,
+                ffn_norm: RmsNorm::from_qtensor_with_dtype(ffn_norm, rms_norm_eps, dtype)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
