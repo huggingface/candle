@@ -2003,6 +2003,7 @@ fn tensor_norm() -> Result<()> {
 #[test]
 fn transfers_cuda_to_device() -> Result<()> {
     use candle_core::test_utils::assert_tensor_eq;
+    use rand::seq::SliceRandom;
 
     let devices = cudarc::driver::safe::CudaContext::device_count()?;
     let (first, second) = if devices < 2 {
@@ -2010,9 +2011,11 @@ fn transfers_cuda_to_device() -> Result<()> {
     } else {
         (Device::new_cuda(0)?, Device::new_cuda(1)?)
     };
+    let mut data: Vec<u32> = (0..262144).collect();
+    let mut rng = rand::rng();
+    data.shuffle(&mut rng);
 
-    let t1 = Tensor::zeros((1, 1), DType::F32, &first)?;
-    let t1 = t1.rand_like(-50.0, 50.0)?;
+    let t1 = Tensor::from_vec(data, (512, 512), &first)?;
     let t2 = t1.to_device(&second)?;
 
     assert_tensor_eq(&t1, &t2)?;
