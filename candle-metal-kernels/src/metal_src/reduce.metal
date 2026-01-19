@@ -1031,8 +1031,9 @@ struct operation<OP, RMS<T>> {
         return op(a, b);
     }
 
-    METAL_FUNC RMS<T> operator()(RMS<T> a, T b) {
-        return this->operator()(a, RMS<T>{ 0, b });
+    template<typename U>
+    METAL_FUNC RMS<T> operator()(RMS<T> a, U b) {
+        return this->operator()(a, RMS<T>{ 0, static_cast<T>(b) });
     }
 };
 
@@ -1070,7 +1071,7 @@ METAL_FUNC void rms_norm(
     using Indexer = indexer_t<uint, false>;
     Indexer indexer;
     Divide fast_divide;
-    loader<T, RMS<T>, RMSLoadOp<T>, BLOCKSIZE, Indexer, uint> load;
+    loader<T, RMS<float>, RMSLoadOp<float>, BLOCKSIZE,  Indexer, uint> load;
     block_reducer<RMS<float>, RMSReduceOp<float>, BLOCKSIZE> reduce(shared);
 
     // Calculate offset for the threadgroup of current thread
@@ -1079,8 +1080,8 @@ METAL_FUNC void rms_norm(
     const uint idx = tid + offset;
 
     // Load with reduction from global memory into shared memory
-    RMS<T> value = load(
-        RMSLoadOp<T>::init(),
+    RMS<float> value = load(
+        RMSLoadOp<float>::init(),
         indexer,
         src_numel,
         el_per_block,
@@ -1212,8 +1213,9 @@ struct operation<OP, LayerNormValue<T>> {
         return op(a, b);
     }
 
-    METAL_FUNC LayerNormValue<T> operator()(LayerNormValue<T> a, T b) {
-        return this->operator()(a, LayerNormValue<T>{ 0, b, b });
+    template<typename U>
+    METAL_FUNC LayerNormValue<T> operator()(LayerNormValue<T> a, U b) {
+        return this->operator()(a, LayerNormValue<T>{ 0, static_cast<T>(b), static_cast<T>(b) });
     }
 };
 
@@ -1255,7 +1257,7 @@ METAL_FUNC void layer_norm(
     using Indexer = indexer_t<uint, false>;
     Indexer indexer;
     Divide fast_divide;
-    loader<T, LayerNormValue<T>, LNLoadOp<T>, BLOCKSIZE, Indexer, uint> load;
+    loader<T, LayerNormValue<float>, LNLoadOp<float>, BLOCKSIZE,  Indexer, uint> load;
     block_reducer<LayerNormValue<float>, LNReduceOp<float>, BLOCKSIZE> reduce(shared);
 
     // Calculate offset for the threadgroup of current thread
@@ -1264,8 +1266,8 @@ METAL_FUNC void layer_norm(
     const uint idx = tid + offset;
 
     // Load with reduction from global memory into shared memory
-    LayerNormValue<T> value = load(
-        LNReduceOp<T>::init(),
+    LayerNormValue<float> value = load(
+        LNReduceOp<float>::init(),
         indexer,
         src_numel,
         el_per_block,
