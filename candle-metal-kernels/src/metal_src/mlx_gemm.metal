@@ -1433,8 +1433,51 @@ template <
     instantiate_gemm(tn, true , false, iname, itype, oname, otype, bm, bn, bk, wm, wn) \
     instantiate_gemm(tt, true , true , iname, itype, oname, otype, bm, bn, bk, wm, wn)
 
+// ============================================================
+// Tile Configuration: (32, 32, 16, 2, 2) - Original/fallback configuration
+// ============================================================
 instantiate_gemm_transpose_helper(f32, float, f32, float, 32, 32, 16, 2, 2)
 instantiate_gemm_transpose_helper(f16, half, f16, half, 32, 32, 16, 2, 2)
 #if defined(__HAVE_BFLOAT__)
 instantiate_gemm_transpose_helper(bf16, bfloat, bf16, bfloat, 32, 32, 16, 2, 2)
+#endif
+
+// ============================================================
+// Tile Configuration: (64, 64, 16, 2, 2) - Default for medium devices
+// Reference: MLX steel_gemm_fused.metal
+// ============================================================
+instantiate_gemm_transpose_helper(f32, float, f32, float, 64, 64, 16, 2, 2)
+instantiate_gemm_transpose_helper(f16, half, f16, half, 64, 64, 16, 2, 2)
+#if defined(__HAVE_BFLOAT__)
+instantiate_gemm_transpose_helper(bf16, bfloat, bf16, bfloat, 64, 64, 16, 2, 2)
+#endif
+
+// ============================================================
+// Tile Configuration: (64, 64, 16, 1, 2) - For half/bfloat with small K
+// Reference: MLX steel_gemm_fused.metal
+// ============================================================
+instantiate_gemm_transpose_helper(f32, float, f32, float, 64, 64, 16, 1, 2)
+instantiate_gemm_transpose_helper(f16, half, f16, half, 64, 64, 16, 1, 2)
+#if defined(__HAVE_BFLOAT__)
+instantiate_gemm_transpose_helper(bf16, bfloat, bf16, bfloat, 64, 64, 16, 1, 2)
+#endif
+
+// ============================================================
+// Tile Configuration: (64, 32, 32, 2, 2) - For nt mode with large K
+// Reference: MLX steel_gemm_fused.metal
+// ============================================================
+instantiate_gemm_transpose_helper(f32, float, f32, float, 64, 32, 32, 2, 2)
+instantiate_gemm_transpose_helper(f16, half, f16, half, 64, 32, 32, 2, 2)
+#if defined(__HAVE_BFLOAT__)
+instantiate_gemm_transpose_helper(bf16, bfloat, bf16, bfloat, 64, 32, 32, 2, 2)
+#endif
+
+// ============================================================
+// Tile Configuration: (32, 64, 16, 1, 2) - For nn mode with large K
+// Reference: MLX steel_gemm_fused.metal
+// ============================================================
+instantiate_gemm_transpose_helper(f32, float, f32, float, 32, 64, 16, 1, 2)
+instantiate_gemm_transpose_helper(f16, half, f16, half, 32, 64, 16, 1, 2)
+#if defined(__HAVE_BFLOAT__)
+instantiate_gemm_transpose_helper(bf16, bfloat, bf16, bfloat, 32, 64, 16, 1, 2)
 #endif

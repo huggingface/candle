@@ -1,4 +1,4 @@
-use crate::metal::{Buffer, ComputeCommandEncoder, Device};
+use crate::metal::{Buffer, ComputeCommandEncoder, Device, MetalDeviceType};
 use crate::utils::EncoderProvider;
 use crate::{set_params, ConstantValues, EncoderParam, Kernels, MetalKernelError, Source, Value};
 use objc2_metal::{MTLResourceUsage, MTLSize};
@@ -8,6 +8,158 @@ pub enum GemmDType {
     BF16,
     F16,
     F32,
+}
+
+/// Tile configuration for GEMM kernel.
+///
+/// These parameters control the block sizes and warp tiling for the Metal GEMM kernel.
+/// Different configurations are optimal for different matrix sizes and data types.
+///
+/// Reference: MLX steel_gemm_fused.metal
+#[derive(Copy, Clone, Debug)]
+struct TileConfig {
+    bm: usize, // Block size M
+    bn: usize, // Block size N
+    bk: usize, // Block size K
+    wm: usize, // Warp tiles M
+    wn: usize, // Warp tiles N
+}
+
+impl TileConfig {
+    const fn new(bm: usize, bn: usize, bk: usize, wm: usize, wn: usize) -> Self {
+        Self { bm, bn, bk, wm, wn }
+    }
+}
+
+// Predefined tile configurations matching MLX's steel_gemm_fused.metal
+// Note: TILE_32_32_16_2_2 is kept for backward compatibility and as a fallback.
+// It's used by MLX for small devices ('g'/'p') but we default to medium device configs.
+#[allow(dead_code)]
+const TILE_32_32_16_2_2: TileConfig = TileConfig::new(32, 32, 16, 2, 2);
+const TILE_64_64_16_2_2: TileConfig = TileConfig::new(64, 64, 16, 2, 2);
+const TILE_64_64_16_1_2: TileConfig = TileConfig::new(64, 64, 16, 1, 2);
+const TILE_64_32_32_2_2: TileConfig = TileConfig::new(64, 32, 32, 2, 2);
+const TILE_32_64_16_1_2: TileConfig = TileConfig::new(32, 64, 16, 1, 2);
+
+/// Select optimal tile configuration based on matrix dimensions, data type, transpose mode,
+/// and device type.
+///
+/// This implements MLX's GEMM_TPARAM_MACRO tile selection logic.
+/// Reference: refs/mlx/mlx/backend/metal/matmul.cpp lines 88-170
+///
+/// The selection is based on:
+/// - Device type (phone/base-pro for small, ultra for large, others for medium)
+/// - Total output size (batch_size * M * N)
+/// - Data type (F32 vs F16/BF16)
+/// - Transpose mode (nn, nt, tn, tt)
+/// - K dimension relative to M and N
+fn select_tile_config(
+    dtype: GemmDType,
+    m: usize,
+    n: usize,
+    k: usize,
+    batch_size: usize,
+    a_trans: bool,
+    b_trans: bool,
+    device_type: MetalDeviceType,
+) -> TileConfig {
+    // MLX uses batch_size * M * N >= 1M as the threshold for "large matmul"
+    let total_output = batch_size * m * n;
+    let is_large_matmul = total_output >= (1 << 20); // 1M elements
+
+    match device_type {
+        // Small devices: phone ('p') and base/pro ('g')
+        MetalDeviceType::Phone | MetalDeviceType::BasePro => {
+            // MLX: if (devc == 'g' || devc == 'p')
+            if !a_trans && b_trans {
+                // nt mode
+                TILE_64_32_32_2_2
+            } else if dtype != GemmDType::F32 {
+                // half and bfloat
+                TILE_64_64_16_1_2
+            } else {
+                // float32 default
+                TILE_64_64_16_2_2
+            }
+        }
+        // Large device: ultra ('d')
+        MetalDeviceType::Ultra => {
+            // MLX: if (devc == 'd')
+            if is_large_matmul {
+                // Large matmul
+                if dtype != GemmDType::F32 {
+                    // half and bfloat
+                    if 2 * m.max(n) > k {
+                        // Reasonable K
+                        TILE_64_64_16_1_2
+                    } else if !a_trans && b_trans {
+                        // nt with large K
+                        TILE_64_32_32_2_2
+                    } else {
+                        // nn with large K
+                        TILE_32_64_16_1_2
+                    }
+                } else {
+                    // float32 takes default
+                    TILE_64_64_16_2_2
+                }
+            } else {
+                // Smaller matmul
+                if dtype != GemmDType::F32 {
+                    // half and bfloat
+                    if !a_trans && b_trans {
+                        // nt
+                        TILE_64_32_32_2_2
+                    } else {
+                        // nn
+                        TILE_64_64_16_1_2
+                    }
+                } else {
+                    // floats
+                    if !a_trans && b_trans {
+                        // nt
+                        TILE_32_64_16_1_2
+                    } else {
+                        // nn
+                        TILE_64_32_32_2_2
+                    }
+                }
+            }
+        }
+        // Medium devices: max ('s') and unknown
+        MetalDeviceType::Max | MetalDeviceType::Medium => {
+            // MLX: default medium device config
+            // Use the same logic as before but with medium device defaults
+            match dtype {
+                GemmDType::F32 => {
+                    if !is_large_matmul {
+                        if !a_trans && b_trans {
+                            TILE_32_64_16_1_2
+                        } else {
+                            TILE_64_32_32_2_2
+                        }
+                    } else {
+                        TILE_64_64_16_2_2
+                    }
+                }
+                GemmDType::F16 | GemmDType::BF16 => {
+                    if is_large_matmul {
+                        if 2 * m.max(n) > k {
+                            TILE_64_64_16_1_2
+                        } else if !a_trans && b_trans {
+                            TILE_64_32_32_2_2
+                        } else {
+                            TILE_32_64_16_1_2
+                        }
+                    } else if !a_trans && b_trans {
+                        TILE_64_32_32_2_2
+                    } else {
+                        TILE_64_64_16_1_2
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -77,7 +229,13 @@ pub fn call_mlx_gemm(
         }
         .bt())?;
     };
-    let (bm, bn, bk, wn, wm) = (32, 32, 16, 2, 2);
+
+    // Dynamic tile selection based on matrix dimensions, dtype, transpose mode, and device type
+    // Reference: MLX GEMM_TPARAM_MACRO in matmul.cpp
+    let device_type = device.device_type();
+    let tile = select_tile_config(dtype, m, n, k, b, a_trans, b_trans, device_type);
+    let (bm, bn, bk, wm, wn) = (tile.bm, tile.bn, tile.bk, tile.wm, tile.wn);
+
     // https://github.com/ml-explore/mlx/blob/02efb310cac667bc547d1b96f21596c221f84fe7/mlx/backend/metal/matmul.cpp#L422
     let constants = Some(ConstantValues::new(vec![
         (10, Value::Bool(/* has_batch */ b > 1)),
@@ -90,11 +248,11 @@ pub fn call_mlx_gemm(
     ]));
 
     let swizzle_log = 0;
-    let tile = 1 << swizzle_log;
+    let tile_swizzle = 1 << swizzle_log;
     let tn = n.div_ceil(bn);
     let tm = m.div_ceil(bm);
-    let tn = tn * tile;
-    let tm = tm.div_ceil(tile);
+    let tn = tn * tile_swizzle;
+    let tm = tm.div_ceil(tile_swizzle);
 
     let batch_stride_a = if lhs_stride.len() > 2 {
         lhs_stride[lhs_stride.len() - 3]
@@ -125,22 +283,24 @@ pub fn call_mlx_gemm(
     };
     let batch_strides = [gemm_params.batch_stride_a, gemm_params.batch_stride_b];
 
-    // TODO(laurent): generate the name
-    // template [[host_name("gemm_" #tname "_"  #iname "_" #oname "_bm" #bm "_bn" #bn "_bk" #bk "_wm" #wm "_wn" #wn)]]
-    let name = match (dtype, a_trans, b_trans) {
-        (GemmDType::F32, false, false) => "gemm_nn_f32_f32_32_32_16_2_2",
-        (GemmDType::F32, true, false) => "gemm_tn_f32_f32_32_32_16_2_2",
-        (GemmDType::F32, false, true) => "gemm_nt_f32_f32_32_32_16_2_2",
-        (GemmDType::F32, true, true) => "gemm_tt_f32_f32_32_32_16_2_2",
-        (GemmDType::BF16, false, false) => "gemm_nn_bf16_bf16_32_32_16_2_2",
-        (GemmDType::BF16, true, false) => "gemm_tn_bf16_bf16_32_32_16_2_2",
-        (GemmDType::BF16, false, true) => "gemm_nt_bf16_bf16_32_32_16_2_2",
-        (GemmDType::BF16, true, true) => "gemm_tt_bf16_bf16_32_32_16_2_2",
-        (GemmDType::F16, false, false) => "gemm_nn_f16_f16_32_32_16_2_2",
-        (GemmDType::F16, true, false) => "gemm_tn_f16_f16_32_32_16_2_2",
-        (GemmDType::F16, false, true) => "gemm_nt_f16_f16_32_32_16_2_2",
-        (GemmDType::F16, true, true) => "gemm_tt_f16_f16_32_32_16_2_2",
+    // Dynamically generate kernel name based on dtype, transpose mode, and tile config
+    // Format: gemm_{trans}_{itype}_{otype}_{bm}_{bn}_{bk}_{wm}_{wn}
+    let dtype_str = match dtype {
+        GemmDType::F32 => "f32",
+        GemmDType::F16 => "f16",
+        GemmDType::BF16 => "bf16",
     };
+    let trans_str = match (a_trans, b_trans) {
+        (false, false) => "nn",
+        (true, false) => "tn",
+        (false, true) => "nt",
+        (true, true) => "tt",
+    };
+    let name = format!(
+        "gemm_{}_{}_{}_{}_{}_{}_{}_{}",
+        trans_str, dtype_str, dtype_str, bm, bn, bk, wm, wn
+    );
+
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
