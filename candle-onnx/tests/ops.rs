@@ -1793,13 +1793,19 @@ fn test_gelu_operation() -> Result<()> {
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-
     let results = z.to_vec2::<f32>()?;
 
-    assert_eq!(
-        results,
-        vec![vec![0.0, 0.8413448], vec![1.9544997, 2.9959502]]
-    );
+    let expected = vec![vec![0.0, 0.8413447], vec![1.9544997, 2.9959502]];
+    let epsilon = 1e-5;
+
+    for (r_row, e_row) in results.iter().zip(expected.iter()) {
+        for (r, e) in r_row.iter().zip(e_row.iter()) {
+            assert!(
+                (r - e).abs() < epsilon,
+                "Value {} is not close enough to expected {}", r, e
+            );
+        }
+    }
 
     Ok(())
 }

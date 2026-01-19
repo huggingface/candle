@@ -50,6 +50,15 @@ jobs:
       - name: Install lld (Linux only)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lld
+      - name: Install protobuf (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y protobuf-compiler
+      - name: Install protobuf (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protobuf (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc -y
       - name: Run tests (with lld on Linux)
         if: runner.os == 'Linux'
         env:

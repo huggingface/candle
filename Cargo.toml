@@ -4,6 +4,7 @@ members = [
     "candle-datasets",
     "candle-examples",
     "candle-nn",
+    "candle-onnx",
     "candle-pyo3",
     "candle-transformers",
     "candle-ug",
@@ -18,7 +19,6 @@ exclude = [
     "candle-flash-attn-v3",
     "candle-kernels",
     "candle-metal-kernels",
-    "candle-onnx",
 ]
 resolver = "2"
 
