@@ -1980,7 +1980,13 @@ fn simple_eval_(
                 )?;
 
                 let mut lstm_state = candle_nn::rnn::LSTMState::new(h, c);
-                let mut h_acc = if node.output.first().map(String::as_str).unwrap_or("") != "" {
+                let mut h_acc = if !node
+                    .output
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     Some(vec![])
                 } else {
                     None
@@ -2274,7 +2280,7 @@ fn simple_eval_(
             }
             "HardSwish" => {
                 let input = get(&node.input[0])?;
-                let hard_sigmoid = candle_nn::ops::hard_sigmoid(&input)?;
+                let hard_sigmoid = candle_nn::ops::hard_sigmoid(input)?;
                 let output = input * hard_sigmoid;
                 values.insert(node.output[0].clone(), output?);
             }
@@ -2416,7 +2422,7 @@ fn simple_eval_(
                 let _updates_shape = updates.dims();
 
                 // Last dimension of indices represents the depth of indexing
-                let k = indices_shape.last().unwrap().clone();
+                let k = *indices_shape.last().unwrap();
 
                 if k > data.rank() {
                     bail!("ScatterND expects k (indices.shape[-1]) to be at most the rank of data");
@@ -2525,7 +2531,7 @@ fn simple_eval_(
                                 flat_output = flat_output.slice_scatter(&new_value, 0, flat_idx)?;
                             }
                         }
-                        "none" | _ => {
+                        _ => {
                             if update_element_shape.is_empty() {
                                 flat_output = flat_output.slice_scatter(
                                     &update_slice.unsqueeze(0)?,

@@ -1,3 +1,6 @@
+#![allow(clippy::excessive_precision)]
+#![allow(clippy::useless_vec)]
+
 use candle::test_utils::to_vec2_round;
 use candle::{DType, Device, NdArray, Result, Tensor};
 use candle_onnx::onnx::attribute_proto::AttributeType;
@@ -1802,7 +1805,9 @@ fn test_gelu_operation() -> Result<()> {
         for (r, e) in r_row.iter().zip(e_row.iter()) {
             assert!(
                 (r - e).abs() < epsilon,
-                "Value {} is not close enough to expected {}", r, e
+                "Value {} is not close enough to expected {}",
+                r,
+                e
             );
         }
     }
