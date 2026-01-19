@@ -1,7 +1,7 @@
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-#[cfg(feature = "mkl")]
+#[cfg(feature = "mkl-unlinked")]
 extern crate intel_mkl_src;
 
 use candle_transformers::models::stable_diffusion;

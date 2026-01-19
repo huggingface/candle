@@ -1,7 +1,7 @@
 //! DINOv2: Learning Robust Visual Features without Supervision
 //! https://github.com/facebookresearch/dinov2
 
-#[cfg(feature = "mkl")]
+#[cfg(feature = "mkl-unlinked")]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]

@@ -1235,7 +1235,7 @@ impl MatMul {
 impl Map2 for MatMul {
     const OP: &'static str = "mat_mul";
 
-    #[cfg(all(not(feature = "mkl"), not(feature = "accelerate")))]
+    #[cfg(all(not(feature = "mkl-unlinked"), not(feature = "accelerate")))]
     fn f<T: 'static + WithDType + num_traits::Num + Copy>(
         &self,
         lhs: &[T],
@@ -1409,7 +1409,7 @@ impl Map2 for MatMul {
         Ok(dst)
     }
 
-    #[cfg(feature = "mkl")]
+    #[cfg(feature = "mkl-unlinked")]
     fn f<T: 'static + WithDType + num_traits::Num + Copy>(
         &self,
         lhs: &[T],

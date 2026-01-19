@@ -69,7 +69,7 @@ mod indexer;
 pub mod layout;
 #[cfg(feature = "metal")]
 pub mod metal_backend;
-#[cfg(feature = "mkl")]
+#[cfg(feature = "mkl-unlinked")]
 mod mkl;
 pub mod npy;
 pub mod op;
@@ -120,7 +120,7 @@ pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
 #[cfg(not(feature = "metal"))]
 pub use dummy_metal_backend::{MetalDevice, MetalError, MetalStorage};
 
-#[cfg(feature = "mkl")]
+#[cfg(feature = "mkl-unlinked")]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]

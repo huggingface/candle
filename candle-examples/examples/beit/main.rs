@@ -1,7 +1,7 @@
 //! BEiT: BERT Pre-Training of Image Transformers
 //! https://github.com/microsoft/unilm/tree/master/beit
 
-#[cfg(feature = "mkl")]
+#[cfg(feature = "mkl-unlinked")]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]

@@ -3,7 +3,7 @@
 //
 // In this example we add the RMS normalization operation and implement it for f32.
 
-#[cfg(feature = "mkl")]
+#[cfg(feature = "mkl-unlinked")]
 extern crate intel_mkl_src;
 
 #[rustfmt::skip]

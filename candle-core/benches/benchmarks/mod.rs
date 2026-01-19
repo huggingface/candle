@@ -45,7 +45,7 @@ impl BenchDevice for Device {
             Device::Cpu => {
                 let cpu_type = if cfg!(feature = "accelerate") {
                     "accelerate"
-                } else if cfg!(feature = "mkl") {
+                } else if cfg!(feature = "mkl-unlinked") {
                     "mkl"
                 } else {
                     "cpu"

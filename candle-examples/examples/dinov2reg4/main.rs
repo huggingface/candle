@@ -3,7 +3,7 @@
 //! https://huggingface.co/spaces/BVRA/PlantCLEF2024
 //! https://zenodo.org/records/10848263
 
-#[cfg(feature = "mkl")]
+#[cfg(feature = "mkl-unlinked")]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
