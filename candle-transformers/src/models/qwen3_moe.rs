@@ -222,7 +222,7 @@ impl DecoderLayer {
         // Decide whether to use MoE or regular MLP based on layer_idx and decoder_sparse_step
         let feed_forward =
             if cfg.num_experts > 0 && (layer_idx + 1).is_multiple_of(cfg.decoder_sparse_step) {
-                if cfg!(feature = "cuda") {
+                if cfg!(any(feature = "cuda", feature = "cuda-unlinked")) {
                     // Use fused MoE kernel on CUDA
                     Qwen3FeedForward::FusedMoE(FusedMoe::new(&moe_cfg, vb.pp("mlp"), vb.dtype())?)
                 } else {

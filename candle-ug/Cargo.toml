@@ -16,4 +16,5 @@ ug-metal = { workspace = true, optional = true }
 [features]
 default = []
 cuda = ["dep:ug-cuda"]
+cuda-unlinked = ["dep:ug-cuda"]
 metal = ["dep:ug-metal"]

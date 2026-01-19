@@ -82,7 +82,7 @@ impl candle::CustomOp1 for Sigmoid {
         Ok((storage, layout.shape().clone()))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
     fn cuda_fwd(
         &self,
         storage: &candle::CudaStorage,
@@ -325,7 +325,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
     fn cuda_fwd(
         &self,
         storage: &candle::CudaStorage,
@@ -503,7 +503,7 @@ impl candle::CustomOp2 for RmsNorm {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
     fn cuda_fwd(
         &self,
         s1: &candle::CudaStorage,
@@ -734,7 +734,7 @@ impl candle::CustomOp3 for LayerNorm {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
     fn cuda_fwd(
         &self,
         s1: &candle::CudaStorage,

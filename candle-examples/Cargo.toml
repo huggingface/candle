@@ -71,6 +71,7 @@ accelerate = [
     "candle-nn/accelerate",
     "candle-transformers/accelerate",
 ]
+
 cuda = [
     "candle/cuda",
     "candle-nn/cuda",
@@ -78,13 +79,56 @@ cuda = [
     "dep:bindgen_cuda",
 ]
 cudnn = ["candle/cudnn", "candle-nn/cudnn", "candle-transformers/cudnn"]
+cuda-unlinked = [
+    "candle/cuda-unlinked",
+    "candle-nn/cuda-unlinked",
+    "candle-transformers/cuda-unlinked",
+    "dep:bindgen_cuda",
+]
+cuda-dynamic-linking = [
+    "candle/cuda-dynamic-linking",
+    "candle-nn/cuda-dynamic-linking",
+    "candle-transformers/cuda-dynamic-linking",
+]
+cuda-static-linking = [
+    "candle/cuda-static-linking",
+    "candle-nn/cuda-static-linking",
+    "candle-transformers/cuda-static-linking",
+]
+cuda-dynamic-loading = [
+    "candle/cuda-dynamic-loading",
+    "candle-nn/cuda-dynamic-loading",
+    "candle-transformers/cuda-dynamic-loading",
+]
+
 flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
+flash-attn-unlinked = ["cuda-unlinked", "candle-transformers/flash-attn-unlinked", "dep:candle-flash-attn", "candle-flash-attn?/cuda-unlinked"]
+
 mkl = [
     "dep:intel-mkl-src",
     "candle/mkl",
     "candle-nn/mkl",
     "candle-transformers/mkl",
 ]
+mkl-unlinked = [
+    "dep:intel-mkl-src",
+    "candle/mkl-unlinked",
+    "candle-nn/mkl-unlinked",
+    "candle-transformers/mkl-unlinked",
+]
+mkl-static-linking = [
+    "candle/mkl-static-linking",
+    "candle-nn/mkl-static-linking",
+    "candle-transformers/mkl-static-linking",
+    "intel-mkl-src?/mkl-static-lp64-iomp",
+]
+mkl-dynamic-linking = [
+    "candle/mkl-dynamic-linking",
+    "candle-nn/mkl-dynamic-linking",
+    "candle-transformers/mkl-dynamic-linking",
+    "intel-mkl-src?/mkl-dynamic-lp64-iomp",
+]
+
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
 onnx = ["candle-onnx"]
 metal = ["candle/metal", "candle-nn/metal"]

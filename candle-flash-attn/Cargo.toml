@@ -11,7 +11,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../candle-core", features = ["cuda"], package = "candle-core", version = "0.9.2-alpha.2" }
+candle = { path = "../candle-core", package = "candle-core", version = "0.9.2-alpha.2" }
 half = { version = "2.3.1", features = ["num-traits"] }
 
 [build-dependencies]
@@ -24,5 +24,10 @@ anyhow = { version = "1", features = ["backtrace"] }
 candle-nn = { path = "../candle-nn", features = ["cuda"] }
 
 [features]
-default = []
+default = ["cuda"]
+cuda = ["candle/cuda"]
 cudnn = ["candle/cudnn"]
+cuda-unlinked = ["candle/cuda-unlinked"]
+cuda-dynamic-linking = ["candle/cuda-dynamic-linking"]
+cuda-static-linking = ["candle/cuda-static-linking"]
+cuda-dynamic-loading = ["candle/cuda-dynamic-loading"]

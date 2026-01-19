@@ -29,6 +29,16 @@ pyo3-build-config = "0.27"
 [features]
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
+
 cuda = ["candle/cuda"]
+cuda-unlinked = ["candle/cuda-unlinked"]
+cuda-dynamic-linking = ["candle/cuda-dynamic-linking"]
+cuda-static-linking = ["candle/cuda-static-linking"]
+cuda-dynamic-loading = ["candle/cuda-dynamic-loading"]
+
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
+mkl-unlinked = ["dep:intel-mkl-src", "candle/mkl-unlinked"]
+mkl-static-linking = ["candle/mkl-static-linking", "intel-mkl-src?/mkl-static-lp64-iomp"]
+mkl-dynamic-linking = ["candle/mkl-dynamic-linking", "intel-mkl-src?/mkl-dynamic-lp64-iomp"]
+
 onnx = ["dep:candle-onnx"]

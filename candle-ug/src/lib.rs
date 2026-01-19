@@ -3,7 +3,7 @@
 
 pub use ug::*;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
 pub mod cuda {
     pub use ug_cuda::*;
 }

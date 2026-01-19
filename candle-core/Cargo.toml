@@ -44,10 +44,21 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda", "float8/cuda"]
+
+cuda = ["cudarc", "cudarc/dynamic-linking", "dep:candle-kernels", "candle-ug?/cuda", "float8/cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
-mkl = ["dep:libc", "dep:intel-mkl-src"]
+# NOTE: float8/cuda is not included because it adds dynamic-linking to cudarc
+cuda-unlinked = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda-unlinked"]
+cuda-dynamic-linking = ["cudarc?/dynamic-linking"]
+cuda-static-linking = ["cudarc?/static-linking"]
+cuda-dynamic-loading = ["cudarc?/dynamic-loading"]
+
+mkl = ["dep:libc", "dep:intel-mkl-src", "intel-mkl-src/mkl-static-lp64-iomp"]
+mkl-unlinked = ["dep:libc", "dep:intel-mkl-src"]
+mkl-static-linking = ["intel-mkl-src?/mkl-static-lp64-iomp"]
+mkl-dynamic-linking = ["intel-mkl-src?/mkl-dynamic-lp64-iomp"]
+
 accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = [
     "dep:objc2-metal",

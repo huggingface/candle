@@ -85,7 +85,7 @@ impl candle::CustomOp3 for RotaryEmbI {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
     fn cuda_fwd(
         &self,
         s1: &candle::CudaStorage,
@@ -368,7 +368,7 @@ impl candle::CustomOp3 for RotaryEmb {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
     fn cuda_fwd(
         &self,
         s1: &candle::CudaStorage,
@@ -638,7 +638,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
     fn cuda_fwd(
         &self,
         s1: &candle::CudaStorage,

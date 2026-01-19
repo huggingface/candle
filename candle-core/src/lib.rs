@@ -55,7 +55,7 @@ pub mod conv;
 mod convert;
 pub mod cpu;
 pub mod cpu_backend;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
 pub mod cuda_backend;
 mod custom_op;
 mod device;
@@ -69,7 +69,7 @@ mod indexer;
 pub mod layout;
 #[cfg(feature = "metal")]
 pub mod metal_backend;
-#[cfg(feature = "mkl")]
+#[cfg(any(feature = "mkl", feature = "mkl-unlinked"))]
 mod mkl;
 pub mod npy;
 pub mod op;
@@ -108,10 +108,10 @@ pub use strided_index::{StridedBlocks, StridedIndex};
 pub use tensor::{Tensor, TensorId};
 pub use variable::Var;
 
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
 pub use cuda_backend as cuda;
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(any(feature = "cuda", feature = "cuda-unlinked")))]
 pub use dummy_cuda_backend as cuda;
 
 pub use cuda::{CudaDevice, CudaStorage};
@@ -122,7 +122,7 @@ pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
 #[cfg(not(feature = "metal"))]
 pub use dummy_metal_backend::{MetalDevice, MetalError, MetalStorage};
 
-#[cfg(feature = "mkl")]
+#[cfg(any(feature = "mkl", feature = "mkl-unlinked"))]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]

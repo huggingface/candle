@@ -236,7 +236,7 @@ impl Tensor {
                         };
                         Storage::Cpu(cpu_storage)
                     }
-                    #[cfg(feature = "cuda")]
+                    #[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
                     Device::Cuda(device) => {
                         let mut slice = unsafe { device.alloc::<u8>(data.len())? };
                         device.memcpy_htod(data, &mut slice)?;
@@ -254,7 +254,7 @@ impl Tensor {
                         };
                         Storage::Cuda(storage)
                     }
-                    #[cfg(not(feature = "cuda"))]
+                    #[cfg(not(any(feature = "cuda", feature = "cuda-unlinked")))]
                     Device::Cuda(_) => {
                         return Err(Error::Msg("CUDA support not compiled".to_string()));
                     }
@@ -336,7 +336,7 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             };
             Storage::Cpu(cpu_storage)
         }
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", feature = "cuda-unlinked"))]
         Device::Cuda(device) => {
             let mut slice = unsafe { device.alloc::<u8>(data.len())? };
             device.memcpy_htod(data, &mut slice)?;
@@ -354,7 +354,7 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             };
             Storage::Cuda(storage)
         }
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(not(any(feature = "cuda", feature = "cuda-unlinked")))]
         Device::Cuda(_) => {
             return Err(Error::Msg("CUDA support not compiled".to_string()));
         }
