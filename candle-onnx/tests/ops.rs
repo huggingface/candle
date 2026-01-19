@@ -7499,8 +7499,8 @@ fn test_quantize_linear_basic_u8() -> Result<()> {
             op_type: "QuantizeLinear".to_string(),
             input: vec![
                 INPUT_X.to_string(),
-                "y_scale".to_string(),
-                "y_zero_point".to_string(),
+                "x_scale".to_string(),
+                "x_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
             ..Default::default()
@@ -7518,8 +7518,8 @@ fn test_quantize_linear_basic_u8() -> Result<()> {
         INPUT_X.to_string(),
         Tensor::from_vec(vec![0.0f32, 2.0f32, 3.0f32, 5.0f32], &[4], &Device::Cpu)?,
     );
-    inputs.insert("y_scale".to_string(), Tensor::new(2.0f32, &Device::Cpu)?);
-    inputs.insert("y_zero_point".to_string(), Tensor::new(0u8, &Device::Cpu)?);
+    inputs.insert("x_scale".to_string(), Tensor::new(2.0f32, &Device::Cpu)?);
+    inputs.insert("x_zero_point".to_string(), Tensor::new(0u8, &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -7537,8 +7537,8 @@ fn test_quantize_linear_with_zero_point() -> Result<()> {
             op_type: "QuantizeLinear".to_string(),
             input: vec![
                 INPUT_X.to_string(),
-                "y_scale".to_string(),
-                "y_zero_point".to_string(),
+                "x_scale".to_string(),
+                "x_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
             ..Default::default()
@@ -7556,9 +7556,9 @@ fn test_quantize_linear_with_zero_point() -> Result<()> {
         INPUT_X.to_string(),
         Tensor::from_vec(vec![-2.0f32, 0.0f32, 2.0f32, 4.0f32], &[4], &Device::Cpu)?,
     );
-    inputs.insert("y_scale".to_string(), Tensor::new(2.0f32, &Device::Cpu)?);
+    inputs.insert("x_scale".to_string(), Tensor::new(2.0f32, &Device::Cpu)?);
     inputs.insert(
-        "y_zero_point".to_string(),
+        "x_zero_point".to_string(),
         Tensor::new(128u8, &Device::Cpu)?,
     );
 
@@ -7578,8 +7578,8 @@ fn test_quantize_linear_clamping() -> Result<()> {
             op_type: "QuantizeLinear".to_string(),
             input: vec![
                 INPUT_X.to_string(),
-                "y_scale".to_string(),
-                "y_zero_point".to_string(),
+                "x_scale".to_string(),
+                "x_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
             ..Default::default()
@@ -7599,9 +7599,9 @@ fn test_quantize_linear_clamping() -> Result<()> {
         Tensor::from_vec(vec![-100.0f32, 500.0f32, 254.6f32], &[3], &Device::Cpu)?,
     );
 
-    inputs.insert("y_scale".to_string(), Tensor::new(1.0f32, &Device::Cpu)?);
+    inputs.insert("x_scale".to_string(), Tensor::new(1.0f32, &Device::Cpu)?);
 
-    inputs.insert("y_zero_point".to_string(), Tensor::new(0u8, &Device::Cpu)?);
+    inputs.insert("x_zero_point".to_string(), Tensor::new(0u8, &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -7618,8 +7618,8 @@ fn test_quantize_linear_3d_axis_1() -> Result<()> {
             op_type: "QuantizeLinear".to_string(),
             input: vec![
                 INPUT_X.to_string(),
-                "y_scale".to_string(),
-                "y_zero_point".to_string(),
+                "x_scale".to_string(),
+                "x_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
             attribute: vec![AttributeProto {
@@ -7648,12 +7648,12 @@ fn test_quantize_linear_3d_axis_1() -> Result<()> {
     inputs.insert(INPUT_X.to_string(), x);
 
     inputs.insert(
-        "y_scale".to_string(),
+        "x_scale".to_string(),
         Tensor::from_vec(vec![1.0f32, 20.0f32, 300.0f32], (3,), &Device::Cpu)?,
     );
 
     inputs.insert(
-        "y_zero_point".to_string(),
+        "x_zero_point".to_string(),
         Tensor::from_vec(vec![0u8, 1u8, 2u8], (3,), &Device::Cpu)?,
     );
 
@@ -7672,8 +7672,8 @@ fn test_quantize_linear_blocked() -> Result<()> {
             op_type: "QuantizeLinear".to_string(),
             input: vec![
                 INPUT_X.to_string(),
-                "y_scale".to_string(),
-                "y_zero_point".to_string(),
+                "x_scale".to_string(),
+                "x_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
             attribute: vec![AttributeProto {
@@ -7702,12 +7702,12 @@ fn test_quantize_linear_blocked() -> Result<()> {
     inputs.insert(INPUT_X.to_string(), x);
 
     inputs.insert(
-        "y_scale".to_string(),
+        "x_scale".to_string(),
         Tensor::from_vec(vec![10.0f32, 1.0f32, 100.0f32], (3,), &Device::Cpu)?,
     );
 
     inputs.insert(
-        "y_zero_point".to_string(),
+        "x_zero_point".to_string(),
         Tensor::from_vec(vec![0u8, 5u8, 10u8], (3,), &Device::Cpu)?,
     );
 
@@ -7726,8 +7726,8 @@ fn test_dequantize_linear_basic() -> Result<()> {
             op_type: "DequantizeLinear".to_string(),
             input: vec![
                 INPUT_X.to_string(),
-                "y_scale".to_string(),
-                "y_zero_point".to_string(),
+                "x_scale".to_string(),
+                "x_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
             ..Default::default()
@@ -7747,10 +7747,10 @@ fn test_dequantize_linear_basic() -> Result<()> {
         Tensor::from_vec(vec![128u8, 129u8, 127u8, 130u8], &[4], &Device::Cpu)?,
     );
 
-    inputs.insert("y_scale".to_string(), Tensor::new(2.0f32, &Device::Cpu)?);
+    inputs.insert("x_scale".to_string(), Tensor::new(2.0f32, &Device::Cpu)?);
 
     inputs.insert(
-        "y_zero_point".to_string(),
+        "x_zero_point".to_string(),
         Tensor::new(128u8, &Device::Cpu)?,
     );
 
@@ -7769,8 +7769,8 @@ fn test_dequantize_linear_with_zero_point() -> Result<()> {
             op_type: "DequantizeLinear".to_string(),
             input: vec![
                 INPUT_X.to_string(),
-                "y_scale".to_string(),
-                "y_zero_point".to_string(),
+                "x_scale".to_string(),
+                "x_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
             ..Default::default()
@@ -7790,10 +7790,10 @@ fn test_dequantize_linear_with_zero_point() -> Result<()> {
         Tensor::from_vec(vec![128u8, 64u8, 192u8, 10u8], &[4], &Device::Cpu)?,
     );
 
-    inputs.insert("y_scale".to_string(), Tensor::new(0.5f32, &Device::Cpu)?);
+    inputs.insert("x_scale".to_string(), Tensor::new(0.5f32, &Device::Cpu)?);
 
     inputs.insert(
-        "y_zero_point".to_string(),
+        "x_zero_point".to_string(),
         Tensor::new(128u8, &Device::Cpu)?,
     );
 
@@ -7813,8 +7813,8 @@ fn test_dequantize_linear_blocked() -> Result<()> {
             op_type: "DequantizeLinear".to_string(),
             input: vec![
                 INPUT_X.to_string(),
-                "y_scale".to_string(),
-                "y_zero_point".to_string(),
+                "x_scale".to_string(),
+                "x_zero_point".to_string(),
             ],
             output: vec![OUTPUT_Z.to_string()],
             attribute: vec![AttributeProto {
@@ -7839,11 +7839,11 @@ fn test_dequantize_linear_blocked() -> Result<()> {
         Tensor::from_vec(vec![100u8, 102u8, 10u8, 12u8], &[4], &Device::Cpu)?,
     );
     inputs.insert(
-        "y_scale".to_string(),
+        "x_scale".to_string(),
         Tensor::from_vec(vec![1.0f32, 10.0f32], &[2], &Device::Cpu)?,
     );
     inputs.insert(
-        "y_zero_point".to_string(),
+        "x_zero_point".to_string(),
         Tensor::from_vec(vec![100u8, 10u8], &[2], &Device::Cpu)?,
     );
 
@@ -7862,8 +7862,8 @@ fn test_quantize_dequantize_blocked_round_trip() -> Result<()> {
                 op_type: "QuantizeLinear".to_string(),
                 input: vec![
                     INPUT_X.to_string(),
-                    "y_scale".to_string(),
-                    "y_zero_point".to_string(),
+                    "x_scale".to_string(),
+                    "x_zero_point".to_string(),
                 ],
                 output: vec!["quantized".to_string()],
                 attribute: vec![AttributeProto {
@@ -7878,8 +7878,8 @@ fn test_quantize_dequantize_blocked_round_trip() -> Result<()> {
                 op_type: "DequantizeLinear".to_string(),
                 input: vec![
                     "quantized".to_string(),
-                    "y_scale".to_string(),
-                    "y_zero_point".to_string(),
+                    "x_scale".to_string(),
+                    "x_zero_point".to_string(),
                 ],
                 output: vec![OUTPUT_Z.to_string()],
                 attribute: vec![AttributeProto {
@@ -7905,11 +7905,11 @@ fn test_quantize_dequantize_blocked_round_trip() -> Result<()> {
         Tensor::from_vec(vec![3.0f32, 3.0f32, 25.0f32, 25.0f32], &[4], &Device::Cpu)?,
     );
     inputs.insert(
-        "y_scale".to_string(),
+        "x_scale".to_string(),
         Tensor::from_vec(vec![2.0f32, 10.0f32], &[2], &Device::Cpu)?,
     );
     inputs.insert(
-        "y_zero_point".to_string(),
+        "x_zero_point".to_string(),
         Tensor::from_vec(vec![0u8, 0u8], &[2], &Device::Cpu)?,
     );
 

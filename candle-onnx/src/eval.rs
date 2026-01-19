@@ -2454,8 +2454,8 @@ fn simple_eval_(
             }
             "QuantizeLinear" => {
                 let x = get(&node.input[0])?;
-                let y_scale = get(&node.input[1])?;
-                let y_zero_point = get_opt(2).transpose()?;
+                let x_scale = get(&node.input[1])?;
+                let x_zero_point = get_opt(2).transpose()?;
 
                 let axis = get_attr_opt::<i64>(node, "axis")?
                     .copied()
@@ -2481,19 +2481,19 @@ fn simple_eval_(
                     None
                 };
 
-                let mut y_scale = if let Some(idx) = &indices {
-                    y_scale.index_select(idx, axis)?
+                let mut x_scale = if let Some(idx) = &indices {
+                    x_scale.index_select(idx, axis)?
                 } else {
-                    y_scale.clone()
+                    x_scale.clone()
                 };
 
-                if y_scale.rank() == 1 && x.rank() > 1 {
+                if x_scale.rank() == 1 && x.rank() > 1 {
                     let mut shape = vec![1; x.rank()];
-                    shape[axis] = y_scale.elem_count();
-                    y_scale = y_scale.reshape(shape)?;
+                    shape[axis] = x_scale.elem_count();
+                    x_scale = x_scale.reshape(shape)?;
                 }
 
-                let y_zero_point = if let Some(zp) = y_zero_point {
+                let x_zero_point = if let Some(zp) = x_zero_point {
                     let mut zp = if let Some(idx) = &indices {
                         zp.index_select(idx, axis)?
                     } else {
@@ -2510,15 +2510,15 @@ fn simple_eval_(
                     None
                 };
 
-                let result = x.broadcast_div(&y_scale)?.round()?;
-                let result = if let Some(ref zp) = y_zero_point {
+                let result = x.broadcast_div(&x_scale)?.round()?;
+                let result = if let Some(ref zp) = x_zero_point {
                     let zp_as_res = zp.to_dtype(result.dtype())?;
                     result.broadcast_add(&zp_as_res)?
                 } else {
                     result
                 };
 
-                let target_dtype = if let Some(ref zp) = y_zero_point {
+                let target_dtype = if let Some(ref zp) = x_zero_point {
                     zp.dtype()
                 } else {
                     match get_attr_opt::<i64>(node, "output_dtype")?.copied() {
