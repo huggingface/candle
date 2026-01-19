@@ -63,6 +63,19 @@ fn select_tile_config(
     b_trans: bool,
     device_type: MetalDeviceType,
 ) -> TileConfig {
+    // Special case: For very small M (vector-matrix multiply),
+    // use the original 32x32 tile to avoid thread waste.
+    // When M is very small (< bm), using larger bm values causes significant
+    // thread underutilization because most threads in the M dimension have no work.
+    // This is critical for benchmarks like [1, 2048] @ [2048, 2048] (m=1).
+    //
+    // We use m < 16 as the threshold because:
+    // - For m=1 to m=15, even 32x32 tile has some waste but it's the smallest available
+    // - For m >= 16, the larger tiles can provide better throughput despite some waste
+    if m < 16 {
+        return TILE_32_32_16_2_2;
+    }
+
     // MLX uses batch_size * M * N >= 1M as the threshold for "large matmul"
     let total_output = batch_size * m * n;
     let is_large_matmul = total_output >= (1 << 20); // 1M elements
