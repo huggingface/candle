@@ -68,3 +68,7 @@ required-features = ["metal"]
 [[example]]
 name = "cuda_basics"
 required-features = ["cuda"]
+
+[[example]]
+name = "metal_matmul_benchmark"
+required-features = ["metal"]

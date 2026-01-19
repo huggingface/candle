@@ -162,6 +162,83 @@ fn select_tile_config(
     }
 }
 
+/// Check if batch can be collapsed into M dimension.
+///
+/// MLX's batch collapse optimization (from matmul.cpp lines 700-740):
+/// When B is broadcasted (2D), we can collapse batch into M dimension:
+/// - [batch, M, K] @ [K, N] -> [batch*M, K] @ [K, N]
+///
+/// Conditions for batch collapse:
+/// 1. batch_size > 1
+/// 2. !transpose_a (A is not transposed, i.e., row-major for M dimension)
+/// 3. A is contiguous in batch dimension (batch_stride_a == M * K)
+/// 4. B is broadcasted (batch_stride_b == 0, meaning B is 2D)
+///
+/// Returns (effective_batch, effective_m, should_collapse)
+fn check_batch_collapse(
+    b: usize,
+    m: usize,
+    k: usize,
+    a_trans: bool,
+    lhs_stride: &[usize],
+    rhs_stride: &[usize],
+) -> (usize, usize, bool) {
+    if b <= 1 {
+        return (b, m, false);
+    }
+
+    // A must not be transposed for batch collapse
+    if a_trans {
+        return (b, m, false);
+    }
+
+    // Check A's batch stride - must be contiguous (batch_stride_a == M * K)
+    let a_batch_stride = if lhs_stride.len() > 2 {
+        lhs_stride[lhs_stride.len() - 3]
+    } else {
+        m * k
+    };
+
+    // Check B's batch stride - must be 0 (broadcasted) for collapse
+    let b_batch_stride = if rhs_stride.len() > 2 {
+        rhs_stride[rhs_stride.len() - 3]
+    } else {
+        0 // B is 2D, effectively broadcasted
+    };
+
+    // For batch collapse:
+    // - A must be contiguous: batch_stride_a == M * K
+    // - B must be broadcasted: batch_stride_b == 0
+    let a_contiguous = a_batch_stride == m * k;
+    let b_broadcasted = b_batch_stride == 0;
+
+    if a_contiguous && b_broadcasted {
+        // Collapse batch into M: new_m = batch * m, new_batch = 1
+        (1, b * m, true)
+    } else {
+        (b, m, false)
+    }
+}
+
+/// Check if we can use split-K strategy for better performance.
+///
+/// MLX uses split-K when:
+/// - batch_size == 1
+/// - (M/16) * (N/16) <= 32 (small output)
+/// - K/16 >= 8 (large K)
+///
+/// This is useful for tall-skinny matrices where K >> M*N
+#[allow(dead_code)]
+fn should_use_split_k(b: usize, m: usize, n: usize, k: usize) -> bool {
+    if b != 1 {
+        return false;
+    }
+    let tm = m / 16;
+    let tn = n / 16;
+    let tk = k / 16;
+    (tm * tn) <= 32 && tk >= 8
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_mlx_gemm(
     device: &Device,
@@ -230,6 +307,15 @@ pub fn call_mlx_gemm(
         .bt())?;
     };
 
+    // Check for batch collapse optimization (MLX matmul.cpp lines 700-740)
+    // When B is broadcasted (2D), collapse batch into M dimension
+    let (effective_batch, effective_m, batch_collapsed) =
+        check_batch_collapse(b, m, k, a_trans, lhs_stride, rhs_stride);
+
+    // Use effective dimensions after potential batch collapse
+    let m = effective_m;
+    let b = effective_batch;
+
     // Dynamic tile selection based on matrix dimensions, dtype, transpose mode, and device type
     // Reference: MLX GEMM_TPARAM_MACRO in matmul.cpp
     let device_type = device.device_type();
@@ -237,8 +323,15 @@ pub fn call_mlx_gemm(
     let (bm, bn, bk, wm, wn) = (tile.bm, tile.bn, tile.bk, tile.wm, tile.wn);
 
     // https://github.com/ml-explore/mlx/blob/02efb310cac667bc547d1b96f21596c221f84fe7/mlx/backend/metal/matmul.cpp#L422
+    // MLX uses batch_shape.size() > 1 for has_batch, not b > 1
+    // When batch dimensions are collapsed into a single dimension (batch_ndim = 1),
+    // has_batch should be false because we can use simple stride multiplication
+    // instead of the more expensive elem_to_loc_broadcast function
+    let batch_ndim = 1; // We always collapse batch dimensions into one
+    let has_batch = batch_ndim > 1; // This matches MLX's logic
+
     let constants = Some(ConstantValues::new(vec![
-        (10, Value::Bool(/* has_batch */ b > 1)),
+        (10, Value::Bool(has_batch)),
         (100, Value::Bool(/* use_out_source */ false)),
         (110, Value::Bool(/* do_axpby */ false)),
         (200, Value::Bool(/* align_m */ m % bm == 0)),
@@ -254,34 +347,40 @@ pub fn call_mlx_gemm(
     let tn = tn * tile_swizzle;
     let tm = tm.div_ceil(tile_swizzle);
 
-    let batch_stride_a = if lhs_stride.len() > 2 {
-        lhs_stride[lhs_stride.len() - 3]
+    // Calculate batch strides based on whether batch was collapsed
+    let (batch_stride_a, batch_stride_b) = if batch_collapsed {
+        // After batch collapse, there's no batch dimension
+        (0isize, 0isize)
     } else {
-        m * k
-    };
-    let batch_stride_b = if rhs_stride.len() > 2 {
-        rhs_stride[rhs_stride.len() - 3]
-    } else {
-        n * k
+        let a_stride = if lhs_stride.len() > 2 {
+            lhs_stride[lhs_stride.len() - 3] as isize
+        } else {
+            (m * k) as isize
+        };
+        let b_stride = if rhs_stride.len() > 2 {
+            rhs_stride[rhs_stride.len() - 3] as isize
+        } else {
+            (n * k) as isize
+        };
+        (a_stride, b_stride)
     };
 
     let gemm_params = GemmParams {
         m: m as i32,
         n: n as i32,
         k: k as i32,
-        lda,
+        lda: if batch_collapsed { k as i32 } else { lda }, // After collapse, lda = K
         ldb,
         ldd: n as i32,
         tiles_n: tn as i32,
         tiles_m: tm as i32,
         swizzle_log,
-        batch_stride_a: batch_stride_a as isize,
-        batch_stride_b: batch_stride_b as isize,
+        batch_stride_a,
+        batch_stride_b,
         batch_stride_d: (m * n) as isize,
         batch_ndim: 1i32,
         gemm_k_iterations_aligned: (k / bk) as i32,
     };
-    let batch_strides = [gemm_params.batch_stride_a, gemm_params.batch_stride_b];
 
     // Dynamically generate kernel name based on dtype, transpose mode, and tile config
     // Format: gemm_{trans}_{itype}_{otype}_{bm}_{bn}_{bk}_{wm}_{wn}
@@ -312,6 +411,10 @@ pub fn call_mlx_gemm(
         }
     }
 
+    // Set buffer parameters
+    // Note: batch_shape and batch_strides are only needed when has_batch = true
+    // Since we always collapse batch dimensions into one (batch_ndim = 1),
+    // has_batch is always false, so we don't need to set buffers 6 and 7
     set_params!(
         encoder,
         (
@@ -319,10 +422,7 @@ pub fn call_mlx_gemm(
             (rhs_buffer, rhs_offset),
             (),
             output,
-            gemm_params,
-            (),
-            b as i32,
-            &batch_strides[..]
+            gemm_params
         )
     );
 
