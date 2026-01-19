@@ -1,3 +1,8 @@
+//! Metal GEMM Benchmark
+//!
+//! This benchmark compares Candle's Metal GEMM performance against MLX.
+//! Run with: cargo run --example metal_matmul_benchmark --features metal --release
+
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
@@ -25,7 +30,6 @@ fn benchmark_matmul(
     }
 
     // Benchmark with proper sync using device.synchronize()
-    // This is equivalent to MLX's mx.eval() - pure sync without extra operations
     let mut times = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let start = Instant::now();
@@ -54,8 +58,9 @@ fn main() -> Result<()> {
     let device = Device::new_metal(0)?;
     println!("Metal GEMM Benchmark (Candle)\n");
 
+    // Test cases covering common GEMM scenarios
     let test_cases: Vec<(&str, Vec<usize>, Vec<usize>)> = vec![
-        // 4D Attention scenarios
+        // 4D Attention scenarios (multi-head attention)
         (
             "4D Attn Small",
             vec![484, 6, 144, 32],
@@ -66,34 +71,21 @@ fn main() -> Result<()> {
             vec![121, 24, 144, 32],
             vec![121, 24, 32, 144],
         ),
-        // 3D QKV scenarios
+        // 3D QKV projection scenarios
         ("3D QKV Small", vec![484, 144, 192], vec![484, 192, 576]),
         ("3D QKV Large", vec![121, 144, 768], vec![121, 768, 2304]),
-        // 2D Linear scenarios
-        ("2D Linear Small", vec![69696, 192], vec![192, 768]),
-        ("2D Linear Large", vec![17424, 768], vec![768, 3072]),
-        // Square matrix tests
+        // Square matrix tests (common benchmark)
         ("Square 256", vec![256, 256], vec![256, 256]),
         ("Square 512", vec![512, 512], vec![512, 512]),
         ("Square 1024", vec![1024, 1024], vec![1024, 1024]),
         ("Square 2048", vec![2048, 2048], vec![2048, 2048]),
-        // 3D A @ 2D B scenarios (batch collapse test)
-        ("3D A @ 2D B Small", vec![484, 144, 192], vec![192, 576]),
-        ("3D A @ 2D B Large", vec![121, 144, 768], vec![768, 2304]),
-        // 3D Attention collapsed (manually collapsed 4D)
-        (
-            "3D Attn Collapsed",
-            vec![2904, 144, 32],
-            vec![2904, 32, 144],
-        ),
-        // Batch scaling tests
-        ("Batch 1", vec![1, 144, 32], vec![1, 32, 144]),
-        ("Batch 10", vec![10, 144, 32], vec![10, 32, 144]),
+        // 2D Linear layer scenarios (transformer FFN)
+        ("2D Linear Small", vec![69696, 192], vec![192, 768]),
+        ("2D Linear Large", vec![17424, 768], vec![768, 3072]),
+        // 3D Batch matmul (attention patterns)
         ("Batch 100", vec![100, 144, 32], vec![100, 32, 144]),
         ("Batch 1000", vec![1000, 144, 32], vec![1000, 32, 144]),
         ("Batch 2904", vec![2904, 144, 32], vec![2904, 32, 144]),
-        // Single large matrix
-        ("Single Large", vec![418176, 32], vec![32, 144]),
     ];
 
     println!(
