@@ -336,12 +336,8 @@ pub fn call_mlx_gemm(
     let (bm, bn, bk, wm, wn) = (tile.bm, tile.bn, tile.bk, tile.wm, tile.wn);
 
     // https://github.com/ml-explore/mlx/blob/02efb310cac667bc547d1b96f21596c221f84fe7/mlx/backend/metal/matmul.cpp#L422
-    // MLX uses batch_shape.size() > 1 for has_batch, not b > 1
-    // When batch dimensions are collapsed into a single dimension (batch_ndim = 1),
-    // has_batch should be false because we can use simple stride multiplication
-    // instead of the more expensive elem_to_loc_broadcast function
-    let batch_ndim = 1; // We always collapse batch dimensions into one
-    let has_batch = batch_ndim > 1; // This matches MLX's logic
+    // has_batch should be true when b > 1, matching the original candle behavior
+    let has_batch = b > 1;
 
     let constants = Some(ConstantValues::new(vec![
         (10, Value::Bool(has_batch)),
@@ -424,10 +420,9 @@ pub fn call_mlx_gemm(
         }
     }
 
-    // Set buffer parameters
-    // Note: batch_shape and batch_strides are only needed when has_batch = true
-    // Since we always collapse batch dimensions into one (batch_ndim = 1),
-    // has_batch is always false, so we don't need to set buffers 6 and 7
+    // Batch strides for buffer 7 (same as main branch)
+    let batch_strides = [batch_stride_a, batch_stride_b];
+
     set_params!(
         encoder,
         (
@@ -435,7 +430,10 @@ pub fn call_mlx_gemm(
             (rhs_buffer, rhs_offset),
             (),
             output,
-            gemm_params
+            gemm_params,
+            (),
+            b as i32,
+            &batch_strides[..]
         )
     );
 
