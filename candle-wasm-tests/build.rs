@@ -183,8 +183,9 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
         transformed_content.replace("test_device!", "candle_wasm_tests::test_device!");
 
     transformed_content = transformed_content.replace("fn $fn_name", "async fn $fn_name");
+    transformed_content = transformed_content.replace("println!", "wasm_bindgen_test::console_log!"); 
+    transformed_content = make_fn_async(&transformed_content, "synchronize").to_string();
 
-    //transformed_content = make_fn_async_base_and_unwrap(&transformed_content, "std::thread::spawn", "tokio::task::spawn_local").to_string();
 
     transformed_content = transformed_content.replace(". await", ".await");
 
@@ -213,7 +214,9 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
                 .to_string();
             
             new_output = new_output.replace("std::thread::spawn(async move || ", "(");
-
+            let re_remove_thread_join = Regex::new(r".join\(\)\s*\.\s*unwrap\(\)").unwrap();
+            new_output = re_remove_thread_join.replace_all(&new_output, "").to_string();
+            
             new_output
         }
         Err(err) => {

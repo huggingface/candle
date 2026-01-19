@@ -184,8 +184,11 @@ fn scatter_set_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         if index < shapes_i{ //in shapes_i is the length after the for loop
-            new_index1 += v_input1_u32[new_index2] * op_meta[start_shape_offset1 + dims1 + dim]; //s_i * stride_i
-            v_dest[new_index1] = v_input2[new_index3];
+            let idx_val = v_input1_u32[new_index2];
+            if (idx_val != 0xffffffffu) {
+                new_index1 += idx_val * op_meta[start_shape_offset1 + dims1 + dim];
+                v_dest[new_index1] = v_input2[new_index3];
+            }
         }
     }
 }

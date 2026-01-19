@@ -1,5 +1,8 @@
 use candle::{Result, Tensor};
 
+#[cfg(feature = "wgpu")]
+pub static INIT_LOGGER: std::sync::Once = std::sync::Once::new();
+
 #[macro_export]
 macro_rules! test_device {
     // TODO: Switch to generating the two last arguments automatically once concat_idents is
@@ -25,6 +28,9 @@ macro_rules! test_device {
         #[cfg(feature = "wgpu")]
         #[test]
         async fn $test_wgpu() -> Result<()> {
+            candle_wasm_tests::INIT_LOGGER.call_once(|| {
+                console_log::init_with_level(log::Level::Warn).ok();
+            });
             let device = Device::new_wgpu_async(0).await?;
             $fn_name(&device).await
         }

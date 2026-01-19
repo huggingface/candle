@@ -25,8 +25,8 @@ override USE_Z : bool = false;
 //specially if stride_reduced_dim == 1, in this case multiple threads can read coallesced memory
 @compute
 @workgroup_size(64,1,1)
-fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let tid = global_id.x;
+fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id : vec3<u32>) {
+    let tid = local_id.x;
     let output_index = global_id.y + select(0u, global_id.z * 65535,USE_Z);
     
     //Start Index of the Elements to Reduce
@@ -117,8 +117,8 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 @compute
 @workgroup_size(64,1,1)
-fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let tid = global_id.x;
+fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id : vec3<u32>) {
+    let tid = local_id.x;
     let output_index = global_id.y + select(0u, global_id.z * 65535,USE_Z);
 
     //Start Index of the Elements to Reduce
@@ -212,21 +212,21 @@ fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>) {
 //for reduce operations, where reduce length is small(e.g. much smaller than 64, or where stride_length != 1)
 @compute
 @workgroup_size(1,64,1)
-fn reduce_small(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn reduce_small(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id : vec3<u32>) {
     let output_index = global_id.y + select(0u, global_id.z * 65535 * 64,USE_Z);
-    var start_index = 0u;
-    if op_reduce_output_to_start_shape_stride2 <= 1
+    if(output_index < op_reduce_dest_size)
     {
-        start_index = output_index * op_reduce_output_to_start_stride1;
-    }
-    else{
-        start_index = output_index * op_reduce_output_to_start_stride1 + (output_index / op_reduce_output_to_start_shape_stride2) * op_reduce_output_to_start_stride2;
-    }
-    
-    let length = op_reduce_length; //length of the elements to reduce
+        var start_index = 0u;
+        if op_reduce_output_to_start_shape_stride2 <= 1
+        {
+            start_index = output_index * op_reduce_output_to_start_stride1;
+        }
+        else{
+            start_index = output_index * op_reduce_output_to_start_stride1 + (output_index / op_reduce_output_to_start_shape_stride2) * op_reduce_output_to_start_stride2;
+        }
+        
+        let length = op_reduce_length; //length of the elements to reduce
 
-    if(output_index < op_reduce_dest_size || !USE_Z)
-    {
         //Now Reduce from start to end
         switch(op_reduce_operation){
             case 0u{ //sum
@@ -263,22 +263,21 @@ fn reduce_small(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 @compute
 @workgroup_size(1,64,1)
-fn reduce_index_small(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn reduce_index_small(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id : vec3<u32>) {
     let output_index = global_id.y + select(0u, global_id.z * 65535 * 64,USE_Z);
-
-    //Start Index of the Elements to Reduce
-    var start_index = 0u;
-    if op_reduce_output_to_start_shape_stride2 <= 1
+    if(output_index < op_reduce_dest_size)
     {
-        start_index = output_index * op_reduce_output_to_start_stride1;
-    }
-    else{
-        start_index = output_index * op_reduce_output_to_start_stride1 + (output_index / op_reduce_output_to_start_shape_stride2) * op_reduce_output_to_start_stride2;
-    }
-    
-    let length = op_reduce_length; //length of the elements to reduce
-    if(output_index < op_reduce_dest_size || !USE_Z)
-    {
+        //Start Index of the Elements to Reduce
+        var start_index = 0u;
+        if op_reduce_output_to_start_shape_stride2 <= 1
+        {
+            start_index = output_index * op_reduce_output_to_start_stride1;
+        }
+        else{
+            start_index = output_index * op_reduce_output_to_start_stride1 + (output_index / op_reduce_output_to_start_shape_stride2) * op_reduce_output_to_start_stride2;
+        }
+        
+        let length = op_reduce_length; //length of the elements to reduce
         //Now Reduce from start to end
         switch(op_reduce_operation){
             case 3u{//ArgMin

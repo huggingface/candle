@@ -13,7 +13,7 @@ pub mod softmax;
 pub mod unary;
 pub mod upsample;
 pub mod where_cond;
-pub mod rotary_emb_i;
+pub mod rotary_emb;
 
 use wgpu_compute_engine::{
     cache::{
@@ -49,9 +49,9 @@ pub use reduce::queue_reduce_from_buffer_op;
 pub use rms_norm::{queue_rms_norm, queue_layer_norm};
 pub use softmax::queue_softmax;
 pub use unary::{queue_unary_from_buffer_op, queue_unary_inplace_op};
-pub use upsample::{queue_upsample1d, queue_upsample2d};
+pub use upsample::{queue_upsample1d, queue_upsample2d, queue_upsample_bilinear2d};
 pub use where_cond::queue_where_cond;
-pub use rotary_emb_i::queue_rotary_emb_i;
+pub use rotary_emb::{queue_rotary_emb_i, queue_rotary_emb_c, queue_rotary_emb_thd};
 
 #[derive(Debug, Copy, Clone)]
 pub struct WgpuTensor<'a>{

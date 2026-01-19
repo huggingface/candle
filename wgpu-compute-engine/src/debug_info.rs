@@ -164,8 +164,7 @@ pub struct ShaderInfo {
 
 pub fn calulate_measurment(map: &HashMap<String, Vec<WgpuDebugInfo>>) -> Vec<Measurement> {
     const NANO: f64 = 1e9;
-
-    return map
+    map
         .iter()
         .flat_map(|(k, data)| {
             let count = data.len();
@@ -254,7 +253,7 @@ pub fn calulate_measurment(map: &HashMap<String, Vec<WgpuDebugInfo>>) -> Vec<Mea
 
             [m1, m2, m3]
         })
-        .collect();
+        .collect()
 }
 
 pub fn save_list<T: Serialize>(
@@ -441,7 +440,7 @@ pub (crate) fn create_dispatch_zip(
         };
 
         zip.start_file(format!("{base}dispatch.json"), options)?;
-        zip.write_all(&to_vec_pretty(&json).map_err(|e| crate::Error::Wgpu(crate::error::WgpuError::Message(format!("{:?}", e))))?)?;
+        zip.write_all(&to_vec_pretty(&json).map_err(|e| crate::Error::Msg(format!("{:?}", e)))?)?;
     }
 
     zip.finish()?;

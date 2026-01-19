@@ -21,7 +21,10 @@ pub fn queue_cmp_buffer_from_buffer(
     dtype: crate::DType,
 ) -> crate::Result<()> {
     let mut queue = dev.get_queue();
+    let input_size = input1.layout().shape().elem_count();
+    let output_size = input_size.div_ceil(4) as u32;
     queue.add(op as u32);
+    queue.add(output_size);
     queue.add_layout1(input1.layout());
     queue.add_layout2(input2.layout());
 
@@ -35,8 +38,8 @@ pub fn queue_cmp_buffer_from_buffer(
     queue.enqueue_64(
         pipeline,
         bind_group,
-        input1.layout().shape().elem_count().div_ceil(4) as u32,
-        input1.layout().shape().elem_count(),
+        output_size,
+        input_size,
     );
     Ok(())
 }

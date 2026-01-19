@@ -9,7 +9,7 @@ impl std::fmt::Debug for Error {
 #[derive(thiserror::Error)]
 pub enum Error {
     #[error("Wgpu error {0}")]
-    Wgpu(#[from] WgpuError),
+    Msg(String),
 
     /// Zip file format error.
     #[cfg(feature = "wgpu_debug")]
@@ -23,16 +23,23 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-
-#[derive(thiserror::Error, Debug)]
-pub enum WgpuError {
-    #[error("{0}")]
-    Message(String),
+#[macro_export]
+macro_rules! bail {
+    ($msg:literal $(,)?) => {
+        return Err($crate::Error::Msg(format!($msg).into()))
+    };
+    ($err:expr $(,)?) => {
+        return Err($crate::Error::Msg(format!($err).into()))
+    };
+    ($fmt:expr, $($arg:tt)*) => {
+        return Err($crate::Error::Msg(format!($fmt, $($arg)*).into()))
+    };
 }
 
-impl From<String> for WgpuError {
+
+impl From<String> for Error {
     fn from(e: String) -> Self {
-        WgpuError::Message(e)
+        Error::Msg(e)
     }
 }
 
@@ -42,10 +49,9 @@ impl From<String> for WgpuError {
 macro_rules! notImplemented {
     ($x:ident) => {{
         let name = String::from(stringify!($x));
-        return Err($crate::Error::Wgpu(
+        return Err($crate::Error::from(
             format!("Wgpu Function not yet Implemented {name}")
-                .to_owned()
-                .into(),
+                .to_owned(),
         ));
     }};
 }
@@ -54,10 +60,9 @@ macro_rules! wrongType {
     ($x:ident, $ty:expr) => {{
         let name = String::from(stringify!($x));
         let ty = $ty;
-        return Err($crate::Error::Wgpu(
+        return Err($crate::Error::from(
             format!("Can not create wgpu Array of Type.{:?} (in {name})", ty)
-                .to_owned()
-                .into(),
+                .to_owned(),
         ));
     }};
 }
@@ -65,6 +70,6 @@ macro_rules! wrongType {
 #[macro_export]
 macro_rules! wgpuError {
     ($x:expr) => {{
-        return Err($crate::Error::Wgpu($x.to_owned().into()));
+        return Err($crate::Error::from($x.to_owned()));
     }};
 }

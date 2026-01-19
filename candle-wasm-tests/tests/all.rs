@@ -472,52 +472,63 @@ async fn bilinear_align_corners_difference(dev: &Device) -> Result<()> {
 }
 candle_wasm_tests::test_device!(
     bilinear_pytorch_2x_upscale, bilinear_pytorch_2x_upscale_cpu,
-    bilinear_pytorch_2x_upscale_gpu, bilinear_pytorch_2x_upscale_metal
+    bilinear_pytorch_2x_upscale_gpu, bilinear_pytorch_2x_upscale_metal,
+    bilinear_pytorch_2x_upscale_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_pytorch_downscale, bilinear_pytorch_downscale_cpu,
-    bilinear_pytorch_downscale_gpu, bilinear_pytorch_downscale_metal
+    bilinear_pytorch_downscale_gpu, bilinear_pytorch_downscale_metal,
+    bilinear_pytorch_downscale_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_pytorch_multi_channel, bilinear_pytorch_multi_channel_cpu,
-    bilinear_pytorch_multi_channel_gpu, bilinear_pytorch_multi_channel_metal
+    bilinear_pytorch_multi_channel_gpu, bilinear_pytorch_multi_channel_metal,
+    bilinear_pytorch_multi_channel_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_pytorch_align_corners_true, bilinear_pytorch_align_corners_true_cpu,
-    bilinear_pytorch_align_corners_true_gpu, bilinear_pytorch_align_corners_true_metal
+    bilinear_pytorch_align_corners_true_gpu, bilinear_pytorch_align_corners_true_metal,
+    bilinear_pytorch_align_corners_true_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_pytorch_scale_factor, bilinear_pytorch_scale_factor_cpu,
-    bilinear_pytorch_scale_factor_gpu, bilinear_pytorch_scale_factor_metal
+    bilinear_pytorch_scale_factor_gpu, bilinear_pytorch_scale_factor_metal,
+    bilinear_pytorch_scale_factor_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_pytorch_non_square_exact, bilinear_pytorch_non_square_exact_cpu,
-    bilinear_pytorch_non_square_exact_gpu, bilinear_pytorch_non_square_exact_metal
+    bilinear_pytorch_non_square_exact_gpu, bilinear_pytorch_non_square_exact_metal,
+    bilinear_pytorch_non_square_exact_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_pytorch_tiny_1x1_to_3x3, bilinear_pytorch_tiny_1x1_to_3x3_cpu,
-    bilinear_pytorch_tiny_1x1_to_3x3_gpu, bilinear_pytorch_tiny_1x1_to_3x3_metal
+    bilinear_pytorch_tiny_1x1_to_3x3_gpu, bilinear_pytorch_tiny_1x1_to_3x3_metal,
+    bilinear_pytorch_tiny_1x1_to_3x3_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_pytorch_tiny_1x2_to_3x6, bilinear_pytorch_tiny_1x2_to_3x6_cpu,
-    bilinear_pytorch_tiny_1x2_to_3x6_gpu, bilinear_pytorch_tiny_1x2_to_3x6_metal
+    bilinear_pytorch_tiny_1x2_to_3x6_gpu, bilinear_pytorch_tiny_1x2_to_3x6_metal,
+    bilinear_pytorch_tiny_1x2_to_3x6_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_pytorch_large_64x64_to_128x128, bilinear_pytorch_large_64x64_to_128x128_cpu,
     bilinear_pytorch_large_64x64_to_128x128_gpu,
-    bilinear_pytorch_large_64x64_to_128x128_metal
+    bilinear_pytorch_large_64x64_to_128x128_metal,
+    bilinear_pytorch_large_64x64_to_128x128_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_output_dimensions, bilinear_output_dimensions_cpu,
-    bilinear_output_dimensions_gpu, bilinear_output_dimensions_metal
+    bilinear_output_dimensions_gpu, bilinear_output_dimensions_metal,
+    bilinear_output_dimensions_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_identity, bilinear_identity_cpu, bilinear_identity_gpu,
-    bilinear_identity_metal
+    bilinear_identity_metal, bilinear_identity_wgpu
 );
 candle_wasm_tests::test_device!(
     bilinear_align_corners_difference, bilinear_align_corners_difference_cpu,
-    bilinear_align_corners_difference_gpu, bilinear_align_corners_difference_metal
+    bilinear_align_corners_difference_gpu, bilinear_align_corners_difference_metal,
+    bilinear_align_corners_difference_wgpu
 );
 }pub mod convert_tests {
 // ============================================================================
@@ -4613,14 +4624,13 @@ async fn tensor_send_sync(device: &Device) -> Result<()> {
     let result: Vec<f32> = tensor.to_vec1_async().await.unwrap();
     assert_eq!(result, vec![1.0f32, 2.0, 3.0]);
     let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
-    tensor.device().synchronize().unwrap();
-    let new = std::thread::spawn(move || {
+    tensor.device().synchronize_async().await.unwrap();
+    let new = ({
             let new = tensor.add(&tensor).unwrap();
-            new.device().synchronize().unwrap();
+            new.device().synchronize_async().await.unwrap();
             new
         })
-        .join()
-        .unwrap();
+        ;
     let result: Vec<f32> = new.to_vec1_async().await.unwrap();
     assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
     Ok(())

@@ -92,3 +92,98 @@ pub fn queue_upsample2d(
     );
     Ok(())
 }
+
+
+#[allow(clippy::too_many_arguments)]
+pub fn queue_upsample_bilinear2d(
+    dev: &WgpuDevice,
+    buffer_src: (BufferReferenceId, u32),
+    dtype: crate::DType,
+    buffer_dest: BufferReferenceId,
+    n: u32,
+    c: u32,
+    in_h: u32,
+    in_w: u32,
+    out_h: u32,
+    out_w: u32,
+    align_corners: bool,
+    scale_h: Option<f64>,
+    scale_w: Option<f64>,
+) -> crate::Result<()> {
+    let (buffer_src, src_offset) = buffer_src;
+
+    let workgroup_size_x: u32 = 8;
+    let workgroup_size_y: u32 = 8;
+
+    let num_invocations_x = n * c;
+    let num_invocations_y = out_h * out_w;
+
+    fn ceil_div(a: u32, b: u32) -> u32 {
+        if a == 0 { 0 } else { a.div_ceil(b) }
+    }
+
+    let workgroup_count_x = ceil_div(num_invocations_x, workgroup_size_x);
+    let workgroup_count_y = ceil_div(num_invocations_y, workgroup_size_y);
+
+    let mut queue = dev.get_queue();
+
+    let use_scale = scale_h.is_some() || scale_w.is_some();
+
+    let sh = match scale_h {
+        Some(v) => v as f32,
+        None => {
+            if let Some(sw) = scale_w {
+                // infer from size ratio
+                (out_h as f64 / in_h as f64) as f32
+            } else {
+                0.0
+            }
+        }
+    };
+
+    let sw = match scale_w {
+        Some(v) => v as f32,
+        None => {
+            if let Some(sh) = scale_h {
+                (out_w as f64 / in_w as f64) as f32
+            } else {
+                0.0
+            }
+        }
+    };
+
+    // op_meta
+    queue.add(n);
+    queue.add(c);
+    queue.add(in_h);
+    queue.add(in_w);
+    queue.add(out_h);
+    queue.add(out_w);
+    queue.add(src_offset);
+    queue.add(if align_corners { 1u32 } else { 0u32 });
+    queue.add(if use_scale { 1u32 } else { 0u32 });
+    queue.add(sh.to_bits());
+    queue.add(sw.to_bits());
+
+    let pipeline = queue.get_pipeline(Pipelines::Upsample(
+        dev.get_dtype(dtype)?,
+        candle_wgpu_kernels::upsample::Functions::UpsampleBilinear2d,
+    ));
+
+    let bind_group = dev.create_bind_group_input1(
+        buffer_dest,
+        buffer_src,
+        dtype.into(),
+    );
+
+    queue.enqueue_workgroups(
+        pipeline,
+        bind_group,
+        workgroup_count_x,
+        workgroup_count_y,
+        1,
+        (n * c * out_h * out_w) as usize,
+    );
+
+    Ok(())
+}

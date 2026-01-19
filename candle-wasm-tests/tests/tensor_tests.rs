@@ -1452,14 +1452,13 @@ async fn tensor_send_sync(device: &Device) -> Result<()> {
     let result: Vec<f32> = tensor.to_vec1_async().await.unwrap();
     assert_eq!(result, vec![1.0f32, 2.0, 3.0]);
     let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
-    tensor.device().synchronize().unwrap();
-    let new = std::thread::spawn(move || {
+    tensor.device().synchronize_async().await.unwrap();
+    let new = ({
             let new = tensor.add(&tensor).unwrap();
-            new.device().synchronize().unwrap();
+            new.device().synchronize_async().await.unwrap();
             new
         })
-        .join()
-        .unwrap();
+        ;
     let result: Vec<f32> = new.to_vec1_async().await.unwrap();
     assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
     Ok(())

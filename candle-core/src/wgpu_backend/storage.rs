@@ -1029,14 +1029,45 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
     fn upsample_bilinear2d(
         &self,
-        _: &Layout,
-        _: usize,
-        _: usize,
-        _: bool,
-        _: Option<f64>,
-        _: Option<f64>,
+        l_src: &Layout,
+        out_h: usize,
+        out_w: usize,
+        align_corners: bool,
+        scale_h: Option<f64>,
+        scale_w: Option<f64>,
     ) -> crate::Result<Self> {
-        todo!()
+        use crate::wgpu::wgpu_functions;
+
+        if !l_src.is_contiguous() {
+            crate::bail!("input must be contiguous");
+        }
+
+        let (n, c, in_h, in_w) = l_src.shape().dims4()?;
+
+        let out_h = out_h as u32;
+        let out_w = out_w as u32;
+
+        // Allocate output
+        let el = (n as u32 * c as u32 * out_h * out_w) as usize;
+        let output_buffer = self.device().alloc_uninit_size(self.dtype(), el);
+
+        wgpu_functions::queue_upsample_bilinear2d(
+            self.device(),
+            (self.buffer(), l_src.start_offset() as u32),
+            self.dtype(),
+            output_buffer.buffer(),
+            n as u32,
+            c as u32,
+            in_h as u32,
+            in_w as u32,
+            out_h,
+            out_w,
+            align_corners,
+            scale_h,
+            scale_w,
+        )?;
+
+        Ok(output_buffer)
     }
 }
 

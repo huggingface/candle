@@ -16,7 +16,7 @@ use tracing::{instrument, span, Level};
 
 use crate::DType;
 
-use crate::error::WgpuError;
+use crate::error::Error;
 use std::borrow::Cow;
 
 
@@ -124,14 +124,14 @@ impl WgpuDevice{
             (crate::DType::I64, true) => Ok(DType::I64),
             (crate::DType::F64, true) => Ok(DType::F64),
             (crate::DType::F16, true) => Ok(DType::F16),
-            (crate::DType::U8, _) => Err(crate::Error::Wgpu(WgpuError::from(format!(
+            (crate::DType::U8, _) => Err(crate::Error::from(format!(
                 "Dtype {:?} not supported on wgpu",
                 &dtype
-            )))),
-            (_, false) => Err(crate::Error::Wgpu(WgpuError::from(format!(
+            ))),
+            (_, false) => Err(crate::Error::from(format!(
                 "Dtype {:?} not supported on this wgpu device",
                 dtype
-            ))))
+            )))
         }
     }
     
@@ -387,7 +387,7 @@ fn get_command_buffer(
                                         Ok(super::debug_info::NumericArray::U8(data))
                                     }
                                     #[cfg(target_arch = "wasm32")]{
-                                        crate::bail!("Synchronous read not supported on wasm32");
+                                        return crate::bail!("Synchronous read not supported on wasm32");
                                     }
                                 }
 
@@ -1010,11 +1010,12 @@ pub fn get_shader(device: &wgpu::Device, shader: &str) -> wgpu::ShaderModule {
     //to mitigate this performance drop, we use create_shader_module_trusted without bounds checks:
     //wgpu v27.0.1(bounds_checks: false, force_loop_bounding: false): (~330,496 token/sec)
 
+    
     unsafe{
         let cs_module = device.create_shader_module_trusted(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
-        }, wgpu::ShaderRuntimeChecks {bounds_checks:false, force_loop_bounding:false, ray_query_initialization_tracking: true });
+        }, wgpu::ShaderRuntimeChecks {bounds_checks:true, force_loop_bounding:true, ray_query_initialization_tracking: true });
         cs_module
     }
 }

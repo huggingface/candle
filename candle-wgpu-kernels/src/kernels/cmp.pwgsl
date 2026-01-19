@@ -1,7 +1,8 @@
 #include "util.pwgsl"
 
 #define op_binary_operation         op_meta[0]
-#define op_binary_input1_layout     1u
+#define op_binary_dest_size         op_meta[1]
+#define op_binary_input1_layout     2u
 
 fn bool_to_int(b : bool) -> u32{
     if b{
@@ -19,6 +20,9 @@ fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let input1_layout = op_binary_input1_layout;
     let input2_layout = input1_layout + get_size1();
 
+    if(id >= op_binary_dest_size){
+        return;
+    }
  
     for (var i = 0u; i < 4; i++){
         let pos1 = get_index1(input1_layout, id * 4 + i);

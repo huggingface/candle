@@ -16,6 +16,8 @@ anyhow = { workspace = true }
 num-traits = { workspace = true }
 half = { workspace = true }
 float8 = { workspace = true }
+console_log = "1.0"
+log = {workspace = true}
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.0"

@@ -551,6 +551,48 @@ impl candle::CustomOp3 for RotaryEmb {
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }
+
+    #[cfg(feature = "wgpu")]
+    fn wgpu_fwd(
+        &self,
+        src: &candle::WgpuStorage,
+        l_src: &Layout,
+        cos: &candle::WgpuStorage,
+        l_cos: &Layout,
+        sin: &candle::WgpuStorage,
+        l_sin: &Layout,
+    ) -> Result<(candle::WgpuStorage, Shape)> {
+        use candle::wgpu::wgpu_functions;
+            
+        if !(l_src.is_contiguous()){
+            candle::bail!("input has to be contiguous")
+        }
+        if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
+            candle::bail!(
+                "dtype mismatch in rope-i {:?} {:?} {:?}",
+                src.dtype(),
+                cos.dtype(),
+                sin.dtype()
+            )
+        }
+
+        let (b, h, t, d) = l_src.shape().dims4()?;
+        
+        let el = b * h * t * d;
+        let output_buffer = src.device().alloc_uninit_size(src.dtype(),  el);
+        wgpu_functions::queue_rotary_emb_c(
+            src.device(),
+            (src.buffer(),  l_src.start_offset() as u32),
+        (cos.buffer(), l_cos.start_offset()  as u32),
+        (sin.buffer(), l_sin.start_offset() as u32),
+            src.dtype(),
+            output_buffer.buffer(),
+            l_cos.dims().len() == 3 && l_sin.dims().len() == 3,
+            (b as u32, h as u32, t as u32, d as u32),
+        )?;
+
+        Ok((output_buffer, l_src.shape().clone()))
+    }
 }
 
 pub fn rope(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
@@ -821,6 +863,48 @@ impl candle::CustomOp3 for RotaryEmbThd {
         .map_err(candle::Error::wrap)?;
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn wgpu_fwd(
+        &self,
+        src: &candle::WgpuStorage,
+        l_src: &Layout,
+        cos: &candle::WgpuStorage,
+        l_cos: &Layout,
+        sin: &candle::WgpuStorage,
+        l_sin: &Layout,
+    ) -> Result<(candle::WgpuStorage, Shape)> {
+        use candle::wgpu::wgpu_functions;
+            
+        if !(l_src.is_contiguous()){
+            candle::bail!("input has to be contiguous")
+        }
+        if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
+            candle::bail!(
+                "dtype mismatch in rope-i {:?} {:?} {:?}",
+                src.dtype(),
+                cos.dtype(),
+                sin.dtype()
+            )
+        }
+
+        let (b, h, t, d) = l_src.shape().dims4()?;
+        
+        let el = b * h * t * d;
+        let output_buffer = src.device().alloc_uninit_size(src.dtype(),  el);
+        wgpu_functions::queue_rotary_emb_thd(
+            src.device(),
+            (src.buffer(),  l_src.start_offset() as u32),
+        (cos.buffer(), l_cos.start_offset()  as u32),
+        (sin.buffer(), l_sin.start_offset() as u32),
+            src.dtype(),
+            output_buffer.buffer(),
+            l_cos.dims().len() == 3 && l_sin.dims().len() == 3,
+            (b as u32, h as u32, t as u32, d as u32),
+        )?;
+
+        Ok((output_buffer, l_src.shape().clone()))
     }
 }
 

@@ -192,7 +192,7 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
         }case 35u{ 
             v_dest[id] = trunc(x) ;
         }case 36u{  //Binary Step
-            if(v_dest[id]) < 0{
+            if(v_dest[id] < 0){
                 v_dest[id] = ZERO;
             }
             else{
@@ -205,7 +205,7 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
         }case 39u{   //Softplus
             v_dest[id] = log(1 + exp(x));
         }case 40u{  //Leaky ReLU
-            if(x) < 0{
+            if(x < 0){
                 v_dest[id] = 0.01 * x;
             }
             else{
@@ -234,7 +234,7 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
             //v_dest[id] = round(x);
         }
         case 52u{ //elu
-            if x > 0 {
+            if (x > 0) {
                 v_dest[id] = x;
             } else {
                 v_dest[id] = (exp(x) - 1) * scalar1;
@@ -357,7 +357,7 @@ fn const_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>)
 fn const_inplace_contiguous_4(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let unused = op_unary_contiguous_offset_is_zero;
 
-    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z) + op_unary_contiguous_offset;;
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z) + op_unary_contiguous_offset;
     if (id >= op_unary_contiguous_length){
         return;
     }

@@ -322,7 +322,7 @@ impl WgpuDevice {
                 }
             )
             .await
-            .map_err(|err| crate::Error::Wgpu(err.to_string().into()))?;
+            .map_err(|err| err.to_string())?;
         log::info!("Device Requested");
 
         #[cfg(feature = "wgpu_debug")]
@@ -625,9 +625,7 @@ impl WgpuDevice {
                 let pipelines = &v.pipelines;
                 let s = debug_info::ShaderInfo {
                     name: shaders.loader_cache.get_shader_name(*k),
-                    pipelines: pipelines
-                        .iter()
-                        .map(|(pk, _)| debug_info::PipelineInfo {
+                    pipelines: pipelines.keys().map(|pk| debug_info::PipelineInfo {
                             name: shaders.loader_cache.get_entry_point(pk.0).to_owned(),
                             consts: queue.id_to_const_array[pk.1].iter()
                                 .map(|(s, x)| (s.to_string(), *x))

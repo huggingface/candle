@@ -87,3 +87,123 @@ fn upsample2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
 }
+
+
+@compute
+@workgroup_size(8, 8, 1)
+fn upsample_bilinear2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    // op_meta:
+    // [0] = N
+    // [1] = C
+    // [2] = in_h
+    // [3] = in_w
+    // [4] = out_h
+    // [5] = out_w
+    // [6] = src_offset
+    // [7] = align_corners (0/1)
+    // [8] = use_scale (0/1)
+    // [9] = scale_h (f32 bits)
+    // [10] = scale_w (f32 bits)
+
+    let N = op_meta[0];
+    let C = op_meta[1];
+    let in_h = op_meta[2];
+    let in_w = op_meta[3];
+    let out_h = op_meta[4];
+    let out_w = op_meta[5];
+    let src_offset = op_meta[6];
+    let align_corners = op_meta[7];
+    let use_scale = op_meta[8];
+
+    // Reinterpret scale bits
+    let scale_h: f32 = bitcast<f32>(op_meta[9]);
+    let scale_w: f32 = bitcast<f32>(op_meta[10]);
+
+    let nc = global_id.x;    // 0 .. N*C-1
+    let i = global_id.y;     // 0 .. out_h*out_w-1
+
+    if (nc >= N * C) { return; }
+    if (i >= out_h * out_w) { return; }
+
+    let n_idx = nc / C;
+    let c_idx = nc % C;
+
+    let out_y = i / out_w;
+    let out_x = i % out_w;
+
+    // Compute scale factors
+    var sy: f32;
+    var sx: f32;
+
+    if (use_scale == 1u) {
+        // PyTorch semantics: scale_factor maps input -> output
+        // so input_coord = output_coord / scale_factor
+        sy = 1.0 / scale_h;
+        sx = 1.0 / scale_w;
+    } else {
+        if (align_corners == 1u) {
+            if (out_h > 1u) {
+                sy = f32(in_h - 1u) / f32(out_h - 1u);
+            } else {
+                sy = 0.0;
+            }
+            if (out_w > 1u) {
+                sx = f32(in_w - 1u) / f32(out_w - 1u);
+            } else {
+                sx = 0.0;
+            }
+        } else {
+            sy = f32(in_h) / f32(out_h);
+            sx = f32(in_w) / f32(out_w);
+        }
+    }
+
+    // Map output -> input coordinates
+    var in_y_f : f32 = ZERO;
+    var in_x_f : f32 = ZERO;
+
+    if (align_corners == 1u) {
+        in_y_f = f32(out_y) * sy;
+        in_x_f = f32(out_x) * sx;
+    } else {
+        in_y_f = (f32(out_y) + 0.5) * sy - 0.5;
+        in_x_f = (f32(out_x) + 0.5) * sx - 0.5;
+    }
+
+    // Compute integer neighbors
+    let in_y0 = i32(floor(in_y_f));
+    let in_x0 = i32(floor(in_x_f));
+
+    let y0 = clamp(in_y0, 0, i32(in_h) - 1);
+    let x0 = clamp(in_x0, 0, i32(in_w) - 1);
+    let y1 = min(y0 + 1, i32(in_h) - 1);
+    let x1 = min(x0 + 1, i32(in_w) - 1);
+
+    let wy = in_y_f - f32(in_y0);
+    let wx = in_x_f - f32(in_x0);
+
+    // NCHW layout:
+    // idx = ((n * C + c) * H + y) * W + x
+    let base_nc = (n_idx * C + c_idx) * in_h * in_w;
+
+    let idx00 = base_nc + u32(y0) * in_w + u32(x0);
+    let idx01 = base_nc + u32(y0) * in_w + u32(x1);
+    let idx10 = base_nc + u32(y1) * in_w + u32(x0);
+    let idx11 = base_nc + u32(y1) * in_w + u32(x1);
+
+    let v00: DTYPE = v_input1[idx00 + src_offset];
+    let v01: DTYPE = v_input1[idx01 + src_offset];
+    let v10: DTYPE = v_input1[idx10 + src_offset];
+    let v11: DTYPE = v_input1[idx11 + src_offset];
+
+    // Bilinear interpolation
+    let v0 = v00 * (1.0 - wx) + v01 * wx;
+    let v1 = v10 * (1.0 - wx) + v11 * wx;
+    let v = v0 * (1.0 - wy) + v1 * wy;
+
+    // Output index: NCHW
+    let out_base_nc = (n_idx * C + c_idx) * out_h * out_w;
+    let out_idx = out_base_nc + out_y * out_w + out_x;
+
+    v_dest[out_idx] = v;
+}
