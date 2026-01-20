@@ -136,10 +136,8 @@ fn upsample_bilinear2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var sx: f32;
 
     if (use_scale == 1u) {
-        // PyTorch semantics: scale_factor maps input -> output
-        // so input_coord = output_coord / scale_factor
-        sy = 1.0 / scale_h;
-        sx = 1.0 / scale_w;
+        sy = scale_h;
+        sx = scale_w;
     } else {
         if (align_corners == 1u) {
             if (out_h > 1u) {
@@ -158,16 +156,34 @@ fn upsample_bilinear2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    // Map output -> input coordinates
-    var in_y_f : f32 = ZERO;
-    var in_x_f : f32 = ZERO;
 
-    if (align_corners == 1u) {
-        in_y_f = f32(out_y) * sy;
-        in_x_f = f32(out_x) * sx;
+    // Map output -> input coordinates
+    var in_y_f : f32;
+    var in_x_f : f32;
+
+    if (in_h == 1u) {
+        in_y_f = 0.0;
     } else {
-        in_y_f = (f32(out_y) + 0.5) * sy - 0.5;
-        in_x_f = (f32(out_x) + 0.5) * sx - 0.5;
+        if (align_corners == 1u) {
+            in_y_f = f32(out_y) * sy;
+        } else {
+            in_y_f = (f32(out_y) + 0.5) * sy - 0.5;
+        }
+    }
+
+    if (in_w == 1u) {
+        in_x_f = 0.0;
+    } else {
+        if (align_corners == 1u) {
+            in_x_f = f32(out_x) * sx;
+        } else {
+            in_x_f = (f32(out_x) + 0.5) * sx - 0.5;
+        }
+    }
+    // PyTorch border behavior for align_corners = false
+    if (align_corners == 0u) {
+        in_y_f = clamp(in_y_f, 0.0, f32(in_h - 1u));
+        in_x_f = clamp(in_x_f, 0.0, f32(in_w - 1u));
     }
 
     // Compute integer neighbors

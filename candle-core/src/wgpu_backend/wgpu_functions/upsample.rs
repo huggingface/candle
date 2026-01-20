@@ -129,27 +129,17 @@ pub fn queue_upsample_bilinear2d(
 
     let use_scale = scale_h.is_some() || scale_w.is_some();
 
-    let sh = match scale_h {
-        Some(v) => v as f32,
-        None => {
-            if let Some(sw) = scale_w {
-                // infer from size ratio
-                (out_h as f64 / in_h as f64) as f32
-            } else {
-                0.0
-            }
-        }
+    let sh = if use_scale {
+        // PyTorch internal scale
+        in_h as f32 / out_h as f32
+    } else {
+        0.0
     };
 
-    let sw = match scale_w {
-        Some(v) => v as f32,
-        None => {
-            if let Some(sh) = scale_h {
-                (out_w as f64 / in_w as f64) as f32
-            } else {
-                0.0
-            }
-        }
+    let sw = if use_scale {
+        in_w as f32 / out_w as f32
+    } else {
+        0.0
     };
 
     // op_meta
