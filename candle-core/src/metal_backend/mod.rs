@@ -1907,6 +1907,75 @@ impl MetalStorage {
         Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
+    /// Fused gather + matmul for MoE (Mixture of Experts) acceleration.
+    ///
+    /// This performs: output[i] = A[i] @ B[indices[i]]
+    /// Where:
+    /// - A has shape [m, k] (input activations, m = num_tokens * num_experts_per_tok)
+    /// - B has shape [num_experts, n, k] (transposed weights)
+    /// - indices has shape [m] selecting which expert to use for each row of A
+    /// - output has shape [m, n]
+    ///
+    /// # Arguments
+    /// * `weights` - Expert weight matrices with shape [num_experts, n, k] (transposed)
+    /// * `indices` - Expert selection indices with shape [m], one per row (u32)
+    /// * `(m, n, k, num_experts)` - Matrix dimensions
+    pub fn gather_mm(
+        &self,
+        weights: &Self,
+        indices: &Self,
+        (m, n, k, num_experts): (usize, usize, usize, usize),
+    ) -> Result<Self> {
+        // Validate dtypes
+        if indices.dtype != DType::U32 {
+            return Err(MetalError::UnexpectedDType {
+                msg: "gather_mm requires u32 indices",
+                expected: DType::U32,
+                got: indices.dtype,
+            }
+            .into());
+        }
+        if self.dtype != weights.dtype {
+            return Err(MetalError::Message(format!(
+                "gather_mm: input dtype {:?} doesn't match weights dtype {:?}",
+                self.dtype, weights.dtype
+            ))
+            .into());
+        }
+
+        let buffer = self.device.new_buffer(m * n, self.dtype, "gather_mm")?;
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("gather_mm");
+
+        let dtype = match self.dtype {
+            DType::F32 => candle_metal_kernels::GemmDType::F32,
+            DType::F16 => candle_metal_kernels::GemmDType::F16,
+            DType::BF16 => candle_metal_kernels::GemmDType::BF16,
+            dtype => {
+                return Err(
+                    MetalError::Message(format!("gather_mm doesn't support {dtype:?}")).into(),
+                )
+            }
+        };
+
+        candle_metal_kernels::call_gather_mm(
+            &self.device.device,
+            &encoder,
+            &self.device.kernels,
+            dtype,
+            (m, n, k, num_experts),
+            0, // A offset - assume contiguous
+            &self.buffer,
+            0, // B offset - assume contiguous
+            &weights.buffer,
+            &indices.buffer,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::new(buffer, self.device.clone(), m * n, self.dtype))
+    }
+
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
         let size = self.count * self.dtype.size_in_bytes();
         let buffer = self.device.allocate_buffer(size)?;

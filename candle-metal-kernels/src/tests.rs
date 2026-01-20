@@ -2487,3 +2487,210 @@ fn commands_concurrent_acquisition() {
 
     commands.wait_until_completed().unwrap();
 }
+
+// ==================== gather_mm tests ====================
+
+fn run_gather_mm<T: Clone>(
+    dtype: GemmDType,
+    (m, n, k, num_experts): (usize, usize, usize, usize),
+    a: &[T],
+    b: &[T],
+    indices: &[u32],
+) -> Vec<T> {
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+    let options = RESOURCE_OPTIONS;
+
+    let a_buffer = device
+        .new_buffer_with_data(
+            a.as_ptr() as *const core::ffi::c_void,
+            std::mem::size_of_val(a),
+            options,
+        )
+        .unwrap();
+    let b_buffer = device
+        .new_buffer_with_data(
+            b.as_ptr() as *const core::ffi::c_void,
+            std::mem::size_of_val(b),
+            options,
+        )
+        .unwrap();
+    let indices_buffer = device
+        .new_buffer_with_data(
+            indices.as_ptr() as *const core::ffi::c_void,
+            std::mem::size_of_val(indices),
+            options,
+        )
+        .unwrap();
+    let output_len = m * n;
+    let output = device
+        .new_buffer(output_len * core::mem::size_of::<T>(), options)
+        .unwrap();
+
+    call_gather_mm(
+        &device,
+        &command_buffer,
+        &kernels,
+        dtype,
+        (m, n, k, num_experts),
+        0,
+        &a_buffer,
+        0,
+        &b_buffer,
+        &indices_buffer,
+        &output,
+    )
+    .unwrap();
+
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    read_to_vec(&output, output_len)
+}
+
+/// Reference implementation: for each row i, compute A[i] @ B[indices[i]].T
+fn gather_mm_reference(
+    m: usize,
+    n: usize,
+    k: usize,
+    _num_experts: usize,
+    a: &[f32],
+    b: &[f32],       // [num_experts, n, k] - transposed weights
+    indices: &[u32],
+) -> Vec<f32> {
+    let mut result = vec![0.0f32; m * n];
+
+    for row in 0..m {
+        let expert = indices[row] as usize;
+        for col in 0..n {
+            let mut sum = 0.0f32;
+            for i in 0..k {
+                // A[row, i]
+                let a_val = a[row * k + i];
+                // B[expert, col, i] - B is [num_experts, n, k]
+                let b_val = b[expert * n * k + col * k + i];
+                sum += a_val * b_val;
+            }
+            result[row * n + col] = sum;
+        }
+    }
+
+    result
+}
+
+#[test]
+fn gather_mm_basic() {
+    // Simple test: 2 rows, 3 output features, 4 hidden dim, 2 experts
+    let (m, n, k, num_experts) = (2, 3, 4, 2);
+
+    // A: [2, 4] - input activations
+    let a: Vec<f32> = vec![
+        1.0, 2.0, 3.0, 4.0,   // row 0
+        5.0, 6.0, 7.0, 8.0,   // row 1
+    ];
+
+    // B: [2, 3, 4] - expert weights (transposed: each expert is [n, k])
+    // Expert 0: [[1,0,0,0], [0,1,0,0], [0,0,1,0]]  -> identity-like
+    // Expert 1: [[2,2,2,2], [1,1,1,1], [0,0,0,1]]
+    let b: Vec<f32> = vec![
+        // Expert 0
+        1.0, 0.0, 0.0, 0.0,  // output 0
+        0.0, 1.0, 0.0, 0.0,  // output 1
+        0.0, 0.0, 1.0, 0.0,  // output 2
+        // Expert 1
+        2.0, 2.0, 2.0, 2.0,  // output 0
+        1.0, 1.0, 1.0, 1.0,  // output 1
+        0.0, 0.0, 0.0, 1.0,  // output 2
+    ];
+
+    // indices: row 0 uses expert 0, row 1 uses expert 1
+    let indices: Vec<u32> = vec![0, 1];
+
+    // Expected results:
+    // Row 0 with expert 0: [1*1+2*0+3*0+4*0, 1*0+2*1+3*0+4*0, 1*0+2*0+3*1+4*0] = [1, 2, 3]
+    // Row 1 with expert 1: [5*2+6*2+7*2+8*2, 5*1+6*1+7*1+8*1, 5*0+6*0+7*0+8*1] = [52, 26, 8]
+    let expected = vec![1.0, 2.0, 3.0, 52.0, 26.0, 8.0];
+
+    let result = run_gather_mm(GemmDType::F32, (m, n, k, num_experts), &a, &b, &indices);
+
+    // Verify against reference
+    let reference = gather_mm_reference(m, n, k, num_experts, &a, &b, &indices);
+    assert_eq!(approx(reference, 4), expected);
+
+    // Verify kernel output
+    assert_eq!(approx(result, 4), expected);
+}
+
+#[test]
+fn gather_mm_larger() {
+    // Larger test: 8 rows, 16 output features, 32 hidden dim, 4 experts
+    let (m, n, k, num_experts) = (8, 16, 32, 4);
+
+    // Generate test data
+    let mut rng = rng();
+    let a: Vec<f32> = (0..m * k).map(|_| rng.random_range(-1.0..1.0)).collect();
+    let b: Vec<f32> = (0..num_experts * n * k)
+        .map(|_| rng.random_range(-1.0..1.0))
+        .collect();
+    let indices: Vec<u32> = (0..m).map(|_| rng.random_range(0..num_experts as u32)).collect();
+
+    // Compute reference
+    let reference = gather_mm_reference(m, n, k, num_experts, &a, &b, &indices);
+
+    // Run kernel
+    let result = run_gather_mm(GemmDType::F32, (m, n, k, num_experts), &a, &b, &indices);
+
+    // Compare with tolerance (floating point)
+    let tolerance = 1e-3;
+    for (i, (r, e)) in result.iter().zip(reference.iter()).enumerate() {
+        let diff = (r - e).abs();
+        assert!(
+            diff < tolerance,
+            "Mismatch at index {}: kernel={}, reference={}, diff={}",
+            i, r, e, diff
+        );
+    }
+}
+
+#[test]
+fn gather_mm_moe_realistic() {
+    // Realistic MoE dimensions: like Qwen3-VL-30B-A3B
+    // num_tokens * num_experts_per_tok = 1 * 8 = 8 rows (single token decode with top-8)
+    // hidden_dim = 2048 (scaled down for test)
+    // intermediate = 1024 (scaled down)
+    // num_experts = 128
+
+    let (m, n, k, num_experts) = (8, 1024, 2048, 128);
+
+    // Generate test data
+    let mut rng = rng();
+    let a: Vec<f32> = (0..m * k).map(|_| rng.random_range(-0.1..0.1)).collect();
+    let b: Vec<f32> = (0..num_experts * n * k)
+        .map(|_| rng.random_range(-0.1..0.1))
+        .collect();
+    // Each of the 8 rows uses a different expert (simulating top-8 routing)
+    let indices: Vec<u32> = vec![0, 15, 32, 47, 64, 79, 96, 111];
+
+    // Compute reference
+    let reference = gather_mm_reference(m, n, k, num_experts, &a, &b, &indices);
+
+    // Run kernel
+    let result = run_gather_mm(GemmDType::F32, (m, n, k, num_experts), &a, &b, &indices);
+
+    // Compare with tolerance
+    let tolerance = 1e-2; // Slightly relaxed for larger computation
+    let mut max_diff = 0.0f32;
+    for (i, (r, e)) in result.iter().zip(reference.iter()).enumerate() {
+        let diff = (r - e).abs();
+        max_diff = max_diff.max(diff);
+        assert!(
+            diff < tolerance,
+            "Mismatch at index {}: kernel={}, reference={}, diff={}",
+            i, r, e, diff
+        );
+    }
+    println!("gather_mm_moe_realistic: max_diff = {}", max_diff);
+}
