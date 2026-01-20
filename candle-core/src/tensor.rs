@@ -2370,29 +2370,20 @@ impl Tensor {
             Ok(self.clone())
         } else {
             let storage = match (&*self.storage(), device) {
-                (Storage::Cpu(storage), Device::Cuda(cuda)) => Arc::new(RwLock::new(
-                    Storage::Cuda(cuda.storage_from_cpu_storage(storage)?),
-                )),
-                (Storage::Cpu(storage), Device::Metal(metal)) => Arc::new(RwLock::new(
-                    Storage::Metal(metal.storage_from_cpu_storage(storage)?),
-                )),
-                (Storage::Cuda(storage), Device::Cpu) => {
-                    Arc::new(RwLock::new(Storage::Cpu(storage.to_cpu_storage()?)))
+                (Storage::Cpu(storage), Device::Cuda(cuda)) => {
+                    Storage::Cuda(cuda.storage_from_cpu_storage(storage)?)
                 }
-                (Storage::Metal(storage), Device::Cpu) => {
-                    Arc::new(RwLock::new(Storage::Cpu(storage.to_cpu_storage()?)))
+                (Storage::Cpu(storage), Device::Metal(metal)) => {
+                    Storage::Metal(metal.storage_from_cpu_storage(storage)?)
                 }
+                (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
-                    if storage.device.id() == cuda.id() {
-                        self.storage.clone()
-                    } else {
-                        let dst_storage = storage.transfer_to_device(cuda)?;
-                        Arc::new(RwLock::new(Storage::Cuda(dst_storage)))
-                    }
+                    // can't clone storage if it's the same device because of the underlying device ptr
+                    let dst_storage = storage.transfer_to_device(cuda)?;
+                    Storage::Cuda(dst_storage)
                 }
-                (Storage::Cpu(storage), Device::Cpu) => {
-                    Arc::new(RwLock::new(Storage::Cpu(storage.clone())))
-                }
+                (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
                 _ => {
                     bail!(
                         "not implemented yet, self.device: {:?}, device: {:?}",
@@ -2404,7 +2395,7 @@ impl Tensor {
             let op = BackpropOp::new1(self, Op::ToDevice);
             let tensor_ = Tensor_ {
                 id: TensorId::new(),
-                storage,
+                storage: Arc::new(RwLock::new(storage)),
                 layout: self.layout.clone(),
                 op,
                 is_variable: false,
