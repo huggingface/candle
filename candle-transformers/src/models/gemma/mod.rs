@@ -16,7 +16,7 @@ pub mod translate_gemma;
 
 // Backward compatibility - will be removed in a future version
 #[deprecated(
-    since = "0.9.0",
+    since = "0.9.2",
     note = "use `models::gemma::gemma1::{Config, Model}` instead"
 )]
 pub use gemma1::{Config, Model};

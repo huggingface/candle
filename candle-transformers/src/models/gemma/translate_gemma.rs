@@ -4,16 +4,16 @@
 //! Gemma 3 checkpoints. Available in 4B, 12B, and 27B parameter sizes, supporting
 //! translation across 55 languages.
 //!
-//! The architecture is identical to Gemma 3 (`Gemma3ForConditionalGeneration`), with
-//! a specialized chat template for translation tasks.
+//! The architecture is identical to Gemma 3, with a specialized prompt format
+//! for translation tasks.
 //!
 //! # Model Variants
 //! - `google/translategemma-4b-it` - Optimized for mobile/edge deployment
-//! - `google/translategemma-12b-it` - Consumer laptop deployment
+//! - `google/translategemma-12b-it` - Consumer laptop deployment  
 //! - `google/translategemma-27b-it` - Maximum fidelity, single H100/TPU
 //!
-//! # Chat Template Format
-//! TranslateGemma uses a specific template with ISO 639-1 language codes:
+//! # Prompt Format
+//! TranslateGemma uses a specific format with ISO 639-1 language codes:
 //! ```text
 //! <bos><start_of_turn>user
 //! <translate source_lang={src} target_lang={tgt}>
@@ -24,21 +24,11 @@
 //!
 //! # Example
 //! ```ignore
-//! use candle_transformers::models::gemma::translate::{TranslateGemma, TranslateConfig, LanguageCode};
+//! use candle_transformers::models::gemma::translate_gemma::{LanguageCode, format_translate_prompt};
 //!
-//! let translator = TranslateGemma::new(&config, translate_config, tokenizer, false, vb)?;
-//! let result = translator.translate("Hello!", LanguageCode::English, LanguageCode::French)?;
-//! println!("{}", result.text);
+//! let prompt = format_translate_prompt("Hello!", "en", "fr");
+//! // Use with gemma3::Model for inference
 //! ```
-
-use candle::{DType, Device, Result, Tensor};
-use candle_nn::VarBuilder;
-use tokenizers::Tokenizer;
-
-use crate::generation::LogitsProcessor;
-
-// Re-use Gemma 3 model from sibling module
-use super::gemma3::{Config as Gemma3Config, Model as Gemma3Model};
 
 /// ISO 639-1 language codes supported by TranslateGemma.
 ///
@@ -97,13 +87,11 @@ pub enum LanguageCode {
     Urdu,
     Vietnamese,
     Chinese,
-    /// Custom language code (ISO 639-1 or regionalized like "en-US")
-    Custom(&'static str),
 }
 
 impl LanguageCode {
     /// Returns the ISO 639-1 language code string.
-    pub fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             LanguageCode::Arabic => "ar",
             LanguageCode::Bulgarian => "bg",
@@ -157,7 +145,6 @@ impl LanguageCode {
             LanguageCode::Urdu => "ur",
             LanguageCode::Vietnamese => "vi",
             LanguageCode::Chinese => "zh",
-            LanguageCode::Custom(code) => code,
         }
     }
 
@@ -222,7 +209,7 @@ impl LanguageCode {
     }
 
     /// Get full language name for display.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &'static str {
         match self {
             LanguageCode::Arabic => "Arabic",
             LanguageCode::Bulgarian => "Bulgarian",
@@ -276,264 +263,114 @@ impl LanguageCode {
             LanguageCode::Urdu => "Urdu",
             LanguageCode::Vietnamese => "Vietnamese",
             LanguageCode::Chinese => "Chinese",
-            LanguageCode::Custom(code) => code,
         }
     }
-}
 
-/// Configuration for TranslateGemma inference.
-#[derive(Debug, Clone)]
-pub struct TranslateConfig {
-    /// Maximum tokens to generate.
-    pub max_tokens: usize,
-    /// Temperature for sampling (None = greedy).
-    pub temperature: Option<f64>,
-    /// Top-p nucleus sampling threshold.
-    pub top_p: Option<f64>,
-    /// Repetition penalty (1.0 = no penalty).
-    pub repeat_penalty: f32,
-    /// Context window for repetition penalty.
-    pub repeat_last_n: usize,
-    /// Random seed.
-    pub seed: u64,
-}
-
-impl Default for TranslateConfig {
-    fn default() -> Self {
-        Self {
-            max_tokens: 2048,
-            temperature: None, // Greedy decoding for consistent translations
-            top_p: None,
-            repeat_penalty: 1.0,
-            repeat_last_n: 64,
-            seed: 42,
-        }
+    /// Returns all supported language codes.
+    pub fn all() -> &'static [LanguageCode] {
+        &[
+            LanguageCode::Arabic,
+            LanguageCode::Bulgarian,
+            LanguageCode::Bengali,
+            LanguageCode::Catalan,
+            LanguageCode::Czech,
+            LanguageCode::Danish,
+            LanguageCode::German,
+            LanguageCode::Greek,
+            LanguageCode::English,
+            LanguageCode::Spanish,
+            LanguageCode::Estonian,
+            LanguageCode::Persian,
+            LanguageCode::Finnish,
+            LanguageCode::French,
+            LanguageCode::Gujarati,
+            LanguageCode::Hebrew,
+            LanguageCode::Hindi,
+            LanguageCode::Croatian,
+            LanguageCode::Hungarian,
+            LanguageCode::Indonesian,
+            LanguageCode::Italian,
+            LanguageCode::Japanese,
+            LanguageCode::Kannada,
+            LanguageCode::Korean,
+            LanguageCode::Lithuanian,
+            LanguageCode::Latvian,
+            LanguageCode::Macedonian,
+            LanguageCode::Malayalam,
+            LanguageCode::Marathi,
+            LanguageCode::Malay,
+            LanguageCode::Burmese,
+            LanguageCode::Dutch,
+            LanguageCode::Norwegian,
+            LanguageCode::Polish,
+            LanguageCode::Portuguese,
+            LanguageCode::Romanian,
+            LanguageCode::Russian,
+            LanguageCode::Slovak,
+            LanguageCode::Slovenian,
+            LanguageCode::Albanian,
+            LanguageCode::Serbian,
+            LanguageCode::Swedish,
+            LanguageCode::Swahili,
+            LanguageCode::Tamil,
+            LanguageCode::Telugu,
+            LanguageCode::Thai,
+            LanguageCode::Tagalog,
+            LanguageCode::Turkish,
+            LanguageCode::Ukrainian,
+            LanguageCode::Urdu,
+            LanguageCode::Vietnamese,
+            LanguageCode::Chinese,
+        ]
     }
 }
 
-/// Result of a translation operation.
-#[derive(Debug, Clone)]
-pub struct TranslationResult {
-    /// Translated text.
-    pub text: String,
-    /// Number of tokens generated.
-    pub tokens_generated: usize,
-    /// Time taken in seconds.
-    pub elapsed_secs: f64,
-}
-
-impl TranslationResult {
-    /// Tokens per second throughput.
-    pub fn tokens_per_second(&self) -> f64 {
-        if self.elapsed_secs > 0.0 {
-            self.tokens_generated as f64 / self.elapsed_secs
-        } else {
-            0.0
-        }
-    }
-}
-
-/// TranslateGemma prompt formatter.
-pub struct PromptFormatter {
-    bos_token: String,
-    start_of_turn: String,
-    end_of_turn: String,
-}
-
-impl Default for PromptFormatter {
-    fn default() -> Self {
-        Self {
-            bos_token: "<bos>".to_string(),
-            start_of_turn: "<start_of_turn>".to_string(),
-            end_of_turn: "<end_of_turn>".to_string(),
-        }
-    }
-}
-
-impl PromptFormatter {
-    /// Format a translation prompt.
-    pub fn format(&self, text: &str, source_lang: &str, target_lang: &str) -> String {
-        format!(
-            "{bos}{start}user\n<translate source_lang={src} target_lang={tgt}>\n{text}\n</translate>{end}\n{start}model\n",
-            bos = self.bos_token,
-            start = self.start_of_turn,
-            end = self.end_of_turn,
-            src = source_lang,
-            tgt = target_lang,
-            text = text,
-        )
-    }
-}
-
-/// TranslateGemma model wrapper.
+/// Format the user message content for TranslateGemma.
 ///
-/// Wraps a Gemma 3 model with translation-specific functionality.
-pub struct TranslateGemma {
-    model: Gemma3Model,
-    tokenizer: Tokenizer,
-    config: TranslateConfig,
-    device: Device,
-    formatter: PromptFormatter,
-    eos_token_id: u32,
-    eot_token_id: u32,
+/// This creates the inner content that should be used as the user message
+/// in a Gemma chat template:
+///
+/// ```ignore
+/// let content = format_translate_content("Hello!", "en", "fr");
+/// // Returns: "<translate source_lang=en target_lang=fr>\nHello!\n</translate>"
+/// // Use with ChatTemplate::gemma() as the user message content
+/// ```
+pub fn format_translate_content(text: &str, source_lang: &str, target_lang: &str) -> String {
+    format!(
+        "<translate source_lang={} target_lang={}>\n{}\n</translate>",
+        source_lang, target_lang, text
+    )
 }
 
-impl TranslateGemma {
-    /// Create a new TranslateGemma instance.
-    pub fn new(
-        model_config: &Gemma3Config,
-        translate_config: TranslateConfig,
-        tokenizer: Tokenizer,
-        use_flash_attn: bool,
-        vb: VarBuilder,
-    ) -> Result<Self> {
-        let device = vb.device().clone();
-        let model = Gemma3Model::new(use_flash_attn, model_config, vb)?;
-
-        let eos_token_id = tokenizer.token_to_id("<eos>").unwrap_or(1);
-        let eot_token_id = tokenizer
-            .token_to_id("<end_of_turn>")
-            .unwrap_or(eos_token_id);
-
-        Ok(Self {
-            model,
-            tokenizer,
-            config: translate_config,
-            device,
-            formatter: PromptFormatter::default(),
-            eos_token_id,
-            eot_token_id,
-        })
-    }
-
-    /// Translate text from source to target language.
-    pub fn translate(
-        &mut self,
-        text: &str,
-        source_lang: LanguageCode,
-        target_lang: LanguageCode,
-    ) -> Result<TranslationResult> {
-        self.translate_with_codes(text, source_lang.as_str(), target_lang.as_str())
-    }
-
-    /// Translate using raw language code strings.
-    pub fn translate_with_codes(
-        &mut self,
-        text: &str,
-        source_lang: &str,
-        target_lang: &str,
-    ) -> Result<TranslationResult> {
-        self.model.clear_kv_cache();
-
-        let prompt = self.formatter.format(text, source_lang, target_lang);
-
-        let encoding = self
-            .tokenizer
-            .encode(prompt.as_str(), true)
-            .map_err(|e| candle::Error::Msg(format!("Tokenization error: {}", e)))?;
-
-        let mut tokens: Vec<u32> = encoding.get_ids().to_vec();
-        let mut output_tokens = Vec::new();
-
-        let mut logits_processor =
-            LogitsProcessor::new(self.config.seed, self.config.temperature, self.config.top_p);
-
-        let start_time = std::time::Instant::now();
-
-        for index in 0..self.config.max_tokens {
-            let context_size = if index > 0 { 1 } else { tokens.len() };
-            let start_pos = tokens.len().saturating_sub(context_size);
-            let ctxt = &tokens[start_pos..];
-
-            let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, start_pos)?;
-            let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-
-            let logits = if self.config.repeat_penalty != 1.0 {
-                let start_at = tokens.len().saturating_sub(self.config.repeat_last_n);
-                crate::utils::apply_repeat_penalty(
-                    &logits,
-                    self.config.repeat_penalty,
-                    &tokens[start_at..],
-                )?
-            } else {
-                logits
-            };
-
-            let next_token = logits_processor.sample(&logits)?;
-            tokens.push(next_token);
-
-            if next_token == self.eos_token_id || next_token == self.eot_token_id {
-                break;
-            }
-
-            output_tokens.push(next_token);
-        }
-
-        let elapsed = start_time.elapsed().as_secs_f64();
-
-        let text = self
-            .tokenizer
-            .decode(&output_tokens, true)
-            .map_err(|e| candle::Error::Msg(format!("Decoding error: {}", e)))?;
-
-        let text = text
-            .trim()
-            .trim_end_matches("<end_of_turn>")
-            .trim_end_matches("<eos>")
-            .trim()
-            .to_string();
-
-        Ok(TranslationResult {
-            text,
-            tokens_generated: output_tokens.len(),
-            elapsed_secs: elapsed,
-        })
-    }
-
-    /// Batch translate multiple texts.
-    pub fn translate_batch(
-        &mut self,
-        texts: &[&str],
-        source_lang: LanguageCode,
-        target_lang: LanguageCode,
-    ) -> Result<Vec<TranslationResult>> {
-        texts
-            .iter()
-            .map(|text| self.translate(text, source_lang, target_lang))
-            .collect()
-    }
-
-    /// Clear KV cache.
-    pub fn clear_cache(&mut self) {
-        self.model.clear_kv_cache();
-    }
-
-    /// Update configuration.
-    pub fn set_config(&mut self, config: TranslateConfig) {
-        self.config = config;
-    }
-
-    /// Get reference to tokenizer.
-    pub fn tokenizer(&self) -> &Tokenizer {
-        &self.tokenizer
-    }
+/// Format a complete TranslateGemma prompt (without using chat template).
+///
+/// This creates the full prompt string ready for tokenization:
+///
+/// ```ignore
+/// let prompt = format_translate_prompt("Hello!", "en", "fr");
+/// // Returns the full prompt with special tokens
+/// ```
+pub fn format_translate_prompt(text: &str, source_lang: &str, target_lang: &str) -> String {
+    format!(
+        "<bos><start_of_turn>user\n<translate source_lang={} target_lang={}>\n{}\n</translate><end_of_turn>\n<start_of_turn>model\n",
+        source_lang, target_lang, text
+    )
 }
 
 /// Model variant enumeration for TranslateGemma.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranslateGemmaVariant {
-    /// 4B parameter model
+    /// 4B parameter model - optimized for edge/mobile
     T4B,
-    /// 12B parameter model
+    /// 12B parameter model - consumer laptop deployment
     T12B,
-    /// 27B parameter model
+    /// 27B parameter model - maximum quality
     T27B,
 }
 
 impl TranslateGemmaVariant {
     /// HuggingFace model ID.
-    pub fn model_id(&self) -> &str {
+    pub fn model_id(&self) -> &'static str {
         match self {
             TranslateGemmaVariant::T4B => "google/translategemma-4b-it",
             TranslateGemmaVariant::T12B => "google/translategemma-12b-it",
@@ -568,12 +405,29 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_formatter() {
-        let formatter = PromptFormatter::default();
-        let prompt = formatter.format("Hello", "en", "fr");
+    fn test_format_translate_content() {
+        let content = format_translate_content("Hello", "en", "fr");
+        assert!(content.contains("source_lang=en"));
+        assert!(content.contains("target_lang=fr"));
+        assert!(content.contains("Hello"));
+        assert!(content.contains("<translate"));
+        assert!(content.contains("</translate>"));
+    }
+
+    #[test]
+    fn test_format_translate_prompt() {
+        let prompt = format_translate_prompt("Hello", "en", "fr");
         assert!(prompt.contains("<bos>"));
+        assert!(prompt.contains("<start_of_turn>user"));
+        assert!(prompt.contains("<start_of_turn>model"));
         assert!(prompt.contains("source_lang=en"));
-        assert!(prompt.contains("target_lang=fr"));
-        assert!(prompt.contains("Hello"));
+    }
+
+    #[test]
+    fn test_variant_model_ids() {
+        assert_eq!(
+            TranslateGemmaVariant::T4B.model_id(),
+            "google/translategemma-4b-it"
+        );
     }
 }

@@ -33,6 +33,7 @@ use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::gemma::gemma3::{Config, Model};
+use candle_transformers::models::gemma::translate_gemma::format_translate_prompt;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
@@ -267,29 +268,10 @@ impl Translator {
         }
     }
 
-    /// Format translation prompt using TranslateGemma chat template.
-    ///
-    /// The template format is:
-    /// <bos><start_of_turn>user
-    /// <translate source_lang={src} target_lang={tgt}>
-    /// {text}
-    /// </translate><end_of_turn>
-    /// <start_of_turn>model
-    fn format_prompt(&self, text: &str, source: &str, target: &str) -> String {
-        format!(
-            "<bos><start_of_turn>user\n\
-            <translate source_lang={} target_lang={}>\n\
-            {}\n\
-            </translate><end_of_turn>\n\
-            <start_of_turn>model\n",
-            source, target, text
-        )
-    }
-
     fn translate(&mut self, text: &str, source: Lang, target: Lang) -> Result<String> {
         self.model.clear_kv_cache();
 
-        let prompt = self.format_prompt(text, source.code(), target.code());
+        let prompt = format_translate_prompt(text, source.code(), target.code());
 
         let encoding = self
             .tokenizer
@@ -607,3 +589,4 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
