@@ -32,7 +32,7 @@ use std::io::{self, BufRead, Write};
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::gemma::gemma3::{Config, Model};
+use candle_transformers::models::gemma::gemma3::Model;
 use candle_transformers::models::gemma::translate_gemma::format_translate_prompt;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -589,4 +589,3 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-
