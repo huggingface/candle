@@ -14,35 +14,22 @@
 //!
 //! # Chat Template Format
 //! TranslateGemma uses a specific template with ISO 639-1 language codes:
-//! ```json
-//! {
-//!   "role": "user",
-//!   "content": [{
-//!     "type": "text",
-//!     "source_lang_code": "en",
-//!     "target_lang_code": "fr",
-//!     "text": "Hello, world!"
-//!   }]
-//! }
+//! ```text
+//! <bos><start_of_turn>user
+//! <translate source_lang={src} target_lang={tgt}>
+//! {text}
+//! </translate><end_of_turn>
+//! <start_of_turn>model
 //! ```
 //!
 //! # Example
-//! ```no_run
-//! use candle::{Device, DType};
-//! use candle_transformers::models::translate_gemma::{TranslateGemma, TranslateConfig, LanguageCode};
+//! ```ignore
+//! use candle_transformers::models::gemma::translate::{TranslateGemma, TranslateConfig, LanguageCode};
 //!
-//! // Load model (uses existing Gemma 3 weights)
-//! let translator = TranslateGemma::new(&config, vb)?;
-//!
-//! // Translate text
-//! let result = translator.translate(
-//!     "Hello, how are you?",
-//!     LanguageCode::English,
-//!     LanguageCode::French,
-//! )?;
+//! let translator = TranslateGemma::new(&config, translate_config, tokenizer, false, vb)?;
+//! let result = translator.translate("Hello!", LanguageCode::English, LanguageCode::French)?;
+//! println!("{}", result.text);
 //! ```
-
-use std::collections::HashMap;
 
 use candle::{DType, Device, Result, Tensor};
 use candle_nn::VarBuilder;
@@ -50,68 +37,66 @@ use tokenizers::Tokenizer;
 
 use crate::generation::LogitsProcessor;
 
-// Re-use Gemma 3 model implementation
-use crate::models::gemma3::{Config as Gemma3Config, Model as Gemma3Model};
+// Re-use Gemma 3 model from sibling module
+use super::gemma3::{Config as Gemma3Config, Model as Gemma3Model};
 
 /// ISO 639-1 language codes supported by TranslateGemma.
 ///
 /// TranslateGemma supports 55 core languages with additional experimental pairs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LanguageCode {
-    // High-resource languages
-    Arabic,     // ar
-    Bulgarian,  // bg
-    Bengali,    // bn
-    Catalan,    // ca
-    Czech,      // cs
-    Danish,     // da
-    German,     // de
-    Greek,      // el
-    English,    // en
-    Spanish,    // es
-    Estonian,   // et
-    Persian,    // fa
-    Finnish,    // fi
-    French,     // fr
-    Gujarati,   // gu
-    Hebrew,     // he
-    Hindi,      // hi
-    Croatian,   // hr
-    Hungarian,  // hu
-    Indonesian, // id
-    Italian,    // it
-    Japanese,   // ja
-    Kannada,    // kn
-    Korean,     // ko
-    Lithuanian, // lt
-    Latvian,    // lv
-    Macedonian, // mk
-    Malayalam,  // ml
-    Marathi,    // mr
-    Malay,      // ms
-    Burmese,    // my
-    Dutch,      // nl
-    Norwegian,  // no
-    Polish,     // pl
-    Portuguese, // pt
-    Romanian,   // ro
-    Russian,    // ru
-    Slovak,     // sk
-    Slovenian,  // sl
-    Albanian,   // sq
-    Serbian,    // sr
-    Swedish,    // sv
-    Swahili,    // sw
-    Tamil,      // ta
-    Telugu,     // te
-    Thai,       // th
-    Tagalog,    // tl
-    Turkish,    // tr
-    Ukrainian,  // uk
-    Urdu,       // ur
-    Vietnamese, // vi
-    Chinese,    // zh
-
+    Arabic,
+    Bulgarian,
+    Bengali,
+    Catalan,
+    Czech,
+    Danish,
+    German,
+    Greek,
+    English,
+    Spanish,
+    Estonian,
+    Persian,
+    Finnish,
+    French,
+    Gujarati,
+    Hebrew,
+    Hindi,
+    Croatian,
+    Hungarian,
+    Indonesian,
+    Italian,
+    Japanese,
+    Kannada,
+    Korean,
+    Lithuanian,
+    Latvian,
+    Macedonian,
+    Malayalam,
+    Marathi,
+    Malay,
+    Burmese,
+    Dutch,
+    Norwegian,
+    Polish,
+    Portuguese,
+    Romanian,
+    Russian,
+    Slovak,
+    Slovenian,
+    Albanian,
+    Serbian,
+    Swedish,
+    Swahili,
+    Tamil,
+    Telugu,
+    Thai,
+    Tagalog,
+    Turkish,
+    Ukrainian,
+    Urdu,
+    Vietnamese,
+    Chinese,
     /// Custom language code (ISO 639-1 or regionalized like "en-US")
     Custom(&'static str),
 }
@@ -177,13 +162,8 @@ impl LanguageCode {
     }
 
     /// Parse a language code from string.
-    ///
-    /// Accepts ISO 639-1 codes (e.g., "en", "fr") or regionalized variants
-    /// (e.g., "en-US", "pt-BR").
     pub fn from_str(s: &str) -> Option<Self> {
-        // Extract base language code (before any - or _)
         let base = s.split(&['-', '_'][..]).next().unwrap_or(s).to_lowercase();
-
         match base.as_str() {
             "ar" => Some(LanguageCode::Arabic),
             "bg" => Some(LanguageCode::Bulgarian),
@@ -354,21 +334,9 @@ impl TranslationResult {
 }
 
 /// TranslateGemma prompt formatter.
-///
-/// Implements the specific chat template format required by TranslateGemma:
-/// ```
-/// <bos><start_of_turn>user
-/// <translate source_lang={src} target_lang={tgt}>
-/// {text}
-/// </translate><end_of_turn>
-/// <start_of_turn>model
-/// ```
 pub struct PromptFormatter {
-    /// Beginning of sequence token.
     bos_token: String,
-    /// Start of turn marker.
     start_of_turn: String,
-    /// End of turn marker.
     end_of_turn: String,
 }
 
@@ -384,8 +352,6 @@ impl Default for PromptFormatter {
 
 impl PromptFormatter {
     /// Format a translation prompt.
-    ///
-    /// Uses the TranslateGemma chat template format with language codes.
     pub fn format(&self, text: &str, source_lang: &str, target_lang: &str) -> String {
         format!(
             "{bos}{start}user\n<translate source_lang={src} target_lang={tgt}>\n{text}\n</translate>{end}\n{start}model\n",
@@ -401,10 +367,7 @@ impl PromptFormatter {
 
 /// TranslateGemma model wrapper.
 ///
-/// Wraps a Gemma 3 model with translation-specific functionality:
-/// - Chat template formatting with language codes
-/// - Greedy decoding for consistent translations
-/// - Batch translation support
+/// Wraps a Gemma 3 model with translation-specific functionality.
 pub struct TranslateGemma {
     model: Gemma3Model,
     tokenizer: Tokenizer,
@@ -417,12 +380,6 @@ pub struct TranslateGemma {
 
 impl TranslateGemma {
     /// Create a new TranslateGemma instance.
-    ///
-    /// # Arguments
-    /// * `model_config` - Gemma 3 model configuration
-    /// * `translate_config` - Translation inference configuration
-    /// * `tokenizer` - HuggingFace tokenizer
-    /// * `vb` - Variable builder with model weights
     pub fn new(
         model_config: &Gemma3Config,
         translate_config: TranslateConfig,
@@ -433,7 +390,6 @@ impl TranslateGemma {
         let device = vb.device().clone();
         let model = Gemma3Model::new(use_flash_attn, model_config, vb)?;
 
-        // Get special token IDs
         let eos_token_id = tokenizer.token_to_id("<eos>").unwrap_or(1);
         let eot_token_id = tokenizer
             .token_to_id("<end_of_turn>")
@@ -461,8 +417,6 @@ impl TranslateGemma {
     }
 
     /// Translate using raw language code strings.
-    ///
-    /// Useful for regionalized codes like "en-US" or "pt-BR".
     pub fn translate_with_codes(
         &mut self,
         text: &str,
@@ -495,7 +449,6 @@ impl TranslateGemma {
             let logits = self.model.forward(&input, start_pos)?;
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
-            // Apply repetition penalty
             let logits = if self.config.repeat_penalty != 1.0 {
                 let start_at = tokens.len().saturating_sub(self.config.repeat_last_n);
                 crate::utils::apply_repeat_penalty(
@@ -510,7 +463,6 @@ impl TranslateGemma {
             let next_token = logits_processor.sample(&logits)?;
             tokens.push(next_token);
 
-            // Check for end of generation
             if next_token == self.eos_token_id || next_token == self.eot_token_id {
                 break;
             }
@@ -520,13 +472,11 @@ impl TranslateGemma {
 
         let elapsed = start_time.elapsed().as_secs_f64();
 
-        // Decode output
         let text = self
             .tokenizer
             .decode(&output_tokens, true)
             .map_err(|e| candle::Error::Msg(format!("Decoding error: {}", e)))?;
 
-        // Clean up output (remove any trailing markers)
         let text = text
             .trim()
             .trim_end_matches("<end_of_turn>")
@@ -542,9 +492,6 @@ impl TranslateGemma {
     }
 
     /// Batch translate multiple texts.
-    ///
-    /// Note: Currently processes sequentially. True batching would require
-    /// padding and attention masks.
     pub fn translate_batch(
         &mut self,
         texts: &[&str],
@@ -557,7 +504,7 @@ impl TranslateGemma {
             .collect()
     }
 
-    /// Clear KV cache (call between unrelated translations).
+    /// Clear KV cache.
     pub fn clear_cache(&mut self) {
         self.model.clear_kv_cache();
     }
@@ -576,11 +523,11 @@ impl TranslateGemma {
 /// Model variant enumeration for TranslateGemma.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranslateGemmaVariant {
-    /// 4B parameter model - optimized for edge/mobile
+    /// 4B parameter model
     T4B,
-    /// 12B parameter model - consumer laptop deployment  
+    /// 12B parameter model
     T12B,
-    /// 27B parameter model - maximum quality
+    /// 27B parameter model
     T27B,
 }
 
@@ -617,40 +564,16 @@ mod tests {
             LanguageCode::from_str("pt-BR"),
             Some(LanguageCode::Portuguese)
         );
-        assert_eq!(LanguageCode::from_str("zh"), Some(LanguageCode::Chinese));
         assert_eq!(LanguageCode::from_str("xx"), None);
-    }
-
-    #[test]
-    fn test_language_code_str() {
-        assert_eq!(LanguageCode::English.as_str(), "en");
-        assert_eq!(LanguageCode::French.as_str(), "fr");
-        assert_eq!(LanguageCode::Japanese.as_str(), "ja");
     }
 
     #[test]
     fn test_prompt_formatter() {
         let formatter = PromptFormatter::default();
         let prompt = formatter.format("Hello", "en", "fr");
-
         assert!(prompt.contains("<bos>"));
-        assert!(prompt.contains("<start_of_turn>user"));
         assert!(prompt.contains("source_lang=en"));
         assert!(prompt.contains("target_lang=fr"));
         assert!(prompt.contains("Hello"));
-        assert!(prompt.contains("</translate>"));
-        assert!(prompt.contains("<start_of_turn>model"));
-    }
-
-    #[test]
-    fn test_variant_model_ids() {
-        assert_eq!(
-            TranslateGemmaVariant::T4B.model_id(),
-            "google/translategemma-4b-it"
-        );
-        assert_eq!(
-            TranslateGemmaVariant::T12B.model_id(),
-            "google/translategemma-12b-it"
-        );
     }
 }

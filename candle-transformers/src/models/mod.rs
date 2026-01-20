@@ -43,8 +43,6 @@ pub mod falcon;
 pub mod fastvit;
 pub mod flux;
 pub mod gemma;
-pub mod gemma2;
-pub mod gemma3;
 pub mod glm4;
 pub mod glm4_new;
 pub mod granite;
@@ -84,7 +82,6 @@ pub mod phi3;
 pub mod pixtral;
 pub mod quantized_blip;
 pub mod quantized_blip_text;
-pub mod quantized_gemma3;
 pub mod quantized_glm4;
 pub mod quantized_lfm2;
 pub mod quantized_llama;
@@ -134,3 +131,8 @@ pub mod wuerstchen;
 pub mod xlm_roberta;
 pub mod yi;
 pub mod z_image;
+
+// Backward compat re-exports
+pub use gemma::gemma2;
+pub use gemma::gemma3;
+pub use gemma::quantized_gemma3;
