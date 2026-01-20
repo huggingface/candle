@@ -120,6 +120,20 @@ pub trait BackendStorage: Sized {
         _: &Layout,
     ) -> Result<Self>;
 
+    /// Fused gather + matmul for MoE (Mixture of Experts) acceleration.
+    /// A: [m, k] - flattened input (num_tokens * num_experts_per_tok, hidden_dim)
+    /// B: [num_experts, n, k] - expert weights (transposed)
+    /// indices: [m] - expert index for each row (u32)
+    /// output: [m, n]
+    fn gather_mm(
+        &self,
+        _weights: &Self,
+        _indices: &Self,
+        _params: (usize, usize, usize, usize), // (m, n, k, num_experts)
+    ) -> Result<Self> {
+        Err(crate::Error::NotCompiledWithMetalSupport)
+    }
+
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()>;
 
     #[allow(clippy::too_many_arguments)]

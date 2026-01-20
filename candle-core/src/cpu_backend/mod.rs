@@ -2952,6 +2952,76 @@ impl BackendStorage for CpuStorage {
         MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
     }
 
+    /// CPU fallback for gather_mm: naive implementation using loops.
+    /// This is correct but not optimized - Metal has a fused kernel.
+    fn gather_mm(
+        &self,
+        weights: &Self,
+        indices: &Self,
+        (m, n, k, _num_experts): (usize, usize, usize, usize),
+    ) -> Result<Self> {
+        // A: [m, k], B: [num_experts, n, k], indices: [m], output: [m, n]
+        // For each row i: output[i] = A[i] @ B[indices[i]].T
+        let indices_u32 = match indices {
+            Self::U32(v) => v,
+            _ => return Err(Error::UnexpectedDType {
+                msg: "gather_mm requires u32 indices",
+                expected: DType::U32,
+                got: indices.dtype(),
+            }.bt()),
+        };
+
+        match (self, weights) {
+            (Self::F32(a), Self::F32(b)) => {
+                let mut output = vec![0f32; m * n];
+                for row in 0..m {
+                    let expert_idx = indices_u32[row] as usize;
+                    let expert_offset = expert_idx * n * k;
+                    for col in 0..n {
+                        let mut sum = 0f32;
+                        for i in 0..k {
+                            // A[row, i] * B[expert, col, i] (B is [experts, n, k])
+                            sum += a[row * k + i] * b[expert_offset + col * k + i];
+                        }
+                        output[row * n + col] = sum;
+                    }
+                }
+                Ok(Self::F32(output))
+            }
+            (Self::F16(a), Self::F16(b)) => {
+                let mut output = vec![f16::ZERO; m * n];
+                for row in 0..m {
+                    let expert_idx = indices_u32[row] as usize;
+                    let expert_offset = expert_idx * n * k;
+                    for col in 0..n {
+                        let mut sum = 0f32;
+                        for i in 0..k {
+                            sum += a[row * k + i].to_f32() * b[expert_offset + col * k + i].to_f32();
+                        }
+                        output[row * n + col] = f16::from_f32(sum);
+                    }
+                }
+                Ok(Self::F16(output))
+            }
+            (Self::BF16(a), Self::BF16(b)) => {
+                let mut output = vec![bf16::ZERO; m * n];
+                for row in 0..m {
+                    let expert_idx = indices_u32[row] as usize;
+                    let expert_offset = expert_idx * n * k;
+                    for col in 0..n {
+                        let mut sum = 0f32;
+                        for i in 0..k {
+                            sum += a[row * k + i].to_f32() * b[expert_offset + col * k + i].to_f32();
+                        }
+                        output[row * n + col] = bf16::from_f32(sum);
+                    }
+                }
+                Ok(Self::BF16(output))
+            }
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "gather_mm").bt()),
+        }
+    }
+
     fn device(&self) -> &Self::Device {
         &CpuDevice
     }

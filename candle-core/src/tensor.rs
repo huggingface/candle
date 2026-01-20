@@ -1559,6 +1559,100 @@ impl Tensor {
         }
     }
 
+    /// Fused gather + matmul for MoE (Mixture of Experts) acceleration.
+    ///
+    /// This operation fuses expert selection and matrix multiplication into a single kernel,
+    /// avoiding the overhead of separate index_select and matmul operations.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - Input tensor with shape `[m, k]` where m = num_tokens * num_experts_per_tok
+    /// * `weights` - Expert weight tensor with shape `[num_experts, n, k]` (transposed layout)
+    /// * `indices` - Expert indices tensor with shape `[m]` containing u32 expert indices
+    ///
+    /// # Returns
+    ///
+    /// Output tensor with shape `[m, n]` where each row is the result of multiplying
+    /// the corresponding input row with the expert weights selected by the index.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // input: [8, 1024], weights: [128, 2048, 1024], indices: [8]
+    /// // output: [8, 2048]
+    /// let output = input.gather_mm(&weights, &indices)?;
+    /// ```
+    pub fn gather_mm(&self, weights: &Self, indices: &Self) -> Result<Self> {
+        // Validate shapes
+        let input_dims = self.shape().dims();
+        let weights_dims = weights.shape().dims();
+        let indices_dims = indices.shape().dims();
+
+        if input_dims.len() != 2 {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: weights.shape().clone(),
+                op: "gather_mm (input must be 2D)",
+            }
+            .bt());
+        }
+        if weights_dims.len() != 3 {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: weights.shape().clone(),
+                op: "gather_mm (weights must be 3D)",
+            }
+            .bt());
+        }
+        if indices_dims.len() != 1 {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: indices.shape().clone(),
+                op: "gather_mm (indices must be 1D)",
+            }
+            .bt());
+        }
+
+        let m = input_dims[0];
+        let k = input_dims[1];
+        let num_experts = weights_dims[0];
+        let n = weights_dims[1];
+        let k_weights = weights_dims[2];
+
+        if k != k_weights {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: weights.shape().clone(),
+                op: "gather_mm (input k must match weights k)",
+            }
+            .bt());
+        }
+        if indices_dims[0] != m {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: indices.shape().clone(),
+                op: "gather_mm (indices length must match input rows)",
+            }
+            .bt());
+        }
+
+        let output_shape = Shape::from_dims(&[m, n]);
+
+        // Make tensors contiguous for the kernel
+        let input = self.contiguous()?;
+        let weights = weights.contiguous()?;
+        let indices = indices.contiguous()?;
+
+        let storage = input.storage().gather_mm(
+            &weights.storage(),
+            &indices.storage(),
+            (m, n, k, num_experts),
+        )?;
+
+        // No backprop support for now (MoE inference only)
+        Ok(from_storage(storage, output_shape, BackpropOp::none(), false))
+    }
+
     /// Returns a tensor with the same shape as the input tensor, the values are taken from
     /// `on_true` if the input tensor value is not zero, and `on_false` at the positions where the
     /// input tensor is equal to zero.

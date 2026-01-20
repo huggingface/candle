@@ -797,6 +797,38 @@ impl Storage {
         }
     }
 
+    /// Fused gather + matmul for MoE acceleration.
+    pub(crate) fn gather_mm(
+        &self,
+        weights: &Self,
+        indices: &Self,
+        params: (usize, usize, usize, usize),
+    ) -> Result<Self> {
+        self.same_device(weights, "gather_mm")?;
+        self.same_device(indices, "gather_mm")?;
+        self.same_dtype(weights, "gather_mm")?;
+        match (self, weights, indices) {
+            (Self::Cpu(input), Self::Cpu(weights), Self::Cpu(indices)) => {
+                let storage = input.gather_mm(weights, indices, params)?;
+                Ok(Self::Cpu(storage))
+            }
+            (Self::Cuda(input), Self::Cuda(weights), Self::Cuda(indices)) => {
+                let storage = input.gather_mm(weights, indices, params)?;
+                Ok(Self::Cuda(storage))
+            }
+            (Self::Metal(input), Self::Metal(weights), Self::Metal(indices)) => {
+                let storage = input.gather_mm(weights, indices, params)?;
+                Ok(Self::Metal(storage))
+            }
+            (lhs, rhs, _) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "gather_mm",
+            }
+            .bt()),
+        }
+    }
+
     // self, the source can be strided whereas dst is contiguous.
     pub(crate) fn copy_strided_src(
         &self,
