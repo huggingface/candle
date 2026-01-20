@@ -7,7 +7,28 @@
 
 #include <metal_stdlib>
 using namespace metal;
+
+#if defined(__HAVE_BFLOAT__)
 typedef bfloat bfloat16_t;
+#else
+// Fallback bfloat16 struct for systems without native bfloat support
+struct _MLX_BFloat16 {
+  uint16_t bits_;
+  _MLX_BFloat16() thread = default;
+  _MLX_BFloat16() device = default;
+  template<typename T>
+  constexpr METAL_FUNC _MLX_BFloat16(T x) thread : bits_(0) {
+    float val = static_cast<float>(x);
+    uint32_t bits = as_type<uint32_t>(val);
+    bits_ = bits >> 16;
+  }
+  template<typename T>
+  constexpr METAL_FUNC operator T() const thread {
+    return static_cast<T>(as_type<float>((uint32_t)bits_ << 16));
+  }
+};
+typedef struct _MLX_BFloat16 bfloat16_t;
+#endif
 
 // From utils.h
 ///////////////////////////////////////////////////////////////////////////////
@@ -57,7 +78,9 @@ instantiate_default_limit(int64_t);
 
 instantiate_float_limit(half);
 instantiate_float_limit(float);
+#if defined(__HAVE_BFLOAT__)
 instantiate_float_limit(bfloat16_t);
+#endif
 
 template <>
 struct Limits<bool> {
@@ -824,7 +847,9 @@ instantiate_block_sort_bn(uint8, uint8_t)
 instantiate_block_sort_bn(uint32, uint32_t)
 instantiate_block_sort_bn(float16, half)
 instantiate_block_sort_bn(float32, float)
+#if defined(__HAVE_BFLOAT__)
 instantiate_block_sort_bn(bfloat16, bfloat16_t)
+#endif
 
 #define instantiate_block_sort_long(itname, itype) \
   instantiate_block_sort_tn(itname, itype, 128)    \
@@ -848,7 +873,9 @@ instantiate_multi_block_sort_base(uint8, uint8_t)
 instantiate_multi_block_sort_base(uint32, uint32_t)
 instantiate_multi_block_sort_base(float16, half)
 instantiate_multi_block_sort_base(float32, float)
+#if defined(__HAVE_BFLOAT__)
 instantiate_multi_block_sort_base(bfloat16, bfloat16_t)
+#endif
 
 #define instantiate_multi_block_sort_long(vtname, vtype) \
   instantiate_multi_block_sort(vtname, vtype, uint32, uint32_t, true, 256, 8)

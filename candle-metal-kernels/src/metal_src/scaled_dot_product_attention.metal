@@ -8,10 +8,12 @@ using namespace metal;
 #define STEEL_CONST static constant constexpr const
 #define STEEL_PRAGMA_UNROLL _Pragma("clang loop unroll(full)")
 
+// float16_t is always available (half type) regardless of bfloat support
+typedef half float16_t;
+
 #if defined(__HAVE_BFLOAT__)
 
 typedef bfloat bfloat16_t;
-typedef half float16_t;
 
 #else
 
@@ -670,7 +672,9 @@ instantiate_default_limit(int64_t);
 
 instantiate_float_limit(half);
 instantiate_float_limit(float);
+#if defined(__HAVE_BFLOAT__)
 instantiate_float_limit(bfloat16_t);
+#endif
 
 
 // ============ "mlx/backend/metal/kernels/steel/attn/loader.h"
@@ -2319,8 +2323,10 @@ template <
     instantiate_attn_shapes_helper(iname, itype, bool_, bool)
 
 instantiate_attn_mask_helper(float16, half);
-instantiate_attn_mask_helper(bfloat16, bfloat16_t);
 instantiate_attn_mask_helper(float32, float);
+#if defined(__HAVE_BFLOAT__)
+instantiate_attn_mask_helper(bfloat16, bfloat16_t);
+#endif
 
 // SDPA vector instantiations
 #define instantiate_sdpa_vector(type, head_dim)                              \
@@ -2382,6 +2388,8 @@ instantiate_attn_mask_helper(float32, float);
   instantiate_sdpa_vector(type, 256)
 
 instantiate_sdpa_vector_heads(float)
-instantiate_sdpa_vector_heads(bfloat16_t)
 instantiate_sdpa_vector_heads(float16_t)
+#if defined(__HAVE_BFLOAT__)
+instantiate_sdpa_vector_heads(bfloat16_t)
+#endif
     // clang-format on
