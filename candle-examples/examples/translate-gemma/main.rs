@@ -335,6 +335,7 @@ struct Translator {
 }
 
 impl Translator {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         model: TranslateGemmaModel,
         tokenizer: Tokenizer,
