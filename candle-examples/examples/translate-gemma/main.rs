@@ -70,6 +70,8 @@ enum Lang {
     Bulgarian,
     #[value(name = "bn")]
     Bengali,
+    #[value(name = "ca")]
+    Catalan,
     #[value(name = "cs")]
     Czech,
     #[value(name = "da")]
@@ -90,6 +92,8 @@ enum Lang {
     Finnish,
     #[value(name = "fr")]
     French,
+    #[value(name = "gu")]
+    Gujarati,
     #[value(name = "he")]
     Hebrew,
     #[value(name = "hi")]
@@ -104,12 +108,24 @@ enum Lang {
     Italian,
     #[value(name = "ja")]
     Japanese,
+    #[value(name = "kn")]
+    Kannada,
     #[value(name = "ko")]
     Korean,
     #[value(name = "lt")]
     Lithuanian,
     #[value(name = "lv")]
     Latvian,
+    #[value(name = "mk")]
+    Macedonian,
+    #[value(name = "ml")]
+    Malayalam,
+    #[value(name = "mr")]
+    Marathi,
+    #[value(name = "ms")]
+    Malay,
+    #[value(name = "my")]
+    Burmese,
     #[value(name = "nl")]
     Dutch,
     #[value(name = "no")]
@@ -126,14 +142,28 @@ enum Lang {
     Slovak,
     #[value(name = "sl")]
     Slovenian,
+    #[value(name = "sq")]
+    Albanian,
+    #[value(name = "sr")]
+    Serbian,
     #[value(name = "sv")]
     Swedish,
+    #[value(name = "sw")]
+    Swahili,
+    #[value(name = "ta")]
+    Tamil,
+    #[value(name = "te")]
+    Telugu,
     #[value(name = "th")]
     Thai,
+    #[value(name = "tl")]
+    Tagalog,
     #[value(name = "tr")]
     Turkish,
     #[value(name = "uk")]
     Ukrainian,
+    #[value(name = "ur")]
+    Urdu,
     #[value(name = "vi")]
     Vietnamese,
     #[value(name = "zh")]
@@ -146,6 +176,7 @@ impl Lang {
             Lang::Arabic => "ar",
             Lang::Bulgarian => "bg",
             Lang::Bengali => "bn",
+            Lang::Catalan => "ca",
             Lang::Czech => "cs",
             Lang::Danish => "da",
             Lang::German => "de",
@@ -156,6 +187,7 @@ impl Lang {
             Lang::Persian => "fa",
             Lang::Finnish => "fi",
             Lang::French => "fr",
+            Lang::Gujarati => "gu",
             Lang::Hebrew => "he",
             Lang::Hindi => "hi",
             Lang::Croatian => "hr",
@@ -163,9 +195,15 @@ impl Lang {
             Lang::Indonesian => "id",
             Lang::Italian => "it",
             Lang::Japanese => "ja",
+            Lang::Kannada => "kn",
             Lang::Korean => "ko",
             Lang::Lithuanian => "lt",
             Lang::Latvian => "lv",
+            Lang::Macedonian => "mk",
+            Lang::Malayalam => "ml",
+            Lang::Marathi => "mr",
+            Lang::Malay => "ms",
+            Lang::Burmese => "my",
             Lang::Dutch => "nl",
             Lang::Norwegian => "no",
             Lang::Polish => "pl",
@@ -174,10 +212,17 @@ impl Lang {
             Lang::Russian => "ru",
             Lang::Slovak => "sk",
             Lang::Slovenian => "sl",
+            Lang::Albanian => "sq",
+            Lang::Serbian => "sr",
             Lang::Swedish => "sv",
+            Lang::Swahili => "sw",
+            Lang::Tamil => "ta",
+            Lang::Telugu => "te",
             Lang::Thai => "th",
+            Lang::Tagalog => "tl",
             Lang::Turkish => "tr",
             Lang::Ukrainian => "uk",
+            Lang::Urdu => "ur",
             Lang::Vietnamese => "vi",
             Lang::Chinese => "zh",
         }
@@ -188,6 +233,7 @@ impl Lang {
             Lang::Arabic => "Arabic",
             Lang::Bulgarian => "Bulgarian",
             Lang::Bengali => "Bengali",
+            Lang::Catalan => "Catalan",
             Lang::Czech => "Czech",
             Lang::Danish => "Danish",
             Lang::German => "German",
@@ -198,6 +244,7 @@ impl Lang {
             Lang::Persian => "Persian",
             Lang::Finnish => "Finnish",
             Lang::French => "French",
+            Lang::Gujarati => "Gujarati",
             Lang::Hebrew => "Hebrew",
             Lang::Hindi => "Hindi",
             Lang::Croatian => "Croatian",
@@ -205,9 +252,15 @@ impl Lang {
             Lang::Indonesian => "Indonesian",
             Lang::Italian => "Italian",
             Lang::Japanese => "Japanese",
+            Lang::Kannada => "Kannada",
             Lang::Korean => "Korean",
             Lang::Lithuanian => "Lithuanian",
             Lang::Latvian => "Latvian",
+            Lang::Macedonian => "Macedonian",
+            Lang::Malayalam => "Malayalam",
+            Lang::Marathi => "Marathi",
+            Lang::Malay => "Malay",
+            Lang::Burmese => "Burmese",
             Lang::Dutch => "Dutch",
             Lang::Norwegian => "Norwegian",
             Lang::Polish => "Polish",
@@ -216,10 +269,17 @@ impl Lang {
             Lang::Russian => "Russian",
             Lang::Slovak => "Slovak",
             Lang::Slovenian => "Slovenian",
+            Lang::Albanian => "Albanian",
+            Lang::Serbian => "Serbian",
             Lang::Swedish => "Swedish",
+            Lang::Swahili => "Swahili",
+            Lang::Tamil => "Tamil",
+            Lang::Telugu => "Telugu",
             Lang::Thai => "Thai",
+            Lang::Tagalog => "Tagalog",
             Lang::Turkish => "Turkish",
             Lang::Ukrainian => "Ukrainian",
+            Lang::Urdu => "Urdu",
             Lang::Vietnamese => "Vietnamese",
             Lang::Chinese => "Chinese",
         }
