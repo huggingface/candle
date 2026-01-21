@@ -33,7 +33,7 @@ pub fn flash_attn<T>(
     k: &Tensor,
     v: &Tensor,
     softmax_scale: f32,
-    attn_mask: AttnMask<'_>,
+    attn_mask: AttnMask,
     max_bias: Option<f32>,
     softcap: Option<f32>,
 ) -> Result<Tensor>
@@ -51,7 +51,15 @@ where
         }
         AttnMask::Mask(mask) => {
             // Explicit mask tensor
-            standard::run_flash_attn_cpu::<T>(q, k, v, Some(mask), softmax_scale, max_bias, softcap)
+            standard::run_flash_attn_cpu::<T>(
+                q,
+                k,
+                v,
+                Some(&mask),
+                softmax_scale,
+                max_bias,
+                softcap,
+            )
         }
     }
 }
