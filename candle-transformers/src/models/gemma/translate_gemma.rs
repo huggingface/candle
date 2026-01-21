@@ -149,7 +149,7 @@ impl LanguageCode {
     }
 
     /// Parse a language code from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         let base = s.split(&['-', '_'][..]).next().unwrap_or(s).to_lowercase();
         match base.as_str() {
             "ar" => Some(LanguageCode::Arabic),
@@ -394,14 +394,11 @@ mod tests {
 
     #[test]
     fn test_language_code_parsing() {
-        assert_eq!(LanguageCode::from_str("en"), Some(LanguageCode::English));
-        assert_eq!(LanguageCode::from_str("EN"), Some(LanguageCode::English));
-        assert_eq!(LanguageCode::from_str("en-US"), Some(LanguageCode::English));
-        assert_eq!(
-            LanguageCode::from_str("pt-BR"),
-            Some(LanguageCode::Portuguese)
-        );
-        assert_eq!(LanguageCode::from_str("xx"), None);
+        assert_eq!(LanguageCode::parse("en"), Some(LanguageCode::English));
+        assert_eq!(LanguageCode::parse("EN"), Some(LanguageCode::English));
+        assert_eq!(LanguageCode::parse("en-US"), Some(LanguageCode::English));
+        assert_eq!(LanguageCode::parse("pt-BR"), Some(LanguageCode::Portuguese));
+        assert_eq!(LanguageCode::parse("xx"), None);
     }
 
     #[test]
