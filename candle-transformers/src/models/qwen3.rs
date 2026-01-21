@@ -263,8 +263,8 @@ impl Qwen3Attention {
         let v = v.transpose(1, 2)?.contiguous()?;
 
         let scale = 1.0 / (self.head_dim as f32).sqrt();
-
-        let ctx = candle_flash_attn::flash_attn(&q, &k, &v, scale, true)?;
+        let causal = l > 1;
+        let ctx = candle_flash_attn::flash_attn(&q, &k, &v, scale, causal)?;
 
         // Output: (B, S, H, D) -> (B, L, hidden_size)
         ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
@@ -352,16 +352,16 @@ impl Qwen3Attention {
     #[cfg(feature = "flash-attn")]
     fn forward_cpu_flash_attn(
         &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
+        _q: &Tensor,
+        _k: &Tensor,
+        _v: &Tensor,
         _offset: usize,
-        b: usize,
-        l: usize,
+        _b: usize,
+        _l: usize,
     ) -> Result<Tensor> {
-        // When flash-attn feature is enabled, fall back to standard attention for CPU
-        // This path is rarely hit since GPU is typically used with flash-attn
-        self.forward_standard_attn(q, k, v, None, b, l)
+        candle::bail!(
+            "CPU inference with use_flash_attn=true requires building without --features flash-attn"
+        )
     }
 
     /// Standard matmul-based attention (works on any device)
