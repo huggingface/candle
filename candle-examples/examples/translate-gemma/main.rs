@@ -29,10 +29,12 @@ use anyhow::{Error as E, Result};
 use clap::{Parser, ValueEnum};
 use std::io::{self, BufRead, Write};
 
+use candle::quantized::gguf_file;
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::gemma::gemma3::Model;
+use candle_transformers::models::gemma::quantized_gemma3::ModelWeights;
 use candle_transformers::models::gemma::translate_gemma::format_translate_prompt;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -57,6 +59,39 @@ impl ModelVariant {
             ModelVariant::T4B => "google/translategemma-4b-it",
             ModelVariant::T12B => "google/translategemma-12b-it",
             ModelVariant::T27B => "google/translategemma-27b-it",
+        }
+    }
+}
+
+/// Model type: full precision or quantized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ModelType {
+    /// Full precision safetensors model
+    #[value(name = "full")]
+    Full,
+    /// Quantized GGUF model
+    #[value(name = "quantized")]
+    Quantized,
+}
+
+/// Wrapper enum for both model types.
+enum TranslateGemmaModel {
+    Full(Model),
+    Quantized(ModelWeights),
+}
+
+impl TranslateGemmaModel {
+    fn forward(&mut self, input: &Tensor, pos: usize) -> candle::Result<Tensor> {
+        match self {
+            Self::Full(m) => m.forward(input, pos),
+            Self::Quantized(m) => m.forward(input, pos),
+        }
+    }
+
+    fn clear_kv_cache(&mut self) {
+        match self {
+            Self::Full(m) => m.clear_kv_cache(),
+            Self::Quantized(m) => m.clear_kv_cache(),
         }
     }
 }
@@ -288,7 +323,7 @@ impl Lang {
 
 /// Translator wrapping the model with inference logic.
 struct Translator {
-    model: Model,
+    model: TranslateGemmaModel,
     tokenizer: Tokenizer,
     device: Device,
     logits_processor: LogitsProcessor,
@@ -301,7 +336,7 @@ struct Translator {
 
 impl Translator {
     fn new(
-        model: Model,
+        model: TranslateGemmaModel,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -466,6 +501,14 @@ struct Args {
     #[arg(long)]
     use_flash_attn: bool,
 
+    /// Model type: 'full' for safetensors or 'quantized' for GGUF.
+    #[arg(long, default_value = "full")]
+    model_type: ModelType,
+
+    /// Path to GGUF model file (required for quantized models).
+    #[arg(long)]
+    model_path: Option<String>,
+
     /// Interactive mode.
     #[arg(long, short = 'i')]
     interactive: bool,
@@ -517,63 +560,86 @@ fn main() -> Result<()> {
     // Load model
     println!("\nLoading model...");
     let start = std::time::Instant::now();
-
-    let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        model_id.clone(),
-        RepoType::Model,
-        args.revision,
-    ));
-
-    let tokenizer_path = repo.get("tokenizer.json")?;
-    let config_path = repo.get("config.json")?;
-
-    // TranslateGemma uses sharded weights
-    let weight_files =
-        candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
-
-    println!("Retrieved files in {:?}", start.elapsed());
-
-    let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
-
-    let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
-        DType::BF16
-    } else {
-        DType::F32
+
+    let (model, tokenizer) = match args.model_type {
+        ModelType::Quantized => {
+            let model_path = args
+                .model_path
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("--model-path is required for quantized models"))?;
+
+            // Load GGUF model
+            let mut file = std::fs::File::open(model_path)?;
+            let content = gguf_file::Content::read(&mut file)?;
+            let model = ModelWeights::from_gguf(content, &mut file, &device)?;
+
+            // Get tokenizer from HuggingFace
+            let api = Api::new()?;
+            let repo = api.repo(Repo::with_revision(
+                model_id.clone(),
+                RepoType::Model,
+                args.revision.clone(),
+            ));
+            let tokenizer_path = repo.get("tokenizer.json")?;
+            let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
+
+            (TranslateGemmaModel::Quantized(model), tokenizer)
+        }
+        ModelType::Full => {
+            let api = Api::new()?;
+            let repo = api.repo(Repo::with_revision(
+                model_id.clone(),
+                RepoType::Model,
+                args.revision.clone(),
+            ));
+
+            let tokenizer_path = repo.get("tokenizer.json")?;
+            let config_path = repo.get("config.json")?;
+
+            // TranslateGemma uses sharded weights
+            let weight_files =
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
+
+            let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
+
+            let dtype = if device.is_cuda() {
+                DType::BF16
+            } else {
+                DType::F32
+            };
+
+            // Load config - TranslateGemma uses Gemma 3 architecture
+            let config_content = std::fs::read_to_string(&config_path)?;
+            let mut config_json: serde_json::Value = serde_json::from_str(&config_content)?;
+
+            // Extract text_config if present (for multimodal config), otherwise use root
+            let text_config_value = if let Some(tc) = config_json.get_mut("text_config") {
+                tc
+            } else {
+                &mut config_json
+            };
+
+            // Add missing sliding_window_pattern field if not present
+            if let serde_json::Value::Object(ref mut map) = text_config_value {
+                map.entry("sliding_window_pattern")
+                    .or_insert(serde_json::Value::Number(6.into()));
+            }
+
+            let text_config = serde_json::from_value(text_config_value.clone())?;
+
+            let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weight_files, dtype, &device)? };
+            let vb = vb.pp("language_model");
+            let model = Model::new(args.use_flash_attn, &text_config, vb)?;
+
+            (TranslateGemmaModel::Full(model), tokenizer)
+        }
     };
-
-    // Load config - TranslateGemma uses Gemma 3 architecture
-    // The config has nested text_config, we need to extract it
-    let config_content = std::fs::read_to_string(&config_path)?;
-    let mut config_json: serde_json::Value = serde_json::from_str(&config_content)?;
-
-    // Extract text_config if present (for multimodal config), otherwise use root
-    let text_config_value = if let Some(tc) = config_json.get_mut("text_config") {
-        tc
-    } else {
-        &mut config_json
-    };
-
-    // Add missing sliding_window_pattern field if not present
-    // TranslateGemma is based on Gemma 3 which uses sliding window every 6 layers
-    if let serde_json::Value::Object(ref mut map) = text_config_value {
-        map.entry("sliding_window_pattern")
-            .or_insert(serde_json::Value::Number(6.into()));
-    }
-
-    let text_config = serde_json::from_value(text_config_value.clone())?;
-
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weight_files, dtype, &device)? };
-    // TranslateGemma weights are nested under language_model.model prefix
-    let vb = vb.pp("language_model");
-    let model = Model::new(args.use_flash_attn, &text_config, vb)?;
 
     println!("Loaded model in {:?}", start.elapsed());
 
     let temp = if args.temperature <= 0.0 {
-        None // Greedy
+        None
     } else {
         Some(args.temperature)
     };
