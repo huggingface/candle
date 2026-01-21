@@ -487,16 +487,27 @@ fn main() -> Result<()> {
     // Load config - TranslateGemma uses Gemma 3 architecture
     // The config has nested text_config, we need to extract it
     let config_content = std::fs::read_to_string(&config_path)?;
-    let config_json: serde_json::Value = serde_json::from_str(&config_content)?;
+    let mut config_json: serde_json::Value = serde_json::from_str(&config_content)?;
 
-    // Extract text_config if present (for multimodal config)
-    let text_config = if let Some(tc) = config_json.get("text_config") {
-        serde_json::from_value(tc.clone())?
+    // Extract text_config if present (for multimodal config), otherwise use root
+    let text_config_value = if let Some(tc) = config_json.get_mut("text_config") {
+        tc
     } else {
-        serde_json::from_str(&config_content)?
+        &mut config_json
     };
 
+    // Add missing sliding_window_pattern field if not present
+    // TranslateGemma is based on Gemma 3 which uses sliding window every 6 layers
+    if let serde_json::Value::Object(ref mut map) = text_config_value {
+        map.entry("sliding_window_pattern")
+            .or_insert(serde_json::Value::Number(6.into()));
+    }
+
+    let text_config = serde_json::from_value(text_config_value.clone())?;
+
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weight_files, dtype, &device)? };
+    // TranslateGemma weights are nested under language_model.model prefix
+    let vb = vb.pp("language_model");
     let model = Model::new(args.use_flash_attn, &text_config, vb)?;
 
     println!("Loaded model in {:?}", start.elapsed());

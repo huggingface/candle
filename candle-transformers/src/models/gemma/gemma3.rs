@@ -243,6 +243,9 @@ impl Attention {
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
 
+        let key_states = key_states.contiguous()?;
+        let value_states = value_states.contiguous()?;
+
         let (key_states, value_states) = match &mut self.kv_cache {
             KvCache::Normal(cache) => cache.append(&key_states, &value_states)?,
             KvCache::Rotating(cache) => cache.append(&key_states, &value_states)?,
