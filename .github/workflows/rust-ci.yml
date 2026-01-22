@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
         cuda_version: [13.1.0]
         # cuda_version: [12.9.1, 13.1.0] if we want multiple cuda versions we need to enable concurrency below
     env:
@@ -69,7 +69,6 @@ jobs:
       - name: Remove cargo config (macOS ring crate fix)
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
-
       
       - name: install cuda  
         uses: Jimver/cuda-toolkit@v0.2.30

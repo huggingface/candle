@@ -69,7 +69,10 @@ half = { version = "2.5.0", features = [
     "use-intrinsics",
     "rand_distr",
 ] }
-float8 = { version = "0.5.0", features = ["num-traits", "rand_distr"] }
+float8 = { version = "0.5.1", git = "https://github.com/krampenschiesser/float8", rev = "16e49a9", features = [
+    "num-traits",
+    "rand_distr",
+] }
 hound = "3.5.1"
 image = { version = "0.25.2", default-features = false, features = [
     "jpeg",
