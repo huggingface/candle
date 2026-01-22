@@ -1,8 +1,11 @@
 use crate::{DType, Result};
+
+#[cfg(feature = "ug")]
+use candle_metal_kernels::metal::ComputePipeline;
 use candle_metal_kernels::{
     metal::{
-        BlitCommandEncoder, Buffer, BufferMap, Commands, ComputeCommandEncoder, ComputePipeline,
-        Device, MTLResourceOptions,
+        BlitCommandEncoder, Buffer, BufferMap, Commands, ComputeCommandEncoder, Device,
+        MTLResourceOptions,
     },
     Kernels,
 };
@@ -188,14 +191,14 @@ impl std::ops::Deref for MetalDevice {
 }
 
 impl MetalDevice {
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    #[cfg(all(feature = "ug", not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn compile(
         &self,
         func_name: &'static str,
-        kernel: ug::lang::ssa::Kernel,
+        kernel: candle_ug::lang::ssa::Kernel,
     ) -> Result<ComputePipeline> {
         let mut buf = vec![];
-        ug_metal::code_gen::gen(&mut buf, func_name, &kernel)?;
+        candle_ug::metal::code_gen::gen(&mut buf, func_name, &kernel)?;
         let metal_code = String::from_utf8(buf)?;
         let lib = self
             .device

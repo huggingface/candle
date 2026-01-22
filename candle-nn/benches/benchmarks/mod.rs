@@ -1,5 +1,5 @@
 pub(crate) mod conv;
-pub(crate) mod layer_norm;
+pub(crate) mod norm;
 pub(crate) mod softmax;
 
 use candle::{Device, Result};
@@ -21,13 +21,13 @@ impl BenchDevice for Device {
                     return Ok(device.synchronize()?);
                 }
                 #[cfg(not(feature = "cuda"))]
-                panic!("Cuda device without cuda feature enabled: {:?}", device)
+                panic!("Cuda device without cuda feature enabled: {device:?}")
             }
             Device::Metal(device) => {
                 #[cfg(feature = "metal")]
                 return device.wait_until_completed();
                 #[cfg(not(feature = "metal"))]
-                panic!("Metal device without metal feature enabled: {:?}", device)
+                panic!("Metal device without metal feature enabled: {device:?}")
             }
         }
     }
@@ -61,8 +61,9 @@ impl BenchDeviceHandler {
             devices.push(Device::new_metal(0)?);
         } else if cfg!(feature = "cuda") {
             devices.push(Device::new_cuda(0)?);
+        } else {
+            devices.push(Device::Cpu);
         }
-        devices.push(Device::Cpu);
         Ok(Self { devices })
     }
 }
