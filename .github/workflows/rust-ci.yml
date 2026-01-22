@@ -11,8 +11,9 @@ jobs:
     name: Check
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+        os: [ubuntu-latest, ubuntu-24.04, windows-latest, macOS-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -22,7 +23,65 @@ jobs:
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --workspace
+
+      - name: Run macos with metal
+        if: matrix.os == 'macOS-latest' 
+        run: cargo check --workspace --features metal
+
+      - name: Run normal cpu
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
+        run: cargo check --workspace
+
+      - name: Run with avx2
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          export RUSTFLAGS="-C target-feature=avx2"
+          cargo check --workspace 
+
+      - name: Run with arm neon
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          export RUSTFLAGS="-C target-feature=neon"
+          cargo check --workspace 
+
+  check-cuda:
+    name: Check Cuda
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        cuda_version: [13.1.0]
+        # cuda_version: [12.9.1, 13.1.0] if we want multiple cuda versions we need to enable concurrency below
+    env:
+      CUDA_HOME: /usr/local/cuda
+      CUDA_LOG_FILE: stderr
+      CUDA_COMPUTE_CAP: 120
+    # concurrency:
+    #   group: ${{ matrix.os }}-cuda
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Remove cargo config (macOS ring crate fix)
+        if: runner.os == 'macOS'
+        run: rm -f .cargo/config.toml
+
+      
+      - name: install cuda  
+        uses: Jimver/cuda-toolkit@v0.2.30
+        id: cuda-toolkit
+        with:
+          cuda: ${{matrix.cuda_version}}  
+      
+      - run: echo "${{steps.cuda-toolkit.outputs.CUDA_PATH}}" >> "$GITHUB_PATH"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: cargo check --workspace --features cuda
 
   test:
     name: Test Suite
@@ -78,3 +137,4 @@ jobs:
         with:
           components: clippy
       - run: cargo clippy --workspace --tests --examples --benches -- -D warnings
+ 
