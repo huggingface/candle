@@ -215,20 +215,21 @@ impl AttentionWeights {
         let q = self.q_proj.forward(x)?;
         let k = self.k_proj.forward(x)?;
         let v = self.v_proj.forward(x)?;
-        let q = if self.attention_bq.is_some() {
-            q.broadcast_add(self.attention_bq.as_ref().unwrap())?
+
+        let q = if let Some(bq) = &self.attention_bq {
+            q.broadcast_add(bq)?
         } else {
             q
         };
 
-        let k = if self.attention_bk.is_some() {
-            k.broadcast_add(self.attention_bk.as_ref().unwrap())?
+        let k = if let Some(bk) = &self.attention_bk {
+            k.broadcast_add(bk)?
         } else {
             k
         };
 
-        let v = if self.attention_bv.is_some() {
-            v.broadcast_add(self.attention_bv.as_ref().unwrap())?
+        let v = if let Some(bv) = &self.attention_bv {
+            v.broadcast_add(bv)?
         } else {
             v
         };

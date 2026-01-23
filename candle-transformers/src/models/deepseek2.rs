@@ -926,21 +926,16 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
-        let moe_or_mlp = if cfg.n_routed_experts.is_some()
-            && layer_idx >= cfg.first_k_dense_replace
-            && layer_idx.is_multiple_of(cfg.moe_layer_freq)
-        {
-            MoeOrMlp::Moe(
-                Moe::new(
-                    cfg,
-                    vb.pp("mlp"),
-                    cfg.n_shared_experts,
-                    cfg.n_routed_experts.unwrap(),
-                )?
-                .into(),
-            )
-        } else {
-            MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None)?.into())
+        let moe_or_mlp = match cfg.n_routed_experts {
+            Some(n_routed_experts)
+                if layer_idx >= cfg.first_k_dense_replace
+                    && layer_idx.is_multiple_of(cfg.moe_layer_freq) =>
+            {
+                MoeOrMlp::Moe(
+                    Moe::new(cfg, vb.pp("mlp"), cfg.n_shared_experts, n_routed_experts)?.into(),
+                )
+            }
+            _ => MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None)?.into()),
         };
 
         Ok(Self {
