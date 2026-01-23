@@ -352,7 +352,7 @@ pub fn format_translate_content(text: &str, source_lang: &str, target_lang: &str
 /// ```
 pub fn format_translate_prompt(text: &str, source_lang: &str, target_lang: &str) -> String {
     format!(
-        "<bos><start_of_turn>user\n<translate source_lang={} target_lang={}>\n{}\n</translate><end_of_turn>\n<start_of_turn>model\n",
+        "<start_of_turn>user\n<translate source_lang={} target_lang={}>\n{}\n</translate><end_of_turn>\n<start_of_turn>model\n",
         source_lang, target_lang, text
     )
 }
