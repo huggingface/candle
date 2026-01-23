@@ -1,5 +1,5 @@
 [package]
-name = "wgpu-compute-engine-pwgsl"
+name = "wgpu-compute-layer-pwgsl"
 version.workspace = true
 edition.workspace = true
 

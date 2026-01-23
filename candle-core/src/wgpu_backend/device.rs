@@ -1,16 +1,16 @@
 
 use tracing::instrument;
-use wgpu_compute_engine::util::ToU64;
+use wgpu_compute_layer::util::ToU64;
 
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::wgpu_backend::MatmulAlgorithm;
 use crate::{notImplemented, wrongType, DType, Layout};
 
-use wgpu_compute_engine::cache::{
+use wgpu_compute_layer::cache::{
     BindGroupReference, BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase,
     BufferReferenceId,
 };
-use wgpu_compute_engine::queue_buffer::QueueBuffer;
+use wgpu_compute_layer::queue_buffer::QueueBuffer;
 use super::wgpu_functions::{self, unary::UnaryOperation};
 use super::WgpuStorage;
 
@@ -18,7 +18,7 @@ static DEVICE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU
 
 #[derive(Debug, Clone)]
 pub struct WgpuDevice{
-    inner_device : wgpu_compute_engine::WgpuDevice,
+    inner_device : wgpu_compute_layer::WgpuDevice,
     device_id : u32,
     pub(crate) matmul_alg : std::sync::Arc<std::sync::Mutex<MatmulAlgorithm>>
 }
@@ -29,7 +29,7 @@ impl WgpuDevice {
         index: usize,
         configuration: crate::WgpuDeviceConfig,
     ) -> crate::Result<Self> {
-        let device = wgpu_compute_engine::WgpuDevice::create(index, configuration.into()).await?;
+        let device = wgpu_compute_layer::WgpuDevice::create(index, configuration.into()).await?;
         device.add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX, || {
             candle_wgpu_kernels::DefaultWgpuShader{}
         });
@@ -39,7 +39,7 @@ impl WgpuDevice {
         Ok(WgpuDevice{inner_device: device, device_id: DEVICE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst), matmul_alg: std::sync::Arc::new(std::sync::Mutex::new(MatmulAlgorithm::MatmulX))})
     }
 
-    pub fn inner_device(&self) -> &wgpu_compute_engine::WgpuDevice {
+    pub fn inner_device(&self) -> &wgpu_compute_layer::WgpuDevice {
         &self.inner_device
     }
 
@@ -47,9 +47,9 @@ impl WgpuDevice {
         Ok(self.inner_device().flush_gpu_command()?)
     }
 
-    pub fn add_wgpu_shader_loader<T: wgpu_compute_engine::shader_loader::ShaderLoader + 'static + Send + Sync>(
+    pub fn add_wgpu_shader_loader<T: wgpu_compute_layer::shader_loader::ShaderLoader + 'static + Send + Sync>(
         &self,
-        index: wgpu_compute_engine::shader_loader::LoaderIndex,
+        index: wgpu_compute_layer::shader_loader::LoaderIndex,
         shader_loader: impl Fn() -> T,
     ) {
         self.inner_device().add_wgpu_shader_loader(index, shader_loader);
@@ -57,7 +57,7 @@ impl WgpuDevice {
 
     pub fn simulate_command(
         &self,
-        command: &wgpu_compute_engine::DebugPipelineRecording,
+        command: &wgpu_compute_layer::DebugPipelineRecording,
         dest_buffer: &WgpuStorage,
         input1_buffer: &WgpuStorage,
         input2_buffer: &WgpuStorage,

@@ -1,5 +1,5 @@
 [package]
-name = "wgpu-compute-engine-macro"
+name = "wgpu-compute-layer-macro"
 version.workspace = true
 edition.workspace = true
 

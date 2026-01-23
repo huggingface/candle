@@ -1,16 +1,16 @@
 use anyhow::Result;
 use candle_core::{backend::BackendStorage, CustomOp1, Device, Tensor};
-use wgpu_compute_engine::{PipelineIndex, ShaderIndex};
+use wgpu_compute_layer::{PipelineIndex, ShaderIndex};
 
 //this demonstrates, how a custom wgpu kernel can be used:
 #[derive(Debug)]
 struct MyCustomLoader{}
 
-wgpu_compute_engine::create_loader!(MyCustomLoader);
+wgpu_compute_layer::create_loader!(MyCustomLoader);
 
-impl wgpu_compute_engine::ShaderLoader for MyCustomLoader {
+impl wgpu_compute_layer::ShaderLoader for MyCustomLoader {
     //define the shader:
-    fn load(&self, _: wgpu_compute_engine::ShaderIndex) -> &str {
+    fn load(&self, _: wgpu_compute_layer::ShaderIndex) -> &str {
         "
 //Binding Order: Dest, Meta, Input1, Input2, Input3
 @group(0) @binding(0)
@@ -34,7 +34,7 @@ fn main2() {
     }
 
     //define the entry point:
-    fn get_entry_point(&self, index: wgpu_compute_engine::PipelineIndex) -> &str {
+    fn get_entry_point(&self, index: wgpu_compute_layer::PipelineIndex) -> &str {
         match index.get_index() {
             0 => "main1",
             1 => "main2",

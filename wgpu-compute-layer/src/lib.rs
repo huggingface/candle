@@ -11,8 +11,8 @@ pub mod queue_buffer;
 pub use error::Error;
 pub use error::Result;
 
-extern crate wgpu_compute_engine_macro;
-pub use wgpu_compute_engine_macro::create_loader;
+extern crate wgpu_compute_layer_macro;
+pub use wgpu_compute_layer_macro::create_loader;
 
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]

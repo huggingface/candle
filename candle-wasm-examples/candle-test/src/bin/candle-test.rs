@@ -179,7 +179,7 @@ pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
     load_recording_consts(&device)?;
     let buffers = create_buffers(&device)?;
 
-    let debug_recordings : Vec<wgpu_compute_engine::DebugPipelineRecording> = serde_json::from_str(DEBUG_USED_PIPELINES)?;
+    let debug_recordings : Vec<wgpu_compute_layer::DebugPipelineRecording> = serde_json::from_str(DEBUG_USED_PIPELINES)?;
     //let debug_recordings : Vec<_> = debug_recordings.iter().filter(|v| matches!(&v.pipeline.0.into(), Pipelines::Matmul64x648x8(_,_))).collect();
 
     let mut measurements : Vec<MeasurementInfo> = vec![];

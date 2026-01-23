@@ -43,7 +43,7 @@ pollster = { workspace = true, optional = true }
 log = {workspace = true, optional = true}
 serde_json = { workspace = true, optional = true }
 candle-wgpu-kernels = { workspace = true, optional = true }
-wgpu-compute-engine = { workspace = true, optional = true }
+wgpu-compute-layer = { workspace = true, optional = true }
 rustc-hash = {workspace = true, optional = true}
 #for wgpu_debug || wgpu_debug_serialize
 serde = { workspace = true, optional = true }
@@ -70,10 +70,10 @@ metal = [
     "candle-ug?/metal",
 ]
 ug = ["dep:candle-ug"]
-wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing", "dep:rustc-hash", "dep:wgpu-compute-engine"]
-wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize", "wgpu-compute-engine/wgpu_debug"]
-wgpu_debug_serialize = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize", "wgpu-compute-engine/wgpu_debug_serialize"]
-default=[]
+wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing", "dep:rustc-hash", "dep:wgpu-compute-layer"]
+wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize", "wgpu-compute-layer/wgpu_debug"]
+wgpu_debug_serialize = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize", "wgpu-compute-layer/wgpu_debug_serialize"]
+default=["wgpu_debug"]
 
 [[bench]]
 name = "bench_main"

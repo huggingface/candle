@@ -1,5 +1,5 @@
 use super::GgmlDType;
-use wgpu_compute_engine::cache::BufferReferenceId;
+use wgpu_compute_layer::cache::BufferReferenceId;
 use crate::{
     DType, Result, Shape, WgpuDevice, WgpuStorage, backend::{BackendDevice, BackendStorage}, quantized::QStorage, wgpu_backend::{
         QuantizedMatmulAlgorithm, wgpu_functions::{
@@ -532,7 +532,7 @@ impl QWgpuStorage {
     }
 
     pub async fn data_async(&self) -> Result<Vec<u8>> {
-        Ok(wgpu_compute_engine::wgpu_functions::read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?)
+        Ok(wgpu_compute_layer::wgpu_functions::read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?)
     }
 
     pub fn data(&self) -> Result<Vec<u8>> {

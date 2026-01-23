@@ -1,6 +1,6 @@
 use crate::{DType, Layout, Shape};
 
-use wgpu_compute_engine::{cache::BufferReferenceId, wgpu_functions::read_from_buffer_reference_async};
+use wgpu_compute_layer::{cache::BufferReferenceId, wgpu_functions::read_from_buffer_reference_async};
 use super::{
     device::WgpuDevice,
     wgpu_functions::{
@@ -11,7 +11,7 @@ use super::{
 };
 
 #[derive(Debug)]
-pub struct WgpuStorage(pub (crate)wgpu_compute_engine::WgpuStorage, pub (crate)WgpuDevice);
+pub struct WgpuStorage(pub (crate)wgpu_compute_layer::WgpuStorage, pub (crate)WgpuDevice);
 
 impl WgpuStorage{
     pub fn device(&self) -> &WgpuDevice {
@@ -22,7 +22,7 @@ impl WgpuStorage{
         self.0.wgpu_dtype().into()
     }
 
-    pub fn wgpu_dtype(&self) -> wgpu_compute_engine::DType {
+    pub fn wgpu_dtype(&self) -> wgpu_compute_layer::DType {
         self.0.wgpu_dtype()
     }
 
@@ -46,7 +46,7 @@ impl WgpuStorage {
         dtype: crate::DType,
         size: u64,
     ) -> Self {
-        Self(wgpu_compute_engine::WgpuStorage::new(buffer, wgpu_device.inner_device().clone(), dtype.into(), size), wgpu_device)
+        Self(wgpu_compute_layer::WgpuStorage::new(buffer, wgpu_device.inner_device().clone(), dtype.into(), size), wgpu_device)
     }
 
     pub(crate) fn temporary_clone(&self) -> Self {

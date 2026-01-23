@@ -36,8 +36,8 @@ impl From<crate::DType> for candle_wgpu_kernels::DType {
     }
 }
 
-impl From<wgpu_compute_engine::Error> for crate::Error {
-    fn from(value: wgpu_compute_engine::Error) -> Self {
+impl From<wgpu_compute_layer::Error> for crate::Error {
+    fn from(value: wgpu_compute_layer::Error) -> Self {
         crate::Error::Wgpu(crate::WgpuError::Message(value.to_string()))
     }
 }

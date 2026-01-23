@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::{env, fs};
 use std::path::{Path, PathBuf};
 
-use wgpu_compute_engine_pwgsl::shader_loader::{DefineDefinition, DefinesDefinitions};
-use wgpu_compute_engine_pwgsl::{ParseState, ShaderStore, shader_loader};
+use wgpu_compute_layer_pwgsl::shader_loader::{DefineDefinition, DefinesDefinitions};
+use wgpu_compute_layer_pwgsl::{ParseState, ShaderStore, shader_loader};
 
 fn get_all_pwgsl_files<P: AsRef<Path>>(dir: P) -> Vec<PathBuf> {
     let mut files = Vec::new();

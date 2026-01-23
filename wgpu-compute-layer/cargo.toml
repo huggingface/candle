@@ -1,5 +1,5 @@
 [package]
-name = "wgpu-compute-engine"
+name = "wgpu-compute-layer"
 version.workspace = true
 edition.workspace = true
 
@@ -24,7 +24,7 @@ serde_json = { workspace = true, optional = true}
 serde = { workspace = true, optional = true}
 
 tracing = {workspace = true, features = ["release_max_level_off"]}
-wgpu-compute-engine-macro = {path = "./wgpu-compute-engine-macro"}
+wgpu-compute-layer-macro = {path = "./wgpu-compute-layer-macro"}
 zip = { workspace = true , optional = true}
 
 [features]

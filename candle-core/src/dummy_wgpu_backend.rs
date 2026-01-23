@@ -123,16 +123,16 @@ impl Default for WgpuDeviceConfig {
 }
 
 #[cfg(feature = "wgpu")]
-impl From<WgpuDeviceConfig> for wgpu_compute_engine::WgpuDeviceConfig {
+impl From<WgpuDeviceConfig> for wgpu_compute_layer::WgpuDeviceConfig {
     fn from(val: WgpuDeviceConfig) -> Self {
-        wgpu_compute_engine::WgpuDeviceConfig {
+        wgpu_compute_layer::WgpuDeviceConfig {
             meta_buffer_size: val.meta_buffer_size,
             max_workload_size: val.max_workload_size,
             buffer_cached_max_allowed_size: val.buffer_cached_max_allowed_size,
             use_cache: val.use_cache,
             flush_gpu_before_buffer_init: val.flush_gpu_before_buffer_init,
             buffer_mapping_size: val.buffer_mapping_size,
-            backend: wgpu_compute_engine::WgpuBackends(val.backend.0),
+            backend: wgpu_compute_layer::WgpuBackends(val.backend.0),
         }
     }
 }

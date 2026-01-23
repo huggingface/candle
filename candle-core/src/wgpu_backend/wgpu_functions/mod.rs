@@ -15,7 +15,7 @@ pub mod upsample;
 pub mod where_cond;
 pub mod rotary_emb;
 
-use wgpu_compute_engine::{
+use wgpu_compute_layer::{
     cache::{
         BindgroupAlignmentLayout, BufferReferenceId
     }, queue_buffer::{OpIsInplaceable, PipelineReference, QueueBuffer}, shader_loader::PipelineIndex, util::ToU32
@@ -23,7 +23,7 @@ use wgpu_compute_engine::{
 
 use super::WgpuDevice;
 
-use wgpu_compute_engine::cache::BindgroupAlignment;
+use wgpu_compute_layer::cache::BindgroupAlignment;
 
 pub use candle_wgpu_kernels::DType;
 pub use candle_wgpu_kernels::Pipelines;
@@ -74,9 +74,9 @@ impl<'a> WgpuTensor<'a> {
 }
 
 
-impl From<crate::DType> for wgpu_compute_engine::cache::BindgroupAlignment {
+impl From<crate::DType> for wgpu_compute_layer::cache::BindgroupAlignment {
     fn from(val: crate::DType) -> Self {
-        let wgpu_type : wgpu_compute_engine::DType = val.into();
+        let wgpu_type : wgpu_compute_layer::DType = val.into();
         wgpu_type.into() 
     }
 }

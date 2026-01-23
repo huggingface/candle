@@ -15,8 +15,6 @@ use crate::{util::ReferenceTrait};
 use tracing::{instrument, span, Level};
 
 use crate::DType;
-
-use crate::error::Error;
 use std::borrow::Cow;
 
 

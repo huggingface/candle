@@ -1,24 +1,24 @@
-use wgpu_compute_engine::cache::BindGroupReference;
-use wgpu_compute_engine::cache::BindgroupAlignmentLayout;
-use wgpu_compute_engine::cache::BindgroupInputBase;
-use wgpu_compute_engine::create_loader;
-use wgpu_compute_engine::shader_loader::PipelineIndex;
-use wgpu_compute_engine::shader_loader::ReplacedInput;
-use wgpu_compute_engine::shader_loader::ShaderIndex;
-use wgpu_compute_engine::shader_loader::ShaderLoader;
-use wgpu_compute_engine::wgpu_functions::KernelConstId;
-pub use wgpu_compute_engine_pwgsl::shader_loader::{DefineDefinition, DefinesDefinitions};
-use wgpu_compute_engine_pwgsl::{shader_loader, ParseState, ShaderStore};
-use wgpu_compute_engine::cache::BindgroupReferenceInput;
-use wgpu_compute_engine::shader_loader::InplaceRewriteDesc;
-use wgpu_compute_engine::shader_loader::RewritePlan;
+use wgpu_compute_layer::cache::BindGroupReference;
+use wgpu_compute_layer::cache::BindgroupAlignmentLayout;
+use wgpu_compute_layer::cache::BindgroupInputBase;
+use wgpu_compute_layer::create_loader;
+use wgpu_compute_layer::shader_loader::PipelineIndex;
+use wgpu_compute_layer::shader_loader::ReplacedInput;
+use wgpu_compute_layer::shader_loader::ShaderIndex;
+use wgpu_compute_layer::shader_loader::ShaderLoader;
+use wgpu_compute_layer::wgpu_functions::KernelConstId;
+pub use wgpu_compute_layer_pwgsl::shader_loader::{DefineDefinition, DefinesDefinitions};
+use wgpu_compute_layer_pwgsl::{shader_loader, ParseState, ShaderStore};
+use wgpu_compute_layer::cache::BindgroupReferenceInput;
+use wgpu_compute_layer::shader_loader::InplaceRewriteDesc;
+use wgpu_compute_layer::shader_loader::RewritePlan;
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 }
 
-pub use wgpu_compute_engine::DType;
-pub use wgpu_compute_engine::EntryPoint;
-pub use wgpu_compute_engine::DTYPE_COUNT;
+pub use wgpu_compute_layer::DType;
+pub use wgpu_compute_layer::EntryPoint;
+pub use wgpu_compute_layer::DTYPE_COUNT;
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
