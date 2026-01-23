@@ -7,7 +7,7 @@
 //! - Group-Query Attention (GQA) with specialized key-value heads
 //! - RMSNorm for layer normalization
 //! - Specialized attention patterns with separate normalization for Q/K/V
-//! - Feed-forward network with SwiGLU activation
+//! - Feed-forward network with GELU activation (matches gelu_pytorch_tanh config)
 //! - Support for 2/3/4/8-bit quantization
 //!
 //! References:
@@ -57,8 +57,7 @@ impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let gate = self.feed_forward_gate.forward(xs)?;
         let up = self.feed_forward_up.forward(xs)?;
-        let silu = candle_nn::ops::silu(&gate)?;
-        let gated = (silu * up)?;
+        let gated = (gate.gelu()? * up)?;
         self.feed_forward_down.forward(&gated)
     }
 }
