@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="900" viewBox="0 0 800 900">
+  <style>
+    .box { fill: white; stroke: black; stroke-width: 2; }
+    .gate { fill: #f0f0f0; stroke: black; stroke-width: 2; }
+    .state { fill: #e0f0ff; stroke: black; stroke-width: 2; }
+    .operation { fill: #ffe0e0; stroke: black; stroke-width: 2; }
+    .arrow { stroke: black; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+    .text { font-family: Arial, sans-serif; font-size: 14px; text-anchor: middle; }
+    .title { font-family: Arial, sans-serif; font-size: 20px; font-weight: bold; text-anchor: middle; }
+    .math { font-family: "Times New Roman", serif; font-style: italic; font-size: 14px; text-anchor: middle; }
+  </style>
+  
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" />
+    </marker>
+  </defs>
+  
+  <!-- Title -->
+  <text x="400" y="30" class="title">LSTM Architecture</text>
+  
+  <!-- Input -->
+  <rect x="350" y="60" width="100" height="50" class="box" />
+  <text x="400" y="85" class="text">Input</text>
+  <text x="400" y="105" class="math">x_t</text>
+  
+  <!-- Previous Hidden State -->
+  <rect x="150" y="60" width="100" height="50" class="state" />
+  <text x="200" y="85" class="text">Previous</text>
+  <text x="200" y="105" class="text">Hidden State</text>
+  <text x="200" y="125" class="math">h_{t-1}</text>
+  
+  <!-- Previous Cell State -->
+  <rect x="550" y="60" width="100" height="50" class="state" />
+  <text x="600" y="85" class="text">Previous</text>
+  <text x="600" y="105" class="text">Cell State</text>
+  <text x="600" y="125" class="math">c_{t-1}</text>
+  
+  <!-- Concatenate -->
+  <rect x="250" y="150" width="100" height="50" class="operation" />
+  <text x="300" y="175" class="text">Concatenate</text>
+  <text x="300" y="195" class="math">[h_{t-1}, x_t]</text>
+  
+  <!-- Forget Gate -->
+  <rect x="100" y="250" width="100" height="50" class="gate" />
+  <text x="150" y="275" class="text">Forget Gate</text>
+  <text x="150" y="295" class="math">f_t</text>
+  
+  <!-- Input Gate -->
+  <rect x="250" y="250" width="100" height="50" class="gate" />
+  <text x="300" y="275" class="text">Input Gate</text>
+  <text x="300" y="295" class="math">i_t</text>
+  
+  <!-- Cell Gate -->
+  <rect x="400" y="250" width="100" height="50" class="gate" />
+  <text x="450" y="275" class="text">Cell Gate</text>
+  <text x="450" y="295" class="math">g_t</text>
+  
+  <!-- Output Gate -->
+  <rect x="550" y="250" width="100" height="50" class="gate" />
+  <text x="600" y="275" class="text">Output Gate</text>
+  <text x="600" y="295" class="math">o_t</text>
+  
+  <!-- Sigmoid for Forget Gate -->
+  <rect x="100" y="350" width="100" height="50" class="operation" />
+  <text x="150" y="375" class="text">Sigmoid</text>
+  <text x="150" y="395" class="math">σ</text>
+  
+  <!-- Sigmoid for Input Gate -->
+  <rect x="250" y="350" width="100" height="50" class="operation" />
+  <text x="300" y="375" class="text">Sigmoid</text>
+  <text x="300" y="395" class="math">σ</text>
+  
+  <!-- Tanh for Cell Gate -->
+  <rect x="400" y="350" width="100" height="50" class="operation" />
+  <text x="450" y="375" class="text">Tanh</text>
+  <text x="450" y="395" class="math">tanh</text>
+  
+  <!-- Sigmoid for Output Gate -->
+  <rect x="550" y="350" width="100" height="50" class="operation" />
+  <text x="600" y="375" class="text">Sigmoid</text>
+  <text x="600" y="395" class="math">σ</text>
+  
+  <!-- Multiply Forget Gate and Previous Cell State -->
+  <circle cx="150" cy="450" r="25" class="operation" />
+  <text x="150" y="455" class="math">×</text>
+  
+  <!-- Multiply Input Gate and Cell Gate -->
+  <circle cx="350" cy="450" r="25" class="operation" />
+  <text x="350" y="455" class="math">×</text>
+  
+  <!-- Add to Update Cell State -->
+  <circle cx="250" cy="520" r="25" class="operation" />
+  <text x="250" y="525" class="math">+</text>
+  
+  <!-- New Cell State -->
+  <rect x="200" y="580" width="100" height="50" class="state" />
+  <text x="250" y="605" class="text">New Cell State</text>
+  <text x="250" y="625" class="math">c_t</text>
+  
+  <!-- Tanh of New Cell State -->
+  <rect x="400" y="580" width="100" height="50" class="operation" />
+  <text x="450" y="605" class="text">Tanh</text>
+  <text x="450" y="625" class="math">tanh(c_t)</text>
+  
+  <!-- Multiply Output Gate and Tanh of Cell State -->
+  <circle cx="500" cy="680" r="25" class="operation" />
+  <text x="500" y="685" class="math">×</text>
+  
+  <!-- New Hidden State -->
+  <rect x="450" y="750" width="100" height="50" class="state" />
+  <text x="500" y="775" class="text">New Hidden State</text>
+  <text x="500" y="795" class="math">h_t</text>
+  
+  <!-- Output -->
+  <rect x="450" y="850" width="100" height="50" class="box" />
+  <text x="500" y="875" class="text">Output</text>
+  <text x="500" y="895" class="math">y_t</text>
+  
+  <!-- Arrows -->
+  <!-- Input flow -->
+  <path d="M 400 110 L 400 130 L 300 130 L 300 150" class="arrow" />
+  
+  <!-- Previous hidden state flow -->
+  <path d="M 200 110 L 200 130 L 300 130 L 300 150" class="arrow" />
+  
+  <!-- Concatenated input to gates -->
+  <path d="M 300 200 L 300 220 L 150 220 L 150 250" class="arrow" />
+  <path d="M 300 200 L 300 250" class="arrow" />
+  <path d="M 300 200 L 300 220 L 450 220 L 450 250" class="arrow" />
+  <path d="M 300 200 L 300 220 L 600 220 L 600 250" class="arrow" />
+  
+  <!-- Gates to activations -->
+  <path d="M 150 300 L 150 350" class="arrow" />
+  <path d="M 300 300 L 300 350" class="arrow" />
+  <path d="M 450 300 L 450 350" class="arrow" />
+  <path d="M 600 300 L 600 350" class="arrow" />
+  
+  <!-- Activations to multiplications -->
+  <path d="M 150 400 L 150 425" class="arrow" />
+  <path d="M 300 400 L 300 425 L 350 425 L 350 425" class="arrow" />
+  <path d="M 450 400 L 450 425 L 350 425 L 350 425" class="arrow" />
+  <path d="M 600 400 L 600 450 L 600 650 L 500 650 L 500 655" class="arrow" />
+  
+  <!-- Previous cell state to multiplication -->
+  <path d="M 600 110 L 600 425 L 175 425 L 175 450" class="arrow" />
+  
+  <!-- Multiplications to addition -->
+  <path d="M 150 475 L 150 520 L 225 520" class="arrow" />
+  <path d="M 350 475 L 350 520 L 275 520" class="arrow" />
+  
+  <!-- Addition to new cell state -->
+  <path d="M 250 545 L 250 580" class="arrow" />
+  
+  <!-- New cell state flow -->
+  <path d="M 250 630 L 250 700 L 250 850 L 700 850 L 700 100 L 600 100" class="arrow" stroke-dasharray="5,5" />
+  <path d="M 250 630 L 250 650 L 400 650 L 400 580" class="arrow" />
+  
+  <!-- Tanh of cell state to multiplication -->
+  <path d="M 450 630 L 450 680 L 475 680" class="arrow" />
+  
+  <!-- Multiplication to new hidden state -->
+  <path d="M 500 705 L 500 750" class="arrow" />
+  
+  <!-- New hidden state to output -->
+  <path d="M 500 800 L 500 850" class="arrow" />
+  
+  <!-- Recurrent connection for hidden state -->
+  <path d="M 500 800 L 500 825 L 100 825 L 100 100 L 150 100" class="arrow" stroke-dasharray="5,5" />
+</svg>
