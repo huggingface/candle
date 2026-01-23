@@ -81,7 +81,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - run: cargo check --workspace --features cuda
+      - run: cargo check --features cuda
 
   test:
     name: Test Suite

@@ -268,8 +268,8 @@ pub fn moe_gemm_gguf(
                     _ => candle::bail!("input must be a cuda tensor"),
                 };
                 ffi::moe_gemm_gguf_prefill(
-                    input_ptr,   // [size_m or size_m/topk, size_k]
-                    weight_ptr,  // [num_experts, size_n, size_k]
+                    input_ptr,  // [size_m or size_m/topk, size_k]
+                    weight_ptr, // [num_experts, size_n, size_k]
                     sorted_token_ids.device_ptr(sorted_token_ids.stream()).0 as *const i32,
                     experts_ids.device_ptr(experts_ids.stream()).0 as *const i32,
                     topk_weights_ptr,

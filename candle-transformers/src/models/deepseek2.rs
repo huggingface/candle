@@ -931,8 +931,7 @@ impl DecoderLayer {
                 && layer_idx.is_multiple_of(cfg.moe_layer_freq)
             {
                 MoeOrMlp::Moe(
-                    Moe::new(cfg, vb.pp("mlp"), cfg.n_shared_experts, n_routed_experts)?
-                        .into(),
+                    Moe::new(cfg, vb.pp("mlp"), cfg.n_shared_experts, n_routed_experts)?.into(),
                 )
             } else {
                 MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None)?.into())
