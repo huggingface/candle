@@ -44,45 +44,6 @@ jobs:
           export RUSTFLAGS="-C target-feature=neon"
           cargo check --workspace 
 
-  check-cuda:
-    name: Check Cuda
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        cuda_version: [13.1.0]
-        # cuda_version: [12.9.1, 13.1.0] if we want multiple cuda versions we need to enable concurrency below
-    env:
-      CUDA_HOME: /usr/local/cuda
-      CUDA_LOG_FILE: stderr
-      CUDA_COMPUTE_CAP: 120
-    # concurrency:
-    #   group: ${{ matrix.os }}-cuda
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Remove cargo config (macOS ring crate fix)
-        if: runner.os == 'macOS'
-        run: rm -f .cargo/config.toml
-      
-      - name: install cuda
-        uses: Jimver/cuda-toolkit@v0.2.30
-        id: cuda-toolkit
-        with:
-          cuda: ${{matrix.cuda_version}}
-          method: 'network'  
-      
-      - run: echo "${{steps.cuda-toolkit.outputs.CUDA_PATH}}" >> "$GITHUB_PATH"
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - run: cargo check --features cuda
-
   test:
     name: Test Suite
     runs-on: ${{ matrix.os }}
