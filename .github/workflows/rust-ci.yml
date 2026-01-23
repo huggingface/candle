@@ -70,11 +70,12 @@ jobs:
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
       
-      - name: install cuda  
+      - name: install cuda
         uses: Jimver/cuda-toolkit@v0.2.30
         id: cuda-toolkit
         with:
-          cuda: ${{matrix.cuda_version}}  
+          cuda: ${{matrix.cuda_version}}
+          method: 'network'  
       
       - run: echo "${{steps.cuda-toolkit.outputs.CUDA_PATH}}" >> "$GITHUB_PATH"
 

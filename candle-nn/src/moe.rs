@@ -83,7 +83,7 @@ pub fn moe_gemm(
             let weights_ptr = topk_weights.device_ptr(topk_weights.stream()).0 as *const f32;
             weights_ptr
         } else {
-            std::ptr::null() as *const f32
+            std::ptr::null()
         };
 
         let output = unsafe { dev.alloc::<T>(size_m * size_n) }?;
@@ -110,7 +110,7 @@ pub fn moe_gemm(
                 size_k as i32,
                 data_type as i32, // 0=float16, 1=bf16 (for input/output)
                 is_prefill,
-                stream as i64,
+                stream,
             );
         }
 
@@ -165,6 +165,7 @@ pub fn moe_gemm(
 }
 
 #[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
 pub fn moe_gemm_gguf(
     input: &Tensor,
     weights: &QTensor,
@@ -180,6 +181,7 @@ pub fn moe_gemm_gguf(
     use candle::DType;
     use half::{bf16, f16};
 
+    #[allow(clippy::too_many_arguments)]
     fn cuda_fwd(
         input: &Tensor,
         weights: &QTensor,
@@ -229,7 +231,7 @@ pub fn moe_gemm_gguf(
             let w_ptr = topk_weights.device_ptr(topk_weights.stream()).0 as *const f32;
             w_ptr
         } else {
-            std::ptr::null() as *const f32
+            std::ptr::null()
         };
 
         let (sorted_token_ids, _) = sorted_token_ids.storage_and_layout();
@@ -266,8 +268,8 @@ pub fn moe_gemm_gguf(
                     _ => candle::bail!("input must be a cuda tensor"),
                 };
                 ffi::moe_gemm_gguf_prefill(
-                    input_ptr,               // [size_m or size_m/topk, size_k]
-                    weight_ptr as *const u8, // [num_experts, size_n, size_k]
+                    input_ptr,   // [size_m or size_m/topk, size_k]
+                    weight_ptr,  // [num_experts, size_n, size_k]
                     sorted_token_ids.device_ptr(sorted_token_ids.stream()).0 as *const i32,
                     experts_ids.device_ptr(experts_ids.stream()).0 as *const i32,
                     topk_weights_ptr,
@@ -277,9 +279,9 @@ pub fn moe_gemm_gguf(
                     size_m as i32,
                     size_n as i32,
                     size_k as i32,
-                    input_dtype as i32,
+                    input_dtype,
                     gguf_dtype as i32, // Q8_0: 0, Q4K: 1, Q2K: 2, Q3k: 3,  Q5K: 4, Q6K: 5 (for weight)
-                    stream as i64,
+                    stream,
                 );
             } else {
                 let (input, _) = input.storage_and_layout();
@@ -301,7 +303,7 @@ pub fn moe_gemm_gguf(
                     size_n as i32,
                     size_k as i32,
                     gguf_dtype as i32, // Q8_0: 0, Q4K: 1, Q2K: 2, Q3k: 3,  Q5K: 4, Q6K: 5 (for weight)
-                    stream as i64,
+                    stream,
                 );
             }
         }
