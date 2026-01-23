@@ -16,7 +16,7 @@
 //! TranslateGemma uses a specific format with ISO 639-1 language codes:
 //! ```text
 //! <bos><start_of_turn>user
-//! <translate source_lang={src} target_lang={tgt}>
+//! <translate type=text source_lang_code={src} target_lang_code={tgt}>
 //! {text}
 //! </translate><end_of_turn>
 //! <start_of_turn>model
@@ -342,18 +342,27 @@ pub fn format_translate_content(text: &str, source_lang: &str, target_lang: &str
     )
 }
 
-/// Format a complete TranslateGemma prompt (without using chat template).
+/// Format the translation prompt for TranslateGemma.
 ///
-/// This creates the full prompt string ready for tokenization:
-///
-/// ```ignore
-/// let prompt = format_translate_prompt("Hello!", "en", "fr");
-/// // Returns the full prompt with special tokens
-/// ```
+/// This creates the prompt that matches HuggingFace's apply_chat_template output.
+/// Note: BOS token is added separately by the tokenizer.
 pub fn format_translate_prompt(text: &str, source_lang: &str, target_lang: &str) -> String {
+    let source_name = LanguageCode::parse(source_lang)
+        .map(|l| l.name())
+        .unwrap_or(source_lang);
+    let target_name = LanguageCode::parse(target_lang)
+        .map(|l| l.name())
+        .unwrap_or(target_lang);
+
     format!(
-        "<start_of_turn>user\n<translate source_lang={} target_lang={}>\n{}\n</translate><end_of_turn>\n<start_of_turn>model\n",
-        source_lang, target_lang, text
+        "<start_of_turn>user\n\
+         You are a professional {source_name} ({source_lang}) to {target_name} ({target_lang}) translator. \
+         Your goal is to accurately convey the meaning and nuances of the original {source_name} text \
+         while adhering to {target_name} grammar, vocabulary, and cultural sensitivities.\n\
+         Produce only the {target_name} translation, without any additional explanations or commentary. \
+         Please translate the following {source_name} text into {target_name}:\n\
+         {text}<end_of_turn>\n\
+         <start_of_turn>model\n"
     )
 }
 
