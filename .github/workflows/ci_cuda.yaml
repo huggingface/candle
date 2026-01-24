@@ -29,7 +29,7 @@ jobs:
       - name: Install dependencies
         run: apt update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config -y
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@v1
-      - uses: Swatinem/rust-cache@v2.8.2
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Test (cuda)
         run: cargo test --features cuda
