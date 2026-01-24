@@ -62,7 +62,7 @@ impl BindgroupAlignmentLayout {
         _ = self.get_index();
     }
 
-    pub fn get_index(&self) -> usize {
+    fn get_index(&self) -> usize {
         use BindgroupAlignment::{Aligned16, Aligned4, Aligned8};
         use BindgroupAlignmentLayout::{Bindgroup0, Bindgroup1, Bindgroup2, Bindgroup3};
         match self {

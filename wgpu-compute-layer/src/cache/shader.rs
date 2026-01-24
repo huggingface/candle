@@ -25,7 +25,7 @@ impl ShaderCache {
         }
     }
 
-    pub fn add_wgpu_shader_loader<T: crate::shader_loader::ShaderLoader + 'static + Send + Sync>(
+    pub(crate) fn add_wgpu_shader_loader<T: crate::shader_loader::ShaderLoader + 'static + Send + Sync>(
         &mut self,
         index: crate::shader_loader::LoaderIndex,
         shader_loader: impl Fn() -> T,

@@ -21,7 +21,7 @@ To add tracing to a project, see the [`tracing`](../tracing.md) page.
 
 In addition:
 
-- `candle-core` has a dependency on `tracing` with  
+- `wgpu_compute_layer` has a dependency on `tracing` with  
   `features = ["release_max_level_off"]` in its `Cargo.toml`.
 - With this configuration, tracing is effectively disabled in release builds.
 - To use tracing, you must either:

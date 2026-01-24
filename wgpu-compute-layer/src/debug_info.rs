@@ -10,8 +10,9 @@ use crate::WgpuDevice;
 
 use super::device::WgpuDebugInfo;
 
+
 #[derive(Debug, Clone)]
-pub struct ShaderDebugInfo {
+pub(crate) struct ShaderPerformanceMeasurmentDebugInfo {
     pub pipeline: String,
     pub workload_size: u64,
     pub x: u32,
@@ -20,14 +21,15 @@ pub struct ShaderDebugInfo {
 }
 
 #[derive(Debug)]
-pub struct DebugInfo {
+
+pub(crate) struct PerformanceMeasurmentDebugInfo {
     pub(crate) query_set_buffer: wgpu::Buffer,
     pub(crate) query_set: wgpu::QuerySet,
     pub(crate) counter: AtomicU32,
-    pub(crate) shader_pipeline: Mutex<HashMap<u32, ShaderDebugInfo>>,
+    pub(crate) shader_pipeline: Mutex<HashMap<u32, ShaderPerformanceMeasurmentDebugInfo>>,
 }
 
-impl DebugInfo {
+impl PerformanceMeasurmentDebugInfo {
     pub(crate) fn new(device: &Device) -> Self {
         // Create a buffer to store the query results
         let query_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -43,7 +45,7 @@ impl DebugInfo {
             label: None,
         });
 
-        DebugInfo {
+        PerformanceMeasurmentDebugInfo {
             counter: AtomicU32::new(0),
             query_set,
             shader_pipeline: Mutex::new(HashMap::new()),
@@ -51,7 +53,7 @@ impl DebugInfo {
         }
     }
 
-    pub(crate) fn insert_info(&self, index: u32, info: ShaderDebugInfo) {
+    pub(crate) fn insert_info(&self, index: u32, info: ShaderPerformanceMeasurmentDebugInfo) {
         self.shader_pipeline
             .lock()
             .expect("could not lock debug info")

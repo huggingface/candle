@@ -162,7 +162,6 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBufferInner, cache: &mut Mo
 
         for entry in deleted_entries.iter() {
             if let Some(buffer_reference) = cache.buffer_reference.get_mut(entry) {
-                buffer_reference.set_referenced_by_candle_storage(false);
                 buffer_reference.set_last_used(0); //if this buffer will not be used in this queue, we can delete the queue and free the used buffer.
             }
         }
@@ -336,7 +335,7 @@ fn get_command_buffer(
                             cpass.write_timestamp(query_set, debug_index + 1);
                             dev.debug.insert_info(
                                 global_index + debug_index * 8,
-                                debug_info::ShaderDebugInfo{
+                                debug_info::ShaderPerformanceMeasurmentDebugInfo{
                                     pipeline: format!(
                                         "Shader: '{}', Pipeline: '{}', {}",
                                         cache.shader.loader_cache.get_shader_name(q.pipeline.0.get_shader()),
@@ -968,7 +967,7 @@ fn end_debug_queue(
     encoder: &mut wgpu::CommandEncoder,
     query_set: &wgpu::QuerySet,
 ) {
-    if global_index % 256 != 0 {
+    if !global_index.is_multiple_of(256) {
         panic!("global_index was:{global_index}")
     }
 

@@ -136,15 +136,6 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
         None
     }
 
-    fn get_const_name(&self, _: KernelConstId) -> &'static str{
-        ""
-    }
-
-    fn get_kernel_index(&self, _: u32) -> KernelConstId{
-        Default::default()
-    }
-
-    
     /// Normalize (canonicalize) the meta buffer for debug and profiling purposes.
     ///
     /// This hook allows shader implementations to remove or neutralize metadata

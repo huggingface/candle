@@ -1,4 +1,5 @@
 
+use rand::SeedableRng;
 use tracing::instrument;
 use wgpu_compute_layer::util::ToU64;
 
@@ -36,15 +37,12 @@ impl WgpuDevice {
         device.add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX, || {
             candle_wgpu_kernels::DefaultWgpuDynamicShader::new()
         });
+        device.set_extension(rand::rngs::StdRng::from_os_rng());
         Ok(WgpuDevice{inner_device: device, device_id: DEVICE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst), matmul_alg: std::sync::Arc::new(std::sync::Mutex::new(MatmulAlgorithm::MatmulX))})
     }
 
     pub fn inner_device(&self) -> &wgpu_compute_layer::WgpuDevice {
         &self.inner_device
-    }
-
-    pub fn flush_gpu_command(&self) -> crate::Result<()> {
-        Ok(self.inner_device().flush_gpu_command()?)
     }
 
     pub fn add_wgpu_shader_loader<T: wgpu_compute_layer::shader_loader::ShaderLoader + 'static + Send + Sync>(
@@ -366,7 +364,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
     }
 
     fn set_seed(&self, seed: u64) -> crate::Result<()> {
-        self.inner_device().set_seed(seed)?;
+        self.inner_device().set_extension(rand::rngs::StdRng::seed_from_u64(seed));
         Ok(())
     }
 

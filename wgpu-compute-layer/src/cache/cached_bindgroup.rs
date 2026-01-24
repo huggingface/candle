@@ -7,17 +7,17 @@ use crate::util::{HashMapMulti, StorageOptional, StorageTrait};
 use super::{CachedBindgroupFull, CachedBindgroupId, CachedBindgroupInput};
 
 #[derive(Debug)]
-pub struct CachedBindgroup {
+pub(crate) struct CachedBindgroup {
     bindgroup: wgpu::BindGroup,
     buffer: CachedBindgroupFull,
 }
 
 impl CachedBindgroup {
-    pub fn new(bindgroup: wgpu::BindGroup, buffer: CachedBindgroupFull) -> Self {
+    pub(crate) fn new(bindgroup: wgpu::BindGroup, buffer: CachedBindgroupFull) -> Self {
         Self { bindgroup, buffer }
     }
 
-    pub fn bindgroup(&self) -> &wgpu::BindGroup {
+    pub(crate) fn bindgroup(&self) -> &wgpu::BindGroup {
         &self.bindgroup
     }
 
@@ -63,7 +63,7 @@ impl BindgroupCacheStorage {
         });
     }
 
-    pub fn get_bindgroup(&self, id: &CachedBindgroupId) -> Option<&CachedBindgroup> {
+    pub(crate) fn get_bindgroup(&self, id: &CachedBindgroupId) -> Option<&CachedBindgroup> {
         self.storage.get(id)
     }
 

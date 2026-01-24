@@ -4,15 +4,14 @@ use std::sync::{Arc, Mutex};
 
 use std::hash::Hash;
 
-use rand::SeedableRng;
 use tracing::instrument;
 use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
 
 use crate::{shader_loader, wgpu_functions};
-use crate::{notImplemented, DType};
+use crate::DType;
 
 #[cfg(feature = "wgpu_debug")]
-use super::debug_info::{self, DebugInfo, MInfo, Measurements, ShaderInfo};
+use super::debug_info::{self, PerformanceMeasurmentDebugInfo, MInfo, Measurements, ShaderInfo};
 
 use super::cache::{BindGroupReference, BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase, BindgroupLayouts, BufferReferenceId, ModelCache};
 use super::queue_buffer::{MlQueue, MlQueueDispatch, PipelineReference};
@@ -161,10 +160,9 @@ pub struct WgpuDeviceInner {
     pub device: wgpu::Device,
     pub backend: wgpu::Backend,
     pub device_limits: wgpu::Limits, //we cache the limits here, because device.limit() was relatively slow on the browser
-    pub device_features: wgpu::Features,
+    device_features: wgpu::Features,
 
-    pub queue: wgpu::Queue,
-    pub rand_state: Mutex<rand::rngs::StdRng>,
+    pub(crate) queue: wgpu::Queue,
 
     pub(crate) command_queue: Mutex<QueueBufferInner>,
     pub(crate) meta_buffer: wgpu::Buffer, //buffer for storing meta information
@@ -176,9 +174,9 @@ pub struct WgpuDeviceInner {
     pub(crate) cache: Mutex<ModelCache>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
     //debug counter
     #[cfg(feature = "wgpu_debug")]
-    pub debug: DebugInfo,
+    pub(crate) debug: PerformanceMeasurmentDebugInfo,
 
-    pub configuration: WgpuDeviceConfig,
+    pub(crate) configuration: WgpuDeviceConfig,
 
     extensions: Mutex<DeviceExtensions>,
 }
@@ -326,7 +324,7 @@ impl WgpuDevice {
         log::info!("Device Requested");
 
         #[cfg(feature = "wgpu_debug")]
-        let debug_info = super::debug_info::DebugInfo::new(&device);
+        let debug_info = super::debug_info::PerformanceMeasurmentDebugInfo::new(&device);
 
         let meta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -356,7 +354,6 @@ impl WgpuDevice {
                 device_features: features,
                 backend: adapter.get_info().backend,
                 queue,
-                rand_state: Mutex::new(rand::rngs::StdRng::from_os_rng()),
                 #[cfg(feature = "wgpu_debug")]
                 debug: debug_info,
                 command_queue: Mutex::new(QueueBufferInner::new(configuration.meta_buffer_size)),
@@ -373,109 +370,9 @@ impl WgpuDevice {
         })
     }
 
-    pub fn flush_gpu_command(&self) -> crate::Result<()> {
+    fn flush_gpu_command(&self) -> crate::Result<()> {
         let mut queue = self.command_queue.lock().unwrap();
         wgpu_functions::flush_gpu_command(self, &mut queue)
-    }
-
-    pub fn add_wgpu_shader_loader<T: shader_loader::ShaderLoader + 'static + Send + Sync>(
-        &self,
-        index: shader_loader::LoaderIndex,
-        shader_loader: impl Fn() -> T,
-    ) {
-        let mut cache = self.cache.lock().unwrap();
-        cache.shader.add_wgpu_shader_loader(index, shader_loader);
-    }
-
-    pub fn print_bindgroup_reuseinfo(&self) {
-        let cache = self.cache.lock().unwrap();
-
-        log::warn!(
-            "Buffer: created: {}, resued : {}",
-            cache.buffers.buffer_counter(),
-            cache.buffers.buffer_reuse_counter()
-        );
-        log::warn!(
-            "Bindgroup: created: {}, resued : {}",
-            cache.bindgroups.bindgroup_counter(),
-            cache.bindgroups.cached_bindgroup_use_counter()
-        );
-        log::warn!(
-            "Inplace used: unary: {}, binary {}, copy: {}",
-            cache.unary_inplace_counter,
-            cache.binary_inplace_counter,
-            cache.copy_inplace_counter
-        );
-    }
-    pub fn print_bindgroup_reuseinfo2(&self) {
-        let cache = self.cache.lock().unwrap();
-
-        println!(
-            "Buffer: created: {}, resued : {}",
-            cache.buffers.buffer_counter(),
-            cache.buffers.buffer_reuse_counter()
-        );
-        println!(
-            "Bindgroup: created: {}, resued : {}",
-            cache.bindgroups.bindgroup_counter(),
-            cache.bindgroups.cached_bindgroup_use_counter()
-        );
-        println!(
-            "Inplace used: unary: {}, binary {}, copy: {}",
-            cache.unary_inplace_counter, cache.binary_inplace_counter, cache.copy_inplace_counter
-        );
-    }
-
-    #[cfg(feature = "wgpu_debug")]
-    pub fn log_debuginfo_to_file(
-        &self,
-        folder: &str,
-        name: &str,
-        version: &str,
-    ) -> crate::Result<()> {
-        let info = pollster::block_on(self.get_debug_info()).unwrap();
-        let map2 = debug_info::calulate_measurment(&info);
-        debug_info::save_list(
-            &map2,
-            &format!("{folder}wgpu_{name}_test_{version}_measurements.json"),
-        )
-        .unwrap();
-
-        let info: Vec<debug_info::ShaderInfo> = self.get_pipeline_info().unwrap();
-        debug_info::save_list(
-            &info,
-            &format!("{folder}wgpu_{name}_test_{version}_shaders.json"),
-        )
-        .unwrap();
-
-        let (pipelines, consts) = self.get_used_pipelines();
-        std::fs::write(
-            format!("{folder}wgpu_{name}_test_{version}_used_pipelines.json"),
-            pipelines,
-        )?;
-        std::fs::write(format!("{folder}wgpu_{name}_test_{version}_used_consts.json"), consts)?;
-
-        let cache = self.cache.lock().unwrap();
-        debug_info::save_list(
-            &cache.debug_buffer_info,
-            &format!("{folder}wgpu_{name}_test_{version}_buffers.json"),
-        )
-        .unwrap();
-        Ok(())
-    }
-
-    #[cfg(feature = "wgpu_debug")]
-    pub fn get_used_pipelines(&self) -> (String, String) {
-        let cache = self.cache.lock().unwrap();
-        let queue = self.command_queue.lock().unwrap();
-        let consts = &queue.id_to_const_array;
-
-        let debug: Vec<_> = cache.debug.values().collect();
-
-        (
-            serde_json::to_string(&debug).unwrap(),
-            serde_json::to_string(consts).unwrap(),
-        )
     }
 
     //allows to load const debug info(for simulating calls)
@@ -537,107 +434,6 @@ impl WgpuDevice {
         command_queue.command_queue.push(q);
     }
 
-    #[cfg(feature = "wgpu_debug")]
-    pub async fn get_debug_info_full(&self) -> crate::Result<Measurements> {
-        use super::wgpu_functions::synchronize_async;
-        synchronize_async(self).await?;
-        let data =
-            wgpu_functions::read_from_buffer_async::<u64>(self, &self.debug.query_set_buffer)
-                .await?;
-
-        let period = self.queue.get_timestamp_period();
-        let mut result = Measurements::new(period);
-        let mut last_end_time = 0u64;
-        let mut shader_pipeline2 = self.debug.shader_pipeline.lock().unwrap();
-        let shader_pipeline = shader_pipeline2.clone();
-        let mut indexes: Vec<_> = shader_pipeline.into_iter().collect();
-        indexes.sort_by_key(|f| f.0);
-        for (i, p) in indexes.into_iter().enumerate() {
-            let start_time = data[(p.0 / 8) as usize];
-            let end_time = data[(p.0 / 8) as usize + 1];
-            if end_time < start_time {
-                panic!("Start Time was after End Time! startTime: {start_time}, endTime:{end_time}, i:{i}");
-            }
-            if end_time == 0 {
-                panic!("End time was 0")
-            }
-            if start_time == 0 {
-                panic!("End time was 0")
-            }
-            if end_time == start_time {
-                panic!("End time == start_time == {}", end_time)
-            }
-            if start_time < last_end_time {
-                panic!("Start Time was before last End Time! startTime: {start_time}, last endTime:{last_end_time}, i:{i}");
-            }
-            last_end_time = end_time;
-            result.data.push(MInfo::new(
-                p.1.pipeline.to_owned(),
-                start_time,
-                end_time,
-                p.1.workload_size,
-                p.1.x,
-                p.1.y,
-                p.1.z,
-            ));
-        }
-        self.debug
-            .counter
-            .store(0u32, std::sync::atomic::Ordering::Relaxed);
-        shader_pipeline2.clear();
-        Ok(result)
-    }
-
-    #[cfg(feature = "wgpu_debug")]
-    pub async fn get_debug_info(
-        &self,
-    ) -> crate::Result<std::collections::HashMap<String, Vec<WgpuDebugInfo>>> {
-        let info = self.get_debug_info_full().await?;
-        let mut map: std::collections::HashMap<String, Vec<WgpuDebugInfo>> =
-            std::collections::HashMap::new();
-
-        for item in info.data.iter() {
-            map.entry(item.label.clone())
-                .or_default()
-                .push(WgpuDebugInfo {
-                    duration: item.end_time - item.start_time,
-                    output_size: item.output_size,
-                    x: item.x,
-                    y: item.y,
-                    z: item.z,
-                });
-        }
-        Ok(map)
-    }
-
-    #[cfg(feature = "wgpu_debug")]
-    pub fn get_pipeline_info(&self) -> crate::Result<Vec<ShaderInfo>> {
-        use super::debug_info;
-        let mut cache = self.cache.lock().unwrap();
-        let shaders = &mut cache.shader;
-
-        let queue = self.command_queue.lock().unwrap();
-
-        Ok(shaders
-            .shaders
-            .iter()
-            .map(|(k, v)| {
-                let pipelines = &v.pipelines;
-                let s = debug_info::ShaderInfo {
-                    name: shaders.loader_cache.get_shader_name(*k),
-                    pipelines: pipelines.keys().map(|pk| debug_info::PipelineInfo {
-                            name: shaders.loader_cache.get_entry_point(pk.0).to_owned(),
-                            consts: queue.id_to_const_array[pk.1].iter()
-                                .map(|(s, x)| (s.to_string(), *x))
-                                .collect(),
-                        })
-                        .collect(),
-                };
-                s
-            })
-            .collect())
-    }
-
     pub async fn synchronize_async(&self) -> crate::Result<()> {
         wgpu_functions::synchronize_async(self).await
     }
@@ -654,7 +450,6 @@ impl WgpuDevice {
     }
 
 
-    
     #[instrument(skip(self, size))]
     pub fn alloc_uninit_size<T: ToU64>(
         &self,
@@ -670,7 +465,6 @@ impl WgpuDevice {
         WgpuStorage::new(buffer, self.clone(), dtype, size)
     }
 
-    
     #[instrument(skip(self, data))]
     pub fn alloc_from_slice<T: bytemuck::Pod>(
         &self,
@@ -699,14 +493,6 @@ impl WgpuDevice {
         Ok(WgpuStorage::new(buffer, self.clone(), dtype, size as u64))
     }
 
-
-    // pub fn allocate_zeros(&self, size_in_bytes : u32) -> crate::Result<WgpuStorage>{
-    //     self.zeros_impl(&((size_in_bytes/4) as usize,).into(), DType::U32)
-    // }
-
-
-
-    
     /**************** Virtual Bindgroups: ****************/ 
     pub fn create_bind_group_input0(
         &self,
@@ -810,6 +596,7 @@ impl WgpuDevice {
 
 impl WgpuDevice{
 
+    //Full Recording
     #[cfg(feature = "wgpu_debug")]
     pub fn start_recording_commands(&self){
         let mut model_cache = self.cache.lock().unwrap();
@@ -825,17 +612,163 @@ impl WgpuDevice{
         drop(model_cache);
         debug_info::create_dispatch_zip(self, output_path)
     }
+
+
+    //Durations and call Count by Pipeline
+    #[cfg(feature = "wgpu_debug")]
+    pub async fn get_debug_info_full(&self) -> crate::Result<Measurements> {
+        use super::wgpu_functions::synchronize_async;
+        synchronize_async(self).await?;
+        let data =
+            wgpu_functions::read_from_buffer_async::<u64>(self, &self.debug.query_set_buffer)
+                .await?;
+
+        let period = self.queue.get_timestamp_period();
+        let mut result = Measurements::new(period);
+        let mut last_end_time = 0u64;
+        let mut shader_pipeline2 = self.debug.shader_pipeline.lock().unwrap();
+        let shader_pipeline = shader_pipeline2.clone();
+        let mut indexes: Vec<_> = shader_pipeline.into_iter().collect();
+        indexes.sort_by_key(|f| f.0);
+        for (i, p) in indexes.into_iter().enumerate() {
+            let start_time = data[(p.0 / 8) as usize];
+            let end_time = data[(p.0 / 8) as usize + 1];
+            if end_time < start_time {
+                panic!("Start Time was after End Time! startTime: {start_time}, endTime:{end_time}, i:{i}");
+            }
+            if end_time == 0 {
+                panic!("End time was 0")
+            }
+            if start_time == 0 {
+                panic!("End time was 0")
+            }
+            if end_time == start_time {
+                panic!("End time == start_time == {}", end_time)
+            }
+            if start_time < last_end_time {
+                panic!("Start Time was before last End Time! startTime: {start_time}, last endTime:{last_end_time}, i:{i}");
+            }
+            last_end_time = end_time;
+            result.data.push(MInfo::new(
+                p.1.pipeline.to_owned(),
+                start_time,
+                end_time,
+                p.1.workload_size,
+                p.1.x,
+                p.1.y,
+                p.1.z,
+            ));
+        }
+        self.debug
+            .counter
+            .store(0u32, std::sync::atomic::Ordering::Relaxed);
+        shader_pipeline2.clear();
+        Ok(result)
+    }
+
+    #[cfg(feature = "wgpu_debug")]
+    pub async fn get_debug_info(
+        &self,
+    ) -> crate::Result<std::collections::HashMap<String, Vec<WgpuDebugInfo>>> {
+        let info = self.get_debug_info_full().await?;
+        let mut map: std::collections::HashMap<String, Vec<WgpuDebugInfo>> =
+            std::collections::HashMap::new();
+
+        for item in info.data.iter() {
+            map.entry(item.label.clone())
+                .or_default()
+                .push(WgpuDebugInfo {
+                    duration: item.end_time - item.start_time,
+                    output_size: item.output_size,
+                    x: item.x,
+                    y: item.y,
+                    z: item.z,
+                });
+        }
+        Ok(map)
+    }
+
+    #[cfg(feature = "wgpu_debug")]
+    pub fn get_pipeline_info(&self) -> crate::Result<Vec<ShaderInfo>> {
+        use super::debug_info;
+        let mut cache = self.cache.lock().unwrap();
+        let shaders = &mut cache.shader;
+
+        let queue = self.command_queue.lock().unwrap();
+
+        Ok(shaders
+            .shaders
+            .iter()
+            .map(|(k, v)| {
+                let pipelines = &v.pipelines;
+                let s = debug_info::ShaderInfo {
+                    name: shaders.loader_cache.get_shader_name(*k),
+                    pipelines: pipelines.keys().map(|pk| debug_info::PipelineInfo {
+                            name: shaders.loader_cache.get_entry_point(pk.0).to_owned(),
+                            consts: queue.id_to_const_array[pk.1].iter()
+                                .map(|(s, x)| (s.to_string(), *x))
+                                .collect(),
+                        })
+                        .collect(),
+                };
+                s
+            })
+            .collect())
+    }
+
+    #[cfg(feature = "wgpu_debug")]
+    pub fn log_debuginfo_to_file(
+        &self,
+        folder: &str,
+        name: &str,
+        version: &str,
+    ) -> crate::Result<()> {
+        let info = pollster::block_on(self.get_debug_info()).unwrap();
+        let map2 = debug_info::calulate_measurment(&info);
+        debug_info::save_list(
+            &map2,
+            &format!("{folder}wgpu_{name}_test_{version}_measurements.json"),
+        )
+        .unwrap();
+
+        let info: Vec<debug_info::ShaderInfo> = self.get_pipeline_info().unwrap();
+        debug_info::save_list(
+            &info,
+            &format!("{folder}wgpu_{name}_test_{version}_shaders.json"),
+        )
+        .unwrap();
+
+        let (pipelines, consts) = self.get_used_pipelines();
+        std::fs::write(
+            format!("{folder}wgpu_{name}_test_{version}_used_pipelines.json"),
+            pipelines,
+        )?;
+        std::fs::write(format!("{folder}wgpu_{name}_test_{version}_used_consts.json"), consts)?;
+
+        let cache = self.cache.lock().unwrap();
+        debug_info::save_list(
+            &cache.debug_buffer_info,
+            &format!("{folder}wgpu_{name}_test_{version}_buffers.json"),
+        )
+        .unwrap();
+        Ok(())
+    }
+
+    #[cfg(feature = "wgpu_debug")]
+    fn get_used_pipelines(&self) -> (String, String) {
+        let cache = self.cache.lock().unwrap();
+        let queue = self.command_queue.lock().unwrap();
+        let consts = &queue.id_to_const_array;
+
+        let debug: Vec<_> = cache.debug.values().collect();
+        (
+            serde_json::to_string(&debug).unwrap(),
+            serde_json::to_string(consts).unwrap(),
+        )
+    }
 }
 
 impl WgpuDevice {
-    pub fn set_seed(&self, seed: u64) -> crate::Result<()> {
-        *self.rand_state.lock().unwrap() = rand::rngs::StdRng::seed_from_u64(seed);
-        Ok(())
-    }
-    
-    pub fn get_current_seed(&self) -> crate::Result<u64> {
-        notImplemented!(get_current_seed)
-    }
     #[cfg(target_arch = "wasm32")]
     pub fn synchronize(&self) -> crate::Result<()> {
         panic!("Synchronize is not possible on wasm. (on_submitted_work_done is currently not implemented in wgpu). In addition synchronize can only be handled async");
@@ -886,5 +819,14 @@ impl WgpuDevice {
     {
         let mut cache = self.cache.lock().unwrap();
         f(&mut cache.shader.loader_cache)
+    }
+
+     pub fn add_wgpu_shader_loader<T: shader_loader::ShaderLoader + 'static + Send + Sync>(
+        &self,
+        index: shader_loader::LoaderIndex,
+        shader_loader: impl Fn() -> T,
+    ) {
+        let mut cache = self.cache.lock().unwrap();
+        cache.shader.add_wgpu_shader_loader(index, shader_loader);
     }
 }

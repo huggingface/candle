@@ -8,8 +8,8 @@ mod shader;
 pub use bindgroup_layout::*;
 use buffer_mapping::*;
 pub use buffer_reference::*;
-pub use cached_bindgroup::*;
-pub use cached_buffer::*;
+use cached_bindgroup::*;
+use cached_buffer::*;
 pub use shader::*;
 
 use tracing::{instrument, span};

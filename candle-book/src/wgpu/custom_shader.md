@@ -6,7 +6,7 @@ In "candle-core/examples/wgpu_basics.rs" is a sample project that shows how to w
 When you add your custom pipeline to the queue, you need to use a unique identifier to distinguish your shader from the default shader provided with Candle, or the shaders of other modules. 
 The macro `create_loader` will generate a unique index for this purpose at compile time.
 ```rust  
-candle_wgpu_kernels::create_loader!(MyCustomLoader);
+wgpu_compute_layer::create_loader!(MyCustomLoader);
 ```
 
 2. Define a ShaderLoader
@@ -14,12 +14,12 @@ A ShaderLoader is an object that implements the `ShaderLoader' trait.
 It is responsible for returning the source code of a .wgsl shader file, as well as the name of the entry point.
 
 ```rust
-impl candle_wgpu_kernels::ShaderLoader for MyCustomLoader{
-    fn load(&self, _ : candle_wgpu_kernels::ShaderIndex) -> &str {
+impl wgpu_compute_layer::ShaderLoader for MyCustomLoader{
+    fn load(&self, _ : wgpu_compute_layer::ShaderIndex) -> &str {
         return "YOUR SHADER CODE GOES HERE";
     }
 
-    fn get_entry_point(&self, _ : candle_wgpu_kernels::PipelineIndex) -> &str {
+    fn get_entry_point(&self, _ : wgpu_compute_layer::PipelineIndex) -> &str {
         return "ENTRY POINT NAME GOES HERE"
     }
 }

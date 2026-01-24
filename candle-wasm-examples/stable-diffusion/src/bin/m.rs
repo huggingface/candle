@@ -667,10 +667,6 @@ impl Model {
             device.synchronize_async().await?;
             let result = save_image_async(&vae, &latents, vae_scale, bsize).await?;
 
-            if let candle::Device::Wgpu(gpu) = &device {
-                gpu.inner_device().print_bindgroup_reuseinfo2();
-            };
-
             if let Some(val) = result.first() {
                 log::info!("Image saved");
                 return Ok(js_sys::Uint8Array::from(&val[..]).into());

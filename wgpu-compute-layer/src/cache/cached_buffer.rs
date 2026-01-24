@@ -12,14 +12,14 @@ use super::CachedBufferId;
 
 ////////////////// CACHED BUFFER:
 #[derive(Debug)]
-pub struct CachedBuffer {
+pub(crate) struct CachedBuffer {
     buffer: wgpu::Buffer,
     is_free: bool, //wheter this buffer is currently free
     last_used_counter: u32
 }
 
 impl CachedBuffer {
-    pub fn new(buffer: wgpu::Buffer) -> Self {
+    pub(crate) fn new(buffer: wgpu::Buffer) -> Self {
         Self {
             buffer,
             is_free: false,
@@ -27,11 +27,11 @@ impl CachedBuffer {
         }
     }
 
-    pub fn buffer(&self) -> &wgpu::Buffer {
+    pub(crate) fn buffer(&self) -> &wgpu::Buffer {
         &self.buffer
     }
 
-    pub fn is_free(&self) -> bool {
+    pub(crate) fn is_free(&self) -> bool {
         self.is_free
     }
 }
@@ -79,7 +79,7 @@ pub(crate) struct BufferCacheStorage {
 }
 
 impl BufferCacheStorage {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             storage: StorageOptional::new(),
             order: BTreeSet::new(),
@@ -111,7 +111,7 @@ impl BufferCacheStorage {
     }
 
     #[instrument(skip(self, id))]
-    pub fn delete_buffer(&mut self, id: &CachedBufferId) {
+    pub(crate) fn delete_buffer(&mut self, id: &CachedBufferId) {
         tracing::info!("delete buffer {:?}", id);
         let value = self.storage.delete_move(id);
         if let Some(val) = value {
@@ -126,13 +126,13 @@ impl BufferCacheStorage {
     }
 
     #[instrument(skip(self, id))]
-    pub fn get_buffer(&self, id: &CachedBufferId) -> Option<&CachedBuffer> {
+    pub(crate) fn get_buffer(&self, id: &CachedBufferId) -> Option<&CachedBuffer> {
         self.storage.get(id)
     }
 
     //will not delete the buffer, but mark it free
     #[instrument(skip(self, id))]
-    pub fn free_buffer(&mut self, id: &CachedBufferId) {
+    pub(crate) fn free_buffer(&mut self, id: &CachedBufferId) {
         tracing::info!("free buffer {:?}", id);
         let buffer: Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer {
@@ -148,7 +148,7 @@ impl BufferCacheStorage {
 
     //will not create a buffer, but mark the buffer as used
     #[instrument(skip(self, command_id, id))]
-    pub fn use_buffer(&mut self, id: &CachedBufferId, command_id: u32) {
+    pub(crate) fn use_buffer(&mut self, id: &CachedBufferId, command_id: u32) {
         tracing::info!("use buffer {:?}", id);
         let buffer: Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer {
@@ -175,7 +175,7 @@ impl BufferCacheStorage {
 
     //will try to find a free buffer in the cache, or create a new one
     #[instrument(skip(self, dev, command_id, minimum_size, optimal_size, duration))]
-    pub fn search_buffer(
+    pub(crate) fn search_buffer(
         &mut self,
         dev: &WgpuDevice,
         minimum_size: u64,
@@ -210,11 +210,11 @@ impl BufferCacheStorage {
         self.create_buffer(dev, optimal_size, command_id)
     }
 
-    pub fn max_memory_allowed(&self) -> u64 {
+    pub(crate) fn max_memory_allowed(&self) -> u64 {
         self.max_memory_allowed
     }
 
-    pub fn set_max_memory_allowed(&mut self, max_memory_allowed: u64) {
+    pub(crate) fn set_max_memory_allowed(&mut self, max_memory_allowed: u64) {
         self.max_memory_allowed = max_memory_allowed;
     }
 
@@ -230,16 +230,16 @@ impl BufferCacheStorage {
         self.buffer_counter
     }
 
-    pub fn get_buffer_count(&self) -> usize {
+    pub(crate) fn get_buffer_count(&self) -> usize {
         self.storage.len()
     }
 
-    pub fn has_free_buffers(&self) -> bool {
+    pub(crate) fn has_free_buffers(&self) -> bool {
         !self.order.is_empty()
     }
 
     #[instrument(skip(self))]
-    pub fn get_free_buffers(&self) -> Vec<(CachedBufferId, u32)> {
+    pub(crate) fn get_free_buffers(&self) -> Vec<(CachedBufferId, u32)> {
         self
             .order
             .iter()
@@ -261,11 +261,11 @@ impl BufferCacheStorage {
     }
 
     #[cfg(feature = "wgpu_debug")]
-    pub fn iter_buffers(&self) ->  impl Iterator<Item = (CachedBufferId, &CachedBuffer)> {
+    pub(crate) fn iter_buffers(&self) ->  impl Iterator<Item = (CachedBufferId, &CachedBuffer)> {
         self.storage.enumerate_option()
     }
     
-    pub fn inc_remove_test_counter(&mut self) -> u32{
+    pub(crate) fn inc_remove_test_counter(&mut self) -> u32{
         self.remove_test_counter += 1;
         self.remove_test_counter
     }

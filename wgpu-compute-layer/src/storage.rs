@@ -41,6 +41,16 @@ impl WgpuStorage {
         }
     }
 
+
+
+    /// Returns a temporary clone of this [`WgpuStorage`].
+    ///
+    /// # Safety
+    /// when a WgpuStorage is dropped it internally marks the underlying wgpu buffer to be freed.
+    /// this function creates a WgpuStorage pointing to the same buffer, but the ownership of the buffer will still be the original one.
+    /// So this temporary cloned WgpuStorage will not keep the buffer alive, nor will droping this cloned WgpuStorage free the underlying buffer.
+    /// 
+    /// This clone may be usefull to allow static analysers to detect correct behavior with MutexGuard in async functions.
     pub unsafe fn temporary_clone(&self) -> Self {
         Self {
             buffer: self.buffer,
