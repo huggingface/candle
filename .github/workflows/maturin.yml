@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@v1.49.4.49.4.49.4.49.4
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
@@ -63,7 +63,7 @@ jobs:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@v1.49.4.49.4.49.4.49.4
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter ${{ env.FEATURES_FLAG }}
@@ -91,7 +91,7 @@ jobs:
             version: ${{ env.PROTOC_VERSION }}
             repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@v1.49.4.49.4.49.4.49.4
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter ${{ env.FEATURES_FLAG }}
@@ -108,12 +108,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install Protoc
-        uses: arduino/setup-protoc@v2
+        uses: arduino/setup-protoc@v3.0.0
         with:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build sdist
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@v1.49.4.49.4.49.4.49.4
         with:
           command: sdist
           args: --out dist
