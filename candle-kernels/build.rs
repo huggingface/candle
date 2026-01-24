@@ -20,7 +20,7 @@ fn main() {
     // Remove unwanted MOE PTX constants from ptx.rs
     remove_lines(&ptx_path, &["MOE_GGUF", "MOE_WMMA", "MOE_WMMA_GGUF"]);
 
-    let moe_builder = bindgen_cuda::Builder::default()
+    let mut moe_builder = bindgen_cuda::Builder::default()
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3");
@@ -44,7 +44,6 @@ fn main() {
         "src/moe/moe_wmma.cu",
         "src/moe/moe_wmma_gguf.cu",
     ]);
-    println!("cargo::warning={builder:?}");
     moe_builder.build_lib(out_dir.join("libmoe.a"));
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=moe");
