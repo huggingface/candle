@@ -737,6 +737,27 @@ impl QMatMul {
         Ok(t)
     }
 
+    /// Create a QMatMul from a QTensor that has transposed data layout.
+    ///
+    /// Some GGUF files (notably diffusion models from city96/stable-diffusion.cpp)
+    /// store weight data in `[in_features, out_features]` row-major order, while
+    /// Candle expects `[out_features, in_features]` row-major order.
+    /// After loading, Candle reverses the shape to `[out, in]` but the underlying
+    /// data remains in `[in, out]` layout. This method fixes the data layout by
+    /// transposing and making the tensor contiguous.
+    ///
+    /// Use this for GGUF files created by stable-diffusion.cpp or similar tools.
+    /// Do NOT use for llama.cpp GGUFs which already use the correct layout.
+    pub fn from_arc_with_transposed_data(qtensor: std::sync::Arc<QTensor>) -> Result<Self> {
+        let tensor = qtensor.dequantize(&qtensor.device())?;
+        // Fix data layout: tensor has shape [out, in] but data is [in, out] row-major
+        // .t() gives shape [in, out] with non-contiguous strides
+        // .contiguous() rearranges data to match [in, out] shape
+        // .t() gives shape [out, in] with correct data layout
+        let tensor = tensor.t()?.contiguous()?.t()?;
+        Ok(Self::Tensor(tensor))
+    }
+
     pub fn from_qtensor(qtensor: QTensor) -> Result<Self> {
         Self::from_arc(std::sync::Arc::new(qtensor))
     }
@@ -860,12 +881,19 @@ impl crate::Module for QMatMul {
         match self {
             Self::QTensor(t) => xs.apply_op1_no_bwd(t.as_ref()),
             Self::Tensor(w) => {
+                let in_dtype = xs.dtype();
                 let w = match *xs.dims() {
                     [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
                     [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
                     _ => w.t()?,
                 };
-                xs.matmul(&w)
+                // Handle dtype mismatch between input and dequantized weights
+                if in_dtype != w.dtype() {
+                    let w = w.to_dtype(in_dtype)?;
+                    xs.matmul(&w)
+                } else {
+                    xs.matmul(&w)
+                }
             }
             Self::TensorF16(w) => {
                 let in_dtype = xs.dtype();
