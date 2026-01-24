@@ -23,7 +23,7 @@ tokenizers = { workspace = true, features = ["unstable_wasm"] }
 num-traits = { workspace = true }
 
 # Shared chat template support
-candle-wasm-chat-template = { path = "../chat-template" }
+candle-wasm-chat-template = { path = "../chat-template", version = "0.1.0" }
 
 # App crates.
 anyhow = { workspace = true }
