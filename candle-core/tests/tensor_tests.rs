@@ -2004,7 +2004,8 @@ fn tensor_norm() -> Result<()> {
 fn transfers_cuda_to_device() -> Result<()> {
     use rand::seq::SliceRandom;
 
-    let devices = cudarc::driver::safe::CudaContext::device_count()?;
+    let devices = cudarc::driver::safe::CudaContext::device_count()
+        .map_err(candle_core::cuda::CudaError::from)?;
     if devices < 2 {
         return Ok(());
     }
