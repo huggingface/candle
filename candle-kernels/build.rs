@@ -79,8 +79,7 @@ fn main() {
     } else {
         moe_builder = moe_builder.arg("-Xcompiler").arg("-fPIC");
     }
-
-    println!("cargo::warning={moe_builder:?}");
+  
     moe_builder.build_lib(out_dir.join("libmoe.a"));
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=moe");
