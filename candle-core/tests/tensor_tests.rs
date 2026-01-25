@@ -1806,7 +1806,7 @@ test_device!(
     binary_op_metal,
     binary_op_wgpu
 );
-test_device!(ternary_op, ternary_op_cpu, ternary_op_gpu, ternary_op_metal);
+test_device!(ternary_op, ternary_op_cpu, ternary_op_gpu, ternary_op_metal, ternary_op_wgpu);
 test_device!(
     embeddings,
     embeddings_cpu,

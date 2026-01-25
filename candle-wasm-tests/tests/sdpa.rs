@@ -4,7 +4,7 @@
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "metal")]
 mod metal_sdpa_tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

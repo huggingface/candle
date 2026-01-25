@@ -1,7 +1,7 @@
 //! Tensor ops.
 //!
 
-use candle::{CpuStorage, D, DType, Layout, Module, Result, Shape, Tensor, WgpuStorage};
+use candle::{CpuStorage, D, DType, Layout, Module, Result, Shape, Tensor};
 use rayon::prelude::*;
 
 #[cfg(feature = "wgpu")]
@@ -213,7 +213,7 @@ impl candle::CustomOp1 for Sigmoid {
     }
 
     #[cfg(feature = "wgpu")]
-    fn wgpu_fwd(&self, storage: &WgpuStorage, layout: &Layout) -> Result<(WgpuStorage, Shape)> {
+    fn wgpu_fwd(&self, storage: &candle::WgpuStorage, layout: &Layout) -> Result<(candle::WgpuStorage, Shape)> {
         let buffer_dest = storage.device().alloc_uninit_size(
             storage.dtype(),
             layout.shape().elem_count(),
@@ -451,9 +451,9 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     #[cfg(feature = "wgpu")]
     fn wgpu_fwd(
             &self,
-            storage: &WgpuStorage,
+            storage: &candle::WgpuStorage,
             layout: &Layout,
-        ) -> Result<(WgpuStorage, Shape)> {
+        ) -> Result<(candle::WgpuStorage, Shape)> {
             use candle::wgpu::wgpu_functions;
         
             if !(layout.is_contiguous()){
@@ -677,11 +677,11 @@ impl candle::CustomOp2 for RmsNorm {
     #[cfg(feature = "wgpu")]
     fn wgpu_fwd(
         &self,
-        src: &WgpuStorage,
+        src: &candle::WgpuStorage,
         layout: &Layout,
-        alpha: &WgpuStorage,
+        alpha: &candle::WgpuStorage,
         alpha_layout: &Layout,
-    ) -> Result<(WgpuStorage, Shape)> {
+    ) -> Result<(candle::WgpuStorage, Shape)> {
         //start offset and length:
         use candle::wgpu::wgpu_functions;
 
@@ -963,13 +963,13 @@ impl candle::CustomOp3 for LayerNorm {
     #[cfg(feature = "wgpu")]
     fn wgpu_fwd(
         &self,
-        src: &WgpuStorage,
+        src: &candle::WgpuStorage,
         layout: &Layout,
-        alpha: &WgpuStorage,
+        alpha: &candle::WgpuStorage,
         alpha_layout: &Layout,
-        beta: &WgpuStorage,
+        beta: &candle::WgpuStorage,
         beta_layout: &Layout,
-    ) -> Result<(WgpuStorage, Shape)> {
+    ) -> Result<(candle::WgpuStorage, Shape)> {
         //start offset and length:
         use candle::wgpu::wgpu_functions;
 

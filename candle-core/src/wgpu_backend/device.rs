@@ -306,6 +306,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
             crate::CpuStorage::F16(data) => self.alloc_from_slice(crate::DType::F16, data),
             crate::CpuStorage::F64(data) => self.alloc_from_slice(crate::DType::F64, data),
             crate::CpuStorage::I64(data) => self.alloc_from_slice(crate::DType::I64, data),
+            crate::CpuStorage::U8(data) => self.alloc_from_slice(crate::DType::U8, data),
             _ => wrongType!(storage_from_cpu_storage, storage.dtype()),
         }
     }
@@ -319,6 +320,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
             crate::CpuStorage::U32(data) => self.alloc_from_slice(crate::DType::U32, &data),
             crate::CpuStorage::I64(data) => self.alloc_from_slice(crate::DType::I64, &data),
             crate::CpuStorage::F64(data) => self.alloc_from_slice(crate::DType::F64, &data),
+            crate::CpuStorage::U8(data) => self.alloc_from_slice(crate::DType::U8, &data),
             _ => wrongType!(storage_from_cpu_storage_owned, storage.dtype()),
         }
     }

@@ -4,7 +4,7 @@
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]

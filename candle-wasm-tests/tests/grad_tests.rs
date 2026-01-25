@@ -4,7 +4,7 @@
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #![allow(clippy::approx_constant)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]

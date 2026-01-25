@@ -14,5 +14,5 @@ browser.
 
 to use wgpu use:
 ```bash
-wasm-pack test --chrome --test all
+wasm-pack test --chrome --features="wgpu" --test all
 ```

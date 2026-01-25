@@ -4,7 +4,7 @@ pub mod bilinear_tests {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -536,7 +536,7 @@ candle_wasm_tests::test_device!(
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -581,7 +581,7 @@ candle_wasm_tests::test_device!(alloc, alloc_cpu, alloc_gpu, alloc_metal, alloc_
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -1741,7 +1741,7 @@ candle_wasm_tests::test_device!(
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -1913,7 +1913,7 @@ async fn ug_op() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -2003,7 +2003,7 @@ Tensor[[2, 1, 1, 100, 100], f32]"#;
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #![allow(clippy::approx_constant)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
@@ -2520,7 +2520,7 @@ candle_wasm_tests::test_device!(
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -2624,7 +2624,7 @@ async fn slice_assign() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -2788,7 +2788,7 @@ candle_wasm_tests::test_device!(
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -3031,7 +3031,7 @@ async fn big_matmul_wgpu(
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -3176,7 +3176,7 @@ candle_wasm_tests::test_device!(
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -4571,7 +4571,7 @@ candle_wasm_tests::test_device!(
     binary_op, binary_op_cpu, binary_op_gpu, binary_op_metal, binary_op_wgpu
 );
 candle_wasm_tests::test_device!(
-    ternary_op, ternary_op_cpu, ternary_op_gpu, ternary_op_metal
+    ternary_op, ternary_op_cpu, ternary_op_gpu, ternary_op_metal, ternary_op_wgpu
 );
 candle_wasm_tests::test_device!(
     embeddings, embeddings_cpu, embeddings_gpu, embeddings_metal, embeddings_wgpu
@@ -4819,13 +4819,61 @@ async fn tensor_norm() -> Result<()> {
     assert_eq!(norm.to_scalar_async::< f64 > (). await ?, 5.);
     Ok(())
 }
+#[cfg(feature = "cuda")]
+#[test]
+async fn transfers_cuda_to_device() -> Result<()> {
+    use rand::seq::SliceRandom;
+    let devices = cudarc::driver::safe::CudaContext::device_count()
+        .map_err(candle::cuda::CudaError::from)?;
+    if devices < 2 {
+        return Ok(());
+    }
+    let first = Device::new_cuda(0)?;
+    let mut data: Vec<u32> = (0..262144).collect();
+    let mut rng = rand::rng();
+    data.shuffle(&mut rng);
+    let t1 = Tensor::from_vec(data, (512, 512), &first)?;
+    let second = Device::new_cuda(1)?;
+    let t2 = t1.to_device_async(&second).await?;
+    assert_ne!(t1.device().as_cuda_device() ?.id(), t2.device().as_cuda_device() ?.id());
+    Ok(())
+}
+#[cfg(feature = "cuda")]
+#[test]
+async fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
+    use std::{ops::Deref, sync::RwLockReadGuard};
+    use candle::Storage;
+    use rand::seq::SliceRandom;
+    let first = Device::new_cuda(0)?;
+    let second = Device::new_cuda(0)?;
+    let mut data: Vec<u32> = (0..262144).collect();
+    let mut rng = rand::rng();
+    data.shuffle(&mut rng);
+    let t1 = Tensor::from_vec(data, (512, 512), &first)?;
+    let t2 = t1.to_device_async(&second).await?;
+    let (storage1, _) = t1.storage_and_layout();
+    let (storage2, _) = t2.storage_and_layout();
+    let extract = |s: RwLockReadGuard<'_, Storage>| match &s.deref() {
+        Storage::Cuda(c) => {
+            use cudarc::driver::DevicePtr;
+            let slice = c.as_cuda_slice::<u32>().unwrap();
+            let ptr = slice.device_ptr(slice.stream()).0;
+            ptr
+        }
+        _ => unimplemented!(),
+    };
+    let id1 = extract(storage1);
+    let id2 = extract(storage2);
+    assert_ne!(id1, id2);
+    Ok(())
+}
 }pub mod batch_norm {
 // ============================================================================
 // === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5046,7 +5094,7 @@ async fn train_batch_norm() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -5097,7 +5145,7 @@ async fn cpu_flash_attn() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5166,7 +5214,7 @@ async fn group_norm() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5297,7 +5345,7 @@ async fn rotating_kv_cache() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5353,7 +5401,7 @@ async fn layer_norm() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5441,7 +5489,7 @@ async fn huber_loss() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -5536,7 +5584,7 @@ async fn test_iter() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5845,7 +5893,7 @@ candle_wasm_tests::test_device!(
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5963,7 +6011,7 @@ async fn adamw_linear_regression_varmap() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -6045,7 +6093,7 @@ async fn gru() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 #[cfg(feature = "metal")]
 mod metal_sdpa_tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -6267,7 +6315,7 @@ mod metal_sdpa_tests {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -6357,7 +6405,7 @@ async fn sample_gumbel() -> Result<()> {
 // === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
 // ============================================================================
 
-#![allow(unused_imports, unexpected_cfgs)]
+#![allow(unused_imports, unexpected_cfgs, unused_parens)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;

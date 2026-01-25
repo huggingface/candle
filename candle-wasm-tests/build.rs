@@ -127,7 +127,7 @@ fn make_fn_async_same_name_same_file<'h>(
 }
 
 fn process_content(content: &str, crate_replace: &str) -> String {
-    let global_start = "#![allow(unused_imports, unexpected_cfgs)]".to_string();
+    let global_start = "#![allow(unused_imports, unexpected_cfgs, unused_parens)]".to_string();
 
     let header = "
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
