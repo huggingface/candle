@@ -1,38 +1,37 @@
 use rustc_hash::FxHasher;
 use std::{
-    hash::{Hash, Hasher}, num::NonZeroU64
+    hash::{Hash, Hasher},
+    num::NonZeroU64
 };
 
 use super::{
     cache::{
-        BindgroupInputBase, BindgroupReferenceFull, BindgroupReferenceInput, BufferReferenceId, CachedBindgroupFull, CachedBindgroupInput, CachedBufferId, ModelCache
-    }, 
-    queue_buffer::{MlQueue, QueueBuffer, QueueBufferInner}, 
-    util::{FixedArray, ToU32, ToF64}, 
-    WgpuDevice
+        BindgroupInputBase, BindgroupReferenceFull, BindgroupReferenceInput, BufferReferenceId,
+        CachedBindgroupFull, CachedBindgroupInput, CachedBufferId, ModelCache,
+    },
+    queue_buffer::{MlQueue, QueueBuffer, QueueBufferInner},
+    util::{FixedArray, ToF64, ToU32},
+    WgpuDevice,
 };
-use crate::{util::ReferenceTrait};
+use crate::util::ReferenceTrait;
 use tracing::{instrument, span, Level};
 
 use crate::DType;
 use std::borrow::Cow;
 
-
 ///Helper Type MetaArray, for constructing the MetaBuffer
-///The MetaBuffer is used to pass Parameters to the Kernel. 
+///The MetaBuffer is used to pass Parameters to the Kernel.
 ///Paramerters for multiple Commands are grouped together in this MetaArray.
 #[derive(Debug)]
 pub struct MetaArray(pub Vec<u32>);
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct KernelConstId(pub &'static str);
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-///Helper Array to Construct Kernel Constants. 
-///Kernel Constants are compiled into the kernel. 
+///Helper Array to Construct Kernel Constants.
+///Kernel Constants are compiled into the kernel.
 pub struct ConstArray(pub FixedArray<(KernelConstId, u32), 32>);
-
 
 //Allows objects to be added to the Meta Parameter Array
 pub trait ToKernelParameterMeta {
@@ -65,12 +64,7 @@ impl ConstArray {
     }
 
     pub fn to_vec(&self) -> Vec<(&'static str, f64)> {
-        Vec::from_iter(
-            self
-                .0
-                .iter()
-                .map(|(k, v)| (k.0, v.to_f64())),
-        )
+        Vec::from_iter(self.0.iter().map(|(k, v)| (k.0, v.to_f64())))
     }
 }
 
@@ -79,7 +73,6 @@ impl Default for ConstArray {
         Self::new()
     }
 }
-
 
 fn next_divisible_by_n<T: num_traits::Num + Clone>(value: T, n: T) -> T {
     if n.is_zero() {
@@ -93,8 +86,8 @@ fn next_divisible_by_n<T: num_traits::Num + Clone>(value: T, n: T) -> T {
     }
 }
 
-impl WgpuDevice{
-    ///Returns the Meta Array. 
+impl WgpuDevice {
+    ///Returns the Meta Array.
     pub fn get_queue<'a>(&'a self) -> QueueBuffer<'a> {
         let mut command_queue = self
             .command_queue
@@ -106,9 +99,10 @@ impl WgpuDevice{
             self.device_limits.min_storage_buffer_offset_alignment as i32 / 4,
         );
         command_queue.current_meta = meta_offset as u32;
-        command_queue
-            .get_meta_mut()
-            .extend(std::iter::repeat_n(0, (meta_offset - meta_array_length) as usize));
+        command_queue.get_meta_mut().extend(std::iter::repeat_n(
+            0,
+            (meta_offset - meta_array_length) as usize,
+        ));
 
         QueueBuffer::new(command_queue)
     }
@@ -129,14 +123,12 @@ impl WgpuDevice{
             (_, false) => Err(crate::Error::from(format!(
                 "Dtype {:?} not supported on this wgpu device",
                 dtype
-            )))
+            ))),
         }
     }
-    
 }
 
-
-/**************** FLUSH COMMANDS TO GPU: ****************/ 
+/**************** FLUSH COMMANDS TO GPU: ****************/
 #[instrument(skip(dev, queue_buffer, cache))]
 ///Prepares Buffers
 fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBufferInner, cache: &mut ModelCache) {
@@ -213,15 +205,13 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBufferInner, cache: &mut Mo
     }
 }
 
-
-#[instrument(skip(dev, cache, command_queue, waiting_buffer, current_meta, meta_array))]
-///Builds Command Buffer and writes meta_array to the gpu 
+#[instrument(skip(dev, cache, command_queue, current_meta, meta_array))]
+///Builds Command Buffer and writes meta_array to the gpu
 fn get_command_buffer(
     dev: &WgpuDevice,
     meta_array: &[u32],
     command_queue: &[MlQueue],
     current_meta: usize,
-    waiting_buffer: &Option<CachedBufferId>, //a buffer, we want to wait for, after all commands have been queued
     cache: &mut ModelCache,
 ) -> wgpu::CommandBuffer {
     #[cfg(feature = "wgpu_debug")]
@@ -335,24 +325,25 @@ fn get_command_buffer(
                             cpass.write_timestamp(query_set, debug_index + 1);
                             dev.debug.insert_info(
                                 global_index + debug_index * 8,
-                                debug_info::ShaderPerformanceMeasurmentDebugInfo{
+                                debug_info::ShaderPerformanceMeasurmentDebugInfo {
                                     pipeline: format!(
                                         "Shader: '{}', Pipeline: '{}', {}",
-                                        cache.shader.loader_cache.get_shader_name(q.pipeline.0.get_shader()),
+                                        cache
+                                            .shader
+                                            .loader_cache
+                                            .get_shader_name(q.pipeline.0.get_shader()),
                                         cache.shader.loader_cache.get_entry_point(q.pipeline.0),
                                         q.debug.to_owned().map_or("".to_string(), |s| s)
                                     ),
                                     workload_size: q.workload_size as u64,
-                                    x : q.x,
-                                    y : q.y,
-                                    z : q.z,
+                                    x: q.x,
+                                    y: q.y,
+                                    z: q.z,
                                 },
                             );
                             debug_index += 2;
-                        
-                        
-                            if cache.full_recording.should_record
-                            {
+
+                            if cache.full_recording.should_record {
                                 use crate::wgpu_functions;
 
                                 let debug_info = crate::device::DebugPipelineRecording {
@@ -360,49 +351,77 @@ fn get_command_buffer(
                                     y: q.y,
                                     z: q.z,
                                     pipeline: q.pipeline.clone(),
-                                    meta : meta_array[meta as usize..].to_vec(),
+                                    meta: meta_array[meta as usize..].to_vec(),
                                     bindgroup: q.bindgroup.clone(),
                                     count: 1,
                                 };
 
-                                fn get_buffer_data(dev: &WgpuDevice, buffer_reference : CachedBufferId, cache: &mut ModelCache) -> crate::Result<super::debug_info::NumericArray>{
-                                    #[cfg(not(target_arch = "wasm32"))]{
+                                fn get_buffer_data(
+                                    dev: &WgpuDevice,
+                                    buffer_reference: CachedBufferId,
+                                    cache: &mut ModelCache,
+                                ) -> crate::Result<super::debug_info::NumericArray>
+                                {
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    {
                                         let staging_buffer;
                                         if buffer_reference.is_valid() {
-                                            if let Some(buffer) = cache.buffers.get_buffer(&buffer_reference) {
-                                                staging_buffer =  wgpu_functions::copy_buffer_to_staging_buffer(dev, buffer.buffer());
+                                            if let Some(buffer) =
+                                                cache.buffers.get_buffer(&buffer_reference)
+                                            {
+                                                staging_buffer =
+                                                    wgpu_functions::copy_buffer_to_staging_buffer(
+                                                        dev,
+                                                        buffer.buffer(),
+                                                    );
                                             } else {
                                                 panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
                                             }
                                         } else {
                                             panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
                                         }
-                                    
 
-                                        let data = pollster::block_on(wgpu_functions::read_from_staging_buffer_async::<u8>(dev, staging_buffer))?;
-                                        //let data = pollster::block_on(wgpu_functions::read_from_buffer_reference_async::<u32>(dev, buffer_reference))?;
+                                        let data = pollster::block_on(
+                                            wgpu_functions::read_from_staging_buffer_async::<u8>(
+                                                dev,
+                                                staging_buffer,
+                                            ),
+                                        )?;
+                                       
                                         Ok(super::debug_info::NumericArray::U8(data))
                                     }
-                                    #[cfg(target_arch = "wasm32")]{
-                                        return crate::bail!("Synchronous read not supported on wasm32");
+                                    #[cfg(target_arch = "wasm32")]
+                                    {
+                                        return crate::bail!(
+                                            "Synchronous read not supported on wasm32"
+                                        );
                                     }
                                 }
 
                                 let buffer_input1 = buffers.get_input().get_input1().cloned();
                                 let buffer_input2 = buffers.get_input().get_input2().cloned();
                                 let buffer_input3 = buffers.get_input().get_input3().cloned();
-                                let vd1 = get_buffer_data(dev, vd, cache).expect("Expect to Read the Buffer");
-                                let v_input1 = buffer_input1.map(|buffer| get_buffer_data(dev, buffer, cache).expect("Expect to Read the Buffer"));
-                                let v_input2 = buffer_input2.map(|buffer| get_buffer_data(dev, buffer, cache).expect("Expect to Read the Buffer"));
-                                let v_input3 = buffer_input3.map(|buffer| get_buffer_data(dev, buffer, cache).expect("Expect to Read the Buffer"));
+                                let vd1 = get_buffer_data(dev, vd, cache)
+                                    .expect("Expect to Read the Buffer");
+                                let v_input1 = buffer_input1.map(|buffer| {
+                                    get_buffer_data(dev, buffer, cache)
+                                        .expect("Expect to Read the Buffer")
+                                });
+                                let v_input2 = buffer_input2.map(|buffer| {
+                                    get_buffer_data(dev, buffer, cache)
+                                        .expect("Expect to Read the Buffer")
+                                });
+                                let v_input3 = buffer_input3.map(|buffer| {
+                                    get_buffer_data(dev, buffer, cache)
+                                        .expect("Expect to Read the Buffer")
+                                });
 
-
-                                let data = super::debug_info::DebugPipelineRecordingWithData{
-                                    recording : debug_info,
-                                    v_dest : vd1,
+                                let data = super::debug_info::DebugPipelineRecordingWithData {
+                                    recording: debug_info,
+                                    v_dest: vd1,
                                     v_input1,
                                     v_input2,
-                                    v_input3
+                                    v_input3,
                                 };
 
                                 cache.full_recording.recordings.push(data);
@@ -420,13 +439,6 @@ fn get_command_buffer(
     drop(_enter2);
     drop(_enter1);
 
-    if let Some(waiting_buffer) = waiting_buffer {
-        let staging_buffer = &dev.staging_probe_buffer;
-        if let Some(buffer) = cache.buffers.get_buffer(waiting_buffer) {
-            encoder.copy_buffer_to_buffer(buffer.buffer(), 0, staging_buffer, 0, 4);
-        }
-    }
-
     #[cfg(feature = "wgpu_debug")]
     end_debug_queue(
         dev,
@@ -443,7 +455,6 @@ fn get_command_buffer(
     result
 }
 
-
 #[instrument(skip(dev, command_buffer, cache, index, last_meta, current_meta))]
 ///Maps Virtual Compute Graph Buffers to actual wgpu Buffers
 fn set_buffers(
@@ -455,12 +466,13 @@ fn set_buffers(
     cache: &mut ModelCache,
 ) -> crate::Result<(bool, u64)> {
     let global_index = command_buffer.global_command_index();
-    
+
     #[cfg(feature = "wgpu_debug")]
     {
         use crate::cache::AverageBufferInfo;
 
-        let mut buffers: std::collections::HashMap<(u32,bool),u32>  = std::collections::HashMap::new();
+        let mut buffers: std::collections::HashMap<(u32, bool), u32> =
+            std::collections::HashMap::new();
         for (_id, cached_buffer) in cache.buffers.iter_buffers() {
             let size = cached_buffer.buffer().size() as u32;
 
@@ -470,11 +482,18 @@ fn set_buffers(
             *buffers.entry((size, is_free)).or_insert(0) += 1;
         }
 
-        let debug_buffer_info = crate::cache::DebugBufferUsage{ 
-            memory_alloc : cache.buffers.buffer_memory(),
-            memory_free : cache.buffers.buffer_free_memory(),
-            buffers : buffers.into_iter().map(|(key, value)| AverageBufferInfo{count : value, is_free : key.1, size: key.0}).collect(),
-            command_buffer_id : global_index
+        let debug_buffer_info = crate::cache::DebugBufferUsage {
+            memory_alloc: cache.buffers.buffer_memory(),
+            memory_free: cache.buffers.buffer_free_memory(),
+            buffers: buffers
+                .into_iter()
+                .map(|(key, value)| AverageBufferInfo {
+                    count: value,
+                    is_free: key.1,
+                    size: key.0,
+                })
+                .collect(),
+            command_buffer_id: global_index,
         };
         cache.debug_buffer_info.push(debug_buffer_info);
     }
@@ -487,10 +506,10 @@ fn set_buffers(
         #[cfg(feature = "wgpu_debug")]
         {
             let ele_size = *index - start_index;
-            if ele_size >= wgpu::QUERY_SET_MAX_QUERIES as usize / 2 - 1{
+            if ele_size >= wgpu::QUERY_SET_MAX_QUERIES as usize / 2 - 1 {
                 break;
-            } 
-            if cache.full_recording.should_record && ele_size > 1{
+            }
+            if cache.full_recording.should_record && ele_size > 1 {
                 break;
             }
         }
@@ -515,7 +534,12 @@ fn set_buffers(
                 let mut optimize_copy_inplace = false;
                 let mut input_replaced_buffer = BufferReferenceId::new(0, 0); //input buffer, that was replaced
 
-                fn should_optimize_inplace(cache : &mut ModelCache,vdest_id: &BufferReferenceId, v1_id: &BufferReferenceId, command_index : u32) -> bool{
+                fn should_optimize_inplace(
+                    cache: &mut ModelCache,
+                    vdest_id: &BufferReferenceId,
+                    v1_id: &BufferReferenceId,
+                    command_index: u32,
+                ) -> bool {
                     let vdest = cache.buffer_reference.get(vdest_id);
                     let v1 = cache.buffer_reference.get(v1_id);
                     if let Some(vdest) = vdest {
@@ -525,7 +549,10 @@ fn set_buffers(
                             }
 
                             //this buffer was last used in this pipeline
-                            if v1.last_used() == command_index &&  vdest.size() <= v1.size() && !vdest.cached_buffer_id().is_valid() {
+                            if v1.last_used() == command_index
+                                && vdest.size() <= v1.size()
+                                && !vdest.cached_buffer_id().is_valid()
+                            {
                                 let input_cached_buffer_id = *v1.cached_buffer_id();
                                 let vdest = cache.buffer_reference.get_mut(vdest_id);
                                 if let Some(vdest) = vdest {
@@ -550,50 +577,69 @@ fn set_buffers(
                             inplace_flags: q.pipeline.2,
                         },
                     ) {
-                        match plan{
-                            crate::shader_loader::RewritePlan::InplaceDispatch { new_pipeline, new_bindgroup, replaced_input } => {
-                                let vinput_id = match replaced_input{
-                                    crate::shader_loader::ReplacedInput::Input1 => q.bindgroup.get_input().get_input1(),
-                                    crate::shader_loader::ReplacedInput::Input2 => q.bindgroup.get_input().get_input2(),
+                        match plan {
+                            crate::shader_loader::RewritePlan::InplaceDispatch {
+                                new_pipeline,
+                                new_bindgroup,
+                                replaced_input,
+                            } => {
+                                let vinput_id = match replaced_input {
+                                    crate::shader_loader::ReplacedInput::Input1 => {
+                                        q.bindgroup.get_input().get_input1()
+                                    }
+                                    crate::shader_loader::ReplacedInput::Input2 => {
+                                        q.bindgroup.get_input().get_input2()
+                                    }
                                 };
                                 if let Some(vinput_id) = vinput_id {
-                                    if should_optimize_inplace(cache, q.bindgroup.get_dest(), vinput_id, command_index)
-                                    {
+                                    if should_optimize_inplace(
+                                        cache,
+                                        q.bindgroup.get_dest(),
+                                        vinput_id,
+                                        command_index,
+                                    ) {
                                         input_replaced_buffer = *vinput_id;
                                         q.pipeline.0 = new_pipeline;
                                         q.bindgroup = new_bindgroup;
                                     }
                                 }
-                            },
+                            }
                             crate::shader_loader::RewritePlan::ElideDispatch { replaced_input } => {
-                                let vinput_id = match replaced_input{
-                                    crate::shader_loader::ReplacedInput::Input1 => q.bindgroup.get_input().get_input1(),
-                                    crate::shader_loader::ReplacedInput::Input2 => q.bindgroup.get_input().get_input2(),
+                                let vinput_id = match replaced_input {
+                                    crate::shader_loader::ReplacedInput::Input1 => {
+                                        q.bindgroup.get_input().get_input1()
+                                    }
+                                    crate::shader_loader::ReplacedInput::Input2 => {
+                                        q.bindgroup.get_input().get_input2()
+                                    }
                                 };
-                                if let Some(vinput_id) = vinput_id
-                                {
+                                if let Some(vinput_id) = vinput_id {
                                     let v1 = cache.buffer_reference.get(vinput_id);
                                     if let Some(v1) = v1 {
                                         let vdest_id = bindgroup_reference.get_dest();
-        
+
                                         let v1_cached_id = *v1.cached_buffer_id();
                                         let v1_size = v1.size();
                                         //this buffer was last used in this pipeline
                                         if v1.last_used() == command_index {
                                             let vdest = cache.buffer_reference.get_mut(vdest_id);
                                             if let Some(vdest) = vdest {
-                                                if vdest.size() <= v1_size && !vdest.cached_buffer_id().is_valid() {
+                                                if vdest.size() <= v1_size
+                                                    && !vdest.cached_buffer_id().is_valid()
+                                                {
                                                     vdest.set_cached_buffer_id(v1_cached_id);
 
                                                     cache.copy_inplace_counter += 1;
                                                     optimize_copy_inplace = true;
                                                 }
                                             }
-        
+
                                             if optimize_copy_inplace {
                                                 let v1 = cache.buffer_reference.get_mut(vinput_id);
                                                 if let Some(v1) = v1 {
-                                                    v1.set_cached_buffer_id(CachedBufferId::new(0, 0));
+                                                    v1.set_cached_buffer_id(CachedBufferId::new(
+                                                        0, 0,
+                                                    ));
                                                 }
                                             }
                                         }
@@ -606,24 +652,30 @@ fn set_buffers(
 
                 drop(_enter1);
 
-
-
-                #[instrument(skip(cache, bindgroup_reference, command_index, input_replaced_buffer))]
+                #[instrument(skip(
+                    cache,
+                    bindgroup_reference,
+                    command_index,
+                    input_replaced_buffer
+                ))]
                 fn check_for_removal(
                     bindgroup_reference: &BindgroupReferenceFull,
                     command_index: u32,
                     cache: &mut ModelCache,
-                    input_replaced_buffer : &BufferReferenceId
+                    input_replaced_buffer: &BufferReferenceId,
                 ) {
                     let check_buffer = |buffer_reference: &BufferReferenceId,
-                                       cache: &mut ModelCache,
-                                       command_index: u32| {
+                                        cache: &mut ModelCache,
+                                        command_index: u32| {
                         if let Some(buffer) = cache.buffer_reference.get_mut(buffer_reference) {
                             if buffer.last_used() <= command_index {
                                 //this buffer reference is not used after this:
                                 let cached_buffer_id = *buffer.cached_buffer_id();
                                 cache.buffer_reference.delete(buffer_reference);
-                                if cached_buffer_id.is_valid() && buffer_reference != input_replaced_buffer { //if this buffer was replaced by another buffer, the referenced buffer is still not free
+                                if cached_buffer_id.is_valid()
+                                    && buffer_reference != input_replaced_buffer
+                                {
+                                    //if this buffer was replaced by another buffer, the referenced buffer is still not free
                                     cache.buffers.free_buffer(&cached_buffer_id);
                                 }
                             }
@@ -660,13 +712,16 @@ fn set_buffers(
                     };
 
                     let consts = &command_buffer.id_to_const_array[q.pipeline.1];
-                    let pipeline = cache.shader.get_pipeline(&dev.device,&q.pipeline, pl, consts)?;
+                    let pipeline =
+                        cache
+                            .shader
+                            .get_pipeline(&dev.device, &q.pipeline, pl, consts)?;
 
                     let bindgroup =
                         cache.get_bind_group(dev, &q.bindgroup, q.pipeline.clone(), command_index);
 
                     let span1 = span!(Level::INFO, "SetBuffers_Optimize implace: ");
-                    let _enter1 = span1.enter();   
+                    let _enter1 = span1.enter();
                     check_for_removal(&q.bindgroup, command_index, cache, &input_replaced_buffer);
                     if cache.should_delete_unused() {
                         //we hit the max cache size
@@ -694,26 +749,31 @@ fn set_buffers(
             }
         }
     }
-    
+
     #[cfg(feature = "wgpu_debug")]
     {
         use crate::cache::AverageBufferInfo;
 
-        let mut buffers: std::collections::HashMap<(u32,bool),u32>  = std::collections::HashMap::new();
+        let mut buffers: std::collections::HashMap<(u32, bool), u32> =
+            std::collections::HashMap::new();
         for (_id, cached_buffer) in cache.buffers.iter_buffers() {
             let size = cached_buffer.buffer().size() as u32;
-
-            // Adjust this depending on how you detect "free"
             let is_free = cached_buffer.is_free();
-
             *buffers.entry((size, is_free)).or_insert(0) += 1;
         }
 
-        let debug_buffer_info = crate::cache::DebugBufferUsage{ 
-            memory_alloc : cache.buffers.buffer_memory(),
-            memory_free : cache.buffers.buffer_free_memory(),
-            buffers : buffers.into_iter().map(|(key, value)| AverageBufferInfo{count : value, is_free : key.1, size: key.0}).collect(),
-            command_buffer_id : global_index
+        let debug_buffer_info = crate::cache::DebugBufferUsage {
+            memory_alloc: cache.buffers.buffer_memory(),
+            memory_free: cache.buffers.buffer_free_memory(),
+            buffers: buffers
+                .into_iter()
+                .map(|(key, value)| AverageBufferInfo {
+                    count: value,
+                    is_free: key.1,
+                    size: key.0,
+                })
+                .collect(),
+            command_buffer_id: global_index,
         };
         cache.debug_buffer_info.push(debug_buffer_info);
     }
@@ -725,168 +785,129 @@ fn set_buffers(
     Ok((cache_limit, total_workload))
 }
 
-#[instrument(skip(dev, queue_buffer))]
-///Send queued commands to the GPU
-pub(crate) fn flush_gpu_command(
-    dev: &WgpuDevice,
-    queue_buffer: &mut QueueBufferInner,
-) -> crate::Result<()> {
-    if !queue_buffer.command_queue.is_empty() {
-        let mut cache = dev
-            .cache
-            .lock().expect("");
-        prepare(dev, queue_buffer, &mut cache);
+macro_rules! maybe_await {
+    ($expr:expr) => {{
+        #[cfg(target_arch = "wasm32")]
         {
-            let mut start_index = 0;
-            let mut index = 0;
-            let mut current_meta: usize = 0;
-            let mut last_meta: usize = 0;
-
-            while index < queue_buffer.command_queue.len() {
-                let (should_reuse_unused, _) = set_buffers(
-                    dev,
-                    queue_buffer,
-                    &mut index,
-                    current_meta,
-                    &mut last_meta,
-                    &mut cache,
-                )?;
-
-                let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
-                let cb = get_command_buffer(
-                    dev,
-                    &queue_buffer.get_meta()[current_meta..last_meta_index],
-                    &queue_buffer.command_queue[start_index..index],
-                    current_meta,
-                    &None,
-                    &mut cache,
-                );
-
-                if should_reuse_unused {
-                    cache.remove_unused();
-                }
-
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let span1 = span!(Level::INFO, "Device Poll");
-                    let _enter1 = span1.enter();
-                    dev.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-                }
-
-                if index > 0 {
-                    //set last buffer, so we can wait for it to finish in the future
-                    match &queue_buffer.command_queue[index - 1] {
-                        MlQueue::Dispatch(d) => if let Some(c) = &d.bindgroup_cached {
-                            if let Some(c) = cache.bindgroups.get_bindgroup(c) {
-                                queue_buffer.last_buffer = Some(*c.buffer().get_dest())
-                            }
-                        },
-                    }
-                }
-
-                let span1 = span!(Level::INFO, "Submit");
-                let _enter1 = span1.enter();
-                dev.queue.submit(Some(cb));
-                drop(_enter1);
-
-                start_index = index;
-                current_meta = last_meta;
-            }
-            finish_commands(queue_buffer, index, &mut cache);
+            $expr.await
         }
-        queue_buffer.clear();
+
+        #[cfg(not(target_arch = "wasm32"))]
         {
-            log::debug!(
-                "current memory {} / {}",
-                cache.buffers.buffer_memory(),
-                cache.buffers.max_memory_allowed()
-            );
-            cache.mappings.finish();
-            cache.remove_unused();
+            $expr
         }
-    }
-    Ok(())
+    }};
 }
 
-#[instrument(skip(dev, queue_buffer))]
-///Send queued commands to the GPU, waits asynchronously
-pub(crate) async fn flush_gpu_command_async(
-    dev: &WgpuDevice,
-    queue_buffer: &mut QueueBufferInner,
-) -> crate::Result<()> {
-    if !queue_buffer.command_queue.is_empty() {
-        log::debug!("flush_gpu_command_async");
-        let mut cache = dev
-            .cache
-            .lock().expect("");
-        prepare(dev, queue_buffer, &mut cache);
-        {
-            let mut start_index = 0;
-            let mut index = 0;
-            let mut current_meta: usize = 0;
-            let mut last_meta: usize = 0;
+macro_rules! platform_fn {
+    (
+        $(#[$meta:meta])*
+        $vis:vis fn $name:ident( $($args:tt)* ) -> $ret:ty $body:block
+    ) => {
+        // Native version (sync)
+        $(#[$meta])*
+        #[cfg(not(target_arch = "wasm32"))]
+        $vis fn $name ( $($args)* ) -> $ret $body
 
-            while index < queue_buffer.command_queue.len() {
-                let (should_reuse_unused, _) = set_buffers(
-                    dev,
-                    queue_buffer,
-                    &mut index,
-                    current_meta,
-                    &mut last_meta,
-                    &mut cache,
-                )?;
-                let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
-                let cb = get_command_buffer(
-                    dev,
-                    &queue_buffer.get_meta()[current_meta..last_meta_index],
-                    &queue_buffer.command_queue[start_index..index],
-                    current_meta,
-                    &queue_buffer.last_buffer,
-                    &mut cache,
-                );
-
-                if should_reuse_unused {
-                    cache.remove_unused();
-                }
-
-                synchronize_device(dev).await?;
-
-                if index > 0 {
-                    //set last buffer, so we can wait for it to finish in the future
-                    match &queue_buffer.command_queue[index - 1] {
-                        MlQueue::Dispatch(d) => if let Some(c) = &d.bindgroup_cached {
-                            if let Some(c) = cache.bindgroups.get_bindgroup(c) {
-                                queue_buffer.last_buffer = Some(*c.buffer().get_dest())
-                            }
-                        },
-                    }
-                }
-
-                let span1 = span!(Level::INFO, "Submit");
-                let _enter1 = span1.enter();
-                dev.queue.submit(Some(cb));
-                drop(_enter1);
-
-                start_index = index;
-                current_meta = last_meta;
-            }
-            finish_commands(queue_buffer, index, &mut cache);
-        }
-
-        queue_buffer.clear();
-        {
-            log::debug!(
-                "current memory {} / {}",
-                cache.buffers.buffer_memory(),
-                cache.buffers.max_memory_allowed()
-            );
-            cache.mappings.finish();
-            cache.remove_unused();
-        }
-    }
-    Ok(())
+        // Wasm version (async)
+        $(#[$meta])*
+        #[cfg(target_arch = "wasm32")]
+        $vis async fn $name ( $($args)* ) -> $ret $body
+    };
 }
 
+platform_fn!{
+    #[instrument(skip(dev))]
+    ///Send queued commands to the GPU,
+    pub(crate) fn flush_gpu_command(dev: &WgpuDevice) -> crate::Result<Option<WasmSubmissionIndex>> {
+        let queue_buffer = &mut dev.command_queue.lock().unwrap();
+        if !queue_buffer.command_queue.is_empty() {
+            log::debug!("flush_gpu_command");
+            let mut submissions = std::collections::VecDeque::<WasmSubmissionIndex> ::new();
+            let mut cache = dev.cache.lock().expect("");
+            prepare(dev, queue_buffer, &mut cache);
+            {
+                let mut start_index = 0;
+                let mut index = 0;
+                let mut current_meta: usize = 0;
+                let mut last_meta: usize = 0;
+
+                while index < queue_buffer.command_queue.len() {
+                    let (should_reuse_unused, _) = set_buffers(
+                        dev,
+                        queue_buffer,
+                        &mut index,
+                        current_meta,
+                        &mut last_meta,
+                        &mut cache,
+                    )?;
+                    let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
+                    let cb = get_command_buffer(
+                        dev,
+                        &queue_buffer.get_meta()[current_meta..last_meta_index],
+                        &queue_buffer.command_queue[start_index..index],
+                        current_meta,
+                        &mut cache,
+                    );
+
+                    if should_reuse_unused {
+                        cache.remove_unused();
+                    }
+
+                    if !submissions.is_empty() {
+                        let submission_to_wait_for = submissions.pop_front().unwrap();
+                        maybe_await!(wait_for_submission(dev, submission_to_wait_for))?; //TODO: cargo clippy --target wasm32-unknown-unknown
+                                                                                          //      this `MutexGuard` is held across an await point
+                    }
+
+                    let span1 = span!(Level::INFO, "Submit");
+                    let _enter1: span::Entered<'_> = span1.enter();
+                    #[cfg(target_arch = "wasm32")]
+                    let wasm_submission_id =
+                    {
+                        let tracker_clone = dev.submission_tracker.clone();
+                        let id = tracker_clone.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        cb.on_submitted_work_done(move || {
+                            // Mark completion
+                            tracker_clone
+                                .completed_id
+                                .store(id, std::sync::atomic::Ordering::Release);
+                            let _ = tracker_clone.tx.send(id);
+                        });
+                        id
+                    };
+                   
+                    let _submission_id = dev.queue.submit(Some(cb));
+                    let submission_index = WasmSubmissionIndex {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        submission_index: _submission_id,
+                        #[cfg(target_arch = "wasm32")]
+                        submission_index_wasm: wasm_submission_id,
+                    };
+                    submissions.push_back(submission_index);
+                    drop(_enter1);
+
+                    start_index = index;
+                    current_meta = last_meta;
+                }
+                finish_commands(queue_buffer, index, &mut cache);
+            }
+
+            queue_buffer.clear();
+            {
+                log::debug!(
+                    "current memory {} / {}",
+                    cache.buffers.buffer_memory(),
+                    cache.buffers.max_memory_allowed()
+                );
+                cache.mappings.finish();
+                cache.remove_unused();
+            }
+            return Ok(submissions.pop_back());
+        }
+        Ok(None)
+    }
+}
 
 fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: &mut ModelCache) {
     let global_index = command_buffer.global_command_index();
@@ -911,7 +932,9 @@ fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: 
                     let new_bindgroup = BindgroupReferenceFull::new(
                         Default::default(),
                         match q.bindgroup.get_input() {
-                            BindgroupInputBase::Bindgroup0(alginment) => BindgroupInputBase::Bindgroup0(*alginment),
+                            BindgroupInputBase::Bindgroup0(alginment) => {
+                                BindgroupInputBase::Bindgroup0(*alginment)
+                            }
                             BindgroupInputBase::Bindgroup1(_, alginment) => {
                                 BindgroupInputBase::Bindgroup1(Default::default(), *alginment)
                             }
@@ -927,7 +950,7 @@ fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: 
                                     Default::default(),
                                     Default::default(),
                                     Default::default(),
-                                    *alginment
+                                    *alginment,
                                 )
                             }
                         },
@@ -936,7 +959,10 @@ fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: 
                     let mut meta: Vec<u32> =
                         command_buffer.get_meta()[q.meta as usize..next_meta].into();
 
-                    _cache.shader.loader_cache.normalize_debug_meta(q.pipeline.0, &mut meta);
+                    _cache
+                        .shader
+                        .loader_cache
+                        .normalize_debug_meta(q.pipeline.0, &mut meta);
 
                     let debug_info = crate::device::DebugPipelineRecording {
                         x: q.x,
@@ -990,12 +1016,11 @@ fn end_debug_queue(
         .store(global_index, std::sync::atomic::Ordering::Relaxed);
 }
 
-
-/**************** WGPU FUNCTIONS: ****************/ 
+/**************** WGPU FUNCTIONS: ****************/
 
 #[instrument(skip(device, shader))]
 ///Creates a wgpu shaderModule
-pub fn get_shader(device: &wgpu::Device, shader: &str) -> wgpu::ShaderModule {
+pub(crate) fn get_shader(device: &wgpu::Device, shader: &str) -> wgpu::ShaderModule {
     //since wgpu v25.x the performance drastically decreased (e.g. llama2-c 15-m model has:
     // wgpu v24.0.5: (~332,284 token/sec)
     // wgpu v25.0.2: (~215,598 token/sec)
@@ -1007,20 +1032,25 @@ pub fn get_shader(device: &wgpu::Device, shader: &str) -> wgpu::ShaderModule {
     //to mitigate this performance drop, we use create_shader_module_trusted without bounds checks:
     //wgpu v27.0.1(bounds_checks: false, force_loop_bounding: false): (~330,496 token/sec)
 
-    
-    unsafe{
-        let cs_module = device.create_shader_module_trusted(wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
-        }, wgpu::ShaderRuntimeChecks {bounds_checks:true, force_loop_bounding:true, ray_query_initialization_tracking: true });
+    unsafe {
+        let cs_module = device.create_shader_module_trusted(
+            wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
+            },
+            wgpu::ShaderRuntimeChecks {
+                bounds_checks:  false,
+                force_loop_bounding:  false,
+                ray_query_initialization_tracking: true,
+            },
+        );
         cs_module
     }
 }
 
-
 #[instrument(skip(dev, size))]
 ///Creates a wgpu buffer
-pub fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
+pub(crate) fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
     dev.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size,
@@ -1033,7 +1063,7 @@ pub fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
 
 #[instrument(skip(dev, cache, bindgroup))]
 ///Creates a wgpu bindgroup
-pub fn create_bindgroup(
+pub(crate) fn create_bindgroup(
     dev: &WgpuDevice,
     bindgroup: CachedBindgroupFull,
     cache: &ModelCache,
@@ -1087,10 +1117,7 @@ pub fn create_bindgroup(
 
     match bindgroup.get_input() {
         CachedBindgroupInput::Bindgroup0(_) => {
-            let entries = &[
-                dest_buffer_bingdgroup_entry,
-                meta_entry,
-            ];
+            let entries = &[dest_buffer_bingdgroup_entry, meta_entry];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: bind_group_layout,
@@ -1101,7 +1128,7 @@ pub fn create_bindgroup(
             let entries = &[
                 dest_buffer_bingdgroup_entry,
                 meta_entry,
-                create_buffer_entry(2, buffer_input1)
+                create_buffer_entry(2, buffer_input1),
             ];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -1114,7 +1141,7 @@ pub fn create_bindgroup(
                 dest_buffer_bingdgroup_entry,
                 meta_entry,
                 create_buffer_entry(2, buffer_input1),
-                create_buffer_entry(3, buffer_input2)
+                create_buffer_entry(3, buffer_input2),
             ];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -1128,7 +1155,7 @@ pub fn create_bindgroup(
                 meta_entry,
                 create_buffer_entry(2, buffer_input1),
                 create_buffer_entry(3, buffer_input2),
-                create_buffer_entry(4, buffer_input3)
+                create_buffer_entry(4, buffer_input3),
             ];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -1140,92 +1167,69 @@ pub fn create_bindgroup(
 }
 
 #[instrument(skip(dev))]
-pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
-    let mut command_queue = dev.command_queue.lock().unwrap();
-    if !command_queue.command_queue.is_empty() {
-        flush_gpu_command(dev, &mut command_queue)?;
-        if let Some(buffer) = &command_queue.last_buffer {
-            let cache = dev.cache.lock().unwrap();
-            if let Some(buffer) = cache.buffers.get_buffer(buffer) {
-                copy_to_staging_probe(dev, buffer.buffer());
-            }
-        }
-
-        return pollster::block_on(synchronize_device(dev));
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
+    if let Some(last_submission_index) = flush_gpu_command(dev)?{
+        wait_for_submission(dev, last_submission_index)?;
     }
     Ok(())
 }
 
 #[instrument(skip(dev))]
-pub async fn synchronize_async(dev: &WgpuDevice) -> crate::Result<()> {
-    let mut command_queue = dev.command_queue.lock().unwrap();
-    if !command_queue.command_queue.is_empty() {
-        flush_gpu_command_async(dev, &mut command_queue).await?;
-        if let Some(buffer) = &command_queue.last_buffer {
-            let cache = dev.cache.lock().unwrap();
-            if let Some(buffer) = cache.buffers.get_buffer(buffer) {
-                copy_to_staging_probe(dev, buffer.buffer());
-            }
-        }
-        return synchronize_device(dev).await;
+pub(crate) async fn synchronize_async(dev: &WgpuDevice) -> crate::Result<()> {
+    if let Some(last_submission_index) = maybe_await!(flush_gpu_command(dev))?{
+        maybe_await!(wait_for_submission(dev, last_submission_index))?;
     }
     Ok(())
 }
 
-#[instrument(skip(dev))]
-async fn synchronize_device(dev: &WgpuDevice) -> crate::Result<()> {
-    wait_for_gpu_buffer_async(dev).await
+//when on wasm we wait until the submission_index_wasm has finished by waiting on the on_submitted_work_done callback of the commandBuffer
+//otherwise we use the wgpu submission index to poll and wait synchron for the submission_index
+pub(crate) struct WasmSubmissionIndex {
+    #[cfg(target_arch = "wasm32")]
+    submission_index_wasm: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    submission_index: wgpu::SubmissionIndex,
+}
+
+//when on wasm we wait until the submission_index_wasm has finished by waiting on the on_submitted_work_done callback of the commandBuffer
+//otherwise we use the wgpu submission index to poll and wait synchron for the submission_index
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn wait_for_submission(
+    dev: &WgpuDevice,
+    index: WasmSubmissionIndex,
+) -> crate::Result<()> {
+    dev.device.poll(wgpu::wgt::PollType::Wait {
+        submission_index: Some(index.submission_index),
+        timeout: None,
+    })?;
+    Ok(())
 }
 
 
-///Copies 4 bytes of the buffer to a staging buffer
-///This is used as a workaround to wait, until all calculation for the buffer has been finished.  
-pub fn copy_to_staging_probe(dev: &WgpuDevice, buffer: &wgpu::Buffer) {
-    let mut encoder = dev
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn wait_for_submission(
+    dev: &WgpuDevice,
+    index: WasmSubmissionIndex,
+) -> crate::Result<()> {
+    // Fast path: already completed
+    if dev.submission_tracker.completed_id.load(std::sync::atomic::Ordering::Acquire)  >= index.submission_index_wasm
+    {
+        return Ok(());
+    }
 
-    let staging_buffer = &dev.staging_probe_buffer;
-
-    encoder.copy_buffer_to_buffer(buffer, 0, staging_buffer, 0, 4);
-
-    // Submits command encoder for processing
-    dev.queue.submit(Some(encoder.finish()));
-}
-
-#[instrument(skip(dev))]
-//wait for the current staging buffer,
-//the buffer one wants to
-pub async fn wait_for_gpu_buffer_async(dev: &WgpuDevice) -> crate::Result<()> {
-    let staging_buffer = &dev.staging_probe_buffer;
-
-    // Note that we're not calling `.await` here.
-    let buffer_slice = staging_buffer.slice(..);
-    // Sets the buffer up for mapping, sending over the result of the mapping back to us when it is finished.
-    let (sender, receiver) = flume::bounded(1);
-    buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
-
-    // Poll the device in a blocking manner so that our future resolves.
-    // In an actual application, `device.poll(...)` should
-    // be called in an event loop or on another thread.
-    dev.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-
-    // Awaits until `buffer_future` can be read from
-    if let Ok(Ok(())) = receiver.recv_async().await {
-        staging_buffer.unmap(); // Unmaps buffer from memory
-                                // If you are familiar with C++ these 2 lines can be thought of similarly to:
-                                //   delete myPointer;
-                                //   myPointer = NULL;
-                                // It effectively frees the memory
-                                // Returns data from buffer
-        Ok(())
-    } else {
-        panic!("failed to run compute on gpu!")
+    // Slow path: wait on channel
+    loop {
+        let completed = dev.submission_tracker.rx.recv_async().await.unwrap();
+        if completed >= index.submission_index_wasm {
+            return Ok(());
+        }
     }
 }
 
 #[instrument(skip(dev, buffer))]
-pub async fn read_from_buffer_async<T: bytemuck::Pod>(
+#[cfg(feature = "wgpu_debug")]
+pub(crate) async fn read_from_buffer_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &wgpu::Buffer,
 ) -> crate::Result<Vec<T>> {
@@ -1249,7 +1253,7 @@ pub async fn read_from_buffer_async<T: bytemuck::Pod>(
     read_from_staging_buffer_async(dev, staging_buffer).await
 }
 
-fn copy_buffer_to_staging_buffer(dev: &WgpuDevice, buffer : &wgpu::Buffer) -> wgpu::Buffer{
+fn copy_buffer_to_staging_buffer(dev: &WgpuDevice, buffer: &wgpu::Buffer) -> wgpu::Buffer {
     let dest_size = buffer.size();
     let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -1266,16 +1270,16 @@ fn copy_buffer_to_staging_buffer(dev: &WgpuDevice, buffer : &wgpu::Buffer) -> wg
     // Submits command encoder for processing
     dev.queue.submit(Some(encoder.finish()));
     staging_buffer
-} 
+}
 
 #[instrument(skip(dev))]
-pub async fn read_from_buffer_reference_async<T: bytemuck::Pod>(
+pub(crate) async fn read_from_buffer_reference_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
-    buffer_reference : BufferReferenceId
+    buffer_reference: BufferReferenceId,
 ) -> crate::Result<Vec<T>> {
-
-    let mut command_queue = dev.command_queue.lock().unwrap();
-    flush_gpu_command_async(dev, &mut command_queue).await?; //send all previous commands to the gpu
+    {
+        maybe_await!(flush_gpu_command(dev))?; //send all previous commands to the gpu
+    }
     let staging_buffer;
     {
         let cache = dev.cache.lock().unwrap();
@@ -1294,15 +1298,14 @@ pub async fn read_from_buffer_reference_async<T: bytemuck::Pod>(
             panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer Reference")
         }
     }
-   
+
     read_from_staging_buffer_async(dev, staging_buffer).await
 }
-
 
 #[instrument(skip(dev, staging_buffer))]
 async fn read_from_staging_buffer_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
-    staging_buffer : wgpu::Buffer
+    staging_buffer: wgpu::Buffer,
 ) -> crate::Result<Vec<T>> {
     // Note that we're not calling `.await` here.
     let buffer_slice = staging_buffer.slice(..);
@@ -1317,7 +1320,9 @@ async fn read_from_staging_buffer_async<T: bytemuck::Pod>(
     // Poll the device in a blocking manner so that our future resolves.
     // In an actual application, `device.poll(...)` should
     // be called in an event loop or on another thread.
-    dev.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    dev.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
 
     // Awaits until `buffer_future` can be read from
     if let Ok(Ok(())) = receiver.recv_async().await {

@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use crate::{queue_buffer::OpIsInplaceable, wgpu_functions::KernelConstId};
+use crate::queue_buffer::OpIsInplaceable;
 use crate::cache::BindGroupReference;
 /// A struct representing the LoaderIndex
 #[derive(Copy, Clone, Debug, PartialEq, Hash, Eq)]

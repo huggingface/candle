@@ -13,7 +13,7 @@ use crate::cache::BindGroupReference;
 use crate::shader_loader;
 use crate::wgpu_functions::KernelConstId;
 
-use super::cache::{BindgroupAlignment, BindgroupAlignmentLayout,BufferReferenceId, CachedBindgroupId, CachedBufferId,BindgroupInputBase};
+use super::cache::{BindgroupAlignment, BindgroupAlignmentLayout,BufferReferenceId, CachedBindgroupId ,BindgroupInputBase};
 use super::util::{ObjectToIdMapper, ToU32};
 use super::wgpu_functions::{MetaArray, ConstArray, ToKernelParameterMeta};
 
@@ -97,10 +97,6 @@ pub struct QueueBufferInner {
 
     ///Current position inside the MetaArray
     pub(crate) current_meta: u32,
-    
-    ///The last destination bufffer, of the last call 
-    ///will be used as a workaround to wait for the last command queue
-    pub(crate) last_buffer: Option<CachedBufferId>, 
 }
 
 
@@ -114,7 +110,6 @@ impl QueueBufferInner {
             const_array: ConstArray::new(),
             const_id_map: ObjectToIdMapper::new(),
             id_to_const_array: Vec::new(),
-            last_buffer: None,
             global_command_index: 1,
         }
     }
@@ -139,97 +134,6 @@ impl QueueBufferInner {
     pub fn get_meta_mut(&mut self) -> &mut Vec<u32> {
         &mut self.meta_array.0
     }
-
-    // pub fn add_layout(
-    //     &mut self,
-    //     layout: &Layout,
-    //     is_contiguous: bool,
-    //     constant_dims: Constants,
-    //     constant_is_startofsset_zero: Constants,
-    //     constant_is_contiguous: Constants,
-    // ) {
-    //     let shape = layout.shape().dims();
-    //     let stride = layout.stride();
-
-    //     self.add_const(constant_dims, shape.len());
-    //     if layout.start_offset() != 0 {
-    //         self.add_const(constant_is_startofsset_zero, false);
-    //         self.add(layout.start_offset());
-    //     }
-
-    //     if is_contiguous {
-    //         self.add(layout.shape().elem_count());
-    //     } else {
-    //         self.add_const(constant_is_contiguous, false);
-
-    //         self.get_meta_mut().extend(shape.iter().map(|&x| x as u32));
-    //         self.get_meta_mut().extend(stride.iter().map(|&x| x as u32));
-    //     }
-    // }
-
-    // pub fn add_layout1(&mut self, layout: &Layout) {
-    //     self.add_layout(
-    //         layout,
-    //         layout.is_contiguous(),
-    //         Constants::ConstDims1,
-    //         Constants::ConstIsStartoffsetZero1,
-    //         Constants::ConstIsContiguous1,
-    //     );
-    // }
-
-    // pub fn add_layout2(&mut self, layout: &Layout) {
-    //     self.add_layout(
-    //         layout,
-    //         layout.is_contiguous(),
-    //         Constants::ConstDims2,
-    //         Constants::ConstIsStartoffsetZero2,
-    //         Constants::ConstIsContiguous2,
-    //     );
-    // }
-
-    // pub fn add_layout3(&mut self, layout: &Layout) {
-    //     self.add_layout(
-    //         layout,
-    //         layout.is_contiguous(),
-    //         Constants::ConstDims3,
-    //         Constants::ConstIsStartoffsetZero3,
-    //         Constants::ConstIsContiguous3,
-    //     );
-    // }
-
-    // //forces to write the shapes and strides
-    // pub fn add_layout1_non_contiguous(&mut self, layout: &Layout) {
-    //     self.add_layout(
-    //         layout,
-    //         false,
-    //         Constants::ConstDims1,
-    //         Constants::ConstIsStartoffsetZero1,
-    //         Constants::ConstIsContiguous1,
-    //     );
-    // }
-
-    // pub fn add_layout2_non_contiguous(&mut self, layout: &Layout) {
-    //     self.add_layout(
-    //         layout,
-    //         false,
-    //         Constants::ConstDims2,
-    //         Constants::ConstIsStartoffsetZero2,
-    //         Constants::ConstIsContiguous2,
-    //     );
-    // }
-
-    // pub fn add_layout3_non_contiguous(&mut self, layout: &Layout) {
-    //     self.add_layout(
-    //         layout,
-    //         false,
-    //         Constants::ConstDims3,
-    //         Constants::ConstIsStartoffsetZero3,
-    //         Constants::ConstIsContiguous3,
-    //     );
-    // }
-
-
-
 
     pub fn get_pipeline(
         &mut self,

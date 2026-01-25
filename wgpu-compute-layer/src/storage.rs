@@ -1,3 +1,5 @@
+use crate::wgpu_functions;
+
 use super::{
     cache::BufferReferenceId,
     device::WgpuDevice
@@ -64,6 +66,11 @@ impl WgpuStorage {
     pub fn size_in_bytes(&self) -> usize {
         self.size as usize
     }
+
+    pub async fn read_from_buffer_reference_async<T: bytemuck::Pod>(&self) -> crate::Result<Vec<T>> {
+       return wgpu_functions::read_from_buffer_reference_async(self.device(), self.buffer()).await;
+    }
+
 }
 
 impl Drop for WgpuStorage {

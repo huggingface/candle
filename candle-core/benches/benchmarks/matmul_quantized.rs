@@ -389,12 +389,7 @@ fn test_functions(
             GGLM_TYPE
         );
     }
-    #[cfg(feature = "wgpu")]
-    if let candle_core::Device::Wgpu(gpu) = &device {
-        gpu.inner_device().print_bindgroup_reuseinfo2();
-    };
 }
-
 
 fn test_matmul_group(c: &mut Criterion, bmnk: (usize, usize, usize, usize), dtype : GgmlDType) {
     let (b, m, n, k) = bmnk;

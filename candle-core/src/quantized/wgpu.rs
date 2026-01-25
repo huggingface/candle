@@ -532,7 +532,7 @@ impl QWgpuStorage {
     }
 
     pub async fn data_async(&self) -> Result<Vec<u8>> {
-        Ok(wgpu_compute_layer::wgpu_functions::read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?)
+        Ok(self.storage.0.read_from_buffer_reference_async().await?)
     }
 
     pub fn data(&self) -> Result<Vec<u8>> {

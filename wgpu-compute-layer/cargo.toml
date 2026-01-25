@@ -27,6 +27,10 @@ tracing = {workspace = true, features = ["release_max_level_off"]}
 wgpu-compute-layer-macro = {path = "./wgpu-compute-layer-macro"}
 zip = { workspace = true , optional = true}
 
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] } #needed for cargo clippy --target wasm32-unknown-unknown
+
 [features]
 wgpu_debug = ["dep:serde", "dep:serde_json", "dep:zip"]
 wgpu_debug_serialize = ["dep:serde", "dep:serde_json"]

@@ -168,10 +168,6 @@ fn test_functions(
             (false, false),
         );
     }
-    #[cfg(feature = "wgpu")]
-    if let candle_core::Device::Wgpu(gpu) = &device {
-        gpu.inner_device().print_bindgroup_reuseinfo2();
-    };
 }
 
 fn criterion_benchmark(c: &mut Criterion) {

@@ -7,13 +7,16 @@ use std::hash::Hash;
 use tracing::instrument;
 use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
 
-use crate::{shader_loader, wgpu_functions};
 use crate::DType;
+use crate::{shader_loader, wgpu_functions};
 
 #[cfg(feature = "wgpu_debug")]
-use super::debug_info::{self, PerformanceMeasurmentDebugInfo, MInfo, Measurements, ShaderInfo};
+use super::debug_info::{self, MInfo, Measurements, PerformanceMeasurmentDebugInfo, ShaderInfo};
 
-use super::cache::{BindGroupReference, BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase, BindgroupLayouts, BufferReferenceId, ModelCache};
+use super::cache::{
+    BindGroupReference, BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase,
+    BindgroupLayouts, BufferReferenceId, ModelCache,
+};
 use super::queue_buffer::{MlQueue, MlQueueDispatch, PipelineReference};
 use super::util::ToU64;
 use super::WgpuStorage;
@@ -40,8 +43,15 @@ pub struct DebugPipelineRecording {
     pub count: u32,
 }
 
-//static DEVICE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
+pub struct InternalCounter {
+    pub buffer_counter: u32,
+    pub buffer_reuse_counter : u32,
+    pub bindgroup_counter: u32,
+    pub cached_bindgroup_use_counter: u32,
+    pub unary_inplace_counter: u32,
+    pub binary_inplace_counter: u32,
+    pub copy_inplace_counter: u32,
+}
 
 pub enum Backend {
     /// Vulkan API (Windows, Linux, Android, MacOS via `vulkan-portability`/MoltenVK)
@@ -59,32 +69,32 @@ pub enum Backend {
 #[derive(Debug, Clone, std::marker::Copy)]
 pub struct WgpuBackends(pub u32);
 
-impl WgpuBackends{
-    pub fn vulkan() -> Self{
+impl WgpuBackends {
+    pub fn vulkan() -> Self {
         WgpuBackends(1 << Backend::Vulkan as u32)
     }
 
-    pub fn gl() -> Self{
+    pub fn gl() -> Self {
         WgpuBackends(1 << Backend::Gl as u32)
     }
 
-    pub fn metal() -> Self{
+    pub fn metal() -> Self {
         WgpuBackends(1 << Backend::Metal as u32)
     }
 
-    pub fn dx12() -> Self{
+    pub fn dx12() -> Self {
         WgpuBackends(1 << Backend::Dx12 as u32)
     }
 
-    pub fn browser_webgpu() -> Self{
+    pub fn browser_webgpu() -> Self {
         WgpuBackends(1 << Backend::BrowserWebGpu as u32)
     }
 
-    pub fn primary() -> Self{
+    pub fn primary() -> Self {
         Self::vulkan() | Self::metal() | Self::dx12() | Self::browser_webgpu()
     }
 
-    pub fn secondary() -> Self{
+    pub fn secondary() -> Self {
         Self::gl()
     }
 }
@@ -95,7 +105,7 @@ impl Default for WgpuBackends {
     }
 }
 
-impl std::ops::BitOr for WgpuBackends{
+impl std::ops::BitOr for WgpuBackends {
     type Output = WgpuBackends;
 
     fn bitor(self, rhs: Self) -> Self::Output {
@@ -103,7 +113,7 @@ impl std::ops::BitOr for WgpuBackends{
     }
 }
 
-impl std::ops::BitAnd for WgpuBackends{
+impl std::ops::BitAnd for WgpuBackends {
     type Output = bool;
 
     fn bitand(self, rhs: Self) -> Self::Output {
@@ -111,49 +121,49 @@ impl std::ops::BitAnd for WgpuBackends{
     }
 }
 
-
 #[derive(Debug)]
-pub struct WgpuDeviceConfig{
+pub struct WgpuDeviceConfig {
     ///the size of the buffer used for storing meta information (e.g. input layouts)
-    pub meta_buffer_size : u32,
-    ///specifies the maximum number of floating point operations to be queued in a single command buffer. 
-    ///(For example, a matrix multiplication of 1000x1000 * 1000x1000 would be 1,000,000 operations, 
-    ///so only 2 of these multiplications can be queued in a command buffer if max_workload_size is set to 2,000,000). 
-    pub max_workload_size : u64,
-    ///Maximum size for cached wgpu::buffers. When this size is reached, free buffers will be deleted until only 75% of this maximum size is used. 
+    pub meta_buffer_size: u32,
+    ///specifies the maximum number of floating point operations to be queued in a single command buffer.
+    ///(For example, a matrix multiplication of 1000x1000 * 1000x1000 would be 1,000,000 operations,
+    ///so only 2 of these multiplications can be queued in a command buffer if max_workload_size is set to 2,000,000).
+    pub max_workload_size: u64,
+    ///Maximum size for cached wgpu::buffers. When this size is reached, free buffers will be deleted until only 75% of this maximum size is used.
     ///if this value is too low for the desired model, performance may drop significantly (e.g. the model requires at least 2gb of data, if this value is e.g. 100mb, all free buffers will be cleared after every command).
-    pub buffer_cached_max_allowed_size : u64,
+    pub buffer_cached_max_allowed_size: u64,
 
-    ///Whether created buffers are cached and reused. 
+    ///Whether created buffers are cached and reused.
     ///If set to false, a new wgpu::Buffer is created for each tensor used.
-    pub use_cache : bool, 
+    pub use_cache: bool,
 
-    ///When data is copied from the CPU to the WGPU device, all previous commands may be flushed to free up other buffers for reuse. 
-    ///However, on a webGPU this may not be optimal as we cannot wait for commands to finish (as this function is not asynchronous). 
-    pub flush_gpu_before_buffer_init : bool,
+    ///When data is copied from the CPU to the WGPU device, all previous commands may be flushed to free up other buffers for reuse.
+    ///However, on a webGPU this may not be optimal as we cannot wait for commands to finish (as this function is not asynchronous).
+    pub flush_gpu_before_buffer_init: bool,
 
     ///The buffers used for previously flushed gpu commands are cached to improve performance when finding buffers for future calls of the same model.  
     ///buffer_mapping_size' specifies how many previously flushed gpu commands are cached.
-    pub buffer_mapping_size : u32,
+    pub buffer_mapping_size: u32,
 
     ///Defines the backend to use (Vulkan, Metal, Dx12,GL or WebGpu)
-    pub backend : WgpuBackends
+    pub backend: WgpuBackends,
 }
 
 impl Default for WgpuDeviceConfig {
     fn default() -> WgpuDeviceConfig {
         WgpuDeviceConfig {
-            meta_buffer_size : 10*1024*1024,
-            max_workload_size :  1024u64*1024*1024*2, 
-            buffer_cached_max_allowed_size : ((1024.0*1024.0*1024.0)*(7.3)) as u64,                                        
-            use_cache : true,
-            flush_gpu_before_buffer_init : true,
-            buffer_mapping_size : 3,
-            backend: WgpuBackends::metal() | WgpuBackends::vulkan() | WgpuBackends::browser_webgpu(), //directx shader compilation is much slower than vulkan. (like 300secs vs 5s there is a faster copmiler, but this would need additional .dlls, and with this compilations needs 30s as well)
+            meta_buffer_size: 10 * 1024 * 1024,
+            max_workload_size: 1024u64 * 1024 * 1024 * 2,
+            buffer_cached_max_allowed_size: ((1024.0 * 1024.0 * 1024.0) * (7.3)) as u64,
+            use_cache: true,
+            flush_gpu_before_buffer_init: true,
+            buffer_mapping_size: 3,
+            backend: WgpuBackends::metal()
+                | WgpuBackends::vulkan()
+                | WgpuBackends::browser_webgpu(), //directx shader compilation is much slower than vulkan. (like 300secs vs 5s there is a faster copmiler, but this would need additional .dlls, and with this compilations needs 30s as well)
         }
     }
 }
-
 
 #[derive(Debug)]
 pub struct WgpuDeviceInner {
@@ -169,8 +179,6 @@ pub struct WgpuDeviceInner {
 
     pub(crate) bindgroup_layouts: BindgroupLayouts,
 
-    pub(crate) staging_probe_buffer: wgpu::Buffer, //wait for submission is not supported on wgpu, we use a mapping to a staging buffer as a work around.
-
     pub(crate) cache: Mutex<ModelCache>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
     //debug counter
     #[cfg(feature = "wgpu_debug")]
@@ -179,29 +187,41 @@ pub struct WgpuDeviceInner {
     pub(crate) configuration: WgpuDeviceConfig,
 
     extensions: Mutex<DeviceExtensions>,
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) submission_tracker: Arc<SubmissionTracker>, //alows to wait async for a speficic wgpu submission
 }
 
 #[derive(Debug)]
-pub struct DeviceExtensions {
+#[cfg(target_arch = "wasm32")]
+pub(crate) struct SubmissionTracker {
+    pub(crate) next_id: std::sync::atomic::AtomicU64,
+    pub(crate) completed_id: std::sync::atomic::AtomicU64,
+    pub(crate) tx: flume::Sender<u64>,
+    pub(crate) rx: flume::Receiver<u64>,
+}
+
+#[derive(Debug)]
+struct DeviceExtensions {
     map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 impl DeviceExtensions {
-    pub fn new() -> Self {
-        Self { map: HashMap::new() }
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
     }
 
-    pub fn get<T: Any>(&self) -> Option<&T> {
-        self.map.get(&TypeId::of::<T>())?
-            .downcast_ref::<T>()
+    fn get<T: Any>(&self) -> Option<&T> {
+        self.map.get(&TypeId::of::<T>())?.downcast_ref::<T>()
     }
 
-    pub fn get_mut<T: Any>(&mut self) -> Option<&mut T> {
-        self.map.get_mut(&TypeId::of::<T>())?
-            .downcast_mut::<T>()
+    fn get_mut<T: Any>(&mut self) -> Option<&mut T> {
+        self.map.get_mut(&TypeId::of::<T>())?.downcast_mut::<T>()
     }
 
-    pub fn insert<T: Any + Send + Sync>(&mut self, value: T) {
+    fn insert<T: Any + Send + Sync>(&mut self, value: T) {
         self.map.insert(TypeId::of::<T>(), Box::new(value));
     }
 }
@@ -230,10 +250,7 @@ pub struct WgpuDebugInfo {
 
 impl WgpuDevice {
     #[instrument]
-    pub async fn create(
-        _: usize,
-        configuration: WgpuDeviceConfig,
-    ) -> crate::Result<Self> {
+    pub async fn create(_: usize, configuration: WgpuDeviceConfig) -> crate::Result<Self> {
         let mut backend = wgpu::Backends::empty();
         if configuration.backend & WgpuBackends::vulkan() {
             backend.insert(Backends::VULKAN);
@@ -254,7 +271,7 @@ impl WgpuDevice {
         let instance = wgpu::Instance::new(&InstanceDescriptor {
             backends: backend,
             flags: InstanceFlags::default(),
-            backend_options: wgpu::BackendOptions{
+            backend_options: wgpu::BackendOptions {
                 dx12: wgpu::Dx12BackendOptions {
                     shader_compiler: wgpu::Dx12Compiler::Fxc,
                     ..Default::default()
@@ -310,15 +327,13 @@ impl WgpuDevice {
         log::debug!("Features: {:?}", features);
         log::debug!("Limits: {:?}", limits);
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: features,
-                    required_limits: limits,
-                    memory_hints: wgpu::MemoryHints::Performance,
-                    ..Default::default()
-                }
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: features,
+                required_limits: limits,
+                memory_hints: wgpu::MemoryHints::Performance,
+                ..Default::default()
+            })
             .await
             .map_err(|err| err.to_string())?;
         log::info!("Device Requested");
@@ -336,16 +351,19 @@ impl WgpuDevice {
         let device_limits = device.limits();
         let bindgroup_layouts = BindgroupLayouts::new(&device);
 
-        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 16,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         let max_memory_size: u64 = device_limits
             .max_buffer_size
             .min(device_limits.max_storage_buffer_binding_size as u64);
+
+        #[cfg(target_arch = "wasm32")]
+        let (tx, rx) = flume::unbounded();
+        #[cfg(target_arch = "wasm32")]
+        let tracker = SubmissionTracker {
+            next_id: std::sync::atomic::AtomicU64::new(1),
+            completed_id: std::sync::atomic::AtomicU64::new(0),
+            tx,
+            rx,
+        };
 
         Ok(WgpuDevice {
             inner: Arc::new(WgpuDeviceInner {
@@ -363,16 +381,12 @@ impl WgpuDevice {
                     max_memory_size,
                 )),
                 bindgroup_layouts,
-                staging_probe_buffer: staging_buffer,
                 extensions: Mutex::new(DeviceExtensions::new()),
                 configuration,
+                #[cfg(target_arch = "wasm32")]
+                submission_tracker: Arc::new(tracker),
             }),
         })
-    }
-
-    fn flush_gpu_command(&self) -> crate::Result<()> {
-        let mut queue = self.command_queue.lock().unwrap();
-        wgpu_functions::flush_gpu_command(self, &mut queue)
     }
 
     //allows to load const debug info(for simulating calls)
@@ -434,10 +448,6 @@ impl WgpuDevice {
         command_queue.command_queue.push(q);
     }
 
-    pub async fn synchronize_async(&self) -> crate::Result<()> {
-        wgpu_functions::synchronize_async(self).await
-    }
-
     pub fn is_dtype_available(&self, dtype: DType) -> bool {
         match dtype {
             DType::U32 => true,
@@ -449,13 +459,8 @@ impl WgpuDevice {
         }
     }
 
-
     #[instrument(skip(self, size))]
-    pub fn alloc_uninit_size<T: ToU64>(
-        &self,
-        dtype: crate::DType,
-        size: T,
-    ) -> WgpuStorage {
+    pub fn alloc_uninit_size<T: ToU64>(&self, dtype: crate::DType, size: T) -> WgpuStorage {
         let size = size.to_u64() * dtype.size_in_bytes() as u64;
         let buffer;
         {
@@ -476,16 +481,17 @@ impl WgpuDevice {
     }
 
     #[instrument(skip(self, data))]
-    pub fn alloc_from_bytes(
-        &self,
-        dtype: crate::DType,
-        data: &[u8],
-    ) -> crate::Result<WgpuStorage> {
+    pub fn alloc_from_bytes(&self, dtype: crate::DType, data: &[u8]) -> crate::Result<WgpuStorage> {
         let size = data.len();
         let buffer;
         {
             if self.configuration.flush_gpu_before_buffer_init {
-                self.flush_gpu_command()?;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if let Some(index) = wgpu_functions::flush_gpu_command(self)? {
+                        wgpu_functions::wait_for_submission(self, index)?;
+                    }
+                }
             }
             let mut cache = self.cache.lock().unwrap();
             buffer = cache.create_buffer_reference_init(self, data, true);
@@ -493,7 +499,7 @@ impl WgpuDevice {
         Ok(WgpuStorage::new(buffer, self.clone(), dtype, size as u64))
     }
 
-    /**************** Virtual Bindgroups: ****************/ 
+    /**************** Virtual Bindgroups: ****************/
     pub fn create_bind_group_input0(
         &self,
         buffer_dest: BufferReferenceId,
@@ -572,7 +578,7 @@ impl WgpuDevice {
             buffer_input1,
             buffer_input2,
             buffer_input3,
-            BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment,alignment),
+            BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment, alignment),
         )
     }
 
@@ -590,15 +596,12 @@ impl WgpuDevice {
             BindgroupInputBase::Bindgroup3(buffer_input1, buffer_input2, buffer_input3, alignment),
         )
     }
-
-    
 }
 
-impl WgpuDevice{
-
+impl WgpuDevice {
     //Full Recording
     #[cfg(feature = "wgpu_debug")]
-    pub fn start_recording_commands(&self){
+    pub fn start_recording_commands(&self) {
         let mut model_cache = self.cache.lock().unwrap();
         model_cache.full_recording.should_record = true;
         println!("start_recording_commands");
@@ -612,7 +615,6 @@ impl WgpuDevice{
         drop(model_cache);
         debug_info::create_dispatch_zip(self, output_path)
     }
-
 
     //Durations and call Count by Pipeline
     #[cfg(feature = "wgpu_debug")]
@@ -703,9 +705,12 @@ impl WgpuDevice{
                 let pipelines = &v.pipelines;
                 let s = debug_info::ShaderInfo {
                     name: shaders.loader_cache.get_shader_name(*k),
-                    pipelines: pipelines.keys().map(|pk| debug_info::PipelineInfo {
+                    pipelines: pipelines
+                        .keys()
+                        .map(|pk| debug_info::PipelineInfo {
                             name: shaders.loader_cache.get_entry_point(pk.0).to_owned(),
-                            consts: queue.id_to_const_array[pk.1].iter()
+                            consts: queue.id_to_const_array[pk.1]
+                                .iter()
                                 .map(|(s, x)| (s.to_string(), *x))
                                 .collect(),
                         })
@@ -743,7 +748,10 @@ impl WgpuDevice{
             format!("{folder}wgpu_{name}_test_{version}_used_pipelines.json"),
             pipelines,
         )?;
-        std::fs::write(format!("{folder}wgpu_{name}_test_{version}_used_consts.json"), consts)?;
+        std::fs::write(
+            format!("{folder}wgpu_{name}_test_{version}_used_consts.json"),
+            consts,
+        )?;
 
         let cache = self.cache.lock().unwrap();
         debug_info::save_list(
@@ -766,47 +774,61 @@ impl WgpuDevice{
             serde_json::to_string(consts).unwrap(),
         )
     }
+
+    pub fn get_internal_counters(&self) -> InternalCounter {
+        let cache = self.cache.lock().unwrap();
+        InternalCounter {
+            buffer_counter: cache.buffers.buffer_counter(),
+            buffer_reuse_counter : cache.buffers.buffer_reuse_counter(),
+
+            binary_inplace_counter: cache.binary_inplace_counter,
+            unary_inplace_counter: cache.unary_inplace_counter,
+            copy_inplace_counter: cache.copy_inplace_counter,
+
+            bindgroup_counter: cache.bindgroups.bindgroup_counter(),
+            cached_bindgroup_use_counter: cache.bindgroups.cached_bindgroup_use_counter(),
+        }
+    }
 }
 
 impl WgpuDevice {
     #[cfg(target_arch = "wasm32")]
     pub fn synchronize(&self) -> crate::Result<()> {
-        panic!("Synchronize is not possible on wasm. (on_submitted_work_done is currently not implemented in wgpu). In addition synchronize can only be handled async");
+        panic!("Synchronize is not possible on wasm. use synchronize_async");
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn synchronize(&self) -> crate::Result<()> {
         wgpu_functions::synchronize(self)
     }
+
+    pub async fn synchronize_async(&self) -> crate::Result<()> {
+        wgpu_functions::synchronize_async(self).await
+    }
 }
 
 impl WgpuDevice {
-    pub fn with_extension<T: Any, R>(
-        &self,
-        f: impl FnOnce(&T) -> R,
-    ) -> Option<R> {
+    pub fn with_extension<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         let ext = self.extensions.lock().unwrap();
         ext.get::<T>().map(f)
     }
 
-    pub fn with_extension_mut<T: Any, R>(
-        &self,
-        f: impl FnOnce(&mut T) -> R,
-    ) -> Option<R> {
+    pub fn with_extension_mut<T: Any, R>(&self, f: impl FnOnce(&mut T) -> R) -> Option<R> {
         let mut ext = self.extensions.lock().unwrap();
         ext.get_mut::<T>().map(f)
     }
 
-    pub fn set_extension<T: Any + Send + Sync>(
-        &self,
-        value: T,
-    ) {
+    pub fn set_extension<T: Any + Send + Sync>(&self, value: T) {
         let mut ext = self.extensions.lock().unwrap();
         ext.insert(value);
     }
 }
 
 impl WgpuDevice {
-    pub fn create_buffer_reference<T: ToU64>(&self, size: T, referenced_by_candle_storage: bool) -> BufferReferenceId {
+    pub fn create_buffer_reference<T: ToU64>(
+        &self,
+        size: T,
+        referenced_by_candle_storage: bool,
+    ) -> BufferReferenceId {
         self.cache
             .lock()
             .unwrap()
@@ -821,7 +843,7 @@ impl WgpuDevice {
         f(&mut cache.shader.loader_cache)
     }
 
-     pub fn add_wgpu_shader_loader<T: shader_loader::ShaderLoader + 'static + Send + Sync>(
+    pub fn add_wgpu_shader_loader<T: shader_loader::ShaderLoader + 'static + Send + Sync>(
         &self,
         index: shader_loader::LoaderIndex,
         shader_loader: impl Fn() -> T,

@@ -73,7 +73,7 @@ ug = ["dep:candle-ug"]
 wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing", "dep:rustc-hash", "dep:wgpu-compute-layer"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize", "wgpu-compute-layer/wgpu_debug"]
 wgpu_debug_serialize = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize", "wgpu-compute-layer/wgpu_debug_serialize"]
-default=["wgpu_debug"]
+default=[]
 
 [[bench]]
 name = "bench_main"

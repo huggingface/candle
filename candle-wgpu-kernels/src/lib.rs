@@ -49,9 +49,9 @@ impl Constants {
     }
 }
 
-impl Into<KernelConstId> for Constants {
-    fn into(self) -> KernelConstId {
-        KernelConstId(self.get_entry_point())
+impl From<Constants> for KernelConstId {
+    fn from(val: Constants) -> Self {
+        KernelConstId(val.get_entry_point())
     }
 }
 

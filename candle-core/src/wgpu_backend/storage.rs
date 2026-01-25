@@ -1,6 +1,6 @@
 use crate::{DType, Layout, Shape};
 
-use wgpu_compute_layer::{cache::BufferReferenceId, wgpu_functions::read_from_buffer_reference_async};
+use wgpu_compute_layer::cache::BufferReferenceId;
 use super::{
     device::WgpuDevice,
     wgpu_functions::{
@@ -58,22 +58,22 @@ impl WgpuStorage {
     pub async fn to_cpu_storage_async(&self) -> crate::Result<crate::CpuStorage> {
         match self.dtype() {
             crate::DType::U32 => Ok(crate::CpuStorage::U32(
-               read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
+               self.0.read_from_buffer_reference_async().await?,
             )),
             crate::DType::F32 => Ok(crate::CpuStorage::F32(
-                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
+                self.0.read_from_buffer_reference_async().await?,
             )),
             crate::DType::U8 => Ok(crate::CpuStorage::U8(
-                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
+                self.0.read_from_buffer_reference_async().await?,
             )),
             crate::DType::I64 => Ok(crate::CpuStorage::I64(
-                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
+                self.0.read_from_buffer_reference_async().await?,
             )),
             crate::DType::F64 => Ok(crate::CpuStorage::F64(
-                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
+                self.0.read_from_buffer_reference_async().await?,
             )),
             crate::DType::F16 => Ok(crate::CpuStorage::F16(
-                read_from_buffer_reference_async(self.device().inner_device(), self.buffer()).await?,
+                self.0.read_from_buffer_reference_async().await?,
             )),
             _ => todo!(),
         }

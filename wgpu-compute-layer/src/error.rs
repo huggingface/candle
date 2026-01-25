@@ -11,6 +11,9 @@ pub enum Error {
     #[error("Wgpu error {0}")]
     Msg(String),
 
+   #[error(transparent)]
+    PollError(#[from] wgpu::PollError),
+
     /// Zip file format error.
     #[cfg(feature = "wgpu_debug")]
     #[error(transparent)]
@@ -41,35 +44,4 @@ impl From<String> for Error {
     fn from(e: String) -> Self {
         Error::Msg(e)
     }
-}
-
-
-
-#[macro_export]
-macro_rules! notImplemented {
-    ($x:ident) => {{
-        let name = String::from(stringify!($x));
-        return Err($crate::Error::from(
-            format!("Wgpu Function not yet Implemented {name}")
-                .to_owned(),
-        ));
-    }};
-}
-#[macro_export]
-macro_rules! wrongType {
-    ($x:ident, $ty:expr) => {{
-        let name = String::from(stringify!($x));
-        let ty = $ty;
-        return Err($crate::Error::from(
-            format!("Can not create wgpu Array of Type.{:?} (in {name})", ty)
-                .to_owned(),
-        ));
-    }};
-}
-
-#[macro_export]
-macro_rules! wgpuError {
-    ($x:expr) => {{
-        return Err($crate::Error::from($x.to_owned()));
-    }};
 }
