@@ -84,7 +84,7 @@ We also provide some command line based examples using state of the art models:
 - [StarCoder](./candle-examples/examples/bigcode/) and
   [StarCoder2](./candle-examples/examples/starcoder2/): LLM specialized to code generation.
 - [Qwen1.5](./candle-examples/examples/qwen/): Bilingual (English/Chinese) LLMs.
-- [RWKV v5 and v6](./candle-examples/examples/rwkv/): An RNN with transformer level LLM
+- [RWKV v5, v6 and v7](./candle-examples/examples/rwkv/): An RNN with transformer level LLM
   performance.
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Yi-6B / Yi-34B](./candle-examples/examples/yi/): two bilingual
@@ -223,7 +223,7 @@ If you have an addition to this list, please submit a pull request.
         - Bert.
         - Yi-6B and Yi-34B.
         - Qwen1.5, Qwen1.5 MoE, Qwen3 MoE.
-        - RWKV v5 and v6.
+        - RWKV v5, v6 and v7.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
         - Mistral 7b, and 7b instruct.
