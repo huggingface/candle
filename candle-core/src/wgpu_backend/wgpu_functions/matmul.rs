@@ -986,7 +986,7 @@ pub mod sgemm {
 
         let input1_stride_k = *input1_stride.next().unwrap_or(&1);
         let input1_stride_m = *input1_stride.next().unwrap_or(&1);
-        //let input1_stride_b = *input1_stride.next().unwrap_or(&1);
+        let input1_stride_b = *input1_stride.next().unwrap_or(&1);
 
         let input2_stride_n = *input2_stride.next().unwrap_or(&1);
         let input2_stride_k = *input2_stride.next().unwrap_or(&1);
@@ -1022,7 +1022,7 @@ pub mod sgemm {
                 params.n
             });
 
-            //queue.add(input1_stride_b); //input1_stride_b
+            queue.add(input1_stride_b); //input1_stride_b
             queue.add(layout_input1_padded.start_offset()); //input1_offset
 
             //queue.add(input2_stride_b); //input2_stride_b
@@ -1054,7 +1054,7 @@ pub mod sgemm {
                 params.n
             });
 
-            //queue.add(input1_stride_b); //input1_stride_b
+            queue.add(input1_stride_b); //input1_stride_b
             queue.add(layout_input1_padded.start_offset()); //input1_offset
 
             //queue.add(input2_stride_b); //input2_stride_b

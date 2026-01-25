@@ -24,8 +24,8 @@ override CONSTV_5 : u32 = 0u;
 
 #define op_matmul_m 1u
 
-//#define op_matmul_input1_stride_b   op_meta[4]
-#define op_matmul_input1_offset     op_meta[2]
+#define op_matmul_input1_stride_b   op_meta[2]
+#define op_matmul_input1_offset     op_meta[3]
 
 #define op_matmul_input1_stride_b 0u
 

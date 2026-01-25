@@ -16,8 +16,8 @@ override CONSTV_4 : bool = true;
 #define op_matmul_k                 op_meta[1]
 #define op_matmul_n                 op_meta[2]
 
-//#define op_matmul_input1_stride_b   op_meta[4]
-#define op_matmul_input1_offset     op_meta[3]
+#define op_matmul_input1_stride_b   op_meta[3]
+#define op_matmul_input1_offset     op_meta[4]
 
 //#define op_matmul_input2_stride_b   op_meta[6]
 //#define op_matmul_input2_offset     op_meta[4]
@@ -28,8 +28,8 @@ override CONSTV_4 : bool = true;
 #define op_matmul_is_input2_stride_n_one CONSTV_2
 #define op_matmul_is_input2_stride_k_one CONSTV_3
 
-#define op_matmul_input1_stride_k   select(op_meta[4], 1u,op_matmul_is_input1_stride_k_one)
-#define op_matmul_input1_stride_m   select(op_meta[5], 1u,op_matmul_is_input1_stride_m_one) 
+#define op_matmul_input1_stride_k   select(op_meta[5], 1u,op_matmul_is_input1_stride_k_one)
+#define op_matmul_input1_stride_m   select(op_meta[6], 1u,op_matmul_is_input1_stride_m_one) 
 
 // #define op_matmul_input2_stride_n   select(op_meta[7], 1u,op_matmul_is_input2_stride_n_one)
 // #define op_matmul_input2_stride_k   select(op_meta[8], 1u,op_matmul_is_input2_stride_k_one)

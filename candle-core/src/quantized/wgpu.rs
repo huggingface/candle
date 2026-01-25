@@ -301,7 +301,7 @@ impl QWgpuStorage {
 
         let input1_stride_k = *input1_stride.next().unwrap_or(&1);
         let input1_stride_m = *input1_stride.next().unwrap_or(&1);
-        //let input1_stride_b = *input1_stride.next().unwrap_or(&1);
+        let input1_stride_b = *input1_stride.next().unwrap_or(&1);
 
         let dst_shape = Shape::from(dst_shape);
         let dev = storage.device();
@@ -328,7 +328,7 @@ impl QWgpuStorage {
                 queue.add(k);
                 queue.add(n);
 
-                //queue.add(input1_stride_b); //input1_stride_b
+                queue.add(input1_stride_b); //input1_stride_b
                 queue.add(layout.start_offset()); //input1_offset
                                                   //queue.add(0); //input2_stride_b
                                                   //queue.add(0); //input2_ofset
