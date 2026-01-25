@@ -889,7 +889,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
             )
         }
 
-        let (b, h, t, d) = l_src.shape().dims4()?;
+        let (b, t, h, d) = l_src.shape().dims4()?;
         
         let el = b * h * t * d;
         let output_buffer = src.device().alloc_uninit_size(src.dtype(),  el);

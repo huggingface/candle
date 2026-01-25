@@ -38,11 +38,6 @@ fn rotary_emb_i(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let unbatched = CONSTV_0;
 
-    // quick guards (avoid runtime panic / OOB)
-    if (D == 0u) { return; }                 // nothing to do
-    // D must be even
-    if ((D & 1u) == 1u) { return; }
-
     let half = D / 2u;                        // number of (x0,x1) pairs per head
     let BH = B * H;
     // compute flat indices from dispatch
@@ -115,11 +110,6 @@ fn rotary_emb_c(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let unbatched = CONSTV_0;
 
-    // quick guards
-    if (D == 0u) { return; }
-    // D must be even
-    if ((D & 1u) == 1u) { return; }
-
     let half = D / 2u;                // size of each contiguous half
     let BH = B * H;
 
@@ -149,7 +139,6 @@ fn rotary_emb_c(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx1 = src_head_base + dim_idx + half;  // x1 in second half
 
     // compute rope (cos/sin) index:
-    // same mapping rules as interleaved version
     var rope_i: u32 = 0u;
     if (unbatched == 1u) {
         rope_i = i + b_idx * (T * half);
@@ -186,10 +175,8 @@ fn rotary_emb_thd(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let src_offset = op_meta[4];
     let cos_offset = op_meta[5];
     let sin_offset = op_meta[6];
-
-    // quick guards
-    if (D == 0u) { return; }
-    if ((D & 1u) == 1u) { return; }   // D must be even
+    
+    let unbatched = CONSTV_0;
 
     let half = D / 2u;
     let BH = B * H;
@@ -219,8 +206,13 @@ fn rotary_emb_thd(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx0 = src_head_base + dim_idx;          // x0
     let idx1 = src_head_base + dim_idx + half;  // x1
 
-    // THD rope tables: (T, half), broadcast across B and H
-    let rope_i: u32 = token_idx * half + dim_idx;
+    // compute rope (cos/sin) index:
+    var rope_i: u32 = 0u;
+    if (unbatched == 1u) {
+        rope_i = i + b_idx * (T * half);
+    } else {
+        rope_i = i;
+    }
 
     // load values
     let x0: DTYPE = v_input1[idx0 + src_offset];
