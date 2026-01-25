@@ -45,7 +45,7 @@ pub struct DebugPipelineRecording {
 
 pub struct InternalCounter {
     pub buffer_counter: u32,
-    pub buffer_reuse_counter : u32,
+    pub buffer_reuse_counter: u32,
     pub bindgroup_counter: u32,
     pub cached_bindgroup_use_counter: u32,
     pub unary_inplace_counter: u32,
@@ -779,7 +779,7 @@ impl WgpuDevice {
         let cache = self.cache.lock().unwrap();
         InternalCounter {
             buffer_counter: cache.buffers.buffer_counter(),
-            buffer_reuse_counter : cache.buffers.buffer_reuse_counter(),
+            buffer_reuse_counter: cache.buffers.buffer_reuse_counter(),
 
             binary_inplace_counter: cache.binary_inplace_counter,
             unary_inplace_counter: cache.unary_inplace_counter,

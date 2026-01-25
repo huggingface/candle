@@ -1,5 +1,7 @@
 use std::{
-    collections::HashMap, fs::File, sync::{Mutex, atomic::AtomicU32}
+    collections::HashMap,
+    fs::File,
+    sync::{atomic::AtomicU32, Mutex},
 };
 use wgpu::Device;
 
@@ -9,7 +11,6 @@ use serde_json::{to_string, to_writer};
 use crate::WgpuDevice;
 
 use super::device::WgpuDebugInfo;
-
 
 #[derive(Debug, Clone)]
 pub(crate) struct ShaderPerformanceMeasurmentDebugInfo {
@@ -166,8 +167,7 @@ pub struct ShaderInfo {
 
 pub fn calulate_measurment(map: &HashMap<String, Vec<WgpuDebugInfo>>) -> Vec<Measurement> {
     const NANO: f64 = 1e9;
-    map
-        .iter()
+    map.iter()
         .flat_map(|(k, data)| {
             let count = data.len();
 
@@ -271,12 +271,7 @@ pub fn get_list<T: Serialize>(measurements: &T) -> Result<String, Box<dyn std::e
     Ok(to_string(measurements)?)
 }
 
-
-
-
-
 /*****  Helper data structures for recording full debug data with input and output buffers *****/
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -288,21 +283,19 @@ pub enum NumericArray {
 }
 
 #[derive(Debug)]
-pub (crate) struct DebugRecordingWithData{
-    pub recordings : Vec<DebugPipelineRecordingWithData>,
-    pub should_record : bool,
+pub(crate) struct DebugRecordingWithData {
+    pub recordings: Vec<DebugPipelineRecordingWithData>,
+    pub should_record: bool,
 }
-
-
 
 #[derive(Debug)]
 #[cfg(feature = "wgpu_debug")]
-pub(crate) struct DebugPipelineRecordingWithData{
-    pub recording : super::DebugPipelineRecording,
-    pub(crate) v_dest : NumericArray, 
-    pub(crate) v_input1 : Option<NumericArray>, 
-    pub(crate) v_input2 : Option<NumericArray>,
-    pub(crate) v_input3 : Option<NumericArray>
+pub(crate) struct DebugPipelineRecordingWithData {
+    pub recording: super::DebugPipelineRecording,
+    pub(crate) v_dest: NumericArray,
+    pub(crate) v_input1: Option<NumericArray>,
+    pub(crate) v_input2: Option<NumericArray>,
+    pub(crate) v_input3: Option<NumericArray>,
 }
 
 #[derive(Serialize)]
@@ -327,11 +320,7 @@ struct ArrayRef<'a> {
     file: &'a str,
 }
 
-
-fn write_numeric_array<W: Write>(
-    writer: &mut W,
-    array: &NumericArray,
-) -> crate::Result<()> {
+fn write_numeric_array<W: Write>(writer: &mut W, array: &NumericArray) -> crate::Result<()> {
     match array {
         NumericArray::U8(v) => {
             for x in v {
@@ -366,33 +355,33 @@ fn array_type_name(array: &NumericArray) -> &'static str {
     }
 }
 
-
-#[cfg(feature = "wgpu_debug")]
-use zip::{ZipWriter, write::FileOptions};
-use std::io::Write;
 use serde_json::to_vec_pretty;
+use std::io::Write;
+#[cfg(feature = "wgpu_debug")]
+use zip::{write::FileOptions, ZipWriter};
 
 #[cfg(feature = "wgpu_debug")]
-pub (crate) fn create_dispatch_zip(
-    wgpu : &WgpuDevice,
-    output_path: &str
-) -> crate::Result<()> {
+pub(crate) fn create_dispatch_zip(wgpu: &WgpuDevice, output_path: &str) -> crate::Result<()> {
     let file = File::create(output_path)?;
     let mut zip = ZipWriter::new(file);
-    let options : FileOptions<()> = FileOptions::default();
+    let options: FileOptions<()> = FileOptions::default();
     let cache = wgpu.cache.lock().unwrap();
     let dispatches = &cache.full_recording.recordings;
     let loader_cache = &cache.shader.loader_cache;
-    let queue: std::sync::MutexGuard<'_, super::queue_buffer::QueueBufferInner> = wgpu.command_queue.lock().unwrap();
-     let consts = &queue.id_to_const_array;
+    let queue: std::sync::MutexGuard<'_, super::queue_buffer::QueueBufferInner> =
+        wgpu.command_queue.lock().unwrap();
+    let consts = &queue.id_to_const_array;
 
     for (i, dispatch) in dispatches.iter().enumerate() {
         let base = format!("dispatch_{}/", i);
 
-
         // shader.wgsl
         zip.start_file(format!("{base}shader.wgsl"), options)?;
-        zip.write_all( loader_cache.get_shader(dispatch.recording.pipeline.0.get_shader()).as_bytes())?;
+        zip.write_all(
+            loader_cache
+                .get_shader(dispatch.recording.pipeline.0.get_shader())
+                .as_bytes(),
+        )?;
 
         // v_dest.bin
         zip.start_file(format!("{base}v_dest.bin"), options)?;
@@ -417,7 +406,8 @@ pub (crate) fn create_dispatch_zip(
         // dispatch.json
         let json = DispatchJson {
             compute_entry_point: loader_cache.get_entry_point(dispatch.recording.pipeline.0),
-            shader_debug_name : &loader_cache.get_shader_name(dispatch.recording.pipeline.0.get_shader()),
+            shader_debug_name: &loader_cache
+                .get_shader_name(dispatch.recording.pipeline.0.get_shader()),
             x: dispatch.recording.x,
             y: dispatch.recording.y,
             z: dispatch.recording.z,

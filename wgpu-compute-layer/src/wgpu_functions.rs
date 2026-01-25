@@ -1,7 +1,7 @@
 use rustc_hash::FxHasher;
 use std::{
     hash::{Hash, Hasher},
-    num::NonZeroU64
+    num::NonZeroU64,
 };
 
 use super::{
@@ -213,7 +213,7 @@ fn get_command_buffer(
     command_queue: &[MlQueue],
     current_meta: usize,
     cache: &mut ModelCache,
-    buffer_to_map : Option<(CachedBufferId, &wgpu::Buffer, u64)>
+    buffer_to_map: Option<(CachedBufferId, &wgpu::Buffer, u64)>,
 ) -> wgpu::CommandBuffer {
     #[cfg(feature = "wgpu_debug")]
     let query_set = &dev.debug.query_set;
@@ -262,11 +262,11 @@ fn get_command_buffer(
                         let span1 = span!(Level::INFO, "Set Pipeline");
                         let _enter1 = span1.enter();
 
-                        if last_pipeline != Some((q.pipeline.0, q.pipeline.1)){
+                        if last_pipeline != Some((q.pipeline.0, q.pipeline.1)) {
                             cpass.set_pipeline(pipeline);
                             last_pipeline = Some((q.pipeline.0, q.pipeline.1));
                         }
-                       
+
                         drop(_enter1);
 
                         if meta * 4 >= dev.configuration.meta_buffer_size - 256 {
@@ -376,8 +376,16 @@ fn get_command_buffer(
                                                 cache.buffers.get_buffer(&buffer_reference)
                                             {
                                                 use crate::wgpu_functions;
-                                                staging_buffer = create_staging_buffer(dev, buffer.buffer().size());
-                                                wgpu_functions::copy_buffer(dev, buffer.buffer(), &staging_buffer, buffer.buffer().size());
+                                                staging_buffer = create_staging_buffer(
+                                                    dev,
+                                                    buffer.buffer().size(),
+                                                );
+                                                wgpu_functions::copy_buffer(
+                                                    dev,
+                                                    buffer.buffer(),
+                                                    &staging_buffer,
+                                                    buffer.buffer().size(),
+                                                );
                                             } else {
                                                 panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
                                             }
@@ -391,7 +399,7 @@ fn get_command_buffer(
                                                 staging_buffer,
                                             ),
                                         )?;
-                                       
+
                                         Ok(super::debug_info::NumericArray::U8(data))
                                     }
                                     #[cfg(target_arch = "wasm32")]
@@ -452,14 +460,14 @@ fn get_command_buffer(
         query_set,
     );
 
-    if let Some((buffer_to_map, staging_buffer, size)) = buffer_to_map{
+    if let Some((buffer_to_map, staging_buffer, size)) = buffer_to_map {
         if let Some(buffer) = cache.buffers.get_buffer(&buffer_to_map) {
-            encoder.copy_buffer_to_buffer(buffer.buffer(), 0, staging_buffer, 0, size); 
+            encoder.copy_buffer_to_buffer(buffer.buffer(), 0, staging_buffer, 0, size);
         } else {
             panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
         }
     }
-    
+
     let span1 = span!(Level::INFO, "Encoder Finish");
     let _enter1 = span1.enter();
     let result = encoder.finish();
@@ -828,7 +836,7 @@ macro_rules! platform_fn {
     };
 }
 
-platform_fn!{
+platform_fn! {
     #[instrument(skip(dev))]
     ///Send queued commands to the GPU,
     pub(crate) fn flush_gpu_command(dev: &WgpuDevice, buffer_id_to_map : Option<(BufferReferenceId, &wgpu::Buffer)>) -> crate::Result<Option<WasmSubmissionIndex>> {
@@ -870,7 +878,7 @@ platform_fn!{
                                 panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer Reference")
                             }
                         }
-                        
+
                     }
 
                     let cb = get_command_buffer(
@@ -908,7 +916,7 @@ platform_fn!{
                         });
                         id
                     };
-                   
+
                     let _submission_id = dev.queue.submit(Some(cb));
                     let submission_index = WasmSubmissionIndex {
                         #[cfg(not(target_arch = "wasm32"))]
@@ -935,7 +943,7 @@ platform_fn!{
                 cache.mappings.finish();
                 cache.remove_unused();
             }
-            
+
             return Ok(submissions.pop_back());
         }
         else if let Some((buffer_reference, staging_buffer)) = buffer_id_to_map{
@@ -944,7 +952,7 @@ platform_fn!{
                 let buffer_storage = buffer.cached_buffer_id();
                 if buffer_storage.is_valid() {
                     if let Some(buffer_storage) = cache.buffers.get_buffer(buffer_storage) {
-                        copy_buffer(dev, buffer_storage.buffer(), staging_buffer, buffer.size()); 
+                        copy_buffer(dev, buffer_storage.buffer(), staging_buffer, buffer.size());
                     } else {
                         panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
                     }
@@ -1089,8 +1097,8 @@ pub(crate) fn get_shader(device: &wgpu::Device, shader: &str) -> wgpu::ShaderMod
                 source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
             },
             wgpu::ShaderRuntimeChecks {
-                bounds_checks:  false,
-                force_loop_bounding:  false,
+                bounds_checks: false,
+                force_loop_bounding: false,
                 ray_query_initialization_tracking: true,
             },
         );
@@ -1219,7 +1227,7 @@ pub(crate) fn create_bindgroup(
 #[instrument(skip(dev))]
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
-    if let Some(last_submission_index) = flush_gpu_command(dev, None)?{
+    if let Some(last_submission_index) = flush_gpu_command(dev, None)? {
         wait_for_submission(dev, last_submission_index)?;
     }
     Ok(())
@@ -1227,7 +1235,7 @@ pub(crate) fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
 
 #[instrument(skip(dev))]
 pub(crate) async fn synchronize_async(dev: &WgpuDevice) -> crate::Result<()> {
-    if let Some(last_submission_index) = maybe_await!(flush_gpu_command(dev, None))?{
+    if let Some(last_submission_index) = maybe_await!(flush_gpu_command(dev, None))? {
         maybe_await!(wait_for_submission(dev, last_submission_index))?;
     }
     Ok(())
@@ -1256,14 +1264,17 @@ pub(crate) fn wait_for_submission(
     Ok(())
 }
 
-
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn wait_for_submission(
     dev: &WgpuDevice,
     index: WasmSubmissionIndex,
 ) -> crate::Result<()> {
     // Fast path: already completed
-    if dev.submission_tracker.completed_id.load(std::sync::atomic::Ordering::Acquire)  >= index.submission_index_wasm
+    if dev
+        .submission_tracker
+        .completed_id
+        .load(std::sync::atomic::Ordering::Acquire)
+        >= index.submission_index_wasm
     {
         return Ok(());
     }
@@ -1303,7 +1314,7 @@ pub(crate) async fn read_from_buffer_async<T: bytemuck::Pod>(
     read_from_staging_buffer_async(dev, staging_buffer).await
 }
 
-fn copy_buffer(dev: &WgpuDevice, buffer: &wgpu::Buffer, dest_buffer : &wgpu::Buffer, size : u64){
+fn copy_buffer(dev: &WgpuDevice, buffer: &wgpu::Buffer, dest_buffer: &wgpu::Buffer, size: u64) {
     let mut encoder = dev
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -1326,7 +1337,6 @@ pub(crate) async fn read_from_buffer_reference_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer_reference: BufferReferenceId,
 ) -> crate::Result<Vec<T>> {
-    
     let staging_buffer;
     {
         let cache = dev.cache.lock().unwrap();
@@ -1338,7 +1348,10 @@ pub(crate) async fn read_from_buffer_reference_async<T: bytemuck::Pod>(
     }
 
     {
-        maybe_await!(flush_gpu_command(dev, Some((buffer_reference, &staging_buffer))))?; //send all previous commands to the gpu
+        maybe_await!(flush_gpu_command(
+            dev,
+            Some((buffer_reference, &staging_buffer))
+        ))?; //send all previous commands to the gpu
     }
 
     read_from_staging_buffer_async(dev, staging_buffer).await

@@ -96,15 +96,14 @@ impl BindgroupAlignmentLayout {
         }
     }
 
-    pub fn get_dest(&self) -> BindgroupAlignment{
+    pub fn get_dest(&self) -> BindgroupAlignment {
         match self {
             BindgroupAlignmentLayout::Bindgroup0(a) => *a,
             BindgroupAlignmentLayout::Bindgroup1(a, _) => *a,
             BindgroupAlignmentLayout::Bindgroup2(a, _, _) => *a,
-            BindgroupAlignmentLayout::Bindgroup3(a,_, _, _) => *a
+            BindgroupAlignmentLayout::Bindgroup3(a, _, _, _) => *a,
         }
     }
-
 }
 
 #[derive(Debug)]

@@ -1,7 +1,7 @@
 use std::any::Any;
 
-use crate::queue_buffer::OpIsInplaceable;
 use crate::cache::BindGroupReference;
+use crate::queue_buffer::OpIsInplaceable;
 /// A struct representing the LoaderIndex
 #[derive(Copy, Clone, Debug, PartialEq, Hash, Eq)]
 #[cfg_attr(
@@ -132,7 +132,7 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     /// Try to rewrite a pipeline invocation into an inplace variant or elide it entirely
     ///
     /// Returns a description of how to rewrite the call.
-    fn rewrite_plan(&self, _: InplaceRewriteDesc<'_>,) -> Option<RewritePlan>{
+    fn rewrite_plan(&self, _: InplaceRewriteDesc<'_>) -> Option<RewritePlan> {
         None
     }
 
@@ -155,14 +155,8 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     /// kernel execution.
     ///
     /// Default implementation performs no normalization.
-    fn normalize_debug_meta(
-        &self,
-        _pipeline: PipelineIndex,
-        _meta: &mut [u32],
-    ) {
-    }
+    fn normalize_debug_meta(&self, _pipeline: PipelineIndex, _meta: &mut [u32]) {}
 }
-
 
 /// Description of an inplace rewrite request
 pub struct InplaceRewriteDesc<'a> {
@@ -170,7 +164,6 @@ pub struct InplaceRewriteDesc<'a> {
     pub bindgroup: &'a BindGroupReference,
     pub inplace_flags: OpIsInplaceable,
 }
-
 
 pub enum RewritePlan {
     /// Replace pipeline + bindgroup, then dispatch
@@ -181,17 +174,13 @@ pub enum RewritePlan {
     },
 
     /// Elide the dispatch entirely (copy inplace)
-    ElideDispatch {
-        replaced_input: ReplacedInput,
-    },
+    ElideDispatch { replaced_input: ReplacedInput },
 }
 
 pub enum ReplacedInput {
     Input1,
     Input2,
 }
-
-
 
 //Struct for storing a custom Shader
 #[derive(Debug)]
@@ -274,7 +263,11 @@ impl ShaderLoaderCache {
             .get_entry_point(shader)
     }
 
-    pub fn rewrite_plan(&self, loader: LoaderIndex, desc: InplaceRewriteDesc) -> Option<RewritePlan> {
+    pub fn rewrite_plan(
+        &self,
+        loader: LoaderIndex,
+        desc: InplaceRewriteDesc,
+    ) -> Option<RewritePlan> {
         self.loader[loader.0 as usize]
             .as_ref()
             .expect("expected loader to be added")
@@ -283,7 +276,7 @@ impl ShaderLoaderCache {
     }
 
     #[cfg(feature = "wgpu_debug")]
-    pub (crate) fn normalize_debug_meta(&self, pipeline: PipelineIndex, meta: &mut [u32]) {
+    pub(crate) fn normalize_debug_meta(&self, pipeline: PipelineIndex, meta: &mut [u32]) {
         self.loader[pipeline.get_shader().get_loader().0 as usize]
             .as_ref()
             .expect("expected loader to be added")

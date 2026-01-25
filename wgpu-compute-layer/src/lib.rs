@@ -1,12 +1,12 @@
 mod device;
-mod storage;
 pub mod shader_loader;
+mod storage;
 
 pub mod cache;
 pub mod error;
+pub mod queue_buffer;
 pub mod util;
 pub mod wgpu_functions;
-pub mod queue_buffer;
 
 pub use error::Error;
 pub use error::Result;
@@ -14,9 +14,9 @@ pub use error::Result;
 extern crate wgpu_compute_layer_macro;
 pub use wgpu_compute_layer_macro::create_loader;
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
-#[cfg_attr(any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+#[cfg_attr(
+    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
     derive(serde::Serialize, serde::Deserialize)
 )]
 pub enum DType {
@@ -71,20 +71,19 @@ pub trait EntryPoint {
     fn get_entry_point(&self) -> &'static str;
 }
 
-
 #[cfg(feature = "wgpu_debug")]
 pub mod debug_info;
 
-pub use device::WgpuDevice;
-pub use storage::WgpuStorage;
-pub use device::WgpuDeviceConfig;
-pub use device::WgpuBackends;
 pub use device::DebugPipelineRecording;
+pub use device::WgpuBackends;
+pub use device::WgpuDevice;
+pub use device::WgpuDeviceConfig;
+pub use storage::WgpuStorage;
 
-pub use shader_loader::ShaderLoader;
 pub use shader_loader::LoaderIndex;
 pub use shader_loader::PipelineIndex;
 pub use shader_loader::ShaderIndex;
+pub use shader_loader::ShaderLoader;
 
 #[cfg(feature = "wgpu_debug")]
 pub use debug_info::MInfo;

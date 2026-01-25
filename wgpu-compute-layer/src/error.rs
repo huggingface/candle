@@ -1,4 +1,3 @@
-
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self}")
@@ -11,7 +10,7 @@ pub enum Error {
     #[error("Wgpu error {0}")]
     Msg(String),
 
-   #[error(transparent)]
+    #[error(transparent)]
     PollError(#[from] wgpu::PollError),
 
     /// Zip file format error.
@@ -38,7 +37,6 @@ macro_rules! bail {
         return Err($crate::Error::Msg(format!($fmt, $($arg)*).into()))
     };
 }
-
 
 impl From<String> for Error {
     fn from(e: String) -> Self {

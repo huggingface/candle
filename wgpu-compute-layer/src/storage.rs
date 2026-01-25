@@ -1,9 +1,6 @@
 use crate::wgpu_functions;
 
-use super::{
-    cache::BufferReferenceId,
-    device::WgpuDevice
-};
+use super::{cache::BufferReferenceId, device::WgpuDevice};
 
 #[derive(Debug)]
 pub struct WgpuStorage {
@@ -13,7 +10,6 @@ pub struct WgpuStorage {
     dtype: crate::DType,
     is_original: bool, //We may have a temporary representation of a buffer. Nothing happens on Drop if this is not the original object.
 }
-
 
 impl WgpuStorage {
     pub fn buffer(&self) -> BufferReferenceId {
@@ -43,15 +39,13 @@ impl WgpuStorage {
         }
     }
 
-
-
     /// Returns a temporary clone of this [`WgpuStorage`].
     ///
     /// # Safety
     /// when a WgpuStorage is dropped it internally marks the underlying wgpu buffer to be freed.
     /// this function creates a WgpuStorage pointing to the same buffer, but the ownership of the buffer will still be the original one.
     /// So this temporary cloned WgpuStorage will not keep the buffer alive, nor will droping this cloned WgpuStorage free the underlying buffer.
-    /// 
+    ///
     /// This clone may be usefull to allow static analysers to detect correct behavior with MutexGuard in async functions.
     pub unsafe fn temporary_clone(&self) -> Self {
         Self {
@@ -67,10 +61,12 @@ impl WgpuStorage {
         self.size as usize
     }
 
-    pub async fn read_from_buffer_reference_async<T: bytemuck::Pod>(&self) -> crate::Result<Vec<T>> {
-       return wgpu_functions::read_from_buffer_reference_async(self.device(), self.buffer()).await;
+    pub async fn read_from_buffer_reference_async<T: bytemuck::Pod>(
+        &self,
+    ) -> crate::Result<Vec<T>> {
+        return wgpu_functions::read_from_buffer_reference_async(self.device(), self.buffer())
+            .await;
     }
-
 }
 
 impl Drop for WgpuStorage {
