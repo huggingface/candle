@@ -488,7 +488,7 @@ impl WgpuDevice {
             if self.configuration.flush_gpu_before_buffer_init {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    if let Some(index) = wgpu_functions::flush_gpu_command(self)? {
+                    if let Some(index) = wgpu_functions::flush_gpu_command(self, None)? {
                         wgpu_functions::wait_for_submission(self, index)?;
                     }
                 }
