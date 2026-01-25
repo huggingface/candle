@@ -1387,23 +1387,59 @@ impl Tensor {
         kernel_size: T,
         stride: T,
     ) -> Result<Self> {
+        let sz = kernel_size.to_usize2();
+        let stride = stride.to_usize2();
+        self.max_pool2d_with_stride_padding(sz, stride, 0)
+    }
+
+    /// Same as `max_pool2d_with_stride` but with padding support.
+    ///
+    /// # Arguments
+    ///
+    /// * `kernel_size` - The size of the pooling window
+    /// * `stride` - The stride of the pooling operation, controlling how far the window
+    /// * `padding` - The amount of zero-padding to add to both sides of the height and width
+    /// # Examples
+    /// ```rust
+    /// use candle_core::{Tensor,Device,Shape};
+    /// let t = Tensor::rand(0.0f32, 1.0, (1, 1, 10, 10), &Device::Cpu)?;
+    /// let (kernel_size,stride,padding) = (2,2,2);
+    /// let t = t.max_pool2d_with_stride_padding(kernel_size,stride,padding)?;
+    /// assert_eq!(t.shape().dims(),[1,1,7,7]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn max_pool2d_with_stride_padding<T: crate::ToUsize2>(
+        &self,
+        kernel_size: T,
+        stride: T,
+        padding: usize,
+    ) -> Result<Self> {
         let kernel_size = kernel_size.to_usize2();
         let stride = stride.to_usize2();
         let (n, c, h, w) = self.dims4()?;
-        if h < kernel_size.0 || w < kernel_size.1 {
-            bail!("kernel-size {kernel_size:?} is larger than the input size {h},{w}")
+
+        // Calculate effective input size with padding
+        let h_padded = h + 2 * padding;
+        let w_padded = w + 2 * padding;
+
+        if h_padded < kernel_size.0 || w_padded < kernel_size.1 {
+            bail!("kernel-size {kernel_size:?} is larger than the padded input size {h_padded},{w_padded}")
         }
+
         // https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html#torch.nn.MaxPool2d
-        let h_out = (h - kernel_size.0) / stride.0 + 1;
-        let w_out = (w - kernel_size.1) / stride.1 + 1;
+        let h_out = (h_padded - kernel_size.0) / stride.0 + 1;
+        let w_out = (w_padded - kernel_size.1) / stride.1 + 1;
+
         let op = BackpropOp::new1(self, |arg| Op::MaxPool2D {
             arg,
             kernel_size,
             stride,
+            padding,
         });
+
         let storage = self
             .storage()
-            .max_pool2d(self.layout(), kernel_size, stride)?;
+            .max_pool2d(self.layout(), kernel_size, stride, padding)?;
         Ok(from_storage(storage, (n, c, h_out, w_out), op, false))
     }
 

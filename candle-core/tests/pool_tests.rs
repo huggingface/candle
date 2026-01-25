@@ -18,15 +18,61 @@ fn avg_pool2d(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/* This test corresponds to the following PyTorch script.
+import torch
+import torch.nn.functional as F
+
+data = torch.tensor([
+        [1., 2., 1., 3.],
+        [0., 0., 1., 1.],
+        [1., 1., 1., 1.],
+        [5., 1., 1., 1.]
+    ]).unsqueeze(0).unsqueeze(0)
+
+pool1 = F.max_pool2d(data, kernel_size=2, stride=2)
+print(pool1.flatten())
+
+pool2 = F.max_pool2d(data, kernel_size=2, stride=1)
+print(pool2)
+
+pool3 = F.max_pool2d(data, kernel_size=2, stride=2, padding=1)
+print(pool3)
+
+data_reshaped = data.reshape(1, 1, 2, 8)
+pool4 = F.max_pool2d(data_reshaped, kernel_size=2, stride=2)
+print(pool4.flatten())
+
+*/
 fn max_pool2d(dev: &Device) -> Result<()> {
+    // Normal
     let data: Vec<f32> = vec![
         1., 2., 1., 3., 0., 0., 1., 1., 1., 1., 1., 1., 5., 1., 1., 1.,
     ];
     let t = Tensor::from_vec(data, (1, 1, 4, 4), dev)?;
 
-    let pool = t.max_pool2d(2)?.squeeze(0)?.squeeze(0)?;
-    assert_eq!(pool.to_vec2::<f32>()?, [[2f32, 3.], [5., 1.]]);
+    let pool1 = t.max_pool2d(2)?.squeeze(0)?.squeeze(0)?;
+    assert_eq!(pool1.to_vec2::<f32>()?, [[2f32, 3.], [5., 1.]]);
 
+    // With Stirde
+    let pool2 = t.max_pool2d_with_stride(2, 1)?.squeeze(0)?.squeeze(0)?;
+    assert_eq!(pool2.dims(), [3, 3]);
+    assert_eq!(
+        pool2.to_vec2::<f32>()?,
+        [[2.0, 2.0, 3.0], [1.0, 1.0, 1.0], [5.0, 1.0, 1.0]]
+    );
+
+    // With Stride And Padding
+    let pool3 = t
+        .max_pool2d_with_stride_padding(2, 2, 1)?
+        .squeeze(0)?
+        .squeeze(0)?;
+    assert_eq!(pool3.dims(), [3, 3]);
+    assert_eq!(
+        pool3.to_vec2::<f32>()?,
+        [[1.0, 2.0, 3.0], [1.0, 1.0, 1.0], [5.0, 1.0, 1.0]]
+    );
+
+    // Reshape
     let t = t.reshape((1, 1, 2, 8))?;
     let pool = t.max_pool2d(2)?.squeeze(0)?.squeeze(0)?;
     assert_eq!(pool.to_vec2::<f32>()?, [[2.0, 3.0, 5.0, 1.0]]);
