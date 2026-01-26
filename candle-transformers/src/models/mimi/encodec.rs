@@ -227,3 +227,156 @@ pub fn load(model_file: &str, num_codebooks: Option<usize>, dev: &Device) -> Res
     let encodec = Encodec::new(cfg, vb)?;
     Ok(encodec)
 }
+
+/// Encoder-only variant of Mimi/Encodec.
+///
+/// This struct contains only the components needed for encoding audio to discrete codes,
+/// without the decoder components. This is useful for models like Qwen3-TTS that only
+/// distribute encoder weights for their speech tokenizer.
+///
+/// # Architecture
+/// ```text
+/// Audio (24kHz) → SeaNet Encoder → Transformer → Downsample → Split RVQ → Codes (12.5Hz)
+/// ```
+#[derive(Debug, Clone)]
+pub struct EncoderOnly {
+    encoder: seanet::SeaNetEncoder,
+    encoder_transformer: transformer::ProjectedTransformer,
+    downsample: conv::ConvDownsample1d,
+    quantizer: quantization::SplitResidualVectorQuantizer,
+    config: Config,
+}
+
+impl EncoderOnly {
+    /// Create a new encoder-only model.
+    ///
+    /// # Arguments
+    /// * `cfg` - Model configuration
+    /// * `vb` - Variable builder for loading weights
+    ///
+    /// # Weight Structure
+    /// Expects weights with the following prefixes:
+    /// - `encoder.*` - SeaNet encoder
+    /// - `encoder_transformer.*` - Transformer
+    /// - `downsample.*` - Downsampling convolution
+    /// - `quantizer.*` - Split residual vector quantizer
+    pub fn new(cfg: Config, vb: VarBuilder) -> Result<Self> {
+        let dim = cfg.seanet.dimension;
+        let encoder = seanet::SeaNetEncoder::new(&cfg.seanet, vb.pp("encoder"))?;
+        let encoder_transformer = transformer::ProjectedTransformer::new(
+            dim,
+            &[dim],
+            &cfg.transformer,
+            vb.pp("encoder_transformer"),
+        )?;
+        let quantizer = quantization::SplitResidualVectorQuantizer::new(
+            /* dim */ cfg.quantizer_dim,
+            /* input_dim */ Some(dim),
+            /* output_dim */ Some(dim),
+            /* n_q */ cfg.quantizer_n_q,
+            /* bins */ cfg.quantizer_bins,
+            vb.pp("quantizer"),
+        )?;
+        let encoder_frame_rate =
+            cfg.sample_rate / cfg.seanet.ratios.iter().product::<usize>() as f64;
+
+        let downsample_stride = (encoder_frame_rate / cfg.frame_rate) as usize;
+        let downsample = conv::ConvDownsample1d::new(
+            /* stride */ downsample_stride,
+            /* dim */ dim,
+            /* causal */ true,
+            /* learnt */ true,
+            vb.pp("downsample"),
+        )?;
+
+        Ok(Self {
+            encoder,
+            encoder_transformer,
+            quantizer,
+            downsample,
+            config: cfg,
+        })
+    }
+
+    /// Get the model configuration.
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// Encode audio to continuous features (before quantization).
+    ///
+    /// # Arguments
+    /// * `xs` - Audio tensor of shape `(batch, channels, samples)`
+    ///
+    /// # Returns
+    /// Continuous features of shape `(batch, dim, frames)`
+    pub fn encode_pre_quantize(&mut self, xs: &Tensor) -> Result<Tensor> {
+        let xs = self.encoder.forward(xs)?;
+        self.encoder_transformer.reset_state();
+        let xs = self.encoder_transformer.forward(&xs)?;
+        let xs = &xs[0];
+        xs.apply(&self.downsample)
+    }
+
+    /// Encode audio to discrete codes.
+    ///
+    /// # Arguments
+    /// * `xs` - Audio tensor of shape `(batch, channels, samples)`
+    ///
+    /// # Returns
+    /// Discrete codes of shape `(batch, num_codebooks, frames)`
+    pub fn encode(&mut self, xs: &Tensor) -> Result<Tensor> {
+        let xs = self.encoder.forward(xs)?;
+        self.encoder_transformer.reset_state();
+        let xs = self.encoder_transformer.forward(&xs)?;
+        let xs = &xs[0];
+        let xs = xs.apply(&self.downsample)?;
+        let codes = self.quantizer.encode(&xs)?;
+        Ok(codes)
+    }
+
+    /// Streaming encode - process audio chunk by chunk.
+    ///
+    /// # Arguments
+    /// * `xs` - Audio chunk as StreamTensor
+    ///
+    /// # Returns
+    /// Discrete codes as StreamTensor (may be empty if not enough data accumulated)
+    pub fn encode_step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+        let xs = self.encoder.step(xs)?;
+        let xs = self.encoder_transformer.step(&xs)?;
+        let xs = self.downsample.step(&xs)?;
+        match xs.as_option() {
+            None => Ok(().into()),
+            Some(xs) => {
+                let codes = self.quantizer.encode(xs)?;
+                Ok(codes.into())
+            }
+        }
+    }
+
+    /// Reset internal streaming state.
+    pub fn reset_state(&mut self) {
+        self.encoder.reset_state();
+        self.encoder_transformer.reset_state();
+        self.downsample.reset_state();
+    }
+}
+
+/// Load an encoder-only model from a safetensors file.
+///
+/// # Arguments
+/// * `model_file` - Path to the safetensors weights file
+/// * `num_codebooks` - Number of codebooks (default: 16)
+/// * `dev` - Device to load the model on
+pub fn load_encoder_only(
+    model_file: &str,
+    num_codebooks: Option<usize>,
+    dev: &Device,
+) -> Result<EncoderOnly> {
+    let vb =
+        unsafe { candle_nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, dev)? };
+    let cfg = Config::v0_1(num_codebooks);
+    let encoder = EncoderOnly::new(cfg, vb)?;
+    Ok(encoder)
+}

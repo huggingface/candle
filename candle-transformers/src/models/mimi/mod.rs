@@ -42,4 +42,4 @@ pub enum NormType {
     LayerNorm,
 }
 
-pub use encodec::{load, Config, Encodec as Model};
+pub use encodec::{load, load_encoder_only, Config, Encodec as Model, EncoderOnly};
