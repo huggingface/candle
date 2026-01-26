@@ -1,3 +1,7 @@
+//! Shader cache that stores compiled shader modules and created compute pipelines.
+//!
+//! Pipelines are cached per `(shader, entry_point, constants)` to avoid
+//! recompilation at runtime.
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 use tracing::instrument;
@@ -73,7 +77,7 @@ impl ShaderCache {
         if let Some(p) = pipelines.get(pipeline) {
             Ok(p.clone())
         } else {
-            panic!("Not expected")
+            panic!("pipeline expected to be present after insertion")
         }
     }
 }

@@ -2,16 +2,16 @@ use wgpu_compute_layer::cache::BindGroupReference;
 use wgpu_compute_layer::cache::BindgroupAlignmentLayout;
 use wgpu_compute_layer::cache::BindgroupInputBase;
 use wgpu_compute_layer::create_loader;
-use wgpu_compute_layer::shader_loader::PipelineIndex;
-use wgpu_compute_layer::shader_loader::ReplacedInput;
-use wgpu_compute_layer::shader_loader::ShaderIndex;
-use wgpu_compute_layer::shader_loader::ShaderLoader;
-use wgpu_compute_layer::wgpu_functions::KernelConstId;
+use wgpu_compute_layer::PipelineIndex;
+use wgpu_compute_layer::ReplacedInput;
+use wgpu_compute_layer::ShaderIndex;
+use wgpu_compute_layer::ShaderLoader;
+use wgpu_compute_layer::KernelConstId;
 pub use wgpu_compute_layer_pwgsl::shader_loader::{DefineDefinition, DefinesDefinitions};
 use wgpu_compute_layer_pwgsl::{shader_loader, ParseState, ShaderStore};
 use wgpu_compute_layer::cache::BindgroupReferenceInput;
-use wgpu_compute_layer::shader_loader::InplaceRewriteDesc;
-use wgpu_compute_layer::shader_loader::RewritePlan;
+use wgpu_compute_layer::InplaceRewriteDesc;
+use wgpu_compute_layer::RewritePlan;
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 }

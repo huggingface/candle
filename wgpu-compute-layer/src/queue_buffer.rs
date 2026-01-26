@@ -1,9 +1,10 @@
-/// The `QueueBuffer` struct is responsible for queuing a kernel to the GPU.
-/// It provides functionality to:
-/// - Add parameters to a `MetaBuffer`.
-/// - Specify pipeline constants for the next pipeline.
-/// - Create a reference to the pipeline.
-/// - Enqueue the defined pipeline.
+/// Helpers for queuing compute dispatches and building virtual bindgroups.
+///
+/// The `QueueBuffer`/`QueueBufferInner` types provide utilities to:
+/// - add parameters to a `MetaArray`,
+/// - collect pipeline constants for the next pipeline call,
+/// - create pipeline references and virtual bindgroup descriptors,
+/// - enqueue the prepared dispatches.
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, MutexGuard};
 
@@ -48,10 +49,10 @@ impl OpIsInplaceable {
     any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
     derive(serde::Serialize, serde::Deserialize)
 )]
-///Pipeline, Pipeline Constants, and Inplaceable Information
+/// Pipeline, pipeline constants, and in-place information.
 pub struct PipelineReference(
     pub shader_loader::PipelineIndex,
-    pub usize, //Index into an Array with Pipeline Constants
+    pub usize, // Index into an array with pipeline constants
     #[cfg_attr(
         any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
         serde(skip)
@@ -69,32 +70,32 @@ pub(crate) struct MlQueueDispatch {
     pub(crate) bindgroup: BindGroupReference,
     pub(crate) bindgroup_cached: Option<CachedBindgroupId>,
     pub(crate) meta: u32,
-    pub(crate) workload_size: usize, //the total size needed to calculate. Needed so we do not queue to many operations at once.
+    pub(crate) workload_size: usize, // the total size needed to calculate; prevents queuing too many operations at once.
     #[cfg(feature = "wgpu_debug")]
     pub(crate) debug: Option<String>,
 }
 
-///a struct, where all operations are cached
+/// A struct where all operations are cached.
 #[derive(Debug)]
 pub struct QueueBufferInner {
-    ///All quened commands
+    /// All queued commands.
     pub(crate) command_queue: Vec<MlQueue>,
 
-    ///u32 MetaArray for parameters of kernels
+    /// u32 `MetaArray` for parameters of kernels.
     meta_array: MetaArray,
 
-    ///ConstArray is used to store the pipeline constants for the next pipeline call
+    /// `ConstArray` used to store the pipeline constants for the next pipeline call.
     const_array: ConstArray,
 
-    ///ConstArray To Id, maps a set of constants of a pipeline to an unique id.
+    /// `ConstArray` -> id mapper: maps a set of constants to a unique id.
     const_id_map: ObjectToIdMapper<ConstArray>,
 
-    ///Id to ConstArray, maps a a unique Id to a set of Constants
+    /// Id -> `ConstArray` mapping: maps a unique id to a set of constants.
     pub(crate) id_to_const_array: Vec<Vec<(&'static str, f64)>>,
 
     global_command_index: u32,
 
-    ///Current position inside the MetaArray
+    /// Current position inside the `MetaArray`.
     pub(crate) current_meta: u32,
 }
 
@@ -111,12 +112,12 @@ impl QueueBufferInner {
         }
     }
 
-    ///Resets the ConstArray for the next pipeline
+    /// Resets the `ConstArray` for the next pipeline.
     pub fn init(&mut self) {
         self.const_array.0.clear();
     }
 
-    ///Removes all Operations from the queue
+    /// Removes all operations from the queue.
     pub fn clear(&mut self) {
         self.command_queue.clear();
         self.meta_array.0.clear();
@@ -157,7 +158,7 @@ impl QueueBufferInner {
         PipelineReference(pipeline.into(), index, inplaceable)
     }
 
-    ///Adds the parameter 'value' to the MetaArray
+    /// Adds the parameter `value` to the `MetaArray`.
     pub fn add<T: ToKernelParameterMeta>(&mut self, value: T) {
         self.meta_array.add(value);
     }
@@ -174,7 +175,7 @@ impl QueueBufferInner {
         self.global_command_index = global_command_index;
     }
 
-    //allows to load const debug info(for simulating calls)
+    // Allows loading const debug info (for simulating calls).
     pub fn load_simulation_consts(&mut self, consts: Vec<Vec<(&'static str, f64)>>) {
         self.id_to_const_array = consts;
         self.const_id_map.next_id = self.id_to_const_array.len();
@@ -189,13 +190,13 @@ impl<'a> QueueBuffer<'a> {
     }
 
     /**************** Enqueue Helper: ****************/
-    ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
+    /// Enqueues a command with a workgroup size of 64 on the X dimension.
     pub fn enqueue_64(
         self,
         pipeline: PipelineReference,
         bind_group: BindGroupReference,
         length: u32,
-        //workload_size is the total size needed to calculate. Needed so we do not queue to many operations at once.
+        // workload_size is the total size needed to calculate. Needed so we do not queue too many operations at once.
         workload_size: usize,
     ) {
         self.enqueue_64_extra(
@@ -208,14 +209,14 @@ impl<'a> QueueBuffer<'a> {
         )
     }
 
-    ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
-    ///With extra debug Info when `wgpu_debug` is enabled
+    /// Enqueues a command with a workgroup size of 64 on the X dimension.
+    /// With extra debug info when `wgpu_debug` is enabled.
     pub fn enqueue_64_extra(
         self,
         pipeline: PipelineReference,
         bind_group: BindGroupReference,
         length: u32,
-        //workload_size is the total size needed to calculate. Needed so we do not queue to many operations at once.
+        // workload_size is the total size needed to calculate. Needed so we do not queue too many operations at once.
         workload_size: usize,
         #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
     ) {
@@ -231,8 +232,8 @@ impl<'a> QueueBuffer<'a> {
         )
     }
 
-    ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
-    ///If the length is greater than 65535, more elements will be enqueued in the Y dimension.
+    /// Enqueues a command with a workgroup size of 64 on the X dimension.
+    /// If the length is greater than 65535, additional elements will be enqueued in the Y dimension.
     pub fn enqueue_64_big(
         self,
         pipeline: PipelineReference,
@@ -248,9 +249,9 @@ impl<'a> QueueBuffer<'a> {
         )
     }
 
-    ///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
-    ///If the length is greater than 65535, more elements will be enqueued in the Y dimension.
-    ///With extra debug Info when `wgpu_debug` is enabled
+    /// Enqueues a command with a workgroup size of 64 on the X dimension.
+    /// If the length is greater than 65535, additional elements will be enqueued in the Y dimension.
+    /// With extra debug info when `wgpu_debug` is enabled.
     pub fn enqueue_64_big_extra(
         self,
         pipeline: PipelineReference,
@@ -273,7 +274,7 @@ impl<'a> QueueBuffer<'a> {
         )
     }
 
-    ///Enqueues a command with x, y and z dimension.
+    /// Enqueues a command with x, y and z dimensions.
     pub fn enqueue_workgroups(
         self,
         pipeline: PipelineReference,
@@ -281,7 +282,7 @@ impl<'a> QueueBuffer<'a> {
         x: u32,
         y: u32,
         z: u32,
-        //workload_size is the total size needed to calculate. Needed so we do not queue to many operations at once.
+        // workload_size is the total size needed to calculate. Needed so we do not queue too many operations at once.
         workload_size: usize,
     ) {
         self.enqueue_workgroups_extra(
@@ -297,8 +298,8 @@ impl<'a> QueueBuffer<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    ///Enqueues a command with x, y and z dimension.
-    ///With extra debug Info when `wgpu_debug` is enabled
+    /// Enqueues a command with x, y and z dimensions.
+    /// With extra debug info when `wgpu_debug` is enabled.
     pub fn enqueue_workgroups_extra(
         mut self,
         pipeline: PipelineReference,
@@ -306,7 +307,7 @@ impl<'a> QueueBuffer<'a> {
         x: u32,
         y: u32,
         z: u32,
-        //workload_size is the total size needed to calculate. Needed so we do not queue to many operations at once.
+        // workload_size is the total size needed to calculate. Needed so we do not queue too many operations at once.
         workload_size: usize,
         #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
     ) {
@@ -436,4 +437,27 @@ impl DerefMut for QueueBuffer<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.deref_mut()
     }
+}
+
+
+
+
+#[test]
+fn queue_buffer_const_mapping_roundtrip() {
+    let mut qb = QueueBufferInner::new(256);
+
+    // Insert a kernel constant
+    qb.add_const(KernelConstId("K1"), 42u32);
+
+    // Request a pipeline which should cause the const array to be stored
+    let pipeline_ref = qb.get_pipeline(crate::PipelineIndex::new(crate::ShaderIndex::new(crate::LoaderIndex(0), 0), 0));
+
+    // id_to_const_array should have one entry and contain our constant
+    assert_eq!(qb.id_to_const_array.len(), 1);
+    let entry = &qb.id_to_const_array[0];
+    assert_eq!(entry[0].0, "K1");
+    assert_eq!(entry[0].1, 42.0);
+
+    // The returned pipeline_ref should reference the stored constants
+    assert_eq!(pipeline_ref.1, 0);
 }

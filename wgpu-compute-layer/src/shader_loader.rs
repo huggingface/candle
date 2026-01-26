@@ -1,3 +1,9 @@
+//! Shader loader abstractions and a small runtime cache.
+//!
+//! The `ShaderLoader` trait represents a source of WGSL shader modules and
+//! their entry points. `ShaderLoaderCache` holds registered loaders and
+//! provides helper accessors used by the rest of the crate.
+
 use std::any::Any;
 
 use crate::cache::BindGroupReference;
@@ -70,13 +76,13 @@ impl From<PipelineIndex> for LoaderIndex {
     }
 }
 
-/// generic trait to load a shader
+/// Generic trait to load a shader.
 pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
-    /// loads the wgsl shader code
-    /// a shader loader may handle multiple shader files, one can use the index to differentiate between shaders
+    /// Loads the WGSL shader code.
+    /// A shader loader may handle multiple shader files; use the `index` to differentiate between shaders.
     /// # Examples
     ///  ```
-    /// use candle_wgpu_kernels::{ShaderLoader, ShaderIndex, PipelineIndex};
+    /// use wgpu_compute_layer::{ShaderLoader, ShaderIndex, PipelineIndex};
     ///
     /// #[derive(Debug)]
     /// struct Example{};
@@ -95,12 +101,12 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     ///  ```
     fn load(&self, index: ShaderIndex) -> &str;
 
-    /// Returns the entry point, of this pipeline.
-    /// a shader loader may handle multiple shader files with multiple entry points in each file,
-    /// one can use the index to differentiate between shaders and entry points
+    /// Returns the entry point for this pipeline.
+    /// A shader loader may handle multiple shader files with multiple entry points in each file;
+    /// use the `index` to differentiate between shaders and entry points.
     /// # Examples
     ///  ```
-    /// use candle_wgpu_kernels::{ShaderLoader, ShaderIndex, PipelineIndex};
+    /// use wgpu_compute_layer::{ShaderLoader, ShaderIndex, PipelineIndex};
     /// #[derive(Debug)]
     /// struct Example{};
     ///
@@ -123,13 +129,13 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     fn get_entry_point(&self, index: PipelineIndex) -> &str;
 
     /// Returns an optional debug name for the given shader.
-    /// This name may be used for debugging purposes, such as labeling shader outputs in wgpu or logging.
-    /// Returns `None` if no debug name is available for the given shader index.
+    /// This name may be used for debugging (for example labeling shader outputs in wgpu) or logging.
+    /// Returns `None` when no debug name is available for the given shader index.
     fn get_debug_name(&self, _index: ShaderIndex) -> Option<String> {
         None
     }
 
-    /// Try to rewrite a pipeline invocation into an inplace variant or elide it entirely
+    /// Try to rewrite a pipeline invocation into an in-place variant or elide it entirely.
     ///
     /// Returns a description of how to rewrite the call.
     fn rewrite_plan(&self, _: InplaceRewriteDesc<'_>) -> Option<RewritePlan> {
@@ -139,14 +145,14 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     /// Normalize (canonicalize) the meta buffer for debug and profiling purposes.
     ///
     /// This hook allows shader implementations to remove or neutralize metadata
-    /// that does not affect execution performance, so that multiple dispatches
+    /// that does not affect execution performance so that multiple dispatches
     /// with identical performance characteristics can be grouped together.
     ///
     /// Typical use cases include:
     /// - Replacing scalar values with fixed constants when their magnitude does
-    ///   not affect runtime (e.g. `x = 1.0` vs `x = 2.0`).
+    ///   not affect runtime (for example `x = 1.0` vs `x = 2.0`).
     /// - Clearing or fixing random seeds or counters for RNG-based kernels.
-    /// - Ignoring flags or parameters that only affect numerical results, not
+    /// - Ignoring flags or parameters that only affect numerical results but not
     ///   memory access patterns or control flow.
     ///
     /// Implementations should mutate `meta` in-place by overwriting the relevant
@@ -154,7 +160,7 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     /// is used only for debug/profiling aggregation and has no effect on actual
     /// kernel execution.
     ///
-    /// Default implementation performs no normalization.
+    /// The default implementation performs no normalization.
     fn normalize_debug_meta(&self, _pipeline: PipelineIndex, _meta: &mut [u32]) {}
 }
 
@@ -288,5 +294,71 @@ impl ShaderLoaderCache {
 impl Default for ShaderLoaderCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests
+{
+    use std::collections::HashMap;
+
+    use crate::{LoaderIndex, PipelineIndex, ShaderIndex, ShaderLoader, shader_loader::ShaderLoaderCache};
+
+    // A simple shader loader that stores WGSL sources in a HashMap and allows
+    // mutation at runtime. This is used to test dynamic shader loader behavior
+    // through the public `ShaderLoaderCache` API.
+    #[derive(Debug)]
+    struct DynamicLoader {
+        map: HashMap<u16, String>,
+    }
+
+    impl DynamicLoader {
+        fn new() -> Self {
+            Self { map: HashMap::new() }
+        }
+
+        fn insert(&mut self, idx: u16, src: &str) {
+            self.map.insert(idx, src.to_string());
+        }
+    }
+
+    impl ShaderLoader for DynamicLoader {
+        fn load(&self, index: ShaderIndex) -> &str {
+            let i = index.get_index();
+            self.map
+                .get(&i)
+                .map(|s| s.as_str())
+                .unwrap_or("@compute @workgroup_size(1) fn main() {}")
+        }
+
+        fn get_entry_point(&self, _index: PipelineIndex) -> &str {
+            "main"
+        }
+    }
+
+    #[test]
+    fn shader_loader_cache_dynamic_replace() {
+        let mut cache = ShaderLoaderCache::new();
+
+        // Register a dynamic loader at index 0
+        cache.add_wgpu_shader_loader(LoaderIndex(0), DynamicLoader::new);
+
+        // Populate the loader with a shader and verify retrieval
+        {
+            let str1 = "@compute @workgroup_size(1) fn main() { }";
+            let loader = cache.get_loader_mut::<DynamicLoader>(LoaderIndex(0)).unwrap();
+            loader.insert(0, str1);
+            let shader_str = cache.get_shader(ShaderIndex::new(LoaderIndex(0), 0));
+            assert_eq!(shader_str, str1);
+        }
+
+        // Replace the shader at runtime and verify the change is visible
+        {
+            let str2 = "@compute @workgroup_size(1) fn main2() { }";
+            let loader = cache.get_loader_mut::<DynamicLoader>(LoaderIndex(0)).unwrap();
+            loader.insert(0, str2);
+            let shader_str = cache.get_shader(ShaderIndex::new(LoaderIndex(0), 0));
+            assert_eq!(shader_str, str2);
+        }
     }
 }

@@ -1,3 +1,8 @@
+//! Utilities for small storage buffer wrappers used by compute pipelines.
+//!
+//! `WgpuStorage` wraps a reference to a GPU buffer with a typed data type and
+//! a device handle. It is a thin convenience type used by higher-level APIs.
+
 use crate::wgpu_functions;
 
 use super::{cache::BufferReferenceId, device::WgpuDevice};
@@ -8,7 +13,7 @@ pub struct WgpuStorage {
     size: u64,
     wgpu_device: WgpuDevice,
     dtype: crate::DType,
-    is_original: bool, //We may have a temporary representation of a buffer. Nothing happens on Drop if this is not the original object.
+    is_original: bool, // We may have a temporary representation of a buffer. Nothing happens on `Drop` if this is not the original object.
 }
 
 impl WgpuStorage {
@@ -42,11 +47,14 @@ impl WgpuStorage {
     /// Returns a temporary clone of this [`WgpuStorage`].
     ///
     /// # Safety
-    /// when a WgpuStorage is dropped it internally marks the underlying wgpu buffer to be freed.
-    /// this function creates a WgpuStorage pointing to the same buffer, but the ownership of the buffer will still be the original one.
-    /// So this temporary cloned WgpuStorage will not keep the buffer alive, nor will droping this cloned WgpuStorage free the underlying buffer.
+    /// When a `WgpuStorage` is dropped it may mark the underlying wgpu buffer to be freed.
+    /// This function creates a `WgpuStorage` pointing to the same buffer, but the
+    /// ownership remains with the original instance. Therefore the cloned storage
+    /// will not keep the buffer alive, and dropping this clone will not free the
+    /// underlying buffer.
     ///
-    /// This clone may be usefull to allow static analysers to detect correct behavior with MutexGuard in async functions.
+    /// This clone can be useful to allow static analysers to reason about
+    /// borrows (for example when holding a `MutexGuard` in async functions).
     pub unsafe fn temporary_clone(&self) -> Self {
         Self {
             buffer: self.buffer,

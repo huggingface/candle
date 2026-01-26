@@ -23,20 +23,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
+/// Common result type used across the crate.
 pub type Result<T> = std::result::Result<T, Error>;
-
-#[macro_export]
-macro_rules! bail {
-    ($msg:literal $(,)?) => {
-        return Err($crate::Error::Msg(format!($msg).into()))
-    };
-    ($err:expr $(,)?) => {
-        return Err($crate::Error::Msg(format!($err).into()))
-    };
-    ($fmt:expr, $($arg:tt)*) => {
-        return Err($crate::Error::Msg(format!($fmt, $($arg)*).into()))
-    };
-}
 
 impl From<String> for Error {
     fn from(e: String) -> Self {

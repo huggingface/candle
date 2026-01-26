@@ -1,3 +1,7 @@
+//! Cached buffer helpers.
+//!
+//! Stores free and in-use GPU buffers for reuse.
+//! 
 use std::collections::BTreeSet;
 
 use tracing::instrument;
@@ -9,11 +13,10 @@ use crate::{
 
 use super::CachedBufferId;
 
-////////////////// CACHED BUFFER:
 #[derive(Debug)]
 pub(crate) struct CachedBuffer {
     buffer: wgpu::Buffer,
-    is_free: bool, //wheter this buffer is currently free
+    is_free: bool, // whether this buffer is currently free
     last_used_counter: u32,
 }
 
@@ -35,7 +38,7 @@ impl CachedBuffer {
     }
 }
 
-// Struct used for ordering by size
+// Struct used for ordering by size.
 #[derive(Debug, Eq, PartialEq)]
 struct OrderedIndex<TI, TV> {
     index: TI,
@@ -63,12 +66,13 @@ impl<TI: PartialOrd + Ord, TV: PartialOrd + Ord> PartialOrd for OrderedIndex<TI,
     }
 }
 
-/// Cache of all free CachedBuffers
+/// Cache of all free cached buffers.
 #[derive(Debug)]
 pub(crate) struct BufferCacheStorage {
     storage: StorageOptional<CachedBuffer, CachedBufferId>,
-    order: BTreeSet<OrderedIndex<u32, u64>>, //contains a ordered list of the currently free buffers in the storage
-    //(a buffer may be free if it is currently not used, this does not mean that it was deleted. a deleted buffer was complely removed from the storage and droped)
+    order: BTreeSet<OrderedIndex<u32, u64>>, // contains an ordered list of the currently free buffers in the storage
+    // (a buffer may be free if it is currently not used; this does not mean that it was deleted.
+    //  a deleted buffer is completely removed from the storage and dropped)
     buffer_counter: u32,       //total number of buffers created
     buffer_reuse_counter: u32, //total number of buffers created
     buffer_memory: u64,        //total memory allocated
@@ -91,7 +95,7 @@ impl BufferCacheStorage {
         }
     }
 
-    //creats a Buffer, expect that it will be used and not be part of free memory
+    // creates a buffer; expect that it will be used and not be part of free memory
     #[instrument(skip(self, dev, command_id, size))]
     pub(crate) fn create_buffer(
         &mut self,
@@ -189,7 +193,7 @@ impl BufferCacheStorage {
             let mut buffer_found = None;
             for id in self.order.range(OrderedIndex::new(0, minimum_size)..) {
                 if id.value < minimum_size {
-                    panic!("Did not expect size to be smaller, than key");
+                    panic!("Did not expect size to be smaller than key");
                 }
 
                 if id.value > max_size {
@@ -198,7 +202,7 @@ impl BufferCacheStorage {
                 buffer_found = Some(id);
             }
 
-            //remove this buffer from free memory:
+            // remove this buffer from free memory:
             if let Some(buffer_found) = buffer_found {
                 if let Some((reference, _)) = self.storage.get_reference(buffer_found.index) {
                     self.use_buffer(&reference, command_id);
@@ -245,7 +249,7 @@ impl BufferCacheStorage {
                 let (id, val) = self
                     .storage
                     .get_reference(entry.index)
-                    .expect("item in order, that could ne be found in storage");
+                    .expect("item in order that could not be found in storage");
                 (id, val.last_used_counter)
             })
             .rev()

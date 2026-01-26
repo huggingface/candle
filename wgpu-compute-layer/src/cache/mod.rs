@@ -1,3 +1,7 @@
+//! Cache subsystem helpers (buffers, bindgroups, mappings).
+//!
+//! This module implements small caches and lightweight IDs used by the crate
+//! to avoid repeated GPU allocations at runtime.
 mod bindgroup_layout;
 mod buffer_mapping;
 mod buffer_reference;
@@ -271,7 +275,7 @@ pub struct DebugBufferUsage {
 }
 
 #[derive(Debug)]
-pub struct ModelCache {
+pub(crate) struct ModelCache {
     pub(crate) buffer_reference: BufferReferenceStorage,
     pub(crate) buffers: BufferCacheStorage,
     pub(crate) bindgroups: BindgroupCacheStorage,
@@ -285,20 +289,20 @@ pub struct ModelCache {
     pub(crate) max_memory_size: u64,
 
     #[cfg(feature = "wgpu_debug")]
-    pub(crate) debug: std::collections::HashMap<
+    pub(crate) debug_pipeline_recording: std::collections::HashMap<
         super::device::DebugPipelineRecording,
         super::device::DebugPipelineRecording,
-    >, //stores all queed commands (e.g. used to test performance in the browser so we can measure the performance of each unnique operation alone)
+    >, // stores all queued commands (e.g. used to test performance in the browser so we can measure the performance of each unique operation alone)
 
     #[cfg(feature = "wgpu_debug")]
     pub(crate) debug_buffer_info: Vec<DebugBufferUsage>,
 
     #[cfg(feature = "wgpu_debug")]
-    pub(crate) full_recording: super::debug_info::DebugRecordingWithData,
+    pub(crate) debug_pipeline_recording_with_data: super::debug_info::DebugRecordingWithData, //stores all queued commands with a complete copy of all input buffers.
 }
 
 impl ModelCache {
-    pub fn new(mapping_size: u32, max_memory_size: u64) -> Self {
+    pub(crate) fn new(mapping_size: u32, max_memory_size: u64) -> Self {
         Self {
             buffer_reference: BufferReferenceStorage::new(),
             buffers: BufferCacheStorage::new(),
@@ -311,11 +315,11 @@ impl ModelCache {
             copy_inplace_counter: 0,
             max_memory_size,
             #[cfg(feature = "wgpu_debug")]
-            debug: std::collections::HashMap::new(),
+            debug_pipeline_recording: std::collections::HashMap::new(),
             #[cfg(feature = "wgpu_debug")]
             debug_buffer_info: Vec::new(),
             #[cfg(feature = "wgpu_debug")]
-            full_recording: super::debug_info::DebugRecordingWithData {
+            debug_pipeline_recording_with_data: super::debug_info::DebugRecordingWithData {
                 recordings: Vec::new(),
                 should_record: false,
             },
@@ -323,10 +327,10 @@ impl ModelCache {
     }
 
     #[instrument(skip(self, size))]
-    pub fn create_buffer_reference<T: ToU64>(
+    pub(crate) fn create_buffer_reference<T: ToU64>(
         &mut self,
         size: T,
-        referenced_by_candle_storage: bool,
+        referenced_by_wgpu_storage: bool,
     ) -> BufferReferenceId {
         let size = size.to_u64();
         if size > self.max_memory_size {
@@ -336,12 +340,12 @@ impl ModelCache {
             );
         }
 
-        let buffer_reference = BufferReference::new(size, referenced_by_candle_storage);
+        let buffer_reference = BufferReference::new(size, referenced_by_wgpu_storage);
         self.buffer_reference.insert(buffer_reference)
     }
 
     #[instrument(skip(self, dev, data))]
-    pub fn create_buffer_reference_init<T: bytemuck::Pod>(
+    pub(crate) fn create_buffer_reference_init<T: bytemuck::Pod>(
         &mut self,
         dev: &WgpuDevice,
         data: &[T],
@@ -352,7 +356,7 @@ impl ModelCache {
 
         if length as u64 > self.max_memory_size {
             panic!(
-                "tried to create_init too large a buffer: {}, max: {}",
+                "create_init requested buffer of {} bytes, but maximum allowed is {} bytes",
                 length, self.max_memory_size
             );
         }
@@ -382,7 +386,7 @@ impl ModelCache {
 
     /// returns, wheter we should stop the command_queue and delete not used buffers
     #[instrument(skip(self))]
-    pub fn should_delete_unused(&mut self) -> bool {
+    pub(crate) fn should_delete_unused(&mut self) -> bool {
         let current_memory = self.buffers.buffer_memory();
         let memory_margin = self.buffers.max_memory_allowed();
         if current_memory > memory_margin {
@@ -392,7 +396,7 @@ impl ModelCache {
     }
 
     #[instrument(skip(self))]
-    pub fn remove_unused(&mut self) -> bool {
+    pub(crate) fn remove_unused(&mut self) -> bool {
         let remove_older_then = *self
             .mappings
             .last_command_indexes
@@ -464,7 +468,7 @@ impl ModelCache {
 
         if check_bindgroups {
             self.bindgroups.retain_bindgroups(|bindgroup| {
-                let span1 = span!(tracing::Level::INFO, "Calc sould keep bindgroup");
+                let span1 = span!(tracing::Level::INFO, "Calc should keep bindgroup");
                 let _enter1 = span1.enter();
 
                 let check_buffer =

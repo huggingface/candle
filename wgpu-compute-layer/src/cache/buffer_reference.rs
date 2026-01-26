@@ -1,27 +1,28 @@
-////////////////// BUFFER REFERENCE:
-
+//! Buffer reference helpers used by the cache subsystem.
+//!
+//! `BufferReference` represents a virtual buffer used in the compute graph.
 use tracing::instrument;
 
 use crate::util::{ReferenceTrait, Storage, StorageTrait};
 
 use super::{BufferReferenceId, CachedBufferId};
 
-/// Virtual Buffer, used in Compute Graph
+/// Virtual buffer used in the compute graph.
 #[derive(Debug)]
 pub struct BufferReference {
     size: u64,
     cached_buffer_id: CachedBufferId,
     first_used: u32,
-    last_used: u32, //u32::max means indefitly
+    last_used: u32, // u32::MAX means indefinitely
 }
 
 impl BufferReference {
-    pub(crate) fn new(size: u64, referenced_by_candle_storage: bool) -> Self {
+    pub(crate) fn new(size: u64, referenced_by_wgpu_storage: bool) -> Self {
         Self {
             size,
             cached_buffer_id: CachedBufferId::new(0, 0),
             first_used: 0,
-            last_used: if referenced_by_candle_storage {
+            last_used: if referenced_by_wgpu_storage {
                 u32::MAX
             } else {
                 0
@@ -32,13 +33,13 @@ impl BufferReference {
     pub(crate) fn new_with_storage(
         size: u64,
         cached_buffer_id: CachedBufferId,
-        referenced_by_candle_storage: bool,
+        referenced_by_wgpu_storage: bool,
     ) -> Self {
         Self {
             size,
             cached_buffer_id,
             first_used: 0,
-            last_used: if referenced_by_candle_storage {
+            last_used: if referenced_by_wgpu_storage {
                 u32::MAX
             } else {
                 0
@@ -89,9 +90,9 @@ impl BufferReferenceStorage {
         }
     }
 
-    #[instrument(skip(self, referece))]
-    pub(crate) fn insert(&mut self, referece: BufferReference) -> BufferReferenceId {
-        self.storage.insert(referece)
+    #[instrument(skip(self, reference))]
+    pub(crate) fn insert(&mut self, reference: BufferReference) -> BufferReferenceId {
+        self.storage.insert(reference)
     }
 
     pub(crate) fn get(&self, id: &BufferReferenceId) -> Option<&BufferReference> {
@@ -117,4 +118,24 @@ impl BufferReferenceStorage {
     pub(crate) fn get_reference(&self, id: u32) -> Option<(BufferReferenceId, &BufferReference)> {
         self.storage.get_reference(id)
     }
+}
+
+
+
+#[test]
+fn modelcache_buffer_reference_flags() {
+    // Small mapping size and max memory size; we won't touch actual GPU buffers.
+    let mut cache = crate::cache::ModelCache::new(2, 1024);
+
+    // Create a virtual buffer that is referenced by WgpuStorage (should set last_used = u32::MAX)
+    let vr1 = cache.create_buffer_reference(128u64, true);
+    let v1 = cache.buffer_reference.get(&vr1).expect("expected buffer ref");
+    assert_eq!(v1.size(), 128u64);
+    assert_eq!(v1.last_used(), u32::MAX);
+
+    // Create a temporary virtual buffer not referenced by storage (last_used == 0)
+    let vr2 = cache.create_buffer_reference(64u64, false);
+    let v2 = cache.buffer_reference.get(&vr2).expect("expected buffer ref");
+    assert_eq!(v2.size(), 64u64);
+    assert_eq!(v2.last_used(), 0u32);
 }

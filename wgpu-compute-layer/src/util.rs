@@ -1,9 +1,14 @@
+//! Small utility helpers used across the crate.
+//!
+//! This module contains simple numeric conversion traits, small collection
+//! helpers and light-weight storage abstractions used by the caching and
+//! queueing subsystems.
+
 use rustc_hash::FxHashMap as HashMap;
 use std::{
     collections::VecDeque,
     hash::{Hash, Hasher},
-    marker::PhantomData,
-    sync::atomic::AtomicU32,
+    marker::PhantomData
 };
 
 use tracing::{instrument, span};
@@ -136,7 +141,7 @@ impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V: PartialEq> HashMapMulti<K
 }
 
 #[derive(Debug)]
-pub struct FixedSizeQueue<T> {
+pub(crate) struct FixedSizeQueue<T> {
     pub(crate) deque: VecDeque<T>,
     capacity: usize,
 }
@@ -153,7 +158,7 @@ impl<T> FixedSizeQueue<T> {
     // Push a new element into the queue
     pub fn push(&mut self, item: T) {
         if self.deque.len() == self.capacity {
-            self.deque.pop_front(); // Remove the oldest element if the capacity is reached
+            self.deque.pop_front(); // Remove the oldest element if capacity is reached.
         }
         self.deque.push_back(item);
     }
@@ -161,23 +166,6 @@ impl<T> FixedSizeQueue<T> {
     // Iterate over the elements in the queue
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.deque.iter()
-    }
-}
-
-#[derive(Debug)]
-pub struct Counter(AtomicU32);
-
-impl Counter {
-    pub fn new(default: u32) -> Self {
-        Counter(AtomicU32::new(default))
-    }
-
-    pub fn inc(&self) -> u32 {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    }
-
-    pub fn get(&self) -> u32 {
-        self.0.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -195,20 +183,8 @@ impl<const TSIZE: usize, T: std::marker::Copy + std::default::Default> FixedArra
         }
     }
 
-    pub fn get(&self) -> &[T] {
-        &self.data[0..self.len]
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.data[0..self.len].iter()
-    }
-
-    pub fn from_vec(vec: &[T]) -> Self {
-        let mut data = [Default::default(); TSIZE];
-        let len = vec.len();
-        assert!(len <= TSIZE);
-        data[..len].copy_from_slice(&vec[..len]);
-        FixedArray { data, len }
     }
 
     pub fn push(&mut self, data: T) {
@@ -218,10 +194,6 @@ impl<const TSIZE: usize, T: std::marker::Copy + std::default::Default> FixedArra
 
     pub fn clear(&mut self) {
         self.len = 0;
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
     }
 }
 
@@ -264,11 +236,6 @@ impl<K: std::cmp::Eq + Hash + Clone> ObjectToIdMapper<K> {
         }
     }
 
-    pub fn insert_force(&mut self, key: &K, value: usize) {
-        self.map.insert(key.clone(), value);
-        self.next_id = value;
-    }
-
     pub fn get_or_insert(&mut self, key: &K) -> (usize, bool) {
         if let Some(id) = self.map.get(key) {
             (*id, false)
@@ -287,7 +254,7 @@ impl<K: std::cmp::Eq + Hash + Clone> Default for ObjectToIdMapper<K> {
     }
 }
 
-///////////// STORAGE Field Helper Struct:
+///////////// Storage field helper struct:
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, std::marker::Copy, Default)]
 #[cfg_attr(
@@ -331,10 +298,6 @@ impl Reference {
     pub fn time(&self) -> ReferenceTime {
         self.time
     }
-
-    pub fn is_valid(&self) -> bool {
-        self.time != 0
-    }
 }
 
 type ReferenceTime = u32;
@@ -349,14 +312,14 @@ struct StorageField<T> {
 #[derive(Debug)]
 pub struct Storage<T, TREF> {
     data: Vec<StorageField<T>>,
-    free: Vec<usize>, //free references
+    free: Vec<usize>, // free references
     phantom: PhantomData<TREF>,
 }
 
 #[derive(Debug)]
 pub struct StorageOptional<T, TREF> {
     data: Vec<StorageField<Option<T>>>,
-    free: Vec<usize>, //free references
+    free: Vec<usize>, // free references
     phantom: PhantomData<TREF>,
 }
 
@@ -369,12 +332,12 @@ pub trait StorageTrait<T, TREF> {
 
     //returns the Reference at the i-th index in this storage
     fn get_reference(&self, i: u32) -> Option<(TREF, &T)>;
-    fn retain(&mut self, keep: impl Fn((&TREF, &T)) -> bool);
+    //fn retain(&mut self, keep: impl Fn((&TREF, &T)) -> bool);
     fn retain_mut(&mut self, keep: impl FnMut((&TREF, &T)) -> bool);
     fn len(&self) -> usize;
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+    // fn is_empty(&self) -> bool {
+    //     self.len() == 0
+    // }
 }
 
 impl<T, TREF> StorageTrait<T, TREF> for StorageOptional<T, TREF>
@@ -447,20 +410,6 @@ where
     }
 
     #[instrument(skip(self, keep))]
-    fn retain(&mut self, keep: impl Fn((&TREF, &T)) -> bool) {
-        for (index, sf) in self.data.iter_mut().enumerate() {
-            if let Some(val) = &sf.value {
-                if !keep((&TREF::new(index as u32, sf.time_stamp), val)) {
-                    sf.is_used = false;
-                    sf.time_stamp += 1;
-                    sf.value = None;
-                    self.free.push(index);
-                }
-            }
-        }
-    }
-
-    #[instrument(skip(self, keep))]
     fn retain_mut(&mut self, mut keep: impl FnMut((&TREF, &T)) -> bool) {
         for (index, sf) in self.data.iter_mut().enumerate() {
             if let Some(val) = &sf.value {
@@ -498,34 +447,13 @@ where
         None
     }
 
-    pub fn iter_option(&self) -> impl Iterator<Item = &T> {
-        self.data
-            .iter()
-            .filter_map(|c| if !c.is_used { None } else { c.value.as_ref() })
-    }
-
-    pub fn iter_mut_option(&mut self) -> impl Iterator<Item = &mut T> {
-        self.data
-            .iter_mut()
-            .filter_map(|c| if !c.is_used { None } else { c.value.as_mut() })
-    }
-
-    pub fn enumerate_option(&self) -> impl Iterator<Item = (TREF, &T)> {
+    #[cfg(feature = "wgpu_debug")]
+    pub(crate) fn enumerate_option(&self) -> impl Iterator<Item = (TREF, &T)> {
         self.data.iter().enumerate().filter_map(|(i, c)| {
             if !c.is_used {
                 None
             } else {
                 Some((TREF::new(i as u32, c.time_stamp), c.value.as_ref()?))
-            }
-        })
-    }
-
-    pub fn enumerate_mut_option(&mut self) -> impl Iterator<Item = (TREF, &mut T)> {
-        self.data.iter_mut().enumerate().filter_map(|(i, c)| {
-            if !c.is_used {
-                None
-            } else {
-                Some((TREF::new(i as u32, c.time_stamp), c.value.as_mut()?))
             }
         })
     }
@@ -597,16 +525,6 @@ where
             }
         }
         None
-    }
-
-    fn retain(&mut self, keep: impl Fn((&TREF, &T)) -> bool) {
-        for (index, sf) in self.data.iter_mut().enumerate() {
-            if !keep((&TREF::new(index as u32, sf.time_stamp), &sf.value)) {
-                sf.is_used = false;
-                sf.time_stamp += 1;
-                self.free.push(index);
-            }
-        }
     }
 
     fn retain_mut(&mut self, mut keep: impl FnMut((&TREF, &T)) -> bool) {

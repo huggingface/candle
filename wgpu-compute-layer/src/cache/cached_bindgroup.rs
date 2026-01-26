@@ -1,3 +1,7 @@
+//! Cached bindgroup storage and helpers.
+//!
+//! Stores bindgroups keyed by their input and destination buffers to avoid
+//! repeated allocation.
 use rustc_hash::FxHashMap as HashMap;
 
 use tracing::instrument;
@@ -30,8 +34,8 @@ impl CachedBindgroup {
 #[derive(Debug)]
 pub(crate) struct BindgroupCacheStorage {
     storage: StorageOptional<CachedBindgroup, CachedBindgroupId>,
-    bindgroups: HashMapMulti<CachedBindgroupInput, CachedBindgroupId>, //all bindgroups based on input buffers
-    bindgroups_full: HashMap<CachedBindgroupFull, CachedBindgroupId>, //all bindgroups based on input und dest buffers
+    bindgroups: HashMapMulti<CachedBindgroupInput, CachedBindgroupId>, // all bindgroups based on input buffers
+    bindgroups_full: HashMap<CachedBindgroupFull, CachedBindgroupId>, // all bindgroups based on input and dest buffers
     bindgroup_counter: u32,
     cached_bindgroup_use_counter: u32,
 }
@@ -95,7 +99,7 @@ impl BindgroupCacheStorage {
         self.bindgroups.add_mapping(bindgroup_d.1.clone(), id);
 
         if self.bindgroups_full.contains_key(&bindgroup_d) {
-            panic!("bindgroup {:?} was tried to add to the bindgroup cache, but it was already be created", bindgroup_d);
+            panic!("bindgroup {:?} was attempted to be added to the bindgroup cache, but it was already created", bindgroup_d);
         }
 
         self.bindgroups_full.insert(bindgroup_d, id);

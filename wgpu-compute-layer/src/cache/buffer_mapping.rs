@@ -1,7 +1,8 @@
 use super::{CachedBufferId, PipelineReference};
 use crate::util::FixedSizeQueue;
 
-///Cache, that stores previously flushed Gpu Commands, we try to use the same buffers as the last time
+/// Cache that stores previously flushed GPU commands so we can reuse buffers
+/// similar to the last run.
 #[derive(Debug)]
 pub(crate) struct BufferMappingCache {
     pub(crate) last_buffer_mappings: FixedSizeQueue<CachedBufferMappings>,
@@ -54,7 +55,7 @@ impl BufferMappingCache {
         self.current_buffer_mapping.as_mut().unwrap()
     }
 
-    ///Stores, that at the provided buffer was used
+    /// Stores that the provided buffer was used.
     pub(crate) fn add_new_buffer(
         &mut self,
         buffer: CachedBufferId,
@@ -94,8 +95,8 @@ impl BufferMappingCache {
 #[derive(Debug)]
 pub(crate) struct CachedBufferMapping {
     pub(crate) pipeline: PipelineReference,
-    pub(crate) used_buffer: CachedBufferId, //index in cachedBUfferMappings
-    pub(crate) last_size: u64, //size of the buffer at the last run(used to determine if this buffer is growing)
+    pub(crate) used_buffer: CachedBufferId, // index in cached buffer mappings
+    pub(crate) last_size: u64, // size of the buffer at the last run (used to determine if this buffer is growing)
 }
 
 impl CachedBufferMapping {
@@ -110,10 +111,10 @@ impl CachedBufferMapping {
 
 #[derive(Debug)]
 pub(crate) struct CachedBufferMappings {
-    pub(crate) data: Vec<CachedBufferMapping>, //all shader calls, and there used BufferCache
+    pub(crate) data: Vec<CachedBufferMapping>, // all shader calls and their used buffer cache
     pub(crate) hash: u64,
-    pub(crate) count: u32, //how many times this mapping has been used (used to determine the size of increasing buffers,
-                           //e.g. if this mapping has been used 100 times, we can allocate enough memory for 200 runs)
+    pub(crate) count: u32, // how many times this mapping has been used (used to determine the size of growing buffers,
+                           // e.g. if this mapping has been used 100 times, we can allocate enough memory for 200 runs)
 }
 
 impl CachedBufferMappings {
@@ -156,7 +157,7 @@ impl CachedBufferMappings {
             if &mapping.pipeline == pipeline {
                 return Some(mapping);
             } else {
-                //if this pipeline is inplaceable the pipeline might be different based wheter the buffer was inplaced or not.
+                // if this pipeline is in-place capable the pipeline might be different based on whether the buffer was in-placed or not.
                 if !pipeline.2.input1_inplaceable && !pipeline.2.input2_inplaceable {
                     panic!(
                         "expected: {pipeline:?} at index {index}, but got {:?}",

@@ -155,10 +155,8 @@ fn test_matmul(
                                         
 
                                     }
-                                    else{
-                                        if tile_k % (threads * 4) != 0{
-                                            continue;
-                                        }
+                                    else if tile_k % (threads * 4) != 0{
+                                        continue;
                                     }
                                     
                                     if threads >= 128{

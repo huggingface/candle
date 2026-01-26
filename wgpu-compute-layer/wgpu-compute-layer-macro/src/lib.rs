@@ -121,7 +121,7 @@ pub fn create_loader(input: TokenStream) -> TokenStream {
     // Generate the loader code with a unique index
     let expanded = quote! {
         impl #loader_name {
-            pub const LOADER_INDEX : wgpu_compute_layer::shader_loader::LoaderIndex = wgpu_compute_layer::shader_loader::LoaderIndex(#new_index);
+            pub const LOADER_INDEX : wgpu_compute_layer::LoaderIndex = wgpu_compute_layer::LoaderIndex(#new_index);
         }
     };
 

@@ -164,7 +164,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBufferInner, cache: &mut Mo
             let mut check_buffer = |buffer_reference| {
                 if let Some(buffer) = cache.buffer_reference.get_mut(&buffer_reference) {
                     if buffer.first_used() == 0 {
-                        //not alreaedy set:
+                        // not already set:
                         buffer.set_first_used(command_index);
                     }
                     if buffer.last_used() < command_index {
@@ -216,10 +216,10 @@ fn get_command_buffer(
     buffer_to_map: Option<(CachedBufferId, &wgpu::Buffer, u64)>,
 ) -> wgpu::CommandBuffer {
     #[cfg(feature = "wgpu_debug")]
-    let query_set = &dev.debug.query_set;
+    let query_set = &dev.debug_pipeline_performance.query_set;
 
     #[cfg(feature = "wgpu_debug")]
-    let global_index = dev.debug.counter.load(std::sync::atomic::Ordering::Relaxed);
+    let global_index = dev.debug_pipeline_performance.counter.load(std::sync::atomic::Ordering::Relaxed);
 
     #[cfg(feature = "wgpu_debug")]
     let mut debug_index = 0;
@@ -229,7 +229,7 @@ fn get_command_buffer(
 
     let data = bytemuck::cast_slice(meta_array);
     if data.len() as u32 + 256 > dev.configuration.meta_buffer_size {
-        panic!("Meta Buffer was to big, length was: {}", data.len());
+        panic!("Meta buffer was too big, length was: {}", data.len());
     }
 
     //write Meta Buffer
@@ -271,7 +271,7 @@ fn get_command_buffer(
 
                         if meta * 4 >= dev.configuration.meta_buffer_size - 256 {
                             panic!(
-                                "meta is to big!: meta was {meta}, q.meta: {}/{current_meta}",
+                                "meta is too big!: meta was {meta}, q.meta: {}/{current_meta}",
                                 q.meta
                             );
                         }
@@ -329,7 +329,7 @@ fn get_command_buffer(
                             use crate::debug_info;
 
                             cpass.write_timestamp(query_set, debug_index + 1);
-                            dev.debug.insert_info(
+                            dev.debug_pipeline_performance.insert_info(
                                 global_index + debug_index * 8,
                                 debug_info::ShaderPerformanceMeasurmentDebugInfo {
                                     pipeline: format!(
@@ -349,7 +349,7 @@ fn get_command_buffer(
                             );
                             debug_index += 2;
 
-                            if cache.full_recording.should_record {
+                            if cache.debug_pipeline_recording_with_data.should_record {
                                 use crate::wgpu_functions;
 
                                 let debug_info = crate::device::DebugPipelineRecording {
@@ -387,10 +387,10 @@ fn get_command_buffer(
                                                     buffer.buffer().size(),
                                                 );
                                             } else {
-                                                panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
+                                                panic!("Unexpected error reading data from GPU: tensor WgpuStorage did not point to a wgpu buffer")
                                             }
                                         } else {
-                                            panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
+                                            panic!("Unexpected error reading data from GPU: tensor WgpuStorage did not point to a wgpu buffer")
                                         }
 
                                         let data = pollster::block_on(
@@ -436,7 +436,7 @@ fn get_command_buffer(
                                     v_input3,
                                 };
 
-                                cache.full_recording.recordings.push(data);
+                                cache.debug_pipeline_recording_with_data.recordings.push(data);
                             }
                         }
                     }
@@ -529,7 +529,7 @@ fn set_buffers(
             if ele_size >= wgpu::QUERY_SET_MAX_QUERIES as usize / 2 - 1 {
                 break;
             }
-            if cache.full_recording.should_record && ele_size > 1 {
+            if cache.debug_pipeline_recording_with_data.should_record && ele_size > 1 {
                 break;
             }
         }
@@ -618,6 +618,12 @@ fn set_buffers(
                                         vinput_id,
                                         command_index,
                                     ) {
+                                        if let crate::wgpu_functions::BindgroupInputBase::Bindgroup0(_) = &new_bindgroup.get_input(){ //no input
+                                            cache.unary_inplace_counter += 1;
+                                        }
+                                        else if let crate::wgpu_functions::BindgroupInputBase::Bindgroup1(_, _) = &new_bindgroup.get_input(){ //1 input
+                                            cache.binary_inplace_counter += 1;
+                                        }
                                         input_replaced_buffer = *vinput_id;
                                         q.pipeline.0 = new_pipeline;
                                         q.bindgroup = new_bindgroup;
@@ -946,21 +952,34 @@ platform_fn! {
 
             return Ok(submissions.pop_back());
         }
-        else if let Some((buffer_reference, staging_buffer)) = buffer_id_to_map{
-            let cache = dev.cache.lock().expect("");
-            if let Some(buffer) = cache.buffer_reference.get(&buffer_reference) {
-                let buffer_storage = buffer.cached_buffer_id();
-                if buffer_storage.is_valid() {
-                    if let Some(buffer_storage) = cache.buffers.get_buffer(buffer_storage) {
-                        copy_buffer(dev, buffer_storage.buffer(), staging_buffer, buffer.size());
+        else{
+            let mut cache = dev.cache.lock().expect("");
+            let deleted_entries = cache.buffer_reference.get_deletion_entries(); //check if there are any buffers to remove
+            for entry in deleted_entries.iter() {
+                if let Some(buffer_reference) = cache.buffer_reference.get_mut(entry) {
+                    let buffer_cached_id = *buffer_reference.cached_buffer_id();
+                    if buffer_reference.cached_buffer_id().is_valid() {
+                        cache.buffers.free_buffer(&buffer_cached_id);
+                    }
+                    cache.buffer_reference.delete(entry);
+                }
+            }
+
+            if let Some((buffer_reference, staging_buffer)) = buffer_id_to_map{
+                if let Some(buffer) = cache.buffer_reference.get(&buffer_reference) {
+                    let buffer_storage = buffer.cached_buffer_id();
+                    if buffer_storage.is_valid() {
+                        if let Some(buffer_storage) = cache.buffers.get_buffer(buffer_storage) {
+                            copy_buffer(dev, buffer_storage.buffer(), staging_buffer, buffer.size());
+                        } else {
+                            panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
+                        }
                     } else {
                         panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
                     }
                 } else {
-                    panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
+                    panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer Reference")
                 }
-            } else {
-                panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer Reference")
             }
         }
         Ok(None)
@@ -1032,10 +1051,10 @@ fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: 
                         count: 1,
                     };
 
-                    if let Some(debug) = _cache.debug.get_mut(&debug_info) {
+                    if let Some(debug) = _cache.debug_pipeline_recording.get_mut(&debug_info) {
                         debug.count += 1;
                     } else {
-                        _cache.debug.insert(debug_info.clone(), debug_info);
+                        _cache.debug_pipeline_recording.insert(debug_info.clone(), debug_info);
                     }
                 }
             }
@@ -1058,7 +1077,7 @@ fn end_debug_queue(
     encoder.resolve_query_set(
         query_set,
         0..length,
-        &dev.debug.query_set_buffer,
+        &dev.debug_pipeline_performance.query_set_buffer,
         global_index as u64,
     );
     let global_index = global_index + (length * 8);
@@ -1069,7 +1088,7 @@ fn end_debug_queue(
     } else {
         global_index + (256 - remainder)
     };
-    dev.debug
+    dev.debug_pipeline_performance
         .counter
         .store(global_index, std::sync::atomic::Ordering::Relaxed);
 }

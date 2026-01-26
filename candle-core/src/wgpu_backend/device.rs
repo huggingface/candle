@@ -1,7 +1,7 @@
 
 use rand::SeedableRng;
 use tracing::instrument;
-use wgpu_compute_layer::util::ToU64;
+use wgpu_compute_layer::ToU64;
 
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::wgpu_backend::MatmulAlgorithm;
@@ -11,7 +11,7 @@ use wgpu_compute_layer::cache::{
     BindGroupReference, BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase,
     BufferReferenceId,
 };
-use wgpu_compute_layer::queue_buffer::QueueBuffer;
+use wgpu_compute_layer::QueueBuffer;
 use super::wgpu_functions::{self, unary::UnaryOperation};
 use super::WgpuStorage;
 
@@ -30,7 +30,7 @@ impl WgpuDevice {
         index: usize,
         configuration: crate::WgpuDeviceConfig,
     ) -> crate::Result<Self> {
-        let device = wgpu_compute_layer::WgpuDevice::create(index, configuration.into()).await?;
+        let device = wgpu_compute_layer::WgpuDevice::create_async(configuration.into()).await?;
         device.add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX, || {
             candle_wgpu_kernels::DefaultWgpuShader{}
         });
@@ -45,9 +45,9 @@ impl WgpuDevice {
         &self.inner_device
     }
 
-    pub fn add_wgpu_shader_loader<T: wgpu_compute_layer::shader_loader::ShaderLoader + 'static + Send + Sync>(
+    pub fn add_wgpu_shader_loader<T: wgpu_compute_layer::ShaderLoader + 'static + Send + Sync>(
         &self,
-        index: wgpu_compute_layer::shader_loader::LoaderIndex,
+        index: wgpu_compute_layer::LoaderIndex,
         shader_loader: impl Fn() -> T,
     ) {
         self.inner_device().add_wgpu_shader_loader(index, shader_loader);

@@ -1,4 +1,8 @@
-//The BindgroupLayouts-structs creates all commonly used BindgroupAlignments and Pipeline layouts in advance.
+//! Bindgroup layout helpers.
+//!
+//! The `BindgroupLayouts` helper creates commonly used bindgroup alignment
+//! variants and associated pipeline layouts in advance to avoid repeated
+//! allocations at runtime.
 
 use std::num::NonZeroU64;
 

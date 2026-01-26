@@ -16,9 +16,10 @@ pub mod where_cond;
 pub mod rotary_emb;
 
 use wgpu_compute_layer::{
+    OpIsInplaceable,
     cache::{
         BindgroupAlignmentLayout, BufferReferenceId
-    }, queue_buffer::{OpIsInplaceable, PipelineReference, QueueBuffer}, shader_loader::PipelineIndex, util::ToU32
+    }, PipelineReference, QueueBuffer, PipelineIndex, ToU32
 };
 
 use super::WgpuDevice;

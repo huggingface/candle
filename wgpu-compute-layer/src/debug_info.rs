@@ -1,3 +1,9 @@
+//! Debug helpers and measurement utilities (enabled with `wgpu_debug`).
+//!
+//! This module contains lightweight structs and functions to record timing and
+//! buffer data for dispatched pipelines. It is normally compiled only when the
+//! `wgpu_debug` feature is enabled.
+
 use std::{
     collections::HashMap,
     fs::File,
@@ -366,7 +372,7 @@ pub(crate) fn create_dispatch_zip(wgpu: &WgpuDevice, output_path: &str) -> crate
     let mut zip = ZipWriter::new(file);
     let options: FileOptions<()> = FileOptions::default();
     let cache = wgpu.cache.lock().unwrap();
-    let dispatches = &cache.full_recording.recordings;
+    let dispatches = &cache.debug_pipeline_recording_with_data.recordings;
     let loader_cache = &cache.shader.loader_cache;
     let queue: std::sync::MutexGuard<'_, super::queue_buffer::QueueBufferInner> =
         wgpu.command_queue.lock().unwrap();
