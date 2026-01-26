@@ -1,109 +1,102 @@
 use anyhow::Result;
-use candle_metal_kernels::GemmDType;
+use candle_metal_kernels::{
+    metal::{create_command_buffer, CommandSemaphore, Device},
+    GemmDType, RESOURCE_OPTIONS,
+};
 /// This example contains some simple benchmarks so that it's easy to run them in perf etc.
 use clap::{Parser, Subcommand};
 use half::f16;
+use std::sync::Arc;
 
 fn run_gemm(f32: bool, n: usize) -> Result<()> {
     const WARMUP_ITERS: usize = 2;
     const MIN_DUR: f64 = 4.;
 
-    let device = metal::Device::system_default().unwrap();
+    let device = Device::system_default().unwrap();
 
     let (b, m, n, k) = (1, n, n, n);
     let kernels = candle_metal_kernels::Kernels::new();
-    let command_queue = device.new_command_queue();
-    let options = metal::MTLResourceOptions::StorageModeManaged;
+    let command_queue = device.new_command_queue().unwrap();
+    let options = RESOURCE_OPTIONS;
 
     let (lhs, rhs) = if f32 {
         let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
         let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
-        let lhs = device.new_buffer_with_data(
-            lhs.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(&lhs) as u64,
-            options,
-        );
-        let rhs = device.new_buffer_with_data(
-            rhs.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(&rhs) as u64,
-            options,
-        );
+        let lhs = device
+            .new_buffer_with_data(
+                lhs.as_ptr() as *const core::ffi::c_void,
+                std::mem::size_of_val(&lhs),
+                options,
+            )
+            .unwrap();
+        let rhs = device
+            .new_buffer_with_data(
+                rhs.as_ptr() as *const core::ffi::c_void,
+                std::mem::size_of_val(&rhs),
+                options,
+            )
+            .unwrap();
         (lhs, rhs)
     } else {
         let lhs: Vec<f16> = (0..b * m * k).map(|f| f16::from_f32(f as f32)).collect();
         let rhs: Vec<f16> = (0..b * n * k).map(|f| f16::from_f32(f as f32)).collect();
-        let lhs = device.new_buffer_with_data(
-            lhs.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(&lhs) as u64,
-            options,
-        );
-        let rhs = device.new_buffer_with_data(
-            rhs.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(&rhs) as u64,
-            options,
-        );
+        let lhs = device
+            .new_buffer_with_data(
+                lhs.as_ptr() as *const core::ffi::c_void,
+                std::mem::size_of_val(&lhs),
+                options,
+            )
+            .unwrap();
+        let rhs = device
+            .new_buffer_with_data(
+                rhs.as_ptr() as *const core::ffi::c_void,
+                std::mem::size_of_val(&rhs),
+                options,
+            )
+            .unwrap();
         (lhs, rhs)
     };
-    let (dtype, name, sizeof) = if f32 {
-        (GemmDType::F32, "sgemm", core::mem::size_of::<f32>())
+    let (dtype, sizeof) = if f32 {
+        (GemmDType::F32, core::mem::size_of::<f32>())
     } else {
-        (GemmDType::F16, "hgemm", core::mem::size_of::<f16>())
+        (GemmDType::F16, core::mem::size_of::<f16>())
     };
-    let output = device.new_buffer((b * m * n * sizeof) as u64, options);
+    let output = device.new_buffer(b * m * n * sizeof, options).unwrap();
 
-    for mlx in [false, true] {
-        let mut sum_dt = 0f64;
-        let mut iters = 0usize;
-        for idx in 0.. {
-            let command_buffer = command_queue.new_command_buffer();
-            let start_time = std::time::Instant::now();
-            if mlx {
-                candle_metal_kernels::call_mlx_gemm(
-                    &device,
-                    command_buffer,
-                    &kernels,
-                    dtype,
-                    (b, m, n, k),
-                    &[m * k, k, 1],
-                    0,
-                    &lhs,
-                    &[n * k, n, 1],
-                    0,
-                    &rhs,
-                    &output,
-                )?;
-            } else {
-                candle_metal_kernels::call_gemm(
-                    &device,
-                    command_buffer,
-                    &kernels,
-                    name,
-                    (b, m, n, k),
-                    &[m * k, k, 1],
-                    0,
-                    &lhs,
-                    &[n * k, n, 1],
-                    0,
-                    &rhs,
-                    &output,
-                )?;
-            }
-            command_buffer.commit();
-            command_buffer.wait_until_completed();
-            let dt = start_time.elapsed().as_secs_f64();
-            if idx < WARMUP_ITERS {
-                continue;
-            }
-            sum_dt += dt;
-            iters += 1;
-            if sum_dt > MIN_DUR {
-                break;
-            }
+    let mut sum_dt = 0f64;
+    let mut iters = 0usize;
+    for idx in 0.. {
+        let semaphore = Arc::new(CommandSemaphore::new());
+        let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+        let start_time = std::time::Instant::now();
+        candle_metal_kernels::call_mlx_gemm(
+            &device,
+            &command_buffer,
+            &kernels,
+            dtype,
+            (b, m, n, k),
+            &[m * k, k, 1],
+            0,
+            &lhs,
+            &[n * k, n, 1],
+            0,
+            &rhs,
+            &output,
+        )?;
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        let dt = start_time.elapsed().as_secs_f64();
+        if idx < WARMUP_ITERS {
+            continue;
         }
-        let gflops = (2 * n * n * n * iters) as f64 / (1e9 * sum_dt);
-        let mlx = if mlx { "MLX" } else { "MFA" };
-        println!("{mlx} {dtype:?},      {n:6}      gflops {gflops:.0}");
+        sum_dt += dt;
+        iters += 1;
+        if sum_dt > MIN_DUR {
+            break;
+        }
     }
+    let gflops = (2 * n * n * n * iters) as f64 / (1e9 * sum_dt);
+    println!("{dtype:?},      {n:6}      gflops {gflops:.0}");
 
     Ok(())
 }

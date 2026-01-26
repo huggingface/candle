@@ -14,40 +14,39 @@ static inline __device__ void ggml_cuda_swap(T & a, T & b) {
 template<int order, typename T>
 static __device__ void k_argsort(const T * x, uint32_t * dst, const int ncols, int ncols_pad) {
     // bitonic sort
-    int col = threadIdx.x;
-    int row = blockIdx.y;
-
-    if (col >= ncols_pad) {
-        return;
-    }
+    int row = blockIdx.x;
 
     const T * x_row = x + row * ncols;
     extern __shared__ int dst_row[];
 
-    // initialize indices
-    dst_row[col] = col;
+    // initialize indices - each thread handles multiple elements if ncols_pad > blockDim.x
+    for (int col = threadIdx.x; col < ncols_pad; col += blockDim.x) {
+        dst_row[col] = col;
+    }
 
     __syncthreads();
 
     for (int k = 2; k <= ncols_pad; k *= 2) {
         for (int j = k / 2; j > 0; j /= 2) {
-            int ixj = col ^ j;
-            if (ixj > col) {
-                if ((col & k) == 0) {
-                    if (dst_row[col] >= ncols ||
-                        (dst_row[ixj] < ncols && (order == SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]]))
-                    ) {
-                        ggml_cuda_swap(dst_row[col], dst_row[ixj]);
-                    }
-                } else {
-                    if (dst_row[ixj] >= ncols ||
-                        (dst_row[col] < ncols && (order == SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]]))
-                    ) {
-                        ggml_cuda_swap(dst_row[col], dst_row[ixj]);
+            for (int col = threadIdx.x; col < ncols_pad; col += blockDim.x) {
+                int ixj = col ^ j;
+                if (ixj > col) {
+                    if ((col & k) == 0) {
+                        if (dst_row[col] >= ncols ||
+                            (dst_row[ixj] < ncols && (order == SORT_ORDER_ASC ?
+                                x_row[dst_row[col]] > x_row[dst_row[ixj]] :
+                                x_row[dst_row[col]] < x_row[dst_row[ixj]]))
+                        ) {
+                            ggml_cuda_swap(dst_row[col], dst_row[ixj]);
+                        }
+                    } else {
+                        if (dst_row[ixj] >= ncols ||
+                            (dst_row[col] < ncols && (order == SORT_ORDER_ASC ?
+                                x_row[dst_row[col]] < x_row[dst_row[ixj]] :
+                                x_row[dst_row[col]] > x_row[dst_row[ixj]]))
+                        ) {
+                            ggml_cuda_swap(dst_row[col], dst_row[ixj]);
+                        }
                     }
                 }
             }
@@ -56,7 +55,7 @@ static __device__ void k_argsort(const T * x, uint32_t * dst, const int ncols, i
     }
 
     // copy the result to dst without the padding
-    if (col < ncols) {
+    for (int col = threadIdx.x; col < ncols; col += blockDim.x) {
         dst[row * ncols + col] = dst_row[col];
     }
 }
@@ -75,6 +74,9 @@ extern "C" __global__ void asort_desc_##RUST_NAME(  \
  
 #if __CUDA_ARCH__ >= 800 || (__CUDA_ARCH__ >= 530 &&  __CUDA_ARCH__ < 800)
 ASORT_OP(__nv_bfloat16, bf16)
+
+// NOTE: No sort ops for f8
+// ASORT_OP(__nv_fp8_e4m3, fp8_e4m3)
 #endif
 
 #if __CUDA_ARCH__ >= 530

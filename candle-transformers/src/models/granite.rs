@@ -2,8 +2,6 @@
 //!
 //! A high performance transformer model optimized for efficient processing
 //! of very long context sequences
-//!
-//! Based on implementation from [Nod.ai](https://github.com/nod-ai/granite)
 
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};

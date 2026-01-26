@@ -1,5 +1,5 @@
 # candle
-[![discord server](https://dcbadge.vercel.app/api/server/hugging-face-879548962464493619)](https://discord.gg/hugging-face-879548962464493619)
+[![discord server](https://dcbadge.limes.pink/api/server/hugging-face-879548962464493619)](https://discord.gg/hugging-face-879548962464493619)
 [![Latest version](https://img.shields.io/crates/v/candle-core.svg)](https://crates.io/crates/candle-core)
 [![Documentation](https://docs.rs/candle-core/badge.svg)](https://docs.rs/candle-core)
 [![License](https://img.shields.io/github/license/base-org/node?color=blue)](https://github.com/huggingface/candle/blob/main/LICENSE-MIT)
@@ -59,12 +59,12 @@ These online demos run entirely in your browser:
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
 - [BLIP](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
 
-We also provide a some command line based examples using state of the art models:
+We also provide some command line based examples using state of the art models:
 
 - [LLaMA v1, v2, and v3](./candle-examples/examples/llama/): general LLM, includes
   the SOLAR-10.7B variant.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion,code interpreter,web search,fuction calling,repository-level
+- [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion, code interpreter, web search, function calling, repository-level
 - [GLM4](./candle-examples/examples/glm4/): Open Multilingual Multimodal Chat LMs by THUDM
 - [Gemma v1 and v2](./candle-examples/examples/gemma/): 2b and 7b+/9b general LLMs from Google Deepmind.
 - [RecurrentGemma](./candle-examples/examples/recurrent-gemma/): 2b and 7b
@@ -92,6 +92,7 @@ We also provide a some command line based examples using state of the art models
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
+- [Quantized Qwen3 MoE](./candle-examples/examples/quantized-qwen3-moe/): support gguf quantized models of Qwen3 MoE models.
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/quantized/assets/aoc.gif" width="600">
   
@@ -189,6 +190,8 @@ And then head over to
 - [`gpt-from-scratch-rs`](https://github.com/jeroenvlek/gpt-from-scratch-rs): A port of Andrej Karpathy's _Let's build GPT_ tutorial on YouTube showcasing the Candle API on a toy problem.
 - [`candle-einops`](https://github.com/tomsanbear/candle-einops): A pure rust implementation of the python [einops](https://github.com/arogozhnikov/einops) library.
 - [`atoma-infer`](https://github.com/atoma-network/atoma-infer): A Rust library for fast inference at scale, leveraging FlashAttention2 for efficient attention computation, PagedAttention for efficient KV-cache memory management, and multi-GPU support. It is OpenAI api compatible.
+- [`llms-from-scratch-rs`](https://github.com/nerdai/llms-from-scratch-rs): A comprehensive Rust translation of the code from Sebastian Raschka's Build an LLM from Scratch book.
+- [`vllm.rs`](https://github.com/guoqingbao/vllm.rs): A minimalist vLLM implementation in Rust based on Candle.
 
 If you have an addition to this list, please submit a pull request.
 
@@ -219,7 +222,7 @@ If you have an addition to this list, please submit a pull request.
         - Replit-code-v1.5-3B.
         - Bert.
         - Yi-6B and Yi-34B.
-        - Qwen1.5, Qwen1.5 MoE.
+        - Qwen1.5, Qwen1.5 MoE, Qwen3 MoE.
         - RWKV v5 and v6.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
@@ -227,6 +230,7 @@ If you have an addition to this list, please submit a pull request.
         - Mixtral 8x7b.
         - Zephyr 7b a and b (Mistral-7b based).
         - OpenChat 3.5 (Mistral-7b based).
+        - Qwen3 MoE (16B-A3B, 32B-A3B)
     - Text to text.
         - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
@@ -289,6 +293,8 @@ Cheatsheet:
 
 ### Why should I use Candle?
 
+<!--- ANCHOR: goals --->
+
 Candle's core goal is to *make serverless inference possible*. Full machine learning frameworks like PyTorch
 are very large, which makes creating instances on a cluster slow. Candle allows deployment of lightweight
 binaries.
@@ -298,6 +304,7 @@ and the [GIL](https://www.backblaze.com/blog/the-python-gil-past-present-and-fut
 
 Finally, Rust is cool! A lot of the HF ecosystem already has Rust crates, like [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers).
 
+<!--- ANCHOR_END: goals --->
 
 ### Other ML frameworks
 

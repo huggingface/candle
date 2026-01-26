@@ -20,15 +20,15 @@ candle-nn = { workspace = true }
 candle-onnx = { workspace = true, optional = true }
 half = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
-pyo3 = { version = "0.22.0", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py313"] }
+float8 = { workspace = true }
 
 [build-dependencies]
-pyo3-build-config = "0.22"
+pyo3-build-config = "0.27"
 
 [features]
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
-mkl = ["dep:intel-mkl-src","candle/mkl"]
+mkl = ["dep:intel-mkl-src", "candle/mkl"]
 onnx = ["dep:candle-onnx"]
-

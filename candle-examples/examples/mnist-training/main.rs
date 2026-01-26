@@ -7,6 +7,7 @@ extern crate accelerate_src;
 
 use clap::{Parser, ValueEnum};
 use rand::prelude::*;
+use rand::rng;
 
 use candle::{DType, Result, Tensor, D};
 use candle_nn::{loss, ops, Conv2d, Linear, Module, ModuleT, Optimizer, VarBuilder, VarMap};
@@ -136,9 +137,9 @@ fn training_loop_cnn(
     let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
     let n_batches = train_images.dim(0)? / BSIZE;
     let mut batch_idxs = (0..n_batches).collect::<Vec<usize>>();
-    for epoch in 1..args.epochs {
+    for epoch in 1..=args.epochs {
         let mut sum_loss = 0f32;
-        batch_idxs.shuffle(&mut thread_rng());
+        batch_idxs.shuffle(&mut rng());
         for batch_idx in batch_idxs.iter() {
             let train_images = train_images.narrow(0, batch_idx * BSIZE, BSIZE)?;
             let train_labels = train_labels.narrow(0, batch_idx * BSIZE, BSIZE)?;
@@ -193,7 +194,7 @@ fn training_loop<M: Model>(
     let mut sgd = candle_nn::SGD::new(varmap.all_vars(), args.learning_rate)?;
     let test_images = m.test_images.to_device(&dev)?;
     let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
-    for epoch in 1..args.epochs {
+    for epoch in 1..=args.epochs {
         let logits = model.forward(&train_images)?;
         let log_sm = ops::log_softmax(&logits, D::Minus1)?;
         let loss = loss::nll(&log_sm, &train_labels)?;

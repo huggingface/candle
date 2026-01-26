@@ -1,5 +1,6 @@
 //! Support for the [GGUF file format](https://github.com/philpax/ggml/blob/gguf-spec/docs/gguf.md).
 //!
+//! Spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md  
 
 use super::{GgmlDType, QTensor};
 use crate::{Context, Device, Result};
@@ -62,7 +63,7 @@ impl TensorInfo {
     ) -> Result<QTensor> {
         let tensor_elems = self.shape.elem_count();
         let block_size = self.ggml_dtype.block_size();
-        if tensor_elems % block_size != 0 {
+        if !tensor_elems.is_multiple_of(block_size) {
             crate::bail!(
             "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )

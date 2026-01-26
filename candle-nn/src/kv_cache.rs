@@ -1,16 +1,17 @@
 //! Cache Implementations
 //!
-use candle::{Device, Result, Tensor};
+use candle::{DType, Device, Result, Tensor};
 
 #[derive(Debug, Clone)]
 pub struct Cache {
     // all_data is an option on a Tensor, this makes it possible to only create the actual tensor
     // on the first call where the batch size is easily known.
-    // Also this makes it safe to clone a KvCache that has been reseted (as in it will not share
+    // Also this makes it safe to clone a KvCache that has been reset (as in it will not share
     // its internal state with the cloned instance).
     all_data: Option<Tensor>,
     dim: usize,
     current_seq_len: usize,
+    grow_by: usize,
     max_seq_len: usize,
 }
 
@@ -20,6 +21,7 @@ impl Cache {
             all_data: None,
             dim,
             current_seq_len: 0,
+            grow_by: max_seq_len,
             max_seq_len,
         }
     }
@@ -64,12 +66,12 @@ impl Cache {
             self.all_data = Some(ad)
         };
         let ad = self.all_data.as_mut().unwrap();
-        if self.current_seq_len + seq_len > self.max_seq_len {
-            candle::bail!(
-                "kv-cache: above max-seq-len {}+{seq_len}>{}",
-                self.current_seq_len,
-                self.max_seq_len
-            )
+        while self.current_seq_len + seq_len > self.max_seq_len {
+            let mut shape = src.dims().to_vec();
+            shape[self.dim] = self.grow_by;
+            let next_ad = Tensor::zeros(shape, src.dtype(), src.device())?;
+            *ad = Tensor::cat(&[&*ad, &next_ad], self.dim)?;
+            self.max_seq_len += self.grow_by;
         }
         ad.slice_set(src, self.dim, self.current_seq_len)?;
         self.current_seq_len += seq_len;
@@ -292,6 +294,27 @@ impl RotatingCache {
         Tensor::from_slice(&mask, (size1, size2), device)
     }
 
+    /// Returns the positions corresponding to all the elements that will be returned
+    /// *after* adding `seq_len` to the cache.
+    pub fn positions(&self, seq_len: usize) -> Vec<usize> {
+        if seq_len <= self.max_seq_len {
+            let upd_offset = (self.offset + seq_len) % self.max_seq_len;
+            let cache_out_len = (self.current_seq_len + seq_len).min(self.max_seq_len);
+            (0..cache_out_len)
+                .map(|i| {
+                    let pos_cache = self.current_seq_len + seq_len + i - upd_offset;
+                    if i < upd_offset {
+                        pos_cache
+                    } else {
+                        pos_cache - self.max_seq_len
+                    }
+                })
+                .collect()
+        } else {
+            (self.current_seq_len..(self.current_seq_len + seq_len)).collect()
+        }
+    }
+
     /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.
     pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
         let mask = if seq_len == 1 {
@@ -360,12 +383,604 @@ impl RotatingKvCache {
         self.k.current_seq_len()
     }
 
+    /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.
     pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
         self.k.attn_mask(seq_len, device)
+    }
+
+    /// Returns the positions corresponding to all the elements that will be returned
+    /// *after* adding `seq_len` to the cache.
+    pub fn positions(&self, seq_len: usize) -> Vec<usize> {
+        self.k.positions(seq_len)
     }
 
     pub fn reset(&mut self) {
         self.k.reset();
         self.v.reset();
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IndicesAndMask {
+    indices: Tensor,
+    mask: Tensor,
+}
+
+impl IndicesAndMask {
+    pub fn mask(&self) -> &Tensor {
+        &self.mask
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScatteredKvCache {
+    k: Tensor,
+    v: Tensor,
+    context: usize,
+}
+
+impl ScatteredKvCache {
+    pub fn append(
+        &mut self,
+        k: &Tensor,
+        v: &Tensor,
+        iam: &IndicesAndMask,
+    ) -> Result<(Tensor, Tensor)> {
+        if self.context <= k.dim(2)? {
+            return Ok((k.clone(), v.clone()));
+        }
+        let indices = iam.indices.unsqueeze(2)?.unsqueeze(1)?;
+        let indices = indices.broadcast_as(k.shape())?.contiguous()?;
+        self.k.scatter_set(&indices, k, 2)?;
+        self.v.scatter_set(&indices, v, 2)?;
+        Ok((self.k.clone(), self.v.clone()))
+    }
+
+    pub fn k(&self) -> &Tensor {
+        &self.k
+    }
+
+    pub fn v(&self) -> &Tensor {
+        &self.v
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScatteredCacheBuilder {
+    context: usize,
+    // The current position in the stream, this can be larger than context.
+    positions: Vec<usize>,
+    // The index where the next element will be stored.
+    indices: Vec<usize>,
+    dtype: DType,
+    device: Device,
+}
+
+impl ScatteredCacheBuilder {
+    pub fn new(batch_size: usize, context: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let positions = vec![0; batch_size];
+        let indices = vec![0; batch_size];
+        Ok(Self {
+            positions,
+            indices,
+            context,
+            dtype,
+            device: device.clone(),
+        })
+    }
+
+    pub fn make_cache(&self, num_heads: usize, head_dim: usize) -> Result<ScatteredKvCache> {
+        let batch_size = self.batch_size();
+        let shape = (batch_size, num_heads, self.context, head_dim);
+        let k = Tensor::zeros(shape, self.dtype, self.device())?;
+        let v = Tensor::zeros(shape, self.dtype, self.device())?;
+        Ok(ScatteredKvCache {
+            k,
+            v,
+            context: self.context,
+        })
+    }
+
+    pub fn positions(&self) -> &[usize] {
+        &self.positions
+    }
+
+    pub fn reset(&mut self) {
+        self.positions.fill(0);
+        self.indices.fill(0);
+    }
+
+    pub fn batch_size(&self) -> usize {
+        self.positions.len()
+    }
+
+    pub fn reset_batch_index(&mut self, batch_index: usize) {
+        self.positions[batch_index] = 0;
+        self.indices[batch_index] = 0;
+    }
+
+    #[allow(clippy::needless_range_loop)]
+    pub fn indices_and_mask(
+        &mut self,
+        seq_len: usize,
+        batch_mask: &[bool],
+    ) -> Result<IndicesAndMask> {
+        // mask shape is (b, h, t, k)
+        let context = self.context;
+        if self.context <= seq_len {
+            return self.indices_and_mask_abs(seq_len, batch_mask);
+        }
+        let mut attention_masks = Vec::with_capacity(self.batch_size());
+        let mut cache_indices = Vec::with_capacity(self.batch_size());
+        for (batch_i, &batch_mask) in batch_mask.iter().enumerate() {
+            if !batch_mask {
+                let masks: Vec<Vec<f32>> = vec![vec![0.0; context]; seq_len];
+                let indices = vec![self.indices[batch_i] as u32; seq_len];
+                attention_masks.push(masks);
+                cache_indices.push(indices);
+            } else {
+                let start_index = self.indices[batch_i];
+                let start_pos = self.positions[batch_i];
+                let mut masks: Vec<Vec<f32>> = Vec::with_capacity(seq_len);
+                let mut indices = Vec::with_capacity(seq_len);
+                let mut all_pos = vec![usize::MAX; context];
+                if start_pos < context {
+                    for i in 0..start_pos {
+                        all_pos[i] = i;
+                    }
+                } else {
+                    let offset = start_pos - start_index;
+                    for i in 0..context {
+                        all_pos[i] = if i < start_index {
+                            i + offset
+                        } else {
+                            i + offset - context
+                        };
+                    }
+                }
+                for seq_i in 0..seq_len {
+                    let index = self.indices[batch_i];
+                    all_pos[index] = seq_i + start_pos;
+                    indices.push(index as u32);
+                    self.indices[batch_i] += 1;
+                    self.positions[batch_i] += 1;
+                    if self.indices[batch_i] >= self.context {
+                        self.indices[batch_i] = 0;
+                    }
+                }
+
+                for seq_i in 0..seq_len {
+                    let my_pos = seq_i + start_pos;
+                    let mask = all_pos
+                        .iter()
+                        .map(|&pos| {
+                            if pos <= my_pos {
+                                0.0
+                            } else {
+                                f32::NEG_INFINITY
+                            }
+                        })
+                        .collect::<Vec<f32>>();
+                    masks.push(mask);
+                }
+
+                attention_masks.push(masks);
+                cache_indices.push(indices);
+            }
+        }
+        // Flattening the attention mask then using Tensor::from_vec rather using Tensor::new ends
+        // up being almost 10x faster with candle 0.9.0. This has been fixed in candle 0.9.1.
+        let attention_masks = attention_masks
+            .into_iter()
+            .flat_map(|m| m.into_iter().flatten())
+            .collect::<Vec<f32>>();
+        let mask = Tensor::from_vec(attention_masks, ((), 1, seq_len, context), self.device())?
+            .to_dtype(self.dtype)?;
+        let indices = Tensor::new(cache_indices, self.device())?;
+        Ok(IndicesAndMask { indices, mask })
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    #[allow(clippy::needless_range_loop)]
+    fn indices_and_mask_abs(
+        &mut self,
+        seq_len: usize,
+        batch_mask: &[bool],
+    ) -> Result<IndicesAndMask> {
+        let mask = self.get_mask_abs(seq_len, seq_len)?;
+        let mut cache_indices = Vec::with_capacity(self.batch_size());
+        for (batch_i, &batch_mask) in batch_mask.iter().enumerate() {
+            if !batch_mask {
+                let indices = vec![self.indices[batch_i] as u32; seq_len];
+                cache_indices.push(indices);
+            } else {
+                let mut indices = Vec::with_capacity(seq_len);
+                for _ in 0..seq_len {
+                    let index = self.indices[batch_i];
+                    indices.push(index as u32);
+                    self.indices[batch_i] += 1;
+                    self.positions[batch_i] += 1;
+                    if self.indices[batch_i] >= self.context {
+                        self.indices[batch_i] = 0;
+                    }
+                }
+                cache_indices.push(indices);
+            }
+        }
+        let indices = Tensor::new(cache_indices, self.device())?;
+        Ok(IndicesAndMask { indices, mask })
+    }
+
+    fn get_mask_abs(&self, size1: usize, size2: usize) -> Result<Tensor> {
+        let context = self.context;
+        let mask: Vec<_> = (0..size1)
+            .flat_map(|i| {
+                (0..size2).map(move |j| {
+                    if size1 + j > size2 + i || size1 + j + context < size2 + i {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.0
+                    }
+                })
+            })
+            .collect();
+        Tensor::from_slice(&mask, (size1, size2), self.device())
+    }
+}
+
+/// KV-Cache using concatenation for append operations
+///
+/// This implementation uses `Tensor::cat` instead of `slice_set` for updates,
+/// providing significant GPU performance improvements for autoregressive generation.
+///
+/// # When to Use
+///
+/// **Recommended for:**
+/// - GPU inference (CUDA, Metal)
+/// - Autoregressive generation (token-by-token decoding)
+///
+/// **Use `KvCache` instead for:**
+/// - CPU-only inference
+/// - When you need fixed memory allocation upfront
+///
+/// # Example
+///
+/// ```ignore
+/// use candle_nn::kv_cache::ConcatKvCache;
+///
+/// let mut cache = ConcatKvCache::new(2); // dim=2 for sequence dimension
+///
+/// // First token (prefill)
+/// let k1 = Tensor::randn(0f32, 1., (1, 8, 10, 64), &device)?;
+/// let v1 = Tensor::randn(0f32, 1., (1, 8, 10, 64), &device)?;
+/// let (k, v) = cache.append(&k1, &v1)?;
+///
+/// // Subsequent tokens (decode)
+/// let k_new = Tensor::randn(0f32, 1., (1, 8, 1, 64), &device)?;
+/// let v_new = Tensor::randn(0f32, 1., (1, 8, 1, 64), &device)?;
+/// let (k, v) = cache.append(&k_new, &v_new)?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct ConcatKvCache {
+    k: Option<Tensor>,
+    v: Option<Tensor>,
+    dim: usize,
+}
+
+impl ConcatKvCache {
+    /// Create a new empty concatenation-based KV-cache
+    ///
+    /// # Arguments
+    /// * `dim` - The dimension along which to concatenate
+    ///   - For attention with shape `[batch, heads, seq, head_dim]`, use `dim=2`
+    ///   - For attention with shape `[batch, seq, heads, head_dim]`, use `dim=1`
+    ///
+    /// # Example
+    /// ```ignore
+    /// // For standard transformer attention: [B, H, S, D]
+    /// let cache = ConcatKvCache::new(2);
+    /// ```
+    pub fn new(dim: usize) -> Self {
+        Self {
+            k: None,
+            v: None,
+            dim,
+        }
+    }
+
+    /// Get current sequence length in the cache
+    ///
+    /// Returns 0 if the cache is empty.
+    pub fn current_seq_len(&self) -> usize {
+        self.k
+            .as_ref()
+            .and_then(|k| k.dims().get(self.dim).copied())
+            .unwrap_or(0)
+    }
+
+    /// Check if cache is empty
+    pub fn is_empty(&self) -> bool {
+        self.k.is_none()
+    }
+
+    /// Get the concatenation dimension
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Append key and value tensors to the cache
+    ///
+    /// This is the core operation that uses optimized concatenation kernels.
+    ///
+    /// # Arguments
+    /// * `k` - Key tensor to append (shape: [..., seq_len, ...])
+    /// * `v` - Value tensor to append (shape: [..., seq_len, ...])
+    ///
+    /// # Returns
+    /// Tuple of `(full_k, full_v)` containing all cached keys and values,
+    /// including the newly appended data.
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        // Ensure inputs are contiguous for optimal concatenation performance
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+        // Update K cache using concatenation
+        self.k = Some(match &self.k {
+            None => k.clone(),
+            Some(k_cache) => {
+                // Concatenate along the sequence dimension
+                // GPU kernel for cat is highly optimized:
+                // - Fused allocation + copy
+                // - Coalesced memory access
+                // - Single kernel launch
+                Tensor::cat(&[k_cache, &k], self.dim)?
+            }
+        });
+
+        // Update V cache using concatenation
+        self.v = Some(match &self.v {
+            None => v.clone(),
+            Some(v_cache) => Tensor::cat(&[v_cache, &v], self.dim)?,
+        });
+
+        Ok((
+            self.k.as_ref().unwrap().clone(),
+            self.v.as_ref().unwrap().clone(),
+        ))
+    }
+
+    /// Reset the cache (clear all stored keys and values)
+    ///
+    /// After calling this, `is_empty()` will return `true` and
+    /// `current_seq_len()` will return 0.
+    pub fn reset(&mut self) {
+        self.k = None;
+        self.v = None;
+    }
+
+    /// Get reference to current K cache data
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn k(&self) -> Option<&Tensor> {
+        self.k.as_ref()
+    }
+
+    /// Get reference to current V cache data
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn v(&self) -> Option<&Tensor> {
+        self.v.as_ref()
+    }
+
+    /// Get mutable reference to K cache data
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn k_mut(&mut self) -> Option<&mut Tensor> {
+        self.k.as_mut()
+    }
+
+    /// Get mutable reference to V cache data
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn v_mut(&mut self) -> Option<&mut Tensor> {
+        self.v.as_mut()
+    }
+
+    /// Get owned K and V tensors, consuming the cache
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn into_inner(self) -> Option<(Tensor, Tensor)> {
+        match (self.k, self.v) {
+            (Some(k), Some(v)) => Some((k, v)),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::IndexOp;
+
+    #[test]
+    fn test_scattered_kv_cache() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ScatteredCacheBuilder::new(2, 5, DType::F32, &device)?;
+        let inf = f32::INFINITY;
+
+        let iam = cache.indices_and_mask(1, &[true, false])?;
+        let mask = iam.mask.i((.., 0))?.to_vec3::<f32>()?;
+        assert_eq!(iam.indices.to_vec2::<u32>()?, [[0], [0]]);
+        assert_eq!(
+            mask,
+            [[[0.0, -inf, -inf, -inf, -inf]], [[0.0, 0.0, 0.0, 0.0, 0.0]]]
+        );
+
+        let iam = cache.indices_and_mask(1, &[true, false])?;
+        let mask = iam.mask.i((.., 0))?.to_vec3::<f32>()?;
+        assert_eq!(iam.indices.to_vec2::<u32>()?, [[1], [0]]);
+        assert_eq!(
+            mask,
+            [[[0.0, 0.0, -inf, -inf, -inf]], [[0.0, 0.0, 0.0, 0.0, 0.0]]]
+        );
+
+        let iam = cache.indices_and_mask(3, &[false, true])?;
+        let mask = iam.mask.i((.., 0))?.to_vec3::<f32>()?;
+        assert_eq!(iam.indices.to_vec2::<u32>()?, [[2, 2, 2], [0, 1, 2]]);
+        assert_eq!(
+            mask,
+            [
+                [
+                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0]
+                ],
+                [
+                    [0.0, -inf, -inf, -inf, -inf],
+                    [0.0, 0.0, -inf, -inf, -inf],
+                    [0.0, 0.0, 0.0, -inf, -inf]
+                ]
+            ]
+        );
+
+        let iam = cache.indices_and_mask(3, &[true, true])?;
+        let mask = iam.mask.i((.., 0))?.to_vec3::<f32>()?;
+        assert_eq!(iam.indices.to_vec2::<u32>()?, [[2, 3, 4], [3, 4, 0]]);
+        assert_eq!(
+            mask,
+            [
+                [
+                    [0.0, 0.0, 0.0, -inf, -inf],
+                    [0.0, 0.0, 0.0, 0.0, -inf],
+                    [0.0, 0.0, 0.0, 0.0, 0.0]
+                ],
+                [
+                    [-inf, 0.0, 0.0, 0.0, -inf],
+                    [-inf, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0]
+                ]
+            ]
+        );
+
+        let iam = cache.indices_and_mask(1, &[true, false])?;
+        let mask = iam.mask.i((.., 0))?.to_vec3::<f32>()?;
+        assert_eq!(iam.indices.to_vec2::<u32>()?, [[0], [1]]);
+        assert_eq!(
+            mask,
+            [[[0.0, 0.0, 0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0, 0.0, 0.0]]]
+        );
+
+        let iam = cache.indices_and_mask(2, &[true, false])?;
+        let mask = iam.mask.i((.., 0))?.to_vec3::<f32>()?;
+        assert_eq!(iam.indices.to_vec2::<u32>()?, [[1, 2], [1, 1]]);
+        assert_eq!(
+            mask,
+            [
+                [[0.0, 0.0, -inf, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0]],
+                [[0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0]]
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concat_cache_basic() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ConcatKvCache::new(2);
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.current_seq_len(), 0);
+
+        // First append
+        let k1 = Tensor::zeros((1, 8, 3, 64), DType::F32, &device)?;
+        let v1 = Tensor::zeros((1, 8, 3, 64), DType::F32, &device)?;
+        let (k, v) = cache.append(&k1, &v1)?;
+
+        assert_eq!(k.dims(), &[1, 8, 3, 64]);
+        assert_eq!(v.dims(), &[1, 8, 3, 64]);
+        assert_eq!(cache.current_seq_len(), 3);
+        assert!(!cache.is_empty());
+
+        // Second append
+        let k2 = Tensor::zeros((1, 8, 2, 64), DType::F32, &device)?;
+        let v2 = Tensor::zeros((1, 8, 2, 64), DType::F32, &device)?;
+        let (k, v) = cache.append(&k2, &v2)?;
+
+        assert_eq!(k.dims(), &[1, 8, 5, 64]); // 3 + 2
+        assert_eq!(v.dims(), &[1, 8, 5, 64]);
+        assert_eq!(cache.current_seq_len(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concat_cache_reset() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ConcatKvCache::new(2);
+
+        let k = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        let v = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        cache.append(&k, &v)?;
+
+        assert_eq!(cache.current_seq_len(), 10);
+
+        cache.reset();
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.current_seq_len(), 0);
+        assert!(cache.k().is_none());
+        assert!(cache.v().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concat_cache_multiple_appends() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ConcatKvCache::new(2);
+
+        // Simulate autoregressive generation
+        let k_prefill = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        let v_prefill = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        cache.append(&k_prefill, &v_prefill)?;
+
+        assert_eq!(cache.current_seq_len(), 10);
+
+        // Decode phase: append one token at a time
+        for i in 1..=5 {
+            let k_token = Tensor::zeros((1, 8, 1, 64), DType::F32, &device)?;
+            let v_token = Tensor::zeros((1, 8, 1, 64), DType::F32, &device)?;
+            let (k, v) = cache.append(&k_token, &v_token)?;
+            assert_eq!(k.dims()[2], 10 + i);
+            assert_eq!(v.dims()[2], 10 + i);
+        }
+
+        assert_eq!(cache.current_seq_len(), 15);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concat_cache_different_dim() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ConcatKvCache::new(1); // Concatenate on dim 1 instead of 2
+
+        let k1 = Tensor::zeros((1, 3, 8, 64), DType::F32, &device)?;
+        let v1 = Tensor::zeros((1, 3, 8, 64), DType::F32, &device)?;
+        let (k, _v) = cache.append(&k1, &v1)?;
+
+        assert_eq!(k.dims(), &[1, 3, 8, 64]);
+
+        let k2 = Tensor::zeros((1, 2, 8, 64), DType::F32, &device)?;
+        let v2 = Tensor::zeros((1, 2, 8, 64), DType::F32, &device)?;
+        let (k, _v) = cache.append(&k2, &v2)?;
+
+        assert_eq!(k.dims(), &[1, 5, 8, 64]); // Concatenated on dim 1
+        assert_eq!(cache.current_seq_len(), 5);
+
+        Ok(())
     }
 }

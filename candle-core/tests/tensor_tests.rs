@@ -1,4 +1,5 @@
 use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor, D};
+use float8::F8E4M3;
 
 fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;
@@ -25,10 +26,12 @@ fn ones(device: &Device) -> Result<()> {
         Tensor::ones((2, 3), DType::F32, device)?.to_vec2::<f32>()?,
         [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
     );
-    assert_eq!(
-        Tensor::ones((2, 3), DType::F64, device)?.to_vec2::<f64>()?,
-        [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-    );
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::ones((2, 3), DType::F64, device)?.to_vec2::<f64>()?,
+            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        );
+    }
     assert_eq!(
         Tensor::ones((2, 3), DType::F16, device)?.to_vec2::<half::f16>()?,
         [
@@ -59,10 +62,48 @@ fn ones(device: &Device) -> Result<()> {
             ]
         ],
     );
+
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
+            [
+                [
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.)
+                ],
+                [
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.)
+                ]
+            ],
+        );
+    }
     Ok(())
 }
 
 fn full(device: &Device) -> Result<()> {
+    let tensor = Tensor::zeros((3, 4), DType::U32, device)?;
+    tensor.const_set(42u32.into())?;
+    assert_eq!(
+        tensor.to_vec2::<u32>()?,
+        [[42, 42, 42, 42], [42, 42, 42, 42], [42, 42, 42, 42]]
+    );
+    tensor.i((.., 2))?.const_set(1337u32.into())?;
+    assert_eq!(
+        tensor.to_vec2::<u32>()?,
+        [[42, 42, 1337, 42], [42, 42, 1337, 42], [42, 42, 1337, 42]]
+    );
+    tensor.i((2, ..))?.const_set(1u32.into())?;
+    assert_eq!(
+        tensor.to_vec2::<u32>()?,
+        [[42, 42, 1337, 42], [42, 42, 1337, 42], [1, 1, 1, 1]]
+    );
+    Ok(())
+}
+
+fn const_set(device: &Device) -> Result<()> {
     assert_eq!(
         Tensor::full(42u32, (2, 3), device)?.to_vec2::<u32>()?,
         [[42, 42, 42], [42, 42, 42]],
@@ -87,6 +128,24 @@ fn arange(device: &Device) -> Result<()> {
         Tensor::arange_step(5i64, 0i64, -1, device)?.to_vec1::<i64>()?,
         [5, 4, 3, 2, 1],
     );
+
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::arange_step(
+                F8E4M3::from_f32(0.),
+                F8E4M3::from_f32(5.),
+                F8E4M3::from_f32(2.),
+                device
+            )?
+            .to_vec1::<F8E4M3>()?,
+            [
+                F8E4M3::from_f32(0.),
+                F8E4M3::from_f32(2.),
+                F8E4M3::from_f32(4.),
+            ],
+        );
+    }
+
     Ok(())
 }
 
@@ -157,6 +216,26 @@ fn asort(device: &Device) -> Result<()> {
         sorted.to_vec2::<f32>()?,
         [[5.0, 4.0, 3.0, 1.1, 1.0], [8.0, 7.0, 2.1, 2.0, 1.0]]
     );
+    Ok(())
+}
+
+/// Test sorting a large tensor that exceeds 1024 elements.
+fn asort_big(device: &Device) -> Result<()> {
+    // Skip on metal for now
+    if device.is_metal() {
+        return Ok(());
+    }
+    const SIZE: usize = 2000;
+    let data: Vec<f32> = (0..SIZE).map(|x| (SIZE - x) as f32).collect();
+    let tensor = Tensor::new(data.as_slice(), device)?;
+
+    let indexes = tensor.arg_sort_last_dim(true)?;
+    let expected_indexes: Vec<u32> = (0..SIZE).rev().map(|x| x as u32).collect();
+    assert_eq!(indexes.to_vec1::<u32>()?, expected_indexes);
+
+    let indexes = tensor.arg_sort_last_dim(false)?;
+    let expected_indexes: Vec<u32> = (0..SIZE).map(|x| x as u32).collect();
+    assert_eq!(indexes.to_vec1::<u32>()?, expected_indexes);
     Ok(())
 }
 
@@ -265,6 +344,21 @@ fn binary_op(device: &Device) -> Result<()> {
         max.to_vec2::<f32>()?,
         [[3.0, 2.5, 4.0, 2.5, 5.0], [2.0, 1.0, 7.0, 8.0, 2.0]]
     );
+    Ok(())
+}
+
+fn ternary_op(device: &Device) -> Result<()> {
+    let data = &[[0u8, 1, 0, 1, 0], [1, 1, 1, 0, 0]];
+    let ids = Tensor::new(data, device)?;
+    let data = &[[0f32, 1., 2., 3., 4.], [5., 6., 7., 8., 9.]];
+    let a = Tensor::new(data, device)?;
+    let data = &[[10f32, 11., 12., 13., 14.], [15., 16., 17., 18., 19.]];
+    let b = Tensor::new(data, device)?;
+    let tensor = ids.where_cond(&a, &b)?;
+    let dims = tensor.dims();
+    assert_eq!(dims, [2, 5]);
+    let result: Vec<f32> = tensor.flatten_all()?.to_vec1()?;
+    assert_eq!(result, [10., 1., 12., 3., 14., 5., 6., 7., 18., 19.]);
     Ok(())
 }
 
@@ -729,6 +823,8 @@ fn slice_set(device: &Device) -> Result<()> {
         .sum_all()?
         .to_vec0::<f32>()?;
     assert_eq!(diff, 0.);
+    // This used to create a deadlock rather than returning an actual error.
+    assert!(cache.slice_set(&cache, 0, 0).is_err());
     Ok(())
 }
 
@@ -821,8 +917,36 @@ fn embeddings(device: &Device) -> Result<()> {
     assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]);
     let hs = t.index_select(&ids.to_dtype(DType::I64)?, 0)?;
     assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]);
+    let ids = Tensor::new(&[u32::MAX, 2u32, u32::MAX], device)?;
+    let hs = t.index_select(&ids, 0)?;
+    assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 0.0], [4.0, 5.0], [0.0, 0.0]]);
     Ok(())
 }
+
+#[test]
+fn index_select_fail() -> Result<()> {
+    // Check that an error is properly reported on out of bounds.
+    let ids = Tensor::new(&[4u32, 2u32, 1u32], &Device::Cpu)?;
+    let t = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], &Device::Cpu)?;
+    let hs = t.index_select(&ids, 0);
+    assert!(hs.is_err());
+    Ok(())
+}
+
+// The test below triggers an unwinding panic as there is a panic within the
+// #[cfg(feature = "cuda")]
+// #[test]
+// #[should_panic]
+// fn index_select_fail_gpu() {
+//     // Check that a panic happens for out of bounds in cuda
+//     if let Ok(device) = Device::new_cuda(0) {
+//         if let Ok(ids) = Tensor::new(&[4u32, 2u32, 1u32], &device) {
+//             if let Ok(t) = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], &device) {
+//                 let _ = t.index_select(&ids, 0);
+//             }
+//         }
+//     }
+// }
 
 fn cmp(device: &Device) -> Result<()> {
     let t1 = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], device)?;
@@ -978,7 +1102,7 @@ fn slice_scatter(device: &Device) -> Result<()> {
     Ok(())
 }
 
-fn scatter_add(device: &Device) -> Result<()> {
+fn scatter(device: &Device) -> Result<()> {
     let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
     assert_eq!(
         t.to_vec2::<f32>()?,
@@ -1002,6 +1126,17 @@ fn scatter_add(device: &Device) -> Result<()> {
         ]
     );
 
+    let hs = init.scatter(&ids, &t, 1)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0, 1.0, 1.0],
+            [5.0, 1.0, 1.0, 3.0, 4.0],
+            [1.0, 8.0, 1.0, 7.0, 1.0],
+            [10.0, 1.0, 9.0, 1.0, 11.0]
+        ]
+    );
+
     let init = Tensor::ones((6, 3), DType::F32, device)?;
     let hs = init.scatter_add(&ids, &t, 0)?;
     assert_eq!(
@@ -1015,6 +1150,56 @@ fn scatter_add(device: &Device) -> Result<()> {
             [1.0, 1.0, 1.0]
         ]
     );
+    let hs = init.scatter(&ids, &t, 0)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [0.0, 10.0, 5.0],
+            [1.0, 1.0, 8.0],
+            [9.0, 1.0, 2.0],
+            [6.0, 7.0, 1.0],
+            [1.0, 4.0, 11.0],
+            [1.0, 1.0, 1.0]
+        ]
+    );
+
+    let hs = {
+        let ids = Tensor::new(
+            &[
+                [0u32, u32::MAX, 2],
+                [3, 4, u32::MAX],
+                [3, 3, 1],
+                [u32::MAX, u32::MAX, 4],
+            ],
+            device,
+        )?;
+        init.scatter(&ids, &t, 0)?
+    };
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 8.0],
+            [1.0, 1.0, 2.0],
+            [6.0, 7.0, 1.0],
+            [1.0, 4.0, 11.0],
+            [1.0, 1.0, 1.0]
+        ]
+    );
+
+    init.scatter_set(&ids, &t, 0)?;
+    assert_eq!(
+        init.to_vec2::<f32>()?,
+        &[
+            [0.0, 10.0, 5.0],
+            [1.0, 1.0, 8.0],
+            [9.0, 1.0, 2.0],
+            [6.0, 7.0, 1.0],
+            [1.0, 4.0, 11.0],
+            [1.0, 1.0, 1.0]
+        ]
+    );
+
     Ok(())
 }
 
@@ -1047,6 +1232,23 @@ fn gather(device: &Device) -> Result<()> {
     let ids = Tensor::new(&[[0u32, 2u32, 0u32], [0u32, 1u32, 1u32]], device)?;
     let hs = t.gather(&ids, 0)?;
     assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 7.0, 2.0], [0.0, 4.0, 5.0]]);
+
+    let hs = {
+        let ids = Tensor::new(
+            &[
+                [0u32, 0u32],
+                [2u32, u32::MAX],
+                [u32::MAX, 1u32],
+                [0u32, 2u32],
+            ],
+            device,
+        )?;
+        t.gather(&ids, 1)?
+    };
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[[0.0, 0.0], [5.0, 0.0], [0.0, 7.0], [9.0, 11.0]]
+    );
 
     // Random data
 
@@ -1482,6 +1684,7 @@ fn zero_dim(device: &Device) -> Result<()> {
 test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal);
 test_device!(ones, ones_cpu, ones_gpu, ones_metal);
 test_device!(full, full_cpu, full_gpu, full_metal);
+test_device!(const_set, cs_cpu, cs_gpu, cs_metal);
 test_device!(arange, arange_cpu, arange_gpu, arange_metal);
 test_device!(add_mul, add_mul_cpu, add_mul_gpu, add_mul_metal);
 test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu, tensor_2d_metal);
@@ -1497,6 +1700,7 @@ test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal);
 test_device!(transpose, transpose_cpu, transpose_gpu, transpose_metal);
 test_device!(unary_op, unary_op_cpu, unary_op_gpu, unary_op_metal);
 test_device!(binary_op, binary_op_cpu, binary_op_gpu, binary_op_metal);
+test_device!(ternary_op, ternary_op_cpu, ternary_op_gpu, ternary_op_metal);
 test_device!(embeddings, embeddings_cpu, embeddings_gpu, embeddings_metal);
 test_device!(cmp, cmp_cpu, cmp_gpu, cmp_metal);
 test_device!(
@@ -1513,12 +1717,7 @@ test_device!(
 );
 test_device!(index_add, index_add_cpu, index_add_gpu, index_add_metal);
 test_device!(gather, gather_cpu, gather_gpu, gather_metal);
-test_device!(
-    scatter_add,
-    scatter_add_cpu,
-    scatter_add_gpu,
-    scatter_add_metal
-);
+test_device!(scatter, scatter_cpu, scatter_gpu, scatter_metal);
 test_device!(
     slice_scatter,
     slice_scatter_cpu,
@@ -1528,8 +1727,45 @@ test_device!(
 test_device!(randn, randn_cpu, randn_gpu, randn_metal);
 test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
 test_device!(asort, asort_cpu, asort_gpu, asort_metal);
+test_device!(asort_big, asort_big_cpu, asort_big_gpu, asort_big_metal);
 test_device!(var, var_cpu, var_gpu, var_metal);
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
+
+fn tensor_send_sync(device: &Device) -> Result<()> {
+    let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
+
+    for _ in 0..10 {
+        let tensor = tensor.clone();
+        std::thread::spawn(move || {
+            let new = tensor.add(&tensor).unwrap();
+            let result: Vec<f32> = new.to_vec1().unwrap();
+            assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
+        });
+    }
+    let result: Vec<f32> = tensor.to_vec1().unwrap();
+    assert_eq!(result, vec![1.0f32, 2.0, 3.0]);
+
+    let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
+    tensor.device().synchronize().unwrap();
+
+    let new = std::thread::spawn(move || {
+        let new = tensor.add(&tensor).unwrap();
+        new.device().synchronize().unwrap();
+        new
+    })
+    .join()
+    .unwrap();
+    let result: Vec<f32> = new.to_vec1().unwrap();
+    assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
+
+    Ok(())
+}
+test_device!(
+    tensor_send_sync,
+    tensor_send_sync_cpu,
+    tensor_send_sync_gpu,
+    tensor_send_sync_metal
+);
 
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381
@@ -1678,5 +1914,149 @@ fn pow() -> Result<()> {
         test_utils::to_vec2_round(&res, 3)?,
         [[1.0, 1.0, 3.0], [16.0, 125.0, 1296.0]]
     );
+    Ok(())
+}
+
+#[test]
+fn test_flip_1d() -> Result<()> {
+    // 1D: [0, 1, 2, 3, 4]
+    let t = Tensor::arange(0.0, 5.0, &Device::Cpu)?.reshape((5,))?;
+    let flipped = t.flip(&[0])?;
+    // Expected: [4, 3, 2, 1, 0]
+    let expected = Tensor::from_vec(vec![4.0, 3.0, 2.0, 1.0, 0.0], (5,), &Device::Cpu)?;
+    candle_core::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+
+#[test]
+fn test_flip_2d() -> Result<()> {
+    // 2D:
+    // [[0, 1, 2],
+    //  [3, 4, 5]]
+    let t = Tensor::arange(0.0, 6.0, &Device::Cpu)?.reshape((2, 3))?;
+    let flipped = t.flip(&[0, 1])?;
+    // Expected:
+    // [[5, 4, 3],
+    //  [2, 1, 0]]
+    let expected = Tensor::from_vec(vec![5.0, 4.0, 3.0, 2.0, 1.0, 0.0], (2, 3), &Device::Cpu)?;
+    candle_core::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+
+#[test]
+fn test_flip_3d_channels() -> Result<()> {
+    // 3D:
+    // [[[0,1,2],
+    //   [3,4,5]],
+    //
+    //  [[6,7,8],
+    //   [9,10,11]]]
+    let t = Tensor::arange(0.0, 12.0, &Device::Cpu)?.reshape((2, 2, 3))?;
+    let flipped = t.flip(&[2])?;
+    // Expected:
+    // [[[2,1,0],
+    //   [5,4,3]],
+    //
+    //  [[8,7,6],
+    //   [11,10,9]]]
+    let expected = Tensor::from_vec(
+        vec![2.0, 1.0, 0.0, 5.0, 4.0, 3.0, 8.0, 7.0, 6.0, 11.0, 10.0, 9.0],
+        (2, 2, 3),
+        &Device::Cpu,
+    )?;
+    candle_core::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+
+#[test]
+fn tensor_new() -> Result<()> {
+    let t1 = Tensor::new(vec![1f32, 2.0, 3.0], &Device::Cpu)?;
+    assert_eq!(t1.to_vec1::<f32>()?, [1.0, 2.0, 3.0]);
+    let t2 = Tensor::new(vec![vec![1f32, 2., 3.], vec![4., 5., 6.]], &Device::Cpu)?;
+    assert_eq!(t2.to_vec2::<f32>()?, [[1., 2., 3.], [4., 5., 6.]]);
+    let t3 = Tensor::new(
+        vec![
+            vec![vec![1f32, 2., 3.], vec![4., 5., 6.]],
+            vec![vec![3f32, 1., 4.], vec![1., 5., 9.]],
+        ],
+        &Device::Cpu,
+    )?;
+    assert_eq!(
+        t3.to_vec3::<f32>()?,
+        [
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            [[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]]
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn tensor_norm() -> Result<()> {
+    let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
+    let norm = t.norm()?;
+    assert_eq!(norm.to_scalar::<f64>()?, 5.);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn transfers_cuda_to_device() -> Result<()> {
+    use rand::seq::SliceRandom;
+
+    let devices = cudarc::driver::safe::CudaContext::device_count()
+        .map_err(candle_core::cuda::CudaError::from)?;
+    if devices < 2 {
+        return Ok(());
+    }
+    let first = Device::new_cuda(0)?;
+
+    let mut data: Vec<u32> = (0..262144).collect();
+    let mut rng = rand::rng();
+    data.shuffle(&mut rng);
+
+    let t1 = Tensor::from_vec(data, (512, 512), &first)?;
+    let second = Device::new_cuda(1)?;
+    let t2 = t1.to_device(&second)?;
+
+    assert_ne!(
+        t1.device().as_cuda_device()?.id(),
+        t2.device().as_cuda_device()?.id()
+    );
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
+    use std::{ops::Deref, sync::RwLockReadGuard};
+
+    use candle_core::Storage;
+    use rand::seq::SliceRandom;
+
+    let first = Device::new_cuda(0)?;
+    let second = Device::new_cuda(0)?;
+
+    let mut data: Vec<u32> = (0..262144).collect();
+    let mut rng = rand::rng();
+    data.shuffle(&mut rng);
+
+    let t1 = Tensor::from_vec(data, (512, 512), &first)?;
+    let t2 = t1.to_device(&second)?;
+
+    let (storage1, _) = t1.storage_and_layout();
+    let (storage2, _) = t2.storage_and_layout();
+    let extract = |s: RwLockReadGuard<'_, Storage>| match &s.deref() {
+        Storage::Cuda(c) => {
+            use cudarc::driver::DevicePtr;
+            let slice = c.as_cuda_slice::<u32>().unwrap();
+            let ptr = slice.device_ptr(slice.stream()).0;
+            ptr
+        }
+        _ => unimplemented!(),
+    };
+    let id1 = extract(storage1);
+    let id2 = extract(storage2);
+    assert_ne!(id1, id2);
     Ok(())
 }

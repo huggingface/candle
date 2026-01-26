@@ -1,5 +1,6 @@
 #include<stdint.h>
 #include "cuda_fp16.h"
+#include "cuda_utils.cuh"
 
 template<typename T>
 __device__ void fill_with(T *buf, T value, const size_t numel) {
@@ -36,13 +37,51 @@ COPY2D_OP(uint8_t, copy2d_u8)
 COPY2D_OP(uint32_t, copy2d_u32)
 COPY2D_OP(int64_t, copy2d_i64)
 
+#define CONST_SET_OP(TYPENAME, FN_NAME) \
+extern "C" __global__ void FN_NAME( \
+    const size_t numel, \
+    const size_t num_dims, \
+    const size_t *info, \
+    const TYPENAME inp, \
+    TYPENAME *out \
+) { \
+    const size_t *dims = info; \
+    const size_t *strides = info + num_dims; \
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) { \
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+            out[i] = inp; \
+        } \
+    } \
+    else { \
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
+            out[strided_i] = inp; \
+        } \
+    } \
+} \
+
+CONST_SET_OP(float, const_set_f32)
+CONST_SET_OP(double, const_set_f64)
+CONST_SET_OP(uint8_t, const_set_u8)
+CONST_SET_OP(uint32_t, const_set_u32)
+CONST_SET_OP(int64_t, const_set_i64)
+
+
 #if __CUDA_ARCH__ >= 530
 extern "C" __global__ void fill_f16(__half *buf, __half value, const size_t numel) { fill_with(buf, value, numel); }
 COPY2D_OP(__half, copy2d_f16)
+CONST_SET_OP(__half, const_set_f16)
 #endif
 
 #if __CUDA_ARCH__ >= 800 || (__CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 800)
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
+
 extern "C" __global__ void fill_bf16(__nv_bfloat16 *buf, __nv_bfloat16 value, const size_t numel) { fill_with(buf, value, numel); }
 COPY2D_OP(__nv_bfloat16, copy2d_bf16)
+CONST_SET_OP(__nv_bfloat16, const_set_bf16)
+
+extern "C" __global__ void fill_f8_e4m3(__nv_fp8_e4m3 *buf, __nv_fp8_e4m3 value, const size_t numel) { fill_with(buf, value, numel); }
+COPY2D_OP(__nv_fp8_e4m3, copy2d_f8_e4m3)
+CONST_SET_OP(__nv_fp8_e4m3, const_set_f8_e4m3)
 #endif

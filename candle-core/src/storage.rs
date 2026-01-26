@@ -1,5 +1,6 @@
 use crate::backend::BackendStorage;
 use crate::op::{self, CmpOp, ReduceOp};
+use crate::scalar::Scalar;
 use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
@@ -70,6 +71,14 @@ impl Storage {
             Err(Error::DTypeMismatchBinaryOp { lhs, rhs, op }.bt())
         } else {
             Ok(())
+        }
+    }
+
+    pub(crate) fn const_set(&mut self, v: Scalar, l: &Layout) -> Result<()> {
+        match self {
+            Storage::Cpu(storage) => storage.const_set(v, l),
+            Storage::Cuda(storage) => storage.const_set(v, l),
+            Storage::Metal(storage) => storage.const_set(v, l),
         }
     }
 
@@ -561,6 +570,34 @@ impl Storage {
         }
     }
 
+    pub(crate) fn upsample_bilinear2d(
+        &self,
+        layout: &Layout,
+        h: usize,
+        w: usize,
+        align_corners: bool,
+        scale_h: Option<f64>,
+        scale_w: Option<f64>,
+    ) -> Result<Self> {
+        match self {
+            Storage::Cpu(storage) => {
+                let storage =
+                    storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
+                Ok(Self::Cpu(storage))
+            }
+            Self::Cuda(storage) => {
+                let storage =
+                    storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
+                Ok(Self::Cuda(storage))
+            }
+            Self::Metal(storage) => {
+                let storage =
+                    storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
+                Ok(Self::Metal(storage))
+            }
+        }
+    }
+
     pub(crate) fn where_cond(
         &self,
         layout: &Layout,
@@ -619,32 +656,56 @@ impl Storage {
         }
     }
 
-    pub(crate) fn scatter_add(
-        &self,
+    pub(crate) fn scatter_set(
+        &mut self,
         l: &Layout,
         indexes: &Self,
         indexes_l: &Layout,
         source: &Self,
         source_l: &Layout,
         d: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
+        self.same_device(indexes, "scatter-set")?;
+        self.same_device(source, "scatter-set")?;
+        match (self, indexes, source) {
+            (Self::Cpu(s), Self::Cpu(indexes), Self::Cpu(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            (Self::Cuda(s), Self::Cuda(indexes), Self::Cuda(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    pub(crate) fn scatter_add(
+        &mut self,
+        l: &Layout,
+        indexes: &Self,
+        indexes_l: &Layout,
+        source: &Self,
+        source_l: &Layout,
+        d: usize,
+    ) -> Result<()> {
         self.same_device(indexes, "scatter-add")?;
         self.same_device(source, "scatter-add")?;
         match (self, indexes, source) {
             (Self::Cpu(s), Self::Cpu(indexes), Self::Cpu(source)) => {
-                let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
-                Ok(Self::Cpu(storage))
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Cuda(s), Self::Cuda(indexes), Self::Cuda(source)) => {
-                let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
-                Ok(Self::Cuda(storage))
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
-                let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
-                Ok(Self::Metal(storage))
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             _ => unreachable!(),
         }
+        Ok(())
     }
 
     pub(crate) fn index_add(

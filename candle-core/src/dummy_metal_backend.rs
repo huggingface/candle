@@ -41,6 +41,10 @@ impl crate::backend::BackendStorage for MetalStorage {
         fail!()
     }
 
+    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
@@ -128,15 +132,27 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn scatter_add(
-        &self,
+    fn scatter_set(
+        &mut self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn scatter_add_set(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<()> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
@@ -194,6 +210,18 @@ impl crate::backend::BackendStorage for MetalStorage {
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
 }
 
 impl crate::backend::BackendDevice for MetalDevice {
@@ -206,6 +234,10 @@ impl crate::backend::BackendDevice for MetalDevice {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
+    fn get_current_seed(&self) -> Result<u64> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     fn location(&self) -> crate::DeviceLocation {
         fail!()
     }
@@ -215,10 +247,6 @@ impl crate::backend::BackendDevice for MetalDevice {
     }
 
     fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
-        Err(Error::NotCompiledWithMetalSupport)
-    }
-
-    fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 

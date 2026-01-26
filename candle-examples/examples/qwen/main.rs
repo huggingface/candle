@@ -9,6 +9,8 @@ use clap::Parser;
 
 use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM as ModelBase};
 use candle_transformers::models::qwen2_moe::{Config as ConfigMoe, Model as ModelMoe};
+use candle_transformers::models::qwen3::{Config as Config3, ModelForCausalLM as Model3};
+use candle_transformers::models::qwen3_moe::{Config as ConfigMoe3, ModelForCausalLM as ModelMoe3};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -20,6 +22,8 @@ use tokenizers::Tokenizer;
 enum Model {
     Base(ModelBase),
     Moe(ModelMoe),
+    Base3(Model3),
+    Moe3(ModelMoe3),
 }
 
 impl Model {
@@ -27,6 +31,8 @@ impl Model {
         match self {
             Self::Moe(ref mut m) => m.forward(xs, s),
             Self::Base(ref mut m) => m.forward(xs, s),
+            Self::Base3(ref mut m) => m.forward(xs, s),
+            Self::Moe3(ref mut m) => m.forward(xs, s),
         }
     }
 }
@@ -85,6 +91,10 @@ impl TextGeneration {
             Some(token) => token,
             None => anyhow::bail!("cannot find the <|endoftext|> token"),
         };
+        let eos_token2 = match self.tokenizer.get_token("<|im_end|>") {
+            Some(token) => token,
+            None => anyhow::bail!("cannot find the <|im_end|> token"),
+        };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -107,7 +117,7 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
-            if next_token == eos_token {
+            if next_token == eos_token || next_token == eos_token2 {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
@@ -152,6 +162,16 @@ enum WhichModel {
     W2_7b,
     #[value(name = "2-72b")]
     W2_72b,
+    #[value(name = "3-0.6b")]
+    W3_0_6b,
+    #[value(name = "3-1.7b")]
+    W3_1_7b,
+    #[value(name = "3-4b")]
+    W3_4b,
+    #[value(name = "3-8b")]
+    W3_8b,
+    #[value(name = "3-moe-a3b")]
+    W3MoeA3b,
 }
 
 #[derive(Parser, Debug)]
@@ -197,7 +217,7 @@ struct Args {
     tokenizer_file: Option<String>,
 
     #[arg(long)]
-    weight_files: Option<String>,
+    weight_path: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
@@ -254,6 +274,11 @@ fn main() -> Result<()> {
                 WhichModel::W14b => ("1.5", "14B"),
                 WhichModel::W72b => ("1.5", "72B"),
                 WhichModel::MoeA27b => ("1.5", "MoE-A2.7B"),
+                WhichModel::W3_0_6b => ("3", "0.6B"),
+                WhichModel::W3_1_7b => ("3", "1.7B"),
+                WhichModel::W3_4b => ("3", "4B"),
+                WhichModel::W3_8b => ("3", "8B"),
+                WhichModel::W3MoeA3b => ("3", "30B-A3B"),
             };
             format!("Qwen/Qwen{version}-{size}")
         }
@@ -263,17 +288,35 @@ fn main() -> Result<()> {
         RepoType::Model,
         args.revision,
     ));
-    let tokenizer_filename = match args.tokenizer_file {
-        Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+
+    let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer_file.as_ref()) {
+        (Some(_), Some(file)) => std::path::PathBuf::from(file),
+        (None, Some(file)) => std::path::PathBuf::from(file),
+        (Some(path), None) => std::path::Path::new(path).join("tokenizer.json"),
+        (None, None) => repo.get("tokenizer.json")?,
     };
-    let filenames = match args.weight_files {
-        Some(files) => files
-            .split(',')
-            .map(std::path::PathBuf::from)
-            .collect::<Vec<_>>(),
+    let config_file = match &args.weight_path {
+        Some(path) => std::path::Path::new(path).join("config.json"),
+        _ => repo.get("config.json")?,
+    };
+
+    let filenames = match args.weight_path {
+        Some(path) => {
+            if std::path::Path::new(&path)
+                .join("model.safetensors.index.json")
+                .exists()
+            {
+                candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
+            } else {
+                vec!["model.safetensors".into()]
+            }
+        }
         None => match args.model {
-            WhichModel::W0_5b | WhichModel::W2_0_5b | WhichModel::W2_1_5b | WhichModel::W1_8b => {
+            WhichModel::W0_5b
+            | WhichModel::W2_0_5b
+            | WhichModel::W2_1_5b
+            | WhichModel::W1_8b
+            | WhichModel::W3_0_6b => {
                 vec![repo.get("model.safetensors")?]
             }
             WhichModel::W4b
@@ -282,7 +325,11 @@ fn main() -> Result<()> {
             | WhichModel::W14b
             | WhichModel::W72b
             | WhichModel::W2_72b
-            | WhichModel::MoeA27b => {
+            | WhichModel::MoeA27b
+            | WhichModel::W3_1_7b
+            | WhichModel::W3_4b
+            | WhichModel::W3_8b
+            | WhichModel::W3MoeA3b => {
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
         },
@@ -291,9 +338,8 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config_file = repo.get("config.json")?;
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
+    let dtype = if device.is_cuda() || device.is_metal() {
         DType::BF16
     } else {
         DType::F32
@@ -303,6 +349,14 @@ fn main() -> Result<()> {
         WhichModel::MoeA27b => {
             let config: ConfigMoe = serde_json::from_slice(&std::fs::read(config_file)?)?;
             Model::Moe(ModelMoe::new(&config, vb)?)
+        }
+        WhichModel::W3_0_6b | WhichModel::W3_1_7b | WhichModel::W3_4b | WhichModel::W3_8b => {
+            let config: Config3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
+            Model::Base3(Model3::new(&config, vb)?)
+        }
+        WhichModel::W3MoeA3b => {
+            let config: ConfigMoe3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
+            Model::Moe3(ModelMoe3::new(&config, vb)?)
         }
         _ => {
             let config: ConfigBase = serde_json::from_slice(&std::fs::read(config_file)?)?;

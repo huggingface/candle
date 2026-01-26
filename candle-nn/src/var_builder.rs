@@ -36,8 +36,9 @@ impl<B: Backend> Clone for VarBuilderArgs<'_, B> {
 pub type VarBuilder<'a> = VarBuilderArgs<'a, Box<dyn SimpleBackend + 'a>>;
 
 struct TensorData<B: Backend> {
-    backend: B,
+    backend: Arc<B>,
     pub device: Device,
+    pub dtype: DType,
 }
 
 /// A trait that defines how tensor data is retrieved.
@@ -59,6 +60,9 @@ pub trait Backend: Send + Sync {
         dev: &Device,
     ) -> Result<Tensor>;
 
+    /// Retrieve a tensor based on the name.
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor>;
+
     fn contains_tensor(&self, name: &str) -> bool;
 }
 
@@ -72,6 +76,9 @@ pub trait SimpleBackend: Send + Sync {
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor>;
+
+    /// Retrieve a tensor based on the name.
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor>;
 
     fn contains_tensor(&self, name: &str) -> bool;
 }
@@ -89,6 +96,10 @@ impl Backend for Box<dyn SimpleBackend + '_> {
         self.as_ref().get(s, name, h, dtype, dev)
     }
 
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        self.as_ref().get_unchecked(name, dtype, dev)
+    }
+
     fn contains_tensor(&self, name: &str) -> bool {
         self.as_ref().contains_tensor(name)
     }
@@ -97,8 +108,9 @@ impl Backend for Box<dyn SimpleBackend + '_> {
 impl<B: Backend> VarBuilderArgs<'_, B> {
     pub fn new_with_args(backend: B, dtype: DType, dev: &Device) -> Self {
         let data = TensorData {
-            backend,
+            backend: Arc::new(backend),
             device: dev.clone(),
+            dtype,
         };
         Self {
             data: Arc::new(data),
@@ -202,6 +214,19 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
         self.get_with_hints(s, name, Default::default())
     }
 
+    /// Retrieve the tensor associated with the given name at the current path.
+    pub fn get_unchecked(&self, name: &str) -> Result<Tensor> {
+        self.get_unchecked_dtype(name, self.data.dtype)
+    }
+
+    /// Retrieve the tensor associated with the given name & dtype at the current path.
+    pub fn get_unchecked_dtype(&self, name: &str, dtype: DType) -> Result<Tensor> {
+        let name = self.path(name);
+        self.data
+            .backend
+            .get_unchecked(&name, dtype, &self.data.device)
+    }
+
     /// Retrieve the tensor associated with the given name & dtype at the current path.
     pub fn get_with_hints_dtype<S: Into<Shape>>(
         &self,
@@ -215,6 +240,31 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
             .backend
             .get(s.into(), &path, hints, dtype, &self.data.device)
     }
+
+    /// Set the device of the VarBuilder.
+    pub fn set_device(self, device: Device) -> Self {
+        Self {
+            data: Arc::new(TensorData {
+                backend: self.data.backend.clone(),
+                dtype: self.data.dtype,
+                device,
+            }),
+            ..self
+        }
+    }
+
+    /// Set the dtype of the VarBuilder.
+    pub fn set_dtype(self, dtype: DType) -> Self {
+        Self {
+            data: Arc::new(TensorData {
+                backend: self.data.backend.clone(),
+                dtype,
+                device: self.data.device.clone(),
+            }),
+            dtype,
+            ..self
+        }
+    }
 }
 
 struct Zeros;
@@ -222,6 +272,12 @@ struct Zeros;
 impl SimpleBackend for Zeros {
     fn get(&self, s: Shape, _: &str, _: crate::Init, dtype: DType, dev: &Device) -> Result<Tensor> {
         Tensor::zeros(s, dtype, dev)
+    }
+
+    fn get_unchecked(&self, _name: &str, _dtype: DType, _dev: &Device) -> Result<Tensor> {
+        candle::bail!(
+            "`Zeros` requires a shape for tensor retrieval, use `get` instead of `get_unchecked`"
+        )
     }
 
     fn contains_tensor(&self, _name: &str) -> bool {
@@ -258,6 +314,19 @@ impl SimpleBackend for HashMap<String, Tensor> {
         tensor.to_device(dev)?.to_dtype(dtype)
     }
 
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        let tensor = self
+            .get(name)
+            .ok_or_else(|| {
+                Error::CannotFindTensor {
+                    path: name.to_string(),
+                }
+                .bt()
+            })?
+            .clone();
+        tensor.to_device(dev)?.to_dtype(dtype)
+    }
+
     fn contains_tensor(&self, name: &str) -> bool {
         self.contains_key(name)
     }
@@ -273,6 +342,10 @@ impl SimpleBackend for VarMap {
         dev: &Device,
     ) -> Result<Tensor> {
         VarMap::get(self, s, name, h, dtype, dev)
+    }
+
+    fn get_unchecked(&self, _name: &str, _dtype: DType, _dev: &Device) -> Result<Tensor> {
+        candle::bail!("`get_unchecked` does not make sense for `VarMap`, use `get`.");
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -316,6 +389,20 @@ impl SimpleBackend for SafeTensorWithRouting<'_> {
         Ok(tensor)
     }
 
+    fn get_unchecked(&self, path: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        let index = self.routing.get(path).ok_or_else(|| {
+            Error::CannotFindTensor {
+                path: path.to_string(),
+            }
+            .bt()
+        })?;
+        let tensor = self.safetensors[*index]
+            .tensor(path)?
+            .load(dev)?
+            .to_dtype(dtype)?;
+        Ok(tensor)
+    }
+
     fn contains_tensor(&self, name: &str) -> bool {
         self.routing.contains_key(name)
     }
@@ -349,8 +436,20 @@ impl SimpleBackend for candle::npy::NpzTensors {
         Ok(tensor)
     }
 
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        let tensor = match self.get(name)? {
+            None => Err(Error::CannotFindTensor {
+                path: name.to_string(),
+            }
+            .bt())?,
+            Some(tensor) => tensor,
+        };
+        let tensor = tensor.to_device(dev)?.to_dtype(dtype)?;
+        Ok(tensor)
+    }
+
     fn contains_tensor(&self, name: &str) -> bool {
-        self.get(name).map_or(false, |v| v.is_some())
+        self.get(name).is_ok_and(|v| v.is_some())
     }
 }
 
@@ -382,8 +481,20 @@ impl SimpleBackend for candle::pickle::PthTensors {
         Ok(tensor)
     }
 
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        let tensor = match self.get(name)? {
+            None => Err(Error::CannotFindTensor {
+                path: name.to_string(),
+            }
+            .bt())?,
+            Some(tensor) => tensor,
+        };
+        let tensor = tensor.to_device(dev)?.to_dtype(dtype)?;
+        Ok(tensor)
+    }
+
     fn contains_tensor(&self, name: &str) -> bool {
-        self.get(name).map_or(false, |v| v.is_some())
+        self.get(name).is_ok_and(|v| v.is_some())
     }
 }
 
@@ -406,6 +517,10 @@ impl SimpleBackend for candle::safetensors::MmapedSafetensors {
             .bt())?
         }
         Ok(tensor)
+    }
+
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        self.load(name, dev)?.to_dtype(dtype)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -434,6 +549,10 @@ impl SimpleBackend for candle::safetensors::BufferedSafetensors {
         Ok(tensor)
     }
 
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        self.load(name, dev)?.to_dtype(dtype)
+    }
+
     fn contains_tensor(&self, name: &str) -> bool {
         self.get(name).is_ok()
     }
@@ -460,6 +579,10 @@ impl SimpleBackend for candle::safetensors::SliceSafetensors<'_> {
         Ok(tensor)
     }
 
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        self.load(name, dev)?.to_dtype(dtype)
+    }
+
     fn contains_tensor(&self, name: &str) -> bool {
         self.get(name).is_ok()
     }
@@ -476,7 +599,11 @@ impl<'a> VarBuilder<'a> {
         dtype: DType,
         device: Device,
     ) -> Self {
-        let data = TensorData { backend, device };
+        let data = TensorData {
+            backend: Arc::new(backend),
+            device,
+            dtype,
+        };
         Self {
             data: Arc::new(data),
             path: vec![],
@@ -590,7 +717,11 @@ impl<'a> VarBuilder<'a> {
         let path = self.path.clone();
         let backend = Rename::new(self, renamer);
         let backend: Box<dyn SimpleBackend + 'a> = Box::new(backend);
-        let data = TensorData { backend, device };
+        let data = TensorData {
+            backend: Arc::new(backend),
+            device,
+            dtype,
+        };
         Self {
             data: Arc::new(data),
             dtype,
@@ -714,6 +845,10 @@ impl Backend for ShardedSafeTensors {
         Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
     }
 
+    fn get_unchecked(&self, _name: &str, _dtype: DType, _dev: &Device) -> Result<Tensor> {
+        candle::bail!("`get_unchecked` does not make sense for `ShardedSafeTensors`, use `get`.");
+    }
+
     fn contains_tensor(&self, name: &str) -> bool {
         self.0.get(name).is_ok()
     }
@@ -745,6 +880,11 @@ impl<R: Renamer + Sync + Send> SimpleBackend for Rename<'_, R> {
         self.inner
             .get_with_hints_dtype(s, &name, h, dtype)?
             .to_device(dev)
+    }
+
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
+        let name = self.renamer.rename(name);
+        self.inner.get_unchecked_dtype(&name, dtype)?.to_device(dev)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {

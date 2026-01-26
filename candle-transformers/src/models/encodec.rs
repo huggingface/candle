@@ -141,6 +141,20 @@ pub fn conv1d_weight_norm(
     Ok(Conv1d::new(weight, Some(bias), config))
 }
 
+pub fn conv1d_weight_norm_no_bias(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    config: candle_nn::Conv1dConfig,
+    vb: VarBuilder,
+) -> Result<Conv1d> {
+    let weight_g = vb.get((out_c, 1, 1), "weight_g")?;
+    let weight_v = vb.get((out_c, in_c, kernel_size), "weight_v")?;
+    let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
+    let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+    Ok(Conv1d::new(weight, None, config))
+}
+
 pub fn conv_transpose1d_weight_norm(
     in_c: usize,
     out_c: usize,
@@ -454,6 +468,7 @@ impl EncodecConv1d {
                     stride,
                     groups: 1,
                     dilation: 1,
+                    cudnn_fwd_algo: None,
                 },
                 vb.pp("conv"),
             )?,
@@ -576,7 +591,7 @@ impl<'a> Layer<'a> {
         self.cnt += 1;
     }
 
-    fn next(&mut self) -> VarBuilder {
+    fn next(&mut self) -> VarBuilder<'_> {
         let vb = self.vb.pp(self.cnt.to_string());
         self.cnt += 1;
         vb
