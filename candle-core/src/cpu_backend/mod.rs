@@ -1362,7 +1362,7 @@ impl Map2 for MatMul {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
-        use gemm::{gemm, Parallelism};
+        use qlora_gemm::{gemm, Parallelism};
 
         match T::DTYPE {
             DType::F16 | DType::F32 | DType::F64 => {}
