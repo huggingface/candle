@@ -635,6 +635,9 @@ impl Tensor {
     unary_op!(sin, Sin);
     unary_op!(cos, Cos);
     unary_op!(tanh, Tanh);
+    unary_op!(asin, Asin);
+    unary_op!(acos, Acos);
+    unary_op!(atan, Atan);
     unary_op!(abs, Abs);
     unary_op!(sqr, Sqr);
     unary_op!(sqrt, Sqrt);
