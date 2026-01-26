@@ -9,7 +9,7 @@ use objc2_metal::{MTLResourceUsage, MTLSize};
 
 ops!(
     cos, sin, exp, sqr, sqrt, neg, log, gelu, abs, ceil, floor, relu, round, erf, gelu_erf, tanh,
-    recip, silu, sign, sigmoid, const_set
+    recip, silu, sign, sigmoid, asin, acos, atan, const_set
 );
 
 #[allow(clippy::too_many_arguments)]

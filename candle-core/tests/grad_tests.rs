@@ -285,6 +285,68 @@ fn unary_grad(device: &Device) -> Result<()> {
         [1.0881, 0.9277, 1.0527, 0.5747],
     );
 
+    // Testing inverse trig functions
+    // Using values in [-1, 1] for asin and acos
+    //
+    // import torch
+    // x = torch.tensor([0.5, -0.5, 0.9, 0.0], requires_grad=True)
+    // y = x.asin()
+    // print(y)
+    // loss = y.sum()
+    // loss.backward()
+    // print(x.grad)
+    let trig_x = Var::new(&[0.5f32, -0.5, 0.9, 0.0], device)?;
+    let y = trig_x.asin()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&trig_x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [0.5236, -0.5236, 1.1198, 0.0]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [1.1547, 1.1547, 2.2942, 1.0],
+    );
+
+    // import torch
+    // x = torch.tensor([0.5, -0.5, 0.9, 0.0], requires_grad=True)
+    // y = x.acos()
+    // print(y)
+    // loss = y.sum()
+    // loss.backward()
+    // print(x.grad)
+    let y = trig_x.acos()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&trig_x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [1.0472, 2.0944, 0.4510, 1.5708]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [-1.1547, -1.1547, -2.2942, -1.0],
+    );
+
+    // import torch
+    // x = torch.tensor([0.5, -0.5, 2.0, 0.0], requires_grad=True)
+    // y = x.atan()
+    // print(y)
+    // loss = y.sum()
+    // loss.backward()
+    // print(x.grad)
+    let atan_x = Var::new(&[0.5f32, -0.5, 2.0, 0.0], device)?;
+    let y = atan_x.atan()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&atan_x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [0.4636, -0.4636, 1.1071, 0.0]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [0.8, 0.8, 0.2, 1.0],
+    );
+
     if device.is_cpu() {
         let x = Var::new(&[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]], device)?;
         let y = x.interpolate1d(12)?.reshape(36)?;
