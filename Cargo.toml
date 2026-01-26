@@ -62,7 +62,7 @@ cudarc = { version = "0.19.0", features = [
     "dynamic-linking",
 ], default-features = false }
 fancy-regex = "0.17.0"
-gemm = { version = "0.19.0", features = ["wasm-simd128-enable"] }
+qlora-gemm = { version = "0.20.0", features = ["wasm-simd128-enable"] }
 hf-hub = "0.4.1"
 half = { version = "2.5.0", features = [
     "num-traits",
