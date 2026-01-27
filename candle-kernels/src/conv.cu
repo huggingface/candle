@@ -51,6 +51,57 @@ __device__ void conv1d(
   dst[dst_i] = static_cast<T>(d);
 }
 
+// Fallback for FP8 conv1d on architectures < CC90: convert to float for computation
+#if __CUDA_ARCH__ < 900
+template <>
+__device__ void conv1d<__nv_fp8_e4m3, float>(
+    const size_t src_numel,
+    const size_t l_out,
+    const size_t stride,
+    const size_t padding,
+    const size_t dilation,
+    const size_t *info,
+    const __nv_fp8_e4m3 *src,
+    const __nv_fp8_e4m3 *kernel,
+    __nv_fp8_e4m3 *dst
+) {
+  // src: (b_size, c_in, l_in)
+  // k: (c_out, c_in, k_size)
+  const size_t *src_dims = info;
+  const size_t *src_s = info + 3;
+  const size_t *k_dims = info + 6;
+  const size_t *k_s = info + 9;
+  const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
+  const size_t k_size = k_dims[2];
+  const size_t c_out = k_dims[0];
+  const size_t c_in = src_dims[1];
+  const size_t l_in = src_dims[2];
+  if (dst_i >= src_dims[0] * c_out * l_out) {
+    return;
+  }
+
+  const size_t b_idx = dst_i / (l_out * c_out);
+  const size_t dst_c_idx = (dst_i / l_out) % c_out;
+  const size_t dst_l = dst_i % l_out;
+
+  const size_t src_idx0 = b_idx * src_s[0];
+  float d = 0;
+  for (size_t offset = 0; offset < k_size; ++offset) {
+    size_t src_l = (stride * dst_l + offset) * dilation;
+    if (src_l < padding || src_l >= padding + l_in) {
+      continue;
+    }
+    src_l -= padding;
+    for (size_t src_c_idx = 0; src_c_idx < c_in; ++src_c_idx) {
+      const size_t src_idx = src_idx0 + src_c_idx * src_s[1] + src_l * src_s[2];
+      const size_t k_idx = dst_c_idx * k_s[0] + src_c_idx * k_s[1] + offset * k_s[2];
+      d += static_cast<float>(src[src_idx]) * static_cast<float>(kernel[k_idx]);
+    }
+  }
+  dst[dst_i] = static_cast<__nv_fp8_e4m3>(d);
+}
+#endif
+
 template <typename T>
 __device__ void im2col1d(
     const size_t numel,
@@ -439,6 +490,68 @@ __device__ void avg_pool2d(
   dst[dst_i] = static_cast<T>(d * scale);
 }
 
+// Fallback for FP8 conv2d on architectures < CC90: convert to float for computation
+#if __CUDA_ARCH__ < 900
+template <>
+__device__ void conv2d<__nv_fp8_e4m3, float>(
+    const size_t src_numel,
+    const size_t w_out,
+    const size_t h_out,
+    const size_t stride,
+    const size_t padding,
+    const size_t dilation,
+    const size_t *info,
+    const __nv_fp8_e4m3 *src,
+    const __nv_fp8_e4m3 *kernel,
+    __nv_fp8_e4m3 *dst
+) {
+  const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
+  // src: (b_size, c_in, h_in, w_in)
+  // k: (c_out, c_in, h_k, w_k)
+  const size_t *src_dims = info;
+  const size_t *src_s = info + 4;
+  const size_t *k_dims = info + 8;
+  const size_t *k_s = info + 12;
+  const size_t h_k = k_dims[2];
+  const size_t w_k = k_dims[3];
+  const size_t c_out = k_dims[0];
+  const size_t c_in = src_dims[1];
+  const size_t h_in = src_dims[2];
+  const size_t w_in = src_dims[3];
+  if (dst_i >= src_dims[0] * c_out * w_out * h_out) {
+    return;
+  }
+
+  const size_t b_idx = dst_i / (w_out * h_out * c_out);
+  const size_t dst_c_idx = (dst_i / (w_out * h_out)) % c_out;
+  const size_t dst_h = (dst_i / w_out) % h_out;
+  const size_t dst_w = dst_i % w_out;
+
+  const size_t src_idx0 = b_idx * src_s[0];
+  float d = 0;
+  for (size_t w_offset = 0; w_offset < w_k; ++w_offset) {
+    size_t src_w = stride * dst_w + w_offset * dilation;
+    if (src_w < padding || src_w >= w_in + padding) {
+      continue;
+    }
+    src_w -= padding;
+    for (size_t h_offset = 0; h_offset < h_k; ++h_offset) {
+      size_t src_h = stride * dst_h + h_offset * dilation;
+      if (src_h < padding || src_h >= h_in + padding) {
+        continue;
+      }
+      src_h -= padding;
+      for (size_t src_c_idx = 0; src_c_idx < c_in; ++src_c_idx) {
+        const size_t src_idx = src_idx0 + src_c_idx * src_s[1] + src_h * src_s[2] + src_w * src_s[3];
+        const size_t k_idx = dst_c_idx * k_s[0] + src_c_idx * k_s[1] + h_offset * k_s[2] + w_offset * k_s[3];
+        d += static_cast<float>(src[src_idx]) * static_cast<float>(kernel[k_idx]);
+      }
+    }
+  }
+  dst[dst_i] = static_cast<__nv_fp8_e4m3>(d);
+}
+#endif
+
 template <typename T>
 __device__ void max_pool2d(
     const size_t src_numel,
@@ -813,6 +926,17 @@ IM2COL_OP(__nv_bfloat16, im2col_bf16)
 IM2COL1D_OP(__nv_bfloat16, im2col1d_bf16)
 COL2IM1D_OP(__nv_bfloat16, col2im1d_bf16)
 
+// FP8 conv and related ops (e4m3)
+// CONV1D_OP(__nv_fp8_e4m3, float, conv1d_f8_e4m3)
+// CONV2D_OP(__nv_fp8_e4m3, float, conv2d_f8_e4m3)
+// CONVT1D_OP(__nv_fp8_e4m3, float, conv_transpose1d_f8_e4m3)
+// CONVT2D_OP(__nv_fp8_e4m3, float, conv_transpose2d_f8_e4m3)
+// AVG_POOL2D_OP(__nv_fp8_e4m3, float, avg_pool2d_f8_e4m3)
+// MAX_POOL2D_OP(__nv_fp8_e4m3, max_pool2d_f8_e4m3)
+// UPSAMPLE_NEAREST2D_OP(__nv_fp8_e4m3, upsample_nearest2d_f8_e4m3)
+// IM2COL_OP(__nv_fp8_e4m3, im2col_f8_e4m3)
+// IM2COL1D_OP(__nv_fp8_e4m3, im2col1d_f8_e4m3)
+// COL2IM1D_OP(__nv_fp8_e4m3, col2im1d_f8_e4m3)
 // NOTE: No conv ops for f8
 // CONV1D_OP(__nv_bfloat16, float, conv1d_f8_e5m)
 // CONV2D_OP(__nv_fp8_e4m3, float, conv2d_f8_e5m)
