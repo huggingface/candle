@@ -423,6 +423,22 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
+
+    fn lazy_fwd(
+        &self,
+        storage: &candle::LazyStorage,
+        layout: &Layout,
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let xs = Tensor::from_storage(storage.clone().into(), layout.shape(), BackpropOp::none(), false);
+        let result = softmax(&xs, D::Minus1)?;
+        let (storage, layout) = result.storage_and_layout();
+        let storage = storage.try_clone(layout)?;
+        let inner = match storage {
+            candle::Storage::Lazy(lazy) => lazy,
+            _ => unreachable!()
+        };
+        Ok((inner, layout.shape().clone()))
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {

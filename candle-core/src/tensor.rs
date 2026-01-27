@@ -1836,7 +1836,21 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Lazy(_) => todo!(),
+            Storage::Lazy(storage) => {
+                #[cfg(feature = "cuda")] {
+                    let result = storage.execute(crate::CudaDevice::new(0)?)?;
+                    return from_cpu_storage(&result.to_cpu_storage()?);
+                }
+                #[cfg(feature = "metal")] {
+                    let result = storage.execute(crate::MetalDevice::new(0)?)?;
+                    return from_cpu_storage(&result.to_cpu_storage()?);
+                }
+                #[cfg(not(any(feature="metal", feature="cuda")))] {
+                    let result = storage.execute(crate::cpu_backend::CpuDevice)?;
+                    return from_cpu_storage(&result.to_cpu_storage()?);
+                }
+                //from_cpu_storage(&storage.to_cpu_storage()?)
+            }
         }
     }
 

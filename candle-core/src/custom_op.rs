@@ -32,6 +32,17 @@ pub trait CustomOp1 {
         ))
     }
 
+    /// The forward pass tracked in the lazy backend
+    fn lazy_fwd(
+        &self,
+        _: &LazyStorage,
+        _: &Layout,
+    ) -> Result<(LazyStorage, Shape)> {
+        Err(crate::Error::Msg(
+            format!("no lazy implementation for {}", self.name()).into(),
+        ))
+    }
+
     /// This function takes as argument the argument `arg` used in the forward pass, the result
     /// produced by the forward operation `res` and the gradient of the result `grad_res`.
     /// The function should return the gradient of the argument.

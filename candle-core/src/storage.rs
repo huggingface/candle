@@ -274,10 +274,9 @@ impl Storage {
                 let (storage, shape) = c.metal_fwd(storage, l)?;
                 Ok((Self::Metal(storage), shape))
             }
-            Self::Lazy(_storage) => {
-                // let storage = storage.lazy_fwd(layout, dtype)?;
-                // Ok(Self::Lazy(storage))
-                todo!()
+            Self::Lazy(storage) => {
+                let (storage, shape) = c.lazy_fwd(storage, l)?;
+                Ok((Self::Lazy(storage), shape))
             }
         }
     }
@@ -918,7 +917,9 @@ impl Storage {
             (Self::Metal(src), Self::Metal(dst)) => {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
-            (Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(src), Self::Lazy(dst)) => {
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),

@@ -243,6 +243,9 @@ pub enum Error {
 
     #[error("unwrap none")]
     UnwrapNone,
+
+    #[error(transparent)]
+    Lazy(#[from] crate::lazy::LazyError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
