@@ -427,11 +427,11 @@ mod tests {
         assert!(prompt.starts_with("<start_of_turn>user\n"));
         assert!(prompt.ends_with("<start_of_turn>model\n"));
         assert!(prompt.contains("<end_of_turn>"));
-    
+
         // Check language expansion
         assert!(prompt.contains("English (en)"));
         assert!(prompt.contains("French (fr)"));
-    
+
         // Check input text is included
         assert!(prompt.contains("Hello"));
     }
