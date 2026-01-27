@@ -355,5 +355,15 @@ test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal);
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
-test_device!(sigmoid_f16, sigmoid_b16_cpu, sigmoid_b16_gpu, sigmoid_b16_metal);
-test_device!(sigmoid_bf16, sigmoid_bf16_cpu, sigmoid_bf16_gpu, sigmoid_bf16_metal);
+test_device!(
+    sigmoid_f16,
+    sigmoid_f16_cpu,
+    sigmoid_f16_gpu,
+    sigmoid_f16_metal
+);
+test_device!(
+    sigmoid_bf16,
+    sigmoid_bf16_cpu,
+    sigmoid_bf16_gpu,
+    sigmoid_bf16_metal
+);
