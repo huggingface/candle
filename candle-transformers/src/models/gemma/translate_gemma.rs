@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn test_format_translate_prompt() {
         let prompt = format_translate_prompt("Hello", "en", "fr");
-        assert!(prompt.contains("<bos>"));
+        assert!(prompt.starts_with("<start_of_turn>user"));
         assert!(prompt.contains("<start_of_turn>user"));
         assert!(prompt.contains("<start_of_turn>model"));
         assert!(prompt.contains("source_lang=en"));
