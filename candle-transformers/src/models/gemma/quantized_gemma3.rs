@@ -244,6 +244,10 @@ impl LayerWeights {
 
         self.attention_wo.forward(&attn_output)
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -476,5 +480,11 @@ impl ModelWeights {
         let output = self.output.forward(&x)?;
 
         Ok(output)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.clear_kv_cache();
+        }
     }
 }
