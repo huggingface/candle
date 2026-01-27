@@ -1998,3 +1998,65 @@ fn tensor_norm() -> Result<()> {
     assert_eq!(norm.to_scalar::<f64>()?, 5.);
     Ok(())
 }
+
+#[cfg(feature = "cuda")]
+#[test]
+fn transfers_cuda_to_device() -> Result<()> {
+    use rand::seq::SliceRandom;
+
+    let devices = cudarc::driver::safe::CudaContext::device_count()
+        .map_err(candle_core::cuda::CudaError::from)?;
+    if devices < 2 {
+        return Ok(());
+    }
+    let first = Device::new_cuda(0)?;
+
+    let mut data: Vec<u32> = (0..262144).collect();
+    let mut rng = rand::rng();
+    data.shuffle(&mut rng);
+
+    let t1 = Tensor::from_vec(data, (512, 512), &first)?;
+    let second = Device::new_cuda(1)?;
+    let t2 = t1.to_device(&second)?;
+
+    assert_ne!(
+        t1.device().as_cuda_device()?.id(),
+        t2.device().as_cuda_device()?.id()
+    );
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
+    use std::{ops::Deref, sync::RwLockReadGuard};
+
+    use candle_core::Storage;
+    use rand::seq::SliceRandom;
+
+    let first = Device::new_cuda(0)?;
+    let second = Device::new_cuda(0)?;
+
+    let mut data: Vec<u32> = (0..262144).collect();
+    let mut rng = rand::rng();
+    data.shuffle(&mut rng);
+
+    let t1 = Tensor::from_vec(data, (512, 512), &first)?;
+    let t2 = t1.to_device(&second)?;
+
+    let (storage1, _) = t1.storage_and_layout();
+    let (storage2, _) = t2.storage_and_layout();
+    let extract = |s: RwLockReadGuard<'_, Storage>| match &s.deref() {
+        Storage::Cuda(c) => {
+            use cudarc::driver::DevicePtr;
+            let slice = c.as_cuda_slice::<u32>().unwrap();
+            let ptr = slice.device_ptr(slice.stream()).0;
+            ptr
+        }
+        _ => unimplemented!(),
+    };
+    let id1 = extract(storage1);
+    let id2 = extract(storage2);
+    assert_ne!(id1, id2);
+    Ok(())
+}
