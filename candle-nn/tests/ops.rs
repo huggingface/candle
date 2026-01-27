@@ -327,7 +327,7 @@ fn sigmoid(device: &Device) -> Result<()> {
 
 fn sigmoid_f16(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
-    let tensor = Tensor::new(data, device)?.to_dtype(DType::F16)?;
+    let tensor = Tensor::new(data, device)?.to_dtype(candle::DType::F16)?;
     let s1 = candle_nn::ops::sigmoid(&tensor)?;
     let s2 = (1. / (1. + tensor.neg()?.exp()?)?)?;
     let diff = (s1 - s2)?.abs()?.sum_all()?.to_vec0::<half::f16>()?;
@@ -337,7 +337,7 @@ fn sigmoid_f16(device: &Device) -> Result<()> {
 
 fn sigmoid_bf16(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
-    let tensor = Tensor::new(data, device)?.to_dtype(DType::BF16)?;
+    let tensor = Tensor::new(data, device)?.to_dtype(candle::DType::BF16)?;
     let s1 = candle_nn::ops::sigmoid(&tensor)?;
     let s2 = (1. / (1. + tensor.neg()?.exp()?)?)?;
     let diff = (s1 - s2)?.abs()?.sum_all()?.to_vec0::<half::bf16>()?;
