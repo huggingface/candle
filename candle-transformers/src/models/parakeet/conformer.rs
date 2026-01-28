@@ -359,7 +359,7 @@ struct DwStridingSubsampling {
 
 impl DwStridingSubsampling {
     fn load(args: &ConformerArgs, vb: VarBuilder) -> Result<Self> {
-        fn load_conv2d_weight(
+        fn try_load_conv2d_weight(
             vb: &VarBuilder,
             name: &str,
             out_ch: usize,
@@ -371,6 +371,38 @@ impl DwStridingSubsampling {
             }
             let weight = vb.get((out_ch, k, k, in_ch), name)?;
             weight.permute((0, 3, 1, 2))
+        }
+
+        fn load_conv2d_weight(
+            vb: &VarBuilder,
+            primary: &str,
+            alt: Option<&str>,
+            out_ch: usize,
+            in_ch: usize,
+            k: usize,
+        ) -> Result<Tensor> {
+            if let Ok(weight) = try_load_conv2d_weight(vb, primary, out_ch, in_ch, k) {
+                return Ok(weight);
+            }
+            if let Some(alt) = alt {
+                return try_load_conv2d_weight(vb, alt, out_ch, in_ch, k);
+            }
+            try_load_conv2d_weight(vb, primary, out_ch, in_ch, k)
+        }
+
+        fn load_conv_bias(
+            vb: &VarBuilder,
+            primary: &str,
+            alt: Option<&str>,
+            channels: usize,
+        ) -> Result<Tensor> {
+            if let Ok(bias) = vb.get((channels,), primary) {
+                return Ok(bias);
+            }
+            if let Some(alt) = alt {
+                return vb.get((channels,), alt);
+            }
+            vb.get((channels,), primary)
         }
 
         let sampling_num = (args.subsampling_factor as f64).log2() as usize;
@@ -394,18 +426,31 @@ impl DwStridingSubsampling {
         let first_w = load_conv2d_weight(
             &vb,
             "conv.0.weight",
+            None,
             args.subsampling_conv_channels,
             in_channels,
             kernel_size,
         )?;
-        let first_b = vb.get((args.subsampling_conv_channels,), "conv.0.bias")?;
+        let first_b = load_conv_bias(&vb, "conv.0.bias", None, args.subsampling_conv_channels)?;
         conv.push(Conv2d::new(first_w, Some(first_b), cfg));
         in_channels = args.subsampling_conv_channels;
 
         for i in 0..(sampling_num - 1) {
             let dw_name = format!("conv.{}", 2 + i * 3);
-            let dw_w = load_conv2d_weight(&vb, dw_name.as_str(), in_channels, 1, kernel_size)?;
-            let dw_b = vb.get((in_channels,), dw_name.as_str())?;
+            let dw_w = load_conv2d_weight(
+                &vb,
+                format!("{dw_name}.weight").as_str(),
+                Some(dw_name.as_str()),
+                in_channels,
+                1,
+                kernel_size,
+            )?;
+            let dw_b = load_conv_bias(
+                &vb,
+                format!("{dw_name}.bias").as_str(),
+                Some(dw_name.as_str()),
+                in_channels,
+            )?;
             let dw_cfg = Conv2dConfig {
                 padding,
                 stride,
@@ -418,12 +463,18 @@ impl DwStridingSubsampling {
             let pw_name = format!("conv.{}", 2 + i * 3 + 1);
             let pw_w = load_conv2d_weight(
                 &vb,
-                pw_name.as_str(),
+                format!("{pw_name}.weight").as_str(),
+                Some(pw_name.as_str()),
                 args.subsampling_conv_channels,
                 in_channels,
                 1,
             )?;
-            let pw_b = vb.get((args.subsampling_conv_channels,), pw_name.as_str())?;
+            let pw_b = load_conv_bias(
+                &vb,
+                format!("{pw_name}.bias").as_str(),
+                Some(pw_name.as_str()),
+                args.subsampling_conv_channels,
+            )?;
             let pw_cfg = Conv2dConfig {
                 padding: 0,
                 stride: 1,
