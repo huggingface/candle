@@ -1227,7 +1227,7 @@ impl Tensor {
     /// # Arguments
     ///
     /// * `target_h` - Target height
-    /// * `target_w` - Target width  
+    /// * `target_w` - Target width
     /// * `align_corners` - If true, corner pixels are aligned. If false (default),
     ///   pixels are treated as areas (matches PyTorch default behavior).
     ///
@@ -1950,15 +1950,24 @@ impl Tensor {
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Lazy(storage) => {
-                #[cfg(feature = "cuda")] {
+                // TODO: Temporary solution.
+                // We may want to use a different API for lazy execution.
+                // For example it's important that we are able to execute on a specific
+                // CudaDevice.
+                // Perhaps we should track ToVec(rank: usize), though the generic S being Sized makes it
+                // not dyn-compatible, so hard to store this information in the graph.
+                #[cfg(feature = "cuda")]
+                {
                     let result = storage.execute(crate::CudaDevice::new(0)?)?;
                     return from_cpu_storage(&result.to_cpu_storage()?);
                 }
-                #[cfg(feature = "metal")] {
+                #[cfg(feature = "metal")]
+                {
                     let result = storage.execute(crate::MetalDevice::new(0)?)?;
                     return from_cpu_storage(&result.to_cpu_storage()?);
                 }
-                #[cfg(not(any(feature="metal", feature="cuda")))] {
+                #[cfg(not(any(feature = "metal", feature = "cuda")))]
+                {
                     let result = storage.execute(crate::cpu_backend::CpuDevice)?;
                     return from_cpu_storage(&result.to_cpu_storage()?);
                 }

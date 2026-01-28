@@ -2141,7 +2141,7 @@ impl Executor for MetalDevice {
         &self,
         graph: &LazyGraph<Self::ResultType>,
         node: petgraph::graph::NodeIndex<u32>,
-        mut state: Self::ResultType, // Should get from graph instead of mut state
+        mut state: Self::ResultType, // TODO: Should get from graph instead of mut state
     ) -> Result<MetalStorage> {
         use crate::lazy::Op::*;
 
@@ -2150,7 +2150,7 @@ impl Executor for MetalDevice {
         match op {
             Const(s) => {
                 let mut edges = graph.edges_directed(node, petgraph::Outgoing);
-                let mut edge = edgest.next().unwrap();
+                let mut edge = edges.next().unwrap();
                 // TODO: get storage from graph
                 state = self.storage_from_cpu_storage(s)?;
             }

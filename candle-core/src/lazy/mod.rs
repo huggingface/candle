@@ -834,6 +834,18 @@ impl BackendStorage for LazyStorage {
         self.operations.add_edge(current_op, idx, edge);
         Ok(())
     }
+
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self> {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -680,15 +680,20 @@ impl Storage {
                     storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
                 Ok(Self::Cpu(storage))
             }
-            Self::Cuda(storage) => {
+            Storage::Cuda(storage) => {
                 let storage =
                     storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
                 Ok(Self::Cuda(storage))
             }
-            Self::Metal(storage) => {
+            Storage::Metal(storage) => {
                 let storage =
                     storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
                 Ok(Self::Metal(storage))
+            }
+            Storage::Lazy(storage) => {
+                let storage =
+                    storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
+                Ok(Self::Lazy(storage))
             }
         }
     }
@@ -857,7 +862,7 @@ impl Storage {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
                 Ok(Self::Metal(storage))
             }
-            (Self::Lazy(lhs), Self::Lazy(rhs)) =>  {
+            (Self::Lazy(lhs), Self::Lazy(rhs)) => {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
                 Ok(Self::Lazy(storage))
             }
@@ -915,7 +920,9 @@ impl Storage {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
-            (Self::Metal(src), Self::Metal(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
+            (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
+            }
             (Self::Lazy(src), Self::Lazy(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),

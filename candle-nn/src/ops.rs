@@ -1,6 +1,6 @@
 //! Tensor ops.
 //!
-use candle::{CpuStorage, op::BackpropOp, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{op::BackpropOp, CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -429,13 +429,32 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         storage: &candle::LazyStorage,
         layout: &Layout,
     ) -> Result<(candle::LazyStorage, Shape)> {
-        let xs = Tensor::from_storage(storage.clone().into(), layout.shape(), BackpropOp::none(), false);
+        // TODO: *applies to all lazy custom ops*
+        //
+        // The initial idea with lazy_fwd impls is to track the "slow" impl in the lazy graph, and
+        // then optimize with a per-backend rewrite rule to launch the fast version shown above.
+        //
+        // An issue with this approach is that this custom op is in candle-nn, so we would have to install this
+        // rewrite rule at runtime. We need some good examples and documentation on how to do this correctly.
+        //
+        // On the other hand what is nice about this is that it allows us to circumvent the CustomOp API for
+        // possible new backends outside of the Storage enum
+        //
+        // It would be a real improvement if we could somehow not recreate Tensors inside this fn, but it's
+        // hard to recreate the Tensor API correctly using LazyStorage directly.
+        //
+        let xs = Tensor::from_storage(
+            storage.clone().into(),
+            layout.shape(),
+            BackpropOp::none(),
+            false,
+        );
         let result = softmax(&xs, D::Minus1)?;
         let (storage, layout) = result.storage_and_layout();
         let storage = storage.try_clone(layout)?;
         let inner = match storage {
             candle::Storage::Lazy(lazy) => lazy,
-            _ => unreachable!()
+            _ => unreachable!(),
         };
         Ok((inner, layout.shape().clone()))
     }
@@ -647,7 +666,7 @@ impl candle::CustomOp2 for RmsNorm {
         let storage = storage.try_clone(layout)?;
         let inner = match storage {
             candle::Storage::Lazy(lazy) => lazy,
-            _ => unreachable!()
+            _ => unreachable!(),
         };
         Ok((inner, layout.shape().clone()))
     }

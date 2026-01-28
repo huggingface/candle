@@ -136,6 +136,7 @@ fn main() -> Result<()> {
         None
     };
 
+    // TODO: Revert. Update candle_examples::device
     let device = candle::Device::Lazy(candle::lazy::LazyDevice); //candle_examples::device(args.cpu)?;
     let dtype = match args.dtype.as_deref() {
         Some("f16") => DType::F16,
@@ -252,10 +253,7 @@ fn main() -> Result<()> {
         }
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
-        println!("");
-        println!("hmm: {input:?} - {context_index}");
         let logits = llama.forward(&input, context_index, &mut cache)?;
-        println!("hmm: {logits:?}");
         let logits = logits.squeeze(0)?;
         let logits = if args.repeat_penalty == 1. {
             logits
