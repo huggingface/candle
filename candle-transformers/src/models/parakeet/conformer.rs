@@ -103,6 +103,20 @@ struct Convolution {
 
 impl Convolution {
     fn load(args: &ConformerArgs, vb: VarBuilder) -> Result<Self> {
+        fn load_conv1d_weight(
+            vb: &VarBuilder,
+            name: &str,
+            out_ch: usize,
+            in_ch: usize,
+            k: usize,
+        ) -> Result<Tensor> {
+            if let Ok(weight) = vb.get((out_ch, in_ch, k), name) {
+                return Ok(weight);
+            }
+            let weight = vb.get((out_ch, k, in_ch), name)?;
+            weight.permute((0, 2, 1))
+        }
+
         let padding = (args.conv_kernel_size - 1) / 2;
         let cfg_pw = Conv1dConfig {
             padding: 0,
@@ -118,23 +132,30 @@ impl Convolution {
             dilation: 1,
             cudnn_fwd_algo: None,
         };
-        let pw1_w = vb.get(
-            (args.d_model * 2, args.d_model, 1),
+        let pw1_w = load_conv1d_weight(
+            &vb,
             "pointwise_conv1.weight",
+            args.d_model * 2,
+            args.d_model,
+            1,
         )?;
         let pw1_b = vb.get((args.d_model * 2,), "pointwise_conv1.bias")?;
         let pointwise_conv1 = Conv1d::new(pw1_w, Some(pw1_b), cfg_pw);
 
-        let dw_w = vb.get(
-            (args.d_model, 1, args.conv_kernel_size),
+        let dw_w = load_conv1d_weight(
+            &vb,
             "depthwise_conv.weight",
+            args.d_model,
+            1,
+            args.conv_kernel_size,
         )?;
         let dw_b = vb.get((args.d_model,), "depthwise_conv.bias")?;
         let depthwise_conv = Conv1d::new(dw_w, Some(dw_b), cfg_dw);
 
         let batch_norm = candle_nn::batch_norm(args.d_model, 1e-5, vb.pp("batch_norm"))?;
 
-        let pw2_w = vb.get((args.d_model, args.d_model, 1), "pointwise_conv2.weight")?;
+        let pw2_w =
+            load_conv1d_weight(&vb, "pointwise_conv2.weight", args.d_model, args.d_model, 1)?;
         let pw2_b = vb.get((args.d_model,), "pointwise_conv2.bias")?;
         let pointwise_conv2 = Conv1d::new(pw2_w, Some(pw2_b), cfg_pw);
 
