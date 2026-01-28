@@ -65,8 +65,23 @@ struct FeedForward {
 
 impl FeedForward {
     fn load(d_model: usize, d_ff: usize, vb: VarBuilder) -> Result<Self> {
-        let linear1 = candle_nn::linear(d_model, d_ff, vb.pp("linear1"))?;
-        let linear2 = candle_nn::linear(d_ff, d_model, vb.pp("linear2"))?;
+        fn load_linear_maybe_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
+            let weight = vb.get((out_dim, in_dim), "weight")?;
+            let bias = match vb.get((out_dim,), "bias") {
+                Ok(bias) => Some(bias),
+                Err(err) => {
+                    if err.to_string().contains("cannot find tensor") {
+                        None
+                    } else {
+                        return Err(err);
+                    }
+                }
+            };
+            Ok(Linear::new(weight, bias))
+        }
+
+        let linear1 = load_linear_maybe_bias(d_model, d_ff, vb.pp("linear1"))?;
+        let linear2 = load_linear_maybe_bias(d_ff, d_model, vb.pp("linear2"))?;
         Ok(Self { linear1, linear2 })
     }
 
