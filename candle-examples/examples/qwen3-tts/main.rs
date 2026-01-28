@@ -346,7 +346,8 @@ fn main() -> Result<()> {
                 .with_context(|| {
                     format!("load ref audio for tokenizer encode: {}", path.display())
                 })?;
-            let audio_t = Tensor::from_vec(pcm_for_code, (1, pcm_for_code.len()), &device)?;
+            let pcm_len = pcm_for_code.len();
+            let audio_t = Tensor::from_vec(pcm_for_code, (1, pcm_len), &device)?;
             let codes_list = speech.encode_audio(&audio_t, None)?;
             let ref_code = if args.x_vector_only {
                 None
