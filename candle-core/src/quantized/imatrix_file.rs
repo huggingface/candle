@@ -30,7 +30,7 @@ pub fn load_imatrix<P: AsRef<Path>>(fname: P) -> Result<HashMap<String, Vec<f32>
 
     let n_entries = cursor
         .read_i32::<LittleEndian>()
-        .map_err(|e| crate::Error::msg(format!("Failed to read number of entries: {}", e)))?
+        .map_err(|e| crate::Error::msg(format!("Failed to read number of entries: {e}")))?
         as usize;
 
     if n_entries < 1 {

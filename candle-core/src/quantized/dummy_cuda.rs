@@ -54,6 +54,10 @@ impl QCudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub fn device_ptr(&self) -> Result<*const u8> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub fn storage_size_in_bytes(&self) -> usize {
         0
     }

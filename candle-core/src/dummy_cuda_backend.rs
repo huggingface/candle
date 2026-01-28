@@ -10,15 +10,26 @@ pub struct CudaDevice;
 #[derive(Debug)]
 pub struct CudaStorage;
 
+impl CudaStorage {
+    pub fn transfer_to_device(&self, _dst: &CudaDevice) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+}
+
 macro_rules! fail {
     () => {
         unimplemented!("cuda support has not been enabled, add `cuda` feature to enable.")
     };
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DeviceId(usize);
 
 impl CudaDevice {
     pub fn new_with_stream(_: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
+    }
+    pub fn id(&self) -> DeviceId {
+        DeviceId(0)
     }
 }
 
@@ -204,6 +215,18 @@ impl crate::backend::BackendStorage for CudaStorage {
     }
 
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }

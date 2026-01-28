@@ -11,10 +11,11 @@ jobs:
     name: Check
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+        os: [ubuntu-latest, ubuntu-24.04, windows-latest, macOS-latest, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
@@ -22,7 +23,26 @@ jobs:
         if: runner.os == 'macOS'
         run: rm -f .cargo/config.toml
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --workspace
+
+      - name: Run macos with metal
+        if: matrix.os == 'macOS-latest' 
+        run: cargo check --workspace --features metal
+
+      - name: Run normal cpu
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
+        run: cargo check --workspace
+
+      - name: Run with avx2
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          export RUSTFLAGS="-C target-feature=avx2"
+          cargo check --workspace 
+
+      - name: Run with arm neon
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          export RUSTFLAGS="-C target-feature=neon"
+          cargo check --workspace 
 
   test:
     name: Test Suite
@@ -39,7 +59,7 @@ jobs:
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           df -h
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
@@ -63,7 +83,7 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -73,8 +93,9 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - run: cargo clippy --workspace --tests --examples --benches -- -D warnings
+ 
