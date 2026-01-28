@@ -142,19 +142,21 @@ impl RelPositionMultiHeadAttention {
 
         let q = q_proj.reshape((b, tq, self.inner.n_head, self.inner.head_dim))?;
         let q_u = q
-            .broadcast_add(
-                &self
-                    .pos_bias_u
-                    .reshape((1, 1, self.inner.n_head, self.inner.head_dim))?,
-            )?
+            .broadcast_add(&self.pos_bias_u.reshape((
+                1,
+                1,
+                self.inner.n_head,
+                self.inner.head_dim,
+            ))?)?
             .transpose(1, 2)?
             .contiguous()?;
         let q_v = q
-            .broadcast_add(
-                &self
-                    .pos_bias_v
-                    .reshape((1, 1, self.inner.n_head, self.inner.head_dim))?,
-            )?
+            .broadcast_add(&self.pos_bias_v.reshape((
+                1,
+                1,
+                self.inner.n_head,
+                self.inner.head_dim,
+            ))?)?
             .transpose(1, 2)?
             .contiguous()?;
 

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 
-use candle::{DType, IndexOp, Tensor};
+use candle::{DType, IndexOp};
 use candle_nn::VarBuilder;
 
 use candle_transformers::models::parakeet::{
@@ -97,7 +97,10 @@ fn main() -> Result<()> {
                 let (features, lengths) = m.encoder.forward(&mel, None)?;
                 let (fb, ft, ff) = features.dims3()?;
                 let lengths = lengths.to_vec1::<i64>()?;
-                eprintln!("debug: features dims=({fb},{ft},{ff}) lengths={:?}", lengths);
+                eprintln!(
+                    "debug: features dims=({fb},{ft},{ff}) lengths={:?}",
+                    lengths
+                );
 
                 let vocab = &m.vocabulary;
                 let blank_id = vocab.len();
@@ -119,9 +122,15 @@ fn main() -> Result<()> {
                     let text = if *id == blank_id {
                         "<blank>".to_string()
                     } else {
-                        vocab.get(*id).cloned().unwrap_or_else(|| "<oob>".to_string())
+                        vocab
+                            .get(*id)
+                            .cloned()
+                            .unwrap_or_else(|| "<oob>".to_string())
                     };
-                    eprintln!("debug: tok[{i}] id={} text={:?} logit={:.4}", id, text, token_vals[*id]);
+                    eprintln!(
+                        "debug: tok[{i}] id={} text={:?} logit={:.4}",
+                        id, text, token_vals[*id]
+                    );
                 }
                 let dur_vals = duration_logits.to_vec1::<f32>()?;
                 eprintln!("debug: duration logits {:?}", dur_vals);
@@ -148,7 +157,10 @@ fn main() -> Result<()> {
                 let (features, lengths) = m.encoder.forward(&mel, None)?;
                 let (fb, ft, ff) = features.dims3()?;
                 let lengths = lengths.to_vec1::<i64>()?;
-                eprintln!("debug: features dims=({fb},{ft},{ff}) lengths={:?}", lengths);
+                eprintln!(
+                    "debug: features dims=({fb},{ft},{ff}) lengths={:?}",
+                    lengths
+                );
             }
             ParakeetModel::Ctc(m) => {
                 let audio = candle_transformers::models::parakeet::load_audio(
@@ -172,7 +184,10 @@ fn main() -> Result<()> {
                 let (features, lengths) = m.encoder.forward(&mel, None)?;
                 let (fb, ft, ff) = features.dims3()?;
                 let lengths = lengths.to_vec1::<i64>()?;
-                eprintln!("debug: features dims=({fb},{ft},{ff}) lengths={:?}", lengths);
+                eprintln!(
+                    "debug: features dims=({fb},{ft},{ff}) lengths={:?}",
+                    lengths
+                );
             }
             ParakeetModel::TdtCtc(m) => {
                 let audio = candle_transformers::models::parakeet::load_audio(
@@ -196,7 +211,10 @@ fn main() -> Result<()> {
                 let (features, lengths) = m.base.encoder.forward(&mel, None)?;
                 let (fb, ft, ff) = features.dims3()?;
                 let lengths = lengths.to_vec1::<i64>()?;
-                eprintln!("debug: features dims=({fb},{ft},{ff}) lengths={:?}", lengths);
+                eprintln!(
+                    "debug: features dims=({fb},{ft},{ff}) lengths={:?}",
+                    lengths
+                );
             }
         }
     }
@@ -234,7 +252,12 @@ fn main() -> Result<()> {
 
     if args.debug {
         let tokens = result.tokens();
-        eprintln!("debug: text_len={} tokens={} sentences={}", result.text.len(), tokens.len(), result.sentences.len());
+        eprintln!(
+            "debug: text_len={} tokens={} sentences={}",
+            result.text.len(),
+            tokens.len(),
+            result.sentences.len()
+        );
         for (i, tok) in tokens.iter().take(20).enumerate() {
             eprintln!(
                 "debug: tok[{i}] id={} text={:?} start={:.3} dur={:.3} conf={:.3}",

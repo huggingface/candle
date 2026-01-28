@@ -399,9 +399,9 @@ impl ParakeetTdt {
                 let mut candidates: HashMap<String, Hypothesis> = HashMap::new();
                 for hyp in active.iter() {
                     let decoder_out = if let Some(token) = hyp.last_token {
-                        let input =
-                            Tensor::from_vec(vec![token as i64], (1, 1), feature.device())?;
-                        self.decoder.forward(Some(&input), hyp.hidden_state.clone())?
+                        let input = Tensor::from_vec(vec![token as i64], (1, 1), feature.device())?;
+                        self.decoder
+                            .forward(Some(&input), hyp.hidden_state.clone())?
                     } else {
                         self.decoder.forward(None, hyp.hidden_state.clone())?
                     };
@@ -433,7 +433,11 @@ impl ParakeetTdt {
 
                     for token in token_idx.iter().copied() {
                         let is_blank = token == self.vocabulary.len();
-                        let next_last = if is_blank { hyp.last_token } else { Some(token) };
+                        let next_last = if is_blank {
+                            hyp.last_token
+                        } else {
+                            Some(token)
+                        };
                         let next_state = if is_blank {
                             hyp.hidden_state.clone()
                         } else {

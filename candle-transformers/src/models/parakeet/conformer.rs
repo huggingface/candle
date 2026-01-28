@@ -103,11 +103,7 @@ struct Convolution {
 
 impl Convolution {
     fn load(args: &ConformerArgs, vb: VarBuilder) -> Result<Self> {
-        fn maybe_bias(
-            vb: &VarBuilder,
-            name: &str,
-            channels: usize,
-        ) -> Result<Option<Tensor>> {
+        fn maybe_bias(vb: &VarBuilder, name: &str, channels: usize) -> Result<Option<Tensor>> {
             match vb.get((channels,), name) {
                 Ok(bias) => Ok(Some(bias)),
                 Err(err) => {

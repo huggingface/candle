@@ -209,12 +209,7 @@ impl Lstm {
         let mut layers = Vec::with_capacity(num_layers);
         for i in 0..num_layers {
             let in_size = if i == 0 { input_size } else { hidden_size };
-            layers.push(LstmLayer::load(
-                in_size,
-                hidden_size,
-                i,
-                vb.clone(),
-            )?);
+            layers.push(LstmLayer::load(in_size, hidden_size, i, vb.clone())?);
         }
         Ok(Self {
             layers,
