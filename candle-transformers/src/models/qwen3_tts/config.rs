@@ -210,16 +210,16 @@ where
                             n.as_i64()
                                 .ok_or_else(|| D::Error::custom("spk_id must be integer"))?,
                         ),
-                        _ => {
-                            return Err(D::Error::custom(
-                                "spk_id array entries must be integer",
-                            ))
-                        }
+                        _ => return Err(D::Error::custom("spk_id array entries must be integer")),
                     }
                 }
                 vals
             }
-            _ => return Err(D::Error::custom("spk_id must be integer or array of integers")),
+            _ => {
+                return Err(D::Error::custom(
+                    "spk_id must be integer or array of integers",
+                ))
+            }
         };
         out.insert(k, ids);
     }

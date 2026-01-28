@@ -218,7 +218,7 @@ fn interleave_modalities(x: &Tensor, mrope_section: &[usize]) -> Result<Tensor> 
     if modalities == 0 {
         candle::bail!("mrope interleaved expects at least one modality");
     }
-    let x_flat = x.to_vec1::<f32>()?;
+    let x_flat = x.contiguous()?.flatten_all()?.to_vec1::<f32>()?;
     let modality_num = mrope_section.len();
     let mut out = vec![0f32; batch * seq_len * dim];
     for b in 0..batch {
@@ -433,8 +433,9 @@ impl Attention {
         }
         let probs = candle_nn::ops::softmax_last_dim(&scores)?;
         let ctx = probs.matmul(&v)?;
+        let attn_dim = self.num_heads * self.head_dim;
         ctx.transpose(1, 2)?
-            .reshape((b, l, self.hidden_size))?
+            .reshape((b, l, attn_dim))?
             .apply(&self.o_proj)
     }
 
@@ -553,8 +554,9 @@ impl TalkerAttention {
         }
         let probs = candle_nn::ops::softmax_last_dim(&scores)?;
         let ctx = probs.matmul(&v)?;
+        let attn_dim = self.num_heads * self.head_dim;
         ctx.transpose(1, 2)?
-            .reshape((b, l, self.hidden_size))?
+            .reshape((b, l, attn_dim))?
             .apply(&self.o_proj)
     }
 
@@ -1626,6 +1628,9 @@ impl Qwen3Tts {
         let mut output_codes: Vec<Vec<i64>> = Vec::new();
 
         for step in 0..params.max_new_tokens {
+            if token0 == self.talker.cfg.codec_eos_token_id {
+                break;
+            }
             let last_id = Tensor::from_vec(vec![token0], (1, 1), &self.device)?;
             let last_hidden = self.talker.model.embed_codec(&last_id)?;
             let predictor_in = Tensor::cat(&[&past_hidden, &last_hidden], 1)?;
@@ -1641,10 +1646,6 @@ impl Qwen3Tts {
             step_codes.push(token0);
             step_codes.extend_from_slice(&sub_tokens);
             output_codes.push(step_codes);
-
-            if token0 == self.talker.cfg.codec_eos_token_id {
-                break;
-            }
 
             let mut codec_hiddens: Vec<Tensor> = Vec::with_capacity(1 + sub_tokens.len());
             codec_hiddens.push(last_hidden);

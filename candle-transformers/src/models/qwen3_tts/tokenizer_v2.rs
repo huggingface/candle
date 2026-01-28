@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{conv1d, conv_transpose1d, layer_norm, LayerNorm, VarBuilder};
+use candle_nn::{conv1d, conv1d_no_bias, conv_transpose1d, layer_norm, LayerNorm, VarBuilder};
 use serde::Deserialize;
 
 use crate::models::mimi;
@@ -81,6 +81,8 @@ pub struct Qwen3TtsTokenizerV2DecoderConfig {
     pub latent_dim: usize,
     pub max_position_embeddings: usize,
     pub rope_theta: f64,
+    #[serde(default)]
+    pub head_dim: Option<usize>,
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
     pub attention_bias: bool,
@@ -101,7 +103,8 @@ pub struct Qwen3TtsTokenizerV2DecoderConfig {
 
 impl Qwen3TtsTokenizerV2DecoderConfig {
     pub fn head_dim(&self) -> usize {
-        self.hidden_size / self.num_attention_heads
+        self.head_dim
+            .unwrap_or(self.hidden_size / self.num_attention_heads)
     }
 
     pub fn codebook_dim(&self) -> usize {
@@ -239,8 +242,9 @@ impl DecoderAttention {
         }
         let probs = candle_nn::ops::softmax_last_dim(&scores)?;
         let ctx = probs.matmul(&v)?;
+        let attn_dim = self.num_heads * self.head_dim;
         ctx.transpose(1, 2)?
-            .reshape((b, l, self.hidden_size))?
+            .reshape((b, l, attn_dim))?
             .apply(&self.o_proj)
     }
 
@@ -796,13 +800,13 @@ impl ResidualVectorQuantizer {
                 groups: 1,
                 cudnn_fwd_algo: None,
             };
-            Some(conv1d(
-                dimension,
-                output_dimension,
-                1,
-                cfg1,
-                vb.pp("output_proj"),
-            )?)
+            let vb = vb.pp("output_proj");
+            let proj = if vb.contains_tensor("bias") {
+                conv1d(dimension, output_dimension, 1, cfg1, vb)?
+            } else {
+                conv1d_no_bias(dimension, output_dimension, 1, cfg1, vb)?
+            };
+            Some(proj)
         };
         let vq = ResidualVectorQuantization::new(cfg, vb.pp("vq"), n_q, dimension)?;
         Ok(Self { output_proj, vq })
@@ -1087,6 +1091,15 @@ impl Qwen3TtsTokenizerV2 {
 }
 
 fn build_encoder(cfg: &Qwen3TtsTokenizerV2Config, vb: VarBuilder) -> Result<Option<mimi::Model>> {
+    let has_encoder = vb.contains_tensor("encoder.layers.0.conv.weight")
+        || vb.contains_tensor("encoder.layers.0.conv.weight_g")
+        || vb.contains_tensor("encoder.layers.0.conv.weight_v");
+    if !has_encoder {
+        return Ok(None);
+    }
+    let has_decoder = vb.contains_tensor("decoder.layers.0.conv.weight")
+        || vb.contains_tensor("decoder.layers.0.conv.weight_g")
+        || vb.contains_tensor("decoder.layers.0.conv.weight_v");
     let num_codebooks = cfg
         .encoder_config
         .as_ref()
@@ -1108,6 +1121,10 @@ fn build_encoder(cfg: &Qwen3TtsTokenizerV2Config, vb: VarBuilder) -> Result<Opti
             enc_cfg.quantizer_dim = quantizer_dim as usize;
         }
     }
-    let encoder = mimi::Model::new(enc_cfg, vb)?;
+    let encoder = if has_decoder {
+        mimi::Model::new(enc_cfg, vb)?
+    } else {
+        mimi::Model::new_encoder_only(enc_cfg, vb)?
+    };
     Ok(Some(encoder))
 }

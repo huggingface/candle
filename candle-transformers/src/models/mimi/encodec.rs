@@ -91,11 +91,11 @@ impl Config {
 #[derive(Debug, Clone)]
 pub struct Encodec {
     encoder: seanet::SeaNetEncoder,
-    decoder: seanet::SeaNetDecoder,
+    decoder: Option<seanet::SeaNetDecoder>,
     encoder_transformer: transformer::ProjectedTransformer,
-    decoder_transformer: transformer::ProjectedTransformer,
+    decoder_transformer: Option<transformer::ProjectedTransformer>,
     downsample: conv::ConvDownsample1d,
-    upsample: conv::ConvTrUpsample1d,
+    upsample: Option<conv::ConvTrUpsample1d>,
     quantizer: quantization::SplitResidualVectorQuantizer,
     config: Config,
 }
@@ -147,12 +147,51 @@ impl Encodec {
 
         Ok(Self {
             encoder,
-            decoder,
+            decoder: Some(decoder),
             encoder_transformer,
-            decoder_transformer,
+            decoder_transformer: Some(decoder_transformer),
             quantizer,
             downsample,
-            upsample,
+            upsample: Some(upsample),
+            config: cfg,
+        })
+    }
+
+    pub fn new_encoder_only(cfg: Config, vb: VarBuilder) -> Result<Self> {
+        let dim = cfg.seanet.dimension;
+        let encoder = seanet::SeaNetEncoder::new(&cfg.seanet, vb.pp("encoder"))?;
+        let encoder_transformer = transformer::ProjectedTransformer::new(
+            dim,
+            &[dim],
+            &cfg.transformer,
+            vb.pp("encoder_transformer"),
+        )?;
+        let quantizer = quantization::SplitResidualVectorQuantizer::new(
+            /* dim */ cfg.quantizer_dim,
+            /* input_dim */ Some(dim),
+            /* output_dim */ Some(dim),
+            /* n_q */ cfg.quantizer_n_q,
+            /* bins */ cfg.quantizer_bins,
+            vb.pp("quantizer"),
+        )?;
+        let encoder_frame_rate =
+            cfg.sample_rate / cfg.seanet.ratios.iter().product::<usize>() as f64;
+        let downsample_stride = (encoder_frame_rate / cfg.frame_rate) as usize;
+        let downsample = conv::ConvDownsample1d::new(
+            /* stride */ downsample_stride,
+            /* dim */ dim,
+            /* causal */ true,
+            /* learnt */ true,
+            vb.pp("downsample"),
+        )?;
+        Ok(Self {
+            encoder,
+            decoder: None,
+            encoder_transformer,
+            decoder_transformer: None,
+            quantizer,
+            downsample,
+            upsample: None,
             config: cfg,
         })
     }
@@ -193,30 +232,60 @@ impl Encodec {
     }
 
     pub fn decode(&mut self, codes: &Tensor) -> Result<Tensor> {
+        let decoder = self
+            .decoder
+            .as_ref()
+            .ok_or_else(|| candle::Error::Msg("decoder weights missing".into()))?;
+        let decoder_transformer = self
+            .decoder_transformer
+            .as_mut()
+            .ok_or_else(|| candle::Error::Msg("decoder transformer weights missing".into()))?;
+        let upsample = self
+            .upsample
+            .as_ref()
+            .ok_or_else(|| candle::Error::Msg("decoder upsample weights missing".into()))?;
         let emb = self.quantizer.decode(codes)?;
-        let emb = emb.apply(&self.upsample)?;
-        self.decoder_transformer.reset_state();
-        let outs = self.decoder_transformer.forward(&emb)?;
+        let emb = emb.apply(upsample)?;
+        decoder_transformer.reset_state();
+        let outs = decoder_transformer.forward(&emb)?;
         let out = &outs[0];
-        self.decoder.forward(out)
+        decoder.forward(out)
     }
 
     pub fn decode_step(&mut self, codes: &StreamTensor) -> Result<StreamTensor> {
+        let decoder = self
+            .decoder
+            .as_mut()
+            .ok_or_else(|| candle::Error::Msg("decoder weights missing".into()))?;
+        let decoder_transformer = self
+            .decoder_transformer
+            .as_mut()
+            .ok_or_else(|| candle::Error::Msg("decoder transformer weights missing".into()))?;
+        let upsample = self
+            .upsample
+            .as_mut()
+            .ok_or_else(|| candle::Error::Msg("decoder upsample weights missing".into()))?;
         let emb = match codes.as_option() {
             Some(codes) => StreamTensor::from_tensor(self.quantizer.decode(codes)?),
             None => StreamTensor::empty(),
         };
-        let emb = self.upsample.step(&emb)?;
-        let out = self.decoder_transformer.step(&emb)?;
-        self.decoder.step(&out)
+        let emb = upsample.step(&emb)?;
+        let out = decoder_transformer.step(&emb)?;
+        decoder.step(&out)
     }
 
     pub fn reset_state(&mut self) {
         self.encoder.reset_state();
         self.encoder_transformer.reset_state();
-        self.decoder.reset_state();
-        self.decoder_transformer.reset_state();
-        self.upsample.reset_state();
+        if let Some(decoder) = self.decoder.as_mut() {
+            decoder.reset_state();
+        }
+        if let Some(decoder_transformer) = self.decoder_transformer.as_mut() {
+            decoder_transformer.reset_state();
+        }
+        if let Some(upsample) = self.upsample.as_mut() {
+            upsample.reset_state();
+        }
     }
 }
 

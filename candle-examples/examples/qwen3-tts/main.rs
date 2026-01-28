@@ -4,15 +4,18 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use clap::{ArgAction, Parser};
+use serde::Deserialize;
+use tokenizers::decoders::byte_level::ByteLevel as ByteLevelDecoder;
 use tokenizers::models::bpe::BPE;
 use tokenizers::pre_tokenizers::byte_level::ByteLevel;
-use tokenizers::decoders::byte_level::ByteLevel as ByteLevelDecoder;
+use tokenizers::AddedToken;
 use tokenizers::Tokenizer;
 
 use candle_transformers::models::qwen3_tts::{
@@ -119,13 +122,62 @@ fn load_tokenizer(model_dir: &Path) -> Result<Tokenizer> {
     if tokenizer_json.exists() {
         return Tokenizer::from_file(tokenizer_json).map_err(anyhow::Error::msg);
     }
+    #[derive(Debug, Deserialize)]
+    struct AddedTokenCfg {
+        content: String,
+        #[serde(default)]
+        single_word: bool,
+        #[serde(default)]
+        lstrip: bool,
+        #[serde(default)]
+        rstrip: bool,
+        #[serde(default)]
+        normalized: bool,
+        #[serde(default)]
+        special: bool,
+    }
+    #[derive(Debug, Deserialize)]
+    struct TokenizerCfg {
+        #[serde(default)]
+        added_tokens_decoder: HashMap<String, AddedTokenCfg>,
+    }
     let vocab = model_dir.join("vocab.json");
     let merges = model_dir.join("merges.txt");
     if vocab.exists() && merges.exists() {
-        let bpe = BPE::from_files(vocab, merges).build().map_err(anyhow::Error::msg)?;
+        let bpe = BPE::from_file(&vocab.to_string_lossy(), &merges.to_string_lossy())
+            .build()
+            .map_err(anyhow::Error::msg)?;
         let mut tokenizer = Tokenizer::new(bpe);
-        tokenizer.with_pre_tokenizer(ByteLevel::default());
-        tokenizer.with_decoder(ByteLevelDecoder::default());
+        tokenizer.with_pre_tokenizer(Some(ByteLevel::default()));
+        tokenizer.with_decoder(Some(ByteLevelDecoder::default()));
+        let cfg_path = model_dir.join("tokenizer_config.json");
+        if cfg_path.exists() {
+            let cfg_file = std::fs::File::open(cfg_path)?;
+            let cfg: TokenizerCfg = serde_json::from_reader(cfg_file)?;
+            if !cfg.added_tokens_decoder.is_empty() {
+                let mut special = Vec::new();
+                let mut normal = Vec::new();
+                for (_, t) in cfg.added_tokens_decoder.into_iter() {
+                    let tok = AddedToken::from(t.content, t.special)
+                        .single_word(t.single_word)
+                        .lstrip(t.lstrip)
+                        .rstrip(t.rstrip)
+                        .normalized(t.normalized)
+                        .special(t.special);
+                    if t.special {
+                        special.push(tok);
+                    } else {
+                        normal.push(tok);
+                    }
+                }
+                if !special.is_empty() {
+                    tokenizer.add_special_tokens(&special);
+                }
+                if !normal.is_empty() {
+                    tokenizer.add_tokens(&normal);
+                }
+            }
+        }
         return Ok(tokenizer);
     }
     anyhow::bail!("tokenizer.json or vocab.json+merges.txt not found in model dir")
