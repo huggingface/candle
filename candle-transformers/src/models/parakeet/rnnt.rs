@@ -42,11 +42,93 @@ struct LstmLayer {
 }
 
 impl LstmLayer {
-    fn load(input_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Self> {
-        let w_ih = vb.get((4 * hidden_size, input_size), "weight_ih")?;
-        let w_hh = vb.get((4 * hidden_size, hidden_size), "weight_hh")?;
-        let b_ih = vb.get((4 * hidden_size,), "bias_ih")?;
-        let b_hh = vb.get((4 * hidden_size,), "bias_hh")?;
+    fn load(
+        input_size: usize,
+        hidden_size: usize,
+        layer_idx: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        fn try_get_weight(
+            vb: &VarBuilder,
+            name: &str,
+            out_dim: usize,
+            in_dim: usize,
+        ) -> Option<Tensor> {
+            if let Ok(w) = vb.get((out_dim, in_dim), name) {
+                return Some(w);
+            }
+            if let Ok(w) = vb.get((in_dim, out_dim), name) {
+                return w.t().ok();
+            }
+            None
+        }
+
+        fn load_weight(
+            vb_layer: &VarBuilder,
+            vb_root: &VarBuilder,
+            base: &str,
+            layer_idx: usize,
+            out_dim: usize,
+            in_dim: usize,
+        ) -> Result<Tensor> {
+            let layer_name = format!("{base}_l{layer_idx}");
+            let candidates = [
+                (vb_layer, base),
+                (vb_layer, layer_name.as_str()),
+                (vb_root, layer_name.as_str()),
+                (vb_root, base),
+            ];
+            for (vb, name) in candidates {
+                if let Some(w) = try_get_weight(vb, name, out_dim, in_dim) {
+                    return Ok(w);
+                }
+            }
+            Err(candle::Error::Msg(format!(
+                "missing lstm weight {base} (layer {layer_idx})"
+            )))
+        }
+
+        fn load_bias(
+            vb_layer: &VarBuilder,
+            vb_root: &VarBuilder,
+            base: &str,
+            layer_idx: usize,
+            size: usize,
+        ) -> Result<Tensor> {
+            let layer_name = format!("{base}_l{layer_idx}");
+            let candidates = [
+                (vb_layer, base),
+                (vb_layer, layer_name.as_str()),
+                (vb_root, layer_name.as_str()),
+                (vb_root, base),
+            ];
+            for (vb, name) in candidates {
+                if let Ok(bias) = vb.get((size,), name) {
+                    return Ok(bias);
+                }
+            }
+            Tensor::zeros((size,), vb_root.dtype(), vb_root.device())
+        }
+
+        let vb_layer = vb.pp(format!("layer_{layer_idx}"));
+        let w_ih = load_weight(
+            &vb_layer,
+            &vb,
+            "weight_ih",
+            layer_idx,
+            4 * hidden_size,
+            input_size,
+        )?;
+        let w_hh = load_weight(
+            &vb_layer,
+            &vb,
+            "weight_hh",
+            layer_idx,
+            4 * hidden_size,
+            hidden_size,
+        )?;
+        let b_ih = load_bias(&vb_layer, &vb, "bias_ih", layer_idx, 4 * hidden_size)?;
+        let b_hh = load_bias(&vb_layer, &vb, "bias_hh", layer_idx, 4 * hidden_size)?;
         Ok(Self {
             w_ih,
             w_hh,
@@ -93,7 +175,8 @@ impl Lstm {
             layers.push(LstmLayer::load(
                 in_size,
                 hidden_size,
-                vb.pp(format!("layer_{i}")),
+                i,
+                vb.clone(),
             )?);
         }
         Ok(Self {
