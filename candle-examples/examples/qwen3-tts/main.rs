@@ -10,6 +10,9 @@ use anyhow::{Context, Result};
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use clap::{ArgAction, Parser};
+use tokenizers::models::bpe::BPE;
+use tokenizers::pre_tokenizers::byte_level::ByteLevel;
+use tokenizers::decoders::byte_level::ByteLevel as ByteLevelDecoder;
 use tokenizers::Tokenizer;
 
 use candle_transformers::models::qwen3_tts::{
@@ -100,16 +103,32 @@ struct Args {
     subtalker_top_p: f64,
 }
 
-fn load_model_paths(model_dir: &Path) -> Result<(PathBuf, Vec<PathBuf>, PathBuf)> {
+fn load_model_paths(model_dir: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
     let config = model_dir.join("config.json");
-    let tokenizer = model_dir.join("tokenizer.json");
     let index = model_dir.join("model.safetensors.index.json");
     let weights = if index.exists() {
         candle_examples::hub_load_local_safetensors(model_dir, "model.safetensors.index.json")?
     } else {
         vec![model_dir.join("model.safetensors")]
     };
-    Ok((config, weights, tokenizer))
+    Ok((config, weights))
+}
+
+fn load_tokenizer(model_dir: &Path) -> Result<Tokenizer> {
+    let tokenizer_json = model_dir.join("tokenizer.json");
+    if tokenizer_json.exists() {
+        return Tokenizer::from_file(tokenizer_json).map_err(anyhow::Error::msg);
+    }
+    let vocab = model_dir.join("vocab.json");
+    let merges = model_dir.join("merges.txt");
+    if vocab.exists() && merges.exists() {
+        let bpe = BPE::from_files(vocab, merges).build().map_err(anyhow::Error::msg)?;
+        let mut tokenizer = Tokenizer::new(bpe);
+        tokenizer.with_pre_tokenizer(ByteLevel::default());
+        tokenizer.with_decoder(ByteLevelDecoder::default());
+        return Ok(tokenizer);
+    }
+    anyhow::bail!("tokenizer.json or vocab.json+merges.txt not found in model dir")
 }
 
 fn load_speech_tokenizer_paths(model_dir: &Path) -> Result<(PathBuf, Vec<PathBuf>)> {
@@ -233,7 +252,7 @@ fn main() -> Result<()> {
         anyhow::bail!("--prompt is required (repeat for batching)");
     }
 
-    let (config_path, model_files, tokenizer_path) = load_model_paths(&args.model_dir)?;
+    let (config_path, model_files) = load_model_paths(&args.model_dir)?;
     let (speech_config_path, speech_files) = load_speech_tokenizer_paths(&args.model_dir)?;
 
     let config_file = std::fs::File::open(config_path)?;
@@ -243,7 +262,7 @@ fn main() -> Result<()> {
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, DType::F32, &device)? };
     let mut model = Qwen3Tts::new(config, vb)?;
 
-    let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
+    let tokenizer = load_tokenizer(&args.model_dir)?;
 
     let speech_cfg_file = std::fs::File::open(speech_config_path)?;
     let speech_cfg: Qwen3TtsTokenizerV2Config = serde_json::from_reader(speech_cfg_file)?;
