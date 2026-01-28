@@ -359,6 +359,20 @@ struct DwStridingSubsampling {
 
 impl DwStridingSubsampling {
     fn load(args: &ConformerArgs, vb: VarBuilder) -> Result<Self> {
+        fn load_conv2d_weight(
+            vb: &VarBuilder,
+            name: &str,
+            out_ch: usize,
+            in_ch: usize,
+            k: usize,
+        ) -> Result<Tensor> {
+            if let Ok(weight) = vb.get((out_ch, in_ch, k, k), name) {
+                return Ok(weight);
+            }
+            let weight = vb.get((out_ch, k, k, in_ch), name)?;
+            weight.permute((0, 3, 1, 2))
+        }
+
         let sampling_num = (args.subsampling_factor as f64).log2() as usize;
         let stride = 2;
         let kernel_size = 3;
@@ -377,14 +391,12 @@ impl DwStridingSubsampling {
             dilation: 1,
             cudnn_fwd_algo: None,
         };
-        let first_w = vb.get(
-            (
-                args.subsampling_conv_channels,
-                in_channels,
-                kernel_size,
-                kernel_size,
-            ),
+        let first_w = load_conv2d_weight(
+            &vb,
             "conv.0.weight",
+            args.subsampling_conv_channels,
+            in_channels,
+            kernel_size,
         )?;
         let first_b = vb.get((args.subsampling_conv_channels,), "conv.0.bias")?;
         conv.push(Conv2d::new(first_w, Some(first_b), cfg));
@@ -392,7 +404,7 @@ impl DwStridingSubsampling {
 
         for i in 0..(sampling_num - 1) {
             let dw_name = format!("conv.{}", 2 + i * 3);
-            let dw_w = vb.get((in_channels, 1, kernel_size, kernel_size), dw_name.as_str())?;
+            let dw_w = load_conv2d_weight(&vb, dw_name.as_str(), in_channels, 1, kernel_size)?;
             let dw_b = vb.get((in_channels,), dw_name.as_str())?;
             let dw_cfg = Conv2dConfig {
                 padding,
@@ -404,9 +416,12 @@ impl DwStridingSubsampling {
             conv.push(Conv2d::new(dw_w, Some(dw_b), dw_cfg));
 
             let pw_name = format!("conv.{}", 2 + i * 3 + 1);
-            let pw_w = vb.get(
-                (args.subsampling_conv_channels, in_channels, 1, 1),
+            let pw_w = load_conv2d_weight(
+                &vb,
                 pw_name.as_str(),
+                args.subsampling_conv_channels,
+                in_channels,
+                1,
             )?;
             let pw_b = vb.get((args.subsampling_conv_channels,), pw_name.as_str())?;
             let pw_cfg = Conv2dConfig {
