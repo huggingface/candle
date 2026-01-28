@@ -174,7 +174,8 @@ fn encode_prompt(tokenizer: &Tokenizer, prompt: &str, device: &candle::Device) -
         .encode(assistant_text, true)
         .map_err(anyhow::Error::msg)?;
     let input_ids: Vec<i64> = input_ids.get_ids().iter().map(|&v| v as i64).collect();
-    Ok(Tensor::from_vec(input_ids, (1, input_ids.len()), device)?)
+    let len = input_ids.len();
+    Ok(Tensor::from_vec(input_ids, (1, len), device)?)
 }
 
 fn encode_instruct(
@@ -187,7 +188,8 @@ fn encode_instruct(
         .encode(instruct_text, true)
         .map_err(anyhow::Error::msg)?;
     let ids: Vec<i64> = enc.get_ids().iter().map(|&v| v as i64).collect();
-    Ok(Tensor::from_vec(ids, (1, ids.len()), device)?)
+    let len = ids.len();
+    Ok(Tensor::from_vec(ids, (1, len), device)?)
 }
 
 fn encode_ref_text(
@@ -200,7 +202,8 @@ fn encode_ref_text(
         .encode(ref_text, true)
         .map_err(anyhow::Error::msg)?;
     let ids: Vec<i64> = enc.get_ids().iter().map(|&v| v as i64).collect();
-    Ok(Tensor::from_vec(ids, (1, ids.len()), device)?)
+    let len = ids.len();
+    Ok(Tensor::from_vec(ids, (1, len), device)?)
 }
 
 #[cfg(feature = "symphonia")]
@@ -401,7 +404,11 @@ fn main() -> Result<()> {
 
         let out_path = out_path_for_index(&args.out_file, idx, codes_batch.len());
         let mut out = std::fs::File::create(&out_path)?;
-        candle_examples::wav::write_pcm_as_wav(&mut out, &wav, speech.output_sample_rate())?;
+        let sample_rate: u32 = speech
+            .output_sample_rate()
+            .try_into()
+            .context("output sample rate fits in u32")?;
+        candle_examples::wav::write_pcm_as_wav(&mut out, &wav, sample_rate)?;
     }
 
     Ok(())
