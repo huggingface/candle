@@ -103,6 +103,23 @@ struct Convolution {
 
 impl Convolution {
     fn load(args: &ConformerArgs, vb: VarBuilder) -> Result<Self> {
+        fn maybe_bias(
+            vb: &VarBuilder,
+            name: &str,
+            channels: usize,
+        ) -> Result<Option<Tensor>> {
+            match vb.get((channels,), name) {
+                Ok(bias) => Ok(Some(bias)),
+                Err(err) => {
+                    if err.to_string().contains("cannot find tensor") {
+                        Ok(None)
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        }
+
         fn load_conv1d_weight(
             vb: &VarBuilder,
             name: &str,
@@ -139,8 +156,8 @@ impl Convolution {
             args.d_model,
             1,
         )?;
-        let pw1_b = vb.get((args.d_model * 2,), "pointwise_conv1.bias")?;
-        let pointwise_conv1 = Conv1d::new(pw1_w, Some(pw1_b), cfg_pw);
+        let pw1_b = maybe_bias(&vb, "pointwise_conv1.bias", args.d_model * 2)?;
+        let pointwise_conv1 = Conv1d::new(pw1_w, pw1_b, cfg_pw);
 
         let dw_w = load_conv1d_weight(
             &vb,
@@ -149,15 +166,15 @@ impl Convolution {
             1,
             args.conv_kernel_size,
         )?;
-        let dw_b = vb.get((args.d_model,), "depthwise_conv.bias")?;
-        let depthwise_conv = Conv1d::new(dw_w, Some(dw_b), cfg_dw);
+        let dw_b = maybe_bias(&vb, "depthwise_conv.bias", args.d_model)?;
+        let depthwise_conv = Conv1d::new(dw_w, dw_b, cfg_dw);
 
         let batch_norm = candle_nn::batch_norm(args.d_model, 1e-5, vb.pp("batch_norm"))?;
 
         let pw2_w =
             load_conv1d_weight(&vb, "pointwise_conv2.weight", args.d_model, args.d_model, 1)?;
-        let pw2_b = vb.get((args.d_model,), "pointwise_conv2.bias")?;
-        let pointwise_conv2 = Conv1d::new(pw2_w, Some(pw2_b), cfg_pw);
+        let pw2_b = maybe_bias(&vb, "pointwise_conv2.bias", args.d_model)?;
+        let pointwise_conv2 = Conv1d::new(pw2_w, pw2_b, cfg_pw);
 
         Ok(Self {
             pointwise_conv1,
