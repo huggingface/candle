@@ -13,6 +13,6 @@ pub mod tokenizer;
 pub use alignment::{AlignedResult, AlignedSentence, AlignedToken, SentenceConfig};
 pub use audio::{get_logmel, load_audio, PreprocessArgs};
 pub use model::{
-    from_config_value, Beam, DecodingConfig, Greedy, ParakeetCtc, ParakeetModel, ParakeetRnnt,
-    ParakeetTdt, ParakeetTdtCtc, StreamingParakeet,
+    from_config_value, Beam, Decoding, DecodingConfig, Greedy, ParakeetCtc, ParakeetModel,
+    ParakeetRnnt, ParakeetTdt, ParakeetTdtCtc, StreamingParakeet,
 };
