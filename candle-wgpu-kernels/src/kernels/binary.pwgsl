@@ -71,6 +71,17 @@ fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>
 
 @compute
 @workgroup_size(64,1,1)
+fn binary_buffer_from_buffer_same_stride(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
+    let pos1 = get_index1(op_binary_input1_layout, id);
+    if(pos1.is_valid){
+        set_binary(op_binary_operation, id, v_input1[pos1.id], v_input2[pos1.id]);
+    }
+}
+
+
+@compute
+@workgroup_size(64,1,1)
 fn binary_buffer_from_buffer_contiguous_both(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
     if (id >= op_binary_contiguous_both_input1_length){

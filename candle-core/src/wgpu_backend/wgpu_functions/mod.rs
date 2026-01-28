@@ -104,6 +104,47 @@ pub(crate) trait QueueLayouts{
         
 }
 
+pub(crate) fn normalize_layout(layout: &Layout) -> Layout {
+    let shape = layout.shape().dims();
+    let stride = layout.stride();
+
+    assert_eq!(shape.len(), stride.len());
+
+    // 1. Remove size-1 dimensions
+    let dims: Vec<(usize, usize)> = shape
+        .iter()
+        .copied()
+        .zip(stride.iter().copied())
+        .filter(|&(d, _)| d != 1)
+        .collect();
+
+    // Scalar fallback
+    if dims.is_empty() {
+        return Layout::new(vec![1].into(), vec![0], layout.start_offset());
+    }
+
+    // 2. Merge contiguous adjacent dimensions
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+
+    for (dim, st) in dims {
+        if let Some((prev_dim, prev_stride)) = merged.last_mut() {
+            // contiguity condition:
+            // previous stride == current stride * current dimension
+            if *prev_stride == st * dim {
+                *prev_dim *= dim;
+                *prev_stride = st;
+                continue;
+            }
+        }
+        merged.push((dim, st));
+    }
+
+    let (new_shape, new_stride): (Vec<_>, Vec<_>) = merged.into_iter().unzip();
+
+    Layout::new(new_shape.into(), new_stride, layout.start_offset())
+}
+
+
 fn add_layout<'a>(
     queue: &mut QueueBuffer<'a>,
     layout: &Layout,
@@ -112,6 +153,7 @@ fn add_layout<'a>(
     constant_is_startofsset_zero: Constants,
     constant_is_contiguous: Constants,
 ) {
+    let layout= normalize_layout(layout);
     let shape = layout.shape().dims();
     let stride = layout.stride();
 

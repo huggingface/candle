@@ -180,30 +180,31 @@ pub fn queue_unary_from_buffer_op(
     scalar2: f32,
     dtype: crate::DType,
 ) -> crate::Result<()> {
+    let layout = normalize_layout(input.layout());
     let mut queue = dev.get_queue();
-    let pipeline = if input.layout().is_contiguous() {
-        let const_vec = vec![op as u32, (input.layout().start_offset() == 0) as u32];
+    let pipeline = if layout.is_contiguous() {
+        let const_vec = vec![op as u32, (layout.start_offset() == 0) as u32];
 
         queue.add(scalar1);
         queue.add(scalar2);
-        queue.add(input.layout().shape().elem_count()); //length
+        queue.add(layout.shape().elem_count()); //length
 
-        if input.layout().start_offset() != 0
+        if layout.start_offset() != 0
             || op == UnaryOperation::RandNormal
             || op == UnaryOperation::RandUniform
         {
-            queue.add(input.layout().start_offset());
+            queue.add(layout.start_offset());
         }
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
             queue.add(dev.inner_device().with_extension_mut::<rand::rngs::StdRng, u32>(|rand| rand.next_u32()).unwrap());
         }
 
         let inplaceable = OpIsInplaceable {
-            input1_inplaceable: input.layout().start_offset() == 0,
+            input1_inplaceable: layout.start_offset() == 0,
             input2_inplaceable: false,
         };
 
-        if input.layout().shape().elem_count() > 65535 * 64 {
+        if layout.shape().elem_count() > 65535 * 64 {
             queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
@@ -217,9 +218,9 @@ pub fn queue_unary_from_buffer_op(
 
         queue.add(scalar1);
         queue.add(scalar2);
-        queue.add_layout1(input.layout());
+        queue.add_layout1(&layout);
 
-        if input.layout().shape().elem_count() > 65535 * 64 {
+        if layout.shape().elem_count() > 65535 * 64 {
             queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
@@ -233,9 +234,9 @@ pub fn queue_unary_from_buffer_op(
     queue.enqueue_64_big_extra(
         pipeline,
         bind_group,
-        input.layout().shape().elem_count() as u32,
+        layout.shape().elem_count() as u32,
         #[cfg(feature = "wgpu_debug")]
-        Some(format!("OP: {:?}, layout: {:?}", op, input.layout())),
+        Some(format!("OP: {:?}, layout: {:?}", op, layout)),
     );
 
     Ok(())

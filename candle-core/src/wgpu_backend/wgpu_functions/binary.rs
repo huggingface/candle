@@ -1,5 +1,4 @@
 use candle_wgpu_kernels::binary::Functions;
-
 use super::*;
 
 #[derive(Copy, Clone, Debug)]
@@ -22,24 +21,26 @@ pub fn queue_binary_buffer_from_buffer(
     op: BinaryOperation,
     dtype: crate::DType,
 ) -> crate::Result<()> {
+    let layout1 = normalize_layout(input1.layout());
+    let layout2 = normalize_layout(input2.layout());
     let mut queue = dev.get_queue();
-    let pipeline = if input1.layout().is_contiguous() && input2.layout().is_contiguous() {
+    let pipeline = if layout1.is_contiguous() && layout2.is_contiguous() {
         let const_vec = vec![
             op as usize,
-            (input1.layout().start_offset() == 0) as usize,
-            (input2.layout().start_offset() == 0) as usize,
+            (layout1.start_offset() == 0) as usize,
+            (layout2.start_offset() == 0) as usize,
         ];
 
-        queue.add(input1.layout().shape().elem_count()); //input1_length
-        queue.add(input1.layout().start_offset());
-        queue.add(input2.layout().start_offset());
+        queue.add(layout1.shape().elem_count()); //input1_length
+        queue.add(layout1.start_offset());
+        queue.add(layout2.start_offset());
 
         let inplaceable = OpIsInplaceable {
-            input1_inplaceable: input1.layout().start_offset() == 0,
-            input2_inplaceable: input2.layout().start_offset() == 0,
+            input1_inplaceable: layout1.start_offset() == 0,
+            input2_inplaceable: layout2.start_offset() == 0,
         };
 
-        if input1.layout().shape().elem_count() > 65535 * 64 {
+        if layout1.shape().elem_count() > 65535 * 64 {
             queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
@@ -53,17 +54,30 @@ pub fn queue_binary_buffer_from_buffer(
         )
     } else {
         let const_vec = vec![op as usize];
-        queue.add_layout1(input1.layout());
-        queue.add_layout2(input2.layout());
+        queue.add_layout1(&layout1);
 
-        if input1.layout().shape().elem_count() > 65535 * 64 {
-            queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        if layout1 != layout2{
+            queue.add_layout2(&layout2);
+
+            if input1.layout().shape().elem_count() > 65535 * 64 {
+                queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+            }
+
+            queue.get_pipeline_const(
+                Pipelines::Binary(dev.get_dtype(dtype)?, Functions::BinaryBufferFromBuffer),
+                const_vec,
+            )
         }
+        else{
+            if layout1.shape().elem_count() > 65535 * 64 {
+                queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+            }
 
-        queue.get_pipeline_const(
-            Pipelines::Binary(dev.get_dtype(dtype)?, Functions::BinaryBufferFromBuffer),
-            const_vec,
-        )
+            queue.get_pipeline_const(
+                Pipelines::Binary(dev.get_dtype(dtype)?, Functions::BinaryBufferFromBufferSameStride),
+                const_vec,
+            )
+        }
     };
 
     let bind_group =
@@ -72,9 +86,9 @@ pub fn queue_binary_buffer_from_buffer(
     queue.enqueue_64_big_extra(
         pipeline,
         bind_group,
-        input1.layout().shape().elem_count() as u32,
+        layout1.shape().elem_count() as u32,
         #[cfg(feature = "wgpu_debug")]
-        Some(format!("OP: {:?}, layout: {:?}", op, input1.layout())),
+        Some(format!("OP: {:?}, layout1: {:?}, layout2: {:?}", op, layout1, layout2)),
     );
     Ok(())
 }

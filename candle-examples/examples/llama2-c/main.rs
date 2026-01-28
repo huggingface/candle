@@ -369,6 +369,17 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
         print!("{rest}");
     }
     let dt = start_gen.elapsed();
+
+    #[cfg(feature = "wgpu_debug")]
+    {
+        device
+            .as_wgpu_device()
+            .unwrap().inner_device()
+            .log_debuginfo_to_file("", "llama2c", "after_fix_shaders")?;
+        // Example:
+        // log_debuginfo_to_file("", "llama2c", "5.0")?;
+    }
+
     println!(
         "\n{} tokens generated ({:.2} token/s)\n",
         tokens.len(),

@@ -5,7 +5,7 @@ def numeric_diff(a: str, b: str):
     i = 0
     diffs = []
 
-    while i < len(a):
+    while i < len(a) and i < len(b):
         if a[i] == b[i]:
             i += 1
             continue
@@ -18,7 +18,7 @@ def numeric_diff(a: str, b: str):
             start -= 1
 
         end = i
-        while end < len(a) and a[end].isdigit() and b[end].isdigit():
+        while end < len(a) and end < len(b) and a[end].isdigit() and b[end].isdigit():
             end += 1
 
         diffs.append((start, end, int(a[start:end]), int(b[start:end])))
@@ -29,7 +29,8 @@ def numeric_diff(a: str, b: str):
 
     # Try each differing number as dynamic base
     for  (_, _, base_a, base_b) in diffs:
-
+        if base_a == 0 or base_b == 0:
+            continue
         # -------------------------------------------------
         # 1) PURE / MULTIPLICATIVE: value = dynamic * k
         # -------------------------------------------------
@@ -344,7 +345,7 @@ def analyse_file(data):
 
 
 # Load JSON data from a file
-with open('path_to_wgpu_debug_file_measurements.json', 'r') as file:
+with open('D:/dev_github/projekt-informatik/candle_webgpu/wgpu_llama2c_test_test_binary_measurements.json', 'r') as file:
     data = json.load(file)
 
 analyse_file(data)
