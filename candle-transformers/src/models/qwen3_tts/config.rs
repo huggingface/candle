@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use candle_nn::Activation;
-use serde::Deserialize;
+use serde::{de::Error as DeError, Deserialize, Deserializer};
 
 fn default_mrope_section() -> Vec<usize> {
     vec![16, 24, 24]
@@ -185,10 +185,45 @@ pub struct Qwen3TtsTalkerConfig {
     pub codec_pad_id: i64,
     #[serde(default = "default_codec_bos_id")]
     pub codec_bos_id: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_spk_id_map")]
     pub spk_id: HashMap<String, Vec<i64>>,
     #[serde(default)]
     pub spk_is_dialect: HashMap<String, serde_json::Value>,
+}
+
+fn deserialize_spk_id_map<'de, D>(deserializer: D) -> Result<HashMap<String, Vec<i64>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: HashMap<String, serde_json::Value> = Deserialize::deserialize(deserializer)?;
+    let mut out = HashMap::with_capacity(raw.len());
+    for (k, v) in raw.into_iter() {
+        let ids = match v {
+            serde_json::Value::Number(n) => vec![n
+                .as_i64()
+                .ok_or_else(|| D::Error::custom("spk_id must be integer"))?],
+            serde_json::Value::Array(arr) => {
+                let mut vals = Vec::with_capacity(arr.len());
+                for item in arr.into_iter() {
+                    match item {
+                        serde_json::Value::Number(n) => vals.push(
+                            n.as_i64()
+                                .ok_or_else(|| D::Error::custom("spk_id must be integer"))?,
+                        ),
+                        _ => {
+                            return Err(D::Error::custom(
+                                "spk_id array entries must be integer",
+                            ))
+                        }
+                    }
+                }
+                vals
+            }
+            _ => return Err(D::Error::custom("spk_id must be integer or array of integers")),
+        };
+        out.insert(k, ids);
+    }
+    Ok(out)
 }
 
 impl Qwen3TtsTalkerConfig {
