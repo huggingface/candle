@@ -60,7 +60,7 @@ impl Default for DecodingConfig {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct GreedyConfig {
     #[serde(default)]
-    max_symbols: Option<usize>,
+    max_symbols: Option<i64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -188,7 +188,11 @@ impl ParakeetTdt {
         }
         let vocabulary = args.joint.vocabulary.clone();
         let durations = args.decoding.durations.clone();
-        let max_symbols = args.decoding.greedy.and_then(|g| g.max_symbols);
+        let max_symbols = args
+            .decoding
+            .greedy
+            .and_then(|g| g.max_symbols)
+            .and_then(|v| if v > 0 { Some(v as usize) } else { None });
         let device = vb.device().clone();
         let encoder = Conformer::load(args.encoder.clone(), vb.pp("encoder"))?;
         let decoder = PredictNetwork::load(&args.decoder, vb.pp("decoder"))?;
@@ -683,7 +687,11 @@ pub struct ParakeetRnnt {
 impl ParakeetRnnt {
     pub fn load(args: ParakeetRnntArgs, vb: VarBuilder) -> Result<Self> {
         let vocabulary = args.joint.vocabulary.clone();
-        let max_symbols = args.decoding.greedy.and_then(|g| g.max_symbols);
+        let max_symbols = args
+            .decoding
+            .greedy
+            .and_then(|g| g.max_symbols)
+            .and_then(|v| if v > 0 { Some(v as usize) } else { None });
         let device = vb.device().clone();
         let encoder = Conformer::load(args.encoder.clone(), vb.pp("encoder"))?;
         let decoder = PredictNetwork::load(&args.decoder, vb.pp("decoder"))?;

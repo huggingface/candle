@@ -6,7 +6,7 @@ pub struct PredictNetworkArgs {
     pub pred_hidden: usize,
     pub pred_rnn_layers: usize,
     #[serde(default)]
-    pub rnn_hidden_size: Option<usize>,
+    pub rnn_hidden_size: Option<i64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -169,7 +169,11 @@ impl PredictNetwork {
         };
         let pred_hidden = args.prednet.pred_hidden;
         let embed = candle_nn::embedding(vocab, pred_hidden, vb.pp("prediction").pp("embed"))?;
-        let hidden_size = args.prednet.rnn_hidden_size.unwrap_or(pred_hidden);
+        let hidden_size = args
+            .prednet
+            .rnn_hidden_size
+            .and_then(|v| if v > 0 { Some(v as usize) } else { None })
+            .unwrap_or(pred_hidden);
         let dec_rnn = Lstm::load(
             pred_hidden,
             hidden_size,

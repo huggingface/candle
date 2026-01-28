@@ -34,7 +34,7 @@ pub struct ConformerArgs {
     #[serde(default = "default_subsampling_conv_chunking_factor")]
     pub subsampling_conv_chunking_factor: isize,
     #[serde(default)]
-    pub att_context_size: Option<Vec<usize>>,
+    pub att_context_size: Option<Vec<i64>>,
 }
 
 fn default_true() -> bool {
@@ -197,8 +197,8 @@ impl ConformerBlock {
                 )?,
                 local_context: if args.self_attention_model == "rel_pos_local_attn" {
                     args.att_context_size.as_ref().and_then(|v| {
-                        if v.len() == 2 {
-                            Some((v[0], v[1]))
+                        if v.len() == 2 && v[0] >= 0 && v[1] >= 0 {
+                            Some((v[0] as usize, v[1] as usize))
                         } else {
                             None
                         }
