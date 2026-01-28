@@ -2,7 +2,7 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
-use crate::lazy::{LazyResult, OpGraph};
+use crate::lazy::{Executor, LazyEdge, LazyGraph, LazyResult, OpGraph};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
 use candle_metal_kernels::{
@@ -2080,13 +2080,13 @@ impl BackendDevice for MetalDevice {
     }
 }
 
-impl crate::lazy::Executor for MetalDevice {
+impl Executor for MetalDevice {
     type ResultType = MetalStorage;
     fn eval(
         &self,
-        graph: &OpGraph,
+        graph: &LazyGraph<Self::ResultType>,
         node: petgraph::graph::NodeIndex<u32>,
-        mut state: Self::ResultType,
+        mut state: Self::ResultType, // Should get from graph instead of mut state
     ) -> Result<MetalStorage> {
         use crate::lazy::Op::*;
 
@@ -2094,6 +2094,9 @@ impl crate::lazy::Executor for MetalDevice {
 
         match op {
             Const(s) => {
+                let mut edges = graph.edges_directed(node, petgraph::Outgoing);
+                let mut edge = edgest.next().unwrap();
+                // TODO: get storage from graph
                 state = self.storage_from_cpu_storage(s)?;
             }
             Affine(mul, add) => {
@@ -2165,6 +2168,9 @@ impl crate::lazy::Executor for MetalDevice {
 
     fn run(&self, graph: OpGraph) -> Result<MetalStorage> {
         use crate::lazy::Op::*;
+
+        let graph = self.prepare(graph);
+
         use petgraph::dot::Dot;
         use petgraph::Direction::*;
         println!(" ----- graph ----- ");

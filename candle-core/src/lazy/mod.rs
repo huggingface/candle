@@ -54,6 +54,26 @@ pub struct LazyEdge<S: Debug + Clone> {
 }
 pub type LazyGraph<S: Debug + Clone> = DiGraph<Op, LazyEdge<S>>;
 
+impl<S: Debug + Clone> From<OpEdge> for LazyEdge<S> {
+    fn from(edge: OpEdge) -> Self {
+        LazyEdge {
+            edge_id: edge.edge_id,
+            layout: edge.layout,
+            dtype: edge.dtype,
+            state: None,
+        }
+    }
+}
+
+impl<S: Debug + Clone> LazyEdge<S> {
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+    pub fn dtype(&self) -> &DType {
+        &self.dtype
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LazyStorage {
     operations: OpGraph,
@@ -91,12 +111,21 @@ pub trait Executor {
 
     fn eval(
         &self,
-        operations: &OpGraph,
+        operations: &LazyGraph<Self::ResultType>,
         node: petgraph::graph::NodeIndex<u32>,
         state: Self::ResultType,
     ) -> Result<Self::ResultType>;
 
     fn run(&self, operations: OpGraph) -> Result<Self::ResultType>;
+
+    /// Converts OpGraph to specialized LazyGraph@
+    /// TODO: Rename. preprocess?
+    fn prepare(&self, graph: OpGraph) -> LazyGraph<Self::ResultType> {
+        graph.map(
+            |_, op| op.clone(),
+            |_, edge| LazyEdge::<Self::ResultType>::from(edge.clone()),
+        )
+    }
 }
 
 impl LazyStorage {
@@ -233,6 +262,19 @@ impl Display for OpEdge {
             self.layout.shape().dims(),
             self.layout.stride(),
             self.dtype
+        )
+    }
+}
+
+impl<S: Debug + Clone> Display for LazyEdge<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "({:?}, {:?}, {:?}, {:?})",
+            self.layout.shape().dims(),
+            self.layout.stride(),
+            self.dtype,
+            self.state
         )
     }
 }
