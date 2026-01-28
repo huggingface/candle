@@ -229,7 +229,7 @@ impl LayerWeights {
             .rotary_embedding
             .apply_rotary_emb_qkv(&q, &k, index_pos)?;
 
-        let (k, v) = self.kv_cache.append(&k, &v)?;
+        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
         // Repeat KV for GQA
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
