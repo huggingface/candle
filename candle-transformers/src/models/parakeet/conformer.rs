@@ -567,9 +567,11 @@ impl DwStridingSubsampling {
         lengths = lengths.to_dtype(DType::I64)?;
 
         let mut x = x.unsqueeze(1)?; // (B, 1, T, F)
-        for conv in &self.conv {
+        for (idx, conv) in self.conv.iter().enumerate() {
             x = conv.forward(&x)?;
-            x = x.relu()?;
+            if idx == 0 || idx % 2 == 0 {
+                x = x.relu()?;
+            }
         }
         let x = x.transpose(1, 2)?; // (B, T, C, F)
         let (b, t, c, f) = x.dims4()?;

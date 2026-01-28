@@ -1,4 +1,4 @@
-use candle::{DType, Device, Result, Tensor, D};
+use candle::{DType, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module, VarBuilder};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -66,12 +66,18 @@ impl LstmLayer {
         fn load_weight(
             vb_layer: &VarBuilder,
             vb_root: &VarBuilder,
+            vb_nemo: &VarBuilder,
             base: &str,
             layer_idx: usize,
             out_dim: usize,
             in_dim: usize,
         ) -> Result<Tensor> {
             let layer_name = format!("{base}_l{layer_idx}");
+            let nemo_name = match base {
+                "weight_ih" => Some("Wx"),
+                "weight_hh" => Some("Wh"),
+                _ => None,
+            };
             let candidates = [
                 (vb_layer, base),
                 (vb_layer, layer_name.as_str()),
@@ -83,6 +89,11 @@ impl LstmLayer {
                     return Ok(w);
                 }
             }
+            if let Some(name) = nemo_name {
+                if let Some(w) = try_get_weight(vb_nemo, name, out_dim, in_dim) {
+                    return Ok(w);
+                }
+            }
             Err(candle::Error::Msg(format!(
                 "missing lstm weight {base} (layer {layer_idx})"
             )))
@@ -91,9 +102,11 @@ impl LstmLayer {
         fn load_bias(
             vb_layer: &VarBuilder,
             vb_root: &VarBuilder,
+            vb_nemo: &VarBuilder,
             base: &str,
             layer_idx: usize,
             size: usize,
+            alt: Option<&str>,
         ) -> Result<Tensor> {
             let layer_name = format!("{base}_l{layer_idx}");
             let candidates = [
@@ -107,13 +120,20 @@ impl LstmLayer {
                     return Ok(bias);
                 }
             }
+            if let Some(name) = alt {
+                if let Ok(bias) = vb_nemo.get((size,), name) {
+                    return Ok(bias);
+                }
+            }
             Tensor::zeros((size,), vb_root.dtype(), vb_root.device())
         }
 
         let vb_layer = vb.pp(format!("layer_{layer_idx}"));
+        let vb_nemo = vb.pp("lstm").pp(format!("{layer_idx}"));
         let w_ih = load_weight(
             &vb_layer,
             &vb,
+            &vb_nemo,
             "weight_ih",
             layer_idx,
             4 * hidden_size,
@@ -122,13 +142,30 @@ impl LstmLayer {
         let w_hh = load_weight(
             &vb_layer,
             &vb,
+            &vb_nemo,
             "weight_hh",
             layer_idx,
             4 * hidden_size,
             hidden_size,
         )?;
-        let b_ih = load_bias(&vb_layer, &vb, "bias_ih", layer_idx, 4 * hidden_size)?;
-        let b_hh = load_bias(&vb_layer, &vb, "bias_hh", layer_idx, 4 * hidden_size)?;
+        let b_ih = load_bias(
+            &vb_layer,
+            &vb,
+            &vb_nemo,
+            "bias_ih",
+            layer_idx,
+            4 * hidden_size,
+            Some("bias"),
+        )?;
+        let b_hh = load_bias(
+            &vb_layer,
+            &vb,
+            &vb_nemo,
+            "bias_hh",
+            layer_idx,
+            4 * hidden_size,
+            None,
+        )?;
         Ok(Self {
             w_ih,
             w_hh,
@@ -281,7 +318,7 @@ impl PredictNetwork {
         } else if let Some((ref h, _)) = h_c {
             h.device()
         } else {
-            &Device::Cpu
+            self.embed.embeddings().device()
         };
         let embedded = if let Some(y) = y {
             self.embed.forward(y)?

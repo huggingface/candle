@@ -74,11 +74,27 @@ pub fn load_audio(path: &std::path::Path, sampling_rate: usize) -> Result<Vec<f3
 }
 
 fn hz_to_mel(freq: f64) -> f64 {
-    2595.0 * (1.0 + freq / 700.0).log10()
+    let f_sp = 200.0 / 3.0;
+    let min_log_hz = 1000.0;
+    let min_log_mel = min_log_hz / f_sp;
+    let logstep = (6.4f64).ln() / 27.0;
+    if freq < min_log_hz {
+        freq / f_sp
+    } else {
+        min_log_mel + (freq / min_log_hz).ln() / logstep
+    }
 }
 
 fn mel_to_hz(mel: f64) -> f64 {
-    700.0 * (10f64.powf(mel / 2595.0) - 1.0)
+    let f_sp = 200.0 / 3.0;
+    let min_log_hz = 1000.0;
+    let min_log_mel = min_log_hz / f_sp;
+    let logstep = (6.4f64).ln() / 27.0;
+    if mel < min_log_mel {
+        f_sp * mel
+    } else {
+        min_log_hz * (logstep * (mel - min_log_mel)).exp()
+    }
 }
 
 fn mel_filterbank(sr: usize, n_fft: usize, n_mels: usize) -> Vec<f32> {

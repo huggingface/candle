@@ -46,6 +46,7 @@ pub enum Decoding {
 pub struct DecodingConfig {
     pub decoding: Decoding,
     pub sentence: SentenceConfig,
+    pub debug_decode: bool,
 }
 
 impl Default for DecodingConfig {
@@ -53,6 +54,7 @@ impl Default for DecodingConfig {
         Self {
             decoding: Decoding::Greedy(Greedy),
             sentence: SentenceConfig::default(),
+            debug_decode: false,
         }
     }
 }
@@ -223,9 +225,11 @@ impl ParakeetTdt {
         config: &DecodingConfig,
     ) -> Result<(Vec<Vec<AlignedToken>>, Vec<Option<(Tensor, Tensor)>>)> {
         match &config.decoding {
-            Decoding::Greedy(_) => self.decode_greedy(features, lengths, last_token, hidden_state),
+            Decoding::Greedy(_) => {
+                self.decode_greedy(features, lengths, last_token, hidden_state, config)
+            }
             Decoding::Beam(beam) => {
-                self.decode_beam(features, lengths, last_token, hidden_state, beam)
+                self.decode_beam(features, lengths, last_token, hidden_state, beam, config)
             }
         }
     }
@@ -236,6 +240,7 @@ impl ParakeetTdt {
         lengths: Option<&Tensor>,
         mut last_token: Option<Vec<Option<usize>>>,
         mut hidden_state: Option<Vec<Option<(Tensor, Tensor)>>>,
+        config: &DecodingConfig,
     ) -> Result<(Vec<Vec<AlignedToken>>, Vec<Option<(Tensor, Tensor)>>)> {
         let (b, s, _) = features.dims3()?;
         let lengths = if let Some(l) = lengths {
@@ -265,6 +270,7 @@ impl ParakeetTdt {
             let mut hidden = hidden_state.as_ref().unwrap()[batch].clone();
 
             while step < length {
+                let step_before = step;
                 let decoder_out = if let Some(token) = last {
                     let input = Tensor::from_vec(vec![token as i64], (1, 1), feature.device())?;
                     self.decoder.forward(Some(&input), hidden.clone())?
@@ -280,8 +286,8 @@ impl ParakeetTdt {
                 let token_logits = joint_out.i((0, 0, 0, 0..vocab_size))?;
                 let duration_logits = joint_out.i((0, 0, 0, vocab_size..))?;
 
-                let pred_token = token_logits.argmax(D::Minus1)?.to_vec1::<u32>()?[0] as usize;
-                let decision = duration_logits.argmax(D::Minus1)?.to_vec1::<u32>()?[0] as usize;
+                let pred_token = token_logits.argmax(D::Minus1)?.to_vec0::<u32>()? as usize;
+                let decision = duration_logits.argmax(D::Minus1)?.to_vec0::<u32>()? as usize;
 
                 let token_probs = softmax(&token_logits, D::Minus1)?;
                 let log_probs = (&token_probs + 1e-10)?.log()?;
@@ -302,15 +308,25 @@ impl ParakeetTdt {
                     hidden = Some(decoder_state);
                 }
 
-                step += self.durations[decision];
+                let duration = self.durations[decision];
+                step += duration;
                 new_symbols += 1;
-                if self.durations[decision] != 0 {
+                let mut forced_advance = false;
+                if duration != 0 {
                     new_symbols = 0;
                 } else if let Some(max_symbols) = self.max_symbols {
                     if new_symbols >= max_symbols {
                         step += 1;
+                        forced_advance = true;
                         new_symbols = 0;
                     }
+                }
+                if config.debug_decode {
+                    let is_blank = pred_token == self.vocabulary.len();
+                    eprintln!(
+                        "debug: step={step_before} token_id={pred_token} blank={is_blank} duration={duration} step_advance={} forced_advance={forced_advance}",
+                        step - step_before
+                    );
                 }
             }
 
@@ -328,6 +344,7 @@ impl ParakeetTdt {
         mut last_token: Option<Vec<Option<usize>>>,
         mut hidden_state: Option<Vec<Option<(Tensor, Tensor)>>>,
         beam: &Beam,
+        _config: &DecodingConfig,
     ) -> Result<(Vec<Vec<AlignedToken>>, Vec<Option<(Tensor, Tensor)>>)> {
         let (b, s, _) = features.dims3()?;
         let lengths = if let Some(l) = lengths {
@@ -365,12 +382,15 @@ impl ParakeetTdt {
             let beam_duration = beam.beam_size.min(self.durations.len());
             let max_candidates = ((beam.beam_size as f64) * beam.patience).round() as usize;
 
+            let init_last = last_token.as_ref().unwrap()[batch];
+            let init_hidden = hidden_state.as_ref().unwrap()[batch].clone();
+
             let mut finished = Vec::new();
             let mut active = vec![Hypothesis {
                 score: 0.0,
                 step: 0,
-                last_token: last_token.as_ref().unwrap()[batch],
-                hidden_state: hidden_state.as_ref().unwrap()[batch].clone(),
+                last_token: init_last,
+                hidden_state: init_hidden,
                 stuck: 0,
                 hypothesis: Vec::new(),
             }];
@@ -379,9 +399,9 @@ impl ParakeetTdt {
                 let mut candidates: HashMap<String, Hypothesis> = HashMap::new();
                 for hyp in active.iter() {
                     let decoder_out = if let Some(token) = hyp.last_token {
-                        let input = Tensor::from_vec(vec![token as i64], (1, 1), feature.device())?;
-                        self.decoder
-                            .forward(Some(&input), hyp.hidden_state.clone())?
+                        let input =
+                            Tensor::from_vec(vec![token as i64], (1, 1), feature.device())?;
+                        self.decoder.forward(Some(&input), hyp.hidden_state.clone())?
                     } else {
                         self.decoder.forward(None, hyp.hidden_state.clone())?
                     };
@@ -413,6 +433,12 @@ impl ParakeetTdt {
 
                     for token in token_idx.iter().copied() {
                         let is_blank = token == self.vocabulary.len();
+                        let next_last = if is_blank { hyp.last_token } else { Some(token) };
+                        let next_state = if is_blank {
+                            hyp.hidden_state.clone()
+                        } else {
+                            Some(decoder_state.clone())
+                        };
                         for decision in dur_idx.iter().copied() {
                             let duration = self.durations[decision];
                             let mut stuck = if duration != 0 { 0 } else { hyp.stuck + 1 };
@@ -456,16 +482,8 @@ impl ParakeetTdt {
                             let new_hyp = Hypothesis {
                                 score,
                                 step,
-                                last_token: if is_blank {
-                                    hyp.last_token
-                                } else {
-                                    Some(token)
-                                },
-                                hidden_state: if is_blank {
-                                    hyp.hidden_state.clone()
-                                } else {
-                                    Some(decoder_state.clone())
-                                },
+                                last_token: next_last,
+                                hidden_state: next_state.clone(),
                                 stuck,
                                 hypothesis,
                             };
@@ -759,7 +777,7 @@ impl ParakeetRnnt {
                 let joint_out = self.joint.forward(&enc_step, &decoder_out)?;
 
                 let token_logits = joint_out.i((0, 0, 0, ..))?;
-                let pred_token = token_logits.argmax(D::Minus1)?.to_vec1::<u32>()?[0] as usize;
+                let pred_token = token_logits.argmax(D::Minus1)?.to_vec0::<u32>()? as usize;
 
                 let token_probs = softmax(&token_logits, D::Minus1)?;
                 let log_probs = (&token_probs + 1e-10)?.log()?;

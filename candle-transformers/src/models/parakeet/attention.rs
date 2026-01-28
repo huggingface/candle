@@ -74,6 +74,7 @@ impl MultiHeadAttention {
             k = k_cached;
             v = v_cached;
         }
+        let v = v.contiguous()?;
 
         let scale = (self.head_dim as f64).powf(-0.5);
         let q = (&q * scale)?;
@@ -140,16 +141,22 @@ impl RelPositionMultiHeadAttention {
         let (_, pos_len, _) = p_proj.dims3()?;
 
         let q = q_proj.reshape((b, tq, self.inner.n_head, self.inner.head_dim))?;
-        let q_u = (&q
-            + &self
-                .pos_bias_u
-                .reshape((1, 1, self.inner.n_head, self.inner.head_dim))?)?
-            .transpose(1, 2)?;
-        let q_v = (&q
-            + &self
-                .pos_bias_v
-                .reshape((1, 1, self.inner.n_head, self.inner.head_dim))?)?
-            .transpose(1, 2)?;
+        let q_u = q
+            .broadcast_add(
+                &self
+                    .pos_bias_u
+                    .reshape((1, 1, self.inner.n_head, self.inner.head_dim))?,
+            )?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let q_v = q
+            .broadcast_add(
+                &self
+                    .pos_bias_v
+                    .reshape((1, 1, self.inner.n_head, self.inner.head_dim))?,
+            )?
+            .transpose(1, 2)?
+            .contiguous()?;
 
         let mut k = k_proj
             .reshape((b, tk, self.inner.n_head, self.inner.head_dim))?
@@ -166,12 +173,13 @@ impl RelPositionMultiHeadAttention {
             k = k_cached;
             v = v_cached;
         }
+        let v = v.contiguous()?;
 
         let scale = (self.inner.head_dim as f64).powf(-0.5);
-        let k_t = k.transpose(2, 3)?;
+        let k_t = k.transpose(2, 3)?.contiguous()?;
         let mut matrix_ac = q_u.matmul(&k_t)?;
         let matrix_bd = {
-            let p_t = p.transpose(2, 3)?;
+            let p_t = p.transpose(2, 3)?.contiguous()?;
             let bd = q_v.matmul(&p_t)?;
             Self::rel_shift(bd)?
         };
