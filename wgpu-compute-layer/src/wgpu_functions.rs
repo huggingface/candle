@@ -94,15 +94,16 @@ impl WgpuDevice {
             .lock()
             .expect("could not get meta command_queue lock");
         let meta_array_length = command_queue.get_meta().len() as i32;
-        let meta_offset = next_divisible_by_n(
-            meta_array_length,
-            self.device_limits.min_storage_buffer_offset_alignment as i32 / 4,
-        );
+        // let meta_offset = next_divisible_by_n(
+        //     meta_array_length,
+        //     self.device_limits.min_storage_buffer_offset_alignment as i32 / 4,
+        // );
+        let meta_offset = meta_array_length;
         command_queue.current_meta = meta_offset as u32;
-        command_queue.get_meta_mut().extend(std::iter::repeat_n(
-            0,
-            (meta_offset - meta_array_length) as usize,
-        ));
+        // command_queue.get_meta_mut().extend(std::iter::repeat_n(
+        //     0,
+        //     (meta_offset - meta_array_length) as usize,
+        // ));
 
         QueueBuffer::new(command_queue)
     }
@@ -233,7 +234,7 @@ fn get_command_buffer(
     }
 
     //write Meta Buffer
-    dev.queue.write_buffer(&dev.meta_buffer, 0, data);
+    //dev.queue.write_buffer(&dev.meta_buffer, 0, data);
     drop(_enter1);
 
     let span1 = span!(Level::INFO, "Create Encoder");
@@ -283,7 +284,7 @@ fn get_command_buffer(
                             .bindgroups
                             .get_bindgroup(bindgroup)
                             .expect("bindgroup could not be found!");
-
+                          
                         let buffers = bindgroup.buffer();
                         let vd = *buffers.get_dest();
                         match buffers.get_input() {
@@ -316,7 +317,12 @@ fn get_command_buffer(
                             }
                         }
 
-                        cpass.set_bind_group(0, bindgroup.bindgroup(), &[meta * 4]);
+                        //cpass.set_bind_group(0, bindgroup.bindgroup(), &[meta * 4]);
+                        //cpass.set_bind_group(0, bindgroup.bindgroup(), &[0]);
+                        cpass.set_bind_group(0, bindgroup.bindgroup(), &[]);
+                        let immediate_part = &data[(meta * 4) as usize..(((meta + q.meta_length)*4) as usize)];
+                        cpass.set_immediates(0, immediate_part);
+                        
                         drop(_enter1);
 
                         let span1 = span!(Level::INFO, "Dispatch Workgroups");
@@ -1147,17 +1153,17 @@ pub(crate) fn create_bindgroup(
 ) -> wgpu::BindGroup {
     let buffer_meta = &dev.meta_buffer;
 
-    let meta_binding = wgpu::BufferBinding {
-        buffer: buffer_meta,
-        offset: 0,
-        size: Some(NonZeroU64::new(256).unwrap()),
-    };
-    let meta_binding = wgpu::BindingResource::Buffer(meta_binding);
+    // let meta_binding = wgpu::BufferBinding {
+    //     buffer: buffer_meta,
+    //     offset: 0,
+    //     size: Some(NonZeroU64::new(256).unwrap()),
+    // };
+    //let meta_binding = wgpu::BindingResource::Buffer(meta_binding);
 
-    let meta_entry = wgpu::BindGroupEntry {
-        binding: 1,
-        resource: meta_binding,
-    };
+    // let meta_entry = wgpu::BindGroupEntry {
+    //     binding: 1,
+    //     resource: meta_binding,
+    // };
 
     let bind_group_layout: &wgpu::BindGroupLayout = match bindgroup.get_input() {
         BindgroupInputBase::Bindgroup0(alignment) => &dev.bindgroup_layouts[*alignment].0,
@@ -1194,7 +1200,7 @@ pub(crate) fn create_bindgroup(
 
     match bindgroup.get_input() {
         CachedBindgroupInput::Bindgroup0(_) => {
-            let entries = &[dest_buffer_bingdgroup_entry, meta_entry];
+            let entries = &[dest_buffer_bingdgroup_entry,];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: bind_group_layout,
@@ -1204,7 +1210,7 @@ pub(crate) fn create_bindgroup(
         CachedBindgroupInput::Bindgroup1(buffer_input1, _) => {
             let entries = &[
                 dest_buffer_bingdgroup_entry,
-                meta_entry,
+                //meta_entry,
                 create_buffer_entry(2, buffer_input1),
             ];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1216,7 +1222,7 @@ pub(crate) fn create_bindgroup(
         CachedBindgroupInput::Bindgroup2(buffer_input1, buffer_input2, _) => {
             let entries = &[
                 dest_buffer_bingdgroup_entry,
-                meta_entry,
+                //meta_entry,
                 create_buffer_entry(2, buffer_input1),
                 create_buffer_entry(3, buffer_input2),
             ];
@@ -1229,7 +1235,7 @@ pub(crate) fn create_bindgroup(
         CachedBindgroupInput::Bindgroup3(buffer_input1, buffer_input2, buffer_input3, _) => {
             let entries = &[
                 dest_buffer_bingdgroup_entry,
-                meta_entry,
+                //meta_entry,
                 create_buffer_entry(2, buffer_input1),
                 create_buffer_entry(3, buffer_input2),
                 create_buffer_entry(4, buffer_input3),

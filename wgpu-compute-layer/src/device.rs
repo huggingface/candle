@@ -22,6 +22,8 @@ use super::util::ToU64;
 use super::WgpuStorage;
 use crate::queue_buffer::QueueBufferInner;
 
+pub const MAX_IMMEDIATE_VALUE : u32 = 16;
+
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 #[cfg_attr(
     any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
@@ -316,6 +318,9 @@ impl WgpuDevice {
         limits.max_storage_buffers_per_shader_stage = 5;
         limits.max_storage_buffer_binding_size = adatper_limits.max_storage_buffer_binding_size; //use as much as possible
         limits.max_buffer_size = adatper_limits.max_buffer_size; //use as much as possible
+        limits.max_immediate_size = MAX_IMMEDIATE_VALUE * 4;
+        features.insert(wgpu::Features::IMMEDIATES);
+
         if adapter_features.contains(wgpu::Features::SHADER_INT64) {
             features.insert(wgpu::Features::SHADER_INT64);
         }
@@ -465,7 +470,8 @@ impl WgpuDevice {
             pipeline_cached: None,
             bindgroup: BindGroupReference::new(dest_buffer.buffer(), new_input),
             bindgroup_cached: None,
-            meta: command_queue.current_meta,
+            meta: command_queue.current_meta, //TODO
+            meta_length: command.meta.len() as u32, //TODO
             workload_size: 0_usize,
             #[cfg(feature = "wgpu_debug")]
             debug: None,

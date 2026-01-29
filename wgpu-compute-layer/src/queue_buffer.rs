@@ -70,6 +70,7 @@ pub(crate) struct MlQueueDispatch {
     pub(crate) bindgroup: BindGroupReference,
     pub(crate) bindgroup_cached: Option<CachedBindgroupId>,
     pub(crate) meta: u32,
+    pub(crate) meta_length: u32,
     pub(crate) workload_size: usize, // the total size needed to calculate; prevents queuing too many operations at once.
     #[cfg(feature = "wgpu_debug")]
     pub(crate) debug: Option<String>,
@@ -317,6 +318,7 @@ impl<'a> QueueBuffer<'a> {
                 pipeline
             );
         }
+        let meta_length = (self.get_meta().len() as u32 - self.current_meta) as u32;
         let q = MlQueue::Dispatch(MlQueueDispatch {
             x,
             y,
@@ -326,6 +328,7 @@ impl<'a> QueueBuffer<'a> {
             bindgroup: bind_group,
             bindgroup_cached: None,
             meta: self.current_meta,
+            meta_length,
             workload_size,
             #[cfg(feature = "wgpu_debug")]
             debug: _debug,
