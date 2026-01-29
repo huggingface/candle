@@ -2187,12 +2187,18 @@ impl Executor for MetalDevice {
 
                 //state = state.binary(kernel, &self.eval(rhs)?, lhs_l, rhs_l)?;
             }
-            _ => todo!("{op:?}"),
             /*
             ToCpu,
             Powf(Layout, f64),
             Elu(Layout, f64),
-            Reduce(ReduceOp, Layout, Vec<usize>),
+            */
+            Reduce(reduce_op, dims) => {
+                let mut edges = graph.edges_directed(node, petgraph::Incoming);
+                let edge = edges.next().unwrap();
+                state = state.reduce_op(reduce_op.clone(), edge.weight().layout(), dims)?;
+            }
+            _ => todo!("{op:?}"),
+            /*
             Cmp(CmpOp, LazyStorage, Layout, Layout),
             ToDType(Layout, DType),
             Unary(Layout, &'static str),

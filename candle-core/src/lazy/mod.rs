@@ -4,6 +4,7 @@ use crate::{CpuStorage, DType, Layout, Result, Shape};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::Dfs;
 use petgraph::Direction::{self, Incoming};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 
@@ -335,6 +336,39 @@ impl<S: Clone> From<Vec<LazyOp>> for OpGraph<S> {
 }
  */
 
+impl LazyStorage {
+    fn merge_graph(
+        &mut self,
+        other: &Self,
+        source_node: NodeIndex<u32>,
+        target_node: NodeIndex<u32>,
+        edge: OpEdge,
+    ) -> Result<()> {
+        // Add nodes from other graph.
+        // Store old->new index mapping for updating edges.
+        let mut idx_map = HashMap::new();
+        for node_idx in other.operations.node_indices() {
+            let new_idx = self.operations.add_node(other.operations[node_idx].clone());
+            idx_map.insert(node_idx, new_idx);
+        }
+
+        // Add edges from other graph, using the index mapping.
+        for edge in other.operations.raw_edges() {
+            let source_idx = *idx_map.get(&edge.source()).unwrap();
+            let target_idx = *idx_map.get(&edge.target()).unwrap();
+            self.operations
+                .add_edge(source_idx, target_idx, edge.clone().weight);
+        }
+
+        // Connect the two graphs using the provided node indices and edge weight.
+        let source_idx = *idx_map.get(&source_node).unwrap();
+        self.operations
+            .add_edge(source_idx, target_node, edge.clone());
+
+        Ok(())
+    }
+}
+
 impl BackendStorage for LazyStorage {
     type Device = LazyDevice;
 
@@ -477,10 +511,10 @@ impl BackendStorage for LazyStorage {
         let lhs_edge = OpEdge::new(lhs_l.clone(), self.dtype);
         next.operations.add_edge(current_op, idx, lhs_edge);
 
-        // TODO: Merge lhs and rhs opgraphs
         let rhs_op = rhs.get_current_node()?;
         let rhs_edge = OpEdge::new(rhs_l.clone(), self.dtype);
-        next.operations.add_edge(rhs_op, idx, rhs_edge);
+
+        next.merge_graph(rhs, rhs_op, idx, rhs_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
