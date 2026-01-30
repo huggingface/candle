@@ -1950,6 +1950,7 @@ impl Tensor {
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Lazy(storage) => {
+                let storage = storage.output()?;
                 // TODO: Temporary solution.
                 // We may want to use a different API for lazy execution.
                 // For example it's important that we are able to execute on a specific

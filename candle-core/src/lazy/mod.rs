@@ -2,7 +2,6 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::Dfs;
 use petgraph::Direction::{self, Incoming};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
@@ -51,7 +50,7 @@ pub struct LazyEdge<S: Debug + Clone> {
     edge_id: EdgeId,
     layout: Layout,
     dtype: DType,
-    state: Option<S>,
+    pub state: Option<S>,
 }
 pub type LazyGraph<S: Debug + Clone> = DiGraph<Op, LazyEdge<S>>;
 
@@ -73,6 +72,13 @@ impl<S: Debug + Clone> LazyEdge<S> {
     pub fn dtype(&self) -> &DType {
         &self.dtype
     }
+    pub fn state(&self) -> &Option<S> {
+        &self.state
+    }
+
+    pub fn set_state(&mut self, state: S) {
+        self.state = Some(state)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +95,20 @@ impl LazyStorage {
     fn get_current_node(&self) -> Result<NodeIndex<u32>> {
         self.current_node
             .ok_or(LazyError::Message("No current node in lazy storage".to_string()).into())
+    }
+
+    pub(crate) fn output(&self) -> Result<Self> {
+        let mut next = self.clone();
+        let idx = next.operations.add_node(Op::Output);
+        let current_op = next.get_current_node()?;
+
+        let previous_edge = next.operations.first_edge(current_op, Incoming).unwrap();
+        let previous_edge = next.operations.edge_weight(previous_edge).unwrap();
+
+        let edge = OpEdge::new(previous_edge.layout().clone(), self.dtype);
+        next.operations.add_edge(current_op, idx, edge);
+
+        Ok(next)
     }
 }
 
@@ -112,10 +132,9 @@ pub trait Executor {
 
     fn eval(
         &self,
-        operations: &LazyGraph<Self::ResultType>,
+        operations: &mut LazyGraph<Self::ResultType>,
         node: petgraph::graph::NodeIndex<u32>,
-        state: Self::ResultType,
-    ) -> Result<Self::ResultType>;
+    ) -> Result<()>;
 
     fn run(&self, operations: OpGraph) -> Result<Self::ResultType>;
 
@@ -218,7 +237,7 @@ impl OpEdge {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Op {
+pub enum Op {
     Const(CpuStorage),
     ToCpu,
     Affine(f64, f64),
@@ -247,6 +266,7 @@ pub(crate) enum Op {
     CopyStridedSrc(usize),
     Copy2D(usize, usize, usize, usize, usize, usize),
     ConstSet(crate::scalar::Scalar),
+    Output,
 }
 
 impl Display for Op {
@@ -464,7 +484,8 @@ impl BackendStorage for LazyStorage {
 
         let rhs_op = rhs.get_current_node()?;
         let rhs_edge = OpEdge::new(rhs_l.clone(), self.dtype);
-        next.operations.add_edge(rhs_op, idx, rhs_edge);
+
+        next.merge_graph(rhs, rhs_op, idx, rhs_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -539,11 +560,11 @@ impl BackendStorage for LazyStorage {
 
         let t_op = t.get_current_node()?;
         let t_edge = OpEdge::new(t_l.clone(), self.dtype);
-        next.operations.add_edge(t_op, idx, t_edge);
+        next.merge_graph(t, t_op, idx, t_edge)?;
 
         let f_op = f.get_current_node()?;
         let f_edge = OpEdge::new(f_l.clone(), self.dtype);
-        next.operations.add_edge(f_op, idx, f_edge);
+        next.merge_graph(f, f_op, idx, f_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -567,7 +588,7 @@ impl BackendStorage for LazyStorage {
 
         let kernel_op = kernel.get_current_node()?;
         let kernel_edge = OpEdge::new(kernel_l.clone(), self.dtype);
-        next.operations.add_edge(kernel_op, idx, kernel_edge);
+        next.merge_graph(kernel, kernel_op, idx, kernel_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -591,7 +612,7 @@ impl BackendStorage for LazyStorage {
 
         let kernel_op = kernel.get_current_node()?;
         let kernel_edge = OpEdge::new(kernel_l.clone(), self.dtype);
-        next.operations.add_edge(kernel_op, idx, kernel_edge);
+        next.merge_graph(kernel, kernel_op, idx, kernel_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -615,7 +636,7 @@ impl BackendStorage for LazyStorage {
 
         let kernel_op = kernel.get_current_node()?;
         let kernel_edge = OpEdge::new(kernel_l.clone(), self.dtype);
-        next.operations.add_edge(kernel_op, idx, kernel_edge);
+        next.merge_graph(kernel, kernel_op, idx, kernel_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -639,7 +660,7 @@ impl BackendStorage for LazyStorage {
 
         let kernel_op = kernel.get_current_node()?;
         let kernel_edge = OpEdge::new(kernel_l.clone(), self.dtype);
-        next.operations.add_edge(kernel_op, idx, kernel_edge);
+        next.merge_graph(kernel, kernel_op, idx, kernel_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -723,7 +744,7 @@ impl BackendStorage for LazyStorage {
 
         let ids_op = ids.get_current_node()?;
         let ids_edge = OpEdge::new(ids_l.clone(), self.dtype);
-        next.operations.add_edge(ids_op, idx, ids_edge);
+        next.merge_graph(ids, ids_op, idx, ids_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -747,11 +768,11 @@ impl BackendStorage for LazyStorage {
 
         let ids_op = ids.get_current_node()?;
         let ids_edge = OpEdge::new(ids_l.clone(), self.dtype);
-        self.operations.add_edge(ids_op, idx, ids_edge);
+        self.merge_graph(ids, ids_op, idx, ids_edge)?;
 
         let src_op = src.get_current_node()?;
         let src_edge = OpEdge::new(src_l.clone(), self.dtype);
-        self.operations.add_edge(src_op, idx, src_edge);
+        self.merge_graph(src, src_op, idx, src_edge)?;
 
         self.current_node = Some(idx);
         Ok(())
@@ -775,11 +796,11 @@ impl BackendStorage for LazyStorage {
 
         let ids_op = ids.get_current_node()?;
         let ids_edge = OpEdge::new(ids_l.clone(), self.dtype);
-        self.operations.add_edge(ids_op, idx, ids_edge);
+        self.merge_graph(ids, ids_op, idx, ids_edge)?;
 
         let src_op = src.get_current_node()?;
         let src_edge = OpEdge::new(src_l.clone(), self.dtype);
-        self.operations.add_edge(src_op, idx, src_edge);
+        self.merge_graph(src, src_op, idx, src_edge)?;
 
         self.current_node = Some(idx);
         Ok(())
@@ -797,7 +818,7 @@ impl BackendStorage for LazyStorage {
 
         let ids_op = ids.get_current_node()?;
         let ids_edge = OpEdge::new(ids_l.clone(), self.dtype);
-        next.operations.add_edge(ids_op, idx, ids_edge);
+        next.merge_graph(ids, ids_op, idx, ids_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -823,11 +844,11 @@ impl BackendStorage for LazyStorage {
 
         let ids_op = ids.get_current_node()?;
         let ids_edge = OpEdge::new(ids_l.clone(), self.dtype);
-        next.operations.add_edge(ids_op, idx, ids_edge);
+        next.merge_graph(ids, ids_op, idx, ids_edge)?;
 
         let src_op = src.get_current_node()?;
         let src_edge = OpEdge::new(src_l.clone(), self.dtype);
-        next.operations.add_edge(src_op, idx, src_edge);
+        next.merge_graph(src, src_op, idx, src_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -851,7 +872,7 @@ impl BackendStorage for LazyStorage {
 
         let rhs_op = rhs.get_current_node()?;
         let rhs_edge = OpEdge::new(rhs_l.clone(), self.dtype);
-        next.operations.add_edge(rhs_op, idx, rhs_edge);
+        next.merge_graph(rhs, rhs_op, idx, rhs_edge)?;
 
         next.current_node = Some(idx);
         Ok(next)
@@ -864,7 +885,7 @@ impl BackendStorage for LazyStorage {
 
         let current_op = self.get_current_node()?;
         let edge = OpEdge::new(src_l.clone(), self.dtype);
-        rhs.operations.add_edge(current_op, idx, edge);
+        rhs.merge_graph(self, current_op, idx, edge)?;
 
         rhs.current_node = Some(idx);
         Ok(())
@@ -887,7 +908,7 @@ impl BackendStorage for LazyStorage {
         let current_op = self.get_current_node()?;
         // TODO: May have to use self.layout here
         let edge = OpEdge::new(Layout::contiguous(self.shape.clone()), self.dtype);
-        dst.operations.add_edge(current_op, idx, edge);
+        dst.merge_graph(self, current_op, idx, edge)?;
 
         dst.current_node = Some(idx);
         Ok(())
@@ -961,7 +982,7 @@ impl BackendDevice for LazyDevice {
     fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<Self::Storage> {
         let shape = Shape::from(s.len());
         let dtype = s.dtype();
-        let mut storage = unsafe { self.alloc_uninit(&shape, dtype)? };
+        let mut storage = LazyStorage::new(shape.clone(), dtype);
 
         let op = Op::Const(s);
         let idx = storage.operations.add_node(op);

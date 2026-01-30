@@ -2,7 +2,7 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
-use crate::lazy::{Executor, LazyEdge, LazyGraph, LazyResult, OpGraph};
+use crate::lazy::{Executor, LazyGraph, OpGraph};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
 use candle_metal_kernels::{
@@ -10,7 +10,10 @@ use candle_metal_kernels::{
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
-use petgraph::visit::Dfs;
+use petgraph::acyclic::Acyclic;
+use petgraph::algo::toposort;
+use petgraph::dot::Dot;
+use petgraph::graph::NodeIndex;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
@@ -2135,55 +2138,114 @@ impl BackendDevice for MetalDevice {
     }
 }
 
+use petgraph::visit::EdgeRef;
 impl Executor for MetalDevice {
     type ResultType = MetalStorage;
     fn eval(
         &self,
-        graph: &LazyGraph<Self::ResultType>,
+        graph: &mut LazyGraph<Self::ResultType>,
         node: petgraph::graph::NodeIndex<u32>,
-        mut state: Self::ResultType, // TODO: Should get from graph instead of mut state
-    ) -> Result<MetalStorage> {
+    ) -> Result<()> {
         use crate::lazy::Op::*;
 
-        let op = graph.node_weight(node).unwrap();
+        let g = graph.clone();
+        let op = g.node_weight(node).unwrap();
 
         match op {
             Const(s) => {
-                let mut edges = graph.edges_directed(node, petgraph::Outgoing);
-                let mut edge = edges.next().unwrap();
-                // TODO: get storage from graph
-                state = self.storage_from_cpu_storage(s)?;
+                let g = graph.clone();
+                let mut outgoing = g.edges_directed(node, petgraph::Outgoing);
+                let out = outgoing.next().unwrap();
+
+                graph
+                    .edge_weight_mut(out.id())
+                    .unwrap()
+                    .set_state(self.storage_from_cpu_storage(s)?);
             }
             Affine(mul, add) => {
-                let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let edge = edges.next().unwrap();
-                state = state.affine(edge.weight().layout(), *mul, *add)?;
+                let g = graph.clone();
+                let mut incoming = g.edges_directed(node, petgraph::Incoming);
+                let in_edge = incoming.next().unwrap();
+                let mut outgoing = g.edges_directed(node, petgraph::Outgoing);
+                let out_edge = outgoing.next().unwrap();
+
+                let in_weight = in_edge.weight();
+                let out_weight = graph.edge_weight_mut(out_edge.id()).unwrap();
+                let state = in_weight.state.clone();
+                if let Some(inner) = state {
+                    let state = inner.affine(in_weight.layout(), *mul, *add)?;
+                    out_weight.set_state(state);
+                } else {
+                    println!("in_edge: {in_edge:?}");
+                    println!("out_edge: {out_edge:?}");
+                }
             }
             ToDType(dtype) => {
-                let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let edge = edges.next().unwrap();
+                let g = graph.clone();
+                let mut incoming = g.edges_directed(node, petgraph::Incoming);
+                let in_edge = incoming.next().unwrap();
+                let in_weight = in_edge.weight();
+                let state = in_weight.state.clone().unwrap();
+
+                let mut outgoing = g.edges_directed(node, petgraph::Outgoing);
+                let out_edge = outgoing.next().unwrap();
+                let out_weight = graph.edge_weight_mut(out_edge.id()).unwrap();
                 if state.dtype != *dtype {
-                    state = state.to_dtype(edge.weight().layout(), *dtype)?;
+                    out_weight.set_state(state.to_dtype(in_weight.layout(), *dtype)?);
+                } else {
+                    out_weight.set_state(state);
                 }
             }
             Unary(kernel) => {
-                let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let edge = edges.next().unwrap();
-                state = state.unary(kernel, edge.weight().layout())?;
+                let g = graph.clone();
+                let mut incoming = g.edges_directed(node, petgraph::Incoming);
+                let in_edge = incoming.next().unwrap();
+                let in_weight = in_edge.weight();
+                let state = in_weight.state.clone();
+
+                let mut outgoing = g.edges_directed(node, petgraph::Outgoing);
+                let out_edge = outgoing.next().unwrap();
+                let out_weight = graph.edge_weight_mut(out_edge.id()).unwrap();
+
+                if let Some(inner) = state {
+                    out_weight.set_state(inner.unary(kernel, in_weight.layout())?);
+                } else {
+                    println!("in_edge: {in_edge:?}");
+                    println!("out_edge: {out_edge:?}");
+                }
             }
             Binary(kernel) => {
-                let mut edges = graph.edges_directed(node, petgraph::Incoming);
+                let g = graph.clone();
+                let mut edges = g.edges_directed(node, petgraph::Incoming);
                 let lhs_edge = edges.next().unwrap();
                 let rhs_edge = edges.next().unwrap();
 
-                let lhs_l = lhs_edge.weight().layout();
-                let rhs_l = rhs_edge.weight().layout();
+                let lhs_weight = lhs_edge.weight();
+                let rhs_weight = rhs_edge.weight();
 
-                let mut neighbors = graph.neighbors_directed(node, petgraph::Incoming);
-                let lhs = neighbors.next().unwrap();
-                let rhs = neighbors.next().unwrap();
+                let lhs_l = lhs_weight.layout();
+                let rhs_l = rhs_weight.layout();
 
-                let rhs = graph.node_weight(rhs).unwrap();
+                let mut outgoing = g.edges_directed(node, petgraph::Outgoing);
+                let out_edge = outgoing.next().unwrap();
+                let out_weight = graph.edge_weight_mut(out_edge.id()).unwrap();
+
+                let lhs_state = lhs_weight.state.clone();
+                if let Some(lhs) = lhs_state {
+                    if let Some(rhs) = rhs_edge.weight().state() {
+                        let state = lhs.binary(kernel, rhs, lhs_l, rhs_l)?;
+                        out_weight.set_state(state);
+                    } else {
+                        println!("lhs_edge: {lhs_edge:?}");
+                        println!("rhs_edge: {rhs_edge:?}");
+                        println!("out_edge: {out_edge:?}");
+                    }
+                } else {
+                    println!("lhs_edge: {lhs_edge:?}");
+                    println!("rhs_edge: {rhs_edge:?}");
+                    println!("out_edge: {out_edge:?}");
+                }
+                //let rhs = self.eval(graph, out)
 
                 //state = state.binary(kernel, &self.eval(rhs)?, lhs_l, rhs_l)?;
             }
@@ -2193,11 +2255,19 @@ impl Executor for MetalDevice {
             Elu(Layout, f64),
             */
             Reduce(reduce_op, dims) => {
-                let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let edge = edges.next().unwrap();
-                state = state.reduce_op(reduce_op.clone(), edge.weight().layout(), dims)?;
+                let g = graph.clone();
+                let mut incoming = g.edges_directed(node, petgraph::Incoming);
+                let in_edge = incoming.next().unwrap();
+                let in_weight = in_edge.weight();
+                let state = in_weight.state.clone().unwrap();
+
+                let mut outgoing = g.edges_directed(node, petgraph::Outgoing);
+                let out_edge = outgoing.next().unwrap();
+                let out_weight = graph.edge_weight_mut(out_edge.id()).unwrap();
+
+                let state = state.reduce_op(reduce_op.clone(), in_weight.layout(), dims)?;
+                out_weight.set_state(state);
             }
-            _ => todo!("{op:?}"),
             /*
             Cmp(CmpOp, LazyStorage, Layout, Layout),
             ToDType(Layout, DType),
@@ -2222,35 +2292,43 @@ impl Executor for MetalDevice {
             Copy2D(LazyStorage, usize, usize, usize, usize, usize, usize),
             ConstSet(crate::scalar::Scalar, Layout)
             */
+            Output => {
+                let mut incoming = g.edges_directed(node, petgraph::Incoming);
+                let in_edge = incoming.next().unwrap();
+                let in_weight = in_edge.weight();
+                let state = in_weight.state.clone().unwrap();
+                println!("{state:?}");
+            }
+            _ => todo!("{op:?}"),
         }
-
-        Ok(state)
+        Ok(())
     }
 
     fn run(&self, graph: OpGraph) -> Result<MetalStorage> {
-        use crate::lazy::Op::*;
+        let mut graph = self.prepare(graph);
+        let acyclic = Acyclic::try_from_graph(graph.clone()).unwrap();
+        let node_indices = toposort(&acyclic, None).unwrap();
 
-        let graph = self.prepare(graph);
-
-        use petgraph::dot::Dot;
-        use petgraph::Direction::*;
         println!(" ----- graph ----- ");
         println!("{}", Dot::new(&graph));
 
-        let mut state = unsafe { self.alloc_uninit(&crate::shape::SCALAR, DType::U32)? };
-        for start in graph.node_indices() {
+        let mut final_node = NodeIndex::new(0);
+        for idx in node_indices {
             // Is root node
-            if graph.edges_directed(start, Incoming).count() == 0 {
-                if let Const(s) = graph.node_weight(start).unwrap() {
-                    let mut dfs = Dfs::new(&graph, start);
+            //if graph.edges_directed(start, Incoming).count() == 0 {
+            //    if let Const(s) = graph.node_weight(start).unwrap() {
 
-                    state = self.storage_from_cpu_storage(s)?;
-                    while let Some(idx) = dfs.next(&graph) {
-                        state = self.eval(&graph, idx, state)?;
-                    }
-                }
-            }
+            //       state = self.storage_from_cpu_storage(s)?;
+
+            self.eval(&mut graph, idx)?;
+            final_node = idx;
+
+            // }
+            //}
         }
+        let mut edges = graph.edges_directed(final_node, petgraph::Incoming);
+        let edge = edges.next().unwrap();
+        let state = edge.weight().state().clone().unwrap();
         Ok(state)
     }
 }
