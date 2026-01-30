@@ -17,7 +17,7 @@ pub struct Config {
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub head_dim: usize,
-    pub attention_bias: bool,
+    pub attention_bias: Option<bool>,
     pub num_key_value_heads: usize,
     pub max_position_embeddings: usize,
     pub sliding_window: Option<usize>,

@@ -1,12 +1,9 @@
 # candle-qwen: large language model series from Alibaba Cloud
 
-Qwen 1.5 is a series of large language models that provide strong performances
-on English and Chinese.
+Qwen 3 is a series of large language models that provide strong performances on English and Chinese.
 
-- [Blog post](https://qwenlm.github.io/blog/qwen1.5/) introducing Qwen1.5.
-- [Model card](https://huggingface.co/Qwen/Qwen1.5-0.5B) on the HuggingFace Hub.
-- [Blog post](https://qwenlm.github.io/blog/qwen-moe/) for the
-  mixture-of-experts (MoE) variant.
+- [Qwen3 Collection](https://huggingface.co/collections/Qwen/qwen3).
+- [Model card](https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507).
 
 ## Running the example
 
@@ -53,5 +50,37 @@ $ cargo run --example qwen --features metal --release  -- --prompt "Write a poem
 
 ```shell
 # Local unquantized 32B MoE model (with Fused MoE kernel) (~80GB GPU memory)
-cargo run --example qwen --features cuda --release  -- --prompt "Write a poem about butterflies. <think></think>." --model "3-moe-a3b" --weight-path /path/Qwen3-30B-A3B-Instruct-2507
+cargo run --example qwen --features cuda --release  -- --prompt "Write a poem about butterflies." --model "3-moe-a3b" --weight-path /path/Qwen3-Coder-30B-A3B-Instruct/
+```
+
+```
+avx: true, neon: false, simd128: false, f16c: true
+temp: 0.00 repeat-penalty: 1.10 repeat-last-n: 64
+retrieved the files in 994.303698ms
+loaded the model in 10.009002649s
+Write a poem about butterflies. The poem should include the word "emerald" at least three times.
+
+
+**Wings of Wonder**
+
+In meadows where the emerald grass sways,
+Butterflies dance in morning's rays,
+With wings like stained glass, bright and free,
+They flutter through the emerald sea.
+
+Their delicate forms catch the light,
+As if they're made of pure delight,
+Each emerald hue a whispered prayer
+That floats above the world with care.
+
+From chrysalis to flight so true,
+These creatures teach us how to renew,
+With emerald eyes that see the grace
+Of time and beauty in their space.
+
+So let us be like butterflies,
+Dancing through life's gentle skies,
+Carrying emerald dreams along,
+Till we're free from sorrow's song.
+160 tokens generated (30.82 token/s)
 ```
