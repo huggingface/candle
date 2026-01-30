@@ -21,19 +21,7 @@ impl From<String> for LazyError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct NodeId(usize);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EdgeId(usize);
-
-impl NodeId {
-    fn new() -> Self {
-        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
-        use std::sync::atomic;
-        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
-        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
-    }
-}
 
 impl EdgeId {
     fn new() -> Self {
@@ -121,21 +109,6 @@ impl LazyStorage {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct LazyResult<S: Clone> {
-    lazy: LazyStorage,
-    inner: Option<S>,
-}
-
-impl<S: Clone> LazyResult<S> {
-    pub fn new(shape: Shape, dtype: DType) -> LazyResult<S> {
-        LazyResult {
-            lazy: LazyStorage::new(shape, dtype),
-            inner: None,
-        }
-    }
-}
-
 pub fn graph_to_dot<G>(g: &G) -> String
 where
     G: petgraph::visit::NodeIndexable
@@ -180,55 +153,9 @@ impl LazyStorage {
     }
 
     pub fn execute<E: Executor>(&self, executor: E) -> Result<E::ResultType> {
-        // Apply optimizations that apply regardless of backend
-        // let mut optimized = self.operations.build::<E::ResultType>();
-        //executor.run(&mut optimized)
-        /*
-        let mut edges = self
-            .operations
-            .edges_directed(NodeIndex::new(0), petgraph::Incoming);
-        let edge = edges.next().unwrap();
-        edge.weight()
-        */
-
+        // TODO: Apply backend agnostic optimizations
+        // TODO: Apply backend specific optimizations
         executor.run(self.operations.clone())
-
-        /*
-        for op in self.graph.operations {
-            match op {
-                Const(s) => {
-                    B::storage_from_cpu_storage_owned(s)
-                }
-                ToCpu,
-                Affine(Layout, f64, f64),
-                Powf(Layout, f64),
-                Elu(Layout, f64),
-                Reduce(ReduceOp, Layout, Vec<usize>),
-                Cmp(CmpOp, LazyStorage, Layout, Layout),
-                ToDType(Layout, DType),
-                Unary(Layout, &'static str),
-                Binary(Layout, LazyStorage, Layout, &'static str),
-                WhereCond(Layout, LazyStorage, Layout, LazyStorage, Layout),
-                Conv1D(Layout, LazyStorage, Layout, crate::conv::ParamsConv1D),
-                ConvTranspose1D(Layout, LazyStorage, Layout, crate::conv::ParamsConvTranspose1D),
-                Conv2D(Layout, LazyStorage, Layout, crate::conv::ParamsConv2D),
-                ConvTranspose2D(Layout, LazyStorage, Layout, crate::conv::ParamsConvTranspose2D),
-                AvgPool2D(Layout, (usize, usize), (usize, usize)),
-                MaxPool2D(Layout, (usize, usize), (usize, usize)),
-                UpsampleNearest1D(Layout, usize),
-                UpsampleNearest2D(Layout, usize, usize),
-                Gather(Layout, LazyStorage, Layout, usize),
-                ScatterSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
-                ScatterAddSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
-                IndexSelect(Layout, LazyStorage, Layout, usize),
-                IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
-                Matmul(LazyStorage, (usize, usize, usize, usize), Layout, Layout),
-                CopyStridedSrc(LazyStorage, usize, Layout),
-                Copy2D(LazyStorage, usize, usize, usize, usize, usize, usize),
-                ConstSet(crate::scalar::Scalar, Layout)
-            }
-        }
-         */
     }
 }
 
@@ -323,59 +250,6 @@ impl<S: Debug + Clone> Display for LazyEdge<S> {
         )
     }
 }
-
-// Very much WIP.
-// We want to be able to run "deferred eager" before we start working on actual lazy optimizations.
-#[derive(Debug, Clone)]
-pub(crate) enum LazyOp {
-    Const(CpuStorage),
-    ToCpu,
-    Affine(Layout, f64, f64),
-    Powf(Layout, f64),
-    Elu(Layout, f64),
-    Reduce(ReduceOp, Layout, Vec<usize>),
-    Cmp(CmpOp, LazyStorage, Layout, Layout),
-    ToDType(Layout, DType),
-    Unary(Layout, &'static str),
-    Binary(Layout, LazyStorage, Layout, &'static str),
-    WhereCond(Layout, LazyStorage, Layout, LazyStorage, Layout),
-    Conv1D(Layout, LazyStorage, Layout, crate::conv::ParamsConv1D),
-    ConvTranspose1D(
-        Layout,
-        LazyStorage,
-        Layout,
-        crate::conv::ParamsConvTranspose1D,
-    ),
-    Conv2D(Layout, LazyStorage, Layout, crate::conv::ParamsConv2D),
-    ConvTranspose2D(
-        Layout,
-        LazyStorage,
-        Layout,
-        crate::conv::ParamsConvTranspose2D,
-    ),
-    AvgPool2D(Layout, (usize, usize), (usize, usize)),
-    MaxPool2D(Layout, (usize, usize), (usize, usize)),
-    UpsampleNearest1D(Layout, usize),
-    UpsampleNearest2D(Layout, usize, usize),
-    Gather(Layout, LazyStorage, Layout, usize),
-    ScatterSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
-    ScatterAddSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
-    IndexSelect(Layout, LazyStorage, Layout, usize),
-    IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
-    Matmul(LazyStorage, (usize, usize, usize, usize), Layout, Layout),
-    CopyStridedSrc(LazyStorage, usize, Layout),
-    Copy2D(LazyStorage, usize, usize, usize, usize, usize, usize),
-    ConstSet(crate::scalar::Scalar, Layout),
-}
-
-/*
-impl<S: Clone> From<Vec<LazyOp>> for OpGraph<S> {
-    fn from(ops: Vec<LazyOp>) -> OpGraph<S> {
-        //let mut graph = OpGraph<LazyOp>
-        for op in ops {}
-    }
-}
- */
 
 impl LazyStorage {
     fn merge(

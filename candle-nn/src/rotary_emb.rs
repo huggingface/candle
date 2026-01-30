@@ -517,9 +517,9 @@ impl candle::CustomOp3 for RotaryEmb {
         sin: &candle::LazyStorage,
         sin_l: &Layout,
     ) -> Result<(candle::LazyStorage, Shape)> {
+        /*
         use candle::backend::BackendStorage;
         use candle::lazy::graph_to_dot;
-        /*
         println!("{}", graph_to_dot(&src.operations()));
         println!(
             "src: {:?}, {:?}, {:?}",
