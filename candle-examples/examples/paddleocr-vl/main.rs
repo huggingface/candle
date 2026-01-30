@@ -142,9 +142,9 @@ struct Args {
     #[arg(long, default_value = "1024")]
     max_length: usize,
 
-    /// Use bfloat16 precision
-    #[arg(long)]
-    bf16: bool,
+    /// Model precision: f32, f16, or bf16
+    #[arg(long, default_value = "bf16")]
+    dtype: String,
 }
 
 /// Compute Levenshtein distance between two strings.
@@ -293,7 +293,7 @@ fn smart_resize(
 }
 
 /// Load and preprocess image for PaddleOCR-VL.
-fn load_image(path: &str, device: &Device, dtype: DType) -> Result<(Tensor, Tensor)> {
+fn load_image(path: &str, device: &Device) -> Result<(Tensor, Tensor)> {
     let img = image::ImageReader::open(path)?
         .decode()
         .map_err(|e| E::msg(format!("Failed to decode image: {}", e)))?;
@@ -341,8 +341,7 @@ fn load_image(path: &str, device: &Device, dtype: DType) -> Result<(Tensor, Tens
     }
 
     // Create tensor: (1, 3, H, W)
-    let pixel_values =
-        Tensor::from_vec(normalized, (1, 3, new_height, new_width), device)?.to_dtype(dtype)?;
+    let pixel_values = Tensor::from_vec(normalized, (1, 3, new_height, new_width), device)?;
 
     // Grid THW: (temporal, height_patches, width_patches)
     let h_patches = (new_height / patch_size) as u32;
@@ -367,7 +366,6 @@ fn load_image(path: &str, device: &Device, dtype: DType) -> Result<(Tensor, Tens
 /// * `fps` - Target frames per second to extract
 /// * `max_frames` - Maximum number of frames to extract
 /// * `device` - Device for tensors
-/// * `dtype` - Data type for tensors
 ///
 /// # Returns
 /// Tuple of (pixel_values, video_grid_thw) where:
@@ -378,7 +376,6 @@ fn load_video_frames(
     fps: f32,
     max_frames: usize,
     device: &Device,
-    dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     use std::process::Command;
 
@@ -487,8 +484,7 @@ fn load_video_frames(
         all_normalized,
         (num_frames, 3, new_height, new_width),
         device,
-    )?
-    .to_dtype(dtype)?;
+    )?;
 
     // Video grid THW: (1, 3) = [temporal, height_patches, width_patches]
     let video_grid_thw = Tensor::new(
@@ -591,7 +587,17 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if args.bf16 { DType::BF16 } else { DType::F32 };
+    let dtype = match args.dtype.as_str() {
+        "f32" => DType::F32,
+        "f16" => DType::F16,
+        "bf16" => DType::BF16,
+        other => {
+            return Err(anyhow::anyhow!(
+                "Unsupported dtype: {}. Use f32, f16, or bf16",
+                other
+            ))
+        }
+    };
     println!("Using device: {:?}, dtype: {:?}", device, dtype);
 
     // Load model from HuggingFace
@@ -734,7 +740,7 @@ fn main() -> Result<()> {
 
                 // Load frame as single image
                 let frame_path_str = frame_path.to_string_lossy().to_string();
-                let (pixel_values, grid_thw) = load_image(&frame_path_str, &device, dtype)?;
+                let (pixel_values, grid_thw) = load_image(&frame_path_str, &device)?;
 
                 // Build input tokens for this frame
                 let grid_thw_vec: Vec<Vec<u32>> = grid_thw.to_vec2()?;
@@ -832,7 +838,7 @@ fn main() -> Result<()> {
 
         // Load video frames
         let (pixel_values_video, video_grid_thw) =
-            load_video_frames(video_path, args.fps, args.max_frames, &device, dtype)?;
+            load_video_frames(video_path, args.fps, args.max_frames, &device)?;
 
         // Compute number of video tokens (after spatial merge)
         let grid_thw_vec: Vec<Vec<u32>> = video_grid_thw.to_vec2()?;
@@ -942,7 +948,7 @@ fn main() -> Result<()> {
 
             // Load and preprocess this image
             let result = (|| -> Result<(String, usize, std::time::Duration)> {
-                let (pixel_values, grid_thw) = load_image(image_path, &device, dtype)?;
+                let (pixel_values, grid_thw) = load_image(image_path, &device)?;
 
                 // Calculate number of image tokens after spatial merge
                 let grid_vec = grid_thw.to_vec2::<u32>()?;
@@ -1058,7 +1064,7 @@ fn main() -> Result<()> {
             );
 
             // Load and preprocess this image
-            let (pixel_values, grid_thw) = load_image(image_path, &device, dtype)?;
+            let (pixel_values, grid_thw) = load_image(image_path, &device)?;
 
             // Calculate number of image tokens after spatial merge
             let grid_vec = grid_thw.to_vec2::<u32>()?;
@@ -1140,7 +1146,7 @@ fn main() -> Result<()> {
 
     // Single image processing path
     println!("Processing image: {}", args.image[0]);
-    let (pixel_values, grid_thw) = load_image(&args.image[0], &device, dtype)?;
+    let (pixel_values, grid_thw) = load_image(&args.image[0], &device)?;
 
     // Calculate number of image tokens after spatial merge
     let grid_vec = grid_thw.to_vec2::<u32>()?;
