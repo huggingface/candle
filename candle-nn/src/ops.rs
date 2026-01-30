@@ -1037,7 +1037,7 @@ impl candle::CustomOp3 for Sdpa {
             || q_head == 128
             || q_head == 256;
 
-        let supports_sdpa_full_mask = !self.mask.is_some() || q_seq <= k_seq;
+        let supports_sdpa_full_mask = self.mask.is_none() || q_seq <= k_seq;
         let supports_sdpa_full = q_seq > 8 && supported_head_dim && supports_sdpa_full_mask;
         let supports_sdpa_vector = q_seq <= 8 && supported_head_dim && q_seq <= k_seq;
 

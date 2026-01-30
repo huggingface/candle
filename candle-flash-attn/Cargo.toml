@@ -1,6 +1,6 @@
 [package]
 name = "candle-flash-attn"
-version = "0.9.2-alpha.2"
+version = "0.9.2"
 edition = "2021"
 
 description = "Flash attention layer for the candle ML framework."
@@ -11,12 +11,13 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../candle-core", features = ["cuda"], package = "candle-core", version = "0.9.2-alpha.2" }
+candle = { path = "../candle-core", features = ["cuda"], package = "candle-core", version = "0.9.2" }
 half = { version = "2.3.1", features = ["num-traits"] }
 
 [build-dependencies]
 bindgen_cuda = "0.1.5"
 anyhow = { version = "1", features = ["backtrace"] }
+candle-flash-attn-build = { path = "../candle-flash-attn-build", version = "0.9.2" }
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
