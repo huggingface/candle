@@ -78,8 +78,28 @@ fn compute_cap() -> usize {
         }
     }
 
-    // Try to detect from bindgen_cuda
-    bindgen_cuda::Builder::default().compute_cap().unwrap_or(80) // Default to 80 if detection fails
+    // Try to detect via nvidia-smi
+    let output = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+        .output();
+
+    if let Ok(output) = output {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Parse "7.5" -> 75, "8.6" -> 86, etc.
+            if let Some(cap) = stdout.lines().next() {
+                let cap = cap.trim().replace('.', "");
+                if let Ok(cap) = cap.parse::<usize>() {
+                    println!("cargo:warning=Detected compute cap: {}", cap);
+                    return cap;
+                }
+            }
+        }
+    }
+
+    // Default to 80 if detection fails (safe: won't disable BF16 unnecessarily)
+    println!("cargo:warning=Could not detect compute cap, defaulting to 80");
+    80
 }
 
 fn remove_lines<P: AsRef<std::path::Path>>(file: P, patterns: &[&str]) {
