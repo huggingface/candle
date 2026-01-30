@@ -1,10 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use hf_hub::{api::sync::Api, Repo, RepoType};
-use std::{
-    fs::{self, File},
-    io::copy,
-    path::Path,
-};
 
 pub fn download_model(model_and_revision: &str) -> Result<()> {
     let (model_id, revision) = match model_and_revision.split_once(":") {
