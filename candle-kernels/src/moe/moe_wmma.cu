@@ -274,11 +274,14 @@ extern "C" void moe_gemm_wmma(
             // we use smaller M_tile and larger N_tile for decoding
             LAUNCH_MOE_WMMA(half, 8, 32, 1)
         }
-    } else if (data_type == 1) { // bfloat16
+    }    
+#ifndef NO_BF16_WMMA        
+    else if (data_type == 1) { // bfloat16
         if (is_prefill) {
             LAUNCH_MOE_WMMA(nv_bfloat16, 16, 16, 2)
         } else {
             LAUNCH_MOE_WMMA(nv_bfloat16, 8, 32, 1)
         }
     }
+#endif    
 }

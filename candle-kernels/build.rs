@@ -7,6 +7,9 @@ fn main() {
     println!("cargo::rerun-if-changed=src/cuda_utils.cuh");
     println!("cargo::rerun-if-changed=src/binary_op_macros.cuh");
 
+    // Detect compute capability
+    let compute_cap = compute_cap();
+
     // Build for PTX
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");
@@ -24,6 +27,16 @@ fn main() {
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3");
+
+    // Disable BF16 WMMA for pre-Ampere GPUs (sm < 80)
+    // BF16 Tensor Core support requires Ampere or newer
+    if compute_cap < 80 {
+        moe_builder = moe_builder.arg("-DNO_BF16_WMMA");
+        println!(
+            "cargo:warning=Disabling BF16 WMMA kernels (compute cap {} < 80)",
+            compute_cap
+        );
+    }
 
     // Build for FFI binding (must use custom bindgen_cuda, which supports simutanously build PTX and lib)
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -51,6 +64,22 @@ fn main() {
     if !is_target_msvc {
         println!("cargo:rustc-link-lib=stdc++");
     }
+}
+
+fn compute_cap() -> usize {
+    // Check for override via environment variable
+    if let Ok(val) = env::var("CUDA_COMPUTE_CAP") {
+        if let Ok(cap) = val.parse::<usize>() {
+            println!(
+                "cargo:warning=Using CUDA_COMPUTE_CAP from environment: {}",
+                cap
+            );
+            return cap;
+        }
+    }
+
+    // Try to detect from bindgen_cuda
+    bindgen_cuda::Builder::default().compute_cap().unwrap_or(80) // Default to 80 if detection fails
 }
 
 fn remove_lines<P: AsRef<std::path::Path>>(file: P, patterns: &[&str]) {
