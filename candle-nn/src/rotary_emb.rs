@@ -1,6 +1,6 @@
 //! Rotary Embeddings
 //!
-use candle::{CpuStorage, op::BackpropOp, Layout, Result, Shape, Tensor, D};
+use candle::{op::BackpropOp, CpuStorage, Layout, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Interleaved variant of rotary embeddings.
@@ -517,15 +517,41 @@ impl candle::CustomOp3 for RotaryEmb {
         sin: &candle::LazyStorage,
         sin_l: &Layout,
     ) -> Result<(candle::LazyStorage, Shape)> {
-        let src = Tensor::from_storage(src.clone().into(), src_l.shape(), BackpropOp::none(), false);
-        let cos = Tensor::from_storage(cos.clone().into(), cos_l.shape(), BackpropOp::none(), false);
-        let sin = Tensor::from_storage(sin.clone().into(), sin_l.shape(), BackpropOp::none(), false);
+        use candle::backend::BackendStorage;
+        use candle::lazy::graph_to_dot;
+        /*
+        println!("{}", graph_to_dot(&src.operations()));
+        println!(
+            "src: {:?}, {:?}, {:?}",
+            src.shape(),
+            src.dtype(),
+            src.get_current_node()?
+        );
+        println!(
+            "cos: {:?}, {:?}, {:?}",
+            cos.shape(),
+            cos.dtype(),
+            cos.get_current_node()?
+        );
+        println!(
+            "sin: {:?}, {:?}, {:?}",
+            sin.shape(),
+            sin.dtype(),
+            sin.get_current_node()?
+        );
+         */
+        let src =
+            Tensor::from_storage(src.clone().into(), src_l.shape(), BackpropOp::none(), false);
+        let cos =
+            Tensor::from_storage(cos.clone().into(), cos_l.shape(), BackpropOp::none(), false);
+        let sin =
+            Tensor::from_storage(sin.clone().into(), sin_l.shape(), BackpropOp::none(), false);
         let result = rope_slow(&src, &cos, &sin)?;
         let (storage, layout) = result.storage_and_layout();
         let storage = storage.try_clone(layout)?;
         let inner = match storage {
             candle::Storage::Lazy(lazy) => lazy,
-            _ => unreachable!()
+            _ => unreachable!(),
         };
         Ok((inner, layout.shape().clone()))
     }

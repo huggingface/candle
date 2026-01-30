@@ -243,6 +243,7 @@ fn main() -> Result<()> {
     let mut index_pos = 0;
     let mut token_generated = 0;
     for index in 0..args.sample_len {
+        println!("start");
         let (context_size, context_index) = if cache.use_kv_cache && index > 0 {
             (1, index_pos)
         } else {
@@ -253,7 +254,9 @@ fn main() -> Result<()> {
         }
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
+        println!("input done");
         let logits = llama.forward(&input, context_index, &mut cache)?;
+        println!("llama forward done");
         let logits = logits.squeeze(0)?;
         let logits = if args.repeat_penalty == 1. {
             logits

@@ -18,7 +18,7 @@ const USE_COL2IM_CONV1D_TR: bool = true;
 
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
 // intercept the oom errors to avoid panicking and provide a proper error.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CpuStorage {
     U8(Vec<u8>),
     U32(Vec<u32>),
@@ -1675,7 +1675,7 @@ impl CpuStorage {
             Self::F6E2M3(s) => s.len(),
             Self::F6E3M2(s) => s.len(),
             Self::F4(s) => s.len(),
-            Self::F8E8M0(s) => s.len()
+            Self::F8E8M0(s) => s.len(),
         }
     }
 

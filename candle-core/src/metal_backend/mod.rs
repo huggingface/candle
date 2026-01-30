@@ -2190,6 +2190,7 @@ impl Executor for MetalDevice {
                 let mut outgoing = g.edges_directed(node, petgraph::Outgoing);
                 let out_edge = outgoing.next().unwrap();
                 let out_weight = graph.edge_weight_mut(out_edge.id()).unwrap();
+                println!("{in_edge:?} --{dtype:?}-> {out_edge:?}");
                 if state.dtype != *dtype {
                     out_weight.set_state(state.to_dtype(in_weight.layout(), *dtype)?);
                 } else {
@@ -2245,9 +2246,6 @@ impl Executor for MetalDevice {
                     println!("rhs_edge: {rhs_edge:?}");
                     println!("out_edge: {out_edge:?}");
                 }
-                //let rhs = self.eval(graph, out)
-
-                //state = state.binary(kernel, &self.eval(rhs)?, lhs_l, rhs_l)?;
             }
             /*
             ToCpu,
@@ -2270,9 +2268,6 @@ impl Executor for MetalDevice {
             }
             /*
             Cmp(CmpOp, LazyStorage, Layout, Layout),
-            ToDType(Layout, DType),
-            Unary(Layout, &'static str),
-            Binary(Layout, LazyStorage, Layout, &'static str),
             WhereCond(Layout, LazyStorage, Layout, LazyStorage, Layout),
             Conv1D(Layout, LazyStorage, Layout, crate::conv::ParamsConv1D),
             ConvTranspose1D(Layout, LazyStorage, Layout, crate::conv::ParamsConvTranspose1D),
@@ -2285,7 +2280,40 @@ impl Executor for MetalDevice {
             Gather(Layout, LazyStorage, Layout, usize),
             ScatterSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
             ScatterAddSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
-            IndexSelect(Layout, LazyStorage, Layout, usize),
+            */
+            IndexSelect(dim) => {
+                let g = graph.clone();
+                let mut edges = g.edges_directed(node, petgraph::Incoming);
+                let lhs_edge = edges.next().unwrap();
+                let rhs_edge = edges.next().unwrap();
+
+                let lhs_weight = lhs_edge.weight();
+                let rhs_weight = rhs_edge.weight();
+
+                let lhs_l = lhs_weight.layout();
+                let rhs_l = rhs_weight.layout();
+
+                let mut outgoing = g.edges_directed(node, petgraph::Outgoing);
+                let out_edge = outgoing.next().unwrap();
+                let out_weight = graph.edge_weight_mut(out_edge.id()).unwrap();
+
+                let lhs_state = lhs_weight.state.clone();
+                if let Some(lhs) = lhs_state {
+                    if let Some(rhs) = rhs_edge.weight().state() {
+                        let state = lhs.index_select(rhs, lhs_l, rhs_l, *dim)?;
+                        out_weight.set_state(state);
+                    } else {
+                        println!("lhs_edge: {lhs_edge:?}");
+                        println!("rhs_edge: {rhs_edge:?}");
+                        println!("out_edge: {out_edge:?}");
+                    }
+                } else {
+                    println!("lhs_edge: {lhs_edge:?}");
+                    println!("rhs_edge: {rhs_edge:?}");
+                    println!("out_edge: {out_edge:?}");
+                }
+            }
+            /*
             IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
             Matmul(LazyStorage, (usize, usize, usize, usize), Layout, Layout),
             CopyStridedSrc(LazyStorage, usize, Layout),
@@ -2306,14 +2334,19 @@ impl Executor for MetalDevice {
 
     fn run(&self, graph: OpGraph) -> Result<MetalStorage> {
         let mut graph = self.prepare(graph);
-        let acyclic = Acyclic::try_from_graph(graph.clone()).unwrap();
+        let acyclic = Acyclic::try_from(graph.clone()).unwrap();
         let node_indices = toposort(&acyclic, None).unwrap();
 
-        println!(" ----- graph ----- ");
+        println!(" ----- GRAPHHHH ----- ");
         println!("{}", Dot::new(&graph));
 
         let mut final_node = NodeIndex::new(0);
         for idx in node_indices {
+            println!("{idx:?}: {:?}", graph.node_weight(idx).unwrap());
+            assert_eq!(
+                graph.node_weight(idx).unwrap(),
+                acyclic.node_weight(idx).unwrap()
+            );
             // Is root node
             //if graph.edges_directed(start, Incoming).count() == 0 {
             //    if let Const(s) = graph.node_weight(start).unwrap() {

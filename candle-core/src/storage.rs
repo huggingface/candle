@@ -722,7 +722,10 @@ impl Storage {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
                 Ok(Self::Metal(storage))
             }
-            (Self::Lazy(_), Self::Lazy(_), Self::Lazy(_)) => todo!(),
+            (Self::Lazy(cond), Self::Lazy(t), Self::Lazy(f)) => {
+                let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
+                Ok(Self::Lazy(storage))
+            }
             (_, lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
