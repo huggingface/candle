@@ -283,5 +283,10 @@ extern "C" void moe_gemm_wmma(
             LAUNCH_MOE_WMMA(nv_bfloat16, 8, 32, 1)
         }
     }
+#else
+    else if (data_type == 1) {
+        fprintf(stderr, "BF16 WMMA not supported (requires sm_80+)\n");
+        return;
+    }
 #endif    
 }
