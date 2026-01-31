@@ -13,7 +13,7 @@ fn main() {
     // Build for PTX
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");
-    let builder = bindgen_cuda::Builder::default()
+    let mut builder = bindgen_cuda::Builder::default()
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3");
