@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use ahash::AHashMap as HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::shader_loader::{shader_shortener, DefinesDefinitions};
@@ -59,16 +59,17 @@ impl Default for ParseState {
 pub mod shader_loader {
     use super::*;
     use fancy_regex::Regex;
-    use std::collections::HashMap;
+    use once_cell::sync::Lazy;
+    use ahash::AHashMap as HashMap;
 
     pub fn load_shader(state: &mut ParseState, store: &ShaderStore) -> String {
         let mut result = shader_defines::load_shader(state, store);
+        static REMOVE_SPACES_REGEX: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))").unwrap()
+        });
 
         if REMOVE_SPACES {
-            result = Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))")
-                .unwrap()
-                .replace_all(&result, "")
-                .to_string(); //replaces newline and not used spaces
+            result = REMOVE_SPACES_REGEX.replace_all(&result, "").to_string();
         }
         result = state.shader_info.shorten_variable_names(&result);
         if REMOVE_UNUSED {
@@ -142,13 +143,13 @@ pub mod shader_loader {
         pub fn match_variable<'a>(
             tokens: &mut impl Iterator<Item = Token<'a>>,
             result: &mut String,
-        ) -> String {
+        ) -> &'a str {
             let mut generic_counter = 0;
             for token in tokens.by_ref() {
                 match token {
                     Token::Word(var_name) => {
                         if generic_counter == 0 {
-                            return var_name.to_string();
+                            return var_name;
                         } else {
                             result.push_str(var_name);
                         }
@@ -163,7 +164,7 @@ pub mod shader_loader {
                     }
                 }
             }
-            "".to_string()
+            ""
         }
 
         pub fn match_function_block<'a>(
@@ -178,6 +179,28 @@ pub mod shader_loader {
                     }
                     Token::Symbol(c) => {
                         result.push(c);
+                        if c == '{' {
+                            generic_counter += 1;
+                        } else if c == '}' {
+                            generic_counter -= 1;
+                            if generic_counter == 0 {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        pub fn match_function_block_no_output<'a>(
+            tokens: &mut impl Iterator<Item = Token<'a>>
+        ) {
+            let mut generic_counter = 0;
+            for token in tokens.by_ref() {
+                match token {
+                    Token::Word(_) => {
+                    }
+                    Token::Symbol(c) => {
                         if c == '{' {
                             generic_counter += 1;
                         } else if c == '}' {
@@ -232,6 +255,25 @@ pub mod shader_loader {
                         }
                         tokens.next();
                         result.push(c);
+                    }
+                }
+            }
+        }
+
+         pub fn match_until_char_no_output<'a>(
+            tokens: &mut Peekable<impl Iterator<Item = Token<'a>>>,
+            char: char
+        ) {
+            while let Some(token) = tokens.peek().cloned() {
+                match token {
+                    Token::Word(_) => {
+                        tokens.next();
+                    }
+                    Token::Symbol(c) => {
+                        if c == char {
+                            return;
+                        }
+                        tokens.next();
                     }
                 }
             }
@@ -543,6 +585,7 @@ pub mod shader_loader {
         use crate::{ParseState, ShaderStore};
         use evalexpr::*;
         use fancy_regex::Regex;
+        use once_cell::sync::Lazy;
         use std::{
             iter::Peekable,
             path::{Component, Path, PathBuf},
@@ -665,24 +708,24 @@ pub mod shader_loader {
                 tokens: &mut Peekable<impl Iterator<Item = Token<'a>>>,
                 state: &mut ParseState,
                 store: &ShaderStore,
-            ) -> String {
-                let mut result = String::new();
-
+                result : &mut String,
+            ) {
                 while let Some(token) = tokens.next() {
                     match token {
                         Token::Word(word) => {
-                            apply_defines_word(tokens, word, &mut result, state, store);
+                            apply_defines_word(tokens, word, result, state, store);
                         }
                         Token::Symbol(c) => result.push(c),
                     }
                 }
-                result
             }
 
             fn apply_defines(code: &str, state: &mut ParseState, store: &ShaderStore) -> String {
                 let tokenizer = Tokenizer::new(code);
                 let mut tokens = tokenizer.peekable();
-                apply_defines_tokens(&mut tokens, state, store)
+                let mut result = String::with_capacity(code.len());
+                apply_defines_tokens(&mut tokens, state, store, &mut result);
+                result
             }
 
             fn match_preprocessor<'a>(
@@ -1089,8 +1132,6 @@ pub mod shader_loader {
         }
 
         pub fn load_shader(state: &mut ParseState, store: &ShaderStore) -> String {
-            //println!("load_shader: {:?}", &state.path);
-
             let shader_code = store.get(&state.path).unwrap_or_else(|| {
                 let available: Vec<_> = store.keys().collect();
                 panic!(
@@ -1106,10 +1147,10 @@ pub mod shader_loader {
                 )
             });
 
+            static REMOVE_COMMENT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"//.*\n").unwrap());
+
             if REMOVE_COMMENT {
-                let shader_code = Regex::new(r"//.*\n")
-                    .unwrap()
-                    .replace_all(shader_code, "\n"); //remove coments
+                let shader_code = REMOVE_COMMENT_REGEX.replace_all(shader_code, "\n"); //remove coments
                 load_shader_content(&shader_code, state, store)
             } else {
                 load_shader_content(shader_code, state, store)
@@ -1118,9 +1159,9 @@ pub mod shader_loader {
     }
 
     pub mod shader_shortener {
-        use std::collections::{HashMap, HashSet};
+        use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
-        use crate::{shader_loader::shader_tokeniser::match_whitespace_to_result, REMOVE_SPACES};
+        use crate::{REMOVE_SPACES, shader_loader::shader_tokeniser::{match_function_block_no_output, match_until_char_no_output, match_whitespace_to_result}};
 
         use super::{
             shader_tokeniser::{
@@ -1162,6 +1203,7 @@ pub mod shader_loader {
             pub fn shorten_variable_names(&mut self, shader_code: &str) -> String {
                 let tokenizer = Tokenizer::new(shader_code);
                 let mut result = String::new();
+                result.reserve(shader_code.len());
                 let mut variables = HashMap::new();
                 let mut functions = HashMap::new();
                 let mut var_counter = 1;
@@ -1176,7 +1218,7 @@ pub mod shader_loader {
                             let var_name = match_variable(&mut tokens, &mut result);
                             if !var_name.is_empty() {
                                 let short_name =
-                                    variables.entry(var_name.clone()).or_insert_with(|| {
+                                    variables.entry(var_name).or_insert_with(|| {
                                         if SHORTEN_NORMAL_VARIABLES {
                                             let (name, new_counter) =
                                                 generate_short_name(var_counter);
@@ -1196,11 +1238,11 @@ pub mod shader_loader {
                             if !var_name.is_empty() {
                                 if is_compute_fn {
                                     let short_name;
-                                    if self.contains_function(&var_name) {
+                                    if self.contains_function(var_name) {
                                         short_name = self
                                             .global_functions
                                             .iter()
-                                            .find(|(k, _)| k == &var_name)
+                                            .find(|(k, _)| k == var_name)
                                             .unwrap()
                                             .1
                                             .to_string();
@@ -1211,7 +1253,7 @@ pub mod shader_loader {
                                             self.global_function_counter = new_counter;
                                             short_name = format!("z{n}");
                                         } else {
-                                            short_name = var_name.clone();
+                                            short_name = var_name.to_string();
                                         }
                                         self.global_functions
                                             .push((var_name.to_string(), short_name.to_string()));
@@ -1239,7 +1281,7 @@ pub mod shader_loader {
                         Token::Word(word) if word == "struct" => {
                             result.push_str(word);
                             let var_name = match_variable(&mut tokens, &mut result);
-                            result.push_str(&var_name);
+                            result.push_str(var_name);
                             match_function_block(&mut tokens, &mut result);
                         }
                         Token::Word(word) if word == "default" => {
@@ -1250,9 +1292,9 @@ pub mod shader_loader {
                             let var_name = match_variable(&mut tokens, &mut result);
                             if !var_name.is_empty() {
                                 let short_name: String;
-                                if self.global_overrides.contains_key(&var_name) {
+                                if self.global_overrides.contains_key(var_name) {
                                     short_name =
-                                        self.global_overrides.get(&var_name).unwrap().to_string();
+                                        self.global_overrides.get(var_name).unwrap().to_string();
                                 } else {
                                     if SHORTEN_OVERRIDES {
                                         let (n, new_counter) =
@@ -1260,7 +1302,7 @@ pub mod shader_loader {
                                         self.global_overrides_counter = new_counter;
                                         short_name = format!("y{n}");
                                     } else {
-                                        short_name = var_name.clone();
+                                        short_name = var_name.to_string();
                                     }
                                     self.global_overrides
                                         .insert(var_name.to_string(), short_name.clone());
@@ -1293,7 +1335,7 @@ pub mod shader_loader {
                                     } else if *c == ':' {
                                         //this is a variable definition, e.g. v1 : u32, v2 : u32
                                         let short_name = variables
-                                            .entry(word.to_string())
+                                            .entry(word)
                                             .or_insert_with(|| {
                                                 if SHORTEN_NORMAL_VARIABLES {
                                                     let (name, new_counter) =
@@ -1365,9 +1407,9 @@ pub mod shader_loader {
                                     }
                                 }
 
-                                used_variables.insert(w.to_string());
+                                used_variables.insert(w);
                             }
-                            defined_variables.insert(w.to_string());
+                            defined_variables.insert(w);
                         }
                         Token::Symbol(_) => {}
                     }
@@ -1377,9 +1419,9 @@ pub mod shader_loader {
                 let tokenizer = Tokenizer::new(shader_code);
                 let mut tokens = tokenizer.peekable();
 
-                let mut result = String::new();
+                let mut result = String::with_capacity(shader_code.len());
                 let mut is_compute_fn = false;
-                let mut current_item = String::new();
+                let mut current_item = String::with_capacity(100);
                 while let Some(token) = tokens.next() {
                     match token {
                         Token::Word(w) => {
@@ -1387,36 +1429,47 @@ pub mod shader_loader {
                                 //we are a global variable
                                 current_item.push_str(w);
                                 let var_name = match_variable(&mut tokens, &mut current_item);
-                                current_item.push_str(&var_name);
-                                match_until_char(&mut tokens, ';', &mut current_item);
-                                tokens.next(); //remove ';' from the tokens list as well
-                                current_item.push(';');
-                                if used_variables.contains(&var_name) {
+                                if used_variables.contains(var_name) {
                                     result.push_str(&current_item);
+                                    result.push_str(var_name);
+                                    match_until_char(&mut tokens, ';', &mut result);
+                                    tokens.next(); //remove ';' from the tokens list as well
+                                    result.push(';');
+                                }
+                                else{
+                                    match_until_char_no_output(&mut tokens, ';');
+                                    tokens.next(); //remove ';' from the tokens list as well 
                                 }
 
-                                current_item = String::new();
+                                current_item.clear();
                             } else if w == "fn" {
                                 //we are a function
                                 current_item.push_str(w);
                                 let var_name = match_variable(&mut tokens, &mut current_item);
-                                current_item.push_str(&var_name);
-                                match_function_block(&mut tokens, &mut current_item);
-                                if is_compute_fn || used_variables.contains(&var_name) {
+                                
+                                if is_compute_fn || used_variables.contains(var_name) {
                                     result.push_str(&current_item);
+                                    result.push_str(var_name);
+                                    match_function_block(&mut tokens, &mut result);
+                                }
+                                else{
+                                    match_function_block_no_output(&mut tokens);
                                 }
                                 is_compute_fn = false;
-                                current_item = String::new();
+                                current_item.clear();
                             } else if w == "struct" {
                                 //we are a struct
                                 current_item.push_str(w);
                                 let var_name = match_variable(&mut tokens, &mut current_item);
-                                current_item.push_str(&var_name);
-                                match_function_block(&mut tokens, &mut current_item);
-                                if used_variables.contains(&var_name) {
+                                if used_variables.contains(var_name) {
                                     result.push_str(&current_item);
+                                    result.push_str(var_name);
+                                    match_function_block(&mut tokens, &mut result);
                                 }
-                                current_item = String::new();
+                                else{
+                                    match_function_block_no_output(&mut tokens);
+                                }
+                                current_item.clear();
                             } else {
                                 current_item.push_str(w);
                             }
@@ -1445,7 +1498,7 @@ pub mod shader_loader {
 
         fn generate_short_name(counter: usize) -> (String, usize) {
             let alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-            let mut name = String::new();
+            let mut name = String::with_capacity(4);
             let mut count = counter;
             let reserved_words = ["as", "if", "do", "fn", "of"];
 

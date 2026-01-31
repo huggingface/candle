@@ -21,10 +21,10 @@ pub use wgpu_compute_layer::EntryPoint;
 pub use wgpu_compute_layer::DTYPE_COUNT;
 
 use std::borrow::Borrow;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::mem;
 use std::path::{Path, PathBuf};
 
 pub use generated::kernels::*;
@@ -69,10 +69,16 @@ impl DefaultWgpuShader{
     }
 }
 
+impl Default for DefaultWgpuShader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 create_loader!(DefaultWgpuShader);
 
 impl ShaderLoader for DefaultWgpuShader {
-    fn load(&self, index: ShaderIndex, defines : &[(& str, String)]) -> &str {
+    fn load(&self, index: ShaderIndex, defines : &[(& str, String)]) -> Cow<'_, str> {
         let shader: Shaders = index.into();
         let path = shader.load_shader();
         let typ : crate::DType = shader.get_type();
@@ -94,8 +100,9 @@ impl ShaderLoader for DefaultWgpuShader {
         let mut parse_state = ParseState::new();
         parse_state.set_path(PathBuf::from(path));
         parse_state.set_defines(state_defines.clone().into_iter().collect());
+
         let processed = shader_loader::load_shader(&mut parse_state, &self.shader_store);
-        Box::leak(processed.into_boxed_str())
+        processed.into()
     }
 
     fn get_entry_point(&self, index: PipelineIndex) -> &str {
@@ -400,9 +407,9 @@ impl Default for DefaultWgpuDynamicShader {
 }
 
 impl ShaderLoader for DefaultWgpuDynamicShader {
-    fn load(&self, index: ShaderIndex, _ : &[(&str, String)]) -> &str {
+    fn load(&self, index: ShaderIndex, _ : &[(&str, String)]) -> Cow<'_, str> {
         let ShaderIndex(_, shader_id) = index;
-        &self.shader_cache[shader_id as usize].dynamic_shader
+        self.shader_cache[shader_id as usize].dynamic_shader.as_str().into()
     }
 
     fn get_entry_point(&self, index: PipelineIndex) -> &str {
