@@ -23,6 +23,7 @@ rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_plain = { workspace = true }
+tokenizers = { workspace = true, optional = true }
 tracing = { workspace = true }
 
 [features]
@@ -33,3 +34,4 @@ cudnn = ["candle/cudnn", "candle-nn/cudnn"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]
 metal = ["candle/metal", "candle-nn/metal"]
+provence-process = ["tokenizers"]
