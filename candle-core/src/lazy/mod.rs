@@ -474,16 +474,16 @@ impl BackendStorage for LazyStorage {
         next.operations.add_edge(current_op, idx, lhs_edge);
 
         let t_op = t.get_current_node()?;
-        let t_edge = OpEdge::new(t_l.clone(), self.dtype());
+        let t_edge = OpEdge::new(t_l.clone(), t.dtype());
         next.merge(t, t_op, idx, t_edge)?;
 
         let f_op = f.get_current_node()?;
-        let f_edge = OpEdge::new(f_l.clone(), self.dtype());
+        let f_edge = OpEdge::new(f_l.clone(), t.dtype());
         next.merge(f, f_op, idx, f_edge)?;
 
         next.current_node = Some(idx);
 
-        println!("{}", graph_to_dot(&next.operations()));
+        //        println!("{}", graph_to_dot(&next.operations()));
         Ok(next)
     }
 

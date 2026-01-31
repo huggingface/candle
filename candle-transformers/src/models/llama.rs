@@ -509,8 +509,8 @@ impl Llama {
         let mut x = self.wte.forward(x)?;
         println!("wte forward done");
         for (block_idx, block) in self.blocks.iter().enumerate() {
-            println!("block {block_idx} forward done");
             x = block.forward(&x, index_pos, block_idx, cache)?;
+            println!("block {block_idx} forward done");
         }
         println!("blocks forward done");
         let x = self.ln_f.forward(&x)?;
