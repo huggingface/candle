@@ -17,6 +17,16 @@ fn main() {
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3");
+
+    // Disable BF16 WMMA for pre-Ampere GPUs (sm < 80)
+    if compute_cap < 80 {
+        builder = builder.arg("-DNO_BF16_WMMA");
+        println!(
+            "cargo:warning=Disabling BF16 WMMA kernels (compute cap {} < 80)",
+            compute_cap
+        );
+    }
+
     let bindings = builder.build_ptx().unwrap();
     bindings.write(&ptx_path).unwrap();
 
