@@ -10,7 +10,7 @@ wgpu_compute_layer::create_loader!(MyCustomLoader);
 
 impl wgpu_compute_layer::ShaderLoader for MyCustomLoader {
     //define the shader:
-    fn load(&self, _: wgpu_compute_layer::ShaderIndex) -> &str {
+    fn load(&self, _: wgpu_compute_layer::ShaderIndex, _ : &[(&str, String)]) -> &str {
         "
 //Binding Order: Dest, Meta, Input1, Input2, Input3
 @group(0) @binding(0)

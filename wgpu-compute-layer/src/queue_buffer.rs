@@ -50,15 +50,23 @@ impl OpIsInplaceable {
     derive(serde::Serialize, serde::Deserialize)
 )]
 /// Pipeline, pipeline constants, and in-place information.
-pub struct PipelineReference(
-    pub shader_loader::PipelineIndex,
-    pub usize, // Index into an array with pipeline constants
+pub struct PipelineReference{
+    pub(crate) index : shader_loader::PipelineIndex,
+    pub(crate)  const_index :  usize, // Index into an array with pipeline constants
+    pub(crate)  defines_index : usize,
     #[cfg_attr(
         any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
         serde(skip)
     )]
-    pub OpIsInplaceable,
-);
+    pub(crate) inplaceable : OpIsInplaceable,
+}
+
+impl PipelineReference {
+    pub fn new(index: shader_loader::PipelineIndex, const_index: usize, defines_index: usize, inplaceable: OpIsInplaceable) -> Self {
+        Self { index, const_index, defines_index, inplaceable }
+    }
+}
+
 
 #[derive(Debug)]
 pub(crate) struct MlQueueDispatch {
@@ -88,11 +96,19 @@ pub struct QueueBufferInner {
     /// `ConstArray` used to store the pipeline constants for the next pipeline call.
     const_array: ConstArray,
 
+    /// `DefinesArray` used to store the pipeline defines for the next pipeline call.
+    defines_array: Vec<(&'static str, String)>,
+
     /// `ConstArray` -> id mapper: maps a set of constants to a unique id.
     const_id_map: ObjectToIdMapper<ConstArray>,
 
+    /// `DefinesArray` -> id mapper: maps a set of defines to a unique id.
+    defines_id_map: ObjectToIdMapper<Vec<(&'static str, String)>>,
+
     /// Id -> `ConstArray` mapping: maps a unique id to a set of constants.
     pub(crate) id_to_const_array: Vec<Vec<(&'static str, f64)>>,
+
+    pub(crate) id_to_defines_array: Vec<Vec<(&'static str, String)>>,
 
     global_command_index: u32,
 
@@ -107,8 +123,11 @@ impl QueueBufferInner {
             meta_array: MetaArray::new(size),
             current_meta: 0,
             const_array: ConstArray::new(),
+            defines_array : Vec::new(),
             const_id_map: ObjectToIdMapper::new(),
+            defines_id_map : ObjectToIdMapper::new(),
             id_to_const_array: Vec::new(),
+            id_to_defines_array: Vec::new(),
             global_command_index: 1,
         }
     }
@@ -116,6 +135,7 @@ impl QueueBufferInner {
     /// Resets the `ConstArray` for the next pipeline.
     pub fn init(&mut self) {
         self.const_array.0.clear();
+        self.defines_array.clear();
     }
 
     /// Removes all operations from the queue.
@@ -134,16 +154,28 @@ impl QueueBufferInner {
         &mut self.meta_array.0
     }
 
+    fn finalize_internal_arrays(&mut self) -> (usize, usize){
+        let (index_const, is_new) = self.const_id_map.get_or_insert(&self.const_array);
+        if is_new {
+            self.id_to_const_array.push(self.const_array.to_vec())
+        }
+
+        self.defines_array.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let (index_defines, is_new) = self.defines_id_map.get_or_insert(&self.defines_array);
+        if is_new {
+            self.id_to_defines_array.push(self.defines_array.to_vec())
+        }
+
+        self.init();
+        (index_const, index_defines)
+    }
+
     pub fn get_pipeline(
         &mut self,
         pipeline: impl Into<shader_loader::PipelineIndex>,
     ) -> PipelineReference {
-        let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
-        if is_new {
-            self.id_to_const_array.push(self.const_array.to_vec())
-        }
-        self.init();
-        PipelineReference(pipeline.into(), index, OpIsInplaceable::new())
+        let (index_const, index_defines) = self.finalize_internal_arrays();
+        PipelineReference::new(pipeline.into(), index_const, index_defines,  OpIsInplaceable::new())
     }
 
     pub fn get_pipeline_inplace(
@@ -151,12 +183,8 @@ impl QueueBufferInner {
         pipeline: impl Into<shader_loader::PipelineIndex>,
         inplaceable: OpIsInplaceable,
     ) -> PipelineReference {
-        let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
-        if is_new {
-            self.id_to_const_array.push(self.const_array.to_vec())
-        }
-        self.init();
-        PipelineReference(pipeline.into(), index, inplaceable)
+        let (index_const, index_defines) = self.finalize_internal_arrays();
+        PipelineReference::new(pipeline.into(), index_const, index_defines, inplaceable)
     }
 
     /// Adds the parameter `value` to the `MetaArray`.
@@ -166,6 +194,10 @@ impl QueueBufferInner {
 
     pub fn add_const<K: Into<KernelConstId>, T: ToU32>(&mut self, key: K, value: T) {
         self.const_array.insert(key.into(), value);
+    }
+
+    pub fn add_define(&mut self, key: &'static str, value : impl Into<String>) {
+        self.defines_array.push((key, value.into()));
     }
 
     pub fn global_command_index(&self) -> u32 {
@@ -462,5 +494,5 @@ fn queue_buffer_const_mapping_roundtrip() {
     assert_eq!(entry[0].1, 42.0);
 
     // The returned pipeline_ref should reference the stored constants
-    assert_eq!(pipeline_ref.1, 0);
+    assert_eq!(pipeline_ref.const_index, 0);
 }

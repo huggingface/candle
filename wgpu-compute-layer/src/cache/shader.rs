@@ -17,7 +17,7 @@ pub struct ShaderModuleComputePipelines {
 #[derive(Debug)]
 pub(crate) struct ShaderCache {
     pub(crate) loader_cache: crate::shader_loader::ShaderLoaderCache,
-    pub(crate) shaders: HashMap<crate::shader_loader::ShaderIndex, ShaderModuleComputePipelines>,
+    pub(crate) shaders: HashMap<(crate::shader_loader::ShaderIndex, u32), ShaderModuleComputePipelines>, //shader + define index
 }
 
 impl ShaderCache {
@@ -47,13 +47,43 @@ impl ShaderCache {
         pipeline: &PipelineReference,
         pipeline_layout: &wgpu::PipelineLayout,
         consts: &[(&str, f64)],
+        define_index : u32,
+        defines: &[(&'static str, String)],
     ) -> crate::Result<Arc<wgpu::ComputePipeline>> {
-        let shader = pipeline.0.get_shader();
+        let shader = pipeline.index.get_shader();
+       
         let shaders = &mut self.shaders;
+        let s = shaders.entry((shader, define_index)).or_insert_with(|| {
+            let shader_str = self.loader_cache.get_shader(shader, defines);
+            
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                wgpu_functions::get_shader(device, shader_str)
+            }));
+            
+            let s = match result {
+                Ok(module) => module,
+                Err(payload) => {
+                    let entry_point_str = self.loader_cache.get_entry_point(pipeline.index);
+                    eprintln!("Shader compilation panic!");
+                    eprintln!("EntryPoint: '{}'", entry_point_str);
+                    eprintln!("Defines:");
+                    for (k, v) in defines {
+                        eprintln!("  {} = {}", k, v);
+                    }
 
-        let s = shaders.entry(shader).or_insert_with(|| {
-            let shader_str = self.loader_cache.get_shader(shader);
-            let s = wgpu_functions::get_shader(device, shader_str);
+                    eprintln!("Consts:");
+                    for (k, v) in consts {
+                        eprintln!("  {} = {}", k, v);
+                    }
+
+                    // Optional: dump shader source
+                    eprintln!("Shader source:\n{}", shader_str);
+
+                    // Re-panic so behavior stays the same
+                    std::panic::resume_unwind(payload);
+                }
+            };
+
             ShaderModuleComputePipelines {
                 shader: Arc::new(s),
                 pipelines: HashMap::default(),
@@ -62,7 +92,7 @@ impl ShaderCache {
 
         let pipelines = &mut s.pipelines;
         if !pipelines.contains_key(pipeline) {
-            let entry_point_str = self.loader_cache.get_entry_point(pipeline.0);
+            let entry_point_str = self.loader_cache.get_entry_point(pipeline.index);
             let p = load_pipeline(
                 device,
                 s.shader.clone(),

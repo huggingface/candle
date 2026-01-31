@@ -44,21 +44,20 @@ override CONSTV_0 : bool = true;
 override CONSTV_1 : bool = true;
 override CONSTV_2 : bool = true;
 
-//var<immediate> op_immediates: array<u32, 6>;
+LOAD_INFO(op_matmul, 7)
+//#define op_matmul_b                 op_matmul[0]
+#define op_matmul_m                 op_matmul[0]
+#define op_matmul_k                 op_matmul[1]
+#define op_matmul_n                 op_matmul[2]
 
-//#define op_matmul_b                 op_meta[0]
-#define op_matmul_m                 op_meta[0]
-#define op_matmul_k                 op_meta[1]
-#define op_matmul_n                 op_meta[2]
-
-#define op_matmul_input1_stride_b   op_meta[3]
-#define op_matmul_input1_offset     op_meta[4]
-//#define op_matmul_input2_stride_b   op_meta[5]
-//#define op_matmul_input2_offset     op_meta[4]
+#define op_matmul_input1_stride_b   op_matmul[3]
+#define op_matmul_input1_offset     op_matmul[4]
+//#define op_matmul_input2_stride_b   op_matmul[5]
+//#define op_matmul_input2_offset     op_matmul[4]
 #define op_matmul_input2_offset     0u
 
-#define op_matmul_input1_stride_k   select(op_meta[5], 1u, CONSTV_0)
-#define op_matmul_input1_stride_m   select(op_meta[6], 1u, CONSTV_1) 
+#define op_matmul_input1_stride_k   select(op_matmul[5], 1u, CONSTV_0)
+#define op_matmul_input1_stride_m   select(op_matmul[6], 1u, CONSTV_1) 
 
 
 
@@ -70,7 +69,8 @@ override CONSTV_2 : bool = true;
 #define load_data(data,idx,bit_mask) (data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask
 #define load_i8(data,idx,bit_mask) i32(((data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask) << 24) >> 24
 
-#define op_dequantize_size               op_meta[0]
+LOAD_INFO(op_dequantize, 1)
+#define op_dequantize_size               op_dequantize[0]
 
 #ifndef SGEMM
 @compute @workgroup_size(64,1,1)

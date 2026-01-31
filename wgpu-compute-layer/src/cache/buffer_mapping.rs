@@ -158,7 +158,7 @@ impl CachedBufferMappings {
                 return Some(mapping);
             } else {
                 // if this pipeline is in-place capable the pipeline might be different based on whether the buffer was in-placed or not.
-                if !pipeline.2.input1_inplaceable && !pipeline.2.input2_inplaceable {
+                if !pipeline.inplaceable.input1_inplaceable && !pipeline.inplaceable.input2_inplaceable {
                     panic!(
                         "expected: {pipeline:?} at index {index}, but got {:?}",
                         mapping.pipeline

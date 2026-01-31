@@ -80,6 +80,7 @@ impl From<PipelineIndex> for LoaderIndex {
 pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     /// Loads the WGSL shader code.
     /// A shader loader may handle multiple shader files; use the `index` to differentiate between shaders.
+    /// When calling a pipeline, you may add a set of defines to the shader, then the ShaderLoader might based on the defines generate different version of the shader
     /// # Examples
     ///  ```
     /// use wgpu_compute_layer::{ShaderLoader, ShaderIndex, PipelineIndex};
@@ -88,7 +89,7 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     /// struct Example{};
     ///
     /// impl ShaderLoader for Example{
-    ///     fn load(&self, index : ShaderIndex) -> &str{
+    ///     fn load(&self, index : ShaderIndex, _ : &[(&str, &str)]) -> &str{
     ///         let index : u16 = index.get_index();
     ///         match index{
     ///             0 => "@compute fn compute1_i32(...){...} @compute fn compute2_i32(...){...}",
@@ -99,7 +100,7 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     ///     fn get_entry_point(&self, index : PipelineIndex) -> &str{todo!()}
     /// }
     ///  ```
-    fn load(&self, index: ShaderIndex) -> &str;
+    fn load(&self, index: ShaderIndex, defines : &[(&str, String)]) -> &str;
 
     /// Returns the entry point for this pipeline.
     /// A shader loader may handle multiple shader files with multiple entry points in each file;
@@ -238,14 +239,14 @@ impl ShaderLoaderCache {
         any.downcast_mut::<T>()
     }
 
-    pub fn get_shader(&self, shader: impl Into<ShaderIndex>) -> &str {
+    pub fn get_shader(&self, shader: impl Into<ShaderIndex>, defines : &[(&str, String)]) -> &str {
         let shader: ShaderIndex = shader.into();
         let loader: LoaderIndex = shader.into();
         self.loader[loader.0 as usize]
             .as_ref()
             .expect("expected loader to be added")
             .shader_loader
-            .load(shader)
+            .load(shader, defines)
     }
 
     pub fn get_shader_name(&self, shader: impl Into<ShaderIndex>) -> String {
@@ -323,7 +324,7 @@ mod tests
     }
 
     impl ShaderLoader for DynamicLoader {
-        fn load(&self, index: ShaderIndex) -> &str {
+        fn load(&self, index: ShaderIndex, _ : &[(&str, String)]) -> &str {
             let i = index.get_index();
             self.map
                 .get(&i)
@@ -348,7 +349,7 @@ mod tests
             let str1 = "@compute @workgroup_size(1) fn main() { }";
             let loader = cache.get_loader_mut::<DynamicLoader>(LoaderIndex(0)).unwrap();
             loader.insert(0, str1);
-            let shader_str = cache.get_shader(ShaderIndex::new(LoaderIndex(0), 0));
+            let shader_str = cache.get_shader(ShaderIndex::new(LoaderIndex(0), 0), &[]);
             assert_eq!(shader_str, str1);
         }
 
@@ -357,7 +358,7 @@ mod tests
             let str2 = "@compute @workgroup_size(1) fn main2() { }";
             let loader = cache.get_loader_mut::<DynamicLoader>(LoaderIndex(0)).unwrap();
             loader.insert(0, str2);
-            let shader_str = cache.get_shader(ShaderIndex::new(LoaderIndex(0), 0));
+            let shader_str = cache.get_shader(ShaderIndex::new(LoaderIndex(0), 0), &[]);
             assert_eq!(shader_str, str2);
         }
     }

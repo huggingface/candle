@@ -287,18 +287,19 @@ override USE_Z : bool = false;
 
 #define op_unary_operation         CONSTV_0
 
-#define op_unary_scalar1             bitcast<f32>(op_meta[0])
-#define op_unary_scalar2             bitcast<f32>(op_meta[1])
+LOAD_INFO_UNKNOWN_SIZE(op_unary, 2)
+#define op_unary_scalar1             bitcast<f32>(op_unary[0])
+#define op_unary_scalar2             bitcast<f32>(op_unary[1])
 #define op_unary_input1_layout       2u
 
-
+LOAD_INFO(op_unary_contiguous, 5)
 #define op_unary_contiguous_operation           CONSTV_0
 #define op_unary_contiguous_offset_is_zero      CONSTV_1
-#define op_unary_contiguous_scalar1             bitcast<f32>(op_meta[0])
-#define op_unary_contiguous_scalar2             bitcast<f32>(op_meta[1])
-#define op_unary_contiguous_length              op_meta[2]
-#define op_unary_contiguous_offset              select(op_meta[3], 0u,op_unary_contiguous_offset_is_zero) 
-#define op_unary_contiguous_seed                op_meta[4]
+#define op_unary_contiguous_scalar1             bitcast<f32>(op_unary_contiguous[0])
+#define op_unary_contiguous_scalar2             bitcast<f32>(op_unary_contiguous[1])
+#define op_unary_contiguous_length              op_unary_contiguous[2]
+#define op_unary_contiguous_offset              select(op_unary_contiguous[3], 0u,op_unary_contiguous_offset_is_zero) 
+#define op_unary_contiguous_seed                op_unary_contiguous[4]
 
 
 
@@ -306,9 +307,9 @@ override USE_Z : bool = false;
 @workgroup_size(64,1,1)
 fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
-    let pos1 = get_index1(op_unary_input1_layout, id);
-    if(pos1.is_valid){
-        let x = v_input1[pos1.id];
+    GET_INDEX1(op_unary,op_unary_input1_layout, id, pos1_is_valid, pos1_id)
+    if(pos1_is_valid){
+        let x = v_input1[pos1_id];
         set_unary(op_unary_operation,id, x, op_unary_scalar1, op_unary_scalar2);
     }
 }
@@ -379,9 +380,9 @@ fn const_inplace_contiguous_4(@builtin(global_invocation_id) global_id: vec3<u32
 @workgroup_size(64,1,1)
 fn const_inplace_non_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
-    let pos1 = get_index1(op_unary_input1_layout, id);
-    if(pos1.is_valid){
-        set_const(op_unary_contiguous_operation, pos1.id);
+    GET_INDEX1(op_unary,op_unary_input1_layout, id, pos1_is_valid, pos1_id)
+    if(pos1_is_valid){
+        set_const(op_unary_contiguous_operation, pos1_id);
     }
 }
 
@@ -389,10 +390,10 @@ fn const_inplace_non_contiguous(@builtin(global_invocation_id) global_id: vec3<u
 @workgroup_size(64,1,1)
 fn unary_inplace_non_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
-    let pos1 = get_index1(op_unary_input1_layout, id);
-    if(pos1.is_valid){
-        let x = v_dest[pos1.id];
-        set_unary(op_unary_operation, pos1.id, x, op_unary_scalar1, op_unary_scalar2);
+    GET_INDEX1(op_unary,op_unary_input1_layout, id, pos1_is_valid, pos1_id)
+    if(pos1_is_valid){
+        let x = v_dest[pos1_id];
+        set_unary(op_unary_operation, pos1_id, x, op_unary_scalar1, op_unary_scalar2);
     }
 }
 

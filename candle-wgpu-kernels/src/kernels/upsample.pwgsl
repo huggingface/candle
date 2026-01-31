@@ -1,18 +1,19 @@
 #include "util.pwgsl"
 
-#define op_upsample1d_target_length                 op_meta[0]
-#define op_upsample1d_input_size_batch              op_meta[1]
-#define op_upsample1d_input_size_channel            op_meta[2]
-#define op_upsample1d_input_size_x                  op_meta[3]
-#define op_upsample1d_input_offset                  op_meta[4]
+LOAD_INFO(op_upsample1d, 10)
+#define op_upsample1d_target_length                 op_upsample1d[0]
+#define op_upsample1d_input_size_batch              op_upsample1d[1]
+#define op_upsample1d_input_size_channel            op_upsample1d[2]
+#define op_upsample1d_input_size_x                  op_upsample1d[3]
+#define op_upsample1d_input_offset                  op_upsample1d[4]
 
-#define op_upsample1d_input_stride_batch            op_meta[5]
-#define op_upsample1d_input_stride_channel          op_meta[6]
-#define op_upsample1d_input_stride_x                op_meta[7]
+#define op_upsample1d_input_stride_batch            op_upsample1d[5]
+#define op_upsample1d_input_stride_channel          op_upsample1d[6]
+#define op_upsample1d_input_stride_x                op_upsample1d[7]
 
 
-#define op_upsample1d_output_stride_batch            op_meta[8]
-#define op_upsample1d_ouput_stride_channel          op_meta[9]
+#define op_upsample1d_output_stride_batch            op_upsample1d[8]
+#define op_upsample1d_ouput_stride_channel          op_upsample1d[9]
 
 
 
@@ -35,23 +36,23 @@ fn upsample1d(@builtin(global_invocation_id) global_id: vec3<u32>) {
     v_dest[index_input + op_upsample1d_output_stride_batch * index_batch + op_upsample1d_ouput_stride_channel * index_channel] = v_input1[index * op_upsample1d_input_stride_x + op_upsample1d_input_stride_channel * index_channel + op_upsample1d_input_stride_batch * index_batch + op_upsample1d_input_offset];
 }
 
-#define op_upsample2d_target_length_y               op_meta[0]
-#define op_upsample2d_target_length_x               op_meta[1]
-#define op_upsample2d_input_size_batch              op_meta[2]
-#define op_upsample2d_input_size_channel            op_meta[3]
-#define op_upsample2d_input_size_y                  op_meta[4]
-#define op_upsample2d_input_size_x                  op_meta[5]
-#define op_upsample2d_input_offset                  op_meta[6]
+LOAD_INFO(op_upsample2d, 14)
+#define op_upsample2d_target_length_y               op_upsample2d[0]
+#define op_upsample2d_target_length_x               op_upsample2d[1]
+#define op_upsample2d_input_size_batch              op_upsample2d[2]
+#define op_upsample2d_input_size_channel            op_upsample2d[3]
+#define op_upsample2d_input_size_y                  op_upsample2d[4]
+#define op_upsample2d_input_size_x                  op_upsample2d[5]
+#define op_upsample2d_input_offset                  op_upsample2d[6]
 
-#define op_upsample2d_input_stride_batch            op_meta[7]
-#define op_upsample2d_input_stride_channel          op_meta[8]
-#define op_upsample2d_input_stride_y                op_meta[9]
-#define op_upsample2d_input_stride_x                op_meta[10]
+#define op_upsample2d_input_stride_batch            op_upsample2d[7]
+#define op_upsample2d_input_stride_channel          op_upsample2d[8]
+#define op_upsample2d_input_stride_y                op_upsample2d[9]
+#define op_upsample2d_input_stride_x                op_upsample2d[10]
 
-
-#define op_upsample2d_output_stride_batch           op_meta[11]
-#define op_upsample2d_output_stride_channel          op_meta[12]
-#define op_upsample2d_output_stride_y                op_meta[13]
+#define op_upsample2d_output_stride_batch           op_upsample2d[11]
+#define op_upsample2d_output_stride_channel          op_upsample2d[12]
+#define op_upsample2d_output_stride_y                op_upsample2d[13]
 
 
 //(N, C, H, W) -> (N,C, H_out, W_out)
@@ -89,10 +90,10 @@ fn upsample2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 
+LOAD_INFO(op_bilinear2d, 11)
 @compute
 @workgroup_size(8, 8, 1)
 fn upsample_bilinear2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    // op_meta:
     // [0] = N
     // [1] = C
     // [2] = in_h
@@ -105,19 +106,19 @@ fn upsample_bilinear2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // [9] = scale_h (f32 bits)
     // [10] = scale_w (f32 bits)
 
-    let N = op_meta[0];
-    let C = op_meta[1];
-    let in_h = op_meta[2];
-    let in_w = op_meta[3];
-    let out_h = op_meta[4];
-    let out_w = op_meta[5];
-    let src_offset = op_meta[6];
-    let align_corners = op_meta[7];
-    let use_scale = op_meta[8];
+    let N = op_bilinear2d[0];
+    let C = op_bilinear2d[1];
+    let in_h = op_bilinear2d[2];
+    let in_w = op_bilinear2d[3];
+    let out_h = op_bilinear2d[4];
+    let out_w = op_bilinear2d[5];
+    let src_offset = op_bilinear2d[6];
+    let align_corners = op_bilinear2d[7];
+    let use_scale = op_bilinear2d[8];
 
     // Reinterpret scale bits
-    let scale_h: f32 = bitcast<f32>(op_meta[9]);
-    let scale_w: f32 = bitcast<f32>(op_meta[10]);
+    let scale_h: f32 = bitcast<f32>(op_bilinear2d[9]);
+    let scale_w: f32 = bitcast<f32>(op_bilinear2d[10]);
 
     let nc = global_id.x;    // 0 .. N*C-1
     let i = global_id.y;     // 0 .. out_h*out_w-1

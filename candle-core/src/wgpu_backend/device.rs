@@ -32,7 +32,7 @@ impl WgpuDevice {
     ) -> crate::Result<Self> {
         let device = wgpu_compute_layer::WgpuDevice::create_async(configuration.into()).await?;
         device.add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX, || {
-            candle_wgpu_kernels::DefaultWgpuShader{}
+            candle_wgpu_kernels::DefaultWgpuShader::new()
         });
         device.add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX, || {
             candle_wgpu_kernels::DefaultWgpuDynamicShader::new()

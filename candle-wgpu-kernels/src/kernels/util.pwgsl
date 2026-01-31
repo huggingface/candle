@@ -45,9 +45,7 @@ var<storage, read_write> v_dest_i64: array<i64>;
 var<storage, read_write> v_dest_f64: array<f64>;
 
 
-var<immediate> op_meta: array<u32, 16>;
-//@group(0) @binding(1)
-//var<storage> op_meta : array<u32>;
+
 
 
 @group(0) @binding(2)
@@ -169,81 +167,164 @@ fn float_to_half(x: f32) -> u32 {
     return u32(sign | normalized | denormalized | saturated);
 }
 
-override CONST_DIMS1 : u32 = 1u;
-override CONST_IS_CONTIGUOUS1 : bool = true;
-override CONST_IS_STARTOFFSET_ZERO1 : bool = true;
 
-override CONST_DIMS2 : u32 = 1u;
-override CONST_IS_CONTIGUOUS2 : bool = true;
-override CONST_IS_STARTOFFSET_ZERO2 : bool = true;
+#ifndef DEFINE_DIMS1
+#define DEFINE_DIMS1 0
+#endif
+#ifndef DEFINE_IS_CONTIGUOUS1
+#define DEFINE_IS_CONTIGUOUS1 1
+#endif
+#ifndef DEFINE_IS_STARTOFFSET_ZERO1
+#define DEFINE_IS_STARTOFFSET_ZERO1 1
+#endif
 
-override CONST_DIMS3 : u32 = 1u;
-override CONST_IS_CONTIGUOUS3 : bool = true;
-override CONST_IS_STARTOFFSET_ZERO3 : bool = true;
+#ifndef DEFINE_DIMS2
+#define DEFINE_DIMS2 0
+#endif
+#ifndef DEFINE_IS_CONTIGUOUS2
+#define DEFINE_IS_CONTIGUOUS2 1
+#endif
+#ifndef DEFINE_IS_STARTOFFSET_ZERO2
+#define DEFINE_IS_STARTOFFSET_ZERO2 1
+#endif
 
-fn get_index(input_offset : u32, index : u32, dims : u32, is_contiguous : bool, is_const_start_offset_zero : bool) -> MatrixIndex{
-    let start_offset = select(op_meta[input_offset], 0u,is_const_start_offset_zero);
-    let start_shape_offset = input_offset + select(1u, 0u,is_const_start_offset_zero);
+#ifndef DEFINE_DIMS3
+#define DEFINE_DIMS3 0
+#endif
+#ifndef DEFINE_IS_CONTIGUOUS3
+#define DEFINE_IS_CONTIGUOUS3 1
+#endif
+#ifndef DEFINE_IS_STARTOFFSET_ZERO3
+#define DEFINE_IS_STARTOFFSET_ZERO3 1
+#endif
 
-    if is_contiguous {
-        let length = op_meta[start_shape_offset];
-       
-        if index < length{
-            return MatrixIndex((start_offset + index), true);
-        }
-        return MatrixIndex(0, false);
-    }
-    else{
+#pp_begin GET_INDEX_IMPL(meta_buffer, input_offset, index, output_var_is_valid, output_var_index, dims, is_contiguous, is_const_start_offset_zero)
+
+#if dims > 0
+    #if is_const_start_offset_zero == 1
+        #define INPUT_OFFSET 0u
+        #define START_SHAPE_OFFSET input_offset
+    #else
+        #define INPUT_OFFSET meta_buffer[input_offset]
+        #definec START_SHAPE_OFFSET input_offset + 1u
+    #endif
+
+    #if is_contiguous == 1
+    #define INPUT_LENGTH meta_buffer[START_SHAPE_OFFSET]
+    
+    let output_var_is_valid = index < INPUT_LENGTH;
+    let output_var_index = INPUT_OFFSET + index;
+    #else
+    var output_var_is_valid : bool;
+    var output_var_index : u32;
+    {
         var shapes_i = 1u;
-        var new_index = start_offset;    
-        for (var i2 : i32 = i32(dims) - 1; i2 >= 0; i2--){
+        var new_index = INPUT_OFFSET;    
+        #definec LOOP_START_INDEX dims - 1
+        for (var i2 : i32 = i32(LOOP_START_INDEX); i2 >= 0; i2--){
             let i = u32(i2);
             let prev_shapes_i = shapes_i;
-            shapes_i *= op_meta[start_shape_offset + i]; 
+            shapes_i *= meta_buffer[START_SHAPE_OFFSET + i]; 
 
             let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
-            new_index += si * op_meta[start_shape_offset + dims + i]; //s_i * stride_i
+            new_index += si * meta_buffer[START_SHAPE_OFFSET + dims + i]; //s_i * stride_i
         }
-
-        if index >= shapes_i{ //in shapes_i is the length after the for loop
-            return MatrixIndex(0, false);
-        }
-
-        return MatrixIndex(new_index, true);
+        output_var_index = new_index;
+        output_var_is_valid = index < shapes_i;
     }
-}
+    #endif 
+#else
+    let output_var_is_valid = false;
+    let output_var_index = 0u;
+#endif
+#pp_end
 
-fn get_index1(input_offset : u32, index : u32) -> MatrixIndex{
-    return get_index(input_offset, index, CONST_DIMS1, CONST_IS_CONTIGUOUS1, CONST_IS_STARTOFFSET_ZERO1);
-}
 
-fn get_index2(input_offset : u32, index : u32) -> MatrixIndex{
-    return get_index(input_offset, index, CONST_DIMS2, CONST_IS_CONTIGUOUS2, CONST_IS_STARTOFFSET_ZERO2);
-}
 
-fn get_index3(input_offset : u32, index : u32) -> MatrixIndex{
-    return get_index(input_offset, index, CONST_DIMS3, CONST_IS_CONTIGUOUS3, CONST_IS_STARTOFFSET_ZERO3);
-}
 
-fn get_size(dims : u32, is_contiguous : bool, is_const_start_offset_zero : bool) -> u32{
-    let start_shape_size = select(1u, 0u,is_const_start_offset_zero);
-    if is_contiguous{ 
-        return start_shape_size + 1u;
-    }
-    else {
-        return start_shape_size + dims * 2;
-    }
-}
+#pp_begin GET_SIZE(dims, is_contiguous, is_const_start_offset_zero, RESULT_NAME)
+#if dims > 0
+    #if is_const_start_offset_zero == 1
+    #define START_SHAPE_SIZE 0
+    #else
+    #define START_SHAPE_SIZE 1
+    #endif
+
+    #if is_contiguous == 1
+    #definec RESULT_NAME START_SHAPE_SIZE + 1u
+    #else
+    #definec RESULT_NAME START_SHAPE_SIZE + dims * 2
+    #endif
+#else
+    #define RESULT_NAME 0
+#endif
+#pp_end
+
+GET_SIZE(DEFINE_DIMS1, DEFINE_IS_CONTIGUOUS1, DEFINE_IS_STARTOFFSET_ZERO1, GET_SIZE1_RESULT)
+GET_SIZE(DEFINE_DIMS2, DEFINE_IS_CONTIGUOUS2, DEFINE_IS_STARTOFFSET_ZERO2, GET_SIZE2_RESULT)
+GET_SIZE(DEFINE_DIMS3, DEFINE_IS_CONTIGUOUS3, DEFINE_IS_STARTOFFSET_ZERO3, GET_SIZE3_RESULT)
+
+
+#definec GET_TOTAL_SIZE_RETURN GET_SIZE1_RESULT + GET_SIZE2_RESULT + GET_SIZE3_RESULT
+
+
+
+#pp_begin GET_INDEX1(meta_buffer, input_offset, index, output_var_is_valid, output_var_index)
+GET_INDEX_IMPL(meta_buffer, input_offset, index, output_var_is_valid, output_var_index, DEFINE_DIMS1, DEFINE_IS_CONTIGUOUS1, DEFINE_IS_STARTOFFSET_ZERO1)
+#pp_end
+
+
+#pp_begin GET_INDEX2(meta_buffer, input_offset, index, output_var_is_valid, output_var_index)
+#definec INDEX_OFFSET2 input_offset + GET_SIZE1_RESULT
+GET_INDEX_IMPL(meta_buffer, INDEX_OFFSET2, index, output_var_is_valid, output_var_index, DEFINE_DIMS2, DEFINE_IS_CONTIGUOUS2, DEFINE_IS_STARTOFFSET_ZERO2)
+#pp_end
+
+#pp_begin GET_INDEX3(meta_buffer, input_offset, index, output_var_is_valid, output_var_index)
+#definec INDEX_OFFSET3 input_offset + GET_SIZE1_RESULT + GET_SIZE2_RESULT
+GET_INDEX_IMPL(meta_buffer, INDEX_OFFSET3, index, output_var_is_valid, output_var_index, DEFINE_DIMS3, DEFINE_IS_CONTIGUOUS3, DEFINE_IS_STARTOFFSET_ZERO3)
+#pp_end
+
+
+
+
+
+
+
+#define USE_IMMEDIATES
+
+#pp_begin LOAD_INFO (name, size)
+//here we might use immediates, or an extra buffer 
+#ifdef USE_IMMEDIATES
+var<immediate> name: array<u32, size>;
+#else 
+@group(0) @binding(1)
+var<storage> name: array<u32>;
+#endif
+#pp_end
+
+#pp_begin LOAD_INFO_UNKNOWN_SIZE(name, minsize)
+#definec LOAD_INFO_SIZE minsize + GET_TOTAL_SIZE_RETURN
+
+LOAD_INFO(name, LOAD_INFO_SIZE)
+#pp_end
+
+#pp_begin CONST_SELECT(FALSE, TRUE, CONDITION)
+#if CONDITION
+TRUE
+#else
+FALSE
+#endif
+#pp_end
 
 fn get_size1() -> u32{
-    return get_size(CONST_DIMS1, CONST_IS_CONTIGUOUS1, CONST_IS_STARTOFFSET_ZERO1);
+    return GET_SIZE1_RESULT;
 }
 
 fn get_size2() -> u32{
-    return get_size(CONST_DIMS2, CONST_IS_CONTIGUOUS2, CONST_IS_STARTOFFSET_ZERO2);
+    return GET_SIZE2_RESULT;
 }
 
 fn get_size3() -> u32{
-    return get_size(CONST_DIMS3, CONST_IS_CONTIGUOUS3, CONST_IS_STARTOFFSET_ZERO3);
+    return GET_SIZE3_RESULT;
 }
 #endif

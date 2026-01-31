@@ -21,16 +21,17 @@ override CONSTV_8:u32 = 1u;
 #define op_conv1d_b              CONSTV_7
 #define op_conv1d_c_in           CONSTV_8
 
-#define op_conv1d_kernel_c_stride   op_meta[0]
-#define op_conv1d_kernel_b_stride   op_meta[1]
-#define op_conv1d_kernel_offset     op_meta[2]
-#define op_conv1d_size_in         op_meta[3]
-#define op_conv1d_stride_batch_out  op_meta[4]
-#define op_conv1d_stride_c_out      op_meta[5]
-#define op_conv1d_size_out        op_meta[6]
+LOAD_INFO(op_conv1d, 9)
+#define op_conv1d_kernel_c_stride   op_conv1d[0]
+#define op_conv1d_kernel_b_stride   op_conv1d[1]
+#define op_conv1d_kernel_offset     op_conv1d[2]
+#define op_conv1d_size_in         op_conv1d[3]
+#define op_conv1d_stride_batch_out  op_conv1d[4]
+#define op_conv1d_stride_c_out      op_conv1d[5]
+#define op_conv1d_size_out        op_conv1d[6]
 
-#define op_conv1d_stride_batch_input op_meta[7]
-#define op_conv1d_stride_c_in       op_meta[8]
+#define op_conv1d_stride_batch_input op_conv1d[7]
+#define op_conv1d_stride_c_in       op_conv1d[8]
 
 
 //(N, C_IN, L) CONV (C_IN, K_size) = (N,C_OUT, L_OUT)

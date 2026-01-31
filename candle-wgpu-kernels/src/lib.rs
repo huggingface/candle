@@ -24,6 +24,7 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::mem;
 use std::path::{Path, PathBuf};
 
 pub use generated::kernels::*;
@@ -56,14 +57,45 @@ impl From<Constants> for KernelConstId {
 }
 
 #[derive(Debug)]
-pub struct DefaultWgpuShader {}
+pub struct DefaultWgpuShader {
+    shader_store: ShaderStore, // build-time embedded shaders
+}
+
+impl DefaultWgpuShader{
+    pub fn new() -> Self {
+        DefaultWgpuShader {
+            shader_store: embedded_shader_store(),
+        }
+    }
+}
 
 create_loader!(DefaultWgpuShader);
 
 impl ShaderLoader for DefaultWgpuShader {
-    fn load(&self, index: ShaderIndex) -> &str {
+    fn load(&self, index: ShaderIndex, defines : &[(& str, String)]) -> &str {
         let shader: Shaders = index.into();
-        shader.load_shader()
+        let path = shader.load_shader();
+        let typ : crate::DType = shader.get_type();
+
+        let mut state_defines = HashMap::new();
+        for define in defines{
+            state_defines.insert(define.0.to_string(), DefineDefinition::new(define.1.clone()));
+        }
+        let typ_define_str = match typ{
+            DType::F32 => "f32",
+            DType::U32 => "u32",
+            DType::U8 => "u8",
+            DType::I64 => "i64",
+            DType::F64 => "f64",
+            DType::F16 => "f16",
+        };
+        state_defines.insert(typ_define_str.to_string(), DefineDefinition::new(typ_define_str.to_string()));
+        
+        let mut parse_state = ParseState::new();
+        parse_state.set_path(PathBuf::from(path));
+        parse_state.set_defines(state_defines.clone().into_iter().collect());
+        let processed = shader_loader::load_shader(&mut parse_state, &self.shader_store);
+        Box::leak(processed.into_boxed_str())
     }
 
     fn get_entry_point(&self, index: PipelineIndex) -> &str {
@@ -368,7 +400,7 @@ impl Default for DefaultWgpuDynamicShader {
 }
 
 impl ShaderLoader for DefaultWgpuDynamicShader {
-    fn load(&self, index: ShaderIndex) -> &str {
+    fn load(&self, index: ShaderIndex, _ : &[(&str, String)]) -> &str {
         let ShaderIndex(_, shader_id) = index;
         &self.shader_cache[shader_id as usize].dynamic_shader
     }

@@ -13,8 +13,9 @@ var<workgroup> sharedM: f32;
 
 override USE_Z : bool = false;
 
-#define op_softmax_length                       op_meta[0]
-#define op_softmax_dest_size                    op_meta[1]
+LOAD_INFO(op_softmax, 2)
+#define op_softmax_length                       op_softmax[0]
+#define op_softmax_dest_size                    op_softmax[1]
 
 @compute
 @workgroup_size(64,1,1)

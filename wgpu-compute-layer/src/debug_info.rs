@@ -312,6 +312,7 @@ struct DispatchJson<'a> {
     y: u32,
     z: u32,
     meta: &'a [u32],
+    defines:  &'a [(&'a str, String)],
     const_array: &'a [(&'a str, f64)],
     v_dest: ArrayRef<'a>,
     v_input1: Option<ArrayRef<'a>>,
@@ -377,15 +378,17 @@ pub(crate) fn create_dispatch_zip(wgpu: &WgpuDevice, output_path: &str) -> crate
     let queue: std::sync::MutexGuard<'_, super::queue_buffer::QueueBufferInner> =
         wgpu.command_queue.lock().unwrap();
     let consts = &queue.id_to_const_array;
-
+    let defines = &queue.id_to_defines_array;
     for (i, dispatch) in dispatches.iter().enumerate() {
         let base = format!("dispatch_{}/", i);
+
+        let define = &defines[dispatch.recording.pipeline.defines_index][..];
 
         // shader.wgsl
         zip.start_file(format!("{base}shader.wgsl"), options)?;
         zip.write_all(
             loader_cache
-                .get_shader(dispatch.recording.pipeline.0.get_shader())
+                .get_shader(dispatch.recording.pipeline.index.get_shader(), define)
                 .as_bytes(),
         )?;
 
@@ -411,14 +414,15 @@ pub(crate) fn create_dispatch_zip(wgpu: &WgpuDevice, output_path: &str) -> crate
 
         // dispatch.json
         let json = DispatchJson {
-            compute_entry_point: loader_cache.get_entry_point(dispatch.recording.pipeline.0),
+            compute_entry_point: loader_cache.get_entry_point(dispatch.recording.pipeline.index),
             shader_debug_name: &loader_cache
-                .get_shader_name(dispatch.recording.pipeline.0.get_shader()),
+                .get_shader_name(dispatch.recording.pipeline.index.get_shader()),
             x: dispatch.recording.x,
             y: dispatch.recording.y,
             z: dispatch.recording.z,
             meta: &dispatch.recording.meta,
-            const_array: &consts[dispatch.recording.pipeline.1][..],
+            defines: &defines[dispatch.recording.pipeline.defines_index][..],
+            const_array: &consts[dispatch.recording.pipeline.const_index][..],
             v_dest: ArrayRef {
                 ty: array_type_name(&dispatch.v_dest),
                 file: "v_dest.bin",

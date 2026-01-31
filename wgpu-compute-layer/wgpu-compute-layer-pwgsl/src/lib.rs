@@ -799,11 +799,12 @@ pub mod shader_loader {
                             let result_exp = match result_exp {
                                 Ok(val) => val,
                                 Err(e) => panic!(
-                                    r#"definec failed!: 
+                                    r#"definec failed for '{}': 
                                 File: '{}', 
-                                Condition: '{}', 
+                                Expression: '{}', 
                                 Expanded:'{}'
                                 Error: '{:?}')"#,
+                                    key,
                                     state.path.display(),
                                     value.replace("\n", "").replace("\r", ""),
                                     condition_parsed.replace("\n", "").replace("\r", ""),

@@ -3,16 +3,17 @@
 override CONSTV_0 : u32 = 0u;
 override CONSTV_1 : u32 = 1u;
 
+LOAD_INFO_UNKNOWN_SIZE(op_reduce, 5)
 #define op_reduce_operation                     CONSTV_0
-#define op_reduce_length                        op_meta[0]
+#define op_reduce_length                        op_reduce[0]
 
 #define op_reduce_workgroup_count               min(64u, op_reduce_length)
 
-#define op_reduce_output_to_start_stride1       op_meta[1]
-#define op_reduce_output_to_start_shape_stride2 op_meta[2]
-#define op_reduce_output_to_start_stride2       op_meta[3]
+#define op_reduce_output_to_start_stride1       op_reduce[1]
+#define op_reduce_output_to_start_shape_stride2 op_reduce[2]
+#define op_reduce_output_to_start_stride2       op_reduce[3]
 #define op_reduce_stride_reduction              CONSTV_1
-#define op_reduce_dest_size                     op_meta[4]
+#define op_reduce_dest_size                     op_reduce[4]
 #define op_reduce_input_layout                  5u
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
@@ -50,7 +51,8 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_in
             case 0u{ //sum
                 var sum = ZERO;
                 for (var i = tid; i < length; i += 64u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    let index = pos1_id;
                     sum += v_input1[index];
                 }
                 sharedSums[tid] = sum;
@@ -58,7 +60,8 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_in
             case 1u{ //min
                 var sum = MAXVALUE;
                 for (var i = tid; i < length; i += 64u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    let index = pos1_id;
                     sum = min(sum, v_input1[index]);
                 }
                 sharedSums[tid] = sum;
@@ -66,8 +69,8 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_in
             case 2u{ //max
                 var sum = MINVALUE;
                 for (var i = tid; i < length; i += 64u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
-                    sum = max(sum, v_input1[index]);
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    sum = max(sum, v_input1[pos1_id]);
                 }
                 sharedSums[tid] = sum;
             }
@@ -143,7 +146,8 @@ fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(lo
                 var arg_index = 0u;
                 
                 for (var i = tid; i < length; i += 64u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    let index = pos1_id;
                     if v_input1[index] < sum{
                         sum = v_input1[index];
                         arg_index = i;
@@ -156,7 +160,8 @@ fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(lo
                 var sum = MINVALUE;
                 var arg_index = 0u;
                 for (var i = tid; i < length; i += 64u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    let index = pos1_id;
                     if v_input1[index] > sum{
                         sum = v_input1[index];
                         arg_index = i;
@@ -232,7 +237,8 @@ fn reduce_small(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(lo
             case 0u{ //sum
                 var sum = ZERO;
                 for (var i = 0u; i < length; i += 1u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    let index = pos1_id;
                     sum += v_input1[index];
                 }
                 v_dest[output_index] = sum;
@@ -240,7 +246,8 @@ fn reduce_small(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(lo
             case 1u{ //min
                 var sum = MAXVALUE;
                 for (var i = 0u; i < length; i += 1u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    let index = pos1_id;
                     sum = min(sum, v_input1[index]);
                 }
                 v_dest[output_index] = sum;
@@ -248,7 +255,8 @@ fn reduce_small(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(lo
             case 2u{ //max
                 var sum = MINVALUE;
                 for (var i = 0u; i < length; i += 1u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    let index = pos1_id;
                     sum = max(sum, v_input1[index]);
                 }
                 v_dest[output_index] = sum;
@@ -285,7 +293,8 @@ fn reduce_index_small(@builtin(global_invocation_id) global_id: vec3<u32>, @buil
                 var arg_index = 0u;
                 
                 for (var i = 0u; i < length; i += 1u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    let index = pos1_id;
                     if v_input1[index] < sum{
                         sum = v_input1[index];
                         arg_index = i;
@@ -297,7 +306,8 @@ fn reduce_index_small(@builtin(global_invocation_id) global_id: vec3<u32>, @buil
                 var sum = MINVALUE;
                 var arg_index = 0u;
                 for (var i = 0u; i < length; i += 1u) {
-                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
+                    GET_INDEX1(op_reduce,op_reduce_input_layout,  start_index + i * op_reduce_stride_reduction, pos1_is_valid, pos1_id)
+                    let index = pos1_id;
                     if v_input1[index] > sum{
                         sum = v_input1[index];
                         arg_index = i;

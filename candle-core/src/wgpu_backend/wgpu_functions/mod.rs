@@ -149,24 +149,24 @@ fn add_layout<'a>(
     queue: &mut QueueBuffer<'a>,
     layout: &Layout,
     is_contiguous: bool,
-    constant_dims: Constants,
-    constant_is_startofsset_zero: Constants,
-    constant_is_contiguous: Constants,
+    constant_dims: &'static str,
+    constant_is_startofsset_zero: &'static str,
+    constant_is_contiguous: &'static str
 ) {
     let layout= normalize_layout(layout);
     let shape = layout.shape().dims();
     let stride = layout.stride();
-
-    queue.add_const(constant_dims, shape.len());
+    queue.add_define(constant_dims, shape.len().to_string());
+  
     if layout.start_offset() != 0 {
-        queue.add_const(constant_is_startofsset_zero, false);
+        queue.add_define(constant_is_startofsset_zero, "0");
         queue.add(layout.start_offset());
     }
 
     if is_contiguous {
         queue.add(layout.shape().elem_count());
     } else {
-        queue.add_const(constant_is_contiguous, false);
+        queue.add_define(constant_is_contiguous, "0");
 
         queue.get_meta_mut().extend(shape.iter().map(|&x| x as u32));
         queue.get_meta_mut().extend(stride.iter().map(|&x| x as u32));
@@ -179,9 +179,9 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            layout.is_contiguous(),
-           Constants::ConstDims1,
-           Constants::ConstIsStartoffsetZero1,
-           Constants::ConstIsContiguous1,
+           "DEFINE_DIMS1",
+           "DEFINE_IS_STARTOFFSET_ZERO1",
+           "DEFINE_IS_CONTIGUOUS1",
        );
     }
 
@@ -189,9 +189,9 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            layout.is_contiguous(),
-           Constants::ConstDims2,
-           Constants::ConstIsStartoffsetZero2,
-           Constants::ConstIsContiguous2,
+            "DEFINE_DIMS2",
+           "DEFINE_IS_STARTOFFSET_ZERO2",
+           "DEFINE_IS_CONTIGUOUS2",
        );
     }
 
@@ -199,9 +199,9 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            layout.is_contiguous(),
-           Constants::ConstDims3,
-           Constants::ConstIsStartoffsetZero3,
-           Constants::ConstIsContiguous3,
+            "DEFINE_DIMS3",
+           "DEFINE_IS_STARTOFFSET_ZERO3",
+           "DEFINE_IS_CONTIGUOUS3",
        );
     }
     
@@ -209,9 +209,9 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            false,
-           Constants::ConstDims1,
-           Constants::ConstIsStartoffsetZero1,
-           Constants::ConstIsContiguous1,
+          "DEFINE_DIMS1",
+           "DEFINE_IS_STARTOFFSET_ZERO1",
+           "DEFINE_IS_CONTIGUOUS1",
        );
     }
 
@@ -219,9 +219,9 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            false,
-           Constants::ConstDims2,
-           Constants::ConstIsStartoffsetZero2,
-           Constants::ConstIsContiguous2,
+            "DEFINE_DIMS2",
+           "DEFINE_IS_STARTOFFSET_ZERO2",
+           "DEFINE_IS_CONTIGUOUS2",
        );
     }
 
@@ -229,9 +229,9 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            false,
-           Constants::ConstDims3,
-           Constants::ConstIsStartoffsetZero3,
-           Constants::ConstIsContiguous3,
+            "DEFINE_DIMS3",
+           "DEFINE_IS_STARTOFFSET_ZERO3",
+           "DEFINE_IS_CONTIGUOUS3",
        );
     }
 

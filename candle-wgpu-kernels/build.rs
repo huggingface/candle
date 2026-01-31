@@ -127,14 +127,7 @@ pub fn main() {
             let functions : Vec<String> = global_functions.iter().map(|(key, _)| to_upper_camel_case(key)).collect();
 
             let functions_match : Vec<String> = global_functions.iter().map(|(key, value)| format!("Functions::{} => \"{}\"", to_upper_camel_case(key), value)).collect();
-            
-            let mut include_code = available_types.iter().map(|available_type|{
-                format!("crate::DType::{} => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_{available_type}.wgsl\")", available_type.to_uppercase())
-            }).collect::<Vec<_>>().join(",");
-            if available_types.len() != TYPES.len(){
-                include_code += ",\n\t\t_=> todo!(\"the type {typ:?} is not implemented for \")";
-            }
-
+            let include_code = format!("\"{relativ_path}/{original_file_name}\"");
             let content =  
             format!("pub mod {parent_name} {{
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -162,10 +155,8 @@ pub fn main() {
             }} 
         }}
 
-        pub fn load_shader(typ : crate::DType) -> &'static str {{
-            match typ{{
-                {include_code}
-            }}
+        pub fn load_shader() -> &'static str {{
+            {include_code}
         }}
     }}
         ", functions.join(","), functions_match.join(","), 
@@ -216,6 +207,16 @@ for (m, _, _) in modules.iter(){
 }
 shader_content.push('}');
 
+shader_content.push_str(&format!("
+impl Shaders{{
+    pub fn get_type(&self) -> crate::DType{{
+        match self{{
+{}
+        }}
+    }}
+}}
+", modules.iter().map(|(m, _, _)| format!("\tShaders::{}(typ) => typ.clone()", to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n")));
+
 shader_content.push_str(
     &format!("
 impl Pipelines {{
@@ -233,7 +234,7 @@ impl Pipelines {{
 }} 
 ",
 modules.iter().map(|(m, _, _)| format!("\t\t\tPipelines::{}(typ, _) => Shaders::{}(typ.clone())", to_upper_camel_case(m), to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n"),
-modules.iter().map(|(m, path, _)| format!("\t\tPipelines::{}(typ, _) => {}{}::load_shader(typ.clone())", to_upper_camel_case(m),change_path(path), m)).collect::<Vec<String>>().join(",\n")
+modules.iter().map(|(m, path, _)| format!("\t\tPipelines::{}(_, _) => {}{}::load_shader()", to_upper_camel_case(m),change_path(path), m)).collect::<Vec<String>>().join(",\n")
 ));
 
 
@@ -308,12 +309,6 @@ modules.iter().enumerate().map(|(i, (m, path, _))| format!("\t\t\t{i} => Pipelin
 shader_content.push_str(
     &format!("
 impl Shaders {{
-    pub fn get_shader(&self) -> Shaders{{
-        match self{{
-{}
-        }}
-    }}
-
     pub fn load_shader(&self) -> &'static str{{
         match self{{
 {}        
@@ -321,8 +316,8 @@ impl Shaders {{
     }}
 }} 
 ",
-modules.iter().map(|(m, _, _)| format!("\t\t\tShaders::{}(typ) => Shaders::{}(typ.clone())", to_upper_camel_case(m), to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n"),
-modules.iter().map(|(m, path, _)| format!("\t\tShaders::{}(typ) => {}{}::load_shader(typ.clone())", to_upper_camel_case(m),change_path(path), m)).collect::<Vec<String>>().join(",\n")
+//modules.iter().map(|(m, _, _)| format!("\t\t\tShaders::{}(_) => Shaders::{}()", to_upper_camel_case(m), to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n"),
+modules.iter().map(|(m, path, _)| format!("\t\tShaders::{}(_) => {}{}::load_shader()", to_upper_camel_case(m),change_path(path), m)).collect::<Vec<String>>().join(",\n")
 ));
 
 

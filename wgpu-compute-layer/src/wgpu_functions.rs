@@ -263,9 +263,9 @@ fn get_command_buffer(
                         let span1 = span!(Level::INFO, "Set Pipeline");
                         let _enter1 = span1.enter();
 
-                        if last_pipeline != Some((q.pipeline.0, q.pipeline.1)) {
+                        if last_pipeline != Some((q.pipeline.index, q.pipeline.const_index, q.pipeline.defines_index)) {
                             cpass.set_pipeline(pipeline);
-                            last_pipeline = Some((q.pipeline.0, q.pipeline.1));
+                            last_pipeline = Some((q.pipeline.index, q.pipeline.const_index, q.pipeline.defines_index));
                         }
 
                         drop(_enter1);
@@ -343,8 +343,8 @@ fn get_command_buffer(
                                         cache
                                             .shader
                                             .loader_cache
-                                            .get_shader_name(q.pipeline.0.get_shader()),
-                                        cache.shader.loader_cache.get_entry_point(q.pipeline.0),
+                                            .get_shader_name(q.pipeline.index.get_shader()),
+                                        cache.shader.loader_cache.get_entry_point(q.pipeline.index),
                                         q.debug.to_owned().map_or("".to_string(), |s| s)
                                     ),
                                     workload_size: q.workload_size as u64,
@@ -593,14 +593,14 @@ fn set_buffers(
 
                 let bindgroup_reference = &q.bindgroup;
 
-                if q.pipeline.2.input1_inplaceable || q.pipeline.2.input2_inplaceable {
-                    let loader = q.pipeline.0.get_shader().get_loader();
+                if q.pipeline.inplaceable.input1_inplaceable || q.pipeline.inplaceable.input2_inplaceable {
+                    let loader = q.pipeline.index.get_shader().get_loader();
                     if let Some(plan) = cache.shader.loader_cache.rewrite_plan(
                         loader,
                         crate::shader_loader::InplaceRewriteDesc {
-                            pipeline: q.pipeline.0,
+                            pipeline: q.pipeline.index,
                             bindgroup: &q.bindgroup,
-                            inplace_flags: q.pipeline.2,
+                            inplace_flags: q.pipeline.inplaceable,
                         },
                     ) {
                         match plan {
@@ -631,7 +631,7 @@ fn set_buffers(
                                             cache.binary_inplace_counter += 1;
                                         }
                                         input_replaced_buffer = *vinput_id;
-                                        q.pipeline.0 = new_pipeline;
+                                        q.pipeline.index = new_pipeline;
                                         q.bindgroup = new_bindgroup;
                                     }
                                 }
@@ -743,11 +743,12 @@ fn set_buffers(
                         }
                     };
 
-                    let consts = &command_buffer.id_to_const_array[q.pipeline.1];
+                    let consts = &command_buffer.id_to_const_array[q.pipeline.const_index];
+                    let defines = &command_buffer.id_to_defines_array[q.pipeline.defines_index];
                     let pipeline =
                         cache
                             .shader
-                            .get_pipeline(&dev.device, &q.pipeline, pl, consts)?;
+                            .get_pipeline(&dev.device, &q.pipeline, pl, consts, q.pipeline.defines_index as u32, defines)?;
 
                     let bindgroup =
                         cache.get_bind_group(dev, &q.bindgroup, q.pipeline.clone(), command_index);
@@ -1045,7 +1046,7 @@ fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: 
                     _cache
                         .shader
                         .loader_cache
-                        .normalize_debug_meta(q.pipeline.0, &mut meta);
+                        .normalize_debug_meta(q.pipeline.index, &mut meta);
 
                     let debug_info = crate::device::DebugPipelineRecording {
                         x: q.x,

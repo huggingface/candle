@@ -19,26 +19,27 @@ override CONSTV_9:u32 = 1u;
 #define op_conv2d_b              CONSTV_5
 #define op_conv2d_c_in           CONSTV_6
 
-#define op_conv2d_offset_input   op_meta[0]
-#define op_conv2d_kernel_y_stride   op_meta[1]
-#define op_conv2d_kernel_c_stride   op_meta[2]
-#define op_conv2d_kernel_b_stride   op_meta[3]
-#define op_conv2d_kernel_offset     op_meta[4]
+LOAD_INFO(op_conv2d, 17)
+#define op_conv2d_offset_input   op_conv2d[0]
+#define op_conv2d_kernel_y_stride   op_conv2d[1]
+#define op_conv2d_kernel_c_stride   op_conv2d[2]
+#define op_conv2d_kernel_b_stride   op_conv2d[3]
+#define op_conv2d_kernel_offset     op_conv2d[4]
 
 #define op_conv2d_size_in_x         CONSTV_7
 #define op_conv2d_size_in_y         CONSTV_8
 
-#define op_conv2d_stride_batch_out  op_meta[7]
-#define op_conv2d_stride_c_out      op_meta[8]
-#define op_conv2d_stride_y_out      op_meta[9]
-#define op_conv2d_size_y_out        op_meta[10]
+#define op_conv2d_stride_batch_out  op_conv2d[7]
+#define op_conv2d_stride_c_out      op_conv2d[8]
+#define op_conv2d_stride_y_out      op_conv2d[9]
+#define op_conv2d_size_y_out        op_conv2d[10]
 
-#define op_conv2d_stride_batch_input op_meta[11]
-#define op_conv2d_stride_c_in        op_meta[12]
-#define op_conv2d_stride_y_in        op_meta[13]
-#define op_conv2d_padding           op_meta[14]
-#define op_conv2d_stride_conv       op_meta[15]
-#define op_conv2d_c_out             op_meta[16]
+#define op_conv2d_stride_batch_input op_conv2d[11]
+#define op_conv2d_stride_c_in        op_conv2d[12]
+#define op_conv2d_stride_y_in        op_conv2d[13]
+#define op_conv2d_padding           op_conv2d[14]
+#define op_conv2d_stride_conv       op_conv2d[15]
+#define op_conv2d_c_out             op_conv2d[16]
 
 
 //(N, C_IN, H, W) CONV (C_IN, K_H, K_W) = (N,C_OUT, H_OUT, W_OUT)
@@ -996,19 +997,20 @@ fn conv2d_2(@builtin(global_invocation_id) global_id: vec3<u32>,@builtin(local_i
 #define op_im2col_input_offset_is_zero    CONSTV_5
 
 
-#define op_im2col_dst_numel       op_meta[0]
-#define op_im2col_h_out           op_meta[1]
-#define op_im2col_w_out           op_meta[2]
+LOAD_INFO(op_im2col, 11)
+#define op_im2col_dst_numel       op_im2col[0]
+#define op_im2col_h_out           op_im2col[1]
+#define op_im2col_w_out           op_im2col[2]
 
-//#define op_im2col_b_size          op_meta[3]
-#define op_im2col_c_in            op_meta[3]
-#define op_im2col_h_in            op_meta[4]
-#define op_im2col_w_in            op_meta[5]
-#define op_im2col_src_s0          op_meta[6]
-#define op_im2col_src_s1          op_meta[7]
-#define op_im2col_src_s2          op_meta[8]
-#define op_im2col_src_s3          op_meta[9]
-#define op_im2col_input_offset          select(op_meta[10], 0u,op_im2col_input_offset_is_zero == 1)
+//#define op_im2col_b_size          op_im2col[3]
+#define op_im2col_c_in            op_im2col[3]
+#define op_im2col_h_in            op_im2col[4]
+#define op_im2col_w_in            op_im2col[5]
+#define op_im2col_src_s0          op_im2col[6]
+#define op_im2col_src_s1          op_im2col[7]
+#define op_im2col_src_s2          op_im2col[8]
+#define op_im2col_src_s3          op_im2col[9]
+#define op_im2col_input_offset          select(op_im2col[10], 0u,op_im2col_input_offset_is_zero == 1)
 
 @compute @workgroup_size(256)
 fn im2col(@builtin(global_invocation_id) global_id : vec3<u32>) {

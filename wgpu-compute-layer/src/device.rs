@@ -753,12 +753,12 @@ impl WgpuDevice {
             .map(|(k, v)| {
                 let pipelines = &v.pipelines;
                 let s = debug_info::ShaderInfo {
-                    name: shaders.loader_cache.get_shader_name(*k),
+                    name: shaders.loader_cache.get_shader_name(*k.0),
                     pipelines: pipelines
                         .keys()
                         .map(|pk| debug_info::PipelineInfo {
-                            name: shaders.loader_cache.get_entry_point(pk.0).to_owned(),
-                            consts: queue.id_to_const_array[pk.1]
+                            name: shaders.loader_cache.get_entry_point(pk.index).to_owned(),
+                            consts: queue.id_to_const_array[pk.const_index]
                                 .iter()
                                 .map(|(s, x)| (s.to_string(), *x))
                                 .collect(),

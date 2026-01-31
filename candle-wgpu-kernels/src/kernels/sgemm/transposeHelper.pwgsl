@@ -5,10 +5,11 @@ override CONSTV_0 : bool = true;
 override CONSTV_1 : bool = true;
 
 var<workgroup> tile: array<array<DTYPE, TILE_DIM>, TILE_DIM>;
-#define op_transpose_width          op_meta[0]
-#define op_transpose_height         op_meta[1]
-#define op_transpose_input_offset   op_meta[2]
-#define op_transpose_batch_stride   op_meta[3]
+LOAD_INFO(op_transpose, 4)
+#define op_transpose_width          op_transpose[0]
+#define op_transpose_height         op_transpose[1]
+#define op_transpose_input_offset   op_transpose[2]
+#define op_transpose_batch_stride   op_transpose[3]
 
 #define op_transpose_use_batch    CONSTV_0
 #define op_transpose_input_offset_is_zero CONSTV_1

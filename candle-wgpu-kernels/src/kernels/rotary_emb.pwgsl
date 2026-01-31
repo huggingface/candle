@@ -4,37 +4,23 @@
 //
 // Buffers:
 // @group(0) @binding(0) var<storage, read_write> v_dest: array<DTYPE>;   // output (same layout as src)
-// @group(0) @binding(1) var<storage> op_meta : array<u32>;             // small parameter list
 // @group(0) @binding(2) var<storage> v_input1: array<DTYPE>;           // src (s1)
 // @group(0) @binding(3) var<storage> v_input2: array<DTYPE>;           // cos  (s2)
 // @group(0) @binding(4) var<storage> v_input3: array<DTYPE>;           // sin  (s3)
-//
-// op_meta layout (u32):
-// [0] = B         // batch
-// [1] = H         // heads
-// [2] = T         // tokens / seq length
-// [3] = D         // head dim (must be even; interleaved x0/x1 pairs -> D/2 pairs)
-// [4] = unbatched_rope  // 0 => batched rope (shared across batches), 1 => unbatched rope (separate per batch)
-//
-// Work distribution:
-//   global_invocation_id.x -> bh_index  (0..B*H-1)  (flattened batch*head)
-//   global_invocation_id.y -> i_over_2   (0..T * (D/2) - 1)  (flat over tokens * pair-index)
-//   z dimension left unused (1)
-
 override CONSTV_0 : u32 = 0u;
 
+LOAD_INFO(op_rotary, 7)
 @compute
 @workgroup_size(8,8,1)
 fn rotary_emb_i(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    // read op_meta
-    let B = op_meta[0];
-    let H = op_meta[1];
-    let T = op_meta[2];
-    let D = op_meta[3];
+    let B = op_rotary[0];
+    let H = op_rotary[1];
+    let T = op_rotary[2];
+    let D = op_rotary[3];
 
-    let src_offset = op_meta[4];
-    let cos_offset = op_meta[5];
-    let sin_offset = op_meta[6];
+    let src_offset = op_rotary[4];
+    let cos_offset = op_rotary[5];
+    let sin_offset = op_rotary[6];
 
     let unbatched = CONSTV_0;
 
@@ -98,15 +84,14 @@ fn rotary_emb_i(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute
 @workgroup_size(8, 8, 1)
 fn rotary_emb_c(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    // read op_meta
-    let B = op_meta[0];
-    let H = op_meta[1];
-    let T = op_meta[2];
-    let D = op_meta[3];
+    let B = op_rotary[0];
+    let H = op_rotary[1];
+    let T = op_rotary[2];
+    let D = op_rotary[3];
 
-    let src_offset = op_meta[4];
-    let cos_offset = op_meta[5];
-    let sin_offset = op_meta[6];
+    let src_offset = op_rotary[4];
+    let cos_offset = op_rotary[5];
+    let sin_offset = op_rotary[6];
 
     let unbatched = CONSTV_0;
 
@@ -166,15 +151,14 @@ fn rotary_emb_c(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute
 @workgroup_size(8, 8, 1)
 fn rotary_emb_thd(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    // read op_meta
-    let B = op_meta[0];
-    let H = op_meta[1];
-    let T = op_meta[2];
-    let D = op_meta[3];
+    let B = op_rotary[0];
+    let H = op_rotary[1];
+    let T = op_rotary[2];
+    let D = op_rotary[3];
 
-    let src_offset = op_meta[4];
-    let cos_offset = op_meta[5];
-    let sin_offset = op_meta[6];
+    let src_offset = op_rotary[4];
+    let cos_offset = op_rotary[5];
+    let sin_offset = op_rotary[6];
     
     let unbatched = CONSTV_0;
 

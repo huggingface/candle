@@ -1,12 +1,14 @@
 #include "util.pwgsl"
 
-#define oop_rms_norm_contiguous_workgroup_count              op_meta[0]
-#define oop_rms_norm_contiguous_workgroup_size               op_meta[1]
-#define oop_rms_norm_contiguous_length                       op_meta[2]
-#define oop_rms_norm_contiguous_input1_offset                op_meta[3]
-#define oop_rms_norm_contiguous_input2_offset                op_meta[4]
-#define oop_rms_norm_contiguous_eps                          bitcast<f32>(op_meta[5])
+LOAD_INFO(op_rms_norm, 7)
+#define oop_rms_norm_contiguous_workgroup_count              op_rms_norm[0]
+#define oop_rms_norm_contiguous_workgroup_size               op_rms_norm[1]
+#define oop_rms_norm_contiguous_length                       op_rms_norm[2]
+#define oop_rms_norm_contiguous_input1_offset                op_rms_norm[3]
+#define oop_rms_norm_contiguous_input2_offset                op_rms_norm[4]
+#define oop_rms_norm_contiguous_eps                          bitcast<f32>(op_rms_norm[5])
 
+#define oop_rms_norm_contiguous_input3_offset                op_rms_norm[6]
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 var<workgroup> sharedMean: f32; 
 var<workgroup> sharedNorm: f32; 
@@ -65,7 +67,6 @@ fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgrou
 
 }
 
-#define oop_rms_norm_contiguous_input3_offset                op_meta[6]
 
 var<workgroup> sharedSumsSquared: array<DTYPE, 64>; 
 

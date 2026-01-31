@@ -18,7 +18,7 @@ fn create_dummy_pipeline_index(index: u8) -> PipelineIndex {
 }
 
 impl wgpu_compute_layer::ShaderLoader for ElideLoader {
-    fn load(&self, _index: wgpu_compute_layer::ShaderIndex) -> &str {
+    fn load(&self, _index: wgpu_compute_layer::ShaderIndex, _defines : &[(&str, String)]) -> &str {
         "
         @group(0) @binding(0) var<storage, read_write> output : array<u32>;
         @group(0) @binding(1) var<storage> op_meta : array<u32>;
