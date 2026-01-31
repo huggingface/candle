@@ -5,6 +5,7 @@
 //! provides helper accessors used by the rest of the crate.
 
 use std::any::Any;
+use std::borrow::Cow;
 
 use crate::cache::BindGroupReference;
 use crate::queue_buffer::OpIsInplaceable;
@@ -100,7 +101,7 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     ///     fn get_entry_point(&self, index : PipelineIndex) -> &str{todo!()}
     /// }
     ///  ```
-    fn load(&self, index: ShaderIndex, defines : &[(&str, String)]) -> &str;
+    fn load(&self, index: ShaderIndex, defines : &[(&str, String)]) -> Cow<'_, str>;
 
     /// Returns the entry point for this pipeline.
     /// A shader loader may handle multiple shader files with multiple entry points in each file;
@@ -239,7 +240,7 @@ impl ShaderLoaderCache {
         any.downcast_mut::<T>()
     }
 
-    pub fn get_shader(&self, shader: impl Into<ShaderIndex>, defines : &[(&str, String)]) -> &str {
+    pub fn get_shader(&self, shader: impl Into<ShaderIndex>, defines : &[(&str, String)]) -> Cow<'_, str> {
         let shader: ShaderIndex = shader.into();
         let loader: LoaderIndex = shader.into();
         self.loader[loader.0 as usize]
@@ -301,7 +302,7 @@ impl Default for ShaderLoaderCache {
 #[cfg(test)]
 mod tests
 {
-    use std::collections::HashMap;
+    use std::{borrow::Cow, collections::HashMap};
 
     use crate::{LoaderIndex, PipelineIndex, ShaderIndex, ShaderLoader, shader_loader::ShaderLoaderCache};
 
@@ -324,12 +325,12 @@ mod tests
     }
 
     impl ShaderLoader for DynamicLoader {
-        fn load(&self, index: ShaderIndex, _ : &[(&str, String)]) -> &str {
+        fn load(&self, index: ShaderIndex, _ : &[(&str, String)]) -> Cow<'_, str> {
             let i = index.get_index();
             self.map
                 .get(&i)
                 .map(|s| s.as_str())
-                .unwrap_or("@compute @workgroup_size(1) fn main() {}")
+                .unwrap_or("@compute @workgroup_size(1) fn main() {}").into()
         }
 
         fn get_entry_point(&self, _index: PipelineIndex) -> &str {

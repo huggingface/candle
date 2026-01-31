@@ -84,6 +84,46 @@ pub(crate) struct MlQueueDispatch {
     pub(crate) debug: Option<String>,
 }
 
+pub type DefineSymbol = usize;
+
+#[derive(Debug)]
+struct DefineMultiMap<V>{
+    key_cache : ObjectToIdMapper<V>,
+    id_to_key: Vec<V>,
+}
+
+impl<V : std::cmp::Eq + std::hash::Hash + std::clone::Clone> DefineMultiMap<V> {
+    fn new() -> Self {
+        Self { key_cache : ObjectToIdMapper::new(), id_to_key : Vec::new() }
+    }
+
+    fn get_index(&mut self, key : &V) -> usize{
+        let (index, is_new) = self.key_cache.get_or_insert(key);
+        if is_new {
+            self.id_to_key.push(key.to_owned())
+        }
+        index
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DefinesCache{
+    key_cache : DefineMultiMap<&'static str>,
+    value_cache :  DefineMultiMap<String>,
+    defines_cache :  DefineMultiMap<Vec<(DefineSymbol, DefineSymbol)>>,
+}
+
+impl DefinesCache {
+    fn new() -> Self {
+        Self { key_cache : DefineMultiMap::new(), value_cache : DefineMultiMap::new(), defines_cache : DefineMultiMap::new() }
+    }
+
+    pub(crate) fn get_define(&self, index : u32) -> Vec<(&'static str, String)> {
+        let test = &self.defines_cache.id_to_key[index as usize];
+        test.iter().map(|c| (self.key_cache.id_to_key[c.0], self.value_cache.id_to_key[c.1].clone())).collect()
+    }
+}
+
 /// A struct where all operations are cached.
 #[derive(Debug)]
 pub struct QueueBufferInner {
@@ -97,18 +137,14 @@ pub struct QueueBufferInner {
     const_array: ConstArray,
 
     /// `DefinesArray` used to store the pipeline defines for the next pipeline call.
-    defines_array: Vec<(&'static str, String)>,
+    defines_array: Vec<(DefineSymbol, DefineSymbol)>,
 
     /// `ConstArray` -> id mapper: maps a set of constants to a unique id.
     const_id_map: ObjectToIdMapper<ConstArray>,
-
-    /// `DefinesArray` -> id mapper: maps a set of defines to a unique id.
-    defines_id_map: ObjectToIdMapper<Vec<(&'static str, String)>>,
-
     /// Id -> `ConstArray` mapping: maps a unique id to a set of constants.
     pub(crate) id_to_const_array: Vec<Vec<(&'static str, f64)>>,
 
-    pub(crate) id_to_defines_array: Vec<Vec<(&'static str, String)>>,
+    pub(crate) define_cache : DefinesCache,
 
     global_command_index: u32,
 
@@ -125,9 +161,8 @@ impl QueueBufferInner {
             const_array: ConstArray::new(),
             defines_array : Vec::new(),
             const_id_map: ObjectToIdMapper::new(),
-            defines_id_map : ObjectToIdMapper::new(),
+            define_cache : DefinesCache::new(),
             id_to_const_array: Vec::new(),
-            id_to_defines_array: Vec::new(),
             global_command_index: 1,
         }
     }
@@ -160,12 +195,9 @@ impl QueueBufferInner {
             self.id_to_const_array.push(self.const_array.to_vec())
         }
 
-        self.defines_array.sort_unstable_by(|a, b| a.0.cmp(b.0));
-        let (index_defines, is_new) = self.defines_id_map.get_or_insert(&self.defines_array);
-        if is_new {
-            self.id_to_defines_array.push(self.defines_array.to_vec())
-        }
-
+        self.defines_array.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let index_defines = self.define_cache.defines_cache.get_index(&self.defines_array);
+        
         self.init();
         (index_const, index_defines)
     }
@@ -197,7 +229,9 @@ impl QueueBufferInner {
     }
 
     pub fn add_define(&mut self, key: &'static str, value : impl Into<String>) {
-        self.defines_array.push((key, value.into()));
+        let key = self.define_cache.key_cache.get_index(&key);
+        let value= self.define_cache.value_cache.get_index(&value.into());
+        self.defines_array.push((key, value));
     }
 
     pub fn global_command_index(&self) -> u32 {

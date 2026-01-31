@@ -1,7 +1,6 @@
 use rustc_hash::FxHasher;
 use std::{
     hash::{Hash, Hasher},
-    num::NonZeroU64,
 };
 
 use super::{
@@ -744,11 +743,10 @@ fn set_buffers(
                     };
 
                     let consts = &command_buffer.id_to_const_array[q.pipeline.const_index];
-                    let defines = &command_buffer.id_to_defines_array[q.pipeline.defines_index];
                     let pipeline =
                         cache
                             .shader
-                            .get_pipeline(&dev.device, &q.pipeline, pl, consts, q.pipeline.defines_index as u32, defines)?;
+                            .get_pipeline(&dev.device, &q.pipeline, pl, consts, q.pipeline.defines_index as u32, &command_buffer.define_cache)?;
 
                     let bindgroup =
                         cache.get_bind_group(dev, &q.bindgroup, q.pipeline.clone(), command_index);

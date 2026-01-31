@@ -48,16 +48,17 @@ impl ShaderCache {
         pipeline_layout: &wgpu::PipelineLayout,
         consts: &[(&str, f64)],
         define_index : u32,
-        defines: &[(&'static str, String)],
+        define_cache : &crate::queue_buffer::DefinesCache,
     ) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         let shader = pipeline.index.get_shader();
        
         let shaders = &mut self.shaders;
         let s = shaders.entry((shader, define_index)).or_insert_with(|| {
-            let shader_str = self.loader_cache.get_shader(shader, defines);
+            let defines = define_cache.get_define(define_index);
+            let shader_str = self.loader_cache.get_shader(shader, &defines);
             
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                wgpu_functions::get_shader(device, shader_str)
+                wgpu_functions::get_shader(device, &shader_str)
             }));
             
             let s = match result {
