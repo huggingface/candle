@@ -67,6 +67,26 @@ __device__ __forceinline__ __half atomicAdd(__half *address, __half val) {
 }
 #endif
 
+// atomicAdd for bfloat16 is SM 8.0+
+#if defined(ALLOW_LEGACY_BF16) && __CUDA_ARCH__ < 800
+__device__ __forceinline__ __nv_bfloat16 atomicAdd(__nv_bfloat16 *address, __nv_bfloat16 val) {
+    unsigned int *address_as_ui = (unsigned int *) ((char *)address - ((size_t)address & 2));
+    unsigned int old = *address_as_ui;
+    unsigned int assumed;
+    bool unaligned = (size_t) address & 2;
+    do {
+        assumed = old;
+        unsigned int hsum;
+        hsum = unaligned ? (old >> 16) : (old & 0xffff);
+        hsum = __bfloat16_as_ushort(__ushort_as_bfloat16(hsum) + val); 
+        old = atomicCAS(address_as_ui, assumed,
+            unaligned ? (old & 0xffff) | (hsum << 16) : (old & 0xffff0000) | hsum
+        );
+
+    } while (assumed != old);
+    return __ushort_as_bfloat16(unaligned ? (old >> 16) : (old & 0xffff));
+}
+#endif
 
 __device__ __forceinline__ __half atomicMaxf(__half* address, __half val) {
 #if __CUDA_ARCH__ < 700
