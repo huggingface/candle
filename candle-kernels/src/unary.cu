@@ -96,7 +96,7 @@ __device__ T sign_(T t) {
   return static_cast<T>(t > static_cast<T>(0)) - static_cast<T>(t < static_cast<T>(0));
 }
 
-#if __CUDA_ARCH__ >= 800 || (__CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 800)
+#if __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_BF16)
 UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
 UNARY_OP(__nv_bfloat16, uneg_bf16, -x)
 UNARY_OP(__nv_bfloat16, urecip_bf16, recipg(x))
@@ -123,7 +123,7 @@ UNARY_OP(__nv_bfloat16, usign_bf16, sign_(x))
 UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
 #endif
 
-#if __CUDA_ARCH__ >= 890
+#if __CUDA_ARCH__ >= 890 || defined(ALLOW_LEGACY_FP8)
 #define F8E4M3_TO_FLOAT(x) __half2float(__nv_cvt_fp8_to_halfraw(x.__x, __NV_E4M3))
 
 UNARY_OP(__nv_fp8_e4m3, ucopy_f8_e4m3, x)
