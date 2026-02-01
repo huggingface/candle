@@ -22,7 +22,7 @@ use super::util::ToU64;
 use super::WgpuStorage;
 use crate::queue_buffer::QueueBufferInner;
 
-pub const MAX_IMMEDIATE_VALUE : u32 = 16;
+pub const MAX_IMMEDIATE_VALUE : u32 = 18;
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 #[cfg_attr(
@@ -181,6 +181,7 @@ pub struct WgpuDeviceInner {
     pub(crate) queue: wgpu::Queue,
 
     pub(crate) command_queue: Mutex<QueueBufferInner>,
+    #[cfg(target_arch = "wasm32")]
     pub(crate) meta_buffer: wgpu::Buffer, // buffer for storing meta information
 
     pub(crate) bindgroup_layouts: BindgroupLayouts,
@@ -354,6 +355,7 @@ impl WgpuDevice {
         #[cfg(feature = "wgpu_debug")]
         let debug_info = super::debug_info::PerformanceMeasurmentDebugInfo::new(&device);
 
+        #[cfg(target_arch = "wasm32")]
         let meta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: configuration.meta_buffer_size as u64,
@@ -388,6 +390,7 @@ impl WgpuDevice {
                 #[cfg(feature = "wgpu_debug")]
                 debug_pipeline_performance: debug_info,
                 command_queue: Mutex::new(QueueBufferInner::new(configuration.meta_buffer_size)),
+                #[cfg(target_arch = "wasm32")]
                 meta_buffer,
                 cache: Mutex::new(ModelCache::new(
                     configuration.buffer_mapping_size,
@@ -470,8 +473,9 @@ impl WgpuDevice {
             pipeline_cached: None,
             bindgroup: BindGroupReference::new(dest_buffer.buffer(), new_input),
             bindgroup_cached: None,
-            meta: command_queue.current_meta, //TODO
-            meta_length: command.meta.len() as u32, //TODO
+            meta: command_queue.current_meta,
+            #[cfg(not(target_arch = "wasm32"))]
+            meta_length: command.meta.len() as u32,
             workload_size: 0_usize,
             #[cfg(feature = "wgpu_debug")]
             debug: None,
@@ -753,7 +757,7 @@ impl WgpuDevice {
             .map(|(k, v)| {
                 let pipelines = &v.pipelines;
                 let s = debug_info::ShaderInfo {
-                    name: shaders.loader_cache.get_shader_name(*k.0),
+                    name: shaders.loader_cache.get_shader_name(k.0),
                     pipelines: pipelines
                         .keys()
                         .map(|pk| debug_info::PipelineInfo {

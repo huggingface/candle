@@ -221,13 +221,13 @@ fn float_to_half(x: f32) -> u32 {
         var shapes_i = 1u;
         var new_index = INPUT_OFFSET;    
         #definec LOOP_START_INDEX dims - 1
-        for (var i2 : i32 = i32(LOOP_START_INDEX); i2 >= 0; i2--){
-            let i = u32(i2);
+        for (var _i2 : i32 = i32(LOOP_START_INDEX); _i2 >= 0; _i2--){
+            let _i = u32(_i2);
             let prev_shapes_i = shapes_i;
-            shapes_i *= meta_buffer[START_SHAPE_OFFSET + i]; 
+            shapes_i *= meta_buffer[START_SHAPE_OFFSET + _i]; 
 
-            let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
-            new_index += si * meta_buffer[START_SHAPE_OFFSET + dims + i]; //s_i * stride_i
+            let si = ((index) / prev_shapes_i) % (shapes_i / prev_shapes_i);  
+            new_index += si * meta_buffer[START_SHAPE_OFFSET + dims + _i]; //s_i * stride_i
         }
         output_var_index = new_index;
         output_var_is_valid = index < shapes_i;
@@ -289,12 +289,13 @@ GET_INDEX_IMPL(meta_buffer, INDEX_OFFSET3, index, output_var_is_valid, output_va
 
 
 
-
-#define USE_IMMEDIATES
+#ifndef USE_IMMEDIATES
+#define USE_IMMEDIATES 1
+#endif
 
 #pp_begin LOAD_INFO (name, size)
 //here we might use immediates, or an extra buffer 
-#ifdef USE_IMMEDIATES
+#if USE_IMMEDIATES == 1
 var<immediate> name: array<u32, size>;
 #else 
 @group(0) @binding(1)

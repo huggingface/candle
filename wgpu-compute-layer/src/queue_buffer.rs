@@ -78,6 +78,7 @@ pub(crate) struct MlQueueDispatch {
     pub(crate) bindgroup: BindGroupReference,
     pub(crate) bindgroup_cached: Option<CachedBindgroupId>,
     pub(crate) meta: u32,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) meta_length: u32,
     pub(crate) workload_size: usize, // the total size needed to calculate; prevents queuing too many operations at once.
     #[cfg(feature = "wgpu_debug")]
@@ -118,8 +119,8 @@ impl DefinesCache {
         Self { key_cache : DefineMultiMap::new(), value_cache : DefineMultiMap::new(), defines_cache : DefineMultiMap::new() }
     }
 
-    pub(crate) fn get_define(&self, index : u32) -> Vec<(&'static str, String)> {
-        let test = &self.defines_cache.id_to_key[index as usize];
+    pub(crate) fn get_define(&self, index : usize) -> Vec<(&'static str, String)> {
+        let test = &self.defines_cache.id_to_key[index];
         test.iter().map(|c| (self.key_cache.id_to_key[c.0], self.value_cache.id_to_key[c.1].clone())).collect()
     }
 }
@@ -384,7 +385,8 @@ impl<'a> QueueBuffer<'a> {
                 pipeline
             );
         }
-        let meta_length = (self.get_meta().len() as u32 - self.current_meta) as u32;
+        #[cfg(not(target_arch = "wasm32"))]
+        let meta_length = self.get_meta().len() as u32 - self.current_meta;
         let q = MlQueue::Dispatch(MlQueueDispatch {
             x,
             y,
@@ -394,6 +396,7 @@ impl<'a> QueueBuffer<'a> {
             bindgroup: bind_group,
             bindgroup_cached: None,
             meta: self.current_meta,
+            #[cfg(not(target_arch = "wasm32"))]
             meta_length,
             workload_size,
             #[cfg(feature = "wgpu_debug")]

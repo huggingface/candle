@@ -95,6 +95,11 @@ impl ShaderLoader for DefaultWgpuShader {
             DType::F64 => "f64",
             DType::F16 => "f16",
         };
+
+        #[cfg(target_arch = "wasm32")]{
+            state_defines.insert("USE_IMMEDIATES".to_string(), DefineDefinition::new("0".to_string()));
+        }
+        
         state_defines.insert(typ_define_str.to_string(), DefineDefinition::new(typ_define_str.to_string()));
         
         let mut parse_state = ParseState::new();

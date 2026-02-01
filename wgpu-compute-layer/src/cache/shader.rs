@@ -17,7 +17,7 @@ pub struct ShaderModuleComputePipelines {
 #[derive(Debug)]
 pub(crate) struct ShaderCache {
     pub(crate) loader_cache: crate::shader_loader::ShaderLoaderCache,
-    pub(crate) shaders: HashMap<(crate::shader_loader::ShaderIndex, u32), ShaderModuleComputePipelines>, //shader + define index
+    pub(crate) shaders: HashMap<(crate::shader_loader::ShaderIndex, usize), ShaderModuleComputePipelines>, //shader + define index
 }
 
 impl ShaderCache {
@@ -47,7 +47,7 @@ impl ShaderCache {
         pipeline: &PipelineReference,
         pipeline_layout: &wgpu::PipelineLayout,
         consts: &[(&str, f64)],
-        define_index : u32,
+        define_index : usize,
         define_cache : &crate::queue_buffer::DefinesCache,
     ) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         let shader = pipeline.index.get_shader();

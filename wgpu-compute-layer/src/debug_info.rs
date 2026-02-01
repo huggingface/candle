@@ -378,17 +378,17 @@ pub(crate) fn create_dispatch_zip(wgpu: &WgpuDevice, output_path: &str) -> crate
     let queue: std::sync::MutexGuard<'_, super::queue_buffer::QueueBufferInner> =
         wgpu.command_queue.lock().unwrap();
     let consts = &queue.id_to_const_array;
-    let defines = &queue.id_to_defines_array;
+    let define_cache = &queue.define_cache;
     for (i, dispatch) in dispatches.iter().enumerate() {
         let base = format!("dispatch_{}/", i);
 
-        let define = &defines[dispatch.recording.pipeline.defines_index][..];
+        let define = define_cache.get_define(dispatch.recording.pipeline.defines_index);
 
         // shader.wgsl
         zip.start_file(format!("{base}shader.wgsl"), options)?;
         zip.write_all(
             loader_cache
-                .get_shader(dispatch.recording.pipeline.index.get_shader(), define)
+                .get_shader(dispatch.recording.pipeline.index.get_shader(), &define)
                 .as_bytes(),
         )?;
 
@@ -421,7 +421,7 @@ pub(crate) fn create_dispatch_zip(wgpu: &WgpuDevice, output_path: &str) -> crate
             y: dispatch.recording.y,
             z: dispatch.recording.z,
             meta: &dispatch.recording.meta,
-            defines: &defines[dispatch.recording.pipeline.defines_index][..],
+            defines: &define,
             const_array: &consts[dispatch.recording.pipeline.const_index][..],
             v_dest: ArrayRef {
                 ty: array_type_name(&dispatch.v_dest),

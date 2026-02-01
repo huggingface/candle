@@ -28,7 +28,6 @@ use wgpu_compute_layer::cache::BindgroupAlignment;
 
 pub use candle_wgpu_kernels::DType;
 pub use candle_wgpu_kernels::Pipelines;
-use candle_wgpu_kernels::Constants;
 
 use crate::Layout;
 
@@ -149,11 +148,18 @@ fn add_layout<'a>(
     queue: &mut QueueBuffer<'a>,
     layout: &Layout,
     is_contiguous: bool,
+    optimize : bool,
     constant_dims: &'static str,
     constant_is_startofsset_zero: &'static str,
     constant_is_contiguous: &'static str
 ) {
-    let layout= normalize_layout(layout);
+    let layout = 
+        if optimize{
+            &normalize_layout(layout)
+        }
+        else{
+            layout
+        };
     let shape = layout.shape().dims();
     let stride = layout.stride();
     queue.add_define(constant_dims, shape.len().to_string());
@@ -179,6 +185,7 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            layout.is_contiguous(),
+           true,
            "DEFINE_DIMS1",
            "DEFINE_IS_STARTOFFSET_ZERO1",
            "DEFINE_IS_CONTIGUOUS1",
@@ -189,6 +196,7 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            layout.is_contiguous(),
+           true,
             "DEFINE_DIMS2",
            "DEFINE_IS_STARTOFFSET_ZERO2",
            "DEFINE_IS_CONTIGUOUS2",
@@ -199,6 +207,7 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            layout.is_contiguous(),
+           true,
             "DEFINE_DIMS3",
            "DEFINE_IS_STARTOFFSET_ZERO3",
            "DEFINE_IS_CONTIGUOUS3",
@@ -208,6 +217,7 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
     fn add_layout1_non_contiguous(&mut self, layout: &crate::Layout) {
         add_layout(self,
            layout,
+           false,
            false,
           "DEFINE_DIMS1",
            "DEFINE_IS_STARTOFFSET_ZERO1",
@@ -219,6 +229,7 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
         add_layout(self,
            layout,
            false,
+           false,
             "DEFINE_DIMS2",
            "DEFINE_IS_STARTOFFSET_ZERO2",
            "DEFINE_IS_CONTIGUOUS2",
@@ -228,6 +239,7 @@ impl<'a> QueueLayouts for QueueBuffer<'a>
     fn add_layout3_non_contiguous(&mut self, layout: &crate::Layout) {
         add_layout(self,
            layout,
+           false,
            false,
             "DEFINE_DIMS3",
            "DEFINE_IS_STARTOFFSET_ZERO3",
