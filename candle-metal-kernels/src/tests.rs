@@ -2487,3 +2487,92 @@ fn commands_concurrent_acquisition() {
 
     commands.wait_until_completed().unwrap();
 }
+
+#[test]
+fn deformable_im2col_f32() {
+    use crate::kernels::deform_conv::*;
+
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+
+    // Simple test: 1x1x4x4 input, 3x3 kernel, stride 1, pad 1
+    // With zero offsets, this should behave like regular im2col
+    let batch_sz = 1;
+    let n_in_channels = 1;
+    let height = 4;
+    let width = 4;
+    let weight_h = 3;
+    let weight_w = 3;
+    let n_offset_grps = 1;
+
+    let cfg = DeformConv2dConfig::new(
+        height,
+        width,
+        weight_h,
+        weight_w,
+        (1, 1),  // padding
+        (1, 1),  // stride
+        (1, 1),  // dilation
+        batch_sz,
+        n_in_channels,
+        n_offset_grps,
+        false,   // use_mask
+    );
+
+    // Input: 4x4 image with values 0-15
+    let input: Vec<f32> = (0..16).map(|v| v as f32).collect();
+    let input_buf = new_buffer(&device, &input);
+
+    // Zero offsets (no deformation)
+    let offset_size = batch_sz * n_offset_grps * 2 * weight_h * weight_w * cfg.out_h * cfg.out_w;
+    let offset: Vec<f32> = vec![0.0; offset_size];
+    let offset_buf = new_buffer(&device, &offset);
+
+    // Dummy mask (not used when use_mask=false)
+    let mask: Vec<f32> = vec![1.0; 1];
+    let mask_buf = new_buffer(&device, &mask);
+
+    // Output columns
+    let col_size = n_in_channels * weight_h * weight_w * batch_sz * cfg.out_h * cfg.out_w;
+    let output_buf = device
+        .new_buffer(col_size * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_deformable_im2col(
+        &device,
+        &command_buffer,
+        &kernels,
+        "deformable_im2col_f32",
+        &cfg,
+        BufferOffset::zero_offset(&input_buf),
+        BufferOffset::zero_offset(&offset_buf),
+        BufferOffset::zero_offset(&mask_buf),
+        &output_buf,
+    )
+    .unwrap();
+
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let results: Vec<f32> = read_to_vec(&output_buf, col_size);
+
+    // With zero offsets and pad=1, stride=1, dilation=1 on a 4x4 input,
+    // the output should be 4x4 spatial, and we should see proper im2col extraction
+    // Just verify the output is non-trivial and has expected size
+    assert_eq!(results.len(), col_size);
+
+    // Check that the center of the first kernel window (position 1,1 in output)
+    // samples the center of input correctly (should get value at position (1,1) = 5)
+    // Column layout: (C_out * K_h * K_w) x (B * H_out * W_out)
+    // For kernel position (1,1) which is center, and output position (1,1):
+    // col index = center_kernel_idx * (B * H_out * W_out) + (1 * W_out + 1)
+    let center_kernel_idx = 4; // center of 3x3 = index 4
+    let out_pos = 1 * cfg.out_w + 1; // output position (1, 1)
+    let col_idx = center_kernel_idx * (batch_sz * cfg.out_h * cfg.out_w) + out_pos;
+
+    // At output (1,1) with zero offset, the center of 3x3 kernel should sample input at (1,1) = 5.0
+    assert!((results[col_idx] - 5.0).abs() < 1e-5, "Expected 5.0, got {}", results[col_idx]);
+}
