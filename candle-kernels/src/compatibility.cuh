@@ -67,7 +67,10 @@ __device__ __forceinline__ __half atomicAdd(__half *address, __half val) {
 }
 #endif
 
-// atomicAdd for bfloat16 is SM 8.0+
+// Polyfill: atomicAdd for bfloat16
+// Native atomicAdd(__nv_bfloat16*, __nv_bfloat16) is only available on SM 8.0+ (Ampere).
+// For older architectures with ALLOW_LEGACY_BF16, we emulate it using 32-bit CAS operations.
+// The implementation handles unaligned addresses by manipulating the appropriate 16-bit half.
 #if defined(ALLOW_LEGACY_BF16) && __CUDA_ARCH__ < 800
 __device__ __forceinline__ __nv_bfloat16 atomicAdd(__nv_bfloat16 *address, __nv_bfloat16 val) {
     unsigned int *address_as_ui = (unsigned int *) ((char *)address - ((size_t)address & 2));

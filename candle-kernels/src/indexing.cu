@@ -146,7 +146,7 @@ __device__ void index_add(
       }
 }
 
-#if __CUDA_ARCH__ >= 890
+#if __CUDA_ARCH__ >= 890 || defined(ALLOW_LEGACY_FP8)
 #define F8E4M3_TO_FLOAT(x) __half2float(__nv_cvt_fp8_to_halfraw(x.__x, __NV_E4M3))
 
 template<typename I>
