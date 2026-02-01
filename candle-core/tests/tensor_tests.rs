@@ -920,6 +920,19 @@ fn embeddings(device: &Device) -> Result<()> {
     let ids = Tensor::new(&[u32::MAX, 2u32, u32::MAX], device)?;
     let hs = t.index_select(&ids, 0)?;
     assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 0.0], [4.0, 5.0], [0.0, 0.0]]);
+
+    // Test empty indices - this tests Metal's linear_split division by zero issue
+    // https://github.com/huggingface/candle/issues/3353
+    let empty_ids = Tensor::zeros(0, DType::U32, device)?;
+    let hs_empty = t.index_select(&empty_ids, 0)?;
+    assert_eq!(hs_empty.dims(), &[0, 2]);
+    assert_eq!(hs_empty.elem_count(), 0);
+
+    // Test with I64 dtype
+    let empty_i64 = Tensor::zeros(0, DType::I64, device)?;
+    let hs_empty_i64 = t.index_select(&empty_i64, 0)?;
+    assert_eq!(hs_empty_i64.dims(), &[0, 2]);
+    assert_eq!(hs_empty_i64.elem_count(), 0);
     Ok(())
 }
 

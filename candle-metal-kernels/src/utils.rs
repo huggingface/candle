@@ -10,6 +10,14 @@ use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 /// Then kernels can just do their op on their single point in the buffer.
 pub(crate) fn linear_split(pipeline: &ComputePipeline, length: usize) -> (MTLSize, MTLSize) {
     let size = length;
+
+    // Handle empty tensors to avoid division by zero
+    if size == 0 {
+        return (
+            MTLSize { width: 0, height: 1, depth: 1 },
+            MTLSize { width: 0, height: 1, depth: 1 },
+        );
+    }
     let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), size);
     let count = size.div_ceil(width);
     let thread_group_count = MTLSize {
