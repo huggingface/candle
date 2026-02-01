@@ -307,7 +307,7 @@ extern "C" __global__ void FN_NAME(  \
 ) { scatter_add_f8(ids, inp, out, left_size, src_dim_size, dst_dim_size, right_size); } \
 
 
-#if __CUDA_ARCH__ >= 800 || (__CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 800)
+#if __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_BF16)
 IS_OP(__nv_bfloat16, int64_t, is_i64_bf16)
 IS_OP(__nv_bfloat16, uint32_t, is_u32_bf16)
 IS_OP(__nv_bfloat16, uint8_t, is_u8_bf16)
@@ -325,7 +325,7 @@ S_OP(__nv_bfloat16, uint32_t, s_u32_bf16)
 S_OP(__nv_bfloat16, uint8_t, s_u8_bf16)
 #endif
 
-#if __CUDA_ARCH__ >= 890
+#if __CUDA_ARCH__ >= 890 || defined(ALLOW_LEGACY_FP8)
 IS_OP(__nv_fp8_e4m3, int16_t, is_i16_f8_e4m3)
 IS_OP(__nv_fp8_e4m3, int32_t, is_i32_f8_e4m3)
 IS_OP(__nv_fp8_e4m3, int64_t, is_i64_f8_e4m3)
