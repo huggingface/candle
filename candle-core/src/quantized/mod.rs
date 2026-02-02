@@ -18,9 +18,9 @@ pub mod metal;
 mod metal {
     pub use super::dummy_metal::*;
 }
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-unlink")]
 pub mod cuda;
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(feature = "cuda-unlink"))]
 mod cuda {
     pub use super::dummy_cuda::*;
 }

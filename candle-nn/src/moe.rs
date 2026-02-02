@@ -1,11 +1,11 @@
 // Adapted from https://github.com/guoqingbao/attention.rs/blob/main/src/moe.rs
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-unlink")]
 use candle::cuda_backend::kernels::ffi;
 #[allow(unused_imports)]
 use candle::quantized::{self, QTensor};
 use candle::{Result, Tensor};
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-unlink")]
 pub fn moe_gemm(
     input: &Tensor,
     weights: &Tensor,
@@ -151,7 +151,7 @@ pub fn moe_gemm(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(feature = "cuda-unlink"))]
 pub fn moe_gemm(
     _: &Tensor,
     _: &Tensor,
@@ -164,7 +164,7 @@ pub fn moe_gemm(
     candle::bail!("moe_gemm is only implemented for the cuda backend")
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-unlink")]
 #[allow(clippy::too_many_arguments)]
 pub fn moe_gemm_gguf(
     input: &Tensor,
@@ -336,7 +336,7 @@ pub fn moe_gemm_gguf(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(feature = "cuda-unlink"))]
 #[allow(clippy::too_many_arguments)]
 pub fn moe_gemm_gguf(
     _: &Tensor,

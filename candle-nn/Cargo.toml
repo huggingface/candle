@@ -33,9 +33,11 @@ criterion = { workspace = true }
 [features]
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
+cuda-unlink = ["candle/cuda-unlink"]
 cuda = ["candle/cuda"]
 cudnn = ["candle/cudnn"]
-mkl = ["dep:intel-mkl-src", "candle/mkl"]
+mkl-unlink = ["dep:intel-mkl-src", "candle/mkl-unlink"]
+mkl = ["candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:objc2-metal"]
 
 [[bench]]

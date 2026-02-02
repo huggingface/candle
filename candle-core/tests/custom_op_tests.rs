@@ -145,7 +145,7 @@ fn inplace_op1() -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(feature = "ug", any(feature = "cuda", feature = "metal")))]
+#[cfg(all(feature = "ug", any(feature = "cuda-unlink", feature = "metal")))]
 #[allow(clippy::approx_constant)]
 #[test]
 fn ug_op() -> Result<()> {

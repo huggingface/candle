@@ -934,7 +934,7 @@ fn index_select_fail() -> Result<()> {
 }
 
 // The test below triggers an unwinding panic as there is a panic within the
-// #[cfg(feature = "cuda")]
+// #[cfg(feature = "cuda-unlink")]
 // #[test]
 // #[should_panic]
 // fn index_select_fail_gpu() {
@@ -1999,7 +1999,7 @@ fn tensor_norm() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-unlink")]
 #[test]
 fn transfers_cuda_to_device() -> Result<()> {
     use rand::seq::SliceRandom;
@@ -2026,7 +2026,7 @@ fn transfers_cuda_to_device() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-unlink")]
 #[test]
 fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     use std::{ops::Deref, sync::RwLockReadGuard};

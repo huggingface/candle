@@ -111,12 +111,12 @@ impl FusedMoe {
 
         let (expert_ids, sorted_token_ids) = if is_prefill {
             // For long-context (32K+), need to use custom sort kernel
-            // #[cfg(feature = "cuda")]
+            // #[cfg(feature = "cuda-unlink")]
             // {
             //     use attention_rs::sort::ArgSortOp;
             //     topk_ids.flatten_all()?.sort(true)?
             // }
-            // #[cfg(not(feature = "cuda"))]
+            // #[cfg(not(feature = "cuda-unlink"))]
             topk_ids.flatten_all()?.sort_last_dim(true)?
         } else {
             topk_ids.flatten_all()?.sort_last_dim(true)?
@@ -248,12 +248,12 @@ impl FusedMoeGGUF {
 
         let (expert_ids, sorted_token_ids) = if is_prefill {
             // For long-context (32K+), need to use custom sort kernel
-            // #[cfg(feature = "cuda")]
+            // #[cfg(feature = "cuda-unlink")]
             // {
             //     use attention_rs::sort::ArgSortOp;
             //     topk_ids.flatten_all()?.sort(true)?
             // }
-            // #[cfg(not(feature = "cuda"))]
+            // #[cfg(not(feature = "cuda-unlink"))]
             topk_ids.flatten_all()?.sort_last_dim(true)?
         } else {
             topk_ids.flatten_all()?.sort_last_dim(true)?
