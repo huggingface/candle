@@ -1850,7 +1850,6 @@ impl MetalStorage {
         let device = self.device();
         let shape = lhs_l.shape();
         let el_count = shape.elem_count();
-        let encoder = device.command_encoder()?;
         let lhs = buffer_o(&self.buffer, lhs_l, self.dtype);
         let rhs = buffer_o(&rhs.buffer, rhs_l, rhs.dtype);
 
@@ -1861,9 +1860,16 @@ impl MetalStorage {
         let lhs_contiguous = lhs_l.is_contiguous();
         let rhs_contiguous = rhs_l.is_contiguous();
 
-        let buffer = if lhs_contiguous && rhs_contiguous {
+        // Allocate the output buffer before acquiring a command encoder.
+        // Otherwise, allocation can call `wait_until_completed` while an encoder is still encoding,
+        // which self-deadlocks (`CommandStatus::Encoding` never returns to `Available`).
+        let buffer = device.new_buffer(el_count, dtype, op)?;
+
+        let encoder = device.command_encoder()?;
+        encoder.set_label("binary");
+
+        if lhs_contiguous && rhs_contiguous {
             let kernel = kernel_name(op, &self.dtype, "");
-            let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_contiguous(
                 &device.device,
                 &encoder,
@@ -1876,7 +1882,6 @@ impl MetalStorage {
                 &buffer,
             )
             .map_err(MetalError::from)?;
-            buffer
         } else {
             let strided_suffix = if lhs_contiguous {
                 "_rstrided"
@@ -1886,7 +1891,6 @@ impl MetalStorage {
                 "_strided"
             };
             let kernel = kernel_name(op, &self.dtype, strided_suffix);
-            let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_strided(
                 &device.device,
                 &encoder,
@@ -1901,9 +1905,7 @@ impl MetalStorage {
                 &buffer,
             )
             .map_err(MetalError::from)?;
-            buffer
         };
-        encoder.set_label("binary");
         Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
