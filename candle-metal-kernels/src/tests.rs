@@ -2576,3 +2576,156 @@ fn deformable_im2col_f32() {
     // At output (1,1) with zero offset, the center of 3x3 kernel should sample input at (1,1) = 5.0
     assert!((results[col_idx] - 5.0).abs() < 1e-5, "Expected 5.0, got {}", results[col_idx]);
 }
+
+#[test]
+fn test_mpsgraph_conv2d_basic() {
+    // Test MPSGraph conv2d with a simple case
+    let device = device();
+
+    // Simple 1x1 conv on 1x1x4x4 input
+    let batch = 1;
+    let in_channels = 1;
+    let out_channels = 1;
+    let height = 4;
+    let width = 4;
+    let kernel_h = 3;
+    let kernel_w = 3;
+    let stride = 1;
+    let padding = 1;
+    let dilation = 1;
+    let groups = 1;
+
+    // Input: 1x1x4x4 (16 elements)
+    let input_data: Vec<f32> = (0..16).map(|i| i as f32).collect();
+    // Weights: 1x1x3x3 (9 elements)
+    let weight_data: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]; // Identity kernel
+
+    let config = MpsGraphConv2dConfig {
+        batch,
+        in_channels,
+        out_channels,
+        height,
+        width,
+        kernel_h,
+        kernel_w,
+        stride,
+        padding,
+        dilation,
+        groups,
+    };
+
+    let input_buf = new_buffer(&device, &input_data);
+    let weight_buf = new_buffer(&device, &weight_data);
+    let output_size = batch * out_channels * config.out_height() * config.out_width();
+    let output_buf = device
+        .new_buffer(output_size * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_mpsgraph_conv2d(
+        &device,
+        &config,
+        DType::F32,
+        &input_buf,
+        &weight_buf,
+        &output_buf,
+    )
+    .unwrap();
+
+    let results: Vec<f32> = read_to_vec(&output_buf, output_size);
+
+    // With an identity kernel (1 in center, 0 elsewhere), the output should
+    // equal the input (with padding handling at edges)
+    assert_eq!(results.len(), 16);
+
+    // Check that center values are preserved (no padding effects)
+    // Position (1,1) in output should be input value at (1,1) = 5.0
+    assert!((results[5] - 5.0).abs() < 1e-5, "Expected 5.0, got {}", results[5]);
+    // Position (2,2) in output should be input value at (2,2) = 10.0
+    assert!((results[10] - 10.0).abs() < 1e-5, "Expected 10.0, got {}", results[10]);
+}
+
+#[test]
+#[ignore] // Run with: cargo test test_mpsgraph_conv2d_benchmark -- --ignored --nocapture
+fn test_mpsgraph_conv2d_benchmark() {
+    use std::time::Instant;
+
+    let device = device();
+
+    // Benchmark config: 7x7 conv @ 256x256 with 64 channels
+    let batch = 1;
+    let in_channels = 64;
+    let out_channels = 64;
+    let height = 256;
+    let width = 256;
+    let kernel_h = 7;
+    let kernel_w = 7;
+    let stride = 1;
+    let padding = 3;
+    let dilation = 1;
+    let groups = 1;
+
+    let config = MpsGraphConv2dConfig {
+        batch,
+        in_channels,
+        out_channels,
+        height,
+        width,
+        kernel_h,
+        kernel_w,
+        stride,
+        padding,
+        dilation,
+        groups,
+    };
+
+    // Create random-ish data
+    let input_size = batch * in_channels * height * width;
+    let weight_size = out_channels * (in_channels / groups) * kernel_h * kernel_w;
+    let output_size = batch * out_channels * config.out_height() * config.out_width();
+
+    let input_data: Vec<f32> = (0..input_size).map(|i| (i as f32) * 0.001).collect();
+    let weight_data: Vec<f32> = (0..weight_size).map(|i| (i as f32) * 0.0001).collect();
+
+    let input_buf = new_buffer(&device, &input_data);
+    let weight_buf = new_buffer(&device, &weight_data);
+    let output_buf = device
+        .new_buffer(output_size * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    // Warmup
+    for _ in 0..5 {
+        call_mpsgraph_conv2d(
+            &device,
+            &config,
+            DType::F32,
+            &input_buf,
+            &weight_buf,
+            &output_buf,
+        )
+        .unwrap();
+    }
+
+    // Benchmark
+    let iterations = 20;
+    let start = Instant::now();
+    for _ in 0..iterations {
+        call_mpsgraph_conv2d(
+            &device,
+            &config,
+            DType::F32,
+            &input_buf,
+            &weight_buf,
+            &output_buf,
+        )
+        .unwrap();
+    }
+    let elapsed = start.elapsed();
+
+    println!("\n=== MPSGraph Conv2d Benchmark ===");
+    println!("Config: {}x{} conv @ {}x{}, {} in -> {} out channels",
+        kernel_h, kernel_w, height, width, in_channels, out_channels);
+    println!("{} iterations: {:?}", iterations, elapsed);
+    println!("Per call: {:.2}ms", elapsed.as_secs_f64() * 1000.0 / iterations as f64);
+    println!("\nExpected: ~12ms/call (MPSGraph NCHW)");
+    println!("Compared to im2col+GEMM: ~157ms/call (13x slower)");
+}

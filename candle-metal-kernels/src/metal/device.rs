@@ -125,6 +125,12 @@ impl Device {
         self.as_ref().currentAllocatedSize()
     }
 
+    /// Get the raw MTLDevice pointer for use with MPSGraph and other Apple frameworks.
+    /// Returns the Objective-C object pointer (not a void pointer).
+    pub fn device(&self) -> &ProtocolObject<dyn MTLDevice> {
+        &self.raw
+    }
+
     /// Get the device architecture name (e.g., "applegpu_g13g", "applegpu_g14d").
     ///
     /// This returns the full architecture string from the Metal device.
