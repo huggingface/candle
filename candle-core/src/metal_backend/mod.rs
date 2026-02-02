@@ -2000,7 +2000,8 @@ impl MetalStorage {
         Ok(read_to_vec(&buffer, self.count))
     }
 
-    /// MPSGraph-based conv2d - ~10-20x faster than im2col + GEMM
+    /// MPSGraph-based conv2d - uses cached compiled graphs and async execution
+    /// for performance matching PyTorch MPS
     fn conv2d_mpsgraph(
         &self,
         layout: &Layout,
@@ -2032,8 +2033,14 @@ impl MetalStorage {
         // Allocate output buffer
         let output = device.new_buffer(dst_el, self.dtype, "conv2d_mpsgraph")?;
 
-        // Wait for any pending GPU work before MPSGraph takes over
-        device.wait_until_completed()?;
+        // Flush any pending work to ensure inputs are ready
+        // (don't wait - async execution will handle ordering)
+        {
+            let commands = device.commands.read().map_err(|_| {
+                crate::Error::Msg("Failed to acquire commands lock".to_string())
+            })?;
+            commands.flush().map_err(MetalError::from)?;
+        }
 
         // Convert dtype
         let mps_dtype = match self.dtype {
@@ -2043,16 +2050,22 @@ impl MetalStorage {
             dtype => crate::bail!("MPSGraph conv2d does not support {dtype:?}"),
         };
 
-        // Run MPSGraph conv2d
-        candle_metal_kernels::call_mpsgraph_conv2d(
-            &device.device,
-            &config,
-            mps_dtype,
-            &self.buffer,
-            &kernel.buffer,
-            &output,
-        )
-        .map_err(MetalError::from)?;
+        // Run MPSGraph conv2d with async execution
+        {
+            let commands = device.commands.read().map_err(|_| {
+                crate::Error::Msg("Failed to acquire commands lock".to_string())
+            })?;
+            candle_metal_kernels::call_mpsgraph_conv2d(
+                &device.device,
+                commands.command_queue(),
+                &config,
+                mps_dtype,
+                &self.buffer,
+                &kernel.buffer,
+                &output,
+            )
+            .map_err(MetalError::from)?;
+        }
 
         Ok(Self::new(output, device, dst_el, self.dtype))
     }
