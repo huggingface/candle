@@ -221,10 +221,12 @@ unsafe fn call_mpsgraph_conv2d_inner(
     };
 
     // Create MPSGraphTensorData for input using MTLBuffer directly
+    // Cast buffer to AnyObject pointer for Objective-C message send
+    let input_buffer_ptr: *mut AnyObject = input.as_ref() as *const _ as *mut AnyObject;
     let input_tensor_data: *mut AnyObject = msg_send![tensor_data_class, alloc];
     let input_tensor_data: *mut AnyObject = msg_send![
         input_tensor_data,
-        initWithMTLBuffer: input.as_raw_ptr(),
+        initWithMTLBuffer: input_buffer_ptr,
         shape: cached.input_shape,
         dataType: mps_dtype
     ];
@@ -232,10 +234,11 @@ unsafe fn call_mpsgraph_conv2d_inner(
         .ok_or_else(|| MetalKernelError::LoadLibraryError("Failed to create input tensor data".into()))?;
 
     // Create MPSGraphTensorData for weights using MTLBuffer directly
+    let weights_buffer_ptr: *mut AnyObject = weights.as_ref() as *const _ as *mut AnyObject;
     let weight_tensor_data: *mut AnyObject = msg_send![tensor_data_class, alloc];
     let weight_tensor_data: *mut AnyObject = msg_send![
         weight_tensor_data,
-        initWithMTLBuffer: weights.as_raw_ptr(),
+        initWithMTLBuffer: weights_buffer_ptr,
         shape: cached.weight_shape,
         dataType: mps_dtype
     ];
@@ -243,10 +246,11 @@ unsafe fn call_mpsgraph_conv2d_inner(
         .ok_or_else(|| MetalKernelError::LoadLibraryError("Failed to create weight tensor data".into()))?;
 
     // Create output tensor data using MTLBuffer directly
+    let output_buffer_ptr: *mut AnyObject = output.as_ref() as *const _ as *mut AnyObject;
     let output_tensor_data: *mut AnyObject = msg_send![tensor_data_class, alloc];
     let output_tensor_data: *mut AnyObject = msg_send![
         output_tensor_data,
-        initWithMTLBuffer: output.as_raw_ptr(),
+        initWithMTLBuffer: output_buffer_ptr,
         shape: cached.output_shape,
         dataType: mps_dtype
     ];
