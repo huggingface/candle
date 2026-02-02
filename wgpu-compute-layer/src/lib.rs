@@ -90,22 +90,22 @@ pub use device::WgpuDevice;
 pub use device::WgpuDeviceConfig;
 pub use storage::WgpuStorage;
 
+pub use shader_loader::InplaceRewriteDesc;
 pub use shader_loader::LoaderIndex;
 pub use shader_loader::PipelineIndex;
+pub use shader_loader::ReplacedInput;
+pub use shader_loader::RewritePlan;
 pub use shader_loader::ShaderIndex;
 pub use shader_loader::ShaderLoader;
-pub use shader_loader::InplaceRewriteDesc;
-pub use shader_loader::RewritePlan;
-pub use shader_loader::ReplacedInput;
 
 pub use queue_buffer::OpIsInplaceable;
 pub use queue_buffer::PipelineReference;
 pub use queue_buffer::QueueBuffer;
 pub use queue_buffer::MAX_DISPATCH_SIZE;
 
+pub use util::ToF64;
 pub use util::ToU32;
 pub use util::ToU64;
-pub use util::ToF64;
 
 #[cfg(feature = "wgpu_debug")]
 pub use debug_info::MInfo;

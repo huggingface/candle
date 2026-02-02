@@ -187,24 +187,30 @@ impl BindgroupLayouts {
         let data = BindgroupAlignmentLayout::values().map(|v| match v {
             BindgroupAlignmentLayout::Bindgroup0(a) => create_bindgroup_layout_and_pipeline(
                 dev,
-                &[dest_entries[a.get_index()], #[cfg(target_arch = "wasm32")] meta_entry],
+                &[
+                    dest_entries[a.get_index()],
+                    #[cfg(target_arch = "wasm32")]
+                    meta_entry,
+                ],
             ),
             BindgroupAlignmentLayout::Bindgroup1(a1, a2) => create_bindgroup_layout_and_pipeline(
                 dev,
                 &[
-                    dest_entries[a1.get_index()], 
-                    #[cfg(target_arch = "wasm32")] meta_entry,
-                    input1_entries[a2.get_index()]
+                    dest_entries[a1.get_index()],
+                    #[cfg(target_arch = "wasm32")]
+                    meta_entry,
+                    input1_entries[a2.get_index()],
                 ],
             ),
             BindgroupAlignmentLayout::Bindgroup2(a1, a2, a3) => {
                 create_bindgroup_layout_and_pipeline(
                     dev,
                     &[
-                        dest_entries[a1.get_index()], 
-                        #[cfg(target_arch = "wasm32")] meta_entry,
+                        dest_entries[a1.get_index()],
+                        #[cfg(target_arch = "wasm32")]
+                        meta_entry,
                         input1_entries[a2.get_index()],
-                        input2_entries[a3.get_index()]
+                        input2_entries[a3.get_index()],
                     ],
                 )
             }
@@ -212,11 +218,12 @@ impl BindgroupLayouts {
                 create_bindgroup_layout_and_pipeline(
                     dev,
                     &[
-                        dest_entries[a1.get_index()], 
-                        #[cfg(target_arch = "wasm32")] meta_entry,
+                        dest_entries[a1.get_index()],
+                        #[cfg(target_arch = "wasm32")]
+                        meta_entry,
                         input1_entries[a2.get_index()],
                         input2_entries[a3.get_index()],
-                        input3_entries[a4.get_index()]
+                        input3_entries[a4.get_index()],
                     ],
                 )
             }

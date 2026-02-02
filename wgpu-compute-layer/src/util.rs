@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap as HashMap;
 use std::{
     collections::VecDeque,
     hash::{Hash, Hasher},
-    marker::PhantomData
+    marker::PhantomData,
 };
 
 use tracing::{instrument, span};

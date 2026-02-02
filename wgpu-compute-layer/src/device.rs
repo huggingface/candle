@@ -22,7 +22,7 @@ use super::util::ToU64;
 use super::WgpuStorage;
 use crate::queue_buffer::QueueBufferInner;
 
-pub const MAX_IMMEDIATE_VALUE : u32 = 18;
+pub const MAX_IMMEDIATE_VALUE: u32 = 18;
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 #[cfg_attr(
@@ -411,7 +411,7 @@ impl WgpuDevice {
     /// The function requests an adapter and device from `wgpu`, configures
     /// feature flags and limits, and prepares internal caches and buffers.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn create(configuration: WgpuDeviceConfig) -> crate::Result<Self>{
+    pub fn create(configuration: WgpuDeviceConfig) -> crate::Result<Self> {
         pollster::block_on(WgpuDevice::create_async(configuration))
     }
 
@@ -672,14 +672,20 @@ impl WgpuDevice {
     pub async fn get_debug_performance_info(&self) -> crate::Result<Measurements> {
         use super::wgpu_functions::synchronize_async;
         synchronize_async(self).await?;
-        let data =
-            wgpu_functions::read_from_buffer_async::<u64>(self, &self.debug_pipeline_performance.query_set_buffer)
-                .await?;
+        let data = wgpu_functions::read_from_buffer_async::<u64>(
+            self,
+            &self.debug_pipeline_performance.query_set_buffer,
+        )
+        .await?;
 
         let period = self.queue.get_timestamp_period();
         let mut result = Measurements::new(period);
         let mut last_end_time = 0u64;
-        let mut shader_pipeline2 = self.debug_pipeline_performance.shader_pipeline.lock().unwrap();
+        let mut shader_pipeline2 = self
+            .debug_pipeline_performance
+            .shader_pipeline
+            .lock()
+            .unwrap();
         let shader_pipeline = shader_pipeline2.clone();
         let mut indexes: Vec<_> = shader_pipeline.into_iter().collect();
         indexes.sort_by_key(|f| f.0);
@@ -909,7 +915,7 @@ impl WgpuDevice {
     /// buffer's lifetime is extended until the owning `WgpuStorage` is dropped.
     /// When `false` the buffer is considered temporary (for example a padded
     /// intermediate) and may be marked as not recently used so it can be
-    /// reclaimed. 
+    /// reclaimed.
     pub fn create_buffer_reference<T: ToU64>(
         &self,
         size: T,

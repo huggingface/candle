@@ -1,7 +1,5 @@
 use rustc_hash::FxHasher;
-use std::{
-    hash::{Hash, Hasher},
-};
+use std::hash::{Hash, Hasher};
 
 use super::{
     cache::{
@@ -209,7 +207,10 @@ fn get_command_buffer(
     let query_set = &dev.debug_pipeline_performance.query_set;
 
     #[cfg(feature = "wgpu_debug")]
-    let global_index = dev.debug_pipeline_performance.counter.load(std::sync::atomic::Ordering::Relaxed);
+    let global_index = dev
+        .debug_pipeline_performance
+        .counter
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     #[cfg(feature = "wgpu_debug")]
     let mut debug_index = 0;
@@ -253,9 +254,19 @@ fn get_command_buffer(
                         let span1 = span!(Level::INFO, "Set Pipeline");
                         let _enter1 = span1.enter();
 
-                        if last_pipeline != Some((q.pipeline.index, q.pipeline.const_index, q.pipeline.defines_index)) {
+                        if last_pipeline
+                            != Some((
+                                q.pipeline.index,
+                                q.pipeline.const_index,
+                                q.pipeline.defines_index,
+                            ))
+                        {
                             cpass.set_pipeline(pipeline);
-                            last_pipeline = Some((q.pipeline.index, q.pipeline.const_index, q.pipeline.defines_index));
+                            last_pipeline = Some((
+                                q.pipeline.index,
+                                q.pipeline.const_index,
+                                q.pipeline.defines_index,
+                            ));
                         }
 
                         drop(_enter1);
@@ -274,7 +285,7 @@ fn get_command_buffer(
                             .bindgroups
                             .get_bindgroup(bindgroup)
                             .expect("bindgroup could not be found!");
-                          
+
                         let buffers = bindgroup.buffer();
                         let vd = *buffers.get_dest();
                         match buffers.get_input() {
@@ -307,17 +318,20 @@ fn get_command_buffer(
                             }
                         }
 
-                        #[cfg(target_arch = "wasm32")]{ //as immediates arent fully supported in wegbGpu yet, we use a seperated Buffer
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            //as immediates arent fully supported in wegbGpu yet, we use a seperated Buffer
                             cpass.set_bind_group(0, bindgroup.bindgroup(), &[meta * 4]);
                         }
-                       
-                        #[cfg(not(target_arch = "wasm32"))]{
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
                             cpass.set_bind_group(0, bindgroup.bindgroup(), &[]);
-                            let immediate_part = &data[(meta * 4) as usize..(((meta + q.meta_length)*4) as usize)];
+                            let immediate_part =
+                                &data[(meta * 4) as usize..(((meta + q.meta_length) * 4) as usize)];
                             cpass.set_immediates(0, immediate_part);
                         }
-                        
-                        
+
                         drop(_enter1);
 
                         let span1 = span!(Level::INFO, "Dispatch Workgroups");
@@ -437,7 +451,10 @@ fn get_command_buffer(
                                     v_input3,
                                 };
 
-                                cache.debug_pipeline_recording_with_data.recordings.push(data);
+                                cache
+                                    .debug_pipeline_recording_with_data
+                                    .recordings
+                                    .push(data);
                             }
                         }
                     }
@@ -588,7 +605,9 @@ fn set_buffers(
 
                 let bindgroup_reference = &q.bindgroup;
 
-                if q.pipeline.inplaceable.input1_inplaceable || q.pipeline.inplaceable.input2_inplaceable {
+                if q.pipeline.inplaceable.input1_inplaceable
+                    || q.pipeline.inplaceable.input2_inplaceable
+                {
                     let loader = q.pipeline.index.get_shader().get_loader();
                     if let Some(plan) = cache.shader.loader_cache.rewrite_plan(
                         loader,
@@ -739,10 +758,14 @@ fn set_buffers(
                     };
 
                     let consts = &command_buffer.id_to_const_array[q.pipeline.const_index];
-                    let pipeline =
-                        cache
-                            .shader
-                            .get_pipeline(&dev.device, &q.pipeline, pl, consts, q.pipeline.defines_index, &command_buffer.define_cache)?;
+                    let pipeline = cache.shader.get_pipeline(
+                        &dev.device,
+                        &q.pipeline,
+                        pl,
+                        consts,
+                        q.pipeline.defines_index,
+                        &command_buffer.define_cache,
+                    )?;
 
                     let bindgroup =
                         cache.get_bind_group(dev, &q.bindgroup, q.pipeline.clone(), command_index);
@@ -1055,7 +1078,9 @@ fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: 
                     if let Some(debug) = _cache.debug_pipeline_recording.get_mut(&debug_info) {
                         debug.count += 1;
                     } else {
-                        _cache.debug_pipeline_recording.insert(debug_info.clone(), debug_info);
+                        _cache
+                            .debug_pipeline_recording
+                            .insert(debug_info.clone(), debug_info);
                     }
                 }
             }
@@ -1195,7 +1220,11 @@ pub(crate) fn create_bindgroup(
 
     match bindgroup.get_input() {
         CachedBindgroupInput::Bindgroup0(_) => {
-            let entries = &[dest_buffer_bingdgroup_entry, #[cfg(target_arch = "wasm32")] meta_entry];
+            let entries = &[
+                dest_buffer_bingdgroup_entry,
+                #[cfg(target_arch = "wasm32")]
+                meta_entry,
+            ];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: bind_group_layout,

@@ -1,7 +1,7 @@
 //! Cached buffer helpers.
 //!
 //! Stores free and in-use GPU buffers for reuse.
-//! 
+//!
 use std::collections::BTreeSet;
 
 use tracing::instrument;

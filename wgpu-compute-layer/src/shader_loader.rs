@@ -101,7 +101,7 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     ///     fn get_entry_point(&self, index : PipelineIndex) -> &str{todo!()}
     /// }
     ///  ```
-    fn load(&self, index: ShaderIndex, defines : &[(&str, String)]) -> Cow<'_, str>;
+    fn load(&self, index: ShaderIndex, defines: &[(&str, String)]) -> Cow<'_, str>;
 
     /// Returns the entry point for this pipeline.
     /// A shader loader may handle multiple shader files with multiple entry points in each file;
@@ -240,7 +240,11 @@ impl ShaderLoaderCache {
         any.downcast_mut::<T>()
     }
 
-    pub fn get_shader(&self, shader: impl Into<ShaderIndex>, defines : &[(&str, String)]) -> Cow<'_, str> {
+    pub fn get_shader(
+        &self,
+        shader: impl Into<ShaderIndex>,
+        defines: &[(&str, String)],
+    ) -> Cow<'_, str> {
         let shader: ShaderIndex = shader.into();
         let loader: LoaderIndex = shader.into();
         self.loader[loader.0 as usize]
@@ -300,11 +304,12 @@ impl Default for ShaderLoaderCache {
 }
 
 #[cfg(test)]
-mod tests
-{
+mod tests {
     use std::{borrow::Cow, collections::HashMap};
 
-    use crate::{LoaderIndex, PipelineIndex, ShaderIndex, ShaderLoader, shader_loader::ShaderLoaderCache};
+    use crate::{
+        shader_loader::ShaderLoaderCache, LoaderIndex, PipelineIndex, ShaderIndex, ShaderLoader,
+    };
 
     // A simple shader loader that stores WGSL sources in a HashMap and allows
     // mutation at runtime. This is used to test dynamic shader loader behavior
@@ -316,7 +321,9 @@ mod tests
 
     impl DynamicLoader {
         fn new() -> Self {
-            Self { map: HashMap::new() }
+            Self {
+                map: HashMap::new(),
+            }
         }
 
         fn insert(&mut self, idx: u16, src: &str) {
@@ -325,12 +332,13 @@ mod tests
     }
 
     impl ShaderLoader for DynamicLoader {
-        fn load(&self, index: ShaderIndex, _ : &[(&str, String)]) -> Cow<'_, str> {
+        fn load(&self, index: ShaderIndex, _: &[(&str, String)]) -> Cow<'_, str> {
             let i = index.get_index();
             self.map
                 .get(&i)
                 .map(|s| s.as_str())
-                .unwrap_or("@compute @workgroup_size(1) fn main() {}").into()
+                .unwrap_or("@compute @workgroup_size(1) fn main() {}")
+                .into()
         }
 
         fn get_entry_point(&self, _index: PipelineIndex) -> &str {
@@ -348,7 +356,9 @@ mod tests
         // Populate the loader with a shader and verify retrieval
         {
             let str1 = "@compute @workgroup_size(1) fn main() { }";
-            let loader = cache.get_loader_mut::<DynamicLoader>(LoaderIndex(0)).unwrap();
+            let loader = cache
+                .get_loader_mut::<DynamicLoader>(LoaderIndex(0))
+                .unwrap();
             loader.insert(0, str1);
             let shader_str = cache.get_shader(ShaderIndex::new(LoaderIndex(0), 0), &[]);
             assert_eq!(shader_str, str1);
@@ -357,7 +367,9 @@ mod tests
         // Replace the shader at runtime and verify the change is visible
         {
             let str2 = "@compute @workgroup_size(1) fn main2() { }";
-            let loader = cache.get_loader_mut::<DynamicLoader>(LoaderIndex(0)).unwrap();
+            let loader = cache
+                .get_loader_mut::<DynamicLoader>(LoaderIndex(0))
+                .unwrap();
             loader.insert(0, str2);
             let shader_str = cache.get_shader(ShaderIndex::new(LoaderIndex(0), 0), &[]);
             assert_eq!(shader_str, str2);

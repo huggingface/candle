@@ -50,23 +50,32 @@ impl OpIsInplaceable {
     derive(serde::Serialize, serde::Deserialize)
 )]
 /// Pipeline, pipeline constants, and in-place information.
-pub struct PipelineReference{
-    pub(crate) index : shader_loader::PipelineIndex,
-    pub(crate)  const_index :  usize, // Index into an array with pipeline constants
-    pub(crate)  defines_index : usize,
+pub struct PipelineReference {
+    pub(crate) index: shader_loader::PipelineIndex,
+    pub(crate) const_index: usize, // Index into an array with pipeline constants
+    pub(crate) defines_index: usize,
     #[cfg_attr(
         any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
         serde(skip)
     )]
-    pub(crate) inplaceable : OpIsInplaceable,
+    pub(crate) inplaceable: OpIsInplaceable,
 }
 
 impl PipelineReference {
-    pub fn new(index: shader_loader::PipelineIndex, const_index: usize, defines_index: usize, inplaceable: OpIsInplaceable) -> Self {
-        Self { index, const_index, defines_index, inplaceable }
+    pub fn new(
+        index: shader_loader::PipelineIndex,
+        const_index: usize,
+        defines_index: usize,
+        inplaceable: OpIsInplaceable,
+    ) -> Self {
+        Self {
+            index,
+            const_index,
+            defines_index,
+            inplaceable,
+        }
     }
 }
-
 
 #[derive(Debug)]
 pub(crate) struct MlQueueDispatch {
@@ -88,17 +97,20 @@ pub(crate) struct MlQueueDispatch {
 pub type DefineSymbol = usize;
 
 #[derive(Debug)]
-struct DefineMultiMap<V>{
-    key_cache : ObjectToIdMapper<V>,
+struct DefineMultiMap<V> {
+    key_cache: ObjectToIdMapper<V>,
     id_to_key: Vec<V>,
 }
 
-impl<V : std::cmp::Eq + std::hash::Hash + std::clone::Clone> DefineMultiMap<V> {
+impl<V: std::cmp::Eq + std::hash::Hash + std::clone::Clone> DefineMultiMap<V> {
     fn new() -> Self {
-        Self { key_cache : ObjectToIdMapper::new(), id_to_key : Vec::new() }
+        Self {
+            key_cache: ObjectToIdMapper::new(),
+            id_to_key: Vec::new(),
+        }
     }
 
-    fn get_index(&mut self, key : &V) -> usize{
+    fn get_index(&mut self, key: &V) -> usize {
         let (index, is_new) = self.key_cache.get_or_insert(key);
         if is_new {
             self.id_to_key.push(key.to_owned())
@@ -108,20 +120,31 @@ impl<V : std::cmp::Eq + std::hash::Hash + std::clone::Clone> DefineMultiMap<V> {
 }
 
 #[derive(Debug)]
-pub(crate) struct DefinesCache{
-    key_cache : DefineMultiMap<&'static str>,
-    value_cache :  DefineMultiMap<String>,
-    defines_cache :  DefineMultiMap<Vec<(DefineSymbol, DefineSymbol)>>,
+pub(crate) struct DefinesCache {
+    key_cache: DefineMultiMap<&'static str>,
+    value_cache: DefineMultiMap<String>,
+    defines_cache: DefineMultiMap<Vec<(DefineSymbol, DefineSymbol)>>,
 }
 
 impl DefinesCache {
     fn new() -> Self {
-        Self { key_cache : DefineMultiMap::new(), value_cache : DefineMultiMap::new(), defines_cache : DefineMultiMap::new() }
+        Self {
+            key_cache: DefineMultiMap::new(),
+            value_cache: DefineMultiMap::new(),
+            defines_cache: DefineMultiMap::new(),
+        }
     }
 
-    pub(crate) fn get_define(&self, index : usize) -> Vec<(&'static str, String)> {
+    pub(crate) fn get_define(&self, index: usize) -> Vec<(&'static str, String)> {
         let test = &self.defines_cache.id_to_key[index];
-        test.iter().map(|c| (self.key_cache.id_to_key[c.0], self.value_cache.id_to_key[c.1].clone())).collect()
+        test.iter()
+            .map(|c| {
+                (
+                    self.key_cache.id_to_key[c.0],
+                    self.value_cache.id_to_key[c.1].clone(),
+                )
+            })
+            .collect()
     }
 }
 
@@ -145,7 +168,7 @@ pub struct QueueBufferInner {
     /// Id -> `ConstArray` mapping: maps a unique id to a set of constants.
     pub(crate) id_to_const_array: Vec<Vec<(&'static str, f64)>>,
 
-    pub(crate) define_cache : DefinesCache,
+    pub(crate) define_cache: DefinesCache,
 
     global_command_index: u32,
 
@@ -160,9 +183,9 @@ impl QueueBufferInner {
             meta_array: MetaArray::new(size),
             current_meta: 0,
             const_array: ConstArray::new(),
-            defines_array : Vec::new(),
+            defines_array: Vec::new(),
             const_id_map: ObjectToIdMapper::new(),
-            define_cache : DefinesCache::new(),
+            define_cache: DefinesCache::new(),
             id_to_const_array: Vec::new(),
             global_command_index: 1,
         }
@@ -190,15 +213,18 @@ impl QueueBufferInner {
         &mut self.meta_array.0
     }
 
-    fn finalize_internal_arrays(&mut self) -> (usize, usize){
+    fn finalize_internal_arrays(&mut self) -> (usize, usize) {
         let (index_const, is_new) = self.const_id_map.get_or_insert(&self.const_array);
         if is_new {
             self.id_to_const_array.push(self.const_array.to_vec())
         }
 
         self.defines_array.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        let index_defines = self.define_cache.defines_cache.get_index(&self.defines_array);
-        
+        let index_defines = self
+            .define_cache
+            .defines_cache
+            .get_index(&self.defines_array);
+
         self.init();
         (index_const, index_defines)
     }
@@ -208,7 +234,12 @@ impl QueueBufferInner {
         pipeline: impl Into<shader_loader::PipelineIndex>,
     ) -> PipelineReference {
         let (index_const, index_defines) = self.finalize_internal_arrays();
-        PipelineReference::new(pipeline.into(), index_const, index_defines,  OpIsInplaceable::new())
+        PipelineReference::new(
+            pipeline.into(),
+            index_const,
+            index_defines,
+            OpIsInplaceable::new(),
+        )
     }
 
     pub fn get_pipeline_inplace(
@@ -229,9 +260,9 @@ impl QueueBufferInner {
         self.const_array.insert(key.into(), value);
     }
 
-    pub fn add_define(&mut self, key: &'static str, value : impl Into<String>) {
+    pub fn add_define(&mut self, key: &'static str, value: impl Into<String>) {
         let key = self.define_cache.key_cache.get_index(&key);
-        let value= self.define_cache.value_cache.get_index(&value.into());
+        let value = self.define_cache.value_cache.get_index(&value.into());
         self.defines_array.push((key, value));
     }
 
@@ -511,9 +542,6 @@ impl DerefMut for QueueBuffer<'_> {
     }
 }
 
-
-
-
 #[test]
 fn queue_buffer_const_mapping_roundtrip() {
     let mut qb = QueueBufferInner::new(256);
@@ -522,7 +550,10 @@ fn queue_buffer_const_mapping_roundtrip() {
     qb.add_const(KernelConstId("K1"), 42u32);
 
     // Request a pipeline which should cause the const array to be stored
-    let pipeline_ref = qb.get_pipeline(crate::PipelineIndex::new(crate::ShaderIndex::new(crate::LoaderIndex(0), 0), 0));
+    let pipeline_ref = qb.get_pipeline(crate::PipelineIndex::new(
+        crate::ShaderIndex::new(crate::LoaderIndex(0), 0),
+        0,
+    ));
 
     // id_to_const_array should have one entry and contain our constant
     assert_eq!(qb.id_to_const_array.len(), 1);

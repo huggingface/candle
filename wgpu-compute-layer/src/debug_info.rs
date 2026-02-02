@@ -312,7 +312,7 @@ struct DispatchJson<'a> {
     y: u32,
     z: u32,
     meta: &'a [u32],
-    defines:  &'a [(&'a str, String)],
+    defines: &'a [(&'a str, String)],
     const_array: &'a [(&'a str, f64)],
     v_dest: ArrayRef<'a>,
     v_input1: Option<ArrayRef<'a>>,

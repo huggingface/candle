@@ -120,8 +120,6 @@ impl BufferReferenceStorage {
     }
 }
 
-
-
 #[test]
 fn modelcache_buffer_reference_flags() {
     // Small mapping size and max memory size; we won't touch actual GPU buffers.
@@ -129,13 +127,19 @@ fn modelcache_buffer_reference_flags() {
 
     // Create a virtual buffer that is referenced by WgpuStorage (should set last_used = u32::MAX)
     let vr1 = cache.create_buffer_reference(128u64, true);
-    let v1 = cache.buffer_reference.get(&vr1).expect("expected buffer ref");
+    let v1 = cache
+        .buffer_reference
+        .get(&vr1)
+        .expect("expected buffer ref");
     assert_eq!(v1.size(), 128u64);
     assert_eq!(v1.last_used(), u32::MAX);
 
     // Create a temporary virtual buffer not referenced by storage (last_used == 0)
     let vr2 = cache.create_buffer_reference(64u64, false);
-    let v2 = cache.buffer_reference.get(&vr2).expect("expected buffer ref");
+    let v2 = cache
+        .buffer_reference
+        .get(&vr2)
+        .expect("expected buffer ref");
     assert_eq!(v2.size(), 64u64);
     assert_eq!(v2.last_used(), 0u32);
 }

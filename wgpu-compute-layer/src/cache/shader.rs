@@ -17,7 +17,8 @@ pub struct ShaderModuleComputePipelines {
 #[derive(Debug)]
 pub(crate) struct ShaderCache {
     pub(crate) loader_cache: crate::shader_loader::ShaderLoaderCache,
-    pub(crate) shaders: HashMap<(crate::shader_loader::ShaderIndex, usize), ShaderModuleComputePipelines>, //shader + define index
+    pub(crate) shaders:
+        HashMap<(crate::shader_loader::ShaderIndex, usize), ShaderModuleComputePipelines>, //shader + define index
 }
 
 impl ShaderCache {
@@ -47,20 +48,20 @@ impl ShaderCache {
         pipeline: &PipelineReference,
         pipeline_layout: &wgpu::PipelineLayout,
         consts: &[(&str, f64)],
-        define_index : usize,
-        define_cache : &crate::queue_buffer::DefinesCache,
+        define_index: usize,
+        define_cache: &crate::queue_buffer::DefinesCache,
     ) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         let shader = pipeline.index.get_shader();
-       
+
         let shaders = &mut self.shaders;
         let s = shaders.entry((shader, define_index)).or_insert_with(|| {
             let defines = define_cache.get_define(define_index);
             let shader_str = self.loader_cache.get_shader(shader, &defines);
-            
+
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 wgpu_functions::get_shader(device, &shader_str)
             }));
-            
+
             let s = match result {
                 Ok(module) => module,
                 Err(payload) => {
