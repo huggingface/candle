@@ -1,0 +1,88 @@
+Token Embeddings Visualization Description
+
+This file describes the design for a token embeddings visualization to be created and saved as token_embeddings.png.
+
+OVERALL LAYOUT:
+- A comprehensive visualization showing the token embedding process and semantic relationships
+- Clean, professional style with consistent colors and clear labels
+- Size approximately 800x500 pixels
+- Split into three main sections: embedding lookup (left), embedding space (right), and dimensionality reduction (bottom)
+
+COMPONENTS:
+
+1. EMBEDDING LOOKUP PROCESS (Left side):
+   - Show the process of converting token IDs to embedding vectors
+   - Include:
+     * A list of example tokens with their IDs: ["king", "queen", "man", "woman", "apple", "orange"]
+     * The corresponding token IDs: [42, 57, 18, 25, 101, 152]
+     * An embedding matrix E of shape (vocabulary_size, embedding_dim)
+     * Arrows showing the lookup process: token ID → row in embedding matrix → embedding vector
+   - Use a simplified embedding matrix with vocabulary_size = 1000 and embedding_dim = 300
+   - Show only a small portion of the matrix with the relevant rows highlighted
+   - Color: Light blue background for this section (#D6EAF8 or similar)
+
+2. EMBEDDING MATRIX REPRESENTATION (Left-center):
+   - Visual representation of the embedding matrix E
+   - Show as a large rectangle with dimensions labeled:
+     * Width = embedding_dim (300)
+     * Height = vocabulary_size (1000)
+   - Highlight specific rows corresponding to the example tokens
+   - Include the mathematical notation: E[token_id] = embedding vector
+   - Color: Light green background for the matrix (#D5F5E3 or similar)
+
+3. EMBEDDING SPACE VISUALIZATION (Right side):
+   - A 2D plot showing the semantic relationships between tokens in the embedding space
+   - Position semantically similar words closer together:
+     * "king" and "queen" should be close
+     * "man" and "woman" should be close
+     * "apple" and "orange" should be close
+     * The pairs should form a parallelogram: king - queen ≈ man - woman
+   - Use a scatter plot with clear labels for each token
+   - Add vectors showing relationships (e.g., "king" - "man" + "woman" ≈ "queen")
+   - Color: Light yellow background for this section (#FEF9E7 or similar)
+
+4. DIMENSIONALITY REDUCTION ILLUSTRATION (Bottom):
+   - Show how high-dimensional embeddings are projected to 2D for visualization
+   - Include:
+     * A representation of high-dimensional vectors (300D)
+     * Arrows pointing to a 2D projection
+     * Labels for dimensionality reduction techniques (t-SNE, PCA)
+   - Use a simplified visual that conveys the concept without being too complex
+   - Color: Light purple background for this section (#E8DAEF or similar)
+
+ANNOTATIONS:
+- Add clear labels for all components
+- Include the key equations:
+  * embedding(token_id) = E[token_id]
+  * Similar tokens have similar vector representations
+  * king - man + woman ≈ queen (vector arithmetic example)
+- Add a brief title at the top: "Token Embeddings Visualization"
+- Include a small legend explaining the color coding and components
+
+STYLE GUIDELINES:
+- Use a clean, minimalist design with adequate white space
+- Use a consistent, professional font (e.g., Arial or Helvetica)
+- Use a color scheme that's easy to distinguish but not too bright
+- Ensure all text is readable at the intended display size
+- Use thin lines for connections and borders
+
+SPECIFIC DETAILS:
+- For the embedding space visualization, use actual 2D coordinates that demonstrate the relationships
+- For the dimensionality reduction, use a simplified visual representation that conveys the concept
+- Use arrows to show the flow of information through the process
+- Include small explanatory notes where helpful
+
+RECOMMENDED TOOLS:
+- Python with matplotlib for creating the visualization
+- Use matplotlib's plotting capabilities for the embedding space
+- Consider using subplots to organize the different components
+
+EXPORT INSTRUCTIONS:
+- Export as PNG at 800x500 pixels resolution
+- Save as "token_embeddings.png" in the src/images/ directory
+- Ensure the image has a transparent background or white background
+
+VERIFICATION:
+- After adding the image to the repository, verify it displays correctly in the documentation
+- Check that the image is properly referenced in src/17_token_embeddings.md
+- Ensure the image is clear and readable at different zoom levels
