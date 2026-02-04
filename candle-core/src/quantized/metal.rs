@@ -44,6 +44,7 @@ impl QMetalStorage {
         self.device.wait_until_completed()?;
         let mut out = vec![0.0; elem_count];
         let block_len = elem_count / self.dtype.block_size();
+
         match self.dtype {
             GgmlDType::F32 => {
                 let vec: Vec<f32> = read_to_vec(&buffer, block_len);
@@ -220,7 +221,14 @@ impl QMetalStorage {
         dst_shape.push(n);
         let dst_shape = Shape::from(dst_shape);
         let device = storage.device().clone();
-        let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
+        let io_dtype = storage.dtype();
+        let io_ggml_dtype = match io_dtype {
+            DType::F32 => candle_metal_kernels::GgmlDType::F32,
+            DType::F16 => candle_metal_kernels::GgmlDType::F16,
+            DType::BF16 => candle_metal_kernels::GgmlDType::BF16,
+            dtype => crate::bail!("Unsupported dtype for quantized matmul: {:?}", dtype),
+        };
+        let dst = device.new_buffer(dst_shape.elem_count(), io_dtype, "qmatmul")?;
         let encoder = device.command_encoder()?;
         // In some cases it would be better to use the mm variant, though it has its drawbacks
         // around memory alignment.
@@ -230,16 +238,17 @@ impl QMetalStorage {
                 &encoder,
                 device.kernels(),
                 self.dtype.into(),
+                io_ggml_dtype,
                 (1, 1, n, k),
                 storage.buffer(),
-                (layout.start_offset() + batch_id * k) * storage.dtype().size_in_bytes(),
+                (layout.start_offset() + batch_id * k) * io_dtype.size_in_bytes(),
                 &self.buffer,
-                batch_id * n * DType::F32.size_in_bytes(),
+                batch_id * n * io_dtype.size_in_bytes(),
                 &dst,
             )
             .map_err(MetalError::from)?;
         }
-        let dst_storage = crate::MetalStorage::new(dst, device, dst_shape.elem_count(), DType::F32);
+        let dst_storage = crate::MetalStorage::new(dst, device, dst_shape.elem_count(), io_dtype);
         Ok((dst_storage, dst_shape))
     }
 
@@ -282,10 +291,15 @@ impl QMetalStorage {
         dst_shape.push(n);
         let dst_shape = Shape::from(dst_shape);
         let device = storage.device().clone();
-        let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
+        let io_dtype = storage.dtype();
+        let io_ggml_dtype = match io_dtype {
+            DType::F32 => candle_metal_kernels::GgmlDType::F32,
+            DType::F16 => candle_metal_kernels::GgmlDType::F16,
+            DType::BF16 => candle_metal_kernels::GgmlDType::BF16,
+            dtype => crate::bail!("Unsupported dtype for quantized matmul: {:?}", dtype),
+        };
+        let dst = device.new_buffer(dst_shape.elem_count(), io_dtype, "qmatmul")?;
         let encoder = device.command_encoder()?;
-
-        assert_eq!(storage.dtype(), DType::F32);
 
         if self_shape.rank() > 4 {
             crate::bail!("weight rank ({}) must be <= 4", self_shape.rank())
@@ -314,6 +328,7 @@ impl QMetalStorage {
             &encoder,
             device.kernels(),
             self.dtype.into(),
+            io_ggml_dtype,
             src0_l.dims(),
             &src0_stride,
             &self.buffer,
@@ -321,17 +336,17 @@ impl QMetalStorage {
             &src1_l
                 .stride()
                 .iter()
-                .map(|x| x * DType::F32.size_in_bytes())
+                .map(|x| x * io_dtype.size_in_bytes())
                 .collect::<Vec<_>>(),
             storage.buffer(),
-            src1_l.start_offset() * storage.dtype().size_in_bytes(),
+            src1_l.start_offset() * io_dtype.size_in_bytes(),
             dst_shape.dims(),
             0,
             &dst,
         )
         .map_err(MetalError::from)?;
 
-        let dst_storage = crate::MetalStorage::new(dst, device, dst_shape.elem_count(), DType::F32);
+        let dst_storage = crate::MetalStorage::new(dst, device, dst_shape.elem_count(), io_dtype);
         Ok((dst_storage, dst_shape))
     }
 
@@ -385,7 +400,7 @@ impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
             GgmlDType::Q8K => candle_metal_kernels::GgmlDType::Q8K,
             GgmlDType::F16 => candle_metal_kernels::GgmlDType::F16,
             GgmlDType::F32 => candle_metal_kernels::GgmlDType::F32,
-            GgmlDType::BF16 => candle_metal_kernels::GgmlDType::F16,
+            GgmlDType::BF16 => candle_metal_kernels::GgmlDType::BF16,
         }
     }
 }
