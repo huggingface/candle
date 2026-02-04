@@ -1,5 +1,9 @@
 //! Candle-specific Error and Result
-use std::{convert::Infallible, fmt::Display};
+use std::{
+    convert::Infallible,
+    fmt::Display,
+    sync::{PoisonError, TryLockError},
+};
 
 use crate::{DType, DeviceLocation, Layout, MetalError, Shape};
 
@@ -207,6 +211,9 @@ pub enum Error {
     #[error("unsupported safetensor dtype {0:?}")]
     UnsupportedSafeTensorDtype(safetensors::Dtype),
 
+    #[error("{0:?}")]
+    LockError(LockError),
+
     /// Arbitrary errors wrapping.
     #[error("{0}")]
     Wrapped(Box<dyn std::fmt::Display + Send + Sync>),
@@ -246,6 +253,29 @@ pub enum Error {
 
     #[error(transparent)]
     Lazy(#[from] crate::lazy::LazyError),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum LockError {
+    #[error("{0}")]
+    Poisoned(String),
+    #[error("Would block")]
+    WouldBlock,
+}
+
+impl<T> From<TryLockError<T>> for Error {
+    fn from(value: TryLockError<T>) -> Self {
+        match value {
+            TryLockError::Poisoned(p) => Error::LockError(LockError::Poisoned(p.to_string())),
+            TryLockError::WouldBlock => Error::LockError(LockError::WouldBlock),
+        }
+    }
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(p: PoisonError<T>) -> Self {
+        Error::LockError(LockError::Poisoned(p.to_string()))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

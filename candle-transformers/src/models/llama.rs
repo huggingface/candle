@@ -503,22 +503,14 @@ impl Llama {
     }
 
     pub fn forward(&self, x: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
-        //return Ok(x.clone()); // TODO: Revert.
         let (_b_sz, seq_len) = x.dims2()?;
-        println!("x.dims2 done");
         let mut x = self.wte.forward(x)?;
-        println!("wte forward done");
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = block.forward(&x, index_pos, block_idx, cache)?;
-            println!("block {block_idx} forward done");
         }
-        println!("blocks forward done");
         let x = self.ln_f.forward(&x)?;
-        println!("ln_f forward done");
         let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
-        println!("index select -> contiguous done");
         let logits = self.lm_head.forward(&x)?;
-        println!("lm_head forward done");
         logits.to_dtype(DType::F32)
     }
 

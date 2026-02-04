@@ -672,6 +672,26 @@ impl candle::CustomOp2 for RmsNorm {
     }
 }
 
+impl candle::lazy::LazyCustomOp2 for RmsNorm {
+    fn name(&self) -> &'static str {
+        "rms-norm"
+    }
+
+    fn lazy_fwd(
+        &self,
+        _lhs: &candle::LazyStorage,
+        _lhs_l: &Layout,
+        _rhs: &candle::LazyStorage,
+        _rhs_l: &Layout,
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        todo!()
+    }
+
+    fn fallback(&self, lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
+        rms_norm_slow(lhs, rhs, self.eps)
+    }
+}
+
 pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
     let x_dtype = x.dtype();
     let internal_dtype = match x_dtype {
