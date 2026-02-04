@@ -14,7 +14,7 @@ pub struct Config {
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub head_dim: usize,
-    pub attention_bias: bool,
+    pub attention_bias: Option<bool>,
     pub num_key_value_heads: usize,
     pub max_position_embeddings: usize,
     pub sliding_window: Option<usize>,
@@ -90,6 +90,17 @@ impl Module for Qwen3MLP {
     }
 }
 
+#[cfg(feature = "flash-attn")]
+fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Qwen3Attention {
     // projections
@@ -129,25 +140,25 @@ impl Qwen3Attention {
         let q_proj = linear_b(
             cfg.hidden_size,
             num_heads * head_dim,
-            cfg.attention_bias,
+            cfg.attention_bias.unwrap_or(false),
             vb.pp("q_proj"),
         )?;
         let k_proj = linear_b(
             cfg.hidden_size,
             num_kv_heads * head_dim,
-            cfg.attention_bias,
+            cfg.attention_bias.unwrap_or(false),
             vb.pp("k_proj"),
         )?;
         let v_proj = linear_b(
             cfg.hidden_size,
             num_kv_heads * head_dim,
-            cfg.attention_bias,
+            cfg.attention_bias.unwrap_or(false),
             vb.pp("v_proj"),
         )?;
         let o_proj = linear_b(
             num_heads * head_dim,
             cfg.hidden_size,
-            cfg.attention_bias,
+            false,
             vb.pp("o_proj"),
         )?;
 
@@ -220,17 +231,30 @@ impl Qwen3Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        // 7. Attention score
-        let scale = 1.0 / (self.head_dim as f64).sqrt();
-        let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-        if let Some(m) = attn_mask {
-            scores = scores.broadcast_add(m)?;
-        }
-        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-        let ctx = probs.matmul(&v)?; // (B, H, L, D)
+        #[cfg(feature = "flash-attn")]
+        let attn_output = {
+            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
+            let q = q.transpose(1, 2)?;
+            let k = k.transpose(1, 2)?;
+            let v = v.transpose(1, 2)?;
+            let scale = 1f32 / (self.head_dim as f32).sqrt();
+            flash_attn(&q, &k, &v, scale, attn_mask.is_some())?.transpose(1, 2)?
+        };
 
+        #[cfg(not(feature = "flash-attn"))]
+        let attn_output = {
+            // 7. Attention score
+            let scale = 1.0 / (self.head_dim as f64).sqrt();
+            let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            if let Some(m) = attn_mask {
+                scores = scores.broadcast_add(m)?;
+            }
+            let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+            probs.matmul(&v)? // (B, H, L, D)
+        };
         // 8. Output proj
-        ctx.transpose(1, 2)?
+        attn_output
+            .transpose(1, 2)?
             .reshape((b, l, self.hidden_size))?
             .apply(&self.o_proj)
     }
