@@ -1,9 +1,6 @@
-use std::env;
-use std::path::{Path, PathBuf};
+#![allow(unused)]
 mod buildtime_downloader;
-#[allow(unused_imports)]
 use buildtime_downloader::download_model;
-use cudaforge::{KernelBuilder, Result};
 
 struct KernelDirectories {
     kernel_glob: &'static str,
@@ -15,11 +12,13 @@ const KERNEL_DIRS: [KernelDirectories; 1] = [KernelDirectories {
     rust_target: "examples/custom-ops/cuda_kernels.rs",
 }];
 
-fn main() -> Result<()> {
+fn main() {
     println!("cargo::rerun-if-changed=build.rs");
 
     #[cfg(feature = "cuda")]
     {
+        use std::env;
+        use std::path::{Path, PathBuf};
         // Added: Get the safe output directory from the environment.
         let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
@@ -31,10 +30,13 @@ fn main() -> Result<()> {
                     .expect("Failed to get filename from rust_target"),
             );
 
-            let bindings = KernelBuilder::new()
+            let bindings = cudaforge::KernelBuilder::new()
                 .source_glob(kdir.kernel_glob)
-                .build_ptx()?; // ✅ Propagate errors
-            bindings.write(safe_target)?;
+                .build_ptx()
+                .expect("Failed to build ptx");
+            bindings
+                .write(safe_target)?
+                .expect("Failed to write ptx bindings");
         }
     }
 
@@ -45,5 +47,4 @@ fn main() -> Result<()> {
     if let Some(model_rev) = core::option_env!("CANDLE_BUILDTIME_MODEL_REVISION") {
         buildtime_downloader::download_model(model_rev).expect("Model download failed!");
     }
-    Ok(())
 }
