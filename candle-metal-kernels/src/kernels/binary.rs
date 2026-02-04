@@ -81,3 +81,81 @@ pub fn call_binary_strided<S: ToString>(
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
+
+/// Specialized broadcast kernel for inner dimension broadcasting.
+/// This is much faster than the generic strided kernel for patterns like [B, N, C] + [C]
+/// where the right tensor is broadcast along the inner (last) dimension.
+///
+/// # Arguments
+/// * `kernel_name` - Base kernel name (e.g., "badd_f32"), will have "_bcast_r_inner" appended
+/// * `length` - Total number of output elements
+/// * `inner_dim` - Size of the inner dimension being broadcast
+/// * `left` - Contiguous left tensor
+/// * `right` - 1D tensor to broadcast (length = inner_dim)
+#[allow(clippy::too_many_arguments)]
+pub fn call_binary_broadcast_right_inner<S: ToString>(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    kernel_name: S,
+    dtype_size: usize,
+    length: usize,
+    inner_dim: usize,
+    left: BufferOffset,
+    right: BufferOffset,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let kernel = format!("{}_bcast_r_inner", kernel_name.to_string());
+    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, inner_dim, &left, &right, output));
+
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
+
+    encoder.use_resource(left.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(right.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// Specialized broadcast kernel for inner dimension broadcasting (left variant).
+/// For patterns like [C] + [B, N, C] where the left tensor is broadcast.
+#[allow(clippy::too_many_arguments)]
+pub fn call_binary_broadcast_left_inner<S: ToString>(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    kernel_name: S,
+    dtype_size: usize,
+    length: usize,
+    inner_dim: usize,
+    left: BufferOffset,
+    right: BufferOffset,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let kernel = format!("{}_bcast_l_inner", kernel_name.to_string());
+    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, inner_dim, &left, &right, output));
+
+    let tile_size = get_tile_size(dtype_size);
+    let tiles = length.div_ceil(tile_size);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
+
+    encoder.use_resource(left.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(right.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}

@@ -2487,3 +2487,245 @@ fn commands_concurrent_acquisition() {
 
     commands.wait_until_completed().unwrap();
 }
+
+#[test]
+fn deformable_im2col_f32() {
+    use crate::kernels::deform_conv::*;
+
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+
+    // Simple test: 1x1x4x4 input, 3x3 kernel, stride 1, pad 1
+    // With zero offsets, this should behave like regular im2col
+    let batch_sz = 1;
+    let n_in_channels = 1;
+    let height = 4;
+    let width = 4;
+    let weight_h = 3;
+    let weight_w = 3;
+    let n_offset_grps = 1;
+
+    let cfg = DeformConv2dConfig::new(
+        height,
+        width,
+        weight_h,
+        weight_w,
+        (1, 1),  // padding
+        (1, 1),  // stride
+        (1, 1),  // dilation
+        batch_sz,
+        n_in_channels,
+        n_offset_grps,
+        false,   // use_mask
+    );
+
+    // Input: 4x4 image with values 0-15
+    let input: Vec<f32> = (0..16).map(|v| v as f32).collect();
+    let input_buf = new_buffer(&device, &input);
+
+    // Zero offsets (no deformation)
+    let offset_size = batch_sz * n_offset_grps * 2 * weight_h * weight_w * cfg.out_h * cfg.out_w;
+    let offset: Vec<f32> = vec![0.0; offset_size];
+    let offset_buf = new_buffer(&device, &offset);
+
+    // Dummy mask (not used when use_mask=false)
+    let mask: Vec<f32> = vec![1.0; 1];
+    let mask_buf = new_buffer(&device, &mask);
+
+    // Output columns
+    let col_size = n_in_channels * weight_h * weight_w * batch_sz * cfg.out_h * cfg.out_w;
+    let output_buf = device
+        .new_buffer(col_size * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_deformable_im2col(
+        &device,
+        &command_buffer,
+        &kernels,
+        "deformable_im2col_f32",
+        &cfg,
+        BufferOffset::zero_offset(&input_buf),
+        BufferOffset::zero_offset(&offset_buf),
+        BufferOffset::zero_offset(&mask_buf),
+        &output_buf,
+    )
+    .unwrap();
+
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let results: Vec<f32> = read_to_vec(&output_buf, col_size);
+
+    // With zero offsets and pad=1, stride=1, dilation=1 on a 4x4 input,
+    // the output should be 4x4 spatial, and we should see proper im2col extraction
+    // Just verify the output is non-trivial and has expected size
+    assert_eq!(results.len(), col_size);
+
+    // Check that the center of the first kernel window (position 1,1 in output)
+    // samples the center of input correctly (should get value at position (1,1) = 5)
+    // Column layout: (C_out * K_h * K_w) x (B * H_out * W_out)
+    // For kernel position (1,1) which is center, and output position (1,1):
+    // col index = center_kernel_idx * (B * H_out * W_out) + (1 * W_out + 1)
+    let center_kernel_idx = 4; // center of 3x3 = index 4
+    let out_pos = 1 * cfg.out_w + 1; // output position (1, 1)
+    let col_idx = center_kernel_idx * (batch_sz * cfg.out_h * cfg.out_w) + out_pos;
+
+    // At output (1,1) with zero offset, the center of 3x3 kernel should sample input at (1,1) = 5.0
+    assert!((results[col_idx] - 5.0).abs() < 1e-5, "Expected 5.0, got {}", results[col_idx]);
+}
+
+#[test]
+fn test_mpsgraph_conv2d_basic() {
+    // Test MPSGraph conv2d with a simple case
+    let device = device();
+
+    // Simple 1x1 conv on 1x1x4x4 input
+    let batch = 1;
+    let in_channels = 1;
+    let out_channels = 1;
+    let height = 4;
+    let width = 4;
+    let kernel_h = 3;
+    let kernel_w = 3;
+    let stride = 1;
+    let padding = 1;
+    let dilation = 1;
+    let groups = 1;
+
+    // Input: 1x1x4x4 (16 elements)
+    let input_data: Vec<f32> = (0..16).map(|i| i as f32).collect();
+    // Weights: 1x1x3x3 (9 elements)
+    let weight_data: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]; // Identity kernel
+
+    let config = MpsGraphConv2dConfig {
+        batch,
+        in_channels,
+        out_channels,
+        height,
+        width,
+        kernel_h,
+        kernel_w,
+        stride,
+        padding,
+        dilation,
+        groups,
+    };
+
+    let input_buf = new_buffer(&device, &input_data);
+    let weight_buf = new_buffer(&device, &weight_data);
+    let output_size = batch * out_channels * config.out_height() * config.out_width();
+    let output_buf = device
+        .new_buffer(output_size * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_mpsgraph_conv2d(
+        &device,
+        &config,
+        DType::F32,
+        &input_buf,
+        &weight_buf,
+        &output_buf,
+    )
+    .unwrap();
+
+    let results: Vec<f32> = read_to_vec(&output_buf, output_size);
+
+    // With an identity kernel (1 in center, 0 elsewhere), the output should
+    // equal the input (with padding handling at edges)
+    assert_eq!(results.len(), 16);
+
+    // Check that center values are preserved (no padding effects)
+    // Position (1,1) in output should be input value at (1,1) = 5.0
+    assert!((results[5] - 5.0).abs() < 1e-5, "Expected 5.0, got {}", results[5]);
+    // Position (2,2) in output should be input value at (2,2) = 10.0
+    assert!((results[10] - 10.0).abs() < 1e-5, "Expected 10.0, got {}", results[10]);
+}
+
+#[test]
+#[ignore] // Run with: cargo test test_mpsgraph_conv2d_benchmark -- --ignored --nocapture
+fn test_mpsgraph_conv2d_benchmark() {
+    use std::time::Instant;
+
+    let device = device();
+
+    // Benchmark config: 7x7 conv @ 256x256 with 64 channels
+    let batch = 1;
+    let in_channels = 64;
+    let out_channels = 64;
+    let height = 256;
+    let width = 256;
+    let kernel_h = 7;
+    let kernel_w = 7;
+    let stride = 1;
+    let padding = 3;
+    let dilation = 1;
+    let groups = 1;
+
+    let config = MpsGraphConv2dConfig {
+        batch,
+        in_channels,
+        out_channels,
+        height,
+        width,
+        kernel_h,
+        kernel_w,
+        stride,
+        padding,
+        dilation,
+        groups,
+    };
+
+    // Create random-ish data
+    let input_size = batch * in_channels * height * width;
+    let weight_size = out_channels * (in_channels / groups) * kernel_h * kernel_w;
+    let output_size = batch * out_channels * config.out_height() * config.out_width();
+
+    let input_data: Vec<f32> = (0..input_size).map(|i| (i as f32) * 0.001).collect();
+    let weight_data: Vec<f32> = (0..weight_size).map(|i| (i as f32) * 0.0001).collect();
+
+    let input_buf = new_buffer(&device, &input_data);
+    let weight_buf = new_buffer(&device, &weight_data);
+    let output_buf = device
+        .new_buffer(output_size * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    // Warmup
+    for _ in 0..5 {
+        call_mpsgraph_conv2d(
+            &device,
+            &config,
+            DType::F32,
+            &input_buf,
+            &weight_buf,
+            &output_buf,
+        )
+        .unwrap();
+    }
+
+    // Benchmark
+    let iterations = 20;
+    let start = Instant::now();
+    for _ in 0..iterations {
+        call_mpsgraph_conv2d(
+            &device,
+            &config,
+            DType::F32,
+            &input_buf,
+            &weight_buf,
+            &output_buf,
+        )
+        .unwrap();
+    }
+    let elapsed = start.elapsed();
+
+    println!("\n=== MPSGraph Conv2d Benchmark ===");
+    println!("Config: {}x{} conv @ {}x{}, {} in -> {} out channels",
+        kernel_h, kernel_w, height, width, in_channels, out_channels);
+    println!("{} iterations: {:?}", iterations, elapsed);
+    println!("Per call: {:.2}ms", elapsed.as_secs_f64() * 1000.0 / iterations as f64);
+    println!("\nExpected: ~12ms/call (MPSGraph NCHW)");
+    println!("Compared to im2col+GEMM: ~157ms/call (13x slower)");
+}

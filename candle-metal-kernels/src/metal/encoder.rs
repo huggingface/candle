@@ -92,6 +92,11 @@ impl ComputeCommandEncoder {
     pub fn set_label(&self, label: &str) {
         self.raw.setLabel(Some(&NSString::from_str(label)))
     }
+
+    /// Get the raw MTLComputeCommandEncoder pointer for FFI
+    pub fn as_raw_ptr(&self) -> *const std::ffi::c_void {
+        Retained::as_ptr(&self.raw) as *const std::ffi::c_void
+    }
 }
 
 impl Drop for ComputeCommandEncoder {

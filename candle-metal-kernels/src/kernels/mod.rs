@@ -2,10 +2,12 @@ pub mod affine;
 pub mod binary;
 pub mod cast;
 pub mod convolution;
+pub mod deform_conv;
 pub mod fill;
 pub mod indexing;
 mod macros;
 pub mod mlx_gemm;
+pub mod mpsgraph_conv;
 pub mod quantized;
 pub mod random;
 pub mod reduce;
@@ -15,9 +17,17 @@ pub mod ternary;
 pub mod unary;
 
 pub use affine::*;
-pub use binary::{call_binary_contiguous, call_binary_strided};
+pub use binary::{
+    call_binary_broadcast_left_inner, call_binary_broadcast_right_inner, call_binary_contiguous,
+    call_binary_strided,
+};
 pub use cast::{call_cast_contiguous, call_cast_strided};
 pub use convolution::*;
+pub use mpsgraph_conv::{call_mpsgraph_conv2d, MpsGraphConv2dConfig};
+pub use deform_conv::{
+    call_deformable_col2im, call_deformable_col2im_coord, call_deformable_im2col,
+    DeformConv2dConfig,
+};
 pub use fill::*;
 pub use indexing::*;
 pub use mlx_gemm::{call_mlx_gemm, GemmDType};
