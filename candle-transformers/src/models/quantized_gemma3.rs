@@ -7,7 +7,7 @@
 //! - Group-Query Attention (GQA) with specialized key-value heads
 //! - RMSNorm for layer normalization
 //! - Specialized attention patterns with separate normalization for Q/K/V
-//! - Feed-forward network with SwiGLU activation
+//! - Feed-forward network with GELU activation (matches gelu_pytorch_tanh config)
 //! - Support for 2/3/4/8-bit quantization
 //!
 //! References:
@@ -19,6 +19,7 @@ use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
 use candle::D;
 use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::kv_cache::{KvCache as NormalKvCache, RotatingKvCache};
 use candle_nn::{Embedding, Module};
 
 pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
@@ -57,8 +58,7 @@ impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let gate = self.feed_forward_gate.forward(xs)?;
         let up = self.feed_forward_up.forward(xs)?;
-        let silu = candle_nn::ops::silu(&gate)?;
-        let gated = (silu * up)?;
+        let gated = (gate.gelu()? * up)?;
         self.feed_forward_down.forward(&gated)
     }
 }
@@ -101,6 +101,28 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
+enum KvCache {
+    Normal(NormalKvCache),
+    Rotating(RotatingKvCache),
+}
+
+impl KvCache {
+    fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        match self {
+            KvCache::Normal(cache) => cache.append(k, v),
+            KvCache::Rotating(cache) => cache.append(k, v),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            KvCache::Normal(cache) => cache.reset(),
+            KvCache::Rotating(cache) => cache.reset(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct LayerWeights {
     // Attention components
     attention_wq: QMatMul,
@@ -133,7 +155,7 @@ struct LayerWeights {
     neg_inf: Tensor,
 
     // Cache
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: KvCache,
 
     // Tracing
     span_attn: tracing::Span,
@@ -207,19 +229,7 @@ impl LayerWeights {
             .rotary_embedding
             .apply_rotary_emb_qkv(&q, &k, index_pos)?;
 
-        let (k, v) = match &self.kv_cache {
-            None => (k, v),
-            Some((k_cache, v_cache)) => {
-                if index_pos == 0 {
-                    (k, v)
-                } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?; // concat on seq dim
-                    let v = Tensor::cat(&[v_cache, &v], 2)?;
-                    (k, v)
-                }
-            }
-        };
-        self.kv_cache = Some((k.clone(), v.clone())); // update cache
+        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
         // Repeat KV for GQA
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
@@ -243,6 +253,10 @@ impl LayerWeights {
             .reshape((b_sz, seq_len, self.q_dim))?;
 
         self.attention_wo.forward(&attn_output)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache.reset();
     }
 }
 
@@ -393,6 +407,13 @@ impl ModelWeights {
 
             let rotary_embedding = RotaryEmbedding::new(key_length, layer_rope_frequency, device)?;
 
+            // Create appropriate KV cache based on layer type
+            let kv_cache = if let Some(window_size) = sliding_window_size {
+                KvCache::Rotating(RotatingKvCache::new(2, window_size))
+            } else {
+                KvCache::Normal(NormalKvCache::new(2, MAX_SEQ_LEN))
+            };
+
             // Tracing spans
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
@@ -416,7 +437,7 @@ impl ModelWeights {
                 sliding_window_size,
                 rotary_embedding,
                 neg_inf: neg_inf.clone(),
-                kv_cache: None,
+                kv_cache,
                 span_attn,
                 span_mlp,
             })
@@ -476,5 +497,11 @@ impl ModelWeights {
         let output = self.output.forward(&x)?;
 
         Ok(output)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.clear_kv_cache();
+        }
     }
 }
