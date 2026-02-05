@@ -800,7 +800,7 @@ extern "C" __global__ void FN_NAME(  \
   upsample_bilinear2d<TYPENAME>(w_out, h_out, align_corners, has_scale_h, scale_h_factor, has_scale_w, scale_w_factor, info, src, dst); \
 } \
 
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_FP8)
 CONV1D_OP(__nv_bfloat16, float, conv1d_bf16)
 CONV2D_OP(__nv_bfloat16, float, conv2d_bf16)
 CONVT1D_OP(__nv_bfloat16, float, conv_transpose1d_bf16)
@@ -813,6 +813,17 @@ IM2COL_OP(__nv_bfloat16, im2col_bf16)
 IM2COL1D_OP(__nv_bfloat16, im2col1d_bf16)
 COL2IM1D_OP(__nv_bfloat16, col2im1d_bf16)
 
+// FP8 conv and related ops (e4m3)
+// CONV1D_OP(__nv_fp8_e4m3, float, conv1d_f8_e4m3)
+// CONV2D_OP(__nv_fp8_e4m3, float, conv2d_f8_e4m3)
+// CONVT1D_OP(__nv_fp8_e4m3, float, conv_transpose1d_f8_e4m3)
+// CONVT2D_OP(__nv_fp8_e4m3, float, conv_transpose2d_f8_e4m3)
+// AVG_POOL2D_OP(__nv_fp8_e4m3, float, avg_pool2d_f8_e4m3)
+// MAX_POOL2D_OP(__nv_fp8_e4m3, max_pool2d_f8_e4m3)
+// UPSAMPLE_NEAREST2D_OP(__nv_fp8_e4m3, upsample_nearest2d_f8_e4m3)
+// IM2COL_OP(__nv_fp8_e4m3, im2col_f8_e4m3)
+// IM2COL1D_OP(__nv_fp8_e4m3, im2col1d_f8_e4m3)
+// COL2IM1D_OP(__nv_fp8_e4m3, col2im1d_f8_e4m3)
 // NOTE: No conv ops for f8
 // CONV1D_OP(__nv_bfloat16, float, conv1d_f8_e5m)
 // CONV2D_OP(__nv_fp8_e4m3, float, conv2d_f8_e5m)

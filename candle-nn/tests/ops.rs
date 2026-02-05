@@ -325,6 +325,27 @@ fn sigmoid(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn sigmoid_f16(device: &Device) -> Result<()> {
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let tensor = Tensor::new(data, device)?.to_dtype(candle::DType::F16)?;
+    let s1 = candle_nn::ops::sigmoid(&tensor)?;
+    let s2 = (1. / (1. + tensor.neg()?.exp()?)?)?;
+    let diff = (s1 - s2)?.abs()?.sum_all()?.to_vec0::<half::f16>()?;
+    assert_eq!(diff, half::f16::from_f32(0.));
+    Ok(())
+}
+
+fn sigmoid_bf16(device: &Device) -> Result<()> {
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let tensor = Tensor::new(data, device)?.to_dtype(candle::DType::BF16)?;
+    let s1 = candle_nn::ops::sigmoid(&tensor)?;
+    let s2 = (1. / (1. + tensor.neg()?.exp()?)?)?;
+    let diff = (s1 - s2)?.abs()?.sum_all()?.to_vec0::<half::bf16>()?;
+    assert_eq!(diff, half::bf16::from_f32(0.));
+    Ok(())
+}
+ 
+
 test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
@@ -334,3 +355,15 @@ test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal);
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+test_device!(
+    sigmoid_f16,
+    sigmoid_f16_cpu,
+    sigmoid_f16_gpu,
+    sigmoid_f16_metal
+);
+test_device!(
+    sigmoid_bf16,
+    sigmoid_bf16_cpu,
+    sigmoid_bf16_gpu,
+    sigmoid_bf16_metal
+);
