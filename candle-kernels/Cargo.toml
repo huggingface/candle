@@ -10,11 +10,19 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+half = "2.4.1"
 
 [build-dependencies]
-bindgen_cuda = "0.1.6"
+cudaforge = "0.1"
 cudarc = { version = "0.19.0", features = [
     "driver",
     "cuda-version-from-build-system",
     "dynamic-linking",
+    "fallback-latest",
 ], default-features = false }
+
+[dev-dependencies]
+half = { version = "2.4.1", features = ["num-traits"] }
+cudarc = { version = "0.19.0", features = ["driver", "cuda-version-from-build-system"] }
+
+[workspace]
