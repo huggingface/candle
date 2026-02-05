@@ -2161,38 +2161,16 @@ impl MetalDevice {
         node: NodeIndex<u32>,
         s: &Arc<CpuStorage>,
     ) -> Result<()> {
-        /*
-        let edge_weight = graph
-            .edge_weight_mut(
-                graph
-                    .edges_directed(node, petgraph::Outgoing)
-                    .next()
-                    .ok_or(InvalidOutgoing(op_node.id()))?
-                    .id(),
-            )
-            .unwrap();
-
-        edge_weight.new_state(self.storage_from_cpu_storage(s)?);
-        */
         update_all_outgoing(graph, node, self.storage_from_cpu_storage(s)?)?;
-
-        // TODO: Debugging. remove.
-        if op_node.id().index() == 9 || op_node.id().index() == 155 {
-            println!("----------------------------------------");
-            let edge_weight = graph
-                .edge_weight_mut(
-                    graph
-                        .edges_directed(node, petgraph::Outgoing)
-                        .next()
-                        .ok_or(InvalidOutgoing(op_node.id()))?
-                        .id(),
-                )
-                .unwrap();
-            println!("{edge_weight:?}");
-        }
         Ok(())
     }
 }
+
+// TODO: Add Allocator API
+fn allocate(device: &MetalDevice, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+    unsafe { Ok(device.alloc_uninit(shape, dtype)?) }
+}
+
 impl Executor for MetalDevice {
     type ResultType = MetalStorage;
     fn eval(
@@ -2203,20 +2181,14 @@ impl Executor for MetalDevice {
         use crate::lazy::Op::*;
 
         let op_node = &graph[node].clone();
-        println!("{}", op_node);
-
         match op_node.op() {
             Const(s) => self.eval_const(op_node, graph, node, s)?,
             Affine(mul, add) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-
-                let in_weight = in_edge.weight();
-                let binding = in_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let state = binding.lock().map_err(Error::from)?;
+                let in_weight = in_edge.weight().clone();
+                let binding = in_weight.state.lock().unwrap();
+                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
                 let state = state.affine(in_weight.layout(), *mul, *add)?;
                 update_all_outgoing(graph, node, state)?;
@@ -2224,12 +2196,9 @@ impl Executor for MetalDevice {
             ToDType(dtype) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let in_weight = in_edge.weight();
-                let binding = in_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let state = binding.lock().map_err(Error::from)?;
+                let in_weight = in_edge.weight().clone();
+                let binding = in_weight.state.lock().unwrap();
+                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
                 let state = if state.dtype != *dtype {
                     state.to_dtype(in_weight.layout(), *dtype)?
@@ -2241,12 +2210,9 @@ impl Executor for MetalDevice {
             Unary(kernel) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let in_weight = in_edge.weight();
-                let binding = in_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let state = binding.lock().map_err(Error::from)?;
+                let in_weight = in_edge.weight().clone();
+                let binding = in_weight.state.lock().map_err(Error::from)?;
+                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
                 let state = state.unary(kernel, in_weight.layout())?;
                 update_all_outgoing(graph, node, state)?;
@@ -2256,23 +2222,17 @@ impl Executor for MetalDevice {
                 let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let lhs_weight = lhs_edge.weight();
-                let rhs_weight = rhs_edge.weight();
+                let lhs_weight = lhs_edge.weight().clone();
+                let rhs_weight = rhs_edge.weight().clone();
 
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
 
-                let lhs_binding = lhs_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let lhs = lhs_binding.lock().map_err(Error::from)?;
+                let lhs_binding = lhs_weight.state.lock().map_err(Error::from)?;
+                let lhs = lhs_binding.clone().ok_or(InvalidOutgoing(op_node.id()))?;
 
-                let rhs_binding = rhs_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let rhs = rhs_binding.lock().map_err(Error::from)?;
+                let rhs_binding = rhs_weight.state.lock().map_err(Error::from)?;
+                let rhs = rhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
                 let state = lhs.binary(kernel, &rhs, lhs_l, rhs_l)?;
                 update_all_outgoing(graph, node, state)?;
@@ -2284,13 +2244,10 @@ impl Executor for MetalDevice {
             */
             Reduce(reduce_op, dims) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().unwrap();
-                let in_weight = in_edge.weight();
-                let binding = in_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let state = binding.lock().map_err(Error::from)?;
+                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let in_weight = in_edge.weight().clone();
+                let binding = in_weight.state.lock().unwrap();
+                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
                 let state = state.reduce_op(reduce_op.clone(), in_weight.layout(), dims)?;
                 update_all_outgoing(graph, node, state)?;
             }
@@ -2314,23 +2271,17 @@ impl Executor for MetalDevice {
                 let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let lhs_weight = lhs_edge.weight();
-                let rhs_weight = rhs_edge.weight();
+                let lhs_weight = lhs_edge.weight().clone();
+                let rhs_weight = rhs_edge.weight().clone();
 
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
 
-                let lhs_binding = lhs_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let lhs = lhs_binding.lock().map_err(Error::from)?;
+                let lhs_binding = lhs_weight.state.lock().map_err(Error::from)?;
+                let lhs = lhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let rhs_binding = rhs_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let rhs = rhs_binding.lock().map_err(Error::from)?;
+                let rhs_binding = rhs_weight.state.lock().map_err(Error::from)?;
+                let rhs = rhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
                 let state = lhs.index_select(&rhs, lhs_l, rhs_l, *dim)?;
                 update_all_outgoing(graph, node, state)?;
@@ -2341,97 +2292,109 @@ impl Executor for MetalDevice {
                 let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let lhs_weight = lhs_edge.weight();
-                let rhs_weight = rhs_edge.weight();
+                let lhs_weight = lhs_edge.weight().clone();
+                let rhs_weight = rhs_edge.weight().clone();
 
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
 
-                let lhs_binding = lhs_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let lhs = lhs_binding.lock().map_err(Error::from)?;
+                let lhs_binding = lhs_weight.state.lock().map_err(Error::from)?;
+                let lhs = lhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let rhs_binding = rhs_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let rhs = rhs_binding.lock().map_err(Error::from)?;
+                let rhs_binding = rhs_weight.state.lock().map_err(Error::from)?;
+                let rhs = rhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
                 let state = rhs.matmul(&lhs, (*b, *m, *n, *k), rhs_l, lhs_l)?;
                 update_all_outgoing(graph, node, state)?;
             }
             CopyStridedSrc(dst_offset) => {
-                let g = graph.clone();
-                let mut incoming = g.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().unwrap();
-                /*
-                let incoming = crate::lazy::get_incoming_edges(&graph, node, Some(1));
-                let in_edge = incoming[0];
-                */
-                let in_weight = in_edge.weight();
-                let binding = in_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let state = binding.lock().map_err(Error::from)?;
+                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
+                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                // Test the alternative api for getting incoming/outgoing edges
+                // let incoming = crate::lazy::get_incoming_edges(&graph, node, Some(1));
+                // let in_edge = incoming[0];
+                let in_weight = in_edge.weight().clone();
+                let binding = in_weight.state.lock().map_err(Error::from)?;
+                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
-                let out_edge = outgoing.next().unwrap();
-                let out_weight = graph.edge_weight_mut(out_edge.id()).unwrap();
+                let outgoing: Vec<(NodeIndex, NodeIndex, LazyEdge<MetalStorage>)> = graph
+                    .edges_directed(node, petgraph::Outgoing)
+                    .map(|e: petgraph::graph::EdgeReference<_>| {
+                        (e.source(), e.target(), e.weight().clone())
+                    })
+                    .collect();
 
-                let binding = out_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let mut out_state = binding.lock().map_err(Error::from)?;
+                let (source, target, out_weight) =
+                    outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
-                state.copy_strided_src(&mut *out_state, *dst_offset, in_weight.layout())?;
+                let mut binding = out_weight.state.lock().map_err(Error::from)?;
+                let mut out_state = binding.get_or_insert_with(|| {
+                    allocate(self, out_weight.layout().shape(), *out_weight.dtype()).unwrap()
+                });
+
+                state.copy_strided_src(&mut out_state, *dst_offset, in_weight.layout())?;
+
+                let mut out_weight = out_weight.clone();
+                out_weight.new_state(out_state.clone());
+                graph.update_edge(*source, *target, out_weight);
             }
             Copy2D(d1, d2, src_s, dst_s, src_o, dst_o) => {
-                let g = graph.clone();
-                let mut edges = g.edges_directed(node, petgraph::Incoming);
-                let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
+                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let lhs_weight = lhs_edge.weight();
-                let mut g2 = graph.clone();
-                let rhs_weight = g2.edge_weight_mut(rhs_edge.id()).unwrap();
+                let in_weight = in_edge.weight().clone();
+                let binding = in_weight.state().lock().map_err(Error::from)?;
+                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let lhs_l = lhs_weight.layout();
-                let rhs_l = rhs_weight.layout();
+                let outgoing: Vec<(NodeIndex, NodeIndex, LazyEdge<MetalStorage>)> = graph
+                    .edges_directed(node, petgraph::Outgoing)
+                    .map(|e: petgraph::graph::EdgeReference<_>| {
+                        (e.source(), e.target(), e.weight().clone())
+                    })
+                    .collect();
 
-                let mut outgoing = g.edges_directed(node, petgraph::Outgoing);
-                let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let out_weight = graph.edge_weight_mut(out_edge.id()).unwrap();
+                assert!(outgoing.len() > 0);
 
-                let lhs_binding = lhs_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let lhs = lhs_binding.lock().map_err(Error::from)?;
+                let (source, target, out_weight) =
+                    outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
-                let binding = rhs_weight
-                    .state
-                    .clone()
-                    .ok_or(InvalidIncoming(op_node.id()))?;
-                let mut rhs_state = binding.lock().map_err(Error::from)?;
+                let target_incoming_edges: Vec<LazyEdge<MetalStorage>> = graph
+                    .edges_directed(*target, petgraph::Outgoing)
+                    .map(|e: petgraph::graph::EdgeReference<_>| e.weight().clone())
+                    .collect();
 
-                let rhs_err = InvalidEdgeState(rhs_weight.id());
-                lhs.copy2d(&mut rhs_state, *d1, *d2, *src_s, *dst_s, *src_o, *dst_o)?;
+                assert!(target_incoming_edges.len() > 0);
 
-                match &out_weight.state {
-                    Some(s) => *s.lock().unwrap() = rhs_state.clone(),
-                    None => out_weight.state = Some(Arc::new(Mutex::new(rhs_state.clone()))),
-                }
+                let out_weight = target_incoming_edges
+                    .first()
+                    .ok_or(InvalidOutgoing(op_node.id()))?;
+
+                let mut binding = out_weight.state.lock().unwrap();
+                let mut out_state = binding.get_or_insert_with(|| {
+                    allocate(self, out_weight.layout().shape(), *out_weight.dtype()).unwrap()
+                });
+
+                state.copy2d(&mut out_state, *d1, *d2, *src_s, *dst_s, *src_o, *dst_o)?;
+
+                let mut out_weight = out_weight.clone();
+                out_weight.new_state(out_state.clone());
+                graph.update_edge(*source, *target, out_weight);
             }
             //ConstSet(crate::scalar::Scalar, Layout)
+            Sink => {
+                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
+                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let in_weight = in_edge.weight().clone();
+                let binding = in_weight.state.lock().unwrap();
+                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+                update_all_outgoing(graph, node, state.clone())?;
+            }
             Output => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().unwrap();
-                let in_weight = in_edge.weight();
-                let state = in_weight.state.clone().unwrap();
+                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let in_weight = in_edge.weight().clone();
+                let binding = in_weight.state.lock().unwrap();
+                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
                 todo!("{state:?}");
             }
             _ => todo!("{:?}", op_node),
@@ -2439,6 +2402,7 @@ impl Executor for MetalDevice {
         Ok(())
     }
     fn run(&self, graph: OpGraph) -> Result<MetalStorage> {
+        //println!("{}", crate::lazy::graph_to_dot(&&graph));
         let mut graph = self.prepare(graph);
         let acyclic = Acyclic::try_from(graph.clone()).unwrap();
         let node_indices = toposort(&acyclic, None).unwrap();
@@ -2450,9 +2414,9 @@ impl Executor for MetalDevice {
         let ancestors = Ancestors::of(&graph, last);
         let mut topo_sorted: Vec<_> = ancestors.collect::<Vec<_>>();
         topo_sorted.reverse();
-        while let Some(idx) = dfs.next(&graph) {
-            //for edge in topo_sorted {
-            //let idx = graph.raw_edges()[edge.index()].source();
+        //while let Some(idx) = dfs.next(&graph) {
+        for edge in topo_sorted {
+            let idx = graph.raw_edges()[edge.index()].source();
 
             // TODO: This is just a sanity check of the acyclic toposort
             assert!(graph.node_weight(idx).unwrap().id() == acyclic.node_weight(idx).unwrap().id());
@@ -2471,18 +2435,11 @@ impl Executor for MetalDevice {
             // }
             //}
         }
-        let mut edges = graph.edges_directed(final_node, petgraph::Incoming);
+        let mut edges = graph.edges_directed(final_node, petgraph::Outgoing);
         let edge = edges.next().unwrap();
-        println!("{edge:?}");
-        let state = edge
-            .weight()
-            .state
-            .as_ref()
-            .unwrap()
-            .lock()
-            .map_err(Error::from)?
-            .clone();
-        Ok(state)
+        let state = edge.weight().state().lock().unwrap().clone();
+        let op_node = &graph[final_node].clone();
+        Ok(state.ok_or(InvalidIncoming(op_node.id()))?)
     }
 }
 

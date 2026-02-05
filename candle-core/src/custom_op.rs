@@ -1,6 +1,6 @@
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
-use crate::{CpuStorage, CudaStorage, LazyStorage,  Layout, MetalStorage, Result, Shape, Tensor};
+use crate::{CpuStorage, CudaStorage, Layout, LazyStorage, MetalStorage, Result, Shape, Tensor};
 use std::sync::Arc;
 
 /// Unary ops that can be defined in user-land.
@@ -33,11 +33,7 @@ pub trait CustomOp1 {
     }
 
     /// The forward pass tracked in the lazy backend
-    fn lazy_fwd(
-        &self,
-        _: &LazyStorage,
-        _: &Layout,
-    ) -> Result<(LazyStorage, Shape)> {
+    fn lazy_fwd(&self, _: &LazyStorage, _: &Layout) -> Result<(LazyStorage, Shape)> {
         Err(crate::Error::Msg(
             format!("no lazy implementation for {}", self.name()).into(),
         ))

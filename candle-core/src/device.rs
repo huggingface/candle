@@ -10,7 +10,7 @@ pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
     Metal { gpu_id: usize },
-    Lazy
+    Lazy,
 }
 
 /// Cpu, Cuda, or Metal
@@ -19,7 +19,7 @@ pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
     Metal(crate::MetalDevice),
-    Lazy(LazyDevice)
+    Lazy(LazyDevice),
 }
 
 pub trait NdArray {
@@ -243,7 +243,7 @@ impl Device {
             Self::Cuda(d) => Ok(d),
             Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
             Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
-            Self::Lazy(_) => crate::bail!("expected a cuda device, got lazy")
+            Self::Lazy(_) => crate::bail!("expected a cuda device, got lazy"),
         }
     }
 
@@ -252,7 +252,7 @@ impl Device {
             Self::Metal(d) => Ok(d),
             Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
             Self::Cpu => crate::bail!("expected a metal device, got cpu"),
-            Self::Lazy(_) => crate::bail!("expected a metal device, got lazy")
+            Self::Lazy(_) => crate::bail!("expected a metal device, got lazy"),
         }
     }
 
@@ -278,7 +278,7 @@ impl Device {
             Self::Cpu => CpuDevice.get_current_seed(),
             Self::Cuda(c) => c.get_current_seed(),
             Self::Metal(m) => m.get_current_seed(),
-            Self::Lazy(_) => todo!()
+            Self::Lazy(_) => todo!(),
         }
     }
 
@@ -297,8 +297,7 @@ impl Device {
             Self::Cpu => DeviceLocation::Cpu,
             Self::Cuda(device) => device.location(),
             Self::Metal(device) => device.location(),
-            Self::Lazy(_) => DeviceLocation::Lazy
-
+            Self::Lazy(_) => DeviceLocation::Lazy,
         }
     }
 
@@ -372,7 +371,7 @@ impl Device {
                 let storage = device.rand_uniform(shape, dtype, lo, up)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::Lazy(_) => todo!()
+            Device::Lazy(_) => todo!(),
         }
     }
 
@@ -411,7 +410,7 @@ impl Device {
                 let storage = device.rand_normal(shape, dtype, mean, std)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::Lazy(_) => todo!()
+            Device::Lazy(_) => todo!(),
         }
     }
 
