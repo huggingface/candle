@@ -2545,6 +2545,308 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
+            "QuantizeLinear" => {
+                let x = get(&node.input[0])?;
+                let x_scale = get(&node.input[1])?;
+                let x_zero_point = get_opt(2).transpose()?;
+
+                let axis = get_attr_opt::<i64>(node, "axis")?
+                    .copied()
+                    .unwrap_or(if x.rank() <= 1 { 0 } else { 1 });
+                let axis = x.normalize_axis(axis)?;
+
+                let block_size = get_attr_opt::<i64>(node, "block_size")?
+                    .copied()
+                    .unwrap_or(0);
+
+                let saturate = get_attr_opt::<i64>(node, "saturate")?
+                    .copied()
+                    .map(|v| v != 0)
+                    .unwrap_or(true);
+
+                let indices = if block_size > 0 {
+                    let repeats = block_size as usize;
+                    let shape_dim = x.dim(axis)?;
+                    let idx = Tensor::arange(0i64, shape_dim as i64, x.device())?;
+                    let repeats_t = Tensor::new(repeats as i64, x.device())?;
+                    Some(idx.broadcast_div(&repeats_t)?)
+                } else {
+                    None
+                };
+
+                let mut x_scale = if let Some(idx) = &indices {
+                    x_scale.index_select(idx, axis)?
+                } else {
+                    x_scale.clone()
+                };
+
+                if x_scale.rank() == 1 && x.rank() > 1 {
+                    let mut shape = vec![1; x.rank()];
+                    shape[axis] = x_scale.elem_count();
+                    x_scale = x_scale.reshape(shape)?;
+                }
+
+                let x_zero_point = if let Some(zp) = x_zero_point {
+                    let mut zp = if let Some(idx) = &indices {
+                        zp.index_select(idx, axis)?
+                    } else {
+                        zp.clone()
+                    };
+
+                    if zp.rank() == 1 && x.rank() > 1 {
+                        let mut shape = vec![1; x.rank()];
+                        shape[axis] = zp.elem_count();
+                        zp = zp.reshape(shape)?;
+                    }
+                    Some(zp)
+                } else {
+                    None
+                };
+
+                let result = x.broadcast_div(&x_scale)?.round()?;
+                let result = if let Some(ref zp) = x_zero_point {
+                    let zp_as_res = zp.to_dtype(result.dtype())?;
+                    result.broadcast_add(&zp_as_res)?
+                } else {
+                    result
+                };
+
+                let target_dtype = if let Some(ref zp) = x_zero_point {
+                    zp.dtype()
+                } else {
+                    match get_attr_opt::<i64>(node, "output_dtype")?.copied() {
+                        Some(dt_int) => DataType::try_from(dt_int as i32)
+                            .map(|dt| dtype(dt).unwrap_or(DType::U8))
+                            .unwrap_or(DType::U8),
+                        None => DType::U8,
+                    }
+                };
+
+                let result = match target_dtype {
+                    DType::U8 => result.clamp(0., 255.)?,
+                    DType::U32 => result.clamp(0., 4294967295.)?,
+                    DType::I64 => result.clamp(-9223372036854775808., 9223372036854775807.)?,
+
+                    DType::F8E4M3 => {
+                        if saturate {
+                            result.clamp(-448., 448.)?
+                        } else {
+                            result
+                        }
+                    }
+                    _ => result,
+                };
+
+                let output = result.to_dtype(target_dtype)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "DequantizeLinear" => {
+                let x = get(&node.input[0])?;
+                let x_scale = get(&node.input[1])?;
+                let x_zero_point = get_opt(2).transpose()?;
+
+                let axis = get_attr_opt::<i64>(node, "axis")?
+                    .copied()
+                    .unwrap_or_else(|| if x.rank() <= 1 { 0 } else { 1 });
+                let axis = x.normalize_axis(axis)?;
+
+                let block_size = get_attr_opt::<i64>(node, "block_size")?
+                    .copied()
+                    .unwrap_or(0);
+
+                let indices = if block_size > 0 {
+                    let repeats = block_size as usize;
+                    let shape_dim = x.dim(axis)?;
+                    let idx = Tensor::arange(0i64, shape_dim as i64, x.device())?;
+                    let repeats_t = Tensor::new(repeats as i64, x.device())?;
+                    Some(idx.broadcast_div(&repeats_t)?)
+                } else {
+                    None
+                };
+
+                let mut x_scale = if let Some(idx) = &indices {
+                    x_scale.index_select(idx, axis)?
+                } else {
+                    x_scale.clone()
+                };
+
+                if x_scale.rank() == 1 && x.rank() > 1 {
+                    let mut shape = vec![1; x.rank()];
+                    shape[axis] = x_scale.elem_count();
+                    x_scale = x_scale.reshape(shape)?;
+                }
+
+                let x_zero_point = if let Some(zp) = x_zero_point {
+                    let mut zp = if let Some(idx) = &indices {
+                        zp.index_select(idx, axis)?
+                    } else {
+                        zp.clone()
+                    };
+
+                    if zp.rank() == 1 && x.rank() > 1 {
+                        let mut shape = vec![1; x.rank()];
+                        shape[axis] = zp.elem_count();
+                        zp = zp.reshape(shape)?;
+                    }
+                    Some(zp)
+                } else {
+                    None
+                };
+
+                let result = if x.dtype().is_int() {
+                    let x_float = x.to_dtype(DType::F32)?;
+
+                    let dx = if let Some(ref zp) = x_zero_point {
+                        let zp_float = zp.to_dtype(DType::F32)?;
+                        x_float.broadcast_sub(&zp_float)?
+                    } else {
+                        x_float
+                    };
+
+                    dx.broadcast_mul(&x_scale)?
+                } else {
+                    x.broadcast_mul(&x_scale)?
+                };
+
+                let output_dtype = match get_attr_opt::<i64>(node, "output_dtype")?.copied() {
+                    Some(dt_int) => DataType::try_from(dt_int as i32)
+                        .ok()
+                        .and_then(|dt| dtype(dt))
+                        .unwrap_or_else(|| x_scale.dtype()),
+                    None => x_scale.dtype(),
+                };
+
+                let output = result.to_dtype(output_dtype)?;
+
+                values.insert(node.output[0].clone(), output);
+            }
+            "RotaryEmbedding" => {
+                let interleaved = get_attr_opt::<i64>(node, "interleaved")?
+                    .copied()
+                    .unwrap_or(0);
+                let num_heads = get_attr_opt::<i64>(node, "num_heads")?;
+                let rotary_embedding_dim = get_attr_opt::<i64>(node, "rotary_embedding_dim")?
+                    .copied()
+                    .unwrap_or(0);
+
+                let input = get(&node.input[0])?;
+                let cos_cache = get(&node.input[1])?;
+                let sin_cache = get(&node.input[2])?;
+                let position_ids = get_opt(3).transpose()?;
+
+                let original_shape = input.dims().to_vec();
+                let original_rank = original_shape.len();
+
+                let (input, batch_size, sequence_length, head_size) = match original_rank {
+                    4 => {
+                        let input = input.transpose(1, 2)?.contiguous()?;
+                        let (batch_size, sequence_length, _, head_size) = input.dims4()?;
+                        (input, batch_size, sequence_length, head_size)
+                    }
+                    3 => {
+                        let (batch_size, sequence_length, hidden_size) = input.dims3()?;
+                        let num_heads_val = match num_heads {
+                            Some(&n) => n as usize,
+                            None => bail!("num_heads attribute is required when input is 3D"),
+                        };
+
+                        if hidden_size % num_heads_val != 0 {
+                            bail!(
+                                "hidden_size ({}) must be divisible by num_heads ({})",
+                                hidden_size,
+                                num_heads_val
+                            );
+                        }
+
+                        let head_size = hidden_size / num_heads_val;
+                        let input = input.reshape((
+                            batch_size,
+                            sequence_length,
+                            num_heads_val,
+                            head_size,
+                        ))?;
+                        (input, batch_size, sequence_length, head_size)
+                    }
+                    _ => bail!("Input must be 3D or 4D, got {}D", original_rank),
+                };
+
+                let rotary_embedding_dim = if rotary_embedding_dim == 0 {
+                    head_size
+                } else {
+                    rotary_embedding_dim as usize
+                };
+
+                if rotary_embedding_dim % 2 != 0 {
+                    bail!(
+                        "rotary_embedding_dim must be even, got {}",
+                        rotary_embedding_dim
+                    );
+                };
+
+                let rotary_embedding_dim_half = rotary_embedding_dim / 2;
+
+                let (cos_cache, sin_cache) = if let Some(pos_ids) = position_ids {
+                    let pos_ids_flat = pos_ids.flatten_all()?;
+                    let cos = cos_cache.index_select(&pos_ids_flat, 0)?;
+                    let sin = sin_cache.index_select(&pos_ids_flat, 0)?;
+                    (
+                        cos.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?,
+                        sin.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?,
+                    )
+                } else {
+                    (cos_cache.clone(), sin_cache.clone())
+                };
+
+                let cos_dims = cos_cache.dims();
+                let sin_dims = sin_cache.dims();
+
+                if cos_dims[cos_dims.len() - 1] != rotary_embedding_dim_half {
+                    bail!(
+                        "Last dimension of cos_cache ({}) does not match rotary_embedding_dim/2 ({})",
+                        cos_dims[cos_dims.len() - 1],
+                        rotary_embedding_dim_half
+                    );
+                }
+
+                if sin_dims[sin_dims.len() - 1] != rotary_embedding_dim_half {
+                    bail!(
+                        "Last dimension of sin_cache ({}) does not match rotary_embedding_dim/2 ({})",
+                        sin_dims[sin_dims.len() - 1],
+                        rotary_embedding_dim_half
+                    );
+                }
+
+                let x_rotate = if rotary_embedding_dim == head_size {
+                    input.clone()
+                } else {
+                    input.narrow(3, 0, rotary_embedding_dim)?.contiguous()?
+                };
+
+                let rotated_part = if interleaved != 0 {
+                    let input_bhsd = x_rotate.transpose(1, 2)?.contiguous()?;
+                    let result =
+                        candle_nn::rotary_emb::rope_i(&input_bhsd, &cos_cache, &sin_cache)?;
+                    result.transpose(1, 2)?
+                } else {
+                    candle_nn::rotary_emb::rope_thd(&x_rotate, &cos_cache, &sin_cache)?
+                };
+
+                let output = if rotary_embedding_dim == head_size {
+                    rotated_part
+                } else {
+                    let x_unrot =
+                        input.narrow(3, rotary_embedding_dim, head_size - rotary_embedding_dim)?;
+                    Tensor::cat(&[rotated_part, x_unrot], 3)?
+                };
+
+                let final_result = if original_rank == 3 {
+                    output.reshape(original_shape.as_slice())?
+                } else {
+                    output.transpose(1, 2)?
+                };
+
+                values.insert(node.output[0].clone(), final_result);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
