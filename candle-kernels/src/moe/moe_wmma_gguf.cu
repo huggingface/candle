@@ -412,11 +412,16 @@ extern "C" void moe_gemm_gguf_prefill(
     
     if (input_dtype == 0) {
         LAUNCH_MOE_GGUF_PREFILL(half);
-    } else {
-#ifndef NO_BF16_KERNEL
-        LAUNCH_MOE_GGUF_PREFILL(nv_bfloat16);
-#endif
     }
+#ifndef NO_BF16_WMMA
+    else {
+        LAUNCH_MOE_GGUF_PREFILL(nv_bfloat16);
+    }
+#else
+    else {
+        fprintf(stderr, "BF16 WMMA not supported (requires sm_80+)\n");
+    }
+#endif
     cudaFreeAsync(expert_counts, stream);
     cudaFreeAsync(expert_offsets, stream);
 }
