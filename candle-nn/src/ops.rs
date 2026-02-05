@@ -390,8 +390,6 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = storage.device();
-        let encoder = device.command_encoder()?;
-        encoder.set_label("softmax");
         let kernels = device.kernels();
         let name = match storage.dtype() {
             DType::F32 => "softmax_f32",
@@ -408,6 +406,9 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         let last_dim = layout.dims()[layout.shape().rank() - 1];
         let elem_count = layout.shape().elem_count();
         let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
+        // CommandStatus is still encoding here
+        let encoder = device.command_encoder()?;
+        encoder.set_label("softmax");
         candle_metal_kernels::call_last_softmax(
             device.metal_device(),
             &encoder,
@@ -582,8 +583,6 @@ impl candle::CustomOp2 for RmsNorm {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = s1.device();
-        let encoder = device.command_encoder()?;
-        encoder.set_label("rmsnorm");
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype()) {
             (DType::F32, DType::F32) => "rmsnorm_f32",
@@ -599,6 +598,9 @@ impl candle::CustomOp2 for RmsNorm {
         let last_dim = l1.dims()[l1.shape().rank() - 1];
         let elem_count = l1.shape().elem_count();
         let output = device.new_buffer(elem_count, s1.dtype(), "rmsnorm")?;
+
+        let encoder = device.command_encoder()?;
+        encoder.set_label("rmsnorm");
         candle_metal_kernels::call_rms_norm(
             device.metal_device(),
             &encoder,
@@ -825,8 +827,6 @@ impl candle::CustomOp3 for LayerNorm {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = s1.device();
-        let encoder = device.command_encoder()?;
-        encoder.set_label("layernorm");
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype(), s3.dtype()) {
             (DType::F32, DType::F32, DType::F32) => "layernorm_f32",
@@ -844,6 +844,9 @@ impl candle::CustomOp3 for LayerNorm {
         let last_dim = l1.dims()[l1.shape().rank() - 1];
         let elem_count = l1.shape().elem_count();
         let output = device.new_buffer(elem_count, s1.dtype(), "layernorm")?;
+
+        let encoder = device.command_encoder()?;
+        encoder.set_label("layernorm");
         candle_metal_kernels::call_layer_norm(
             device.metal_device(),
             &encoder,
@@ -1073,7 +1076,6 @@ impl candle::CustomOp3 for Sdpa {
             other => candle::bail!("unsupported sdpa type {other:?}"),
         };
 
-        let encoder = q.device().command_encoder()?;
         if supports_sdpa_vector {
             // Route to the 2 pass fused attention if the k seqlen is large.
             // https://github.com/ml-explore/mlx/pull/1597
@@ -1102,6 +1104,7 @@ impl candle::CustomOp3 for Sdpa {
                     "sdpa_2pass_maxs",
                 )?;
 
+                let encoder = q.device().command_encoder()?;
                 encoder.set_label("vector_attention");
                 candle_metal_kernels::call_sdpa_vector_2pass(
                     q.device().device(),
@@ -1127,6 +1130,7 @@ impl candle::CustomOp3 for Sdpa {
                 )
                 .map_err(candle::Error::wrap)?;
             } else {
+                let encoder = q.device().command_encoder()?;
                 encoder.set_label("vector_attention");
                 candle_metal_kernels::call_sdpa_vector(
                     q.device().device(),
@@ -1150,6 +1154,7 @@ impl candle::CustomOp3 for Sdpa {
                 .map_err(candle::Error::wrap)?;
             }
         } else if supports_sdpa_full {
+            let encoder = q.device().command_encoder()?;
             encoder.set_label("full_attention");
             if self.softcapping != 1. {
                 candle::bail!("SDPA full requires softcapping to be disabled (1.0)");

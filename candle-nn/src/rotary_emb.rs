@@ -178,8 +178,6 @@ impl candle::CustomOp3 for RotaryEmbI {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = src.device();
-        let encoder = device.command_encoder()?;
-        encoder.set_label("rope_i");
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
             candle::bail!(
@@ -203,6 +201,10 @@ impl candle::CustomOp3 for RotaryEmbI {
         };
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope_i")?;
+
+        //encoder is still encoding
+        let encoder = device.command_encoder()?;
+        encoder.set_label("rope_i");
         candle_metal_kernels::call_rope_i(
             device.metal_device(),
             &encoder,
@@ -461,8 +463,6 @@ impl candle::CustomOp3 for RotaryEmb {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = src.device();
-        let encoder = device.command_encoder()?;
-        encoder.set_label("rope");
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
             candle::bail!(
@@ -486,6 +486,9 @@ impl candle::CustomOp3 for RotaryEmb {
         };
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope")?;
+
+        let encoder = device.command_encoder()?;
+        encoder.set_label("rope");
         candle_metal_kernels::call_rope(
             device.metal_device(),
             &encoder,
@@ -731,8 +734,6 @@ impl candle::CustomOp3 for RotaryEmbThd {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = src.device();
-        let encoder = device.command_encoder()?;
-        encoder.set_label("rope_thd");
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
             candle::bail!(
@@ -756,6 +757,9 @@ impl candle::CustomOp3 for RotaryEmbThd {
         };
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope_thd")?;
+
+        let encoder = device.command_encoder()?;
+        encoder.set_label("rope_thd");
         candle_metal_kernels::call_rope_thd(
             device.metal_device(),
             &encoder,
