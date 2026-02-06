@@ -315,6 +315,22 @@ fn unary_op(device: &Device) -> Result<()> {
         test_utils::to_vec1_round(&y, 4)?,
         [-1.2642, -1.7293, 0.0000, 3.0000]
     );
+
+    // Test inverse trig functions (asin, acos, atan)
+    let trig_tensor = Tensor::new(&[0.0f32, 0.5, -0.5, 0.9, -0.9], device)?;
+    assert_eq!(
+        test_utils::to_vec1_round(&trig_tensor.asin()?, 4)?,
+        [0.0, 0.5236, -0.5236, 1.1198, -1.1198]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&trig_tensor.acos()?, 4)?,
+        [1.5708, 1.0472, 2.0944, 0.451, 2.6906]
+    );
+    let atan_tensor = Tensor::new(&[0.0f32, 1.0, -1.0, 2.0, -2.0], device)?;
+    assert_eq!(
+        test_utils::to_vec1_round(&atan_tensor.atan()?, 4)?,
+        [0.0, 0.7854, -0.7854, 1.1071, -1.1071]
+    );
     Ok(())
 }
 

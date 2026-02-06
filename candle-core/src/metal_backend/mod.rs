@@ -715,6 +715,15 @@ impl BackendStorage for MetalStorage {
                 ("usign", DType::F32) => contiguous::sign::FLOAT,
                 ("usign", DType::BF16) => contiguous::sign::BFLOAT,
                 ("usign", DType::I64) => contiguous::sign::I64,
+                ("uasin", DType::F16) => contiguous::asin::HALF,
+                ("uasin", DType::F32) => contiguous::asin::FLOAT,
+                ("uasin", DType::BF16) => contiguous::asin::BFLOAT,
+                ("uacos", DType::F16) => contiguous::acos::HALF,
+                ("uacos", DType::F32) => contiguous::acos::FLOAT,
+                ("uacos", DType::BF16) => contiguous::acos::BFLOAT,
+                ("uatan", DType::F16) => contiguous::atan::HALF,
+                ("uatan", DType::F32) => contiguous::atan::FLOAT,
+                ("uatan", DType::BF16) => contiguous::atan::BFLOAT,
                 (name, dtype) => {
                     crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
                 }
@@ -787,6 +796,16 @@ impl BackendStorage for MetalStorage {
                 ("urelu", DType::BF16) => strided::relu::BFLOAT,
                 ("uround", DType::BF16) => strided::round::BFLOAT,
                 ("utanh", DType::BF16) => strided::tanh::BFLOAT,
+
+                ("uasin", DType::F32) => strided::asin::FLOAT,
+                ("uasin", DType::F16) => strided::asin::HALF,
+                ("uasin", DType::BF16) => strided::asin::BFLOAT,
+                ("uacos", DType::F32) => strided::acos::FLOAT,
+                ("uacos", DType::F16) => strided::acos::HALF,
+                ("uacos", DType::BF16) => strided::acos::BFLOAT,
+                ("uatan", DType::F32) => strided::atan::FLOAT,
+                ("uatan", DType::F16) => strided::atan::HALF,
+                ("uatan", DType::BF16) => strided::atan::BFLOAT,
 
                 (name, dtype) => {
                     crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
