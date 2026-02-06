@@ -368,20 +368,34 @@ conditions](https://huggingface.co/meta-llama/Llama-2-7b-hf), and set up your
 authentication token. See issue
 [#350](https://github.com/huggingface/candle/issues/350) for more details.
 
-#### Missing cute/cutlass headers when compiling flash-attn
+#### Docker build
+
+When building CUDA kernels inside a Dockerfile, nvidia-smi cannot be used to auto-detect compute capability.
+
+You must explicitly set CUDA_COMPUTE_CAP, for example:
 
 ```
-  In file included from kernels/flash_fwd_launch_template.h:11:0,
-                   from kernels/flash_fwd_hdim224_fp16_sm80.cu:5:
-  kernels/flash_fwd_kernel.h:8:10: fatal error: cute/algorithm/copy.hpp: No such file or directory
-   #include <cute/algorithm/copy.hpp>
-            ^~~~~~~~~~~~~~~~~~~~~~~~~
-  compilation terminated.
-  Error: nvcc error while compiling:
-```
-[cutlass](https://github.com/NVIDIA/cutlass) is provided as a git submodule so you may want to run the following command to check it in properly.
-```bash
-git submodule update --init
+FROM nvidia/cuda:12.9.0-devel-ubuntu22.04
+
+# Install git and curl
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y curl git ca-certificates;
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# Clone candle repo
+RUN git clone https://github.com/huggingface/candle.git
+
+# Set compute capability for the build
+ARG CUDA_COMPUTE_CAP=90
+ENV CUDA_COMPUTE_CAP=${CUDA_COMPUTE_CAP}
+
+# Build with explicit compute cap
+WORKDIR /app
+COPY . .
+RUN cargo build --release features cuda
 ```
 
 #### Compiling with flash-attention fails
