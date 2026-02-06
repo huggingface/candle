@@ -324,7 +324,6 @@ impl ModelWeights {
         device: &Device,
     ) -> Result<Self> {
 
-        tracing::info!("quantized_gemma3::ModelWeights::from_gguf: start");
         // Detect architecture prefix by probing which keys exist in metadata.
         // This supports gemma3, gemma2, gemma, gemma-embedding, and future variants.
         let arch_prefix = ["gemma3", "gemma2", "gemma", "gemma-embedding"]
@@ -400,12 +399,9 @@ impl ModelWeights {
             Some(QMatMul::from_qtensor(out_tensor)?)
         };
 
-        tracing::info!("quantized_gemma3::ModelWeights::from_gguf: enter layers");
         let mut layers = Vec::with_capacity(block_count);
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
-
-            tracing::info!(layer_idx, %prefix, "loading layer");
 
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
@@ -507,8 +503,6 @@ impl ModelWeights {
                 span_mlp,
             })
         }
-
-        tracing::info!("quantized_gemma3::ModelWeights::from_gguf: end");
 
         let span = tracing::span!(tracing::Level::TRACE, "model");
         let span_output = tracing::span!(tracing::Level::TRACE, "output");

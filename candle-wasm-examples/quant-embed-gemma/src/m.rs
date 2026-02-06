@@ -8,7 +8,6 @@ use candle::{Device, DType, Tensor};
 use candle_transformers::models::quantized_gemma3::ModelWeights as BaseGemma3Model;
 use candle_nn::{linear_b as linear, Activation, Linear, Module, VarBuilder};
 use tokenizers::Tokenizer;
-// use crate::profiler::ProfileGuard;
 use wasm_bindgen::prelude::*;
 use serde::Deserialize;
 
@@ -77,18 +76,14 @@ impl Gemma3Model {
     }
 
     pub fn forward(&mut self, batch: Batch) -> candle::Result<Option<Tensor>> {
-        // let batch_size = batch.len();
-        // let max_length = batch.max_length as usize;
+
         let seq_len = batch.input_ids.len();
 
-        // only for bs = 1 now
         let input_ids = Tensor::from_vec(
             batch.input_ids.clone(),
             (1, seq_len),
             &Device::Cpu,
         )?;
-
-        // let input_lengths = vec![seq_len];
 
         let pooled_embeddings = self.base_model.forward(&input_ids, 0)?;
 
@@ -120,11 +115,9 @@ impl Gemma3Embedder {
         tokenizer: Vec<u8>, 
         config: Vec<u8>
     ) -> Result<Gemma3Embedder, JsError> {
-        // let _prof = ProfileGuard::new("total_load");
         console_error_panic_hook::set_once();
 
         let device = Device::Cpu;
-        // let _prof = ProfileGuard::new("load_tokenizer");
         console_log!("Loading tokenizer...");
         let tokenizer = 
             Tokenizer::from_bytes(&tokenizer).map_err(|e| JsError::new(&e.to_string()))?;
