@@ -22,7 +22,11 @@ use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::kv_cache::{KvCache as NormalKvCache, RotatingKvCache};
 use candle_nn::{Embedding, Module};
 
-pub const MAX_SEQ_LEN: usize = 1024; // 131072; // Gemma 3 supports 128K context window
+#[cfg(target_arch = "wasm32")]
+pub const MAX_SEQ_LEN: usize = 2048;
+#[cfg(not(target_arch = "wasm32"))]
+pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
+
 pub const DEFAULT_SLIDING_WINDOW_TYPE: usize = 6;
 pub const DEFAULT_ROPE_FREQUENCY: f32 = 1_000_000.;
 pub const DEFAULT_ROPE_FREQUENCY_SLIDING: f32 = 10_000.;
