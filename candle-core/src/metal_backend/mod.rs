@@ -2157,28 +2157,45 @@ impl MetalDevice {
     fn eval_const(
         &self,
         op_node: &OpNode,
-        graph: &mut LazyGraph<MetalStorage>,
+        graph: &mut LazyGraph<Buffer>,
         node: NodeIndex<u32>,
         s: &Arc<CpuStorage>,
     ) -> Result<()> {
-        update_all_outgoing(graph, node, self.storage_from_cpu_storage(s)?)?;
+        update_all_outgoing(graph, node, self.storage_from_cpu_storage(s)?.buffer())?;
         Ok(())
     }
 }
 
 // TODO: Add Allocator API
-fn allocate(device: &MetalDevice, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-    unsafe { Ok(device.alloc_uninit(shape, dtype)?) }
+fn allocate(device: &MetalDevice, shape: &Shape, dtype: DType) -> Result<Buffer> {
+    unsafe { Ok(device.alloc_uninit(shape, dtype)?).map(|s| s.buffer().clone()) }
+}
+
+use crate::lazy::{BufferId, LazyAllocator, LazyBuffer};
+impl LazyBuffer for Buffer {}
+
+pub struct MetalAllocator {
+    buffer_map: HashMap<BufferId, Buffer>,
+}
+
+impl LazyAllocator<Buffer> for MetalAllocator {
+    fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<Buffer> {
+        // TODO: Real Error
+        Ok(self.buffer_map.get(&id).unwrap().clone())
+    }
 }
 
 impl Executor for MetalDevice {
-    type ResultType = MetalStorage;
+    type BufferType = Buffer;
+    type AllocatorType = MetalAllocator;
+
     fn eval(
         &self,
-        graph: &mut LazyGraph<Self::ResultType>,
+        graph: &mut LazyGraph<Buffer>,
         node: petgraph::graph::NodeIndex<u32>,
     ) -> Result<()> {
         use crate::lazy::Op::*;
+        //println!("{}", crate::lazy::graph_to_dot(&&graph.clone()));
 
         let op_node = &graph[node].clone();
         match op_node.op() {
@@ -2188,34 +2205,52 @@ impl Executor for MetalDevice {
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_weight = in_edge.weight().clone();
                 let binding = in_weight.state.lock().unwrap();
-                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+                let buffer = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let state = state.affine(in_weight.layout(), *mul, *add)?;
-                update_all_outgoing(graph, node, state)?;
+                let storage = MetalStorage::new(
+                    Arc::new(buffer),
+                    self.clone(),
+                    in_weight.layout().shape().elem_count(),
+                    *in_weight.dtype(),
+                );
+                let storage = storage.affine(in_weight.layout(), *mul, *add)?;
+                update_all_outgoing(graph, node, storage.buffer())?;
             }
             ToDType(dtype) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_weight = in_edge.weight().clone();
                 let binding = in_weight.state.lock().unwrap();
-                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+                let buffer = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let state = if state.dtype != *dtype {
-                    state.to_dtype(in_weight.layout(), *dtype)?
+                let storage = MetalStorage::new(
+                    Arc::new(buffer),
+                    self.clone(),
+                    in_weight.layout().shape().elem_count(),
+                    *in_weight.dtype(),
+                );
+                let storage = if in_weight.dtype() != dtype {
+                    storage.to_dtype(in_weight.layout(), *dtype)?
                 } else {
-                    state.clone()
+                    storage.clone()
                 };
-                update_all_outgoing(graph, node, state)?;
+                update_all_outgoing(graph, node, storage.buffer())?;
             }
             Unary(kernel) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_weight = in_edge.weight().clone();
                 let binding = in_weight.state.lock().map_err(Error::from)?;
-                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+                let buffer = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let state = state.unary(kernel, in_weight.layout())?;
-                update_all_outgoing(graph, node, state)?;
+                let storage = MetalStorage::new(
+                    Arc::new(buffer),
+                    self.clone(),
+                    in_weight.layout().shape().elem_count(),
+                    *in_weight.dtype(),
+                );
+                let storage = storage.unary(kernel, in_weight.layout())?;
+                update_all_outgoing(graph, node, storage.buffer())?;
             }
             Binary(kernel) => {
                 let mut edges = graph.edges_directed(node, petgraph::Incoming);
@@ -2229,13 +2264,25 @@ impl Executor for MetalDevice {
                 let rhs_l = rhs_weight.layout();
 
                 let lhs_binding = lhs_weight.state.lock().map_err(Error::from)?;
-                let lhs = lhs_binding.clone().ok_or(InvalidOutgoing(op_node.id()))?;
+                let lhs_buffer = lhs_binding.clone().ok_or(InvalidOutgoing(op_node.id()))?;
 
                 let rhs_binding = rhs_weight.state.lock().map_err(Error::from)?;
-                let rhs = rhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+                let rhs_buffer = rhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let state = lhs.binary(kernel, &rhs, lhs_l, rhs_l)?;
-                update_all_outgoing(graph, node, state)?;
+                let lhs = MetalStorage::new(
+                    Arc::new(lhs_buffer),
+                    self.clone(),
+                    lhs_weight.layout().shape().elem_count(),
+                    *lhs_weight.dtype(),
+                );
+                let rhs = MetalStorage::new(
+                    Arc::new(rhs_buffer),
+                    self.clone(),
+                    rhs_weight.layout().shape().elem_count(),
+                    *rhs_weight.dtype(),
+                );
+                let storage = lhs.binary(kernel, &rhs, lhs_l, rhs_l)?;
+                update_all_outgoing(graph, node, storage.buffer())?;
             }
             /*
             ToCpu,
@@ -2247,9 +2294,16 @@ impl Executor for MetalDevice {
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_weight = in_edge.weight().clone();
                 let binding = in_weight.state.lock().unwrap();
-                let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
-                let state = state.reduce_op(reduce_op.clone(), in_weight.layout(), dims)?;
-                update_all_outgoing(graph, node, state)?;
+                let buffer = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+
+                let storage = MetalStorage::new(
+                    Arc::new(buffer),
+                    self.clone(),
+                    in_weight.layout().shape().elem_count(),
+                    *in_weight.dtype(),
+                );
+                let storage = storage.reduce_op(reduce_op.clone(), in_weight.layout(), dims)?;
+                update_all_outgoing(graph, node, storage.buffer())?;
             }
             /*
             Cmp(CmpOp, LazyStorage, Layout, Layout),
@@ -2278,13 +2332,25 @@ impl Executor for MetalDevice {
                 let rhs_l = rhs_weight.layout();
 
                 let lhs_binding = lhs_weight.state.lock().map_err(Error::from)?;
-                let lhs = lhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+                let lhs_buffer = lhs_binding.clone().ok_or(InvalidOutgoing(op_node.id()))?;
 
                 let rhs_binding = rhs_weight.state.lock().map_err(Error::from)?;
-                let rhs = rhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+                let rhs_buffer = rhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let state = lhs.index_select(&rhs, lhs_l, rhs_l, *dim)?;
-                update_all_outgoing(graph, node, state)?;
+                let lhs = MetalStorage::new(
+                    Arc::new(lhs_buffer),
+                    self.clone(),
+                    lhs_weight.layout().shape().elem_count(),
+                    *lhs_weight.dtype(),
+                );
+                let rhs = MetalStorage::new(
+                    Arc::new(rhs_buffer),
+                    self.clone(),
+                    rhs_weight.layout().shape().elem_count(),
+                    *rhs_weight.dtype(),
+                );
+                let storage = lhs.index_select(&rhs, lhs_l, rhs_l, *dim)?;
+                update_all_outgoing(graph, node, storage.buffer())?;
             }
             //IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
             Matmul((b, m, n, k)) => {
@@ -2299,13 +2365,25 @@ impl Executor for MetalDevice {
                 let rhs_l = rhs_weight.layout();
 
                 let lhs_binding = lhs_weight.state.lock().map_err(Error::from)?;
-                let lhs = lhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+                let lhs_buffer = lhs_binding.clone().ok_or(InvalidOutgoing(op_node.id()))?;
 
                 let rhs_binding = rhs_weight.state.lock().map_err(Error::from)?;
-                let rhs = rhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
+                let rhs_buffer = rhs_binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let state = rhs.matmul(&lhs, (*b, *m, *n, *k), rhs_l, lhs_l)?;
-                update_all_outgoing(graph, node, state)?;
+                let lhs = MetalStorage::new(
+                    Arc::new(lhs_buffer),
+                    self.clone(),
+                    lhs_weight.layout().shape().elem_count(),
+                    *lhs_weight.dtype(),
+                );
+                let rhs = MetalStorage::new(
+                    Arc::new(rhs_buffer),
+                    self.clone(),
+                    rhs_weight.layout().shape().elem_count(),
+                    *rhs_weight.dtype(),
+                );
+                let storage = rhs.matmul(&lhs, (*b, *m, *n, *k), rhs_l, lhs_l)?;
+                update_all_outgoing(graph, node, storage.buffer())?;
             }
             CopyStridedSrc(dst_offset) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
@@ -2317,7 +2395,7 @@ impl Executor for MetalDevice {
                 let binding = in_weight.state.lock().map_err(Error::from)?;
                 let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let outgoing: Vec<(NodeIndex, NodeIndex, LazyEdge<MetalStorage>)> = graph
+                let outgoing: Vec<(NodeIndex, NodeIndex, LazyEdge<Buffer>)> = graph
                     .edges_directed(node, petgraph::Outgoing)
                     .map(|e: petgraph::graph::EdgeReference<_>| {
                         (e.source(), e.target(), e.weight().clone())
@@ -2328,11 +2406,25 @@ impl Executor for MetalDevice {
                     outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
                 let mut binding = out_weight.state.lock().map_err(Error::from)?;
-                let mut out_state = binding.get_or_insert_with(|| {
+                let out_state = binding.get_or_insert_with(|| {
                     allocate(self, out_weight.layout().shape(), *out_weight.dtype()).unwrap()
                 });
 
-                state.copy_strided_src(&mut out_state, *dst_offset, in_weight.layout())?;
+                let src = MetalStorage::new(
+                    Arc::new(state),
+                    self.clone(),
+                    in_weight.layout().shape().elem_count(),
+                    *in_weight.dtype(),
+                );
+
+                let mut dst = MetalStorage::new(
+                    Arc::new(out_state.clone()),
+                    self.clone(),
+                    out_weight.layout().shape().elem_count(),
+                    *out_weight.dtype(),
+                );
+
+                src.copy_strided_src(&mut dst, *dst_offset, in_weight.layout())?;
 
                 let mut out_weight = out_weight.clone();
                 out_weight.new_state(out_state.clone());
@@ -2346,7 +2438,7 @@ impl Executor for MetalDevice {
                 let binding = in_weight.state().lock().map_err(Error::from)?;
                 let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let outgoing: Vec<(NodeIndex, NodeIndex, LazyEdge<MetalStorage>)> = graph
+                let mut outgoing: Vec<(NodeIndex, NodeIndex, LazyEdge<Buffer>)> = graph
                     .edges_directed(node, petgraph::Outgoing)
                     .map(|e: petgraph::graph::EdgeReference<_>| {
                         (e.source(), e.target(), e.weight().clone())
@@ -2355,10 +2447,12 @@ impl Executor for MetalDevice {
 
                 assert!(outgoing.len() > 0);
 
+                outgoing.sort_by(|a, b| a.0.cmp(&b.0));
+
                 let (source, target, out_weight) =
                     outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
-                let target_incoming_edges: Vec<LazyEdge<MetalStorage>> = graph
+                let target_incoming_edges: Vec<LazyEdge<Buffer>> = graph
                     .edges_directed(*target, petgraph::Outgoing)
                     .map(|e: petgraph::graph::EdgeReference<_>| e.weight().clone())
                     .collect();
@@ -2370,11 +2464,24 @@ impl Executor for MetalDevice {
                     .ok_or(InvalidOutgoing(op_node.id()))?;
 
                 let mut binding = out_weight.state.lock().unwrap();
-                let mut out_state = binding.get_or_insert_with(|| {
+                let out_state = binding.get_or_insert_with(|| {
                     allocate(self, out_weight.layout().shape(), *out_weight.dtype()).unwrap()
                 });
 
-                state.copy2d(&mut out_state, *d1, *d2, *src_s, *dst_s, *src_o, *dst_o)?;
+                let src = MetalStorage::new(
+                    Arc::new(state),
+                    self.clone(),
+                    in_weight.layout().shape().elem_count(),
+                    *in_weight.dtype(),
+                );
+
+                let mut dst = MetalStorage::new(
+                    Arc::new(out_state.clone()),
+                    self.clone(),
+                    out_weight.layout().shape().elem_count(),
+                    *out_weight.dtype(),
+                );
+                src.copy2d(&mut dst, *d1, *d2, *src_s, *dst_s, *src_o, *dst_o)?;
 
                 let mut out_weight = out_weight.clone();
                 out_weight.new_state(out_state.clone());
@@ -2387,7 +2494,7 @@ impl Executor for MetalDevice {
                 let in_weight = in_edge.weight().clone();
                 let binding = in_weight.state.lock().unwrap();
                 let state = binding.clone().ok_or(InvalidIncoming(op_node.id()))?;
-                update_all_outgoing(graph, node, state.clone())?;
+                update_all_outgoing(graph, node, &state)?;
             }
             Output => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
@@ -2401,7 +2508,7 @@ impl Executor for MetalDevice {
         }
         Ok(())
     }
-    fn run(&self, graph: OpGraph) -> Result<MetalStorage> {
+    fn run(&self, graph: OpGraph) -> Result<Buffer> {
         //println!("{}", crate::lazy::graph_to_dot(&&graph));
         let mut graph = self.prepare(graph);
         let acyclic = Acyclic::try_from(graph.clone()).unwrap();

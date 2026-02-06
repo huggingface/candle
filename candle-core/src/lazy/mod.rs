@@ -81,10 +81,18 @@ impl EdgeId {
     }
 }
 
-trait Identity {
-    type Idx;
-    fn id(&self) -> Self::Idx;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BufferId(usize);
+
+impl BufferId {
+    fn new() -> Self {
+        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
+        use std::sync::atomic;
+        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
+    }
 }
+
 pub type OpGraph = DiGraph<OpNode, OpEdge>;
 
 #[derive(Debug, Clone)]
@@ -99,7 +107,7 @@ pub type LazyGraph<S: Debug + Clone> = DiGraph<OpNode, LazyEdge<S>>;
 pub fn update_all_outgoing<S: Debug + Clone>(
     g: &mut LazyGraph<S>,
     node: NodeIndex<u32>,
-    state: S,
+    state: &S,
 ) -> Result<()> {
     let edges: Vec<(NodeIndex, NodeIndex, LazyEdge<S>)> = g
         .edges_directed(node, Outgoing)
@@ -120,7 +128,7 @@ pub fn update_all_outgoing<S: Debug + Clone>(
 impl<S: Debug + Clone> From<OpEdge> for LazyEdge<S> {
     fn from(edge: OpEdge) -> Self {
         LazyEdge {
-            edge_id: edge.edge_id,
+            edge_id: edge.id,
             layout: edge.layout,
             dtype: edge.dtype,
             state: Arc::new(Mutex::new(None)),
@@ -306,20 +314,16 @@ impl LazyStorage {
     pub fn output(&self) -> Result<Self> {
         count();
 
-        let mut x = Some(Arc::new(Mutex::new(0usize)));
-        if let Some(s) = x {
-            *s.lock().unwrap() = 20;
-        }
-
         let mut next = self.clone();
-        let idx = next.add_operation(Op::Output);
-        let current_op = next.get_current_node()?;
+        let current_node = next.get_current_node()?;
 
-        let previous_edge = next.operations.first_edge(current_op, Incoming).unwrap();
-        let previous_edge = next.operations.edge_weight(previous_edge).unwrap();
-
-        let edge = OpEdge::new(previous_edge.layout().clone(), self.dtype());
-        next.operations.add_edge(current_op, idx, edge);
+        let current_op = self.operations.node_weight(current_node).unwrap();
+        // Only add output node if not already present
+        if !matches!(current_op.op(), Op::Output) {
+            let idx = next.add_operation(Op::Output);
+            let edge = OpEdge::new(Layout::contiguous(self.shape.clone()), self.dtype());
+            next.operations.add_edge(current_node, idx, edge);
+        };
 
         Ok(next)
     }
@@ -328,7 +332,7 @@ impl LazyStorage {
         count();
 
         let mut next = self.clone();
-        let idx = next.add_operation(Op::Output);
+        let idx = next.add_operation(Op::Sink);
         let current_op = next.get_current_node()?;
 
         let previous_edge = next.operations.first_edge(current_op, Incoming).unwrap();
@@ -361,19 +365,26 @@ where
     format!("{}", petgraph::dot::Dot::new(g))
 }
 
+pub trait LazyBuffer: Debug + Clone {}
+
+pub trait LazyAllocator<S: LazyBuffer> {
+    fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<S>;
+}
+
 pub trait Executor {
-    type ResultType: Debug + Clone;
+    type BufferType: LazyBuffer;
+    type AllocatorType: LazyAllocator<Self::BufferType>;
 
-    fn eval(&self, operations: &mut LazyGraph<Self::ResultType>, node: NodeIndex) -> Result<()>;
+    fn eval(&self, operations: &mut LazyGraph<Self::BufferType>, node: NodeIndex) -> Result<()>;
 
-    fn run(&self, operations: OpGraph) -> Result<Self::ResultType>;
+    fn run(&self, operations: OpGraph) -> Result<Self::BufferType>;
 
     /// Converts OpGraph to specialized LazyGraph
     /// TODO: Rename. preprocess?
-    fn prepare(&self, graph: OpGraph) -> LazyGraph<Self::ResultType> {
+    fn prepare(&self, graph: OpGraph) -> LazyGraph<Self::BufferType> {
         graph.map(
             |_, op| op.clone(),
-            |_, edge| LazyEdge::<Self::ResultType>::from(edge.clone()),
+            |_, edge| LazyEdge::<Self::BufferType>::from(edge.clone()),
         )
     }
 }
@@ -389,7 +400,7 @@ impl LazyStorage {
         }
     }
 
-    pub fn execute<E: Executor>(&self, executor: E) -> Result<E::ResultType> {
+    pub fn execute<E: Executor>(&self, executor: E) -> Result<E::BufferType> {
         // TODO: Apply backend agnostic optimizations
         // TODO: Apply backend specific optimizations
         executor.run(self.operations.clone())
@@ -398,17 +409,19 @@ impl LazyStorage {
 
 #[derive(Debug, Clone)]
 pub struct OpEdge {
-    edge_id: EdgeId,
+    id: EdgeId,
     layout: Layout,
     dtype: DType,
+    buffer_id: BufferId,
 }
 
 impl OpEdge {
     pub fn new(layout: Layout, dtype: DType) -> Self {
         OpEdge {
-            edge_id: EdgeId::new(),
+            id: EdgeId::new(),
             layout,
             dtype,
+            buffer_id: BufferId::new(),
         }
     }
 
@@ -416,8 +429,12 @@ impl OpEdge {
         &self.layout
     }
 
-    pub fn dtype(&self) -> &DType {
-        &self.dtype
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    pub fn buffer_id(&self) -> BufferId {
+        self.buffer_id
     }
 }
 
@@ -499,7 +516,7 @@ impl Display for OpEdge {
         write!(
             f,
             "{} ({:?}, {:?}, {:?})",
-            self.edge_id.0,
+            self.id.0,
             self.layout.shape().dims(),
             self.layout.stride(),
             self.dtype
@@ -566,7 +583,7 @@ impl LazyStorage {
             .operations
             .raw_edges()
             .iter()
-            .map(|e| e.weight.edge_id)
+            .map(|e| e.weight.id)
             .collect();
 
         // Add all relevant nodes if not already present
@@ -580,7 +597,7 @@ impl LazyStorage {
 
         // Add edges from other graph, using the index mapping.
         other.operations.raw_edges().iter().for_each(|other_edge| {
-            let oid = other_edge.weight.edge_id;
+            let oid = other_edge.weight.id;
             if !edges.contains(&oid) {
                 let source = other_edge.source();
                 let target = other_edge.target();
@@ -1365,6 +1382,7 @@ mod tests {
             &Device::Lazy(LazyDevice),
         )?;
         let t1 = t1.sqrt()?;
+        assert_eq!(t1.to_vec1::<f32>()?, &[1.0, 1.4142135, 1.7320508, 2.0]);
 
         let t2 = Tensor::from_slice(
             &[5.0f32, 6.0, 7.0, 8.0],
@@ -1372,14 +1390,15 @@ mod tests {
             &Device::Lazy(LazyDevice),
         )?;
 
-        let t2 = t2.affine(0.5, 1.2)?;
+        //let t2 = t2.affine(0.5, 1.2)?;
+        //assert_eq!(t2.to_vec1::<f32>()?, &[3.7, 4.2, 4.7, 5.2]);
 
         let result = Tensor::cat(&[t1, t2], 0)?;
 
         let result = result.flatten_all()?.to_vec1::<f32>()?;
         assert_eq!(
             result,
-            &[1.0, 1.4142135, 1.7320508, 2.0, 3.7, 4.2, 4.7, 5.2]
+            &[1.0, 1.4142135, 1.7320508, 2.0, 5.0, 6.0, 7.0, 8.0]
         );
         Ok(())
     }

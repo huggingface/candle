@@ -1964,8 +1964,15 @@ impl Tensor {
                 }
                 #[cfg(feature = "metal")]
                 {
-                    let result = storage.execute(crate::MetalDevice::new(0)?)?;
-                    return from_cpu_storage(&result.to_cpu_storage()?);
+                    let device = crate::MetalDevice::new(0)?;
+                    let result = storage.execute(device.clone())?;
+                    let storage = crate::MetalStorage::new(
+                        Arc::new(result),
+                        device,
+                        storage.shape().elem_count(),
+                        storage.dtype(),
+                    );
+                    return from_cpu_storage(&storage.to_cpu_storage()?);
                 }
                 #[cfg(not(any(feature = "metal", feature = "cuda")))]
                 {
