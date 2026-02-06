@@ -8,8 +8,8 @@ use petgraph::{EdgeType, Graph};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
+use std::sync::atomic;
 use std::sync::Arc;
-use std::sync::{atomic, Mutex};
 
 static OP_COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
 
@@ -95,15 +95,6 @@ impl BufferId {
 
 pub type OpGraph = DiGraph<OpNode, OpEdge>;
 
-#[derive(Debug, Clone)]
-pub struct LazyEdge<S: Debug + Clone> {
-    edge_id: EdgeId,
-    layout: Layout,
-    dtype: DType,
-    pub state: Arc<Mutex<Option<S>>>,
-}
-pub type LazyGraph<S: Debug + Clone> = DiGraph<OpNode, LazyEdge<S>>;
-
 pub fn update_all_outgoing(
     g: &mut OpGraph,
     node: NodeIndex<u32>,
@@ -125,24 +116,12 @@ pub fn update_all_outgoing(
     Ok(())
 }
 
-impl<S: Debug + Clone> From<OpEdge> for LazyEdge<S> {
-    fn from(edge: OpEdge) -> Self {
-        LazyEdge {
-            edge_id: edge.id,
-            layout: edge.layout,
-            dtype: edge.dtype,
-            state: Arc::new(Mutex::new(None)),
-        }
-    }
-}
-
 pub struct Ancestors<'a, N, E, D, Idx>
 where
     E: 'a,
     Idx: 'a + IndexType,
     D: EdgeType,
 {
-    skip_start: NodeIndex<Idx>,
     graph: &'a Graph<N, E, D, Idx>,
     edges: &'a [Edge<E, Idx>],
     visited: HashSet<EdgeIndex<Idx>>,
@@ -160,7 +139,6 @@ where
         D: EdgeType,
     {
         Ancestors {
-            skip_start: start,
             graph: &g,
             edges: g.raw_edges(),
             visited: HashSet::new(),
@@ -242,26 +220,6 @@ pub fn get_incoming_edges<N, E>(
     }
 
     result
-}
-
-impl<S: Debug + Clone> LazyEdge<S> {
-    pub fn id(&self) -> EdgeId {
-        self.edge_id
-    }
-    pub fn layout(&self) -> &Layout {
-        &self.layout
-    }
-    pub fn dtype(&self) -> &DType {
-        &self.dtype
-    }
-
-    pub fn state(&self) -> &Arc<Mutex<Option<S>>> {
-        &self.state
-    }
-
-    pub fn new_state(&mut self, state: S) {
-        self.state = Arc::new(Mutex::new(Some(state)));
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -524,24 +482,6 @@ impl Display for OpEdge {
             self.layout.shape().dims(),
             self.layout.stride(),
             self.dtype
-        )
-    }
-}
-
-impl<S: Debug + Clone> Display for LazyEdge<S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} ({:?}, {:?}, {:?}, {:?})",
-            self.edge_id.0,
-            self.layout.shape().dims(),
-            self.layout.stride(),
-            self.dtype,
-            if self.state.lock().unwrap().is_none() {
-                "not set"
-            } else {
-                "set"
-            }
         )
     }
 }
