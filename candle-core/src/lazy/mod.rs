@@ -104,12 +104,12 @@ pub struct LazyEdge<S: Debug + Clone> {
 }
 pub type LazyGraph<S: Debug + Clone> = DiGraph<OpNode, LazyEdge<S>>;
 
-pub fn update_all_outgoing<S: Debug + Clone>(
-    g: &mut LazyGraph<S>,
+pub fn update_all_outgoing(
+    g: &mut OpGraph,
     node: NodeIndex<u32>,
-    state: &S,
+    buffer_id: BufferId,
 ) -> Result<()> {
-    let edges: Vec<(NodeIndex, NodeIndex, LazyEdge<S>)> = g
+    let edges: Vec<(NodeIndex, NodeIndex, OpEdge)> = g
         .edges_directed(node, Outgoing)
         .map(|e| (e.source(), e.target(), e.weight().clone()))
         .collect();
@@ -119,8 +119,8 @@ pub fn update_all_outgoing<S: Debug + Clone>(
         //return Err(LazyError::InvalidOutgoing(node));
     }
     for (source, target, mut weight) in edges {
-        weight.new_state(state.clone());
-        g.update_edge(source, target, weight.clone());
+        weight.buffer_id = buffer_id;
+        g.update_edge(source, target, weight);
     }
     Ok(())
 }
@@ -196,9 +196,9 @@ where
 
 // Return a subgraph which includes all nodes and edges that are ascendants of the provided node index
 // TODO: pub fn ancestors<N, E>(g: &DiGraph<N, E>, node: NodeIndex<u32>) -> DiGraph<N, E> {
-pub fn ancestors<S: Debug + Clone>(g: &LazyGraph<S>, node: NodeIndex<u32>) -> LazyGraph<S> {
+pub fn ancestors(g: &OpGraph, node: NodeIndex<u32>) -> OpGraph {
     let ancestors_iter = Ancestors::of(g, node);
-    let mut ancestors = LazyGraph::<S>::new();
+    let mut ancestors = OpGraph::new();
     let mut idx_map = HashMap::new();
 
     ancestors_iter.for_each(|e| {
@@ -367,26 +367,30 @@ where
 
 pub trait LazyBuffer: Debug + Clone {}
 
-pub trait LazyAllocator<S: LazyBuffer> {
-    fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<S>;
+pub trait LazyAllocator<B: LazyBuffer> {
+    fn insert(&mut self, id: BufferId, buffer: B) -> Result<()>;
+    fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<B>;
 }
 
 pub trait Executor {
     type BufferType: LazyBuffer;
     type AllocatorType: LazyAllocator<Self::BufferType>;
 
-    fn eval(&self, operations: &mut LazyGraph<Self::BufferType>, node: NodeIndex) -> Result<()>;
-
     fn run(&self, operations: OpGraph) -> Result<Self::BufferType>;
 
-    /// Converts OpGraph to specialized LazyGraph
-    /// TODO: Rename. preprocess?
-    fn prepare(&self, graph: OpGraph) -> LazyGraph<Self::BufferType> {
-        graph.map(
-            |_, op| op.clone(),
-            |_, edge| LazyEdge::<Self::BufferType>::from(edge.clone()),
-        )
+    fn optimize(&self, _graph: &mut OpGraph) {
+        // TODO: Generic optimizations
     }
+
+    /// Backend specific optimizations. Defaults to noop.
+    fn specialize(&self, _graph: &mut OpGraph) {}
+
+    fn eval(
+        &self,
+        operations: &mut OpGraph,
+        allocator: &mut Self::AllocatorType,
+        node: NodeIndex,
+    ) -> Result<()>;
 }
 
 impl LazyStorage {
@@ -1390,15 +1394,17 @@ mod tests {
             &Device::Lazy(LazyDevice),
         )?;
 
-        //let t2 = t2.affine(0.5, 1.2)?;
-        //assert_eq!(t2.to_vec1::<f32>()?, &[3.7, 4.2, 4.7, 5.2]);
+        // TODO: bug. copy2d uses first copy data twice _and_ applies affine to it.
+        // So even if t2 is correct below, the final result is wrong in two different ways.
+        let t2 = t2.affine(0.5, 1.2)?;
+        assert_eq!(t2.to_vec1::<f32>()?, &[3.7, 4.2, 4.7, 5.2]);
 
         let result = Tensor::cat(&[t1, t2], 0)?;
 
         let result = result.flatten_all()?.to_vec1::<f32>()?;
         assert_eq!(
             result,
-            &[1.0, 1.4142135, 1.7320508, 2.0, 5.0, 6.0, 7.0, 8.0]
+            &[1.0, 1.4142135, 1.7320508, 2.0, 3.7, 4.2, 4.7, 5.2]
         );
         Ok(())
     }
