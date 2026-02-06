@@ -60,7 +60,7 @@ tokio = "1.48.0"
 
 [build-dependencies]
 anyhow = { workspace = true }
-cudaforge = { version = "0.1", optional = true }
+cudaforge = { version = "0.1.2", optional = true }
 hf-hub = { workspace = true, features = ["tokio"] }
 
 [features]
