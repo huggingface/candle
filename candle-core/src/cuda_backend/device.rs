@@ -34,6 +34,7 @@ pub struct ModuleStore {
 pub struct PoolInner {
     host_slices: Vec<Vec<usize>>,
     slices: Vec<Arc<cudarc::driver::CudaSlice<usize>>>,
+    by_hash: HashMap<[u8; 32], Vec<usize>>,
     size: usize,
 }
 
@@ -55,16 +56,35 @@ impl CudaGraphCapturePool {
         inner.size
     }
 
+    // TODO set caching threshold so we don't cache large allocations
     pub fn capture_htod_slice(
         &self,
         host_slice: Vec<usize>,
+        hash: [u8; 32],
         dev_slice: Arc<cudarc::driver::CudaSlice<usize>>,
     ) {
         let mut inner = self.inner.lock().unwrap();
         let bytes_len = host_slice.len() * std::mem::size_of::<usize>();
+        let idx = inner.host_slices.len();
         inner.host_slices.push(host_slice);
         inner.slices.push(dev_slice);
+        inner.by_hash.entry(hash).or_default().push(idx);
         inner.size += bytes_len;
+    }
+
+    pub fn get_htod_slice(
+        &self,
+        host_slice: &[usize],
+        hash: [u8; 32],
+    ) -> Option<Arc<cudarc::driver::CudaSlice<usize>>> {
+        let inner = self.inner.lock().unwrap();
+        let candidate_idxs = inner.by_hash.get(&hash)?;
+        for idx in candidate_idxs {
+            if inner.host_slices[*idx] == host_slice {
+                return Some(inner.slices[*idx].clone());
+            }
+        }
+        None
     }
 }
 
@@ -204,9 +224,19 @@ impl CudaDevice {
     pub fn capture_htod_slice(
         &self,
         host_slice: Vec<usize>,
+        hash: [u8; 32],
         dev_slice: Arc<cudarc::driver::CudaSlice<usize>>,
     ) {
-        self.capture_pool.capture_htod_slice(host_slice, dev_slice);
+        self.capture_pool
+            .capture_htod_slice(host_slice, hash, dev_slice);
+    }
+
+    pub fn get_captured_htod_slice(
+        &self,
+        host_slice: &[usize],
+        hash: [u8; 32],
+    ) -> Option<Arc<cudarc::driver::CudaSlice<usize>>> {
+        self.capture_pool.get_htod_slice(host_slice, hash)
     }
 
     pub fn capture_pool_size(&self) -> usize {

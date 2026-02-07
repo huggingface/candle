@@ -26,10 +26,24 @@ pub enum SlicePtrOrNull<T> {
     Null,
 }
 
-fn clone_htod_capture_pool(dev: &CudaDevice, v: Vec<usize>) -> Result<Arc<CudaSlice<usize>>> {
+fn blake3_hash_usize_slice(v: &[usize]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    for value in v {
+        hasher.update(&value.to_ne_bytes());
+    }
+    *hasher.finalize().as_bytes()
+}
+
+//TODO make private again before merge
+pub fn clone_htod_capture_pool(dev: &CudaDevice, v: Vec<usize>) -> Result<Arc<CudaSlice<usize>>> {
+    let hash = blake3_hash_usize_slice(&v);
+    if let Some(dev_slice) = dev.get_captured_htod_slice(&v, hash) {
+        return Ok(dev_slice);
+    }
+
     let dev_slice = Arc::new(dev.clone_htod(&v)?);
     if dev.is_graph_capturing()? {
-        dev.capture_htod_slice(v, dev_slice.clone());
+        dev.capture_htod_slice(v, hash, dev_slice.clone());
     }
     Ok(dev_slice)
 }
