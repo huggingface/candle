@@ -7,7 +7,6 @@ extern crate accelerate_src;
 use anyhow::Result;
 use clap::Parser;
 use std::io::Write;
-use std::time::Instant;
 
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::encodec;
@@ -109,8 +108,7 @@ fn main() -> Result<()> {
         candle::utils::with_simd128(),
         candle::utils::with_f16c()
     );
-    let device = candle_examples::device(args.cpu)?; 
-    let start = Instant::now();
+    let device = candle_examples::device(args.cpu)?;
     let api = Api::new()?;
     let repo = api.model("lmz/candle-metavoice".to_string());
     let first_stage_meta = match &args.first_stage_meta {
@@ -275,6 +273,5 @@ fn main() -> Result<()> {
     let pcm = pcm.to_vec1::<f32>()?;
     let mut output = std::fs::File::create(&args.out_file)?;
     candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
-    println!("Total Duration: {:?}", Instant::now().duration_since(start));
     Ok(())
 }

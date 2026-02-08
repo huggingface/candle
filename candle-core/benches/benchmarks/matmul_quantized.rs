@@ -84,7 +84,6 @@ fn test_matmul(
                 use candle_core::wgpu::wgpu_functions::matmul::sgemm::GenericDynamicMatmulShaderSettings;
 
                 let mut run_bench = |func_name : String|{
-                    tracing::info!("TEST: {func_name}");
                     if multiple_sizes {
                         group.bench_with_input(
                             BenchmarkId::new(func_name.clone(), size),

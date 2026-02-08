@@ -86,14 +86,12 @@ fn test_matmul(
                         if tpa { "_tranposedA" } else { "" },
                         if tpb { "_tranposedB" } else { "" }
                     ));
-                    tracing::info!("TEST: {func_name}");
                     if multiple_sizes {
                         group.bench_with_input(
                             BenchmarkId::new(func_name.clone(), size),
                             &size,
                             |b, _| {
                                 b.iter_custom(|iters| {
-                                    tracing::info!("TEST_CUSTOM_ITER: {func_name}");
                                     let start = Instant::now();
                                     for _ in 0..iters {
                                         run(black_box(&lhs), black_box(&rhs));

@@ -33,21 +33,15 @@ safetensors = { workspace = true }
 thiserror = { workspace = true }
 yoke = { workspace = true }
 zip = { workspace = true }
-tracing = {workspace = true, optional = true, features = ["release_max_level_off"]}
 
 #Wgpu Dependencies:
-wgpu = { workspace = true, optional = true}
-flume = { workspace = true, optional = true}
+#wgpu = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
+tracing = {workspace = true, optional = true, features = ["release_max_level_off"]}
+
 pollster = { workspace = true, optional = true }
-log = {workspace = true, optional = true}
-serde_json = { workspace = true, optional = true }
 candle-wgpu-kernels = { workspace = true, optional = true }
 wgpu-compute-layer = { workspace = true, optional = true }
-rustc-hash = {workspace = true, optional = true}
-#for wgpu_debug || wgpu_debug_serialize
-serde = { workspace = true, optional = true }
-
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 candle-ug = { workspace = true, optional = true }
@@ -71,9 +65,23 @@ metal = [
     "candle-ug?/metal",
 ]
 ug = ["dep:candle-ug"]
-wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing", "dep:rustc-hash", "dep:wgpu-compute-layer"]
-wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize", "wgpu-compute-layer/wgpu_debug"]
-wgpu_debug_serialize = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize", "wgpu-compute-layer/wgpu_debug_serialize"]
+wgpu = [
+    "dep:bytemuck",
+    "dep:tracing",
+    "dep:pollster",
+    "dep:candle-wgpu-kernels",
+    "dep:wgpu-compute-layer",
+]
+wgpu_debug = [
+    "wgpu",
+    "candle-wgpu-kernels/wgpu_debug_serialize",
+    "wgpu-compute-layer/wgpu_debug",
+]
+wgpu_debug_serialize = [
+    "wgpu",
+    "candle-wgpu-kernels/wgpu_debug_serialize",
+    "wgpu-compute-layer/wgpu_debug_serialize",
+]
 
 [[bench]]
 name = "bench_main"

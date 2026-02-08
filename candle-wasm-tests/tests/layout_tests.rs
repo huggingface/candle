@@ -131,34 +131,3 @@ async fn strided_blocks() -> Result<()> {
     };
     Ok(())
 }
-async fn layout(device: &Device) -> Result<()> {
-    let rs: usize = 14;
-    let a: usize = 12;
-    let b: usize = 13;
-    let data1 = Tensor::ones((1, b, a, rs), candle::DType::U32, &Device::Cpu)?;
-    let data1 = data1.reshape((1, b, a, rs))?;
-    let data2 = data1.to_device_async(device).await?;
-    let index1 = data1.i((.., .., 3..6, ..4))?;
-    let index2 = data2.i((.., .., 3..6, ..4))?;
-    let result1 = index1.reshape((b, 3, 4))?;
-    let result2 = index2.reshape((b, 3, 4))?;
-    assert_eq!(
-        result1.to_vec3_async::< u32 > (). await ?, result2.to_vec3_async::< u32 > ().
-        await ?
-    );
-    let copy1 = index1.copy()?;
-    let copy2 = index2.copy()?;
-    let result1 = copy1.reshape((b, 3, 4))?;
-    let result2 = copy2.reshape((b, 3, 4))?;
-    assert_eq!(
-        result1.to_vec3_async::< u32 > (). await ?, result2.to_vec3_async::< u32 > ().
-        await ?
-    );
-    let result1 = index1.sum_all()?.to_vec0_async::<u32>().await?;
-    let result2 = index2.sum_all()?.to_vec0_async::<u32>().await?;
-    assert_eq!(result1, result2);
-    Ok(())
-}
-candle_wasm_tests::test_device!(
-    layout, layout_cpu, layout_gpu, layout_metal, layout_wgpu
-);

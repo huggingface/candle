@@ -40,7 +40,10 @@ impl LogitsProcessor {
         Self::from_sampling(seed, sampling)
     }
 
-    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `sample_argmax_async` for wasm support instead"))]
+    #[cfg_attr(
+        all(target_arch = "wasm32", feature = "wgpu"),
+        deprecated(note = "use `sample_argmax_async` for wasm support instead")
+    )]
     #[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
     fn sample_argmax(&mut self, logits: Tensor) -> Result<u32> {
         logits.argmax(candle::D::Minus1)?.to_scalar::<u32>()
@@ -73,7 +76,7 @@ impl LogitsProcessor {
     /// less likely to go "off the rails".
     fn sample_topp(&mut self, prs: &mut Vec<f32>, top_p: f32) -> Result<u32> {
         let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
-        
+
         // Sort by descending probability.
         argsort_indices.sort_by(|&i, &j| prs[j].total_cmp(&prs[i]));
 
@@ -128,16 +131,27 @@ impl LogitsProcessor {
         self.sample_f_async(logits, |_| {}).await
     }
 
-    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `sample_async` for wasm support instead"))]
+    #[cfg_attr(
+        all(target_arch = "wasm32", feature = "wgpu"),
+        deprecated(note = "use `sample_async` for wasm support instead")
+    )]
     pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
         #[allow(deprecated)] //we are already ina deprecated function!
         self.sample_f(logits, |_| {})
     }
 
-    pub async fn sample_f_async(&mut self, logits: &Tensor, f: impl FnOnce(&mut [f32])) -> Result<u32> {
+    pub async fn sample_f_async(
+        &mut self,
+        logits: &Tensor,
+        f: impl FnOnce(&mut [f32]),
+    ) -> Result<u32> {
         let logits = logits.to_dtype(DType::F32)?;
 
-        async fn prs (temperature: f64,logits: &Tensor,  f: impl FnOnce(&mut [f32])) -> Result<Vec<f32>> {
+        async fn prs(
+            temperature: f64,
+            logits: &Tensor,
+            f: impl FnOnce(&mut [f32]),
+        ) -> Result<Vec<f32>> {
             let logits = (logits / temperature)?;
             let prs = candle_nn::ops::softmax_last_dim(&logits)?;
             let mut prs = prs.to_vec1_async().await?;
@@ -151,11 +165,11 @@ impl LogitsProcessor {
                 self.sample_gumbel_softmax(&logits, *temperature)?
             }
             Sampling::All { temperature } => {
-                let prs : Vec<f32> = prs(*temperature,&logits,f).await?;
+                let prs: Vec<f32> = prs(*temperature, &logits, f).await?;
                 self.sample_multinomial(&prs)?
             }
             Sampling::TopP { p, temperature } => {
-                let mut prs : Vec<f32> = prs(*temperature,&logits,f).await?;
+                let mut prs: Vec<f32> = prs(*temperature, &logits, f).await?;
                 if *p <= 0.0 || *p >= 1.0 {
                     // simply sample from the predicted probability distribution
                     self.sample_multinomial(&prs)?
@@ -165,18 +179,21 @@ impl LogitsProcessor {
                 }
             }
             Sampling::TopK { k, temperature } => {
-                let mut prs: Vec<f32> = prs(*temperature,&logits,f).await?;
+                let mut prs: Vec<f32> = prs(*temperature, &logits, f).await?;
                 self.sample_topk(&mut prs, *k)?
             }
             Sampling::TopKThenTopP { k, p, temperature } => {
-                let mut prs: Vec<f32> = prs(*temperature,&logits,f).await?;
+                let mut prs: Vec<f32> = prs(*temperature, &logits, f).await?;
                 self.sample_topk_topp(&mut prs, *k, *p as f32)?
             }
         };
         Ok(next_token)
     }
 
-    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `sample_f_async` for wasm support instead"))]
+    #[cfg_attr(
+        all(target_arch = "wasm32", feature = "wgpu"),
+        deprecated(note = "use `sample_f_async` for wasm support instead")
+    )]
     #[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
     pub fn sample_f(&mut self, logits: &Tensor, f: impl FnOnce(&mut [f32])) -> Result<u32> {
         let logits = logits.to_dtype(DType::F32)?;
@@ -187,7 +204,7 @@ impl LogitsProcessor {
             f(&mut prs);
             Ok(prs)
         };
-        
+
         #[allow(deprecated)] //we are already ina deprecated function!
         let next_token = match &self.sampling {
             Sampling::ArgMax => self.sample_argmax(logits)?,

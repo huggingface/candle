@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { workspace = true}
+candle = { workspace = true }
 half = { workspace = true }
 thiserror = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -24,7 +24,6 @@ candle-metal-kernels = { workspace = true, optional = true }
 libc = { workspace = true }
 
 [dev-dependencies]
-pollster = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }
@@ -32,13 +31,13 @@ rand_distr = { workspace = true }
 criterion = { workspace = true }
 
 [features]
+default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
 cudnn = ["candle/cudnn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:objc2-metal"]
 wgpu = ["candle/wgpu"]
-default=[]
 
 [[bench]]
 name = "bench_main"

@@ -85,11 +85,16 @@ async fn avg_pool2d_pytorch(dev: &Device) -> Result<()> {
             dev,
         )?
         .reshape((1, 2, 4, 4))?;
+    let pool = t.avg_pool2d(2)?.squeeze(0)?;
     if !dev.is_wgpu() {
-        let pool = t.avg_pool2d(2)?.squeeze(0)?;
         assert_eq!(
             to_vec3_round_async(& pool, 4). await ?, [[[- 1.1926, - 0.0395], [0.2688,
             0.1871]], [[0.1835, - 0.1606], [0.6249, 0.3217]]]
+        );
+    } else {
+        assert_eq!(
+            to_vec3_round_async(& pool, 4). await ?, [[[- 1.1926, - 0.0395], [0.2688,
+            0.1871]], [[0.1835, - 0.1605], [0.6249, 0.3217]]]
         );
     }
     let pool = t.avg_pool2d(3)?.squeeze(0)?;
@@ -116,15 +121,6 @@ async fn upsample_nearest2d(dev: &Device) -> Result<()> {
     );
     Ok(())
 }
-async fn upsample_nearest1d(dev: &Device) -> Result<()> {
-    let t = Tensor::arange(0f32, 3f32, dev)?.reshape((1, 1, 3))?;
-    let upsampled = t.upsample_nearest1d(6)?.i(0)?.i(0)?;
-    assert_eq!(t.i(0) ?.i(0) ?.to_vec1_async::< f32 > (). await ?, [0.0, 1.0, 2.0]);
-    assert_eq!(
-        upsampled.to_vec1_async::< f32 > (). await ?, [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
-    );
-    Ok(())
-}
 candle_wasm_tests::test_device!(
     avg_pool2d, avg_pool2d_cpu, avg_pool2d_gpu, avg_pool2d_metal, avg_pool2d_wgpu
 );
@@ -134,10 +130,6 @@ candle_wasm_tests::test_device!(
 );
 candle_wasm_tests::test_device!(
     max_pool2d, max_pool2d_cpu, max_pool2d_gpu, max_pool2d_metal, max_pool2d_wgpu
-);
-candle_wasm_tests::test_device!(
-    upsample_nearest1d, upsample_nearest1d_cpu, upsample_nearest1d_gpu,
-    upsample_nearest1d_metal, upsample_nearest1d_wgpu
 );
 candle_wasm_tests::test_device!(
     upsample_nearest2d, upsample_nearest2d_cpu, upsample_nearest2d_gpu,

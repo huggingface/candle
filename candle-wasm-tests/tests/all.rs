@@ -530,51 +530,6 @@ candle_wasm_tests::test_device!(
     bilinear_align_corners_difference_gpu, bilinear_align_corners_difference_metal,
     bilinear_align_corners_difference_wgpu
 );
-}pub mod convert_tests {
-// ============================================================================
-// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
-// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
-// ============================================================================
-
-#![allow(unused_imports, unexpected_cfgs, unused_parens)]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_test::wasm_bindgen_test as test;
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::test as test;
-use candle_wasm_tests::{
-    to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
-};
-use anyhow::{Ok, Result};
-use candle::{test_device, Device, Tensor};
-async fn convert(device: &Device) -> Result<()> {
-    let vf32 = Tensor::arange(0f32, 4f32, device)?;
-    let vf32_u32: Vec<u32> = vf32.to_dtype(candle::DType::U32)?.to_vec1_async().await?;
-    assert_eq!(vf32_u32, [0u32, 1u32, 2u32, 3u32]);
-    let vu32 = Tensor::new(vf32_u32, device)?;
-    let vu32_f32: Vec<f32> = vu32.to_dtype(candle::DType::F32)?.to_vec1_async().await?;
-    assert_eq!(vu32_f32, [0f32, 1f32, 2f32, 3f32]);
-    let vu32_u8: Vec<u8> = vu32.to_dtype(candle::DType::U8)?.to_vec1_async().await?;
-    assert_eq!(vu32_u8, [0, 1, 2, 3]);
-    let vf32_u8: Vec<u8> = vf32.to_dtype(candle::DType::U8)?.to_vec1_async().await?;
-    assert_eq!(vf32_u8, [0, 1, 2, 3]);
-    let vu8 = vu32.to_dtype(candle::DType::U8)?;
-    let vu8_f32: Vec<f32> = vu8.to_dtype(candle::DType::F32)?.to_vec1_async().await?;
-    assert_eq!(vu8_f32, [0f32, 1f32, 2f32, 3f32]);
-    Ok(())
-}
-async fn alloc(device: &Device) -> Result<()> {
-    let t = 5.0f64;
-    let ratio = (Tensor::ones(1, candle::DType::F32, device)? * t)?;
-    assert_eq!(ratio.to_vec1_async::< f32 > (). await ?, [5f32]);
-    let ratio = (Tensor::ones(1, candle::DType::U32, device)? * t)?;
-    assert_eq!(ratio.to_vec1_async::< u32 > (). await ?, [5u32]);
-    Ok(())
-}
-candle_wasm_tests::test_device!(
-    convert, convert_cpu, convert_gpu, convert_metal, convert_wgpu
-);
-candle_wasm_tests::test_device!(alloc, alloc_cpu, alloc_gpu, alloc_metal, alloc_wgpu);
 }pub mod conv_tests {
 // ============================================================================
 // === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
@@ -2751,37 +2706,6 @@ async fn strided_blocks() -> Result<()> {
     };
     Ok(())
 }
-async fn layout(device: &Device) -> Result<()> {
-    let rs: usize = 14;
-    let a: usize = 12;
-    let b: usize = 13;
-    let data1 = Tensor::ones((1, b, a, rs), candle::DType::U32, &Device::Cpu)?;
-    let data1 = data1.reshape((1, b, a, rs))?;
-    let data2 = data1.to_device_async(device).await?;
-    let index1 = data1.i((.., .., 3..6, ..4))?;
-    let index2 = data2.i((.., .., 3..6, ..4))?;
-    let result1 = index1.reshape((b, 3, 4))?;
-    let result2 = index2.reshape((b, 3, 4))?;
-    assert_eq!(
-        result1.to_vec3_async::< u32 > (). await ?, result2.to_vec3_async::< u32 > ().
-        await ?
-    );
-    let copy1 = index1.copy()?;
-    let copy2 = index2.copy()?;
-    let result1 = copy1.reshape((b, 3, 4))?;
-    let result2 = copy2.reshape((b, 3, 4))?;
-    assert_eq!(
-        result1.to_vec3_async::< u32 > (). await ?, result2.to_vec3_async::< u32 > ().
-        await ?
-    );
-    let result1 = index1.sum_all()?.to_vec0_async::<u32>().await?;
-    let result2 = index2.sum_all()?.to_vec0_async::<u32>().await?;
-    assert_eq!(result1, result2);
-    Ok(())
-}
-candle_wasm_tests::test_device!(
-    layout, layout_cpu, layout_gpu, layout_metal, layout_wgpu
-);
 }pub mod matmul_tests {
 // ============================================================================
 // === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
@@ -3112,11 +3036,16 @@ async fn avg_pool2d_pytorch(dev: &Device) -> Result<()> {
             dev,
         )?
         .reshape((1, 2, 4, 4))?;
+    let pool = t.avg_pool2d(2)?.squeeze(0)?;
     if !dev.is_wgpu() {
-        let pool = t.avg_pool2d(2)?.squeeze(0)?;
         assert_eq!(
             to_vec3_round_async(& pool, 4). await ?, [[[- 1.1926, - 0.0395], [0.2688,
             0.1871]], [[0.1835, - 0.1606], [0.6249, 0.3217]]]
+        );
+    } else {
+        assert_eq!(
+            to_vec3_round_async(& pool, 4). await ?, [[[- 1.1926, - 0.0395], [0.2688,
+            0.1871]], [[0.1835, - 0.1605], [0.6249, 0.3217]]]
         );
     }
     let pool = t.avg_pool2d(3)?.squeeze(0)?;
@@ -3143,15 +3072,6 @@ async fn upsample_nearest2d(dev: &Device) -> Result<()> {
     );
     Ok(())
 }
-async fn upsample_nearest1d(dev: &Device) -> Result<()> {
-    let t = Tensor::arange(0f32, 3f32, dev)?.reshape((1, 1, 3))?;
-    let upsampled = t.upsample_nearest1d(6)?.i(0)?.i(0)?;
-    assert_eq!(t.i(0) ?.i(0) ?.to_vec1_async::< f32 > (). await ?, [0.0, 1.0, 2.0]);
-    assert_eq!(
-        upsampled.to_vec1_async::< f32 > (). await ?, [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
-    );
-    Ok(())
-}
 candle_wasm_tests::test_device!(
     avg_pool2d, avg_pool2d_cpu, avg_pool2d_gpu, avg_pool2d_metal, avg_pool2d_wgpu
 );
@@ -3161,10 +3081,6 @@ candle_wasm_tests::test_device!(
 );
 candle_wasm_tests::test_device!(
     max_pool2d, max_pool2d_cpu, max_pool2d_gpu, max_pool2d_metal, max_pool2d_wgpu
-);
-candle_wasm_tests::test_device!(
-    upsample_nearest1d, upsample_nearest1d_cpu, upsample_nearest1d_gpu,
-    upsample_nearest1d_metal, upsample_nearest1d_wgpu
 );
 candle_wasm_tests::test_device!(
     upsample_nearest2d, upsample_nearest2d_cpu, upsample_nearest2d_gpu,

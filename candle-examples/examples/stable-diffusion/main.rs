@@ -4,8 +4,6 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use std::time::Instant;
-
 use candle_transformers::models::stable_diffusion;
 use std::ops::Div;
 
@@ -618,7 +616,6 @@ fn run(args: Args) -> Result<()> {
 
     let mut scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
-    let start = Instant::now();
     // If a seed is not given, generate a random seed and print it
     let seed = seed.unwrap_or(rand::rng().random_range(0u64..u64::MAX));
 
@@ -819,7 +816,6 @@ fn run(args: Args) -> Result<()> {
             None,
         )?;
     }
-    println!("Total Duration: {:?}", Instant::now().duration_since(start));
     Ok(())
 }
 

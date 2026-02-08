@@ -64,6 +64,7 @@ bindgen_cuda = { version = "0.1.5", optional = true }
 hf-hub = { workspace = true, features = ["tokio"] }
 
 [features]
+default = []
 accelerate = [
     "dep:accelerate-src",
     "candle/accelerate",
@@ -96,7 +97,6 @@ wgpu_debug = ["wgpu", "candle/wgpu_debug"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
 buildtime-download = []
-default = []
 
 [[example]]
 name = "llama_multiprocess"

@@ -26,7 +26,7 @@ pub struct WgpuDevice {
 impl WgpuDevice {
     #[instrument]
     pub(crate) async fn create(
-        index: usize,
+        _index: usize,
         configuration: crate::WgpuDeviceConfig,
     ) -> crate::Result<Self> {
         let device = wgpu_compute_layer::WgpuDevice::create_async(configuration.into()).await?;
