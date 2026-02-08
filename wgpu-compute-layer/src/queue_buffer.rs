@@ -75,6 +75,10 @@ impl PipelineReference {
             inplaceable,
         }
     }
+
+    pub fn get_index(&self) -> shader_loader::PipelineIndex{
+        self.index
+    }
 }
 
 #[derive(Debug)]
@@ -148,63 +152,19 @@ impl DefinesCache {
     }
 }
 
-/// A struct where all operations are cached.
+/// Core fields that are frequently drained for flushing.
 #[derive(Debug)]
-pub struct QueueBufferInner {
+pub(crate) struct QueueBufferCore {
     /// All queued commands.
     pub(crate) command_queue: Vec<MlQueue>,
 
     /// u32 `MetaArray` for parameters of kernels.
-    meta_array: MetaArray,
+    pub(crate) meta_array: MetaArray,
 
-    /// `ConstArray` used to store the pipeline constants for the next pipeline call.
-    const_array: ConstArray,
-
-    /// `DefinesArray` used to store the pipeline defines for the next pipeline call.
-    defines_array: Vec<(DefineSymbol, DefineSymbol)>,
-
-    /// `ConstArray` -> id mapper: maps a set of constants to a unique id.
-    const_id_map: ObjectToIdMapper<ConstArray>,
-    /// Id -> `ConstArray` mapping: maps a unique id to a set of constants.
-    pub(crate) id_to_const_array: Vec<Vec<(&'static str, f64)>>,
-
-    pub(crate) define_cache: DefinesCache,
-
-    global_command_index: u32,
-
-    /// Current position inside the `MetaArray`.
-    pub(crate) current_meta: u32,
+    pub(crate) global_command_index: u32,
 }
 
-impl QueueBufferInner {
-    pub fn new(size: u32) -> Self {
-        Self {
-            command_queue: vec![],
-            meta_array: MetaArray::new(size),
-            current_meta: 0,
-            const_array: ConstArray::new(),
-            defines_array: Vec::new(),
-            const_id_map: ObjectToIdMapper::new(),
-            define_cache: DefinesCache::new(),
-            id_to_const_array: Vec::new(),
-            global_command_index: 1,
-        }
-    }
-
-    /// Resets the `ConstArray` for the next pipeline.
-    pub fn init(&mut self) {
-        self.const_array.0.clear();
-        self.defines_array.clear();
-    }
-
-    /// Removes all operations from the queue.
-    pub fn clear(&mut self) {
-        self.command_queue.clear();
-        self.meta_array.0.clear();
-        self.init();
-        self.current_meta = 0;
-    }
-
+impl QueueBufferCore {
     pub fn get_meta(&self) -> &Vec<u32> {
         &self.meta_array.0
     }
@@ -212,18 +172,101 @@ impl QueueBufferInner {
     pub fn get_meta_mut(&mut self) -> &mut Vec<u32> {
         &mut self.meta_array.0
     }
+}
+
+/// Shared fields that should remain inside the locked area.
+#[derive(Debug)]
+pub(crate) struct QueueBufferShared {
+    /// `ConstArray` used to store the pipeline constants for the next pipeline call.
+    pub(crate) const_array: ConstArray,
+
+    /// `DefinesArray` used to store the pipeline defines for the next pipeline call.
+    pub(crate) defines_array: Vec<(DefineSymbol, DefineSymbol)>,
+
+    /// `ConstArray` -> id mapper: maps a set of constants to a unique id.
+    pub(crate) const_id_map: ObjectToIdMapper<ConstArray>,
+    /// Id -> `ConstArray` mapping: maps a unique id to a set of constants.
+    pub(crate) id_to_const_array: Vec<Vec<(&'static str, f64)>>,
+
+    pub(crate) define_cache: DefinesCache,
+
+    /// Current position inside the `MetaArray`.
+    pub(crate) current_meta: u32,
+}
+
+/// A struct where all operations are cached.
+#[derive(Debug)]
+pub struct QueueBufferInner {
+    pub(crate) core: QueueBufferCore,
+    pub(crate) shared: QueueBufferShared,
+}
+
+impl QueueBufferInner {
+    pub fn new(size: u32) -> Self {
+        Self {
+            core: QueueBufferCore {
+                command_queue: vec![],
+                meta_array: MetaArray::new(size),
+                global_command_index: 1,
+            },
+            shared: QueueBufferShared {
+                const_array: ConstArray::new(),
+                defines_array: Vec::new(),
+                const_id_map: ObjectToIdMapper::new(),
+                define_cache: DefinesCache::new(),
+                id_to_const_array: Vec::new(),
+                current_meta: 0,
+            },
+        }
+    }
+
+    /// Access to the `MetaArray`.
+    pub fn get_meta(&self) -> &Vec<u32> {
+        self.core.get_meta()
+    }
+
+    /// Mutable access to the `MetaArray`.
+    pub fn get_meta_mut(&mut self) -> &mut Vec<u32> {
+        self.core.get_meta_mut()
+    }
+
+    /// Resets the `ConstArray` for the next pipeline.
+    pub(crate) fn init(&mut self) {
+        self.shared.const_array.0.clear();
+        self.shared.defines_array.clear();
+    }
+
+    /// Drains all operations from the queue and returns them.
+    pub(crate) fn drained(&mut self) -> QueueBufferCore {
+        let core = QueueBufferCore {
+            command_queue: std::mem::take(&mut self.core.command_queue),
+            meta_array: std::mem::take(&mut self.core.meta_array),
+            global_command_index: self.core.global_command_index,
+        };
+
+        self.core.global_command_index += core.command_queue.len() as u32;
+
+        self.init();
+        self.shared.current_meta = 0;
+
+        core
+    }
 
     fn finalize_internal_arrays(&mut self) -> (usize, usize) {
-        let (index_const, is_new) = self.const_id_map.get_or_insert(&self.const_array);
+        let (index_const, is_new) = self
+            .shared
+            .const_id_map
+            .get_or_insert(&self.shared.const_array);
         if is_new {
-            self.id_to_const_array.push(self.const_array.to_vec())
+            self.shared.id_to_const_array.push(self.shared.const_array.to_vec())
         }
 
-        self.defines_array.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        self.shared.defines_array.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         let index_defines = self
+            .shared
             .define_cache
             .defines_cache
-            .get_index(&self.defines_array);
+            .get_index(&self.shared.defines_array);
 
         self.init();
         (index_const, index_defines)
@@ -253,31 +296,24 @@ impl QueueBufferInner {
 
     /// Adds the parameter `value` to the `MetaArray`.
     pub fn add<T: ToKernelParameterMeta>(&mut self, value: T) {
-        self.meta_array.add(value);
+        self.core.meta_array.add(value);
     }
 
     pub fn add_const<K: Into<KernelConstId>, T: ToU32>(&mut self, key: K, value: T) {
-        self.const_array.insert(key.into(), value);
+        self.shared.const_array.insert(key.into(), value);
     }
 
-    pub fn add_define(&mut self, key: &'static str, value: impl Into<String>) {
-        let key = self.define_cache.key_cache.get_index(&key);
-        let value = self.define_cache.value_cache.get_index(&value.into());
-        self.defines_array.push((key, value));
+    pub fn add_define(&mut self, key: &'static str, value: impl ToString) {
+        let key = self.shared.define_cache.key_cache.get_index(&key);
+        let value = self.shared.define_cache.value_cache.get_index(&value.to_string());
+        self.shared.defines_array.push((key, value));
     }
 
-    pub fn global_command_index(&self) -> u32 {
-        self.global_command_index
-    }
-
-    pub fn set_global_command_index(&mut self, global_command_index: u32) {
-        self.global_command_index = global_command_index;
-    }
-
+   
     // Allows loading const debug info (for simulating calls).
     pub fn load_simulation_consts(&mut self, consts: Vec<Vec<(&'static str, f64)>>) {
-        self.id_to_const_array = consts;
-        self.const_id_map.next_id = self.id_to_const_array.len();
+        self.shared.id_to_const_array = consts;
+        self.shared.const_id_map.next_id = self.shared.id_to_const_array.len();
     }
 }
 
@@ -417,7 +453,7 @@ impl<'a> QueueBuffer<'a> {
             );
         }
         #[cfg(not(target_arch = "wasm32"))]
-        let meta_length = self.get_meta().len() as u32 - self.current_meta;
+        let meta_length = self.core.get_meta().len() as u32 - self.shared.current_meta;
         let q = MlQueue::Dispatch(MlQueueDispatch {
             x,
             y,
@@ -426,14 +462,14 @@ impl<'a> QueueBuffer<'a> {
             pipeline_cached: None,
             bindgroup: bind_group,
             bindgroup_cached: None,
-            meta: self.current_meta,
+            meta: self.shared.current_meta,
             #[cfg(not(target_arch = "wasm32"))]
             meta_length,
             workload_size,
             #[cfg(feature = "wgpu_debug")]
             debug: _debug,
         });
-        self.command_queue.push(q);
+        self.core.command_queue.push(q);
     }
 
     /**************** Virtual Bindgroups: ****************/
@@ -556,8 +592,8 @@ fn queue_buffer_const_mapping_roundtrip() {
     ));
 
     // id_to_const_array should have one entry and contain our constant
-    assert_eq!(qb.id_to_const_array.len(), 1);
-    let entry = &qb.id_to_const_array[0];
+    assert_eq!(qb.shared.id_to_const_array.len(), 1);
+    let entry = &qb.shared.id_to_const_array[0];
     assert_eq!(entry[0].0, "K1");
     assert_eq!(entry[0].1, 42.0);
 

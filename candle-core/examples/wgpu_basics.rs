@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use anyhow::Result;
 use candle_core::{backend::BackendStorage, CustomOp1, Device, Tensor};
 use wgpu_compute_layer::{PipelineIndex, ShaderIndex};
@@ -10,7 +12,7 @@ wgpu_compute_layer::create_loader!(MyCustomLoader);
 
 impl wgpu_compute_layer::ShaderLoader for MyCustomLoader {
     //define the shader:
-    fn load(&self, _: wgpu_compute_layer::ShaderIndex, _ : &[(&str, String)]) -> &str {
+    fn load(&self, _: wgpu_compute_layer::ShaderIndex, _ : &[(&str, String)]) -> Cow<'_, str> {
         "
 //Binding Order: Dest, Meta, Input1, Input2, Input3
 @group(0) @binding(0)
@@ -30,7 +32,7 @@ fn main1() {
 fn main2() {
     v_dest[0] = v_input1[0] * op_meta[0];
 }
-        "
+        ".into()
     }
 
     //define the entry point:

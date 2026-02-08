@@ -1,49 +1,12 @@
 use super::{CachedBufferId, PipelineReference};
 use crate::util::FixedSizeQueue;
 
-/// Cache that stores previously flushed GPU commands so we can reuse buffers
-/// similar to the last run.
-#[derive(Debug)]
-pub(crate) struct BufferMappingCache {
-    pub(crate) last_buffer_mappings: FixedSizeQueue<CachedBufferMappings>,
+pub(crate) struct BufferMappingEntry {
     pub(crate) current_buffer_mapping: Option<CachedBufferMappings>,
     pub(crate) current_index: u32,
-    pub(crate) last_command_indexes: FixedSizeQueue<u32>,
 }
 
-impl BufferMappingCache {
-    pub(crate) fn new(size: u32) -> Self {
-        Self {
-            last_buffer_mappings: FixedSizeQueue::new(size as usize),
-            current_buffer_mapping: None,
-            current_index: 0,
-            last_command_indexes: FixedSizeQueue::new(10),
-        }
-    }
-
-    pub(crate) fn set_current_buffer_mapping(&mut self, hash: u64) {
-        let index = self
-            .last_buffer_mappings
-            .iter()
-            .position(|b| b.hash == hash);
-        if let Some(index) = index {
-            log::debug!(
-                "reuse mapping: {index}, hash: {hash}, mappings: {}",
-                self.last_buffer_mappings.deque.len()
-            );
-            let mut buffer_mapping = self.last_buffer_mappings.deque.remove(index).unwrap();
-            buffer_mapping.count += 1;
-
-            self.current_buffer_mapping = Some(buffer_mapping);
-        } else {
-            log::debug!(
-                "create new mapping: hash: {hash}, mappings: {}",
-                self.last_buffer_mappings.deque.len()
-            );
-            self.current_buffer_mapping = Some(CachedBufferMappings::new(hash));
-        }
-    }
-
+impl BufferMappingEntry {
     pub(crate) fn get_current_mapping_count(&self) -> u32 {
         if let Some(mapping) = &self.current_buffer_mapping {
             return mapping.count;
@@ -51,10 +14,12 @@ impl BufferMappingCache {
         0
     }
 
+    
     pub(crate) fn get_current_mapping(&mut self) -> &mut CachedBufferMappings {
         self.current_buffer_mapping.as_mut().unwrap()
     }
 
+    
     /// Stores that the provided buffer was used.
     pub(crate) fn add_new_buffer(
         &mut self,
@@ -79,12 +44,59 @@ impl BufferMappingCache {
         }
         self.current_index += 1;
     }
+}
 
-    pub(crate) fn finish(&mut self) {
-        if let Some(value) = self.current_buffer_mapping.take() {
-            self.last_buffer_mappings.push(value);
+/// Cache that stores previously flushed GPU commands so we can reuse buffers
+/// similar to the last run.
+#[derive(Debug)]
+pub(crate) struct BufferMappingCache {
+    pub(crate) last_buffer_mappings: FixedSizeQueue<CachedBufferMappings>,
+    pub(crate) last_command_indexes: FixedSizeQueue<u32>,
+}
+
+impl BufferMappingCache {
+    pub(crate) fn new(size: u32) -> Self {
+        Self {
+            last_buffer_mappings: FixedSizeQueue::new(size as usize),
+            last_command_indexes: FixedSizeQueue::new(10),
         }
-        self.current_index = 0;
+    }
+
+    pub(crate) fn set_current_buffer_mapping(&mut self, hash: u64) -> BufferMappingEntry{
+        let index = self
+            .last_buffer_mappings
+            .iter()
+            .position(|b| b.hash == hash);
+        if let Some(index) = index {
+            log::debug!(
+                "reuse mapping: {index}, hash: {hash}, mappings: {}",
+                self.last_buffer_mappings.deque.len()
+            );
+            let mut buffer_mapping = self.last_buffer_mappings.deque.remove(index).unwrap();
+            buffer_mapping.count += 1;
+
+            BufferMappingEntry {
+                current_buffer_mapping: Some(buffer_mapping),
+                current_index: 0,
+            }
+        
+        } else {
+            log::debug!(
+                "create new mapping: hash: {hash}, mappings: {}",
+                self.last_buffer_mappings.deque.len()
+            );
+            BufferMappingEntry {
+                current_buffer_mapping: Some(CachedBufferMappings::new(hash)),
+                current_index: 0,
+            }
+        }
+    }
+
+   
+
+
+    pub(crate) fn finish(&mut self, entry: BufferMappingEntry) {
+        self.last_buffer_mappings.push(entry.current_buffer_mapping.unwrap());
     }
 
     pub(crate) fn set_global_command_index(&mut self, index: u32) {

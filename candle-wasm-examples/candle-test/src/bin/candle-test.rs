@@ -190,11 +190,11 @@ pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
             for (index, command) in debug_recordings.iter().enumerate(){
                 
                 let command_str = 
-                    if  command.pipeline.0.get_shader().get_loader() == candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX{
-                        let pipeline : Pipelines = command.pipeline.0.into();
-                        format!("x:{}, y:{}, z: {}, pipeline: {:?}, consts: {}, meta{:?}, bindgroup: {:?}, count: {}", command.x, command.y, command.z, pipeline, command.pipeline.1, command.meta, command.bindgroup, command.count)
+                    if  command.pipeline.get_index().get_shader().get_loader() == candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX{
+                        let pipeline : Pipelines = command.pipeline.get_index().into();
+                        format!("x:{}, y:{}, z: {}, pipeline: {:?}, ref: {:?}, meta{:?}, bindgroup: {:?}, count: {}", command.x, command.y, command.z, pipeline, command.pipeline, command.meta, command.bindgroup, command.count)
                     }else{
-                        format!("x:{}, y:{}, z: {}, pipeline: {:?}, consts: {}, meta{:?}, bindgroup: {:?}, count: {}", command.x, command.y, command.z, command.pipeline, command.pipeline.1, command.meta, command.bindgroup, command.count)
+                        format!("x:{}, y:{}, z: {}, pipeline: {:?}, ref: {:?}, meta{:?}, bindgroup: {:?}, count: {}", command.x, command.y, command.z, command.pipeline, command.pipeline, command.meta, command.bindgroup, command.count)
                         //serde_json::to_string(command).unwrap().to_string()
                     };
                 log::warn!("progress: {index}/{total}");

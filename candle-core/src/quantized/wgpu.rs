@@ -496,19 +496,55 @@ impl QWgpuStorage {
                 }
             }
             QuantizedMatmulAlgorithm::Some(generic_dynamic_matmul_shader_settings) => {
-                let path = match self.dtype {
-                    GgmlDType::Q4_0 => "kernels/quantized/q4_0.pwgsl",
-                    GgmlDType::Q4_1 => "kernels/quantized/q4_1.pwgsl",
-                    GgmlDType::Q5_0 => "kernels/quantized/q5_0.pwgsl",
-                    GgmlDType::Q5_1 => "kernels/quantized/q5_1.pwgsl",
-                    GgmlDType::Q8_0 => "kernels/quantized/q8_0.pwgsl",
-                    GgmlDType::Q8_1 => "kernels/quantized/q8_1.pwgsl",
-                    GgmlDType::Q2K => "kernels/quantized/q2k.pwgsl",
-                    GgmlDType::Q3K => "kernels/quantized/q3k.pwgsl",
-                    GgmlDType::Q4K => "kernels/quantized/q4k.pwgsl",
-                    GgmlDType::Q5K => "kernels/quantized/q5k.pwgsl",
-                    GgmlDType::Q6K => "kernels/quantized/q6k.pwgsl",
-                    GgmlDType::Q8K => "kernels/quantized/q8k.pwgsl",
+                let pipeline = match self.dtype() {
+                    GgmlDType::Q4_0 => candle_wgpu_kernels::Pipelines::Q40(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q4_0::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q4_1 => candle_wgpu_kernels::Pipelines::Q41(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q4_1::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q5_0 => candle_wgpu_kernels::Pipelines::Q50(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q5_0::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q5_1 => candle_wgpu_kernels::Pipelines::Q51(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q5_1::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q8_0 => candle_wgpu_kernels::Pipelines::Q80(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q8_0::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q8_1 => candle_wgpu_kernels::Pipelines::Q81(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q8_1::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q2K => candle_wgpu_kernels::Pipelines::Q2K(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q2_k::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q3K => candle_wgpu_kernels::Pipelines::Q3K(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q3_k::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q4K => candle_wgpu_kernels::Pipelines::Q4K(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q4_k::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q5K => candle_wgpu_kernels::Pipelines::Q5K(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q5_k::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q6K => candle_wgpu_kernels::Pipelines::Q6K(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q6_k::Functions::MatmulSgemm,
+                    ),
+                    GgmlDType::Q8K => candle_wgpu_kernels::Pipelines::Q8K(
+                        candle_wgpu_kernels::DType::F32,
+                        candle_wgpu_kernels::quantized::q8_k::Functions::MatmulSgemm,
+                    ),
                     _ => todo!(),
                 };
 
@@ -521,7 +557,7 @@ impl QWgpuStorage {
                         self.storage.buffer(),
                     ),
                     SGEMMParams::new(b, m, k, n),
-                    path,
+                    pipeline,
                     &generic_dynamic_matmul_shader_settings,
                 )?;
             }

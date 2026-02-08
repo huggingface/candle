@@ -155,11 +155,6 @@ mod transpose {
 }
 
 pub mod sgemm {
-
-    use std::path::Path;
-
-    use candle_wgpu_kernels::DefineDefinition;
-
     use super::*;
     use crate::Shape;
 
@@ -800,7 +795,7 @@ pub mod sgemm {
         input1: WgpuTensor,
         input2: WgpuTensor,
         params: SGEMMParams,
-        kernel_path: &str,
+        pipeline: candle_wgpu_kernels::Pipelines,
         shader_settings: &GenericDynamicMatmulShaderSettings,
     ) -> crate::Result<()> {
         let dtype = crate::DType::F32;
@@ -1070,44 +1065,25 @@ pub mod sgemm {
             }
         }
     
-        let mut defines = vec![
-            (
-                "TSM",
-                DefineDefinition::value(shader_settings.settings.m_tile),
-            ),
-            (
-                "TSN",
-                DefineDefinition::value(shader_settings.settings.n_tile),
-            ),
-            (
-                "TSK",
-                DefineDefinition::value(shader_settings.settings.k_tile),
-            ),
-            ("WPTM", DefineDefinition::value(shader_settings.wptm)),
-            ("WPTN", DefineDefinition::value(shader_settings.wptn)),
-            ("SGEMM", DefineDefinition::new_empty()),
-            ("f32", DefineDefinition::new_empty()),
-        ];
+        queue.add_define("TSM", shader_settings.settings.m_tile);
+        queue.add_define("TSN", shader_settings.settings.n_tile);
+        queue.add_define("TSK", shader_settings.settings.k_tile);
+        queue.add_define("WPTM", shader_settings.wptm);
+        queue.add_define("WPTN", shader_settings.wptn);
+        queue.add_define("SGEMM", "");
+        queue.add_define("f32", "");
+
         if shader_settings.prefatch {
-            defines.push(("PREFATCH", DefineDefinition::new_empty()));
+            queue.add_define("PREFATCH", "");
         }
         if shader_settings.tiled_small {
-            defines.push(("TILED_SMALL", DefineDefinition::new_empty()));
-            //defines.push(("THREADS_PER_K", DefineDefinition::value(shader_settings.threads_per_k)));
-            //defines.push(("WPTK", DefineDefinition::value(shader_settings.wptk)));
+            queue.add_define("TILED_SMALL", "");
         }
         if shader_settings.wont_load_use_a {
-            defines.push(("WONT_USE_LOADA", DefineDefinition::new_empty()));
+            queue.add_define("WONT_USE_LOADA", "");
         }
 
-        let pipeline_index = dev.inner_device().with_shader_loader_cache(|f| {
-            let loader = f.get_loader_mut::<candle_wgpu_kernels::DefaultWgpuDynamicShader>(
-                candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX).unwrap();
-            let shader_index = loader.get_shader_index(Path::new(kernel_path).to_path_buf(), &defines);
-            loader.get_pipeline_index(shader_index, "matmul_sgemm")
-        });
-       
-        let pipeline = queue.get_pipeline_const(pipeline_index, const_vec.clone());
+        let pipeline = queue.get_pipeline_const(pipeline, const_vec.clone());
         let input_alignment: BindgroupAlignment = dtype.into();
         if input_alignment != BindgroupAlignment::Aligned4 {
             panic!("matmul can only be performed with f32 and i32");

@@ -34,9 +34,6 @@ impl WgpuDevice {
         device.add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX, || {
             candle_wgpu_kernels::DefaultWgpuShader::new()
         });
-        device.add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuDynamicShader::LOADER_INDEX, || {
-            candle_wgpu_kernels::DefaultWgpuDynamicShader::new()
-        });
         device.set_extension(rand::rngs::StdRng::from_os_rng());
         Ok(WgpuDevice{inner_device: device, device_id: DEVICE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst), matmul_alg: std::sync::Arc::new(std::sync::Mutex::new(MatmulAlgorithm::MatmulX))})
     }

@@ -215,7 +215,7 @@ impl Shaders{{
         }}
     }}
 }}
-", modules.iter().map(|(m, _, _)| format!("\tShaders::{}(typ) => typ.clone()", to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n")));
+", modules.iter().map(|(m, _, _)| format!("\tShaders::{}(typ) => *typ", to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n")));
 
 shader_content.push_str(
     &format!("
@@ -233,7 +233,7 @@ impl Pipelines {{
     }}
 }} 
 ",
-modules.iter().map(|(m, _, _)| format!("\t\t\tPipelines::{}(typ, _) => Shaders::{}(typ.clone())", to_upper_camel_case(m), to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n"),
+modules.iter().map(|(m, _, _)| format!("\t\t\tPipelines::{}(typ, _) => Shaders::{}(*typ)", to_upper_camel_case(m), to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n"),
 modules.iter().map(|(m, path, _)| format!("\t\tPipelines::{}(_, _) => {}{}::load_shader()", to_upper_camel_case(m),change_path(path), m)).collect::<Vec<String>>().join(",\n")
 ));
 

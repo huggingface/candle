@@ -196,16 +196,75 @@ pub struct WgpuDeviceInner {
     extensions: Mutex<DeviceExtensions>,
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) submission_tracker: Arc<SubmissionTracker>, // allows waiting asynchronously for a specific wgpu submission
+    pub(crate) submission_tracker: Arc<SubmissionTracker>, // allows waiting asynchronously for a specific wgpu command_buffer submission
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) flush_gpu_lock : async_lock::Mutex<()>, //we need this lock to make sure that only one thread can flush commands to the GPU on wasm.
+                                                       //on native we just lock the command_queue and cache lock, but for wasm we need an async lock.
 }
+
+#[cfg(target_arch = "wasm32")]
+type WaiterSender = flume::Sender<()>;
+#[cfg(target_arch = "wasm32")]
+type WaiterReceiver = flume::Receiver<()>;
 
 #[derive(Debug)]
 #[cfg(target_arch = "wasm32")]
 pub(crate) struct SubmissionTracker {
-    pub(crate) next_id: std::sync::atomic::AtomicU64,
-    pub(crate) completed_id: std::sync::atomic::AtomicU64,
-    pub(crate) tx: flume::Sender<u64>,
-    pub(crate) rx: flume::Receiver<u64>,
+    next_id: std::sync::atomic::AtomicU64,
+    completed_id: std::sync::atomic::AtomicU64,
+    waiters: Mutex<Vec<(u64, WaiterSender, WaiterReceiver)>>, // id + promise sender
+}
+
+#[cfg(target_arch = "wasm32")]
+impl SubmissionTracker
+{
+    pub(crate) fn new() -> Self {
+        Self {
+            next_id: std::sync::atomic::AtomicU64::new(1),
+            completed_id: std::sync::atomic::AtomicU64::new(0),
+            waiters: Mutex::new(Vec::new()),
+        }
+    }
+    
+    /// Register a waiter for a given submission ID
+    pub(crate) async fn wait_for_submission(&self, id: u64) {
+        // Fast path
+        if self.completed_id.load( std::sync::atomic::Ordering::Acquire) >= id {
+            return;
+        }
+
+        // Create a small channel for this waiter
+        let (tx, rx) = flume::bounded(1);
+
+        {
+            let mut waiters = self.waiters.lock().unwrap();
+            waiters.push((id, tx, rx.clone()));
+        }
+
+        // Wait for completion
+        let _ = rx.recv_async().await;
+    }
+
+    pub(crate) fn mark_completed(&self, id: u64) {
+        self.completed_id.store(id, std::sync::atomic::Ordering::Release);
+
+        // Notify all waiters whose id <= completed
+        let mut waiters = self.waiters.lock().unwrap();
+        let mut i = 0;
+        while i < waiters.len() {
+            if waiters[i].0 <= id {
+                let (_, tx, _) = waiters.remove(i);
+                let _ = tx.send(()); // notify
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    pub(crate) fn get_next_id(&self) -> u64 {
+        self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 #[derive(Debug)]
@@ -370,16 +429,6 @@ impl WgpuDevice {
             .max_buffer_size
             .min(device_limits.max_storage_buffer_binding_size as u64);
 
-        #[cfg(target_arch = "wasm32")]
-        let (tx, rx) = flume::unbounded();
-        #[cfg(target_arch = "wasm32")]
-        let tracker = SubmissionTracker {
-            next_id: std::sync::atomic::AtomicU64::new(1),
-            completed_id: std::sync::atomic::AtomicU64::new(0),
-            tx,
-            rx,
-        };
-
         Ok(WgpuDevice {
             inner: Arc::new(WgpuDeviceInner {
                 device,
@@ -400,7 +449,9 @@ impl WgpuDevice {
                 extensions: Mutex::new(DeviceExtensions::new()),
                 configuration,
                 #[cfg(target_arch = "wasm32")]
-                submission_tracker: Arc::new(tracker),
+                submission_tracker: Arc::new(SubmissionTracker::new()),
+                #[cfg(target_arch = "wasm32")]
+                flush_gpu_lock: async_lock::Mutex::new(())
             }),
         })
     }
@@ -437,7 +488,7 @@ impl WgpuDevice {
         input3_buffer: &WgpuStorage,
     ) {
         let mut command_queue = self.get_queue();
-        command_queue
+        command_queue.core
             .get_meta_mut()
             .append(&mut command.meta.clone());
 
@@ -473,14 +524,14 @@ impl WgpuDevice {
             pipeline_cached: None,
             bindgroup: BindGroupReference::new(dest_buffer.buffer(), new_input),
             bindgroup_cached: None,
-            meta: command_queue.current_meta,
+            meta: command_queue.shared.current_meta,
             #[cfg(not(target_arch = "wasm32"))]
             meta_length: command.meta.len() as u32,
             workload_size: 0_usize,
             #[cfg(feature = "wgpu_debug")]
             debug: None,
         });
-        command_queue.command_queue.push(q);
+        command_queue.core.command_queue.push(q);
     }
 
     /// Returns true when the given `DType` is supported by this device.
@@ -768,7 +819,7 @@ impl WgpuDevice {
                         .keys()
                         .map(|pk| debug_info::PipelineInfo {
                             name: shaders.loader_cache.get_entry_point(pk.index).to_owned(),
-                            consts: queue.id_to_const_array[pk.const_index]
+                            consts: queue.shared.id_to_const_array[pk.const_index]
                                 .iter()
                                 .map(|(s, x)| (s.to_string(), *x))
                                 .collect(),
@@ -826,7 +877,7 @@ impl WgpuDevice {
     fn get_used_pipelines(&self) -> (String, String) {
         let cache = self.cache.lock().unwrap();
         let queue = self.command_queue.lock().unwrap();
-        let consts = &queue.id_to_const_array;
+        let consts = &queue.shared.id_to_const_array;
 
         let debug: Vec<_> = cache.debug_pipeline_recording.values().collect();
         (

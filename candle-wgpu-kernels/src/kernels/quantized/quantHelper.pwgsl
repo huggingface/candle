@@ -170,4 +170,10 @@ fn matmul_naive_block_m1(@builtin(global_invocation_id) global_id: vec3<u32>) {
       x] = sum;
 }
 #endif
+
+//dummy impl:
+#ifndef SGEMM
+@compute @workgroup_size(1,1,1)
+fn matmul_sgemm(){}
+#endif
 #endif

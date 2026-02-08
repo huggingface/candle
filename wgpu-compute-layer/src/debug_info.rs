@@ -377,8 +377,8 @@ pub(crate) fn create_dispatch_zip(wgpu: &WgpuDevice, output_path: &str) -> crate
     let loader_cache = &cache.shader.loader_cache;
     let queue: std::sync::MutexGuard<'_, super::queue_buffer::QueueBufferInner> =
         wgpu.command_queue.lock().unwrap();
-    let consts = &queue.id_to_const_array;
-    let define_cache = &queue.define_cache;
+    let consts = &queue.shared.id_to_const_array;
+    let define_cache = &queue.shared.define_cache;
     for (i, dispatch) in dispatches.iter().enumerate() {
         let base = format!("dispatch_{}/", i);
 

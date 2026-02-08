@@ -90,13 +90,13 @@ pub trait ShaderLoader: std::fmt::Debug + std::any::Any {
     /// struct Example{};
     ///
     /// impl ShaderLoader for Example{
-    ///     fn load(&self, index : ShaderIndex, _ : &[(&str, &str)]) -> &str{
+    ///     fn load(&self, index : ShaderIndex, _ : &[(&str, &str)]) -> Cow<'_, str>{
     ///         let index : u16 = index.get_index();
     ///         match index{
     ///             0 => "@compute fn compute1_i32(...){...} @compute fn compute2_i32(...){...}",
     ///             1 => "@compute fn compute1_f32(...){...} @compute fn compute2_f32(...){...}",
     ///             _ => {todo!()}
-    ///         }
+    ///         }.into()
     ///     }
     ///     fn get_entry_point(&self, index : PipelineIndex) -> &str{todo!()}
     /// }

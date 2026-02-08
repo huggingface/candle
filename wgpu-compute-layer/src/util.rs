@@ -332,12 +332,8 @@ pub trait StorageTrait<T, TREF> {
 
     //returns the Reference at the i-th index in this storage
     fn get_reference(&self, i: u32) -> Option<(TREF, &T)>;
-    //fn retain(&mut self, keep: impl Fn((&TREF, &T)) -> bool);
     fn retain_mut(&mut self, keep: impl FnMut((&TREF, &T)) -> bool);
     fn len(&self) -> usize;
-    // fn is_empty(&self) -> bool {
-    //     self.len() == 0
-    // }
 }
 
 impl<T, TREF> StorageTrait<T, TREF> for StorageOptional<T, TREF>

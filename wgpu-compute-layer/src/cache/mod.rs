@@ -10,7 +10,7 @@ mod cached_buffer;
 mod shader;
 
 pub use bindgroup_layout::*;
-use buffer_mapping::*;
+pub(crate) use buffer_mapping::*;
 pub use buffer_reference::*;
 use cached_bindgroup::*;
 use cached_buffer::*;
@@ -497,13 +497,14 @@ impl ModelCache {
         false
     }
 
-    #[instrument(skip(self, dev, bindgroup_reference, command_id, pipeline))]
+    #[instrument(skip(self, dev, bindgroup_reference, command_id, pipeline, current_mapping_entry))]
     pub(crate) fn get_bind_group(
         &mut self,
         dev: &WgpuDevice,
         bindgroup_reference: &BindgroupReferenceFull,
         pipeline: PipelineReference,
         command_id: u32,
+        current_mapping_entry : &mut BufferMappingEntry
     ) -> CachedBindgroupId {
         fn check_buffer_reference(
             cache: &mut ModelCache,
@@ -549,7 +550,7 @@ impl ModelCache {
         fn get_buffer_referece_key(
             cache: &ModelCache,
             dest_buffer: CachedBufferId,
-            bindgroup_reference: &BindgroupReferenceFull,
+            bindgroup_reference: &BindgroupReferenceFull
         ) -> CachedBindgroupFull {
             BindgroupFullBase(
                 dest_buffer,
@@ -574,9 +575,8 @@ impl ModelCache {
         let mut optimal_size = buf_dest_size; //size we use if we need to create a new buffer (may be a little bit bigger for growing buffers)
 
         if dev.configuration.use_cache {
-            let current_mapping_index = self.mappings.current_index;
-            let current_mapping = self.mappings.get_current_mapping();
-
+            let current_mapping_index = current_mapping_entry.current_index;
+            let current_mapping = current_mapping_entry.get_current_mapping();
             let buffer_already_set = self.buffers.get_buffer(&buf_dest_cached_id).is_some();
 
             //search in buffer mapping, and use the same buffer as last run:
@@ -587,7 +587,7 @@ impl ModelCache {
                     let bindgroup_inputs =
                         get_buffer_referece_key(self, buf_dest_cached_id, bindgroup_reference);
 
-                    self.mappings.reuse_buffer(buf_dest_size);
+                    current_mapping_entry.reuse_buffer(buf_dest_size);
 
                     if let Some(bg) = self
                         .bindgroups
@@ -618,7 +618,7 @@ impl ModelCache {
                                 buf_dest_reference.set_cached_buffer_id(buffer_id);
                                 self.buffers.use_buffer(&buffer_id, command_id);
 
-                                self.mappings.reuse_buffer(buf_dest_size);
+                                current_mapping_entry.reuse_buffer(buf_dest_size);
 
                                 //reuse a bindgroup, if we could find one:
                                 let bindgroup_inputs =
@@ -657,7 +657,7 @@ impl ModelCache {
                     if optimal_size > buffer_last_size {
                         let delta_size = optimal_size - buffer_last_size;
                         let new_size = optimal_size
-                            + delta_size * self.mappings.get_current_mapping_count() as u64;
+                            + delta_size * current_mapping_entry.get_current_mapping_count() as u64;
 
                         //We try to determine a good new buffer size for constantly growing buffers,
                         //but do not use more than 2 * optimal_size:
@@ -685,8 +685,7 @@ impl ModelCache {
                     .cloned()
                 {
                     self.bindgroups.cached_bindgroup_use_counter_inc();
-                    self.mappings
-                        .add_new_buffer(buf_dest_cached_id, pipeline, buf_dest_size);
+                    current_mapping_entry.add_new_buffer(buf_dest_cached_id, pipeline, buf_dest_size);
                     return bg;
                 }
             }
@@ -715,8 +714,7 @@ impl ModelCache {
         let bindgroup_inputs = get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
 
         if dev.configuration.use_cache {
-            self.mappings
-                .add_new_buffer(dest_buffer_id, pipeline, buf_dest_size);
+            current_mapping_entry.add_new_buffer(dest_buffer_id, pipeline, buf_dest_size);
         }
 
         if let Some(bg) = self

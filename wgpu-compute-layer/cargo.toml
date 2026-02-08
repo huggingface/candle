@@ -29,6 +29,7 @@ zip = { workspace = true, optional = true }
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+async-lock = { workspace = true }
 getrandom = { version = "0.3", features = [
     "wasm_js",
 ] } #needed for cargo clippy --target wasm32-unknown-unknown

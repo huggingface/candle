@@ -6,11 +6,11 @@ use super::{
         BindgroupInputBase, BindgroupReferenceFull, BindgroupReferenceInput, BufferReferenceId,
         CachedBindgroupFull, CachedBindgroupInput, CachedBufferId, ModelCache,
     },
-    queue_buffer::{MlQueue, QueueBuffer, QueueBufferInner},
+    queue_buffer::{MlQueue, QueueBuffer},
     util::{FixedArray, ToF64, ToU32},
     WgpuDevice,
 };
-use crate::util::ReferenceTrait;
+use crate::{cache::BufferMappingEntry, queue_buffer::{QueueBufferCore, QueueBufferShared}, util::ReferenceTrait};
 use tracing::{instrument, span, Level};
 
 use crate::DType;
@@ -19,7 +19,7 @@ use std::borrow::Cow;
 ///Helper Type MetaArray, for constructing the MetaBuffer
 ///The MetaBuffer is used to pass Parameters to the Kernel.
 ///Paramerters for multiple Commands are grouped together in this MetaArray.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MetaArray(pub Vec<u32>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -78,16 +78,16 @@ impl WgpuDevice {
             .command_queue
             .lock()
             .expect("could not get meta command_queue lock");
-        let meta_array_length = command_queue.get_meta().len() as u32;
+        let meta_array_length = command_queue.core.get_meta().len() as u32;
         #[cfg(target_arch = "wasm32")]
-        let alignment = self.device_limits.min_storage_buffer_offset_alignment as u32 / 4;
+        let alignment = self.device_limits.min_storage_buffer_offset_alignment / 4;
         #[cfg(target_arch = "wasm32")]
         let meta_offset = meta_array_length.div_ceil(alignment) * alignment;
         #[cfg(not(target_arch = "wasm32"))]
         let meta_offset = meta_array_length;
-        command_queue.current_meta = meta_offset;
+        command_queue.shared.current_meta = meta_offset;
         #[cfg(target_arch = "wasm32")]
-        command_queue.get_meta_mut().extend(std::iter::repeat_n(
+        command_queue.core.get_meta_mut().extend(std::iter::repeat_n(
             0,
             (meta_offset - meta_array_length) as usize,
         ));
@@ -117,12 +117,12 @@ impl WgpuDevice {
 }
 
 /**************** FLUSH COMMANDS TO GPU: ****************/
-#[instrument(skip(dev, queue_buffer, cache))]
+#[instrument(skip(dev, queue_core, cache))]
 ///Prepares Buffers
-fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBufferInner, cache: &mut ModelCache) {
-    let global_index = queue_buffer.global_command_index();
+fn prepare(dev: &WgpuDevice, queue_core : &mut QueueBufferCore, cache: &mut ModelCache) -> BufferMappingEntry {
+    let global_index = queue_core.global_command_index;
     cache.mappings.set_global_command_index(global_index);
-    let queue = &mut queue_buffer.command_queue;
+    let queue = &mut queue_core.command_queue;
     {
         let mut hasher = FxHasher::default();
         for q in queue.iter() {
@@ -137,7 +137,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBufferInner, cache: &mut Mo
 
         tracing::info!("current hash: {current_hash}");
 
-        cache.mappings.set_current_buffer_mapping(current_hash);
+        let current_mapping_entry = cache.mappings.set_current_buffer_mapping(current_hash);
         let deleted_entries = cache.buffer_reference.get_deletion_entries();
 
         for entry in deleted_entries.iter() {
@@ -190,6 +190,8 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBufferInner, cache: &mut Mo
         cache
             .buffers
             .set_max_memory_allowed(dev.configuration.buffer_cached_max_allowed_size);
+
+        current_mapping_entry
     }
 }
 
@@ -493,17 +495,20 @@ fn get_command_buffer(
     result
 }
 
-#[instrument(skip(dev, command_buffer, cache, index, last_meta, current_meta))]
+#[instrument(skip(dev, shared_info, cache, index, last_meta, current_meta, current_mapping_entry))]
+#[allow(clippy::too_many_arguments)]
 ///Maps Virtual Compute Graph Buffers to actual wgpu Buffers
 fn set_buffers(
     dev: &WgpuDevice,
-    command_buffer: &mut QueueBufferInner,
+    shared_info: &QueueBufferShared,
+    command_queue: &mut QueueBufferCore,
     index: &mut usize,
     current_meta: usize,
     last_meta: &mut usize,
     cache: &mut ModelCache,
+    current_mapping_entry: &mut BufferMappingEntry,
 ) -> crate::Result<(bool, u64)> {
-    let global_index = command_buffer.global_command_index();
+    let global_index = command_queue.global_command_index;
 
     #[cfg(feature = "wgpu_debug")]
     {
@@ -535,7 +540,7 @@ fn set_buffers(
         };
         cache.debug_buffer_info.push(debug_buffer_info);
     }
-    let queue = &mut command_buffer.command_queue;
+    let queue = &mut command_queue.command_queue;
     let mut cache_limit = false;
     let mut total_workload = 0u64; //we only allow a certain amount of workload per commandBuffer
     let start_index = *index;
@@ -757,18 +762,18 @@ fn set_buffers(
                         }
                     };
 
-                    let consts = &command_buffer.id_to_const_array[q.pipeline.const_index];
+                    let consts = &shared_info.id_to_const_array[q.pipeline.const_index];
                     let pipeline = cache.shader.get_pipeline(
                         &dev.device,
                         &q.pipeline,
                         pl,
                         consts,
                         q.pipeline.defines_index,
-                        &command_buffer.define_cache,
+                        &shared_info.define_cache,
                     )?;
 
                     let bindgroup =
-                        cache.get_bind_group(dev, &q.bindgroup, q.pipeline.clone(), command_index);
+                        cache.get_bind_group(dev, &q.bindgroup, q.pipeline.clone(), command_index, current_mapping_entry);
 
                     let span1 = span!(Level::INFO, "SetBuffers_Optimize implace: ");
                     let _enter1 = span1.enter();
@@ -870,64 +875,98 @@ platform_fn! {
     #[instrument(skip(dev))]
     ///Send queued commands to the GPU,
     pub(crate) fn flush_gpu_command(dev: &WgpuDevice, buffer_id_to_map : Option<(BufferReferenceId, &wgpu::Buffer)>) -> crate::Result<Option<WasmSubmissionIndex>> {
-        let queue_buffer = &mut dev.command_queue.lock().unwrap();
-        if !queue_buffer.command_queue.is_empty() {
+        #[cfg(target_arch = "wasm32")]
+        let _flush_gpu_lock = dev.flush_gpu_lock.lock().await;
+        let mut queue_buffer_option = Some(dev.command_queue.lock().unwrap());
+        let queue_buffer = &mut queue_buffer_option.as_mut().unwrap();
+        if !queue_buffer.core.command_queue.is_empty() {
             log::debug!("flush_gpu_command");
             let mut submissions = std::collections::VecDeque::<WasmSubmissionIndex> ::new();
-            let mut cache = dev.cache.lock().expect("");
-            prepare(dev, queue_buffer, &mut cache);
+            
+            let mut queue_storage = queue_buffer.drained();
+            let queue = &mut queue_storage; 
+            queue.global_command_index += queue.command_queue.len() as u32; 
+
+            let (mut cache_option, mut current_mapping_entry) =   
+            {
+                let mut cache = dev.cache.lock().expect("");
+                let current_mapping_entry = prepare(dev, queue, &mut cache);
+                (Some(cache), current_mapping_entry)
+            };
+
             {
                 let mut start_index = 0;
                 let mut index = 0;
                 let mut current_meta: usize = 0;
                 let mut last_meta: usize = 0;
 
-                while index < queue_buffer.command_queue.len() {
-                    let (should_remove_unused, _) = set_buffers(
-                        dev,
-                        queue_buffer,
-                        &mut index,
-                        current_meta,
-                        &mut last_meta,
-                        &mut cache,
-                    )?;
-                    let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
+                while index < queue.command_queue.len() {
+                    let cb = {
+                        if queue_buffer_option.is_none(){
+                            queue_buffer_option = Some(dev.command_queue.lock().unwrap());
+                        }
+                        let shared = &mut queue_buffer_option.as_mut().unwrap().shared;
 
-                    let is_last = index >= queue_buffer.command_queue.len();
-                    let mut buffer_to_map = None;
-                    if is_last{
-                        if let Some((buffer_reference, staging_buffer)) = buffer_id_to_map{
-                            if let Some(buffer) = cache.buffer_reference.get(&buffer_reference) {
-                                let buffer_storage = buffer.cached_buffer_id();
-                                if buffer_storage.is_valid() {
-                                    buffer_to_map = Some((*buffer_storage, staging_buffer, buffer.size()));
+                        if cache_option.is_none(){
+                            cache_option = Some(dev.cache.lock().expect(""));
+                        }
+                        let cache = cache_option.as_mut().unwrap();
+
+                        let (should_remove_unused, _) = set_buffers(
+                            dev,
+                            shared,
+                            queue,
+                            &mut index,
+                            current_meta,
+                            &mut last_meta,
+                            cache,
+                            &mut current_mapping_entry
+                        )?;
+                       
+                        let last_meta_index = (last_meta + 256 / 4).min(queue.get_meta().len());
+
+                        let is_last = index >= queue.command_queue.len();
+                        let mut buffer_to_map = None;
+                        if is_last{
+                            if let Some((buffer_reference, staging_buffer)) = buffer_id_to_map{
+                                if let Some(buffer) = cache.buffer_reference.get(&buffer_reference) {
+                                    let buffer_storage = buffer.cached_buffer_id();
+                                    if buffer_storage.is_valid() {
+                                        buffer_to_map = Some((*buffer_storage, staging_buffer, buffer.size()));
+                                    } else {
+                                        panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
+                                }
                                 } else {
-                                    panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
-                               }
-                            } else {
-                                panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer Reference")
+                                    panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer Reference")
+                                }
                             }
                         }
+                    
+                        let cb = get_command_buffer(
+                            dev,
+                            &queue.get_meta()[current_meta..last_meta_index],
+                            &queue.command_queue[start_index..index],
+                            current_meta,
+                            cache,
+                            buffer_to_map
+                        );
 
-                    }
-
-                    let cb = get_command_buffer(
-                        dev,
-                        &queue_buffer.get_meta()[current_meta..last_meta_index],
-                        &queue_buffer.command_queue[start_index..index],
-                        current_meta,
-                        &mut cache,
-                        buffer_to_map
-                    );
-
-                    if should_remove_unused {
-                        cache.remove_unused();
-                    }
-
+                        if should_remove_unused {
+                            cache.remove_unused();
+                        }
+                        cb
+                    };
+                    
                     if !submissions.is_empty() {
                         let submission_to_wait_for = submissions.pop_front().unwrap();
-                        maybe_await!(wait_for_submission(dev, submission_to_wait_for))?; //TODO: cargo clippy --target wasm32-unknown-unknown
-                                                                                          //      this `MutexGuard` is held across an await point
+                        //on wasm32 we need to drop the locks before awaiting, we can not hold an MutexGuard across an await point
+                        //we use the dev.flush_gpu_lock to make sure that we are the only one flushing at the same time. 
+                        //on non wasm, we do not await here and also do not need to drop the locks therefore.
+                        #[cfg(target_arch = "wasm32")]{
+                            cache_option.take();
+                            queue_buffer_option.take();
+                        }
+                        maybe_await!(wait_for_submission(dev, submission_to_wait_for))?; 
                     }
 
                     let span1 = span!(Level::INFO, "Submit");
@@ -936,13 +975,10 @@ platform_fn! {
                     let wasm_submission_id =
                     {
                         let tracker_clone = dev.submission_tracker.clone();
-                        let id = tracker_clone.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let id = tracker_clone.get_next_id();
                         cb.on_submitted_work_done(move || {
                             // Mark completion
-                            tracker_clone
-                                .completed_id
-                                .store(id, std::sync::atomic::Ordering::Release);
-                            let _ = tracker_clone.tx.send(id);
+                            tracker_clone.mark_completed(id);
                         });
                         id
                     };
@@ -960,23 +996,33 @@ platform_fn! {
                     start_index = index;
                     current_meta = last_meta;
                 }
-                finish_commands(queue_buffer, index, &mut cache);
             }
 
-            queue_buffer.clear();
+            if queue_buffer_option.is_none(){
+                queue_buffer_option = Some(dev.command_queue.lock().unwrap());
+            }
+            let shared = &mut queue_buffer_option.as_mut().unwrap().shared;
+
+            if cache_option.is_none(){
+                cache_option = Some(dev.cache.lock().expect(""));
+            }
+            let cache = cache_option.as_mut().unwrap();
+
+            finish_commands(shared, queue, cache);
+
             {
                 log::debug!(
                     "current memory {} / {}",
                     cache.buffers.buffer_memory(),
                     cache.buffers.max_memory_allowed()
                 );
-                cache.mappings.finish();
+                cache.mappings.finish(current_mapping_entry);
                 cache.remove_unused();
             }
-
             return Ok(submissions.pop_back());
         }
         else{
+            drop(queue_buffer_option);
             let mut cache = dev.cache.lock().expect("");
             let deleted_entries = cache.buffer_reference.get_deletion_entries(); //check if there are any buffers to remove
             for entry in deleted_entries.iter() {
@@ -1005,23 +1051,21 @@ platform_fn! {
                     panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer Reference")
                 }
             }
+            drop(cache);
         }
         Ok(None)
     }
 }
 
-fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: &mut ModelCache) {
-    let global_index = command_buffer.global_command_index();
-    command_buffer.set_global_command_index(global_index + index as u32);
-
+fn finish_commands(_queue_shared : &QueueBufferShared, _queue_core : &mut QueueBufferCore, _cache: &mut ModelCache) {
     #[cfg(feature = "wgpu_debug")]
     {
-        for i in 0..command_buffer.command_queue.len() {
-            let current = &command_buffer.command_queue[i];
-            let next = &command_buffer.command_queue.get(i + 1);
+        for i in 0.._queue_core.command_queue.len() {
+            let current = &_queue_core.command_queue[i];
+            let next = &_queue_core.command_queue.get(i + 1);
             match current {
                 MlQueue::Dispatch(q) => {
-                    let mut next_meta = command_buffer.get_meta().len();
+                    let mut next_meta = _queue_core.get_meta().len();
                     if let Some(next) = next {
                         match next {
                             MlQueue::Dispatch(q) => {
@@ -1058,7 +1102,7 @@ fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: 
                     );
 
                     let mut meta: Vec<u32> =
-                        command_buffer.get_meta()[q.meta as usize..next_meta].into();
+                        _queue_core.get_meta()[q.meta as usize..next_meta].into();
 
                     _cache
                         .shader
@@ -1321,23 +1365,8 @@ pub(crate) async fn wait_for_submission(
     dev: &WgpuDevice,
     index: WasmSubmissionIndex,
 ) -> crate::Result<()> {
-    // Fast path: already completed
-    if dev
-        .submission_tracker
-        .completed_id
-        .load(std::sync::atomic::Ordering::Acquire)
-        >= index.submission_index_wasm
-    {
-        return Ok(());
-    }
-
-    // Slow path: wait on channel
-    loop {
-        let completed = dev.submission_tracker.rx.recv_async().await.unwrap();
-        if completed >= index.submission_index_wasm {
-            return Ok(());
-        }
-    }
+    dev.submission_tracker.wait_for_submission(index.submission_index_wasm).await;
+    Ok(())
 }
 
 #[instrument(skip(dev, buffer))]
