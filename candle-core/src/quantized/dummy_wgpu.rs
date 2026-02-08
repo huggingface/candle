@@ -1,6 +1,6 @@
 #![allow(unused)]
 use super::GgmlDType;
-use crate::{Error, Result, WgpuDevice, WgpuStorage, quantized::QStorage};
+use crate::{quantized::QStorage, Error, Result, WgpuDevice, WgpuStorage};
 
 pub struct QWgpuStorage {
     dtype: GgmlDType,
@@ -50,10 +50,6 @@ impl QWgpuStorage {
     }
 }
 
-pub fn load_quantized(
-    device: &WgpuDevice,
-    dtype : GgmlDType,
-    data: &[u8],
-) -> Result<QStorage> {
+pub fn load_quantized(device: &WgpuDevice, dtype: GgmlDType, data: &[u8]) -> Result<QStorage> {
     Err(Error::NotCompiledWithWgpuSupport)
 }

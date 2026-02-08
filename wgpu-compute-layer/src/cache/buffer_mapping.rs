@@ -14,12 +14,10 @@ impl BufferMappingEntry {
         0
     }
 
-    
     pub(crate) fn get_current_mapping(&mut self) -> &mut CachedBufferMappings {
         self.current_buffer_mapping.as_mut().unwrap()
     }
 
-    
     /// Stores that the provided buffer was used.
     pub(crate) fn add_new_buffer(
         &mut self,
@@ -62,7 +60,7 @@ impl BufferMappingCache {
         }
     }
 
-    pub(crate) fn set_current_buffer_mapping(&mut self, hash: u64) -> BufferMappingEntry{
+    pub(crate) fn set_current_buffer_mapping(&mut self, hash: u64) -> BufferMappingEntry {
         let index = self
             .last_buffer_mappings
             .iter()
@@ -79,7 +77,6 @@ impl BufferMappingCache {
                 current_buffer_mapping: Some(buffer_mapping),
                 current_index: 0,
             }
-        
         } else {
             log::debug!(
                 "create new mapping: hash: {hash}, mappings: {}",
@@ -92,11 +89,9 @@ impl BufferMappingCache {
         }
     }
 
-   
-
-
     pub(crate) fn finish(&mut self, entry: BufferMappingEntry) {
-        self.last_buffer_mappings.push(entry.current_buffer_mapping.unwrap());
+        self.last_buffer_mappings
+            .push(entry.current_buffer_mapping.unwrap());
     }
 
     pub(crate) fn set_global_command_index(&mut self, index: u32) {

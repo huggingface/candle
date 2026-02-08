@@ -93,7 +93,6 @@ pub fn queue_rotary_emb_i(
     Ok(())
 }
 
-
 #[allow(clippy::too_many_arguments)]
 pub fn queue_rotary_emb_c(
     dev: &WgpuDevice,

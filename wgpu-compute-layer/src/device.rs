@@ -199,8 +199,8 @@ pub struct WgpuDeviceInner {
     pub(crate) submission_tracker: Arc<SubmissionTracker>, // allows waiting asynchronously for a specific wgpu command_buffer submission
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) flush_gpu_lock : async_lock::Mutex<()>, //we need this lock to make sure that only one thread can flush commands to the GPU on wasm.
-                                                       //on native we just lock the command_queue and cache lock, but for wasm we need an async lock.
+    pub(crate) flush_gpu_lock: async_lock::Mutex<()>, //we need this lock to make sure that only one thread can flush commands to the GPU on wasm.
+                                                      //on native we just lock the command_queue and cache lock, but for wasm we need an async lock.
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -217,8 +217,7 @@ pub(crate) struct SubmissionTracker {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl SubmissionTracker
-{
+impl SubmissionTracker {
     pub(crate) fn new() -> Self {
         Self {
             next_id: std::sync::atomic::AtomicU64::new(1),
@@ -226,11 +225,11 @@ impl SubmissionTracker
             waiters: Mutex::new(Vec::new()),
         }
     }
-    
+
     /// Register a waiter for a given submission ID
     pub(crate) async fn wait_for_submission(&self, id: u64) {
         // Fast path
-        if self.completed_id.load( std::sync::atomic::Ordering::Acquire) >= id {
+        if self.completed_id.load(std::sync::atomic::Ordering::Acquire) >= id {
             return;
         }
 
@@ -247,7 +246,8 @@ impl SubmissionTracker
     }
 
     pub(crate) fn mark_completed(&self, id: u64) {
-        self.completed_id.store(id, std::sync::atomic::Ordering::Release);
+        self.completed_id
+            .store(id, std::sync::atomic::Ordering::Release);
 
         // Notify all waiters whose id <= completed
         let mut waiters = self.waiters.lock().unwrap();
@@ -263,7 +263,8 @@ impl SubmissionTracker
     }
 
     pub(crate) fn get_next_id(&self) -> u64 {
-        self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        self.next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -451,7 +452,7 @@ impl WgpuDevice {
                 #[cfg(target_arch = "wasm32")]
                 submission_tracker: Arc::new(SubmissionTracker::new()),
                 #[cfg(target_arch = "wasm32")]
-                flush_gpu_lock: async_lock::Mutex::new(())
+                flush_gpu_lock: async_lock::Mutex::new(()),
             }),
         })
     }
@@ -488,7 +489,8 @@ impl WgpuDevice {
         input3_buffer: &WgpuStorage,
     ) {
         let mut command_queue = self.get_queue();
-        command_queue.core
+        command_queue
+            .core
             .get_meta_mut()
             .append(&mut command.meta.clone());
 

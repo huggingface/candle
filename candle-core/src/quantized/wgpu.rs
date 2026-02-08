@@ -1,16 +1,23 @@
 use super::GgmlDType;
-use wgpu_compute_layer::cache::BufferReferenceId;
 use crate::{
-    DType, Result, Shape, WgpuDevice, WgpuStorage, backend::{BackendDevice, BackendStorage}, quantized::QStorage, wgpu_backend::{
-        QuantizedMatmulAlgorithm, wgpu_functions::{
-            self, QueueLayouts, WgpuTensor, matmul::{
-                SGEMMParams, sgemm::{
+    backend::{BackendDevice, BackendStorage},
+    quantized::QStorage,
+    wgpu_backend::{
+        wgpu_functions::{
+            self,
+            matmul::{
+                sgemm::{
                     GenericDynamicMatmulShaderSettings, GenericMatmulSettings, StrideOptimization,
-                }
-            }
-        }
-    }
+                },
+                SGEMMParams,
+            },
+            QueueLayouts, WgpuTensor,
+        },
+        QuantizedMatmulAlgorithm,
+    },
+    DType, Result, Shape, WgpuDevice, WgpuStorage,
 };
+use wgpu_compute_layer::cache::BufferReferenceId;
 
 pub struct QWgpuStorage {
     dtype: GgmlDType,
@@ -307,7 +314,10 @@ impl QWgpuStorage {
         let dev = storage.device();
         let dst = dev.alloc_uninit_size(DType::F32, dst_shape.elem_count());
 
-        let matmul_alg = dev.inner_device().with_extension::<QuantizedMatmulAlgorithm, QuantizedMatmulAlgorithm>(|c| c.clone()).unwrap_or(QuantizedMatmulAlgorithm::None);
+        let matmul_alg = dev
+            .inner_device()
+            .with_extension::<QuantizedMatmulAlgorithm, QuantizedMatmulAlgorithm>(|c| c.clone())
+            .unwrap_or(QuantizedMatmulAlgorithm::None);
         let matmul_alg: QuantizedMatmulAlgorithm = match &matmul_alg {
             QuantizedMatmulAlgorithm::None => {
                 self.get_best_algorithm(self.dtype, (b, m, n, k), input1_stride_k)

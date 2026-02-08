@@ -1,5 +1,5 @@
-use candle_wgpu_kernels::binary::Functions;
 use super::*;
+use candle_wgpu_kernels::binary::Functions;
 
 #[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
@@ -56,7 +56,7 @@ pub fn queue_binary_buffer_from_buffer(
         let const_vec = vec![op as usize];
         queue.add_layout1(&layout1);
 
-        if layout1 != layout2{
+        if layout1 != layout2 {
             queue.add_layout2(&layout2);
 
             if input1.layout().shape().elem_count() > 65535 * 64 {
@@ -67,14 +67,16 @@ pub fn queue_binary_buffer_from_buffer(
                 Pipelines::Binary(dev.get_dtype(dtype)?, Functions::BinaryBufferFromBuffer),
                 const_vec,
             )
-        }
-        else{
+        } else {
             if layout1.shape().elem_count() > 65535 * 64 {
                 queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
             }
 
             queue.get_pipeline_const(
-                Pipelines::Binary(dev.get_dtype(dtype)?, Functions::BinaryBufferFromBufferSameStride),
+                Pipelines::Binary(
+                    dev.get_dtype(dtype)?,
+                    Functions::BinaryBufferFromBufferSameStride,
+                ),
                 const_vec,
             )
         }
@@ -88,7 +90,10 @@ pub fn queue_binary_buffer_from_buffer(
         bind_group,
         layout1.shape().elem_count() as u32,
         #[cfg(feature = "wgpu_debug")]
-        Some(format!("OP: {:?}, layout1: {:?}, layout2: {:?}", op, layout1, layout2)),
+        Some(format!(
+            "OP: {:?}, layout1: {:?}, layout2: {:?}",
+            op, layout1, layout2
+        )),
     );
     Ok(())
 }

@@ -114,14 +114,15 @@ pub fn queue_copy(
                 buffer_input,
                 BindgroupAlignment::Aligned16,
             );
-            queue.enqueue_64_big_extra(pipeline, bind_group, (copy_size / 4) as u32,
+            queue.enqueue_64_big_extra(
+                pipeline,
+                bind_group,
+                (copy_size / 4) as u32,
                 #[cfg(feature = "wgpu_debug")]
                 Some(format!(
                     "size: {}, src_offset: {}, dst_offset: {}",
-                    copy_size,
-                    source_offset,
-                    destination_offset
-                ))
+                    copy_size, source_offset, destination_offset
+                )),
             );
         } else {
             queue.add(copy_size);
@@ -137,14 +138,15 @@ pub fn queue_copy(
             );
 
             let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
-            queue.enqueue_64_big_extra(pipeline, bind_group, copy_size as u32,
+            queue.enqueue_64_big_extra(
+                pipeline,
+                bind_group,
+                copy_size as u32,
                 #[cfg(feature = "wgpu_debug")]
                 Some(format!(
                     "size: {}, src_offset: {}, dst_offset: {}",
-                    copy_size,
-                    source_offset,
-                    destination_offset
-                ))
+                    copy_size, source_offset, destination_offset
+                )),
             );
         }
     }

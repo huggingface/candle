@@ -497,14 +497,21 @@ impl ModelCache {
         false
     }
 
-    #[instrument(skip(self, dev, bindgroup_reference, command_id, pipeline, current_mapping_entry))]
+    #[instrument(skip(
+        self,
+        dev,
+        bindgroup_reference,
+        command_id,
+        pipeline,
+        current_mapping_entry
+    ))]
     pub(crate) fn get_bind_group(
         &mut self,
         dev: &WgpuDevice,
         bindgroup_reference: &BindgroupReferenceFull,
         pipeline: PipelineReference,
         command_id: u32,
-        current_mapping_entry : &mut BufferMappingEntry
+        current_mapping_entry: &mut BufferMappingEntry,
     ) -> CachedBindgroupId {
         fn check_buffer_reference(
             cache: &mut ModelCache,
@@ -550,7 +557,7 @@ impl ModelCache {
         fn get_buffer_referece_key(
             cache: &ModelCache,
             dest_buffer: CachedBufferId,
-            bindgroup_reference: &BindgroupReferenceFull
+            bindgroup_reference: &BindgroupReferenceFull,
         ) -> CachedBindgroupFull {
             BindgroupFullBase(
                 dest_buffer,
@@ -685,7 +692,11 @@ impl ModelCache {
                     .cloned()
                 {
                     self.bindgroups.cached_bindgroup_use_counter_inc();
-                    current_mapping_entry.add_new_buffer(buf_dest_cached_id, pipeline, buf_dest_size);
+                    current_mapping_entry.add_new_buffer(
+                        buf_dest_cached_id,
+                        pipeline,
+                        buf_dest_size,
+                    );
                     return bg;
                 }
             }

@@ -76,7 +76,7 @@ impl PipelineReference {
         }
     }
 
-    pub fn get_index(&self) -> shader_loader::PipelineIndex{
+    pub fn get_index(&self) -> shader_loader::PipelineIndex {
         self.index
     }
 }
@@ -258,10 +258,14 @@ impl QueueBufferInner {
             .const_id_map
             .get_or_insert(&self.shared.const_array);
         if is_new {
-            self.shared.id_to_const_array.push(self.shared.const_array.to_vec())
+            self.shared
+                .id_to_const_array
+                .push(self.shared.const_array.to_vec())
         }
 
-        self.shared.defines_array.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        self.shared
+            .defines_array
+            .sort_unstable_by(|a, b| a.0.cmp(&b.0));
         let index_defines = self
             .shared
             .define_cache
@@ -305,11 +309,14 @@ impl QueueBufferInner {
 
     pub fn add_define(&mut self, key: &'static str, value: impl ToString) {
         let key = self.shared.define_cache.key_cache.get_index(&key);
-        let value = self.shared.define_cache.value_cache.get_index(&value.to_string());
+        let value = self
+            .shared
+            .define_cache
+            .value_cache
+            .get_index(&value.to_string());
         self.shared.defines_array.push((key, value));
     }
 
-   
     // Allows loading const debug info (for simulating calls).
     pub fn load_simulation_consts(&mut self, consts: Vec<Vec<(&'static str, f64)>>) {
         self.shared.id_to_const_array = consts;

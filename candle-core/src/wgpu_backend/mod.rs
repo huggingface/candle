@@ -9,7 +9,7 @@ pub use storage::WgpuStorage;
 pub use wgpu_functions::matmul::MatmulAlgorithm;
 pub use wgpu_functions::matmul::QuantizedMatmulAlgorithm;
 
-impl From<candle_wgpu_kernels::DType> for crate::DType{
+impl From<candle_wgpu_kernels::DType> for crate::DType {
     fn from(value: candle_wgpu_kernels::DType) -> Self {
         match value {
             candle_wgpu_kernels::DType::F32 => crate::DType::F32,

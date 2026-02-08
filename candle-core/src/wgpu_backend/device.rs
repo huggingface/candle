@@ -1,4 +1,3 @@
-
 use rand::SeedableRng;
 use tracing::instrument;
 use wgpu_compute_layer::ToU64;
@@ -7,21 +6,21 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::wgpu_backend::MatmulAlgorithm;
 use crate::{notImplemented, wrongType, DType, Layout};
 
+use super::wgpu_functions::{self, unary::UnaryOperation};
+use super::WgpuStorage;
 use wgpu_compute_layer::cache::{
     BindGroupReference, BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase,
     BufferReferenceId,
 };
 use wgpu_compute_layer::QueueBuffer;
-use super::wgpu_functions::{self, unary::UnaryOperation};
-use super::WgpuStorage;
 
 static DEVICE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 #[derive(Debug, Clone)]
-pub struct WgpuDevice{
-    inner_device : wgpu_compute_layer::WgpuDevice,
-    device_id : u32,
-    pub(crate) matmul_alg : std::sync::Arc<std::sync::Mutex<MatmulAlgorithm>>
+pub struct WgpuDevice {
+    inner_device: wgpu_compute_layer::WgpuDevice,
+    device_id: u32,
+    pub(crate) matmul_alg: std::sync::Arc<std::sync::Mutex<MatmulAlgorithm>>,
 }
 
 impl WgpuDevice {
@@ -35,7 +34,11 @@ impl WgpuDevice {
             candle_wgpu_kernels::DefaultWgpuShader::new()
         });
         device.set_extension(rand::rngs::StdRng::from_os_rng());
-        Ok(WgpuDevice{inner_device: device, device_id: DEVICE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst), matmul_alg: std::sync::Arc::new(std::sync::Mutex::new(MatmulAlgorithm::MatmulX))})
+        Ok(WgpuDevice {
+            inner_device: device,
+            device_id: DEVICE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            matmul_alg: std::sync::Arc::new(std::sync::Mutex::new(MatmulAlgorithm::MatmulX)),
+        })
     }
 
     pub fn inner_device(&self) -> &wgpu_compute_layer::WgpuDevice {
@@ -47,7 +50,8 @@ impl WgpuDevice {
         index: wgpu_compute_layer::LoaderIndex,
         shader_loader: impl Fn() -> T,
     ) {
-        self.inner_device().add_wgpu_shader_loader(index, shader_loader);
+        self.inner_device()
+            .add_wgpu_shader_loader(index, shader_loader);
     }
 
     pub fn simulate_command(
@@ -58,15 +62,20 @@ impl WgpuDevice {
         input2_buffer: &WgpuStorage,
         input3_buffer: &WgpuStorage,
     ) {
-        self.inner_device().simulate_command(command, &dest_buffer.0, &input1_buffer.0, &input2_buffer.0, &input3_buffer.0);
+        self.inner_device().simulate_command(
+            command,
+            &dest_buffer.0,
+            &input1_buffer.0,
+            &input2_buffer.0,
+            &input3_buffer.0,
+        );
     }
 
     pub fn get_dtype(&self, dtype: crate::DType) -> crate::Result<candle_wgpu_kernels::DType> {
         Ok(self.inner_device().get_dtype(dtype.into())?)
     }
 
-    pub fn get_queue<'a>(&'a self) -> QueueBuffer<'a> 
-    {
+    pub fn get_queue<'a>(&'a self) -> QueueBuffer<'a> {
         self.inner_device().get_queue()
     }
 
@@ -363,7 +372,8 @@ impl crate::backend::BackendDevice for WgpuDevice {
     }
 
     fn set_seed(&self, seed: u64) -> crate::Result<()> {
-        self.inner_device().set_extension(rand::rngs::StdRng::seed_from_u64(seed));
+        self.inner_device()
+            .set_extension(rand::rngs::StdRng::seed_from_u64(seed));
         Ok(())
     }
 

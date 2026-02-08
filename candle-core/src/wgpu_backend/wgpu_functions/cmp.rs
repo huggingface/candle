@@ -35,11 +35,6 @@ pub fn queue_cmp_buffer_from_buffer(
 
     let bind_group =
         dev.create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
-    queue.enqueue_64(
-        pipeline,
-        bind_group,
-        output_size,
-        input_size,
-    );
+    queue.enqueue_64(pipeline, bind_group, output_size, input_size);
     Ok(())
 }

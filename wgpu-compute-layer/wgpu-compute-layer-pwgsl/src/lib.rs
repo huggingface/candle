@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use ahash::AHashMap as HashMap;
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use crate::shader_loader::{shader_shortener, DefinesDefinitions};
@@ -58,15 +58,14 @@ impl Default for ParseState {
 
 pub mod shader_loader {
     use super::*;
+    use ahash::AHashMap as HashMap;
     use fancy_regex::Regex;
     use once_cell::sync::Lazy;
-    use ahash::AHashMap as HashMap;
 
     pub fn load_shader(state: &mut ParseState, store: &ShaderStore) -> String {
         let mut result = shader_defines::load_shader(state, store);
-        static REMOVE_SPACES_REGEX: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))").unwrap()
-        });
+        static REMOVE_SPACES_REGEX: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))").unwrap());
 
         if REMOVE_SPACES {
             result = REMOVE_SPACES_REGEX.replace_all(&result, "").to_string();
@@ -192,14 +191,11 @@ pub mod shader_loader {
             }
         }
 
-        pub fn match_function_block_no_output<'a>(
-            tokens: &mut impl Iterator<Item = Token<'a>>
-        ) {
+        pub fn match_function_block_no_output<'a>(tokens: &mut impl Iterator<Item = Token<'a>>) {
             let mut generic_counter = 0;
             for token in tokens.by_ref() {
                 match token {
-                    Token::Word(_) => {
-                    }
+                    Token::Word(_) => {}
                     Token::Symbol(c) => {
                         if c == '{' {
                             generic_counter += 1;
@@ -260,9 +256,9 @@ pub mod shader_loader {
             }
         }
 
-         pub fn match_until_char_no_output<'a>(
+        pub fn match_until_char_no_output<'a>(
             tokens: &mut Peekable<impl Iterator<Item = Token<'a>>>,
-            char: char
+            char: char,
         ) {
             while let Some(token) = tokens.peek().cloned() {
                 match token {
@@ -708,7 +704,7 @@ pub mod shader_loader {
                 tokens: &mut Peekable<impl Iterator<Item = Token<'a>>>,
                 state: &mut ParseState,
                 store: &ShaderStore,
-                result : &mut String,
+                result: &mut String,
             ) {
                 while let Some(token) = tokens.next() {
                     match token {
@@ -1161,7 +1157,13 @@ pub mod shader_loader {
     pub mod shader_shortener {
         use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
-        use crate::{REMOVE_SPACES, shader_loader::shader_tokeniser::{match_function_block_no_output, match_until_char_no_output, match_whitespace_to_result}};
+        use crate::{
+            shader_loader::shader_tokeniser::{
+                match_function_block_no_output, match_until_char_no_output,
+                match_whitespace_to_result,
+            },
+            REMOVE_SPACES,
+        };
 
         use super::{
             shader_tokeniser::{
@@ -1217,17 +1219,15 @@ pub mod shader_loader {
                             result.push_str(word);
                             let var_name = match_variable(&mut tokens, &mut result);
                             if !var_name.is_empty() {
-                                let short_name =
-                                    variables.entry(var_name).or_insert_with(|| {
-                                        if SHORTEN_NORMAL_VARIABLES {
-                                            let (name, new_counter) =
-                                                generate_short_name(var_counter);
-                                            var_counter = new_counter;
-                                            name
-                                        } else {
-                                            var_name.to_string()
-                                        }
-                                    });
+                                let short_name = variables.entry(var_name).or_insert_with(|| {
+                                    if SHORTEN_NORMAL_VARIABLES {
+                                        let (name, new_counter) = generate_short_name(var_counter);
+                                        var_counter = new_counter;
+                                        name
+                                    } else {
+                                        var_name.to_string()
+                                    }
+                                });
                                 result.push_str(short_name);
                             }
                         }
@@ -1334,9 +1334,8 @@ pub mod shader_loader {
                                         valid = false;
                                     } else if *c == ':' {
                                         //this is a variable definition, e.g. v1 : u32, v2 : u32
-                                        let short_name = variables
-                                            .entry(word)
-                                            .or_insert_with(|| {
+                                        let short_name =
+                                            variables.entry(word).or_insert_with(|| {
                                                 if SHORTEN_NORMAL_VARIABLES {
                                                     let (name, new_counter) =
                                                         generate_short_name(var_counter);
@@ -1435,10 +1434,9 @@ pub mod shader_loader {
                                     match_until_char(&mut tokens, ';', &mut result);
                                     tokens.next(); //remove ';' from the tokens list as well
                                     result.push(';');
-                                }
-                                else{
+                                } else {
                                     match_until_char_no_output(&mut tokens, ';');
-                                    tokens.next(); //remove ';' from the tokens list as well 
+                                    tokens.next(); //remove ';' from the tokens list as well
                                 }
 
                                 current_item.clear();
@@ -1446,13 +1444,12 @@ pub mod shader_loader {
                                 //we are a function
                                 current_item.push_str(w);
                                 let var_name = match_variable(&mut tokens, &mut current_item);
-                                
+
                                 if is_compute_fn || used_variables.contains(var_name) {
                                     result.push_str(&current_item);
                                     result.push_str(var_name);
                                     match_function_block(&mut tokens, &mut result);
-                                }
-                                else{
+                                } else {
                                     match_function_block_no_output(&mut tokens);
                                 }
                                 is_compute_fn = false;
@@ -1465,8 +1462,7 @@ pub mod shader_loader {
                                     result.push_str(&current_item);
                                     result.push_str(var_name);
                                     match_function_block(&mut tokens, &mut result);
-                                }
-                                else{
+                                } else {
                                     match_function_block_no_output(&mut tokens);
                                 }
                                 current_item.clear();

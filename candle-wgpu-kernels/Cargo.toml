@@ -11,13 +11,12 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-wgpu-compute-layer-pwgsl = {path = "../wgpu-compute-layer/wgpu-compute-layer-pwgsl"}
+wgpu-compute-layer-pwgsl = { path = "../wgpu-compute-layer/wgpu-compute-layer-pwgsl" }
 wgpu-compute-layer = { path = "../wgpu-compute-layer" }
 
 [build-dependencies]
-wgpu-compute-layer-pwgsl = {path = "../wgpu-compute-layer/wgpu-compute-layer-pwgsl"}
+wgpu-compute-layer-pwgsl = { path = "../wgpu-compute-layer/wgpu-compute-layer-pwgsl" }
 
 [features]
 wgpu_debug_serialize = ["dep:serde", "dep:serde_json"]
-default=[]
-
+default = []

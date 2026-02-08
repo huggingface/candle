@@ -93,7 +93,6 @@ pub fn queue_upsample2d(
     Ok(())
 }
 
-
 #[allow(clippy::too_many_arguments)]
 pub fn queue_upsample_bilinear2d(
     dev: &WgpuDevice,
@@ -119,7 +118,11 @@ pub fn queue_upsample_bilinear2d(
     let num_invocations_y = out_h * out_w;
 
     fn ceil_div(a: u32, b: u32) -> u32 {
-        if a == 0 { 0 } else { a.div_ceil(b) }
+        if a == 0 {
+            0
+        } else {
+            a.div_ceil(b)
+        }
     }
 
     let workgroup_count_x = ceil_div(num_invocations_x, workgroup_size_x);
@@ -160,11 +163,7 @@ pub fn queue_upsample_bilinear2d(
         candle_wgpu_kernels::upsample::Functions::UpsampleBilinear2d,
     ));
 
-    let bind_group = dev.create_bind_group_input1(
-        buffer_dest,
-        buffer_src,
-        dtype.into(),
-    );
+    let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_src, dtype.into());
 
     queue.enqueue_workgroups(
         pipeline,

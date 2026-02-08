@@ -10,7 +10,11 @@ use super::{
     util::{FixedArray, ToF64, ToU32},
     WgpuDevice,
 };
-use crate::{cache::BufferMappingEntry, queue_buffer::{QueueBufferCore, QueueBufferShared}, util::ReferenceTrait};
+use crate::{
+    cache::BufferMappingEntry,
+    queue_buffer::{QueueBufferCore, QueueBufferShared},
+    util::ReferenceTrait,
+};
 use tracing::{instrument, span, Level};
 
 use crate::DType;
@@ -87,10 +91,13 @@ impl WgpuDevice {
         let meta_offset = meta_array_length;
         command_queue.shared.current_meta = meta_offset;
         #[cfg(target_arch = "wasm32")]
-        command_queue.core.get_meta_mut().extend(std::iter::repeat_n(
-            0,
-            (meta_offset - meta_array_length) as usize,
-        ));
+        command_queue
+            .core
+            .get_meta_mut()
+            .extend(std::iter::repeat_n(
+                0,
+                (meta_offset - meta_array_length) as usize,
+            ));
 
         QueueBuffer::new(command_queue)
     }
@@ -119,7 +126,11 @@ impl WgpuDevice {
 /**************** FLUSH COMMANDS TO GPU: ****************/
 #[instrument(skip(dev, queue_core, cache))]
 ///Prepares Buffers
-fn prepare(dev: &WgpuDevice, queue_core : &mut QueueBufferCore, cache: &mut ModelCache) -> BufferMappingEntry {
+fn prepare(
+    dev: &WgpuDevice,
+    queue_core: &mut QueueBufferCore,
+    cache: &mut ModelCache,
+) -> BufferMappingEntry {
     let global_index = queue_core.global_command_index;
     cache.mappings.set_global_command_index(global_index);
     let queue = &mut queue_core.command_queue;
@@ -495,7 +506,15 @@ fn get_command_buffer(
     result
 }
 
-#[instrument(skip(dev, shared_info, cache, index, last_meta, current_meta, current_mapping_entry))]
+#[instrument(skip(
+    dev,
+    shared_info,
+    cache,
+    index,
+    last_meta,
+    current_meta,
+    current_mapping_entry
+))]
 #[allow(clippy::too_many_arguments)]
 ///Maps Virtual Compute Graph Buffers to actual wgpu Buffers
 fn set_buffers(
@@ -772,8 +791,13 @@ fn set_buffers(
                         &shared_info.define_cache,
                     )?;
 
-                    let bindgroup =
-                        cache.get_bind_group(dev, &q.bindgroup, q.pipeline.clone(), command_index, current_mapping_entry);
+                    let bindgroup = cache.get_bind_group(
+                        dev,
+                        &q.bindgroup,
+                        q.pipeline.clone(),
+                        command_index,
+                        current_mapping_entry,
+                    );
 
                     let span1 = span!(Level::INFO, "SetBuffers_Optimize implace: ");
                     let _enter1 = span1.enter();
@@ -882,12 +906,12 @@ platform_fn! {
         if !queue_buffer.core.command_queue.is_empty() {
             log::debug!("flush_gpu_command");
             let mut submissions = std::collections::VecDeque::<WasmSubmissionIndex> ::new();
-            
-            let mut queue_storage = queue_buffer.drained();
-            let queue = &mut queue_storage; 
-            queue.global_command_index += queue.command_queue.len() as u32; 
 
-            let (mut cache_option, mut current_mapping_entry) =   
+            let mut queue_storage = queue_buffer.drained();
+            let queue = &mut queue_storage;
+            queue.global_command_index += queue.command_queue.len() as u32;
+
+            let (mut cache_option, mut current_mapping_entry) =
             {
                 let mut cache = dev.cache.lock().expect("");
                 let current_mapping_entry = prepare(dev, queue, &mut cache);
@@ -922,7 +946,7 @@ platform_fn! {
                             cache,
                             &mut current_mapping_entry
                         )?;
-                       
+
                         let last_meta_index = (last_meta + 256 / 4).min(queue.get_meta().len());
 
                         let is_last = index >= queue.command_queue.len();
@@ -941,7 +965,7 @@ platform_fn! {
                                 }
                             }
                         }
-                    
+
                         let cb = get_command_buffer(
                             dev,
                             &queue.get_meta()[current_meta..last_meta_index],
@@ -956,17 +980,17 @@ platform_fn! {
                         }
                         cb
                     };
-                    
+
                     if !submissions.is_empty() {
                         let submission_to_wait_for = submissions.pop_front().unwrap();
                         //on wasm32 we need to drop the locks before awaiting, we can not hold an MutexGuard across an await point
-                        //we use the dev.flush_gpu_lock to make sure that we are the only one flushing at the same time. 
+                        //we use the dev.flush_gpu_lock to make sure that we are the only one flushing at the same time.
                         //on non wasm, we do not await here and also do not need to drop the locks therefore.
                         #[cfg(target_arch = "wasm32")]{
                             cache_option.take();
                             queue_buffer_option.take();
                         }
-                        maybe_await!(wait_for_submission(dev, submission_to_wait_for))?; 
+                        maybe_await!(wait_for_submission(dev, submission_to_wait_for))?;
                     }
 
                     let span1 = span!(Level::INFO, "Submit");
@@ -1057,7 +1081,11 @@ platform_fn! {
     }
 }
 
-fn finish_commands(_queue_shared : &QueueBufferShared, _queue_core : &mut QueueBufferCore, _cache: &mut ModelCache) {
+fn finish_commands(
+    _queue_shared: &QueueBufferShared,
+    _queue_core: &mut QueueBufferCore,
+    _cache: &mut ModelCache,
+) {
     #[cfg(feature = "wgpu_debug")]
     {
         for i in 0.._queue_core.command_queue.len() {
@@ -1365,7 +1393,9 @@ pub(crate) async fn wait_for_submission(
     dev: &WgpuDevice,
     index: WasmSubmissionIndex,
 ) -> crate::Result<()> {
-    dev.submission_tracker.wait_for_submission(index.submission_index_wasm).await;
+    dev.submission_tracker
+        .wait_for_submission(index.submission_index_wasm)
+        .await;
     Ok(())
 }
 

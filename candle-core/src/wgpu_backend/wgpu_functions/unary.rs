@@ -108,7 +108,11 @@ pub fn queue_unary_inplace_op(
             }
         }
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
-            queue.add(dev.inner_device().with_extension_mut::<rand::rngs::StdRng, u32 >(|rand| rand.next_u32()).unwrap());
+            queue.add(
+                dev.inner_device()
+                    .with_extension_mut::<rand::rngs::StdRng, u32>(|rand| rand.next_u32())
+                    .unwrap(),
+            );
         }
 
         let length = if is_contiguous4 {
@@ -196,7 +200,11 @@ pub fn queue_unary_from_buffer_op(
             queue.add(layout.start_offset());
         }
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
-            queue.add(dev.inner_device().with_extension_mut::<rand::rngs::StdRng, u32>(|rand| rand.next_u32()).unwrap());
+            queue.add(
+                dev.inner_device()
+                    .with_extension_mut::<rand::rngs::StdRng, u32>(|rand| rand.next_u32())
+                    .unwrap(),
+            );
         }
 
         let inplaceable = OpIsInplaceable {

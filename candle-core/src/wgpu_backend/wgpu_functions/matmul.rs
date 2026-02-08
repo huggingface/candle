@@ -1064,7 +1064,7 @@ pub mod sgemm {
                 queue.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
             }
         }
-    
+
         queue.add_define("TSM", shader_settings.settings.m_tile);
         queue.add_define("TSN", shader_settings.settings.n_tile);
         queue.add_define("TSK", shader_settings.settings.k_tile);
@@ -1590,9 +1590,21 @@ pub fn queue_matmul_buffer_best(
                 let new_input2_size = b * new_k * new_n * dtype.size_in_bytes();
                 let new_output_size = b * new_m * new_n * dtype.size_in_bytes();
 
-                if new_input1_size > dev.inner_device().device_limits.max_storage_buffer_binding_size as usize
-                    || new_input2_size > dev.inner_device().device_limits.max_storage_buffer_binding_size as usize
-                    || new_output_size > dev.inner_device().device_limits.max_storage_buffer_binding_size as usize
+                if new_input1_size
+                    > dev
+                        .inner_device()
+                        .device_limits
+                        .max_storage_buffer_binding_size as usize
+                    || new_input2_size
+                        > dev
+                            .inner_device()
+                            .device_limits
+                            .max_storage_buffer_binding_size as usize
+                    || new_output_size
+                        > dev
+                            .inner_device()
+                            .device_limits
+                            .max_storage_buffer_binding_size as usize
                 {
                     continue;
                 }
