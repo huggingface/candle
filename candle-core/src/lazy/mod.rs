@@ -323,11 +323,142 @@ where
     format!("{}", petgraph::dot::Dot::new(g))
 }
 
-pub trait LazyBuffer: Debug + Clone {}
+pub trait LazyBuffer: Debug + Clone + PartialEq {}
 
 pub trait LazyAllocator<B: LazyBuffer> {
+    fn initialize(
+        &mut self,
+        graph: &mut OpGraph,
+        edges: &[EdgeIndex],
+        last_node: NodeIndex,
+    ) -> Result<()>;
     fn insert(&mut self, id: BufferId, buffer: B) -> Result<()>;
+    fn get(&self, id: BufferId) -> Option<&B>;
     fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<B>;
+}
+
+pub fn determine_tensor_source<'a>(graph: &'a OpGraph, edge: &'a Edge<OpEdge>) -> &'a Edge<OpEdge> {
+    let mut source = edge;
+    loop {
+        let next_edge = source.next_edge(petgraph::Incoming);
+        if next_edge == EdgeIndex::end() {
+            break;
+        }
+        source = &graph.raw_edges()[next_edge.index()];
+    }
+    source
+}
+
+pub fn calculate_usage_records(
+    graph: &OpGraph,
+    edges: &[EdgeIndex],
+) -> HashMap<BufferId, (Option<BufferId>, Option<usize>, usize, Shape, DType)> {
+    let mut records = HashMap::with_capacity(edges.len());
+    let topo_len = edges.len() - 1;
+    for (i, edge_idx) in edges.iter().rev().enumerate() {
+        let edge = &graph.raw_edges()[edge_idx.index()];
+        let buffer_id = edge.weight.buffer_id();
+        let node_idx = edge.source();
+
+        let t = &graph[node_idx];
+        if t.resolved() {
+            continue;
+        }
+        let incoming = graph.edges_directed(node_idx, petgraph::Incoming);
+        for in_idx in incoming {
+            let in_edge: &Edge<OpEdge> = &graph.raw_edges()[in_idx.id().index()];
+            let source_idx = in_edge.source();
+
+            let source = &graph[source_idx];
+            if source.resolved() {
+                continue;
+            }
+            let true_source = determine_tensor_source(graph, in_edge);
+            records
+                .entry(true_source.weight.buffer_id())
+                .or_insert_with(|| {
+                    (
+                        None,
+                        None,
+                        topo_len - i,
+                        true_source.weight.shape().clone(),
+                        true_source.weight.dtype(),
+                    )
+                });
+        }
+
+        if let Some(record) = records.get_mut(&edge.weight.buffer_id()) {
+            record.0 = Some(edge.weight.buffer_id());
+            record.1 = Some(topo_len - i);
+        }
+    }
+    //filter records with no producer
+    records.retain(|_, v| v.1.is_some());
+    records
+}
+pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
+    graph: &OpGraph,
+    edges: &[EdgeIndex],
+    allocator: &mut A,
+) -> Result<()> {
+    let record_map = calculate_usage_records(graph, edges);
+    let mut shared_objects: Vec<B> = Vec::with_capacity(record_map.len());
+
+    for (buffer_id, (record_buffer_id, producer, last_consumer, shape, dtype)) in record_map.iter()
+    {
+        let record_producer = producer.unwrap();
+        let mut best_obj = None;
+        for obj in shared_objects.iter() {
+            let mut suitable = true;
+            for (
+                inner_buffer_id,
+                (_, inner_producer, inner_last_consumer, inner_shape, inner_dtype),
+            ) in record_map.iter()
+            {
+                let max_first = std::cmp::max(record_producer, inner_producer.unwrap());
+                let min_last = *std::cmp::min(last_consumer, inner_last_consumer);
+                if max_first <= min_last && allocator.get(*inner_buffer_id) == Some(obj) {
+                    suitable = false;
+                    break;
+                }
+            }
+            if suitable {
+                best_obj = Some(obj);
+            }
+        }
+        if let Some(obj) = best_obj {
+            allocator.insert(*buffer_id, (*obj).clone())?;
+        } else {
+            //let rounded_size = (record.size - 1).next_power_of_two();
+            let buffer = allocator.get_or_allocate(*buffer_id, shape, *dtype)?;
+            shared_objects.push(buffer.clone());
+        }
+    }
+
+    //Loop through and add inplace assignments
+    for edge_idx in edges.iter() {
+        let edge = &graph.raw_edges()[edge_idx.index()];
+        let node_idx = edge.source();
+        let t = &graph[node_idx];
+        if t.resolved() {
+            continue;
+        }
+        let incoming = graph.edges_directed(node_idx, petgraph::Incoming);
+        for in_idx in incoming {
+            let in_edge: &Edge<OpEdge> = &graph.raw_edges()[in_idx.id().index()];
+
+            let true_source = determine_tensor_source(graph, in_edge);
+            if true_source.weight.buffer_id() != in_edge.weight.buffer_id() {
+                if let Some(buf) = allocator.get(true_source.weight.buffer_id()) {
+                    allocator.insert(in_edge.weight.buffer_id(), buf.clone())?;
+                }
+            }
+        }
+    }
+
+    //We use `immediate` = false here in create_buffer
+    //and submit the queue after all allocations are done.
+    Ok(())
 }
 
 pub trait Executor {
@@ -349,6 +480,8 @@ pub trait Executor {
         allocator: &mut Self::AllocatorType,
         node: NodeIndex,
     ) -> Result<()>;
+
+    fn allocator(&self) -> Self::AllocatorType;
 }
 
 impl LazyStorage {
@@ -387,8 +520,16 @@ impl OpEdge {
         }
     }
 
+    pub fn id(&self) -> EdgeId {
+        self.id
+    }
+
     pub fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    pub fn shape(&self) -> &Shape {
+        &self.layout.shape()
     }
 
     pub fn dtype(&self) -> DType {
@@ -397,6 +538,10 @@ impl OpEdge {
 
     pub fn buffer_id(&self) -> BufferId {
         self.buffer_id
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.layout.shape().elem_count() * self.dtype.size_in_bytes()
     }
 }
 
@@ -420,6 +565,10 @@ impl OpNode {
 
     pub fn op(&self) -> &Op {
         &self.op
+    }
+
+    pub fn resolved(&self) -> bool {
+        matches!(self.op, Op::Const(_))
     }
 }
 
@@ -769,15 +918,15 @@ impl BackendStorage for LazyStorage {
         let idx = next.add_operation(Op::WhereCond);
 
         let current_op = next.get_current_node()?;
-        let lhs_edge = OpEdge::new(l.clone(), self.dtype());
-        next.operations.add_edge(current_op, idx, lhs_edge);
+        let src = OpEdge::new(l.clone(), self.dtype());
+        next.operations.add_edge(current_op, idx, src);
 
         let t_op = t.get_current_node()?;
         let t_edge = OpEdge::new(t_l.clone(), t.dtype());
         next.merge(t, t_op, idx, t_edge)?;
 
         let f_op = f.get_current_node()?;
-        let f_edge = OpEdge::new(f_l.clone(), t.dtype());
+        let f_edge = OpEdge::new(f_l.clone(), f.dtype());
         next.merge(f, f_op, idx, f_edge)?;
 
         next.current_node = Some(idx);
@@ -1052,7 +1201,7 @@ impl BackendStorage for LazyStorage {
         let idx = next.add_operation(op);
 
         let current_op = next.get_current_node()?;
-        let edge = OpEdge::new(src_l.clone(), self.dtype());
+        let edge = OpEdge::new(src_l.clone(), ids.dtype());
         next.operations.add_edge(current_op, idx, edge);
 
         let ids_op = ids.get_current_node()?;

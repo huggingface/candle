@@ -1966,6 +1966,13 @@ impl Tensor {
                 {
                     let device = crate::MetalDevice::new(0)?;
                     let result = storage.execute(device.clone())?;
+                    device.synchronize()?;
+                    let data = crate::metal_backend::read_to_vec::<S>(
+                        &result,
+                        storage.shape().elem_count(),
+                    );
+                    return Ok(data);
+                    /*
                     let storage = crate::MetalStorage::new(
                         Arc::new(result),
                         device,
@@ -1973,6 +1980,7 @@ impl Tensor {
                         storage.dtype(),
                     );
                     return from_cpu_storage(&storage.to_cpu_storage()?);
+                     */
                 }
                 #[cfg(not(any(feature = "metal", feature = "cuda")))]
                 {

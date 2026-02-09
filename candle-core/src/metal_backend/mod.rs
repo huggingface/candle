@@ -10,9 +10,8 @@ use candle_metal_kernels::{
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
-use petgraph::acyclic::Acyclic;
-use petgraph::algo::toposort;
-use petgraph::graph::NodeIndex;
+use petgraph::graph::{Edge, EdgeIndex, NodeIndex};
+use petgraph::visit::EdgeRef;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
@@ -2137,8 +2136,6 @@ impl BackendDevice for MetalDevice {
     }
 }
 
-use petgraph::visit::EdgeRef;
-
 macro_rules! debug_println {
     () => {
         #[cfg(debug_assertions)]
@@ -2194,6 +2191,7 @@ impl LazyBuffer for Buffer {}
 // Memory planning should be backend agnostic, but there may be backend specific edge cases so
 // should be open to specializing. Let OpGraph create the initial memory plan. Override the trait fn or post-process as needed.
 // Only Const and Output need to have SharedStorage setting. All other buffers can be private.
+#[derive(Clone, Debug)]
 pub struct MetalAllocator {
     buffer_map: HashMap<BufferId, Buffer>,
     device: MetalDevice,
@@ -2223,8 +2221,43 @@ impl MetalAllocator {
         }
     }
 }
+use crate::lazy::Op;
 
 impl LazyAllocator<Buffer> for MetalAllocator {
+    fn initialize(
+        &mut self,
+        graph: &mut OpGraph,
+        edges: &[EdgeIndex],
+        last_node: NodeIndex,
+    ) -> Result<()> {
+        //let mut free: Vec<T> = Vec::with_capacity(edges.len());
+        //let mut assignments = HashMap::with_capacity(edges.len());
+        for edge_idx in edges.iter().rev() {
+            let edge = &graph.raw_edges()[edge_idx.index()];
+            let buffer_id = edge.weight.buffer_id();
+            let node_idx = edge.source();
+
+            if let Op::Const(s) = &graph[node_idx].op() {
+                let shape = Shape::from(s.len());
+                let new_buffer = allocate(&self.device, &shape, s.dtype()).unwrap();
+                self.insert(buffer_id, new_buffer)?;
+            }
+        }
+
+        //Allocate intermediates
+        crate::lazy::greedy_by_size(graph, edges, self)?;
+
+        let output = edges.last().unwrap();
+        let output_edge: &Edge<OpEdge> = &graph.raw_edges()[output.index()];
+        let source = crate::lazy::determine_tensor_source(&graph, output_edge);
+        let source_w = &source.weight;
+        let output_buffer =
+            self.get_or_allocate(source_w.buffer_id(), source_w.shape(), source_w.dtype())?;
+
+        let output_w = graph.edge_weight(*output).unwrap();
+        self.insert(output_w.buffer_id(), output_buffer)?;
+        Ok(())
+    }
     fn insert(&mut self, id: BufferId, buffer: Buffer) -> Result<()> {
         self.buffer_map.insert(id, buffer); // TODO: ok_or(DescriptiveError)
         Ok(())
@@ -2236,6 +2269,10 @@ impl LazyAllocator<Buffer> for MetalAllocator {
             .entry(id)
             .or_insert_with(|| allocate(&self.device, shape, dtype).unwrap())
             .clone())
+    }
+
+    fn get(&self, id: BufferId) -> Option<&Buffer> {
+        self.buffer_map.get(&id)
     }
 }
 
@@ -2251,23 +2288,29 @@ impl Executor for MetalDevice {
         //println!("{}", crate::lazy::graph_to_dot(&&graph));
         // TODO: &mut OpGraph input?
         let mut graph = graph.clone();
-        let mut allocator = MetalAllocator::new(self.clone());
+        let mut allocator = self.allocator();
         self.optimize(&mut graph);
         self.specialize(&mut graph);
 
-        let acyclic = Acyclic::try_from(graph.clone()).unwrap();
-        let node_indices = toposort(&acyclic, None).unwrap();
+        //let acyclic = pethgraph::acyclic::Acyclic::try_from(graph.clone()).unwrap();
+        //let node_indices = petgraph::algo:toposort(&acyclic, None).unwrap();
         //let first = *node_indices.first().unwrap();
-        let last = *node_indices.last().unwrap();
-        //let mut dfs = petgraph::visit::Dfs::new(&graph, first);
+        let (last, last_node) = graph.raw_nodes().iter().enumerate().last().unwrap();
+        let last = NodeIndex::new(last);
 
         let ancestors = Ancestors::of(&graph, last);
-        let mut topo_sorted: Vec<_> = ancestors.collect::<Vec<_>>();
-        topo_sorted.reverse();
+        // Edges topologically sorted in a stable manner (note reverse)
+        let mut edges: Vec<_> = {
+            let mut topo_sorted = ancestors.collect::<Vec<_>>();
+            topo_sorted.reverse();
+            topo_sorted
+        };
+
+        allocator.initialize(&mut graph, &edges, last)?;
 
         let mut final_node = NodeIndex::end();
         //while let Some(idx) = dfs.next(&graph) {
-        for edge in topo_sorted {
+        for edge in edges {
             let idx = graph.raw_edges()[edge.index()].source();
 
             // TODO: This is just a sanity check of the acyclic toposort
@@ -2287,8 +2330,8 @@ impl Executor for MetalDevice {
         let mut edges = graph.edges_directed(final_node, petgraph::Outgoing);
         let out = edges.next().unwrap();
         let out_w = out.weight();
-        let buffer =
-            allocator.get_or_allocate(out_w.buffer_id(), out_w.layout().shape(), out_w.dtype())?;
+        let buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
+
         Ok(buffer)
     }
 
@@ -2376,17 +2419,8 @@ impl Executor for MetalDevice {
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
 
-                let lhs_buffer = allocator.get_or_allocate(
-                    lhs_weight.buffer_id(),
-                    lhs_l.shape(),
-                    lhs_weight.dtype(),
-                )?;
-
-                let rhs_buffer = allocator.get_or_allocate(
-                    rhs_weight.buffer_id(),
-                    rhs_l.shape(),
-                    rhs_weight.dtype(),
-                )?;
+                let lhs_buffer = allocator.get(lhs_weight.buffer_id()).unwrap().clone();
+                let rhs_buffer = allocator.get(rhs_weight.buffer_id()).unwrap().clone();
 
                 let lhs = MetalStorage::new(
                     Arc::new(lhs_buffer),
@@ -2412,11 +2446,7 @@ impl Executor for MetalDevice {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_w = in_edge.weight().clone();
-                let buffer = allocator.get_or_allocate(
-                    in_w.buffer_id(),
-                    in_w.layout().shape(),
-                    in_w.dtype(),
-                )?;
+                let buffer = allocator.get(in_w.buffer_id()).unwrap().clone();
 
                 let storage = MetalStorage::new(
                     Arc::new(buffer),
@@ -2427,9 +2457,48 @@ impl Executor for MetalDevice {
                 let storage = storage.reduce_op(reduce_op.clone(), in_w.layout(), dims)?;
                 allocator.update_all_outgoing(graph, node, storage.buffer());
             }
+            //Cmp(CmpOp, LazyStorage, Layout, Layout),
+            WhereCond => {
+                let mut edges = graph.edges_directed(node, petgraph::Incoming);
+                let f_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let t_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let src_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+
+                let src_weight = src_edge.weight().clone();
+                let t_weight = t_edge.weight().clone();
+                let f_weight = f_edge.weight().clone();
+
+                let src_l = src_weight.layout();
+                let t_l = t_weight.layout();
+                let f_l = f_weight.layout();
+
+                let src_buffer = allocator.get(src_weight.buffer_id()).unwrap().clone();
+                let t_buffer = allocator.get(t_weight.buffer_id()).unwrap().clone();
+                let f_buffer = allocator.get(f_weight.buffer_id()).unwrap().clone();
+
+                let src = MetalStorage::new(
+                    Arc::new(src_buffer),
+                    self.clone(),
+                    src_weight.shape().elem_count(),
+                    src_weight.dtype(),
+                );
+                let t = MetalStorage::new(
+                    Arc::new(t_buffer),
+                    self.clone(),
+                    t_weight.shape().elem_count(),
+                    t_weight.dtype(),
+                );
+
+                let f = MetalStorage::new(
+                    Arc::new(f_buffer),
+                    self.clone(),
+                    f_weight.shape().elem_count(),
+                    f_weight.dtype(),
+                );
+                let storage = src.where_cond(src_l, &t, t_l, &f, f_l)?;
+                allocator.update_all_outgoing(graph, node, storage.buffer());
+            }
             /*
-            Cmp(CmpOp, LazyStorage, Layout, Layout),
-            WhereCond(Layout, LazyStorage, Layout, LazyStorage, Layout),
             Conv1D(Layout, LazyStorage, Layout, crate::conv::ParamsConv1D),
             ConvTranspose1D(Layout, LazyStorage, Layout, crate::conv::ParamsConvTranspose1D),
             Conv2D(Layout, LazyStorage, Layout, crate::conv::ParamsConv2D),
@@ -2453,17 +2522,8 @@ impl Executor for MetalDevice {
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
 
-                let lhs_buffer = allocator.get_or_allocate(
-                    lhs_weight.buffer_id(),
-                    lhs_l.shape(),
-                    lhs_weight.dtype(),
-                )?;
-
-                let rhs_buffer = allocator.get_or_allocate(
-                    rhs_weight.buffer_id(),
-                    rhs_l.shape(),
-                    rhs_weight.dtype(),
-                )?;
+                let lhs_buffer = allocator.get(lhs_weight.buffer_id()).unwrap().clone();
+                let rhs_buffer = allocator.get(rhs_weight.buffer_id()).unwrap().clone();
 
                 let lhs = MetalStorage::new(
                     Arc::new(lhs_buffer),
@@ -2483,8 +2543,8 @@ impl Executor for MetalDevice {
             //IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
             Matmul((b, m, n, k)) => {
                 let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
 
                 let lhs_weight = lhs_edge.weight().clone();
                 let rhs_weight = rhs_edge.weight().clone();
@@ -2492,17 +2552,8 @@ impl Executor for MetalDevice {
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
 
-                let lhs_buffer = allocator.get_or_allocate(
-                    lhs_weight.buffer_id(),
-                    lhs_l.shape(),
-                    lhs_weight.dtype(),
-                )?;
-
-                let rhs_buffer = allocator.get_or_allocate(
-                    rhs_weight.buffer_id(),
-                    rhs_l.shape(),
-                    rhs_weight.dtype(),
-                )?;
+                let lhs_buffer = allocator.get(lhs_weight.buffer_id()).unwrap().clone();
+                let rhs_buffer = allocator.get(rhs_weight.buffer_id()).unwrap().clone();
 
                 let lhs = MetalStorage::new(
                     Arc::new(lhs_buffer),
@@ -2516,7 +2567,7 @@ impl Executor for MetalDevice {
                     rhs_weight.layout().shape().elem_count(),
                     rhs_weight.dtype(),
                 );
-                let storage = rhs.matmul(&lhs, (*b, *m, *n, *k), rhs_l, lhs_l)?;
+                let storage = lhs.matmul(&rhs, (*b, *m, *n, *k), lhs_l, rhs_l)?;
                 allocator.update_all_outgoing(graph, node, storage.buffer());
             }
             CopyStridedSrc(dst_offset) => {
@@ -2527,11 +2578,7 @@ impl Executor for MetalDevice {
                 // let in_edge = incoming[0];
                 let in_weight = in_edge.weight().clone();
                 let in_w = in_edge.weight().clone();
-                let buffer = allocator.get_or_allocate(
-                    in_w.buffer_id(),
-                    in_w.layout().shape(),
-                    in_w.dtype(),
-                )?;
+                let buffer = allocator.get(in_w.buffer_id()).unwrap().clone();
 
                 let outgoing: Vec<OpEdge> = graph
                     .edges_directed(node, petgraph::Outgoing)
@@ -2540,11 +2587,7 @@ impl Executor for MetalDevice {
 
                 let out_w = outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
-                let out_buffer = allocator.get_or_allocate(
-                    out_w.buffer_id(),
-                    out_w.layout().shape(),
-                    out_w.dtype(),
-                )?;
+                let out_buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
 
                 let src = MetalStorage::new(
                     Arc::new(buffer),
@@ -2574,16 +2617,19 @@ impl Executor for MetalDevice {
                     in_w.dtype(),
                 )?;
 
-                let mut outgoing: Vec<(NodeIndex, NodeIndex)> = graph
+                let mut outgoing: Vec<(NodeIndex, NodeIndex, OpEdge)> = graph
                     .edges_directed(node, petgraph::Outgoing)
-                    .map(|e: petgraph::graph::EdgeReference<_>| (e.source(), e.target()))
+                    .map(|e: petgraph::graph::EdgeReference<_>| {
+                        (e.source(), e.target(), e.weight().clone())
+                    })
                     .collect();
 
                 assert!(outgoing.len() > 0);
 
                 outgoing.sort_by(|a, b| a.0.cmp(&b.0));
 
-                let (_, target) = outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
+                /*
+                let (_, target, _) = outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
                 let target_outgoing_edges: Vec<OpEdge> = graph
                     .edges_directed(*target, petgraph::Outgoing)
@@ -2591,10 +2637,10 @@ impl Executor for MetalDevice {
                     .collect();
 
                 assert!(target_outgoing_edges.len() > 0);
+                */
 
-                let out_w = target_outgoing_edges
-                    .first()
-                    .ok_or(InvalidOutgoing(op_node.id()))?;
+                let (out_source, out_target, out_w) =
+                    outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
                 let out_buffer = allocator.get_or_allocate(
                     out_w.buffer_id(),
@@ -2647,9 +2693,13 @@ impl Executor for MetalDevice {
         }
         Ok(())
     }
+
+    fn allocator(&self) -> MetalAllocator {
+        MetalAllocator::new(self.clone())
+    }
 }
 
-fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
+pub fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
     assert!(!ptr.is_null());
     let slice = unsafe { std::slice::from_raw_parts(ptr, n) };
