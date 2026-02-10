@@ -35,7 +35,7 @@ fn main() {
                 .build_ptx()
                 .expect("Failed to build ptx");
             bindings
-                .write(safe_target)?
+                .write(safe_target)
                 .expect("Failed to write ptx bindings");
         }
     }
