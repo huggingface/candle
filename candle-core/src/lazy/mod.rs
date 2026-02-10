@@ -626,11 +626,12 @@ impl Display for OpEdge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} ({:?}, {:?}, {:?})",
+            "{} ({:?}, {:?}, {:?}, {:?})",
             self.id.0,
             self.layout.shape().dims(),
             self.layout.stride(),
-            self.dtype
+            self.dtype,
+            self.buffer_id
         )
     }
 }

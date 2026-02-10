@@ -1914,6 +1914,75 @@ impl MetalStorage {
         Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
+    pub fn alt_binary(
+        device: MetalDevice,
+        op: &'static str,
+        lhs_buffer: &Buffer,
+        lhs_l: &Layout,
+        lhs_dtype: DType,
+        rhs_buffer: &Buffer,
+        rhs_l: &Layout,
+        rhs_dtype: DType,
+        dst_buffer: &Buffer,
+    ) -> Result<()> {
+        fn kernel_name(op: &'static str, dtype: &DType, suffix: &str) -> String {
+            format!("{op}_{}{}", dtype.as_str(), suffix)
+        }
+        let shape = lhs_l.shape();
+        let el_count = shape.elem_count();
+        let encoder = device.command_encoder()?;
+        let lhs = buffer_o(lhs_buffer, lhs_l, lhs_dtype);
+        let rhs = buffer_o(rhs_buffer, rhs_l, rhs_dtype);
+
+        let dtype = match op {
+            "eq" | "ne" | "le" | "lt" | "ge" | "gt" => DType::U8,
+            _ => lhs_dtype,
+        };
+        let lhs_contiguous = lhs_l.is_contiguous();
+        let rhs_contiguous = rhs_l.is_contiguous();
+
+        if lhs_contiguous && rhs_contiguous {
+            let kernel = kernel_name(op, &lhs_dtype, "");
+            candle_metal_kernels::call_binary_contiguous(
+                &device.device,
+                &encoder,
+                &device.kernels,
+                kernel,
+                lhs_dtype.size_in_bytes(),
+                el_count,
+                lhs,
+                rhs,
+                dst_buffer,
+            )
+            .map_err(MetalError::from)?;
+        } else {
+            let strided_suffix = if lhs_contiguous {
+                "_rstrided"
+            } else if rhs_contiguous {
+                "_lstrided"
+            } else {
+                "_strided"
+            };
+            let kernel = kernel_name(op, &lhs_dtype, strided_suffix);
+            candle_metal_kernels::call_binary_strided(
+                &device.device,
+                &encoder,
+                &device.kernels,
+                kernel,
+                lhs_dtype.size_in_bytes(),
+                lhs_l.dims(),
+                lhs,
+                lhs_l.stride(),
+                rhs,
+                rhs_l.stride(),
+                dst_buffer,
+            )
+            .map_err(MetalError::from)?;
+        };
+        encoder.set_label("binary");
+        Ok(())
+    }
+
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
         let size = self.count * self.dtype.size_in_bytes();
         let buffer = self.device.allocate_buffer(size)?;
@@ -2419,9 +2488,18 @@ impl Executor for MetalDevice {
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
 
+                let lhs_dtype = lhs_weight.dtype();
+                let rhs_dtype = rhs_weight.dtype();
+
                 let lhs_buffer = allocator.get(lhs_weight.buffer_id()).unwrap().clone();
                 let rhs_buffer = allocator.get(rhs_weight.buffer_id()).unwrap().clone();
 
+                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
+                let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
+                let dst_weight = dst_edge.weight().clone();
+                let dst_buffer = allocator.get(dst_weight.buffer_id()).unwrap().clone();
+
+                /*
                 let lhs = MetalStorage::new(
                     Arc::new(lhs_buffer),
                     self.clone(),
@@ -2433,9 +2511,20 @@ impl Executor for MetalDevice {
                     self.clone(),
                     rhs_weight.layout().shape().elem_count(),
                     rhs_weight.dtype(),
-                );
-                let storage = lhs.binary(kernel, &rhs, lhs_l, rhs_l)?;
-                allocator.update_all_outgoing(graph, node, storage.buffer());
+                );*/
+                MetalStorage::alt_binary(
+                    self.clone(),
+                    kernel,
+                    &lhs_buffer,
+                    lhs_l,
+                    lhs_dtype,
+                    &rhs_buffer,
+                    rhs_l,
+                    rhs_dtype,
+                    &dst_buffer,
+                )?;
+                //let storage = lhs.binary(kernel, &rhs, lhs_l, rhs_l)?;
+                allocator.update_all_outgoing(graph, node, &dst_buffer);
             }
             /*
             ToCpu,
@@ -2611,11 +2700,7 @@ impl Executor for MetalDevice {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_w = in_edge.weight().clone();
-                let buffer = allocator.get_or_allocate(
-                    in_w.buffer_id(),
-                    in_w.layout().shape(),
-                    in_w.dtype(),
-                )?;
+                let buffer = allocator.get(in_w.buffer_id()).unwrap().clone();
 
                 let mut outgoing: Vec<(NodeIndex, NodeIndex, OpEdge)> = graph
                     .edges_directed(node, petgraph::Outgoing)
@@ -2624,9 +2709,9 @@ impl Executor for MetalDevice {
                     })
                     .collect();
 
-                assert!(outgoing.len() > 0);
+                println!("{outgoing:?}");
 
-                outgoing.sort_by(|a, b| a.0.cmp(&b.0));
+                assert!(outgoing.len() > 0);
 
                 /*
                 let (_, target, _) = outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
@@ -2642,11 +2727,12 @@ impl Executor for MetalDevice {
                 let (out_source, out_target, out_w) =
                     outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
-                let out_buffer = allocator.get_or_allocate(
-                    out_w.buffer_id(),
-                    out_w.layout().shape(),
-                    out_w.dtype(),
-                )?;
+                let ancestors = crate::lazy::ancestors(&graph, *out_target);
+                println!("{}", crate::lazy::graph_to_dot(&&ancestors));
+
+                let out_buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
+
+                println!("copy2d {:?} -> {:?}", in_w.buffer_id(), out_w.buffer_id());
 
                 let src = MetalStorage::new(
                     Arc::new(buffer),
