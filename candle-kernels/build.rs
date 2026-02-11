@@ -61,13 +61,11 @@ fn main() -> Result<()> {
     }
 
     moe_builder.build_lib(out_dir.join("libmoe.a"))?;
-
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=moe");
     println!("cargo:rustc-link-lib=dylib=cudart");
     if !is_target_msvc {
         println!("cargo:rustc-link-lib=stdc++");
     }
-
     Ok(())
 }
