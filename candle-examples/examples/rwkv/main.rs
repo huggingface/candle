@@ -9,8 +9,10 @@ use clap::{Parser, ValueEnum};
 
 use candle_transformers::models::quantized_rwkv_v5::Model as Q5;
 use candle_transformers::models::quantized_rwkv_v6::Model as Q6;
+use candle_transformers::models::quantized_rwkv_v7::Model as Q7;
 use candle_transformers::models::rwkv_v5::{Config, Model as M5, State, Tokenizer};
 use candle_transformers::models::rwkv_v6::Model as M6;
+use candle_transformers::models::rwkv_v7::Model as M7;
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
@@ -24,6 +26,8 @@ enum Model {
     Q5(Q5),
     M6(M6),
     Q6(Q6),
+    M7(M7),
+    Q7(Q7),
 }
 
 impl Model {
@@ -33,6 +37,8 @@ impl Model {
             Self::Q5(m) => m.forward(xs, state),
             Self::M6(m) => m.forward(xs, state),
             Self::Q6(m) => m.forward(xs, state),
+            Self::M7(m) => m.forward(xs, state),
+            Self::Q7(m) => m.forward(xs, state),
         }
     }
 }
@@ -126,10 +132,11 @@ impl TextGeneration {
 
 #[derive(Parser, ValueEnum, Clone, Copy, PartialEq, Eq, Debug)]
 enum Which {
-    Eagle7b,
-    World1b5,
-    World3b,
-    World6_1b6,
+    Eagle7b, // V5
+    World1b5, // V5
+    World3b, // V5
+    World6_1b6, // V6
+    G1_0b1, // V7
 }
 
 impl std::fmt::Display for Which {
@@ -145,6 +152,7 @@ impl Which {
             Self::World1b5 => "RWKV/rwkv-5-world-1b5",
             Self::World3b => "RWKV/rwkv-5-world-3b",
             Self::World6_1b6 => "paperfun/rwkv",
+            Self::G1_0b1 => "paperfun/rwkv-x070-g1-0b1",
         }
     }
 
@@ -152,7 +160,7 @@ impl Which {
         match self {
             Self::Eagle7b => "refs/pr/1",
             Self::World1b5 | Self::World3b => "refs/pr/2",
-            Self::World6_1b6 => "main",
+            Self::World6_1b6 | Self::G1_0b1 => "main",
         }
     }
 }
@@ -280,10 +288,11 @@ fn main() -> Result<()> {
                         .model("lmz/candle-rwkv".to_string())
                         .get("eagle7b-q4k.gguf")?,
                     Which::World6_1b6 => repo.get("rwkv-6-world-1b6-q4k.gguf")?,
+                    Which::G1_0b1 => repo.get("model.q4k.gguf")?,
                 }]
             } else {
                 vec![match args.which {
-                    Which::World1b5 | Which::World3b | Which::Eagle7b => {
+                    Which::World1b5 | Which::World3b | Which::Eagle7b | Which::G1_0b1 => {
                         repo.get("model.safetensors")?
                     }
                     Which::World6_1b6 => repo.get("rwkv-6-world-1b6.safetensors")?,
@@ -304,12 +313,14 @@ fn main() -> Result<()> {
         match args.which {
             Which::World1b5 | Which::World3b | Which::Eagle7b => Model::Q5(Q5::new(&config, vb)?),
             Which::World6_1b6 => Model::Q6(Q6::new(&config, vb)?),
+            Which::G1_0b1 => Model::Q7(Q7::new(&config, vb)?),
         }
     } else {
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
         match args.which {
             Which::World1b5 | Which::World3b | Which::Eagle7b => Model::M5(M5::new(&config, vb)?),
             Which::World6_1b6 => Model::M6(M6::new(&config, vb)?),
+            Which::G1_0b1 => Model::M7(M7::new(&config, vb)?),
         }
     };
     println!("loaded the model in {:?}", start.elapsed());
