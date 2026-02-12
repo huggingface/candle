@@ -1,37 +1,7 @@
 use cudaforge::{detect_compute_cap, get_gpu_arch_string, KernelBuilder, Result};
 use std::env;
 use std::path::PathBuf;
-
-```rust
-// Macro to register capabilities in Rust and in the CUDA builder
-```
-macro_rules! set_cfg {
-    ($builder:expr, $name:expr, $value:expr) => {
-```rust
-        // Register for Rust (check-cfg is required for recent Rust versions)
-```
-        println!("cargo::rustc-check-cfg=cfg({}, values(\"true\", \"false\"))", $name);
-        
-```rust
-        // Apply the configuration if the value is true
-```
-        if $value {
-            println!("cargo:rustc-cfg={}=\"true\"", $name);
-            $builder = $builder.arg(format!("-D{}=1", $name.to_uppercase()).as_str());
-        } else {
-            println!("cargo:rustc-cfg={}=\"false\"", $name);
-            // Optionnel : $builder = $builder.arg(format!("-D{}=0", $name.to_uppercase()).as_str());
-        }
-    };
-}
-
-// Macro helper to apply to both builders
-macro_rules! dual_set {
-    ($b1:expr, $b2:expr, $name:expr, $value:expr) => {
-        set_cfg!($b1, $name, $value);
-        set_cfg!($b2, $name, $value);
-    };
-}
+ 
 
 fn main() -> Result<()> {
     println!("cargo::rerun-if-changed=build.rs");
@@ -83,7 +53,7 @@ fn main() -> Result<()> {
 
     // Apply hardware capabilities using the macro (affects Rust and both builders)
     println!("cargo:rustc-cfg=cuda_arch=\"{}\"", compute_cap);
-    println!("cargo:rustc-cfg=inf_cc_700=\"{}\"", compute_cap >= 70);
+    println!("cargo:rustc-cfg=inf_cc_70=\"{}\"", compute_cap >= 70);
     println!("cargo:rustc-cfg=inf_cc_61=\"{}\"", compute_cap >= 61);
     println!("cargo:rustc-cfg=inf_cc_53=\"{}\"", compute_cap >= 53);
 
@@ -138,4 +108,29 @@ fn main() -> Result<()> {
         println!("cargo:rustc-link-lib=stdc++");
     }
     Ok(())
+}
+
+// Macro to register capabilities in Rust and in the CUDA builder
+macro_rules! set_cfg {
+    ($builder:expr, $name:expr, $value:expr) => {
+        // Register for Rust (check-cfg is required for recent Rust versions)
+        println!("cargo::rustc-check-cfg=cfg({}, values(\"true\", \"false\"))", $name);
+        
+        // Apply the configuration if the value is true
+        if $value {
+            println!("cargo:rustc-cfg={}=\"true\"", $name);
+            $builder = $builder.arg(format!("-D{}=1", $name.to_uppercase()).as_str());
+        } else {
+            println!("cargo:rustc-cfg={}=\"false\"", $name);
+            // Optionnel : $builder = $builder.arg(format!("-D{}=0", $name.to_uppercase()).as_str());
+        }
+    };
+}
+
+// Macro helper to apply to both builders
+macro_rules! dual_set {
+    ($b1:expr, $b2:expr, $name:expr, $value:expr) => {
+        set_cfg!($b1, $name, $value);
+        set_cfg!($b2, $name, $value);
+    };
 }
