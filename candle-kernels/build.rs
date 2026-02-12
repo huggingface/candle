@@ -10,9 +10,66 @@ fn main() -> Result<()> {
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
+    println!("cargo::rustc-check-cfg=cfg(allow_legacy_fp16)");
+    println!("cargo::rustc-check-cfg=cfg(allow_legacy_bf16)");
+    println!("cargo::rustc-check-cfg=cfg(allow_legacy_fp8)");
+    println!("cargo::rustc-check-cfg=cfg(cuda_arch, values(\"53\", \"61\", \"70\", \"75\", \"80\", \"86\", \"89\", \"90\", \"100\"))");
+    println!("cargo::rustc-check-cfg=cfg(inf_cc_700, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(inf_cc_61, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(inf_cc_53, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_f16, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_half2_native, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_dp4a, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_pageable_memory_access, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_memory_pools, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_async_copy, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_l2_cache_persistence, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_cuda_graphs, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_wmma, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_wmma_f16, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_independent_thread_scheduling, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_bf16_conversions, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_sparse_tensor_cores, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_wmma_bf16, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_bf16, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_tf32, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_fp8, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_transformer_engine, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_fp4, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_tma, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_clusters, values(\"true\", \"false\"))");
+    println!("cargo::rustc-check-cfg=cfg(has_distributed_shared_memory, values(\"true\", \"false\"))");
+    
+
     // Detect CUDA compute capability using cudaforge's nvidia-smi detection
     let arch = detect_compute_cap().unwrap_or_else(|_| cudaforge::GpuArch::new(0));
     let compute_cap = arch.base();
+    println!("cargo:rustc-cfg=cuda_arch=\"{}\"", compute_cap);
+    println!("cargo:rustc-cfg=inf_cc_700=\"{}\"", compute_cap >= 70);
+    println!("cargo:rustc-cfg=inf_cc_61=\"{}\"", compute_cap >= 61);
+    println!("cargo:rustc-cfg=inf_cc_53=\"{}\"", compute_cap >= 53);
+    println!("cargo:rustc-cfg=has_f16=\"{}\"", compute_cap >= 53);
+    println!("cargo:rustc-cfg=has_half2_native=\"{}\"", compute_cap == 60 || compute_cap == 62 || compute_cap >= 70);
+    println!("cargo:rustc-cfg=has_dp4a=\"{}\"", compute_cap >= 61);
+    println!("cargo:rustc-cfg=has_pageable_memory_access=\"{}\"", compute_cap >= 60);
+    println!("cargo:rustc-cfg=has_memory_pools=\"{}\"", compute_cap >= 60);
+    println!("cargo:rustc-cfg=has_async_copy=\"{}\"", compute_cap >= 80);
+    println!("cargo:rustc-cfg=has_l2_cache_persistence=\"{}\"", compute_cap >= 80);
+    println!("cargo:rustc-cfg=has_cuda_graphs=\"{}\"", compute_cap >= 30);
+    println!("cargo:rustc-cfg=has_wmma=\"{}\"", compute_cap >= 70);
+    println!("cargo:rustc-cfg=has_wmma_f16=\"{}\"", compute_cap >= 70);
+    println!("cargo:rustc-cfg=has_independent_thread_scheduling=\"{}\"", compute_cap >= 70);
+    println!("cargo:rustc-cfg=has_bf16_conversions=\"{}\"", compute_cap >= 70);
+    println!("cargo:rustc-cfg=has_sparse_tensor_cores=\"{}\"", compute_cap >= 80);
+    println!("cargo:rustc-cfg=has_wmma_bf16=\"{}\"", compute_cap >= 80);
+    println!("cargo:rustc-cfg=has_bf16=\"{}\"", compute_cap >= 80);
+    println!("cargo:rustc-cfg=has_tf32=\"{}\"", compute_cap >= 80);
+    println!("cargo:rustc-cfg=has_fp8=\"{}\"", compute_cap >= 89);
+    println!("cargo:rustc-cfg=has_transformer_engine=\"{}\"", compute_cap >= 89);
+    println!("cargo:rustc-cfg=has_fp4=\"{}\"", compute_cap >= 100);
+    println!("cargo:rustc-cfg=has_tma=\"{}\"", compute_cap >= 90);
+    println!("cargo:rustc-cfg=has_clusters=\"{}\"", compute_cap >= 90);
+    println!("cargo:rustc-cfg=has_distributed_shared_memory=\"{}\"", compute_cap >= 90);
 
     // WMMA (Tensor Cores) require SM 7.0+ (Volta)
     if compute_cap < 70 {
