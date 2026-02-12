@@ -31,6 +31,15 @@ fn main() -> Result<()> {
         .arg("-std=c++17")
         .arg("-O3");
 
+    // Disable bf16 WMMA kernels on GPUs older than sm_80 (Ampere).
+    // bf16 WMMA fragments require compute capability >= 8.0.
+    let compute_cap = cudaforge::detect_compute_cap()
+        .map(|arch| arch.base())
+        .unwrap_or(80);
+    if compute_cap < 80 {
+        moe_builder = moe_builder.arg("-DNO_BF16_KERNEL");
+    }
+
     let mut is_target_msvc = false;
     if let Ok(target) = std::env::var("TARGET") {
         if target.contains("msvc") {
