@@ -15,8 +15,16 @@ __device__ __forceinline__ __half __hmin_nan(__half a, __half b) {
     return __hisnan(a) ? a : (__hisnan(b) ? b : __hmin(a, b));
 }
 #endif
+#if (__CUDACC_VER_MAJOR__ < 12 || __CUDACC_VER_MINOR__ < 2) && __CUDA_ARCH__ < 800
+__device__ __forceinline__ __nv_bfloat16 __hmax_nan(__nv_bfloat16 a, __nv_bfloat16 b) {
+    return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
+}
+__device__ __forceinline__ __nv_bfloat16 __hmin_nan(__nv_bfloat16 a, __nv_bfloat16 b) {
+    return __hisnan(a) ? a : (__hisnan(b) ? b : __hmin(a, b));
+}
+#endif
 
-#if __CUDA_ARCH__ < 600
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
 // Copied from https://docs.nvidia.com/cuda/cuda-c-programming-guide/#atomic-functions
 __device__ double atomicAdd(double* address, double val) {
     unsigned long long int* address_as_ull = (unsigned long long int*)address;
@@ -35,29 +43,53 @@ __device__ double atomicAdd(double* address, double val) {
 }
 #endif
 
-#if __CUDA_ARCH__ < 700
+// __half support starts at SM 5.3, native atomicAdd(__half*) at SM 7.0+
+#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 700
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#atomicadd
 // The 16-bit __half floating-point version of atomicAdd() is only supported by devices of compute capability 7.x and higher.
 // Solution adapted from https://github.com/torch/cutorch/blob/master/lib/THC/THCAtomics.cuh#L96-L119
-//__device__ __half atomicAdd(__half *address, __half val) {
-   //  unsigned int *address_as_ui = (unsigned int *) ((char *)address - ((size_t)address & 2));
-   //  unsigned int old = *address_as_ui;
-   //  unsigned int assumed;
-   //  bool unaligned = (size_t) address & 2;
-   //  do {
-   //      assumed = old;
-   //      unsigned int hsum;
-   //      hsum = unaligned ? (old >> 16) : (old & 0xffff);
-   //      hsum = __half_as_ushort(__ushort_as_half(hsum) + val); 
-   //      old = atomicCAS(address_as_ui, assumed,
-   //          unaligned ? (old & 0xffff) | (hsum << 16) : (old & 0xffff0000) | hsum
-   //      );
+__device__ __forceinline__ __half atomicAdd(__half *address, __half val) {
+    unsigned int *address_as_ui = (unsigned int *) ((char *)address - ((size_t)address & 2));
+    unsigned int old = *address_as_ui;
+    unsigned int assumed;
+    bool unaligned = (size_t) address & 2;
+    do {
+        assumed = old;
+        unsigned int hsum;
+        hsum = unaligned ? (old >> 16) : (old & 0xffff);
+        hsum = __half_as_ushort(__ushort_as_half(hsum) + val); 
+        old = atomicCAS(address_as_ui, assumed,
+            unaligned ? (old & 0xffff) | (hsum << 16) : (old & 0xffff0000) | hsum
+        );
 
-   // } while (assumed != old);
-   // return __ushort_as_half(unaligned ? (old >> 16) : (old & 0xffff));
-//}
+    } while (assumed != old);
+    return __ushort_as_half(unaligned ? (old >> 16) : (old & 0xffff));
+}
 #endif
 
+// Polyfill: atomicAdd for bfloat16
+// Native atomicAdd(__nv_bfloat16*, __nv_bfloat16) is only available on SM 8.0+ (Ampere).
+// For older architectures with ALLOW_LEGACY_BF16, we emulate it using 32-bit CAS operations.
+// The implementation handles unaligned addresses by manipulating the appropriate 16-bit half.
+#if defined(ALLOW_LEGACY_BF16) && __CUDA_ARCH__ < 800
+__device__ __forceinline__ __nv_bfloat16 atomicAdd(__nv_bfloat16 *address, __nv_bfloat16 val) {
+    unsigned int *address_as_ui = (unsigned int *) ((char *)address - ((size_t)address & 2));
+    unsigned int old = *address_as_ui;
+    unsigned int assumed;
+    bool unaligned = (size_t) address & 2;
+    do {
+        assumed = old;
+        unsigned int hsum;
+        hsum = unaligned ? (old >> 16) : (old & 0xffff);
+        hsum = __bfloat16_as_ushort(__ushort_as_bfloat16(hsum) + val); 
+        old = atomicCAS(address_as_ui, assumed,
+            unaligned ? (old & 0xffff) | (hsum << 16) : (old & 0xffff0000) | hsum
+        );
+
+    } while (assumed != old);
+    return __ushort_as_bfloat16(unaligned ? (old >> 16) : (old & 0xffff));
+}
+#endif
 
 __device__ __forceinline__ __half atomicMaxf(__half* address, __half val) {
 #if __CUDA_ARCH__ < 700

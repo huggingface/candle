@@ -10,6 +10,7 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+half = "2.4.1"
 
 [build-dependencies]
 cudaforge = "0.1.2"
