@@ -2292,6 +2292,7 @@ impl MetalAllocator {
 }
 use crate::lazy::Op;
 
+// TODO: Get rid of unwraps. Use real errors.
 impl LazyAllocator<Buffer> for MetalAllocator {
     fn initialize(
         &mut self,
@@ -2299,8 +2300,6 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         edges: &[EdgeIndex],
         last_node: NodeIndex,
     ) -> Result<()> {
-        //let mut free: Vec<T> = Vec::with_capacity(edges.len());
-        //let mut assignments = HashMap::with_capacity(edges.len());
         for edge_idx in edges.iter().rev() {
             let edge = &graph.raw_edges()[edge_idx.index()];
             let buffer_id = edge.weight.buffer_id();
@@ -2308,8 +2307,7 @@ impl LazyAllocator<Buffer> for MetalAllocator {
 
             if let Op::Const(s) = &graph[node_idx].op() {
                 let shape = Shape::from(s.len());
-                let new_buffer = allocate(&self.device, &shape, s.dtype()).unwrap();
-                self.insert(buffer_id, new_buffer)?;
+                self.allocate(buffer_id, &shape, s.dtype())?;
             }
         }
 
@@ -2317,31 +2315,39 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         crate::lazy::greedy_by_size(graph, edges, self)?;
 
         let output = edges.last().unwrap();
+        let output_w = graph.edge_weight(*output).unwrap();
         let output_edge: &Edge<OpEdge> = &graph.raw_edges()[output.index()];
         let source = crate::lazy::determine_tensor_source(&graph, output_edge);
         let source_w = &source.weight;
         let output_buffer =
-            self.get_or_allocate(source_w.buffer_id(), source_w.shape(), source_w.dtype())?;
+            self.allocate(output_w.buffer_id(), source_w.shape(), source_w.dtype())?;
 
-        let output_w = graph.edge_weight(*output).unwrap();
         self.insert(output_w.buffer_id(), output_buffer)?;
+
         Ok(())
     }
+
     fn insert(&mut self, id: BufferId, buffer: Buffer) -> Result<()> {
-        self.buffer_map.insert(id, buffer); // TODO: ok_or(DescriptiveError)
+        self.buffer_map.insert(id, buffer);
         Ok(())
     }
+
+    fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<Buffer> {
+        let buffer = allocate(&self.device, shape, dtype).unwrap();
+        self.buffer_map.insert(id, buffer.clone());
+        Ok(buffer)
+    }
+
+    fn get(&self, id: BufferId) -> Option<&Buffer> {
+        self.buffer_map.get(&id)
+    }
+
     fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<Buffer> {
-        // TODO: Real Error
         Ok(self
             .buffer_map
             .entry(id)
             .or_insert_with(|| allocate(&self.device, shape, dtype).unwrap())
             .clone())
-    }
-
-    fn get(&self, id: BufferId) -> Option<&Buffer> {
-        self.buffer_map.get(&id)
     }
 }
 
@@ -2354,7 +2360,7 @@ impl Executor for MetalDevice {
     type AllocatorType = MetalAllocator;
 
     fn run(&self, graph: OpGraph) -> Result<Buffer> {
-        //println!("{}", crate::lazy::graph_to_dot(&&graph));
+        println!("{}", crate::lazy::graph_to_dot(&&graph));
         // TODO: &mut OpGraph input?
         let mut graph = graph.clone();
         let mut allocator = self.allocator();
@@ -2701,7 +2707,7 @@ impl Executor for MetalDevice {
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_w = in_edge.weight().clone();
                 let buffer = allocator.get(in_w.buffer_id()).unwrap().clone();
-
+                println!("{allocator:?}");
                 let mut outgoing: Vec<(NodeIndex, NodeIndex, OpEdge)> = graph
                     .edges_directed(node, petgraph::Outgoing)
                     .map(|e: petgraph::graph::EdgeReference<_>| {
@@ -2713,19 +2719,20 @@ impl Executor for MetalDevice {
 
                 assert!(outgoing.len() > 0);
 
-                /*
-                let (_, target, _) = outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
+                let (_, sink, _) = outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
-                let target_outgoing_edges: Vec<OpEdge> = graph
-                    .edges_directed(*target, petgraph::Outgoing)
-                    .map(|e: petgraph::graph::EdgeReference<_>| e.weight().clone())
+                let sink_outgoing_edges: Vec<(NodeIndex, NodeIndex, OpEdge)> = graph
+                    .edges_directed(*sink, petgraph::Outgoing)
+                    .map(|e: petgraph::graph::EdgeReference<_>| {
+                        (e.source(), e.target(), e.weight().clone())
+                    })
                     .collect();
 
-                assert!(target_outgoing_edges.len() > 0);
-                */
+                assert!(sink_outgoing_edges.len() > 0);
 
-                let (out_source, out_target, out_w) =
-                    outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
+                let (out_source, out_target, out_w) = sink_outgoing_edges
+                    .first()
+                    .ok_or(InvalidOutgoing(op_node.id()))?;
 
                 let ancestors = crate::lazy::ancestors(&graph, *out_target);
                 println!("{}", crate::lazy::graph_to_dot(&&ancestors));
@@ -2733,6 +2740,7 @@ impl Executor for MetalDevice {
                 let out_buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
 
                 println!("copy2d {:?} -> {:?}", in_w.buffer_id(), out_w.buffer_id());
+                println!("{d1}, {d2}, {src_s}, {dst_s}, {src_o}, {dst_o}");
 
                 let src = MetalStorage::new(
                     Arc::new(buffer),
@@ -2753,6 +2761,7 @@ impl Executor for MetalDevice {
             }
             //ConstSet(crate::scalar::Scalar, Layout)
             Sink => {
+                /*
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_w = in_edge.weight().clone();
@@ -2763,6 +2772,7 @@ impl Executor for MetalDevice {
                 )?;
 
                 allocator.update_all_outgoing(graph, node, &buffer);
+                 */
             }
             Output => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);

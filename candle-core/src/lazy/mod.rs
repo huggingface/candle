@@ -226,7 +226,7 @@ pub fn get_incoming_edges<N, E>(
 pub struct LazyStorage {
     id: LazyStorageId,
     operations: OpGraph,
-    shape: Shape,
+    layout: Layout,
     initial_dtype: DType,
     current_node: Option<NodeIndex<u32>>,
     // potentially Arc<RwLock<...>>
@@ -279,7 +279,8 @@ impl LazyStorage {
         // Only add output node if not already present
         if !matches!(current_op.op(), Op::Output) {
             let idx = next.add_operation(Op::Output);
-            let edge = OpEdge::new(Layout::contiguous(self.shape.clone()), self.dtype());
+            println!("self during fn output: {self:?}");
+            let edge = OpEdge::new(self.layout.clone(), self.dtype());
             next.operations.add_edge(current_node, idx, edge);
         };
 
@@ -307,7 +308,7 @@ impl LazyStorage {
     }
 
     pub fn shape(&self) -> &Shape {
-        &self.shape
+        self.layout.shape()
     }
 }
 
@@ -333,6 +334,7 @@ pub trait LazyAllocator<B: LazyBuffer> {
         last_node: NodeIndex,
     ) -> Result<()>;
     fn insert(&mut self, id: BufferId, buffer: B) -> Result<()>;
+    fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<B>;
     fn get(&self, id: BufferId) -> Option<&B>;
     fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<B>;
 }
@@ -344,7 +346,14 @@ pub fn determine_tensor_source<'a>(graph: &'a OpGraph, edge: &'a Edge<OpEdge>) -
         if next_edge == EdgeIndex::end() {
             break;
         }
-        source = &graph.raw_edges()[next_edge.index()];
+        let edge = &graph.raw_edges()[next_edge.index()];
+
+        let source_node_idx = edge.source();
+        let source_node = &graph.raw_nodes()[source_node_idx.index()];
+        if !source_node.weight.supports_inplace() {
+            break;
+        }
+        source = edge;
     }
     source
 }
@@ -352,7 +361,7 @@ pub fn determine_tensor_source<'a>(graph: &'a OpGraph, edge: &'a Edge<OpEdge>) -
 pub fn calculate_usage_records(
     graph: &OpGraph,
     edges: &[EdgeIndex],
-) -> HashMap<BufferId, (Option<BufferId>, Option<usize>, usize, Shape, DType)> {
+) -> HashMap<BufferId, (Option<BufferId>, Option<usize>, usize, Layout, DType)> {
     let mut records = HashMap::with_capacity(edges.len());
     let topo_len = edges.len() - 1;
     for (i, edge_idx) in edges.iter().rev().enumerate() {
@@ -381,7 +390,7 @@ pub fn calculate_usage_records(
                         None,
                         None,
                         topo_len - i,
-                        true_source.weight.shape().clone(),
+                        true_source.weight.layout.clone(),
                         true_source.weight.dtype(),
                     )
                 });
@@ -396,6 +405,7 @@ pub fn calculate_usage_records(
     records.retain(|_, v| v.1.is_some());
     records
 }
+
 pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
     graph: &OpGraph,
     edges: &[EdgeIndex],
@@ -404,15 +414,15 @@ pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
     let record_map = calculate_usage_records(graph, edges);
     let mut shared_objects: Vec<B> = Vec::with_capacity(record_map.len());
 
-    for (buffer_id, (record_buffer_id, producer, last_consumer, shape, dtype)) in record_map.iter()
+    for (buffer_id, (record_buffer_id, producer, last_consumer, layout, dtype)) in record_map.iter()
     {
         let record_producer = producer.unwrap();
-        let mut best_obj = None;
+        let mut best_obj: Option<&B> = None;
         for obj in shared_objects.iter() {
             let mut suitable = true;
             for (
                 inner_buffer_id,
-                (_, inner_producer, inner_last_consumer, inner_shape, inner_dtype),
+                (_, inner_producer, inner_last_consumer, inner_layout, inner_dtype),
             ) in record_map.iter()
             {
                 let max_first = std::cmp::max(record_producer, inner_producer.unwrap());
@@ -427,15 +437,15 @@ pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
             }
         }
         if let Some(obj) = best_obj {
-            allocator.insert(*buffer_id, (*obj).clone())?;
+            allocator.insert(*buffer_id, obj.clone())?;
         } else {
             //let rounded_size = (record.size - 1).next_power_of_two();
-            let buffer = allocator.get_or_allocate(*buffer_id, shape, *dtype)?;
+            let buffer = allocator.allocate(*buffer_id, layout.shape(), *dtype)?;
             shared_objects.push(buffer.clone());
         }
     }
 
-    //Loop through and add inplace assignments
+    // Loop through and add inplace assignments
     for edge_idx in edges.iter() {
         let edge = &graph.raw_edges()[edge_idx.index()];
         let node_idx = edge.source();
@@ -455,9 +465,6 @@ pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
             }
         }
     }
-
-    //We use `immediate` = false here in create_buffer
-    //and submit the queue after all allocations are done.
     Ok(())
 }
 
@@ -489,7 +496,7 @@ impl LazyStorage {
         LazyStorage {
             id: LazyStorageId::new(),
             operations: Default::default(),
-            shape,
+            layout: Layout::contiguous(shape),
             initial_dtype: dtype,
             current_node: None,
         }
@@ -569,6 +576,10 @@ impl OpNode {
 
     pub fn resolved(&self) -> bool {
         matches!(self.op, Op::Const(_))
+    }
+
+    pub fn supports_inplace(&self) -> bool {
+        false //matches!(self.op, Op::Const(_)) // | Op::Copy2D(_, _, _, _, _, _))
     }
 }
 
@@ -1267,14 +1278,12 @@ impl BackendStorage for LazyStorage {
         let rhs_edge = OpEdge::new(rhs_l.clone(), self.dtype());
         next.merge(rhs, rhs_op, idx, rhs_edge)?;
 
-        let sink = next.add_operation(Op::Sink);
         let lhs_dims = lhs_l.shape().dims();
         let dim = lhs_dims.len();
         let out_shape = Shape::from(&lhs_dims[..dim - 2]).extend(&[m, n]);
-        let edge = OpEdge::new(Layout::contiguous(out_shape), self.dtype());
-        next.operations.add_edge(idx, sink, edge);
 
-        next.current_node = Some(sink);
+        next.layout = Layout::contiguous(out_shape);
+        next.current_node = Some(idx);
         Ok(next)
     }
 
@@ -1317,9 +1326,7 @@ impl BackendStorage for LazyStorage {
 
         let self_current_node = self.get_current_node()?;
 
-        // TODO: May have to use self.layout / dst.layout here
-        let in_edge = OpEdge::new(Layout::contiguous(self.shape.clone()), self.dtype());
-        let out_edge = OpEdge::new(Layout::contiguous(dst.shape.clone()), dst.dtype());
+        let in_edge = OpEdge::new(self.layout.clone(), self.dtype());
 
         let sink_idx = if let Ok(dst_current_node) = dst.get_current_node() {
             let dst_node_weight = dst.node(dst_current_node).unwrap();
@@ -1328,10 +1335,11 @@ impl BackendStorage for LazyStorage {
                 // Already aggregating copies. Continue using this node.
                 dst_current_node
             } else {
-                // Current node is not sink. Add sink node.
-                let sink_idx = dst.add_operation(Op::Sink);
                 dst.operations
                     .add_edge(dst_current_node, copy_idx, in_edge.clone());
+
+                // Current node is not sink. Add sink node.
+                let sink_idx = dst.add_operation(Op::Sink);
                 dst.current_node = Some(sink_idx);
                 sink_idx
             }
@@ -1341,6 +1349,7 @@ impl BackendStorage for LazyStorage {
             dst.current_node = Some(sink_idx);
             sink_idx
         };
+        let out_edge = OpEdge::new(self.layout.clone(), self.dtype());
         dst.operations
             .add_edge(copy_idx, sink_idx, out_edge.clone());
         dst.merge(self, self_current_node, copy_idx, out_edge)?;
@@ -1467,6 +1476,33 @@ impl BackendDevice for LazyDevice {
 #[cfg(test)]
 mod tests {
     use crate::{lazy::LazyDevice, Device, Result, Shape, Tensor};
+
+    #[test]
+    fn lazy_unary() -> Result<()> {
+        let t1 = Tensor::from_slice(
+            &[1.0f32, 2.0, 3.0, 4.0],
+            Shape::from(4),
+            &Device::Lazy(LazyDevice),
+        )?;
+        let t1 = t1.sqrt()?.exp()?;
+        assert_eq!(
+            t1.to_vec1::<f32>()?,
+            &[2.718282, 4.1132507, 5.6522336, 7.389056]
+        );
+
+        let t2 = Tensor::from_slice(
+            &[5.0f32, 6.0, 7.0, 8.0],
+            Shape::from(4),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        // TODO: bug. copy2d uses first copy data twice _and_ applies affine to it.
+        // So even if t2 is correct below, the final result is wrong in two different ways.
+        let t2 = t2.sqr()?.affine(0.5, 1.2)?;
+        assert_eq!(t2.to_vec1::<f32>()?, &[13.7, 19.2, 25.7, 33.2]);
+
+        Ok(())
+    }
 
     #[test]
     fn lazy_concat() -> Result<()> {
