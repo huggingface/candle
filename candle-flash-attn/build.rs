@@ -1,8 +1,9 @@
 // Build script to run nvcc and generate the C glue code for launching the flash-attention kernel.
 // The cuda build time is very long so one can set the CANDLE_FLASH_ATTN_BUILD_DIR environment
 // variable in order to cache the compiled artifacts and avoid recompiling too often.
-use anyhow::{Context, Result};
+use cudaforge::{KernelBuilder, Result};
 use std::path::PathBuf;
+const CUTLASS_COMMIT: &str = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
 
 const KERNEL_FILES: [&str; 33] = [
     "kernels/flash_api.cu",
@@ -55,7 +56,7 @@ fn main() -> Result<()> {
     println!("cargo::rerun-if-changed=kernels/block_info.h");
     println!("cargo::rerun-if-changed=kernels/static_switch.h");
     println!("cargo::rerun-if-changed=kernels/hardware_info.h");
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").context("OUT_DIR not set")?);
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
     let build_dir = match std::env::var("CANDLE_FLASH_ATTN_BUILD_DIR") {
         Err(_) =>
         {
@@ -72,21 +73,22 @@ fn main() -> Result<()> {
         }
     };
 
-    let kernels = KERNEL_FILES.iter().collect();
-    let mut builder = bindgen_cuda::Builder::default()
-        .kernel_paths(kernels)
-        .out_dir(build_dir.clone())
+    let kernels: Vec<_> = KERNEL_FILES.iter().collect();
+    let mut builder = KernelBuilder::new()
+        .source_files(kernels)
+        .out_dir(&build_dir)
+        .with_cutlass(Some(CUTLASS_COMMIT)) // ✅ Auto-fetch and include CUTLASS from GitHub
         .arg("-std=c++17")
         .arg("-O3")
         .arg("-U__CUDA_NO_HALF_OPERATORS__")
         .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
         .arg("-U__CUDA_NO_HALF2_OPERATORS__")
         .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
-        .arg("-Icutlass/include")
         .arg("--expt-relaxed-constexpr")
         .arg("--expt-extended-lambda")
         .arg("--use_fast_math")
-        .arg("--verbose");
+        .arg("--verbose")
+        .thread_percentage(0.5); // Use up to 50% of available threads
 
     let mut is_target_msvc = false;
     if let Ok(target) = std::env::var("TARGET") {
@@ -101,7 +103,7 @@ fn main() -> Result<()> {
     }
 
     let out_file = build_dir.join("libflashattention.a");
-    builder.build_lib(out_file);
+    builder.build_lib(out_file)?;
 
     println!("cargo::rustc-link-search={}", build_dir.display());
     println!("cargo::rustc-link-lib=flashattention");

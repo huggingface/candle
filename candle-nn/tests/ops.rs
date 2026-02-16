@@ -88,6 +88,7 @@ fn rms_norml(device: &Device) -> Result<()> {
     let alpha = Tensor::ones(head_dim, candle::DType::F32, device)?;
     let t = candle_nn::ops::rms_norm(&tensor, &alpha, 1e-5)?;
     let t2 = candle_nn::ops::rms_norm_slow(&tensor, &alpha, 1e-5)?;
+    assert_eq!(to_vec3_round(&t, 2)?, to_vec3_round(&t2, 2)?);
     let diff = (t - t2)?
         .abs()?
         .flatten_all()?

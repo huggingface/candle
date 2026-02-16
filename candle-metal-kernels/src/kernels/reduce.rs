@@ -14,47 +14,47 @@ pub fn call_reduce_contiguous(
     input: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let length = shape.iter().product::<usize>();
+    let length: usize = shape.iter().product();
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
+
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
+    let shape: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
     set_params!(
         encoder,
         (
-            length,
-            num_dims,
-            shape,
-            work_per_threadgroup,
+            length as u32,
+            num_dims as u32,
+            shape.as_slice(),
+            work_per_threadgroup as u32,
             &input,
             output
         )
     );
 
-    let thread_group_count = MTLSize {
-        width: out_length,
-        height: 1,
-        depth: 1,
-    };
-
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
         (work_per_threadgroup / 2).next_power_of_two(),
     );
-
-    let thread_group_size = MTLSize {
-        width,
-        height: 1,
-        depth: 1,
-    };
-
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: out_length,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width,
+            height: 1,
+            depth: 1,
+        },
+    );
     Ok(())
 }
 
@@ -73,44 +73,46 @@ pub fn call_reduce_strided(
     let length: usize = shape.iter().product();
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
+
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
+    let shape: Vec<u32> = shape.iter().map(|&x| x as u32).collect();
+    let strides: Vec<u32> = strides.iter().map(|&x| x as u32).collect();
     set_params!(
         encoder,
         (
-            length,
-            num_dims,
-            shape,
-            strides,
-            work_per_threadgroup,
+            length as u32,
+            num_dims as u32,
+            shape.as_slice(),
+            strides.as_slice(),
+            work_per_threadgroup as u32,
             &input,
             output
         )
     );
 
-    let thread_group_count = MTLSize {
-        width: out_length,
-        height: 1,
-        depth: 1,
-    };
-
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
         (work_per_threadgroup / 2).next_power_of_two(),
     );
-
-    let thread_group_size = MTLSize {
-        width,
-        height: 1,
-        depth: 1,
-    };
     encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: out_length,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width,
+            height: 1,
+            depth: 1,
+        },
+    );
     Ok(())
 }
 
@@ -193,8 +195,9 @@ pub fn call_rms_norm(
             eps
         )
     );
+    let work_per_threadgroup = elements_to_sum;
 
-    let out_length = length / elements_to_sum;
+    let out_length = length / work_per_threadgroup;
 
     let thread_group_count = MTLSize {
         width: out_length,
@@ -204,19 +207,17 @@ pub fn call_rms_norm(
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum,
-    )
-    .next_power_of_two();
+        (work_per_threadgroup / 2).next_power_of_two(),
+    );
 
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
     encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(alpha, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.set_threadgroup_memory_length(0, (width * 4).max(16));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -256,7 +257,9 @@ pub fn call_layer_norm(
         )
     );
 
-    let out_length = length / elements_to_sum;
+    let work_per_threadgroup = elements_to_sum;
+
+    let out_length = length / work_per_threadgroup;
 
     let thread_group_count = MTLSize {
         width: out_length,
@@ -266,19 +269,18 @@ pub fn call_layer_norm(
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum,
-    )
-    .next_power_of_two();
+        (work_per_threadgroup / 2).next_power_of_two(),
+    );
 
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
     encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(alpha, MTLResourceUsage::Read);
+    encoder.use_resource(beta, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.set_threadgroup_memory_length(0, (width * 8).max(32));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
