@@ -767,6 +767,39 @@ fn index_select_is_u8_bf16() {
 }
 
 #[test]
+fn index_select_is_u32_i64() {
+    let embedding: Vec<i64> = (1..=10).map(|x| x as i64).collect();
+    let shape = [5, 2];
+    let stride = [2, 1];
+    let ids = [0u32, 4, 2];
+    let dim = 0;
+    let result = run_index_select(&embedding, &shape, &stride, &ids, dim, "is_u32_i64");
+    assert_eq!(result, vec![1i64, 2, 9, 10, 5, 6]);
+}
+
+#[test]
+fn index_select_is_u8_i64() {
+    let embedding: Vec<i64> = (1..=10).map(|x| x as i64).collect();
+    let shape = [5, 2];
+    let stride = [2, 1];
+    let ids = [0u8, 4, 2];
+    let dim = 0;
+    let result = run_index_select(&embedding, &shape, &stride, &ids, dim, "is_u8_i64");
+    assert_eq!(result, vec![1i64, 2, 9, 10, 5, 6]);
+}
+
+#[test]
+fn index_select_is_i64_i64() {
+    let embedding: Vec<i64> = (1..=10).map(|x| x as i64).collect();
+    let shape = [5, 2];
+    let stride = [2, 1];
+    let ids = [0i64, 4, 2];
+    let dim = 0;
+    let result = run_index_select(&embedding, &shape, &stride, &ids, dim, "is_i64_i64");
+    assert_eq!(result, vec![1i64, 2, 9, 10, 5, 6]);
+}
+
+#[test]
 fn index_select_dim1() {
     let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
     let shape = [5, 2];
