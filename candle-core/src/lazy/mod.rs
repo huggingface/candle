@@ -1599,4 +1599,32 @@ mod tests {
         assert_eq!(result, &[7.0, 10.0, 15.0, 22.0, 23.0, 34.0, 31.0, 46.0]);
         Ok(())
     }
+
+    #[test]
+    fn lazy_where_cond() -> Result<()> {
+        let src = Tensor::from_slice(
+            &[0u8, 1, 0, 1, 0, 0, 1, 1],
+            Shape::from(8),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let t = Tensor::from_slice(
+            &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            Shape::from(8),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let f = Tensor::from_slice(
+            &[9.0f32, 10., 11., 12., 13., 14., 15., 16.],
+            Shape::from(8),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let result = src.where_cond(&t, &f)?;
+        assert_eq!(
+            result.to_vec1::<f32>()?,
+            &[9., 2., 11., 4., 13., 14., 7., 8.]
+        );
+        Ok(())
+    }
 }

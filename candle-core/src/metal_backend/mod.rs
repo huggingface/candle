@@ -2670,9 +2670,9 @@ impl Executor for MetalDevice {
                 let t_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let src_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let src_weight = src_edge.weight().clone();
-                let t_weight = t_edge.weight().clone();
-                let f_weight = f_edge.weight().clone();
+                let src_weight = src_edge.weight();
+                let t_weight = t_edge.weight();
+                let f_weight = f_edge.weight();
 
                 let src_l = src_weight.layout();
                 let t_l = t_weight.layout();
@@ -2682,9 +2682,9 @@ impl Executor for MetalDevice {
                 let t_buffer = allocator.get(t_weight.buffer_id()).unwrap();
                 let f_buffer = allocator.get(f_weight.buffer_id()).unwrap();
 
-                let mut outgoing = graph.edges_directed(node, petgraph::Incoming);
+                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
                 let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let out_w = out_edge.weight().clone();
+                let out_w = out_edge.weight();
                 let dst = allocator.get(out_w.buffer_id()).unwrap();
 
                 where_cond(
