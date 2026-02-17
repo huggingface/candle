@@ -261,6 +261,126 @@ pub fn elu(
     Ok(())
 }
 
+pub fn reduce_op(
+    device: &MetalDevice,
+    op: &ReduceOp,
+    src_buffer: &Buffer,
+    layout: &Layout,
+    dtype: DType,
+    sum_dims: &[usize],
+    reduction_layout: &Layout,
+    dst_el: usize,
+    dst_buffer: &Buffer,
+) -> Result<()> {
+    if layout.is_contiguous() && reduction_layout.is_contiguous() {
+        let (name, check_empty, return_index) = match (op, dtype) {
+            (ReduceOp::Sum, DType::F32) => ("fast_sum_f32", false, false),
+            (ReduceOp::Min, DType::F32) => ("fast_min_f32", true, false),
+            (ReduceOp::Max, DType::F32) => ("fast_max_f32", true, false),
+            (ReduceOp::ArgMin, DType::F32) => ("fast_argmin_f32", true, true),
+            (ReduceOp::ArgMax, DType::F32) => ("fast_argmax_f32", true, true),
+            (ReduceOp::Sum, DType::U32) => ("fast_sum_u32", false, false),
+            (ReduceOp::Min, DType::U32) => ("fast_min_u32", true, false),
+            (ReduceOp::Max, DType::U32) => ("fast_max_u32", true, false),
+            (ReduceOp::ArgMin, DType::U32) => ("fast_argmin_u32", true, true),
+            (ReduceOp::ArgMax, DType::U32) => ("fast_argmax_u32", true, true),
+            (ReduceOp::Sum, DType::F16) => ("fast_sum_f16", false, false),
+            (ReduceOp::Min, DType::F16) => ("fast_min_f16", true, false),
+            (ReduceOp::Max, DType::F16) => ("fast_max_f16", true, false),
+            (ReduceOp::ArgMin, DType::F16) => ("fast_argmin_f16", true, true),
+            (ReduceOp::ArgMax, DType::F16) => ("fast_argmax_f16", true, true),
+            (ReduceOp::Sum, DType::BF16) => ("fast_sum_bf16", false, false),
+            (ReduceOp::Min, DType::BF16) => ("fast_min_bf16", true, false),
+            (ReduceOp::Max, DType::BF16) => ("fast_max_bf16", true, false),
+            (ReduceOp::ArgMin, DType::BF16) => ("fast_argmin_bf16", true, true),
+            (ReduceOp::ArgMax, DType::BF16) => ("fast_argmax_bf16", true, true),
+            (ReduceOp::Sum, DType::I64) => ("fast_sum_i64", false, false),
+            (ReduceOp::Min, DType::I64) => ("fast_min_i64", true, false),
+            (ReduceOp::Max, DType::I64) => ("fast_max_i64", true, false),
+            (ReduceOp::ArgMin, DType::I64) => ("fast_argmin_i64", true, true),
+            (ReduceOp::ArgMax, DType::I64) => ("fast_argmax_i64", true, true),
+            (ReduceOp::Sum, DType::U8) => ("fast_sum_u8", false, false),
+            (ReduceOp::Min, DType::U8) => ("fast_min_u8", true, false),
+            (ReduceOp::Max, DType::U8) => ("fast_max_u8", true, false),
+            (ReduceOp::ArgMin, DType::U8) => ("fast_argmin_u8", true, true),
+            (ReduceOp::ArgMax, DType::U8) => ("fast_argmax_u8", true, true),
+            (k, dtype) => {
+                crate::bail!("Metal contiguous reduce op {k:?} {dtype:?} not implemented")
+            }
+        };
+        if check_empty && layout.shape().elem_count() == 0 {
+            Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
+        }
+        let encoder = device.command_encoder()?;
+        encoder.set_label("reduce");
+        let src = buffer_o(src_buffer, layout, dtype);
+        candle_metal_kernels::call_reduce_contiguous(
+            &device.device,
+            &encoder,
+            &device.kernels,
+            name,
+            layout.shape().dims(),
+            dst_el,
+            src,
+            dst_buffer,
+        )
+        .map_err(MetalError::from)?;
+    } else {
+        let (name, check_empty, return_index) = match (op, dtype) {
+            (ReduceOp::Sum, DType::F32) => ("fast_sum_f32_strided", false, false),
+            (ReduceOp::Min, DType::F32) => ("fast_min_f32_strided", true, false),
+            (ReduceOp::Max, DType::F32) => ("fast_max_f32_strided", true, false),
+            (ReduceOp::ArgMin, DType::F32) => ("fast_argmin_f32_strided", true, true),
+            (ReduceOp::ArgMax, DType::F32) => ("fast_argmax_f32_strided", true, true),
+            (ReduceOp::Sum, DType::U32) => ("fast_sum_u32_strided", false, false),
+            (ReduceOp::Min, DType::U32) => ("fast_min_u32_strided", true, false),
+            (ReduceOp::Max, DType::U32) => ("fast_max_u32_strided", true, false),
+            (ReduceOp::ArgMin, DType::U32) => ("fast_argmin_u32_strided", true, true),
+            (ReduceOp::ArgMax, DType::U32) => ("fast_argmax_u32_strided", true, true),
+            (ReduceOp::Sum, DType::F16) => ("fast_sum_f16_strided", false, false),
+            (ReduceOp::Min, DType::F16) => ("fast_min_f16_strided", true, false),
+            (ReduceOp::Max, DType::F16) => ("fast_max_f16_strided", true, false),
+            (ReduceOp::ArgMin, DType::F16) => ("fast_argmin_f16_strided", true, true),
+            (ReduceOp::ArgMax, DType::F16) => ("fast_argmax_f16_strided", true, true),
+            (ReduceOp::Sum, DType::BF16) => ("fast_sum_bf16_strided", false, false),
+            (ReduceOp::Min, DType::BF16) => ("fast_min_bf16_strided", true, false),
+            (ReduceOp::Max, DType::BF16) => ("fast_max_bf16_strided", true, false),
+            (ReduceOp::ArgMin, DType::BF16) => ("fast_argmin_bf16_strided", true, true),
+            (ReduceOp::ArgMax, DType::BF16) => ("fast_argmax_bf16_strided", true, true),
+            (ReduceOp::Sum, DType::I64) => ("fast_sum_i64_strided", false, false),
+            (ReduceOp::Min, DType::I64) => ("fast_min_i64_strided", true, false),
+            (ReduceOp::Max, DType::I64) => ("fast_max_i64_strided", true, false),
+            (ReduceOp::ArgMin, DType::I64) => ("fast_argmin_i64_strided", true, true),
+            (ReduceOp::ArgMax, DType::I64) => ("fast_argmax_i64_strided", true, true),
+            (ReduceOp::Sum, DType::U8) => ("fast_sum_u8_strided", false, false),
+            (ReduceOp::Min, DType::U8) => ("fast_min_u8_strided", true, false),
+            (ReduceOp::Max, DType::U8) => ("fast_max_u8_strided", true, false),
+            (ReduceOp::ArgMin, DType::U8) => ("fast_argmin_u8_strided", true, true),
+            (ReduceOp::ArgMax, DType::U8) => ("fast_argmax_u8_strided", true, true),
+            (k, dtype) => crate::bail!("Metal strided reduce op {k:?} {dtype:?} not implemented"),
+        };
+        if check_empty && layout.shape().elem_count() == 0 {
+            Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
+        }
+        let encoder = device.command_encoder()?;
+        encoder.set_label("reduce");
+        let src = buffer_o(src_buffer, layout, dtype);
+        candle_metal_kernels::call_reduce_strided(
+            &device.device,
+            &encoder,
+            &device.kernels,
+            name,
+            reduction_layout.shape().dims(),
+            reduction_layout.stride(),
+            dst_el,
+            src,
+            dst_buffer,
+        )
+        .map_err(MetalError::from)?;
+    }
+    Ok(())
+}
+
 pub fn unary(
     device: &MetalDevice,
     buffer: &Buffer,
@@ -581,7 +701,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
-        let device = self.device.clone();
+        let device = self.device();
 
         let src_stride = layout.stride();
         let src_dims = layout.shape().dims();
@@ -603,121 +723,29 @@ impl BackendStorage for MetalStorage {
         }
 
         let reduction_shape = Shape::from(dims.clone());
+        let reduction_layout = Layout::new(reduction_shape, stride.clone(), 0);
 
-        if layout.is_contiguous() && reduction_shape.is_contiguous(&stride) {
-            let (name, check_empty, return_index) = match (op, self.dtype) {
-                (ReduceOp::Sum, DType::F32) => ("fast_sum_f32", false, false),
-                (ReduceOp::Min, DType::F32) => ("fast_min_f32", true, false),
-                (ReduceOp::Max, DType::F32) => ("fast_max_f32", true, false),
-                (ReduceOp::ArgMin, DType::F32) => ("fast_argmin_f32", true, true),
-                (ReduceOp::ArgMax, DType::F32) => ("fast_argmax_f32", true, true),
-                (ReduceOp::Sum, DType::U32) => ("fast_sum_u32", false, false),
-                (ReduceOp::Min, DType::U32) => ("fast_min_u32", true, false),
-                (ReduceOp::Max, DType::U32) => ("fast_max_u32", true, false),
-                (ReduceOp::ArgMin, DType::U32) => ("fast_argmin_u32", true, true),
-                (ReduceOp::ArgMax, DType::U32) => ("fast_argmax_u32", true, true),
-                (ReduceOp::Sum, DType::F16) => ("fast_sum_f16", false, false),
-                (ReduceOp::Min, DType::F16) => ("fast_min_f16", true, false),
-                (ReduceOp::Max, DType::F16) => ("fast_max_f16", true, false),
-                (ReduceOp::ArgMin, DType::F16) => ("fast_argmin_f16", true, true),
-                (ReduceOp::ArgMax, DType::F16) => ("fast_argmax_f16", true, true),
-                (ReduceOp::Sum, DType::BF16) => ("fast_sum_bf16", false, false),
-                (ReduceOp::Min, DType::BF16) => ("fast_min_bf16", true, false),
-                (ReduceOp::Max, DType::BF16) => ("fast_max_bf16", true, false),
-                (ReduceOp::ArgMin, DType::BF16) => ("fast_argmin_bf16", true, true),
-                (ReduceOp::ArgMax, DType::BF16) => ("fast_argmax_bf16", true, true),
-                (ReduceOp::Sum, DType::I64) => ("fast_sum_i64", false, false),
-                (ReduceOp::Min, DType::I64) => ("fast_min_i64", true, false),
-                (ReduceOp::Max, DType::I64) => ("fast_max_i64", true, false),
-                (ReduceOp::ArgMin, DType::I64) => ("fast_argmin_i64", true, true),
-                (ReduceOp::ArgMax, DType::I64) => ("fast_argmax_i64", true, true),
-                (ReduceOp::Sum, DType::U8) => ("fast_sum_u8", false, false),
-                (ReduceOp::Min, DType::U8) => ("fast_min_u8", true, false),
-                (ReduceOp::Max, DType::U8) => ("fast_max_u8", true, false),
-                (ReduceOp::ArgMin, DType::U8) => ("fast_argmin_u8", true, true),
-                (ReduceOp::ArgMax, DType::U8) => ("fast_argmax_u8", true, true),
-                (k, dtype) => {
-                    crate::bail!("Metal contiguous reduce op {k:?} {dtype:?} not implemented")
-                }
-            };
-            if check_empty && layout.shape().elem_count() == 0 {
-                Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
-            }
-            let dtype = if return_index { DType::U32 } else { self.dtype };
-            let buffer = device.new_buffer(dst_el, dtype, "reduce")?;
-            let encoder = self.device.command_encoder()?;
-            encoder.set_label("reduce");
-            let src = buffer_o(&self.buffer, layout, self.dtype);
-            candle_metal_kernels::call_reduce_contiguous(
-                &device.device,
-                &encoder,
-                &device.kernels,
-                name,
-                src_dims,
-                dst_el,
-                src,
-                &buffer,
-            )
-            .map_err(MetalError::from)?;
-
-            return Ok(Self::new(buffer, device, dst_el, dtype));
-        }
-
-        let (name, check_empty, return_index) = match (op, self.dtype) {
-            (ReduceOp::Sum, DType::F32) => ("fast_sum_f32_strided", false, false),
-            (ReduceOp::Min, DType::F32) => ("fast_min_f32_strided", true, false),
-            (ReduceOp::Max, DType::F32) => ("fast_max_f32_strided", true, false),
-            (ReduceOp::ArgMin, DType::F32) => ("fast_argmin_f32_strided", true, true),
-            (ReduceOp::ArgMax, DType::F32) => ("fast_argmax_f32_strided", true, true),
-            (ReduceOp::Sum, DType::U32) => ("fast_sum_u32_strided", false, false),
-            (ReduceOp::Min, DType::U32) => ("fast_min_u32_strided", true, false),
-            (ReduceOp::Max, DType::U32) => ("fast_max_u32_strided", true, false),
-            (ReduceOp::ArgMin, DType::U32) => ("fast_argmin_u32_strided", true, true),
-            (ReduceOp::ArgMax, DType::U32) => ("fast_argmax_u32_strided", true, true),
-            (ReduceOp::Sum, DType::F16) => ("fast_sum_f16_strided", false, false),
-            (ReduceOp::Min, DType::F16) => ("fast_min_f16_strided", true, false),
-            (ReduceOp::Max, DType::F16) => ("fast_max_f16_strided", true, false),
-            (ReduceOp::ArgMin, DType::F16) => ("fast_argmin_f16_strided", true, true),
-            (ReduceOp::ArgMax, DType::F16) => ("fast_argmax_f16_strided", true, true),
-            (ReduceOp::Sum, DType::BF16) => ("fast_sum_bf16_strided", false, false),
-            (ReduceOp::Min, DType::BF16) => ("fast_min_bf16_strided", true, false),
-            (ReduceOp::Max, DType::BF16) => ("fast_max_bf16_strided", true, false),
-            (ReduceOp::ArgMin, DType::BF16) => ("fast_argmin_bf16_strided", true, true),
-            (ReduceOp::ArgMax, DType::BF16) => ("fast_argmax_bf16_strided", true, true),
-            (ReduceOp::Sum, DType::I64) => ("fast_sum_i64_strided", false, false),
-            (ReduceOp::Min, DType::I64) => ("fast_min_i64_strided", true, false),
-            (ReduceOp::Max, DType::I64) => ("fast_max_i64_strided", true, false),
-            (ReduceOp::ArgMin, DType::I64) => ("fast_argmin_i64_strided", true, true),
-            (ReduceOp::ArgMax, DType::I64) => ("fast_argmax_i64_strided", true, true),
-            (ReduceOp::Sum, DType::U8) => ("fast_sum_u8_strided", false, false),
-            (ReduceOp::Min, DType::U8) => ("fast_min_u8_strided", true, false),
-            (ReduceOp::Max, DType::U8) => ("fast_max_u8_strided", true, false),
-            (ReduceOp::ArgMin, DType::U8) => ("fast_argmin_u8_strided", true, true),
-            (ReduceOp::ArgMax, DType::U8) => ("fast_argmax_u8_strided", true, true),
-            (k, dtype) => crate::bail!("Metal strided reduce op {k:?} {dtype:?} not implemented"),
+        let dst_dtype = if matches!(op, ReduceOp::ArgMin | ReduceOp::ArgMax) {
+            DType::U32
+        } else {
+            self.dtype
         };
-        if check_empty && layout.shape().elem_count() == 0 {
-            Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
-        }
-        let dtype = if return_index { DType::U32 } else { self.dtype };
-        let buffer = device.new_buffer(dst_el, dtype, "reduce")?;
-        let encoder = self.device.command_encoder()?;
-        encoder.set_label("reduce");
-        let src = buffer_o(&self.buffer, layout, self.dtype);
-        candle_metal_kernels::call_reduce_strided(
-            &device.device,
-            &encoder,
-            &device.kernels,
-            name,
-            &dims,
-            &stride,
-            dst_el,
-            src,
-            &buffer,
-        )
-        .map_err(MetalError::from)?;
 
-        Ok(Self::new(buffer, device, dst_el, dtype))
+        let dst_buffer = device.new_buffer(dst_el, dst_dtype, "reduce")?;
+
+        reduce_op(
+            device,
+            &op,
+            self.buffer(),
+            layout,
+            self.dtype(),
+            sum_dims,
+            &reduction_layout,
+            dst_el,
+            &dst_buffer,
+        )?;
+
+        Ok(Self::new(dst_buffer, device.clone(), dst_el, dst_dtype))
     }
 
     fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
@@ -2559,20 +2587,28 @@ impl Executor for MetalDevice {
             Powf(Layout, f64),
             Elu(Layout, f64),
             */
-            Reduce(reduce_op, dims) => {
+            Reduce(op, sum_dims, reduction_layout, dst_el) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_w = in_edge.weight().clone();
-                let buffer = allocator.get(in_w.buffer_id()).unwrap().clone();
+                let src_buffer = allocator.get(in_w.buffer_id()).unwrap().clone();
 
-                let storage = MetalStorage::new(
-                    Arc::new(buffer),
-                    self.clone(),
-                    in_w.layout().shape().elem_count(),
+                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
+                let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
+                let out_w = out_edge.weight().clone();
+                let dst_buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
+
+                reduce_op(
+                    self,
+                    op,
+                    &src_buffer,
+                    in_w.layout(),
                     in_w.dtype(),
-                );
-                let storage = storage.reduce_op(reduce_op.clone(), in_w.layout(), dims)?;
-                allocator.update_all_outgoing(graph, node, storage.buffer());
+                    sum_dims,
+                    &reduction_layout,
+                    *dst_el,
+                    &dst_buffer,
+                )?;
             }
             //Cmp(CmpOp, LazyStorage, Layout, Layout),
             WhereCond => {

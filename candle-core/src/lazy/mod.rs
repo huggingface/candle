@@ -590,7 +590,7 @@ pub enum Op {
     Affine(f64, f64),
     Powf(f64),
     Elu(f64),
-    Reduce(ReduceOp, Vec<usize>),
+    Reduce(ReduceOp, Vec<usize>, Layout, usize),
     Cmp(CmpOp),
     ToDType(DType),
     Unary(&'static str),
@@ -820,12 +820,35 @@ impl BackendStorage for LazyStorage {
         Ok(next)
     }
 
-    fn reduce_op(&self, reduce: ReduceOp, l: &Layout, dims: &[usize]) -> Result<Self> {
+    fn reduce_op(&self, reduce: ReduceOp, l: &Layout, sum_dims: &[usize]) -> Result<Self> {
         count();
 
         let mut next = self.clone();
 
-        let op = Op::Reduce(reduce, dims.to_vec());
+        // Calculate reduction layout and number of destination elements.
+        let src_stride = l.stride();
+        let src_dims = l.shape().dims();
+        // Source dims and strides with the sum dims at the end.
+        let mut dims = vec![];
+        let mut stride = vec![];
+        let mut dst_el: usize = 1;
+        for (dim_idx, &d) in src_dims.iter().enumerate() {
+            if !sum_dims.contains(&dim_idx) {
+                dst_el *= d;
+                dims.push(d);
+                stride.push(src_stride[dim_idx]);
+            }
+        }
+
+        for &dim_idx in sum_dims.iter() {
+            dims.push(src_dims[dim_idx]);
+            stride.push(src_stride[dim_idx]);
+        }
+
+        let reduction_shape = Shape::from(dims.clone());
+        let reduction_layout = Layout::new(reduction_shape, stride, 0);
+
+        let op = Op::Reduce(reduce, sum_dims.to_vec(), reduction_layout, dst_el);
         let edge = OpEdge::new(l.clone(), self.dtype());
         let idx = next.add_operation(op);
         next.operations
