@@ -1496,10 +1496,11 @@ mod tests {
             &Device::Lazy(LazyDevice),
         )?;
 
-        // TODO: bug. copy2d uses first copy data twice _and_ applies affine to it.
-        // So even if t2 is correct below, the final result is wrong in two different ways.
         let t2 = t2.sqr()?.affine(0.5, 1.2)?;
         assert_eq!(t2.to_vec1::<f32>()?, &[13.7, 19.2, 25.7, 33.2]);
+
+        //let t3 = t2.powf(1.2)?;
+        //assert_eq!(t3.to_vec1::<f32>()?, &[13.7, 19.2, 25.7, 33.2]);
 
         Ok(())
     }

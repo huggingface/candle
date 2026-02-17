@@ -149,6 +149,118 @@ pub fn affine(
     Ok(())
 }
 
+pub fn powf(
+    device: &MetalDevice,
+    src_buffer: &Buffer,
+    layout: &Layout,
+    dtype: DType,
+    pow: f64,
+    dst_buffer: &Buffer,
+) -> Result<()> {
+    let shape = layout.shape();
+    let el = shape.elem_count();
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("powf");
+    let src = buffer_o(src_buffer, layout, dtype);
+    if layout.is_contiguous() {
+        let name = match dtype {
+            DType::F32 => "powf_f32",
+            DType::F16 => "powf_f16",
+            DType::BF16 => "powf_bf16",
+            dtype => crate::bail!("Metal contiguous powf {dtype:?} not implemented"),
+        };
+        candle_metal_kernels::call_powf(
+            &device.device,
+            &encoder,
+            &device.kernels,
+            name,
+            dtype.size_in_bytes(),
+            el,
+            src,
+            &dst_buffer,
+            pow as f32,
+        )
+        .map_err(MetalError::from)?;
+    } else {
+        let name = match dtype {
+            DType::F32 => "powf_f32_strided",
+            DType::F16 => "powf_f16_strided",
+            DType::BF16 => "powf_bf16_strided",
+            dtype => crate::bail!("Metal strided powf {dtype:?} not implemented"),
+        };
+        candle_metal_kernels::call_powf_strided(
+            &device.device,
+            &encoder,
+            &device.kernels,
+            name,
+            layout.dims(),
+            src,
+            layout.stride(),
+            &dst_buffer,
+            pow as f32,
+        )
+        .map_err(MetalError::from)?;
+    }
+    Ok(())
+}
+
+pub fn elu(
+    device: &MetalDevice,
+    src_buffer: &Buffer,
+    layout: &Layout,
+    dtype: DType,
+    alpha: f64,
+    dst_buffer: &Buffer,
+) -> Result<()> {
+    let shape = layout.shape();
+    let el = shape.elem_count();
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("elu");
+    let src = buffer_o(src_buffer, layout, dtype);
+    if layout.is_contiguous() {
+        let name = match dtype {
+            DType::F32 => "elu_f32",
+            DType::F16 => "elu_f16",
+            DType::BF16 => "elu_bf16",
+            dtype => crate::bail!("Metal contiguous elu {dtype:?} not implemented"),
+        };
+        candle_metal_kernels::call_elu(
+            &device.device,
+            &encoder,
+            &device.kernels,
+            name,
+            dtype.size_in_bytes(),
+            el,
+            src,
+            &dst_buffer,
+            alpha as f32,
+        )
+        .map_err(MetalError::from)?;
+    } else {
+        let name = match dtype {
+            DType::F32 => "elu_f32_strided",
+            DType::F16 => "elu_f16_strided",
+            DType::BF16 => "elu_bf16_strided",
+            dtype => crate::bail!("Metal strided elu {dtype:?} not implemented"),
+        };
+        candle_metal_kernels::call_elu_strided(
+            &device.device,
+            &encoder,
+            &device.kernels,
+            name,
+            layout.dims(),
+            src,
+            layout.stride(),
+            &dst_buffer,
+            alpha as f32,
+        )
+        .map_err(MetalError::from)?;
+    }
+    Ok(())
+}
+
 pub fn unary(
     device: &MetalDevice,
     buffer: &Buffer,
@@ -438,109 +550,34 @@ impl BackendStorage for MetalStorage {
     }
 
     fn powf(&self, layout: &Layout, pow: f64) -> Result<Self> {
-        let device = self.device().clone();
-
+        let device = self.device();
         let shape = layout.shape();
-        let el = shape.elem_count();
-        let dtype = self.dtype;
+        let el_count = shape.elem_count();
 
-        let buffer = device.new_buffer(el, self.dtype, "powf")?;
-        let encoder = self.device.command_encoder()?;
-        encoder.set_label("powf");
-        let src = buffer_o(&self.buffer, layout, dtype);
-        if layout.is_contiguous() {
-            let name = match self.dtype {
-                DType::F32 => "powf_f32",
-                DType::F16 => "powf_f16",
-                DType::BF16 => "powf_bf16",
-                dtype => crate::bail!("Metal contiguous powf {dtype:?} not implemented"),
-            };
-            candle_metal_kernels::call_powf(
-                &device.device,
-                &encoder,
-                &device.kernels,
-                name,
-                self.dtype.size_in_bytes(),
-                el,
-                src,
-                &buffer,
-                pow as f32,
-            )
-            .map_err(MetalError::from)?;
-        } else {
-            let name = match self.dtype {
-                DType::F32 => "powf_f32_strided",
-                DType::F16 => "powf_f16_strided",
-                DType::BF16 => "powf_bf16_strided",
-                dtype => crate::bail!("Metal strided powf {dtype:?} not implemented"),
-            };
-            candle_metal_kernels::call_powf_strided(
-                &device.device,
-                &encoder,
-                &device.kernels,
-                name,
-                layout.dims(),
-                src,
-                layout.stride(),
-                &buffer,
-                pow as f32,
-            )
-            .map_err(MetalError::from)?;
-        }
-        Ok(Self::new(buffer, device.clone(), el, dtype))
+        let dst_buffer = device.new_buffer(el_count, self.dtype, "powf")?;
+
+        powf(device, self.buffer(), layout, self.dtype, pow, &dst_buffer)?;
+
+        Ok(Self::new(dst_buffer, device.clone(), el_count, self.dtype))
     }
 
     fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
-        let device = self.device().clone();
-
+        let device = self.device();
         let shape = layout.shape();
-        let el = shape.elem_count();
-        let dtype = self.dtype;
+        let el_count = shape.elem_count();
 
-        let buffer = device.new_buffer(el, self.dtype, "elu")?;
-        let encoder = self.device.command_encoder()?;
-        encoder.set_label("elu");
-        let src = buffer_o(&self.buffer, layout, self.dtype);
-        if layout.is_contiguous() {
-            let name = match self.dtype {
-                DType::F32 => "elu_f32",
-                DType::F16 => "elu_f16",
-                DType::BF16 => "elu_bf16",
-                dtype => crate::bail!("Metal contiguous elu {dtype:?} not implemented"),
-            };
-            candle_metal_kernels::call_elu(
-                &device.device,
-                &encoder,
-                &device.kernels,
-                name,
-                self.dtype.size_in_bytes(),
-                el,
-                src,
-                &buffer,
-                alpha as f32,
-            )
-            .map_err(MetalError::from)?;
-        } else {
-            let name = match self.dtype {
-                DType::F32 => "elu_f32_strided",
-                DType::F16 => "elu_f16_strided",
-                DType::BF16 => "elu_bf16_strided",
-                dtype => crate::bail!("Metal strided elu {dtype:?} not implemented"),
-            };
-            candle_metal_kernels::call_elu_strided(
-                &device.device,
-                &encoder,
-                &device.kernels,
-                name,
-                layout.dims(),
-                src,
-                layout.stride(),
-                &buffer,
-                alpha as f32,
-            )
-            .map_err(MetalError::from)?;
-        }
-        Ok(Self::new(buffer, device.clone(), el, dtype))
+        let dst_buffer = device.new_buffer(el_count, self.dtype, "elu")?;
+
+        elu(
+            device,
+            self.buffer(),
+            layout,
+            self.dtype,
+            alpha,
+            &dst_buffer,
+        )?;
+
+        Ok(Self::new(dst_buffer, device.clone(), el_count, self.dtype))
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
