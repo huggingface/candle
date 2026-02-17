@@ -30,10 +30,17 @@ impl LogitsProcessor {
 
     pub fn new(seed: u64, temperature: Option<f64>, top_p: Option<f64>) -> Self {
         let temperature = temperature.and_then(|v| if v < 1e-7 { None } else { Some(v) });
+        let top_p = top_p.and_then(|p| {
+            if p <= 0.0 || p >= 1.0 {
+                None
+            } else {
+                Some(p)
+            }
+        });
         let sampling = match temperature {
             None => Sampling::ArgMax,
             Some(temperature) => match top_p {
-                None => Sampling::All { temperature },
+                None => Sampling::GumbelSoftmax { temperature },
                 Some(p) => Sampling::TopP { p, temperature },
             },
         };

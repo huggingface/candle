@@ -2033,6 +2033,59 @@ impl Tensor {
         &self.device
     }
 
+    pub fn copy_from_slice_offset_u32(&self, src: &[u32], dst_offset: usize) -> Result<()> {
+        if self.dtype() != DType::U32 {
+            bail!(
+                "unexpected dtype in copy_from_slice_offset_u32, expected {:?}, got {:?}",
+                DType::U32,
+                self.dtype()
+            )
+        }
+        if !self.is_contiguous() {
+            bail!("copy_from_slice_offset_u32 expects a contiguous tensor")
+        }
+        if !self.device().is_cuda() {
+            bail!("copy_from_slice_offset_u32 expects a cuda tensor")
+        }
+
+        let (mut storage, layout) = self.storage_mut_and_layout();
+        let start = layout.start_offset() + dst_offset;
+        let elem_count = layout.shape().elem_count();
+        if start + src.len() > elem_count {
+            bail!(
+                "copy_from_slice_offset_u32 out of bounds (start={}, len={}, elem_count={})",
+                start,
+                src.len(),
+                elem_count
+            )
+        }
+
+        match &mut *storage {
+            Storage::Cuda(storage) => {
+                #[cfg(feature = "cuda")]
+                {
+                    let dev = storage.device.clone();
+                    let dst = storage.as_cuda_slice_mut::<u32>()?;
+                    let mut dst = dst.slice_mut(start..start + src.len());
+                    dev.memcpy_htod(src, &mut dst)?;
+                    Ok(())
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    let _ = storage;
+                    Err(Error::NotCompiledWithCudaSupport.bt())
+                }
+            }
+            Storage::Cpu(_) | Storage::Metal(_) => {
+                bail!("copy_from_slice_offset_u32 expects a cuda tensor")
+            }
+        }
+    }
+
+    pub fn copy_from_slice_u32(&self, src: &[u32]) -> Result<()> {
+        self.copy_from_slice_offset_u32(src, 0)
+    }
+
     /// The tensor shape, i.e. dimension sizes on each axis.
     pub fn shape(&self) -> &Shape {
         self.layout().shape()
