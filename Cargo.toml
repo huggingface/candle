@@ -47,7 +47,7 @@ candle-transformers = { path = "./candle-transformers", version = "0.9.2" }
 candle-ug = { path = "./candle-ug", version = "0.9.2" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.8", default-features = false }
-cudarc = { version = "0.19.1", features = [
+cudarc = { version = "0.19.2", features = [
     "std",
     "cublas",
     "cublaslt",
@@ -57,7 +57,7 @@ cudarc = { version = "0.19.1", features = [
     "f16",
     "f8",
     "cuda-version-from-build-system",
-    "dynamic-linking",
+    "dynamic-loading",
 ], default-features = false }
 fancy-regex = "0.17.0"
 gemm = { version = "0.19.0", features = ["wasm-simd128-enable"] }
@@ -107,3 +107,8 @@ objc2-foundation = { version = "0.3.1" }
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+# patch until https://github.com/LaurentMazare/ug/pull/15 is merged
+[patch.crates-io]
+ug = { git = "https://github.com/mayocream/ug", branch = "cuda-dynamic-loading" }
+ug-cuda = { git = "https://github.com/mayocream/ug", branch = "cuda-dynamic-loading" }

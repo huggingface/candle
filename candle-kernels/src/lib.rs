@@ -2,6 +2,10 @@ mod ptx {
     include!(concat!(env!("OUT_DIR"), "/ptx.rs"));
 }
 
+mod moe_ptx {
+    include!(concat!(env!("OUT_DIR"), "/moe_ptx.rs"));
+}
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Id {
@@ -16,9 +20,13 @@ pub enum Id {
     Sort,
     Ternary,
     Unary,
+    MoeUtils,
+    MoeGguf,
+    MoeWmma,
+    MoeWmmaGguf,
 }
 
-pub const ALL_IDS: [Id; 11] = [
+pub const ALL_IDS: [Id; 15] = [
     Id::Affine,
     Id::Binary,
     Id::Cast,
@@ -30,6 +38,10 @@ pub const ALL_IDS: [Id; 11] = [
     Id::Sort,
     Id::Ternary,
     Id::Unary,
+    Id::MoeUtils,
+    Id::MoeGguf,
+    Id::MoeWmma,
+    Id::MoeWmmaGguf,
 ];
 
 pub struct Module {
@@ -67,6 +79,15 @@ macro_rules! mdl {
     };
 }
 
+macro_rules! moe_mdl {
+    ($cst:ident, $id:ident) => {
+        pub const $cst: Module = Module {
+            index: module_index(Id::$id),
+            ptx: moe_ptx::$cst,
+        };
+    };
+}
+
 mdl!(AFFINE, Affine);
 mdl!(BINARY, Binary);
 mdl!(CAST, Cast);
@@ -78,5 +99,7 @@ mdl!(REDUCE, Reduce);
 mdl!(SORT, Sort);
 mdl!(TERNARY, Ternary);
 mdl!(UNARY, Unary);
-
-pub mod ffi;
+moe_mdl!(MOE_UTILS, MoeUtils);
+moe_mdl!(MOE_GGUF, MoeGguf);
+moe_mdl!(MOE_WMMA, MoeWmma);
+moe_mdl!(MOE_WMMA_GGUF, MoeWmmaGguf);
