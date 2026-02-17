@@ -243,6 +243,16 @@ impl MetalDevice {
         Ok(new_buffer)
     }
 
+    /// Allocate without using the cache
+    pub fn allocate_untracked(&self, size: usize) -> Result<Buffer> {
+        let new_buffer = self
+            .device
+            .new_buffer(size, RESOURCE_OPTIONS)
+            .map_err(MetalError::from)?;
+
+        Ok(new_buffer)
+    }
+
     /// Create a metal GPU capture trace on [`path`].
     pub fn capture<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let capture = unsafe { MTLCaptureManager::sharedCaptureManager() };
