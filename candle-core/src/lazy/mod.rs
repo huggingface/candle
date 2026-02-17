@@ -279,7 +279,6 @@ impl LazyStorage {
         // Only add output node if not already present
         if !matches!(current_op.op(), Op::Output) {
             let idx = next.add_operation(Op::Output);
-            println!("self during fn output: {self:?}");
             let edge = OpEdge::new(self.layout.clone(), self.dtype());
             next.operations.add_edge(current_node, idx, edge);
         };

@@ -618,6 +618,129 @@ pub fn binary(
     Ok(())
 }
 
+pub fn to_dtype(
+    device: &MetalDevice,
+    src_buffer: &Buffer,
+    layout: &Layout,
+    src_dtype: DType,
+    dst_buffer: &Buffer,
+    dst_dtype: DType,
+) -> Result<()> {
+    let shape = layout.shape();
+    let el_count = shape.elem_count();
+    let encoder = device.command_encoder()?;
+    encoder.set_label("to_dtype");
+    let src = buffer_o(src_buffer, layout, src_dtype);
+    if layout.is_contiguous() {
+        let kernel_name = match (src_dtype, dst_dtype) {
+            (DType::U32, DType::BF16) => "cast_u32_bf16",
+            (DType::U32, DType::F16) => "cast_u32_f16",
+            (DType::U32, DType::F32) => "cast_u32_f32",
+            (DType::U32, DType::I64) => "cast_u32_i64",
+            (DType::U32, DType::U8) => "cast_u32_u8",
+
+            (DType::U8, DType::BF16) => "cast_u8_bf16",
+            (DType::U8, DType::F16) => "cast_u8_f16",
+            (DType::U8, DType::F32) => "cast_u8_f32",
+            (DType::U8, DType::I64) => "cast_u8_i64",
+            (DType::U8, DType::U32) => "cast_u8_u32",
+
+            (DType::F32, DType::BF16) => "cast_f32_bf16",
+            (DType::F32, DType::F16) => "cast_f32_f16",
+            (DType::F32, DType::I64) => "cast_f32_i64",
+            (DType::F32, DType::U32) => "cast_f32_u32",
+            (DType::F32, DType::U8) => "cast_f32_u8",
+
+            (DType::I64, DType::BF16) => "cast_i64_bf16",
+            (DType::I64, DType::F16) => "cast_i64_f16",
+            (DType::I64, DType::F32) => "cast_i64_f32",
+            (DType::I64, DType::U32) => "cast_i64_u32",
+            (DType::I64, DType::U8) => "cast_i64_u8",
+
+            (DType::F16, DType::BF16) => "cast_f16_bf16",
+            (DType::F16, DType::F32) => "cast_f16_f32",
+            (DType::F16, DType::I64) => "cast_f16_i64",
+            (DType::F16, DType::U32) => "cast_f16_u32",
+            (DType::F16, DType::U8) => "cast_f16_u8",
+
+            (DType::BF16, DType::F16) => "cast_bf16_f16",
+            (DType::BF16, DType::F32) => "cast_bf16_f32",
+            (DType::BF16, DType::I64) => "cast_bf16_i64",
+            (DType::BF16, DType::U32) => "cast_bf16_u32",
+            (DType::BF16, DType::U8) => "cast_bf16_u8",
+
+            (left, right) => {
+                crate::bail!("Metal contiguous to_dtype {left:?} {right:?} not implemented")
+            }
+        };
+        candle_metal_kernels::call_cast_contiguous(
+            &device.device,
+            &encoder,
+            &device.kernels,
+            kernel_name,
+            src_dtype.size_in_bytes(),
+            el_count,
+            src,
+            dst_buffer,
+        )
+        .map_err(MetalError::from)?;
+    } else {
+        let kernel_name = match (src_dtype, dst_dtype) {
+            (DType::BF16, DType::F16) => "cast_bf16_f16_strided",
+            (DType::BF16, DType::F32) => "cast_bf16_f32_strided",
+            (DType::BF16, DType::I64) => "cast_bf16_i64_strided",
+            (DType::BF16, DType::U32) => "cast_bf16_u32_strided",
+            (DType::BF16, DType::U8) => "cast_bf16_u8_strided",
+
+            (DType::F16, DType::BF16) => "cast_f16_bf16_strided",
+            (DType::F16, DType::F32) => "cast_f16_f32_strided",
+            (DType::F16, DType::I64) => "cast_f16_i64_strided",
+            (DType::F16, DType::U32) => "cast_f16_u32_strided",
+            (DType::F16, DType::U8) => "cast_f16_u8_strided",
+
+            (DType::F32, DType::BF16) => "cast_f32_bf16_strided",
+            (DType::F32, DType::F16) => "cast_f32_f16_strided",
+            (DType::F32, DType::I64) => "cast_f32_i64_strided",
+            (DType::F32, DType::U32) => "cast_f32_u32_strided",
+            (DType::F32, DType::U8) => "cast_f32_u8_strided",
+
+            (DType::I64, DType::F32) => "cast_i64_f32_strided",
+            (DType::I64, DType::BF16) => "cast_i64_bf16_strided",
+            (DType::I64, DType::F16) => "cast_i64_f16_strided",
+            (DType::I64, DType::U32) => "cast_i64_u32_strided",
+            (DType::I64, DType::U8) => "cast_i64_u8_strided",
+
+            (DType::U32, DType::BF16) => "cast_u32_bf16_strided",
+            (DType::U32, DType::F16) => "cast_u32_f16_strided",
+            (DType::U32, DType::F32) => "cast_u32_f32_strided",
+            (DType::U32, DType::I64) => "cast_u32_i64_strided",
+            (DType::U32, DType::U8) => "cast_u32_u8_strided",
+
+            (DType::U8, DType::BF16) => "cast_u8_bf16_strided",
+            (DType::U8, DType::F16) => "cast_u8_f16_strided",
+            (DType::U8, DType::F32) => "cast_u8_f32_strided",
+            (DType::U8, DType::I64) => "cast_u8_i64_strided",
+            (DType::U8, DType::U32) => "cast_u8_u32_strided",
+
+            (left, right) => {
+                crate::bail!("Metal strided to_dtype {left:?} {right:?} not implemented")
+            }
+        };
+        candle_metal_kernels::call_cast_strided(
+            &device.device,
+            &encoder,
+            &device.kernels,
+            kernel_name,
+            layout.dims(),
+            src,
+            layout.stride(),
+            dst_buffer,
+        )
+        .map_err(MetalError::from)?;
+    }
+    Ok(())
+}
+
 impl BackendStorage for MetalStorage {
     type Device = MetalDevice;
 
@@ -852,122 +975,21 @@ impl BackendStorage for MetalStorage {
         }
     }
 
-    fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
+    fn to_dtype(&self, layout: &Layout, dst_dtype: DType) -> Result<Self> {
         let device = self.device();
         let shape = layout.shape();
         let el_count = shape.elem_count();
-        let buffer = device.new_buffer(el_count, dtype, "to_dtype")?;
-        let encoder = device.command_encoder()?;
-        encoder.set_label("to_dtype");
-        let src = buffer_o(&self.buffer, layout, self.dtype);
-        if layout.is_contiguous() {
-            let kernel_name = match (self.dtype, dtype) {
-                (DType::U32, DType::BF16) => "cast_u32_bf16",
-                (DType::U32, DType::F16) => "cast_u32_f16",
-                (DType::U32, DType::F32) => "cast_u32_f32",
-                (DType::U32, DType::I64) => "cast_u32_i64",
-                (DType::U32, DType::U8) => "cast_u32_u8",
+        let dst_buffer = device.new_buffer(el_count, dst_dtype, "to_dtype")?;
 
-                (DType::U8, DType::BF16) => "cast_u8_bf16",
-                (DType::U8, DType::F16) => "cast_u8_f16",
-                (DType::U8, DType::F32) => "cast_u8_f32",
-                (DType::U8, DType::I64) => "cast_u8_i64",
-                (DType::U8, DType::U32) => "cast_u8_u32",
-
-                (DType::F32, DType::BF16) => "cast_f32_bf16",
-                (DType::F32, DType::F16) => "cast_f32_f16",
-                (DType::F32, DType::I64) => "cast_f32_i64",
-                (DType::F32, DType::U32) => "cast_f32_u32",
-                (DType::F32, DType::U8) => "cast_f32_u8",
-
-                (DType::I64, DType::BF16) => "cast_i64_bf16",
-                (DType::I64, DType::F16) => "cast_i64_f16",
-                (DType::I64, DType::F32) => "cast_i64_f32",
-                (DType::I64, DType::U32) => "cast_i64_u32",
-                (DType::I64, DType::U8) => "cast_i64_u8",
-
-                (DType::F16, DType::BF16) => "cast_f16_bf16",
-                (DType::F16, DType::F32) => "cast_f16_f32",
-                (DType::F16, DType::I64) => "cast_f16_i64",
-                (DType::F16, DType::U32) => "cast_f16_u32",
-                (DType::F16, DType::U8) => "cast_f16_u8",
-
-                (DType::BF16, DType::F16) => "cast_bf16_f16",
-                (DType::BF16, DType::F32) => "cast_bf16_f32",
-                (DType::BF16, DType::I64) => "cast_bf16_i64",
-                (DType::BF16, DType::U32) => "cast_bf16_u32",
-                (DType::BF16, DType::U8) => "cast_bf16_u8",
-
-                (left, right) => {
-                    crate::bail!("Metal contiguous to_dtype {left:?} {right:?} not implemented")
-                }
-            };
-            candle_metal_kernels::call_cast_contiguous(
-                &device.device,
-                &encoder,
-                &device.kernels,
-                kernel_name,
-                self.dtype.size_in_bytes(),
-                el_count,
-                src,
-                &buffer,
-            )
-            .map_err(MetalError::from)?;
-        } else {
-            let kernel_name = match (self.dtype, dtype) {
-                (DType::BF16, DType::F16) => "cast_bf16_f16_strided",
-                (DType::BF16, DType::F32) => "cast_bf16_f32_strided",
-                (DType::BF16, DType::I64) => "cast_bf16_i64_strided",
-                (DType::BF16, DType::U32) => "cast_bf16_u32_strided",
-                (DType::BF16, DType::U8) => "cast_bf16_u8_strided",
-
-                (DType::F16, DType::BF16) => "cast_f16_bf16_strided",
-                (DType::F16, DType::F32) => "cast_f16_f32_strided",
-                (DType::F16, DType::I64) => "cast_f16_i64_strided",
-                (DType::F16, DType::U32) => "cast_f16_u32_strided",
-                (DType::F16, DType::U8) => "cast_f16_u8_strided",
-
-                (DType::F32, DType::BF16) => "cast_f32_bf16_strided",
-                (DType::F32, DType::F16) => "cast_f32_f16_strided",
-                (DType::F32, DType::I64) => "cast_f32_i64_strided",
-                (DType::F32, DType::U32) => "cast_f32_u32_strided",
-                (DType::F32, DType::U8) => "cast_f32_u8_strided",
-
-                (DType::I64, DType::F32) => "cast_i64_f32_strided",
-                (DType::I64, DType::BF16) => "cast_i64_bf16_strided",
-                (DType::I64, DType::F16) => "cast_i64_f16_strided",
-                (DType::I64, DType::U32) => "cast_i64_u32_strided",
-                (DType::I64, DType::U8) => "cast_i64_u8_strided",
-
-                (DType::U32, DType::BF16) => "cast_u32_bf16_strided",
-                (DType::U32, DType::F16) => "cast_u32_f16_strided",
-                (DType::U32, DType::F32) => "cast_u32_f32_strided",
-                (DType::U32, DType::I64) => "cast_u32_i64_strided",
-                (DType::U32, DType::U8) => "cast_u32_u8_strided",
-
-                (DType::U8, DType::BF16) => "cast_u8_bf16_strided",
-                (DType::U8, DType::F16) => "cast_u8_f16_strided",
-                (DType::U8, DType::F32) => "cast_u8_f32_strided",
-                (DType::U8, DType::I64) => "cast_u8_i64_strided",
-                (DType::U8, DType::U32) => "cast_u8_u32_strided",
-
-                (left, right) => {
-                    crate::bail!("Metal strided to_dtype {left:?} {right:?} not implemented")
-                }
-            };
-            candle_metal_kernels::call_cast_strided(
-                &device.device,
-                &encoder,
-                &device.kernels,
-                kernel_name,
-                layout.dims(),
-                src,
-                layout.stride(),
-                &buffer,
-            )
-            .map_err(MetalError::from)?;
-        }
-        Ok(Self::new(buffer, device.clone(), el_count, dtype))
+        to_dtype(
+            device,
+            self.buffer(),
+            layout,
+            self.dtype(),
+            &dst_buffer,
+            dst_dtype,
+        )?;
+        Ok(Self::new(dst_buffer, device.clone(), el_count, dst_dtype))
     }
 
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
@@ -2421,7 +2443,7 @@ impl Executor for MetalDevice {
     type AllocatorType = MetalAllocator;
 
     fn run(&self, graph: OpGraph) -> Result<Buffer> {
-        println!("{}", crate::lazy::graph_to_dot(&&graph));
+        // println!("{}", crate::lazy::graph_to_dot(&&graph));
         // TODO: &mut OpGraph input?
         let mut graph = graph.clone();
         let mut allocator = self.allocator();
@@ -2456,9 +2478,9 @@ impl Executor for MetalDevice {
                 let ancestor_edges: Vec<_> = Ancestors::of(&graph, idx)
                     .map(|e| graph.raw_edges()[e.index()].clone())
                     .collect();
-                println!("{:?}", ancestor_edges);
+                //println!("{:?}", ancestor_edges);
                 let ancestors = crate::lazy::ancestors(&graph, idx);
-                println!("{}", crate::lazy::graph_to_dot(&&ancestors));
+                //println!("{}", crate::lazy::graph_to_dot(&&ancestors));
                 Err(e)?
             }
             final_node = idx;
@@ -2504,28 +2526,27 @@ impl Executor for MetalDevice {
                     dst_buffer,
                 )?;
             }
-            ToDType(dtype) => {
+            ToDType(dst_dtype) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_w = in_edge.weight().clone();
-                let buffer = allocator.get_or_allocate(
-                    in_w.buffer_id(),
-                    in_w.layout().shape(),
-                    in_w.dtype(),
-                )?;
+                let src_buffer = allocator.get(in_w.buffer_id()).unwrap();
 
-                let storage = MetalStorage::new(
-                    Arc::new(buffer),
-                    self.clone(),
-                    in_w.layout().shape().elem_count(),
-                    in_w.dtype(),
-                );
-                let storage = if in_w.dtype() != *dtype {
-                    storage.to_dtype(in_w.layout(), *dtype)?
-                } else {
-                    storage.clone()
-                };
-                allocator.update_all_outgoing(graph, node, storage.buffer());
+                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
+                let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
+                let out_w = out_edge.weight().clone();
+                let dst_buffer = allocator.get(out_w.buffer_id()).unwrap();
+
+                if in_w.dtype() != *dst_dtype {
+                    to_dtype(
+                        self,
+                        src_buffer,
+                        in_w.layout(),
+                        in_w.dtype(),
+                        dst_buffer,
+                        *dst_dtype,
+                    )?
+                }
             }
             Unary(kernel) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
@@ -2580,7 +2601,6 @@ impl Executor for MetalDevice {
                     rhs_dtype,
                     &dst_buffer,
                 )?;
-                allocator.update_all_outgoing(graph, node, &dst_buffer);
             }
             /*
             ToCpu,
@@ -2721,7 +2741,7 @@ impl Executor for MetalDevice {
                     rhs_weight.dtype(),
                 );
                 let storage = lhs.matmul(&rhs, (*b, *m, *n, *k), lhs_l, rhs_l)?;
-                //allocator.update_all_outgoing(graph, node, storage.buffer());
+                allocator.update_all_outgoing(graph, node, storage.buffer());
             }
             CopyStridedSrc(dst_offset) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
@@ -2757,8 +2777,6 @@ impl Executor for MetalDevice {
                 );
 
                 src.copy_strided_src(&mut dst, *dst_offset, in_w.layout())?;
-
-                allocator.update_all_outgoing(graph, node, &out_buffer);
             }
             Copy2D(d1, d2, src_s, dst_s, src_o, dst_o) => {
                 // TODO: tidy up
