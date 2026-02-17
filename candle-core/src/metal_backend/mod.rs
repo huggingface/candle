@@ -741,6 +741,67 @@ pub fn to_dtype(
     Ok(())
 }
 
+pub fn where_cond(
+    device: &MetalDevice,
+    src: &Buffer,
+    src_l: &Layout,
+    src_dtype: DType,
+    t: &Buffer,
+    t_l: &Layout,
+    t_dtype: DType,
+    f: &Buffer,
+    f_l: &Layout,
+    f_dtype: DType,
+    dst: &Buffer,
+) -> Result<()> {
+    let shape = t_l.shape();
+    let dims = shape.dims();
+    let el = shape.elem_count();
+    let dtype = t_dtype;
+    let encoder = device.command_encoder()?;
+    encoder.set_label("where");
+    if t_dtype != f_dtype {
+        crate::bail!(
+            "Invalid where: different dtypes for values {:?} != {:?}",
+            t_dtype,
+            f_dtype
+        );
+    }
+    let name = match (src_dtype, t_dtype) {
+        (DType::U8, DType::F32) => "where_u8_f32",
+        (DType::U32, DType::F32) => "where_u32_f32",
+        (DType::U8, DType::BF16) => "where_u8_bf16",
+        (DType::U8, DType::F16) => "where_u8_f16",
+        (DType::U8, DType::I64) => "where_u8_i64",
+        (DType::U8, DType::U32) => "where_u8_u32",
+        (DType::U8, DType::U8) => "where_u8_u8",
+        (left, right) => crate::bail!("Metal where_cond {left:?} {right:?} not implemented"),
+    };
+    let src = buffer_o(src, src_l, src_dtype);
+    let t = buffer_o(t, t_l, t_dtype);
+    let f = buffer_o(f, f_l, f_dtype);
+    candle_metal_kernels::call_where_cond(
+        &device.device,
+        &encoder,
+        &device.kernels,
+        name,
+        dtype.size_in_bytes(),
+        dims,
+        src,
+        src_l.stride(),
+        src_l.is_contiguous(),
+        t,
+        t_l.stride(),
+        t_l.is_contiguous(),
+        f,
+        f_l.stride(),
+        f_l.is_contiguous(),
+        dst,
+    )
+    .map_err(MetalError::from)?;
+    Ok(())
+}
+
 impl BackendStorage for MetalStorage {
     type Device = MetalDevice;
 
@@ -1013,54 +1074,26 @@ impl BackendStorage for MetalStorage {
         f: &Self,
         f_l: &Layout,
     ) -> Result<Self> {
-        let device = self.device.clone();
+        let device = self.device();
         let shape = t_l.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
         let dtype = t.dtype;
-        let buffer = self.device.new_buffer(el, dtype, "where")?;
-        let encoder = self.device.command_encoder()?;
-        encoder.set_label("where");
-        if t.dtype() != f.dtype() {
-            crate::bail!(
-                "Invalid where: different dtypes for values {:?} != {:?}",
-                t.dtype(),
-                f.dtype()
-            );
-        }
-        let name = match (self.dtype, t.dtype()) {
-            (DType::U8, DType::F32) => "where_u8_f32",
-            (DType::U32, DType::F32) => "where_u32_f32",
-            (DType::U8, DType::BF16) => "where_u8_bf16",
-            (DType::U8, DType::F16) => "where_u8_f16",
-            (DType::U8, DType::I64) => "where_u8_i64",
-            (DType::U8, DType::U32) => "where_u8_u32",
-            (DType::U8, DType::U8) => "where_u8_u8",
-            (left, right) => crate::bail!("Metal where_cond {left:?} {right:?} not implemented"),
-        };
-        let src = buffer_o(&self.buffer, layout, self.dtype);
-        let t = buffer_o(&t.buffer, t_l, t.dtype);
-        let f = buffer_o(&f.buffer, f_l, f.dtype);
-        candle_metal_kernels::call_where_cond(
-            &device.device,
-            &encoder,
-            &device.kernels,
-            name,
-            dtype.size_in_bytes(),
-            dims,
-            src,
-            layout.stride(),
-            layout.is_contiguous(),
-            t,
-            t_l.stride(),
-            t_l.is_contiguous(),
-            f,
-            f_l.stride(),
-            f_l.is_contiguous(),
-            &buffer,
-        )
-        .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, device, el, dtype))
+        let dst = device.new_buffer(el, dtype, "where")?;
+        where_cond(
+            device,
+            self.buffer(),
+            layout,
+            self.dtype(),
+            t.buffer(),
+            t_l,
+            t.dtype(),
+            f.buffer(),
+            f_l,
+            f.dtype(),
+            &dst,
+        )?;
+        Ok(Self::new(dst, device.clone(), el, dtype))
     }
 
     fn conv1d(
@@ -2632,10 +2665,10 @@ impl Executor for MetalDevice {
             }
             //Cmp(CmpOp, LazyStorage, Layout, Layout),
             WhereCond => {
-                let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let f_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let t_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let src_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
+                let f_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let t_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let src_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
 
                 let src_weight = src_edge.weight().clone();
                 let t_weight = t_edge.weight().clone();
@@ -2645,31 +2678,28 @@ impl Executor for MetalDevice {
                 let t_l = t_weight.layout();
                 let f_l = f_weight.layout();
 
-                let src_buffer = allocator.get(src_weight.buffer_id()).unwrap().clone();
-                let t_buffer = allocator.get(t_weight.buffer_id()).unwrap().clone();
-                let f_buffer = allocator.get(f_weight.buffer_id()).unwrap().clone();
+                let src_buffer = allocator.get(src_weight.buffer_id()).unwrap();
+                let t_buffer = allocator.get(t_weight.buffer_id()).unwrap();
+                let f_buffer = allocator.get(f_weight.buffer_id()).unwrap();
 
-                let src = MetalStorage::new(
-                    Arc::new(src_buffer),
-                    self.clone(),
-                    src_weight.shape().elem_count(),
+                let mut outgoing = graph.edges_directed(node, petgraph::Incoming);
+                let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
+                let out_w = out_edge.weight().clone();
+                let dst = allocator.get(out_w.buffer_id()).unwrap();
+
+                where_cond(
+                    self,
+                    src_buffer,
+                    src_l,
                     src_weight.dtype(),
-                );
-                let t = MetalStorage::new(
-                    Arc::new(t_buffer),
-                    self.clone(),
-                    t_weight.shape().elem_count(),
+                    t_buffer,
+                    t_l,
                     t_weight.dtype(),
-                );
-
-                let f = MetalStorage::new(
-                    Arc::new(f_buffer),
-                    self.clone(),
-                    f_weight.shape().elem_count(),
+                    f_buffer,
+                    f_l,
                     f_weight.dtype(),
-                );
-                let storage = src.where_cond(src_l, &t, t_l, &f, f_l)?;
-                allocator.update_all_outgoing(graph, node, storage.buffer());
+                    &dst,
+                )?;
             }
             /*
             Conv1D(Layout, LazyStorage, Layout, crate::conv::ParamsConv1D),
