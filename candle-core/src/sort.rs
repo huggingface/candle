@@ -1,5 +1,20 @@
 use crate::backend::BackendStorage;
 use crate::{Result, Tensor};
+
+#[cfg(feature = "cuda")]
+thread_local! {
+    static TOPK_TMP: std::cell::RefCell<
+        std::collections::HashMap<(crate::cuda_backend::DeviceId, usize), TopkTmpBufs>,
+    > =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(feature = "cuda")]
+struct TopkTmpBufs {
+    vals: crate::cuda_backend::cudarc::driver::CudaSlice<f32>,
+    idx: crate::cuda_backend::cudarc::driver::CudaSlice<u32>,
+    cap_elems: usize,
+}
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -381,8 +396,30 @@ impl crate::CustomOp1 for TopKIndices {
                 * (self.k)
                 * (std::mem::size_of::<f32>() + std::mem::size_of::<u32>());
 
-            let tmp_vals = unsafe { dev.alloc::<f32>(grid * self.k)? };
-            let tmp_idx = unsafe { dev.alloc::<u32>(grid * self.k)? };
+            let cap_elems = grid * self.k;
+            let dev_id = dev.id();
+            let (tmp_vals, tmp_idx) = TOPK_TMP.with(|cell| -> Result<_> {
+                let mut map = cell.borrow_mut();
+                match map.get_mut(&(dev_id, self.k)) {
+                    Some(bufs) if bufs.cap_elems >= cap_elems => {
+                        Ok((bufs.vals.clone(), bufs.idx.clone()))
+                    }
+                    _ => {
+                        let vals = unsafe { dev.alloc::<f32>(cap_elems)? };
+                        let idx = unsafe { dev.alloc::<u32>(cap_elems)? };
+                        map.insert(
+                            (dev_id, self.k),
+                            TopkTmpBufs {
+                                vals: vals.clone(),
+                                idx: idx.clone(),
+                                cap_elems,
+                            },
+                        );
+                        Ok((vals, idx))
+                    }
+                }
+            })?;
+
             let out_idx = unsafe { dev.alloc::<u32>(self.k)? };
 
             let items_per_block_u32 = items_per_block as u32;
