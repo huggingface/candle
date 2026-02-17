@@ -1,3 +1,4 @@
+use crate::backend::BackendStorage;
 use crate::{Result, Tensor};
 use rayon::prelude::*;
 
@@ -286,5 +287,155 @@ impl Tensor {
         let asort = self.arg_sort_last_dim(asc)?;
         let sorted = self.gather(&asort, crate::D::Minus1)?;
         Ok((sorted, asort))
+    }
+
+    pub fn topk_indices(&self, k: usize) -> Result<Tensor> {
+        if !self.is_contiguous() {
+            return Err(crate::Error::RequiresContiguous { op: "topk_indices" });
+        }
+        if self.rank() != 1 {
+            crate::bail!("topk_indices expects a 1D tensor")
+        }
+        if k == 0 {
+            crate::bail!("topk_indices expects k > 0")
+        }
+        if k > 64 {
+            crate::bail!("topk_indices currently supports k <= 64")
+        }
+        let n = self.dims1()?;
+        if k > n {
+            crate::bail!("topk_indices expects k <= n")
+        }
+        self.apply_op1_no_bwd(&TopKIndices { k })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TopKIndices {
+    k: usize,
+}
+
+impl crate::CustomOp1 for TopKIndices {
+    fn name(&self) -> &'static str {
+        "topk_indices"
+    }
+
+    fn cpu_fwd(
+        &self,
+        storage: &crate::CpuStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::CpuStorage, crate::Shape)> {
+        if !layout.is_contiguous() {
+            crate::bail!("topk_indices requires contiguous layout")
+        }
+        let k = self.k;
+        let n = layout.shape().elem_count();
+        let start = layout.start_offset();
+        let end = start + n;
+
+        let mut pairs: Vec<(f32, u32)> = match storage {
+            crate::CpuStorage::F32(vs) => vs[start..end]
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| (v, i as u32))
+                .collect(),
+            _ => return Err(crate::Error::UnsupportedDTypeForOp(storage.dtype(), "topk_indices").bt()),
+        };
+
+        let kth = k.saturating_sub(1);
+        pairs.select_nth_unstable_by(kth, |a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Greater));
+        pairs.truncate(k);
+        pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Greater));
+
+        let out: Vec<u32> = pairs.into_iter().map(|(_, i)| i).collect();
+        Ok((crate::CpuStorage::U32(out), crate::Shape::from((k,))))
+    }
+
+    fn cuda_fwd(&self, storage: &crate::CudaStorage, layout: &crate::Layout) -> Result<(crate::CudaStorage, crate::Shape)> {
+        #[cfg(feature = "cuda")]
+        {
+            use crate::cuda_backend::cudarc::driver::{LaunchConfig, PushKernelArg};
+            use crate::cuda_backend::{kernel_name, CudaDType, WrapErr};
+
+            if !layout.is_contiguous() {
+                crate::bail!("topk_indices requires contiguous layout")
+            }
+            let k = self.k as u32;
+            let n = layout.shape().elem_count() as u32;
+            let dev = &storage.device;
+
+            let x = storage.as_cuda_slice::<f32>()?;
+            let (o1, o2) = layout.contiguous_offsets().ok_or_else(|| crate::Error::Msg("topk_indices requires contiguous offsets".into()).bt())?;
+            let x = x.slice(o1..o2);
+
+            let block_dim1 = 128u32;
+            let block_dim2 = 128u32;
+            let items_per_block = (block_dim1 as usize) * 8;
+            let mut grid = ((n as usize) + items_per_block - 1) / items_per_block;
+            grid = grid.clamp(1, 1024);
+            let grid_dim = grid as u32;
+            let shared1 = (block_dim1 as usize)
+                * (self.k)
+                * (std::mem::size_of::<f32>() + std::mem::size_of::<u32>());
+            let shared2 = (block_dim2 as usize)
+                * (self.k)
+                * (std::mem::size_of::<f32>() + std::mem::size_of::<u32>());
+
+            let tmp_vals = unsafe { dev.alloc::<f32>(grid * self.k)? };
+            let tmp_idx = unsafe { dev.alloc::<u32>(grid * self.k)? };
+            let out_idx = unsafe { dev.alloc::<u32>(self.k)? };
+
+            let items_per_block_u32 = items_per_block as u32;
+            let f1 = dev.get_or_load_func(
+                &kernel_name::<f32>("topk_stage1"),
+                &crate::cuda_backend::kernels::SORT,
+            )?;
+            let stream = dev.cuda_stream();
+            let mut b1 = stream.launch_builder(&f1);
+            b1.arg(&x)
+                .arg(&n)
+                .arg(&k)
+                .arg(&items_per_block_u32)
+                .arg(&tmp_vals)
+                .arg(&tmp_idx);
+            unsafe {
+                b1.launch(LaunchConfig {
+                    grid_dim: (grid_dim, 1, 1),
+                    block_dim: (block_dim1, 1, 1),
+                    shared_mem_bytes: shared1 as u32,
+                })
+            }
+            .w()?;
+
+            let m = (grid_dim * k) as u32;
+            let f2 = dev.get_or_load_func(
+                &kernel_name::<f32>("topk_stage2"),
+                &crate::cuda_backend::kernels::SORT,
+            )?;
+            let stream = dev.cuda_stream();
+            let mut b2 = stream.launch_builder(&f2);
+            b2.arg(&tmp_vals)
+                .arg(&tmp_idx)
+                .arg(&m)
+                .arg(&k)
+                .arg(&out_idx);
+            unsafe {
+                b2.launch(LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (block_dim2, 1, 1),
+                    shared_mem_bytes: shared2 as u32,
+                })
+            }
+            .w()?;
+
+            let dst = <u32 as CudaDType>::wrap_cuda_slice(out_idx, dev.clone());
+            Ok((dst, crate::Shape::from((self.k,))))
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = storage;
+            let _ = layout;
+            Err(crate::Error::NotCompiledWithCudaSupport.bt())
+        }
     }
 }
