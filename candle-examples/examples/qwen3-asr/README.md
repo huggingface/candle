@@ -11,6 +11,7 @@ Out of scope in this example:
 - forced-aligner timestamps
 - server/API features from the standalone project
 - benchmark/regression tooling
+- enabling crate-level `forced-aligner` does not add timestamp support here
 
 Input notes:
 - wav input is decoded via `symphonia`
