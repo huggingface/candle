@@ -7,6 +7,11 @@ This migration stage includes:
 - streaming transcription
 - model/tokenizer loading from Hugging Face or local path
 
+Out of scope in this example:
+- forced-aligner timestamps
+- server/API features from the standalone project
+- benchmark/regression tooling
+
 Input notes:
 - wav input is decoded via `symphonia`
 - non-16kHz audio is automatically resampled to 16kHz for ASR
@@ -24,4 +29,16 @@ Streaming:
 ```bash
 cargo run --example qwen3-asr --features symphonia --release -- \
   -- --model-id Qwen/Qwen3-ASR-0.6B --stream --chunk-size-sec 0.5 --print-intermediate
+```
+
+## Smoke-tested commands
+
+```bash
+# Offline
+cargo run -p candle-examples --example qwen3-asr --features symphonia --release -- \
+  --model-id Qwen/Qwen3-ASR-0.6B --input sample:jfk --cpu
+
+# Streaming
+cargo run -p candle-examples --example qwen3-asr --features symphonia --release -- \
+  --model-id Qwen/Qwen3-ASR-0.6B --input sample:jfk --cpu --stream --chunk-size-sec 0.5 --print-intermediate
 ```
