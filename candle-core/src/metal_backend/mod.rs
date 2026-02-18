@@ -2765,8 +2765,8 @@ impl Executor for MetalDevice {
             */
             IndexSelect(dim) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let src_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let ids_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let src_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
 
                 let src_weight = src_edge.weight();
                 let ids_weight = ids_edge.weight();
