@@ -40,7 +40,7 @@ impl LogitsProcessor {
         let sampling = match temperature {
             None => Sampling::ArgMax,
             Some(temperature) => match top_p {
-                None => Sampling::GumbelSoftmax { temperature },
+                None => Sampling::All { temperature },
                 Some(p) => Sampling::TopP { p, temperature },
             },
         };
