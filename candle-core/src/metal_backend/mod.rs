@@ -864,6 +864,46 @@ pub fn index_select(
     Ok(())
 }
 
+pub fn matmul(
+    device: &MetalDevice,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs: &Buffer,
+    lhs_l: &Layout,
+    lhs_dtype: DType,
+    rhs: &Buffer,
+    rhs_l: &Layout,
+    rhs_dtype: DType,
+    dst: &Buffer,
+) -> Result<()> {
+    let encoder = device.command_encoder()?;
+    encoder.set_label("matmul");
+    let dtype = match lhs_dtype {
+        DType::F32 => candle_metal_kernels::GemmDType::F32,
+        DType::F16 => candle_metal_kernels::GemmDType::F16,
+        DType::BF16 => candle_metal_kernels::GemmDType::BF16,
+        dtype => {
+            return Err(MetalError::Message(format!("mlx matmul doesn't support {dtype:?}")).into())
+        }
+    };
+    candle_metal_kernels::call_mlx_gemm(
+        &device.device,
+        &encoder,
+        &device.kernels,
+        dtype,
+        (b, m, n, k),
+        lhs_l.stride(),
+        lhs_l.start_offset() * lhs_dtype.size_in_bytes(),
+        lhs,
+        rhs_l.stride(),
+        rhs_l.start_offset() * rhs_dtype.size_in_bytes(),
+        rhs,
+        dst,
+    )
+    .map_err(MetalError::from)?;
+
+    Ok(())
+}
+
 impl BackendStorage for MetalStorage {
     type Device = MetalDevice;
 
@@ -1928,41 +1968,21 @@ impl BackendStorage for MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
-        let encoder = self.device.command_encoder()?;
-        encoder.set_label("matmul");
-        let dtype = match self.dtype {
-            DType::F32 => candle_metal_kernels::GemmDType::F32,
-            DType::F16 => candle_metal_kernels::GemmDType::F16,
-            DType::BF16 => candle_metal_kernels::GemmDType::BF16,
-            dtype => {
-                return Err(
-                    MetalError::Message(format!("mlx matmul doesn't support {dtype:?}")).into(),
-                )
-            }
-        };
-        candle_metal_kernels::call_mlx_gemm(
-            &self.device.device,
-            &encoder,
-            &self.device.kernels,
-            dtype,
-            (b, m, n, k),
-            lhs_l.stride(),
-            lhs_l.start_offset() * self.dtype.size_in_bytes(),
-            &self.buffer,
-            rhs_l.stride(),
-            rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
-            &rhs.buffer,
-            &buffer,
-        )
-        .map_err(MetalError::from)?;
+        let dst = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
 
-        Ok(Self::new(
-            buffer,
-            self.device.clone(),
-            b * m * n,
+        matmul(
+            self.device(),
+            (b, m, n, k),
+            self.buffer(),
+            lhs_l,
             self.dtype(),
-        ))
+            rhs.buffer(),
+            rhs_l,
+            rhs.dtype(),
+            &dst,
+        )?;
+
+        Ok(Self::new(dst, self.device.clone(), b * m * n, self.dtype()))
     }
 
     fn copy2d(
@@ -2786,23 +2806,28 @@ impl Executor for MetalDevice {
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
 
-                let lhs_buffer = allocator.get(lhs_weight.buffer_id()).unwrap().clone();
-                let rhs_buffer = allocator.get(rhs_weight.buffer_id()).unwrap().clone();
+                let lhs_dtype = lhs_weight.dtype();
+                let rhs_dtype = rhs_weight.dtype();
 
-                let lhs = MetalStorage::new(
-                    Arc::new(lhs_buffer),
-                    self.clone(),
-                    lhs_weight.layout().shape().elem_count(),
-                    lhs_weight.dtype(),
-                );
-                let rhs = MetalStorage::new(
-                    Arc::new(rhs_buffer),
-                    self.clone(),
-                    rhs_weight.layout().shape().elem_count(),
-                    rhs_weight.dtype(),
-                );
-                let storage = lhs.matmul(&rhs, (*b, *m, *n, *k), lhs_l, rhs_l)?;
-                allocator.update_all_outgoing(graph, node, storage.buffer());
+                let lhs_buffer = allocator.get(lhs_weight.buffer_id()).unwrap();
+                let rhs_buffer = allocator.get(rhs_weight.buffer_id()).unwrap();
+
+                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
+                let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
+                let dst_weight = dst_edge.weight();
+                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
+
+                matmul(
+                    self,
+                    (*b, *m, *n, *k),
+                    lhs_buffer,
+                    lhs_l,
+                    lhs_dtype,
+                    rhs_buffer,
+                    rhs_l,
+                    rhs_dtype,
+                    dst,
+                )?;
             }
             CopyStridedSrc(dst_offset) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
