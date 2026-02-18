@@ -2590,73 +2590,51 @@ impl Executor for MetalDevice {
             Affine(mul, add) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let in_w = in_edge.weight().clone();
-                let buffer = allocator.get(in_w.buffer_id()).unwrap();
+                let in_w = in_edge.weight();
+                let src = allocator.get(in_w.buffer_id()).unwrap();
 
                 let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
                 let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_weight = dst_edge.weight().clone();
-                let dst_buffer = allocator.get(dst_weight.buffer_id()).unwrap();
+                let dst_weight = dst_edge.weight();
+                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
 
-                affine(
-                    self,
-                    buffer,
-                    in_w.layout(),
-                    in_w.dtype(),
-                    *mul,
-                    *add,
-                    dst_buffer,
-                )?;
+                affine(self, src, in_w.layout(), in_w.dtype(), *mul, *add, dst)?;
             }
             ToDType(dst_dtype) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let in_w = in_edge.weight().clone();
-                let src_buffer = allocator.get(in_w.buffer_id()).unwrap();
+                let in_w = in_edge.weight();
+                let src = allocator.get(in_w.buffer_id()).unwrap();
 
                 let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
                 let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let out_w = out_edge.weight().clone();
-                let dst_buffer = allocator.get(out_w.buffer_id()).unwrap();
+                let out_w = out_edge.weight();
+                let dst = allocator.get(out_w.buffer_id()).unwrap();
 
                 if in_w.dtype() != *dst_dtype {
-                    to_dtype(
-                        self,
-                        src_buffer,
-                        in_w.layout(),
-                        in_w.dtype(),
-                        dst_buffer,
-                        *dst_dtype,
-                    )?
+                    to_dtype(self, src, in_w.layout(), in_w.dtype(), dst, *dst_dtype)?
                 }
             }
             Unary(kernel) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let in_w = in_edge.weight().clone();
-                let buffer = allocator.get(in_w.buffer_id()).unwrap();
+                let in_w = in_edge.weight();
+                let src = allocator.get(in_w.buffer_id()).unwrap();
 
                 let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
                 let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_weight = dst_edge.weight().clone();
-                let dst_buffer = allocator.get(dst_weight.buffer_id()).unwrap().clone();
+                let dst_weight = dst_edge.weight();
+                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
 
-                unary(
-                    &self,
-                    buffer,
-                    kernel,
-                    in_w.layout(),
-                    in_w.dtype(),
-                    &dst_buffer,
-                )?;
+                unary(self, src, kernel, in_w.layout(), in_w.dtype(), dst)?;
             }
             Binary(kernel) => {
                 let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let lhs_weight = lhs_edge.weight().clone();
-                let rhs_weight = rhs_edge.weight().clone();
+                let lhs_weight = lhs_edge.weight();
+                let rhs_weight = rhs_edge.weight();
 
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
@@ -2664,24 +2642,16 @@ impl Executor for MetalDevice {
                 let lhs_dtype = lhs_weight.dtype();
                 let rhs_dtype = rhs_weight.dtype();
 
-                let lhs_buffer = allocator.get(lhs_weight.buffer_id()).unwrap().clone();
-                let rhs_buffer = allocator.get(rhs_weight.buffer_id()).unwrap().clone();
+                let lhs = allocator.get(lhs_weight.buffer_id()).unwrap();
+                let rhs = allocator.get(rhs_weight.buffer_id()).unwrap();
 
                 let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
                 let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_weight = dst_edge.weight().clone();
-                let dst_buffer = allocator.get(dst_weight.buffer_id()).unwrap().clone();
+                let dst_weight = dst_edge.weight();
+                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
 
                 binary(
-                    self,
-                    kernel,
-                    &lhs_buffer,
-                    lhs_l,
-                    lhs_dtype,
-                    &rhs_buffer,
-                    rhs_l,
-                    rhs_dtype,
-                    &dst_buffer,
+                    self, kernel, lhs, lhs_l, lhs_dtype, rhs, rhs_l, rhs_dtype, dst,
                 )?;
             }
             /*
@@ -2692,24 +2662,24 @@ impl Executor for MetalDevice {
             Reduce(op, sum_dims, reduction_layout, dst_el) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let in_w = in_edge.weight().clone();
-                let src_buffer = allocator.get(in_w.buffer_id()).unwrap().clone();
+                let in_w = in_edge.weight();
+                let src = allocator.get(in_w.buffer_id()).unwrap();
 
                 let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
                 let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let out_w = out_edge.weight().clone();
-                let dst_buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
+                let out_w = out_edge.weight();
+                let dst = allocator.get(out_w.buffer_id()).unwrap();
 
                 reduce_op(
                     self,
                     op,
-                    &src_buffer,
+                    src,
                     in_w.layout(),
                     in_w.dtype(),
                     sum_dims,
                     &reduction_layout,
                     *dst_el,
-                    &dst_buffer,
+                    dst,
                 )?;
             }
             //Cmp(CmpOp, LazyStorage, Layout, Layout),
@@ -2747,7 +2717,7 @@ impl Executor for MetalDevice {
                     f_buffer,
                     f_l,
                     f_weight.dtype(),
-                    &dst,
+                    dst,
                 )?;
             }
             /*
@@ -2800,8 +2770,8 @@ impl Executor for MetalDevice {
                 let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let lhs_weight = lhs_edge.weight().clone();
-                let rhs_weight = rhs_edge.weight().clone();
+                let lhs_weight = lhs_edge.weight();
+                let rhs_weight = rhs_edge.weight();
 
                 let lhs_l = lhs_weight.layout();
                 let rhs_l = rhs_weight.layout();
@@ -2835,9 +2805,9 @@ impl Executor for MetalDevice {
                 // Test the alternative api for getting incoming/outgoing edges
                 // let incoming = crate::lazy::get_incoming_edges(&graph, node, Some(1));
                 // let in_edge = incoming[0];
-                let in_weight = in_edge.weight().clone();
-                let in_w = in_edge.weight().clone();
-                let buffer = allocator.get(in_w.buffer_id()).unwrap().clone();
+                let in_weight = in_edge.weight();
+                let in_w = in_edge.weight();
+                let src = allocator.get(in_w.buffer_id()).unwrap();
 
                 let outgoing: Vec<OpEdge> = graph
                     .edges_directed(node, petgraph::Outgoing)
@@ -2846,17 +2816,17 @@ impl Executor for MetalDevice {
 
                 let out_w = outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
 
-                let out_buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
+                let dst = allocator.get(out_w.buffer_id()).unwrap();
 
                 let src = MetalStorage::new(
-                    Arc::new(buffer),
+                    Arc::new(src.clone()),
                     self.clone(),
                     in_weight.layout().shape().elem_count(),
                     in_weight.dtype(),
                 );
 
                 let mut dst = MetalStorage::new(
-                    Arc::new(out_buffer.clone()),
+                    Arc::new(dst.clone()),
                     self.clone(),
                     out_w.layout().shape().elem_count(),
                     out_w.dtype(),
@@ -2868,8 +2838,8 @@ impl Executor for MetalDevice {
                 // TODO: tidy up
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let in_w = in_edge.weight().clone();
-                let buffer = allocator.get(in_w.buffer_id()).unwrap().clone();
+                let in_w = in_edge.weight();
+                let src = allocator.get(in_w.buffer_id()).unwrap();
 
                 let mut outgoing: Vec<(NodeIndex, NodeIndex, OpEdge)> = graph
                     .edges_directed(node, petgraph::Outgoing)
@@ -2893,18 +2863,18 @@ impl Executor for MetalDevice {
                     .first()
                     .ok_or(InvalidOutgoing(op_node.id()))?;
 
-                let out_buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
+                let dst = allocator.get(out_w.buffer_id()).unwrap();
 
                 // TODO: Extract copy2d out of MetalStorage and refactor.
                 let src = MetalStorage::new(
-                    Arc::new(buffer),
+                    Arc::new(src.clone()),
                     self.clone(),
                     in_w.layout().shape().elem_count(),
                     in_w.dtype(),
                 );
 
                 let mut dst = MetalStorage::new(
-                    Arc::new(out_buffer.clone()),
+                    Arc::new(dst.clone()),
                     self.clone(),
                     out_w.layout().shape().elem_count(),
                     out_w.dtype(),
@@ -2916,7 +2886,7 @@ impl Executor for MetalDevice {
             Output => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let in_w = in_edge.weight().clone();
+                let in_w = in_edge.weight();
                 let buffer = allocator.get_or_allocate(
                     in_w.buffer_id(),
                     in_w.layout().shape(),
