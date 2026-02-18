@@ -17,6 +17,13 @@ use crate::model::{thinker::ThinkerForConditionalGeneration, AsrModel};
 use crate::processor::chat_template;
 use crate::processor::{asr_processor::PreparedInputs, AsrProcessor};
 
+fn ensure_timestamps_not_requested(return_timestamps: bool) -> Result<()> {
+    if return_timestamps {
+        bail!("return_timestamps is not supported in this qwen3-asr candle example");
+    }
+    Ok(())
+}
+
 #[cfg(feature = "timing")]
 fn duration_to_us(d: std::time::Duration) -> u64 {
     let us = d.as_micros();
@@ -654,9 +661,7 @@ pub fn transcribe(
     audio: &[AudioInput<'_>],
     opts: &TranscribeOptions,
 ) -> Result<Vec<AsrTranscription>> {
-    if opts.return_timestamps {
-        bail!("return_timestamps is not supported in this qwen3-asr candle example");
-    }
+    ensure_timestamps_not_requested(opts.return_timestamps)?;
 
     let contexts = opts.context.broadcast(audio.len(), "context")?;
     let forced_langs = opts.language.broadcast(audio.len(), "language")?;
@@ -763,9 +768,7 @@ pub fn transcribe_timed(
     audio: &[AudioInput<'_>],
     opts: &TranscribeOptions,
 ) -> Result<(Vec<AsrTranscription>, TranscribeTimings)> {
-    if opts.return_timestamps {
-        bail!("return_timestamps is not supported in this qwen3-asr candle example");
-    }
+    ensure_timestamps_not_requested(opts.return_timestamps)?;
 
     let start_total = std::time::Instant::now();
     let mut timings = TranscribeTimings::default();
@@ -876,4 +879,23 @@ pub fn transcribe_timed(
 
     timings.total_us = duration_to_us(start_total.elapsed());
     Ok((out, timings))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn timestamps_guard_rejects_timestamp_requests() {
+        let err = super::ensure_timestamps_not_requested(true)
+            .expect_err("timestamps should be rejected in this example");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("return_timestamps is not supported"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn timestamps_guard_allows_normal_requests() {
+        super::ensure_timestamps_not_requested(false).expect("non-timestamp requests are valid");
+    }
 }

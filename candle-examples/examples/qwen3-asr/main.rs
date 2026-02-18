@@ -181,3 +181,21 @@ fn main() -> Result<()> {
         run_offline(&asr, &wav, &args)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn linear_resample_is_noop_for_equal_sample_rates() {
+        let input = vec![0.0f32, 0.25, -0.5, 1.0, -1.0];
+        let out = super::linear_resample(&input, 16_000, 16_000);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn linear_resample_48k_to_16k_produces_expected_length() {
+        let input: Vec<f32> = (0..480).map(|i| (i as f32 * 0.01).sin()).collect();
+        let out = super::linear_resample(&input, 48_000, 16_000);
+        assert_eq!(out.len(), 160);
+        assert!(out.iter().all(|x| x.is_finite()));
+    }
+}
