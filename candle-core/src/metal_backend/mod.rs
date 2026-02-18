@@ -2744,33 +2744,35 @@ impl Executor for MetalDevice {
             ScatterAddSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
             */
             IndexSelect(dim) => {
-                let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
+                let src_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let ids_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
 
-                let lhs_weight = lhs_edge.weight().clone();
-                let rhs_weight = rhs_edge.weight().clone();
+                let src_weight = src_edge.weight();
+                let ids_weight = ids_edge.weight();
 
-                let lhs_l = lhs_weight.layout();
-                let rhs_l = rhs_weight.layout();
+                let src_l = src_weight.layout();
+                let ids_l = ids_weight.layout();
 
-                let lhs_buffer = allocator.get(lhs_weight.buffer_id()).unwrap().clone();
-                let rhs_buffer = allocator.get(rhs_weight.buffer_id()).unwrap().clone();
+                let src = allocator.get(src_weight.buffer_id()).unwrap();
+                let ids = allocator.get(ids_weight.buffer_id()).unwrap();
 
-                let lhs = MetalStorage::new(
-                    Arc::new(lhs_buffer),
-                    self.clone(),
-                    lhs_weight.layout().shape().elem_count(),
-                    lhs_weight.dtype(),
-                );
-                let rhs = MetalStorage::new(
-                    Arc::new(rhs_buffer),
-                    self.clone(),
-                    rhs_weight.layout().shape().elem_count(),
-                    rhs_weight.dtype(),
-                );
-                let storage = lhs.index_select(&rhs, lhs_l, rhs_l, *dim)?;
-                allocator.update_all_outgoing(graph, node, storage.buffer());
+                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
+                let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
+                let dst_weight = dst_edge.weight();
+                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
+
+                index_select(
+                    self,
+                    src,
+                    src_l,
+                    src_weight.dtype(),
+                    ids,
+                    ids_l,
+                    ids_weight.dtype(),
+                    *dim,
+                    &dst,
+                )?;
             }
             //IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
             Matmul((b, m, n, k)) => {
