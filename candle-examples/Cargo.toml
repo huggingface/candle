@@ -161,5 +161,9 @@ name = "voxtral"
 required-features = ["symphonia"]
 
 [[example]]
+name = "qwen3-asr"
+required-features = ["symphonia"]
+
+[[example]]
 name = "bert_single_file_binary"
 required-features = ["buildtime-download"]
