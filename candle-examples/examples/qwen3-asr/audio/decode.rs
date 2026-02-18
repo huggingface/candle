@@ -1,7 +1,7 @@
 //! Decoding audio bytes into a waveform.
 //!
-//! This is intentionally feature-gated: production ASR can accept paths/URLs/base64,
-//! but for model/math bring-up you can start with in-memory waveform inputs only.
+//! This is intentionally feature-gated: this example only accepts local path
+//! or in-memory waveform inputs.
 
 use anyhow::{bail, Result};
 use std::path::Path;
@@ -32,75 +32,6 @@ pub fn decode_path(path: &Path) -> Result<(Vec<f32>, u32)> {
 #[cfg(not(feature = "audio-loading"))]
 pub fn decode_path(_path: &Path) -> Result<(Vec<f32>, u32)> {
     bail!("decode_path requires the `audio-loading` feature")
-}
-
-#[cfg(feature = "audio-loading")]
-pub fn decode_url(url: &str) -> Result<(Vec<f32>, u32)> {
-    use std::io::Cursor;
-
-    use symphonia::core::io::MediaSourceStream;
-    use symphonia::core::probe::Hint;
-
-    let resp = reqwest::blocking::get(url)
-        .with_context(|| format!("failed to fetch audio from URL {url:?}"))?;
-    if !resp.status().is_success() {
-        bail!("HTTP error fetching {url:?}: {}", resp.status());
-    }
-
-    let bytes = resp
-        .bytes()
-        .with_context(|| format!("failed to read response body for {url:?}"))?;
-    let cursor = Cursor::new(bytes.to_vec());
-    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
-
-    let mut hint = Hint::new();
-    if let Some(ext) = url.rsplit('.').next() {
-        let ext = ext.to_lowercase();
-        if ["wav", "mp3", "flac", "ogg", "m4a", "aac", "opus", "webm"].contains(&ext.as_str()) {
-            hint.with_extension(ext.as_str());
-        }
-    }
-
-    let (samples, sr, channels) = decode_audio_stream(mss, hint)?;
-    let mono = to_mono(&samples, channels)?;
-    Ok((mono, sr))
-}
-
-#[cfg(not(feature = "audio-loading"))]
-pub fn decode_url(_url: &str) -> Result<(Vec<f32>, u32)> {
-    bail!("decode_url requires the `audio-loading` feature")
-}
-
-#[cfg(feature = "audio-loading")]
-pub fn decode_base64(b64: &str) -> Result<(Vec<f32>, u32)> {
-    use std::io::Cursor;
-
-    use base64::Engine;
-    use symphonia::core::io::MediaSourceStream;
-    use symphonia::core::probe::Hint;
-
-    let data = if b64.contains(',') && b64.trim().starts_with("data:") {
-        b64.split(',')
-            .nth(1)
-            .ok_or_else(|| anyhow::anyhow!("invalid data URL base64 format"))?
-    } else {
-        b64
-    };
-
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data)
-        .map_err(|e| anyhow::anyhow!("base64 decode error: {e}"))?;
-
-    let cursor = Cursor::new(bytes);
-    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
-    let (samples, sr, channels) = decode_audio_stream(mss, Hint::new())?;
-    let mono = to_mono(&samples, channels)?;
-    Ok((mono, sr))
-}
-
-#[cfg(not(feature = "audio-loading"))]
-pub fn decode_base64(_b64: &str) -> Result<(Vec<f32>, u32)> {
-    bail!("decode_base64 requires the `audio-loading` feature")
 }
 
 #[cfg(feature = "audio-loading")]

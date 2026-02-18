@@ -15,6 +15,7 @@ Out of scope in this example:
 Input notes:
 - wav input is decoded via `symphonia`
 - non-16kHz audio is automatically resampled to 16kHz for ASR
+- only local file paths and `sample:*` are supported inputs in this example
 
 ## Run
 

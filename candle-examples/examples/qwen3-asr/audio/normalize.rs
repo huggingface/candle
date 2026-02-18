@@ -11,8 +11,6 @@ pub fn normalize_audio_input(input: &AudioInput<'_>) -> Result<Vec<f32>> {
             sample_rate,
         } => (samples.to_vec(), *sample_rate),
         AudioInput::Path(path) => decode::decode_path(path)?,
-        AudioInput::Url(url) => decode::decode_url(url)?,
-        AudioInput::Base64(b64) => decode::decode_base64(b64)?,
     };
 
     if wav.is_empty() {
