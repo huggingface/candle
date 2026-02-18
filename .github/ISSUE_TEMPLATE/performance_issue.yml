@@ -1,0 +1,67 @@
+name: 🐌 Performance Issue
+description: Report performance problems or comparisons with PyTorch
+labels: ["performance"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Performance issues help us optimize Candle. Please provide benchmarks if possible.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Performance Issue
+      description: Describe the performance problem
+      placeholder: What operation is slow? How does it compare to PyTorch?
+    validations:
+      required: true
+
+  - type: textarea
+    id: benchmark
+    attributes:
+      label: Benchmark Code
+      description: Code used to measure performance
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: results
+    attributes:
+      label: Performance Results
+      description: Timing results (include Candle vs PyTorch if applicable)
+      placeholder: |
+        Candle: 124.97ms per iteration
+        PyTorch: 31.24ms per iteration
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - CPU
+        - CUDA
+        - Metal
+      multiple: true
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware
+      description: CPU/GPU model
+      placeholder: "M1 Max / RTX 4090 / etc."
+    validations:
+      required: true
+
+  - type: textarea
+    id: flags
+    attributes:
+      label: Feature Flags & Optimizations
+      description: Cargo features and compilation flags used
+      placeholder: |
+        features = ["cuda", "cudnn", "mkl"]
+        RUSTFLAGS = "-C target-cpu=native"
