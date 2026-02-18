@@ -133,5 +133,6 @@ pub mod whisper;
 pub mod with_tracing;
 pub mod wuerstchen;
 pub mod xlm_roberta;
+pub mod xlstm;
 pub mod yi;
 pub mod z_image;
