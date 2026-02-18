@@ -120,6 +120,7 @@ pub mod segment_anything;
 pub mod siglip;
 pub mod smol;
 pub mod snac;
+pub mod snac_tts_integration;
 pub mod stable_diffusion;
 pub mod stable_lm;
 pub mod starcoder2;

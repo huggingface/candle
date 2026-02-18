@@ -27,6 +27,85 @@ pub struct Config {
     pub depthwise: bool,
 }
 
+impl Config {
+    pub fn default_24khz_speech() -> Self {
+        Self {
+            sampling_rate: 24000,
+            encoder_dim: 64,
+            encoder_rates: vec![2, 4, 8, 8],
+            decoder_dim: 1536,
+            decoder_rates: vec![8, 8, 4, 2],
+            attn_window_size: Some(32),
+            codebook_size: 4096,
+            codebook_dim: 8,
+            vq_strides: vec![8, 4, 2, 1],
+            noise: true,
+            depthwise: true,
+        }
+    }
+
+    pub fn default_32khz_general() -> Self {
+        Self {
+            sampling_rate: 32000,
+            encoder_dim: 64,
+            encoder_rates: vec![2, 4, 8, 8],
+            decoder_dim: 1536,
+            decoder_rates: vec![8, 8, 4, 2],
+            attn_window_size: Some(32),
+            codebook_size: 4096,
+            codebook_dim: 8,
+            vq_strides: vec![8, 4, 2, 1],
+            noise: true,
+            depthwise: true,
+        }
+    }
+
+    pub fn default_tts() -> Self {
+        Self::default_24khz_speech()
+    }
+
+    pub fn high_quality_tts() -> Self {
+        Self {
+            sampling_rate: 24000,
+            encoder_dim: 128,
+            encoder_rates: vec![2, 4, 8, 8],
+            decoder_dim: 2048,
+            decoder_rates: vec![8, 8, 4, 2],
+            attn_window_size: Some(64),
+            codebook_size: 8192,
+            codebook_dim: 16,
+            vq_strides: vec![8, 4, 2, 1],
+            noise: true,
+            depthwise: true,
+        }
+    }
+
+    pub fn fast_tts() -> Self {
+        Self {
+            sampling_rate: 16000,
+            encoder_dim: 32,
+            encoder_rates: vec![4, 8, 8],
+            decoder_dim: 768,
+            decoder_rates: vec![8, 8, 4],
+            attn_window_size: None,
+            codebook_size: 2048,
+            codebook_dim: 8,
+            vq_strides: vec![4, 2, 1],
+            noise: false,
+            depthwise: false,
+        }
+    }
+
+    pub fn get_frame_rate(&self) -> f64 {
+        let hop_length: usize = self.encoder_rates.iter().product();
+        self.sampling_rate as f64 / hop_length as f64
+    }
+
+    pub fn get_compression_ratio(&self) -> usize {
+        self.encoder_rates.iter().product()
+    }
+}
+
 // Equivalent to torch.repeat_interleave
 pub fn repeat_interleave<D: candle::shape::Dim>(
     img: &Tensor,
@@ -810,5 +889,91 @@ impl Model {
 
     pub fn num_codebooks(&self) -> usize {
         self.quantizer.quantizers.len()
+    }
+
+    pub fn encode_for_tts(&self, audio_data: &Tensor) -> Result<Tensor> {
+        let codes = self.encode(audio_data)?;
+        self.flatten_codes(&codes)
+    }
+
+    pub fn decode_from_tts_tokens(&self, tokens: &Tensor) -> Result<Tensor> {
+        let codes = self.unflatten_codes(tokens)?;
+        let code_refs: Vec<&Tensor> = codes.iter().collect();
+        self.decode(&code_refs)
+    }
+
+    pub fn flatten_codes(&self, codes: &[Tensor]) -> Result<Tensor> {
+        if codes.is_empty() {
+            candle::bail!("Cannot flatten empty codes");
+        }
+        
+        let (batch_size, seq_len) = codes[0].dims2()?;
+        let num_codebooks = codes.len();
+        
+        let mut flattened_codes = Vec::new();
+        for code in codes {
+            let (b, s) = code.dims2()?;
+            if b != batch_size || s != seq_len {
+                candle::bail!("All codes must have the same batch size and sequence length");
+            }
+            flattened_codes.push(code.clone());
+        }
+        
+        Tensor::stack(&flattened_codes, 1)
+    }
+
+    pub fn unflatten_codes(&self, flattened: &Tensor) -> Result<Vec<Tensor>> {
+        let (batch_size, num_codebooks, seq_len) = flattened.dims3()?;
+        let expected_codebooks = self.num_codebooks();
+        
+        if num_codebooks != expected_codebooks {
+            candle::bail!(
+                "Expected {} codebooks, got {}",
+                expected_codebooks,
+                num_codebooks
+            );
+        }
+        
+        let mut codes = Vec::with_capacity(num_codebooks);
+        for i in 0..num_codebooks {
+            let code = flattened.i((.., i, ..))?;
+            codes.push(code);
+        }
+        
+        Ok(codes)
+    }
+
+    pub fn encode_batch(&self, audios: &[Tensor]) -> Result<Vec<Vec<Tensor>>> {
+        let mut batch_codes = Vec::with_capacity(audios.len());
+        for audio in audios {
+            let codes = self.encode(audio)?;
+            batch_codes.push(codes);
+        }
+        Ok(batch_codes)
+    }
+
+    pub fn decode_batch(&self, codes_batch: &[Vec<&Tensor>]) -> Result<Vec<Tensor>> {
+        let mut batch_audio = Vec::with_capacity(codes_batch.len());
+        for codes in codes_batch {
+            let audio = self.decode(codes)?;
+            batch_audio.push(audio);
+        }
+        Ok(batch_audio)
+    }
+
+    pub fn get_sample_rate(&self) -> usize {
+        self.config.sampling_rate
+    }
+
+    pub fn get_hop_length(&self) -> usize {
+        self.hop_length
+    }
+
+    pub fn frames_to_samples(&self, frames: usize) -> usize {
+        frames * self.hop_length
+    }
+
+    pub fn samples_to_frames(&self, samples: usize) -> usize {
+        samples.div_ceil(self.hop_length)
     }
 }
