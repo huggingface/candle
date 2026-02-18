@@ -9,13 +9,12 @@ use clap::Parser;
 use hf_hub::api::sync::Api;
 use qwen3_asr::{AudioInput, Batch, LoadOptions, Qwen3Asr, StreamOptions, TranscribeOptions};
 
-mod audio;
-mod config;
-mod error;
-mod inference;
-mod model;
-mod processor;
-mod qwen3_asr;
+pub mod audio;
+pub mod config;
+pub mod inference;
+pub mod model;
+pub mod processor;
+pub mod qwen3_asr;
 
 const SAMPLE_RATE_HZ: u32 = 16_000;
 
