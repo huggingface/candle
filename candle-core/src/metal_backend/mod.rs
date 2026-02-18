@@ -2487,8 +2487,7 @@ impl LazyAllocator<Buffer> for MetalAllocator {
             let buffer_id = edge.weight.buffer_id();
             let shape = edge.weight.shape();
             let dtype = edge.weight.dtype();
-            let output_buffer = self.allocate(buffer_id, shape, dtype)?;
-            self.insert(buffer_id, output_buffer)?;
+            self.allocate(buffer_id, shape, dtype)?;
         }
 
         Ok(())
@@ -2499,24 +2498,31 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         Ok(())
     }
 
-    fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<Buffer> {
+    fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&Buffer> {
         let buffer = self
             .device
             .allocate_untracked(shape.elem_count() * dtype.size_in_bytes())?;
-        self.buffer_map.insert(id, buffer.clone());
+        self.buffer_map.insert(id, buffer);
+        self.get(id)
+    }
+
+    fn get(&self, id: BufferId) -> Result<&Buffer> {
+        self.buffer_map
+            .get(&id)
+            .ok_or_else(|| BufferNotFound(id.clone()).into())
+    }
+
+    fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&Buffer> {
+        use std::collections::hash_map::Entry;
+        let buffer = match self.buffer_map.entry(id) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(
+                self.device
+                    .allocate_untracked(shape.elem_count() * dtype.size_in_bytes())?,
+            ),
+        };
+
         Ok(buffer)
-    }
-
-    fn get(&self, id: BufferId) -> Option<&Buffer> {
-        self.buffer_map.get(&id)
-    }
-
-    fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<Buffer> {
-        if let Some(buffer) = self.get(id) {
-            return Ok(buffer.clone());
-        } else {
-            return self.allocate(id, shape, dtype);
-        }
     }
 }
 

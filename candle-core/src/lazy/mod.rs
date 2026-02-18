@@ -33,6 +33,9 @@ pub enum LazyError {
 
     #[error("Edge {0:?} expected to have state")]
     InvalidEdgeState(EdgeId),
+
+    #[error("No buffer found for {0:?}")]
+    BufferNotFound(BufferId),
 }
 
 impl From<String> for LazyError {
@@ -333,9 +336,9 @@ pub trait LazyAllocator<B: LazyBuffer> {
         last_node: NodeIndex,
     ) -> Result<()>;
     fn insert(&mut self, id: BufferId, buffer: B) -> Result<()>;
-    fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<B>;
-    fn get(&self, id: BufferId) -> Option<&B>;
-    fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<B>;
+    fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&B>;
+    fn get(&self, id: BufferId) -> Result<&B>;
+    fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&B>;
 }
 
 pub fn determine_tensor_source<'a>(graph: &'a OpGraph, edge: &'a Edge<OpEdge>) -> &'a Edge<OpEdge> {
@@ -426,7 +429,7 @@ pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
             {
                 let max_first = std::cmp::max(record_producer, inner_producer.unwrap());
                 let min_last = *std::cmp::min(last_consumer, inner_last_consumer);
-                if max_first <= min_last && allocator.get(*inner_buffer_id) == Some(obj) {
+                if max_first <= min_last && allocator.get(*inner_buffer_id).ok() == Some(obj) {
                     suitable = false;
                     break;
                 }
@@ -458,7 +461,7 @@ pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
 
             let true_source = determine_tensor_source(graph, in_edge);
             if true_source.weight.buffer_id() != in_edge.weight.buffer_id() {
-                if let Some(buf) = allocator.get(true_source.weight.buffer_id()) {
+                if let Ok(buf) = allocator.get(true_source.weight.buffer_id()) {
                     allocator.insert(in_edge.weight.buffer_id(), buf.clone())?;
                 }
             }
@@ -1252,9 +1255,10 @@ impl BackendStorage for LazyStorage {
         let dst_layout = Layout::contiguous(dst_el);
 
         let sink_idx = next.add_operation(Op::Sink);
-        let sink_edge = OpEdge::new(dst_layout, self.dtype());
+        let sink_edge = OpEdge::new(dst_layout.clone(), self.dtype());
         next.operations.add_edge(idx, sink_idx, sink_edge);
 
+        next.layout = dst_layout;
         next.current_node = Some(sink_idx);
         Ok(next)
     }
