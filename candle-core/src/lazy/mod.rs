@@ -1235,14 +1235,27 @@ impl BackendStorage for LazyStorage {
         let idx = next.add_operation(op);
 
         let current_op = next.get_current_node()?;
-        let edge = OpEdge::new(src_l.clone(), ids.dtype());
+        let edge = OpEdge::new(src_l.clone(), self.dtype());
         next.operations.add_edge(current_op, idx, edge);
 
         let ids_op = ids.get_current_node()?;
-        let ids_edge = OpEdge::new(ids_l.clone(), self.dtype());
+        let ids_edge = OpEdge::new(ids_l.clone(), ids.dtype());
         next.merge(ids, ids_op, idx, ids_edge)?;
 
-        next.current_node = Some(idx);
+        // Calculate amount of elements in result, and use to calculate size of output edge buffer.
+        let left_size: usize = src_l.dims()[..dim].iter().product();
+        let right_size: usize = src_l.dims()[dim + 1..].iter().product();
+        let ids_el = ids_l.shape().elem_count();
+        // TODO: Instead of using dst_el directly as the layout of the OpEdge from index select node -> sink node,
+        // perhaps we should calculate actual layout/shape of dst tensor.
+        let dst_el = ids_el * left_size * right_size;
+        let dst_layout = Layout::contiguous(dst_el);
+
+        let sink_idx = next.add_operation(Op::Sink);
+        let sink_edge = OpEdge::new(dst_layout, self.dtype());
+        next.operations.add_edge(idx, sink_idx, sink_edge);
+
+        next.current_node = Some(sink_idx);
         Ok(next)
     }
 

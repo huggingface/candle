@@ -802,6 +802,68 @@ pub fn where_cond(
     Ok(())
 }
 
+pub fn index_select(
+    device: &MetalDevice,
+    src: &Buffer,
+    src_l: &Layout,
+    src_dtype: DType,
+    ids: &Buffer,
+    ids_l: &Layout,
+    ids_dtype: DType,
+    dim: usize,
+    dst: &Buffer,
+) -> Result<()> {
+    if !ids_l.is_contiguous() {
+        crate::bail!("Metal index_select requires contiguous ids")
+    }
+    let name = match (ids_dtype, src_dtype) {
+        (DType::U8, DType::U8) => "is_u8_u8",
+        (DType::U8, DType::U32) => "is_u8_u32",
+        (DType::U8, DType::I64) => "is_u8_i64",
+        (DType::U8, DType::BF16) => "is_u8_bf16",
+        (DType::U8, DType::F32) => "is_u8_f32",
+        (DType::U8, DType::F16) => "is_u8_f16",
+
+        (DType::U32, DType::U8) => "is_u32_u8",
+        (DType::U32, DType::U32) => "is_u32_u32",
+        (DType::U32, DType::I64) => "is_u32_i64",
+        (DType::U32, DType::F32) => "is_u32_f32",
+        (DType::U32, DType::F16) => "is_u32_f16",
+        (DType::U32, DType::BF16) => "is_u32_bf16",
+
+        (DType::I64, DType::U8) => "is_i64_u8",
+        (DType::I64, DType::U32) => "is_i64_u32",
+        (DType::I64, DType::I64) => "is_i64_i64",
+        (DType::I64, DType::F32) => "is_i64_f32",
+        (DType::I64, DType::F16) => "is_i64_f16",
+        (DType::I64, DType::BF16) => "is_i64_bf16",
+
+        (left, right) => {
+            crate::bail!("Metal contiguous index_select {left:?} {right:?} not implemented")
+        }
+    };
+    let encoder = device.command_encoder()?;
+    let src = buffer_o(src, src_l, src_dtype);
+    let ids = buffer_o(ids, ids_l, ids_dtype);
+    candle_metal_kernels::call_index_select(
+        &device.device,
+        &encoder,
+        &device.kernels,
+        name,
+        src_l.dims(),
+        ids_l.shape().elem_count(),
+        dim,
+        src_l.is_contiguous(),
+        src_l.dims(),
+        src_l.stride(),
+        src,
+        ids,
+        dst,
+    )
+    .map_err(MetalError::from)?;
+    Ok(())
+}
+
 impl BackendStorage for MetalStorage {
     type Device = MetalDevice;
 
@@ -1780,53 +1842,20 @@ impl BackendStorage for MetalStorage {
         let dst_el = ids_el * left_size * right_size;
         let dtype = self.dtype;
         let device = self.device();
-        let buffer = device.new_buffer(dst_el, dtype, "index_select")?;
-        let name = match (ids.dtype, self.dtype) {
-            (DType::U8, DType::U8) => "is_u8_u8",
-            (DType::U8, DType::U32) => "is_u8_u32",
-            (DType::U8, DType::I64) => "is_u8_i64",
-            (DType::U8, DType::BF16) => "is_u8_bf16",
-            (DType::U8, DType::F32) => "is_u8_f32",
-            (DType::U8, DType::F16) => "is_u8_f16",
+        let dst = device.new_buffer(dst_el, dtype, "index_select")?;
 
-            (DType::U32, DType::U8) => "is_u32_u8",
-            (DType::U32, DType::U32) => "is_u32_u32",
-            (DType::U32, DType::I64) => "is_u32_i64",
-            (DType::U32, DType::F32) => "is_u32_f32",
-            (DType::U32, DType::F16) => "is_u32_f16",
-            (DType::U32, DType::BF16) => "is_u32_bf16",
-
-            (DType::I64, DType::U8) => "is_i64_u8",
-            (DType::I64, DType::U32) => "is_i64_u32",
-            (DType::I64, DType::I64) => "is_i64_i64",
-            (DType::I64, DType::F32) => "is_i64_f32",
-            (DType::I64, DType::F16) => "is_i64_f16",
-            (DType::I64, DType::BF16) => "is_i64_bf16",
-
-            (left, right) => {
-                crate::bail!("Metal contiguous index_select {left:?} {right:?} not implemented")
-            }
-        };
-        let encoder = self.device.command_encoder()?;
-        let src = buffer_o(&self.buffer, src_l, dtype);
-        let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
-        candle_metal_kernels::call_index_select(
-            &device.device,
-            &encoder,
-            &self.device.kernels,
-            name,
-            src_l.dims(),
-            ids_el,
+        index_select(
+            device,
+            self.buffer(),
+            src_l,
+            self.dtype(),
+            ids.buffer(),
+            ids_l,
+            ids.dtype(),
             dim,
-            src_l.is_contiguous(),
-            src_l.dims(),
-            src_l.stride(),
-            src,
-            ids,
-            &buffer,
-        )
-        .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, device.clone(), dst_el, dtype))
+            &dst,
+        )?;
+        Ok(Self::new(dst, device.clone(), dst_el, dtype))
     }
 
     fn index_add(
