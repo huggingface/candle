@@ -7,8 +7,9 @@ This migration stage includes:
 - streaming transcription
 - model/tokenizer loading from Hugging Face or local path
 
-Current limitation:
-- for this first migration pass, the input audio must already be 16kHz mono.
+Input notes:
+- wav input is decoded via `symphonia`
+- non-16kHz audio is automatically resampled to 16kHz for ASR
 
 ## Run
 

@@ -80,13 +80,38 @@ fn resolve_audio_path(input: Option<String>) -> Result<std::path::PathBuf> {
 
 fn load_audio(input: Option<String>) -> Result<Vec<f32>> {
     let path = resolve_audio_path(input)?;
-    let (audio, sample_rate) = candle_examples::audio::pcm_decode(path)?;
-    if sample_rate != SAMPLE_RATE_HZ {
-        anyhow::bail!(
-            "expected 16kHz input for initial migration path, got {sample_rate}Hz; re-encode or add resampling support"
-        );
+    let (audio, sample_rate) = candle_examples::audio::pcm_decode(&path)?;
+    if sample_rate == SAMPLE_RATE_HZ {
+        return Ok(audio);
     }
-    Ok(audio)
+
+    println!(
+        "resampling input from {sample_rate}Hz to {SAMPLE_RATE_HZ}Hz: {}",
+        path.display()
+    );
+    Ok(linear_resample(&audio, sample_rate, SAMPLE_RATE_HZ))
+}
+
+fn linear_resample(samples: &[f32], from_hz: u32, to_hz: u32) -> Vec<f32> {
+    if samples.is_empty() || from_hz == 0 || to_hz == 0 || from_hz == to_hz {
+        return samples.to_vec();
+    }
+
+    let ratio = to_hz as f64 / from_hz as f64;
+    let out_len = (samples.len() as f64 * ratio).round().max(1.0) as usize;
+    let mut out = Vec::with_capacity(out_len);
+
+    for i in 0..out_len {
+        let src = i as f64 / ratio;
+        let idx0 = src.floor() as usize;
+        let idx1 = idx0.saturating_add(1).min(samples.len().saturating_sub(1));
+        let t = (src - idx0 as f64) as f32;
+        let y0 = samples[idx0];
+        let y1 = samples[idx1];
+        out.push(y0 + (y1 - y0) * t);
+    }
+
+    out
 }
 
 fn run_offline(model: &Qwen3Asr, wav: &[f32], args: &Args) -> Result<()> {
