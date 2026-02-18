@@ -183,7 +183,7 @@ impl MultiHeadSelfAttention {
 
         let q: Tensor = (q / (dim_per_head as f64).sqrt())?;
         let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
-        let mask = attention_mask.broadcast_as(scores.shape())?;
+        let mask = attention_mask.eq(0u8)?.broadcast_as(scores.shape())?;
 
         let scores = masked_fill(&scores.to_dtype(DType::F32)?, &mask, f32::NEG_INFINITY)?;
         let weights = candle_nn::ops::softmax(&scores, candle::D::Minus1)?;
