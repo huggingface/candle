@@ -42,9 +42,6 @@ pub const SUPPORTED_LANGUAGES: &[&str] = &[
 /// Maximum audio duration (seconds) per ASR request in the official stack.
 pub const MAX_ASR_INPUT_SECONDS: f32 = 1200.0;
 
-/// Maximum audio duration (seconds) per forced-aligner request in the official stack.
-pub const MAX_FORCE_ALIGN_INPUT_SECONDS: f32 = 180.0;
-
 const ASR_TEXT_TAG: &str = "<asr_text>";
 const LANG_PREFIX: &str = "language ";
 const DEFAULT_REPETITION_THRESHOLD: usize = 20;
