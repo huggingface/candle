@@ -110,6 +110,34 @@ template <typename T>
     output[dst_idx] = input[src_idx];
 }
 
+// Optimized transpose for the last 2 dimensions.
+// For a tensor with shape [..., M, N] being transposed to [..., N, M],
+// this kernel efficiently handles the transpose with better memory coalescing.
+// batch_size = product of all dimensions except last 2
+// m = second-to-last dimension (rows)
+// n = last dimension (cols)
+// Input layout: [batch, m, n] with strides [m*n, n, 1]
+// Output layout: [batch, n, m] with strides [n*m, m, 1]
+template <typename T>
+[[kernel]] void transpose_last2(
+    constant size_t &batch_size,
+    constant size_t &m,
+    constant size_t &n,
+    device const T *input,
+    device T *output,
+    uint3 gid [[thread_position_in_grid]]
+) {
+    // gid.x = column in transposed output (row in input)
+    // gid.y = row in transposed output (column in input)
+    // gid.z = batch index
+    if (gid.x >= m || gid.y >= n || gid.z >= batch_size) return;
+
+    size_t src_idx = gid.z * (m * n) + gid.x * n + gid.y;
+    size_t dst_idx = gid.z * (m * n) + gid.y * m + gid.x;
+    output[dst_idx] = input[src_idx];
+}
+
+
 // Unary functions
 template <typename T> METAL_FUNC T erf(T in){
     // constants
@@ -220,6 +248,9 @@ define_unary_op(utanh, precise::tanh(x));
 #define init_copy2d(tname, t)  \
     init_kernel("copy2d_" #tname, copy2d, t)
 
+#define init_transpose_last2(tname, t)  \
+    init_kernel("transpose_last2_" #tname, transpose_last2, t)
+
 #define init_const_set(tname, t)                    \
     init_kernel("const_set_" #tname, const_set, t)  \
     init_kernel("const_set_" #tname "_strided", const_set_strided, t)
@@ -251,12 +282,17 @@ init_unary_float(tanh, utanh);
 init_copy2d(f32, float);
 init_copy2d(f16, half);
 
+// Initialize transpose_last2 kernels
+init_transpose_last2(f32, float);
+init_transpose_last2(f16, half);
+
 // Initialize const_set kernels
 init_const_set(f32, float);
 init_const_set(f16, half);
 
 #if defined(__HAVE_BFLOAT__)
 init_copy2d(bf16, bfloat);
+init_transpose_last2(bf16, bfloat);
 init_const_set(bf16, bfloat);
 #endif
 

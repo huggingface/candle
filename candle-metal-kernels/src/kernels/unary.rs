@@ -129,6 +129,13 @@ pub mod copy2d {
     pub const U8: Kernel = Kernel("copy2d_u8");
 }
 
+pub mod transpose_last2 {
+    pub struct Kernel(pub &'static str);
+    pub const FLOAT: Kernel = Kernel("transpose_last2_f32");
+    pub const HALF: Kernel = Kernel("transpose_last2_f16");
+    pub const BFLOAT: Kernel = Kernel("transpose_last2_bf16");
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_copy2d(
     device: &Device,
@@ -167,6 +174,49 @@ pub fn call_copy2d(
     };
     let group_dims = get_block_dims(d1, d2, 1);
     encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
+    encoder.dispatch_threads(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Optimized transpose for the last 2 dimensions.
+///
+/// Transposes a tensor from shape [..., M, N] to [..., N, M].
+/// This is much faster than the generic strided copy for this common pattern.
+///
+/// # Arguments
+/// * `batch_size` - Product of all dimensions except the last 2
+/// * `m` - Second-to-last dimension (rows before transpose)
+/// * `n` - Last dimension (cols before transpose)
+/// * `input` - Input buffer (must be contiguous in the original layout)
+/// * `output` - Output buffer
+#[allow(clippy::too_many_arguments)]
+pub fn call_transpose_last2(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: transpose_last2::Kernel,
+    batch_size: usize,
+    m: usize,
+    n: usize,
+    input: BufferOffset,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (batch_size, m, n, &input, output));
+
+    // Grid: (m, n, batch_size) - one thread per element
+    let grid_dims = MTLSize {
+        width: m,
+        height: n,
+        depth: batch_size,
+    };
+    let group_dims = get_block_dims(m, n, batch_size);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_threads(grid_dims, group_dims);
     Ok(())
