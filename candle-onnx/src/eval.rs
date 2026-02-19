@@ -12,6 +12,7 @@ pub fn dtype(dt: DataType) -> Option<DType> {
     match dt {
         DataType::Uint8 => Some(DType::U8),
         DataType::Uint32 => Some(DType::U32),
+        DataType::Int32 => Some(DType::I64), // Map Int32 to I64 (candle doesn't have I32)
         DataType::Int64 => Some(DType::I64),
         DataType::Float16 => Some(DType::F16),
         DataType::Float => Some(DType::F32),
@@ -495,6 +496,10 @@ fn simple_eval_(
                 let pads = get_attr_opt::<[i64]>(node, "pads")?;
                 let strides = get_attr_opt::<[i64]>(node, "strides")?;
                 let auto_pad = get_attr_opt::<str>(node, "auto_pad")?;
+                let ceil_mode = get_attr_opt::<i64>(node, "ceil_mode")?
+                    .copied()
+                    .unwrap_or(0)
+                    == 1;
                 match auto_pad {
                     None | Some("NOTSET") => (),
                     Some(s) => bail!("unsupported auto_pad {s}"),
@@ -504,22 +509,78 @@ fn simple_eval_(
                         bail!("AvgPool with dilation != 1, {dilations:?}")
                     }
                 }
+                // Check pads - only fail if there are non-zero pads
                 if let Some(d) = pads {
                     if d.iter().any(|&v| v != 0) {
                         bail!("AvgPool with pads != 0, {pads:?}")
                     }
                 }
                 let xs = get(&node.input[0])?;
-                let (k1, k2) = match kernel_shape {
-                    [k1, k2] => (*k1 as usize, *k2 as usize),
-                    _ => bail!("only 2d AvgPool is supported, kernel shape {kernel_shape:?}"),
-                };
-                let ys = match strides {
-                    None => xs.avg_pool2d((k1, k2))?,
-                    Some([s1, s2]) => {
-                        xs.avg_pool2d_with_stride((k1, k2), (*s1 as usize, *s2 as usize))?
+                let ys = match kernel_shape {
+                    [k1] => {
+                        // 1D average pooling
+                        let k = *k1 as usize;
+                        let stride = match strides {
+                            None => k,
+                            Some([s]) => *s as usize,
+                            Some(s) => bail!("unexpected strides for 1d AvgPool {s:?}"),
+                        };
+                        // xs shape: [N, C, L]
+                        let (_n, _c, l) = xs.dims3()?;
+
+                        // Handle case where kernel is larger than input
+                        if k > l {
+                            // Global average pooling over the entire sequence
+                            xs.mean(2)?.unsqueeze(2)?
+                        } else {
+                            // Calculate output length based on ceil_mode
+                            let out_len = if ceil_mode {
+                                // ceil((l - k) / stride) + 1
+                                (l - k + stride - 1) / stride + 1
+                            } else {
+                                // floor((l - k) / stride) + 1
+                                (l - k) / stride + 1
+                            };
+
+                            if out_len == 0 {
+                                // Return empty tensor with correct shape
+                                let mut shape = xs.dims().to_vec();
+                                shape[2] = 0;
+                                Tensor::zeros(shape, xs.dtype(), xs.device())?
+                            } else {
+                                // Manual 1D average pooling
+                                let mut pools = Vec::with_capacity(out_len);
+                                for i in 0..out_len {
+                                    let start = i * stride;
+                                    // In ceil_mode, the last window might extend beyond input
+                                    // We need to handle partial windows
+                                    let actual_k = k.min(l - start);
+                                    let slice = xs.narrow(2, start, actual_k)?;
+                                    let avg = slice.mean(2)?;
+                                    pools.push(avg);
+                                }
+                                Tensor::stack(&pools, 2)?
+                            }
+                        }
                     }
-                    Some(strides) => bail!("only 2d AvgPool is supported, strides {strides:?}"),
+                    [k1, k2] => {
+                        // 2D average pooling
+                        let (k1, k2) = (*k1 as usize, *k2 as usize);
+                        // Note: 2D pooling with ceil_mode not yet implemented
+                        if ceil_mode {
+                            bail!("ceil_mode not yet supported for 2D AveragePool")
+                        }
+                        match strides {
+                            None => xs.avg_pool2d((k1, k2))?,
+                            Some([s1, s2]) => {
+                                xs.avg_pool2d_with_stride((k1, k2), (*s1 as usize, *s2 as usize))?
+                            }
+                            Some(strides) => bail!("unexpected strides for 2d AvgPool {strides:?}"),
+                        }
+                    }
+                    _ => {
+                        bail!("only 1d and 2d AvgPool is supported, kernel shape {kernel_shape:?}")
+                    }
                 };
                 values.insert(node.output[0].clone(), ys);
             }
@@ -915,39 +976,65 @@ fn simple_eval_(
                                 bail!("more pads than expected in conv2d {pads:?} {}", node.name)
                             }
                         };
-                        let strides = match strides {
-                            None => 1,
-                            Some([p]) => *p as usize,
-                            Some([p1, p2]) => {
-                                if p1 != p2 {
-                                    bail!(
-                                        "strides have to be the same on both axis {pads:?} {}",
-                                        node.name
-                                    )
-                                }
-                                *p1 as usize
-                            }
+                        let (stride_h, stride_w) = match strides {
+                            None => (1, 1),
+                            Some([p]) => (*p as usize, *p as usize),
+                            Some([p1, p2]) => (*p1 as usize, *p2 as usize),
                             Some(s) => {
                                 bail!("more strides than expected in conv2d {s:?} {}", node.name)
                             }
                         };
-                        let dilations = match dilations {
-                            None => 1,
-                            Some([p]) => *p as usize,
-                            Some([p1, p2]) => {
-                                if p1 != p2 {
-                                    bail!(
-                                        "dilations have to be the same on both axis {pads:?} {}",
-                                        node.name
-                                    )
-                                }
-                                *p1 as usize
-                            }
+                        let (dilation_h, dilation_w) = match dilations {
+                            None => (1, 1),
+                            Some([p]) => (*p as usize, *p as usize),
+                            Some([p1, p2]) => (*p1 as usize, *p2 as usize),
                             Some(s) => {
                                 bail!("more dilations than expected in conv2d {s:?} {}", node.name)
                             }
                         };
-                        xs.conv2d(ws, pads, strides, dilations, groups as usize)?
+                        // If strides or dilations are different, we need to handle it specially
+                        if stride_h != stride_w || dilation_h != dilation_w {
+                            // For asymmetric strides, we do conv with stride 1, then subsample
+                            let min_stride = stride_h.min(stride_w);
+                            let min_dilation = dilation_h.min(dilation_w);
+
+                            // Perform conv2d with minimum stride/dilation
+                            let conv_result =
+                                xs.conv2d(ws, pads, min_stride, min_dilation, groups as usize)?;
+
+                            // Now subsample to achieve the desired asymmetric stride
+                            // conv_result shape: [N, C, H_out, W_out]
+                            let (_, _, h_out, w_out) = conv_result.dims4()?;
+
+                            // Calculate subsampling factors
+                            let subsample_h = stride_h / min_stride;
+                            let subsample_w = stride_w / min_stride;
+
+                            // Create indices for subsampling
+                            let h_indices: Vec<i64> =
+                                (0..h_out).step_by(subsample_h).map(|x| x as i64).collect();
+                            let w_indices: Vec<i64> =
+                                (0..w_out).step_by(subsample_w).map(|x| x as i64).collect();
+
+                            let h_idx = Tensor::from_vec(
+                                h_indices.clone(),
+                                (h_indices.len(),),
+                                conv_result.device(),
+                            )?;
+                            let w_idx = Tensor::from_vec(
+                                w_indices.clone(),
+                                (w_indices.len(),),
+                                conv_result.device(),
+                            )?;
+
+                            // Subsample along H and W dimensions
+                            let result = conv_result
+                                .index_select(&h_idx, 2)?
+                                .index_select(&w_idx, 3)?;
+                            result
+                        } else {
+                            xs.conv2d(ws, pads, stride_h, dilation_h, groups as usize)?
+                        }
                     }
                     rank => bail!(
                         "unsupported rank for weight matrix {rank} in conv {}",
@@ -1072,6 +1159,13 @@ fn simple_eval_(
                 let output = input.floor()?;
                 values.insert(node.output[0].clone(), output);
             }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Round
+            "Round" => {
+                let input = get(&node.input[0])?;
+                // Round to nearest even (banker's rounding)
+                let output = input.round()?;
+                values.insert(node.output[0].clone(), output);
+            }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Constant
             "Constant" => {
                 let value = match node.attribute.iter().find(|attr| attr.name == "value") {
@@ -1173,9 +1267,17 @@ fn simple_eval_(
                 let mode = get_attr_opt(node, "mode")?.unwrap_or("constant");
                 let data = get(&node.input[0])?;
                 let pads = get(&node.input[1])?;
-                if node.input.len() > 2 {
+                // Third input is optional constant_value (default 0)
+                let constant_value: f64 = if node.input.len() > 2 && !node.input[2].is_empty() {
+                    let cv = get(&node.input[2])?;
+                    to_scalar_flexible::<f64>(&cv.to_dtype(DType::F64)?)?
+                } else {
+                    0.0
+                };
+                // Fourth input is optional axes (not commonly used, ignore for now)
+                if node.input.len() > 4 {
                     bail!(
-                        "unsupported number of inputs {} for Pad node {:?}, expected 2",
+                        "unsupported number of inputs {} for Pad node {:?}, expected at most 4",
                         node.input.len(),
                         node.name
                     );
@@ -1191,6 +1293,48 @@ fn simple_eval_(
                 let (pads_pre, pads_post) = pads.split_at(pads.len() / 2);
 
                 match mode {
+                    "constant" => {
+                        let mut out = data.clone();
+                        for (i, _) in data.dims().iter().enumerate().rev() {
+                            let pre = pads_pre[i] as usize;
+                            let post = pads_post[i] as usize;
+                            if pre == 0 && post == 0 {
+                                continue;
+                            }
+                            // Create padding tensors with constant value
+                            let mut pre_shape = out.dims().to_vec();
+                            pre_shape[i] = pre;
+                            let mut post_shape = out.dims().to_vec();
+                            post_shape[i] = post;
+
+                            let pre_pad = if pre > 0 {
+                                Some(
+                                    Tensor::full(constant_value, pre_shape, out.device())?
+                                        .to_dtype(out.dtype())?,
+                                )
+                            } else {
+                                None
+                            };
+                            let post_pad = if post > 0 {
+                                Some(
+                                    Tensor::full(constant_value, post_shape, out.device())?
+                                        .to_dtype(out.dtype())?,
+                                )
+                            } else {
+                                None
+                            };
+
+                            // Concatenate along axis i
+                            let tensors: Vec<&Tensor> =
+                                [pre_pad.as_ref(), Some(&out), post_pad.as_ref()]
+                                    .into_iter()
+                                    .flatten()
+                                    .collect();
+
+                            out = Tensor::cat(&tensors, i)?;
+                        }
+                        values.insert(node.output[0].clone(), out);
+                    }
                     "reflect" => {
                         let mut out = data.clone();
                         for (i, &dim) in data.dims().iter().enumerate().rev() {
@@ -1602,7 +1746,7 @@ fn simple_eval_(
                     Some(Ok(axes)) => axes
                         .to_vec1::<i64>()?
                         .into_iter()
-                        .map(|x| x as usize)
+                        .map(|x| input.normalize_axis(x).unwrap_or(x as usize))
                         .collect::<Vec<_>>(),
                     Some(Err(_)) | None => {
                         if noop_with_empty_axes == 1 {
@@ -1618,6 +1762,59 @@ fn simple_eval_(
                 } else {
                     input.sum(axes)?
                 };
+
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#ReduceProd
+            "ReduceProd" => {
+                let input = get(&node.input[0])?;
+                let axes = get_opt(1);
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1);
+                let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?
+                    .copied()
+                    .unwrap_or(0);
+
+                let axes: Vec<usize> = match axes {
+                    Some(Ok(axes)) => axes
+                        .to_vec1::<i64>()?
+                        .into_iter()
+                        .map(|x| input.normalize_axis(x).unwrap_or(x as usize))
+                        .collect(),
+                    Some(Err(_)) | None => {
+                        if noop_with_empty_axes == 1 {
+                            vec![]
+                        } else {
+                            (0..input.rank()).collect()
+                        }
+                    }
+                };
+
+                // Candle doesn't have a direct prod method, so we use log + sum + exp
+                // But this doesn't work for negative numbers or zeros
+                // Instead, we iterate over axes and use a manual product
+                let mut output = input.clone();
+                let mut sorted_axes = axes.clone();
+                sorted_axes.sort();
+                sorted_axes.reverse(); // Process from highest to lowest to avoid index shifting
+
+                for axis in sorted_axes {
+                    // Get the size of this axis
+                    let axis_size = output.dim(axis)?;
+                    if axis_size == 0 {
+                        continue;
+                    }
+                    // Compute product along this axis
+                    let mut prod = output.narrow(axis, 0, 1)?;
+                    for i in 1..axis_size {
+                        let slice = output.narrow(axis, i, 1)?;
+                        prod = prod.mul(&slice)?;
+                    }
+                    if keepdims == 1 {
+                        output = prod;
+                    } else {
+                        output = prod.squeeze(axis)?;
+                    }
+                }
 
                 values.insert(node.output[0].clone(), output);
             }
@@ -2203,6 +2400,47 @@ fn simple_eval_(
                 let out = candle_nn::ops::selu(input, alpha as f32, gamma as f32)?;
                 values.insert(node.output[0].clone(), out);
             }
+            // https://onnx.ai/onnx/operators/onnx__Elu.html
+            "Elu" => {
+                let input = get(&node.input[0])?;
+                let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0) as f64;
+                // Elu: f(x) = x if x > 0, alpha * (exp(x) - 1) if x <= 0
+                // Equivalent to: max(0, x) + min(0, alpha * (exp(x) - 1))
+                let zeros = input.zeros_like()?;
+                let positive = input.maximum(&zeros)?;
+                let negative = input.minimum(&zeros)?;
+                let exp_neg = negative.exp()?;
+                let neg_part = ((exp_neg - 1.0)? * alpha)?;
+                let output = positive.add(&neg_part.minimum(&zeros)?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://onnx.ai/onnx/operators/onnx__Mod.html
+            "Mod" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[1])?;
+                let fmod = get_attr_opt::<i64>(node, "fmod")?.copied().unwrap_or(0);
+
+                let output = if fmod == 1 {
+                    // fmod behavior: a - trunc(a/b) * b
+                    // For positive numbers, trunc and floor are the same
+                    // For negative numbers, we need to handle differently
+                    let div = input0.broadcast_div(input1)?;
+                    // trunc = sign(x) * floor(abs(x))
+                    let abs_div = div.abs()?;
+                    let floored = abs_div.floor()?;
+                    let trunc = div.sign()?.broadcast_mul(&floored)?;
+                    let mul = trunc.broadcast_mul(input1)?;
+                    input0.broadcast_sub(&mul)?
+                } else {
+                    // Default behavior: a - floor(a/b) * b
+                    let div = input0.broadcast_div(input1)?;
+                    let floored = div.floor()?;
+                    let mul = floored.broadcast_mul(input1)?;
+                    input0.broadcast_sub(&mul)?
+                };
+
+                values.insert(node.output[0].clone(), output);
+            }
 
             // https://onnx.ai/onnx/operators/onnx__OneHot.html
             "OneHot" => {
@@ -2544,6 +2782,134 @@ fn simple_eval_(
                 output = flat_output.reshape(data_shape.to_vec())?;
 
                 values.insert(node.output[0].clone(), output);
+            }
+            // CosyVoice3 GRU operator support
+            "GRU" => {
+                // === 1. Parse attributes ===
+                let direction = get_attr_opt::<str>(node, "direction")?.unwrap_or("forward");
+                if direction != "forward" {
+                    bail!("GRU currently only supports direction == \"forward\"");
+                }
+                let num_directions = 1usize;
+                let hidden_size: i64 = *get_attr(node, "hidden_size")?;
+                let hidden_size = hidden_size as usize;
+
+                // linear_before_reset: 0 = r_t * (H_prev * R + Rb), 1 = (r_t * H_prev) * R + Rb
+                let linear_before_reset = get_attr_opt::<i64>(node, "linear_before_reset")?
+                    .copied()
+                    .unwrap_or(0);
+                if linear_before_reset != 0 {
+                    bail!("GRU currently only supports linear_before_reset == 0");
+                }
+
+                let layout = get_attr_opt::<i64>(node, "layout")?.copied().unwrap_or(0);
+                if layout != 0 {
+                    bail!("GRU currently only supports layout == 0");
+                }
+
+                // === 2. Get input tensors ===
+                // X: [seq_length, batch_size, input_size]
+                let x = get(&node.input[0])?;
+                let (seq_length, batch_size, input_size) = x.dims3()?;
+
+                // W: [num_directions, 3*hidden_size, input_size] - input weights
+                let w = get(&node.input[1])?;
+
+                // R: [num_directions, 3*hidden_size, hidden_size] - recurrent weights
+                let r = get(&node.input[2])?;
+
+                // B: [num_directions, 6*hidden_size] - optional bias
+                let b = if node.input.len() > 3 && !node.input[3].is_empty() {
+                    get(&node.input[3])?.clone()
+                } else {
+                    Tensor::zeros((num_directions, 6 * hidden_size), x.dtype(), x.device())?
+                };
+
+                // initial_h: [num_directions, batch_size, hidden_size] - optional initial hidden state
+                let initial_h = if node.input.len() > 5 && !node.input[5].is_empty() {
+                    get(&node.input[5])?.clone()
+                } else {
+                    Tensor::zeros(
+                        (num_directions, batch_size, hidden_size),
+                        x.dtype(),
+                        x.device(),
+                    )?
+                };
+
+                // === 3. Extract single direction weights (assuming forward) ===
+                let w = w.get(0)?; // [3*hidden_size, input_size]
+                let r = r.get(0)?; // [3*hidden_size, hidden_size]
+                let b = b.get(0)?; // [6*hidden_size]
+                let h = initial_h.get(0)?; // [batch_size, hidden_size]
+
+                // === 4. Separate biases: Wb and Rb ===
+                let wb = b.narrow(0, 0, 3 * hidden_size)?;
+                let rb = b.narrow(0, 3 * hidden_size, 3 * hidden_size)?;
+
+                // === 5. Reorder weights: ONNX (zrh) -> candle-nn (rzn) ===
+                // ONNX order: z(update), r(reset), h(hidden)
+                // candle-nn order: r(reset), z(update), n(hidden)
+                let w_z = w.narrow(0, 0, hidden_size)?;
+                let w_r = w.narrow(0, hidden_size, hidden_size)?;
+                let w_h = w.narrow(0, 2 * hidden_size, hidden_size)?;
+                let w = Tensor::cat(&[&w_r, &w_z, &w_h], 0)?; // [3*hidden_size, input_size]
+
+                let r_z = r.narrow(0, 0, hidden_size)?;
+                let r_r = r.narrow(0, hidden_size, hidden_size)?;
+                let r_h = r.narrow(0, 2 * hidden_size, hidden_size)?;
+                let r = Tensor::cat(&[&r_r, &r_z, &r_h], 0)?; // [3*hidden_size, hidden_size]
+
+                let wb_z = wb.narrow(0, 0, hidden_size)?;
+                let wb_r = wb.narrow(0, hidden_size, hidden_size)?;
+                let wb_h = wb.narrow(0, 2 * hidden_size, hidden_size)?;
+                let wb = Tensor::cat(&[&wb_r, &wb_z, &wb_h], 0)?;
+
+                let rb_z = rb.narrow(0, 0, hidden_size)?;
+                let rb_r = rb.narrow(0, hidden_size, hidden_size)?;
+                let rb_h = rb.narrow(0, 2 * hidden_size, hidden_size)?;
+                let rb = Tensor::cat(&[&rb_r, &rb_z, &rb_h], 0)?;
+
+                // === 6. Build candle-nn GRU ===
+                let vmap = candle_nn::VarMap::new();
+                {
+                    let mut data = vmap.data().lock().unwrap();
+                    data.insert("weight_ih_l0".to_string(), candle::Var::from_tensor(&w)?);
+                    data.insert("weight_hh_l0".to_string(), candle::Var::from_tensor(&r)?);
+                    data.insert("bias_ih_l0".to_string(), candle::Var::from_tensor(&wb)?);
+                    data.insert("bias_hh_l0".to_string(), candle::Var::from_tensor(&rb)?);
+                }
+
+                use candle_nn::rnn::RNN as _;
+                let gru = candle_nn::rnn::gru(
+                    input_size,
+                    hidden_size,
+                    candle_nn::rnn::GRUConfig::default(),
+                    candle_nn::VarBuilder::from_varmap(&vmap, w.dtype(), w.device()),
+                )?;
+
+                // === 7. Execute GRU sequence ===
+                let mut gru_state = candle_nn::rnn::GRUState { h };
+                let mut h_outputs: Vec<Tensor> = Vec::new();
+
+                for t in 0..seq_length {
+                    let x_t = x.get(t)?; // [batch_size, input_size]
+                    gru_state = gru.step(&x_t, &gru_state)?;
+                    h_outputs.push(gru_state.h.clone());
+                }
+
+                // === 8. Build outputs ===
+                // Y: [seq_length, num_directions, batch_size, hidden_size]
+                if !node.output.is_empty() && !node.output[0].is_empty() {
+                    let y = Tensor::stack(&h_outputs, 0)?; // [seq_length, batch_size, hidden_size]
+                    let y = y.unsqueeze(1)?; // [seq_length, 1, batch_size, hidden_size]
+                    values.insert(node.output[0].clone(), y);
+                }
+
+                // Y_h: [num_directions, batch_size, hidden_size]
+                if node.output.len() > 1 && !node.output[1].is_empty() {
+                    let y_h = gru_state.h.unsqueeze(0)?; // [1, batch_size, hidden_size]
+                    values.insert(node.output[1].clone(), y_h);
+                }
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
