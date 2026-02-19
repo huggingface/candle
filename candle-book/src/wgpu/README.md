@@ -32,7 +32,7 @@ To address this limitation, the `buffer_cached_max_allowed_size` property is inc
 | **<span style="color:#1E90FF">Data Types</span>**                                  |                                       |                                                                    |
 | f32                         | ✅ Supported                                     |                                                                    |
 | u32                         | ✅ Supported                                     |                                                                    |
-| u8                          | ⚠️ Only Output of Cmp                            | *Only f32, I32 and U32 are available in a webGpu shader            |
+| u8                          | ⚠️ Only for boolean values                            | *Only f32, I32 and U32 are available in a webGpu shader            |
 | i64                         | ⚠️ Supported Native                              |                                                                    |
 | f64                         | ⚠️ Supported Native                              |                                                                    |
 | f16                         | ⚠️ Only in Quantized Matrices                    |                                                                    |
@@ -89,23 +89,10 @@ Ok(())
 ** Note that the above limitation only applies if the browser is targeted; a native program can still use the same sync functions.
 
 # Example Projects
-All example projects, as well as the WAM examples, can be used with the wgpu backend. 
+All example projects, as well as the WASM examples, can be used with the wgpu backend. 
 
 In order to use **WGPU** add `--features wgpu` to the example command line.
 e.g:
 ```bash
 cargo run --example stable-diffusion --release --features="wgpu" -- --prompt "Anthropomorphic cat dressed as a fire fighter" --sd-version v1-5
 ```
-
-
-# known problems
-- not all dtypes are supported: f32, u32 is implemented for most and u8 for a cmp and whereCond. 
-  f64 or i64 is supported for native programs. WebGpu has no support for f64 or i64 or u8 dtypes<br>
-  (There is a f16 extension in the webGpu Spec, but this is currently not supported by wgpu(https://github.com/gfx-rs/wgpu/issues/4384))
-- Reduce Implementation error: When using ArgMin, ArgMax with non continues reduction dimensions will probably not work. e.g if dim 0 and 2 are reduced. The current implementation will first reduce dim 2, and afterwards dim 0. This approach will not work for ArgMin/ArgMax as after the first reduction the type and source values changed.
-- Buffer size limitation: 
-  Depending on the driver used, it may not be possible to create a large enough buffer. 
-  Also, you may be able to create a large buffer, but not be able to bind to the entire buffer in a single operation.
-- Browser performance worse than native:
-  The shaders have been optimized for an NVIDIA GPU using a native Vulkan driver. 
-  Performance may not be optimal on other platforms or GPUs. Browser performance has been shown to be slower than native.

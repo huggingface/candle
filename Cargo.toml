@@ -116,7 +116,6 @@ wgpu = {version="28.0.0", features=["fragile-send-sync-non-atomic-wasm"]}
 bytemuck = { version = "1.24.0", features = [ "derive" ] }
 pollster = "0.4.0"
 flume = "0.11.1"
-tracing-mutex = "0.3.2"
 web-time = "=1.1.0"
 rustc-hash = "2.1.1"
 

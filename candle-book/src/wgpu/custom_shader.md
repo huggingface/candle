@@ -5,7 +5,9 @@ In "candle-core/examples/wgpu_basics.rs" is a sample project that shows how to w
 1. Define a LoaderIndex. 
 When you add your custom pipeline to the queue, you need to use a unique identifier to distinguish your shader from the default shader provided with Candle, or the shaders of other modules. 
 The macro `create_loader` will generate a unique index for this purpose at compile time.
-```rust  
+```rust
+#[derive(Debug)]
+struct MyCustomLoader {}  
 wgpu_compute_layer::create_loader!(MyCustomLoader);
 ```
 
@@ -15,8 +17,8 @@ It is responsible for returning the source code of a .wgsl shader file, as well 
 
 ```rust
 impl wgpu_compute_layer::ShaderLoader for MyCustomLoader{
-    fn load(&self, _ : wgpu_compute_layer::ShaderIndex) -> &str {
-        return "YOUR SHADER CODE GOES HERE";
+    fn load(&self, _ : wgpu_compute_layer::ShaderIndex,_ : &[(&str, String)]) -> Cow<'_, str> {
+        return "YOUR SHADER CODE GOES HERE".into();
     }
 
     fn get_entry_point(&self, _ : wgpu_compute_layer::PipelineIndex) -> &str {
@@ -26,6 +28,7 @@ impl wgpu_compute_layer::ShaderLoader for MyCustomLoader{
 ```
 Instead of creating multiple ShaderLoaders, your ShaderLoader can handle multiple files using the index parameter. (Up to 65536 can be handled).
 Each file can also have multiple compute entry points, which you can differentiate using the PipelineIndex parameter.
+The `load` function accepts a set of defines, allowing shader variants to be generated dynamically at runtime.
 
 3. Add the ShaderLoader to the WGPU device.
 You can get a reference to the WgpuDevice from WgpuStorage.device() (e.g. inside a CustomOp), 
