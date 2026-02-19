@@ -116,6 +116,17 @@ impl RmsNorm {
         let weight = weight.dequantize(&weight.device())?;
         Ok(Self { weight, eps, span })
     }
+
+    /// Create RmsNorm with weights converted to target dtype to avoid runtime conversion overhead
+    pub fn from_qtensor_with_dtype(
+        weight: QTensor,
+        eps: f64,
+        dtype: candle::DType,
+    ) -> Result<Self> {
+        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
+        let weight = weight.dequantize(&weight.device())?.to_dtype(dtype)?;
+        Ok(Self { weight, eps, span })
+    }
 }
 
 impl Module for RmsNorm {
