@@ -354,11 +354,17 @@ impl crate::CustomOp1 for TopKIndices {
                 .enumerate()
                 .map(|(i, &v)| (v, i as u32))
                 .collect(),
-            _ => return Err(crate::Error::UnsupportedDTypeForOp(storage.dtype(), "topk_indices").bt()),
+            _ => {
+                return Err(
+                    crate::Error::UnsupportedDTypeForOp(storage.dtype(), "topk_indices").bt(),
+                )
+            }
         };
 
         let kth = k.saturating_sub(1);
-        pairs.select_nth_unstable_by(kth, |a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Greater));
+        pairs.select_nth_unstable_by(kth, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Greater)
+        });
         pairs.truncate(k);
         pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Greater));
 
@@ -366,7 +372,11 @@ impl crate::CustomOp1 for TopKIndices {
         Ok((crate::CpuStorage::U32(out), crate::Shape::from((k,))))
     }
 
-    fn cuda_fwd(&self, storage: &crate::CudaStorage, layout: &crate::Layout) -> Result<(crate::CudaStorage, crate::Shape)> {
+    fn cuda_fwd(
+        &self,
+        storage: &crate::CudaStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::CudaStorage, crate::Shape)> {
         #[cfg(feature = "cuda")]
         {
             use crate::cuda_backend::cudarc::driver::{LaunchConfig, PushKernelArg};
@@ -380,7 +390,9 @@ impl crate::CustomOp1 for TopKIndices {
             let dev = &storage.device;
 
             let x = storage.as_cuda_slice::<f32>()?;
-            let (o1, o2) = layout.contiguous_offsets().ok_or_else(|| crate::Error::Msg("topk_indices requires contiguous offsets".into()).bt())?;
+            let (o1, o2) = layout.contiguous_offsets().ok_or_else(|| {
+                crate::Error::Msg("topk_indices requires contiguous offsets".into()).bt()
+            })?;
             let x = x.slice(o1..o2);
 
             let block_dim1 = 128u32;
