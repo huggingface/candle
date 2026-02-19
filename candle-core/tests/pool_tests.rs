@@ -57,13 +57,25 @@ fn avg_pool2d_pytorch(dev: &Device) -> Result<()> {
     )?
     .reshape((1, 2, 4, 4))?;
     let pool = t.avg_pool2d(2)?.squeeze(0)?;
-    assert_eq!(
-        test_utils::to_vec3_round(&pool, 4)?,
-        [
-            [[-1.1926, -0.0395], [0.2688, 0.1871]],
-            [[0.1835, -0.1606], [0.6249, 0.3217]]
-        ]
-    );
+
+    if !dev.is_wgpu() {
+        assert_eq!(
+            test_utils::to_vec3_round(&pool, 4)?,
+            [
+                [[-1.1926, -0.0395], [0.2688, 0.1871]],
+                [[0.1835, -0.1606], [0.6249, 0.3217]]
+            ]
+        );
+    } else {
+        //-0.16055 rounds to -0.1605 for wgpu
+        assert_eq!(
+            test_utils::to_vec3_round(&pool, 4)?,
+            [
+                [[-1.1926, -0.0395], [0.2688, 0.1871]],
+                [[0.1835, -0.1605], [0.6249, 0.3217]]
+            ]
+        );
+    }
     let pool = t.avg_pool2d(3)?.squeeze(0)?;
     assert_eq!(
         test_utils::to_vec3_round(&pool, 4)?,
@@ -101,17 +113,31 @@ fn upsample_nearest2d(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(avg_pool2d, avg_pool2d_cpu, avg_pool2d_gpu, avg_pool2d_metal);
+test_device!(
+    avg_pool2d,
+    avg_pool2d_cpu,
+    avg_pool2d_gpu,
+    avg_pool2d_metal,
+    avg_pool2d_wgpu
+);
 test_device!(
     avg_pool2d_pytorch,
     avg_pool2d_pytorch_cpu,
     avg_pool2d_pytorch_gpu,
-    avg_pool2d_pytorch_metal
+    avg_pool2d_pytorch_metal,
+    avg_pool2d_pytorch_wgpu
 );
-test_device!(max_pool2d, max_pool2d_cpu, max_pool2d_gpu, max_pool2d_metal);
+test_device!(
+    max_pool2d,
+    max_pool2d_cpu,
+    max_pool2d_gpu,
+    max_pool2d_metal,
+    max_pool2d_wgpu
+);
 test_device!(
     upsample_nearest2d,
     upsample_nearest2d_cpu,
     upsample_nearest2d_gpu,
-    upsample_nearest2d_metal
+    upsample_nearest2d_metal,
+    upsample_nearest2d_wgpu
 );

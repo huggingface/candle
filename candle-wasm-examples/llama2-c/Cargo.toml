@@ -25,17 +25,18 @@ serde_json = { workspace = true }
 
 # Wasm specific crates.
 console_error_panic_hook = "0.1.7"
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 gloo = "0.11"
 js-sys = "0.3.64"
 wasm-bindgen = "0.2.87"
 wasm-bindgen-futures = "0.4.37"
 wasm-logger = "0.2"
+console_log = "0.1"
 yew-agent = "0.2.0"
 yew = { version = "0.20.0", features = ["csr"] }
 
 [dependencies.web-sys]
-version = "0.3.70"
+version = "0.3.74"
 features = [
   'Blob',
   'Document',
@@ -50,3 +51,7 @@ features = [
   'Response',
   'Performance',
 ]
+
+[features]
+default = []
+wgpu = ["candle/wgpu", "candle-nn/wgpu", "candle-transformers/wgpu"]

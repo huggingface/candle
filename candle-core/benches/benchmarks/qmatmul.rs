@@ -65,6 +65,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             GgmlDType::Q5K,
             GgmlDType::Q6K,
         ] {
+            if device.is_wgpu() && dtype == GgmlDType::F16{
+                continue;
+            }
             run_bench(c, &device, dtype);
         }
     }

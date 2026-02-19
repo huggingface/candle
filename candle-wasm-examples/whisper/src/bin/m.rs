@@ -10,7 +10,7 @@ pub struct Decoder {
 impl Decoder {
     #[wasm_bindgen(constructor)]
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub async fn new(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,
         mel_filters: Vec<u8>,
@@ -20,6 +20,7 @@ impl Decoder {
         timestamps: bool,
         task: Option<String>,
         language: Option<String>,
+        use_wgpu : bool
     ) -> Result<Decoder, JsError> {
         let decoder = D::load(ModelData {
             tokenizer,
@@ -31,7 +32,8 @@ impl Decoder {
             timestamps,
             task,
             language,
-        });
+            use_wgpu
+        }).await;
 
         match decoder {
             Ok(decoder) => Ok(Self { decoder }),
@@ -40,10 +42,10 @@ impl Decoder {
     }
 
     #[wasm_bindgen]
-    pub fn decode(&mut self, wav_input: Vec<u8>) -> Result<String, JsError> {
+    pub async fn decode(&mut self, wav_input: Vec<u8>) -> Result<String, JsError> {
         let segments = self
             .decoder
-            .convert_and_run(&wav_input)
+            .convert_and_run(&wav_input).await
             .map_err(|e| JsError::new(&e.to_string()))?;
         let json = serde_json::to_string(&segments)?;
         Ok(json)

@@ -16,8 +16,8 @@ async function fetchArrayBuffer(url) {
 class Bert {
   static instance = {};
 
-  static async getInstance(weightsURL, tokenizerURL, configURL, modelID) {
-    if (!this.instance[modelID]) {
+  static async getInstance(weightsURL, tokenizerURL, configURL, modelID, useWgpu) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -28,15 +28,16 @@ class Bert {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = new Model(
+      this.instance[modelID + useWgpu] = await new Model(
         weightsArrayU8,
         tokenizerArrayU8,
-        mel_filtersArrayU8
+        mel_filtersArrayU8,
+        useWgpu
       );
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });
     }
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 }
 
@@ -48,6 +49,7 @@ self.addEventListener("message", async (event) => {
     modelID,
     sentences,
     normalize = true,
+    useWgpu
   } = event.data;
   try {
     self.postMessage({ status: "ready", message: "Starting Bert Model" });
@@ -55,13 +57,14 @@ self.addEventListener("message", async (event) => {
       weightsURL,
       tokenizerURL,
       configURL,
-      modelID
+      modelID,
+      useWgpu
     );
     self.postMessage({
       status: "embedding",
       message: "Calculating Embeddings",
     });
-    const output = model.get_embeddings({
+    const output = await model.get_embeddings({
       sentences: sentences,
       normalize_embeddings: normalize,
     });

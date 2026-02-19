@@ -15,15 +15,19 @@ struct Embeddings {
 pub struct Model {
     sam: sam::Sam,
     embeddings: Option<Embeddings>,
+    device : Device
 }
 
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn new(weights: Vec<u8>, use_tiny: bool) -> Result<Model, JsError> {
+    pub async fn new(weights: Vec<u8>, use_tiny: bool, use_wgpu : bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
-        let dev = &Device::Cpu;
-        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, dev)?;
+        let device = match use_wgpu{
+            true => Device::new_wgpu_async(0).await?,
+            false => Device::Cpu,
+        };
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
         let sam = if use_tiny {
             sam::Sam::new_tiny(vb)? // tiny vit_t
         } else {
@@ -32,6 +36,7 @@ impl Model {
         Ok(Self {
             sam,
             embeddings: None,
+            device
         })
     }
 
@@ -55,12 +60,13 @@ impl Model {
         let image_t = {
             let img = image.resize_exact(width, height, image::imageops::FilterType::CatmullRom);
             let data = img.to_rgb8().into_raw();
+            #[allow(deprecated)]
             Tensor::from_vec(
                 data,
                 (img.height() as usize, img.width() as usize, 3),
                 &Device::Cpu,
             )?
-            .permute((2, 0, 1))?
+            .permute((2, 0, 1))?.to_dtype(DType::F32)?.to_device(&self.device)?
         };
         let data = self.sam.embeddings(&image_t)?;
         self.embeddings = Some(Embeddings {
@@ -73,8 +79,8 @@ impl Model {
         Ok(())
     }
 
-    pub fn mask_for_point(&self, input: JsValue) -> Result<JsValue, JsError> {
-        let input: PointsInput =
+    pub async fn mask_for_point(&self, input: JsValue) -> Result<JsValue, JsError> {
+        let input : PointsInput =
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
         let transformed_points = input.points;
 
@@ -101,9 +107,9 @@ impl Model {
             &transformed_points,
             false,
         )?;
-        let iou = iou_predictions.flatten(0, 1)?.to_vec1::<f32>()?[0];
+        let iou = iou_predictions.flatten(0, 1)?.to_vec1_async::<f32>().await?[0];
         let mask_shape = mask.dims().to_vec();
-        let mask_data = mask.ge(0f32)?.flatten_all()?.to_vec1::<u8>()?;
+        let mask_data = mask.to_device_async(&Device::Cpu).await?.ge(0f32)?.flatten_all()?.to_vec1_async::<u8>().await?;
         let mask = Mask {
             iou,
             mask_shape,

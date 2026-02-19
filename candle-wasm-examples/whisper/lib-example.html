@@ -66,6 +66,7 @@
         };
 
       const modelEl = document.querySelector("#model");
+      const useWgpuEl = document.querySelector("#useWgpu");
 
       Object.keys(MODELS).forEach((modelID) => {
         const model = MODELS[modelID];
@@ -85,7 +86,8 @@
         configURL, // model config URL
         mel_filtersURL, // URL to the mel filters file
         audioURL, // URL to the audio file
-        updateStatus // function to update the status
+        updateStatus, // function to update the status
+        useWgpu
       ) {
         return new Promise((resolve, reject) => {
           whisperWorker.postMessage({
@@ -95,6 +97,7 @@
             configURL,
             mel_filtersURL,
             audioURL,
+            useWgpu
           });
           function messageHandler(event) {
             console.log(event.data);
@@ -177,7 +180,7 @@
         const modelURL = model.base_url + model.model;
         const tokenizerURL = model.base_url + model.tokenizer;
         const configURL = model.base_url + model.config;
-
+        const useWgpu = useWgpuEl.value;
         classifyAudio(
           modelURL,
           modelID,
@@ -185,7 +188,8 @@
           configURL,
           "mel_filters.safetensors",
           audioURL,
-          updateStatus
+          updateStatus,
+          useWgpu
         )
           .then((result) => {
             console.log("RESULT", result);
@@ -246,6 +250,16 @@
           class="border-2 border-gray-500 rounded-md font-light">
         </select>
       </div>
+      <div>
+        <label for="useWgpu" class="font-medium">Use Wgpu </label>
+        <select
+          id="useWgpu"
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="true" selected>True</option>
+          <option value="false">False</option>
+        </select>
+      </div>
+      <div>
       <!-- drag and drop area -->
       <div class="relative">
         <div

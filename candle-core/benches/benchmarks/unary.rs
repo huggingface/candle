@@ -86,11 +86,15 @@ fn criterion_benchmark(c: &mut Criterion) {
                 DType::F32
             };
             let name = format!("cast_{}_{}", dtype.as_str(), to_dtype.as_str());
-            run_cast_benchmark(c, &device, dtype, to_dtype, &name);
+            if device.is_dtype_available(dtype) && device.is_dtype_available(to_dtype) {
+                run_cast_benchmark(c, &device, dtype, to_dtype, &name);
+            }
         }
         for dtype in [DType::F32, DType::BF16, DType::F16] {
             let name = format!("sqrt_{dtype:?}");
-            run_unary_benchmark(c, &device, dtype, &name);
+            if device.is_dtype_available(dtype) {
+                run_unary_benchmark(c, &device, dtype, &name);
+            }
         }
     }
 }

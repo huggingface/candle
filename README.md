@@ -208,6 +208,7 @@ If you have an addition to this list, please submit a pull request.
 - Backends.
     - Optimized CPU backend with optional MKL support for x86 and Accelerate for macs.
     - CUDA backend for efficiently running on GPUs, multiple GPU distribution via NCCL.
+    - Wgpu backend for execution on the GPU (e.g. if Cuda is not available or in the browser).
     - WASM support, run your models in a browser.
 - Included models.
     - Language Models.
@@ -285,6 +286,7 @@ Cheatsheet:
 - [candle-nn](./candle-nn/): Tools to build real models
 - [candle-examples](./candle-examples/): Examples of using the library in realistic settings
 - [candle-kernels](./candle-kernels/): CUDA custom kernels
+- [candle-wgpu-kernels](./candle-wgpu-kernels/): wgpu custom kernels
 - [candle-datasets](./candle-datasets/): Datasets and data loaders.
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.

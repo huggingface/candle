@@ -188,7 +188,8 @@
         modelSize, // size of model
         confidence, // confidence threshold
         iou_threshold, // IoU threshold
-        updateStatus // function receives status updates
+        updateStatus, // function receives status updates
+        useWgpu
       ) {
         return new Promise((resolve, reject) => {
           yoloWorker.postMessage({
@@ -198,6 +199,7 @@
             modelSize,
             confidence,
             iou_threshold,
+            useWgpu
           });
           function handleMessage(event) {
             console.log("message", event.data);
@@ -222,6 +224,7 @@
           return;
         }
         const modelID = document.querySelector("#model").value;
+        const useWgpu = document.querySelector("#useWgpu").value === 'true';
         const modelURL = MODEL_BASEURL + MODELS[modelID].url;
         const modelSize = MODELS[modelID].model_size;
         const confidence = parseFloat(
@@ -249,7 +252,8 @@
           modelSize,
           confidence,
           iou_threshold,
-          updateStatus
+          updateStatus,
+          useWgpu
         );
 
         const { output } = results;
@@ -385,6 +389,15 @@
           <option value="yolov8m_pose">yolov8m_pose (53 MB)</option>
           <option value="yolov8l_pose">yolov8l_pose (89.1 MB)</option>
           <option value="yolov8x_pose">yolov8x_pose (139 MB)</option>
+        </select>
+      </div>
+      <div>
+        <label for="useWgpu" class="font-medium">Use Wgpu </label>
+        <select
+          id="useWgpu"
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="true" selected>True</option>
+          <option value="false">False</option>
         </select>
       </div>
       <div>

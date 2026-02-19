@@ -659,6 +659,7 @@ impl Tensor {
 
     /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
     /// dimensions, an error is returned instead.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_scalar_async` for wasm support instead"))]
     pub fn to_scalar<S: crate::WithDType>(&self) -> Result<S> {
         if self.rank() != 0 {
             Err(Error::UnexpectedNumberOfDims {
@@ -676,10 +677,55 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
+    async fn tensor_from_cpu_storage_async<T>(&self, from_cpu_storage : impl Fn(&crate::CpuStorage) -> Result<T>) -> Result<T>{
+        let wgpu_storage;
+        {
+            match &*self.storage() {
+                Storage::Cpu(cpu_storage) => return from_cpu_storage(cpu_storage),
+                Storage::Cuda(storage) => return from_cpu_storage(&storage.to_cpu_storage()?),
+                Storage::Metal(storage) => return from_cpu_storage(&storage.to_cpu_storage()?),
+                Storage::Wgpu(storage) => 
+                {
+                    //https://github.com/rust-lang/rust-clippy/issues/6446
+                    //We need to return the scope here so that Clippy can detect that we are not using the MutexGuard with the await.
+                    wgpu_storage = storage.temporary_clone();
+                },
+            }
+        }
+        from_cpu_storage(&wgpu_storage.to_cpu_storage_async().await?)
+    }
+
+    /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
+    /// dimensions, an error is returned instead.
+    pub async fn to_scalar_async<S: crate::WithDType>(&self) -> Result<S> {
+        if self.rank() != 0 {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: 0,
+                got: self.rank(),
+                shape: self.shape().clone(),
+            }
+            .bt())?
+        }
+        let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
+            let data = S::cpu_storage_as_slice(cpu_storage)?;
+            Ok::<_, Error>(data[self.layout().start_offset()])
+        };
+        self.tensor_from_cpu_storage_async(from_cpu_storage).await
+    }
+
+
     /// An alias for `to_scalar`.
+    pub async fn to_vec0_async<S: crate::WithDType>(&self) -> Result<S> {
+        self.to_scalar_async::<S>().await
+    }
+
+
+    /// An alias for `to_scalar`.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_vec0_async` for wasm support instead"))]
     pub fn to_vec0<S: crate::WithDType>(&self) -> Result<S> {
         self.to_scalar::<S>()
     }
@@ -1927,6 +1973,7 @@ impl Tensor {
     }
 
     /// Returns the data contained in a 1D tensor as a vector of scalar values.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_vec1_async` for wasm support instead"))]
     pub fn to_vec1<S: crate::WithDType>(&self) -> Result<Vec<S>> {
         if self.rank() != 1 {
             Err(Error::UnexpectedNumberOfDims {
@@ -1948,10 +1995,35 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
+    /// Returns the data contained in a 1D tensor as a vector of scalar values.
+    pub async fn to_vec1_async<S: crate::WithDType>(&self) -> Result<Vec<S>> {
+        if self.rank() != 1 {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: 1,
+                got: self.rank(),
+                shape: self.shape().clone(),
+            }
+            .bt())?
+        }
+        let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
+            let data = S::cpu_storage_as_slice(cpu_storage)?;
+            let data = match self.layout.contiguous_offsets() {
+                Some((o1, o2)) => data[o1..o2].to_vec(),
+                None => self.strided_index().map(|i| data[i]).collect(),
+            };
+            Ok::<Vec<_>, Error>(data)
+        };
+
+        self.tensor_from_cpu_storage_async(from_cpu_storage).await
+    }
+
+
     /// Returns the data contained in a 2D tensor as a vector of vector of scalar values.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_vec2_async` for wasm support instead"))]
     pub fn to_vec2<S: crate::WithDType>(&self) -> Result<Vec<Vec<S>>> {
         let (dim1, dim2) = self.dims2()?;
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
@@ -1979,10 +2051,39 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
+     /// Returns the data contained in a 2D tensor as a vector of vector of scalar values.
+     pub async fn to_vec2_async<S: crate::WithDType>(&self) -> Result<Vec<Vec<S>>> {
+        let (dim1, dim2) = self.dims2()?;
+        let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
+            let data = S::cpu_storage_as_slice(cpu_storage)?;
+            let mut rows = vec![];
+            match self.layout.contiguous_offsets() {
+                Some((o1, o2)) => {
+                    let data = &data[o1..o2];
+                    for idx_row in 0..dim1 {
+                        rows.push(data[idx_row * dim2..(idx_row + 1) * dim2].to_vec())
+                    }
+                }
+                None => {
+                    let mut src_index = self.strided_index();
+                    for _idx_row in 0..dim1 {
+                        let row = (0..dim2).map(|_| data[src_index.next().unwrap()]).collect();
+                        rows.push(row)
+                    }
+                    assert!(src_index.next().is_none());
+                }
+            }
+            Ok(rows)
+        };
+        self.tensor_from_cpu_storage_async(from_cpu_storage).await
+    }
+
     /// Returns the data contained in a 3D tensor.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_vec3_async` for wasm support instead"))]
     pub fn to_vec3<S: crate::WithDType>(&self) -> Result<Vec<Vec<Vec<S>>>> {
         let (dim1, dim2, dim3) = self.dims3()?;
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
@@ -2020,7 +2121,45 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
+    }
+
+    /// Returns the data contained in a 3D tensor.
+    pub async fn to_vec3_async<S: crate::WithDType>(&self) -> Result<Vec<Vec<Vec<S>>>> {
+        let (dim1, dim2, dim3) = self.dims3()?;
+        let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
+            let data = S::cpu_storage_as_slice(cpu_storage)?;
+            let mut top_rows = vec![];
+            match self.layout.contiguous_offsets() {
+                Some((o1, o2)) => {
+                    let data = &data[o1..o2];
+                    let dim23 = dim2 * dim3;
+                    for idx1 in 0..dim1 {
+                        let data = &data[idx1 * dim23..(idx1 + 1) * dim23];
+                        let mut rows = vec![];
+                        for idx2 in 0..dim2 {
+                            rows.push(data[idx2 * dim3..(idx2 + 1) * dim3].to_vec())
+                        }
+                        top_rows.push(rows);
+                    }
+                }
+                None => {
+                    let mut src_index = self.strided_index();
+                    for _idx in 0..dim1 {
+                        let mut rows = vec![];
+                        for _jdx in 0..dim2 {
+                            let row = (0..dim3).map(|_| data[src_index.next().unwrap()]).collect();
+                            rows.push(row)
+                        }
+                        top_rows.push(rows);
+                    }
+                    assert!(src_index.next().is_none());
+                }
+            }
+            Ok(top_rows)
+        };
+        self.tensor_from_cpu_storage_async(from_cpu_storage).await
     }
 
     /// The dtype for the elements stored in the input tensor.
@@ -2365,6 +2504,7 @@ impl Tensor {
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_device_async` for wasm support instead"))]
     pub fn to_device(&self, device: &Device) -> Result<Tensor> {
         if self.device().same_device(device) {
             Ok(self.clone())
@@ -2376,6 +2516,9 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Metal(metal)) => {
                     Storage::Metal(metal.storage_from_cpu_storage(storage)?)
                 }
+                (Storage::Cpu(storage), Device::Wgpu(wgpu)) => {
+                    Storage::Wgpu(wgpu.storage_from_cpu_storage(storage)?)
+                }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
@@ -2384,6 +2527,7 @@ impl Tensor {
                     Storage::Cuda(dst_storage)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
+                (Storage::Wgpu(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 _ => {
                     bail!(
                         "not implemented yet, self.device: {:?}, device: {:?}",
@@ -2403,6 +2547,71 @@ impl Tensor {
                 device: device.clone(),
             };
             Ok(Tensor(Arc::new(tensor_)))
+        }
+    }
+
+     /// If the target device is the same as the tensor device, only a shallow copy is performed.
+     /// This Function is only needed for wgpu -> Cpu, in all other cases one can use the sync version.
+     pub async fn to_device_async(&self, device: &Device) -> Result<Tensor> {
+        if self.device().same_device(device) {
+            Ok(self.clone())
+        } else {
+            
+            let to_device_helper = |storage| {
+                let op = BackpropOp::new1(self, Op::ToDevice);
+                let tensor_ = Tensor_ {
+                    id: TensorId::new(),
+                    storage: Arc::new(RwLock::new(storage)),
+                    layout: self.layout.clone(),
+                    op,
+                    is_variable: false,
+                    dtype: self.dtype,
+                    device: device.clone(),
+                };
+                Ok(Tensor(Arc::new(tensor_)))
+            };
+            
+            let wgpu_storage;
+            {
+                let storage_guard = self.storage();
+                match (&*storage_guard, device) {
+                    (Storage::Cpu(storage), Device::Cuda(cuda)) => {
+                        return to_device_helper(Storage::Cuda(cuda.storage_from_cpu_storage(storage)?));
+                    }
+                    (Storage::Cpu(storage), Device::Metal(metal)) => {
+                        return to_device_helper(Storage::Metal(metal.storage_from_cpu_storage(storage)?));
+                    }
+                    (Storage::Cpu(storage), Device::Wgpu(wgpu)) => {
+                        return to_device_helper(Storage::Wgpu(wgpu.storage_from_cpu_storage(storage)?));
+                    }
+                    (Storage::Cuda(storage), Device::Cpu) => {return to_device_helper(Storage::Cpu(storage.to_cpu_storage()?));},
+                    (Storage::Metal(storage), Device::Cpu) => {return to_device_helper(Storage::Cpu(storage.to_cpu_storage()?));},
+                    (Storage::Cuda(storage), Device::Cuda(cuda)) => {
+                        // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
+                        // are the same.
+                        let cpu_storage = storage.to_cpu_storage()?;
+                        return to_device_helper(Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?));
+                    }
+                    (Storage::Cpu(storage), Device::Cpu) => {return to_device_helper(Storage::Cpu(storage.clone()));},
+                    (Storage::Wgpu(storage), Device::Cpu) => {
+                        wgpu_storage = Some(storage.temporary_clone());
+                    },
+                    _ => {
+                        bail!(
+                            "not implemented yet, self.device: {:?}, device: {:?}",
+                            self.device(),
+                            device
+                        )
+                    }
+                };
+            }
+            
+            if let Some(wgpu_storage) = wgpu_storage{
+                to_device_helper(Storage::Cpu(wgpu_storage.to_cpu_storage_async().await?))
+            }
+            else{
+                unreachable!()
+            }
         }
     }
 

@@ -2,6 +2,7 @@ use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use candle_wasm_example_llama2::worker::{Model as M, ModelData};
 use wasm_bindgen::prelude::*;
+extern crate console_error_panic_hook;
 
 #[wasm_bindgen]
 pub struct Model {
@@ -9,27 +10,30 @@ pub struct Model {
     logits_processor: LogitsProcessor,
     tokens: Vec<u32>,
     repeat_penalty: f32,
+    device : Device
 }
 
 impl Model {
-    fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
+    async fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
         const REPEAT_LAST_N: usize = 64;
-        let dev = Device::Cpu;
-        let input = Tensor::new(tokens, &dev)?.unsqueeze(0)?;
-        let logits = self.inner.llama.forward(&input, tokens.len())?;
+        let input = Tensor::new(tokens, &self.device)?.unsqueeze(0)?;
+        
+        let logits = self.inner.llama.forward(&input, tokens.len()).await?;
+        
         let logits = logits.squeeze(0)?;
         let logits = if self.repeat_penalty == 1. || tokens.is_empty() {
             logits
         } else {
             let start_at = self.tokens.len().saturating_sub(REPEAT_LAST_N);
-            candle_transformers::utils::apply_repeat_penalty(
+            candle_transformers::utils::apply_repeat_penalty_async(
                 &logits,
                 self.repeat_penalty,
                 &self.tokens[start_at..],
-            )?
+            ).await?
         };
+      
 
-        let next_token = self.logits_processor.sample(&logits)?;
+        let next_token = self.logits_processor.sample_async(&logits).await?;
         self.tokens.push(next_token);
         let text = match self.inner.tokenizer.id_to_token(next_token) {
             Some(text) => text.replace('▁', " ").replace("<0x0A>", "\n"),
@@ -42,20 +46,37 @@ impl Model {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn new(weights: Vec<u8>, tokenizer: Vec<u8>) -> Result<Model, JsError> {
+    pub async fn new(weights: Vec<u8>, tokenizer: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
+        log::info!("create Model, wgpu: {use_wgpu}");
+        let device = match use_wgpu{
+            true => Device::new_wgpu_async(0).await?,
+            false => Device::Cpu,
+        };
+
+        log::info!("created wgpu device");
+
         let model = M::load(ModelData {
             tokenizer,
             model: weights,
-        });
+        }, &device).await;
+        log::info!("Model Loaded:");
         let logits_processor = LogitsProcessor::new(299792458, None, None);
+        
+        log::info!("created logits processor");
+
+       
+       
         match model {
             Ok(inner) => Ok(Self {
                 inner,
                 logits_processor,
                 tokens: vec![],
                 repeat_penalty: 1.,
+                device
             }),
-            Err(e) => Err(JsError::new(&e.to_string())),
+            Err(e) => {
+                log::error!("Error at model: {:?}", e);
+                Err(JsError::new(&e.to_string()))},
         }
     }
 
@@ -65,7 +86,7 @@ impl Model {
     }
 
     #[wasm_bindgen]
-    pub fn init_with_prompt(
+    pub async fn init_with_prompt(
         &mut self,
         prompt: String,
         temp: f64,
@@ -97,19 +118,22 @@ impl Model {
             .get_ids()
             .to_vec();
         let text = self
-            .process(&tokens)
+            .process(&tokens).await
             .map_err(|m| JsError::new(&m.to_string()))?;
         Ok(text)
     }
 
     #[wasm_bindgen]
-    pub fn next_token(&mut self) -> Result<String, JsError> {
+    pub async fn next_token(&mut self) -> Result<String, JsError> {
         let last_token = *self.tokens.last().unwrap();
         let text = self
-            .process(&[last_token])
+            .process(&[last_token]).await
             .map_err(|m| JsError::new(&m.to_string()))?;
         Ok(text)
     }
 }
 
-fn main() {}
+fn main() {
+    console_error_panic_hook::set_once();
+    console_log::init().expect("could not initialize logger");
+}

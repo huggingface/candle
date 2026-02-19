@@ -9,6 +9,7 @@ pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
     Metal { gpu_id: usize },
+    Wgpu { gpu_id: usize },
 }
 
 /// Cpu, Cuda, or Metal
@@ -17,6 +18,7 @@ pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
     Metal(crate::MetalDevice),
+    Wgpu(crate::WgpuDevice)
 }
 
 pub trait NdArray {
@@ -240,6 +242,7 @@ impl Device {
             Self::Cuda(d) => Ok(d),
             Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
             Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
+            Self::Wgpu(_) => crate::bail!("expected a cuda device, got Wgpu"),
         }
     }
 
@@ -248,6 +251,16 @@ impl Device {
             Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
             Self::Cpu => crate::bail!("expected a metal device, got cpu"),
             Self::Metal(d) => Ok(d),
+            Self::Wgpu(_) => crate::bail!("expected a metal device, got Wgpu"),
+        }
+    }
+
+    pub fn as_wgpu_device(&self) -> Result<&crate::WgpuDevice> {
+        match self {
+            Self::Cuda(_) => crate::bail!("expected a wgpu device, got cuda"),
+            Self::Cpu => crate::bail!("expected a wgpu device, got cpu"),
+            Self::Metal(_) => crate::bail!("expected a wgpu device, got metal"),
+            Self::Wgpu(d) => Ok(d),
         }
     }
 
@@ -259,11 +272,44 @@ impl Device {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
 
+    pub async fn new_wgpu_async(ordinal: usize) -> Result<Self> {
+        Ok(Self::Wgpu(crate::WgpuDevice::create(ordinal, crate::WgpuDeviceConfig::default()).await?))
+    }
+
+    pub async fn new_wgpu_config_async(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
+        Ok(Self::Wgpu(crate::WgpuDevice::create(ordinal, configuration).await?))
+    }
+
+    ///creates a new wgpu device synchronously. 
+    ///If you are targeting wasm32, use the async functions to create a new device.
+    #[cfg(all(feature="wgpu", not(target_arch = "wasm32")))]
+    pub fn new_wgpu(ordinal: usize) -> Result<Self> {
+        pollster::block_on(Device::new_wgpu_async(ordinal))
+    }
+
+    ///creates a new wgpu device synchronously. 
+    ///If you are targeting wasm32, use the async functions to create a new device.
+    #[cfg(all(feature="wgpu", not(target_arch = "wasm32")))]
+    pub fn new_wgpu_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
+        pollster::block_on(Device::new_wgpu_config_async(ordinal, configuration))
+    }
+
+    #[cfg(not(feature="wgpu"))]
+    pub fn new_wgpu(_: usize) -> Result<Self> {
+        Err(crate::Error::NotCompiledWithWgpuSupport)
+    }
+
+    #[cfg(not(feature="wgpu"))]
+    pub fn new_wgpu_config(_: usize, _ : crate::WgpuDeviceConfig) -> Result<Self> {
+        Err(crate::Error::NotCompiledWithWgpuSupport)
+    }
+
     pub fn set_seed(&self, seed: u64) -> Result<()> {
         match self {
             Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),
             Self::Metal(m) => m.set_seed(seed),
+            Self::Wgpu(m) => m.set_seed(seed),
         }
     }
 
@@ -272,6 +318,7 @@ impl Device {
             Self::Cpu => CpuDevice.get_current_seed(),
             Self::Cuda(c) => c.get_current_seed(),
             Self::Metal(m) => m.get_current_seed(),
+            Self::Wgpu(w) => w.get_current_seed(),
         }
     }
 
@@ -280,6 +327,7 @@ impl Device {
             (Self::Cpu, Self::Cpu) => true,
             (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
             (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
+            (Self::Wgpu(lhs), Self::Wgpu(rhs)) => lhs.same_device(rhs),
             _ => false,
         }
     }
@@ -289,6 +337,7 @@ impl Device {
             Self::Cpu => DeviceLocation::Cpu,
             Self::Cuda(device) => device.location(),
             Device::Metal(device) => device.location(),
+            Self::Wgpu(device) => device.location(),
         }
     }
 
@@ -304,10 +353,28 @@ impl Device {
         matches!(self, Self::Metal(_))
     }
 
+    pub fn is_wgpu(&self) -> bool {
+        matches!(self, Self::Wgpu(_))
+    }
+
+    pub fn is_dtype_available(&self, dtype: DType) -> bool{
+        match (self, dtype) {
+            (Device::Cpu, _) => true,
+            (Device::Cuda(_), _) => true,
+            (Device::Metal(_), _) => true,
+            (Device::Wgpu(_dev), _dtype) => {
+                #[cfg(feature="wgpu")]
+                return _dev.is_dtype_available(_dtype);
+                #[cfg(not(feature="wgpu"))]
+                return false;
+            }, 
+        }
+    }
+
     pub fn supports_bf16(&self) -> bool {
         match self {
             Self::Cuda(_) | Self::Metal(_) => true,
-            Self::Cpu => false,
+            Self::Cpu | Self::Wgpu(_)=> false,
         }
     }
 
@@ -362,6 +429,10 @@ impl Device {
                 let storage = device.rand_uniform(shape, dtype, lo, up)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Wgpu(device) => {
+                let storage = device.rand_uniform(shape, dtype, lo, up)?;
+                Ok(Storage::Wgpu(storage))
+            }
         }
     }
 
@@ -400,6 +471,10 @@ impl Device {
                 let storage = device.rand_normal(shape, dtype, mean, std)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Wgpu(device) => {
+                let storage = device.rand_normal(shape, dtype, mean, std)?;
+                Ok(Storage::Wgpu(storage))
+            }
         }
     }
 
@@ -426,6 +501,10 @@ impl Device {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Wgpu(device) => {
+                let storage = device.zeros_impl(shape, dtype)?;
+                Ok(Storage::Wgpu(storage))
+            }
         }
     }
 
@@ -443,6 +522,10 @@ impl Device {
                 let storage = device.alloc_uninit(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Wgpu(device) => {
+                let storage = device.alloc_uninit(shape, dtype)?;
+                Ok(Storage::Wgpu(storage))
+            }
         }
     }
 
@@ -456,6 +539,10 @@ impl Device {
             Device::Metal(device) => {
                 let storage = device.storage_from_slice(data)?;
                 Ok(Storage::Metal(storage))
+            }
+            Device::Wgpu(device) => {
+                let storage = device.storage_from_slice(data)?;
+                Ok(Storage::Wgpu(storage))
             }
         }
     }
@@ -473,6 +560,11 @@ impl Device {
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Wgpu(device) => {
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Wgpu(storage))
+            }
         }
     }
 
@@ -489,6 +581,11 @@ impl Device {
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Wgpu(device) => {
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Wgpu(storage))
+            }
         }
     }
 
@@ -497,6 +594,16 @@ impl Device {
             Self::Cpu => Ok(()),
             Self::Cuda(d) => d.synchronize(),
             Self::Metal(d) => d.synchronize(),
+            Self::Wgpu(d) => d.synchronize(),
+        }
+    }
+
+    pub async fn synchronize_async(&self) -> Result<()> {
+        match self {
+            Self::Cpu => Ok(()),
+            Self::Cuda(d) => d.synchronize(),
+            Self::Metal(d) => d.synchronize(),
+            Self::Wgpu(d) => d.synchronize_async().await,
         }
     }
 }

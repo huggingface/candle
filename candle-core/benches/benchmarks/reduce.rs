@@ -17,20 +17,36 @@ fn criterion_benchmark(c: &mut Criterion) {
     let (lo, up) = (-1000.0f32, 1000.0f32);
     for device in handler.devices {
         run_reduce(c, &device, (lo, up), false);
-        run_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), false);
-        run_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), false);
+        if device.is_dtype_available(DType::F16){
+            run_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), false);
+        }
+        if device.is_dtype_available(DType::BF16){
+            run_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), false);
+        }
 
         run_arg_reduce(c, &device, (lo, up), false);
-        run_arg_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), false);
-        run_arg_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), false);
+        if device.is_dtype_available(DType::F16){
+            run_arg_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), false);
+        }
+        if device.is_dtype_available(DType::BF16){
+            run_arg_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), false);
+        }
 
         run_reduce(c, &device, (lo, up), true);
-        run_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), true);
-        run_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), true);
+        if device.is_dtype_available(DType::F16){
+            run_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), true);
+        }
+        if device.is_dtype_available(DType::BF16){
+            run_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), true);
+        }
 
         run_arg_reduce(c, &device, (lo, up), true);
-        run_arg_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), true);
-        run_arg_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), true);
+        if device.is_dtype_available(DType::F16){
+            run_arg_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), true);
+        }
+        if device.is_dtype_available(DType::BF16){
+            run_arg_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)), true);
+        }
     }
 }
 

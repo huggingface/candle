@@ -18,7 +18,7 @@ default = []
 [dependencies]
 candle = { workspace = true }
 candle-nn = { workspace = true }
-candle-transformers = { workspace = true} #, features = ["simd-flash-attn"] }
+candle-transformers = { workspace = true }                      #, features = ["simd-flash-attn"] }
 tokenizers = { workspace = true, features = ["unstable_wasm"] }
 num-traits = { workspace = true }
 
@@ -28,7 +28,9 @@ candle-wasm-chat-template = { path = "../chat-template", version = "0.1.0" }
 # App crates.
 anyhow = { workspace = true }
 byteorder = { workspace = true }
-getrandom = { version = "0.3", features = ["wasm_js"], default-features = false }
+getrandom = { version = "0.3", features = [
+    "wasm_js",
+], default-features = false }
 image = { workspace = true }
 log = { workspace = true }
 safetensors = { workspace = true }
@@ -42,4 +44,8 @@ libc = "0.2"
 console_error_panic_hook = "0.1.7"
 wasm-bindgen = "0.2.87"
 js-sys = "0.3.64"
-web-sys = { version = "0.3.70", features = ["console", "Window", "Performance"] }
+web-sys = { version = "0.3.70", features = [
+    "console",
+    "Window",
+    "Performance",
+] }
