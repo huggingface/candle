@@ -1173,13 +1173,30 @@ fn simple_eval_(
                 let mode = get_attr_opt(node, "mode")?.unwrap_or("constant");
                 let data = get(&node.input[0])?;
                 let pads = get(&node.input[1])?;
-                if node.input.len() > 2 {
+                if node.input.len() > 3 {
                     bail!(
-                        "unsupported number of inputs {} for Pad node {:?}, expected 2",
+                        "unsupported number of inputs {} for Pad node {:?}, expected 2 or 3",
                         node.input.len(),
                         node.name
                     );
                 }
+                let constant_value = if node.input.len() == 3 {
+                    let constant = get(&node.input[2])?;
+                    let v = match constant.dtype() {
+                        DType::F32 => to_scalar_flexible::<f32>(constant)? as f64,
+                        DType::F64 => to_scalar_flexible::<f64>(constant)?,
+                        DType::I64 => to_scalar_flexible::<i64>(constant)? as f64,
+                        DType::I32 => to_scalar_flexible::<i32>(constant)? as f64,
+                        DType::U8 => to_scalar_flexible::<u8>(constant)? as f64,
+                        dt => bail!(
+                            "Pad constant mode got unsupported constant dtype {dt:?} in {:?}",
+                            node.name
+                        ),
+                    };
+                    Some(v)
+                } else {
+                    None
+                };
                 if pads.rank() != 1 {
                     bail!("Pad expects 'pads' input to be 1D vector: {pads:?}");
                 }
@@ -1191,6 +1208,30 @@ fn simple_eval_(
                 let (pads_pre, pads_post) = pads.split_at(pads.len() / 2);
 
                 match mode {
+                    "constant" => {
+                        let constant_value = constant_value.unwrap_or(0.0);
+                        if constant_value != 0.0 {
+                            bail!(
+                                "Pad constant mode currently supports only zero value, got {constant_value} for {:?}",
+                                node.name
+                            );
+                        }
+                        let mut out = data.clone();
+                        for (i, (&pre, &post)) in pads_pre.iter().zip(pads_post.iter()).enumerate()
+                        {
+                            if pre < 0 || post < 0 {
+                                bail!(
+                                    "Pad constant mode does not support negative padding in {:?}",
+                                    node.name
+                                );
+                            }
+                            if pre == 0 && post == 0 {
+                                continue;
+                            }
+                            out = out.pad_with_zeros(i, pre as usize, post as usize)?;
+                        }
+                        values.insert(node.output[0].clone(), out);
+                    }
                     "reflect" => {
                         let mut out = data.clone();
                         for (i, &dim) in data.dims().iter().enumerate().rev() {
