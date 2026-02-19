@@ -86,6 +86,8 @@ const CUTLASS_COMMIT: &str = "4c42f73fdab5787e3bb57717f35a8cb1b3c0dc6d";
 fn main() -> Result<()> {
     // Telling Cargo that if any of these files changes, rebuild.
     println!("cargo:rerun-if-changed=build.rs");
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let is_target_msvc = target.contains("msvc");
     println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
     println!("cargo:rerun-if-env-changed=CANDLE_NVCC_CCBIN");
 
@@ -142,6 +144,10 @@ fn main() -> Result<()> {
         .arg("--verbose")
         .thread_percentage(0.5); // Use up to 50% of available threads
 
+    if !is_target_msvc {
+        builder = builder.arg("-Xcompiler").arg("-fPIC");
+    }
+
     let compute_cap = builder.get_compute_cap().unwrap_or(80);
     assert!(compute_cap >= 90, "Compute capability must be >=90 (90a)");
 
@@ -159,7 +165,9 @@ fn main() -> Result<()> {
 
     // Link required system libs
     println!("cargo:rustc-link-lib=dylib=cudart");
-    println!("cargo:rustc-link-lib=dylib=stdc++");
+    if !is_target_msvc {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
 
     Ok(())
 }
