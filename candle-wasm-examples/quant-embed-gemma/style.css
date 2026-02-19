@@ -1,0 +1,176 @@
+/* style.css - lightweight, CDN-free styling inspired by the BERT demo */
+
+:root {
+    --text: #111827;         /* gray-900 */
+    --muted: #6b7280;        /* gray-500 */
+    --border: #374151;       /* gray-700 */
+    --border2: #6b7280;      /* gray-500 */
+    --panel: #f1f5f9;        /* slate-100 */
+    --btn: #374151;          /* gray-700 */
+    --btnHover: #1f2937;     /* gray-800 */
+    --disabled: #d1d5db;     /* gray-300 */
+    --linkHover: #2563eb;    /* blue-600 */
+  }
+  
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #fff;
+    color: var(--text);
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  }
+  
+  .container {
+    max-width: 980px; /* ~tailwind max-w-4xl */
+    margin: 0 auto;
+    padding: 16px;
+  }
+  
+  main {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+    position: relative;
+  }
+  
+  .candle {
+    position: absolute;
+    font-size: 48px;
+    left: -40px;
+    top: 0;
+  }
+  
+  h1 { font-size: 48px; font-weight: 800; margin: 0 0 6px; }
+  h2 { font-size: 24px; font-weight: 700; margin: 0 0 14px; }
+  h3 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+  
+  p { max-width: 560px; line-height: 1.45; margin: 0; }
+  
+  a { text-decoration: underline; color: inherit; }
+  a:hover { text-decoration: none; color: var(--linkHover); }
+  
+  .label {
+    font-weight: 600;
+    display: block;
+    margin-bottom: 6px;
+  }
+  
+  select {
+    border: 2px solid var(--border2);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-weight: 300;
+    width: max-content;
+    max-width: 100%;
+  }
+  
+  .row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  
+  .examples-form {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 12px;
+  }
+  
+  .small-btn {
+    background: transparent;
+    border: 1px solid var(--disabled);
+    border-radius: 6px;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  
+  .search-form {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px;
+    gap: 8px;
+  }
+  
+  .search-input {
+    font-weight: 300;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    outline: none;
+  }
+  
+  .btn {
+    background: var(--btn);
+    color: white;
+    border: 0;
+    border-radius: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+    font-weight: 500;
+    min-width: 64px;
+  }
+  
+  .btn:hover { background: var(--btnHover); }
+  button:disabled, select:disabled, input:disabled, textarea:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+  }
+  
+  .status {
+    font-size: 12px;
+    font-weight: 300;
+  }
+  
+  .invisible { visibility: hidden; }
+  
+  .panel {
+    min-height: 250px;
+    background: var(--panel);
+    color: var(--muted);
+    border-radius: 10px;
+    padding: 20px;
+    position: relative;
+  }
+  
+  #input-area {
+    position: absolute;
+    inset: 20px;
+    width: calc(100% - 40px);
+    height: calc(100% - 40px);
+    resize: none;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+  }
+
+  #output-area {
+    color: #374151;              /* softer text (gray-700) */
+    max-width: 680px;            /* limit line length */
+    line-height: 1.6;            /* more breathing room */
+    font-size: 15px;
+  
+    white-space: pre-wrap;       /* preserve paragraph breaks */
+    overflow-wrap: anywhere;     /* prevent overflow */
+  
+    margin: 0 auto;              /* center in panel */
+  }
+  
+  /* nicer paragraph spacing when wiki loads multi-paragraph text */
+  #output-area span {
+    display: inline-block;
+    margin-bottom: 6px;
+  }
+
+  /* when editing, hide the rendered spans so text doesn't overlay */
+  .editing #output-area {
+    visibility: hidden;
+  }
+  
+  
