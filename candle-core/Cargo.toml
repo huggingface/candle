@@ -17,7 +17,7 @@ candle-metal-kernels = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
-gemm = { workspace = true }
+qlora-gemm = { workspace = true }
 half = { workspace = true }
 float8 = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
