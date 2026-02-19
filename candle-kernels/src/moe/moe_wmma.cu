@@ -9,7 +9,7 @@
  *  performs matrix multiplication using Tensor Cores (WMMA), and accumulates results
  *  into a shared C tile. The final results are written atomically into the global
  *  output buffer to support multi-expert (top-k > 1) routing where tokens appear in
- *  multiple experts’ outputs.
+ *  multiple experts' outputs.
  *
  *  Adapted from https://github.com/guoqingbao/attention.rs/tree/main/src/kernels/src/moe_gemm_wmma.cu
  */
@@ -19,7 +19,6 @@
 #include <mma.h>
 #include <cstdio>
 #include <cstdint>
-#include <vector>
 #include <cassert>
 #include <cstring>
 #include "moe_utils.cuh"
@@ -63,7 +62,7 @@ constexpr int K_BLK = WMMA_K;           // 16
  *  @param size_k           Input hidden dimension
 */
 template<typename T, int WMMA_M, int WMMA_N, int WARPS_N>
-__global__ void moe_gemm_grouped_kernel(
+__device__ void moe_gemm_grouped_impl(
     const T* __restrict__ input,           // [size_m, size_k]
     const T* __restrict__ weights,         // [num_experts, size_n, size_k]
     const int32_t* __restrict__ sorted_token_ids, // [size_m]
@@ -91,7 +90,7 @@ __global__ void moe_gemm_grouped_kernel(
     const T* expert_w = weights + (size_t)expert_id * (size_t)size_n * (size_t)size_k;
 
     extern __shared__ uint8_t smem_bytes[];
-    
+
     // A tile: [M_BLK, K_BLK] (row-major)
     T* A_sh = reinterpret_cast<T*>(smem_bytes);
     // B tile: [N_BLK, K_BLK] (row-major)
@@ -117,7 +116,7 @@ __global__ void moe_gemm_grouped_kernel(
     const int VEC_ELEMS_A = A_ELEMS_PER_BLOCK / VEC_SIZE; // 512 / 8 = 64
     VecT zero_vec;
     zero_vec.x = zero_vec.y = zero_vec.z = zero_vec.w = 0.0f;
-    
+
     for (int m_base = 0; m_base < num_rows_in_segment; m_base += M_BLK) {
         // We'll accumulate full-K results in per-warp fragments (initialized here)
         fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag;
@@ -154,7 +153,7 @@ __global__ void moe_gemm_grouped_kernel(
                 int k_global = k_base + k_local;
 
                 if (m_seg < num_rows_in_segment && k_global < size_k) {
-                    int token_pair_index = segment_start + m_seg; 
+                    int token_pair_index = segment_start + m_seg;
                     int token_index = sorted_token_ids[token_pair_index];
                     int input_index = token_index / (topk_weights? 1: topk);
                     *reinterpret_cast<VecT*>(&A_sh[m_local * K_BLK + k_local]) = *reinterpret_cast<const VecT*>(
@@ -206,7 +205,7 @@ __global__ void moe_gemm_grouped_kernel(
                 int token_pair_index = segment_start + m_seg;
                 if (token_pair_index < size_m) {
                     int token_index = sorted_token_ids[token_pair_index];
-                    float val = C_sh[m_local_c * N_BLK + n_local_c]; 
+                    float val = C_sh[m_local_c * N_BLK + n_local_c];
                     if (topk_weights) {
                         val *= topk_weights[token_index];
                     }
@@ -217,71 +216,78 @@ __global__ void moe_gemm_grouped_kernel(
     } // end m_base loop
 }
 
-}
+} // namespace vllm_rs
 
-#define LAUNCH_MOE_WMMA(DTYPE, WMMA_M, WMMA_N, WARPS_N)\
-    vllm_rs::moe_gemm_grouped_kernel<DTYPE, WMMA_M, WMMA_N, WARPS_N><<<grid, block, smem_bytes, stream>>>(\
-        reinterpret_cast<const DTYPE*>(input),\
-        reinterpret_cast<const DTYPE*>(weights),\
-        sorted_token_ids,\
-        expert_offsets,\
-        topk_weights,\
-        reinterpret_cast<DTYPE*>(output),\
-        num_experts, topk,\
-        size_m, size_n, size_k \
-    );\
+// ============================================================================
+// extern "C" __global__ wrappers for PTX compilation
+// ============================================================================
 
-extern "C" void moe_gemm_wmma(
-    const void* input,                // [size_m, size_k]
-    const void* weights,              // [num_experts, size_n, size_k]
-    const int32_t* sorted_token_ids,  // [size_m] (Device)
-    const int32_t* expert_ids,   // [size_m * topk]
-    const float* topk_weights,        // [size_m] (Device, can be nullptr)
-    void* output,                     // [size_m, size_n]
-    int32_t* expert_counts, // prealloc [num_experts]
-    int32_t* expert_offsets, // prealloc [num_experts + 1]
-    int num_experts,
-    int topk,
-    int size_m,
-    int size_n,
-    int size_k,
-    int data_type,                    // 0 = half, 1 = bfloat16
-    bool is_prefill,
-    cudaStream_t stream
+// --- half, prefill (WMMA_M=16, WMMA_N=16, WARPS_N=2) ---
+extern "C" __global__ void moe_gemm_grouped_f16_prefill(
+    const half* __restrict__ input,
+    const half* __restrict__ weights,
+    const int32_t* __restrict__ sorted_token_ids,
+    const int32_t* __restrict__ expert_offsets,
+    const float* __restrict__ topk_weights,
+    half* __restrict__ output,
+    const int num_experts, const int topk,
+    const int32_t size_m, const int32_t size_n, const int32_t size_k
 ) {
-    if (is_prefill) {
-        calculate_expert_offsets(expert_ids, size_m, expert_counts, expert_offsets, num_experts, stream);
-    } else {
-        calculate_expert_offsets_light(expert_ids, size_m, expert_counts, expert_offsets, num_experts, stream);
-    }
-
-    int grid_n = CEILDIV(size_n, vllm_rs::N_BLK);
-    dim3 grid(num_experts, grid_n, 1);
-    dim3 block(vllm_rs::BLOCK_THREADS, 1, 1);
-
-    // Shared memory: A_sh[M_BLK, K_BLK] + B_sh[N_BLK, K_BLK]
-    size_t A_sh_bytes = vllm_rs::M_BLK * vllm_rs::K_BLK * 2; // (32*16 * 2) = 1024
-    size_t B_sh_bytes = vllm_rs::N_BLK * vllm_rs::K_BLK * 2; // (32*16 * 2) = 1024
-    size_t C_sh_bytes = vllm_rs::M_BLK * vllm_rs::N_BLK * sizeof(float);
-    size_t AB_bytes = A_sh_bytes + B_sh_bytes;
-    size_t pad = (16 - (AB_bytes % 16)) % 16; 
-    size_t smem_bytes = AB_bytes + pad + C_sh_bytes; // ~6KB total needed
-
-    if (data_type == 0) { // half
-        if (is_prefill) {
-            LAUNCH_MOE_WMMA(half, 16, 16, 2)
-        } else {
-            // we use smaller M_tile and larger N_tile for decoding
-            LAUNCH_MOE_WMMA(half, 8, 32, 1)
-        }
-    }
-#ifndef NO_BF16_KERNEL
-    else if (data_type == 1) { // bfloat16
-        if (is_prefill) {
-            LAUNCH_MOE_WMMA(nv_bfloat16, 16, 16, 2)
-        } else {
-            LAUNCH_MOE_WMMA(nv_bfloat16, 8, 32, 1)
-        }
-    }
-#endif
+    vllm_rs::moe_gemm_grouped_impl<half, 16, 16, 2>(
+        input, weights, sorted_token_ids, expert_offsets, topk_weights,
+        output, num_experts, topk, size_m, size_n, size_k
+    );
 }
+
+// --- half, decode (WMMA_M=8, WMMA_N=32, WARPS_N=1) ---
+extern "C" __global__ void moe_gemm_grouped_f16_decode(
+    const half* __restrict__ input,
+    const half* __restrict__ weights,
+    const int32_t* __restrict__ sorted_token_ids,
+    const int32_t* __restrict__ expert_offsets,
+    const float* __restrict__ topk_weights,
+    half* __restrict__ output,
+    const int num_experts, const int topk,
+    const int32_t size_m, const int32_t size_n, const int32_t size_k
+) {
+    vllm_rs::moe_gemm_grouped_impl<half, 8, 32, 1>(
+        input, weights, sorted_token_ids, expert_offsets, topk_weights,
+        output, num_experts, topk, size_m, size_n, size_k
+    );
+}
+
+#ifndef NO_BF16_KERNEL
+// --- bfloat16, prefill (WMMA_M=16, WMMA_N=16, WARPS_N=2) ---
+extern "C" __global__ void moe_gemm_grouped_bf16_prefill(
+    const nv_bfloat16* __restrict__ input,
+    const nv_bfloat16* __restrict__ weights,
+    const int32_t* __restrict__ sorted_token_ids,
+    const int32_t* __restrict__ expert_offsets,
+    const float* __restrict__ topk_weights,
+    nv_bfloat16* __restrict__ output,
+    const int num_experts, const int topk,
+    const int32_t size_m, const int32_t size_n, const int32_t size_k
+) {
+    vllm_rs::moe_gemm_grouped_impl<nv_bfloat16, 16, 16, 2>(
+        input, weights, sorted_token_ids, expert_offsets, topk_weights,
+        output, num_experts, topk, size_m, size_n, size_k
+    );
+}
+
+// --- bfloat16, decode (WMMA_M=8, WMMA_N=32, WARPS_N=1) ---
+extern "C" __global__ void moe_gemm_grouped_bf16_decode(
+    const nv_bfloat16* __restrict__ input,
+    const nv_bfloat16* __restrict__ weights,
+    const int32_t* __restrict__ sorted_token_ids,
+    const int32_t* __restrict__ expert_offsets,
+    const float* __restrict__ topk_weights,
+    nv_bfloat16* __restrict__ output,
+    const int num_experts, const int topk,
+    const int32_t size_m, const int32_t size_n, const int32_t size_k
+) {
+    vllm_rs::moe_gemm_grouped_impl<nv_bfloat16, 8, 32, 1>(
+        input, weights, sorted_token_ids, expert_offsets, topk_weights,
+        output, num_experts, topk, size_m, size_n, size_k
+    );
+}
+#endif

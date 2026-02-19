@@ -16,7 +16,6 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include <mma.h>
-#include <vector>
 #include <cassert>
 #include <cstring>
 #include "moe_utils.cuh"
@@ -122,7 +121,7 @@ __forceinline__ __device__ void dequantize_block_warp(
  * @param gguf_dtype        GGUF quantization type ID (e.g., Q8_0)
 */
 template<typename T, int qk, typename block_q_t, int wrap_size>
-__global__ void moe_gemm_gguf_prefill_kernel(
+__device__ void moe_gemm_gguf_prefill_impl(
     const T* __restrict__ input,
     const uint8_t* __restrict__ weights, // Now uint8_t*
     const int32_t* __restrict__ sorted_token_ids,
@@ -145,7 +144,7 @@ __global__ void moe_gemm_gguf_prefill_kernel(
 
     if (num_rows_in_segment == 0) return;
     constexpr int BLOCK_THREADS = WARPS_PER_BLOCK * wrap_size; // 128 threads
-    
+
     const int n_base = n_tile_idx * N_BLK;
     if (n_base >= size_n) return;
 
@@ -154,15 +153,15 @@ __global__ void moe_gemm_gguf_prefill_kernel(
     const uint8_t* expert_w = weights + (size_t)expert_id * size_n * expert_w_row_stride_bytes;
 
     extern __shared__ uint8_t smem_bytes[];
-    
+
     // 1. A tile: [M_BLK, qk] (dequantized)
     T* A_sh = reinterpret_cast<T*>(smem_bytes);
     size_t A_sh_bytes = (size_t)M_BLK * qk * sizeof(T);
-    
+
     // 2. B tile: [N_BLK, qk] (dequantized)
     uint8_t* B_sh_ptr = smem_bytes + A_sh_bytes;
     size_t B_sh_bytes = (size_t)N_BLK * qk * sizeof(T);
-    
+
     // 3. B quantized tile: [N_BLK * block_size_bytes] (raw GGUF)
     uint8_t* B_quant_sh_ptr = B_sh_ptr + B_sh_bytes;
     size_t B_quant_sh_bytes = (size_t)N_BLK * block_size_bytes;
@@ -171,7 +170,7 @@ __global__ void moe_gemm_gguf_prefill_kernel(
     uint8_t* C_sh_ptr = B_quant_sh_ptr + B_quant_sh_bytes;
     size_t C_sh_offset = reinterpret_cast<uintptr_t>(C_sh_ptr) % alignof(float);
     if (C_sh_offset != 0) C_sh_ptr += (alignof(float) - C_sh_offset);
-    
+
     // Final aligned shared memory pointers
     T* B_sh = reinterpret_cast<T*>(B_sh_ptr);
     uint8_t* B_quant_sh = reinterpret_cast<uint8_t*>(B_quant_sh_ptr);
@@ -187,16 +186,16 @@ __global__ void moe_gemm_gguf_prefill_kernel(
     const size_t VEC_ELEMS_A = A_ELEMS_PER_BLOCK / VEC_SIZE;
     VecT zero_vec;
     zero_vec.x = zero_vec.y = zero_vec.z = zero_vec.w = 0.0f;
-    
+
     for (int m_base = 0; m_base < num_rows_in_segment; m_base += M_BLK) {
-        
+
         // Per-warp accumulator fragment
         fragment<accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag;
         fill_fragment(c_frag, 0.0f);
 
         // K-Loop: Strides by GGUF block size `qk`
         for (int k_base = 0; k_base < size_k; k_base += qk) {
-            
+
             // Load A Tile (Inputs) into A_sh
             #pragma unroll
             for (size_t i = threadId; i < VEC_ELEMS_A; i += BLOCK_THREADS) {
@@ -208,7 +207,7 @@ __global__ void moe_gemm_gguf_prefill_kernel(
                 int k_global = k_base + k_local;
 
                 if (m_seg < num_rows_in_segment && k_global < size_k) {
-                    int token_pair_index = segment_start + m_seg; 
+                    int token_pair_index = segment_start + m_seg;
                     int token_index = sorted_token_ids[token_pair_index];
                     int input_index = token_index / (topk_weights? 1: topk);
                     *reinterpret_cast<VecT*>(&A_sh[m_local * qk + k_local]) = *reinterpret_cast<const VecT*>(
@@ -222,7 +221,7 @@ __global__ void moe_gemm_gguf_prefill_kernel(
             // Load B Tile (Quantized) into B_quant_sh
             const size_t k_base_offset_bytes = (k_base / qk) * block_size_bytes;
             constexpr int ROWS_PER_WARP = N_BLK / WARPS_PER_BLOCK;
-            
+
             #pragma unroll
             for (int row = 0; row < ROWS_PER_WARP; ++row) {
                 int n_local = warpId * ROWS_PER_WARP + row;
@@ -233,7 +232,7 @@ __global__ void moe_gemm_gguf_prefill_kernel(
                     *dest_ptr = *src_ptr;
                 }
             }
-            
+
             __syncthreads();
 
             // Dequantize B from B_quant_sh to B_sh
@@ -265,7 +264,7 @@ __global__ void moe_gemm_gguf_prefill_kernel(
 
                 load_matrix_sync(a_frag, A_sh_ptr, qk); // Stride is qk
                 load_matrix_sync(b_frag, B_sh_ptr, qk); // Stride is qk
-                
+
                 mma_sync(c_frag, a_frag, b_frag, c_frag);
             }
         } // end k_base loop
@@ -288,7 +287,7 @@ __global__ void moe_gemm_gguf_prefill_kernel(
                 int token_pair_index = segment_start + m_seg;
                 if (token_pair_index < size_m) {
                     int token_index = sorted_token_ids[token_pair_index];
-                    float val = C_sh[m_local_c * N_BLK + n_local_c]; 
+                    float val = C_sh[m_local_c * N_BLK + n_local_c];
                     if (topk_weights) {
                         val *= topk_weights[token_index];
                     }
@@ -299,124 +298,43 @@ __global__ void moe_gemm_gguf_prefill_kernel(
     } // end m_base loop
 }
 
-#define LAUNCH_MOE_GGUF_PREFILL(DTYPE) \
-    if (gguf_type == 0) {\
-        dim3 block(32, WARPS_PER_BLOCK, 1);\
-        moe_gemm_gguf_prefill_kernel<DTYPE, QK8_0, block_q8_0, 32><<<grid, block, smem_bytes, stream>>>(\
-            reinterpret_cast<const DTYPE*>(input),\
-            reinterpret_cast<const uint8_t*>(weights),\
-            sorted_token_ids, expert_offsets, topk_weights,\
-            output, num_experts, topk, size_m, size_n, size_k, gguf_type\
-        );\
-    } else if (gguf_type == 1) {\
-        dim3 block(32, WARPS_PER_BLOCK, 1);\
-        moe_gemm_gguf_prefill_kernel<DTYPE, QK_K, block_q4_K, 32><<<grid, block, smem_bytes, stream>>>(\
-            reinterpret_cast<const DTYPE*>(input),\
-            reinterpret_cast<const uint8_t*>(weights),\
-            sorted_token_ids, expert_offsets, topk_weights,\
-            output, num_experts, topk, size_m, size_n, size_k, gguf_type\
-        );\
-    } else if (gguf_type == 2) {\
-        dim3 block(64, WARPS_PER_BLOCK, 1);\
-        moe_gemm_gguf_prefill_kernel<DTYPE, QK_K, block_q2_K, 64><<<grid, block, smem_bytes, stream>>>(\
-            reinterpret_cast<const DTYPE*>(input),\
-            reinterpret_cast<const uint8_t*>(weights),\
-            sorted_token_ids, expert_offsets, topk_weights,\
-            output, num_experts, topk, size_m, size_n, size_k, gguf_type\
-        );\
-    } else if (gguf_type == 3) {\
-        dim3 block(64, WARPS_PER_BLOCK, 1);\
-        moe_gemm_gguf_prefill_kernel<DTYPE, QK_K, block_q3_K, 64><<<grid, block, smem_bytes, stream>>>(\
-            reinterpret_cast<const DTYPE*>(input),\
-            reinterpret_cast<const uint8_t*>(weights),\
-            sorted_token_ids, expert_offsets, topk_weights,\
-            output, num_experts, topk, size_m, size_n, size_k, gguf_type\
-        );\
-    } else if (gguf_type == 4) { \
-        dim3 block(64, WARPS_PER_BLOCK, 1);\
-        moe_gemm_gguf_prefill_kernel<DTYPE, QK_K, block_q5_K, 64><<<grid, block, smem_bytes, stream>>>(\
-            reinterpret_cast<const DTYPE*>(input),\
-            reinterpret_cast<const uint8_t*>(weights),\
-            sorted_token_ids, expert_offsets, topk_weights,\
-            output, num_experts, topk, size_m, size_n, size_k, gguf_type\
-        );\
-    } else if (gguf_type == 5) { \
-        dim3 block(64, WARPS_PER_BLOCK, 1);\
-        moe_gemm_gguf_prefill_kernel<DTYPE, QK_K, block_q6_K, 64><<<grid, block, smem_bytes, stream>>>(\
-            reinterpret_cast<const DTYPE*>(input),\
-            reinterpret_cast<const uint8_t*>(weights),\
-            sorted_token_ids, expert_offsets, topk_weights,\
-            output, num_experts, topk, size_m, size_n, size_k, gguf_type\
-        );\
-    }
+// ============================================================================
+// extern "C" __global__ wrappers for PTX compilation
+// ============================================================================
 
-
-extern "C" void moe_gemm_gguf_prefill(
-    const void* input,
-    const uint8_t* weights,
-    const int32_t* sorted_token_ids,
-    const int32_t* expert_ids,
-    const float* topk_weights,
-    float* output,
-    int num_experts,
-    int topk,
-    int size_m,
-    int size_n,
-    int size_k,
-    int input_dtype,      // 0 = half, 1 = bfloat16
-    int gguf_type, //Q8_0: 0, Q4K: 1, Q2K: 2, Q3k: 3,  Q5K: 4, Q6K: 5,
-    cudaStream_t stream
-) {
-    int32_t* expert_counts;
-    cudaMallocAsync(&expert_counts, num_experts * sizeof(int32_t), stream);
-
-    int32_t* expert_offsets;
-    cudaMallocAsync(&expert_offsets, (num_experts + 1) * sizeof(int32_t), stream);
-    calculate_expert_offsets(expert_ids, size_m, expert_counts, expert_offsets, num_experts, stream);
-    
-    int grid_n = CEILDIV(size_n, N_BLK);
-    dim3 grid(num_experts, grid_n, 1);
-    
-    size_t qk = QK_K;
-    size_t block_size_bytes = sizeof(block_q6_K);
-    if (gguf_type == 0) { //Q8_0: 0,
-        block_size_bytes = sizeof(block_q8_0);
-        qk = QK8_0;
-    } else if (gguf_type == 1) {// Q4K: 1,
-        block_size_bytes = sizeof(block_q4_K);
-    } else if (gguf_type == 2) {// Q2K: 2,
-        block_size_bytes = sizeof(block_q2_K);
-    } else if (gguf_type == 3) {//Q3K: 3,
-        block_size_bytes = sizeof(block_q3_K);
-    } else if (gguf_type == 4) {//Q5K: 4,
-        block_size_bytes = sizeof(block_q5_K);
-    }
-
-    // 1. A tile: [M_BLK, qk] (dequantized)
-    size_t A_sh_bytes = (size_t)M_BLK * qk * 2; // 2 for half/bfloat16
-    
-    // 2. B tile: [N_BLK, qk] (dequantized)
-    size_t B_sh_bytes = (size_t)N_BLK * qk * 2;
-    
-    // 3. B quantized tile: [N_BLK * block_size_bytes]
-    size_t B_quant_sh_bytes = (size_t)N_BLK * block_size_bytes;
-
-    // 4. C tile: [M_BLK, N_BLK] (float accumulator)
-    size_t C_sh_bytes = (size_t)M_BLK * N_BLK * sizeof(float);
-    
-    // Add up, with padding for C
-    size_t smem_bytes = A_sh_bytes + B_sh_bytes + B_quant_sh_bytes;
-    size_t C_sh_offset = smem_bytes % alignof(float);
-    if (C_sh_offset != 0) smem_bytes += (alignof(float) - C_sh_offset);
-    smem_bytes += C_sh_bytes;
-    
-    if (input_dtype == 0) {
-        LAUNCH_MOE_GGUF_PREFILL(half);
-    } else {
-#ifndef NO_BF16_KERNEL
-        LAUNCH_MOE_GGUF_PREFILL(nv_bfloat16);
-#endif
-    }
-    cudaFreeAsync(expert_counts, stream);
-    cudaFreeAsync(expert_offsets, stream);
+// Macro to define extern "C" __global__ wrappers for each (dtype, gguf_type) combo
+#define DEFINE_MOE_GGUF_PREFILL_KERNEL(suffix, dtype, qk_val, block_q_type, wrap_sz) \
+extern "C" __global__ void moe_gemm_gguf_prefill_##suffix( \
+    const dtype* __restrict__ input, \
+    const uint8_t* __restrict__ weights, \
+    const int32_t* __restrict__ sorted_token_ids, \
+    const int32_t* __restrict__ expert_offsets, \
+    const float* __restrict__ topk_weights, \
+    float* __restrict__ output, \
+    const int num_experts, const int topk, \
+    const int32_t size_m, const int32_t size_n, const int32_t size_k, \
+    const int gguf_dtype \
+) { \
+    moe_gemm_gguf_prefill_impl<dtype, qk_val, block_q_type, wrap_sz>( \
+        input, weights, sorted_token_ids, expert_offsets, topk_weights, \
+        output, num_experts, topk, size_m, size_n, size_k, gguf_dtype \
+    ); \
 }
+
+// --- half variants ---
+DEFINE_MOE_GGUF_PREFILL_KERNEL(f16_q8_0, half, QK8_0, block_q8_0, 32)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(f16_q4k,  half, QK_K,  block_q4_K, 32)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(f16_q2k,  half, QK_K,  block_q2_K, 64)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(f16_q3k,  half, QK_K,  block_q3_K, 64)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(f16_q5k,  half, QK_K,  block_q5_K, 64)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(f16_q6k,  half, QK_K,  block_q6_K, 64)
+
+#ifndef NO_BF16_KERNEL
+// --- bfloat16 variants ---
+DEFINE_MOE_GGUF_PREFILL_KERNEL(bf16_q8_0, nv_bfloat16, QK8_0, block_q8_0, 32)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(bf16_q4k,  nv_bfloat16, QK_K,  block_q4_K, 32)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(bf16_q2k,  nv_bfloat16, QK_K,  block_q2_K, 64)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(bf16_q3k,  nv_bfloat16, QK_K,  block_q3_K, 64)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(bf16_q5k,  nv_bfloat16, QK_K,  block_q5_K, 64)
+DEFINE_MOE_GGUF_PREFILL_KERNEL(bf16_q6k,  nv_bfloat16, QK_K,  block_q6_K, 64)
+#endif
