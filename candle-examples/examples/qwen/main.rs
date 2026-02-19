@@ -229,6 +229,35 @@ struct Args {
 
     #[arg(long, default_value = "0.5b")]
     model: WhichModel,
+
+    /// Skip chat template formatting (use raw prompt, like base model)
+    #[arg(long)]
+    no_chat_template: bool,
+
+    /// Enable thinking/reasoning mode (allows model to show its reasoning process)
+    #[arg(long)]
+    thinking: bool,
+}
+
+impl Args {
+    fn should_use_chat_template(&self) -> bool {
+        matches!(
+            self.model,
+            WhichModel::W3_0_6b
+                | WhichModel::W3_1_7b
+                | WhichModel::W3_4b
+                | WhichModel::W3_8b
+                | WhichModel::W3MoeA3b
+        ) && !self.no_chat_template
+    }
+}
+
+fn format_prompt(prompt: &str, use_chat_template: bool, thinking: bool) -> String {
+    if !use_chat_template {
+        return prompt.to_string();
+    }
+    let think_tag = if thinking { " /think" } else { " /no_think" };
+    format!("<|im_start|>user\n{prompt}{think_tag}<|im_end|>\n<|im_start|>assistant\n")
 }
 
 fn main() -> Result<()> {
@@ -259,6 +288,8 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
+    let use_chat_template = args.should_use_chat_template();
+    let thinking = args.thinking;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
         None => {
@@ -376,6 +407,7 @@ fn main() -> Result<()> {
         args.repeat_last_n,
         &device,
     );
-    pipeline.run(&args.prompt, args.sample_len)?;
+    let prompt = format_prompt(&args.prompt, use_chat_template, thinking);
+    pipeline.run(&prompt, args.sample_len)?;
     Ok(())
 }
