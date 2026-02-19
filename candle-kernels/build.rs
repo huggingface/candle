@@ -49,7 +49,7 @@ fn main() -> Result<()> {
     // Legacy emulations can be selectively enabled via ALLOW_LEGACY="bf16,fp8".
     for (name, val) in utils::get_capabilities_results(compute_cap) {
         dual_set!(builder, moe_builder, name, val);
-    }  
+    }
 
     // Build for PTX
     let ptx_output = builder.build_ptx()?;
