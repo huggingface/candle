@@ -4,7 +4,7 @@ use crate::{
     utils::repeat_kv,
 };
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{kv_cache::KvCache, Activation, VarBuilder};
+use candle_nn::{kv_cache::IncrementalKvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -123,7 +123,7 @@ pub(crate) struct Attention {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: KvCache,
+    kv_cache: IncrementalKvCache,
 }
 
 impl Attention {
@@ -169,7 +169,7 @@ impl Attention {
 
         // Initialize KV cache with 512 tokens capacity to reduce initial memory allocation.
         // The cache will grow in chunks of 512 tokens when needed.
-        let kv_cache = KvCache::new(2, 512);
+        let kv_cache = IncrementalKvCache::new(2, 512);
 
         Ok(Self {
             q_proj,

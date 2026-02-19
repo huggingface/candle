@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{kv_cache::KvCache, Embedding, RmsNorm};
+use candle_nn::{kv_cache::IncrementalKvCache, Embedding, RmsNorm};
 
 #[derive(Debug, Clone)]
 struct QLinear {
@@ -83,7 +83,7 @@ struct LayerWeights {
     cos: Tensor,
     sin: Tensor,
     neg_inf: Tensor,
-    kv_cache: KvCache,
+    kv_cache: IncrementalKvCache,
     use_flash_attn: bool,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
@@ -269,7 +269,7 @@ impl ModelWeights {
             )?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
-            let kv_cache = KvCache::new(2, max_seq_len);
+            let kv_cache = IncrementalKvCache::new(2, max_seq_len);
             layers.push(LayerWeights {
                 attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
                 attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
