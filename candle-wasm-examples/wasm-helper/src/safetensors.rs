@@ -56,8 +56,8 @@ impl SafeTensors {
         // if !string.starts_with('{') {
         //     return Err(SafeTensorError::InvalidHeaderStart);
         // }
-        let metadata: Metadata = serde_json::from_str(string)
-            .map_err(SafeTensorError::InvalidHeaderDeserialization)?;
+        let metadata: Metadata =
+            serde_json::from_str(string).map_err(SafeTensorError::InvalidHeaderDeserialization)?;
         let buffer_end = metadata.validate()?;
         if buffer_end + 8 + n != buffer_len {
             return Err(SafeTensorError::MetadataIncompleteBuffer.into());

@@ -12,8 +12,8 @@ license.workspace = true
 
 [dependencies]
 
-candle = { workspace = true} #error
-candle-nn = { workspace = true}
+candle = { workspace = true }      #error
+candle-nn = { workspace = true }
 safetensors = { workspace = true }
 yoke = { workspace = true }
 memmap2 = { workspace = true }
@@ -60,7 +60,7 @@ features = [
   'FileSystemDirectoryEntry',
   'FileSystemRemoveOptions',
   'ReadableStream',
-  'Blob'
+  'Blob',
 ]
 
 
