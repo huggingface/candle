@@ -136,6 +136,18 @@ pub trait BackendStorage: Sized {
     ) -> Result<()>;
 
     fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn deform_conv2d(
+        &self,
+        _l: &Layout,
+        _offset: &Self,
+        _offset_l: &Layout,
+        _weight: &Self,
+        _weight_l: &Layout,
+        _mask: Option<(&Self, &Layout)>,
+        _params: &crate::conv::ParamsDeformConv2D,
+    ) -> Result<Self>;
 }
 
 pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
