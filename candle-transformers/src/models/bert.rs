@@ -623,3 +623,39 @@ impl BertForMaskedLM {
         self.cls.forward(&sequence_output)
     }
 }
+
+// Token Classification for Named Entity Recognition (NER)
+// Adapted from DeBERTa V2 NER implementation
+pub struct BertForTokenClassification {
+    bert: BertModel,
+    dropout: Dropout,
+    classifier: Linear,
+    pub device: Device,
+}
+
+impl BertForTokenClassification {
+    pub fn load(vb: VarBuilder, config: &Config, num_labels: usize) -> Result<Self> {
+        let bert = BertModel::load(vb.pp("bert"), config)?;
+        let dropout = Dropout::new(config.hidden_dropout_prob);
+        let classifier = linear(config.hidden_size, num_labels, vb.pp("classifier"))?;
+        Ok(Self {
+            bert,
+            dropout,
+            classifier,
+            device: vb.device().clone(),
+        })
+    }
+
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        token_type_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let sequence_output = self
+            .bert
+            .forward(input_ids, token_type_ids, attention_mask)?;
+        let sequence_output = self.dropout.forward(&sequence_output)?;
+        self.classifier.forward(&sequence_output)
+    }
+}
