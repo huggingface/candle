@@ -4641,7 +4641,6 @@ fn test_pad() -> Result<()> {
 fn test_pad_constant_three_inputs() -> Result<()> {
     let data = Tensor::from_vec(vec![1f32, 2., 3., 4., 5., 6.], (2, 3), &Device::Cpu)?;
     let pads = Tensor::from_vec(vec![0i64, 1, 0, 0], (4,), &Device::Cpu)?;
-    let constant_zero = Tensor::from_vec(vec![0f32], (1,), &Device::Cpu)?;
     let expected = Tensor::from_vec(vec![0f32, 1., 2., 3., 0., 4., 5., 6.], (2, 4), &Device::Cpu)?;
 
     let model = create_model_proto_with_graph(Some(GraphProto {
@@ -4682,20 +4681,28 @@ fn test_pad_constant_three_inputs() -> Result<()> {
         ..GraphProto::default()
     }));
 
-    let inputs = HashMap::from_iter([
-        ("data".to_string(), data.clone()),
-        ("pads".to_string(), pads.clone()),
-        ("constant_value".to_string(), constant_zero),
-    ]);
-    let res = simple_eval(&model, inputs)?;
-    let Some(actual) = res.get("output") else {
-        candle::bail!("outputs didn't contain expected key `output`: {res:?}");
+    let check_zero_constant = |constant_value: Tensor| -> Result<()> {
+        let inputs = HashMap::from_iter([
+            ("data".to_string(), data.clone()),
+            ("pads".to_string(), pads.clone()),
+            ("constant_value".to_string(), constant_value),
+        ]);
+        let res = simple_eval(&model, inputs)?;
+        let Some(actual) = res.get("output") else {
+            candle::bail!("outputs didn't contain expected key `output`: {res:?}");
+        };
+        assert_eq!(actual.to_vec2::<f32>()?, expected.to_vec2::<f32>()?);
+        Ok(())
     };
-    assert_eq!(actual.to_vec2::<f32>()?, expected.to_vec2::<f32>()?);
+
+    check_zero_constant(Tensor::from_vec(vec![0f32], (1,), &Device::Cpu)?)?;
+    check_zero_constant(Tensor::from_vec(vec![0i64], (1,), &Device::Cpu)?)?;
+    check_zero_constant(Tensor::from_vec(vec![0f32], (1,), &Device::Cpu)?.to_dtype(DType::F16)?)?;
+    check_zero_constant(Tensor::from_vec(vec![0f32], (1,), &Device::Cpu)?.to_dtype(DType::BF16)?)?;
 
     let inputs_non_zero = HashMap::from_iter([
-        ("data".to_string(), data),
-        ("pads".to_string(), pads),
+        ("data".to_string(), data.clone()),
+        ("pads".to_string(), pads.clone()),
         (
             "constant_value".to_string(),
             Tensor::from_vec(vec![1u32], (1,), &Device::Cpu)?,
