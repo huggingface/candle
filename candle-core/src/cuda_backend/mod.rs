@@ -10,6 +10,7 @@ use cudarc::driver::{
     CudaSlice, DevicePtr, DeviceRepr, LaunchConfig, PushKernelArg, ValidAsZeroBits,
 };
 use half::{bf16, f16};
+use std::sync::Arc;
 
 #[cfg(feature = "cudnn")]
 pub mod cudnn;
@@ -21,14 +22,42 @@ pub use error::{CudaError, WrapErr};
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
 
 pub enum SlicePtrOrNull<T> {
-    Ptr(CudaSlice<T>),
+    Ptr(Arc<CudaSlice<T>>),
     Null,
+}
+
+fn blake3_hash_usize_slice(v: &[usize]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    for value in v {
+        hasher.update(&value.to_ne_bytes());
+    }
+    *hasher.finalize().as_bytes()
+}
+
+//TODO make private again before merge
+pub fn clone_htod_capture_pool(dev: &CudaDevice, v: Vec<usize>) -> Result<Arc<CudaSlice<usize>>> {
+    let hash = blake3_hash_usize_slice(&v);
+    if let Some(dev_slice) = dev.get_captured_htod_slice(&v, hash) {
+        return Ok(dev_slice);
+    }
+
+    let dev_slice = Arc::new(dev.clone_htod(&v)?);
+    if dev.is_graph_capturing()? {
+        dev.capture_htod_slice(v, hash, dev_slice.clone());
+    }
+    Ok(dev_slice)
+}
+
+impl<T> Default for SlicePtrOrNull<T> {
+    fn default() -> Self {
+        SlicePtrOrNull::Null
+    }
 }
 
 impl<T: DeviceRepr> SlicePtrOrNull<T> {
     pub fn builder_arg<'a, 'b: 'a>(&'b self, builder: &mut cudarc::driver::LaunchArgs<'a>) {
         match self {
-            SlicePtrOrNull::Ptr(slice) => builder.arg(slice),
+            SlicePtrOrNull::Ptr(slice) => builder.arg(slice.as_ref()),
             SlicePtrOrNull::Null => builder.arg(&0usize),
         };
     }
@@ -57,7 +86,8 @@ impl SlicePtrOrNull<usize> {
         let ds = if l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(dev.clone_htod(&[l.dims(), l.stride()].concat())?)
+            let v = [l.dims(), l.stride()].concat();
+            SlicePtrOrNull::Ptr(clone_htod_capture_pool(dev, v)?)
         };
         Ok(ds)
     }
@@ -187,7 +217,7 @@ impl Map1 for Im2Col1D {
         let l_out = self.l_out(dims[2]);
         let threads = dims[0] * l_out * dims[1];
         let cfg = LaunchConfig::for_num_elems(threads as u32);
-        let ds = dev.clone_htod(&[dims, layout.stride()].concat())?;
+        let ds = clone_htod_capture_pool(dev, [dims, layout.stride()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
@@ -199,11 +229,12 @@ impl Map1 for Im2Col1D {
         barg!(builder, self.stride);
         barg!(builder, self.padding);
         barg!(builder, self.dilation);
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         builder.arg(src);
         builder.arg(&dst);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(dst)
     }
 }
@@ -238,7 +269,7 @@ impl Map1 for Im2Col {
         let (h_out, w_out) = self.hw_out(dims[2], dims[3]);
         let dst_el = dims[0] * h_out * w_out * dims[1] * self.h_k * self.w_k;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let ds = dev.clone_htod(&[dims, layout.stride()].concat())?;
+        let ds = clone_htod_capture_pool(dev, [dims, layout.stride()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
@@ -252,11 +283,12 @@ impl Map1 for Im2Col {
         barg!(builder, self.stride);
         barg!(builder, self.padding);
         barg!(builder, self.dilation);
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         builder.arg(src);
         builder.arg(&dst);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(dst)
     }
 }
@@ -330,7 +362,7 @@ impl Map1Any for FastReduce<'_> {
             block_dim: (block_dim as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let ds = dev.clone_htod(&[dims.as_slice(), stride.as_slice()].concat())?;
+        let ds = clone_htod_capture_pool(dev, [dims.as_slice(), stride.as_slice()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let (name, check_empty, return_index) = match self.1 {
             ReduceOp::Sum => ("fast_sum", false, false),
@@ -350,11 +382,12 @@ impl Map1Any for FastReduce<'_> {
             barg!(builder, src_el);
             barg!(builder, el_to_sum_per_block);
             barg!(builder, src_dims.len());
-            builder.arg(&ds);
+            builder.arg(ds.as_ref());
             builder.arg(src);
             builder.arg(&out);
             // SAFETY: ffi.
             unsafe { builder.launch(cfg) }.w()?;
+
             Ok(S::U32(out))
         } else {
             // SAFETY: filled in by the follow up kernel.
@@ -363,11 +396,12 @@ impl Map1Any for FastReduce<'_> {
             barg!(builder, src_el);
             barg!(builder, el_to_sum_per_block);
             barg!(builder, src_dims.len());
-            builder.arg(&ds);
+            builder.arg(ds.as_ref());
             builder.arg(src);
             builder.arg(&out);
             // SAFETY: ffi.
             unsafe { builder.launch(cfg) }.w()?;
+
             Ok(wrap(out))
         }
     }
@@ -429,7 +463,7 @@ impl Map1 for IndexSelect<'_> {
         };
         let ids_shape = ids_l.shape();
         let ids_dims = ids_shape.dims();
-        let ds = dev.clone_htod(&[ids_dims, ids_l.stride()].concat())?;
+        let ds = clone_htod_capture_pool(dev, [ids_dims, ids_l.stride()].concat())?;
         let src = match src_l.contiguous_offsets() {
             Some((o1, o2)) => src.slice(o1..o2),
             None => Err(crate::Error::RequiresContiguous { op: "index-select" }.bt())?,
@@ -446,7 +480,7 @@ impl Map1 for IndexSelect<'_> {
         let mut builder = func.builder();
         barg!(builder, dst_el);
         barg!(builder, ids_dims.len());
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         barg!(builder, ids);
         builder.arg(&src);
         builder.arg(&out);
@@ -456,6 +490,7 @@ impl Map1 for IndexSelect<'_> {
         barg!(builder, right_size);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(out)
     }
 }
@@ -702,15 +737,16 @@ impl Map2 for Conv1D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv1d {dims:?}")
         };
-        let ds = dev.clone_htod(&ds)?;
+        let ds = clone_htod_capture_pool(dev, ds)?;
         let mut builder = func.builder();
         barg!(builder, el, l_out, p.stride, p.padding, p.dilation);
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         builder.arg(inp);
         builder.arg(k);
         builder.arg(&out);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(out)
     }
 }
@@ -745,15 +781,16 @@ impl Map2 for Conv2D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv2d {dims:?}")
         };
-        let ds = dev.clone_htod(&ds)?;
+        let ds = clone_htod_capture_pool(dev, ds)?;
         let mut builder = func.builder();
         barg!(builder, el, out_w, out_h, p.stride, p.padding, p.dilation);
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         builder.arg(inp);
         builder.arg(k);
         builder.arg(&out);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(out)
     }
 }
@@ -816,7 +853,7 @@ impl Map2 for ConvTranspose1D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv_transpose1d {dims:?}")
         };
-        let ds = dev.clone_htod(&ds)?;
+        let ds = clone_htod_capture_pool(dev, ds)?;
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, l_out);
@@ -824,12 +861,13 @@ impl Map2 for ConvTranspose1D<'_> {
         barg!(builder, p.padding);
         barg!(builder, p.output_padding);
         barg!(builder, p.dilation);
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         builder.arg(inp);
         builder.arg(k);
         builder.arg(&out);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(out)
     }
 }
@@ -864,7 +902,7 @@ impl Map2 for ConvTranspose2D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv_transpose2d {dims:?}")
         };
-        let ds = dev.clone_htod(&ds)?;
+        let ds = clone_htod_capture_pool(dev, ds)?;
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, out_w);
@@ -873,12 +911,13 @@ impl Map2 for ConvTranspose2D<'_> {
         barg!(builder, p.padding);
         barg!(builder, p.output_padding);
         barg!(builder, p.dilation);
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         builder.arg(inp);
         builder.arg(k);
         builder.arg(&out);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(out)
     }
 }
@@ -924,18 +963,19 @@ impl Map1 for Pool2D {
         let func = dev.get_or_load_func(&kernel_name::<T>(kname), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
-        let ds = dev.clone_htod(&ds)?;
+        let ds = clone_htod_capture_pool(dev, ds)?;
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, self.w_k);
         barg!(builder, self.h_k);
         barg!(builder, self.w_stride);
         barg!(builder, self.h_stride);
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         builder.arg(inp);
         builder.arg(&out);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(out)
     }
 }
@@ -963,7 +1003,7 @@ impl Map1 for UpsampleNearest2D {
         let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
-        let ds = dev.clone_htod(&ds)?;
+        let ds = clone_htod_capture_pool(dev, ds)?;
         let scale_w = dims[2] as f64 / out_w as f64;
         let scale_h = dims[3] as f64 / out_h as f64;
         let mut builder = func.builder();
@@ -971,11 +1011,12 @@ impl Map1 for UpsampleNearest2D {
         barg!(builder, out_h);
         barg!(builder, scale_w);
         barg!(builder, scale_h);
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         builder.arg(inp);
         builder.arg(&out);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(out)
     }
 }
@@ -1012,7 +1053,7 @@ impl Map1 for UpsampleBilinear2D {
 
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
-        let ds = dev.clone_htod(&ds)?;
+        let ds = clone_htod_capture_pool(dev, ds)?;
 
         let mut builder = func.builder();
         barg!(builder, out_w);
@@ -1022,12 +1063,13 @@ impl Map1 for UpsampleBilinear2D {
         barg!(builder, self.scale_h_factor.unwrap_or(0.0));
         barg!(builder, self.scale_w_factor.is_some());
         barg!(builder, self.scale_w_factor.unwrap_or(0.0));
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         builder.arg(inp);
         builder.arg(&out);
 
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(out)
     }
 }
@@ -1067,8 +1109,10 @@ impl Map2 for WhereCond<'_> {
         let dims = shape.dims();
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
-        let ds =
-            dev.clone_htod(&[dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())?;
+        let ds = clone_htod_capture_pool(
+            dev,
+            [dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat(),
+        )?;
         let t = &t.slice(layout_t.start_offset()..);
         let f = &f.slice(layout_f.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::TERNARY)?;
@@ -1077,13 +1121,14 @@ impl Map2 for WhereCond<'_> {
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, dims.len());
-        builder.arg(&ds);
+        builder.arg(ds.as_ref());
         barg!(builder, ids);
         builder.arg(t);
         builder.arg(f);
         builder.arg(&out);
         // SAFETY: ffi
         unsafe { builder.launch(cfg) }.w()?;
+
         Ok(out)
     }
 }
@@ -1104,7 +1149,8 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(dev.clone_htod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())?)
+            let v = [dims, lhs_l.stride(), rhs_l.stride()].concat();
+            SlicePtrOrNull::Ptr(clone_htod_capture_pool(dev, v)?)
         };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
@@ -1141,7 +1187,8 @@ impl Map2Any for Cmp {
         let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(dev.clone_htod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())?)
+            let v = [dims, lhs_l.stride(), rhs_l.stride()].concat();
+            SlicePtrOrNull::Ptr(clone_htod_capture_pool(dev, v)?)
         };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
