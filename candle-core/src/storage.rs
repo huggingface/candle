@@ -519,18 +519,19 @@ impl Storage {
         layout: &Layout,
         kernel_size: (usize, usize),
         stride: (usize, usize),
+        padding: usize,
     ) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
-                let storage = storage.max_pool2d(layout, kernel_size, stride)?;
+                let storage = storage.max_pool2d(layout, kernel_size, stride, padding)?;
                 Ok(Self::Cpu(storage))
             }
             Self::Cuda(storage) => {
-                let storage = storage.max_pool2d(layout, kernel_size, stride)?;
+                let storage = storage.max_pool2d(layout, kernel_size, stride, padding)?;
                 Ok(Self::Cuda(storage))
             }
             Self::Metal(storage) => {
-                let storage = storage.max_pool2d(layout, kernel_size, stride)?;
+                let storage = storage.max_pool2d(layout, kernel_size, stride, padding)?;
                 Ok(Self::Metal(storage))
             }
         }
