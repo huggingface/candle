@@ -465,3 +465,19 @@ impl Model {
         }
     }
 }
+
+impl crate::auto::Model for Model {
+    fn model_type(&self) -> &'static str {
+        "mistral"
+    }
+}
+
+impl crate::auto::CausalLM for Model {
+    fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        Model::forward(self, input_ids, seqlen_offset)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        Model::clear_kv_cache(self)
+    }
+}
