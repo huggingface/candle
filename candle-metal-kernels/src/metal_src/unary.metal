@@ -197,6 +197,9 @@ define_unary_op(usigmoid, sigmoid(x));
 // tanh may create NaN on large values, e.g. 45 rather than outputting 1.
 // This has been an issue for the encodec example.
 define_unary_op(utanh, precise::tanh(x));
+define_unary_op(uasin, asin(x));
+define_unary_op(uacos, acos(x));
+define_unary_op(uatan, atan(x));
 
 // Macros to help initialize kernels
 #define init_kernel(name, func, ...) \
@@ -246,6 +249,9 @@ init_unary_float(erf, uerf);
 init_unary_float(sign, usign);
 init_unary_float(sigmoid, usigmoid);
 init_unary_float(tanh, utanh);
+init_unary_float(asin, uasin);
+init_unary_float(acos, uacos);
+init_unary_float(atan, uatan);
 
 // Initialize copy2d kernels
 init_copy2d(f32, float);
