@@ -14,6 +14,7 @@
 //! The implementations aim to be readable while maintaining good performance. For more information
 //! on each model see the model's module docs in the links below.
 
+pub mod bart;
 pub mod based;
 pub mod beit;
 pub mod bert;
@@ -35,6 +36,7 @@ pub mod depth_anything_v2;
 pub mod dinov2;
 pub mod dinov2reg4;
 pub mod distilbert;
+pub mod donut;
 pub mod efficientnet;
 pub mod efficientvit;
 pub mod encodec;
@@ -125,6 +127,7 @@ pub mod stable_diffusion;
 pub mod stable_lm;
 pub mod starcoder2;
 pub mod stella_en_v5;
+pub mod swin;
 pub mod t5;
 pub mod trocr;
 pub mod vgg;
