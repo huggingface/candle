@@ -139,8 +139,8 @@ fn select_tile_config(
                 }
             }
         }
-        // Medium devices: max ('s') and unknown
-        MetalDeviceType::Max | MetalDeviceType::Medium => {
+        // Medium devices: max ('s') and unknown (IntelMac uses naive GEMM, not this path)
+        MetalDeviceType::Max | MetalDeviceType::IntelMac | MetalDeviceType::Medium => {
             // MLX: default medium device config
             // Use the same logic as before but with medium device defaults
             match dtype {
@@ -409,7 +409,22 @@ pub fn call_mlx_gemm(
         trans_str, dtype_str, dtype_str, bm, bn, bk, wm, wn
     );
 
-    let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
+    let naive_name = format!("naive_gemm_{}_{}", trans_str, dtype_str);
+    let (pipeline, use_naive) = if device_type == MetalDeviceType::IntelMac {
+        (
+            kernels.load_pipeline(device, Source::Gemm, naive_name)?,
+            true,
+        )
+    } else {
+        match kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants) {
+            Ok(p) => (p, false),
+            Err(_) => {
+                let p = kernels.load_pipeline(device, Source::Gemm, naive_name)?;
+                (p, true)
+            }
+        }
+    };
+
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -437,19 +452,34 @@ pub fn call_mlx_gemm(
         )
     );
 
-    let grid_size = MTLSize {
-        width: tn,
-        height: tm,
-        depth: /* batch_size_out */ b,
-    };
-    let group_size = MTLSize {
-        width: 32,
-        height: wn,
-        depth: wm,
-    };
     encoder.use_resource(lhs_buffer, MTLResourceUsage::Read);
     encoder.use_resource(rhs_buffer, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(grid_size, group_size);
+
+    if use_naive {
+        let group_size = MTLSize {
+            width: 8,
+            height: 8,
+            depth: 1,
+        };
+        let grid_size = MTLSize {
+            width: m.div_ceil(group_size.width),
+            height: n.div_ceil(group_size.height),
+            depth: b,
+        };
+        encoder.dispatch_thread_groups(grid_size, group_size);
+    } else {
+        let grid_size = MTLSize {
+            width: tn,
+            height: tm,
+            depth: /* batch_size_out */ b,
+        };
+        let group_size = MTLSize {
+            width: 32,
+            height: wn,
+            depth: wm,
+        };
+        encoder.dispatch_thread_groups(grid_size, group_size);
+    }
     Ok(())
 }
