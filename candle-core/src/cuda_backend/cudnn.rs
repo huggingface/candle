@@ -1,6 +1,6 @@
 use crate::WithDType;
 use cudarc;
-use cudarc::cudnn::safe::{ConvForward, Cudnn};
+use cudarc::cudnn::safe::{ConvBackwardData, ConvForward, Cudnn};
 use cudarc::driver::{CudaSlice, CudaView, DeviceRepr, ValidAsZeroBits};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -219,6 +219,105 @@ pub(crate) fn launch_conv1d<
             src,
             filter,
             dst,
+        )?;
+    }
+    Ok(())
+}
+
+/// Launch a cuDNN-backed 1D transposed convolution.
+///
+/// ConvTranspose1d is mathematically equivalent to cuDNN's ConvBackwardData:
+/// - `dy` (backward-data input) = our conv_transpose input `[B, C_in, L_in]`
+/// - `dx` (backward-data output) = our conv_transpose output `[B, C_out, L_out]`
+/// - `w` (filter) = kernel `[C_in, C_out, K]`
+///
+/// We fake 1D as 2D by setting the last spatial dimension to 1, same as `launch_conv1d`.
+pub(crate) fn launch_conv_transpose1d<
+    T: DeviceRepr + WithDType + ValidAsZeroBits + cudarc::cudnn::CudnnDataType,
+    Y: cudarc::cudnn::CudnnDataType,
+>(
+    inp: &CudaView<T>,
+    inp_l: &crate::Layout,
+    filter: &CudaView<T>,
+    dst: &mut CudaSlice<T>,
+    params: &crate::conv::ParamsConvTranspose1D,
+    dev: &crate::cuda_backend::CudaDevice,
+) -> crate::Result<()> {
+    let device_id = dev.id();
+    let cudnn = CUDNN.with(|cudnn| {
+        if let Some(cudnn) = cudnn.borrow().get(&device_id) {
+            return Ok(cudnn.clone());
+        }
+        let c = Cudnn::new(dev.cuda_stream());
+        if let Ok(c) = &c {
+            cudnn.borrow_mut().insert(device_id, c.clone());
+        }
+        c
+    })?;
+
+    let conv = cudnn.create_conv2d::<Y>(
+        /* pad */ [params.padding as i32, 0],
+        /* stride */ [params.stride as i32, 1],
+        /* dilation */ [params.dilation as i32, 1],
+        cudarc::cudnn::sys::cudnnConvolutionMode_t::CUDNN_CROSS_CORRELATION,
+    )?;
+
+    // dy = input to conv_transpose: [B, C_in, L_in, 1]
+    let dy_shape = [
+        params.b_size as i32,
+        params.c_in as i32,
+        params.l_in as i32,
+        1,
+    ];
+    let dy = if inp_l.is_contiguous() {
+        cudnn.create_4d_tensor::<T>(
+            cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
+            dy_shape,
+        )?
+    } else {
+        let s = inp_l.stride();
+        cudnn.create_4d_tensor_ex::<T>(dy_shape, [s[0] as i32, s[1] as i32, s[2] as i32, 1i32])?
+    };
+
+    // Filter: [C_in, C_out, K, 1]
+    // In candle's conv_transpose1d, kernel shape is (c_in_k, c_out, k_size).
+    // For cuDNN backward-data, the filter descriptor matches the *forward* conv filter,
+    // which is [C_in, C_out, K] — same layout as our kernel.
+    let w = cudnn.create_4d_filter::<T>(
+        cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
+        [
+            params.c_in as i32,
+            params.c_out as i32,
+            params.k_size as i32,
+            1,
+        ],
+    )?;
+
+    // dx = output of conv_transpose: [B, C_out, L_out, 1]
+    let l_out = params.l_out() as i32;
+    let dx = cudnn.create_4d_tensor::<T>(
+        cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
+        [params.b_size as i32, params.c_out as i32, l_out, 1],
+    )?;
+
+    let conv_bwd = ConvBackwardData {
+        conv: &conv,
+        dx: &dx,
+        w: &w,
+        dy: &dy,
+    };
+
+    let alg = conv_bwd.pick_algorithm()?;
+    let workspace_size = conv_bwd.get_workspace_size(alg)?;
+    let mut workspace = dev.cuda_stream().alloc_zeros::<u8>(workspace_size)?;
+    unsafe {
+        conv_bwd.launch::<CudaSlice<u8>, _, _, _>(
+            alg,
+            Some(&mut workspace),
+            (T::one(), T::zero()),
+            dst,
+            filter,
+            inp,
         )?;
     }
     Ok(())
