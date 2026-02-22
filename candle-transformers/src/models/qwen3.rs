@@ -308,7 +308,7 @@ impl Model {
         })
     }
 
-    fn clear_kv_cache(&mut self) {
+    pub fn clear_kv_cache(&mut self) {
         for l in &mut self.layers {
             l.clear_kv_cache();
         }
