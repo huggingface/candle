@@ -1331,6 +1331,73 @@ impl Tensor {
         ))
     }
 
+    /// Bicubic interpolation to resize the input tensor to the specified size.
+    ///
+    /// The input tensor should have four dimensions: `(batch, channels, h, w)`.
+    /// The returned tensor also has four dimensions: `(batch, channels, target_h, target_w)`.
+    ///
+    /// Uses the Keys cubic kernel (a=-0.75) matching PyTorch's `interpolate(mode='bicubic')`.
+    pub fn upsample_bicubic2d(
+        &self,
+        target_h: usize,
+        target_w: usize,
+        align_corners: bool,
+    ) -> Result<Self> {
+        let (n, c, _h, _w) = self.dims4()?;
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleBicubic2D {
+            arg,
+            target_h,
+            target_w,
+            align_corners,
+        });
+        let storage = self.storage().upsample_bicubic2d(
+            self.layout(),
+            target_h,
+            target_w,
+            align_corners,
+            None,
+            None,
+        )?;
+        Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
+    }
+
+    /// Bicubic interpolation using scale factors.
+    ///
+    /// Similar to `upsample_bicubic2d` but uses scale factors instead of absolute sizes.
+    pub fn upsample_bicubic2d_with_scale(
+        &self,
+        scale_h: f64,
+        scale_w: f64,
+        align_corners: bool,
+    ) -> Result<Self> {
+        let (n, c, height_in, width_in) = self.dims4()?;
+        let height_out = (height_in as f64 * scale_h).floor() as usize;
+        let width_out = (width_in as f64 * scale_w).floor() as usize;
+        if height_in == height_out && width_in == width_out {
+            return Ok(self.clone());
+        }
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleBicubic2D {
+            arg,
+            target_h: height_out,
+            target_w: width_out,
+            align_corners,
+        });
+        let storage = self.storage().upsample_bicubic2d(
+            self.layout(),
+            height_out,
+            width_out,
+            align_corners,
+            Some(scale_h),
+            Some(scale_w),
+        )?;
+        Ok(from_storage(
+            storage,
+            (n, c, height_out, width_out),
+            op,
+            false,
+        ))
+    }
+
     /// 2D average pooling over an input tensor with multiple channels.
     ///
     /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned
