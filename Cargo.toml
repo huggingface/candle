@@ -6,7 +6,6 @@ members = [
     "candle-nn",
     "candle-pyo3",
     "candle-transformers",
-    "candle-ug",
     "candle-wasm-examples/*",
     "candle-wasm-tests",
     "tensor-tools",
@@ -47,7 +46,6 @@ candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.9.2" }
 candle-nn = { path = "./candle-nn", version = "0.9.2" }
 candle-onnx = { path = "./candle-onnx", version = "0.9.2" }
 candle-transformers = { path = "./candle-transformers", version = "0.9.2" }
-candle-ug = { path = "./candle-ug", version = "0.9.2" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.8", default-features = false }
 cudarc = { version = "0.19.0", features = [
@@ -99,9 +97,6 @@ tokenizers = { version = "0.22.0", default-features = false }
 tracing = "0.1.37"
 tracing-chrome = "0.7.1"
 tracing-subscriber = "0.3.7"
-ug = "0.5.0"
-ug-cuda = "0.5.0"
-ug-metal = "0.5.0"
 yoke = { version = "0.8.1", features = ["derive"] }
 zip = { version = "7.2.0", default-features = false }
 objc2-metal = { version = "0.3.1" }

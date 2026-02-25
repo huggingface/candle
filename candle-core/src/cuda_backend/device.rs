@@ -261,28 +261,6 @@ impl CudaDevice {
         self.context.is_event_tracking()
     }
 
-    #[cfg(all(feature = "ug", not(target_arch = "wasm32")))]
-    pub fn compile(
-        &self,
-        func_name: &'static str,
-        kernel: candle_ug::lang::ssa::Kernel,
-    ) -> Result<CudaFunc> {
-        let mut buf = vec![];
-        candle_ug::cuda::code_gen::gen(&mut buf, func_name, &kernel)?;
-        let cuda_code = String::from_utf8(buf)?;
-        let opts = cudarc::nvrtc::CompileOptions {
-            use_fast_math: Some(true),
-            ..Default::default()
-        };
-        let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(cuda_code, opts).w()?;
-        let module = self.context.load_module(ptx).w()?;
-        let func = module.load_function(func_name).w()?;
-        Ok(CudaFunc {
-            func,
-            stream: self.stream.clone(),
-        })
-    }
-
     pub fn id(&self) -> DeviceId {
         self.id
     }
