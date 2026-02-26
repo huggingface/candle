@@ -34,7 +34,7 @@ fn copy_test_folders(source_dir: &str, crate_replace: &str) -> io::Result<Vec<(S
             let path_str = path
                 .to_str()
                 .expect("expected path to be convertible to str");
-            if path_str.contains("pth_tests") || path_str.contains("serialization_tests")  || path_str.contains("quantized_tests") {
+            if path_str.contains("pth_tests") || path_str.contains("serialization_tests") {
                 continue;
             }
             println!("cargo::rerun-if-changed={}", path.to_str().expect(""));
@@ -159,7 +159,7 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
     transformed_content = make_fn_async(&transformed_content, "to_device").to_string();
     transformed_content = make_fn_async(&transformed_content, "sample").to_string();
     transformed_content = make_fn_async(&transformed_content, "one_hot").to_string();
-
+    transformed_content = make_fn_async_base(&transformed_content, "quantized::QTensor::quantize", "candle_wasm_tests::quantize_async").to_string();
     transformed_content =
         make_fn_async_same_name(&transformed_content, "to_vec0_round").to_string();
     transformed_content =
@@ -178,6 +178,7 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
         "candle_nn::encoding::one_hot",
         "candle_nn::encoding::one_hot_async",
     );
+    transformed_content = transformed_content.replace("crate::k_quants", &format!("{crate_replace}::quantized::k_quants"));
     transformed_content = transformed_content.replace("crate::", &format!("{crate_replace}::"));
     transformed_content =
         transformed_content.replace("test_device!", "candle_wasm_tests::test_device!");

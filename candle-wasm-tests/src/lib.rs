@@ -1,4 +1,4 @@
-use candle::{Result, Tensor};
+use candle::{Result, Tensor, quantized::{self, GgmlDType, QTensor}};
 
 #[cfg(feature = "wgpu")]
 pub static INIT_LOGGER: std::sync::Once = std::sync::Once::new();
@@ -92,6 +92,9 @@ pub async fn to_vec3_round_async(t: &Tensor, digits: i32) -> Result<Vec<Vec<Vec<
     Ok(t)
 }
 
+pub async fn quantize_async(src: &Tensor, dtype: GgmlDType) -> Result<QTensor>{
+    quantized::QTensor::quantize_onto(&src.to_device_async(&candle::Device::Cpu).await?, dtype, src.device())
+}
 
 pub trait ToVecRound{
     fn to_vec0_round_async(&self, digits: i32) -> impl std::future::Future<Output = Result<f32>>;

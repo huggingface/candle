@@ -33,9 +33,9 @@ const KMASK2: u32 = 0x0f0f0f0f;
     let a = tid * loads_per_thread;
 
     var aux = vec4<u32>(
-        load_data(data,block_starting_byte+SCALES_OFFSET,0xFFFF)      | (load_data(data,block_starting_byte+SCALES_OFFSET+2,0xFFFF)) << 16, 
-        load_data(data,block_starting_byte+SCALES_OFFSET + 4u,0xFFFF) | (load_data(data,block_starting_byte+SCALES_OFFSET+6u,0xFFFF)) << 16,
-        load_data(data,block_starting_byte+SCALES_OFFSET + 8u,0xFFFF) | (load_data(data,block_starting_byte+SCALES_OFFSET+10u,0xFFFF)) << 16,0u);
+        load_data(data,block_starting_byte+SCALES_OFFSET,0xFFFF)      | (load_data(data,block_starting_byte+SCALES_OFFSET+2,0xFFFF) << 16), 
+        load_data(data,block_starting_byte+SCALES_OFFSET + 4u,0xFFFF) | (load_data(data,block_starting_byte+SCALES_OFFSET+6u,0xFFFF) << 16),
+        load_data(data,block_starting_byte+SCALES_OFFSET + 8u,0xFFFF) | (load_data(data,block_starting_byte+SCALES_OFFSET+10u,0xFFFF) << 16),0u);
 
     let tmp = aux[2];
     aux[2] = ((aux[0] >> 4) & KMASK2) | (((tmp >> 4) & KMASK1) << 4);

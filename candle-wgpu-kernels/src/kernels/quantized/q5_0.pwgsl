@@ -35,7 +35,7 @@ let shift_bytes = block_qs_byte & 3u;
 #if (QH_OFFSET % 4 == 0) && (BLOCK_BYTE_SIZE % 4 == 0)
     let qh = data[(block_starting_byte + QH_OFFSET) / 4];
 #else
-    let qh = load_data(data,block_starting_byte+QH_OFFSET,0xFFFF) | (load_data(data,block_starting_byte+QH_OFFSET+2,0xFFFF)) << 16 ;
+    let qh = load_data(data,block_starting_byte+QH_OFFSET,0xFFFF) | (load_data(data,block_starting_byte+QH_OFFSET+2,0xFFFF) << 16);
 #endif
 
 #pp_end

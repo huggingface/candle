@@ -66,8 +66,8 @@ LOAD_INFO(op_matmul, 7)
 #define op_matmul_use_batch   CONSTV_2
 
 #define load_u32(data, idx) (data[idx])
-#define load_data(data,idx,bit_mask) (data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask
-#define load_i8(data,idx,bit_mask) i32(((data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask) << 24) >> 24
+#define load_data(data,idx,bit_mask) ((data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask)
+#define load_i8(data,idx,bit_mask) (i32(((data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask) << 24) >> 24)
 
 LOAD_INFO(op_dequantize, 1)
 #define op_dequantize_size               op_dequantize[0]
@@ -77,7 +77,7 @@ LOAD_INFO(op_dequantize, 1)
 fn dequantize_block_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let block_index = global_id.x;
     if(block_index < (op_dequantize_size / BLOCK_SIZE)){
-        #define CALLBACK(idx,value, idx2) v_dest[idx + block_index * BLOCK_SIZE] = value;
+        #define CALLBACK(idx,value, idx2) v_dest[(idx) + block_index * BLOCK_SIZE] = value;
         LOAD_HEADER(v_input1_u32)
 
         for(var tid = 0u; tid < TID_SIZE; tid += 1u){
