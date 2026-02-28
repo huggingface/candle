@@ -2428,23 +2428,6 @@ impl MetalAllocator {
             device,
         }
     }
-
-    // TODO: We don't really want to throw buffers around. We want to assign the correct buffer id to the edge.
-    // This is a temporary fix.
-    fn update_all_outgoing(&mut self, g: &mut OpGraph, node: NodeIndex<u32>, buffer: &Buffer) {
-        let edges: Vec<OpEdge> = g
-            .edges_directed(node, petgraph::Outgoing)
-            .map(|e| e.weight().clone())
-            .collect();
-
-        if edges.is_empty() {
-            todo!("Add error type for this state")
-            //return Err(LazyError::InvalidOutgoing(node));
-        }
-        for weight in edges {
-            self.insert(weight.buffer_id(), buffer.clone()).unwrap(); // TODO: ok_or(DescriptiveError)
-        }
-    }
 }
 use crate::lazy::Op;
 
@@ -2456,7 +2439,6 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         edges: &[EdgeIndex],
         last_node: NodeIndex,
     ) -> Result<()> {
-        /*
         for edge_idx in edges.iter().rev() {
             let edge = &graph.raw_edges()[edge_idx.index()];
             let buffer_id = edge.weight.buffer_id();
@@ -2479,9 +2461,9 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         let output_buffer =
             self.allocate(output_w.buffer_id(), source_w.shape(), source_w.dtype())?;
 
-        self.insert(output_w.buffer_id(), output_buffer)?;
-         */
+        //self.insert(output_w.buffer_id(), output_buffer.clone())?;
 
+        /*
         for edge_idx in edges.iter() {
             let edge = &graph.raw_edges()[edge_idx.index()];
             let buffer_id = edge.weight.buffer_id();
@@ -2489,11 +2471,13 @@ impl LazyAllocator<Buffer> for MetalAllocator {
             let dtype = edge.weight.dtype();
             self.allocate(buffer_id, shape, dtype)?;
         }
+        */
 
         Ok(())
     }
 
     fn insert(&mut self, id: BufferId, buffer: Buffer) -> Result<()> {
+        println!("id: {id:?}, buffer: {buffer:?}");
         self.buffer_map.insert(id, buffer);
         Ok(())
     }
@@ -2531,7 +2515,7 @@ impl Executor for MetalDevice {
     type AllocatorType = MetalAllocator;
 
     fn run(&self, graph: OpGraph) -> Result<Buffer> {
-        // println!("{}", crate::lazy::graph_to_dot(&&graph));
+        println!("{}", crate::lazy::graph_to_dot(&&graph));
         // TODO: &mut OpGraph input?
         let mut graph = graph.clone();
         let mut allocator = self.allocator();
@@ -2578,6 +2562,8 @@ impl Executor for MetalDevice {
         let out_w = out.weight();
         let buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
 
+        println!("{allocator:?}");
+
         Ok(buffer)
     }
 
@@ -2590,6 +2576,7 @@ impl Executor for MetalDevice {
         use crate::lazy::Op::*;
         //println!("{}", crate::lazy::graph_to_dot(&&graph.clone()));
 
+        self.synchronize()?;
         let op_node = &graph[node].clone();
         match op_node.op() {
             Const(s) => self.eval_const(op_node, graph, allocator, node, s)?,
@@ -2633,8 +2620,23 @@ impl Executor for MetalDevice {
                 let dst = allocator.get(dst_weight.buffer_id()).unwrap();
 
                 unary(self, src, kernel, in_w.layout(), in_w.dtype(), dst)?;
+
+                self.synchronize()?;
+
+                println!("{kernel}");
+
+                println!(
+                    "src ({:?}): {:?}",
+                    in_w.buffer_id(),
+                    read_to_vec::<f32>(src, in_w.shape().elem_count())
+                );
+                println!(
+                    "dst ({:?}): {:?}",
+                    dst_weight.buffer_id(),
+                    read_to_vec::<f32>(dst, dst_weight.layout().shape().elem_count())
+                );
             }
-            Binary(kernel) => {
+            Binary(kernel, lhs_l_bc, rhs_l_bc) => {
                 let mut edges = graph.edges_directed(node, petgraph::Incoming);
                 let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
@@ -2656,9 +2658,29 @@ impl Executor for MetalDevice {
                 let dst_weight = dst_edge.weight();
                 let dst = allocator.get(dst_weight.buffer_id()).unwrap();
 
+                println!("{kernel} lhs_l: {lhs_l_bc:?}");
+                println!("{kernel} rhs_l: {rhs_l_bc:?}");
                 binary(
-                    self, kernel, lhs, lhs_l, lhs_dtype, rhs, rhs_l, rhs_dtype, dst,
+                    self, kernel, lhs, lhs_l_bc, lhs_dtype, rhs, rhs_l_bc, rhs_dtype, dst,
                 )?;
+
+                self.synchronize()?;
+
+                println!(
+                    "lhs ({:?}): {:?}",
+                    lhs_weight.buffer_id(),
+                    read_to_vec::<f32>(lhs, lhs_l_bc.shape().elem_count())
+                );
+                println!(
+                    "rhs ({:?}): {:?}",
+                    rhs_weight.buffer_id(),
+                    read_to_vec::<f32>(rhs, rhs_l_bc.shape().elem_count())
+                );
+                println!(
+                    "dst ({:?}): {:?}",
+                    dst_weight.buffer_id(),
+                    read_to_vec::<f32>(dst, dst_weight.layout().shape().elem_count())
+                );
             }
             /*
             ToCpu,
@@ -2890,6 +2912,7 @@ impl Executor for MetalDevice {
             //ConstSet(crate::scalar::Scalar, Layout)
             Sink => {}
             Output => {
+                todo!();
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_w = in_edge.weight();

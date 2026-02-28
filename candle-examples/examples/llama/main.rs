@@ -137,7 +137,9 @@ fn main() -> Result<()> {
     };
 
     // TODO: Revert. Update candle_examples::device
-    let device = candle::Device::Lazy(candle::lazy::LazyDevice); //candle_examples::device(args.cpu)?;
+    let device = candle::Device::Lazy(candle::lazy::LazyDevice);
+    //let device = candle_examples::device(args.cpu)?;
+
     let dtype = match args.dtype.as_deref() {
         Some("f16") => DType::F16,
         Some("bf16") => DType::BF16,

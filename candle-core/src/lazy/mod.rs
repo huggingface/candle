@@ -342,6 +342,8 @@ pub trait LazyAllocator<B: LazyBuffer> {
 }
 
 pub fn determine_tensor_source<'a>(graph: &'a OpGraph, edge: &'a Edge<OpEdge>) -> &'a Edge<OpEdge> {
+    // TODO: Something is not quite right here.
+    /*
     let mut source = edge;
     loop {
         let next_edge = source.next_edge(petgraph::Incoming);
@@ -358,6 +360,8 @@ pub fn determine_tensor_source<'a>(graph: &'a OpGraph, edge: &'a Edge<OpEdge>) -
         source = edge;
     }
     source
+    */
+    edge
 }
 
 pub fn calculate_usage_records(
@@ -398,8 +402,8 @@ pub fn calculate_usage_records(
                 });
         }
 
-        if let Some(record) = records.get_mut(&edge.weight.buffer_id()) {
-            record.0 = Some(edge.weight.buffer_id());
+        if let Some(record) = records.get_mut(&buffer_id) {
+            record.0 = Some(buffer_id);
             record.1 = Some(topo_len - i);
         }
     }
@@ -408,6 +412,7 @@ pub fn calculate_usage_records(
     records
 }
 
+// https://arxiv.org/pdf/2001.03288.pdf
 pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
     graph: &OpGraph,
     edges: &[EdgeIndex],
@@ -448,6 +453,7 @@ pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
     }
 
     // Loop through and add inplace assignments
+    /*
     for edge_idx in edges.iter() {
         let edge = &graph.raw_edges()[edge_idx.index()];
         let node_idx = edge.source();
@@ -467,6 +473,7 @@ pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
             }
         }
     }
+    */
     Ok(())
 }
 
@@ -596,7 +603,7 @@ pub enum Op {
     Cmp(CmpOp),
     ToDType(DType),
     Unary(&'static str),
-    Binary(&'static str),
+    Binary(&'static str, Layout, Layout),
     WhereCond,
     Conv1D(crate::conv::ParamsConv1D),
     ConvTranspose1D(crate::conv::ParamsConvTranspose1D),
@@ -822,40 +829,55 @@ impl BackendStorage for LazyStorage {
         Ok(next)
     }
 
-    fn reduce_op(&self, reduce: ReduceOp, l: &Layout, sum_dims: &[usize]) -> Result<Self> {
+    fn reduce_op(&self, reduce: ReduceOp, l: &Layout, reduce_dims: &[usize]) -> Result<Self> {
         count();
 
         let mut next = self.clone();
 
         // Calculate reduction layout and number of destination elements.
         let src_stride = l.stride();
-        let src_dims = l.shape().dims();
+        let src_dims = l.dims();
         // Source dims and strides with the sum dims at the end.
         let mut dims = vec![];
         let mut stride = vec![];
         let mut dst_el: usize = 1;
         for (dim_idx, &d) in src_dims.iter().enumerate() {
-            if !sum_dims.contains(&dim_idx) {
+            if !reduce_dims.contains(&dim_idx) {
                 dst_el *= d;
                 dims.push(d);
                 stride.push(src_stride[dim_idx]);
             }
         }
 
-        for &dim_idx in sum_dims.iter() {
+        let mut dst_dims = src_dims.to_vec();
+        for &dim_idx in reduce_dims.iter() {
             dims.push(src_dims[dim_idx]);
             stride.push(src_stride[dim_idx]);
+            dst_dims[dim_idx] = 1;
         }
 
         let reduction_shape = Shape::from(dims.clone());
+        println!("reduction_shape: {reduction_shape:?}");
         let reduction_layout = Layout::new(reduction_shape, stride, 0);
+        println!("reduction_layout: {reduction_layout:?}");
 
-        let op = Op::Reduce(reduce, sum_dims.to_vec(), reduction_layout, dst_el);
-        let edge = OpEdge::new(l.clone(), self.dtype());
+        let dst_shape = Shape::from(dst_dims);
+        println!("dst_shape: {dst_shape:?}");
+        let dst_layout = Layout::contiguous(dst_shape);
+        println!("dst_layout: {dst_layout:?}");
+
+        let op = Op::Reduce(
+            reduce,
+            reduce_dims.to_vec(),
+            reduction_layout.clone(),
+            dst_el,
+        );
+        let edge = OpEdge::new(reduction_layout.clone(), self.dtype());
         let idx = next.add_operation(op);
         next.operations
             .add_edge(next.get_current_node()?, idx, edge);
 
+        next.layout = dst_layout;
         next.current_node = Some(idx);
         Ok(next)
     }
@@ -910,6 +932,7 @@ impl BackendStorage for LazyStorage {
         next.operations
             .add_edge(next.get_current_node()?, idx, edge);
 
+        next.layout = l.clone();
         next.current_node = Some(idx);
         Ok(next)
     }
@@ -922,17 +945,21 @@ impl BackendStorage for LazyStorage {
     ) -> Result<Self> {
         count();
 
+        println!("lazy binary lhs_l: {lhs_l:?}");
+        println!("lazy binary rhs_l: {rhs_l:?}");
+        println!("lazy binary self.layout: {:?}", self.layout);
+        println!("lazy binary rhs.layout: {:?}", rhs.layout);
         let mut next = self.clone();
 
-        let op = Op::Binary(B::KERNEL);
+        let op = Op::Binary(B::KERNEL, lhs_l.clone(), rhs_l.clone());
         let idx = next.add_operation(op);
 
         let current_op = next.get_current_node()?;
-        let lhs_edge = OpEdge::new(lhs_l.clone(), self.dtype());
+        let lhs_edge = OpEdge::new(self.layout.clone(), self.dtype());
         next.operations.add_edge(current_op, idx, lhs_edge);
 
         let rhs_op = rhs.get_current_node()?;
-        let rhs_edge = OpEdge::new(rhs_l.clone(), self.dtype());
+        let rhs_edge = OpEdge::new(rhs.layout.clone(), self.dtype());
 
         next.merge(rhs, rhs_op, idx, rhs_edge)?;
 
@@ -1514,7 +1541,7 @@ impl BackendDevice for LazyDevice {
 
 #[cfg(test)]
 mod tests {
-    use crate::{lazy::LazyDevice, Device, Result, Shape, Tensor};
+    use crate::{lazy::LazyDevice, Device, Result, Shape, Tensor, D};
 
     #[test]
     fn lazy_unary() -> Result<()> {
@@ -1641,6 +1668,75 @@ mod tests {
         assert_eq!(
             result.to_vec1::<f32>()?,
             &[9., 2., 11., 4., 13., 14., 7., 8.]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_reduce() -> Result<()> {
+        let t = Tensor::from_slice(
+            &[0f32, 1., 2., 3., 4., 3., 2., 1.],
+            Shape::from((4, 1)),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let result = t.max(1)?;
+        assert_eq!(result.to_vec1::<f32>()?, &[0., 1., 2., 3.]);
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_check() -> Result<()> {
+        let t1 = Tensor::from_slice(
+            &[0f32, 1., 2., 3., 4., 5., 6., 7.],
+            Shape::from(8),
+            &Device::Lazy(LazyDevice),
+            //&Device::new_metal(0)?,
+        )?;
+
+        let t2 = t1.affine(1.25, 0.0)?;
+        assert_eq!(
+            t2.to_vec1::<f32>()?,
+            &[0.0, 1.25, 2.5, 3.75, 5.0, 6.25, 7.5, 8.75]
+        );
+        let t3 = t2.max_keepdim(D::Minus1)?;
+        assert_eq!(t3.to_vec1::<f32>()?, &[8.75]);
+        let t4 = t1.broadcast_sub(&t3)?;
+        assert_eq!(
+            t4.to_vec1::<f32>()?,
+            &[-8.75, -7.75, -6.75, -5.75, -4.75, -3.75, -2.75, -1.75]
+        );
+        let t5 = t4.exp()?;
+        assert_eq!(
+            t5.to_vec1::<f32>()?,
+            &[
+                0.0001584613,
+                0.00043074263,
+                0.0011708796,
+                0.003182782,
+                0.008651696,
+                0.02351775,
+                0.06392787,
+                0.17377394
+            ]
+        );
+        let t6 = t5.sum_keepdim(D::Minus1)?;
+        assert_eq!(t6.to_vec1::<f32>()?, &[0.27481413]);
+        let t7 = t5.broadcast_div(&t6)?;
+
+        let result = t7;
+        assert_eq!(
+            result.to_vec1::<f32>()?,
+            &[
+                0.00057661266,
+                0.0015673962,
+                0.0042606234,
+                0.011581581,
+                0.031481992,
+                0.08557693,
+                0.23262219,
+                0.6323326
+            ]
         );
         Ok(())
     }
