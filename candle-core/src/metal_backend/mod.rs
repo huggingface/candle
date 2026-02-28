@@ -2451,7 +2451,19 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         }
 
         //Allocate intermediates
-        crate::lazy::greedy_by_size(graph, edges, self)?;
+        let memory_plan = crate::lazy::greedy_by_size(graph, edges)?;
+
+        for edge_weight in graph.edge_weights_mut() {
+            let buffer_id = edge_weight.buffer_id();
+            if let Some(best) = memory_plan.plan.get(&buffer_id) {
+                println!("buffer id override {buffer_id:?} -> {best:?}");
+                edge_weight.update_buffer_id(*best);
+            }
+        }
+
+        for (buffer_id, (layout, dtype)) in memory_plan.allocations.iter() {
+            self.allocate(*buffer_id, layout.shape(), *dtype)?;
+        }
 
         let output = edges.last().unwrap();
         let output_w = graph.edge_weight(*output).unwrap();
@@ -2515,7 +2527,6 @@ impl Executor for MetalDevice {
     type AllocatorType = MetalAllocator;
 
     fn run(&self, graph: OpGraph) -> Result<Buffer> {
-        println!("{}", crate::lazy::graph_to_dot(&&graph));
         // TODO: &mut OpGraph input?
         let mut graph = graph.clone();
         let mut allocator = self.allocator();
@@ -2537,6 +2548,8 @@ impl Executor for MetalDevice {
         };
 
         allocator.initialize(&mut graph, &edges, last)?;
+
+        println!("{}", crate::lazy::graph_to_dot(&&graph));
 
         let mut final_node = NodeIndex::end();
         //while let Some(idx) = dfs.next(&graph) {

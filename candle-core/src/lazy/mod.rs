@@ -412,20 +412,25 @@ pub fn calculate_usage_records(
     records
 }
 
+pub struct MemoryPlan {
+    pub plan: HashMap<BufferId, BufferId>,
+    pub allocations: HashMap<BufferId, (Layout, DType)>,
+}
+
 // https://arxiv.org/pdf/2001.03288.pdf
-pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
-    graph: &OpGraph,
-    edges: &[EdgeIndex],
-    allocator: &mut A,
-) -> Result<()> {
+pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan> {
     let record_map = calculate_usage_records(graph, edges);
-    let mut shared_objects: Vec<B> = Vec::with_capacity(record_map.len());
+    let mut shared_objects: Vec<BufferId> = Vec::with_capacity(record_map.len());
+
+    let mut memory_plan = HashMap::with_capacity(record_map.len());
+    let mut allocations = HashMap::with_capacity(record_map.len());
 
     for (buffer_id, (record_buffer_id, producer, last_consumer, layout, dtype)) in record_map.iter()
     {
         let record_producer = producer.unwrap();
-        let mut best_obj: Option<&B> = None;
-        for obj in shared_objects.iter() {
+        let mut best_buffer: Option<BufferId> = None;
+
+        for obj in shared_objects.iter().cloned() {
             let mut suitable = true;
             for (
                 inner_buffer_id,
@@ -434,21 +439,26 @@ pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
             {
                 let max_first = std::cmp::max(record_producer, inner_producer.unwrap());
                 let min_last = *std::cmp::min(last_consumer, inner_last_consumer);
-                if max_first <= min_last && allocator.get(*inner_buffer_id).ok() == Some(obj) {
+                if max_first <= min_last
+                    && allocations.contains_key(inner_buffer_id)
+                    && inner_buffer_id == &obj
+                {
                     suitable = false;
                     break;
                 }
             }
             if suitable {
-                best_obj = Some(obj);
+                best_buffer = Some(obj);
             }
         }
-        if let Some(obj) = best_obj {
-            allocator.insert(*buffer_id, obj.clone())?;
+        if let Some(best) = best_buffer {
+            memory_plan.insert(buffer_id.clone(), best);
+            //allocator.insert(*buffer_id, obj.clone())?;
         } else {
             //let rounded_size = (record.size - 1).next_power_of_two();
-            let buffer = allocator.allocate(*buffer_id, layout.shape(), *dtype)?;
-            shared_objects.push(buffer.clone());
+            allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
+            //let buffer = allocator.allocate(*buffer_id, layout.shape(), *dtype)?;
+            shared_objects.push(buffer_id.clone());
         }
     }
 
@@ -474,7 +484,10 @@ pub fn greedy_by_size<A: LazyAllocator<B>, B: LazyBuffer>(
         }
     }
     */
-    Ok(())
+    Ok(MemoryPlan {
+        plan: memory_plan,
+        allocations,
+    })
 }
 
 pub trait Executor {
@@ -554,6 +567,10 @@ impl OpEdge {
 
     pub fn buffer_id(&self) -> BufferId {
         self.buffer_id
+    }
+
+    pub fn update_buffer_id(&mut self, buffer_id: BufferId) {
+        self.buffer_id = buffer_id
     }
 
     pub fn bytes(&self) -> usize {
