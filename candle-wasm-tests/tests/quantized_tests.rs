@@ -459,6 +459,7 @@ async fn ggml_quantization_error_test(
     }
     Ok(())
 }
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 async fn imatrix_quantize_q6k() -> Result<()> {
     let cpu = &Device::Cpu;
@@ -485,6 +486,7 @@ async fn imatrix_quantize_q6k() -> Result<()> {
     assert!(err2 < err1, "err2 {err2} > err1 {err1}");
     Ok(())
 }
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 async fn imatrix_quantize_q5k() -> Result<()> {
     let cpu = &Device::Cpu;
@@ -511,6 +513,7 @@ async fn imatrix_quantize_q5k() -> Result<()> {
     assert!(err2 < err1, "err2 {err2} > err1 {err1}");
     Ok(())
 }
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 async fn imatrix_quantize_q4k() -> Result<()> {
     let cpu = &Device::Cpu;
@@ -537,6 +540,7 @@ async fn imatrix_quantize_q4k() -> Result<()> {
     assert!(err2 < err1, "err2 {err2} > err1 {err1}");
     Ok(())
 }
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 async fn imatrix_quantize_q3k() -> Result<()> {
     let cpu = &Device::Cpu;
@@ -563,6 +567,7 @@ async fn imatrix_quantize_q3k() -> Result<()> {
     assert!(err2 < err1, "err2 {err2} > err1 {err1}");
     Ok(())
 }
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 async fn imatrix_quantize_q2k() -> Result<()> {
     let cpu = &Device::Cpu;

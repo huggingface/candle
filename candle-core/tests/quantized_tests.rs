@@ -486,6 +486,7 @@ fn ggml_quantization_error_test(dtype: GgmlDType, device: &Device, max_error: f3
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]//on wasm this test is too slow
 #[test]
 fn imatrix_quantize_q6k() -> Result<()> {
     let cpu = &Device::Cpu;
@@ -524,6 +525,7 @@ fn imatrix_quantize_q6k() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]//on wasm this test is too slow
 #[test]
 fn imatrix_quantize_q5k() -> Result<()> {
     let cpu = &Device::Cpu;
@@ -562,6 +564,7 @@ fn imatrix_quantize_q5k() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]//on wasm this test is too slow
 #[test]
 fn imatrix_quantize_q4k() -> Result<()> {
     // let data =
@@ -607,6 +610,7 @@ fn imatrix_quantize_q4k() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]//on wasm this test is too slow
 #[test]
 fn imatrix_quantize_q3k() -> Result<()> {
     let cpu = &Device::Cpu;
@@ -645,6 +649,7 @@ fn imatrix_quantize_q3k() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]//on wasm this test is too slow
 #[test]
 fn imatrix_quantize_q2k() -> Result<()> {
     let cpu = &Device::Cpu;

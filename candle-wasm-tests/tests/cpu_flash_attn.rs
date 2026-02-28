@@ -15,6 +15,7 @@ use candle_wasm_tests::{
 };
 use candle::{DType, Device, Result, Tensor};
 use candle_nn::cpu_flash_attention::run_flash_attn_cpu;
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 async fn cpu_flash_attn() -> Result<()> {
     let b = 1;

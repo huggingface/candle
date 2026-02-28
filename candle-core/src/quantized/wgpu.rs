@@ -152,6 +152,67 @@ impl QWgpuStorage {
         Ok(())
     }
 
+    pub fn quantize_onto(&mut self, src: &crate::CpuStorage) -> Result<()> {
+        // Quantization only happens on CPU for now.
+        let elem_count = src.as_slice::<f32>()?.len();
+        let mut qcpu_storage = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+
+        if let QStorage::Cpu(storage) = &mut qcpu_storage {
+            storage.from_float(src.as_slice::<f32>()?);
+        } else {
+            unreachable!()
+        }
+
+        let buffer = self
+            .device()
+            .alloc_from_slice(DType::U32, &qcpu_storage.data()?)?;
+        self.storage = buffer;
+        Ok(())
+    }
+
+    pub fn quantize_imatrix(
+        &mut self,
+        src: &WgpuStorage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        // Quantization only happens on CPU for now.
+        let src = src.to_cpu_storage()?;
+        let elem_count = src.as_slice::<f32>()?.len();
+        let src = crate::Storage::Cpu(src);
+        let mut qcpu_storage = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+        qcpu_storage.quantize_imatrix(&src, imatrix_weights, n_per_row)?;
+        let buffer = self
+            .device()
+            .alloc_from_slice(DType::U32, &qcpu_storage.data()?)?;
+        self.storage = buffer;
+        Ok(())
+    }
+
+    pub fn quantize_imatrix_onto(
+        &mut self,
+        src: &crate::CpuStorage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        // Quantization only happens on CPU for now.
+        let elem_count = src.as_slice::<f32>()?.len();
+        let mut qcpu_storage = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+
+        if let QStorage::Cpu(storage) = &mut qcpu_storage {
+            storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
+        } else {
+            unreachable!()
+        }
+
+        let buffer = self
+            .device()
+            .alloc_from_slice(DType::U32, &qcpu_storage.data()?)?;
+        self.storage = buffer;
+        Ok(())
+    }
+
+
     fn get_best_algorithm(
         &self,
         dtype: GgmlDType,

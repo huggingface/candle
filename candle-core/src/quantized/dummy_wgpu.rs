@@ -32,6 +32,28 @@ impl QWgpuStorage {
         Err(Error::NotCompiledWithWgpuSupport)
     }
 
+    pub fn quantize_onto(&mut self, _src: &crate::CpuStorage) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn quantize_imatrix(
+        &mut self,
+        _src: &WgpuStorage,
+        _imatrix_weights: &[f32],
+        _n_per_row: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    pub fn quantize_imatrix_onto(
+        &mut self,
+        _src: &crate::CpuStorage,
+        _imatrix_weights: &[f32],
+        _n_per_row: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     pub fn storage_size_in_bytes(&self) -> usize {
         0
     }
