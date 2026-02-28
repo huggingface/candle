@@ -1,0 +1,224 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+    <title>Candle WUERSTCHEN Rust/WASM</title>
+  </head>
+  <body></body>
+</html>
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+      html,
+      body {
+        font-family: "Source Sans 3", sans-serif;
+      }
+      code,
+      output,
+      select,
+      pre {
+        font-family: "Source Code Pro", monospace;
+      }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      Error.stackTraceLimit = 50;
+
+      const opfsRoot = await navigator.storage.getDirectory();
+      console.log(opfsRoot);
+      console.log("entries:");
+      for await (let [name, handle] of opfsRoot) {
+          console.log(name);
+      }
+
+      import init, {Model} from "./build/m.js";
+
+      let model = null;
+
+      async function generateSequence(controller) {
+        const getValue = (id) => document.querySelector(`#${id}`).value;
+        const useWgpu = getValue("useWgpu");
+        const prompt = getValue("prompt");
+     
+        function updateStatus(status) {
+          const outStatus = document.querySelector("#output-status");
+          const outGen = document.querySelector("#output-generation");
+
+          switch (status) {
+            case "loading":
+              outGen.style.display = 'flex';
+              outGen.hidden = false;
+              outStatus.hidden = false;
+              outStatus.textContent = "Loading Model";
+              break;
+            case "generating":
+              outGen.style.display = 'flex';
+              outGen.hidden = false;
+              outStatus.hidden = false;
+              outStatus.textContent = "Generating... Image";
+              break;
+            case "complete":
+              outGen.style.display = 'none';
+              outGen.hidden = true;
+              outStatus.hidden = true;
+              break;
+          }
+        }
+       
+        console.log("before init");
+        await init();
+
+        if(model == null){
+          updateStatus("loading");
+          model = await new Model(
+            JSON.stringify(
+              {use_gpu : true, 
+              buffer_cached_max_allowed_size : 1024*1024*1024*8, 
+              max_workload_size: 1024*1024*1024, 
+              use_cache : true,
+              flush_gpu_before_buffer_init : false,
+            }));
+        } 
+        updateStatus("generating");
+        let result = await model.run(JSON.stringify({prompt : prompt, prior_steps: 12, vgan_steps : 12}));
+        updateStatus("complete");
+        console.log("Got Result");
+        var blob = new Blob([result], {'type': 'image/png'});
+        console.log("Loaded Blob");
+        var url = URL.createObjectURL(blob);
+        console.log("Got Blob Url:" + url);
+        const outputCanvas = document.querySelector("#output-canvas");
+        outputCanvas.src = url; 
+        console.log("Set image url");
+      }
+
+      const form = document.querySelector("#form");
+      const prompt = document.querySelector("#prompt");
+      const clearBtn = document.querySelector("#clear-btn");
+      const runBtn = document.querySelector("#run");
+      let runController = new AbortController();
+      let isRunning = false;
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (isRunning) {
+          stopRunning();
+        } else {
+          startRunning();
+          await generateSequence(runController);
+          stopRunning();
+        }
+      });
+
+      function startRunning() {
+        isRunning = true;
+        runBtn.textContent = "Stop";
+      }
+
+      function stopRunning() {
+        runController.abort();
+        runController = new AbortController();
+        runBtn.textContent = "Run";
+        isRunning = false;
+      }
+      clearBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        prompt.value = "";
+        clearBtn.classList.add("invisible");
+        runBtn.disabled = true;
+        stopRunning();
+      });
+      prompt.addEventListener("input", (e) => {
+        runBtn.disabled = false;
+        if (e.target.value.length > 0) {
+          clearBtn.classList.remove("invisible");
+        } else {
+          clearBtn.classList.add("invisible");
+        }
+      });
+    </script>
+  </head>
+  <body class="container max-w-4xl mx-auto p-4 text-gray-800">
+    <main class="grid grid-cols-1 gap-8 relative">
+      <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
+      <div>
+        <h1 class="text-5xl font-bold">Candle wuerstchen</h1>
+        <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+        <p class="max-w-lg">
+         wuerstchen
+          <a
+            href="https://github.com/huggingface/candle/"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+            >Candle
+          </a>
+          to run wuerstchen in the browser using rust/wasm.
+        </p>
+      </div>
+
+      <div>
+        <label for="useWgpu" class="font-medium">Use Wgpu </label>
+        <select
+          id="useWgpu"
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="true" selected>True</option>
+          <option value="false">False</option>
+        </select>
+      </div>
+      <div>
+        <p class="text-xs italic max-w-lg">
+          <b>Note:</b>
+          The model may only work with WGPU enabled as there is not enough memory in WASM to run on the CPU. 
+          The model is 12.37 GB in size, the first run may be significantly slower. 
+          At the moment there is no feedback that the model is being downloaded 
+          (you may have to look for external tools, e.g. the network speed in the task manager, to monitor the download).
+        </p>
+      </div>
+      <form
+        id="form"
+        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center">
+        <input type="submit" hidden />
+        <input
+          type="text"
+          id="prompt"
+          class="font-light w-full px-3 py-2 mx-1 resize-none outline-none"
+          placeholder="Add your prompt here..."
+          value="Once upon a time" />
+        <button id="clear-btn">
+          <svg
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            width="40"
+            viewBox="0 0 70 40">
+            <path opacity=".5" d="M39 .2v40.2" stroke="#1F2937" />
+            <path
+              d="M1.5 11.5 19 29.1m0-17.6L1.5 29.1"
+              opacity=".5"
+              stroke="#1F2937"
+              stroke-width="2" />
+          </svg>
+        </button>
+        <button
+          id="run"
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed">
+          Run
+        </button>
+      </form>
+      <div>
+        <h3 class="font-medium">Generation:</h3>
+        <div
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2" id="output-generation">
+          <span id="output-status" class="m-auto font-light">No output yet</span
+          >
+        </div>
+        <img id="output-canvas">
+
+        </img>
+      </div>
+    </main>
+  </body>
+</html>

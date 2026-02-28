@@ -65,3 +65,8 @@ Run `cargo build` to make sure everything can be correctly built.
 ```bash
 cargo build
 ```
+
+
+**With wgpu support**
+
+You can also see the `wgpu` feature which could be interesting to get faster inference with (Vulkan, Dx12, Metal or WebGpu). [Using wgpu](../wgpu/)

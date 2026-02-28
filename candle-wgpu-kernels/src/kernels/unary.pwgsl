@@ -1,0 +1,409 @@
+#include "util.pwgsl"
+
+fn hash(i : u32) -> u32{
+    var x = i ^ (i >> 16);
+    x = x * 0x85ebca6b;
+    x ^= x >> 13;
+    x = x * 0xc2b2ae35;
+    x ^= x >> 16;
+    return x;
+}
+
+fn pseudo_random_u32(index : u32,seed : u32) -> u32{
+    return hash(index ^ seed);
+}
+
+#ifdef f32
+
+fn pseudo_random_float(index : u32,seed : u32) -> f32{
+    return f32(pseudo_random_u32(index, seed)) / f32(0xFFFFFFFFu);
+}
+
+// Function to convert a uniformly distributed random number [0, 1) to a normal distribution with mean and std
+fn uniform_to_normal(mean: f32, std_: f32, u1: f32, u2 : f32) -> f32 {
+    // Box-Muller transform to convert uniform random value to normal distribution
+    let pi: f32 = 3.141592653589793;    
+
+    let z0 = sqrt(-2.0 * log(u1)) * cos(2.0 * pi * u2);
+    let z = mean + std_ * z0; // Convert to desired mean and std
+    return z;
+}
+
+// Function to convert a uniformly distributed random number [0, 1) to a normal distribution with mean and std
+fn rand_normal(id: u32, mean: f32, std_: f32, seed : u32) -> f32 {
+    let u1 = pseudo_random_float(2*id, seed);
+    let u2 = pseudo_random_float(2*id + 1, seed);
+    return uniform_to_normal(mean, std_, u1, u2);
+}
+
+const SQRT_TWO_OVER_PI_F32: f32 = 0.79788456080286535587989211986876373;
+
+
+
+//https://en.wikipedia.org/wiki/Error_function Abramowitz and Stegun approximation
+fn erfg(x : f32) -> f32{
+    let p = 0.3275911;
+    let a1 = 0.254829592;
+    let a2 = -0.284496736;
+    let a3 = 1.421413741;
+    let a4 = -1.453152027;
+    let a5 = 1.061405429;
+
+    let t = 1 / (1 + p*x);
+
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let t4 = t3 * t;
+    let t5 = t4 * t;
+
+    return 1 - (a1 * t + a2 * t2 + a3 * t3 + a4 * t4 + a5 * t5) * exp(- (x * x));
+}
+
+fn erf(x : f32) -> f32{
+   if x >= 0{
+        return erfg(x);
+   }
+   else{
+        return -erfg(-x);
+   }
+}
+
+
+#endif
+
+//all Const Operations
+fn set_const(operation : u32, id : u32){
+    switch operation {
+        case 0u{ // set 0
+            v_dest[id] = ZERO;
+        }
+        case 1u{ //set 1
+            v_dest[id] = ONE;
+        }
+        default{
+        }
+    }
+}
+
+//all rand Operations
+fn set_rand(operation : u32, id : u32, scalar1 : f32, scalar2 : f32, seed : u32){
+    switch operation {
+    #ifdef f32
+        case 47u{ //random_normal
+            v_dest[id] = rand_normal(id, scalar1, scalar2, seed);
+        }
+        case 48u{ //RandUniform
+            let r = pseudo_random_float(id, seed);
+            v_dest[id] = (scalar2 - scalar1) * r + scalar1;
+        }
+    #endif
+        default{
+        }
+    }
+}
+
+//all Unary Operations
+fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32){
+    switch operation {
+        case 2u{ 
+            v_dest[id] += ONE;
+        }
+        case 3u{ 
+            v_dest[id] -= ONE;
+        }
+        case 4u{ //Identity
+            v_dest[id] = x;
+        }
+        case 5u{ //square
+            v_dest[id] = x * x;
+        }
+        case 6u{//Affine
+            v_dest[id] = TODTYPE(f32(x) * scalar1 + scalar2);
+        }
+
+#ifdef f32
+        case 7u{  
+            v_dest[id] = abs(x);
+        }
+        case 8u{ 
+            v_dest[id] = acos(x); 
+        }
+        case 9u{ 
+            v_dest[id] = acosh(x); 
+        }
+        case 10u{ 
+            v_dest[id] = asin(x); 
+        }
+        case 11u{ 
+            v_dest[id] = asinh(x); 
+        }
+        case 12u{ 
+            v_dest[id] = atan(x) ;
+        }
+        case 13u{ 
+            v_dest[id] = atanh(x) ;
+        }
+        case 14u{ 
+            v_dest[id] = ceil(x) ;
+        }
+        case 15u{ 
+            v_dest[id] = cos(x); 
+        }
+        case 16u{ 
+            v_dest[id] = cosh(x) ;
+        }
+        case 17u{ 
+            v_dest[id] = degrees(x) ;
+        }
+        case 21u{ 
+            v_dest[id] = exp(x); 
+        }
+        case 22u{ 
+            v_dest[id] = floor(x); 
+        }
+        case 23u{ 
+            v_dest[id] = fract(x); 
+        }
+        case 24u{ 
+            v_dest[id] = inverseSqrt(x) ;
+        }
+        case 25u{ 
+            v_dest[id] = log(x) ;
+        }
+        case 26u{ 
+            v_dest[id] = log2(x) ;
+        }
+        case 27u{ 
+            v_dest[id] = radians(x) ;
+        }
+        case 28u{ 
+            v_dest[id] = sign(x) ;
+        }
+        case 29u{ 
+            v_dest[id] = sin(x) ;
+        }case 31u{ 
+            v_dest[id] = sinh(x) ;
+        }case 32u{ 
+            v_dest[id] = sqrt(x) ;
+        }case 33u{ 
+            v_dest[id] = tan(x); 
+        }case 34u{ 
+            v_dest[id] = tanh(x); 
+        }case 35u{ 
+            v_dest[id] = trunc(x) ;
+        }case 36u{  //Binary Step
+            if(v_dest[id] < 0){
+                v_dest[id] = ZERO;
+            }
+            else{
+                v_dest[id] = ONE;
+            }
+        }case 37u{   //Sigmoid
+            v_dest[id] = 1 / (1 + exp(-x));
+        }case 38u{   //Relu
+            v_dest[id] = max(ZERO, x) ;
+        }case 39u{   //Softplus
+            v_dest[id] = log(1 + exp(x));
+        }case 40u{  //Leaky ReLU
+            if(x < 0){
+                v_dest[id] = 0.01 * x;
+            }
+            else{
+                v_dest[id] = x;
+            }
+        }case 41u{ //SiLU
+            v_dest[id] = x / (1 + exp(-x));
+        }
+        case 42u{ //Gaussian
+            v_dest[id] = exp(-(x * x));
+        }
+        case 45u{ 
+            v_dest[id] = -x;
+        }
+        case 46u{ //inverse
+            v_dest[id] = 1 / x;
+        }
+        case 49u{//Gelu
+            v_dest[id] = 0.5 * x * (1.0 + tanh(SQRT_TWO_OVER_PI_F32 * x * (1.0 + 0.044715 * x * x)));
+        }
+        case 50u{
+            //round away from zero, //wgsl round would be round to even
+            let a = abs(x);
+            let b = floor(a) + floor(2*(a%1));
+            v_dest[id] = sign(x)*b;
+            //v_dest[id] = round(x);
+        }
+        case 52u{ //elu
+            if (x > 0) {
+                v_dest[id] = x;
+            } else {
+                v_dest[id] = (exp(x) - 1) * scalar1;
+            }
+        }
+        case 53u{
+            v_dest[id] = erf(x);
+        }
+        case 54u{ //gelu_erf
+             v_dest[id] = (erf(x / sqrt(2.0)) + 1.) * 0.5 * x;
+        }
+#endif
+        case 100u{ //set
+            v_dest[id] = TODTYPE(scalar1);
+        }
+        case 101u{ //add
+            v_dest[id] = x + TODTYPE(scalar1);
+        }
+        case 102u{ //mult
+            v_dest[id] = TODTYPE(f32(x) * scalar1);
+        }
+        case 103u{ //minus
+            v_dest[id] = x - TODTYPE(scalar1);
+        }
+        case 104u{ //div
+            v_dest[id] = TODTYPE(f32(x) / scalar1);
+        }
+        case 105u{ //max
+            v_dest[id] = max(x, TODTYPE(scalar1));
+        }
+        case 106u{ //min
+            v_dest[id] = min(x, TODTYPE(scalar1));
+        }
+
+#ifdef f32
+        case 107u{ //powf
+            v_dest[id] = pow(x, scalar1);
+        }
+#endif
+        default{
+
+        }
+    }
+}
+
+
+override CONSTV_0 : u32 = 1u;
+override CONSTV_1 : bool = true;
+override USE_Z : bool = false;
+
+#define op_unary_operation         CONSTV_0
+
+LOAD_INFO_UNKNOWN_SIZE(op_unary, 2)
+#define op_unary_scalar1             bitcast<f32>(op_unary[0])
+#define op_unary_scalar2             bitcast<f32>(op_unary[1])
+#define op_unary_input1_layout       2u
+
+LOAD_INFO(op_unary_contiguous, 5)
+#define op_unary_contiguous_operation           CONSTV_0
+#define op_unary_contiguous_offset_is_zero      CONSTV_1
+#define op_unary_contiguous_scalar1             bitcast<f32>(op_unary_contiguous[0])
+#define op_unary_contiguous_scalar2             bitcast<f32>(op_unary_contiguous[1])
+#define op_unary_contiguous_length              op_unary_contiguous[2]
+#define op_unary_contiguous_offset              select(op_unary_contiguous[3], 0u,op_unary_contiguous_offset_is_zero) 
+#define op_unary_contiguous_seed                op_unary_contiguous[4]
+
+
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
+    GET_INDEX1(op_unary,op_unary_input1_layout, id, pos1_is_valid, pos1_id)
+    if(pos1_is_valid){
+        let x = v_input1[pos1_id];
+        set_unary(op_unary_operation,id, x, op_unary_scalar1, op_unary_scalar2);
+    }
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
+    if (id >= op_unary_contiguous_length){
+        return;
+    }
+    let x = v_input1[id + op_unary_contiguous_offset];
+    set_unary(op_unary_contiguous_operation, id, x, op_unary_contiguous_scalar1, op_unary_contiguous_scalar2);
+}
+
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z) + op_unary_contiguous_offset;
+    if (id >= op_unary_contiguous_length){
+        return;
+    }
+    let x = v_dest[id];
+    set_unary(op_unary_contiguous_operation, id, x, op_unary_contiguous_scalar1, op_unary_contiguous_scalar2);
+}
+
+
+
+//for constant functions, e.g. Set Zero:
+@compute
+@workgroup_size(64,1,1)
+fn const_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let unused = op_unary_contiguous_offset_is_zero;
+
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z) + op_unary_contiguous_offset;
+    if (id >= op_unary_contiguous_length){
+        return;
+    }
+    set_const(op_unary_contiguous_operation, id);
+}
+
+//for constant functions, e.g. Set Zero:
+@compute
+@workgroup_size(64,1,1)
+fn const_inplace_contiguous_4(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let unused = op_unary_contiguous_offset_is_zero;
+
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z) + op_unary_contiguous_offset;
+    if (id >= op_unary_contiguous_length){
+        return;
+    }
+
+    switch op_unary_contiguous_operation {
+        case 0u{ // set 0
+            v_dest_4[id] = vec4(ZERO,ZERO,ZERO,ZERO);
+        }
+        case 1u{ //set 1
+            v_dest_4[id] = vec4(ONE,ONE,ONE,ONE);
+        }
+        default{
+        }
+    }
+}
+
+//for constant functions, e.g. Set Zero:
+@compute
+@workgroup_size(64,1,1)
+fn const_inplace_non_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
+    GET_INDEX1(op_unary,op_unary_input1_layout, id, pos1_is_valid, pos1_id)
+    if(pos1_is_valid){
+        set_const(op_unary_contiguous_operation, pos1_id);
+    }
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_inplace_non_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
+    GET_INDEX1(op_unary,op_unary_input1_layout, id, pos1_is_valid, pos1_id)
+    if(pos1_is_valid){
+        let x = v_dest[pos1_id];
+        set_unary(op_unary_operation, pos1_id, x, op_unary_scalar1, op_unary_scalar2);
+    }
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn rand_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let unused = op_unary_contiguous_offset_is_zero;
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
+    if (id >= op_unary_contiguous_length){
+        return;
+    }
+    set_rand(op_unary_contiguous_operation, id, op_unary_contiguous_scalar1, op_unary_contiguous_scalar2, op_unary_contiguous_seed);
+}

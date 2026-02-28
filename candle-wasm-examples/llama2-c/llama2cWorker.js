@@ -1,5 +1,6 @@
 import init, { Model } from "./build/m.js";
 
+Error.stackTraceLimit = 50;
 async function fetchArrayBuffer(url) {
   const cacheName = "llama2c-candle-cache";
   const cache = await caches.open(cacheName);
@@ -15,9 +16,9 @@ async function fetchArrayBuffer(url) {
 class Llama2C {
   static instance = {};
 
-  static async getInstance(weightsURL, modelID, tokenizerURL) {
+  static async getInstance(weightsURL, modelID, tokenizerURL, useWgpu) {
     // load individual modelID only once
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -27,9 +28,9 @@ class Llama2C {
         fetchArrayBuffer(tokenizerURL),
       ]);
 
-      this.instance[modelID] = new Model(weightsArrayU8, tokenizerArrayU8);
+      this.instance[modelID + useWgpu] = new Model(weightsArrayU8, tokenizerArrayU8, useWgpu);
     }
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 }
 
@@ -54,13 +55,15 @@ async function generate(data) {
     repeatPenalty,
     seed,
     maxSeqLen,
+    useWgpu
   } = data;
   try {
     self.postMessage({ status: "loading", message: "Starting llama2.c" });
-    const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL);
+
+    const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL, useWgpu);
 
     self.postMessage({ status: "loading", message: "Initializing model" });
-    const firstToken = model.init_with_prompt(
+    const firstToken = await model.init_with_prompt(
       prompt,
       temp,
       top_p,

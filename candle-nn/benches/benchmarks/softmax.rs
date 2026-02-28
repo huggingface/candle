@@ -42,8 +42,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let device = BenchDeviceHandler::new().unwrap();
     for d in device.devices {
         run_softmax_benchmark(c, &d, DType::F32, "softmax_f32");
-        run_softmax_benchmark(c, &d, DType::BF16, "softmax_bf16");
-        run_softmax_benchmark(c, &d, DType::F16, "softmax_f16");
+        if d.is_dtype_available(DType::BF16){
+            run_softmax_benchmark(c, &d, DType::BF16, "softmax_bf16");
+        }
+        if d.is_dtype_available(DType::F16){
+            run_softmax_benchmark(c, &d, DType::F16, "softmax_f16");
+        }
     }
 }
 

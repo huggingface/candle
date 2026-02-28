@@ -5,6 +5,7 @@ export async function getEmbeddings(
   configURL,
   modelID,
   sentences,
+  useWgpu,
   updateStatus = null
 ) {
   return new Promise((resolve, reject) => {
@@ -14,6 +15,7 @@ export async function getEmbeddings(
       configURL,
       modelID,
       sentences,
+      useWgpu
     });
     function messageHandler(event) {
       if ("error" in event.data) {

@@ -85,6 +85,7 @@ impl PyDevice {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
             Device::Metal(_) => Self::Metal,
+            Device::Wgpu(_) => panic!("not supported for wgpu")
         }
     }
 

@@ -59,7 +59,7 @@ impl Multiples {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Upsample {
     scale_factor: usize,
 }
@@ -77,7 +77,7 @@ impl Module for Upsample {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ConvBlock {
     conv: Conv2d,
     bn: BatchNorm,
@@ -113,7 +113,7 @@ impl Module for ConvBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Bottleneck {
     cv1: ConvBlock,
     cv2: ConvBlock,
@@ -142,7 +142,7 @@ impl Module for Bottleneck {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct C2f {
     cv1: ConvBlock,
     cv2: ConvBlock,
@@ -179,7 +179,7 @@ impl Module for C2f {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Sppf {
     cv1: ConvBlock,
     cv2: ConvBlock,
@@ -215,7 +215,7 @@ impl Module for Sppf {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Dfl {
     conv: Conv2d,
     num_classes: usize,
@@ -239,7 +239,7 @@ impl Module for Dfl {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DarkNet {
     b1_0: ConvBlock,
     b1_1: ConvBlock,
@@ -349,7 +349,7 @@ impl DarkNet {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct YoloV8Neck {
     up: Upsample,
     n1: C2f,
@@ -437,7 +437,7 @@ impl YoloV8Neck {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DetectionHead {
     dfl: Dfl,
     cv2: [(ConvBlock, ConvBlock, Conv2d); 3],
@@ -650,11 +650,11 @@ impl PoseHead {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct YoloV8 {
     net: DarkNet,
     fpn: YoloV8Neck,
-    head: DetectionHead,
+    head: DetectionHead
 }
 
 impl YoloV8 {
@@ -732,7 +732,7 @@ fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
     i_area / (b1_area + b2_area - i_area)
 }
 
-pub fn report_detect(
+pub async fn report_detect(
     pred: &Tensor,
     img: DynamicImage,
     w: usize,
@@ -748,7 +748,7 @@ pub fn report_detect(
     let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
     // Extract the bounding boxes for which confidence is above the threshold.
     for index in 0..npreds {
-        let pred = Vec::<f32>::try_from(pred.i((.., index))?)?;
+        let pred : Vec<f32> = pred.i((.., index))?.flatten_all()?.to_vec1_async().await?;
         let confidence = *pred[4..].iter().max_by(|x, y| x.total_cmp(y)).unwrap();
         if confidence > conf_threshold {
             let mut class_index = 0;
@@ -812,7 +812,7 @@ fn non_maximum_suppression(bboxes: &mut [Vec<Bbox>], threshold: f32) {
     }
 }
 
-pub fn report_pose(
+pub async fn report_pose(
     pred: &Tensor,
     img: DynamicImage,
     w: usize,
@@ -827,7 +827,7 @@ pub fn report_pose(
     let mut bboxes = vec![];
     // Extract the bounding boxes for which confidence is above the threshold.
     for index in 0..npreds {
-        let pred = Vec::<f32>::try_from(pred.i((.., index))?)?;
+        let pred = pred.i((.., index))?.to_vec1_async::<f32>().await?;
         let confidence = pred[4];
         if confidence > confidence_threshold {
             let keypoints = (0..17)

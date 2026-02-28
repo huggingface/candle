@@ -1,8 +1,11 @@
 //! Tensor ops.
 //!
 
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{CpuStorage, D, DType, Layout, Module, Result, Shape, Tensor};
 use rayon::prelude::*;
+
+#[cfg(feature = "wgpu")]
+use candle::wgpu::wgpu_functions::{self, WgpuTensor, unary::UnaryOperation};
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
@@ -207,6 +210,26 @@ impl candle::CustomOp1 for Sigmoid {
         // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
         let d_dx_sigmoid = res.ones_like()?.sub(res)?.mul(res)?;
         Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn wgpu_fwd(&self, storage: &candle::WgpuStorage, layout: &Layout) -> Result<(candle::WgpuStorage, Shape)> {
+        let buffer_dest = storage.device().alloc_uninit_size(
+            storage.dtype(),
+            layout.shape().elem_count(),
+        );
+
+        wgpu_functions::queue_unary_from_buffer_op(
+            storage.device(),
+            buffer_dest.buffer(),
+            WgpuTensor::new(layout, storage.buffer()),
+            UnaryOperation::Sigmoid,
+            0.0,
+            0.0,
+            storage.dtype(),
+        )?;
+        
+        Ok((buffer_dest, layout.shape().clone()))
     }
 }
 
@@ -424,6 +447,39 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
+
+    #[cfg(feature = "wgpu")]
+    fn wgpu_fwd(
+            &self,
+            storage: &candle::WgpuStorage,
+            layout: &Layout,
+        ) -> Result<(candle::WgpuStorage, Shape)> {
+            use candle::wgpu::wgpu_functions;
+        
+            if !(layout.is_contiguous()){
+                candle::bail!("input has to be contiguous")
+            }
+
+            let el_count = layout.shape().elem_count();
+            let dims = layout.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
+
+            let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
+
+            let output_buffer = storage.device().alloc_uninit_size(storage.dtype(),  el_count);
+
+            wgpu_functions::queue_softmax(
+                storage.device(),
+                output_buffer.buffer(),
+                storage.buffer(),
+                storage.dtype(),
+                layout.start_offset() as u32,
+                dim_m1 as u32,
+                dest_size as u32,
+            )?;
+            Ok((output_buffer, Shape::from_dims(dims)))
+    }
+
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
@@ -616,6 +672,45 @@ impl candle::CustomOp2 for RmsNorm {
         .map_err(candle::Error::wrap)?;
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn wgpu_fwd(
+        &self,
+        src: &candle::WgpuStorage,
+        layout: &Layout,
+        alpha: &candle::WgpuStorage,
+        alpha_layout: &Layout,
+    ) -> Result<(candle::WgpuStorage, Shape)> {
+        //start offset and length:
+        use candle::wgpu::wgpu_functions;
+
+        if !(layout.is_contiguous()){
+            candle::bail!("input has to be contiguous")
+        }
+        if !(alpha_layout.is_contiguous()){
+            candle::bail!("alpha has to be contiguous")
+        }
+       
+        let el_count = layout.shape().elem_count();
+        let dims = layout.shape().dims();
+        let dim_m1 = dims[dims.len() - 1];
+
+        let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
+
+        let output_buffer = src.device().alloc_uninit_size(src.dtype(),  el_count);
+
+        wgpu_functions::queue_rms_norm(
+            src.device(),
+            output_buffer.buffer(),
+            (src.buffer(), layout.start_offset() as u32),
+            (alpha.buffer(), alpha_layout.start_offset() as u32),
+            src.dtype(),
+            dim_m1 as u32,
+            dest_size as u32,
+            self.eps,
+        )?;
+        Ok((output_buffer, Shape::from_dims(dims)))
     }
 }
 
@@ -864,6 +959,52 @@ impl candle::CustomOp3 for LayerNorm {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
+
+    #[cfg(feature = "wgpu")]
+    fn wgpu_fwd(
+        &self,
+        src: &candle::WgpuStorage,
+        layout: &Layout,
+        alpha: &candle::WgpuStorage,
+        alpha_layout: &Layout,
+        beta: &candle::WgpuStorage,
+        beta_layout: &Layout,
+    ) -> Result<(candle::WgpuStorage, Shape)> {
+        //start offset and length:
+        use candle::wgpu::wgpu_functions;
+
+        if !(layout.is_contiguous()){
+            candle::bail!("input has to be contiguous")
+        }
+        if !(alpha_layout.is_contiguous()){
+            candle::bail!("alpha has to be contiguous")
+        }
+        if !(beta_layout.is_contiguous()){
+            candle::bail!("beta has to be contiguous")
+        }
+       
+        let el_count = layout.shape().elem_count();
+        let dims = layout.shape().dims();
+        let dim_m1 = dims[dims.len() - 1];
+
+        let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
+
+        let output_buffer = src.device().alloc_uninit_size(src.dtype(),  el_count);
+
+        wgpu_functions::queue_layer_norm(
+            src.device(),
+            output_buffer.buffer(),
+            (src.buffer(), layout.start_offset() as u32),
+            (alpha.buffer(), alpha_layout.start_offset() as u32),
+            (beta.buffer(), beta_layout.start_offset() as u32),
+            src.dtype(),
+            dim_m1 as u32,
+            dest_size as u32,
+            self.eps,
+        )?;
+        Ok((output_buffer, Shape::from_dims(dims)))
+    }
+
 }
 
 pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {

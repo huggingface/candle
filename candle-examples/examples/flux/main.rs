@@ -249,7 +249,7 @@ fn run(args: Args) -> Result<()> {
         model.decode(&img)?
     };
     println!("img\n{img}");
-    let img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(candle::DType::U8)?;
+    let img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_device(&candle::Device::Cpu)?.to_dtype(candle::DType::U8)?;
     let filename = match args.seed {
         None => "out.jpg".to_string(),
         Some(s) => format!("out-{s}.jpg"),

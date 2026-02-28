@@ -210,6 +210,17 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
+    pub fn get_with_hints_device<S: Into<Shape>>(
+        &self,
+        s: S,
+        name: &str,
+        hints: B::Hints,
+        device : &Device
+    ) -> Result<Tensor> {
+        self.get_with_hints_dtype_device(s, name, hints, self.dtype, device)
+    }
+
+    /// Retrieve the tensor associated with the given name at the current path.
     pub fn get<S: Into<Shape>>(&self, s: S, name: &str) -> Result<Tensor> {
         self.get_with_hints(s, name, Default::default())
     }
@@ -225,6 +236,11 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
         self.data
             .backend
             .get_unchecked(&name, dtype, &self.data.device)
+    }
+
+    /// Retrieve the tensor associated with the given name at the current path.
+    pub fn get_with_device<S: Into<Shape>>(&self, s: S, name: &str,  device : &Device) -> Result<Tensor> {
+        self.get_with_hints_device(s, name, Default::default(), device)
     }
 
     /// Retrieve the tensor associated with the given name & dtype at the current path.
@@ -264,6 +280,21 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
             dtype,
             ..self
         }
+    }
+
+     /// Retrieve the tensor associated with the given name & dtype at the current path.
+     pub fn get_with_hints_dtype_device<S: Into<Shape>>(
+        &self,
+        s: S,
+        name: &str,
+        hints: B::Hints,
+        dtype: DType,
+        device : &Device
+    ) -> Result<Tensor> {
+        let path = self.path(name);
+        self.data
+            .backend
+            .get(s.into(), &path, hints, dtype, device)
     }
 }
 

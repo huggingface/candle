@@ -1,0 +1,94 @@
+#include "util.pwgsl"
+
+override CONSTV_0 : u32 = 1u;
+override CONSTV_1 : u32 = 1u;
+
+#define op_softmax_input1_offset               CONSTV_0
+
+var<workgroup> sharedSums: array<DTYPE, 64>; 
+
+var<workgroup> sharedM: f32; 
+
+#ifdef f32
+
+override USE_Z : bool = false;
+
+LOAD_INFO(op_softmax, 2)
+#define op_softmax_length                       op_softmax[0]
+#define op_softmax_dest_size                    op_softmax[1]
+
+@compute
+@workgroup_size(64,1,1)
+fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let tid = global_id.x;
+    let output_index = global_id.y + select(0u, global_id.z * 65535,USE_Z);
+    
+    //Start Index of the Elements to Reduce
+    let start_index = output_index * op_softmax_length;
+    let start_index1 = start_index + op_softmax_input1_offset;
+
+    //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
+    var maxVal = MINVALUE;
+    if(output_index < op_softmax_dest_size || !USE_Z)
+    {
+        //Now Reduce from start to end
+        for (var i = tid; i < op_softmax_length; i += 64u) {
+            maxVal = max(maxVal, v_input1[start_index1 + i]);
+        }
+    }
+    sharedSums[tid] = maxVal; 
+    workgroupBarrier();
+
+    //calculate max
+    if (tid < 32u) {
+        sharedSums[tid] = max(sharedSums[tid], sharedSums[tid + 32u]);
+    }
+    workgroupBarrier();
+    if (tid == 0) {
+        var global_max = sharedSums[0];
+        for (var i = 1u; i < 32u; i++) {
+            global_max = max(global_max, sharedSums[i]);
+        }
+        sharedSums[0] = global_max;
+    }
+
+    workgroupBarrier();
+
+    let maxElement = sharedSums[0];
+
+    var sum = ZERO;
+    if (output_index < op_softmax_dest_size || !USE_Z) {
+        for (var i = tid; i < op_softmax_length; i += 64u) {
+            let val = exp(v_input1[start_index1 + i] - maxElement);
+            v_dest[start_index + i] = val;
+            sum += val;
+        }
+    }
+    sharedSums[tid] = sum;
+   
+    workgroupBarrier();
+
+    // Parallel reduction to sum the exponentials
+    if (tid < 32u) {
+        sharedSums[tid] += sharedSums[tid + 32u];
+    }
+    workgroupBarrier();
+    if (tid == 0) {
+        var global_sum = sharedSums[0];
+        for (var i = 1u; i < 32u; i++) {
+            global_sum += sharedSums[i];
+        }
+        sharedSums[0] = global_sum;
+    }
+
+    workgroupBarrier();
+
+    let totalSum = sharedSums[0];
+    if (output_index < op_softmax_dest_size || !USE_Z) {
+        for (var i = tid; i < op_softmax_length; i += 64u) {
+            v_dest[start_index + i] /= totalSum;
+        }
+    }
+}
+
+#endif

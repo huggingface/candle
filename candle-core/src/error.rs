@@ -1,7 +1,7 @@
 //! Candle-specific Error and Result
 use std::{convert::Infallible, fmt::Display};
 
-use crate::{DType, DeviceLocation, Layout, MetalError, Shape};
+use crate::{DType, DeviceLocation, Layout, MetalError, WgpuError, Shape};
 
 #[derive(Debug, Clone)]
 pub struct MatMulUnexpectedStriding {
@@ -164,6 +164,9 @@ pub enum Error {
     #[error("the candle crate has not been built with metal support")]
     NotCompiledWithMetalSupport,
 
+    #[error("the candle crate has not been built with wgpu support")]
+    NotCompiledWithWgpuSupport,
+
     #[error("cannot find tensor {path}")]
     CannotFindTensor { path: String },
 
@@ -177,6 +180,9 @@ pub enum Error {
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), feature = "ug"))]
     #[error(transparent)]
     Ug(#[from] candle_ug::Error),
+
+    #[error("Wgpu error {0}")]
+    Wgpu(#[from] WgpuError),
 
     #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),

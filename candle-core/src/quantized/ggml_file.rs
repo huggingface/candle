@@ -130,6 +130,7 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
         Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
         Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
+        Device::Wgpu(wgpu) => super::wgpu::load_quantized(wgpu, T::DTYPE, raw_data)?
     };
     super::QTensor::new(data, dims)
 }

@@ -17,7 +17,7 @@ num-traits = { workspace = true }
 # App crates.
 anyhow = { workspace = true }
 byteorder = { workspace = true }
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 image = { workspace = true }
 log = { workspace = true }
 safetensors = { workspace = true }
@@ -27,4 +27,9 @@ serde_json = { workspace = true }
 # Wasm specific crates.
 console_error_panic_hook = "0.1.7"
 wasm-bindgen = "0.2.87"
+wasm-bindgen-futures = "0.4.37"
 serde-wasm-bindgen = "0.6.0"
+
+[features]
+default = []
+wgpu = ["candle/wgpu", "candle-nn/wgpu", "candle-transformers/wgpu"]

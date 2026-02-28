@@ -1,0 +1,15 @@
+[package]
+name = "wgpu-compute-layer-macro"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { version = "1.0", features = [] }
+quote = "1.0"
+syn = { version = "1.0", features = ["full"] }
+fs2 = "0.4.3"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"

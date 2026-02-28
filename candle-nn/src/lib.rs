@@ -15,6 +15,8 @@
 //! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implementation of many published transformer models.
 //!
 
+#![cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))] //for wasm32 and wgpu, async functions may be used instead of sync functions. 
+                                                                               //this will allow the deprecated warnings inside this crate
 pub mod activation;
 pub mod batch_norm;
 pub mod conv;

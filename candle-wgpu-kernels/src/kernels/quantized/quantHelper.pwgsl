@@ -1,0 +1,179 @@
+#ifdef f32
+#define QUANTIZED
+#include "../util.pwgsl"
+#ifndef D_SIZE
+    #define D_SIZE 2
+#endif
+#ifndef D_OFFSET
+    #define D_OFFSET 0
+#endif
+
+//TODO: Why /16 ?
+#definec DATA_SIZE (BIT_SIZE*BLOCK_SIZE/16) 
+
+
+#define M_OFFSET_SIZE 0
+#ifdef M_OFFSET
+    #define M_OFFSET_SIZE 2
+#endif
+#ifndef BSUMS_SIZE
+    #define BSUMS_SIZE 0
+#endif
+
+#ifndef HEADER_BYTE_SIZE
+    #definec HEADER_BYTE_SIZE M_OFFSET_SIZE + D_SIZE + BSUMS_SIZE
+#endif
+
+#ifndef BLOCK_BYTE_SIZE
+    #definec BLOCK_BYTE_SIZE (BLOCK_SIZE * BIT_SIZE) / 8 + HEADER_BYTE_SIZE
+#endif
+
+#define load_u32(data, idx) (data[idx])
+#define load_data(data,idx,bit_mask) (data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask
+#define load_i8(data,idx,bit_mask) i32(((data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask) << 24) >> 24
+
+#ifndef TID_SIZE
+    #define TID_SIZE 8
+#endif
+#definec VALUES_PER_THREAD BLOCK_SIZE / TID_SIZE
+
+#definec INVERSE_BIT_SIZE 32 - BIT_SIZE
+#definec BLOCK_SIZE_MINUS_1 BLOCK_SIZE - 1
+
+override CONSTV_0 : bool = true;
+override CONSTV_1 : bool = true;
+override CONSTV_2 : bool = true;
+
+LOAD_INFO(op_matmul, 7)
+//#define op_matmul_b                 op_matmul[0]
+#define op_matmul_m                 op_matmul[0]
+#define op_matmul_k                 op_matmul[1]
+#define op_matmul_n                 op_matmul[2]
+
+#define op_matmul_input1_stride_b   op_matmul[3]
+#define op_matmul_input1_offset     op_matmul[4]
+//#define op_matmul_input2_stride_b   op_matmul[5]
+//#define op_matmul_input2_offset     op_matmul[4]
+#define op_matmul_input2_offset     0u
+
+#define op_matmul_input1_stride_k   select(op_matmul[5], 1u, CONSTV_0)
+#define op_matmul_input1_stride_m   select(op_matmul[6], 1u, CONSTV_1) 
+
+
+
+
+
+#define op_matmul_use_batch   CONSTV_2
+
+#define load_u32(data, idx) (data[idx])
+#define load_data(data,idx,bit_mask) ((data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask)
+#define load_i8(data,idx,bit_mask) (i32(((data[(idx) / 4] >> (((idx) % 4) * 8)) & bit_mask) << 24) >> 24)
+
+LOAD_INFO(op_dequantize, 1)
+#define op_dequantize_size               op_dequantize[0]
+
+#ifndef SGEMM
+@compute @workgroup_size(64,1,1)
+fn dequantize_block_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let block_index = global_id.x;
+    if(block_index < (op_dequantize_size / BLOCK_SIZE)){
+        #define CALLBACK(idx,value, idx2) v_dest[(idx) + block_index * BLOCK_SIZE] = value;
+        LOAD_HEADER(v_input1_u32)
+
+        for(var tid = 0u; tid < TID_SIZE; tid += 1u){
+            LOAD_SINGLE(v_input1_u32, tid)
+        }
+    }
+}
+#endif
+
+#ifndef SGEMM
+@compute @workgroup_size(16,16,1)
+fn matmul_naive_block(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x;
+    let y = global_id.y;
+    let b = global_id.z;
+
+    if(x >= op_matmul_n){
+        return;
+    }
+    if(y >= op_matmul_m){
+        return;
+    }
+
+    let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n, op_matmul_use_batch); 
+
+    let input1_offset = op_matmul_input1_offset;
+    let input2_offset = op_matmul_input2_offset;
+
+    let input1_stride_b = select(0u, op_matmul_input1_stride_b, op_matmul_use_batch); 
+    //let input2_stride_b = select(0u, op_matmul_input2_stride_b, op_matmul_use_batch); 
+    
+    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b;
+    let m_input2_offset = (input2_offset + op_matmul_k * x//+ b * input2_stride_b
+        ) / BLOCK_SIZE;
+
+    var sum = ZERO;
+    var blk = 0u;
+    for (var k = 0u; k < op_matmul_k; k+=u32(BLOCK_SIZE)){
+        let block_index = blk+m_input2_offset ;
+        #define CALLBACK(idx,value, idx2) sum += v_input1[op_matmul_input1_stride_k * (k + (idx)) + m_input1_offset] * (value);
+        LOAD_HEADER(v_input2_u32)
+
+        for(var tid = 0u; tid < TID_SIZE; tid += 1u){
+            LOAD_SINGLE(v_input2_u32, tid)
+        }
+
+        blk += 1u;
+    }
+    v_dest[b * output_size_of_one_batch + 
+    y * op_matmul_n + x] = sum;
+}
+
+@compute @workgroup_size(32,1,1)
+fn matmul_naive_block_m1(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x;
+    //let y = global_id.y; //m==1
+    let b = global_id.z;
+
+    // if(x >= op_matmul_n){
+    //    return;
+    // }
+
+    let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n, op_matmul_use_batch); 
+
+    let input1_offset = op_matmul_input1_offset;
+    let input2_offset = op_matmul_input2_offset;
+
+    let input1_stride_b = select(0u, op_matmul_input1_stride_b, op_matmul_use_batch); 
+    //let input2_stride_b = select(0u, op_matmul_input2_stride_b, op_matmul_use_batch); 
+    
+    let m_input1_offset = input1_offset;// + op_matmul_input1_stride_m * y;// + b * input1_stride_b;
+    let m_input2_offset = (input2_offset + op_matmul_k * x// + b * input2_stride_b
+    ) / BLOCK_SIZE;
+
+    var sum = ZERO;
+    var blk = 0u;
+    for (var k = 0u; k < op_matmul_k; k+=u32(BLOCK_SIZE)){
+        let block_index = blk+m_input2_offset ;
+        #define CALLBACK(idx,value, idx2) sum += v_input1[op_matmul_input1_stride_k * (k + (idx)) + m_input1_offset] * (value);
+        LOAD_HEADER(v_input2_u32)
+
+        for(var tid = 0u; tid < TID_SIZE; tid += 1u){
+            LOAD_SINGLE(v_input2_u32, tid)
+        }
+
+        blk += 1u;
+    }
+    v_dest[b * output_size_of_one_batch +
+     //y * op_matmul_n +
+      x] = sum;
+}
+#endif
+
+//dummy impl:
+#ifndef SGEMM
+@compute @workgroup_size(1,1,1)
+fn matmul_sgemm(){}
+#endif
+#endif

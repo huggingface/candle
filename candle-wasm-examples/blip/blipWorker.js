@@ -21,9 +21,10 @@ class Blip {
     tokenizerURL,
     configURL,
     modelID,
-    quantized
+    quantized,
+    useWgpu
   ) {
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -34,21 +35,22 @@ class Blip {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = new Model(
+      this.instance[modelID + useWgpu] = await new Model(
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,
-        quantized
+        quantized,
+        useWgpu
       );
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });
     }
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 }
 
 self.addEventListener("message", async (event) => {
-  const { weightsURL, tokenizerURL, configURL, modelID, imageURL, quantized } =
+  const { weightsURL, tokenizerURL, configURL, modelID, imageURL, quantized, useWgpu } =
     event.data;
   try {
     self.postMessage({ status: "status", message: "Loading Blip Model..." });
@@ -57,14 +59,15 @@ self.addEventListener("message", async (event) => {
       tokenizerURL,
       configURL,
       modelID,
-      quantized
+      quantized,
+      useWgpu
     );
     self.postMessage({
       status: "status",
       message: "Running Blip Inference...",
     });
     const imageArrayU8 = await fetchArrayBuffer(imageURL, false);
-    const output = model.generate_caption_from_image(imageArrayU8);
+    const output = await model.generate_caption_from_image(imageArrayU8);
 
     self.postMessage({
       status: "complete",

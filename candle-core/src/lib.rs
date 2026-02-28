@@ -47,6 +47,11 @@
 //! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implementation of many published transformer models.
 //!
 
+
+
+#![cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))] //for wasm32 and wgpu, async functions may be used instead of sync functions. 
+                                                                               //this will allow the deprecated warnings inside this crate
+
 #[cfg(feature = "accelerate")]
 mod accelerate;
 pub mod backend;
@@ -88,6 +93,10 @@ pub mod test_utils;
 pub mod utils;
 mod variable;
 
+#[cfg(feature = "wgpu")]
+pub mod wgpu_backend;
+pub mod dummy_wgpu_backend;
+
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
 
@@ -127,6 +136,15 @@ extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
+
+#[cfg(feature = "wgpu")]
+pub use wgpu_backend as wgpu;
+
+#[cfg(not(feature = "wgpu"))]
+pub use dummy_wgpu_backend as wgpu;
+
+pub use wgpu::{WgpuDevice, WgpuStorage};
+pub use crate::dummy_wgpu_backend::{WgpuError, WgpuBackends, WgpuDeviceConfig};
 
 pub trait ToUsize2 {
     fn to_usize2(self) -> (usize, usize);

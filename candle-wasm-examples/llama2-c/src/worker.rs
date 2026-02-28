@@ -6,6 +6,7 @@ use candle_transformers::generation::LogitsProcessor;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 use yew_agent::{HandlerId, Public, WorkerLink};
 
 #[wasm_bindgen]
@@ -49,15 +50,17 @@ fn read_tensor<R: std::io::Read, S: Into<Shape>>(
     Ok(tensor)
 }
 
+#[derive(Clone)]
 pub struct Model {
     pub cache: Cache,
     pub config: Config,
     pub llama: Llama,
     pub tokenizer: Tokenizer,
+    pub device : Device
 }
 
 impl Model {
-    fn run(
+    async fn run(
         &self,
         link: &WorkerLink<Worker>,
         id: HandlerId,
@@ -65,7 +68,10 @@ impl Model {
         top_p: f64,
         prompt: String,
     ) -> Result<()> {
-        let dev = Device::Cpu;
+        const REPEAT_LAST_N: usize = 64;
+        const REPEAT_PENALTY : f32 = 1.1;
+        let dev = &self.device;
+
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1.0 {
             None
@@ -87,18 +93,28 @@ impl Model {
             if tokens.len() >= self.config.seq_len {
                 break;
             }
-            let context_size = if self.cache.use_kv_cache && index > 0 {
+            let context_size = if index > 0 {
                 1
             } else {
                 tokens.len()
             };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-            let input = Tensor::new(ctxt, &dev)?.unsqueeze(0)?;
-            let logits = self.llama.forward(&input, index_pos)?;
+            let input = Tensor::new(ctxt, dev)?.unsqueeze(0)?;
+            let logits = self.llama.forward(&input, index_pos).await?;
             let logits = logits.squeeze(0)?;
+            let logits = if REPEAT_PENALTY == 1. || tokens.is_empty() {
+                logits
+            } else {
+                let start_at = tokens.len().saturating_sub(REPEAT_LAST_N);
+                candle_transformers::utils::apply_repeat_penalty_async(
+                    &logits,
+                    REPEAT_PENALTY,
+                    &tokens[start_at..],
+                ).await?
+            };
             index_pos += ctxt.len();
 
-            let next_token = logits_processor.sample(&logits)?;
+            let next_token = logits_processor.sample_async(&logits).await?;
             tokens.push(next_token);
             if let Some(text) = self.tokenizer.id_to_token(next_token) {
                 let text = text.replace('▁', " ").replace("<0x0A>", "\n");
@@ -247,13 +263,12 @@ impl TransformerWeights {
 }
 
 impl Model {
-    pub fn load(md: ModelData) -> Result<Self> {
-        let dev = Device::Cpu;
+    pub async fn load(md: ModelData,dev : &Device) -> Result<Self> {
         let mut model = std::io::Cursor::new(md.model);
         let config = Config::from_reader(&mut model)?;
-        let weights = TransformerWeights::from_reader(&mut model, &config, &dev)?;
-        let vb = weights.var_builder(&config, &dev)?;
-        let cache = Cache::new(true, &config, vb.pp("rot"))?;
+        let weights = TransformerWeights::from_reader(&mut model, &config, dev)?;
+        let vb = weights.var_builder(&config, dev)?;
+        let cache = Cache::new(false, &config, vb.pp("rot"))?;
         let llama = Llama::load(vb, &cache, &config)?;
         let tokenizer =
             Tokenizer::from_bytes(&md.tokenizer).map_err(|m| candle::Error::Msg(m.to_string()))?;
@@ -262,6 +277,7 @@ impl Model {
             config,
             llama,
             tokenizer,
+            device : dev.clone()
         })
     }
 }
@@ -284,9 +300,13 @@ pub enum WorkerOutput {
     WeightsLoaded,
 }
 
+pub enum WorkerMessage{
+    SetModel(Model)
+}
+
 impl yew_agent::Worker for Worker {
     type Input = WorkerInput;
-    type Message = ();
+    type Message = WorkerMessage;
     type Output = std::result::Result<WorkerOutput, String>;
     type Reach = Public<Self>;
 
@@ -294,21 +314,38 @@ impl yew_agent::Worker for Worker {
         Self { link, model: None }
     }
 
-    fn update(&mut self, _msg: Self::Message) {
-        // no messaging
+    fn update(&mut self, msg: Self::Message) {
+        match msg{
+            WorkerMessage::SetModel(model) => self.model = Some(model),
+        }
     }
 
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
-        let output = match msg {
-            WorkerInput::ModelData(md) => match Model::load(md) {
-                Ok(model) => {
-                    self.model = Some(model);
-                    Ok(WorkerOutput::WeightsLoaded)
-                }
-                Err(err) => Err(format!("model creation error {err:?}")),
+        let link = self.link.clone();
+        match msg {
+            WorkerInput::ModelData(md) => 
+            {
+                let future = async move{
+                    let use_wgpu = true;
+                    let dev = match use_wgpu{
+                        true => Device::new_wgpu_async(0).await.unwrap(),
+                        false => Device::Cpu,
+                    };
+                
+                    let model = Model::load(md, &dev).await;
+                    let output = match model{
+                        Ok(model) => {
+                            link.send_message(WorkerMessage::SetModel(model));
+                            Ok(WorkerOutput::WeightsLoaded)
+                        },
+                        Err(err) => Err(format!("model creation error {err:?}")),
+                    };
+                    link.respond(id, output);
+                };
+                spawn_local(future);
             },
             WorkerInput::Run(temp, top_p, prompt) => match &mut self.model {
-                None => Err("model has not been set yet".to_string()),
+                None => link.respond(id, Err("model has not been set yet".to_string())),
                 Some(model) => {
                     {
                         let mut cache = model.cache.kvs.lock().unwrap();
@@ -316,14 +353,18 @@ impl yew_agent::Worker for Worker {
                             *elem = None
                         }
                     }
-                    let result = model
-                        .run(&self.link, id, temp, top_p, prompt)
-                        .map_err(|e| e.to_string());
-                    Ok(WorkerOutput::GenerationDone(result))
+                    let model = model.clone();
+                    spawn_local(async move{
+                        let result = model
+                            .run(&link, id, temp, top_p, prompt).await
+                            .map_err(|e| e.to_string());
+                        link.respond(id, Ok(WorkerOutput::GenerationDone(result)))
+                    });
+
+                    
                 }
             },
         };
-        self.link.respond(id, output);
     }
 
     fn name_of_resource() -> &'static str {

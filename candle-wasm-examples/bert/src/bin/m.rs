@@ -9,31 +9,36 @@ use wasm_bindgen::prelude::*;
 pub struct Model {
     bert: BertModel,
     tokenizer: Tokenizer,
+    device : Device
 }
 
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn load(weights: Vec<u8>, tokenizer: Vec<u8>, config: Vec<u8>) -> Result<Model, JsError> {
+    pub async fn load(weights: Vec<u8>, tokenizer: Vec<u8>, config: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = &Device::Cpu;
-        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, device)?;
+        let device = match use_wgpu{
+            true => Device::new_wgpu_async(0).await?,
+            false => Device::Cpu,
+        };
+
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
         let config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
         let bert = BertModel::load(vb, &config)?;
 
-        Ok(Self { bert, tokenizer })
+        Ok(Self { bert, tokenizer, device})
     }
 
-    pub fn get_embeddings(&mut self, input: JsValue) -> Result<JsValue, JsError> {
+    pub async fn get_embeddings(&mut self, input: JsValue) -> Result<JsValue, JsError> {
         let input: Params =
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
         let sentences = input.sentences;
         let normalize_embeddings = input.normalize_embeddings;
 
-        let device = &Device::Cpu;
+       
         if let Some(pp) = self.tokenizer.get_padding_mut() {
             pp.strategy = tokenizers::PaddingStrategy::BatchLongest
         } else {
@@ -52,14 +57,14 @@ impl Model {
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_ids().to_vec();
-                Tensor::new(tokens.as_slice(), device)
+                Tensor::new(tokens.as_slice(), &self.device)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let attention_mask: Vec<Tensor> = tokens
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_attention_mask().to_vec();
-                Tensor::new(tokens.as_slice(), device)
+                Tensor::new(tokens.as_slice(), &self.device)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -79,7 +84,7 @@ impl Model {
         } else {
             embeddings
         };
-        let embeddings_data = embeddings.to_vec2()?;
+        let embeddings_data = embeddings.to_vec2_async().await?;
         Ok(serde_wasm_bindgen::to_value(&Embeddings {
             data: embeddings_data,
         })?)

@@ -1,0 +1,43 @@
+#include "util.pwgsl"
+
+
+LOAD_INFO_UNKNOWN_SIZE(op_where_cond, 0)
+@compute
+@workgroup_size(64,1,1)
+fn where_cond_index_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    GET_INDEX1(op_where_cond, 0, id, pos1_is_valid, pos1_id)
+    if(pos1_is_valid){
+        let x = v_input1_u32[pos1_id];
+        if x == 0{
+            GET_INDEX3(op_where_cond, 0, id, pos3_is_valid, pos3_id)
+            v_dest[id] = v_input3[pos3_id]; 
+        }
+        else{
+            GET_INDEX2(op_where_cond, 0, id, pos2_is_valid, pos2_id)
+            v_dest[id] = v_input2[pos2_id];   
+        }
+    }
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn where_cond_index_u8(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+
+    GET_INDEX1(op_where_cond, 0, id, pos1_is_valid, pos1_id)
+    if(pos1_is_valid){
+
+        let mem_id = pos1_id / 4;
+        let u8_offset = pos1_id % 4;
+        let x = (v_input1_u32[mem_id] >> (8 * u8_offset)) & 0xFF;
+        if x == 0{
+            GET_INDEX3(op_where_cond, 0, id, pos3_is_valid, pos3_id)
+            v_dest[id] = v_input3[pos3_id]; 
+        }
+        else{
+            GET_INDEX2(op_where_cond, 0, id, pos2_is_valid, pos2_id)
+            v_dest[id] = v_input2[pos2_id];   
+        }
+    }
+}

@@ -26,8 +26,13 @@ safetensors = { workspace = true }
 
 # Wasm specific crates.
 console_error_panic_hook = "0.1.7"
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 gloo = "0.11"
 js-sys = "0.3.64"
 wasm-bindgen = "0.2.87"
+wasm-bindgen-futures = "0.4.37"
 serde-wasm-bindgen = "0.6.0"
+
+
+[features]
+wgpu = ["candle-nn/wgpu", "candle/wgpu", "candle-transformers/wgpu"]

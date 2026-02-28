@@ -3,6 +3,7 @@ use candle::{DType, Device, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 use yew_agent::{HandlerId, Public, WorkerLink};
 
 #[wasm_bindgen]
@@ -26,6 +27,7 @@ macro_rules! console_log {
 pub struct ModelData {
     pub weights: Vec<u8>,
     pub model_size: String,
+    pub use_wgpu : bool
 }
 
 #[derive(Serialize, Deserialize)]
@@ -35,12 +37,14 @@ pub struct RunData {
     pub iou_threshold: f32,
 }
 
+#[derive(Clone)]
 pub struct Model {
     model: YoloV8,
+    device : Device
 }
 
 impl Model {
-    pub fn run(
+    pub async fn run(
         &self,
         image_data: Vec<u8>,
         conf_threshold: f32,
@@ -74,7 +78,7 @@ impl Model {
             Tensor::from_vec(
                 data,
                 (img.height() as usize, img.width() as usize, 3),
-                &Device::Cpu,
+                &self.device,
             )?
             .permute((2, 0, 1))?
         };
@@ -88,11 +92,11 @@ impl Model {
             height,
             conf_threshold,
             iou_threshold,
-        )?;
+        ).await?;
         Ok(bboxes)
     }
 
-    pub fn load_(weights: Vec<u8>, model_size: &str) -> Result<Self> {
+    pub async fn load_(weights: Vec<u8>, model_size: &str, use_wgpu : bool) -> Result<Self> {
         let multiples = match model_size {
             "n" => Multiples::n(),
             "s" => Multiples::s(),
@@ -103,23 +107,28 @@ impl Model {
                 "invalid model size: must be n, s, m, l or x".to_string(),
             ))?,
         };
-        let dev = &Device::Cpu;
-        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, dev)?;
+        let device = match use_wgpu{
+            true => Device::new_wgpu_async(0).await?,
+            false => Device::Cpu,
+        };
+
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
         let model = YoloV8::load(vb, multiples, 80)?;
-        Ok(Self { model })
+        Ok(Self { model, device })
     }
 
-    pub fn load(md: ModelData) -> Result<Self> {
-        Self::load_(md.weights, &md.model_size.to_string())
+    pub async fn load(md: ModelData) -> Result<Self> {
+        Self::load_(md.weights, &md.model_size.to_string(), md.use_wgpu).await
     }
 }
 
 pub struct ModelPose {
     model: YoloV8Pose,
+    device : Device
 }
 
 impl ModelPose {
-    pub fn run(
+    pub async fn run(
         &self,
         image_data: Vec<u8>,
         conf_threshold: f32,
@@ -153,7 +162,7 @@ impl ModelPose {
             Tensor::from_vec(
                 data,
                 (img.height() as usize, img.width() as usize, 3),
-                &Device::Cpu,
+                &self.device,
             )?
             .permute((2, 0, 1))?
         };
@@ -167,11 +176,11 @@ impl ModelPose {
             height,
             conf_threshold,
             iou_threshold,
-        )?;
+        ).await?;
         Ok(bboxes)
     }
 
-    pub fn load_(weights: Vec<u8>, model_size: &str) -> Result<Self> {
+    pub async fn load_(weights: Vec<u8>, model_size: &str, use_wgpu : bool) -> Result<Self> {
         let multiples = match model_size {
             "n" => Multiples::n(),
             "s" => Multiples::s(),
@@ -182,14 +191,18 @@ impl ModelPose {
                 "invalid model size: must be n, s, m, l or x".to_string(),
             ))?,
         };
-        let dev = &Device::Cpu;
-        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, dev)?;
+        
+        let device = match use_wgpu{
+            true => Device::new_wgpu_async(0).await?,
+            false => Device::Cpu,
+        };
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
         let model = YoloV8Pose::load(vb, multiples, 1, (17, 3))?;
-        Ok(Self { model })
+        Ok(Self { model, device})
     }
 
-    pub fn load(md: ModelData) -> Result<Self> {
-        Self::load_(md.weights, &md.model_size.to_string())
+    pub async fn load(md: ModelData) -> Result<Self> {
+        Self::load_(md.weights, &md.model_size.to_string(), md.use_wgpu).await
     }
 }
 
@@ -210,9 +223,13 @@ pub enum WorkerOutput {
     WeightsLoaded,
 }
 
+pub enum WorkerMessage{
+    SetModel(Option<Model>)
+}
+
 impl yew_agent::Worker for Worker {
     type Input = WorkerInput;
-    type Message = ();
+    type Message = WorkerMessage;
     type Output = std::result::Result<WorkerOutput, String>;
     type Reach = Public<Self>;
 
@@ -220,30 +237,50 @@ impl yew_agent::Worker for Worker {
         Self { link, model: None }
     }
 
-    fn update(&mut self, _msg: Self::Message) {
-        // no messaging
+    fn update(&mut self, msg: Self::Message) {
+        match msg{
+            WorkerMessage::SetModel(model) => self.model = model,
+        }
     }
 
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
-        let output = match msg {
-            WorkerInput::ModelData(md) => match Model::load(md) {
-                Ok(model) => {
-                    self.model = Some(model);
-                    Ok(WorkerOutput::WeightsLoaded)
+        let link = self.link.clone();
+
+        match msg {
+            WorkerInput::ModelData(md) => {
+                // Spawn an async task to handle the async logic
+                spawn_local(async move {
+                    let output = match Model::load(md).await {
+                        Ok(model) => {
+                            link.send_message(WorkerMessage::SetModel(Some(model)));
+                            Ok(WorkerOutput::WeightsLoaded)
+                        }
+                        Err(err) => Err(format!("model creation error {err:?}")),
+                    };
+                    link.respond(id, output);
+                });
+            }
+            WorkerInput::RunData(rd) =>{
+
+                match &mut self.model{
+                    None => self.link.respond(id, Err("model has not been set yet".to_string())),
+                    Some(model) => {
+                        let model = model.clone();
+                        spawn_local(async move{
+                            let output =  {
+                                    let result = model
+                                        .run(rd.image_data, rd.conf_threshold, rd.iou_threshold).await
+                                        .map_err(|e| e.to_string());
+                                    Ok(WorkerOutput::ProcessingDone(result))
+                                };
+                            link.respond(id, output);
+                        });
+                    }
                 }
-                Err(err) => Err(format!("model creation error {err:?}")),
-            },
-            WorkerInput::RunData(rd) => match &mut self.model {
-                None => Err("model has not been set yet".to_string()),
-                Some(model) => {
-                    let result = model
-                        .run(rd.image_data, rd.conf_threshold, rd.iou_threshold)
-                        .map_err(|e| e.to_string());
-                    Ok(WorkerOutput::ProcessingDone(result))
-                }
-            },
-        };
-        self.link.respond(id, output);
+
+              
+            }
+        }
     }
 
     fn name_of_resource() -> &'static str {

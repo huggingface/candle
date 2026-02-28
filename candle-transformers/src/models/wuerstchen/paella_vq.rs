@@ -23,7 +23,7 @@ impl MixingResidualBlock {
         let depthwise_conv = candle_nn::conv2d(inp, inp, 3, cfg, vb.pp("depthwise.1"))?;
         let channelwise_lin1 = candle_nn::linear(inp, embed_dim, vb.pp("channelwise.0"))?;
         let channelwise_lin2 = candle_nn::linear(embed_dim, inp, vb.pp("channelwise.2"))?;
-        let gammas = vb.get(6, "gammas")?.to_vec1::<f32>()?;
+        let gammas = vb.get_with_device(6, "gammas", &candle::Device::Cpu)?.to_vec1::<f32>()?;
         Ok(Self {
             norm1,
             depthwise_conv,

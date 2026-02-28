@@ -16,7 +16,7 @@ async function fetchArrayBuffer(url) {
 class Encoder {
   static instance = {};
 
-  static async getInstance(weightsURL, tokenizerURL, configURL, modelID) {
+  static async getInstance(weightsURL, tokenizerURL, configURL, modelID, useWgpu) {
     if (modelID.includes("quantized")) {
       ({ default: init, ModelEncoder } = await import(
         "./build/m-quantized.js"
@@ -24,7 +24,7 @@ class Encoder {
     } else {
       ({ default: init, ModelEncoder } = await import("./build/m.js"));
     }
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -35,15 +35,16 @@ class Encoder {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = new ModelEncoder(
+      this.instance[modelID + useWgpu] = await new ModelEncoder(
         weightsArrayU8,
         tokenizerArrayU8,
-        configArrayU8
+        configArrayU8,
+        wgpu
       );
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });
     }
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 }
 
@@ -55,6 +56,7 @@ self.addEventListener("message", async (event) => {
     modelID,
     sentences,
     normalize_embeddings,
+    useWgpu
   } = event.data;
   try {
     self.postMessage({ status: "ready", message: "Starting T5 Encoder" });
@@ -62,13 +64,14 @@ self.addEventListener("message", async (event) => {
       weightsURL,
       tokenizerURL,
       configURL,
-      modelID
+      modelID,
+      useWgpu
     );
     self.postMessage({
       status: "encoding",
       message: "Encoding Sentences",
     });
-    const output = model.decode({
+    const output = await model.decode({
       sentences: sentences,
       normalize_embeddings: normalize_embeddings || true,
     });
@@ -78,6 +81,6 @@ self.addEventListener("message", async (event) => {
       output: output,
     });
   } catch (e) {
-    self.postMessage({ error: e });
+    self.postMessage({ error: e.toString() }); // Convert error to string
   }
 });
