@@ -421,28 +421,56 @@ impl QMetalStorage {
             .map(|x| x * DType::F32.size_in_bytes())
             .collect::<Vec<_>>();
 
-        candle_metal_kernels::call_quantized_matmul_mv_id_t(
-            device.device(),
-            &encoder,
-            device.kernels(),
-            self.dtype.into(),
-            src0_l.dims(),
-            &src0_stride,
-            &self.buffer,
-            src1_l.dims(),
-            &src1_stride,
-            input.buffer(),
-            input_l.start_offset() * input.dtype().size_in_bytes(),
-            ids_l.shape().dims(),
-            &ids_stride,
-            ids.buffer(),
-            ids_l.start_offset() * ids.dtype().size_in_bytes(),
-            dst_l.dims(),
-            &dst_stride,
-            0,
-            &dst,
-        )
-        .map_err(MetalError::from)?;
+        // Small decode-like workloads are faster on the mv-id path, while larger batches/prefill
+        // are better served by mm-id.
+        let use_mv_id = batch * input_dim1 <= 8;
+        if use_mv_id {
+            candle_metal_kernels::call_quantized_matmul_mv_id_t(
+                device.device(),
+                &encoder,
+                device.kernels(),
+                self.dtype.into(),
+                src0_l.dims(),
+                &src0_stride,
+                &self.buffer,
+                src1_l.dims(),
+                &src1_stride,
+                input.buffer(),
+                input_l.start_offset() * input.dtype().size_in_bytes(),
+                ids_l.shape().dims(),
+                &ids_stride,
+                ids.buffer(),
+                ids_l.start_offset() * ids.dtype().size_in_bytes(),
+                dst_l.dims(),
+                &dst_stride,
+                0,
+                &dst,
+            )
+            .map_err(MetalError::from)?;
+        } else {
+            candle_metal_kernels::call_quantized_matmul_mm_id_t(
+                device.device(),
+                &encoder,
+                device.kernels(),
+                self.dtype.into(),
+                src0_l.dims(),
+                &src0_stride,
+                &self.buffer,
+                src1_l.dims(),
+                &src1_stride,
+                input.buffer(),
+                input_l.start_offset() * input.dtype().size_in_bytes(),
+                ids_l.shape().dims(),
+                &ids_stride,
+                ids.buffer(),
+                ids_l.start_offset() * ids.dtype().size_in_bytes(),
+                dst_l.dims(),
+                &dst_stride,
+                0,
+                &dst,
+            )
+            .map_err(MetalError::from)?;
+        }
 
         let dst_storage = crate::MetalStorage::new(dst, device, out_shape.elem_count(), DType::F32);
         Ok((dst_storage, out_shape))

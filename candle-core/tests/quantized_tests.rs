@@ -392,6 +392,23 @@ fn quantize_q5_1(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn quantize_mxfp4(device: &Device) -> Result<()> {
+    let dtype = GgmlDType::MXFP4;
+    let src = get_test_vector2(8.0, 1024, device)?;
+    let quant = quantized::QTensor::quantize(&src, dtype)?;
+    let dst = quant.dequantize(device)?;
+    let dst_f16 = quant.dequantize_f16(device)?;
+    let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+
+    ggml_quantization_error_test(dtype, device, 0.03)?;
+    Ok(())
+}
+
 fn get_test_vector2(bound: f32, size: usize, device: &Device) -> Result<Tensor> {
     assert!(
         size.is_multiple_of(crate::quantized::k_quants::QK_K),
@@ -975,6 +992,12 @@ test_device!(
     quantize_q5_1_metal
 );
 test_device!(
+    quantize_mxfp4,
+    quantize_mxfp4_cpu,
+    quantize_mxfp4_cuda,
+    quantize_mxfp4_metal
+);
+test_device!(
     quantize_q2k,
     quantize_q2k_cpu,
     quantize_q2k_cuda,
@@ -1029,6 +1052,7 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         GgmlDType::Q6K => 0.000952,
         GgmlDType::Q4_0 => 0.001143,
         GgmlDType::Q4_1 => 0.008,
+        GgmlDType::MXFP4 => 0.012,
         GgmlDType::Q5_0 => 0.001353,
         GgmlDType::Q5_1 => 0.00149,
         GgmlDType::Q8_0 => 0.000092,
