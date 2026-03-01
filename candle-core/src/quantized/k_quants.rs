@@ -19,6 +19,7 @@ pub const QK5_0: usize = 32;
 pub const QK5_1: usize = 32;
 pub const QK8_0: usize = 32;
 pub const QK8_1: usize = 32;
+pub const QK_MXFP4: usize = 32;
 
 pub trait GgmlType: Sized + Clone + Send + Sync {
     const DTYPE: GgmlDType;
@@ -70,6 +71,14 @@ pub struct BlockQ4_1 {
     pub(crate) qs: [u8; QK4_1 / 2],
 }
 const _: () = assert!(std::mem::size_of::<BlockQ4_1>() == 20);
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockMXFP4 {
+    pub(crate) e: u8,
+    pub(crate) qs: [u8; QK_MXFP4 / 2],
+}
+const _: () = assert!(std::mem::size_of::<BlockMXFP4>() == 17);
 
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
@@ -169,6 +178,34 @@ pub struct BlockQ8K {
 }
 const _: () = assert!(4 + QK_K + QK_K / 16 * 2 == std::mem::size_of::<BlockQ8K>());
 
+const MXFP4_VALUES: [f32; 16] = [
+    0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+];
+
+#[inline]
+fn e8m0_to_f32(x: u8) -> f32 {
+    let bits = if x == 0 {
+        0x0040_0000
+    } else {
+        (x as u32) << 23
+    };
+    f32::from_bits(bits)
+}
+
+#[inline]
+fn nearest_mxfp4_value_index(x: f32) -> u8 {
+    let mut best_i = 0u8;
+    let mut best_dist = f32::INFINITY;
+    for (i, v) in MXFP4_VALUES.iter().enumerate() {
+        let dist = (x - *v).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best_i = i as u8;
+        }
+    }
+    best_i
+}
+
 impl GgmlType for BlockQ4_0 {
     const DTYPE: GgmlDType = GgmlDType::Q4_0;
     const BLCK_SIZE: usize = QK4_0;
@@ -267,6 +304,85 @@ impl GgmlType for BlockQ4_0 {
             sumf += sum_i as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
         }
         sumf
+    }
+}
+
+impl GgmlType for BlockMXFP4 {
+    const DTYPE: GgmlDType = GgmlDType::MXFP4;
+    const BLCK_SIZE: usize = QK_MXFP4;
+    type VecDotType = BlockQ8_0;
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        let k = ys.len();
+        let qk = Self::BLCK_SIZE;
+        debug_assert!(k.is_multiple_of(qk), "{k} is not divisible by {qk}");
+
+        let nb = k / qk;
+        for i in 0..nb {
+            let d = e8m0_to_f32(xs[i].e);
+            for j in 0..(qk / 2) {
+                let q = xs[i].qs[j];
+                ys[i * qk + j] = d * MXFP4_VALUES[(q & 0x0F) as usize];
+                ys[i * qk + j + qk / 2] = d * MXFP4_VALUES[(q >> 4) as usize];
+            }
+        }
+    }
+
+    fn from_float(xs: &[f32], ys: &mut [Self]) {
+        let qk = Self::BLCK_SIZE;
+        let k = xs.len();
+        debug_assert!(k.is_multiple_of(qk), "{k} is not divisible by {qk}");
+        debug_assert_eq!(ys.len(), k / qk, "size mismatch {} {}", ys.len(), k / qk);
+
+        for (i, ys) in ys.iter_mut().enumerate() {
+            let xs = &xs[i * qk..(i + 1) * qk];
+            let mut amax = 0.0f32;
+            for &x in xs {
+                amax = amax.max(x.abs());
+            }
+
+            let (e, d) = if amax == 0.0 {
+                (0u8, 1.0f32)
+            } else {
+                let ie = (amax.log2().floor() as i32) - 2 + 127;
+                let e = ie.clamp(1, 254) as u8;
+                (e, e8m0_to_f32(e))
+            };
+            ys.e = e;
+
+            for j in 0..(qk / 2) {
+                let q0 = nearest_mxfp4_value_index(xs[j] / d);
+                let q1 = nearest_mxfp4_value_index(xs[j + qk / 2] / d);
+                ys.qs[j] = q0 | (q1 << 4);
+            }
+        }
+    }
+
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        let qk = Self::BLCK_SIZE;
+        debug_assert!(n.is_multiple_of(qk), "{n} is not divisible by {qk}");
+        let nb = n / qk;
+        debug_assert!(xs.len() >= nb, "xs len {} < {nb}", xs.len());
+        debug_assert!(ys.len() >= nb, "ys len {} < {nb}", ys.len());
+
+        let mut sum = 0.0f32;
+        for i in 0..nb {
+            let d = e8m0_to_f32(xs[i].e);
+            let dy = ys[i].d.to_f32();
+            for j in 0..(qk / 2) {
+                let q = xs[i].qs[j];
+                let x0 = MXFP4_VALUES[(q & 0x0F) as usize];
+                let x1 = MXFP4_VALUES[(q >> 4) as usize];
+                let y0 = ys[i].qs[j] as f32;
+                let y1 = ys[i].qs[j + qk / 2] as f32;
+                sum += d * dy * (x0 * y0 + x1 * y1);
+            }
+        }
+        sum
     }
 }
 
@@ -2500,6 +2616,6 @@ macro_rules! verify_block_sizes {
 }
 
 verify_block_sizes!(
-    BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K, BlockQ3K, BlockQ4K,
-    BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
+    BlockQ4_0, BlockQ4_1, BlockMXFP4, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K,
+    BlockQ3K, BlockQ4K, BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
 );
