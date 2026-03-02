@@ -6,6 +6,7 @@ extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
+use candle_examples::chat_template::{ChatTemplate, ChatTemplateOptions, Message};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
@@ -39,13 +40,24 @@ struct Args {
     #[arg(long)]
     tokenizer: Option<PathBuf>,
 
+    /// Disable chat-template formatting even if chat_template.jinja is available.
+    #[arg(long)]
+    no_chat_template: bool,
+
     /// Prompt text.
-    #[arg(long, default_value = "Write a short Rust function that reverses a UTF-8 string.")]
+    #[arg(
+        long,
+        default_value = "Write a short Rust function that reverses a UTF-8 string."
+    )]
     prompt: String,
 
     /// Number of tokens to generate.
     #[arg(long, default_value_t = 128)]
     sample_len: usize,
+
+    /// Harmony reasoning effort for gpt-oss chat template: low, medium, high.
+    #[arg(long, default_value = "low")]
+    reasoning_effort: String,
 
     /// Temperature (0 => greedy).
     #[arg(long, default_value_t = 0.0)]
@@ -97,7 +109,7 @@ fn resolve_dtype(args: &Args, device: &Device) -> Result<DType> {
     Ok(dtype)
 }
 
-fn load_paths(args: &Args) -> Result<(Vec<PathBuf>, PathBuf, PathBuf)> {
+fn load_paths(args: &Args) -> Result<(Vec<PathBuf>, PathBuf, PathBuf, Option<PathBuf>)> {
     let api = Api::new()?;
     let repo = api.repo(Repo::with_revision(
         args.model_id.clone(),
@@ -107,8 +119,10 @@ fn load_paths(args: &Args) -> Result<(Vec<PathBuf>, PathBuf, PathBuf)> {
 
     match &args.model_dir {
         Some(model_dir) => {
-            let model_files =
-                candle_examples::hub_load_local_safetensors(model_dir, "model.safetensors.index.json")?;
+            let model_files = candle_examples::hub_load_local_safetensors(
+                model_dir,
+                "model.safetensors.index.json",
+            )?;
             let config_file = model_dir.join("config.json");
             let tokenizer_file = match &args.tokenizer {
                 Some(p) => p.clone(),
@@ -121,32 +135,93 @@ fn load_paths(args: &Args) -> Result<(Vec<PathBuf>, PathBuf, PathBuf)> {
                     }
                 }
             };
-            Ok((model_files, config_file, tokenizer_file))
+            let chat_template_file = if args.no_chat_template {
+                None
+            } else {
+                let local = model_dir.join("chat_template.jinja");
+                if local.exists() {
+                    Some(local)
+                } else {
+                    repo.get("chat_template.jinja").ok()
+                }
+            };
+            Ok((model_files, config_file, tokenizer_file, chat_template_file))
         }
         None => {
-            let model_files = candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
+            let model_files =
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
             let config_file = repo.get("config.json")?;
             let tokenizer_file = match &args.tokenizer {
                 Some(p) => p.clone(),
                 None => repo.get("tokenizer.json")?,
             };
-            Ok((model_files, config_file, tokenizer_file))
+            let chat_template_file = if args.no_chat_template {
+                None
+            } else {
+                repo.get("chat_template.jinja").ok()
+            };
+            Ok((model_files, config_file, tokenizer_file, chat_template_file))
         }
     }
 }
 
 fn eos_token_id(tos: &TokenOutputStream) -> Option<u32> {
-    tos.get_token("<|endoftext|>")
+    for tok in ["<|return|>", "<|end|>", "<|endoftext|>", "<|im_end|>"] {
+        if let Some(id) = tos.get_token(tok) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+fn format_prompt(prompt: &str, chat_template: Option<&ChatTemplate>) -> Result<(String, bool)> {
+    match chat_template {
+        None => Ok((prompt.to_string(), true)),
+        Some(template) => {
+            let messages = vec![Message::user(prompt)];
+            let formatted = template
+                .apply(&messages, &ChatTemplateOptions::for_generation())
+                .map_err(|e| E::msg(e.to_string()))?;
+            Ok((formatted, false))
+        }
+    }
+}
+
+fn extract_harmony_final(raw: &str) -> Option<String> {
+    let marker = "<|channel|>final<|message|>";
+    let start = raw.rfind(marker)?;
+    let tail = &raw[start + marker.len()..];
+    let end = tail
+        .find("<|return|>")
+        .or_else(|| tail.find("<|end|>"))
+        .unwrap_or(tail.len());
+    let out = tail[..end].trim();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.to_string())
+    }
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if !matches!(args.reasoning_effort.as_str(), "low" | "medium" | "high") {
+        anyhow::bail!(
+            "unsupported --reasoning-effort {}, expected low|medium|high",
+            args.reasoning_effort
+        );
+    }
     let device = candle_examples::device(args.cpu)?;
     let dtype = resolve_dtype(&args, &device)?;
 
-    let (model_files, config_file, tokenizer_file) = load_paths(&args)?;
+    let (model_files, config_file, tokenizer_file, chat_template_file) = load_paths(&args)?;
     println!("loading config from {}", config_file.display());
     println!("loading tokenizer from {}", tokenizer_file.display());
+    if let Some(path) = &chat_template_file {
+        println!("loading chat template from {}", path.display());
+    } else {
+        println!("chat template disabled or not found, using raw prompt");
+    }
     println!(
         "loading {} model shard(s), dtype={dtype:?}, device={:?}",
         model_files.len(),
@@ -156,13 +231,28 @@ fn main() -> Result<()> {
     let config: Config = serde_json::from_slice(&std::fs::read(config_file)?)?;
     let tokenizer = Tokenizer::from_file(&tokenizer_file).map_err(E::msg)?;
     let mut tos = TokenOutputStream::new(tokenizer);
+    let chat_template = match chat_template_file {
+        Some(path) => {
+            let template_src = std::fs::read_to_string(path)?;
+            let template_src = format!(
+                "{{% set reasoning_effort = \"{}\" %}}\n{}",
+                args.reasoning_effort, template_src
+            );
+            Some(
+                ChatTemplate::new(template_src, "<|startoftext|>", "<|return|>")
+                    .map_err(|e| E::msg(e.to_string()))?,
+            )
+        }
+        None => None,
+    };
 
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, dtype, &device)? };
     let mut model = ModelForCausalLM::new(&config, vb)?;
 
+    let (formatted_prompt, add_special_tokens) = format_prompt(&args.prompt, chat_template.as_ref())?;
     let tokens = tos
         .tokenizer()
-        .encode(args.prompt.as_str(), true)
+        .encode(formatted_prompt.as_str(), add_special_tokens)
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
@@ -198,7 +288,11 @@ fn main() -> Result<()> {
     let start_prefill = std::time::Instant::now();
     let mut next_token = if !args.split_prompt {
         let input = Tensor::new(tokens.as_slice(), &device)?.unsqueeze(0)?;
-        let logits = model.forward(&input, 0)?.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
+        let logits = model
+            .forward(&input, 0)?
+            .squeeze(0)?
+            .squeeze(0)?
+            .to_dtype(DType::F32)?;
         logits_processor.sample(&logits)?
     } else {
         let mut next = 0u32;
@@ -214,13 +308,16 @@ fn main() -> Result<()> {
         next
     };
     let prefill_dt = start_prefill.elapsed();
+    let harmony_mode = chat_template.is_some();
 
     print!("{}", args.prompt);
     std::io::stdout().flush()?;
     let mut generated_tokens = vec![next_token];
-    if let Some(t) = tos.next_token(next_token)? {
-        print!("{t}");
-        std::io::stdout().flush()?;
+    if !harmony_mode {
+        if let Some(t) = tos.next_token(next_token)? {
+            print!("{t}");
+            std::io::stdout().flush()?;
+        }
     }
 
     let eos = eos_token_id(&tos);
@@ -249,9 +346,11 @@ fn main() -> Result<()> {
         generated_tokens.push(next_token);
         sampled += 1;
 
-        if let Some(t) = tos.next_token(next_token)? {
-            print!("{t}");
-            std::io::stdout().flush()?;
+        if !harmony_mode {
+            if let Some(t) = tos.next_token(next_token)? {
+                print!("{t}");
+                std::io::stdout().flush()?;
+            }
         }
 
         if let Some(eos) = eos {
@@ -261,7 +360,16 @@ fn main() -> Result<()> {
         }
     }
 
-    if let Some(rest) = tos.decode_rest().map_err(E::msg)? {
+    if harmony_mode {
+        let raw = tos
+            .tokenizer()
+            .decode(&generated_tokens, false)
+            .map_err(E::msg)?;
+        match extract_harmony_final(&raw) {
+            Some(final_text) => print!("{final_text}"),
+            None => print!("{raw}"),
+        }
+    } else if let Some(rest) = tos.decode_rest().map_err(E::msg)? {
         print!("{rest}");
     }
     println!();

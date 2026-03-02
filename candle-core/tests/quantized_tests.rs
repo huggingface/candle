@@ -7,6 +7,7 @@ use candle_core::{
 };
 use quantized::{k_quants, GgmlType};
 use rand::prelude::*;
+use std::borrow::Cow;
 
 const GGML_TEST_SIZE: usize = 32 * 128;
 
@@ -407,6 +408,206 @@ fn quantize_mxfp4(device: &Device) -> Result<()> {
 
     ggml_quantization_error_test(dtype, device, 0.03)?;
     Ok(())
+}
+
+#[test]
+fn indexed_moe_mxfp4_cpu_reference() -> Result<()> {
+    let device = &Device::Cpu;
+    let (num_experts, n, k) = (3usize, 8usize, 32usize);
+    let (batch, topk) = (2usize, 2usize);
+
+    let w = (0..num_experts * n * k)
+        .map(|i| ((i as f32) * 0.011).sin() * 2.0)
+        .collect::<Vec<_>>();
+    let w = Tensor::from_vec(w, (num_experts, n, k), device)?;
+    let q = quantized::QTensor::quantize(&w, GgmlDType::MXFP4)?;
+
+    let x = (0..batch * k)
+        .map(|i| ((i as f32) * 0.017).cos())
+        .collect::<Vec<_>>();
+    let x = Tensor::from_vec(x, (batch, k), device)?.to_dtype(DType::F32)?;
+    let ids = Tensor::from_vec(vec![0u32, 2, 1, 0], (batch, topk), device)?;
+
+    let y = q
+        .indexed_moe_forward(&x, &ids)?
+        .to_dtype(DType::F32)?
+        .to_vec3::<f32>()?;
+
+    let w_dq = q.dequantize(device)?.to_vec3::<f32>()?;
+    let x = x.to_vec2::<f32>()?;
+    let ids = ids.to_vec2::<u32>()?;
+    let mut y_ref = vec![0f32; batch * topk * n];
+    for b in 0..batch {
+        for t in 0..topk {
+            let e = ids[b][t] as usize;
+            for r in 0..n {
+                let mut acc = 0f32;
+                for c in 0..k {
+                    acc += x[b][c] * w_dq[e][r][c];
+                }
+                y_ref[(b * topk + t) * n + r] = acc;
+            }
+        }
+    }
+
+    let y_ref = Tensor::from_vec(y_ref, (batch, topk, n), device)?.to_vec3::<f32>()?;
+    let mut max_abs = 0f32;
+    for b in 0..batch {
+        for t in 0..topk {
+            for r in 0..n {
+                let d = (y[b][t][r] - y_ref[b][t][r]).abs();
+                if d > max_abs {
+                    max_abs = d;
+                }
+            }
+        }
+    }
+
+    // The CPU indexed_moe path quantizes activations for vec-dot, so it should
+    // stay close (but not bit-exact) to f32 x dequantized-weight reference.
+    assert!(max_abs < 0.35, "max_abs={max_abs}");
+    Ok(())
+}
+
+fn indexed_moe_mxfp4_parity_with_device(device: &Device) -> Result<()> {
+    let cpu = &Device::Cpu;
+    let (num_experts, n, k) = (4usize, 256usize, 256usize);
+    let (batch, topk) = (4usize, 2usize);
+
+    let w = (0..num_experts * n * k)
+        .map(|i| ((i as f32) * 0.0031).sin() * 1.5)
+        .collect::<Vec<_>>();
+    let w = Tensor::from_vec(w, (num_experts, n, k), cpu)?;
+    let q_cpu = quantized::QTensor::quantize(&w, GgmlDType::MXFP4)?;
+    let q_data = q_cpu.data()?.into_owned();
+    let mut max_e = 0u8;
+    for (i, block) in q_data.chunks_exact(17).enumerate() {
+        let e = block[0];
+        assert!(e != 255, "invalid MXFP4 exponent 255 in block {i}");
+        if e > max_e {
+            max_e = e;
+        }
+    }
+    assert!(max_e < 200, "unexpectedly large MXFP4 exponent {max_e}");
+    let q_dev_storage =
+        quantized::QStorage::from_data(Cow::Owned(q_data.clone()), device, GgmlDType::MXFP4)?;
+    let q_dev = quantized::QTensor::new(q_dev_storage, (num_experts, n, k))?;
+    let q_dev_data = q_dev.data()?.into_owned();
+    if q_data != q_dev_data {
+        let first_diff = q_data
+            .iter()
+            .zip(q_dev_data.iter())
+            .position(|(a, b)| a != b)
+            .unwrap_or_else(|| q_data.len().min(q_dev_data.len()));
+        let q_head = &q_data[..usize::min(32, q_data.len())];
+        let d_head = &q_dev_data[..usize::min(32, q_dev_data.len())];
+        panic!(
+            "device MXFP4 bytes differ from CPU source: cpu_len={} dev_len={} first_diff={} cpu_head={:?} dev_head={:?}",
+            q_data.len(),
+            q_dev_data.len(),
+            first_diff,
+            q_head,
+            d_head
+        );
+    }
+    let q_dev_dq = q_dev
+        .dequantize(device)?
+        .to_device(cpu)?
+        .to_dtype(DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    if let Some((idx, v)) = q_dev_dq
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, v)| !v.is_finite())
+    {
+        panic!("device dequantized weight non-finite at {idx}: {v}");
+    }
+
+    let x = (0..batch * k)
+        .map(|i| ((i as f32) * 0.013).cos())
+        .collect::<Vec<_>>();
+    let x_cpu = Tensor::from_vec(x, (batch, k), cpu)?.to_dtype(DType::F32)?;
+    let x_dev = x_cpu.to_device(device)?;
+
+    let ids_cpu = Tensor::from_vec(vec![0u32, 1, 2, 3, 3, 2, 1, 0], (batch, topk), cpu)?;
+    let ids_dev = ids_cpu.to_device(device)?;
+
+    let y_cpu = q_cpu
+        .indexed_moe_forward(&x_cpu, &ids_cpu)?
+        .to_dtype(DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    let y_dev = q_dev
+        .indexed_moe_forward(&x_dev, &ids_dev)?
+        .to_device(cpu)?
+        .to_dtype(DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+
+    if let Some((idx, v)) = y_cpu
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, v)| !v.is_finite())
+    {
+        panic!("cpu output non-finite at {idx}: {v}");
+    }
+    if let Some((idx, v)) = y_dev
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, v)| !v.is_finite())
+    {
+        panic!("device output non-finite at {idx}: {v}");
+    }
+
+    let mut max_abs = 0f32;
+    let mut mean_abs = 0f32;
+    let mut mean_abs_ref = 0f32;
+    for (&a, &b) in y_cpu.iter().zip(y_dev.iter()) {
+        let d = (a - b).abs();
+        if d > max_abs {
+            max_abs = d;
+        }
+        mean_abs += d;
+        mean_abs_ref += a.abs();
+    }
+    mean_abs /= y_cpu.len() as f32;
+    mean_abs_ref /= y_cpu.len() as f32;
+
+    // Quantized backend kernels are not bit-identical, but should remain close
+    // on average for deterministic inputs and identical packed weights.
+    let mean_tol = 0.03 * mean_abs_ref + 1e-4;
+    let max_tol = 0.20 * mean_abs_ref + 1e-3;
+    assert!(
+        mean_abs <= mean_tol && max_abs <= max_tol,
+        "indexed_moe parity failed: max_abs={max_abs} mean_abs={mean_abs} max_tol={max_tol} mean_tol={mean_tol} cpu_head={:?} dev_head={:?}",
+        &y_cpu[..usize::min(8, y_cpu.len())],
+        &y_dev[..usize::min(8, y_dev.len())]
+    );
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn indexed_moe_mxfp4_cpu_cuda_parity() -> Result<()> {
+    let dev = match Device::new_cuda(0) {
+        Ok(d) => d,
+        Err(_) => return Ok(()),
+    };
+    indexed_moe_mxfp4_parity_with_device(&dev)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn indexed_moe_mxfp4_cpu_metal_parity() -> Result<()> {
+    let dev = match Device::new_metal(0) {
+        Ok(d) => d,
+        Err(_) => return Ok(()),
+    };
+    indexed_moe_mxfp4_parity_with_device(&dev)
 }
 
 fn get_test_vector2(bound: f32, size: usize, device: &Device) -> Result<Tensor> {

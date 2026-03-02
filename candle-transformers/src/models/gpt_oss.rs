@@ -867,15 +867,17 @@ impl ModelForCausalLM {
 
 #[cfg(test)]
 mod tests {
-    use super::{pack_mxfp4_blocks, Config, LayerType};
     #[cfg(feature = "metal")]
     use super::SWIGLU_ALPHA;
-    #[cfg(feature = "metal")]
+    use super::{pack_mxfp4_blocks, Config, LayerType};
+    #[cfg(any(feature = "metal", feature = "cuda"))]
     use candle::{DType, Device, Tensor};
-    #[cfg(feature = "metal")]
+    #[cfg(any(feature = "metal", feature = "cuda"))]
     use candle_nn::VarBuilder;
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    use std::collections::HashMap;
     #[cfg(feature = "metal")]
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
     #[cfg(feature = "metal")]
     use std::fs;
     #[cfg(feature = "metal")]
@@ -1006,6 +1008,173 @@ mod tests {
         assert_eq!(decode_pairwise_block(&src1), decode_ggml_block(&dst1));
     }
 
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "manual CPU/CUDA parity probe for GPT-OSS MLP path"]
+    fn mlp_cpu_cuda_parity_synthetic() -> candle::Result<()> {
+        let dev_cuda = match Device::new_cuda(0) {
+            Ok(d) => d,
+            Err(_) => return Ok(()),
+        };
+
+        let cfg: Config = serde_json::from_str(
+            r#"{
+                "vocab_size":1024,
+                "hidden_size":256,
+                "intermediate_size":256,
+                "num_hidden_layers":1,
+                "num_attention_heads":4,
+                "num_key_value_heads":4,
+                "head_dim":64,
+                "num_local_experts":4,
+                "num_experts_per_tok":2
+            }"#,
+        )
+        .map_err(candle::Error::msg)?;
+        cfg.validate()?;
+
+        let num_experts = cfg.num_local_experts;
+        let hidden_size = cfg.hidden_size;
+        let intermediate_size = cfg.intermediate_size;
+        let gate_up_rows = 2 * intermediate_size;
+        let gate_up_col_blocks = hidden_size / 32;
+        let down_rows = hidden_size;
+        let down_col_blocks = intermediate_size / 32;
+
+        // Keep router top-k selection stable across backends.
+        let router_weight = vec![0f32; num_experts * hidden_size];
+        let router_bias = (0..num_experts)
+            .map(|i| ((num_experts - i) as f32) * 2.0)
+            .collect::<Vec<_>>();
+        let gate_up_bias = (0..num_experts * gate_up_rows)
+            .map(|i| ((i as f32) * 0.017).sin() * 0.1)
+            .collect::<Vec<_>>();
+        let down_bias = (0..num_experts * hidden_size)
+            .map(|i| ((i as f32) * 0.019).cos() * 0.1)
+            .collect::<Vec<_>>();
+
+        let small_nibbles = [0u8, 1, 2, 9, 10];
+        let gate_up_blocks = (0..num_experts * gate_up_rows * gate_up_col_blocks * 16)
+            .map(|i| {
+                let lo = small_nibbles[(3 * i + 1) % small_nibbles.len()];
+                let hi = small_nibbles[(5 * i + 2) % small_nibbles.len()];
+                lo | (hi << 4)
+            })
+            .collect::<Vec<_>>();
+        let gate_up_scales = vec![127u8; num_experts * gate_up_rows * gate_up_col_blocks];
+        let down_blocks = (0..num_experts * down_rows * down_col_blocks * 16)
+            .map(|i| {
+                let lo = small_nibbles[(7 * i + 3) % small_nibbles.len()];
+                let hi = small_nibbles[(11 * i + 4) % small_nibbles.len()];
+                lo | (hi << 4)
+            })
+            .collect::<Vec<_>>();
+        let down_scales = vec![127u8; num_experts * down_rows * down_col_blocks];
+
+        let mut fp_cpu = HashMap::new();
+        fp_cpu.insert(
+            "router.weight".to_string(),
+            Tensor::from_vec(router_weight, (num_experts, hidden_size), &Device::Cpu)?,
+        );
+        fp_cpu.insert(
+            "router.bias".to_string(),
+            Tensor::from_vec(router_bias, (num_experts,), &Device::Cpu)?,
+        );
+        fp_cpu.insert(
+            "experts.gate_up_proj_bias".to_string(),
+            Tensor::from_vec(gate_up_bias, (num_experts, gate_up_rows), &Device::Cpu)?,
+        );
+        fp_cpu.insert(
+            "experts.down_proj_bias".to_string(),
+            Tensor::from_vec(down_bias, (num_experts, hidden_size), &Device::Cpu)?,
+        );
+
+        let mut u8_cpu = HashMap::new();
+        u8_cpu.insert(
+            "experts.gate_up_proj_blocks".to_string(),
+            Tensor::from_vec(
+                gate_up_blocks,
+                (num_experts, gate_up_rows, gate_up_col_blocks, 16),
+                &Device::Cpu,
+            )?,
+        );
+        u8_cpu.insert(
+            "experts.gate_up_proj_scales".to_string(),
+            Tensor::from_vec(
+                gate_up_scales,
+                (num_experts, gate_up_rows, gate_up_col_blocks),
+                &Device::Cpu,
+            )?,
+        );
+        u8_cpu.insert(
+            "experts.down_proj_blocks".to_string(),
+            Tensor::from_vec(
+                down_blocks,
+                (num_experts, down_rows, down_col_blocks, 16),
+                &Device::Cpu,
+            )?,
+        );
+        u8_cpu.insert(
+            "experts.down_proj_scales".to_string(),
+            Tensor::from_vec(
+                down_scales,
+                (num_experts, down_rows, down_col_blocks),
+                &Device::Cpu,
+            )?,
+        );
+
+        let mut fp_cuda = HashMap::new();
+        for (k, v) in fp_cpu.iter() {
+            fp_cuda.insert(k.clone(), v.to_device(&dev_cuda)?);
+        }
+        let mut u8_cuda = HashMap::new();
+        for (k, v) in u8_cpu.iter() {
+            u8_cuda.insert(k.clone(), v.to_device(&dev_cuda)?);
+        }
+
+        let mlp_cpu = super::Mlp::new(
+            &cfg,
+            VarBuilder::from_tensors(fp_cpu, DType::F32, &Device::Cpu),
+            VarBuilder::from_tensors(u8_cpu, DType::U8, &Device::Cpu),
+        )?;
+        let mlp_cuda = super::Mlp::new(
+            &cfg,
+            VarBuilder::from_tensors(fp_cuda, DType::F32, &dev_cuda),
+            VarBuilder::from_tensors(u8_cuda, DType::U8, &dev_cuda),
+        )?;
+
+        let (batch, seq_len) = (3usize, 2usize);
+        let x = (0..batch * seq_len * hidden_size)
+            .map(|i| ((i as f32) * 0.007).sin())
+            .collect::<Vec<_>>();
+        let x_cpu = Tensor::from_vec(x.clone(), (batch, seq_len, hidden_size), &Device::Cpu)?;
+        let x_cuda = Tensor::from_vec(x, (batch, seq_len, hidden_size), &dev_cuda)?;
+
+        let y_cpu = mlp_cpu.forward(&x_cpu)?.to_dtype(DType::F32)?;
+        let y_cuda = mlp_cuda
+            .forward(&x_cuda)?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+
+        let diffs = (&y_cpu - &y_cuda)?.abs()?.flatten_all()?.to_vec1::<f32>()?;
+        let max_abs = diffs
+            .iter()
+            .copied()
+            .fold(0f32, |acc, v| if v > acc { v } else { acc });
+        let mean_abs = diffs.iter().sum::<f32>() / diffs.len() as f32;
+        let y_cpu_v = y_cpu.flatten_all()?.to_vec1::<f32>()?;
+        let mean_abs_ref = y_cpu_v.iter().map(|v| v.abs()).sum::<f32>() / y_cpu_v.len() as f32;
+
+        println!("mlp cpu-cuda parity max_abs={max_abs:.6} mean_abs={mean_abs:.6}");
+        let mean_tol = 0.03 * mean_abs_ref + 1e-3;
+        if mean_abs > mean_tol {
+            candle::bail!(
+                "parity check failed: max_abs={max_abs} mean_abs={mean_abs} mean_tol={mean_tol}"
+            );
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "metal")]
     fn e8m0_to_f32(x: u8) -> f32 {
         let bits = if x == 0 {
@@ -1047,7 +1216,8 @@ mod tests {
     #[cfg(feature = "metal")]
     fn load_local_safetensor_shards(root: &Path) -> candle::Result<Vec<PathBuf>> {
         let index = fs::File::open(root.join("model.safetensors.index.json"))?;
-        let json: serde_json::Value = serde_json::from_reader(index).map_err(candle::Error::wrap)?;
+        let json: serde_json::Value =
+            serde_json::from_reader(index).map_err(candle::Error::wrap)?;
         let weight_map = match json.get("weight_map") {
             None => candle::bail!("missing weight_map in model.safetensors.index.json"),
             Some(serde_json::Value::Object(m)) => m,
@@ -1558,7 +1728,10 @@ mod tests {
                 .to_device(&Device::Cpu)?
                 .to_dtype(DType::F32)?;
             assert_all_finite(&logits, &format!("step{step} logits"))?;
-            save_f32_tensor_flat(&out_dir.join(format!("rust_logits_step{step}.bin")), &logits)?;
+            save_f32_tensor_flat(
+                &out_dir.join(format!("rust_logits_step{step}.bin")),
+                &logits,
+            )?;
             next = argmax_id(&logits)?;
         }
 

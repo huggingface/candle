@@ -172,6 +172,10 @@ impl ChatTemplate {
                 msg,
             ))
         });
+        // Some HF templates (e.g. gpt-oss harmony) call strftime_now("%Y-%m-%d").
+        env.add_function("strftime_now", |fmt: String| -> String {
+            chrono::Local::now().format(&fmt).to_string()
+        });
 
         env.add_template_owned("chat".to_string(), template.into())
             .map_err(|e| ChatTemplateError::TemplateError(e.to_string()))?;
