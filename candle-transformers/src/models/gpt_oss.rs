@@ -747,7 +747,12 @@ impl ModelForCausalLM {
 
 #[cfg(test)]
 mod tests {
-    use super::{pack_mxfp4_blocks, Config, LayerType};
+    use super::{pack_mxfp4_blocks, Config, LayerType, SWIGLU_ALPHA};
+    use candle::{DType, Device, Tensor};
+    use candle_nn::VarBuilder;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::Path;
 
     fn decode_pairwise_block(src: &[u8; 16]) -> [u8; 32] {
         let mut out = [0u8; 32];
@@ -827,5 +832,283 @@ mod tests {
 
         assert_eq!(decode_pairwise_block(&src0), decode_ggml_block(&dst0));
         assert_eq!(decode_pairwise_block(&src1), decode_ggml_block(&dst1));
+    }
+
+    #[cfg(feature = "metal")]
+    fn e8m0_to_f32(x: u8) -> f32 {
+        let bits = if x == 0 {
+            0x0040_0000
+        } else {
+            (x as u32) << 23
+        };
+        f32::from_bits(bits)
+    }
+
+    #[cfg(feature = "metal")]
+    fn sigmoid(x: f32) -> f32 {
+        1.0 / (1.0 + (-x).exp())
+    }
+
+    #[cfg(feature = "metal")]
+    fn read_u8_tensor(path: &Path, shape: impl Into<candle::Shape>) -> candle::Result<Tensor> {
+        let v = fs::read(path)?;
+        Tensor::from_vec(v, shape, &Device::Cpu)
+    }
+
+    #[cfg(feature = "metal")]
+    fn read_bf16_tensor_as_f32(
+        path: &Path,
+        shape: impl Into<candle::Shape>,
+    ) -> candle::Result<Tensor> {
+        let bytes = fs::read(path)?;
+        if bytes.len() % 2 != 0 {
+            candle::bail!("{} has invalid bf16 byte length", path.display());
+        }
+        let mut vals = Vec::with_capacity(bytes.len() / 2);
+        for c in bytes.chunks_exact(2) {
+            let bits = u16::from_le_bytes([c[0], c[1]]);
+            vals.push(f32::from_bits((bits as u32) << 16));
+        }
+        Tensor::from_vec(vals, shape, &Device::Cpu)
+    }
+
+    #[cfg(feature = "metal")]
+    fn topk_sorted_desc(xs: &[f32], k: usize) -> Vec<usize> {
+        let mut ids: Vec<usize> = (0..xs.len()).collect();
+        ids.sort_by(|&a, &b| {
+            xs[b]
+                .partial_cmp(&xs[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        ids.truncate(k);
+        ids
+    }
+
+    #[cfg(feature = "metal")]
+    fn softmax(xs: &[f32]) -> Vec<f32> {
+        let m = xs
+            .iter()
+            .fold(f32::NEG_INFINITY, |acc, &x| if x > acc { x } else { acc });
+        let exps: Vec<f32> = xs.iter().map(|&x| (x - m).exp()).collect();
+        let sum: f32 = exps.iter().sum();
+        exps.into_iter().map(|x| x / sum).collect()
+    }
+
+    #[cfg(feature = "metal")]
+    fn dot_mxfp4_pairwise_row(
+        blocks: &[u8],
+        scales: &[u8],
+        row: usize,
+        rows: usize,
+        cols: usize,
+        expert: usize,
+        x: &[f32],
+    ) -> f32 {
+        const LUT: [f32; 16] = [
+            0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+        ];
+        let n_blk = cols / 32;
+        let mut acc = 0f32;
+        for b in 0..n_blk {
+            let s_off = ((expert * rows + row) * n_blk) + b;
+            let d = e8m0_to_f32(scales[s_off]);
+            let blk_off = (((expert * rows + row) * n_blk + b) * 16) as usize;
+            for i in 0..16 {
+                let q = blocks[blk_off + i];
+                let c0 = b * 32 + 2 * i;
+                let c1 = c0 + 1;
+                acc += d * (LUT[(q & 0x0f) as usize] * x[c0] + LUT[(q >> 4) as usize] * x[c1]);
+            }
+        }
+        acc
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    #[ignore = "requires /tmp/gptoss20b_layer0/*.bin from gpt-oss-20b checkpoint slices"]
+    fn real_checkpoint_layer0_mlp_parity() -> candle::Result<()> {
+        let root = Path::new("/tmp/gptoss20b_layer0");
+        for f in [
+            "router_weight_bf16.bin",
+            "router_bias_bf16.bin",
+            "gate_up_proj_blocks_u8.bin",
+            "gate_up_proj_scales_u8.bin",
+            "gate_up_proj_bias_bf16.bin",
+            "down_proj_blocks_u8.bin",
+            "down_proj_scales_u8.bin",
+            "down_proj_bias_bf16.bin",
+        ] {
+            if !root.join(f).exists() {
+                candle::bail!("missing required file {}", root.join(f).display());
+            }
+        }
+
+        let router_weight =
+            read_bf16_tensor_as_f32(&root.join("router_weight_bf16.bin"), (32, 2880))?;
+        let router_bias = read_bf16_tensor_as_f32(&root.join("router_bias_bf16.bin"), (32,))?;
+        let gate_up_blocks =
+            read_u8_tensor(&root.join("gate_up_proj_blocks_u8.bin"), (32, 5760, 90, 16))?;
+        let gate_up_scales =
+            read_u8_tensor(&root.join("gate_up_proj_scales_u8.bin"), (32, 5760, 90))?;
+        let gate_up_bias =
+            read_bf16_tensor_as_f32(&root.join("gate_up_proj_bias_bf16.bin"), (32, 5760))?;
+        let down_blocks =
+            read_u8_tensor(&root.join("down_proj_blocks_u8.bin"), (32, 2880, 90, 16))?;
+        let down_scales = read_u8_tensor(&root.join("down_proj_scales_u8.bin"), (32, 2880, 90))?;
+        let down_bias = read_bf16_tensor_as_f32(&root.join("down_proj_bias_bf16.bin"), (32, 2880))?;
+
+        let mut fp_tensors = HashMap::new();
+        fp_tensors.insert(
+            "model.layers.0.mlp.router.weight".to_string(),
+            router_weight.clone(),
+        );
+        fp_tensors.insert(
+            "model.layers.0.mlp.router.bias".to_string(),
+            router_bias.clone(),
+        );
+        fp_tensors.insert(
+            "model.layers.0.mlp.experts.gate_up_proj_bias".to_string(),
+            gate_up_bias.clone(),
+        );
+        fp_tensors.insert(
+            "model.layers.0.mlp.experts.down_proj_bias".to_string(),
+            down_bias.clone(),
+        );
+
+        let mut u8_tensors = HashMap::new();
+        u8_tensors.insert(
+            "model.layers.0.mlp.experts.gate_up_proj_blocks".to_string(),
+            gate_up_blocks.clone(),
+        );
+        u8_tensors.insert(
+            "model.layers.0.mlp.experts.gate_up_proj_scales".to_string(),
+            gate_up_scales.clone(),
+        );
+        u8_tensors.insert(
+            "model.layers.0.mlp.experts.down_proj_blocks".to_string(),
+            down_blocks.clone(),
+        );
+        u8_tensors.insert(
+            "model.layers.0.mlp.experts.down_proj_scales".to_string(),
+            down_scales.clone(),
+        );
+
+        let dev = Device::new_metal(0)?;
+        let vb = VarBuilder::from_tensors(fp_tensors, DType::F32, &dev);
+        let vb_u8 = VarBuilder::from_tensors(u8_tensors, DType::U8, &dev);
+
+        let cfg: Config = serde_json::from_str(
+            r#"{
+                "vocab_size":201088,
+                "hidden_size":2880,
+                "intermediate_size":2880,
+                "num_hidden_layers":1,
+                "num_attention_heads":64,
+                "num_key_value_heads":8,
+                "head_dim":64,
+                "attention_bias":true,
+                "max_position_embeddings":131072,
+                "initial_context_length":4096,
+                "sliding_window":128,
+                "tie_word_embeddings":false,
+                "rope_theta":150000.0,
+                "rms_norm_eps":1e-5,
+                "swiglu_limit":7.0,
+                "num_local_experts":32,
+                "num_experts_per_tok":4,
+                "layer_types":["sliding_attention"]
+            }"#,
+        )
+        .map_err(candle::Error::msg)?;
+
+        let mlp = super::Mlp::new(
+            &cfg,
+            vb.pp("model").pp("layers").pp(0).pp("mlp"),
+            vb_u8.pp("model").pp("layers").pp(0).pp("mlp"),
+        )?;
+
+        let x: Vec<f32> = (0..2880).map(|i| ((i as f32) * 0.001).sin()).collect();
+        let x_t = Tensor::from_vec(x.clone(), (1, 1, 2880), &dev)?;
+        let y_model = mlp
+            .forward(&x_t)?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+
+        let router_w = router_weight.to_vec2::<f32>()?;
+        let router_b = router_bias.to_vec1::<f32>()?;
+        let mut logits = vec![0f32; 32];
+        for e in 0..32 {
+            let mut s = router_b[e];
+            for (h, &xv) in x.iter().enumerate() {
+                s += router_w[e][h] * xv;
+            }
+            logits[e] = s;
+        }
+        let topk_ids = topk_sorted_desc(&logits, 4);
+        let topk_logits: Vec<f32> = topk_ids.iter().map(|&i| logits[i]).collect();
+        let topk_weights = softmax(&topk_logits);
+
+        let gate_up_bias_v = gate_up_bias.to_vec2::<f32>()?;
+        let down_bias_v = down_bias.to_vec2::<f32>()?;
+        let gate_up_blocks_v = fs::read(root.join("gate_up_proj_blocks_u8.bin"))?;
+        let gate_up_scales_v = fs::read(root.join("gate_up_proj_scales_u8.bin"))?;
+        let down_blocks_v = fs::read(root.join("down_proj_blocks_u8.bin"))?;
+        let down_scales_v = fs::read(root.join("down_proj_scales_u8.bin"))?;
+
+        let mut y_ref = vec![0f32; 2880];
+        for (slot, &expert) in topk_ids.iter().enumerate() {
+            let mut gate_up = vec![0f32; 5760];
+            for r in 0..5760 {
+                gate_up[r] = dot_mxfp4_pairwise_row(
+                    &gate_up_blocks_v,
+                    &gate_up_scales_v,
+                    r,
+                    5760,
+                    2880,
+                    expert,
+                    &x,
+                ) + gate_up_bias_v[expert][r];
+            }
+            let mut down_in = vec![0f32; 2880];
+            for i in 0..2880 {
+                let gate = gate_up[2 * i].min(cfg.swiglu_limit as f32);
+                let up =
+                    gate_up[2 * i + 1].clamp(-(cfg.swiglu_limit as f32), cfg.swiglu_limit as f32);
+                down_in[i] = gate * sigmoid((SWIGLU_ALPHA as f32) * gate) * (up + 1.0);
+            }
+
+            let w = topk_weights[slot];
+            for r in 0..2880 {
+                let v = dot_mxfp4_pairwise_row(
+                    &down_blocks_v,
+                    &down_scales_v,
+                    r,
+                    2880,
+                    2880,
+                    expert,
+                    &down_in,
+                ) + down_bias_v[expert][r];
+                y_ref[r] += w * v;
+            }
+        }
+
+        let mut max_abs = 0f32;
+        let mut mean_abs = 0f32;
+        for (a, b) in y_model.iter().zip(y_ref.iter()) {
+            let d = (a - b).abs();
+            if d > max_abs {
+                max_abs = d;
+            }
+            mean_abs += d;
+        }
+        mean_abs /= y_ref.len() as f32;
+
+        println!("real-checkpoint mlp parity max_abs={max_abs:.6} mean_abs={mean_abs:.6}");
+        if max_abs > 2e-2 || mean_abs > 5e-3 {
+            candle::bail!("parity check failed: max_abs={max_abs} mean_abs={mean_abs}");
+        }
+        Ok(())
     }
 }
