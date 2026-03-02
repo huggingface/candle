@@ -867,11 +867,18 @@ impl ModelForCausalLM {
 
 #[cfg(test)]
 mod tests {
-    use super::{pack_mxfp4_blocks, Config, LayerType, SWIGLU_ALPHA};
+    use super::{pack_mxfp4_blocks, Config, LayerType};
+    #[cfg(feature = "metal")]
+    use super::SWIGLU_ALPHA;
+    #[cfg(feature = "metal")]
     use candle::{DType, Device, Tensor};
+    #[cfg(feature = "metal")]
     use candle_nn::VarBuilder;
+    #[cfg(feature = "metal")]
     use std::collections::{HashMap, HashSet};
+    #[cfg(feature = "metal")]
     use std::fs;
+    #[cfg(feature = "metal")]
     use std::path::{Path, PathBuf};
 
     fn decode_pairwise_block(src: &[u8; 16]) -> [u8; 32] {
@@ -1086,6 +1093,17 @@ mod tests {
                 candle::bail!("{label} contains non-finite value at {i}: {x}");
             }
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    fn save_f32_tensor_flat(path: &Path, t: &Tensor) -> candle::Result<()> {
+        let vals = t.flatten_all()?.to_vec1::<f32>()?;
+        let mut bytes = Vec::with_capacity(vals.len() * 4);
+        for v in vals {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        fs::write(path, bytes)?;
         Ok(())
     }
 
@@ -1483,6 +1501,77 @@ mod tests {
             logits = model.forward(&tok_t, prompt.len() + 1 + step)?;
         }
         println!("full-checkpoint generated token ids: {generated:?}");
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    #[ignore = "requires /tmp/gpt-oss-20b and CANDLE_GPTOSS_FULL_DUMP_DIR"]
+    fn full_checkpoint_dump_logits_for_pytorch_parity() -> candle::Result<()> {
+        let root = std::env::var("CANDLE_GPTOSS_CHECKPOINT_DIR")
+            .unwrap_or_else(|_| "/tmp/gpt-oss-20b".to_string());
+        let root = Path::new(&root);
+        for f in ["config.json", "model.safetensors.index.json"] {
+            if !root.join(f).exists() {
+                candle::bail!("missing required file {}", root.join(f).display());
+            }
+        }
+        let out_dir = std::env::var("CANDLE_GPTOSS_FULL_DUMP_DIR")
+            .map_err(|_| candle::Error::msg("set CANDLE_GPTOSS_FULL_DUMP_DIR"))?;
+        let out_dir = Path::new(&out_dir);
+        fs::create_dir_all(out_dir)?;
+
+        let decode_steps = std::env::var("CANDLE_GPTOSS_PARITY_STEPS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(4usize);
+        let prompt: Vec<u32> = vec![11, 502, 3290, 257, 1542, 318, 1246, 13];
+
+        let config_bytes = fs::read(root.join("config.json"))?;
+        let cfg: Config = serde_json::from_slice(&config_bytes).map_err(candle::Error::msg)?;
+        cfg.validate()?;
+        let files = load_local_safetensor_shards(root)?;
+        if files.is_empty() {
+            candle::bail!("no safetensors shard files found via model.safetensors.index.json");
+        }
+
+        let dev = Device::new_metal(0)?;
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&files, DType::BF16, &dev)? };
+        let mut model = super::ModelForCausalLM::new(&cfg, vb)?;
+        model.clear_kv_cache();
+
+        let prompt_t = Tensor::from_vec(prompt.clone(), (1, prompt.len()), &dev)?;
+        let logits0 = model
+            .forward(&prompt_t, 0)?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        assert_all_finite(&logits0, "step0 logits")?;
+        save_f32_tensor_flat(&out_dir.join("rust_logits_step0.bin"), &logits0)?;
+
+        let mut fed_tokens = Vec::with_capacity(decode_steps);
+        let mut next = argmax_id(&logits0)?;
+        for step in 1..=decode_steps {
+            fed_tokens.push(next);
+            let tok_t = Tensor::from_vec(vec![next], (1, 1), &dev)?;
+            let logits = model
+                .forward(&tok_t, prompt.len() + step - 1)?
+                .to_device(&Device::Cpu)?
+                .to_dtype(DType::F32)?;
+            assert_all_finite(&logits, &format!("step{step} logits"))?;
+            save_f32_tensor_flat(&out_dir.join(format!("rust_logits_step{step}.bin")), &logits)?;
+            next = argmax_id(&logits)?;
+        }
+
+        let metadata = serde_json::json!({
+            "checkpoint_dir": root.display().to_string(),
+            "prompt_tokens": prompt,
+            "decode_steps": decode_steps,
+            "fed_tokens": fed_tokens,
+            "vocab_size": cfg.vocab_size
+        });
+        let metadata = serde_json::to_vec_pretty(&metadata).map_err(candle::Error::wrap)?;
+        fs::write(out_dir.join("metadata.json"), metadata)?;
+        println!("dumped full-model parity logits to {}", out_dir.display());
         Ok(())
     }
 }
