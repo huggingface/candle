@@ -1342,6 +1342,22 @@ mod tests {
             }
         }
 
+        if let Ok(dir) = std::env::var("CANDLE_GPTOSS_LAYER0_DUMP_DIR") {
+            let dir = Path::new(&dir);
+            fs::create_dir_all(dir)?;
+            let mut y_model_bytes = Vec::with_capacity(y_model.len() * 4);
+            for &v in &y_model {
+                y_model_bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            let mut y_ref_bytes = Vec::with_capacity(y_ref.len() * 4);
+            for &v in &y_ref {
+                y_ref_bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            fs::write(dir.join("y_model_rust_f32.bin"), y_model_bytes)?;
+            fs::write(dir.join("y_ref_rust_f32.bin"), y_ref_bytes)?;
+            println!("dumped layer0 outputs to {}", dir.display());
+        }
+
         let mut max_abs = 0f32;
         let mut mean_abs = 0f32;
         for (a, b) in y_model.iter().zip(y_ref.iter()) {
