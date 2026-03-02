@@ -45,6 +45,7 @@ fn default_swiglu_limit() -> f64 {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(try_from = "ConfigSerde")]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_size: usize,
@@ -79,10 +80,115 @@ pub struct Config {
     pub rope_ntk_alpha: Option<f64>,
     #[serde(default)]
     pub rope_ntk_beta: Option<f64>,
-    #[serde(alias = "num_local_experts", alias = "num_experts")]
     pub num_local_experts: usize,
-    #[serde(alias = "num_experts_per_tok", alias = "experts_per_token")]
     pub num_experts_per_tok: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct ConfigSerde {
+    pub vocab_size: usize,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub head_dim: usize,
+    #[serde(default = "default_attention_bias")]
+    pub attention_bias: bool,
+    pub num_key_value_heads: usize,
+    #[serde(default)]
+    pub max_position_embeddings: Option<usize>,
+    #[serde(default)]
+    pub initial_context_length: Option<usize>,
+    #[serde(default)]
+    pub sliding_window: Option<usize>,
+    #[serde(default)]
+    pub tie_word_embeddings: bool,
+    #[serde(default = "default_rope_theta")]
+    pub rope_theta: f64,
+    #[serde(default = "default_rms_norm_eps")]
+    pub rms_norm_eps: f64,
+    #[serde(default = "default_swiglu_limit")]
+    pub swiglu_limit: f64,
+    #[serde(default)]
+    pub layer_types: Vec<LayerType>,
+    #[serde(default)]
+    pub rope_scaling: Option<RopeScaling>,
+    #[serde(default)]
+    pub rope_scaling_factor: Option<f64>,
+    #[serde(default)]
+    pub rope_ntk_alpha: Option<f64>,
+    #[serde(default)]
+    pub rope_ntk_beta: Option<f64>,
+    #[serde(default)]
+    pub num_local_experts: Option<usize>,
+    #[serde(default)]
+    pub num_experts: Option<usize>,
+    #[serde(default)]
+    pub num_experts_per_tok: Option<usize>,
+    #[serde(default)]
+    pub experts_per_token: Option<usize>,
+}
+
+impl TryFrom<ConfigSerde> for Config {
+    type Error = String;
+
+    fn try_from(cfg: ConfigSerde) -> std::result::Result<Self, Self::Error> {
+        fn resolve_alias(
+            canonical: Option<usize>,
+            alias: Option<usize>,
+            canonical_name: &str,
+            alias_name: &str,
+        ) -> std::result::Result<usize, String> {
+            match (canonical, alias) {
+                (Some(v), Some(a)) if v != a => Err(format!(
+                    "conflicting values for {canonical_name} ({v}) and {alias_name} ({a})"
+                )),
+                (Some(v), _) => Ok(v),
+                (None, Some(a)) => Ok(a),
+                (None, None) => Err(format!(
+                    "missing required field `{canonical_name}` (or alias `{alias_name}`)"
+                )),
+            }
+        }
+
+        let num_local_experts = resolve_alias(
+            cfg.num_local_experts,
+            cfg.num_experts,
+            "num_local_experts",
+            "num_experts",
+        )?;
+        let num_experts_per_tok = resolve_alias(
+            cfg.num_experts_per_tok,
+            cfg.experts_per_token,
+            "num_experts_per_tok",
+            "experts_per_token",
+        )?;
+
+        Ok(Self {
+            vocab_size: cfg.vocab_size,
+            hidden_size: cfg.hidden_size,
+            intermediate_size: cfg.intermediate_size,
+            num_hidden_layers: cfg.num_hidden_layers,
+            num_attention_heads: cfg.num_attention_heads,
+            head_dim: cfg.head_dim,
+            attention_bias: cfg.attention_bias,
+            num_key_value_heads: cfg.num_key_value_heads,
+            max_position_embeddings: cfg.max_position_embeddings,
+            initial_context_length: cfg.initial_context_length,
+            sliding_window: cfg.sliding_window,
+            tie_word_embeddings: cfg.tie_word_embeddings,
+            rope_theta: cfg.rope_theta,
+            rms_norm_eps: cfg.rms_norm_eps,
+            swiglu_limit: cfg.swiglu_limit,
+            layer_types: cfg.layer_types,
+            rope_scaling: cfg.rope_scaling,
+            rope_scaling_factor: cfg.rope_scaling_factor,
+            rope_ntk_alpha: cfg.rope_ntk_alpha,
+            rope_ntk_beta: cfg.rope_ntk_beta,
+            num_local_experts,
+            num_experts_per_tok,
+        })
+    }
 }
 
 impl Config {
@@ -157,6 +263,19 @@ impl Config {
                 "num_attention_heads ({}) must be divisible by num_key_value_heads ({})",
                 self.num_attention_heads,
                 self.num_key_value_heads
+            )
+        }
+        if self.num_local_experts == 0 {
+            candle::bail!("num_local_experts must be > 0")
+        }
+        if self.num_experts_per_tok == 0 {
+            candle::bail!("num_experts_per_tok must be > 0")
+        }
+        if self.num_experts_per_tok > self.num_local_experts {
+            candle::bail!(
+                "num_experts_per_tok ({}) must be <= num_local_experts ({})",
+                self.num_experts_per_tok,
+                self.num_local_experts
             )
         }
         if !self.hidden_size.is_multiple_of(QK_MXFP4) {
@@ -509,13 +628,14 @@ impl Mlp {
         let num_tokens = x.dim(0)?;
         let x_f32 = x.to_dtype(DType::F32)?;
 
-        let router_logits = self.router.forward(&x_f32)?;
-        let topk_ids = router_logits
+        let router_logits = self.router.forward(&x)?;
+        let router_logits_f32 = router_logits.to_dtype(DType::F32)?;
+        let topk_ids = router_logits_f32
             .arg_sort_last_dim(false)?
             .narrow(D::Minus1, 0, self.num_experts_per_tok)?
             .contiguous()?;
-        let topk_logits = router_logits.gather(&topk_ids, D::Minus1)?;
-        let topk_weights = candle_nn::ops::softmax_last_dim(&topk_logits.to_dtype(DType::F32)?)?;
+        let topk_logits = router_logits_f32.gather(&topk_ids, D::Minus1)?;
+        let topk_weights = candle_nn::ops::softmax_last_dim(&topk_logits)?;
 
         let gate_up = self.gate_up_proj.indexed_moe_forward(&x_f32, &topk_ids)?;
         let ids_flat = topk_ids.flatten_all()?;
@@ -750,9 +870,9 @@ mod tests {
     use super::{pack_mxfp4_blocks, Config, LayerType, SWIGLU_ALPHA};
     use candle::{DType, Device, Tensor};
     use candle_nn::VarBuilder;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     fn decode_pairwise_block(src: &[u8; 16]) -> [u8; 32] {
         let mut out = [0u8; 32];
@@ -813,6 +933,51 @@ mod tests {
     }
 
     #[test]
+    fn parse_config_accepts_canonical_and_alias_expert_keys() {
+        let cfg: Config = serde_json::from_str(
+            r#"{
+                "vocab_size":201088,
+                "hidden_size":2880,
+                "intermediate_size":2880,
+                "num_hidden_layers":2,
+                "num_attention_heads":64,
+                "num_key_value_heads":8,
+                "head_dim":64,
+                "num_local_experts":32,
+                "num_experts":32,
+                "num_experts_per_tok":4,
+                "experts_per_token":4
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.num_local_experts, 32);
+        assert_eq!(cfg.num_experts_per_tok, 4);
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn parse_config_rejects_conflicting_alias_expert_keys() {
+        let err = serde_json::from_str::<Config>(
+            r#"{
+                "vocab_size":201088,
+                "hidden_size":2880,
+                "intermediate_size":2880,
+                "num_hidden_layers":2,
+                "num_attention_heads":64,
+                "num_key_value_heads":8,
+                "head_dim":64,
+                "num_local_experts":32,
+                "num_experts":31,
+                "num_experts_per_tok":4,
+                "experts_per_token":4
+            }"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("conflicting values for num_local_experts"));
+    }
+
+    #[test]
     fn pack_mxfp4_layout() {
         let scales = vec![127u8, 130u8];
         let blocks = vec![
@@ -870,6 +1035,89 @@ mod tests {
             vals.push(f32::from_bits((bits as u32) << 16));
         }
         Tensor::from_vec(vals, shape, &Device::Cpu)
+    }
+
+    #[cfg(feature = "metal")]
+    fn load_local_safetensor_shards(root: &Path) -> candle::Result<Vec<PathBuf>> {
+        let index = fs::File::open(root.join("model.safetensors.index.json"))?;
+        let json: serde_json::Value = serde_json::from_reader(index).map_err(candle::Error::wrap)?;
+        let weight_map = match json.get("weight_map") {
+            None => candle::bail!("missing weight_map in model.safetensors.index.json"),
+            Some(serde_json::Value::Object(m)) => m,
+            Some(_) => candle::bail!("weight_map is not a JSON object"),
+        };
+        let mut files = HashSet::new();
+        for value in weight_map.values() {
+            let Some(filename) = value.as_str() else {
+                candle::bail!("non-string entry in weight_map")
+            };
+            files.insert(root.join(filename));
+        }
+        let mut files: Vec<_> = files.into_iter().collect();
+        files.sort();
+        Ok(files)
+    }
+
+    #[cfg(feature = "metal")]
+    fn abs_diff_stats(a: &Tensor, b: &Tensor) -> candle::Result<(f32, f32)> {
+        let a = a.flatten_all()?.to_vec1::<f32>()?;
+        let b = b.flatten_all()?.to_vec1::<f32>()?;
+        if a.len() != b.len() {
+            candle::bail!("tensor size mismatch: {} != {}", a.len(), b.len());
+        }
+        let mut max_abs = 0f32;
+        let mut mean_abs = 0f32;
+        for (&x, &y) in a.iter().zip(b.iter()) {
+            let d = (x - y).abs();
+            if d > max_abs {
+                max_abs = d;
+            }
+            mean_abs += d;
+        }
+        mean_abs /= a.len() as f32;
+        Ok((max_abs, mean_abs))
+    }
+
+    #[cfg(feature = "metal")]
+    fn assert_all_finite(t: &Tensor, label: &str) -> candle::Result<()> {
+        let xs = t.flatten_all()?.to_vec1::<f32>()?;
+        for (i, &x) in xs.iter().enumerate() {
+            if !x.is_finite() {
+                candle::bail!("{label} contains non-finite value at {i}: {x}");
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    fn argmax_id(t: &Tensor) -> candle::Result<u32> {
+        let xs = t.flatten_all()?.to_vec1::<f32>()?;
+        let mut best_idx = 0usize;
+        let mut best_val = f32::NEG_INFINITY;
+        for (i, &x) in xs.iter().enumerate() {
+            if x > best_val {
+                best_val = x;
+                best_idx = i;
+            }
+        }
+        Ok(best_idx as u32)
+    }
+
+    #[cfg(feature = "metal")]
+    fn run_prompt_token_by_token(
+        model: &mut super::ModelForCausalLM,
+        dev: &Device,
+        prompt: &[u32],
+    ) -> candle::Result<Tensor> {
+        let mut last_logits = None;
+        for (offset, &tok) in prompt.iter().enumerate() {
+            let tok_t = Tensor::from_vec(vec![tok], (1, 1), dev)?;
+            last_logits = Some(model.forward(&tok_t, offset)?);
+        }
+        match last_logits {
+            Some(logits) => Ok(logits),
+            None => candle::bail!("prompt must contain at least one token"),
+        }
     }
 
     #[cfg(feature = "metal")]
@@ -1109,6 +1357,116 @@ mod tests {
         if max_abs > 2e-2 || mean_abs > 5e-3 {
             candle::bail!("parity check failed: max_abs={max_abs} mean_abs={mean_abs}");
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    #[ignore = "requires /tmp/gpt-oss-20b with config + sharded safetensors"]
+    fn full_checkpoint_prefill_decode_consistency() -> candle::Result<()> {
+        let root = Path::new("/tmp/gpt-oss-20b");
+        for f in ["config.json", "model.safetensors.index.json"] {
+            if !root.join(f).exists() {
+                candle::bail!("missing required file {}", root.join(f).display());
+            }
+        }
+
+        let config_bytes = fs::read(root.join("config.json"))?;
+        let cfg: Config = serde_json::from_slice(&config_bytes).map_err(candle::Error::msg)?;
+        cfg.validate()?;
+        let files = load_local_safetensor_shards(root)?;
+        if files.is_empty() {
+            candle::bail!("no safetensors shard files found via model.safetensors.index.json");
+        }
+
+        let dev = Device::new_metal(0)?;
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&files, DType::BF16, &dev)? };
+        let mut model = super::ModelForCausalLM::new(&cfg, vb)?;
+
+        let prompt: Vec<u32> = vec![11, 502, 3290, 257, 1542, 318, 1246, 13];
+        let prompt_t = Tensor::from_vec(prompt.clone(), (1, prompt.len()), &dev)?;
+
+        model.clear_kv_cache();
+        let logits_prefill_prompt = model
+            .forward(&prompt_t, 0)?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        assert_all_finite(&logits_prefill_prompt, "prefill prompt logits")?;
+
+        model.clear_kv_cache();
+        let logits_step_prompt = run_prompt_token_by_token(&mut model, &dev, &prompt)?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        assert_all_finite(&logits_step_prompt, "step prompt logits")?;
+
+        let (prompt_max_abs, prompt_mean_abs) =
+            abs_diff_stats(&logits_prefill_prompt, &logits_step_prompt)?;
+        let prompt_prefill_top = argmax_id(&logits_prefill_prompt)?;
+        let prompt_step_top = argmax_id(&logits_step_prompt)?;
+        println!(
+            "full-checkpoint prompt parity max_abs={prompt_max_abs:.6} mean_abs={prompt_mean_abs:.6} top_prefill={prompt_prefill_top} top_step={prompt_step_top}"
+        );
+        if prompt_prefill_top != prompt_step_top {
+            candle::bail!(
+                "prompt parity failed: top token mismatch {prompt_prefill_top} != {prompt_step_top}"
+            );
+        }
+        if prompt_max_abs > 2e-1 || prompt_mean_abs > 2e-2 {
+            candle::bail!(
+                "prompt parity failed: max_abs={prompt_max_abs} mean_abs={prompt_mean_abs}"
+            );
+        }
+
+        let next_token = argmax_id(&logits_prefill_prompt)?;
+        let next_t = Tensor::from_vec(vec![next_token], (1, 1), &dev)?;
+
+        model.clear_kv_cache();
+        let _ = model.forward(&prompt_t, 0)?;
+        let logits_prefill_next = model
+            .forward(&next_t, prompt.len())?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        assert_all_finite(&logits_prefill_next, "prefill next-token logits")?;
+
+        model.clear_kv_cache();
+        let _ = run_prompt_token_by_token(&mut model, &dev, &prompt)?;
+        let logits_step_next = model
+            .forward(&next_t, prompt.len())?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        assert_all_finite(&logits_step_next, "step next-token logits")?;
+
+        let (decode_max_abs, decode_mean_abs) =
+            abs_diff_stats(&logits_prefill_next, &logits_step_next)?;
+        let decode_prefill_top = argmax_id(&logits_prefill_next)?;
+        let decode_step_top = argmax_id(&logits_step_next)?;
+        println!(
+            "full-checkpoint decode parity max_abs={decode_max_abs:.6} mean_abs={decode_mean_abs:.6} top_prefill={decode_prefill_top} top_step={decode_step_top}"
+        );
+        if decode_prefill_top != decode_step_top {
+            candle::bail!(
+                "decode parity failed: top token mismatch {decode_prefill_top} != {decode_step_top}"
+            );
+        }
+        if decode_max_abs > 2e-1 || decode_mean_abs > 2e-2 {
+            candle::bail!(
+                "decode parity failed: max_abs={decode_max_abs} mean_abs={decode_mean_abs}"
+            );
+        }
+
+        model.clear_kv_cache();
+        let _ = model.forward(&prompt_t, 0)?;
+        let mut logits = model.forward(&next_t, prompt.len())?;
+        let mut generated = Vec::new();
+        for step in 0..8 {
+            let logits_cpu = logits.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
+            assert_all_finite(&logits_cpu, &format!("decode step {step} logits"))?;
+            let tok = argmax_id(&logits_cpu)?;
+            generated.push(tok);
+            let tok_t = Tensor::from_vec(vec![tok], (1, 1), &dev)?;
+            logits = model.forward(&tok_t, prompt.len() + 1 + step)?;
+        }
+        println!("full-checkpoint generated token ids: {generated:?}");
         Ok(())
     }
 }
