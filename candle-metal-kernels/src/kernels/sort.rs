@@ -57,6 +57,7 @@ fn multi_block_sort(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     dtype: DType,
+    ascending: bool,
     bn: usize,
     tn: usize,
     nblocks: usize,
@@ -66,6 +67,7 @@ fn multi_block_sort(
     dst: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let dtype_str = mlx_dtype_str(dtype);
+    let order_str = if ascending { "" } else { "_desc" };
     // Do allocations
     let el_count = nrows * ncols;
     let bytes_len = el_count * dtype.size_in_bytes();
@@ -79,7 +81,7 @@ fn multi_block_sort(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     // Do blockwise sort
     {
-        let name = format!("sort_mbsort_{dtype_str}_uint32_bn{bn}_tn{tn}");
+        let name = format!("sort_mbsort{order_str}_{dtype_str}_uint32_bn{bn}_tn{tn}");
         let pipeline = kernels.load_pipeline(device, Source::MlxSort, name)?;
         encoder.set_compute_pipeline_state(&pipeline);
         set_params!(
@@ -111,8 +113,8 @@ fn multi_block_sort(
     let mut ping = false;
     let mut merge_tiles = 2;
     let n_thr_per_group = usize::min(nblocks + 1, 1024);
-    let partition_name = format!("partition_mbsort_{dtype_str}_uint32_bn{bn}_tn{tn}");
-    let merge_name = format!("merge_mbsort_float32_uint32_bn{bn}_tn{tn}");
+    let partition_name = format!("partition_mbsort{order_str}_{dtype_str}_uint32_bn{bn}_tn{tn}");
+    let merge_name = format!("merge_mbsort{order_str}_{dtype_str}_uint32_bn{bn}_tn{tn}");
     while merge_tiles / 2 < nblocks {
         let (dev_vals_in, dev_vals_out) = if ping {
             (&mut dev_vals_1, &mut dev_vals_0)
@@ -221,6 +223,7 @@ fn block_sort(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     dtype: DType,
+    ascending: bool,
     bn: usize,
     tn: usize,
     nrows: usize,
@@ -229,7 +232,8 @@ fn block_sort(
     dst: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let dtype_str = mlx_dtype_str(dtype);
-    let name = format!("carg_block_sort_{dtype_str}_uint32_bn{bn}_tn{tn}");
+    let order_str = if ascending { "" } else { "_desc" };
+    let name = format!("carg_block_sort{order_str}_{dtype_str}_uint32_bn{bn}_tn{tn}");
     let pipeline = kernels.load_pipeline(device, Source::MlxSort, name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
@@ -268,6 +272,7 @@ pub fn call_mlx_arg_sort(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     dtype: DType,
+    ascending: bool,
     nrows: usize,
     ncols: usize,
     src: BufferOffset,
@@ -283,10 +288,12 @@ pub fn call_mlx_arg_sort(
     let n_blocks = ncols.div_ceil(n_per_block);
     if n_blocks > 1 {
         multi_block_sort(
-            device, ep, kernels, dtype, bn, tn, n_blocks, nrows, ncols, src, dst,
+            device, ep, kernels, dtype, ascending, bn, tn, n_blocks, nrows, ncols, src, dst,
         )?
     } else {
-        block_sort(device, ep, kernels, dtype, bn, tn, nrows, ncols, src, dst)?
+        block_sort(
+            device, ep, kernels, dtype, ascending, bn, tn, nrows, ncols, src, dst,
+        )?
     }
     Ok(())
 }
