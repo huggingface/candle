@@ -360,11 +360,32 @@ impl Attention {
 }
 
 fn pack_mxfp4_blocks(blocks: &[u8], scales: &[u8]) -> Vec<u8> {
+    fn reorder_block_pairwise_to_ggml(src: &[u8]) -> [u8; 16] {
+        debug_assert_eq!(src.len(), 16);
+        let mut dst = [0u8; 16];
+        for k in 0..16 {
+            let lo = if k % 2 == 0 {
+                src[k / 2] & 0x0f
+            } else {
+                (src[k / 2] >> 4) & 0x0f
+            };
+            let k2 = k + 16;
+            let hi = if k2 % 2 == 0 {
+                src[k2 / 2] & 0x0f
+            } else {
+                (src[k2 / 2] >> 4) & 0x0f
+            };
+            dst[k] = lo | (hi << 4);
+        }
+        dst
+    }
+
     let mut packed = Vec::with_capacity(scales.len() * 17);
     for (block_idx, &e) in scales.iter().enumerate() {
         packed.push(e);
         let start = block_idx * 16;
-        packed.extend_from_slice(&blocks[start..start + 16]);
+        let reordered = reorder_block_pairwise_to_ggml(&blocks[start..start + 16]);
+        packed.extend_from_slice(&reordered);
     }
     packed
 }
@@ -728,6 +749,24 @@ impl ModelForCausalLM {
 mod tests {
     use super::{pack_mxfp4_blocks, Config, LayerType};
 
+    fn decode_pairwise_block(src: &[u8; 16]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for i in 0..16 {
+            out[2 * i] = src[i] & 0x0f;
+            out[2 * i + 1] = (src[i] >> 4) & 0x0f;
+        }
+        out
+    }
+
+    fn decode_ggml_block(src: &[u8; 16]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for i in 0..16 {
+            out[i] = src[i] & 0x0f;
+            out[i + 16] = (src[i] >> 4) & 0x0f;
+        }
+        out
+    }
+
     #[test]
     fn parse_config_hf_style() {
         let cfg: Config = serde_json::from_str(
@@ -779,8 +818,14 @@ mod tests {
         let packed = pack_mxfp4_blocks(&blocks, &scales);
         assert_eq!(packed.len(), 34);
         assert_eq!(packed[0], scales[0]);
-        assert_eq!(&packed[1..17], &blocks[0..16]);
         assert_eq!(packed[17], scales[1]);
-        assert_eq!(&packed[18..34], &blocks[16..32]);
+
+        let src0: [u8; 16] = blocks[0..16].try_into().unwrap();
+        let src1: [u8; 16] = blocks[16..32].try_into().unwrap();
+        let dst0: [u8; 16] = packed[1..17].try_into().unwrap();
+        let dst1: [u8; 16] = packed[18..34].try_into().unwrap();
+
+        assert_eq!(decode_pairwise_block(&src0), decode_ggml_block(&dst0));
+        assert_eq!(decode_pairwise_block(&src1), decode_ggml_block(&dst1));
     }
 }
