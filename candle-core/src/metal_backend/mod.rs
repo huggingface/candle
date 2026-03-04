@@ -2515,7 +2515,7 @@ impl Executor for MetalDevice {
 
         allocator.initialize(&mut graph, &edges, last)?;
 
-        //println!("{}", crate::lazy::graph_to_dot(&&graph));
+        println!("{}", crate::lazy::graph_to_dot(&&graph));
 
         let mut final_node = NodeIndex::end();
         for edge in edges {

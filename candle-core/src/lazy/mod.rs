@@ -180,7 +180,7 @@ where
 pub fn ancestors(g: &OpGraph, node: NodeIndex<u32>) -> OpGraph {
     let ancestors_iter = Ancestors::of(g, node);
     let mut ancestors = OpGraph::new();
-    let mut idx_map = HashMap::new();
+    let mut idx_map = BTreeMap::new();
 
     ancestors_iter.for_each(|e| {
         let e = &g.raw_edges()[e.index()];
@@ -391,8 +391,8 @@ pub fn determine_tensor_source<'a>(graph: &'a OpGraph, edge: &'a Edge<OpEdge>) -
 pub fn calculate_usage_records(
     graph: &OpGraph,
     edges: &[EdgeIndex],
-) -> HashMap<BufferId, (Option<BufferId>, Option<usize>, usize, Layout, DType)> {
-    let mut records = HashMap::with_capacity(edges.len());
+) -> BTreeMap<BufferId, (Option<BufferId>, Option<usize>, usize, Layout, DType)> {
+    let mut records = BTreeMap::new();
     let topo_len = edges.len() - 1;
     for (i, edge_idx) in edges.iter().rev().enumerate() {
         let edge = &graph.raw_edges()[edge_idx.index()];
@@ -743,7 +743,7 @@ impl LazyStorage {
 
         // Add nodes from other graph.
         // Store old->new index mapping for updating edges.
-        // TODO: Use self.operations.visit_map() instead of hashmap
+        // TODO: Use self.operations.visit_map() instead of BTreeMap
         let mut nodes: BTreeMap<NodeId, NodeIndex> = self
             .operations
             .raw_nodes()
