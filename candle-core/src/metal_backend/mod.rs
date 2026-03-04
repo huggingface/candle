@@ -2,7 +2,7 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
-use crate::lazy::{Ancestors, Executor, LazyError::*, OpEdge, OpGraph, OpNode};
+use crate::lazy::{Ancestors, Executor, LazyError::*, MemoryPlan, Op, OpEdge, OpGraph, OpNode};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
 use candle_metal_kernels::{
@@ -2429,9 +2429,7 @@ impl MetalAllocator {
         }
     }
 }
-use crate::lazy::Op;
 
-// TODO: Get rid of unwraps. Use real errors.
 impl LazyAllocator<Buffer> for MetalAllocator {
     fn initialize(
         &mut self,
@@ -2439,57 +2437,25 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         edges: &[EdgeIndex],
         last_node: NodeIndex,
     ) -> Result<()> {
-        for edge_idx in edges.iter().rev() {
-            let edge = &graph.raw_edges()[edge_idx.index()];
-            let buffer_id = edge.weight.buffer_id();
-            let node_idx = edge.source();
+        let MemoryPlan {
+            reusage,
+            allocations,
+        } = crate::lazy::greedy_by_size(graph, edges)?;
 
-            if let Op::Const(s) = &graph[node_idx].op() {
-                let shape = Shape::from(s.len());
-                self.allocate(buffer_id, &shape, s.dtype())?;
+        graph.edge_weights_mut().for_each(|edge| {
+            if let Some(reuse) = reusage.get(&edge.buffer_id()) {
+                edge.set_buffer_id(*reuse);
             }
-        }
+        });
 
-        //Allocate intermediates
-        let memory_plan = crate::lazy::greedy_by_size(graph, edges)?;
-
-        for edge_weight in graph.edge_weights_mut() {
-            let buffer_id = edge_weight.buffer_id();
-            if let Some(best) = memory_plan.plan.get(&buffer_id) {
-                println!("buffer id override {buffer_id:?} -> {best:?}");
-                edge_weight.update_buffer_id(*best);
-            }
-        }
-
-        for (buffer_id, (layout, dtype)) in memory_plan.allocations.iter() {
+        for (buffer_id, (layout, dtype)) in allocations.iter() {
             self.allocate(*buffer_id, layout.shape(), *dtype)?;
         }
-
-        let output = edges.last().unwrap();
-        let output_w = graph.edge_weight(*output).unwrap();
-        let output_edge: &Edge<OpEdge> = &graph.raw_edges()[output.index()];
-        let source = crate::lazy::determine_tensor_source(&graph, output_edge);
-        let source_w = &source.weight;
-        let output_buffer =
-            self.allocate(output_w.buffer_id(), source_w.shape(), source_w.dtype())?;
-
-        //self.insert(output_w.buffer_id(), output_buffer.clone())?;
-
-        /*
-        for edge_idx in edges.iter() {
-            let edge = &graph.raw_edges()[edge_idx.index()];
-            let buffer_id = edge.weight.buffer_id();
-            let shape = edge.weight.shape();
-            let dtype = edge.weight.dtype();
-            self.allocate(buffer_id, shape, dtype)?;
-        }
-        */
 
         Ok(())
     }
 
     fn insert(&mut self, id: BufferId, buffer: Buffer) -> Result<()> {
-        println!("id: {id:?}, buffer: {buffer:?}");
         self.buffer_map.insert(id, buffer);
         Ok(())
     }
@@ -2549,22 +2515,18 @@ impl Executor for MetalDevice {
 
         allocator.initialize(&mut graph, &edges, last)?;
 
-        println!("{}", crate::lazy::graph_to_dot(&&graph));
+        //println!("{}", crate::lazy::graph_to_dot(&&graph));
 
         let mut final_node = NodeIndex::end();
-        //while let Some(idx) = dfs.next(&graph) {
         for edge in edges {
             let idx = graph.raw_edges()[edge.index()].source();
-
-            // TODO: This is just a sanity check of the acyclic toposort
-            // assert!(graph.node_weight(idx).unwrap().id() == acyclic.node_weight(idx).unwrap().id());
 
             if let Err(e) = self.eval(&mut graph, &mut allocator, idx) {
                 let ancestor_edges: Vec<_> = Ancestors::of(&graph, idx)
                     .map(|e| graph.raw_edges()[e.index()].clone())
                     .collect();
                 //println!("{:?}", ancestor_edges);
-                let ancestors = crate::lazy::ancestors(&graph, idx);
+                //let ancestors = crate::lazy::ancestors(&graph, idx);
                 //println!("{}", crate::lazy::graph_to_dot(&&ancestors));
                 Err(e)?
             }
@@ -2574,8 +2536,6 @@ impl Executor for MetalDevice {
         let out = edges.next().unwrap();
         let out_w = out.weight();
         let buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
-
-        println!("{allocator:?}");
 
         Ok(buffer)
     }
@@ -2589,7 +2549,7 @@ impl Executor for MetalDevice {
         use crate::lazy::Op::*;
         //println!("{}", crate::lazy::graph_to_dot(&&graph.clone()));
 
-        self.synchronize()?;
+        //self.synchronize()?;
         let op_node = &graph[node].clone();
         match op_node.op() {
             Const(s) => self.eval_const(op_node, graph, allocator, node, s)?,
@@ -2634,6 +2594,7 @@ impl Executor for MetalDevice {
 
                 unary(self, src, kernel, in_w.layout(), in_w.dtype(), dst)?;
 
+                /*
                 self.synchronize()?;
 
                 println!("{kernel}");
@@ -2648,6 +2609,7 @@ impl Executor for MetalDevice {
                     dst_weight.buffer_id(),
                     read_to_vec::<f32>(dst, dst_weight.layout().shape().elem_count())
                 );
+                 */
             }
             Binary(kernel, lhs_l_bc, rhs_l_bc) => {
                 let mut edges = graph.edges_directed(node, petgraph::Incoming);
@@ -2671,12 +2633,13 @@ impl Executor for MetalDevice {
                 let dst_weight = dst_edge.weight();
                 let dst = allocator.get(dst_weight.buffer_id()).unwrap();
 
-                println!("{kernel} lhs_l: {lhs_l_bc:?}");
-                println!("{kernel} rhs_l: {rhs_l_bc:?}");
                 binary(
                     self, kernel, lhs, lhs_l_bc, lhs_dtype, rhs, rhs_l_bc, rhs_dtype, dst,
                 )?;
 
+                /*
+                println!("{kernel} lhs_l: {lhs_l_bc:?}");
+                println!("{kernel} rhs_l: {rhs_l_bc:?}");
                 self.synchronize()?;
 
                 println!(
@@ -2694,6 +2657,7 @@ impl Executor for MetalDevice {
                     dst_weight.buffer_id(),
                     read_to_vec::<f32>(dst, dst_weight.layout().shape().elem_count())
                 );
+                 */
             }
             /*
             ToCpu,
