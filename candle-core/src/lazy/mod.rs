@@ -16,6 +16,8 @@ static OP_COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
 fn count() -> usize {
     OP_COUNTER.fetch_add(1, atomic::Ordering::Relaxed)
 }
+
+#[allow(unused)]
 fn get_count() -> usize {
     OP_COUNTER.load(atomic::Ordering::Relaxed)
 }
@@ -41,18 +43,6 @@ pub enum LazyError {
 impl From<String> for LazyError {
     fn from(e: String) -> Self {
         LazyError::Message(e)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct LazyStorageId(usize);
-
-impl LazyStorageId {
-    fn new() -> Self {
-        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
-        use std::sync::atomic;
-        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
-        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
     }
 }
 
@@ -227,7 +217,6 @@ pub fn get_incoming_edges<N, E>(
 
 #[derive(Debug, Clone)]
 pub struct LazyStorage {
-    id: LazyStorageId,
     operations: OpGraph,
     layout: Layout,
     initial_dtype: DType,
@@ -456,7 +445,8 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
     let record_map = calculate_usage_records(graph, edges);
     let mut shared_objects: Vec<BufferId> = Vec::with_capacity(record_map.len());
 
-    for (buffer_id, (record_buffer_id, producer, last_consumer, layout, dtype)) in record_map.iter()
+    for (buffer_id, (_record_buffer_id, producer, last_consumer, layout, dtype)) in
+        record_map.iter()
     {
         let record_producer = producer.unwrap();
         let mut best_buffer: Option<BufferId> = None;
@@ -465,7 +455,7 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
             let mut suitable = true;
             for (
                 inner_buffer_id,
-                (_, inner_producer, inner_last_consumer, inner_layout, inner_dtype),
+                (_, inner_producer, inner_last_consumer, _inner_layout, _inner_dtype),
             ) in record_map.iter()
             {
                 let max_first = std::cmp::max(record_producer, inner_producer.unwrap());
@@ -556,7 +546,6 @@ pub trait Executor {
 impl LazyStorage {
     fn new(shape: Shape, dtype: DType) -> LazyStorage {
         LazyStorage {
-            id: LazyStorageId::new(),
             operations: Default::default(),
             layout: Layout::contiguous(shape),
             initial_dtype: dtype,

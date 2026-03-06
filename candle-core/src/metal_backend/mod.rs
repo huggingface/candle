@@ -2,7 +2,7 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
-use crate::lazy::{Ancestors, Executor, LazyError::*, MemoryPlan, Op, OpEdge, OpGraph, OpNode};
+use crate::lazy::{Ancestors, Executor, LazyError::*, MemoryPlan, OpEdge, OpGraph, OpNode};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
 use candle_metal_kernels::{
@@ -10,7 +10,7 @@ use candle_metal_kernels::{
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
-use petgraph::graph::{Edge, EdgeIndex, NodeIndex};
+use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -267,13 +267,12 @@ pub fn reduce_op(
     src_buffer: &Buffer,
     layout: &Layout,
     dtype: DType,
-    sum_dims: &[usize],
     reduction_layout: &Layout,
     dst_el: usize,
     dst_buffer: &Buffer,
 ) -> Result<()> {
     if layout.is_contiguous() && reduction_layout.is_contiguous() {
-        let (name, check_empty, return_index) = match (op, dtype) {
+        let (name, check_empty, _return_index) = match (op, dtype) {
             (ReduceOp::Sum, DType::F32) => ("fast_sum_f32", false, false),
             (ReduceOp::Min, DType::F32) => ("fast_min_f32", true, false),
             (ReduceOp::Max, DType::F32) => ("fast_max_f32", true, false),
@@ -326,7 +325,7 @@ pub fn reduce_op(
         )
         .map_err(MetalError::from)?;
     } else {
-        let (name, check_empty, return_index) = match (op, dtype) {
+        let (name, check_empty, _return_index) = match (op, dtype) {
             (ReduceOp::Sum, DType::F32) => ("fast_sum_f32_strided", false, false),
             (ReduceOp::Min, DType::F32) => ("fast_min_f32_strided", true, false),
             (ReduceOp::Max, DType::F32) => ("fast_max_f32_strided", true, false),
@@ -568,11 +567,6 @@ pub fn binary(
     let encoder = device.command_encoder()?;
     let lhs = buffer_o(lhs_buffer, lhs_l, lhs_dtype);
     let rhs = buffer_o(rhs_buffer, rhs_l, rhs_dtype);
-
-    let dtype = match op {
-        "eq" | "ne" | "le" | "lt" | "ge" | "gt" => DType::U8,
-        _ => lhs_dtype,
-    };
     let lhs_contiguous = lhs_l.is_contiguous();
     let rhs_contiguous = rhs_l.is_contiguous();
 
@@ -756,7 +750,6 @@ pub fn where_cond(
 ) -> Result<()> {
     let shape = t_l.shape();
     let dims = shape.dims();
-    let el = shape.elem_count();
     let dtype = t_dtype;
     let encoder = device.command_encoder()?;
     encoder.set_label("where");
@@ -1025,7 +1018,6 @@ impl BackendStorage for MetalStorage {
             self.buffer(),
             layout,
             self.dtype(),
-            sum_dims,
             &reduction_layout,
             dst_el,
             &dst_buffer,
@@ -1178,7 +1170,6 @@ impl BackendStorage for MetalStorage {
     ) -> Result<Self> {
         let device = self.device();
         let shape = t_l.shape();
-        let dims = shape.dims();
         let el = shape.elem_count();
         let dtype = t.dtype;
         let dst = device.new_buffer(el, dtype, "where")?;
@@ -2366,17 +2357,6 @@ impl BackendDevice for MetalDevice {
     }
 }
 
-macro_rules! debug_println {
-    () => {
-        #[cfg(debug_assertions)]
-        println!();
-    };
-    ($($arg:tt)*) => {{
-        #[cfg(debug_assertions)]
-        println!($($arg)*);
-    }};
-}
-
 impl MetalDevice {
     fn eval_const(
         &self,
@@ -2435,7 +2415,7 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         &mut self,
         graph: &mut OpGraph,
         edges: &[EdgeIndex],
-        last_node: NodeIndex,
+        _last_node: NodeIndex, // TODO: remove from API
     ) -> Result<()> {
         let MemoryPlan {
             reusage,
@@ -2502,12 +2482,12 @@ impl Executor for MetalDevice {
         //let acyclic = pethgraph::acyclic::Acyclic::try_from(graph.clone()).unwrap();
         //let node_indices = petgraph::algo:toposort(&acyclic, None).unwrap();
         //let first = *node_indices.first().unwrap();
-        let (last, last_node) = graph.raw_nodes().iter().enumerate().last().unwrap();
+        let (last, _last_node) = graph.raw_nodes().iter().enumerate().last().unwrap();
         let last = NodeIndex::new(last);
 
         let ancestors = Ancestors::of(&graph, last);
         // Edges topologically sorted in a stable manner (note reverse)
-        let mut edges: Vec<_> = {
+        let edges: Vec<_> = {
             let mut topo_sorted = ancestors.collect::<Vec<_>>();
             topo_sorted.reverse();
             topo_sorted
@@ -2522,12 +2502,14 @@ impl Executor for MetalDevice {
             let idx = graph.raw_edges()[edge.index()].source();
 
             if let Err(e) = self.eval(&mut graph, &mut allocator, idx) {
+                /*
                 let ancestor_edges: Vec<_> = Ancestors::of(&graph, idx)
                     .map(|e| graph.raw_edges()[e.index()].clone())
                     .collect();
-                //println!("{:?}", ancestor_edges);
-                //let ancestors = crate::lazy::ancestors(&graph, idx);
-                //println!("{}", crate::lazy::graph_to_dot(&&ancestors));
+                println!("{:?}", ancestor_edges);
+                let ancestors = crate::lazy::ancestors(&graph, idx);
+                println!("{}", crate::lazy::graph_to_dot(&&ancestors));
+                */
                 Err(e)?
             }
             final_node = idx;
@@ -2619,8 +2601,10 @@ impl Executor for MetalDevice {
                 let lhs_weight = lhs_edge.weight();
                 let rhs_weight = rhs_edge.weight();
 
-                let lhs_l = lhs_weight.layout();
-                let rhs_l = rhs_weight.layout();
+                // We use layouts with possible broadcasting, aka lhs_l_bc and rhs_l_bc.
+                // TODO: Verify approach.
+                // let lhs_l = lhs_weight.layout();
+                // let rhs_l = rhs_weight.layout();
 
                 let lhs_dtype = lhs_weight.dtype();
                 let rhs_dtype = rhs_weight.dtype();
@@ -2664,7 +2648,7 @@ impl Executor for MetalDevice {
             Powf(Layout, f64),
             Elu(Layout, f64),
             */
-            Reduce(op, sum_dims, reduction_layout, dst_el) => {
+            Reduce(op, _sum_dims, reduction_layout, dst_el) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_w = in_edge.weight();
@@ -2681,7 +2665,6 @@ impl Executor for MetalDevice {
                     src,
                     in_w.layout(),
                     in_w.dtype(),
-                    sum_dims,
                     &reduction_layout,
                     *dst_el,
                     dst,
@@ -2846,7 +2829,7 @@ impl Executor for MetalDevice {
                 let in_w = in_edge.weight();
                 let src = allocator.get(in_w.buffer_id()).unwrap();
 
-                let mut outgoing: Vec<(NodeIndex, NodeIndex, OpEdge)> = graph
+                let outgoing: Vec<(NodeIndex, NodeIndex, OpEdge)> = graph
                     .edges_directed(node, petgraph::Outgoing)
                     .map(|e: petgraph::graph::EdgeReference<_>| {
                         (e.source(), e.target(), e.weight().clone())
@@ -2864,7 +2847,7 @@ impl Executor for MetalDevice {
 
                 assert!(sink_outgoing_edges.len() > 0);
 
-                let (out_source, out_target, out_w) = sink_outgoing_edges
+                let (_out_source, _out_target, out_w) = sink_outgoing_edges
                     .first()
                     .ok_or(InvalidOutgoing(op_node.id()))?;
 
@@ -2890,6 +2873,7 @@ impl Executor for MetalDevice {
             Sink => {}
             Output => {
                 todo!();
+                /*
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
                 let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
                 let in_w = in_edge.weight();
@@ -2898,7 +2882,7 @@ impl Executor for MetalDevice {
                     in_w.layout().shape(),
                     in_w.dtype(),
                 )?;
-                todo!("{buffer:?}");
+                */
             }
             _ => todo!("{:?}", op_node),
         }
