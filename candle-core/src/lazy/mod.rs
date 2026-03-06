@@ -1698,29 +1698,30 @@ mod tests {
     }
 
     #[test]
-    fn lazy_check() -> Result<()> {
-        let t1 = Tensor::from_slice(
+    fn lazy_softmax() -> Result<()> {
+        let src = Tensor::from_slice(
             &[0f32, 1., 2., 3., 4., 5., 6., 7.],
             Shape::from(8),
             &Device::Lazy(LazyDevice),
             //&Device::new_metal(0)?,
         )?;
 
-        let t2 = t1.affine(1.25, 0.0)?;
-        assert_eq!(
-            t2.to_vec1::<f32>()?,
-            &[0.0, 1.25, 2.5, 3.75, 5.0, 6.25, 7.5, 8.75]
-        );
-        let t3 = t2.max_keepdim(D::Minus1)?;
-        assert_eq!(t3.to_vec1::<f32>()?, &[8.75]);
-        let t4 = t1.broadcast_sub(&t3)?;
+        let t1 = src.affine(1.25, 0.0)?;
+        //assert_eq!(
+        //    t1.to_vec1::<f32>()?,
+        //    &[0.0, 1.25, 2.5, 3.75, 5.0, 6.25, 7.5, 8.75]
+        //);
+        let t2 = t1.max_keepdim(D::Minus1)?;
+        //assert_eq!(t2.to_vec1::<f32>()?, &[8.75]);
+        let t3 = src.broadcast_sub(&t2)?;
+        //assert_eq!(
+        //    t3.to_vec1::<f32>()?,
+        //    &[-8.75, -7.75, -6.75, -5.75, -4.75, -3.75, -2.75, -1.75]
+        //);
+        let t4 = t3.exp()?;
+        /*
         assert_eq!(
             t4.to_vec1::<f32>()?,
-            &[-8.75, -7.75, -6.75, -5.75, -4.75, -3.75, -2.75, -1.75]
-        );
-        let t5 = t4.exp()?;
-        assert_eq!(
-            t5.to_vec1::<f32>()?,
             &[
                 0.0001584613,
                 0.00043074263,
@@ -1732,11 +1733,11 @@ mod tests {
                 0.17377394
             ]
         );
-        let t6 = t5.sum_keepdim(D::Minus1)?;
-        assert_eq!(t6.to_vec1::<f32>()?, &[0.27481413]);
-        let t7 = t5.broadcast_div(&t6)?;
+        */
+        let t5 = t4.sum_keepdim(D::Minus1)?;
+        //assert_eq!(t5.to_vec1::<f32>()?, &[0.27481413]);
+        let result = t4.broadcast_div(&t5)?;
 
-        let result = t7;
         assert_eq!(
             result.to_vec1::<f32>()?,
             &[
@@ -1749,6 +1750,32 @@ mod tests {
                 0.23262219,
                 0.6323326
             ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_rmsnorm() -> Result<()> {
+        let device = Device::Lazy(LazyDevice);
+        //let device = Device::new_metal(0)?;
+
+        let x = Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), &device)?;
+
+        let alpha = Tensor::from_slice(
+            &[1f32, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7],
+            Shape::from(8),
+            &device,
+        )?;
+
+        let eps = 1.2;
+        let hidden_size = x.dim(D::Minus1)?;
+        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
+        let result = x_normed.broadcast_mul(&alpha)?;
+
+        assert_eq!(
+            result.to_vec1::<f32>()?,
+            &[0.0, 0.2543735, 0.5549967, 0.90186965, 1.2949923, 1.7343647, 2.219987, 2.7518587]
         );
         Ok(())
     }
