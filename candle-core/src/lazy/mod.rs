@@ -5,7 +5,7 @@ use petgraph::graph::{DiGraph, Edge, EdgeIndex, EdgeReference, IndexType, NodeIn
 use petgraph::visit::EdgeRef;
 use petgraph::Direction::{Incoming, Outgoing};
 use petgraph::{EdgeType, Graph};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::atomic;
@@ -274,21 +274,20 @@ impl LazyStorage {
 
     fn add_edge(&mut self, src: NodeIndex, dst: NodeIndex, l: Layout, dtype: DType) {
         // Get existing outgoing edges from the source node
-        let mut outgoing = self.operations.edges_directed(src, Outgoing);
-        if let Some(edge) = outgoing.next() {
+        if let Some(edge) = self.operations.edges_directed(src, Outgoing).next() {
+            /*
             let size = l.shape().elem_count() * dtype.size_in_bytes();
             let e_layout = edge.weight().layout();
             let e_dtype = edge.weight().dtype();
             let e_size =
                 (e_layout.shape().elem_count() - e_layout.start_offset()) * e_dtype.size_in_bytes();
             if size < e_size {
-                /*
                 println!("{:?}", self.operations.node_weight(src));
                 println!("{l:?} | {dtype:?}");
                 println!("{e_layout:?} | {e_dtype:?}");
-                 */
                 debug_assert_eq!(size, e_size);
             }
+            */
             self.operations.add_edge(src, dst, edge.weight().clone());
         } else {
             self.operations.add_edge(src, dst, OpEdge::new(l, dtype));
@@ -471,10 +470,9 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
             {
                 let max_first = std::cmp::max(record_producer, inner_producer.unwrap());
                 let min_last = *std::cmp::min(last_consumer, inner_last_consumer);
-                if max_first <= min_last
-                    && allocations.contains_key(inner_buffer_id)
-                    && *inner_buffer_id == obj
-                {
+                let uses_obj =
+                    *inner_buffer_id == obj || reusage.get(inner_buffer_id) == Some(&obj);
+                if max_first <= min_last && uses_obj {
                     suitable = false;
                     break;
                 }
@@ -774,11 +772,16 @@ impl LazyStorage {
             if !edges.contains(&oid) {
                 let source = other_edge.source();
                 let target = other_edge.target();
-                let e = other_edge.weight.clone();
                 let s_id = other.operations.node_weight(source).unwrap().id;
                 let t_id = other.operations.node_weight(target).unwrap().id;
                 let source_idx = nodes.get(&s_id).unwrap();
                 let target_idx = nodes.get(&t_id).unwrap();
+
+                let mut e = other_edge.weight.clone();
+                if let Some(existing) = self.operations.edges_directed(*source_idx, Outgoing).next()
+                {
+                    e.set_buffer_id(existing.weight().buffer_id());
+                }
                 self.operations.add_edge(*source_idx, *target_idx, e);
             }
         });
@@ -998,7 +1001,7 @@ impl BackendStorage for LazyStorage {
 
         let mut next = self.clone();
 
-        let op = Op::Binary(B::KERNEL, self.layout.clone(), rhs_l.clone());
+        let op = Op::Binary(B::KERNEL, lhs_l.clone(), rhs_l.clone());
         let idx = next.add_operation(op);
 
         next.add_edge(
