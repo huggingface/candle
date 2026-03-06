@@ -426,8 +426,13 @@ pub fn calculate_usage_records(
 
 // https://arxiv.org/pdf/2001.03288.pdf
 pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan> {
+    use std::time::Instant;
+
     let mut reusage = BTreeMap::new();
     let mut allocations = BTreeMap::new();
+
+    let i1 = Instant::now();
+    print!("Const allocations ... ");
 
     // Plan Const (input) allocations
     for edge_idx in edges.iter().rev() {
@@ -440,18 +445,25 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
             allocations.insert(buffer_id, (Layout::contiguous(shape), s.dtype()));
         }
     }
+    let i2 = Instant::now();
+    println!("{:?}", i2.duration_since(i1));
 
+    print!("Calculate usage records allocations ... ");
     // Find buffer usage spans in the graph
     let record_map = calculate_usage_records(graph, edges);
+    let i1 = Instant::now();
+    println!("{:?}", i1.duration_since(i2));
+
     let mut shared_objects: Vec<BufferId> = Vec::with_capacity(record_map.len());
 
+    print!("Record map loop ... ");
     for (buffer_id, (_record_buffer_id, producer, last_consumer, layout, dtype)) in
         record_map.iter()
     {
         let record_producer = producer.unwrap();
         let mut best_buffer: Option<BufferId> = None;
 
-        for obj in shared_objects.iter().cloned() {
+        for obj in shared_objects.iter() {
             let mut suitable = true;
             for (
                 inner_buffer_id,
@@ -460,15 +472,15 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
             {
                 let max_first = std::cmp::max(record_producer, inner_producer.unwrap());
                 let min_last = *std::cmp::min(last_consumer, inner_last_consumer);
-                let uses_obj =
-                    *inner_buffer_id == obj || reusage.get(inner_buffer_id) == Some(&obj);
-                if max_first <= min_last && uses_obj {
+                if max_first <= min_last
+                    && (inner_buffer_id == obj || reusage.get(inner_buffer_id) == Some(obj))
+                {
                     suitable = false;
                     break;
                 }
             }
             if suitable {
-                best_buffer = Some(obj);
+                best_buffer = Some(*obj);
             }
         }
         if let Some(best) = best_buffer {
@@ -479,6 +491,8 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
             shared_objects.push(buffer_id.clone());
         }
     }
+    let i2 = Instant::now();
+    println!("{:?}", i2.duration_since(i1));
 
     // Loop through and add inplace assignments
     /*
@@ -503,6 +517,7 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
     }
      */
 
+    print!("Final node ... ");
     // Handle final output edge
     let output = edges.last().unwrap();
     let output_w = graph.edge_weight(*output).unwrap();
@@ -513,6 +528,8 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
         output_w.buffer_id(),
         (source_w.layout.clone(), source_w.dtype()),
     );
+    let i1 = Instant::now();
+    println!("{:?}", i1.duration_since(i2));
 
     Ok(MemoryPlan {
         reusage,

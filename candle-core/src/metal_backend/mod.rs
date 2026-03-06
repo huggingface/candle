@@ -2417,20 +2417,32 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         edges: &[EdgeIndex],
         _last_node: NodeIndex, // TODO: remove from API
     ) -> Result<()> {
+        use std::time::Instant;
+
+        let i1 = Instant::now();
+        println!("\nCreating memory plan ... ");
         let MemoryPlan {
             reusage,
             allocations,
         } = crate::lazy::greedy_by_size(graph, edges)?;
+        let i2 = Instant::now();
+        println!("Memory plan finished ... {:?}", i2.duration_since(i1));
 
+        print!("Updating buffer ids ... ");
         graph.edge_weights_mut().for_each(|edge| {
             if let Some(reuse) = reusage.get(&edge.buffer_id()) {
                 edge.set_buffer_id(*reuse);
             }
         });
+        let i1 = Instant::now();
+        println!("{:?}", i1.duration_since(i2));
 
+        print!("Allocating buffers ...");
         for (buffer_id, (layout, dtype)) in allocations.iter() {
             self.allocate(*buffer_id, layout.shape(), *dtype)?;
         }
+        let i2 = Instant::now();
+        println!("{:?}", i2.duration_since(i1));
 
         Ok(())
     }
@@ -2494,8 +2506,7 @@ impl Executor for MetalDevice {
         };
 
         allocator.initialize(&mut graph, &edges, last)?;
-
-        println!("{}", crate::lazy::graph_to_dot(&&graph));
+        // println!("{}", crate::lazy::graph_to_dot(&&graph));
 
         let mut final_node = NodeIndex::end();
         for edge in edges {
