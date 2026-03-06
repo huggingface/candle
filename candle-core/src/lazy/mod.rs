@@ -1022,6 +1022,7 @@ impl BackendStorage for LazyStorage {
 
         next.merge(rhs, rhs_op, idx, rhs_edge)?;
 
+        next.layout = lhs_l.clone();
         next.current_node = Some(idx);
         Ok(next)
     }
@@ -1442,9 +1443,12 @@ impl BackendStorage for LazyStorage {
 
         let op = Op::ConstSet(s);
         let idx = self.add_operation(op);
-        self.add_edge(self.get_current_node()?, idx, l.clone(), self.dtype());
+        if let Ok(current_node) = self.get_current_node() {
+            self.add_edge(current_node, idx, l.clone(), self.dtype());
+        }
 
         self.current_node = Some(idx);
+        self.layout = l.clone();
         Ok(())
     }
 
@@ -1553,7 +1557,7 @@ impl BackendDevice for LazyDevice {
 
 #[cfg(test)]
 mod tests {
-    use crate::{lazy::LazyDevice, Device, Result, Shape, Tensor, D};
+    use crate::{lazy::LazyDevice, DType, Device, Result, Shape, Tensor, D};
 
     #[test]
     fn lazy_unary() -> Result<()> {
@@ -1777,6 +1781,29 @@ mod tests {
             result.to_vec1::<f32>()?,
             &[0.0, 0.2543735, 0.5549967, 0.90186965, 1.2949923, 1.7343647, 2.219987, 2.7518587]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_binary_matmul_layout_mismatch_case() -> Result<()> {
+        let device = Device::Lazy(LazyDevice);
+        //let device = Device::new_metal(0)?;
+
+        // buffer 1: ([128256, 2048], [2048, 1], BF16, BufferId(9))
+        // buffer 2: ([1, 2048], [4096, 1], BF16, BufferId(2368))
+        // matmul((1, 1, 128256, 2048))
+        // dst buffer: ([1, 128256], [128256, 1], BF16, BufferId(2220))
+
+        let x = Tensor::from_slice(
+            &[0.0f32, 1.0, 2.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            (4, 2),
+            &device,
+        )?;
+        let y = Tensor::from_slice(&[1.0f32, 2.0], (2, 1), &device)?;
+        let y = (y * 2.0)?;
+
+        let result = x.matmul(&y)?.flatten_all()?;
+        assert_eq!(result.to_vec1::<f32>()?, &[2.0, 10.0, 17.0, 23.0]);
         Ok(())
     }
 }

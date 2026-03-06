@@ -2506,7 +2506,7 @@ impl Executor for MetalDevice {
         };
 
         allocator.initialize(&mut graph, &edges, last)?;
-        // println!("{}", crate::lazy::graph_to_dot(&&graph));
+        println!("{}", crate::lazy::graph_to_dot(&&graph));
 
         let mut final_node = NodeIndex::end();
         for edge in edges {
@@ -2880,7 +2880,23 @@ impl Executor for MetalDevice {
                 );
                 src.copy2d(&mut dst, *d1, *d2, *src_s, *dst_s, *src_o, *dst_o)?;
             }
-            //ConstSet(crate::scalar::Scalar, Layout)
+            ConstSet(scalar) => {
+                let dst_edge = graph
+                    .edges_directed(node, petgraph::Outgoing)
+                    .next()
+                    .ok_or(InvalidOutgoing(op_node.id()))?;
+                let dst_w = dst_edge.weight();
+                let dst_buffer = allocator.get(dst_w.buffer_id()).unwrap();
+
+                let mut dst = MetalStorage::new(
+                    Arc::new(dst_buffer.clone()),
+                    self.clone(),
+                    dst_w.layout().shape().elem_count(),
+                    dst_w.dtype(),
+                );
+
+                dst.const_set(scalar.clone(), dst_w.layout())?;
+            }
             Sink => {}
             Output => {
                 todo!();
