@@ -307,9 +307,13 @@ pub fn call_mlx_gemm(
         .bt())?;
     };
     // rhs has shape b, k, n
+    // Supports: non-transposed [k,n] stride [n,1], transposed [n,k] stride [1,n] or [k,1]
     let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
         (n as i32, false)
     } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        (k as i32, true)
+    } else if (rhs_m1 == 1 || k == 1) && (rhs_m2 == k || n == 1) {
+        // Row-major transposed: [n, k] with stride [k, 1]
         (k as i32, true)
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
