@@ -285,6 +285,45 @@ impl Tensor {
         Ok(crate::tensor::from_storage(storage, out_dims, op, false))
     }
 
+    fn conv2d_single_group_with_bias(
+        &self,
+        kernel: &Self,
+        bias: &Self,
+        params: &ParamsConv2D,
+    ) -> Result<Self> {
+        let use_fused = match self.device() {
+            crate::Device::Cpu => true,
+            crate::Device::Cuda(_) => cfg!(feature = "cudnn") && kernel.layout().is_contiguous(),
+            crate::Device::Metal(_) => false,
+        };
+        if use_fused {
+            let storage = self.storage().conv2d_with_bias(
+                self.layout(),
+                &kernel.storage(),
+                kernel.layout(),
+                &bias.storage(),
+                bias.layout(),
+                params,
+            )?;
+            let op = BackpropOp::new3(self, kernel, bias, |arg, kernel, bias| Op::Conv2DBias {
+                arg,
+                kernel,
+                bias,
+                padding: params.padding,
+                stride: params.stride,
+                dilation: params.dilation,
+            });
+            let out_dims = params.out_dims();
+            Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+        } else {
+            // Fallback: separate conv2d then broadcast_add bias.
+            let out = self.conv2d_single_group(kernel, params)?;
+            let b = bias.dims1()?;
+            let bias = bias.reshape((1, b, 1, 1))?;
+            out.broadcast_add(&bias)
+        }
+    }
+
     /// Applies a 2D convolution over the input tensor.
     pub fn conv2d(
         &self,
@@ -294,9 +333,10 @@ impl Tensor {
         dilation: usize,
         groups: usize,
     ) -> Result<Self> {
-        self.conv2d_with_algo(kernel, padding, stride, dilation, groups, None)
+        self.conv2d_with_algo(kernel, padding, stride, dilation, groups, None, &None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn conv2d_with_algo(
         &self,
         kernel: &Self,
@@ -305,6 +345,7 @@ impl Tensor {
         dilation: usize,
         groups: usize,
         cudnn_fwd_algo: Option<CudnnFwdAlgo>,
+        bias: &Option<Tensor>,
     ) -> Result<Self> {
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_out, c_in_k, k_h, k_w) = kernel.dims4()?;
@@ -326,17 +367,36 @@ impl Tensor {
             dilation,
             cudnn_fwd_algo,
         };
-        if groups == 1 {
-            self.conv2d_single_group(kernel, &params)
-        } else {
-            let blocks = self.chunk(groups, 1)?;
-            let kernel = kernel.chunk(groups, 0)?;
-            let blocks = blocks
-                .iter()
-                .zip(&kernel)
-                .map(|(block, kernel)| block.conv2d_single_group(kernel, &params))
-                .collect::<Result<Vec<_>>>()?;
-            Tensor::cat(&blocks, 1)
+        // FIXME should bias be reshaped here already?
+        match (groups == 1, bias) {
+            // Single group.
+            (true, Some(bias)) => self.conv2d_single_group_with_bias(kernel, bias, &params),
+            (true, None) => self.conv2d_single_group(kernel, &params),
+            // Multiple groups.
+            (false, Some(bias)) => {
+                let blocks = self.chunk(groups, 1)?;
+                let kernel = kernel.chunk(groups, 0)?;
+                let bias_chunks = bias.chunk(groups, 0)?;
+                let blocks = blocks
+                    .iter()
+                    .zip(&kernel)
+                    .zip(&bias_chunks)
+                    .map(|((block, kernel), bias_chunk)| {
+                        block.conv2d_single_group_with_bias(kernel, bias_chunk, &params)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Tensor::cat(&blocks, 1)
+            }
+            (false, None) => {
+                let blocks = self.chunk(groups, 1)?;
+                let kernel = kernel.chunk(groups, 0)?;
+                let blocks = blocks
+                    .iter()
+                    .zip(&kernel)
+                    .map(|(block, kernel)| block.conv2d_single_group(kernel, &params))
+                    .collect::<Result<Vec<_>>>()?;
+                Tensor::cat(&blocks, 1)
+            }
         }
     }
 

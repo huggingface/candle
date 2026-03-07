@@ -11,7 +11,7 @@ pub use utils::{
     binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2InPlace, Map2U8,
 };
 mod conv2d;
-use conv2d::Conv2D;
+use conv2d::{Conv2D, Conv2DWithBias};
 
 const USE_IM2COL_CONV1D: bool = true;
 const USE_COL2IM_CONV1D_TR: bool = true;
@@ -3020,6 +3020,21 @@ impl BackendStorage for CpuStorage {
             ),
         }
         Ok(())
+    }
+}
+
+// Since not all backends support fused conv2d+bias, we implement this outside of the `BackendStorage` trait.
+impl CpuStorage {
+    pub fn conv2d_with_bias(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        bias: &Self,
+        bias_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        Conv2DWithBias(params).map(self, l, kernel, kernel_l, bias, bias_l)
     }
 }
 

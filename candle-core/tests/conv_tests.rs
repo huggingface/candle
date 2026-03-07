@@ -860,6 +860,100 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/// Test that fused conv2d+bias produces the same result as conv2d followed by broadcast_add.
+fn conv2d_fused_bias(dev: &Device) -> Result<()> {
+    // Input: batch=2, c_in=3, h=5, w=5
+    let t = Tensor::rand(-1.0f32, 1.0, (2, 3, 5, 5), dev)?;
+    // Kernel: c_out=4, c_in=3, k_h=3, k_w=3
+    let w = Tensor::rand(-1.0f32, 1.0, (4, 3, 3, 3), dev)?;
+    // Bias: [c_out]
+    let bias = Tensor::rand(-1.0f32, 1.0, 4, dev)?;
+
+    // Two-step: conv2d then broadcast_add
+    let out_no_bias = t.conv2d(
+        &w, /*padding=*/ 1, /*stride=*/ 1, /*dilation=*/ 1, /*groups=*/ 1,
+    )?;
+    let bias_reshaped = bias.reshape((1, 4, 1, 1))?;
+    let expected = out_no_bias.broadcast_add(&bias_reshaped)?;
+
+    // Fused: conv2d_with_algo with bias
+    let fused = t.conv2d_with_algo(&w, 1, 1, 1, 1, None, &Some(bias.clone()))?;
+
+    let expected_vals: Vec<f32> = expected.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = fused.flatten_all()?.to_vec1()?;
+
+    assert_eq!(expected.dims(), fused.dims());
+    assert_eq!(expected_vals.len(), fused_vals.len());
+    for (i, (e, f)) in expected_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-5,
+            "mismatch at index {i}: expected {e}, got {f}"
+        );
+    }
+    Ok(())
+}
+
+/// Test conv2d+bias with groups > 1.
+fn conv2d_fused_bias_groups(dev: &Device) -> Result<()> {
+    let groups = 2usize;
+    // Input: batch=1, c_in=4, h=4, w=4
+    let t = Tensor::rand(-1.0f32, 1.0, (1, 4, 4, 4), dev)?;
+    // Kernel: c_out=6, c_in/groups=2, k_h=3, k_w=3
+    let w = Tensor::rand(-1.0f32, 1.0, (6, 2, 3, 3), dev)?;
+    // Bias: [c_out]
+    let bias = Tensor::rand(-1.0f32, 1.0, 6, dev)?;
+
+    // Two-step: conv2d then broadcast_add
+    let out_no_bias = t.conv2d(&w, 0, 1, 1, groups)?;
+    let bias_reshaped = bias.reshape((1, 6, 1, 1))?;
+    let expected = out_no_bias.broadcast_add(&bias_reshaped)?;
+
+    // Fused path
+    let fused = t.conv2d_with_algo(&w, 0, 1, 1, groups, None, &Some(bias.clone()))?;
+
+    let expected_vals: Vec<f32> = expected.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = fused.flatten_all()?.to_vec1()?;
+
+    assert_eq!(expected.dims(), fused.dims());
+    for (i, (e, f)) in expected_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-5,
+            "mismatch at index {i}: expected {e}, got {f}"
+        );
+    }
+    Ok(())
+}
+
+/// Test conv2d+bias with 1x1 kernel (exercises the fast 1x1 path on CPU).
+fn conv2d_fused_bias_1x1(dev: &Device) -> Result<()> {
+    // Input: batch=2, c_in=3, h=4, w=4
+    let t = Tensor::rand(-1.0f32, 1.0, (2, 3, 4, 4), dev)?;
+    // Kernel: c_out=5, c_in=3, k_h=1, k_w=1
+    let w = Tensor::rand(-1.0f32, 1.0, (5, 3, 1, 1), dev)?;
+    // Bias: [c_out]
+    let bias = Tensor::rand(-1.0f32, 1.0, 5, dev)?;
+
+    // Two-step
+    let out_no_bias = t.conv2d(&w, 0, 1, 1, 1)?;
+    let bias_reshaped = bias.reshape((1, 5, 1, 1))?;
+    let expected = out_no_bias.broadcast_add(&bias_reshaped)?;
+
+    // Fused
+    let fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, &Some(bias.clone()))?;
+
+    let expected_vals: Vec<f32> = expected.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = fused.flatten_all()?.to_vec1()?;
+
+    assert_eq!(expected.dims(), fused.dims());
+    for (i, (e, f)) in expected_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-5,
+            "mismatch at index {i}: expected {e}, got {f}"
+        );
+    }
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -891,4 +985,223 @@ test_device!(
     conv2d_grad_cpu,
     conv2d_grad_gpu,
     conv2_grad_metal
+);
+test_device!(
+    conv2d_fused_bias,
+    conv2d_fused_bias_cpu,
+    conv2d_fused_bias_gpu,
+    conv2d_fused_bias_metal
+);
+test_device!(
+    conv2d_fused_bias_groups,
+    conv2d_fused_bias_groups_cpu,
+    conv2d_fused_bias_groups_gpu,
+    conv2d_fused_bias_groups_metal
+);
+test_device!(
+    conv2d_fused_bias_1x1,
+    conv2d_fused_bias_1x1_cpu,
+    conv2d_fused_bias_1x1_gpu,
+    conv2d_fused_bias_1x1_metal
+);
+
+/// Test that fused conv2d+bias backprop produces the same gradients as manual conv2d + broadcast_add.
+fn conv2d_fused_bias_grad(dev: &Device) -> Result<()> {
+    use candle_core::Var;
+
+    let t = Var::from_slice(
+        &[
+            0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,
+            1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699, 0.0823, 0.3526, 0.6843, 0.2395,
+            1.2279, -0.9287, -1.7030, 0.1370, 0.6047, 0.3770, -0.6266, 0.3529, 2.2013, -0.6836,
+            0.2477, 1.3127, -0.2260, 0.2622, -1.2974, -0.8140, -0.8404, -0.3490, 0.0130, 1.3123,
+            1.7569, -0.3956, -1.8255, 0.1727, -0.3538, 2.6941, 1.0529, 0.4219, -0.2071, 1.1586,
+            0.4717, 0.3865, -0.5690, -0.5010, -0.1310, 0.7796, 0.6630, -0.2021, 2.6090, 0.2049,
+            0.6466, -0.5042, -0.0603, -1.6538, -1.2429, 1.8357, 1.6052, -1.3844, 0.3323, -1.3712,
+            0.9634, -0.4799, -0.6451, -0.0840, -1.4247, 0.5512, -0.1747, -0.5509, -0.3742, 0.3790,
+            -0.4431, -0.4720, -0.7890, 0.2620, 0.7875, 0.5377, -0.6779, -0.8088, 1.9098, 1.2006,
+            -0.8, -0.4983, 1.5480, 0.8265, -0.1025, 0.5138, 0.5748, 0.3821, -0.4607, 0.0085,
+        ],
+        (1, 4, 5, 5),
+        dev,
+    )?;
+    let w = Var::from_slice(
+        &[
+            -0.9325f32, 0.6451, -0.8537, 0.2378, 0.8764, -0.1832, 0.2987, -0.6488, -0.2273,
+            -2.4184, -0.1192, -0.4821, -0.5079, -0.5766, -2.4729, 1.6734, 0.4558, 0.2851, 1.1514,
+            -0.9013, 1.0662, -0.1817, -0.0259, 0.1709, 0.5367, 0.7513, 0.8086, -2.2586, -0.5027,
+            0.9141, -1.3086, -1.3343, -1.5669, -0.1657, 0.7958, 0.1432,
+        ],
+        (1, 4, 3, 3),
+        dev,
+    )?;
+    let bias = Var::from_slice(&[0.5f32], 1, dev)?;
+
+    // Reference: manual conv2d + broadcast_add bias
+    let t_ref = Var::from_tensor(t.as_tensor())?;
+    let w_ref = Var::from_tensor(w.as_tensor())?;
+    let bias_ref = Var::from_tensor(bias.as_tensor())?;
+    let out_ref = t_ref.conv2d(&w_ref, 0, 1, 1, 1)?;
+    let bias_reshaped = bias_ref.reshape((1, 1, 1, 1))?;
+    let out_ref = out_ref.broadcast_add(&bias_reshaped)?;
+    let loss_ref = out_ref.sqr()?.sum_all()?;
+    let grads_ref = loss_ref.backward()?;
+
+    // Fused path
+    let out_fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, &Some(bias.as_tensor().clone()))?;
+    let loss_fused = out_fused.sqr()?.sum_all()?;
+    let grads_fused = loss_fused.backward()?;
+
+    // Compare forward results
+    let ref_vals: Vec<f32> = out_ref.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = out_fused.flatten_all()?.to_vec1()?;
+    for (i, (e, f)) in ref_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-5,
+            "forward mismatch at {i}: expected {e}, got {f}"
+        );
+    }
+
+    // Compare t gradients
+    let grad_t_ref = grads_ref.get(&t_ref).unwrap();
+    let grad_t_fused = grads_fused.get(&t).unwrap();
+    let ref_vals: Vec<f32> = grad_t_ref.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = grad_t_fused.flatten_all()?.to_vec1()?;
+    for (i, (e, f)) in ref_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-4,
+            "grad_t mismatch at {i}: expected {e}, got {f}"
+        );
+    }
+
+    // Compare w gradients
+    let grad_w_ref = grads_ref.get(&w_ref).unwrap();
+    let grad_w_fused = grads_fused.get(&w).unwrap();
+    let ref_vals: Vec<f32> = grad_w_ref.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = grad_w_fused.flatten_all()?.to_vec1()?;
+    for (i, (e, f)) in ref_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-4,
+            "grad_w mismatch at {i}: expected {e}, got {f}"
+        );
+    }
+
+    // Compare bias gradients
+    let grad_bias_ref = grads_ref.get(&bias_ref).unwrap();
+    let grad_bias_fused = grads_fused.get(&bias).unwrap();
+    let ref_vals: Vec<f32> = grad_bias_ref.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = grad_bias_fused.flatten_all()?.to_vec1()?;
+    assert_eq!(ref_vals.len(), fused_vals.len(), "bias grad shape mismatch");
+    for (i, (e, f)) in ref_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-4,
+            "grad_bias mismatch at {i}: expected {e}, got {f}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Test fused conv2d+bias backprop with multiple output channels.
+fn conv2d_fused_bias_grad_multi_cout(dev: &Device) -> Result<()> {
+    use candle_core::Var;
+
+    let t = Var::from_slice(
+        &[
+            0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,
+            1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699, 0.0823, 0.3526, 0.6843, 0.2395,
+            1.2279, -0.9287, -1.7030, 0.1370, 0.6047, 0.3770, -0.6266, 0.3529, 2.2013, -0.6836,
+            0.2477, 1.3127, -0.2260, 0.2622, -1.2974, -0.8140, -0.8404, -0.3490, 0.0130, 1.3123,
+            1.7569, -0.3956, -1.8255, 0.1727, -0.3538, 2.6941, 1.0529, 0.4219, -0.2071, 1.1586,
+            0.4717, 0.3865, -0.5690, -0.5010, -0.1310, 0.7796, 0.6630, -0.2021, 2.6090, 0.2049,
+            0.6466, -0.5042, -0.0603, -1.6538, -1.2429, 1.8357, 1.6052, -1.3844, 0.3323, -1.3712,
+            0.9634, -0.4799, -0.6451, -0.0840, -1.4247, 0.5512, -0.1747, -0.5509, -0.3742, 0.3790,
+            -0.4431, -0.4720, -0.7890, 0.2620, 0.7875, 0.5377, -0.6779, -0.8088, 1.9098, 1.2006,
+            -0.8, -0.4983, 1.5480, 0.8265, -0.1025, 0.5138, 0.5748, 0.3821, -0.4607, 0.0085,
+        ],
+        (1, 4, 5, 5),
+        dev,
+    )?;
+    let w = Var::from_slice(
+        &[
+            -0.9325f32, 0.6451, -0.8537, 0.2378, 0.8764, -0.1832, 0.2987, -0.6488, -0.2273,
+            -2.4184, -0.1192, -0.4821, -0.5079, -0.5766, -2.4729, 1.6734, 0.4558, 0.2851, 1.1514,
+            -0.9013, 1.0662, -0.1817, -0.0259, 0.1709, 0.5367, 0.7513, 0.8086, -2.2586, -0.5027,
+            0.9141, -1.3086, -1.3343, -1.5669, -0.1657, 0.7958, 0.1432, 0.3896, -0.4501, 0.1667,
+            0.0714, -0.0952, 1.2970, -0.1674, -0.3178, 1.0677, 0.3060, 0.7080, 0.1914, 1.1679,
+            -0.3602, 1.9265, -1.8626, -0.5112, -0.0982, 0.2621, 0.6565, 0.5908, 1.0089, -0.1646,
+            1.8032, -0.6286, 0.2016, -0.3370, 1.2555, 0.8009, -0.6488, -0.4652, -1.5685, 1.5860,
+            0.5583, 0.4623, 0.6026,
+        ],
+        (2, 4, 3, 3),
+        dev,
+    )?;
+    let bias = Var::from_slice(&[0.5f32, -0.3], 2, dev)?;
+
+    // Reference
+    let t_ref = Var::from_tensor(t.as_tensor())?;
+    let w_ref = Var::from_tensor(w.as_tensor())?;
+    let bias_ref = Var::from_tensor(bias.as_tensor())?;
+    let out_ref = t_ref.conv2d(&w_ref, 0, 1, 1, 1)?;
+    let bias_reshaped = bias_ref.reshape((1, 2, 1, 1))?;
+    let out_ref = out_ref.broadcast_add(&bias_reshaped)?;
+    let loss_ref = out_ref.sqr()?.sum_all()?;
+    let grads_ref = loss_ref.backward()?;
+
+    // Fused
+    let out_fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, &Some(bias.as_tensor().clone()))?;
+    let loss_fused = out_fused.sqr()?.sum_all()?;
+    let grads_fused = loss_fused.backward()?;
+
+    // Compare bias gradients
+    let grad_bias_ref = grads_ref.get(&bias_ref).unwrap();
+    let grad_bias_fused = grads_fused.get(&bias).unwrap();
+    assert_eq!(grad_bias_ref.dims(), grad_bias_fused.dims());
+    let ref_vals: Vec<f32> = grad_bias_ref.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = grad_bias_fused.flatten_all()?.to_vec1()?;
+    for (i, (e, f)) in ref_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-4,
+            "grad_bias mismatch at {i}: expected {e}, got {f}"
+        );
+    }
+
+    // Compare t gradients
+    let grad_t_ref = grads_ref.get(&t_ref).unwrap();
+    let grad_t_fused = grads_fused.get(&t).unwrap();
+    let ref_vals: Vec<f32> = grad_t_ref.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = grad_t_fused.flatten_all()?.to_vec1()?;
+    for (i, (e, f)) in ref_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-4,
+            "grad_t mismatch at {i}: expected {e}, got {f}"
+        );
+    }
+
+    // Compare w gradients
+    let grad_w_ref = grads_ref.get(&w_ref).unwrap();
+    let grad_w_fused = grads_fused.get(&w).unwrap();
+    let ref_vals: Vec<f32> = grad_w_ref.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = grad_w_fused.flatten_all()?.to_vec1()?;
+    for (i, (e, f)) in ref_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-4,
+            "grad_w mismatch at {i}: expected {e}, got {f}"
+        );
+    }
+
+    Ok(())
+}
+
+test_device!(
+    conv2d_fused_bias_grad,
+    conv2d_fused_bias_grad_cpu,
+    conv2d_fused_bias_grad_gpu,
+    conv2d_fused_bias_grad_metal
+);
+test_device!(
+    conv2d_fused_bias_grad_multi_cout,
+    conv2d_fused_bias_grad_multi_cout_cpu,
+    conv2d_fused_bias_grad_multi_cout_gpu,
+    conv2d_fused_bias_grad_multi_cout_metal
 );
