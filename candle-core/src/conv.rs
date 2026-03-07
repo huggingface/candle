@@ -305,15 +305,13 @@ impl Tensor {
                 bias.layout(),
                 params,
             )?;
-            let op = BackpropOp::new3(self, kernel, bias, |arg, kernel, bias| {
-                Op::Conv2DBias {
-                    arg,
-                    kernel,
-                    bias,
-                    padding: params.padding,
-                    stride: params.stride,
-                    dilation: params.dilation,
-                }
+            let op = BackpropOp::new3(self, kernel, bias, |arg, kernel, bias| Op::Conv2DBias {
+                arg,
+                kernel,
+                bias,
+                padding: params.padding,
+                stride: params.stride,
+                dilation: params.dilation,
             });
             let out_dims = params.out_dims();
             Ok(crate::tensor::from_storage(storage, out_dims, op, false))
