@@ -860,6 +860,100 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/// Test that fused conv2d+bias produces the same result as conv2d followed by broadcast_add.
+fn conv2d_fused_bias(dev: &Device) -> Result<()> {
+    // Input: batch=2, c_in=3, h=5, w=5
+    let t = Tensor::rand(-1.0f32, 1.0, (2, 3, 5, 5), dev)?;
+    // Kernel: c_out=4, c_in=3, k_h=3, k_w=3
+    let w = Tensor::rand(-1.0f32, 1.0, (4, 3, 3, 3), dev)?;
+    // Bias: [c_out]
+    let bias = Tensor::rand(-1.0f32, 1.0, 4, dev)?;
+
+    // Two-step: conv2d then broadcast_add
+    let out_no_bias = t.conv2d(
+        &w, /*padding=*/ 1, /*stride=*/ 1, /*dilation=*/ 1, /*groups=*/ 1,
+    )?;
+    let bias_reshaped = bias.reshape((1, 4, 1, 1))?;
+    let expected = out_no_bias.broadcast_add(&bias_reshaped)?;
+
+    // Fused: conv2d_with_algo with bias
+    let fused = t.conv2d_with_algo(&w, 1, 1, 1, 1, None, &Some(bias.clone()))?;
+
+    let expected_vals: Vec<f32> = expected.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = fused.flatten_all()?.to_vec1()?;
+
+    assert_eq!(expected.dims(), fused.dims());
+    assert_eq!(expected_vals.len(), fused_vals.len());
+    for (i, (e, f)) in expected_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-5,
+            "mismatch at index {i}: expected {e}, got {f}"
+        );
+    }
+    Ok(())
+}
+
+/// Test conv2d+bias with groups > 1.
+fn conv2d_fused_bias_groups(dev: &Device) -> Result<()> {
+    let groups = 2usize;
+    // Input: batch=1, c_in=4, h=4, w=4
+    let t = Tensor::rand(-1.0f32, 1.0, (1, 4, 4, 4), dev)?;
+    // Kernel: c_out=6, c_in/groups=2, k_h=3, k_w=3
+    let w = Tensor::rand(-1.0f32, 1.0, (6, 2, 3, 3), dev)?;
+    // Bias: [c_out]
+    let bias = Tensor::rand(-1.0f32, 1.0, 6, dev)?;
+
+    // Two-step: conv2d then broadcast_add
+    let out_no_bias = t.conv2d(&w, 0, 1, 1, groups)?;
+    let bias_reshaped = bias.reshape((1, 6, 1, 1))?;
+    let expected = out_no_bias.broadcast_add(&bias_reshaped)?;
+
+    // Fused path
+    let fused = t.conv2d_with_algo(&w, 0, 1, 1, groups, None, &Some(bias.clone()))?;
+
+    let expected_vals: Vec<f32> = expected.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = fused.flatten_all()?.to_vec1()?;
+
+    assert_eq!(expected.dims(), fused.dims());
+    for (i, (e, f)) in expected_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-5,
+            "mismatch at index {i}: expected {e}, got {f}"
+        );
+    }
+    Ok(())
+}
+
+/// Test conv2d+bias with 1x1 kernel (exercises the fast 1x1 path on CPU).
+fn conv2d_fused_bias_1x1(dev: &Device) -> Result<()> {
+    // Input: batch=2, c_in=3, h=4, w=4
+    let t = Tensor::rand(-1.0f32, 1.0, (2, 3, 4, 4), dev)?;
+    // Kernel: c_out=5, c_in=3, k_h=1, k_w=1
+    let w = Tensor::rand(-1.0f32, 1.0, (5, 3, 1, 1), dev)?;
+    // Bias: [c_out]
+    let bias = Tensor::rand(-1.0f32, 1.0, 5, dev)?;
+
+    // Two-step
+    let out_no_bias = t.conv2d(&w, 0, 1, 1, 1)?;
+    let bias_reshaped = bias.reshape((1, 5, 1, 1))?;
+    let expected = out_no_bias.broadcast_add(&bias_reshaped)?;
+
+    // Fused
+    let fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, &Some(bias.clone()))?;
+
+    let expected_vals: Vec<f32> = expected.flatten_all()?.to_vec1()?;
+    let fused_vals: Vec<f32> = fused.flatten_all()?.to_vec1()?;
+
+    assert_eq!(expected.dims(), fused.dims());
+    for (i, (e, f)) in expected_vals.iter().zip(fused_vals.iter()).enumerate() {
+        assert!(
+            (e - f).abs() < 1e-5,
+            "mismatch at index {i}: expected {e}, got {f}"
+        );
+    }
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -891,4 +985,22 @@ test_device!(
     conv2d_grad_cpu,
     conv2d_grad_gpu,
     conv2_grad_metal
+);
+test_device!(
+    conv2d_fused_bias,
+    conv2d_fused_bias_cpu,
+    conv2d_fused_bias_gpu,
+    conv2d_fused_bias_metal
+);
+test_device!(
+    conv2d_fused_bias_groups,
+    conv2d_fused_bias_groups_cpu,
+    conv2d_fused_bias_groups_gpu,
+    conv2d_fused_bias_groups_metal
+);
+test_device!(
+    conv2d_fused_bias_1x1,
+    conv2d_fused_bias_1x1_cpu,
+    conv2d_fused_bias_1x1_gpu,
+    conv2d_fused_bias_1x1_metal
 );

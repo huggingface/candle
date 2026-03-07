@@ -291,24 +291,37 @@ impl Tensor {
         bias: &Self,
         params: &ParamsConv2D,
     ) -> Result<Self> {
-        let storage = self.storage().conv2d_with_bias(
-            self.layout(),
-            &kernel.storage(),
-            kernel.layout(),
-            &bias.storage(),
-            bias.layout(),
-            params,
-        )?;
-        // FIXME in case of conv2d + bias, it's probably a new op for backprop purposes?
-        let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::Conv2D {
-            arg,
-            kernel,
-            padding: params.padding,
-            stride: params.stride,
-            dilation: params.dilation,
-        });
-        let out_dims = params.out_dims();
-        Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+        let use_fused = match self.device() {
+            crate::Device::Cpu => true,
+            crate::Device::Cuda(_) => cfg!(feature = "cudnn") && kernel.layout().is_contiguous(),
+            crate::Device::Metal(_) => false,
+        };
+        if use_fused {
+            let storage = self.storage().conv2d_with_bias(
+                self.layout(),
+                &kernel.storage(),
+                kernel.layout(),
+                &bias.storage(),
+                bias.layout(),
+                params,
+            )?;
+            // FIXME in case of conv2d + bias, it's probably a new op for backprop purposes?
+            let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::Conv2D {
+                arg,
+                kernel,
+                padding: params.padding,
+                stride: params.stride,
+                dilation: params.dilation,
+            });
+            let out_dims = params.out_dims();
+            Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+        } else {
+            // Fallback: separate conv2d then broadcast_add bias.
+            let out = self.conv2d_single_group(kernel, params)?;
+            let b = bias.dims1()?;
+            let bias = bias.reshape((1, b, 1, 1))?;
+            out.broadcast_add(&bias)
+        }
     }
 
     /// Applies a 2D convolution over the input tensor.
@@ -359,10 +372,20 @@ impl Tensor {
             // Single group.
             (true, Some(bias)) => self.conv2d_single_group_with_bias(kernel, bias, &params),
             (true, None) => self.conv2d_single_group(kernel, &params),
-            // Mutliple groups.
-            (false, Some(_bias)) => {
-                todo!("hmmm")
-                // crate::bail!("conv2d with bias is only supported for groups=1")
+            // Multiple groups.
+            (false, Some(bias)) => {
+                let blocks = self.chunk(groups, 1)?;
+                let kernel = kernel.chunk(groups, 0)?;
+                let bias_chunks = bias.chunk(groups, 0)?;
+                let blocks = blocks
+                    .iter()
+                    .zip(&kernel)
+                    .zip(&bias_chunks)
+                    .map(|((block, kernel), bias_chunk)| {
+                        block.conv2d_single_group_with_bias(kernel, bias_chunk, &params)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Tensor::cat(&blocks, 1)
             }
             (false, None) => {
                 let blocks = self.chunk(groups, 1)?;
@@ -375,26 +398,6 @@ impl Tensor {
                 Tensor::cat(&blocks, 1)
             }
         }
-        // let res = if groups == 1 {
-        //     self.conv2d_single_group(kernel, &params)?
-        // } else {
-        //     let blocks = self.chunk(groups, 1)?;
-        //     let kernel = kernel.chunk(groups, 0)?;
-        //     let blocks = blocks
-        //         .iter()
-        //         .zip(&kernel)
-        //         .map(|(block, kernel)| block.conv2d_single_group(kernel, &params))
-        //         .collect::<Result<Vec<_>>>()?;
-        //     Tensor::cat(&blocks, 1)?
-        // };
-        // // Add bias if provided.
-        // if let Some(bias) = bias {
-        //     let b = bias.dims1()?;
-        //     let bias = bias.reshape((1, b, 1, 1))?;
-        //     Ok(res.broadcast_add(&bias)?)
-        // } else {
-        //     Ok(res)
-        // }
     }
 
     /// Applies a 2D transposed convolution over the input tensor.

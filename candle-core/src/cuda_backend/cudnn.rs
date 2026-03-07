@@ -1,4 +1,4 @@
-use crate::{cudnn, WithDType};
+use crate::WithDType;
 use cudarc;
 use cudarc::cudnn::safe::{ConvForward, Cudnn};
 use cudarc::cudnn::ConvBiasActivationForward;
@@ -140,7 +140,6 @@ pub(crate) fn launch_conv2d_bias_activation<
     params: &crate::conv::ParamsConv2D,
     dev: &crate::cuda_backend::CudaDevice,
 ) -> crate::Result<()> {
-    use crate::conv::CudnnFwdAlgo as CandleAlgo;
     use cudarc::cudnn::sys::cudnnConvolutionFwdAlgo_t as A;
 
     let cudnn = cudnn_handle(dev)?;
@@ -188,13 +187,13 @@ pub(crate) fn launch_conv2d_bias_activation<
         cudarc::cudnn::sys::cudnnNanPropagation_t::CUDNN_NOT_PROPAGATE_NAN,
         1.0,
     )?;
-    // z has same shape as bias, but it's all 0s always, since we don't use the z-term.
+    // z must have the same shape as y (the output tensor).
     let z = cudnn.create_4d_tensor(
         cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
-        [1, params.c_out as i32, 1, 1],
-        // [params.b_size as i32, params.c_out as i32, h_out, w_out],
+        [params.b_size as i32, params.c_out as i32, h_out, w_out],
     )?;
-    let z_src = dev.alloc_zeros(params.c_out)?;
+    let dst_el = params.b_size * params.c_out * h_out as usize * w_out as usize;
+    let z_src = dev.alloc_zeros(dst_el)?;
     let bias_d = cudnn.create_4d_tensor(
         cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
         [1, params.c_out as i32, 1, 1],
@@ -208,20 +207,8 @@ pub(crate) fn launch_conv2d_bias_activation<
         z: &z,
         bias: &bias_d,
     };
-    let alg = match params.cudnn_fwd_algo {
-        None => conv2d.pick_algorithm()?,
-        Some(CandleAlgo::ImplicitGemm) => A::CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM,
-        Some(CandleAlgo::ImplicitPrecompGemm) => {
-            A::CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM
-        }
-        Some(CandleAlgo::Gemm) => A::CUDNN_CONVOLUTION_FWD_ALGO_GEMM,
-        Some(CandleAlgo::Direct) => A::CUDNN_CONVOLUTION_FWD_ALGO_DIRECT,
-        Some(CandleAlgo::Fft) => A::CUDNN_CONVOLUTION_FWD_ALGO_FFT,
-        Some(CandleAlgo::FftTiling) => A::CUDNN_CONVOLUTION_FWD_ALGO_FFT_TILING,
-        Some(CandleAlgo::Winograd) => A::CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD,
-        Some(CandleAlgo::WinogradNonFused) => A::CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED,
-        Some(CandleAlgo::Count) => A::CUDNN_CONVOLUTION_FWD_ALGO_COUNT,
-    };
+    // CUDNN_ACTIVATION_IDENTITY requires IMPLICIT_PRECOMP_GEMM.
+    let alg = A::CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
     let workspace_size = conv2d.get_workspace_size(alg)?;
     let mut workspace = dev.cuda_stream().alloc_zeros::<u8>(workspace_size)?;
     unsafe {
