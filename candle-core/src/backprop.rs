@@ -52,7 +52,13 @@ impl Tensor {
                 nodes
             } else if let Some(op) = node.op() {
                 match op {
-                    Op::IndexAdd(t1, t2, t3, _)
+                    Op::Conv2DBias {
+                        arg: t1,
+                        kernel: t2,
+                        bias: t3,
+                        ..
+                    }
+                    | Op::IndexAdd(t1, t2, t3, _)
                     | Op::Scatter(t1, t2, t3, _)
                     | Op::ScatterAdd(t1, t2, t3, _)
                     | Op::CustomOp3(t1, t2, t3, _)
@@ -310,6 +316,50 @@ impl Tensor {
                             grad_kernel
                         };
                         *sum_grad = sum_grad.add(&grad_kernel)?;
+                    }
+                    Op::Conv2DBias {
+                        arg,
+                        kernel,
+                        bias,
+                        padding,
+                        stride,
+                        dilation,
+                    } => {
+                        // arg and kernel grads are the same as Conv2D
+                        let grad_h = grad.dim(2)?;
+                        let k_h = kernel.dim(2)?;
+                        let out_size =
+                            (grad_h - 1) * stride + dilation * (k_h - 1) + 1 - 2 * padding;
+                        let out_padding = arg.dim(2)? - out_size;
+                        let grad_arg = grad.conv_transpose2d(
+                            kernel,
+                            *padding,
+                            out_padding,
+                            *stride,
+                            *dilation,
+                        )?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad_arg)?;
+
+                        let grad_kernel = arg
+                            .transpose(0, 1)?
+                            .conv2d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
+                            .transpose(0, 1)?;
+                        let sum_grad = grads.or_insert(kernel)?;
+                        let (_, _, k0, k1) = kernel.dims4()?;
+                        let (_, _, g_k0, g_k1) = grad_kernel.dims4()?;
+                        let grad_kernel = if g_k0 != k0 || g_k1 != k1 {
+                            grad_kernel.narrow(2, 0, k0)?.narrow(3, 0, k1)?
+                        } else {
+                            grad_kernel
+                        };
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
+
+                        // bias grad: sum over batch, height, width (dims 0, 2, 3)
+                        let grad_bias = grad.sum_keepdim(0)?.sum_keepdim(2)?.sum_keepdim(3)?;
+                        let grad_bias = grad_bias.flatten_all()?;
+                        let sum_grad = grads.or_insert(bias)?;
+                        *sum_grad = sum_grad.add(&grad_bias)?;
                     }
                     Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
                         op: "conv-transpose1d",

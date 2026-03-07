@@ -14,6 +14,18 @@ impl CudaStorage {
     pub fn transfer_to_device(&self, _dst: &CudaDevice) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    pub fn conv2d_with_bias(
+        &self,
+        _inp_l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _bias: &Self,
+        _bias_l: &Layout,
+        _params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
 
 macro_rules! fail {

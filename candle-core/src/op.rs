@@ -116,6 +116,16 @@ pub enum Op {
     },
 
     #[allow(dead_code)]
+    Conv2DBias {
+        arg: Tensor,
+        kernel: Tensor,
+        bias: Tensor,
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+    },
+
+    #[allow(dead_code)]
     ConvTranspose2D {
         arg: Tensor,
         kernel: Tensor,
