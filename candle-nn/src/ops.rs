@@ -672,6 +672,27 @@ impl candle::CustomOp2 for RmsNorm {
     }
 }
 
+impl candle::lazy::LazyCustomOp for RmsNorm {
+    fn name(&self) -> &'static str {
+        "rms-norm"
+    }
+
+    fn fwd(
+        &self,
+        input: &[(&candle::LazyStorage, &Layout)],
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let (first, layout) = input.first().unwrap();
+        first
+            .custom_op(Box::new(self.clone()), inputs)
+            .map(|s| (s, layout.shape().clone()))
+    }
+
+    fn fallback(&self, tensors: &[&Tensor]) -> Result<crate::Tensor> {
+        debug_assert_eq!(tensors.len(), 2);
+        rms_norm_slow(tensors[0], tensors[1], self.eps)
+    }
+}
+
 impl candle::lazy::LazyCustomOp2 for RmsNorm {
     fn name(&self) -> &'static str {
         "rms-norm"

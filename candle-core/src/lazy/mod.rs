@@ -5,7 +5,7 @@ use petgraph::graph::{DiGraph, Edge, EdgeIndex, EdgeReference, IndexType, NodeIn
 use petgraph::visit::EdgeRef;
 use petgraph::Direction::{Incoming, Outgoing};
 use petgraph::{EdgeType, Graph};
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::atomic;
@@ -218,11 +218,80 @@ pub fn get_incoming_edges<N, E>(
 #[derive(Debug, Clone)]
 pub struct LazyStorage {
     operations: OpGraph,
+    custom_op_fallbacks: HashMap<String, OpGraph>,
     layout: Layout,
     initial_dtype: DType,
     current_node: Option<NodeIndex<u32>>,
     // potentially Arc<RwLock<...>>
     //inner: Option<CpuStorage>,
+}
+
+pub trait LazyCustomOpClone {
+    fn clone_box(&self) -> Box<dyn LazyCustomOp>;
+}
+
+impl<T> LazyCustomOpClone for T
+where
+    T: 'static + LazyCustomOp + Clone + ?Sized,
+{
+    fn clone_box(&self) -> Box<dyn LazyCustomOp> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn LazyCustomOp> {
+    fn clone(&self) -> Box<dyn LazyCustomOp> {
+        self.clone_box()
+    }
+}
+
+pub trait LazyCustomFnClone<B: LazyBuffer> {
+    fn clone_box(&self) -> Box<dyn LazyCustomFn<B>>;
+}
+
+impl<T, B> LazyCustomFnClone<B> for T
+where
+    T: 'static + LazyCustomFn<B> + Clone + ?Sized,
+    B: LazyBuffer + Clone,
+{
+    fn clone_box(&self) -> Box<dyn LazyCustomFn<B>> {
+        Box::new(self.clone())
+    }
+}
+
+impl<B> Clone for Box<dyn LazyCustomFn<B>>
+where
+    B: LazyBuffer,
+{
+    fn clone(&self) -> Box<dyn LazyCustomFn<B>> {
+        self.clone_box()
+    }
+}
+
+impl Debug for Box<dyn LazyCustomOp> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Box<LazyCustomOp>")
+            .field("op", &self.name())
+            .finish()
+    }
+}
+impl PartialEq for Box<dyn LazyCustomOp> {
+    fn eq(&self, other: &Self) -> bool {
+        self.name() == other.name()
+    }
+}
+
+pub trait LazyCustomOp: LazyCustomOpClone + Send + Sync {
+    fn name(&self) -> &'static str;
+
+    // Forward pass
+    fn fwd(&self, input: &[(&LazyStorage, &Layout)]) -> Result<(LazyStorage, Shape)>;
+
+    fn fallback(&self, _tensors: &[&Tensor]) -> Result<crate::Tensor> {
+        Err(crate::Error::Msg(
+            format!("no lazy fallback for {}", self.name()).into(),
+        ))
+    }
 }
 
 pub trait LazyCustomOp1 {
@@ -299,18 +368,26 @@ impl LazyStorage {
         Ok(next)
     }
 
-    pub fn custom_op(&self, _: Box<dyn LazyCustomOp1>) -> Result<Self> {
+    pub fn custom_op(
+        &self,
+        op: Box<dyn LazyCustomOp>,
+        inputs: &[(&Self, &Layout)],
+    ) -> Result<Self> {
         count();
 
         let mut next = self.clone();
-        let idx = next.add_operation(Op::Sink);
+        let idx = next.add_operation(Op::CustomOp(op.into()));
         let current_op = next.get_current_node()?;
 
-        let previous_edge = next.operations.first_edge(current_op, Incoming).unwrap();
-        let previous_edge = next.operations.edge_weight(previous_edge).unwrap();
+        next.add_edge(current_op, idx, self.layout.clone(), self.dtype());
 
-        next.add_edge(current_op, idx, previous_edge.layout.clone(), self.dtype());
+        for (input, input_l) in inputs {
+            let input_op = input.get_current_node()?;
+            let input_edge = OpEdge::new(input_l.clone().clone(), input.dtype());
+            next.merge(input, input_op, idx, input_edge)?;
+        }
 
+        next.current_node = Some(idx);
         Ok(next)
     }
 
@@ -537,11 +614,13 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
     })
 }
 
+pub trait LazyCustomFn<B: LazyBuffer>: LazyCustomFnClone<B> + Send + Sync {
+    fn call(&self, input: &[(&B, &Layout, DType)], dst: &B) -> Result<()>;
+}
+
 pub trait Executor {
     type BufferType: LazyBuffer;
     type AllocatorType: LazyAllocator<Self::BufferType>;
-
-    fn run(&self, operations: OpGraph) -> Result<Self::BufferType>;
 
     fn optimize(&self, _graph: &mut OpGraph) {
         // TODO: Generic optimizations
@@ -549,6 +628,8 @@ pub trait Executor {
 
     /// Backend specific optimizations. Defaults to noop.
     fn specialize(&self, _graph: &mut OpGraph) {}
+
+    fn run(&self, operations: OpGraph) -> Result<Self::BufferType>;
 
     fn eval(
         &self,
@@ -558,12 +639,26 @@ pub trait Executor {
     ) -> Result<()>;
 
     fn allocator(&self) -> Self::AllocatorType;
+
+    fn get_specialized_op(
+        &self,
+        _op: &Box<dyn LazyCustomOp>,
+    ) -> Option<Box<dyn LazyCustomFn<Self::BufferType>>> {
+        None
+    }
+
+    fn install_custom_op(
+        &mut self,
+        op: &Box<dyn LazyCustomOp>,
+        func: Box<dyn LazyCustomFn<Self::BufferType>>,
+    ) -> Option<&Box<dyn LazyCustomFn<Self::BufferType>>>;
 }
 
 impl LazyStorage {
     fn new(shape: Shape, dtype: DType) -> LazyStorage {
         LazyStorage {
             operations: Default::default(),
+            custom_op_fallbacks: HashMap::new(),
             layout: Layout::contiguous(shape),
             initial_dtype: dtype,
             current_node: None,
@@ -688,6 +783,7 @@ pub enum Op {
     Sink,
     Aggregate,
     Output,
+    CustomOp(Box<dyn LazyCustomOp>),
 }
 
 impl Display for OpNode {
@@ -1557,7 +1653,7 @@ impl BackendDevice for LazyDevice {
 
 #[cfg(test)]
 mod tests {
-    use crate::{lazy::LazyDevice, DType, Device, Result, Shape, Tensor, D};
+    use crate::{lazy::LazyDevice, Device, Result, Shape, Tensor, D};
 
     #[test]
     fn lazy_unary() -> Result<()> {
@@ -1800,7 +1896,6 @@ mod tests {
             &device,
         )?;
         let y = Tensor::from_slice(&[1.0f32, 2.0], (2, 1), &device)?;
-        let y = (y * 2.0)?;
 
         let result = x.matmul(&y)?.flatten_all()?;
         assert_eq!(result.to_vec1::<f32>()?, &[2.0, 10.0, 17.0, 23.0]);

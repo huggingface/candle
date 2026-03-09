@@ -2,7 +2,9 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
-use crate::lazy::{Ancestors, Executor, LazyError::*, MemoryPlan, OpEdge, OpGraph, OpNode};
+use crate::lazy::{
+    Ancestors, Executor, LazyCustomOp, LazyError::*, MemoryPlan, OpEdge, OpGraph, OpNode,
+};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
 use candle_metal_kernels::{
@@ -14,8 +16,7 @@ use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
-
+use std::sync::{Arc, LazyLock, Mutex, PoisonError, RwLock, TryLockError};
 mod device;
 pub use device::{DeviceId, MetalDevice};
 
@@ -2480,14 +2481,47 @@ impl LazyAllocator<Buffer> for MetalAllocator {
     }
 }
 
+type MetalCustomFn = dyn crate::lazy::LazyCustomFn<Buffer>;
+
+pub struct MetalCustomOpHandler {
+    custom_ops: HashMap<String, Box<MetalCustomFn>>,
+}
+
+impl MetalCustomOpHandler {
+    fn new() -> Self {
+        Self {
+            custom_ops: HashMap::new(),
+        }
+    }
+}
+
+static CUSTOM_OP_HANDLER: LazyLock<Mutex<MetalCustomOpHandler>> =
+    LazyLock::new(|| Mutex::new(MetalCustomOpHandler::new()));
+
+pub fn replace_custom_op_with_fallback(_graph: &mut OpGraph, _custom_op: &Box<dyn LazyCustomOp>) {}
+
 impl Executor for MetalDevice {
     type BufferType = Buffer;
     type AllocatorType = MetalAllocator;
+
+    fn specialize(&self, graph: &mut OpGraph) {
+        use crate::lazy::Op::*;
+        for node in graph.node_indices() {
+            if let CustomOp(custom_op) = graph[node].op().clone() {
+                if self.get_specialized_op(&custom_op).is_none() {
+                    replace_custom_op_with_fallback(graph, &custom_op)
+                }
+            }
+        }
+    }
 
     fn run(&self, graph: OpGraph) -> Result<Buffer> {
         // TODO: &mut OpGraph input?
         let mut graph = graph.clone();
         let mut allocator = self.allocator();
+
+        //custom_op_handler.install_custom_op()
+
         self.optimize(&mut graph);
         self.specialize(&mut graph);
 
@@ -2911,6 +2945,33 @@ impl Executor for MetalDevice {
                 )?;
                 */
             }
+            CustomOp(custom_op) => {
+                let incoming = graph.edges_directed(node, petgraph::Incoming);
+                let input: Vec<_> = incoming
+                    .map(|edge| {
+                        let w = edge.weight();
+                        let buffer = allocator.get(w.buffer_id()).unwrap();
+                        let layout = w.layout();
+                        let dtype = w.dtype();
+                        (buffer, layout, dtype)
+                    })
+                    .collect();
+
+                let dst_edge = graph
+                    .edges_directed(node, petgraph::Outgoing)
+                    .next()
+                    .ok_or(InvalidOutgoing(op_node.id()))?;
+                let dst_w = dst_edge.weight();
+                let dst_buffer = allocator.get(dst_w.buffer_id()).unwrap();
+
+                // Attempt to get metal op for this custom operation
+                if let Some(specialized_op) = self.get_specialized_op(custom_op) {
+                    specialized_op.call(&input, dst_buffer)?;
+                }
+                //} else {
+                //    custom_op.fallback
+                //}
+            }
             _ => todo!("{:?}", op_node),
         }
         Ok(())
@@ -2918,6 +2979,28 @@ impl Executor for MetalDevice {
 
     fn allocator(&self) -> MetalAllocator {
         MetalAllocator::new(self.clone())
+    }
+
+    fn get_specialized_op(&self, op: &Box<dyn LazyCustomOp>) -> Option<Box<MetalCustomFn>> {
+        CUSTOM_OP_HANDLER
+            .lock()
+            .unwrap()
+            .custom_ops
+            .get(op.name())
+            .cloned()
+    }
+
+    fn install_custom_op(
+        &mut self,
+        op: &Box<dyn LazyCustomOp>,
+        func: Box<MetalCustomFn>,
+    ) -> Option<&Box<MetalCustomFn>> {
+        CUSTOM_OP_HANDLER
+            .lock()
+            .unwrap()
+            .custom_ops
+            .insert(op.name().to_string(), func);
+        None
     }
 }
 
