@@ -98,4 +98,6 @@ impl LightOnOCR {
     pub fn clear_kv_cache(&mut self) {
         self.language_model.clear_kv_cache();
     }
+
+    
 }
