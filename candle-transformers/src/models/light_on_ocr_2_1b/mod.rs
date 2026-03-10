@@ -1,3 +1,0 @@
-mod projector;
-mod model;
-

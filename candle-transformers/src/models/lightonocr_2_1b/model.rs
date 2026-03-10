@@ -1,30 +1,24 @@
 use candle::{IndexOp, Tensor};
-use candle_nn::{Module, VarBuilder};
+use candle_nn::{Activation, Module, VarBuilder};
 use serde::Deserialize;
-use crate::models::light_on_ocr_2_1b::projector::Projector;
+use crate::models::lightonocr_2_1b::projector::Projector;
 use crate::models::pixtral::vision_model;
 use crate::models::qwen3;
 use candle::Result;
 
 #[derive(Deserialize)]
 pub struct Config {
-    pub architectures: Vec<String>,
     pub dtype: String,
     pub eos_token_id: usize,
     pub image_token_id: usize,
-    pub model_type: String,
-    pub multimodal_projector_bias: bool,
     pub pad_token_id: usize,
-    pub projector_hidden_act: String,
+    pub projector_hidden_act: Activation,
     pub spatial_merge_size: usize,
     pub text_config: qwen3::Config,
-    pub transformers_version: String,
-    pub use_cache: bool,
     pub vision_config: vision_model::Config,
-    pub vision_feature_layer: i32
 }
 
-pub struct LightOnOCR{
+pub struct Model{
     pub vision_encoder: vision_model::Model,
     pub vision_config: vision_model::Config,
     pub projector: Projector,
@@ -32,7 +26,7 @@ pub struct LightOnOCR{
     pub image_token_id: usize,
 }
 
-impl LightOnOCR {
+impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let model_vb = vb.pp("model");
 

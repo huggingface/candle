@@ -138,4 +138,4 @@ pub mod wuerstchen;
 pub mod xlm_roberta;
 pub mod yi;
 pub mod z_image;
-pub mod light_on_ocr_2_1b;
+pub mod lightonocr_2_1b;
