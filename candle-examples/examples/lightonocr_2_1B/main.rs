@@ -23,3 +23,8 @@ impl TextGeneration {
         }
     }
 }
+
+
+pub fn main(){
+    
+}
