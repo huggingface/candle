@@ -1,13 +1,13 @@
 use candle::{IndexOp, Tensor};
 use candle_nn::{Activation, Module, VarBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use crate::models::lightonocr_2_1b::preprocessor::Preprocessor;
 use crate::models::lightonocr_2_1b::projector::Projector;
 use crate::models::pixtral::vision_model;
 use crate::models::qwen3;
 use candle::Result;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct Config {
     pub dtype: String,
     pub eos_token_id: usize,

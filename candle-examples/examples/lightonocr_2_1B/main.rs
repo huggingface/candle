@@ -1,29 +1,30 @@
-use candle::{DType, Device, Tensor};
-use candle_examples::{chat_template::{self, ChatTemplate, Conversation}, device, token_output_stream::TokenOutputStream};
-use candle_transformers::models::lightonocr_2_1b::{self, model::Model};
-use clap::{Parser, ValueEnum};
+use std::path::Path;
+
+use candle::{DType, Device, Tensor, bail};
+use candle_examples::token_output_stream::TokenOutputStream;
+use candle_nn::VarBuilder;
+use candle_transformers::models::lightonocr_2_1b::{self, model};
+use clap::Parser;
+use serde_json::from_str;
 use tokenizers::Tokenizer;
 use candle::Result;
 
 pub struct TextGeneration{
-    model: Model,
+    model: model::Model,
     device: Device,
     tokenizer: TokenOutputStream, 
-    config: lightonocr_2_1b::model::Config  
 }
 
 impl TextGeneration {
     fn new(
-        model: Model,
+        model: model::Model,
         tokenizer: Tokenizer, 
         device: &Device,
-        config: lightonocr_2_1b::model::Config,
     ) -> Self {
         Self { 
             model, device: 
             device.clone(), 
             tokenizer: TokenOutputStream::new(tokenizer) ,
-            config: config
         }
     }
     pub fn load_and_resize_image(
@@ -70,8 +71,6 @@ impl TextGeneration {
     fn run(&mut self, 
         image: String, 
         dtype: DType,
-        tokenizer_config: String,
-        template: String,
         ) -> Result<()>{
         self.model.clear_kv_cache();
         let preprocessor = &self.model.preprocessor;
@@ -86,13 +85,6 @@ impl TextGeneration {
         let num_image_tokens = (h / patch_size as usize) * (w / patch_size as usize);
 
         let input_tensor = self.encode_image_tokens(num_image_tokens)?;
-
-        let logits = self.model.forward(
-            &input_tensor, 
-            &preprocessed, 0
-        )?;
-
-
 
         Ok(())
     }
@@ -217,11 +209,87 @@ struct Args {
     #[arg(long)]
     model_config: Option<String>,
 
+    // Location of the config file for the preprocesor
+    #[arg(long)]
+    processor_config: Option<String>,
+
+    #[arg(long)]
+    dtype: Option<String>,
+
     //Location of the weights for the model
     #[arg(long)]
-    model_weights: Option<String>
+    model_weights: Option<String>,
+
+    //Location of the Tokenizer config
+    #[arg(long)]
+    tokenizer_config: Option<String>,
+
+    //Location of the image to transcribe
+    #[arg(long)]
+    image_location: String,
 }
 
-pub fn main(){
+pub fn main() -> Result<()>{
+    let args = Args::parse(); 
+    let device = candle_examples::device(args.cpu)?;
 
+    let dtype = match args.dtype.as_deref() {
+        Some("f32") => DType::F32,
+        Some("bf16") => DType::BF16,
+        Some(dtype) => bail!("Unsupported dtype {dtype}"),
+        None => DType::F32,
+    };  
+    // TODO all of this can be moved into the new function 
+    // also  if config not found need to use defaults.
+    //build preprocessor:
+    let preprocessor_cfg = load_config(
+        args.processor_config.as_deref(), 
+        "Preprocessor config");
+    let processor_cfg: lightonocr_2_1b::preprocessor::Config = from_str(&preprocessor_cfg)
+    .expect("Failed ");
+    let prepreprocessor = processor_cfg.image_processor;
+
+    //Load model weights:
+    let weights_path = args.model_weights.as_deref()
+    .expect("Empty model weights field");
+
+    let vb = unsafe {
+        VarBuilder::from_mmaped_safetensors(&[weights_path], dtype, &device)
+    }?;
+
+    let config_str = load_config(
+        args.model_config.as_deref(), 
+        "Model Config");
+
+    let cfg: model::Config = serde_json::from_str(&config_str)
+    .expect("Failed to deserialize config");
+    let model = model::Model::new(cfg, prepreprocessor, vb)?;
+
+    let tokenizer_path = args.tokenizer_config.as_deref().expect("No tokenizer config found");
+    let tokenizer = Tokenizer::from_file(tokenizer_path)
+        .map_err(|e| anyhow::anyhow!("Tokenizer error: {e}"))
+        .expect("Failed to create tokenizer");
+    
+    let mut text_generation = TextGeneration::new(model, tokenizer, &device);
+
+    text_generation.run(args.image_location, dtype)
+    
 }
+
+pub fn load_config(file: Option<&str>, which_config: &str) -> String {
+ 
+    let path = Path::new(
+        file.expect(
+            format!("Please provide a file for {which_config}")
+            .as_str()
+        )
+    );
+
+    let config_str = std::fs::read_to_string(path)
+    .expect(
+        format!("Failed to read path for {which_config}"
+        ).as_str()
+    );
+
+    config_str
+}   

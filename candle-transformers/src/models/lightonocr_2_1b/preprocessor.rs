@@ -1,11 +1,20 @@
 use candle::{DType, Device, Result, Tensor};
 use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Config{
+    pub image_processor: Preprocessor,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Preprocessor {
    pub patch_size: u32,
    pub merge_size: u32,
+   #[serde(rename = "longest_edge")]
    pub max_edge: u32,
+   #[serde(rename = "image_mean")]
    pub mean: [f32; 3],
+   #[serde(rename = "image_std")]
    pub std: [f32; 3],
 }
 
