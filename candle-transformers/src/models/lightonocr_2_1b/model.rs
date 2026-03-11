@@ -26,10 +26,11 @@ pub struct Model{
     pub preprocessor: Preprocessor,
     pub language_model: qwen3::ModelForCausalLM,
     pub image_token_id: usize,
+    pub model_config: Config
 }
 
 impl Model {
-    pub fn new(cfg: &Config, preprocessor: Preprocessor, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: Config, preprocessor: Preprocessor, vb: VarBuilder) -> Result<Self> {
         let model_vb = vb.pp("model");
 
         let vision_encoder = vision_model::Model::new(
@@ -52,7 +53,8 @@ impl Model {
             projector,
             preprocessor, 
             language_model, 
-            image_token_id: cfg.image_token_id 
+            image_token_id: cfg.image_token_id,
+            model_config: cfg
         })
     }
 
@@ -94,10 +96,6 @@ impl Model {
         }
         Ok(Tensor::cat(&rows, 0)?
             .unsqueeze(0)?)  
-    }
-
-    pub fn decode_step(&mut self, input_ids: &Tensor, offset: usize) -> Result<Tensor> {
-        Ok(self.language_model.forward(input_ids, offset)?)
     }
 
     pub fn clear_kv_cache(&mut self) {
