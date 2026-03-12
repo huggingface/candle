@@ -45,10 +45,26 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
+cuda = ["cuda-enabled", "cudarc/dynamic-linking"]
+cuda-enabled = ["dep:cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
+cuda-dynamic-linking = [
+    "cuda-enabled",
+    "cudarc/dynamic-linking",
+]
+cuda-dynamic-loading = [
+    "cuda-enabled",
+    "cudarc/dynamic-loading",
+]
+cuda-static-linking = [
+    "cuda-enabled",
+    "cudarc/static-linking",
+]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
-mkl = ["dep:libc", "dep:intel-mkl-src"]
+mkl = ["mkl-enabled", "intel-mkl-src/mkl-static-lp64-iomp"]
+mkl-enabled = ["dep:libc", "dep:intel-mkl-src"]
+mkl-static-linking = ["mkl-enabled", "intel-mkl-src/mkl-static-lp64-iomp"]
+mkl-dynamic-linking = ["mkl-enabled", "intel-mkl-src/mkl-dynamic-lp64-iomp"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = [
     "dep:objc2-metal",
@@ -68,4 +84,4 @@ required-features = ["metal"]
 
 [[example]]
 name = "cuda_basics"
-required-features = ["cuda"]
+required-features = ["cuda-enabled"]

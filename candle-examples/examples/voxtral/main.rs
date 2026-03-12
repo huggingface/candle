@@ -23,12 +23,12 @@ struct Args {
     model_id: Option<String>,
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-enabled")]
 fn use_cpu() -> bool {
     true
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(feature = "cuda-enabled"))]
 fn use_cpu() -> bool {
     false
 }

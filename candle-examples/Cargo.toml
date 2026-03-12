@@ -72,18 +72,64 @@ accelerate = [
     "candle-transformers/accelerate",
 ]
 cuda = [
+    "cuda-enabled",
     "candle/cuda",
     "candle-nn/cuda",
     "candle-transformers/cuda",
     "dep:cudaforge",
 ]
+cuda-enabled = [
+    "candle/cuda-enabled",
+    "candle-nn/cuda-enabled",
+    "candle-transformers/cuda-enabled",
+    "dep:cudaforge",
+]
+cuda-dynamic-linking = [
+    "cuda-enabled",
+    "candle/cuda-dynamic-linking",
+    "candle-nn/cuda-dynamic-linking",
+    "candle-transformers/cuda-dynamic-linking",
+    "dep:cudaforge",
+]
+cuda-dynamic-loading = [
+    "cuda-enabled",
+    "candle/cuda-dynamic-loading",
+    "candle-nn/cuda-dynamic-loading",
+    "candle-transformers/cuda-dynamic-loading",
+    "dep:cudaforge",
+]
+cuda-static-linking = [
+    "cuda-enabled",
+    "candle/cuda-static-linking",
+    "candle-nn/cuda-static-linking",
+    "candle-transformers/cuda-static-linking",
+    "dep:cudaforge",
+]
 cudnn = ["candle/cudnn", "candle-nn/cudnn", "candle-transformers/cudnn"]
 flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
 mkl = [
-    "dep:intel-mkl-src",
+    "mkl-enabled",
     "candle/mkl",
     "candle-nn/mkl",
     "candle-transformers/mkl",
+]
+mkl-enabled = [
+    "dep:intel-mkl-src",
+    "candle/mkl-enabled",
+    "candle-nn/mkl-enabled",
+    "candle-transformers/mkl-enabled",
+]
+mkl-static-linking = [
+    "mkl-enabled",
+    "candle/mkl-static-linking",
+    "candle-nn/mkl-static-linking",
+    "candle-transformers/mkl-static-linking",
+]
+mkl-dynamic-linking = [
+    "mkl-enabled",
+    "candle/mkl-dynamic-linking",
+    "candle-nn/mkl-dynamic-linking",
+    "candle-transformers/mkl-dynamic-linking",
 ]
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
 onnx = ["candle-onnx"]

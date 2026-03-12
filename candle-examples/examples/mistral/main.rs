@@ -232,7 +232,7 @@ fn main() -> Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda-enabled")]
     candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
 
     let _guard = if args.tracing {

@@ -17,11 +17,11 @@ pub fn has_accelerate() -> bool {
 }
 
 pub fn has_mkl() -> bool {
-    cfg!(feature = "mkl")
+    cfg!(feature = "mkl-enabled")
 }
 
 pub fn cuda_is_available() -> bool {
-    cfg!(feature = "cuda")
+    cfg!(feature = "cuda-enabled")
 }
 
 pub fn metal_is_available() -> bool {

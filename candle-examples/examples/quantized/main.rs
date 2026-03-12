@@ -439,7 +439,7 @@ fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda-enabled")]
     candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
 
     candle::cuda::set_gemm_reduced_precision_f16(true);

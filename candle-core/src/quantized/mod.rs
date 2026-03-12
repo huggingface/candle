@@ -19,9 +19,9 @@ pub mod tokenizer;
 mod metal {
     pub use super::dummy_metal::*;
 }
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-enabled")]
 pub mod cuda;
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(feature = "cuda-enabled"))]
 mod cuda {
     pub use super::dummy_cuda::*;
 }

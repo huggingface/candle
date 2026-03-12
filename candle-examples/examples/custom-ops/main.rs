@@ -7,7 +7,7 @@
 extern crate intel_mkl_src;
 
 #[rustfmt::skip]
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cuda-enabled")]
 mod cuda_kernels {
     include!(concat!(env!("OUT_DIR"), "/cuda_kernels.rs"));
 }
@@ -51,7 +51,7 @@ impl CustomOp1 for LayerNorm {
         Ok((storage, layout.shape().clone()))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda-enabled")]
     fn cuda_fwd(
         &self,
         storage: &candle::CudaStorage,

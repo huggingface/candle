@@ -15,7 +15,7 @@ const KERNEL_DIRS: [KernelDirectories; 1] = [KernelDirectories {
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
 
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda-enabled")]
     {
         use std::env;
         use std::path::{Path, PathBuf};

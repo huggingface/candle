@@ -46,7 +46,7 @@ impl CustomOp1 for AllReduce {
         candle::bail!("AllReduce is never used on cpu")
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda-enabled")]
     fn cuda_fwd(
         &self,
         s: &candle::CudaStorage,

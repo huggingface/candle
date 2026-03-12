@@ -1,4 +1,4 @@
-#[cfg(feature = "mkl")]
+#[cfg(feature = "mkl-enabled")]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
