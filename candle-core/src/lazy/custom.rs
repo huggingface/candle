@@ -142,3 +142,8 @@ pub fn register_custom_ops(ops: Vec<CustomOp>) {
         }
     }
 }
+
+pub fn get_custom_op_registry() -> HashMap<String, CustomOp> {
+    let registry = CUSTOM_OP_REGISTRY.lock().unwrap().clone();
+    registry
+}

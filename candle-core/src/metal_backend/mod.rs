@@ -2508,7 +2508,18 @@ static METAL_DEVICE: LazyLock<MetalDevice> = LazyLock::new(|| MetalDevice::new(0
 
 pub fn replace_custom_op_with_fallback(_graph: &mut OpGraph, _custom_op: &Box<dyn LazyCustomOp>) {}
 
-pub fn install_custom_op2(op: Box<dyn crate::CustomOp2>) {
+use crate::lazy::custom::CustomOp;
+pub fn install_custom_ops() {
+    for (name, op) in crate::lazy::custom::get_custom_op_registry().iter() {
+        match op {
+            CustomOp::Two(ref custom_op2) => {
+                install_custom_op2(custom_op2);
+            }
+        }
+    }
+}
+
+pub fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp2>,
@@ -2565,6 +2576,7 @@ impl Executor for MetalDevice {
         for node in graph.node_indices() {
             if let CustomOp(custom_op) = graph[node].op().clone() {
                 if self.get_specialized_op(&custom_op).is_none() {
+                    println!("No specialized op. Replacing with fallback");
                     replace_custom_op_with_fallback(graph, &custom_op)
                 }
             }
@@ -2576,7 +2588,7 @@ impl Executor for MetalDevice {
         let mut graph = graph.clone();
         let mut allocator = self.allocator();
 
-        //custom_op_handler.install_custom_op()
+        install_custom_ops();
 
         self.optimize(&mut graph);
         self.specialize(&mut graph);
@@ -3022,6 +3034,7 @@ impl Executor for MetalDevice {
 
                 // Attempt to get metal op for this custom operation
                 if let Some(specialized_op) = self.get_specialized_op(custom_op) {
+                    println!("specialized op found! {}", custom_op.name());
                     specialized_op.call(&input, dst_buffer)?;
                 }
                 //} else {
