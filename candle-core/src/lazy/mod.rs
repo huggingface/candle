@@ -1,6 +1,6 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, Shape, Tensor};
+use crate::{CpuStorage, CustomOp2, DType, Layout, Result, Shape, Tensor};
 use petgraph::graph::{DiGraph, Edge, EdgeIndex, EdgeReference, IndexType, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction::{Incoming, Outgoing};
@@ -218,7 +218,7 @@ pub fn get_incoming_edges<N, E>(
 #[derive(Debug, Clone)]
 pub struct LazyStorage {
     operations: OpGraph,
-    custom_op_fallbacks: HashMap<String, OpGraph>,
+    custom_op_fallbacks: HashMap<String, LazyStorage>,
     layout: Layout,
     initial_dtype: DType,
     current_node: Option<NodeIndex<u32>>,
@@ -285,12 +285,23 @@ pub trait LazyCustomOp: LazyCustomOpClone + Send + Sync {
     fn name(&self) -> &'static str;
 
     // Forward pass
-    fn fwd(&self, input: &[(&LazyStorage, &Layout)]) -> Result<(LazyStorage, Shape)>;
+    fn lazy_custom(&self, input: &[(&LazyStorage, &Layout)]) -> Result<(LazyStorage, Shape)>;
 
-    fn fallback(&self, _tensors: &[&Tensor]) -> Result<crate::Tensor> {
+    fn lazy_fallback(&self, _tensors: &[&Tensor]) -> Result<crate::Tensor> {
         Err(crate::Error::Msg(
             format!("no lazy fallback for {}", self.name()).into(),
         ))
+    }
+
+    fn extract_lazy(&self, tensor: Tensor) -> Result<(LazyStorage, Layout)> {
+        let (storage, layout) = tensor.storage_and_layout();
+        let storage = storage.try_clone(layout)?;
+        let inner = match storage {
+            crate::Storage::Lazy(lazy) => lazy,
+            _ => unreachable!(),
+        };
+
+        Ok((inner, layout.clone()))
     }
 }
 
@@ -328,6 +339,14 @@ impl LazyStorage {
     pub fn get_current_node(&self) -> Result<NodeIndex<u32>> {
         self.current_node
             .ok_or(LazyError::Message("No current node in lazy storage".to_string()).into())
+    }
+
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    pub fn add_custom_fallback<S: Into<String>>(&mut self, name: S, fallback: LazyStorage) {
+        self.custom_op_fallbacks.insert(name.into(), fallback);
     }
 
     fn add_edge(&mut self, src: NodeIndex, dst: NodeIndex, l: Layout, dtype: DType) {
@@ -383,7 +402,7 @@ impl LazyStorage {
 
         for (input, input_l) in inputs {
             let input_op = input.get_current_node()?;
-            let input_edge = OpEdge::new(input_l.clone().clone(), input.dtype());
+            let input_edge = OpEdge::new((*input_l).clone(), input.dtype());
             next.merge(input, input_op, idx, input_edge)?;
         }
 

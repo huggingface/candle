@@ -185,6 +185,10 @@ impl RmsNorm {
         let _enter = self.span.enter();
         self.inner.forward_diff(x)
     }
+
+    pub fn inner(&self) -> &candle_nn::RmsNorm {
+        &self.inner
+    }
 }
 
 impl Module for RmsNorm {

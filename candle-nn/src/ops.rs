@@ -1,6 +1,10 @@
 //! Tensor ops.
 //!
-use candle::{op::BackpropOp, CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{
+    lazy::{LazyCustomOp, LazyCustomOpClone},
+    op::BackpropOp,
+    CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D,
+};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -465,8 +469,14 @@ pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
 }
 
 #[derive(Debug, Clone)]
-struct RmsNorm {
+pub struct RmsNorm {
     eps: f32,
+}
+
+impl RmsNorm {
+    pub fn new(eps: f32) -> Self {
+        Self { eps }
+    }
 }
 
 impl candle::CustomOp2 for RmsNorm {
@@ -659,16 +669,18 @@ impl candle::CustomOp2 for RmsNorm {
         s2: &candle::LazyStorage,
         l2: &Layout,
     ) -> Result<(candle::LazyStorage, Shape)> {
+        let mut s1 = s1.custom_op(self.clone_box(), &[(s2, l2)])?;
+
+        // fallback
         let x = Tensor::from_storage(s1.clone().into(), l1.shape(), BackpropOp::none(), false);
         let alpha = Tensor::from_storage(s2.clone().into(), l2.shape(), BackpropOp::none(), false);
-        let result = rms_norm_slow(&x, &alpha, self.eps)?;
-        let (storage, layout) = result.storage_and_layout();
-        let storage = storage.try_clone(layout)?;
-        let inner = match storage {
-            candle::Storage::Lazy(lazy) => lazy,
-            _ => unreachable!(),
-        };
-        Ok((inner, layout.shape().clone()))
+
+        let result = self.lazy_fallback(&[&x, &alpha])?;
+        let (inner, layout) = self.extract_lazy(result)?;
+
+        s1.add_custom_fallback(LazyCustomOp::name(self), inner);
+        let shape = s1.layout().shape().clone();
+        Ok((s1, layout.shape().clone()))
     }
 }
 
@@ -677,18 +689,17 @@ impl candle::lazy::LazyCustomOp for RmsNorm {
         "rms-norm"
     }
 
-    fn fwd(
+    fn lazy_custom(
         &self,
         input: &[(&candle::LazyStorage, &Layout)],
     ) -> Result<(candle::LazyStorage, Shape)> {
-        let (first, layout) = input.first().unwrap();
+        let (first, layout) = input[0];
         first
-            .custom_op(Box::new(self.clone()), inputs)
+            .custom_op(Box::new(self.clone()), &input[0..])
             .map(|s| (s, layout.shape().clone()))
     }
 
-    fn fallback(&self, tensors: &[&Tensor]) -> Result<crate::Tensor> {
-        debug_assert_eq!(tensors.len(), 2);
+    fn lazy_fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
         rms_norm_slow(tensors[0], tensors[1], self.eps)
     }
 }

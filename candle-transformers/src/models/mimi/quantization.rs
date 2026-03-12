@@ -5,6 +5,7 @@
 use candle::{IndexOp, Layout, Result, Shape, Tensor, D};
 use candle_nn::{linear, Linear, VarBuilder};
 
+#[derive(Clone)]
 struct CodebookEncode;
 
 impl candle::CustomOp2 for CodebookEncode {

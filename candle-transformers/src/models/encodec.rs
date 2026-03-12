@@ -175,6 +175,7 @@ pub fn conv_transpose1d_weight_norm(
     Ok(ConvTranspose1d::new(weight, bias, config))
 }
 
+#[derive(Clone)]
 struct CodebookEncode;
 
 impl candle::CustomOp2 for CodebookEncode {

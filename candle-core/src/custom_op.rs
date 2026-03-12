@@ -47,7 +47,7 @@ pub trait CustomOp1 {
     }
 }
 
-pub trait CustomOp2 {
+pub trait CustomOp2: CustomOp2Clone + Send + Sync {
     fn name(&self) -> &'static str;
 
     /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
@@ -109,6 +109,25 @@ pub trait CustomOp2 {
         _grad_res: &Tensor,
     ) -> Result<(Option<Tensor>, Option<Tensor>)> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
+    }
+}
+
+pub trait CustomOp2Clone {
+    fn clone_box(&self) -> Box<dyn CustomOp2>;
+}
+
+impl<T> CustomOp2Clone for T
+where
+    T: 'static + CustomOp2 + Clone,
+{
+    fn clone_box(&self) -> Box<dyn CustomOp2> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn CustomOp2> {
+    fn clone(&self) -> Box<dyn CustomOp2> {
+        self.clone_box()
     }
 }
 

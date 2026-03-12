@@ -103,6 +103,10 @@ impl LayerNorm {
     pub fn bias(&self) -> Option<&Tensor> {
         self.bias.as_ref()
     }
+
+    pub fn eps(&self) -> f64 {
+        self.eps
+    }
 }
 
 impl Module for LayerNorm {

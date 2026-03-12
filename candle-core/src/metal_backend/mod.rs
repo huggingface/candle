@@ -2098,6 +2098,10 @@ impl MetalStorage {
         &self.buffer
     }
 
+    pub fn size(&self) -> usize {
+        self.count * self.dtype.size_in_bytes()
+    }
+
     pub fn unary(&self, op: &'static str, layout: &Layout) -> Result<Self> {
         let device = self.device();
         let el_count = layout.shape().elem_count();
@@ -2481,7 +2485,9 @@ impl LazyAllocator<Buffer> for MetalAllocator {
     }
 }
 
-type MetalCustomFn = dyn crate::lazy::LazyCustomFn<Buffer>;
+use crate::lazy::LazyCustomFn;
+
+type MetalCustomFn = dyn LazyCustomFn<Buffer>;
 
 pub struct MetalCustomOpHandler {
     custom_ops: HashMap<String, Box<MetalCustomFn>>,
@@ -2498,7 +2504,74 @@ impl MetalCustomOpHandler {
 static CUSTOM_OP_HANDLER: LazyLock<Mutex<MetalCustomOpHandler>> =
     LazyLock::new(|| Mutex::new(MetalCustomOpHandler::new()));
 
+static METAL_DEVICE: LazyLock<MetalDevice> = LazyLock::new(|| MetalDevice::new(0).unwrap());
+
 pub fn replace_custom_op_with_fallback(_graph: &mut OpGraph, _custom_op: &Box<dyn LazyCustomOp>) {}
+
+pub enum CustomOp {
+    Two(Box<dyn crate::CustomOp2>),
+}
+
+impl From<Box<dyn crate::CustomOp2>> for CustomOp {
+    fn from(op: Box<dyn crate::CustomOp2>) -> Self {
+        CustomOp::Two(op)
+    }
+}
+
+pub fn install_custom_ops(ops: Vec<CustomOp>) {
+    for op in ops {
+        match op {
+            CustomOp::Two(custom_op2) => install_custom_op2(custom_op2),
+        }
+    }
+}
+pub fn install_custom_op2(op: Box<dyn crate::CustomOp2>) {
+    #[derive(Clone)]
+    struct InlineCustomOp {
+        op: Box<dyn crate::CustomOp2>,
+        device: MetalDevice,
+    };
+
+    impl LazyCustomFn<Buffer> for InlineCustomOp {
+        fn call(&self, input: &[(&Buffer, &Layout, DType)], dst: &Buffer) -> Result<()> {
+            let create_metal_storage = |(b, l, d): (&Buffer, &Layout, DType)| {
+                MetalStorage::new(
+                    Arc::new(b.clone()),
+                    self.device.clone(),
+                    l.shape().elem_count(),
+                    d,
+                )
+            };
+            let a = input[0];
+            let a_l = a.1;
+            let a = create_metal_storage(a);
+
+            let b = input[0];
+            let b_l = b.1;
+            let b = create_metal_storage(b);
+            let (result, shape) = self.op.metal_fwd(&a, a_l, &b, b_l)?;
+
+            {
+                let size = result.size();
+                let blit = self.device.blit_command_encoder()?;
+                blit.set_label("copy_to_dst");
+                blit.copy_from_buffer(result.buffer(), 0, &dst, 0, size);
+                blit.end_encoding();
+            }
+
+            Ok(())
+        }
+    }
+
+    let mut binding = CUSTOM_OP_HANDLER.lock().unwrap();
+    binding.custom_ops.insert(
+        op.name().to_string(),
+        Box::new(InlineCustomOp {
+            op: op.clone(),
+            device: METAL_DEVICE.clone(),
+        }),
+    );
+}
 
 impl Executor for MetalDevice {
     type BufferType = Buffer;
