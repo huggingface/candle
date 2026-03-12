@@ -1,7 +1,7 @@
 //! Tensor ops.
 //!
 use candle::{
-    lazy::{LazyCustomOp, LazyCustomOpClone},
+    lazy::custom::{LazyCustomOp, LazyCustomOpClone},
     op::BackpropOp,
     CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D,
 };
@@ -684,7 +684,7 @@ impl candle::CustomOp2 for RmsNorm {
     }
 }
 
-impl candle::lazy::LazyCustomOp for RmsNorm {
+impl candle::lazy::custom::LazyCustomOp for RmsNorm {
     fn name(&self) -> &'static str {
         "rms-norm"
     }
@@ -704,7 +704,7 @@ impl candle::lazy::LazyCustomOp for RmsNorm {
     }
 }
 
-impl candle::lazy::LazyCustomOp2 for RmsNorm {
+impl candle::lazy::custom::LazyCustomOp2 for RmsNorm {
     fn name(&self) -> &'static str {
         "rms-norm"
     }

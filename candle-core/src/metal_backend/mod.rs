@@ -3,7 +3,7 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::lazy::{
-    Ancestors, Executor, LazyCustomOp, LazyError::*, MemoryPlan, OpEdge, OpGraph, OpNode,
+    custom::LazyCustomOp, Ancestors, Executor, LazyError::*, MemoryPlan, OpEdge, OpGraph, OpNode,
 };
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
@@ -2485,7 +2485,7 @@ impl LazyAllocator<Buffer> for MetalAllocator {
     }
 }
 
-use crate::lazy::LazyCustomFn;
+use crate::lazy::custom::LazyCustomFn;
 
 type MetalCustomFn = dyn LazyCustomFn<Buffer>;
 
@@ -2508,23 +2508,6 @@ static METAL_DEVICE: LazyLock<MetalDevice> = LazyLock::new(|| MetalDevice::new(0
 
 pub fn replace_custom_op_with_fallback(_graph: &mut OpGraph, _custom_op: &Box<dyn LazyCustomOp>) {}
 
-pub enum CustomOp {
-    Two(Box<dyn crate::CustomOp2>),
-}
-
-impl From<Box<dyn crate::CustomOp2>> for CustomOp {
-    fn from(op: Box<dyn crate::CustomOp2>) -> Self {
-        CustomOp::Two(op)
-    }
-}
-
-pub fn install_custom_ops(ops: Vec<CustomOp>) {
-    for op in ops {
-        match op {
-            CustomOp::Two(custom_op2) => install_custom_op2(custom_op2),
-        }
-    }
-}
 pub fn install_custom_op2(op: Box<dyn crate::CustomOp2>) {
     #[derive(Clone)]
     struct InlineCustomOp {
