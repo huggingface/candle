@@ -2,6 +2,7 @@
 use super::GgmlDType;
 use crate::{CudaDevice, CudaStorage, Error, Result};
 
+#[derive(Clone)]
 pub struct QCudaStorage {
     dtype: GgmlDType,
     device: CudaDevice,

@@ -2512,6 +2512,9 @@ use crate::lazy::custom::CustomOp;
 pub fn install_custom_ops() {
     for (name, op) in crate::lazy::custom::get_custom_op_registry().iter() {
         match op {
+            CustomOp::One(ref custom_op1) => {
+                //install_custom_op1(custom_op1);
+            }
             CustomOp::Two(ref custom_op2) => {
                 install_custom_op2(custom_op2);
             }

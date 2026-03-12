@@ -120,6 +120,7 @@ pub trait LazyCustomOp2 {
 
 #[derive(Clone)]
 pub enum CustomOp {
+    One(Box<dyn crate::CustomOp1>),
     Two(Box<dyn crate::CustomOp2>),
 }
 
@@ -136,6 +137,9 @@ pub fn register_custom_ops(ops: Vec<CustomOp>) {
     let mut registry = CUSTOM_OP_REGISTRY.lock().unwrap();
     for op in ops {
         match op {
+            CustomOp::One(ref custom_op1) => {
+                registry.insert(custom_op1.name().to_string(), op.clone());
+            }
             CustomOp::Two(ref custom_op2) => {
                 registry.insert(custom_op2.name().to_string(), op.clone());
             }

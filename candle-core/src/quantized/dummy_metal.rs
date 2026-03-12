@@ -2,6 +2,7 @@
 use super::GgmlDType;
 use crate::{Error, MetalDevice, MetalStorage, Result};
 
+#[derive(Clone)]
 pub struct QMetalStorage {
     dtype: GgmlDType,
     device: MetalDevice,

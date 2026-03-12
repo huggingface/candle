@@ -49,6 +49,7 @@ pub fn swiglu(xs: &Tensor) -> Result<Tensor> {
     &xs[0].silu()? * &xs[1]
 }
 
+#[derive(Clone)]
 struct Sigmoid;
 
 impl candle::CustomOp1 for Sigmoid {
@@ -281,6 +282,7 @@ impl candle::ModuleT for Dropout {
     }
 }
 
+#[derive(Clone)]
 struct SoftmaxLastDim;
 
 impl candle::CustomOp1 for SoftmaxLastDim {

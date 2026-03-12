@@ -50,6 +50,7 @@ fn as_t_slice<T>(data: Cow<'_, [u8]>) -> &[T] {
     unsafe { std::slice::from_raw_parts(ptr as *const T, data.len() / size) }
 }
 
+#[derive(Clone)]
 pub struct QTensor {
     storage: QStorage,
     shape: Shape,
@@ -75,6 +76,7 @@ impl Device {
     }
 }
 
+#[derive(Clone)]
 pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
     Metal(metal::QMetalStorage),
@@ -396,7 +398,7 @@ impl GgmlDType {
 }
 
 // A version of GgmlType without `vec_dot` so that it can be dyn boxed.
-pub trait QuantizedType: Send + Sync {
+pub trait QuantizedType: QuantizedTypeClone + Send + Sync {
     fn dtype(&self) -> GgmlDType;
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
     fn matmul_t_f16(&self, mkn: (usize, usize, usize), lhs: &[f16], dst: &mut [f16]) -> Result<()>;
@@ -411,7 +413,26 @@ pub trait QuantizedType: Send + Sync {
     fn size(&self) -> usize;
 }
 
-impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
+pub trait QuantizedTypeClone {
+    fn clone_box(&self) -> Box<dyn QuantizedType>;
+}
+
+impl<T> QuantizedTypeClone for T
+where
+    T: 'static + QuantizedType + Clone,
+{
+    fn clone_box(&self) -> Box<dyn QuantizedType> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn QuantizedType> {
+    fn clone(&self) -> Box<dyn QuantizedType> {
+        self.clone_box()
+    }
+}
+
+impl<T: k_quants::GgmlType + Send + Sync + 'static> QuantizedType for Vec<T> {
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()> {
         k_quants::matmul(mkn, lhs, self.as_slice(), dst)
     }

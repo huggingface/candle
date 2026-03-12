@@ -4,7 +4,7 @@ use crate::{CpuStorage, CudaStorage, Layout, LazyStorage, MetalStorage, Result, 
 use std::sync::Arc;
 
 /// Unary ops that can be defined in user-land.
-pub trait CustomOp1 {
+pub trait CustomOp1: CustomOp1Clone + Send + Sync {
     // Box<dyn> does not support const yet, so use a function to get the name.
     fn name(&self) -> &'static str;
 
@@ -44,6 +44,25 @@ pub trait CustomOp1 {
     /// The function should return the gradient of the argument.
     fn bwd(&self, _arg: &Tensor, _res: &Tensor, _grad_res: &Tensor) -> Result<Option<Tensor>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
+    }
+}
+
+pub trait CustomOp1Clone {
+    fn clone_box(&self) -> Box<dyn CustomOp1>;
+}
+
+impl<T> CustomOp1Clone for T
+where
+    T: 'static + CustomOp1 + Clone,
+{
+    fn clone_box(&self) -> Box<dyn CustomOp1> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn CustomOp1> {
+    fn clone(&self) -> Box<dyn CustomOp1> {
+        self.clone_box()
     }
 }
 
