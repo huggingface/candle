@@ -1,7 +1,7 @@
 //! Tensor ops.
 //!
 use candle::{
-    lazy::custom::{LazyCustomOp, LazyCustomOpClone},
+    lazy::custom::{CustomOp, LazyCustomOp, LazyCustomOpClone},
     op::BackpropOp,
     CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D,
 };
@@ -449,20 +449,41 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         // It would be a real improvement if we could somehow not recreate Tensors inside this fn, but it's
         // hard to recreate the Tensor API correctly using LazyStorage directly.
         //
+        let mut storage = storage.lazy_custom_op(self.clone_box(), &[])?;
+        storage.register_custom_op(CustomOp::One(Box::new(self.clone())));
+
         let xs = Tensor::from_storage(
             storage.clone().into(),
             layout.shape(),
             BackpropOp::none(),
             false,
         );
-        let result = softmax(&xs, D::Minus1)?;
-        let (storage, layout) = result.storage_and_layout();
-        let storage = storage.try_clone(layout)?;
-        let inner = match storage {
-            candle::Storage::Lazy(lazy) => lazy,
-            _ => unreachable!(),
-        };
-        Ok((inner, layout.shape().clone()))
+        let result = self.lazy_fallback(&[&xs])?;
+        let (inner, layout) = self.extract_lazy(result)?;
+
+        storage.add_custom_fallback(LazyCustomOp::name(self), inner);
+        let shape = storage.layout().shape().clone();
+        Ok((storage, layout.shape().clone()))
+    }
+}
+
+impl candle::lazy::custom::LazyCustomOp for SoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim"
+    }
+
+    fn lazy_custom(
+        &self,
+        input: &[(&candle::LazyStorage, &Layout)],
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let (first, layout) = input[0];
+        first
+            .lazy_custom_op(Box::new(self.clone()), &input[0..])
+            .map(|s| (s, layout.shape().clone()))
+    }
+
+    fn lazy_fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
+        softmax(tensors[0], D::Minus1)
     }
 }
 
@@ -671,7 +692,8 @@ impl candle::CustomOp2 for RmsNorm {
         s2: &candle::LazyStorage,
         l2: &Layout,
     ) -> Result<(candle::LazyStorage, Shape)> {
-        let mut s1 = s1.custom_op(self.clone_box(), &[(s2, l2)])?;
+        let mut s1 = s1.lazy_custom_op(self.clone_box(), &[(s2, l2)])?;
+        s1.register_custom_op(CustomOp::Two(Box::new(self.clone())));
 
         // fallback
         let x = Tensor::from_storage(s1.clone().into(), l1.shape(), BackpropOp::none(), false);
@@ -697,7 +719,7 @@ impl candle::lazy::custom::LazyCustomOp for RmsNorm {
     ) -> Result<(candle::LazyStorage, Shape)> {
         let (first, layout) = input[0];
         first
-            .custom_op(Box::new(self.clone()), &input[0..])
+            .lazy_custom_op(Box::new(self.clone()), &input[0..])
             .map(|s| (s, layout.shape().clone()))
     }
 

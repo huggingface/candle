@@ -6,7 +6,7 @@ use crate::lazy::{
     custom::LazyCustomOp, Ancestors, Executor, LazyError::*, MemoryPlan, OpEdge, OpGraph, OpNode,
 };
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
+use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, LazyStorage, Result, Shape};
 use candle_metal_kernels::{
     metal::{Buffer, Commands, Device},
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
@@ -2509,11 +2509,11 @@ static METAL_DEVICE: LazyLock<MetalDevice> = LazyLock::new(|| MetalDevice::new(0
 pub fn replace_custom_op_with_fallback(_graph: &mut OpGraph, _custom_op: &Box<dyn LazyCustomOp>) {}
 
 use crate::lazy::custom::CustomOp;
-pub fn install_custom_ops() {
-    for (name, op) in crate::lazy::custom::get_custom_op_registry().iter() {
+pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
+    for (_name, op) in custom_ops.iter() {
         match op {
             CustomOp::One(ref custom_op1) => {
-                //install_custom_op1(custom_op1);
+                install_custom_op1(custom_op1);
             }
             CustomOp::Two(ref custom_op2) => {
                 install_custom_op2(custom_op2);
@@ -2521,13 +2521,59 @@ pub fn install_custom_ops() {
         }
     }
 }
+fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
+    println!("install_custom_op1: {}", op.name());
+    #[derive(Clone)]
+    struct InlineCustomOp {
+        op: Box<dyn crate::CustomOp1>,
+        device: MetalDevice,
+    }
 
-pub fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
+    impl LazyCustomFn<Buffer> for InlineCustomOp {
+        fn call(&self, input: &[(&Buffer, &Layout, DType)], dst: &Buffer) -> Result<()> {
+            let create_metal_storage = |(b, l, d): (&Buffer, &Layout, DType)| {
+                MetalStorage::new(
+                    Arc::new(b.clone()),
+                    self.device.clone(),
+                    l.shape().elem_count(),
+                    d,
+                )
+            };
+            let a = input[0];
+            let a_l = a.1;
+            let a = create_metal_storage(a);
+
+            let (result, _shape) = self.op.metal_fwd(&a, a_l)?;
+
+            {
+                let size = result.size();
+                let blit = self.device.blit_command_encoder()?;
+                blit.set_label("copy_to_dst");
+                blit.copy_from_buffer(result.buffer(), 0, &dst, 0, size);
+                blit.end_encoding();
+            }
+
+            Ok(())
+        }
+    }
+
+    let mut binding = CUSTOM_OP_HANDLER.lock().unwrap();
+    binding.custom_ops.insert(
+        op.name().to_string(),
+        Box::new(InlineCustomOp {
+            op: op.clone(),
+            device: METAL_DEVICE.clone(),
+        }),
+    );
+}
+
+fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
+    println!("install_custom_op2: {}", op.name());
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp2>,
         device: MetalDevice,
-    };
+    }
 
     impl LazyCustomFn<Buffer> for InlineCustomOp {
         fn call(&self, input: &[(&Buffer, &Layout, DType)], dst: &Buffer) -> Result<()> {
@@ -2546,7 +2592,7 @@ pub fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
             let b = input[0];
             let b_l = b.1;
             let b = create_metal_storage(b);
-            let (result, shape) = self.op.metal_fwd(&a, a_l, &b, b_l)?;
+            let (result, _shape) = self.op.metal_fwd(&a, a_l, &b, b_l)?;
 
             {
                 let size = result.size();
@@ -2579,19 +2625,26 @@ impl Executor for MetalDevice {
         for node in graph.node_indices() {
             if let CustomOp(custom_op) = graph[node].op().clone() {
                 if self.get_specialized_op(&custom_op).is_none() {
-                    println!("No specialized op. Replacing with fallback");
+                    println!(
+                        "No specialized op found for {}. Replacing with fallback",
+                        custom_op.name()
+                    );
                     replace_custom_op_with_fallback(graph, &custom_op)
                 }
             }
         }
     }
 
-    fn run(&self, graph: OpGraph) -> Result<Buffer> {
+    fn run(&self, lazy_storage: LazyStorage) -> Result<Buffer> {
         // TODO: &mut OpGraph input?
-        let mut graph = graph.clone();
+        let mut graph = lazy_storage.operations().clone();
         let mut allocator = self.allocator();
 
-        install_custom_ops();
+        println!(
+            "lazy_storage.custom_ops(): {:?}",
+            lazy_storage.custom_ops().clone()
+        );
+        install_custom_ops(lazy_storage.custom_ops().clone());
 
         self.optimize(&mut graph);
         self.specialize(&mut graph);
@@ -3037,12 +3090,10 @@ impl Executor for MetalDevice {
 
                 // Attempt to get metal op for this custom operation
                 if let Some(specialized_op) = self.get_specialized_op(custom_op) {
-                    println!("specialized op found! {}", custom_op.name());
                     specialized_op.call(&input, dst_buffer)?;
+                } else {
+                    todo!("should be unreachable");
                 }
-                //} else {
-                //    custom_op.fallback
-                //}
             }
             _ => todo!("{:?}", op_node),
         }

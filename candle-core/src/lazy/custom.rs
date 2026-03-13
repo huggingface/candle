@@ -53,9 +53,7 @@ where
 
 impl std::fmt::Debug for Box<dyn LazyCustomOp> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Box<LazyCustomOp>")
-            .field("op", &self.name())
-            .finish()
+        f.debug_tuple("LazyCustomOp").field(&self.name()).finish()
     }
 }
 impl PartialEq for Box<dyn LazyCustomOp> {
@@ -127,6 +125,23 @@ pub enum CustomOp {
 impl From<Box<dyn crate::CustomOp2>> for CustomOp {
     fn from(op: Box<dyn crate::CustomOp2>) -> Self {
         CustomOp::Two(op)
+    }
+}
+
+impl std::fmt::Debug for CustomOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::One(one) => {
+                f.write_str("CustomOp::One(")?;
+                f.write_str(one.name())?;
+                f.write_str(")")
+            }
+            Self::Two(two) => {
+                f.write_str("CustomOp::Two(")?;
+                f.write_str(two.name())?;
+                f.write_str(")")
+            }
+        }
     }
 }
 

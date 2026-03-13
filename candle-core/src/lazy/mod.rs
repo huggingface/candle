@@ -1,7 +1,7 @@
 pub mod custom;
 
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::lazy::custom::{LazyCustomFn, LazyCustomOp};
+use crate::lazy::custom::{CustomOp, LazyCustomFn, LazyCustomOp};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CustomOp2, DType, Layout, Result, Shape, Tensor};
 use petgraph::graph::{DiGraph, Edge, EdgeIndex, EdgeReference, IndexType, NodeIndex};
@@ -222,6 +222,7 @@ pub fn get_incoming_edges<N, E>(
 pub struct LazyStorage {
     operations: OpGraph,
     custom_op_fallbacks: HashMap<String, LazyStorage>,
+    custom_ops: HashMap<String, CustomOp>,
     layout: Layout,
     initial_dtype: DType,
     current_node: Option<NodeIndex<u32>>,
@@ -237,6 +238,10 @@ impl LazyStorage {
 
     pub fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    pub fn custom_ops(&self) -> &HashMap<String, CustomOp> {
+        &self.custom_ops
     }
 
     pub fn add_custom_fallback<S: Into<String>>(&mut self, name: S, fallback: LazyStorage) {
@@ -281,7 +286,20 @@ impl LazyStorage {
         Ok(next)
     }
 
-    pub fn custom_op(
+    pub fn register_custom_op(&mut self, op: CustomOp) {
+        match op {
+            CustomOp::One(ref custom_op1) => {
+                self.custom_ops
+                    .insert(custom_op1.name().to_string(), op.clone());
+            }
+            CustomOp::Two(ref custom_op2) => {
+                self.custom_ops
+                    .insert(custom_op2.name().to_string(), op.clone());
+            }
+        }
+    }
+
+    pub fn lazy_custom_op(
         &self,
         op: Box<dyn LazyCustomOp>,
         inputs: &[(&Self, &Layout)],
@@ -538,7 +556,7 @@ pub trait Executor {
     /// Backend specific optimizations. Defaults to noop.
     fn specialize(&self, _graph: &mut OpGraph) {}
 
-    fn run(&self, operations: OpGraph) -> Result<Self::BufferType>;
+    fn run(&self, lazy_storage: LazyStorage) -> Result<Self::BufferType>;
 
     fn eval(
         &self,
@@ -568,6 +586,7 @@ impl LazyStorage {
         LazyStorage {
             operations: Default::default(),
             custom_op_fallbacks: HashMap::new(),
+            custom_ops: HashMap::new(),
             layout: Layout::contiguous(shape),
             initial_dtype: dtype,
             current_node: None,
@@ -577,7 +596,7 @@ impl LazyStorage {
     pub fn execute<E: Executor>(&self, executor: E) -> Result<E::BufferType> {
         // TODO: Apply backend agnostic optimizations
         // TODO: Apply backend specific optimizations
-        executor.run(self.operations.clone())
+        executor.run(self.clone())
     }
 }
 
@@ -744,6 +763,10 @@ impl LazyStorage {
         target_node: NodeIndex<u32>,
         edge: OpEdge,
     ) -> Result<()> {
+        self.custom_op_fallbacks
+            .extend(other.custom_op_fallbacks.clone());
+        self.custom_ops.extend(other.custom_ops.clone());
+
         // TODO: Optimize. Perhaps we should use a GraphMap instead of Graph.
 
         let source_id = other.operations.node_weight(source_node).unwrap().id;

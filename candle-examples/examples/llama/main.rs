@@ -211,15 +211,6 @@ fn main() -> Result<()> {
         (Llama::load(vb, &config)?, tokenizer_filename, cache, config)
     };
 
-    // TODO: Improve this setup
-    use candle::lazy::custom::register_custom_ops;
-    let rms_eps = llama.ln_f().clone().into_inner().eps();
-    let rms = candle_nn::ops::RmsNorm::new(rms_eps as f32);
-    let rms: Box<dyn candle::CustomOp2> = Box::new(rms);
-    let ops = vec![rms.into()];
-    register_custom_ops(ops);
-    println!("RmsNorm custom op registered");
-
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
     let eos_token_id = config.eos_token_id.or_else(|| {
         tokenizer
