@@ -1403,3 +1403,61 @@ pub fn sdpa(
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::ops::{rms_norm, softmax_last_dim};
+    use candle::{lazy::LazyDevice, Device, Result, Shape, Tensor};
+
+    #[test]
+    fn lazy_softmax() -> Result<()> {
+        let src = Tensor::from_slice(
+            &[0f32, 1., 2., 3., 4., 5., 6., 7.],
+            Shape::from(8),
+            &Device::Lazy(LazyDevice),
+            //&Device::new_metal(0)?,
+        )?;
+
+        let t1 = src.affine(1.25, 0.0)?;
+        let result = softmax_last_dim(&t1)?;
+
+        assert_eq!(
+            result.to_vec1::<f32>()?,
+            &[
+                0.00011306652,
+                0.0003946411,
+                0.0013774326,
+                0.004807711,
+                0.016780565,
+                0.058569912,
+                0.20442909,
+                0.7135276
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_rms_norm() -> Result<()> {
+        let device = Device::Lazy(LazyDevice);
+        //let device = Device::new_metal(0)?;
+
+        let xs = Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), &device)?;
+
+        let alpha = Tensor::from_slice(
+            &[1f32, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7],
+            Shape::from(8),
+            &device,
+        )?;
+
+        let eps = 1.2;
+
+        let result = rms_norm(&xs, &alpha, eps)?;
+
+        assert_eq!(
+            result.to_vec1::<f32>()?,
+            &[0.0, 0.25437352, 0.5549968, 0.9018697, 1.2949924, 1.7343647, 2.2199872, 2.751859]
+        );
+        Ok(())
+    }
+}

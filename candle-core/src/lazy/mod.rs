@@ -440,7 +440,7 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
     let mut allocations = BTreeMap::new();
 
     let i1 = Instant::now();
-    print!("Const allocations ... ");
+    //print!("Const allocations ... ");
 
     // Plan Const (input) allocations
     for edge_idx in edges.iter().rev() {
@@ -454,17 +454,17 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
         }
     }
     let i2 = Instant::now();
-    println!("{:?}", i2.duration_since(i1));
+    //println!("{:?}", i2.duration_since(i1));
 
-    print!("Calculate usage records allocations ... ");
+    //print!("Calculate usage records allocations ... ");
     // Find buffer usage spans in the graph
     let record_map = calculate_usage_records(graph, edges);
     let i1 = Instant::now();
-    println!("{:?}", i1.duration_since(i2));
+    //println!("{:?}", i1.duration_since(i2));
 
     let mut shared_objects: Vec<BufferId> = Vec::with_capacity(record_map.len());
 
-    print!("Record map loop ... ");
+    //print!("Record map loop ... ");
     for (buffer_id, (_record_buffer_id, producer, last_consumer, layout, dtype)) in
         record_map.iter()
     {
@@ -500,7 +500,7 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
         }
     }
     let i2 = Instant::now();
-    println!("{:?}", i2.duration_since(i1));
+    //println!("{:?}", i2.duration_since(i1));
 
     // Loop through and add inplace assignments
     /*
@@ -525,7 +525,7 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
     }
      */
 
-    print!("Final node ... ");
+    //print!("Final node ... ");
     // Handle final output edge
     let output = edges.last().unwrap();
     let output_w = graph.edge_weight(*output).unwrap();
@@ -537,7 +537,7 @@ pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan
         (source_w.layout.clone(), source_w.dtype()),
     );
     let i1 = Instant::now();
-    println!("{:?}", i1.duration_since(i2));
+    //println!("{:?}", i1.duration_since(i2));
 
     Ok(MemoryPlan {
         reusage,

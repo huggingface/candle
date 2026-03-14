@@ -2425,29 +2425,29 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         use std::time::Instant;
 
         let i1 = Instant::now();
-        println!("\nCreating memory plan ... ");
+        //println!("\nCreating memory plan ... ");
         let MemoryPlan {
             reusage,
             allocations,
         } = crate::lazy::greedy_by_size(graph, edges)?;
         let i2 = Instant::now();
-        println!("Memory plan finished ... {:?}", i2.duration_since(i1));
+        //println!("Memory plan finished ... {:?}", i2.duration_since(i1));
 
-        print!("Updating buffer ids ... ");
+        //print!("Updating buffer ids ... ");
         graph.edge_weights_mut().for_each(|edge| {
             if let Some(reuse) = reusage.get(&edge.buffer_id()) {
                 edge.set_buffer_id(*reuse);
             }
         });
         let i1 = Instant::now();
-        println!("{:?}", i1.duration_since(i2));
+        //println!("{:?}", i1.duration_since(i2));
 
-        print!("Allocating buffers ...");
+        //print!("Allocating buffers ...");
         for (buffer_id, (layout, dtype)) in allocations.iter() {
             self.allocate(*buffer_id, layout.shape(), *dtype)?;
         }
         let i2 = Instant::now();
-        println!("{:?}", i2.duration_since(i1));
+        //println!("{:?}", i2.duration_since(i1));
 
         Ok(())
     }
@@ -2522,7 +2522,6 @@ pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
     }
 }
 fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
-    println!("install_custom_op1: {}", op.name());
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp1>,
@@ -2551,6 +2550,7 @@ fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
                 blit.set_label("copy_to_dst");
                 blit.copy_from_buffer(result.buffer(), 0, &dst, 0, size);
                 blit.end_encoding();
+                self.device.synchronize()?;
             }
 
             Ok(())
@@ -2568,7 +2568,6 @@ fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
 }
 
 fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
-    println!("install_custom_op2: {}", op.name());
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp2>,
@@ -2600,6 +2599,7 @@ fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
                 blit.set_label("copy_to_dst");
                 blit.copy_from_buffer(result.buffer(), 0, &dst, 0, size);
                 blit.end_encoding();
+                self.device.synchronize()?;
             }
 
             Ok(())
@@ -2640,10 +2640,10 @@ impl Executor for MetalDevice {
         let mut graph = lazy_storage.operations().clone();
         let mut allocator = self.allocator();
 
-        println!(
-            "lazy_storage.custom_ops(): {:?}",
-            lazy_storage.custom_ops().clone()
-        );
+        //println!(
+        //    "lazy_storage.custom_ops(): {:?}",
+        //    lazy_storage.custom_ops().clone()
+        //);
         install_custom_ops(lazy_storage.custom_ops().clone());
 
         self.optimize(&mut graph);
@@ -2664,7 +2664,7 @@ impl Executor for MetalDevice {
         };
 
         allocator.initialize(&mut graph, &edges, last)?;
-        println!("{}", crate::lazy::graph_to_dot(&&graph));
+        //println!("{}", crate::lazy::graph_to_dot(&&graph));
 
         let mut final_node = NodeIndex::end();
         for edge in edges {
@@ -2700,7 +2700,7 @@ impl Executor for MetalDevice {
         use crate::lazy::Op::*;
         //println!("{}", crate::lazy::graph_to_dot(&&graph.clone()));
 
-        //self.synchronize()?;
+        self.synchronize()?;
         let op_node = &graph[node].clone();
         match op_node.op() {
             Const(s) => self.eval_const(op_node, graph, allocator, node, s)?,
