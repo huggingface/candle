@@ -54,11 +54,19 @@ impl Multiples {
             max_ch: 512,
         }
     }
+
+    /// Whether ALL C3k2 blocks use C3k branches.
+    /// Ultralytics parse_model: `if scale in "mlx": args[3] = True`.
+    pub fn c3k_all(&self) -> bool {
+        *self == Self::m() || *self == Self::l() || *self == Self::x()
+    }
 }
 
-/// Compute scaled channel count: min(floor(base * width), max_ch).
+/// Compute scaled channel count: `make_divisible(min(base, max_ch) * width, 8)`.
+/// Matches ultralytics parse_model: clamp to max_ch first, then scale, then align to 8.
 fn ch(base: usize, m: Multiples) -> usize {
-    ((base as f64 * m.width) as usize).min(m.max_ch)
+    let raw: f64 = base.min(m.max_ch) as f64 * m.width;
+    ((raw / 8.0).ceil() as usize) * 8
 }
 
 /// Compute scaled depth (repeat count): max(round(base * depth), 1).
@@ -578,6 +586,8 @@ struct DarkNet26 {
 impl DarkNet26 {
     fn load(vb: VarBuilder, m: Multiples) -> Result<Self> {
         let d2 = depth(2, m); // repeat count for C3k2/C2PSA (base=2)
+        // For m/l/x: all C3k2 use c3k=True (ultralytics parse_model override)
+        let c3k_24 = m.c3k_all();
         let l0 = ConvBlock::load(vb.pp("0"), 3, ch(64, m), 3, 2, 1, true)?;
         let l1 = ConvBlock::load(vb.pp("1"), ch(64, m), ch(128, m), 3, 2, 1, true)?;
         let l2 = C3k2::load(
@@ -585,7 +595,7 @@ impl DarkNet26 {
             ch(128, m),
             ch(256, m),
             d2,
-            false,
+            c3k_24,
             0.25,
             true,
             false,
@@ -596,7 +606,7 @@ impl DarkNet26 {
             ch(256, m),
             ch(512, m),
             d2,
-            false,
+            c3k_24,
             0.25,
             true,
             false,
