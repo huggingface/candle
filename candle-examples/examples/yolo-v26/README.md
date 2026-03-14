@@ -1,5 +1,9 @@
 # candle-yolo-v26: NMS-Free Object Detection with Attention
 
+You can try this model online on the [Candle YOLO26
+Space](https://huggingface.co/spaces/developer0hye/candle-yolo-v26). The model
+runs entirely in your browser using WebAssembly.
+
 This is a port of [Ultralytics
 YOLO26](https://docs.ultralytics.com/models/yolo26). YOLO26 introduces several
 architectural improvements over YOLOv8:
