@@ -31,7 +31,7 @@ pub enum LazyError {
     Message(String),
 
     #[error("Incorrect incoming edges to node {0:?}")]
-    InvalidIncoming(NodeId),
+    InvalidIncoming(OpNode),
 
     #[error("Incorrect outgoing edges to node {0:?}")]
     InvalidOutgoing(NodeId),
@@ -202,6 +202,53 @@ pub fn ancestors(g: &OpGraph, node: NodeIndex<u32>) -> OpGraph {
     ancestors
 }
 
+pub fn execution_order(g: &OpGraph) -> Vec<NodeIndex> {
+    let mut done = HashSet::new();
+    let mut pending = HashSet::new();
+    let mut order = Vec::new();
+
+    let last_node = NodeIndex::new(g.node_count() - 1);
+    let mut stack: Vec<(NodeIndex, usize)> = vec![(last_node, 0)];
+    while let Some((cur_n, cur_src)) = stack.pop() {
+        let srcs: Vec<_> = g.edges_directed(cur_n, petgraph::Incoming).collect();
+        let all_deps_done = cur_src == srcs.len();
+
+        if all_deps_done {
+            done.insert(cur_n);
+            pending.remove(&cur_n);
+            order.push(cur_n);
+            continue;
+        }
+
+        let (srcs_with_deps, srcs_without_deps): (Vec<_>, Vec<_>) = srcs
+            .iter()
+            .map(|s| s.source())
+            .partition(|s| g.edges_directed(*s, petgraph::Incoming).count() == 0);
+
+        let all_srcs = srcs_with_deps
+            .into_iter()
+            .chain(srcs_without_deps)
+            .collect::<Vec<_>>();
+
+        let precursor = all_srcs[cur_src];
+
+        if done.contains(&precursor) {
+            stack.push((cur_n, cur_src + 1));
+        } else if pending.contains(&precursor) {
+            panic!(
+                    "Cycle detected whilst computing topological order: {:?}. Try plotting with feature `plotting`.",
+                    precursor
+                );
+        } else {
+            pending.insert(precursor);
+            stack.push((cur_n, cur_src));
+            stack.push((precursor, 0));
+        }
+    }
+
+    order
+}
+
 pub fn get_incoming_edges<N, E>(
     g: &DiGraph<N, E>,
     idx: NodeIndex<u32>,
@@ -228,6 +275,34 @@ pub struct LazyStorage {
     current_node: Option<NodeIndex<u32>>,
     // potentially Arc<RwLock<...>>
     //inner: Option<CpuStorage>,
+}
+
+impl PartialEq for LazyStorage {
+    fn eq(&self, other: &Self) -> bool {
+        let ops = self.operations();
+        let other_ops = other.operations();
+
+        let count = ops.node_count();
+        let other_count = other_ops.node_count();
+        let edge_count = ops.edge_count();
+        let other_edge_count = other_ops.edge_count();
+
+        if count != other_count || edge_count != other_edge_count {
+            return false;
+        }
+
+        let ancestors = Ancestors::of(ops, NodeIndex::new(count));
+        let other_ancestors = Ancestors::of(other_ops, NodeIndex::new(other_count));
+        for (e1, e2) in ancestors.zip(other_ancestors) {
+            let edge = ops.edge_weight(e1).unwrap();
+            let other_edge = other_ops.edge_weight(e2).unwrap();
+            if edge != other_edge {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 impl LazyStorage {
@@ -299,11 +374,7 @@ impl LazyStorage {
         }
     }
 
-    pub fn lazy_custom_op(
-        &self,
-        op: Box<dyn LazyCustomOp>,
-        inputs: &[(&Self, &Layout)],
-    ) -> Result<Self> {
+    pub fn custom_op(&self, op: Box<dyn LazyCustomOp>, args: &[(&Self, &Layout)]) -> Result<Self> {
         count();
 
         let mut next = self.clone();
@@ -312,10 +383,10 @@ impl LazyStorage {
 
         next.add_edge(current_op, idx, self.layout.clone(), self.dtype());
 
-        for (input, input_l) in inputs {
-            let input_op = input.get_current_node()?;
-            let input_edge = OpEdge::new((*input_l).clone(), input.dtype());
-            next.merge(input, input_op, idx, input_edge)?;
+        for (arg, arg_l) in args {
+            let node = arg.get_current_node()?;
+            let edge = OpEdge::new((*arg_l).clone(), arg.dtype());
+            next.merge(arg, node, idx, edge)?;
         }
 
         next.current_node = Some(idx);
@@ -595,12 +666,11 @@ impl LazyStorage {
 
     pub fn execute<E: Executor>(&self, executor: E) -> Result<E::BufferType> {
         // TODO: Apply backend agnostic optimizations
-        // TODO: Apply backend specific optimizations
         executor.run(self.clone())
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OpEdge {
     id: EdgeId,
     layout: Layout,

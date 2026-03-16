@@ -12,6 +12,7 @@ fn fwd<T: num_traits::Float>(v: T, alpha: f64) -> T {
     }
 }
 
+#[derive(Clone)]
 struct Elu {
     alpha: f64,
 }
@@ -55,6 +56,7 @@ fn bwd<T: num_traits::Float>(v: T, alpha: f64) -> T {
     }
 }
 
+#[derive(Clone)]
 struct EluBackward {
     alpha: f64,
 }
@@ -75,6 +77,7 @@ impl CustomOp1 for EluBackward {
     }
 }
 
+#[derive(Clone)]
 struct EluWithBackward(Elu);
 
 impl EluWithBackward {

@@ -3,10 +3,13 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::lazy::{
-    custom::LazyCustomOp, Ancestors, Executor, LazyError::*, MemoryPlan, OpEdge, OpGraph, OpNode,
+    custom::{CustomOp, LazyCustomOp},
+    Ancestors, Executor,
+    LazyError::*,
+    MemoryPlan, OpEdge, OpGraph, OpNode,
 };
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, LazyStorage, Result, Shape};
+use crate::{bail, CpuStorage, CpuStorageRef, DType, Error, Layout, LazyStorage, Result, Shape};
 use candle_metal_kernels::{
     metal::{Buffer, Commands, Device},
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
@@ -2508,7 +2511,6 @@ static METAL_DEVICE: LazyLock<MetalDevice> = LazyLock::new(|| MetalDevice::new(0
 
 pub fn replace_custom_op_with_fallback(_graph: &mut OpGraph, _custom_op: &Box<dyn LazyCustomOp>) {}
 
-use crate::lazy::custom::CustomOp;
 pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
     for (_name, op) in custom_ops.iter() {
         match op {
@@ -2588,11 +2590,10 @@ fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
             let a_l = a.1;
             let a = create_metal_storage(a);
 
-            let b = input[0];
+            let b = input[1];
             let b_l = b.1;
             let b = create_metal_storage(b);
             let (result, _shape) = self.op.metal_fwd(&a, a_l, &b, b_l)?;
-
             {
                 let size = result.size();
                 let blit = self.device.blit_command_encoder()?;
@@ -2652,8 +2653,9 @@ impl Executor for MetalDevice {
         //let acyclic = pethgraph::acyclic::Acyclic::try_from(graph.clone()).unwrap();
         //let node_indices = petgraph::algo:toposort(&acyclic, None).unwrap();
         //let first = *node_indices.first().unwrap();
-        let (last, _last_node) = graph.raw_nodes().iter().enumerate().last().unwrap();
-        let last = NodeIndex::new(last);
+        /*
+        let last = graph.node_count();
+        let last = NodeIndex::new(last - 1);
 
         let ancestors = Ancestors::of(&graph, last);
         // Edges topologically sorted in a stable manner (note reverse)
@@ -2663,8 +2665,18 @@ impl Executor for MetalDevice {
             topo_sorted
         };
 
+         */
+        let execution_order = crate::lazy::execution_order(&graph);
+        let last = execution_order.last().unwrap().clone();
+        let mut edges = vec![];
+        for n in execution_order {
+            let mut new_edges: Vec<_> = graph.edges(n).map(|e| e.id()).collect();
+            new_edges.reverse();
+            edges.extend(new_edges);
+        }
+
         allocator.initialize(&mut graph, &edges, last)?;
-        //println!("{}", crate::lazy::graph_to_dot(&&graph));
+        println!("{}", crate::lazy::graph_to_dot(&&graph));
 
         let mut final_node = NodeIndex::end();
         for edge in edges {
@@ -2683,7 +2695,7 @@ impl Executor for MetalDevice {
             }
             final_node = idx;
         }
-        let mut edges = graph.edges_directed(final_node, petgraph::Outgoing);
+        let mut edges = graph.edges(final_node);
         let out = edges.next().unwrap();
         let out_w = out.weight();
         let buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
@@ -2706,11 +2718,13 @@ impl Executor for MetalDevice {
             Const(s) => self.eval_const(op_node, graph, allocator, node, s)?,
             Affine(mul, add) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let in_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
                 let in_w = in_edge.weight();
                 let src = allocator.get(in_w.buffer_id()).unwrap();
 
-                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
+                let mut outgoing = graph.edges(node);
                 let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
                 let dst_weight = dst_edge.weight();
                 let dst = allocator.get(dst_weight.buffer_id()).unwrap();
@@ -2719,7 +2733,9 @@ impl Executor for MetalDevice {
             }
             ToDType(dst_dtype) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let in_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
                 let in_w = in_edge.weight();
                 let src = allocator.get(in_w.buffer_id()).unwrap();
 
@@ -2734,7 +2750,9 @@ impl Executor for MetalDevice {
             }
             Unary(kernel) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let in_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
                 let in_w = in_edge.weight();
                 let src = allocator.get(in_w.buffer_id()).unwrap();
 
@@ -2763,9 +2781,18 @@ impl Executor for MetalDevice {
                  */
             }
             Binary(kernel, lhs_l_bc, rhs_l_bc) => {
+                let edges: Vec<_> = graph.edges_directed(node, petgraph::Incoming).collect();
+                if edges.len() < 2 {
+                    bail!("edges: {edges:?}");
+                }
                 let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+
+                let rhs_edge = edges
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
+                let lhs_edge = edges
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
 
                 let lhs_weight = lhs_edge.weight();
                 let rhs_weight = rhs_edge.weight();
@@ -2819,7 +2846,9 @@ impl Executor for MetalDevice {
             */
             Reduce(op, _sum_dims, reduction_layout, dst_el) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let in_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
                 let in_w = in_edge.weight();
                 let src = allocator.get(in_w.buffer_id()).unwrap();
 
@@ -2842,9 +2871,15 @@ impl Executor for MetalDevice {
             //Cmp(CmpOp, LazyStorage, Layout, Layout),
             WhereCond => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let f_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let t_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let src_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let f_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
+                let t_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
+                let src_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
 
                 let src_weight = src_edge.weight();
                 let t_weight = t_edge.weight();
@@ -2892,8 +2927,12 @@ impl Executor for MetalDevice {
             */
             IndexSelect(dim) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let ids_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let src_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let ids_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
+                let src_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
 
                 let src_weight = src_edge.weight();
                 let ids_weight = ids_edge.weight();
@@ -2924,8 +2963,12 @@ impl Executor for MetalDevice {
             //IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
             Matmul((b, m, n, k)) => {
                 let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let rhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let lhs_edge = edges.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let rhs_edge = edges
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
+                let lhs_edge = edges
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
 
                 let lhs_weight = lhs_edge.weight();
                 let rhs_weight = rhs_edge.weight();
@@ -2958,7 +3001,9 @@ impl Executor for MetalDevice {
             }
             CopyStridedSrc(dst_offset) => {
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let in_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
                 // Test the alternative api for getting incoming/outgoing edges
                 // let incoming = crate::lazy::get_incoming_edges(&graph, node, Some(1));
                 // let in_edge = incoming[0];
@@ -2994,7 +3039,9 @@ impl Executor for MetalDevice {
             Copy2D(d1, d2, src_s, dst_s, src_o, dst_o) => {
                 // TODO: tidy up
                 let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
+                let in_edge = incoming
+                    .next()
+                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
                 let in_w = in_edge.weight();
                 let src = allocator.get(in_w.buffer_id()).unwrap();
 
@@ -3071,7 +3118,7 @@ impl Executor for MetalDevice {
             }
             CustomOp(custom_op) => {
                 let incoming = graph.edges_directed(node, petgraph::Incoming);
-                let input: Vec<_> = incoming
+                let mut input: Vec<_> = incoming
                     .map(|edge| {
                         let w = edge.weight();
                         let buffer = allocator.get(w.buffer_id()).unwrap();
@@ -3080,6 +3127,7 @@ impl Executor for MetalDevice {
                         (buffer, layout, dtype)
                     })
                     .collect();
+                input.reverse();
 
                 let dst_edge = graph
                     .edges_directed(node, petgraph::Outgoing)

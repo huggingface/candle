@@ -63,15 +63,24 @@ impl PartialEq for Box<dyn LazyCustomOp> {
 }
 
 pub trait LazyCustomOp: LazyCustomOpClone + Send + Sync {
+    /// Lazy custom op that can be defined in user-land.
     fn name(&self) -> &'static str;
 
-    // Forward pass
-    fn lazy_custom(&self, input: &[(&LazyStorage, &Layout)]) -> Result<(LazyStorage, Shape)>;
+    /// Forward pass. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn fwd(&self, args: &[(&LazyStorage, &Layout)]) -> Result<(LazyStorage, Shape)>;
 
-    fn lazy_fallback(&self, _tensors: &[&Tensor]) -> Result<crate::Tensor> {
+    fn fallback(&self, _tensors: &[&Tensor]) -> Result<crate::Tensor> {
         Err(crate::Error::Msg(
             format!("no lazy fallback for {}", self.name()).into(),
         ))
+    }
+
+    /// This function takes as argument the argument `args` used in the forward pass, the result
+    /// produced by the forward operation `res` and the gradient of the result `grad_res`.
+    /// The function should return the gradient of the argument.
+    fn bwd(&self, _args: &[&Tensor], _res: &Tensor, _grad_res: &Tensor) -> Result<Option<Tensor>> {
+        Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
 
     fn extract_lazy(&self, tensor: Tensor) -> Result<(LazyStorage, Layout)> {
@@ -86,40 +95,21 @@ pub trait LazyCustomOp: LazyCustomOpClone + Send + Sync {
     }
 }
 
-pub trait LazyCustomOp1 {
-    fn name(&self) -> &'static str;
-
-    fn lazy_fwd(&self, _: &LazyStorage, _: &Layout) -> Result<(LazyStorage, Shape)>;
-
-    fn fallback(&self) -> Result<crate::Tensor> {
-        Err(crate::Error::Msg(
-            format!("no lazy fallback for {}", self.name()).into(),
-        ))
-    }
-}
-
-pub trait LazyCustomOp2 {
-    fn name(&self) -> &'static str;
-
-    fn lazy_fwd(
-        &self,
-        _: &LazyStorage,
-        _: &Layout,
-        _: &LazyStorage,
-        _: &Layout,
-    ) -> Result<(LazyStorage, Shape)>;
-
-    fn fallback(&self, _: &Tensor, _: &Tensor) -> Result<Tensor> {
-        Err(crate::Error::Msg(
-            format!("no lazy fallback for {}", self.name()).into(),
-        ))
-    }
-}
-
 #[derive(Clone)]
 pub enum CustomOp {
     One(Box<dyn crate::CustomOp1>),
     Two(Box<dyn crate::CustomOp2>),
+}
+
+// TODO: This is not true equality, because there may be values stored inside the custom op that make them different.
+impl PartialEq for CustomOp {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::One(l0), Self::One(r0)) => l0.name() == r0.name(),
+            (Self::Two(l0), Self::Two(r0)) => l0.name() == r0.name(),
+            _ => false,
+        }
+    }
 }
 
 impl From<Box<dyn crate::CustomOp2>> for CustomOp {
