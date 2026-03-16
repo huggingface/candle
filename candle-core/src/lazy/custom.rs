@@ -66,6 +66,8 @@ pub trait LazyCustomOp: LazyCustomOpClone + Send + Sync {
     /// Lazy custom op that can be defined in user-land.
     fn name(&self) -> &'static str;
 
+    fn expected_edges(&self) -> usize;
+
     /// Forward pass. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn fwd(&self, args: &[(&LazyStorage, &Layout)]) -> Result<(LazyStorage, Shape)>;
@@ -99,14 +101,16 @@ pub trait LazyCustomOp: LazyCustomOpClone + Send + Sync {
 pub enum CustomOp {
     One(Box<dyn crate::CustomOp1>),
     Two(Box<dyn crate::CustomOp2>),
+    Three(Box<dyn crate::CustomOp3>),
 }
 
 // TODO: This is not true equality, because there may be values stored inside the custom op that make them different.
 impl PartialEq for CustomOp {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::One(l0), Self::One(r0)) => l0.name() == r0.name(),
-            (Self::Two(l0), Self::Two(r0)) => l0.name() == r0.name(),
+            (Self::One(s), Self::One(o)) => s.name() == o.name(),
+            (Self::Two(s), Self::Two(o)) => s.name() == o.name(),
+            (Self::Three(s), Self::Three(o)) => s.name() == o.name(),
             _ => false,
         }
     }
@@ -131,6 +135,11 @@ impl std::fmt::Debug for CustomOp {
                 f.write_str(two.name())?;
                 f.write_str(")")
             }
+            Self::Three(three) => {
+                f.write_str("CustomOp::Three(")?;
+                f.write_str(three.name())?;
+                f.write_str(")")
+            }
         }
     }
 }
@@ -147,6 +156,9 @@ pub fn register_custom_ops(ops: Vec<CustomOp>) {
             }
             CustomOp::Two(ref custom_op2) => {
                 registry.insert(custom_op2.name().to_string(), op.clone());
+            }
+            CustomOp::Three(ref custom_op3) => {
+                registry.insert(custom_op3.name().to_string(), op.clone());
             }
         }
     }

@@ -1,6 +1,10 @@
 //! Rotary Embeddings
 //!
-use candle::{op::BackpropOp, CpuStorage, Layout, Result, Shape, Tensor, D};
+use candle::{
+    lazy::custom::{CustomOp, LazyCustomOp, LazyCustomOpClone},
+    op::BackpropOp,
+    CpuStorage, Layout, Result, Shape, Tensor, D,
+};
 use rayon::prelude::*;
 
 /// Interleaved variant of rotary embeddings.
@@ -517,43 +521,47 @@ impl candle::CustomOp3 for RotaryEmb {
         sin: &candle::LazyStorage,
         sin_l: &Layout,
     ) -> Result<(candle::LazyStorage, Shape)> {
-        /*
-        use candle::backend::BackendStorage;
-        use candle::lazy::graph_to_dot;
-        println!("{}", graph_to_dot(&src.operations()));
-        println!(
-            "src: {:?}, {:?}, {:?}",
-            src.shape(),
-            src.dtype(),
-            src.get_current_node()?
-        );
-        println!(
-            "cos: {:?}, {:?}, {:?}",
-            cos.shape(),
-            cos.dtype(),
-            cos.get_current_node()?
-        );
-        println!(
-            "sin: {:?}, {:?}, {:?}",
-            sin.shape(),
-            sin.dtype(),
-            sin.get_current_node()?
-        );
-         */
+        let (mut storage, _) =
+            LazyCustomOp::fwd(self, &[(src, src_l), (cos, cos_l), (sin, sin_l)])?;
+        storage.register_custom_op(CustomOp::Three(Box::new(self.clone())));
+
         let src =
             Tensor::from_storage(src.clone().into(), src_l.shape(), BackpropOp::none(), false);
         let cos =
             Tensor::from_storage(cos.clone().into(), cos_l.shape(), BackpropOp::none(), false);
         let sin =
             Tensor::from_storage(sin.clone().into(), sin_l.shape(), BackpropOp::none(), false);
-        let result = rope_slow(&src, &cos, &sin)?;
-        let (storage, layout) = result.storage_and_layout();
-        let storage = storage.try_clone(layout)?;
-        let inner = match storage {
-            candle::Storage::Lazy(lazy) => lazy,
-            _ => unreachable!(),
-        };
-        Ok((inner, layout.shape().clone()))
+
+        let result = self.fallback(&[&src, &cos, &sin])?;
+        let (inner, layout) = self.extract_lazy(result)?;
+
+        storage.add_custom_fallback(LazyCustomOp::name(self), inner);
+        let _shape = src.layout().shape().clone();
+        Ok((storage, layout.shape().clone()))
+    }
+}
+
+impl candle::lazy::custom::LazyCustomOp for RotaryEmb {
+    fn name(&self) -> &'static str {
+        "rotary-emb"
+    }
+
+    fn fwd(
+        &self,
+        args: &[(&candle::LazyStorage, &Layout)],
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let (first, layout) = args[0];
+        first
+            .custom_op(Box::new(self.clone()), &args[1..])
+            .map(|s| (s, layout.shape().clone()))
+    }
+
+    fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
+        rope_slow(tensors[0], tensors[1], tensors[2])
+    }
+
+    fn expected_edges(&self) -> usize {
+        3
     }
 }
 
@@ -609,7 +617,7 @@ struct RotaryEmbThd;
 
 impl candle::CustomOp3 for RotaryEmbThd {
     fn name(&self) -> &'static str {
-        "rotary-emb"
+        "rotary-emb-thd"
     }
 
     fn cpu_fwd(

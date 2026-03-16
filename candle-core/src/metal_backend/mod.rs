@@ -2520,6 +2520,9 @@ pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
             CustomOp::Two(ref custom_op2) => {
                 install_custom_op2(custom_op2);
             }
+            CustomOp::Three(ref custom_op3) => {
+                install_custom_op3(custom_op3);
+            }
         }
     }
 }
@@ -2594,6 +2597,58 @@ fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
             let b_l = b.1;
             let b = create_metal_storage(b);
             let (result, _shape) = self.op.metal_fwd(&a, a_l, &b, b_l)?;
+            {
+                let size = result.size();
+                let blit = self.device.blit_command_encoder()?;
+                blit.set_label("copy_to_dst");
+                blit.copy_from_buffer(result.buffer(), 0, &dst, 0, size);
+                blit.end_encoding();
+                self.device.synchronize()?;
+            }
+
+            Ok(())
+        }
+    }
+
+    let mut binding = CUSTOM_OP_HANDLER.lock().unwrap();
+    binding.custom_ops.insert(
+        op.name().to_string(),
+        Box::new(InlineCustomOp {
+            op: op.clone(),
+            device: METAL_DEVICE.clone(),
+        }),
+    );
+}
+
+fn install_custom_op3(op: &Box<dyn crate::CustomOp3>) {
+    #[derive(Clone)]
+    struct InlineCustomOp {
+        op: Box<dyn crate::CustomOp3>,
+        device: MetalDevice,
+    }
+
+    impl LazyCustomFn<Buffer> for InlineCustomOp {
+        fn call(&self, input: &[(&Buffer, &Layout, DType)], dst: &Buffer) -> Result<()> {
+            let create_metal_storage = |(b, l, d): (&Buffer, &Layout, DType)| {
+                MetalStorage::new(
+                    Arc::new(b.clone()),
+                    self.device.clone(),
+                    l.shape().elem_count(),
+                    d,
+                )
+            };
+            let a = input[0];
+            let a_l = a.1;
+            let a = create_metal_storage(a);
+
+            let b = input[1];
+            let b_l = b.1;
+            let b = create_metal_storage(b);
+
+            let c = input[2];
+            let c_l = c.1;
+            let c = create_metal_storage(c);
+            let (result, _shape) = self.op.metal_fwd(&a, a_l, &b, b_l, &c, c_l)?;
             {
                 let size = result.size();
                 let blit = self.device.blit_command_encoder()?;
@@ -3128,6 +3183,8 @@ impl Executor for MetalDevice {
                     })
                     .collect();
                 input.reverse();
+
+                println!("{} incoming edges count: {}", custom_op.name(), input.len());
 
                 let dst_edge = graph
                     .edges_directed(node, petgraph::Outgoing)

@@ -435,20 +435,6 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         storage: &candle::LazyStorage,
         layout: &Layout,
     ) -> Result<(candle::LazyStorage, Shape)> {
-        // TODO: *applies to all lazy custom ops*
-        //
-        // The initial idea with lazy_fwd impls is to track the "slow" impl in the lazy graph, and
-        // then optimize with a per-backend rewrite rule to launch the fast version shown above.
-        //
-        // An issue with this approach is that this custom op is in candle-nn, so we would have to install this
-        // rewrite rule at runtime. We need some good examples and documentation on how to do this correctly.
-        //
-        // On the other hand what is nice about this is that it allows us to circumvent the CustomOp API for
-        // possible new backends outside of the Storage enum
-        //
-        // It would be a real improvement if we could somehow not recreate Tensors inside this fn, but it's
-        // hard to recreate the Tensor API correctly using LazyStorage directly.
-        //
         let mut storage = storage.custom_op(self.clone_box(), &[])?;
         storage.register_custom_op(CustomOp::One(Box::new(self.clone())));
 
@@ -478,12 +464,16 @@ impl candle::lazy::custom::LazyCustomOp for SoftmaxLastDim {
     ) -> Result<(candle::LazyStorage, Shape)> {
         let (first, layout) = input[0];
         first
-            .custom_op(Box::new(self.clone()), &input[0..])
+            .custom_op(Box::new(self.clone()), &input[1..])
             .map(|s| (s, layout.shape().clone()))
     }
 
     fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
         softmax(tensors[0], D::Minus1)
+    }
+
+    fn expected_edges(&self) -> usize {
+        1
     }
 }
 
@@ -725,6 +715,10 @@ impl candle::lazy::custom::LazyCustomOp for RmsNorm {
 
     fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
         rms_norm_slow(tensors[0], tensors[1], self.eps)
+    }
+
+    fn expected_edges(&self) -> usize {
+        2
     }
 }
 
@@ -1071,6 +1065,7 @@ impl Module for Identity {
 }
 
 #[allow(dead_code)]
+#[derive(Clone)]
 struct Sdpa {
     scale: f32,
     softcapping: f32,

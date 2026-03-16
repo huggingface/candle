@@ -3,7 +3,7 @@ pub mod custom;
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::lazy::custom::{CustomOp, LazyCustomFn, LazyCustomOp};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, CustomOp2, DType, Layout, Result, Shape, Tensor};
+use crate::{CpuStorage, DType, Layout, Result, Shape};
 use petgraph::graph::{DiGraph, Edge, EdgeIndex, EdgeReference, IndexType, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction::{Incoming, Outgoing};
@@ -371,11 +371,24 @@ impl LazyStorage {
                 self.custom_ops
                     .insert(custom_op2.name().to_string(), op.clone());
             }
+            CustomOp::Three(ref custom_op3) => {
+                self.custom_ops
+                    .insert(custom_op3.name().to_string(), op.clone());
+            }
         }
     }
 
     pub fn custom_op(&self, op: Box<dyn LazyCustomOp>, args: &[(&Self, &Layout)]) -> Result<Self> {
         count();
+
+        let expected_edges = op.expected_edges();
+        if expected_edges - 1 != args.len() {
+            crate::bail!(
+                "Incorrect args len. Expected {}, got {}",
+                expected_edges - 1,
+                args.len()
+            );
+        }
 
         let mut next = self.clone();
         let idx = next.add_operation(Op::CustomOp(op.into()));
@@ -1467,23 +1480,22 @@ impl BackendStorage for LazyStorage {
         Ok(next)
     }
 
-    fn copy_strided_src(&self, rhs: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
+    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         count();
 
-        // TODO: Validate that self -> mut rhs graph logic is correct.
+        // TODO: Validate that self -> mut dst graph logic is correct.
         let op = Op::CopyStridedSrc(dst_offset);
-        let idx = rhs.add_operation(op);
+        let idx = dst.add_operation(op);
 
-        if let Ok(rhs_current_node) = rhs.get_current_node() {
-            let edge = OpEdge::new(src_l.clone(), rhs.dtype());
-            rhs.operations.add_edge(rhs_current_node, idx, edge);
+        if let Ok(rhs_current_node) = dst.get_current_node() {
+            let edge = OpEdge::new(dst.layout.clone(), dst.dtype());
+            dst.operations.add_edge(rhs_current_node, idx, edge);
         }
 
-        let current_op = self.get_current_node()?;
         let edge = OpEdge::new(src_l.clone(), self.dtype());
-        rhs.merge(self, current_op, idx, edge)?;
+        dst.merge(self, self.get_current_node()?, idx, edge)?;
 
-        rhs.current_node = Some(idx);
+        dst.current_node = Some(idx);
 
         Ok(())
     }
