@@ -277,34 +277,6 @@ pub struct LazyStorage {
     //inner: Option<CpuStorage>,
 }
 
-impl PartialEq for LazyStorage {
-    fn eq(&self, other: &Self) -> bool {
-        let ops = self.operations();
-        let other_ops = other.operations();
-
-        let count = ops.node_count();
-        let other_count = other_ops.node_count();
-        let edge_count = ops.edge_count();
-        let other_edge_count = other_ops.edge_count();
-
-        if count != other_count || edge_count != other_edge_count {
-            return false;
-        }
-
-        let ancestors = Ancestors::of(ops, NodeIndex::new(count));
-        let other_ancestors = Ancestors::of(other_ops, NodeIndex::new(other_count));
-        for (e1, e2) in ancestors.zip(other_ancestors) {
-            let edge = ops.edge_weight(e1).unwrap();
-            let other_edge = other_ops.edge_weight(e2).unwrap();
-            if edge != other_edge {
-                return false;
-            }
-        }
-
-        true
-    }
-}
-
 impl LazyStorage {
     pub fn get_current_node(&self) -> Result<NodeIndex<u32>> {
         self.current_node
