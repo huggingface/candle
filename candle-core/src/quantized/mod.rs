@@ -14,7 +14,6 @@ pub mod imatrix_file;
 pub mod k_quants;
 #[cfg(feature = "metal")]
 pub mod metal;
-#[cfg(feature = "tokenizers")]
 pub mod tokenizer;
 #[cfg(not(feature = "metal"))]
 mod metal {

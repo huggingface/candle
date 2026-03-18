@@ -140,7 +140,6 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
 
     // Convert NCHW input to NHWC layout for tiled im2col.
-    // See: https://github.com/huggingface/candle/issues/3404
     let cont_s0 = p.i_h * p.i_w * p.c_in;
     let cont_s1 = p.i_w * p.c_in;
     let cont_s2 = p.c_in;
@@ -289,7 +288,6 @@ fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
     let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
 
     // Convert NCHW input to NHWC layout for direct convolution.
-    // See: https://github.com/huggingface/candle/issues/3404
     let cont_s0 = p.i_h * p.i_w * p.c_in;
     let cont_s1 = p.i_w * p.c_in;
     let cont_s2 = p.c_in;

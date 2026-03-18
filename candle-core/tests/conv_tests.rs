@@ -933,13 +933,6 @@ fn conv2d_c_eq_h_eq_w(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(
-    conv2d_c_eq_h_eq_w,
-    conv2d_c_eq_h_eq_w_cpu,
-    conv2d_c_eq_h_eq_w_gpu,
-    conv2d_c_eq_h_eq_w_metal
-);
-
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -971,4 +964,10 @@ test_device!(
     conv2d_grad_cpu,
     conv2d_grad_gpu,
     conv2_grad_metal
+);
+test_device!(
+    conv2d_c_eq_h_eq_w,
+    conv2d_c_eq_h_eq_w_cpu,
+    conv2d_c_eq_h_eq_w_gpu,
+    conv2d_c_eq_h_eq_w_metal
 );
