@@ -148,8 +148,7 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
         for h_idx in 0..p.i_h {
             for w_idx in 0..p.i_w {
                 for c_idx in 0..p.c_in {
-                    let src_idx =
-                        b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
+                    let src_idx = b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
                     let dst_idx = b_idx * cont_s0 + h_idx * cont_s1 + w_idx * cont_s2 + c_idx;
                     inp_cont[dst_idx] = inp[src_idx]
                 }
@@ -296,8 +295,7 @@ fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
         for h_idx in 0..p.i_h {
             for w_idx in 0..p.i_w {
                 for c_idx in 0..p.c_in {
-                    let src_idx =
-                        b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
+                    let src_idx = b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
                     let dst_idx = b_idx * cont_s0 + h_idx * cont_s1 + w_idx * cont_s2 + c_idx;
                     inp_cont[dst_idx] = inp[src_idx]
                 }
