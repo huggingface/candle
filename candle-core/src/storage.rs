@@ -1,9 +1,8 @@
 use crate::backend::BackendStorage;
+use crate::lazy::LazyStorage;
 use crate::op::{self, CmpOp, ReduceOp};
 use crate::scalar::Scalar;
-use crate::{
-    CpuStorage, CudaStorage, DType, Device, Error, Layout, LazyStorage, MetalStorage, Result, Shape,
-};
+use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of

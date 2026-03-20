@@ -3,7 +3,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use crate::{lazy::LazyBuffer, DType, Layout, LazyStorage, Result, Shape, Tensor};
+use crate::{lazy::LazyBuffer, lazy::LazyStorage, DType, Layout, Result, Shape, Tensor};
 
 pub trait LazyCustomFn<B: LazyBuffer>: LazyCustomFnClone<B> + Send + Sync {
     fn call(&self, input: &[(&B, &Layout, DType)], dst: &B) -> Result<()>;

@@ -2,21 +2,21 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
+use crate::lazy::ops::LazyOp;
 use crate::lazy::{
     custom::{CustomOp, LazyCustomOp},
-    Ancestors, Executor,
+    Executor,
     LazyError::*,
-    MemoryPlan, OpEdge, OpGraph, OpNode,
+    MemoryPlan,
 };
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{bail, CpuStorage, CpuStorageRef, DType, Error, Layout, LazyStorage, Result, Shape};
+use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, LazyStorage, Result, Shape};
 use candle_metal_kernels::{
     metal::{Buffer, Commands, Device},
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
-use petgraph::graph::{EdgeIndex, NodeIndex};
-use petgraph::visit::EdgeRef;
+
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError, RwLock, TryLockError};
@@ -2368,35 +2368,20 @@ impl BackendDevice for MetalDevice {
 impl MetalDevice {
     fn eval_const(
         &self,
-        _op_node: &OpNode,
-        graph: &mut OpGraph,
         allocator: &mut MetalAllocator,
-        node: NodeIndex<u32>,
         s: &Arc<CpuStorage>,
+        buffer_id: &BufferId,
     ) -> Result<()> {
         let storage = self.storage_from_cpu_storage(s)?;
         let buffer = storage.buffer();
 
-        // TODO: crate::lazy::update_all_outgoing
-        let edges: Vec<OpEdge> = graph
-            .edges_directed(node, petgraph::Outgoing)
-            .map(|e| e.weight().clone())
-            .collect();
+        allocator.insert(buffer_id.clone(), buffer.clone()).unwrap(); // TODO: ok_or(DescriptiveError)
 
-        if edges.is_empty() {
-            todo!("Add error type for this state")
-            //return Err(LazyError::InvalidOutgoing(node));
-        }
-        for weight in edges {
-            allocator
-                .insert(weight.buffer_id(), buffer.clone())
-                .unwrap(); // TODO: ok_or(DescriptiveError)
-        }
         Ok(())
     }
 }
 
-use crate::lazy::{BufferId, LazyAllocator, LazyBuffer};
+use crate::lazy::{BufferId, LazyAllocator, LazyBuffer, Op};
 impl LazyBuffer for Buffer {}
 
 // Allocator notes:
@@ -2409,6 +2394,7 @@ pub struct MetalAllocator {
     buffer_map: HashMap<BufferId, Buffer>,
     device: MetalDevice,
 }
+
 impl MetalAllocator {
     fn new(device: MetalDevice) -> Self {
         Self {
@@ -2419,38 +2405,21 @@ impl MetalAllocator {
 }
 
 impl LazyAllocator<Buffer> for MetalAllocator {
-    fn initialize(
-        &mut self,
-        graph: &mut OpGraph,
-        edges: &[EdgeIndex],
-        _last_node: NodeIndex, // TODO: remove from API
-    ) -> Result<()> {
-        use std::time::Instant;
-
-        let i1 = Instant::now();
-        //println!("\nCreating memory plan ... ");
+    fn initialize(&mut self, graph: &[&LazyStorage]) -> Result<()> {
         let MemoryPlan {
             reusage,
             allocations,
-        } = crate::lazy::greedy_by_size(graph, edges)?;
-        let i2 = Instant::now();
-        //println!("Memory plan finished ... {:?}", i2.duration_since(i1));
-
+        } = crate::lazy::greedy_by_size(graph)?;
         //print!("Updating buffer ids ... ");
-        graph.edge_weights_mut().for_each(|edge| {
-            if let Some(reuse) = reusage.get(&edge.buffer_id()) {
-                edge.set_buffer_id(*reuse);
+        for node in graph {
+            if let Some(reuse) = reusage.get(&node.buffer_id()) {
+                node.set_buffer_id(reuse.clone());
             }
-        });
-        let i1 = Instant::now();
-        //println!("{:?}", i1.duration_since(i2));
-
-        //print!("Allocating buffers ...");
-        for (buffer_id, (layout, dtype)) in allocations.iter() {
-            self.allocate(*buffer_id, layout.shape(), *dtype)?;
         }
-        let i2 = Instant::now();
-        //println!("{:?}", i2.duration_since(i1));
+
+        for (buffer_id, (layout, dtype)) in allocations.into_iter() {
+            self.allocate(buffer_id, layout.shape(), dtype)?;
+        }
 
         Ok(())
     }
@@ -2464,11 +2433,11 @@ impl LazyAllocator<Buffer> for MetalAllocator {
         let buffer = self
             .device
             .allocate_untracked(shape.elem_count() * dtype.size_in_bytes())?;
-        self.buffer_map.insert(id, buffer);
-        self.get(id)
+        self.buffer_map.insert(id.clone(), buffer);
+        self.get(&id)
     }
 
-    fn get(&self, id: BufferId) -> Result<&Buffer> {
+    fn get(&self, id: &BufferId) -> Result<&Buffer> {
         self.buffer_map
             .get(&id)
             .ok_or_else(|| BufferNotFound(id.clone()).into())
@@ -2509,7 +2478,11 @@ static CUSTOM_OP_HANDLER: LazyLock<Mutex<MetalCustomOpHandler>> =
 
 static METAL_DEVICE: LazyLock<MetalDevice> = LazyLock::new(|| MetalDevice::new(0).unwrap());
 
-pub fn replace_custom_op_with_fallback(_graph: &mut OpGraph, _custom_op: &Box<dyn LazyCustomOp>) {}
+pub fn replace_custom_op_with_fallback(
+    _lazy_storage: &LazyStorage,
+    _custom_op: &Box<dyn LazyCustomOp>,
+) {
+}
 
 pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
     for (_name, op) in custom_ops.iter() {
@@ -2526,6 +2499,7 @@ pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
         }
     }
 }
+
 fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
     #[derive(Clone)]
     struct InlineCustomOp {
@@ -2672,298 +2646,153 @@ fn install_custom_op3(op: &Box<dyn crate::CustomOp3>) {
     );
 }
 
+pub trait LazyMetalOp {
+    fn call(&self, _dst: &BufferId) -> Result<()> {
+        Ok(())
+    }
+}
+
 impl Executor for MetalDevice {
     type BufferType = Buffer;
     type AllocatorType = MetalAllocator;
 
-    fn specialize(&self, graph: &mut OpGraph) {
+    fn specialize(&self, lazy_storage: &LazyStorage) {
         use crate::lazy::Op::*;
-        for node in graph.node_indices() {
-            if let CustomOp(custom_op) = graph[node].op().clone() {
-                if self.get_specialized_op(&custom_op).is_none() {
+
+        for ls in lazy_storage.execution_order() {
+            if let CustomOp(custom_op) = ls.op() {
+                if self.get_specialized_op(&custom_op.op()).is_none() {
                     println!(
                         "No specialized op found for {}. Replacing with fallback",
                         custom_op.name()
                     );
-                    replace_custom_op_with_fallback(graph, &custom_op)
+                    replace_custom_op_with_fallback(&ls, custom_op.op())
                 }
             }
         }
     }
 
     fn run(&self, lazy_storage: LazyStorage) -> Result<Buffer> {
-        // TODO: &mut OpGraph input?
-        let mut graph = lazy_storage.operations().clone();
         let mut allocator = self.allocator();
 
-        //println!(
-        //    "lazy_storage.custom_ops(): {:?}",
-        //    lazy_storage.custom_ops().clone()
-        //);
-        install_custom_ops(lazy_storage.custom_ops().clone());
+        install_custom_ops(lazy_storage.custom_ops());
 
-        self.optimize(&mut graph);
-        self.specialize(&mut graph);
+        self.optimize(&lazy_storage);
+        self.specialize(&lazy_storage);
 
-        //let acyclic = pethgraph::acyclic::Acyclic::try_from(graph.clone()).unwrap();
-        //let node_indices = petgraph::algo:toposort(&acyclic, None).unwrap();
-        //let first = *node_indices.first().unwrap();
-        /*
-        let last = graph.node_count();
-        let last = NodeIndex::new(last - 1);
+        let graph = lazy_storage.execution_order();
 
-        let ancestors = Ancestors::of(&graph, last);
-        // Edges topologically sorted in a stable manner (note reverse)
-        let edges: Vec<_> = {
-            let mut topo_sorted = ancestors.collect::<Vec<_>>();
-            topo_sorted.reverse();
-            topo_sorted
-        };
+        allocator.initialize(&graph)?;
+        println!("{}", crate::lazy::graph_to_dot(&lazy_storage));
 
-         */
-        let execution_order = crate::lazy::execution_order(&graph);
-        let last = execution_order.last().unwrap().clone();
-        let mut edges = vec![];
-        for n in execution_order {
-            let mut new_edges: Vec<_> = graph.edges(n).map(|e| e.id()).collect();
-            new_edges.reverse();
-            edges.extend(new_edges);
+        let result_buffer_id = graph.last().unwrap().buffer_id();
+        for node in graph {
+            self.eval(&node, &mut allocator)?;
         }
 
-        allocator.initialize(&mut graph, &edges, last)?;
-        println!("{}", crate::lazy::graph_to_dot(&&graph));
-
-        let mut final_node = NodeIndex::end();
-        for edge in edges {
-            let idx = graph.raw_edges()[edge.index()].source();
-
-            if let Err(e) = self.eval(&mut graph, &mut allocator, idx) {
-                /*
-                let ancestor_edges: Vec<_> = Ancestors::of(&graph, idx)
-                    .map(|e| graph.raw_edges()[e.index()].clone())
-                    .collect();
-                println!("{:?}", ancestor_edges);
-                let ancestors = crate::lazy::ancestors(&graph, idx);
-                println!("{}", crate::lazy::graph_to_dot(&&ancestors));
-                */
-                Err(e)?
-            }
-            final_node = idx;
-        }
-        let mut edges = graph.edges(final_node);
-        let out = edges.next().unwrap();
-        let out_w = out.weight();
-        let buffer = allocator.get(out_w.buffer_id()).unwrap().clone();
-
+        let buffer = allocator.get(result_buffer_id).unwrap().clone();
         Ok(buffer)
     }
 
-    fn eval(
-        &self,
-        graph: &mut OpGraph,
-        allocator: &mut MetalAllocator,
-        node: NodeIndex,
-    ) -> Result<()> {
+    fn eval(&self, current: &LazyStorage, allocator: &mut MetalAllocator) -> Result<()> {
         use crate::lazy::Op::*;
-        //println!("{}", crate::lazy::graph_to_dot(&&graph.clone()));
 
         self.synchronize()?;
-        let op_node = &graph[node].clone();
-        match op_node.op() {
-            Const(s) => self.eval_const(op_node, graph, allocator, node, s)?,
-            Affine(mul, add) => {
-                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let in_w = in_edge.weight();
-                let src = allocator.get(in_w.buffer_id()).unwrap();
+        match current.op() {
+            Const(s) => self.eval_const(allocator, s, current.buffer_id())?,
+            Affine(a) => {
+                let src = allocator.get(a.src.buffer_id()).unwrap();
+                let dst = allocator.get(current.buffer_id()).unwrap();
 
-                let mut outgoing = graph.edges(node);
-                let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_weight = dst_edge.weight();
-                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
-
-                affine(self, src, in_w.layout(), in_w.dtype(), *mul, *add, dst)?;
+                affine(self, src, &a.src_l, a.src.dtype(), a.mul, a.add, dst)?;
             }
-            ToDType(dst_dtype) => {
-                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let in_w = in_edge.weight();
-                let src = allocator.get(in_w.buffer_id()).unwrap();
+            ToDType(op) => {
+                let src = op.srcs()[0];
 
-                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
-                let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let out_w = out_edge.weight();
-                let dst = allocator.get(out_w.buffer_id()).unwrap();
-
-                if in_w.dtype() != *dst_dtype {
-                    to_dtype(self, src, in_w.layout(), in_w.dtype(), dst, *dst_dtype)?
+                if src.dtype() != op.dtype {
+                    let src_buffer = allocator.get(src.buffer_id()).unwrap();
+                    let dst = allocator.get(current.buffer_id()).unwrap();
+                    to_dtype(self, src_buffer, src.layout(), src.dtype(), dst, op.dtype)?
                 }
             }
-            Unary(kernel) => {
-                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let in_w = in_edge.weight();
-                let src = allocator.get(in_w.buffer_id()).unwrap();
+            Unary(op) => {
+                let src = op.srcs()[0];
 
-                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
-                let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_weight = dst_edge.weight();
-                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
+                let src_buffer = allocator.get(src.buffer_id()).unwrap();
+                let dst = allocator.get(current.buffer_id()).unwrap();
 
-                unary(self, src, kernel, in_w.layout(), in_w.dtype(), dst)?;
-
-                /*
-                self.synchronize()?;
-
-                println!("{kernel}");
-
-                println!(
-                    "src ({:?}): {:?}",
-                    in_w.buffer_id(),
-                    read_to_vec::<f32>(src, in_w.shape().elem_count())
-                );
-                println!(
-                    "dst ({:?}): {:?}",
-                    dst_weight.buffer_id(),
-                    read_to_vec::<f32>(dst, dst_weight.layout().shape().elem_count())
-                );
-                 */
+                unary(self, src_buffer, op.op(), src.layout(), src.dtype(), dst)?;
             }
-            Binary(kernel, lhs_l_bc, rhs_l_bc) => {
-                let edges: Vec<_> = graph.edges_directed(node, petgraph::Incoming).collect();
-                if edges.len() < 2 {
-                    bail!("edges: {edges:?}");
-                }
-                let mut edges = graph.edges_directed(node, petgraph::Incoming);
+            Binary(op) => {
+                let srcs = op.srcs();
+                debug_assert_eq!(srcs.len(), 2);
+                let lhs = srcs[0];
+                let rhs = srcs[1];
 
-                let rhs_edge = edges
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let lhs_edge = edges
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-
-                let lhs_weight = lhs_edge.weight();
-                let rhs_weight = rhs_edge.weight();
-
-                // We use layouts with possible broadcasting, aka lhs_l_bc and rhs_l_bc.
-                // TODO: Verify approach.
-                // let lhs_l = lhs_weight.layout();
-                // let rhs_l = rhs_weight.layout();
-
-                let lhs_dtype = lhs_weight.dtype();
-                let rhs_dtype = rhs_weight.dtype();
-
-                let lhs = allocator.get(lhs_weight.buffer_id()).unwrap();
-                let rhs = allocator.get(rhs_weight.buffer_id()).unwrap();
-
-                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
-                let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_weight = dst_edge.weight();
-                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
+                let lhs_buffer = allocator.get(lhs.buffer_id()).unwrap();
+                let rhs_buffer = allocator.get(rhs.buffer_id()).unwrap();
+                let dst_buffer = allocator.get(current.buffer_id()).unwrap();
 
                 binary(
-                    self, kernel, lhs, lhs_l_bc, lhs_dtype, rhs, rhs_l_bc, rhs_dtype, dst,
+                    self,
+                    op.op(),
+                    lhs_buffer,
+                    op.lhs_l(),
+                    lhs.dtype(),
+                    rhs_buffer,
+                    op.rhs_l(),
+                    rhs.dtype(),
+                    dst_buffer,
                 )?;
-
-                /*
-                println!("{kernel} lhs_l: {lhs_l_bc:?}");
-                println!("{kernel} rhs_l: {rhs_l_bc:?}");
-                self.synchronize()?;
-
-                println!(
-                    "lhs ({:?}): {:?}",
-                    lhs_weight.buffer_id(),
-                    read_to_vec::<f32>(lhs, lhs_l_bc.shape().elem_count())
-                );
-                println!(
-                    "rhs ({:?}): {:?}",
-                    rhs_weight.buffer_id(),
-                    read_to_vec::<f32>(rhs, rhs_l_bc.shape().elem_count())
-                );
-                println!(
-                    "dst ({:?}): {:?}",
-                    dst_weight.buffer_id(),
-                    read_to_vec::<f32>(dst, dst_weight.layout().shape().elem_count())
-                );
-                 */
             }
             /*
             ToCpu,
             Powf(Layout, f64),
             Elu(Layout, f64),
             */
-            Reduce(op, _sum_dims, reduction_layout, dst_el) => {
-                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let in_w = in_edge.weight();
-                let src = allocator.get(in_w.buffer_id()).unwrap();
+            Reduce(reduce) => {
+                let storage = reduce.src();
+                let op = reduce.op();
+                let reduction_layout = reduce.reduction_layout();
+                let dst_el = reduce.count();
 
-                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
-                let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let out_w = out_edge.weight();
-                let dst = allocator.get(out_w.buffer_id()).unwrap();
-
+                let src = allocator.get(storage.buffer_id()).unwrap();
+                let dst = allocator.get(current.buffer_id()).unwrap();
                 reduce_op(
                     self,
                     op,
                     src,
-                    in_w.layout(),
-                    in_w.dtype(),
-                    &reduction_layout,
-                    *dst_el,
+                    storage.layout(),
+                    storage.dtype(),
+                    reduction_layout,
+                    dst_el,
                     dst,
                 )?;
             }
             //Cmp(CmpOp, LazyStorage, Layout, Layout),
-            WhereCond => {
-                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let f_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let t_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let src_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
+            Op::WhereCond(wc) => {
+                let srcs = wc.srcs();
+                debug_assert_eq!(srcs.len(), 3);
+                let src = srcs[0];
+                let t = srcs[1];
+                let f = srcs[2];
 
-                let src_weight = src_edge.weight();
-                let t_weight = t_edge.weight();
-                let f_weight = f_edge.weight();
-
-                let src_l = src_weight.layout();
-                let t_l = t_weight.layout();
-                let f_l = f_weight.layout();
-
-                let src_buffer = allocator.get(src_weight.buffer_id()).unwrap();
-                let t_buffer = allocator.get(t_weight.buffer_id()).unwrap();
-                let f_buffer = allocator.get(f_weight.buffer_id()).unwrap();
-
-                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
-                let out_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let out_w = out_edge.weight();
-                let dst = allocator.get(out_w.buffer_id()).unwrap();
+                let src_buffer = allocator.get(src.buffer_id()).unwrap();
+                let t_buffer = allocator.get(t.buffer_id()).unwrap();
+                let f_buffer = allocator.get(f.buffer_id()).unwrap();
+                let dst = allocator.get(current.buffer_id()).unwrap();
 
                 where_cond(
                     self,
                     src_buffer,
-                    src_l,
-                    src_weight.dtype(),
+                    wc.src_l(),
+                    src.dtype(),
                     t_buffer,
-                    t_l,
-                    t_weight.dtype(),
+                    wc.t_l(),
+                    t.dtype(),
                     f_buffer,
-                    f_l,
-                    f_weight.dtype(),
+                    wc.f_l(),
+                    f.dtype(),
                     dst,
                 )?;
             }
@@ -2980,166 +2809,108 @@ impl Executor for MetalDevice {
             ScatterSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
             ScatterAddSet(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
             */
-            IndexSelect(dim) => {
-                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let ids_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let src_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
+            IndexSelect(is) => {
+                let srcs = is.srcs();
+                debug_assert_eq!(srcs.len(), 2);
+                let src = srcs[0];
+                let ids = srcs[1];
 
-                let src_weight = src_edge.weight();
-                let ids_weight = ids_edge.weight();
-
-                let src_l = src_weight.layout();
-                let ids_l = ids_weight.layout();
-
-                let src = allocator.get(src_weight.buffer_id()).unwrap();
-                let ids = allocator.get(ids_weight.buffer_id()).unwrap();
-
-                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
-                let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_weight = dst_edge.weight();
-                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
+                let src_buffer = allocator.get(src.buffer_id()).unwrap();
+                let ids_buffer = allocator.get(ids.buffer_id()).unwrap();
+                let dst = allocator.get(current.buffer_id()).unwrap();
 
                 index_select(
                     self,
-                    src,
-                    src_l,
-                    src_weight.dtype(),
-                    ids,
-                    ids_l,
-                    ids_weight.dtype(),
-                    *dim,
+                    src_buffer,
+                    is.src_l(),
+                    src.dtype(),
+                    ids_buffer,
+                    is.ids_l(),
+                    ids.dtype(),
+                    is.dim(),
                     &dst,
                 )?;
             }
             //IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
-            Matmul((b, m, n, k)) => {
-                let mut edges = graph.edges_directed(node, petgraph::Incoming);
-                let rhs_edge = edges
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let lhs_edge = edges
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
+            Matmul(op) => {
+                let srcs = op.srcs();
+                debug_assert_eq!(srcs.len(), 2);
+                let lhs = srcs[0];
+                let rhs = srcs[1];
 
-                let lhs_weight = lhs_edge.weight();
-                let rhs_weight = rhs_edge.weight();
+                let lhs_buffer = allocator.get(lhs.buffer_id()).unwrap();
+                let rhs_buffer = allocator.get(rhs.buffer_id()).unwrap();
+                let dst = allocator.get(current.buffer_id()).unwrap();
 
-                let lhs_l = lhs_weight.layout();
-                let rhs_l = rhs_weight.layout();
-
-                let lhs_dtype = lhs_weight.dtype();
-                let rhs_dtype = rhs_weight.dtype();
-
-                let lhs_buffer = allocator.get(lhs_weight.buffer_id()).unwrap();
-                let rhs_buffer = allocator.get(rhs_weight.buffer_id()).unwrap();
-
-                let mut outgoing = graph.edges_directed(node, petgraph::Outgoing);
-                let dst_edge = outgoing.next().ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_weight = dst_edge.weight();
-                let dst = allocator.get(dst_weight.buffer_id()).unwrap();
-
+                let (b, m, n, k) = op.dims();
                 matmul(
                     self,
-                    (*b, *m, *n, *k),
+                    (b, m, n, k),
                     lhs_buffer,
-                    lhs_l,
-                    lhs_dtype,
+                    op.lhs_l(),
+                    lhs.dtype(),
                     rhs_buffer,
-                    rhs_l,
-                    rhs_dtype,
+                    op.rhs_l(),
+                    rhs.dtype(),
                     dst,
                 )?;
             }
-            CopyStridedSrc(dst_offset) => {
-                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                // Test the alternative api for getting incoming/outgoing edges
-                // let incoming = crate::lazy::get_incoming_edges(&graph, node, Some(1));
-                // let in_edge = incoming[0];
-                let in_weight = in_edge.weight();
-                let in_w = in_edge.weight();
-                let src = allocator.get(in_w.buffer_id()).unwrap();
+            CopyStridedSrc(copy_strided_src) => {
+                let src = copy_strided_src.srcs()[0];
+                let src_buffer = allocator.get(src.buffer_id()).unwrap();
+                let src_layout = src.layout();
 
-                let outgoing: Vec<OpEdge> = graph
-                    .edges_directed(node, petgraph::Outgoing)
-                    .map(|e: petgraph::graph::EdgeReference<_>| e.weight().clone())
-                    .collect();
-
-                let out_w = outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
-
-                let dst = allocator.get(out_w.buffer_id()).unwrap();
+                let dst = allocator.get(current.buffer_id()).unwrap();
 
                 let src = MetalStorage::new(
-                    Arc::new(src.clone()),
+                    Arc::new(src_buffer.clone()),
                     self.clone(),
-                    in_weight.layout().shape().elem_count(),
-                    in_weight.dtype(),
+                    src.layout().shape().elem_count(),
+                    src.dtype(),
                 );
 
                 let mut dst = MetalStorage::new(
                     Arc::new(dst.clone()),
                     self.clone(),
-                    out_w.layout().shape().elem_count(),
-                    out_w.dtype(),
+                    current.layout().shape().elem_count(),
+                    current.dtype(),
                 );
 
-                src.copy_strided_src(&mut dst, *dst_offset, in_w.layout())?;
+                src.copy_strided_src(&mut dst, copy_strided_src.dst_offset(), src_layout)?;
             }
-            Copy2D(d1, d2, src_s, dst_s, src_o, dst_o) => {
-                // TODO: tidy up
-                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming
-                    .next()
-                    .ok_or_else(|| InvalidIncoming(op_node.clone()))?;
-                let in_w = in_edge.weight();
-                let src = allocator.get(in_w.buffer_id()).unwrap();
-
-                let outgoing: Vec<(NodeIndex, NodeIndex, OpEdge)> = graph
-                    .edges_directed(node, petgraph::Outgoing)
-                    .map(|e: petgraph::graph::EdgeReference<_>| {
-                        (e.source(), e.target(), e.weight().clone())
-                    })
-                    .collect();
-
-                let (_, sink, _) = outgoing.first().ok_or(InvalidOutgoing(op_node.id()))?;
-
-                let sink_outgoing_edges: Vec<(NodeIndex, NodeIndex, OpEdge)> = graph
-                    .edges_directed(*sink, petgraph::Outgoing)
-                    .map(|e: petgraph::graph::EdgeReference<_>| {
-                        (e.source(), e.target(), e.weight().clone())
-                    })
-                    .collect();
-
-                assert!(sink_outgoing_edges.len() > 0);
-
-                let (_out_source, _out_target, out_w) = sink_outgoing_edges
-                    .first()
-                    .ok_or(InvalidOutgoing(op_node.id()))?;
-
-                let dst = allocator.get(out_w.buffer_id()).unwrap();
-
-                // TODO: Extract copy2d out of MetalStorage and refactor.
-                let src = MetalStorage::new(
-                    Arc::new(src.clone()),
-                    self.clone(),
-                    in_w.layout().shape().elem_count(),
-                    in_w.dtype(),
-                );
-
+            Copy2D(op) => {
+                let dst = allocator.get(current.buffer_id()).unwrap();
                 let mut dst = MetalStorage::new(
                     Arc::new(dst.clone()),
                     self.clone(),
-                    out_w.layout().shape().elem_count(),
-                    out_w.dtype(),
+                    current.layout().shape().elem_count(),
+                    current.dtype(),
                 );
-                src.copy2d(&mut dst, *d1, *d2, *src_s, *dst_s, *src_o, *dst_o)?;
+
+                for copy in op.copies() {
+                    let src = copy.src();
+                    let src_buffer = allocator.get(src.buffer_id()).unwrap();
+
+                    // TODO: Extract copy2d out of MetalStorage and refactor.
+                    let src = MetalStorage::new(
+                        Arc::new(src_buffer.clone()),
+                        self.clone(),
+                        src.layout().shape().elem_count(),
+                        src.dtype(),
+                    );
+
+                    let (d1, d2, src_s, dst_s, src_o, dst_o) = (
+                        copy.d1(),
+                        copy.d2(),
+                        copy.src_s(),
+                        copy.dst_s(),
+                        copy.src_o(),
+                        copy.dst_o(),
+                    );
+                    src.copy2d(&mut dst, d1, d2, src_s, dst_s, src_o, dst_o)?;
+                }
             }
+            /*
             ConstSet(scalar) => {
                 let dst_edge = graph
                     .edges_directed(node, petgraph::Outgoing)
@@ -3157,50 +2928,34 @@ impl Executor for MetalDevice {
 
                 dst.const_set(scalar.clone(), dst_w.layout())?;
             }
-            Sink => {}
-            Output => {
-                todo!();
-                /*
-                let mut incoming = graph.edges_directed(node, petgraph::Incoming);
-                let in_edge = incoming.next().ok_or(InvalidIncoming(op_node.id()))?;
-                let in_w = in_edge.weight();
-                let buffer = allocator.get_or_allocate(
-                    in_w.buffer_id(),
-                    in_w.layout().shape(),
-                    in_w.dtype(),
-                )?;
-                */
-            }
+            */
+            Sink(_sink) => {}
             CustomOp(custom_op) => {
-                let incoming = graph.edges_directed(node, petgraph::Incoming);
-                let mut input: Vec<_> = incoming
-                    .map(|edge| {
-                        let w = edge.weight();
-                        let buffer = allocator.get(w.buffer_id()).unwrap();
-                        let layout = w.layout();
-                        let dtype = w.dtype();
+                let expected_edges = custom_op.op().expected_edges();
+                let edges = custom_op.args().len();
+                assert_eq!(expected_edges, edges);
+
+                let args: Vec<_> = custom_op
+                    .args()
+                    .iter()
+                    .map(|(storage, layout)| {
+                        let buffer = allocator.get(storage.buffer_id()).unwrap();
+                        let dtype = storage.dtype();
                         (buffer, layout, dtype)
                     })
                     .collect();
-                input.reverse();
 
-                println!("{} incoming edges count: {}", custom_op.name(), input.len());
-
-                let dst_edge = graph
-                    .edges_directed(node, petgraph::Outgoing)
-                    .next()
-                    .ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_w = dst_edge.weight();
-                let dst_buffer = allocator.get(dst_w.buffer_id()).unwrap();
+                let dst_buffer = allocator.get(current.buffer_id()).unwrap();
 
                 // Attempt to get metal op for this custom operation
-                if let Some(specialized_op) = self.get_specialized_op(custom_op) {
-                    specialized_op.call(&input, dst_buffer)?;
+                if let Some(specialized_op) = self.get_specialized_op(custom_op.op()) {
+                    specialized_op.call(&args, dst_buffer)?;
                 } else {
-                    todo!("should be unreachable");
+                    unreachable!("could not find specialized op, yet no fallback registered.");
                 }
             }
-            _ => todo!("{:?}", op_node),
+            Output(_) => {}
+            _ => todo!("{}", current.op()),
         }
         Ok(())
     }

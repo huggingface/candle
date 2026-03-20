@@ -1,7 +1,7 @@
 //! Rotary Embeddings
 //!
 use candle::{
-    lazy::custom::{CustomOp, LazyCustomOp, LazyCustomOpClone},
+    lazy::custom::{CustomOp, LazyCustomOp},
     op::BackpropOp,
     CpuStorage, Layout, Result, Shape, Tensor, D,
 };

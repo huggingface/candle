@@ -1,0 +1,1890 @@
+pub mod custom;
+
+use crate::backend::{BackendDevice, BackendStorage};
+use crate::lazy::custom::{CustomOp, LazyCustomFn, LazyCustomOp};
+use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::{CpuStorage, DType, Layout, Result, Shape};
+use petgraph::graph::{DiGraph, Edge, EdgeIndex, EdgeReference, IndexType, NodeIndex};
+use petgraph::visit::EdgeRef;
+use petgraph::Direction::{Incoming, Outgoing};
+use petgraph::{EdgeType, Graph};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
+use std::sync::atomic;
+use std::sync::Arc;
+
+static OP_COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+
+fn count() -> usize {
+    OP_COUNTER.fetch_add(1, atomic::Ordering::Relaxed)
+}
+
+#[allow(unused)]
+fn get_count() -> usize {
+    OP_COUNTER.load(atomic::Ordering::Relaxed)
+}
+
+#[derive(thiserror::Error, Debug, Clone)]
+pub enum LazyError {
+    #[error("{0}")]
+    Message(String),
+
+    #[error("Incorrect incoming edges to node {0:?}")]
+    InvalidIncoming(OpNode),
+
+    #[error("Incorrect outgoing edges to node {0:?}")]
+    InvalidOutgoing(NodeId),
+
+    #[error("Edge {0:?} expected to have state")]
+    InvalidEdgeState(EdgeId),
+
+    #[error("No buffer found for {0:?}")]
+    BufferNotFound(BufferId),
+}
+
+impl From<String> for LazyError {
+    fn from(e: String) -> Self {
+        LazyError::Message(e)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NodeId(usize);
+
+impl NodeId {
+    fn new() -> Self {
+        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
+        use std::sync::atomic;
+        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
+    }
+
+    pub fn index(&self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EdgeId(usize);
+
+impl EdgeId {
+    fn new() -> Self {
+        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
+        use std::sync::atomic;
+        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BufferId(usize);
+
+impl BufferId {
+    fn new() -> Self {
+        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
+        use std::sync::atomic;
+        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
+    }
+}
+
+pub type OpGraph = DiGraph<OpNode, OpEdge>;
+
+pub fn update_all_outgoing(
+    g: &mut OpGraph,
+    node: NodeIndex<u32>,
+    buffer_id: BufferId,
+) -> Result<()> {
+    let edges: Vec<(NodeIndex, NodeIndex, OpEdge)> = g
+        .edges_directed(node, Outgoing)
+        .map(|e| (e.source(), e.target(), e.weight().clone()))
+        .collect();
+
+    if edges.is_empty() {
+        todo!("Add error type for this state")
+        //return Err(LazyError::InvalidOutgoing(node));
+    }
+    for (source, target, mut weight) in edges {
+        weight.buffer_id = buffer_id;
+        g.update_edge(source, target, weight);
+    }
+    Ok(())
+}
+
+pub struct Ancestors<'a, N, E, D, Idx>
+where
+    E: 'a,
+    Idx: 'a + IndexType,
+    D: EdgeType,
+{
+    graph: &'a Graph<N, E, D, Idx>,
+    edges: &'a [Edge<E, Idx>],
+    visited: HashSet<EdgeIndex<Idx>>,
+    to_visit: VecDeque<EdgeIndex<Idx>>,
+}
+
+impl<'a, N, E, D, Idx> Ancestors<'a, N, E, D, Idx>
+where
+    E: 'a,
+    Idx: 'a + IndexType,
+    D: EdgeType,
+{
+    pub fn of(g: &'a Graph<N, E, D, Idx>, start: NodeIndex<Idx>) -> Self
+    where
+        D: EdgeType,
+    {
+        Ancestors {
+            graph: &g,
+            edges: g.raw_edges(),
+            visited: HashSet::new(),
+            to_visit: g.edges_directed(start, Incoming).map(|e| e.id()).collect(),
+        }
+    }
+}
+
+impl<'a, N, E, D, Idx> Iterator for Ancestors<'a, N, E, D, Idx>
+where
+    E: 'a,
+    Idx: 'a + IndexType,
+    D: EdgeType,
+{
+    type Item = EdgeIndex<Idx>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(e) = self.to_visit.pop_front() {
+            if self.visited.contains(&e) {
+                continue;
+            }
+            self.visited.insert(e);
+            let edge = &self.edges[e.index()];
+
+            let source = edge.source();
+            self.to_visit
+                .extend(self.graph.edges_directed(source, Incoming).map(|e| e.id()));
+            return Some(e);
+        }
+        None
+    }
+}
+
+// Return a subgraph which includes all nodes and edges that are ascendants of the provided node index
+// TODO: pub fn ancestors<N, E>(g: &DiGraph<N, E>, node: NodeIndex<u32>) -> DiGraph<N, E> {
+pub fn ancestors(g: &OpGraph, node: NodeIndex<u32>) -> OpGraph {
+    let ancestors_iter = Ancestors::of(g, node);
+    let mut ancestors = OpGraph::new();
+    let mut idx_map = BTreeMap::new();
+
+    ancestors_iter.for_each(|e| {
+        let e = &g.raw_edges()[e.index()];
+        let source = e.source();
+        let target = e.target();
+        let edge_weight = e.weight.clone();
+
+        let source_id = idx_map
+            .entry(source)
+            .or_insert_with(|| {
+                let w = g.node_weight(source).unwrap().clone();
+                ancestors.add_node(w)
+            })
+            .clone();
+
+        let target_id = idx_map
+            .entry(target)
+            .or_insert_with(|| {
+                let w = g.node_weight(target).unwrap().clone();
+                ancestors.add_node(w)
+            })
+            .clone();
+
+        ancestors.add_edge(source_id, target_id, edge_weight);
+    });
+    ancestors
+}
+
+pub fn execution_order(g: &OpGraph) -> Vec<NodeIndex> {
+    let mut done = HashSet::new();
+    let mut pending = HashSet::new();
+    let mut order = Vec::new();
+
+    let last_node = NodeIndex::new(g.node_count() - 1);
+    let mut stack: Vec<(NodeIndex, usize)> = vec![(last_node, 0)];
+    while let Some((cur_n, cur_src)) = stack.pop() {
+        let srcs: Vec<_> = g.edges_directed(cur_n, petgraph::Incoming).collect();
+        let all_deps_done = cur_src == srcs.len();
+
+        if all_deps_done {
+            done.insert(cur_n);
+            pending.remove(&cur_n);
+            order.push(cur_n);
+            continue;
+        }
+
+        let (srcs_with_deps, srcs_without_deps): (Vec<_>, Vec<_>) = srcs
+            .iter()
+            .map(|s| s.source())
+            .partition(|s| g.edges_directed(*s, petgraph::Incoming).count() == 0);
+
+        let all_srcs = srcs_with_deps
+            .into_iter()
+            .chain(srcs_without_deps)
+            .collect::<Vec<_>>();
+
+        let precursor = all_srcs[cur_src];
+
+        if done.contains(&precursor) {
+            stack.push((cur_n, cur_src + 1));
+        } else if pending.contains(&precursor) {
+            panic!(
+                    "Cycle detected whilst computing topological order: {:?}. Try plotting with feature `plotting`.",
+                    precursor
+                );
+        } else {
+            pending.insert(precursor);
+            stack.push((cur_n, cur_src));
+            stack.push((precursor, 0));
+        }
+    }
+
+    order
+}
+
+pub fn get_incoming_edges<N, E>(
+    g: &DiGraph<N, E>,
+    idx: NodeIndex<u32>,
+    expected: Option<usize>,
+) -> Vec<EdgeReference<'_, E>> {
+    let edges = g.edges_directed(idx, Incoming);
+    let result: Vec<EdgeReference<E>> = edges.collect();
+
+    if let Some(n) = expected {
+        // TODO: Return Error instead
+        assert_eq!(result.len(), n);
+    }
+
+    result
+}
+
+#[derive(Debug, Clone)]
+pub struct LazyStorage {
+    operations: OpGraph,
+    custom_op_fallbacks: HashMap<String, LazyStorage>,
+    custom_ops: HashMap<String, CustomOp>,
+    layout: Layout,
+    initial_dtype: DType,
+    current_node: Option<NodeIndex<u32>>,
+    // potentially Arc<RwLock<...>>
+    //inner: Option<CpuStorage>,
+}
+
+impl LazyStorage {
+    pub fn get_current_node(&self) -> Result<NodeIndex<u32>> {
+        self.current_node
+            .ok_or(LazyError::Message("No current node in lazy storage".to_string()).into())
+    }
+
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    pub fn custom_ops(&self) -> &HashMap<String, CustomOp> {
+        &self.custom_ops
+    }
+
+    pub fn add_custom_fallback<S: Into<String>>(&mut self, name: S, fallback: LazyStorage) {
+        self.custom_op_fallbacks.insert(name.into(), fallback);
+    }
+
+    fn add_edge(&mut self, src: NodeIndex, dst: NodeIndex, l: Layout, dtype: DType) {
+        // Get existing outgoing edges from the source node
+        if let Some(edge) = self.operations.edges_directed(src, Outgoing).next() {
+            /*
+            let size = l.shape().elem_count() * dtype.size_in_bytes();
+            let e_layout = edge.weight().layout();
+            let e_dtype = edge.weight().dtype();
+            let e_size =
+                (e_layout.shape().elem_count() - e_layout.start_offset()) * e_dtype.size_in_bytes();
+            if size < e_size {
+                println!("{:?}", self.operations.node_weight(src));
+                println!("{l:?} | {dtype:?}");
+                println!("{e_layout:?} | {e_dtype:?}");
+                debug_assert_eq!(size, e_size);
+            }
+            */
+            self.operations.add_edge(src, dst, edge.weight().clone());
+        } else {
+            self.operations.add_edge(src, dst, OpEdge::new(l, dtype));
+        }
+    }
+
+    pub fn output(&self) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+        let current_node = next.get_current_node()?;
+
+        let current_op = self.operations.node_weight(current_node).unwrap();
+        // Only add output node if not already present
+        if !matches!(current_op.op(), Op::Output) {
+            let idx = next.add_operation(Op::Output);
+            next.add_edge(current_node, idx, self.layout.clone(), self.dtype());
+        };
+
+        Ok(next)
+    }
+
+    pub fn register_custom_op(&mut self, op: CustomOp) {
+        match op {
+            CustomOp::One(ref custom_op1) => {
+                self.custom_ops
+                    .insert(custom_op1.name().to_string(), op.clone());
+            }
+            CustomOp::Two(ref custom_op2) => {
+                self.custom_ops
+                    .insert(custom_op2.name().to_string(), op.clone());
+            }
+            CustomOp::Three(ref custom_op3) => {
+                self.custom_ops
+                    .insert(custom_op3.name().to_string(), op.clone());
+            }
+        }
+    }
+
+    pub fn custom_op(&self, op: Box<dyn LazyCustomOp>, args: &[(&Self, &Layout)]) -> Result<Self> {
+        count();
+
+        let expected_edges = op.expected_edges();
+        if expected_edges - 1 != args.len() {
+            crate::bail!(
+                "Incorrect args len. Expected {}, got {}",
+                expected_edges - 1,
+                args.len()
+            );
+        }
+
+        let mut next = self.clone();
+        let idx = next.add_operation(Op::CustomOp(op.into()));
+        let current_op = next.get_current_node()?;
+
+        next.add_edge(current_op, idx, self.layout.clone(), self.dtype());
+
+        for (arg, arg_l) in args {
+            let node = arg.get_current_node()?;
+            let edge = OpEdge::new((*arg_l).clone(), arg.dtype());
+            next.merge(arg, node, idx, edge)?;
+        }
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    pub fn operations(&self) -> &OpGraph {
+        &self.operations
+    }
+
+    pub fn shape(&self) -> &Shape {
+        self.layout.shape()
+    }
+}
+
+pub fn graph_to_dot<G>(g: &G) -> String
+where
+    G: petgraph::visit::NodeIndexable
+        + petgraph::visit::GraphProp
+        + petgraph::visit::IntoNodeReferences
+        + petgraph::visit::IntoEdgeReferences,
+    <G as petgraph::visit::Data>::EdgeWeight: Display,
+    <G as petgraph::visit::Data>::NodeWeight: Display,
+{
+    format!("{}", petgraph::dot::Dot::new(g))
+}
+
+pub trait LazyBuffer: Debug + Clone + PartialEq {}
+
+pub trait LazyAllocator<B: LazyBuffer> {
+    fn initialize(
+        &mut self,
+        graph: &mut OpGraph,
+        edges: &[EdgeIndex],
+        last_node: NodeIndex,
+    ) -> Result<()>;
+    fn insert(&mut self, id: BufferId, buffer: B) -> Result<()>;
+    fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&B>;
+    fn get(&self, id: BufferId) -> Result<&B>;
+    fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&B>;
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryPlan {
+    pub reusage: BTreeMap<BufferId, BufferId>,
+    pub allocations: BTreeMap<BufferId, (Layout, DType)>,
+}
+
+pub fn determine_tensor_source<'a>(graph: &'a OpGraph, edge: &'a Edge<OpEdge>) -> &'a Edge<OpEdge> {
+    // TODO: Something is not quite right here.
+    let mut source = edge;
+    loop {
+        let next_edge = source.next_edge(petgraph::Incoming);
+        if next_edge == EdgeIndex::end() {
+            break;
+        }
+        let edge = &graph.raw_edges()[next_edge.index()];
+
+        let source_node_idx = edge.source();
+        let source_node = &graph.raw_nodes()[source_node_idx.index()];
+        if !source_node.weight.supports_inplace() {
+            break;
+        }
+        source = edge;
+    }
+    source
+}
+
+pub fn calculate_usage_records(
+    graph: &OpGraph,
+    edges: &[EdgeIndex],
+) -> BTreeMap<BufferId, (Option<BufferId>, Option<usize>, usize, Layout, DType)> {
+    let mut records = BTreeMap::new();
+    let topo_len = edges.len() - 1;
+    for (i, edge_idx) in edges.iter().rev().enumerate() {
+        let edge = &graph.raw_edges()[edge_idx.index()];
+        let buffer_id = edge.weight.buffer_id();
+        let node_idx = edge.source();
+
+        let t = &graph[node_idx];
+        if t.resolved() {
+            continue;
+        }
+        let incoming = graph.edges_directed(node_idx, petgraph::Incoming);
+        for in_idx in incoming {
+            let in_edge: &Edge<OpEdge> = &graph.raw_edges()[in_idx.id().index()];
+            let source_idx = in_edge.source();
+
+            let source = &graph[source_idx];
+            if source.resolved() {
+                continue;
+            }
+            let true_source = determine_tensor_source(graph, in_edge);
+            records
+                .entry(true_source.weight.buffer_id())
+                .or_insert_with(|| {
+                    (
+                        None,
+                        None,
+                        topo_len - i,
+                        true_source.weight.layout.clone(),
+                        true_source.weight.dtype(),
+                    )
+                });
+        }
+
+        if let Some(record) = records.get_mut(&buffer_id) {
+            record.0 = Some(buffer_id);
+            record.1 = Some(topo_len - i);
+        }
+    }
+    //filter records with no producer
+    records.retain(|_, v| v.1.is_some());
+    records
+}
+
+// https://arxiv.org/pdf/2001.03288.pdf
+pub fn greedy_by_size(graph: &OpGraph, edges: &[EdgeIndex]) -> Result<MemoryPlan> {
+    use std::time::Instant;
+
+    let mut reusage = BTreeMap::new();
+    let mut allocations = BTreeMap::new();
+
+    let i1 = Instant::now();
+    //print!("Const allocations ... ");
+
+    // Plan Const (input) allocations
+    for edge_idx in edges.iter().rev() {
+        let edge = &graph.raw_edges()[edge_idx.index()];
+        let buffer_id = edge.weight.buffer_id();
+        let node_idx = edge.source();
+
+        if let Op::Const(s) = &graph[node_idx].op() {
+            let shape = Shape::from(s.len());
+            allocations.insert(buffer_id, (Layout::contiguous(shape), s.dtype()));
+        }
+    }
+    let i2 = Instant::now();
+    //println!("{:?}", i2.duration_since(i1));
+
+    //print!("Calculate usage records allocations ... ");
+    // Find buffer usage spans in the graph
+    let record_map = calculate_usage_records(graph, edges);
+    let i1 = Instant::now();
+    //println!("{:?}", i1.duration_since(i2));
+
+    let mut shared_objects: Vec<BufferId> = Vec::with_capacity(record_map.len());
+
+    //print!("Record map loop ... ");
+    for (buffer_id, (_record_buffer_id, producer, last_consumer, layout, dtype)) in
+        record_map.iter()
+    {
+        let record_producer = producer.unwrap();
+        let mut best_buffer: Option<BufferId> = None;
+
+        for obj in shared_objects.iter() {
+            let mut suitable = true;
+            for (
+                inner_buffer_id,
+                (_, inner_producer, inner_last_consumer, _inner_layout, _inner_dtype),
+            ) in record_map.iter()
+            {
+                let max_first = std::cmp::max(record_producer, inner_producer.unwrap());
+                let min_last = *std::cmp::min(last_consumer, inner_last_consumer);
+                if max_first <= min_last
+                    && (inner_buffer_id == obj || reusage.get(inner_buffer_id) == Some(obj))
+                {
+                    suitable = false;
+                    break;
+                }
+            }
+            if suitable {
+                best_buffer = Some(*obj);
+            }
+        }
+        if let Some(best) = best_buffer {
+            reusage.insert(buffer_id.clone(), best);
+        } else {
+            //let rounded_size = (record.size - 1).next_power_of_two();
+            allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
+            shared_objects.push(buffer_id.clone());
+        }
+    }
+    let i2 = Instant::now();
+    //println!("{:?}", i2.duration_since(i1));
+
+    // Loop through and add inplace assignments
+    /*
+    for edge_idx in edges.iter() {
+        let edge = &graph.raw_edges()[edge_idx.index()];
+        let node_idx = edge.source();
+        let t = &graph[node_idx];
+        if t.resolved() {
+            continue;
+        }
+        let incoming = graph.edges_directed(node_idx, petgraph::Incoming);
+        for in_idx in incoming {
+            let in_edge: &Edge<OpEdge> = &graph.raw_edges()[in_idx.id().index()];
+
+            let true_source = determine_tensor_source(graph, in_edge);
+            if true_source.weight.buffer_id() != in_edge.weight.buffer_id() {
+                if let Some(_) = allocations.get(&true_source.weight.buffer_id()) {
+                    reusage.insert(in_edge.weight.buffer_id(), true_source.weight.buffer_id());
+                }
+            }
+        }
+    }
+     */
+
+    //print!("Final node ... ");
+    // Handle final output edge
+    let output = edges.last().unwrap();
+    let output_w = graph.edge_weight(*output).unwrap();
+    let output_edge: &Edge<OpEdge> = &graph.raw_edges()[output.index()];
+    let source = determine_tensor_source(&graph, output_edge);
+    let source_w = &source.weight;
+    allocations.insert(
+        output_w.buffer_id(),
+        (source_w.layout.clone(), source_w.dtype()),
+    );
+    let i1 = Instant::now();
+    //println!("{:?}", i1.duration_since(i2));
+
+    Ok(MemoryPlan {
+        reusage,
+        allocations,
+    })
+}
+
+pub trait Executor {
+    type BufferType: LazyBuffer;
+    type AllocatorType: LazyAllocator<Self::BufferType>;
+
+    fn optimize(&self, _graph: &mut OpGraph) {
+        // TODO: Generic optimizations
+    }
+
+    /// Backend specific optimizations. Defaults to noop.
+    fn specialize(&self, _graph: &mut OpGraph) {}
+
+    fn run(&self, lazy_storage: LazyStorage) -> Result<Self::BufferType>;
+
+    fn eval(
+        &self,
+        operations: &mut OpGraph,
+        allocator: &mut Self::AllocatorType,
+        node: NodeIndex,
+    ) -> Result<()>;
+
+    fn allocator(&self) -> Self::AllocatorType;
+
+    fn get_specialized_op(
+        &self,
+        _op: &Box<dyn LazyCustomOp>,
+    ) -> Option<Box<dyn LazyCustomFn<Self::BufferType>>> {
+        None
+    }
+
+    fn install_custom_op(
+        &mut self,
+        op: &Box<dyn LazyCustomOp>,
+        func: Box<dyn LazyCustomFn<Self::BufferType>>,
+    ) -> Option<&Box<dyn LazyCustomFn<Self::BufferType>>>;
+}
+
+impl LazyStorage {
+    fn new(shape: Shape, dtype: DType) -> LazyStorage {
+        LazyStorage {
+            operations: Default::default(),
+            custom_op_fallbacks: HashMap::new(),
+            custom_ops: HashMap::new(),
+            layout: Layout::contiguous(shape),
+            initial_dtype: dtype,
+            current_node: None,
+        }
+    }
+
+    pub fn execute<E: Executor>(&self, executor: E) -> Result<E::BufferType> {
+        // TODO: Apply backend agnostic optimizations
+        executor.run(self.clone())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpEdge {
+    id: EdgeId,
+    layout: Layout,
+    dtype: DType,
+    buffer_id: BufferId,
+}
+
+impl OpEdge {
+    pub fn new(layout: Layout, dtype: DType) -> Self {
+        OpEdge {
+            id: EdgeId::new(),
+            layout,
+            dtype,
+            buffer_id: BufferId::new(),
+        }
+    }
+
+    pub fn id(&self) -> EdgeId {
+        self.id
+    }
+
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    pub fn shape(&self) -> &Shape {
+        &self.layout.shape()
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    pub fn buffer_id(&self) -> BufferId {
+        self.buffer_id
+    }
+
+    pub fn set_buffer_id(&mut self, buffer_id: BufferId) {
+        self.buffer_id = buffer_id
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.layout.shape().elem_count() * self.dtype.size_in_bytes()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpNode {
+    id: NodeId,
+    op: Op,
+}
+
+impl OpNode {
+    fn new(op: Op) -> Self {
+        Self {
+            id: NodeId::new(),
+            op: op,
+        }
+    }
+
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+
+    pub fn op(&self) -> &Op {
+        &self.op
+    }
+
+    pub fn resolved(&self) -> bool {
+        matches!(self.op, Op::Const(_))
+    }
+
+    pub fn supports_inplace(&self) -> bool {
+        false //matches!(self.op, Op::Const(_)) // | Op::Copy2D(_, _, _, _, _, _))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Op {
+    Const(Arc<CpuStorage>),
+    ToCpu,
+    Affine(f64, f64),
+    Powf(f64),
+    Elu(f64),
+    Reduce(ReduceOp, Vec<usize>, Layout, usize),
+    Cmp(CmpOp),
+    ToDType(DType),
+    Unary(&'static str),
+    Binary(&'static str, Layout, Layout),
+    WhereCond,
+    Conv1D(crate::conv::ParamsConv1D),
+    ConvTranspose1D(crate::conv::ParamsConvTranspose1D),
+    Conv2D(crate::conv::ParamsConv2D),
+    ConvTranspose2D(crate::conv::ParamsConvTranspose2D),
+    AvgPool2D((usize, usize), (usize, usize)),
+    MaxPool2D((usize, usize), (usize, usize)),
+    UpsampleNearest1D(usize),
+    UpsampleNearest2D(usize, usize),
+    Gather(usize),
+    ScatterSet(usize),
+    ScatterAddSet(usize),
+    IndexSelect(usize),
+    IndexAdd(usize),
+    Matmul((usize, usize, usize, usize)),
+    CopyStridedSrc(usize),
+    Copy2D(usize, usize, usize, usize, usize, usize),
+    ConstSet(crate::scalar::Scalar),
+    Sink,
+    Aggregate,
+    Output,
+    CustomOp(Box<dyn LazyCustomOp>),
+}
+
+impl Display for OpNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.id.0, self.op)
+    }
+}
+
+impl Display for Op {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Op::Const(_) => write!(f, "Const"),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl Display for OpEdge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} ({:?}, {:?}, {:?}, {:?})",
+            self.id.0,
+            self.layout.shape().dims(),
+            self.layout.stride(),
+            self.dtype,
+            self.buffer_id
+        )
+    }
+}
+
+impl LazyStorage {
+    fn node(&self, idx: NodeIndex<u32>) -> Option<&OpNode> {
+        self.operations.node_weight(idx)
+    }
+
+    fn node_op(&self, idx: NodeIndex<u32>) -> Option<Op> {
+        self.node(idx).map(|n| n.op.clone())
+    }
+
+    fn add_operation(&mut self, op: Op) -> NodeIndex<u32> {
+        self.operations.add_node(OpNode::new(op))
+    }
+
+    fn merge(
+        &mut self,
+        other: &Self,
+        source_node: NodeIndex<u32>,
+        target_node: NodeIndex<u32>,
+        edge: OpEdge,
+    ) -> Result<()> {
+        self.custom_op_fallbacks
+            .extend(other.custom_op_fallbacks.clone());
+        self.custom_ops.extend(other.custom_ops.clone());
+
+        // TODO: Optimize. Perhaps we should use a GraphMap instead of Graph.
+
+        let source_id = other.operations.node_weight(source_node).unwrap().id;
+        let _target_id = self.operations.node_weight(target_node).unwrap().id;
+        debug_assert!(target_node.index() <= self.operations().node_count());
+
+        // Add nodes from other graph.
+        // Store old->new index mapping for updating edges.
+        // TODO: Use self.operations.visit_map() instead of BTreeMap
+        let mut nodes: BTreeMap<NodeId, NodeIndex> = self
+            .operations
+            .raw_nodes()
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.weight.id, NodeIndex::new(i)))
+            .collect();
+
+        let edges: HashSet<EdgeId> = self
+            .operations
+            .raw_edges()
+            .iter()
+            .map(|e| e.weight.id)
+            .collect();
+
+        // Add all relevant nodes if not already present
+        other.operations.raw_nodes().iter().for_each(|o| {
+            let oid = o.weight.id;
+            if !nodes.contains_key(&oid) {
+                let i = self.operations.add_node(o.weight.clone());
+                nodes.insert(oid, i);
+            }
+        });
+
+        // Add edges from other graph, using the index mapping.
+        other.operations.raw_edges().iter().for_each(|other_edge| {
+            let oid = other_edge.weight.id;
+            if !edges.contains(&oid) {
+                let source = other_edge.source();
+                let target = other_edge.target();
+                let s_id = other.operations.node_weight(source).unwrap().id;
+                let t_id = other.operations.node_weight(target).unwrap().id;
+                let source_idx = nodes.get(&s_id).unwrap();
+                let target_idx = nodes.get(&t_id).unwrap();
+
+                let mut e = other_edge.weight.clone();
+                if let Some(existing) = self.operations.edges_directed(*source_idx, Outgoing).next()
+                {
+                    e.set_buffer_id(existing.weight().buffer_id());
+                }
+                self.operations.add_edge(*source_idx, *target_idx, e);
+            }
+        });
+
+        // Find source_node in self graph by unique id
+        let source_node = self
+            .operations()
+            .raw_nodes()
+            .iter()
+            .enumerate()
+            .find_map(|(i, n)| {
+                if n.weight.id == source_id {
+                    return Some(NodeIndex::new(i));
+                }
+                None
+            })
+            .unwrap();
+
+        // Connect the two graphs using the provided node indices and edge weight.
+        self.add_edge(
+            source_node,
+            target_node,
+            edge.layout().clone(),
+            edge.dtype(),
+        );
+
+        Ok(())
+    }
+}
+
+impl BackendStorage for LazyStorage {
+    type Device = LazyDevice;
+
+    fn try_clone(&self, _: &Layout) -> Result<Self> {
+        Ok(self.clone())
+    }
+
+    fn dtype(&self) -> DType {
+        // Get current node if available
+        if let Ok(node) = self.get_current_node() {
+            // If Const get dtype from inner storage
+            if let Some(Op::Const(s)) = self.node_op(node) {
+                return s.dtype();
+            }
+            // If ToDType use that dtype
+            if let Some(Op::ToDType(dtype)) = self.node_op(node) {
+                return dtype;
+            }
+            // Otherwise get dtype from first incoming edge if available
+            let mut incoming = self.operations.edges_directed(node, Incoming);
+            if let Some(first) = incoming.next() {
+                return first.weight().dtype;
+            }
+        }
+        // TODO: unreachable? A node must either have incoming edges or be Const.
+        // Fallback to default dtype
+        self.initial_dtype
+    }
+
+    fn device(&self) -> &Self::Device {
+        &LazyDevice
+    }
+
+    fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        let mut next = self.clone();
+        next.add_operation(Op::ToCpu);
+        todo!()
+    }
+
+    fn affine(&self, l: &Layout, mul: f64, add: f64) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Affine(mul, add);
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn powf(&self, l: &Layout, pow: f64) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Powf(pow);
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn elu(&self, l: &Layout, alpha: f64) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Elu(alpha);
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn reduce_op(&self, reduce: ReduceOp, l: &Layout, reduce_dims: &[usize]) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        // Calculate reduction layout and number of destination elements.
+        let src_stride = l.stride();
+        let src_dims = l.dims();
+        // Source dims and strides with the sum dims at the end.
+        let mut dims = vec![];
+        let mut stride = vec![];
+        let mut dst_el: usize = 1;
+        for (dim_idx, &d) in src_dims.iter().enumerate() {
+            if !reduce_dims.contains(&dim_idx) {
+                dst_el *= d;
+                dims.push(d);
+                stride.push(src_stride[dim_idx]);
+            }
+        }
+
+        let mut dst_dims = src_dims.to_vec();
+        for &dim_idx in reduce_dims.iter() {
+            dims.push(src_dims[dim_idx]);
+            stride.push(src_stride[dim_idx]);
+            dst_dims[dim_idx] = 1;
+        }
+
+        let reduction_shape = Shape::from(dims.clone());
+        let reduction_layout = Layout::new(reduction_shape, stride, 0);
+
+        let dst_shape = Shape::from(dst_dims);
+        let dst_layout = Layout::contiguous(dst_shape);
+
+        let op = Op::Reduce(
+            reduce,
+            reduce_dims.to_vec(),
+            reduction_layout.clone(),
+            dst_el,
+        );
+        let idx = next.add_operation(op);
+        next.add_edge(
+            next.get_current_node()?,
+            idx,
+            reduction_layout.clone(),
+            self.dtype(),
+        );
+
+        next.layout = dst_layout;
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn cmp(&self, cmp_op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Cmp(cmp_op);
+        let idx = next.add_operation(op);
+
+        let current_op = next.get_current_node()?;
+        next.add_edge(current_op, idx, lhs_l.clone(), self.dtype());
+
+        let rhs_op = rhs.get_current_node()?;
+        let rhs_edge = OpEdge::new(rhs_l.clone(), self.dtype());
+        next.merge(rhs, rhs_op, idx, rhs_edge)?;
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn to_dtype(&self, l: &Layout, dtype: DType) -> Result<Self> {
+        if self.dtype() != dtype {
+            count();
+
+            let mut next = self.clone();
+
+            let op = Op::ToDType(dtype);
+            let idx = next.add_operation(op);
+            next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+            next.current_node = Some(idx);
+            return Ok(next);
+        }
+        Ok(self.clone())
+    }
+
+    fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Unary(B::KERNEL);
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        next.layout = l.clone();
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn binary_impl<B: BinaryOpT>(
+        &self,
+        rhs: &Self,
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Binary(B::KERNEL, lhs_l.clone(), rhs_l.clone());
+        let idx = next.add_operation(op);
+
+        next.add_edge(
+            next.get_current_node()?,
+            idx,
+            self.layout.clone(),
+            self.dtype(),
+        );
+
+        let rhs_op = rhs.get_current_node()?;
+        let rhs_edge = OpEdge::new(rhs.layout.clone(), self.dtype());
+
+        next.merge(rhs, rhs_op, idx, rhs_edge)?;
+
+        next.layout = lhs_l.clone();
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn where_cond(
+        &self,
+        l: &Layout,
+        t: &Self,
+        t_l: &Layout,
+        f: &Self,
+        f_l: &Layout,
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let idx = next.add_operation(Op::WhereCond);
+
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        let t_op = t.get_current_node()?;
+        let t_edge = OpEdge::new(t_l.clone(), t.dtype());
+        next.merge(t, t_op, idx, t_edge)?;
+
+        let f_op = f.get_current_node()?;
+        let f_edge = OpEdge::new(f_l.clone(), f.dtype());
+        next.merge(f, f_op, idx, f_edge)?;
+
+        next.current_node = Some(idx);
+
+        Ok(next)
+    }
+
+    fn conv1d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Conv1D(params.clone());
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        let kernel_op = kernel.get_current_node()?;
+        let kernel_edge = OpEdge::new(kernel_l.clone(), self.dtype());
+        next.merge(kernel, kernel_op, idx, kernel_edge)?;
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn conv_transpose1d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose1D,
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::ConvTranspose1D(params.clone());
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        let kernel_op = kernel.get_current_node()?;
+        let kernel_edge = OpEdge::new(kernel_l.clone(), self.dtype());
+        next.merge(kernel, kernel_op, idx, kernel_edge)?;
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn conv2d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Conv2D(params.clone());
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        let kernel_op = kernel.get_current_node()?;
+        let kernel_edge = OpEdge::new(kernel_l.clone(), self.dtype());
+        next.merge(kernel, kernel_op, idx, kernel_edge)?;
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn conv_transpose2d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose2D,
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::ConvTranspose2D(params.clone());
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        let kernel_op = kernel.get_current_node()?;
+        let kernel_edge = OpEdge::new(kernel_l.clone(), self.dtype());
+        next.merge(kernel, kernel_op, idx, kernel_edge)?;
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn avg_pool2d(
+        &self,
+        l: &Layout,
+        (w_k, h_k): (usize, usize),
+        (w_stride, h_stride): (usize, usize),
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::AvgPool2D((w_k, h_k), (w_stride, h_stride));
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn max_pool2d(
+        &self,
+        l: &Layout,
+        (w_k, h_k): (usize, usize),
+        (w_stride, h_stride): (usize, usize),
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::MaxPool2D((w_k, h_k), (w_stride, h_stride));
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn upsample_nearest1d(&self, l: &Layout, sz: usize) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::UpsampleNearest1D(sz);
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn upsample_nearest2d(&self, l: &Layout, out_w: usize, out_h: usize) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::UpsampleNearest2D(out_w, out_h);
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Gather(dim);
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        let ids_op = ids.get_current_node()?;
+        let ids_edge = OpEdge::new(ids_l.clone(), self.dtype());
+        next.merge(ids, ids_op, idx, ids_edge)?;
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn scatter_set(
+        &mut self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<()> {
+        count();
+
+        let op = Op::ScatterSet(dim);
+        let idx = self.add_operation(op);
+        self.add_edge(self.get_current_node()?, idx, l.clone(), self.dtype());
+
+        let ids_op = ids.get_current_node()?;
+        let ids_edge = OpEdge::new(ids_l.clone(), self.dtype());
+        self.merge(ids, ids_op, idx, ids_edge)?;
+
+        let src_op = src.get_current_node()?;
+        let src_edge = OpEdge::new(src_l.clone(), self.dtype());
+        self.merge(src, src_op, idx, src_edge)?;
+
+        self.current_node = Some(idx);
+        Ok(())
+    }
+
+    fn scatter_add_set(
+        &mut self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<()> {
+        count();
+
+        let op = Op::ScatterAddSet(dim);
+        let idx = self.add_operation(op);
+        self.add_edge(self.get_current_node()?, idx, l.clone(), self.dtype());
+
+        let ids_op = ids.get_current_node()?;
+        let ids_edge = OpEdge::new(ids_l.clone(), self.dtype());
+        self.merge(ids, ids_op, idx, ids_edge)?;
+
+        let src_op = src.get_current_node()?;
+        let src_edge = OpEdge::new(src_l.clone(), self.dtype());
+        self.merge(src, src_op, idx, src_edge)?;
+
+        self.current_node = Some(idx);
+        Ok(())
+    }
+
+    fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::IndexSelect(dim);
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, src_l.clone(), self.dtype());
+
+        let ids_op = ids.get_current_node()?;
+        let ids_edge = OpEdge::new(ids_l.clone(), ids.dtype());
+        next.merge(ids, ids_op, idx, ids_edge)?;
+
+        // Calculate amount of elements in result, and use to calculate size of output edge buffer.
+        let left_size: usize = src_l.dims()[..dim].iter().product();
+        let right_size: usize = src_l.dims()[dim + 1..].iter().product();
+        let ids_el = ids_l.shape().elem_count();
+        // TODO: Instead of using dst_el directly as the layout of the OpEdge from index select node -> sink node,
+        // perhaps we should calculate actual layout/shape of dst tensor.
+        let dst_el = ids_el * left_size * right_size;
+        let dst_layout = Layout::contiguous(dst_el);
+
+        let sink_idx = next.add_operation(Op::Sink);
+        let sink_edge = OpEdge::new(dst_layout.clone(), self.dtype());
+        next.operations.add_edge(idx, sink_idx, sink_edge);
+
+        next.layout = dst_layout;
+        next.current_node = Some(sink_idx);
+        Ok(next)
+    }
+
+    fn index_add(
+        &self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::IndexAdd(dim);
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, l.clone(), self.dtype());
+
+        let ids_op = ids.get_current_node()?;
+        let ids_edge = OpEdge::new(ids_l.clone(), self.dtype());
+        next.merge(ids, ids_op, idx, ids_edge)?;
+
+        let src_op = src.get_current_node()?;
+        let src_edge = OpEdge::new(src_l.clone(), self.dtype());
+        next.merge(src, src_op, idx, src_edge)?;
+
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn matmul(
+        &self,
+        rhs: &Self,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        count();
+
+        let mut next = self.clone();
+
+        let op = Op::Matmul((b, m, n, k));
+        let idx = next.add_operation(op);
+        next.add_edge(next.get_current_node()?, idx, lhs_l.clone(), self.dtype());
+
+        let rhs_op = rhs.get_current_node()?;
+        let rhs_edge = OpEdge::new(rhs_l.clone(), self.dtype());
+        next.merge(rhs, rhs_op, idx, rhs_edge)?;
+
+        let lhs_dims = lhs_l.shape().dims();
+        let dim = lhs_dims.len();
+        let out_shape = Shape::from(&lhs_dims[..dim - 2]).extend(&[m, n]);
+
+        next.layout = Layout::contiguous(out_shape);
+        next.current_node = Some(idx);
+        Ok(next)
+    }
+
+    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
+        count();
+
+        // TODO: Validate that self -> mut dst graph logic is correct.
+        let op = Op::CopyStridedSrc(dst_offset);
+        let idx = dst.add_operation(op);
+
+        if let Ok(rhs_current_node) = dst.get_current_node() {
+            let edge = OpEdge::new(dst.layout.clone(), dst.dtype());
+            dst.operations.add_edge(rhs_current_node, idx, edge);
+        }
+
+        let edge = OpEdge::new(src_l.clone(), self.dtype());
+        dst.merge(self, self.get_current_node()?, idx, edge)?;
+
+        dst.current_node = Some(idx);
+
+        Ok(())
+    }
+
+    fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) -> Result<()> {
+        count();
+
+        // Add Copy2D node to dst graph. This is the node we will be merging on later.
+        let op = Op::Copy2D(d1, d2, src_s, dst_s, src_o, dst_o);
+        let copy_idx = dst.add_operation(op);
+
+        let self_current_node = self.get_current_node()?;
+
+        let in_edge = OpEdge::new(self.layout.clone(), self.dtype());
+
+        let sink_idx = if let Ok(dst_current_node) = dst.get_current_node() {
+            let dst_node_weight = dst.node(dst_current_node).unwrap();
+
+            if matches!(dst_node_weight.op, Op::Sink) {
+                // Already aggregating copies. Continue using this node.
+                dst_current_node
+            } else {
+                dst.operations
+                    .add_edge(dst_current_node, copy_idx, in_edge.clone());
+
+                // Current node is not sink. Add sink node.
+                let sink_idx = dst.add_operation(Op::Sink);
+                dst.current_node = Some(sink_idx);
+                sink_idx
+            }
+        } else {
+            // No current node exsits for dst. Add sink node.
+            let sink_idx = dst.add_operation(Op::Sink);
+            dst.current_node = Some(sink_idx);
+            sink_idx
+        };
+        let out_edge = OpEdge::new(self.layout.clone(), self.dtype());
+        dst.operations
+            .add_edge(copy_idx, sink_idx, out_edge.clone());
+        dst.merge(self, self_current_node, copy_idx, out_edge)?;
+        Ok(())
+    }
+
+    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        count();
+
+        let op = Op::ConstSet(s);
+        let idx = self.add_operation(op);
+        if let Ok(current_node) = self.get_current_node() {
+            self.add_edge(current_node, idx, l.clone(), self.dtype());
+        }
+
+        self.current_node = Some(idx);
+        self.layout = l.clone();
+        Ok(())
+    }
+
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self> {
+        count();
+
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LazyDevice;
+
+impl BackendDevice for LazyDevice {
+    type Storage = LazyStorage;
+
+    fn new(_ordinal: usize) -> Result<Self> {
+        Ok(LazyDevice)
+    }
+
+    fn location(&self) -> crate::DeviceLocation {
+        crate::DeviceLocation::Lazy
+    }
+
+    fn same_device(&self, _rhs: &Self) -> bool {
+        true
+    }
+
+    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+        Ok(LazyStorage::new(shape.clone(), dtype))
+    }
+
+    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+        let mut storage = unsafe { self.alloc_uninit(shape, dtype)? };
+
+        storage.const_set(
+            crate::scalar::Scalar::zero(dtype),
+            &Layout::contiguous(shape.clone()),
+        )?;
+        Ok(storage)
+    }
+
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+        let s = T::to_cpu_storage(s);
+        self.storage_from_cpu_storage_owned(s)
+    }
+
+    fn storage_from_cpu_storage(&self, s: &CpuStorage) -> Result<Self::Storage> {
+        self.storage_from_cpu_storage_owned(s.clone())
+    }
+
+    fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<Self::Storage> {
+        count();
+
+        let shape = Shape::from(s.len());
+        let dtype = s.dtype();
+        let mut storage = LazyStorage::new(shape.clone(), dtype);
+
+        let op = Op::Const(s.into());
+        let idx = storage.add_operation(op);
+        storage.current_node = Some(idx);
+
+        Ok(storage)
+    }
+
+    fn rand_uniform(
+        &self,
+        _shape: &Shape,
+        _dtype: DType,
+        _min: f64,
+        _max: f64,
+    ) -> Result<Self::Storage> {
+        todo!()
+    }
+
+    fn rand_normal(
+        &self,
+        _shape: &Shape,
+        _dtype: DType,
+        _mean: f64,
+        _stddev: f64,
+    ) -> Result<Self::Storage> {
+        todo!()
+    }
+
+    fn set_seed(&self, _seed: u64) -> Result<()> {
+        todo!()
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
+        todo!()
+    }
+
+    fn synchronize(&self) -> Result<()> {
+        todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{lazy::LazyDevice, Device, Result, Shape, Tensor, D};
+
+    #[test]
+    fn lazy_unary() -> Result<()> {
+        let t1 = Tensor::from_slice(
+            &[1.0f32, 2.0, 3.0, 4.0],
+            Shape::from(4),
+            &Device::Lazy(LazyDevice),
+        )?;
+        let t1 = t1.sqrt()?.exp()?;
+        assert_eq!(
+            t1.to_vec1::<f32>()?,
+            &[2.718282, 4.1132507, 5.6522336, 7.389056]
+        );
+
+        let t2 = Tensor::from_slice(
+            &[5.0f32, 6.0, 7.0, 8.0],
+            Shape::from(4),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let t2 = t2.sqr()?.affine(0.5, 1.2)?;
+        assert_eq!(t2.to_vec1::<f32>()?, &[13.7, 19.2, 25.7, 33.2]);
+
+        //let t3 = t2.powf(1.2)?;
+        //assert_eq!(t3.to_vec1::<f32>()?, &[13.7, 19.2, 25.7, 33.2]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_concat() -> Result<()> {
+        let t1 = Tensor::from_slice(
+            &[1.0f32, 2.0, 3.0, 4.0],
+            Shape::from(4),
+            &Device::Lazy(LazyDevice),
+        )?;
+        let t1 = t1.sqrt()?;
+        assert_eq!(t1.to_vec1::<f32>()?, &[1.0, 1.4142135, 1.7320508, 2.0]);
+
+        let t2 = Tensor::from_slice(
+            &[5.0f32, 6.0, 7.0, 8.0],
+            Shape::from(4),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        // TODO: bug. copy2d uses first copy data twice _and_ applies affine to it.
+        // So even if t2 is correct below, the final result is wrong in two different ways.
+        let t2 = t2.affine(0.5, 1.2)?;
+        assert_eq!(t2.to_vec1::<f32>()?, &[3.7, 4.2, 4.7, 5.2]);
+
+        let result = Tensor::cat(&[t1, t2], 0)?;
+
+        let result = result.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(
+            result,
+            &[1.0, 1.4142135, 1.7320508, 2.0, 3.7, 4.2, 4.7, 5.2]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_binary() -> Result<()> {
+        let t1 = Tensor::from_slice(
+            &[1.0f32, 2.0, 3.0, 4.0],
+            Shape::from(4),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let t2 = Tensor::from_slice(
+            &[5.0f32, 6.0, 7.0, 8.0],
+            Shape::from(4),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let result = (t1 + t2)?;
+
+        let result = result.to_vec1::<f32>()?;
+        assert_eq!(result, &[6.0, 8.0, 10.0, 12.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_matmul() -> Result<()> {
+        let t1 = Tensor::from_slice(
+            &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            Shape::from((4, 2)),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let t2 = Tensor::from_slice(
+            &[1.0f32, 2.0, 3.0, 4.0],
+            Shape::from((2, 2)),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let result = t1.matmul(&t2)?;
+
+        let result = result.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(result, &[7.0, 10.0, 15.0, 22.0, 23.0, 34.0, 31.0, 46.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_where_cond() -> Result<()> {
+        let src = Tensor::from_slice(
+            &[0u8, 1, 0, 1, 0, 0, 1, 1],
+            Shape::from(8),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let t = Tensor::from_slice(
+            &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            Shape::from(8),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let f = Tensor::from_slice(
+            &[9.0f32, 10., 11., 12., 13., 14., 15., 16.],
+            Shape::from(8),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let result = src.where_cond(&t, &f)?;
+        assert_eq!(
+            result.to_vec1::<f32>()?,
+            &[9., 2., 11., 4., 13., 14., 7., 8.]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_reduce() -> Result<()> {
+        let t = Tensor::from_slice(
+            &[0f32, 1., 2., 3., 4., 3., 2., 1.],
+            Shape::from((4, 1)),
+            &Device::Lazy(LazyDevice),
+        )?;
+
+        let result = t.max(1)?;
+        assert_eq!(result.to_vec1::<f32>()?, &[0., 1., 2., 3.]);
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_softmax() -> Result<()> {
+        let src = Tensor::from_slice(
+            &[0f32, 1., 2., 3., 4., 5., 6., 7.],
+            Shape::from(8),
+            &Device::Lazy(LazyDevice),
+            //&Device::new_metal(0)?,
+        )?;
+
+        let t1 = src.affine(1.25, 0.0)?;
+        //assert_eq!(
+        //    t1.to_vec1::<f32>()?,
+        //    &[0.0, 1.25, 2.5, 3.75, 5.0, 6.25, 7.5, 8.75]
+        //);
+        let t2 = t1.max_keepdim(D::Minus1)?;
+        //assert_eq!(t2.to_vec1::<f32>()?, &[8.75]);
+        let t3 = src.broadcast_sub(&t2)?;
+        //assert_eq!(
+        //    t3.to_vec1::<f32>()?,
+        //    &[-8.75, -7.75, -6.75, -5.75, -4.75, -3.75, -2.75, -1.75]
+        //);
+        let t4 = t3.exp()?;
+        /*
+        assert_eq!(
+            t4.to_vec1::<f32>()?,
+            &[
+                0.0001584613,
+                0.00043074263,
+                0.0011708796,
+                0.003182782,
+                0.008651696,
+                0.02351775,
+                0.06392787,
+                0.17377394
+            ]
+        );
+        */
+        let t5 = t4.sum_keepdim(D::Minus1)?;
+        //assert_eq!(t5.to_vec1::<f32>()?, &[0.27481413]);
+        let result = t4.broadcast_div(&t5)?;
+
+        assert_eq!(
+            result.to_vec1::<f32>()?,
+            &[
+                0.00057661266,
+                0.0015673962,
+                0.0042606234,
+                0.011581581,
+                0.031481992,
+                0.08557693,
+                0.23262219,
+                0.6323326
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_rmsnorm() -> Result<()> {
+        let device = Device::Lazy(LazyDevice);
+        //let device = Device::new_metal(0)?;
+
+        let x = Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), &device)?;
+
+        let alpha = Tensor::from_slice(
+            &[1f32, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7],
+            Shape::from(8),
+            &device,
+        )?;
+
+        let eps = 1.2;
+        let hidden_size = x.dim(D::Minus1)?;
+        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
+        let result = x_normed.broadcast_mul(&alpha)?;
+
+        assert_eq!(
+            result.to_vec1::<f32>()?,
+            &[0.0, 0.2543735, 0.5549967, 0.90186965, 1.2949923, 1.7343647, 2.219987, 2.7518587]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_binary_matmul_layout_mismatch_case() -> Result<()> {
+        let device = Device::Lazy(LazyDevice);
+        //let device = Device::new_metal(0)?;
+
+        // buffer 1: ([128256, 2048], [2048, 1], BF16, BufferId(9))
+        // buffer 2: ([1, 2048], [4096, 1], BF16, BufferId(2368))
+        // matmul((1, 1, 128256, 2048))
+        // dst buffer: ([1, 128256], [128256, 1], BF16, BufferId(2220))
+
+        let x = Tensor::from_slice(
+            &[0.0f32, 1.0, 2.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            (4, 2),
+            &device,
+        )?;
+        let y = Tensor::from_slice(&[1.0f32, 2.0], (2, 1), &device)?;
+
+        let result = x.matmul(&y)?.flatten_all()?;
+        assert_eq!(result.to_vec1::<f32>()?, &[2.0, 10.0, 17.0, 23.0]);
+        Ok(())
+    }
+}
