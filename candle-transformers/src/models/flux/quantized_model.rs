@@ -414,6 +414,133 @@ impl Flux {
             final_layer,
         })
     }
+
+    /// Inject LoRA weights into the model layers
+    ///
+    /// This method applies LoRA adaptations to the quantized model's linear layers.
+    /// LoRA weights are matched by layer name and injected into the corresponding
+    /// Linear layers for runtime application during forward passes.
+    ///
+    /// # Arguments
+    /// * `loras` - HashMap mapping layer names to (lora_a, lora_b, scale) tuples
+    ///
+    /// # Returns
+    /// Number of successfully injected LoRA layers
+    pub fn inject_loras(
+        &mut self,
+        loras: &std::collections::HashMap<String, (Tensor, Tensor, f32)>,
+    ) -> Result<usize> {
+        let mut injected_count = 0;
+
+        tracing::info!("Starting LoRA injection with {} available LoRA layers", loras.len());
+
+        // Debug: show a few sample keys from the LoRA map
+        if loras.len() > 0 {
+            let sample_keys: Vec<_> = loras.keys().take(5).cloned().collect();
+            tracing::debug!("Sample LoRA keys: {:?}", sample_keys);
+        }
+
+        // Helper to inject LoRA into a Linear layer
+        let mut miss_logged = 0;
+        let inject = |linear: &mut Linear, name: &str, loras: &std::collections::HashMap<String, (Tensor, Tensor, f32)>, miss_logged: &mut usize| -> Result<bool> {
+            if let Some((lora_a, lora_b, scale)) = loras.get(name) {
+                linear.set_lora(lora_a.clone(), lora_b.clone(), *scale)?;
+                tracing::debug!("✓ Injected LoRA: {}", name);
+                Ok(true)
+            } else {
+                // Only log first few misses to avoid spam
+                if *miss_logged < 3 {
+                    tracing::debug!("✗ No LoRA found for: {}", name);
+                    *miss_logged += 1;
+                }
+                Ok(false)
+            }
+        };
+
+        // Inject into double blocks (attention + MLP + modulation layers)
+        for (idx, block) in self.double_blocks.iter_mut().enumerate() {
+            // Image modulation
+            if inject(&mut block.img_mod.lin, &format!("double.blocks.{}.img.mod.lin.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+
+            // Image attention: qkv, proj
+            if inject(&mut block.img_attn.qkv, &format!("double.blocks.{}.img.attn.qkv.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+            if inject(&mut block.img_attn.proj, &format!("double.blocks.{}.img.attn.proj.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+
+            // Image MLP: lin1, lin2
+            if inject(&mut block.img_mlp.lin1, &format!("double.blocks.{}.img.mlp.0.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+            if inject(&mut block.img_mlp.lin2, &format!("double.blocks.{}.img.mlp.2.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+
+            // Text modulation
+            if inject(&mut block.txt_mod.lin, &format!("double.blocks.{}.txt.mod.lin.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+
+            // Text attention: qkv, proj
+            if inject(&mut block.txt_attn.qkv, &format!("double.blocks.{}.txt.attn.qkv.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+            if inject(&mut block.txt_attn.proj, &format!("double.blocks.{}.txt.attn.proj.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+
+            // Text MLP: lin1, lin2
+            if inject(&mut block.txt_mlp.lin1, &format!("double.blocks.{}.txt.mlp.0.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+            if inject(&mut block.txt_mlp.lin2, &format!("double.blocks.{}.txt.mlp.2.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+        }
+
+        // Inject into single blocks (linear1, linear2, modulation)
+        for (idx, block) in self.single_blocks.iter_mut().enumerate() {
+            if inject(&mut block.modulation.lin, &format!("single.blocks.{}.modulation.lin.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+            if inject(&mut block.linear1, &format!("single.blocks.{}.linear1.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+            if inject(&mut block.linear2, &format!("single.blocks.{}.linear2.weight", idx), loras, &mut miss_logged)? {
+                injected_count += 1;
+            }
+        }
+
+        Ok(injected_count)
+    }
+
+    /// Clear all LoRA weights from the model
+    pub fn clear_loras(&mut self) {
+        // Clear from double blocks
+        for block in self.double_blocks.iter_mut() {
+            block.img_mod.lin.clear_lora();
+            block.img_attn.qkv.clear_lora();
+            block.img_attn.proj.clear_lora();
+            block.img_mlp.lin1.clear_lora();
+            block.img_mlp.lin2.clear_lora();
+            block.txt_mod.lin.clear_lora();
+            block.txt_attn.qkv.clear_lora();
+            block.txt_attn.proj.clear_lora();
+            block.txt_mlp.lin1.clear_lora();
+            block.txt_mlp.lin2.clear_lora();
+        }
+
+        // Clear from single blocks
+        for block in self.single_blocks.iter_mut() {
+            block.modulation.lin.clear_lora();
+            block.linear1.clear_lora();
+            block.linear2.clear_lora();
+        }
+    }
 }
 
 impl super::WithForward for Flux {
