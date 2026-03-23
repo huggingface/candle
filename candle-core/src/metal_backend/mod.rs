@@ -1402,6 +1402,18 @@ impl BackendStorage for MetalStorage {
         Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
+    fn upsample_bicubic2d(
+        &self,
+        _inp_l: &Layout,
+        _out_h: usize,
+        _out_w: usize,
+        _align_corners: bool,
+        _scale_h: Option<f64>,
+        _scale_w: Option<f64>,
+    ) -> Result<Self> {
+        crate::bail!("Metal upsample_bicubic2d not implemented")
+    }
+
     fn gather(&self, src_l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
         if !ids_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "gather" }.bt());
