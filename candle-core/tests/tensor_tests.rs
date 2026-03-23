@@ -614,6 +614,47 @@ fn max(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn max_reduction_stability(device: &Device) -> Result<()> {
+    let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(
+        tensor.max_keepdim(2)?.to_vec3::<u32>()?,
+        &[[[4], [9]], [[7], [8]]]
+    );
+    assert_eq!(
+        tensor.max_keepdim(0)?.to_vec3::<u32>()?,
+        &[[[3, 1, 7], [8, 5, 9]]],
+    );
+
+    // Regression: all-negative reductions must not collapse to 0 on CUDA.
+    // Keep reduced sizes < 32 to stress the small-block reduction path.
+    for (data, shape, expected) in [
+        (vec![-0.3740226f32], (1, 1), vec![-0.3740226f32]),
+        (
+            vec![-0.437639f32, -0.1750766, -0.21964085],
+            (1, 3),
+            vec![-0.1750766f32],
+        ),
+        (
+            vec![
+                -0.40390146f32, -0.048737526, -0.32284284,
+                -0.0018222332, -0.041230083, -0.32251203,
+            ],
+            (2, 3),
+            vec![-0.048737526f32, -0.0018222332],
+        ),
+    ] {
+        let t = Tensor::from_vec(data, shape, device)?;
+        assert_eq!(t.max(1)?.to_vec1::<f32>()?, expected);
+
+        let expected_keepdim = expected.iter().copied().map(|v| vec![v]).collect::<Vec<_>>();
+        assert_eq!(t.max_keepdim(1)?.to_vec2::<f32>()?, expected_keepdim);
+    }
+
+    Ok(())
+}
+
+
 fn argmin(device: &Device) -> Result<()> {
     let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
     let tensor = Tensor::new(data, device)?;
@@ -1695,6 +1736,7 @@ test_device!(cat, cat_cpu, cat_gpu, cat_metal);
 test_device!(sum, sum_cpu, sum_gpu, sum_metal);
 test_device!(min, min_cpu, min_gpu, min_metal);
 test_device!(max, max_cpu, max_gpu, max_metal);
+test_device!(max_reduction_stability, max_reduction_stability_cpu, max_reduction_stability_gpu, max_reduction_stability_metal);
 test_device!(argmax, argmax_cpu, argmax_gpu, argmax_metal);
 test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal);
 test_device!(transpose, transpose_cpu, transpose_gpu, transpose_metal);

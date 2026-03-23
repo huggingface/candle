@@ -181,24 +181,59 @@ __device__ __forceinline__ __half copysigng(__half a, __half b) { return __float
 #endif
 
 #if __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_BF16)
+// Common BF16 functions (mostly via float for consistency/availability)
 __device__ __forceinline__ __nv_bfloat16 powg(__nv_bfloat16 a, __nv_bfloat16 b) { return __float2bfloat16(powf(__bfloat162float(a), __bfloat162float(b))); }
-__device__ __forceinline__ bool isnang(__nv_bfloat16 a) { return __hisnan(a); }
-__device__ __forceinline__ __nv_bfloat16 sqrtg(__nv_bfloat16 a) { return hsqrt(a); }
-__device__ __forceinline__ __nv_bfloat16 cosg(__nv_bfloat16 a) { return hcos(a); }
-__device__ __forceinline__ __nv_bfloat16 sing(__nv_bfloat16 a) { return hsin(a); }
-__device__ __forceinline__ __nv_bfloat16 recipg(__nv_bfloat16 a) { __nv_bfloat16 one = 1.0; return one / a; }
-__device__ __forceinline__ __nv_bfloat16 maxg(__nv_bfloat16 a, __nv_bfloat16 b) { return __hmax_nan(a, b); }
 __device__ __forceinline__ __nv_bfloat16 tanhg(__nv_bfloat16 a) { return __float2bfloat16(tanhf(__bfloat162float(a))); }
 __device__ __forceinline__ __nv_bfloat16 erfg(__nv_bfloat16 a) { return __float2bfloat16(erff(__bfloat162float(a))); }
 __device__ __forceinline__ __nv_bfloat16 ceilg(__nv_bfloat16 a) { return __float2bfloat16(ceilf(__bfloat162float(a))); }
 __device__ __forceinline__ __nv_bfloat16 floorg(__nv_bfloat16 a) { return __float2bfloat16(floorf(__bfloat162float(a))); }
 __device__ __forceinline__ __nv_bfloat16 roundg(__nv_bfloat16 a) { return __float2bfloat16(roundf(__bfloat162float(a))); }
 __device__ __forceinline__ __nv_bfloat16 normcdfg(__nv_bfloat16 a) { return __float2bfloat16(normcdff(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 copysigng(__nv_bfloat16 a, __nv_bfloat16 b) { return __float2bfloat16(copysignf(__bfloat162float(a), __bfloat162float(b))); }
+
+// Use __hmax_nan and __hmin_nan for all paths to ensure consistent NaN propagation
+__device__ __forceinline__ __nv_bfloat16 maxg(__nv_bfloat16 a, __nv_bfloat16 b) { return __hmax_nan(a, b); }
 __device__ __forceinline__ __nv_bfloat16 ming(__nv_bfloat16 a, __nv_bfloat16 b) { return __hmin_nan(a, b); }
+
+#if __CUDA_ARCH__ >= 800
+__device__ __forceinline__ bool isnang(__nv_bfloat16 a) { return __hisnan(a); }
+__device__ __forceinline__ __nv_bfloat16 sqrtg(__nv_bfloat16 a) { return hsqrt(a); }
+__device__ __forceinline__ __nv_bfloat16 cosg(__nv_bfloat16 a) { return hcos(a); }
+__device__ __forceinline__ __nv_bfloat16 sing(__nv_bfloat16 a) { return hsin(a); }
+__device__ __forceinline__ __nv_bfloat16 recipg(__nv_bfloat16 a) { __nv_bfloat16 one = 1.0; return one / a; }
 __device__ __forceinline__ __nv_bfloat16 logg(__nv_bfloat16 a) { return hlog(a); }
 __device__ __forceinline__ __nv_bfloat16 expg(__nv_bfloat16 a) { return hexp(a); }
 __device__ __forceinline__ __nv_bfloat16 absg(__nv_bfloat16 a) { return __habs(a); }
-__device__ __forceinline__ __nv_bfloat16 copysigng(__nv_bfloat16 a, __nv_bfloat16 b) { return __float2bfloat16(copysignf(__bfloat162float(a), __bfloat162float(b))); }
+#else
+__device__ __forceinline__ bool isnang(__nv_bfloat16 a) { return isnan(__bfloat162float(a)); }
+__device__ __forceinline__ __nv_bfloat16 sqrtg(__nv_bfloat16 a) { return __float2bfloat16(sqrtf(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 cosg(__nv_bfloat16 a) { return __float2bfloat16(cosf(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 sing(__nv_bfloat16 a) { return __float2bfloat16(sinf(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 recipg(__nv_bfloat16 a) { return __float2bfloat16(1.0f / __bfloat162float(a)); }
+__device__ __forceinline__ __nv_bfloat16 logg(__nv_bfloat16 a) { return __float2bfloat16(logf(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 expg(__nv_bfloat16 a) { return __float2bfloat16(expf(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 absg(__nv_bfloat16 a) { return __float2bfloat16(fabsf(__bfloat162float(a))); }
+#endif
+
+// Explicit arithmetic operator overloads for legacy bf16 on pre-Ampere GPUs.
+// Only needed on older CUDA toolkits that don't provide them in cuda_bf16.hpp.
+#if CUDART_VERSION < 12000
+__device__ __forceinline__ __nv_bfloat16 operator+(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __float2bfloat16(__bfloat162float(a) + __bfloat162float(b)); }
+__device__ __forceinline__ __nv_bfloat16 operator-(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __float2bfloat16(__bfloat162float(a) - __bfloat162float(b)); }
+__device__ __forceinline__ __nv_bfloat16 operator*(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __float2bfloat16(__bfloat162float(a) * __bfloat162float(b)); }
+__device__ __forceinline__ __nv_bfloat16 operator/(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __float2bfloat16(__bfloat162float(a) / __bfloat162float(b)); }
+__device__ __forceinline__ __nv_bfloat16 operator-(const __nv_bfloat16 &a) { return __float2bfloat16(-__bfloat162float(a)); }
+__device__ __forceinline__ bool operator==(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __bfloat162float(a) == __bfloat162float(b); }
+__device__ __forceinline__ bool operator!=(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __bfloat162float(a) != __bfloat162float(b); }
+__device__ __forceinline__ bool operator<(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __bfloat162float(a) < __bfloat162float(b); }
+__device__ __forceinline__ bool operator<=(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __bfloat162float(a) <= __bfloat162float(b); }
+__device__ __forceinline__ bool operator>(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __bfloat162float(a) > __bfloat162float(b); }
+__device__ __forceinline__ bool operator>=(const __nv_bfloat16 &a, const __nv_bfloat16 &b) { return __bfloat162float(a) >= __bfloat162float(b); }
+__device__ __forceinline__ __nv_bfloat16& operator+=(__nv_bfloat16 &a, const __nv_bfloat16 &b) { a = a + b; return a; }
+__device__ __forceinline__ __nv_bfloat16& operator-=(__nv_bfloat16 &a, const __nv_bfloat16 &b) { a = a - b; return a; }
+__device__ __forceinline__ __nv_bfloat16& operator*=(__nv_bfloat16 &a, const __nv_bfloat16 &b) { a = a * b; return a; }
+__device__ __forceinline__ __nv_bfloat16& operator/=(__nv_bfloat16 &a, const __nv_bfloat16 &b) { a = a / b; return a; }
+#endif // CUDART_VERSION < 12000
 #endif
 
 #if __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_FP8)
