@@ -123,6 +123,17 @@ impl RotaryEmbedding {
     }
 }
 
+#[cfg(feature = "flash-attn")]
+fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+}
+
 #[derive(Debug, Clone)]
 struct AttentionWeights {
     q_proj: QMatMul,
@@ -214,23 +225,38 @@ impl AttentionWeights {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let scale = 1.0 / (self.head_dim as f64).sqrt();
-        let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-        if let Some(m) = attn_mask {
-            let m_dtype = m.dtype();
-            let scores_dtype = scores.dtype();
-            let mask = if m_dtype != scores_dtype {
-                m.to_dtype(scores_dtype)?
-            } else {
-                m.clone()
-            };
-            scores = scores.broadcast_add(&mask)?;
-        }
-        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-        let ctx = probs.matmul(&v)?; // (B, H, L, D)
-        let reshaped_ctx = ctx
-            .transpose(1, 2)?
-            .reshape((b, l, self.num_heads * self.head_dim))?;
+        #[cfg(feature = "flash-attn")]
+        let attn_output = {
+            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
+            let q = q.transpose(1, 2)?;
+            let k = k.transpose(1, 2)?;
+            let v = v.transpose(1, 2)?;
+            let scale = 1f32 / (self.head_dim as f32).sqrt();
+            flash_attn(&q, &k, &v, scale, attn_mask.is_some())?.transpose(1, 2)?
+        };
+
+        #[cfg(not(feature = "flash-attn"))]
+        let attn_output = {
+            let scale = 1.0 / (self.head_dim as f64).sqrt();
+            let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            if let Some(m) = attn_mask {
+                let m_dtype = m.dtype();
+                let scores_dtype = scores.dtype();
+                let mask = if m_dtype != scores_dtype {
+                    m.to_dtype(scores_dtype)?
+                } else {
+                    m.clone()
+                };
+                scores = scores.broadcast_add(&mask)?;
+            }
+            let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+            probs.matmul(&v)? // (B, H, L, D)
+        };
+
+        let reshaped_ctx =
+            attn_output
+                .transpose(1, 2)?
+                .reshape((b, l, self.num_heads * self.head_dim))?;
         self.o_proj.forward(&reshaped_ctx)
     }
 
