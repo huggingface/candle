@@ -626,14 +626,19 @@ fn max_reduction_stability(device: &Device) -> Result<()> {
         &[[[3, 1, 7], [8, 5, 9]]],
     );
 
-    // Regression: all-negative reductions must not collapse to 0 on CUDA.
-    // Keep reduced sizes < 32 to stress the small-block reduction path.
+    // Regression: small CUDA reductions must preserve the true extrema.
+    // Keep reduced sizes < 32 to stress the small-block and vectorized paths.
     for (data, shape, expected) in [
         (vec![-0.3740226f32], (1, 1), vec![-0.3740226f32]),
         (
             vec![-0.437639f32, -0.1750766, -0.21964085],
             (1, 3),
             vec![-0.1750766f32],
+        ),
+        (
+            vec![0.05909121f32, 0.2847445, -0.13227654, 0.25832105],
+            (1, 4),
+            vec![0.2847445f32],
         ),
         (
             vec![

@@ -7,6 +7,67 @@
 
 // FIXME: the minimum compute capabilities are just guesses since the table is not specific enough
 
+// Vectorized Memory Access Traits for maximum bandwidth utilization.
+// VecType<T> must occupy exactly VecConfig<T>::size * sizeof(T) bytes because
+// reduce.cu reinterprets the loaded vector as a contiguous T array.
+template<typename T> struct VecType { typedef T Type; };
+template<> struct VecType<float> { typedef float4 Type; };
+template<> struct VecType<double> { typedef double2 Type; };
+template<> struct VecType<__half> { typedef float4 Type; };
+template<> struct VecType<__nv_bfloat16> { typedef float4 Type; };
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_FP8)
+template<> struct VecType<__nv_fp8_e4m3> { typedef int4 Type; };
+#endif
+
+// Vectorization configuration constants
+template<typename T> struct VecConfig {
+    static constexpr int size = 1;      // Elements per vector
+    static constexpr bool supported = false;
+};
+
+// 128-bit vectorization (float4 is 4x32 bits = 16 bytes)
+template<> struct VecConfig<__half> {
+    static constexpr int size = 8;
+    static constexpr bool supported = true;
+};
+
+template<> struct VecConfig<__nv_bfloat16> {
+    static constexpr int size = 8;
+    static constexpr bool supported = true;
+};
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_FP8)
+// 128-bit int4 = 4x32 bits = 16 bytes. Holds 16x 8-bit fp8 values
+template<> struct VecConfig<__nv_fp8_e4m3> {
+    static constexpr int size = 16;
+    static constexpr bool supported = true;
+};
+#endif
+
+template<> struct VecConfig<float> {
+    static constexpr int size = 4;
+    static constexpr bool supported = true;
+};
+
+template<> struct VecConfig<double> {
+    static constexpr int size = 2; // double2 is 128-bit
+    static constexpr bool supported = true;
+};
+
+template <typename T>
+inline constexpr bool vec_layout_matches_v =
+    !VecConfig<T>::supported ||
+    sizeof(typename VecType<T>::Type) == VecConfig<T>::size * sizeof(T);
+
+static_assert(vec_layout_matches_v<float>);
+static_assert(vec_layout_matches_v<double>);
+static_assert(vec_layout_matches_v<__half>);
+static_assert(vec_layout_matches_v<__nv_bfloat16>);
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_FP8)
+static_assert(vec_layout_matches_v<__nv_fp8_e4m3>);
+#endif
+
 #if (__CUDACC_VER_MAJOR__ < 12 || __CUDACC_VER_MINOR__ < 2) && __CUDA_ARCH__ < 750
 __device__ __forceinline__ __half __hmax_nan(__half a, __half b) {
     return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
