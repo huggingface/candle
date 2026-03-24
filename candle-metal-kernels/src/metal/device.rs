@@ -3,7 +3,7 @@ use crate::{
 };
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
-use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice};
+use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice, MTLFence};
 use std::{ffi::c_void, ptr};
 
 /// Metal device type classification based on Apple Silicon architecture.
@@ -151,5 +151,25 @@ impl Device {
             Some('d') => MetalDeviceType::Ultra,
             _ => MetalDeviceType::Medium,
         }
+    }
+
+    pub fn make_fence(&self) -> MetalFence {
+        MetalFence::new(self.raw.newFence().unwrap())
+    }
+}
+
+pub struct MetalFence {
+    raw: Retained<ProtocolObject<dyn MTLFence>>,
+}
+
+impl MetalFence {
+    fn new(raw: Retained<ProtocolObject<dyn MTLFence>>) -> MetalFence {
+        MetalFence { raw }
+    }
+}
+
+impl AsRef<ProtocolObject<dyn MTLFence>> for MetalFence {
+    fn as_ref(&self) -> &ProtocolObject<dyn MTLFence> {
+        &self.raw
     }
 }

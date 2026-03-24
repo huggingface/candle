@@ -11,6 +11,7 @@ use crate::lazy::{
 };
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, LazyStorage, Result, Shape};
+use candle_metal_kernels::metal::MetalFence;
 use candle_metal_kernels::{
     metal::{Buffer, Commands, Device},
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
@@ -872,6 +873,7 @@ pub fn matmul(
     rhs_l: &Layout,
     rhs_dtype: DType,
     dst: &Buffer,
+    fences: &[&MetalFence],
 ) -> Result<()> {
     let encoder = device.command_encoder()?;
     encoder.set_label("matmul");
@@ -883,6 +885,9 @@ pub fn matmul(
             return Err(MetalError::Message(format!("mlx matmul doesn't support {dtype:?}")).into())
         }
     };
+    for fence in fences {
+        encoder.wait_for_fence(fence);
+    }
     candle_metal_kernels::call_mlx_gemm(
         &device.device,
         &encoder,
@@ -1976,6 +1981,7 @@ impl BackendStorage for MetalStorage {
             rhs_l,
             rhs.dtype(),
             &dst,
+            &[],
         )?;
 
         Ok(Self::new(dst, self.device.clone(), b * m * n, self.dtype()))
@@ -2183,6 +2189,7 @@ impl BackendDevice for MetalDevice {
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
+            fences: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -2532,8 +2539,8 @@ fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
                 blit.set_label("copy_to_dst");
                 blit.copy(result.buffer(), 0, &dst, 0, size);
                 blit.end_encoding();
-                self.device.synchronize()?;
             }
+            self.device.synchronize()?;
 
             Ok(())
         }
@@ -2580,8 +2587,8 @@ fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
                 blit.set_label("copy_to_dst");
                 blit.copy(result.buffer(), 0, &dst, 0, size);
                 blit.end_encoding();
-                self.device.synchronize()?;
             }
+            self.device.synchronize()?;
 
             Ok(())
         }
@@ -2871,6 +2878,12 @@ impl Executor for MetalDevice {
                 let rhs_buffer = allocator.get(rhs.buffer_id()).unwrap();
                 let dst = allocator.get(current.buffer_id()).unwrap();
 
+                let mut binding = self.fences.lock().unwrap();
+                let waiting_on: Vec<_> = srcs
+                    .iter()
+                    .filter_map(|src| binding.get(&src.id()))
+                    .collect();
+
                 let (b, m, n, k) = op.dims();
                 matmul(
                     self,
@@ -2882,7 +2895,10 @@ impl Executor for MetalDevice {
                     op.rhs_l(),
                     rhs.dtype(),
                     dst,
+                    &waiting_on,
                 )?;
+
+                binding.insert(current.id(), self.make_fence());
             }
             CopyStridedSrc(copy_strided_src) => {
                 let src = copy_strided_src.srcs()[0];

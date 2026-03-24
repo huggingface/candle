@@ -1,17 +1,18 @@
 use crate::{DType, Result};
 
+use crate::lazy::NodeId;
 #[cfg(feature = "ug")]
 use candle_metal_kernels::metal::ComputePipeline;
 use candle_metal_kernels::{
     metal::{
         BlitCommandEncoder, Buffer, BufferMap, Commands, ComputeCommandEncoder, Device,
-        MTLResourceOptions,
+        MTLResourceOptions, MetalFence,
     },
     Kernels,
 };
 use objc2_foundation::NSURL;
-use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
-
+use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager, MTLFence};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -63,6 +64,8 @@ pub struct MetalDevice {
     pub(crate) seed: Arc<Mutex<Buffer>>,
     /// Last seed value set on this device.
     pub(crate) seed_value: Arc<RwLock<u64>>,
+
+    pub(crate) fences: Arc<Mutex<HashMap<NodeId, MetalFence>>>,
 }
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.

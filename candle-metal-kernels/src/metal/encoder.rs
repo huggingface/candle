@@ -1,4 +1,6 @@
-use crate::metal::{Buffer, CommandSemaphore, CommandStatus, ComputePipeline, MetalResource};
+use crate::metal::{
+    Buffer, CommandSemaphore, CommandStatus, ComputePipeline, MetalFence, MetalResource,
+};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
@@ -47,6 +49,10 @@ impl ComputeCommandEncoder {
             threadgroups_per_grid,
             threads_per_threadgroup,
         )
+    }
+
+    pub fn wait_for_fence(&self, fence: &MetalFence) {
+        self.raw.waitForFence(fence.as_ref());
     }
 
     pub fn set_buffer(&self, index: usize, buffer: Option<&Buffer>, offset: usize) {
