@@ -551,6 +551,46 @@ fn simple_eval_(
                 let xs = xs.broadcast_mul(&weight)?.broadcast_add(&bias)?;
                 values.insert(node.output[0].clone(), xs);
             }
+            "LayerNormalization" => {
+                let xs = get(&node.input[0])?;
+                let weight = get(&node.input[1])?;
+                let bias = if node.input.len() > 2 {
+                    get(&node.input[2])?
+                } else {
+                    &Tensor::zeros_like(&weight)?
+                };
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(-1);
+                let axis = xs.normalize_axis(axis)?; // relative axis index
+                let eps = get_attr_opt::<f32>(node, "epsilon")?
+                    .copied()
+                    .unwrap_or(1e-5);
+                let stash_type = get_attr_opt::<i64>(node, "stash_type")?;
+                if stash_type.copied().unwrap_or(1) != 1 {
+                    bail!("stash_type != 1 is not implemented")
+                };
+
+                // Parameter used to convert N-D tensor layer normalization
+                // to equivalent 2-D matrix operations.
+                let mut row_number = 1;
+                let mut col_number = 1;
+                for i in 0..xs.rank() {
+                    if i < axis {
+                        row_number *= xs.dims()[i] as usize;
+                    } else {
+                        col_number *= xs.dims()[i] as usize;
+                    }
+                }
+
+                let y_mat = candle_nn::ops::layer_norm(
+                    &xs.reshape((row_number, col_number))?,
+                    &weight.reshape((row_number, col_number))?,
+                    &bias.reshape((row_number, col_number))?,
+                    eps as f32,
+                )?;
+
+                let xs = y_mat.reshape(xs.shape())?;
+                values.insert(node.output[0].clone(), xs);
+            }
             "Squeeze" => {
                 let xs = get(&node.input[0])?;
                 let mut axes = if node.input.len() <= 1 {
