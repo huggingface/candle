@@ -3,7 +3,11 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use crate::{lazy::LazyBuffer, lazy::LazyStorage, DType, Layout, Result, Shape, Tensor};
+use crate::{
+    backend::BackendStorage,
+    lazy::{LazyBuffer, LazyStorage},
+    DType, Layout, Result, Shape, Tensor,
+};
 
 pub trait LazyCustomFn<B: LazyBuffer>: LazyCustomFnClone<B> + Send + Sync {
     fn call(&self, input: &[(&B, &Layout, DType)], dst: &B) -> Result<()>;
@@ -70,7 +74,13 @@ pub trait LazyCustomOp: LazyCustomOpClone + Send + Sync {
 
     /// Forward pass. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
-    fn fwd(&self, args: &[(&LazyStorage, &Layout)]) -> Result<(LazyStorage, Shape)>;
+    fn fwd(&self, args: &[(&LazyStorage, &Layout)]) -> Result<(LazyStorage, Shape)> {
+        let (first, layout) = args[0];
+        let first = LazyStorage::copy(first, layout);
+        first
+            .custom_op(self.clone_box(), &args[1..])
+            .map(|s| (s, layout.shape().clone()))
+    }
 
     fn fallback(&self, _tensors: &[&Tensor]) -> Result<crate::Tensor> {
         Err(crate::Error::Msg(

@@ -64,7 +64,7 @@ impl BufferId {
     }
 
     pub fn inner(&self) -> usize {
-        self.0.load(atomic::Ordering::SeqCst)
+        self.0.load(atomic::Ordering::Relaxed)
     }
 }
 
@@ -126,6 +126,18 @@ impl LazyStorage {
         }
     }
 
+    // Copy lazy storage with updated layout
+    pub fn copy(source: &LazyStorage, layout: &Layout) -> Self {
+        Self {
+            id: source.id,
+            op: Arc::new(source.op().clone()),
+            custom_op_fallbacks: source.custom_op_fallbacks.clone(),
+            layout: layout.clone(),
+            dtype: source.dtype,
+            buffer_id: source.buffer_id.clone(),
+        }
+    }
+
     pub fn id(&self) -> NodeId {
         self.id
     }
@@ -179,7 +191,11 @@ impl LazyStorage {
     pub fn custom_op(&self, op: Box<dyn LazyCustomOp>, args: &[(&Self, &Layout)]) -> Result<Self> {
         // Include self / src with layout in the args list
         let mut src_and_args = vec![(self.clone(), self.layout().clone())];
-        src_and_args.extend(args.iter().map(|(b, l)| ((*b).clone(), (*l).clone())));
+
+        src_and_args.extend(args.iter().map(|(b, l)| {
+            let b = LazyStorage::copy(b, l);
+            (b, (*l).clone())
+        }));
 
         let expected_edges = op.expected_edges();
         if expected_edges != src_and_args.len() {
@@ -209,7 +225,7 @@ impl LazyStorage {
     pub fn set_buffer_id(&self, buffer_id: BufferId) {
         self.buffer_id
             .0
-            .store(buffer_id.inner(), atomic::Ordering::SeqCst);
+            .store(buffer_id.inner(), atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn execution_order(&self) -> Vec<&LazyStorage> {
@@ -254,7 +270,8 @@ impl LazyStorage {
                 stack.push((precursor, 0));
             }
         }
-
+        // Uncomment to change ordering to insertion order (ids are incr generated)
+        // order.sort_by(|a, b| a.id().cmp(&b.id()));
         order
     }
 }
@@ -268,7 +285,7 @@ impl Dot {
 
     pub fn graph_fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "digraph {{ ")?;
-
+        writeln!(f, "{}ordering=\"in\"", INDENT)?;
         // output all labels
         for node in self.0.execution_order() {
             write!(f, "{}{} [ ", INDENT, node.id().index())?;
@@ -283,7 +300,7 @@ impl Dot {
         }
         // output all edges
 
-        for (_i, node) in self.0.execution_order().iter().enumerate() {
+        for node in self.0.execution_order() {
             for source in node.srcs() {
                 write!(
                     f,
@@ -292,17 +309,6 @@ impl Dot {
                     source.id().index(),
                     node.id().index(),
                 )?;
-                /*
-                if !self.config.EdgeNoLabel {
-                    write!(f, "label = \"")?;
-                    if self.config.EdgeIndexLabel {
-                        write!(f, "{i}")?;
-                    } else {
-                        Escaped(FnFmt(edge.weight(), &edge_fmt)).fmt(f)?;
-                    }
-                    write!(f, "\" ")?;
-                }
-                 */
                 write!(f, "label = \"")?;
                 write!(
                     f,
@@ -315,7 +321,6 @@ impl Dot {
                 write!(f, "\" ")?;
                 writeln!(f, "]")?;
             }
-            //writeln!(f, "{}]", (self.get_edge_attributes)(g, edge))?;
         }
 
         writeln!(f, "}}")?;
@@ -409,7 +414,7 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
     let mut allocations = BTreeMap::new();
 
     // Plan Const (input) allocations
-    for node in graph.iter().rev() {
+    for node in graph {
         let buffer_id = node.buffer_id();
 
         if let Op::Const(s) = node.op() {
@@ -450,7 +455,11 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
             }
         }
         if let Some(best) = best_buffer {
-            reusage.insert(buffer_id.clone(), best);
+            if let Some(nested) = reusage.get(&best) {
+                reusage.insert(buffer_id.clone(), nested.clone());
+            } else {
+                reusage.insert(buffer_id.clone(), best);
+            }
         } else {
             //let rounded_size = (record.size - 1).next_power_of_two();
             allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
@@ -573,7 +582,7 @@ pub enum Op {
 }
 
 impl Op {
-    fn srcs(&self) -> Vec<&LazyStorage> {
+    pub fn srcs(&self) -> Vec<&LazyStorage> {
         match self {
             Op::Uninit => vec![],
             Op::Const(_) => vec![],
@@ -608,9 +617,9 @@ impl Display for Op {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Op::Uninit => write!(f, "Uninit"),
-            Op::Const(s) => write!(f, "Const([{};{}])", s.dtype().as_str(), s.len()),
+            Op::Const(_) => write!(f, "Const"),
             Op::ToCpu => write!(f, "ToCpu"),
-            Op::Affine(_affine) => write!(f, "Affine"),
+            Op::Affine(affine) => write!(f, "Affine({},{})", affine.add, affine.mul),
             Op::Powf(_powf) => write!(f, "Powf"),
             Op::Elu(_elu) => write!(f, "Elu"),
             Op::Reduce(reduce) => write!(
@@ -734,15 +743,17 @@ impl BackendStorage for LazyStorage {
     }
 
     fn to_dtype(&self, l: &Layout, dtype: DType) -> Result<Self> {
+        let src = LazyStorage::copy(self, l);
         if self.dtype() != dtype {
-            let op = Op::ToDType(ToDType::new(self.clone(), l.clone(), dtype));
+            let op = Op::ToDType(ToDType::new(src, l.clone(), dtype));
             return Ok(LazyStorage::new(op, l, dtype));
         }
-        Ok(self.clone())
+        Ok(src)
     }
 
     fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
-        let op = Op::Unary(Unary::new(self.clone(), l.clone(), B::KERNEL));
+        let src = LazyStorage::copy(self, l);
+        let op = Op::Unary(Unary::new(src, l.clone(), B::KERNEL));
         Ok(LazyStorage::new(op, l, self.dtype()))
     }
 
@@ -752,10 +763,13 @@ impl BackendStorage for LazyStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
+        let lhs = LazyStorage::copy(self, lhs_l);
+        let rhs = LazyStorage::copy(rhs, rhs_l);
+
         let op = Op::Binary(Binary::new(
-            self.clone(),
+            lhs,
             lhs_l.clone(),
-            rhs.clone(),
+            rhs,
             rhs_l.clone(),
             B::KERNEL,
         ));
@@ -770,15 +784,20 @@ impl BackendStorage for LazyStorage {
         f: &Self,
         f_l: &Layout,
     ) -> Result<Self> {
+        let src = LazyStorage::copy(self, l);
+        let t = LazyStorage::copy(t, t_l);
+        let f = LazyStorage::copy(f, f_l);
+        let dtype = f.dtype();
+
         let op = Op::WhereCond(WhereCond::new(
-            self.clone(),
+            src,
             l.clone(),
-            t.clone(),
+            t,
             t_l.clone(),
-            f.clone(),
+            f,
             f_l.clone(),
         ));
-        Ok(LazyStorage::new(op, l, t.dtype()))
+        Ok(LazyStorage::new(op, f_l, dtype))
     }
 
     fn conv1d(
@@ -876,6 +895,9 @@ impl BackendStorage for LazyStorage {
     }
 
     fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
+        let src = LazyStorage::copy(self, src_l);
+        let ids = LazyStorage::copy(ids, ids_l);
+
         // Calculate amount of elements in result, and use to calculate size of output edge buffer.
         let left_size: usize = src_l.dims()[..dim].iter().product();
         let right_size: usize = src_l.dims()[dim + 1..].iter().product();
@@ -886,9 +908,9 @@ impl BackendStorage for LazyStorage {
         let dst_layout = Layout::contiguous(dst_el);
 
         let op = Op::IndexSelect(IndexSelect::new(
-            self.clone(),
+            src,
             src_l.clone(),
-            ids.clone(),
+            ids,
             ids_l.clone(),
             dim,
         ));
@@ -914,10 +936,13 @@ impl BackendStorage for LazyStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
+        let lhs = LazyStorage::copy(self, lhs_l);
+        let rhs = LazyStorage::copy(rhs, rhs_l);
+
         let op = Op::Matmul(Matmul::new(
-            self.clone(),
+            lhs,
             lhs_l.clone(),
-            rhs.clone(),
+            rhs,
             rhs_l.clone(),
             (b, m, n, k),
         ));
@@ -930,8 +955,10 @@ impl BackendStorage for LazyStorage {
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
+        let src = LazyStorage::copy(self, src_l);
+
         let op = Op::CopyStridedSrc(CopyStridedSrc::new(
-            self.clone(),
+            src,
             src_l.clone(),
             dst.clone(),
             dst.layout().clone(),

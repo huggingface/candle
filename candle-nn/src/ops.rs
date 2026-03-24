@@ -458,16 +458,6 @@ impl candle::lazy::custom::LazyCustomOp for SoftmaxLastDim {
         "softmax-last-dim"
     }
 
-    fn fwd(
-        &self,
-        input: &[(&candle::LazyStorage, &Layout)],
-    ) -> Result<(candle::LazyStorage, Shape)> {
-        let (first, layout) = input[0];
-        first
-            .custom_op(Box::new(self.clone()), &input[1..])
-            .map(|s| (s, layout.shape().clone()))
-    }
-
     fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
         softmax(tensors[0], D::Minus1)
     }
@@ -682,7 +672,11 @@ impl candle::CustomOp2 for RmsNorm {
         s2: &candle::LazyStorage,
         l2: &Layout,
     ) -> Result<(candle::LazyStorage, Shape)> {
-        let mut s1 = s1.custom_op(self.clone_box(), &[(s2, l2)])?;
+        let s1 = candle::LazyStorage::copy(s1, l1);
+        let s2 = candle::LazyStorage::copy(s2, l2);
+
+        let mut s1 = s1.custom_op(self.clone_box(), &[(&s2, l2)])?;
+
         s1.register_custom_op(CustomOp::Two(Box::new(self.clone())));
 
         // fallback
@@ -690,27 +684,17 @@ impl candle::CustomOp2 for RmsNorm {
         let alpha = Tensor::from_storage(s2.clone().into(), l2.shape(), BackpropOp::none(), false);
 
         let result = self.fallback(&[&x, &alpha])?;
-        let (inner, layout) = self.extract_lazy(result)?;
+        let (inner, _layout) = self.extract_lazy(result)?;
 
         s1.add_custom_fallback(LazyCustomOp::name(self), inner);
 
-        Ok((s1, layout.shape().clone()))
+        Ok((s1, l1.shape().clone()))
     }
 }
 
 impl candle::lazy::custom::LazyCustomOp for RmsNorm {
     fn name(&self) -> &'static str {
         "rms-norm"
-    }
-
-    fn fwd(
-        &self,
-        args: &[(&candle::LazyStorage, &Layout)],
-    ) -> Result<(candle::LazyStorage, Shape)> {
-        let (first, layout) = args[0];
-        first
-            .custom_op(Box::new(self.clone()), &args[1..])
-            .map(|s| (s, layout.shape().clone()))
     }
 
     fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
@@ -1417,21 +1401,23 @@ mod tests {
         let device = Device::Lazy(LazyDevice);
         //let device = Device::new_metal(0)?;
 
-        let xs = Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), &device)?;
-
-        let alpha = Tensor::from_slice(
-            &[1f32, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7],
-            Shape::from(8),
+        let xs = Tensor::from_slice(
+            &[0f32, 1., 2., 3., 4., 5., 6., 7.],
+            Shape::from((4, 2)),
             &device,
         )?;
+        let indices = Tensor::from_slice(&[0u8, 1], Shape::from(2), &device)?;
+        let xs = xs.index_select(&indices, 0usize)?;
+
+        let alpha = Tensor::from_slice(&[1f32, 1.1], Shape::from(2), &device)?;
 
         let eps = 1.2;
 
         let result = rms_norm(&xs, &alpha, eps)?;
 
         assert_eq!(
-            result.to_vec1::<f32>()?,
-            &[0.0, 0.25437352, 0.5549968, 0.9018697, 1.2949924, 1.7343647, 2.2199872, 2.751859]
+            result.flatten_all()?.to_vec1::<f32>()?,
+            &[0.0, 0.8436615, 0.72075, 1.1892376]
         );
         Ok(())
     }

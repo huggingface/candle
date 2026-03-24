@@ -2410,10 +2410,12 @@ impl LazyAllocator<Buffer> for MetalAllocator {
             reusage,
             allocations,
         } = crate::lazy::greedy_by_size(graph)?;
-        //print!("Updating buffer ids ... ");
+
         for node in graph {
-            if let Some(reuse) = reusage.get(&node.buffer_id()) {
-                node.set_buffer_id(reuse.clone());
+            for src in node.op().srcs() {
+                if let Some(reuse) = reusage.get(&src.buffer_id()) {
+                    src.set_buffer_id(reuse.clone());
+                }
             }
         }
 
@@ -2683,11 +2685,38 @@ impl Executor for MetalDevice {
         let graph = lazy_storage.execution_order();
 
         allocator.initialize(&graph)?;
-        println!("{}", crate::lazy::graph_to_dot(&lazy_storage));
+        //println!("{}", crate::lazy::graph_to_dot(&lazy_storage));
 
         let result_buffer_id = graph.last().unwrap().buffer_id();
         for node in graph {
-            self.eval(&node, &mut allocator)?;
+            if let Err(e) = self.eval(&node, &mut allocator) {
+                println!("{}", crate::lazy::graph_to_dot(&node));
+                Err(e)?
+            }
+
+            let node_buffer = allocator.get(node.buffer_id())?;
+            let storage = MetalStorage::new(
+                node_buffer.clone().into(),
+                self.clone(),
+                node.layout().shape().elem_count(),
+                node.dtype(),
+            );
+            let result = storage.to_cpu_storage()?;
+            match result {
+                CpuStorage::F32(data) => {
+                    if data.iter().any(|&x| x.is_nan()) {
+                        println!("{}", crate::lazy::graph_to_dot(&node));
+                        panic!("result was NaN")
+                    }
+                }
+                CpuStorage::BF16(data) => {
+                    if data.iter().any(|&x| x.is_nan()) {
+                        println!("{}", crate::lazy::graph_to_dot(&node));
+                        panic!("result was NaN")
+                    }
+                }
+                _ => {}
+            }
         }
 
         let buffer = allocator.get(result_buffer_id).unwrap().clone();
@@ -2697,7 +2726,6 @@ impl Executor for MetalDevice {
     fn eval(&self, current: &LazyStorage, allocator: &mut MetalAllocator) -> Result<()> {
         use crate::lazy::Op::*;
 
-        self.synchronize()?;
         match current.op() {
             Const(s) => self.eval_const(allocator, s, current.buffer_id())?,
             Affine(a) => {
@@ -2710,7 +2738,7 @@ impl Executor for MetalDevice {
                 let src = op.srcs()[0];
 
                 if src.dtype() != op.dtype {
-                    let src_buffer = allocator.get(src.buffer_id()).unwrap();
+                    let src_buffer = allocator.get(src.buffer_id())?;
                     let dst = allocator.get(current.buffer_id()).unwrap();
                     to_dtype(self, src_buffer, src.layout(), src.dtype(), dst, op.dtype)?
                 }

@@ -536,24 +536,14 @@ impl candle::CustomOp3 for RotaryEmb {
         let (inner, layout) = self.extract_lazy(result)?;
 
         storage.add_custom_fallback(LazyCustomOp::name(self), inner);
-        let _shape = src.layout().shape().clone();
-        Ok((storage, layout.shape().clone()))
+
+        Ok((storage, src_l.shape().clone()))
     }
 }
 
 impl candle::lazy::custom::LazyCustomOp for RotaryEmb {
     fn name(&self) -> &'static str {
         "rotary-emb"
-    }
-
-    fn fwd(
-        &self,
-        args: &[(&candle::LazyStorage, &Layout)],
-    ) -> Result<(candle::LazyStorage, Shape)> {
-        let (first, layout) = args[0];
-        first
-            .custom_op(Box::new(self.clone()), &args[1..])
-            .map(|s| (s, layout.shape().clone()))
     }
 
     fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
