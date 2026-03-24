@@ -455,11 +455,7 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
             }
         }
         if let Some(best) = best_buffer {
-            if let Some(nested) = reusage.get(&best) {
-                reusage.insert(buffer_id.clone(), nested.clone());
-            } else {
-                reusage.insert(buffer_id.clone(), best);
-            }
+            reusage.insert(buffer_id.clone(), best);
         } else {
             //let rounded_size = (record.size - 1).next_power_of_two();
             allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
@@ -469,26 +465,20 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
 
     // Loop through and add inplace assignments
     /*
-    for edge_idx in edges.iter() {
-        let edge = &graph.raw_edges()[edge_idx.index()];
-        let node_idx = edge.source();
-        let t = &graph[node_idx];
-        if t.resolved() {
+    for node in graph {
+        if node.op().resolved() {
             continue;
         }
-        let incoming = graph.edges_directed(node_idx, petgraph::Incoming);
-        for in_idx in incoming {
-            let in_edge: &Edge<OpEdge> = &graph.raw_edges()[in_idx.id().index()];
-
-            let true_source = determine_tensor_source(graph, in_edge);
-            if true_source.weight.buffer_id() != in_edge.weight.buffer_id() {
-                if let Some(_) = allocations.get(&true_source.weight.buffer_id()) {
-                    reusage.insert(in_edge.weight.buffer_id(), true_source.weight.buffer_id());
+        for source in node.op().srcs() {
+            let true_source = determine_tensor_source(source);
+            if true_source.id() != source.id() {
+                if let Some(buf) = allocations.get(&true_source.buffer_id()) {
+                    ... assignments.insert(source.id(), buf.clone());
                 }
             }
         }
     }
-     */
+    */
 
     // Handle final output edge
     let output = graph.last().unwrap();

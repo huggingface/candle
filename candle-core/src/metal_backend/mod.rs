@@ -16,6 +16,7 @@ use candle_metal_kernels::{
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
+use objc2_metal::MTLStages;
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -2003,7 +2004,7 @@ impl BackendStorage for MetalStorage {
             let src_offset = src_o * self.dtype.size_in_bytes();
             let length = d1 * d2 * self.dtype.size_in_bytes();
             let dst_offset = dst_o * dst.dtype().size_in_bytes();
-            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
+            blit.copy(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
             blit.end_encoding();
         } else {
             let el_count = d1 * d2;
@@ -2047,7 +2048,7 @@ impl BackendStorage for MetalStorage {
             let src_offset = src_l.start_offset() * self.dtype.size_in_bytes();
             let length = src_l.shape().elem_count() * self.dtype.size_in_bytes();
             let dst_offset = dst_offset * dst.dtype().size_in_bytes();
-            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
+            blit.copy(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
             blit.end_encoding();
         } else {
             let src_shape = src_l.shape();
@@ -2149,7 +2150,7 @@ impl MetalStorage {
         {
             let blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
+            blit.copy(&self.buffer, 0, &buffer, 0, size);
             blit.end_encoding();
         }
         self.device.wait_until_completed()?;
@@ -2529,7 +2530,7 @@ fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
                 let size = result.size();
                 let blit = self.device.blit_command_encoder()?;
                 blit.set_label("copy_to_dst");
-                blit.copy_from_buffer(result.buffer(), 0, &dst, 0, size);
+                blit.copy(result.buffer(), 0, &dst, 0, size);
                 blit.end_encoding();
                 self.device.synchronize()?;
             }
@@ -2577,7 +2578,7 @@ fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
                 let size = result.size();
                 let blit = self.device.blit_command_encoder()?;
                 blit.set_label("copy_to_dst");
-                blit.copy_from_buffer(result.buffer(), 0, &dst, 0, size);
+                blit.copy(result.buffer(), 0, &dst, 0, size);
                 blit.end_encoding();
                 self.device.synchronize()?;
             }
@@ -2629,7 +2630,7 @@ fn install_custom_op3(op: &Box<dyn crate::CustomOp3>) {
                 let size = result.size();
                 let blit = self.device.blit_command_encoder()?;
                 blit.set_label("copy_to_dst");
-                blit.copy_from_buffer(result.buffer(), 0, &dst, 0, size);
+                blit.copy(result.buffer(), 0, &dst, 0, size);
                 blit.end_encoding();
                 self.device.synchronize()?;
             }
@@ -2985,6 +2986,9 @@ impl Executor for MetalDevice {
             Output(_) => {}
             _ => todo!("{}", current.op()),
         }
+
+        self.synchronize()?;
+
         Ok(())
     }
 
