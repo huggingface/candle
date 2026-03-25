@@ -9,6 +9,18 @@
 //! Tensors can also be serialized to safetensor format using the `save` function or
 //! `Tensor::save_safetensors` method.
 //!
+//! # Endianness Handling
+//!
+//! SafeTensors stores all multi-byte data in little-endian format. On big-endian systems,
+//! this module automatically converts between little-endian (file format) and big-endian
+//! (system format) by reversing byte order for multi-byte types. Single-byte types (U8, F8E4M3)
+//! require no conversion. This conversion is applied during both loading and saving operations.
+//!
+//! **Note on Dummy Types**: The dummy types (F6E2M3, F6E3M2, F4, F8E8M0) store raw packed bytes
+//! whose internal structure is opaque. Loading or saving these types on big-endian systems will
+//! return an error, as we cannot safely perform byte swapping without knowing their internal format.
+//! These types are only supported on little-endian architectures.
+//!
 use crate::op::BackpropOp;
 use crate::storage::Storage;
 use crate::tensor::from_storage;
@@ -112,10 +124,73 @@ impl Tensor {
     }
 }
 
+/// Convert byte slice to appropriate endianness for the current system.
+/// SafeTensors uses little-endian format; this swaps bytes on big-endian systems.
+#[inline]
+fn maybe_swap_endianness(data: &[u8], _size_in_bytes: usize) -> Cow<'_, [u8]> {
+    #[cfg(target_endian = "big")]
+    {
+        if _size_in_bytes == 1 {
+            Cow::Borrowed(data)
+        } else {
+            let mut swapped = data.to_vec();
+            for chunk in swapped.chunks_exact_mut(_size_in_bytes) {
+                chunk.reverse();
+            }
+            Cow::Owned(swapped)
+        }
+    }
+    #[cfg(target_endian = "little")]
+    {
+        Cow::Borrowed(data)
+    }
+}
+
+/// Handle endianness conversion for dummy types.
+/// Returns an error on big-endian systems since the internal structure is opaque
+/// and we cannot safely swap bytes without knowing the format.
+fn maybe_swap_dummy_endianness(data: &[u8]) -> Result<Cow<'_, [u8]>> {
+    #[cfg(target_endian = "big")]
+    {
+        // Dummy types store raw bytes with opaque internal structure.
+        // Without knowing the format, we cannot safely swap bytes.
+        Err(Error::Msg(
+            "Dummy types (F6E2M3, F6E3M2, F4, F8E8M0) are not supported on big-endian systems due to unknown internal byte structure".to_string()
+        ))
+    }
+    #[cfg(target_endian = "little")]
+    {
+        Ok(Cow::Borrowed(data))
+    }
+}
+
+/// Checks if data is properly aligned for the given size in bytes.
+/// On big-endian systems with multi-byte types, swapped data may not be aligned.
+fn check_alignment(data: &Cow<'_, [u8]>, size_in_bytes: usize) -> bool {
+    #[cfg(target_endian = "big")]
+    {
+        let is_aligned = (data.as_ptr() as usize).is_multiple_of(size_in_bytes);
+        if size_in_bytes > 1 && matches!(data, Cow::Owned(_)) {
+            // Swapped data from Vec may not maintain alignment, use unaligned path
+            false
+        } else {
+            is_aligned
+        }
+    }
+    
+    #[cfg(target_endian = "little")]
+    {
+        (data.as_ptr() as usize).is_multiple_of(size_in_bytes)
+    }
+}
+
 fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
-    if (data.as_ptr() as usize).is_multiple_of(size_in_bytes) {
+    let data = maybe_swap_endianness(data, size_in_bytes);
+    let is_aligned = check_alignment(&data, size_in_bytes);
+    
+    if is_aligned {
         // SAFETY This is safe because we just checked that this
         // was correctly aligned.
         let data: &[T] =
@@ -145,7 +220,10 @@ fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>
 ) -> Result<Tensor> {
     let size_in_bytes = std::mem::size_of::<T>();
     let elem_count = data.len() / size_in_bytes;
-    if (data.as_ptr() as usize).is_multiple_of(size_in_bytes) {
+    let data = maybe_swap_endianness(data, size_in_bytes);
+    let is_aligned = check_alignment(&data, size_in_bytes);
+    
+    if is_aligned {
         // SAFETY This is safe because we just checked that this
         // was correctly aligned.
         let data: &[T] =
@@ -186,13 +264,24 @@ fn convert_back_<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
     let length = vs.len() * size_in_bytes;
     let capacity = vs.capacity() * size_in_bytes;
     let ptr = vs.as_mut_ptr() as *mut u8;
-    // Don't run the destructor for Vec<T>
     std::mem::forget(vs);
-    // SAFETY:
-    //
-    // Every T is larger than u8, so there is no issue regarding alignment.
-    // This re-interpret the Vec<T> as a Vec<u8>.
-    unsafe { Vec::from_raw_parts(ptr, length, capacity) }
+    
+    // SAFETY: Every T is larger than u8, so no alignment issues.
+    // Re-interpret Vec<T> as Vec<u8>, then swap bytes for big-endian.
+    let bytes = unsafe { Vec::from_raw_parts(ptr, length, capacity) };
+    
+    #[cfg(target_endian = "big")]
+    {
+        if size_in_bytes > 1 {
+            let mut bytes = bytes;
+            for chunk in bytes.chunks_exact_mut(size_in_bytes) {
+                chunk.reverse();
+            }
+            return bytes;
+        }
+    }
+    
+    bytes
 }
 
 pub trait Load {
@@ -224,7 +313,8 @@ impl Tensor {
             DType::F64 => convert_slice::<f64>(data, shape, device),
             DType::F8E4M3 => convert_slice::<float8::F8E4M3>(data, shape, device),
             DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
-                // For dummy types, create storage with raw bytes
+                // For dummy types, create storage with raw bytes (see module docs for limitations)
+                let data = maybe_swap_dummy_endianness(data)?;
                 let storage = match device {
                     Device::Cpu => {
                         let cpu_storage = match dtype {
@@ -320,9 +410,9 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         _ => unreachable!("convert_dummy called with non-dummy dtype"),
     };
 
-    // Load the raw bytes
     let data = view.data();
     let shape = view.shape();
+    let data = maybe_swap_dummy_endianness(data)?;
 
     // Create storage with the appropriate dummy type variant
     let storage = match device {
@@ -640,5 +730,81 @@ mod tests {
         let data: Vec<u8> = tensor.to_vec1().unwrap();
         assert_eq!(data, vec![1, 3]);
         std::fs::remove_file("test_u8.safetensors").unwrap();
+    }
+
+    #[test]
+    fn test_endianness_multi_byte_types() {
+        // Test that multi-byte types are correctly handled
+        // SafeTensors stores data in little-endian format
+        
+        // Test F32: value 1.0 in little-endian is [0x00, 0x00, 0x80, 0x3f]
+        // Header: 8 bytes length (0x36 = 54) + 54 bytes JSON, then data
+        let f32_bytes = b"6\0\0\0\0\0\0\0{\"x\":{\"dtype\":\"F32\",\"shape\":[1],\"data_offsets\":[0,4]}}\x00\x00\x80\x3f";
+        std::fs::write("test_f32_endian.safetensors", f32_bytes).unwrap();
+        let weights = load("test_f32_endian.safetensors", &Device::Cpu).unwrap();
+        let tensor = weights.get("x").unwrap();
+        let data: Vec<f32> = tensor.to_vec1().unwrap();
+        assert_eq!(data, vec![1.0f32]);
+        std::fs::remove_file("test_f32_endian.safetensors").unwrap();
+
+        // Test I32: value 256 in little-endian is [0x00, 0x01, 0x00, 0x00]
+        let i32_bytes = b"6\0\0\0\0\0\0\0{\"x\":{\"dtype\":\"I32\",\"shape\":[1],\"data_offsets\":[0,4]}}\x00\x01\x00\x00";
+        std::fs::write("test_i32_endian.safetensors", i32_bytes).unwrap();
+        let weights = load("test_i32_endian.safetensors", &Device::Cpu).unwrap();
+        let tensor = weights.get("x").unwrap();
+        let data: Vec<i32> = tensor.to_vec1().unwrap();
+        assert_eq!(data, vec![256i32]);
+        std::fs::remove_file("test_i32_endian.safetensors").unwrap();
+
+        // Test U32: value 65536 in little-endian is [0x00, 0x00, 0x01, 0x00]
+        let u32_bytes = b"6\0\0\0\0\0\0\0{\"x\":{\"dtype\":\"U32\",\"shape\":[1],\"data_offsets\":[0,4]}}\x00\x00\x01\x00";
+        std::fs::write("test_u32_endian.safetensors", u32_bytes).unwrap();
+        let weights = load("test_u32_endian.safetensors", &Device::Cpu).unwrap();
+        let tensor = weights.get("x").unwrap();
+        let data: Vec<u32> = tensor.to_vec1().unwrap();
+        assert_eq!(data, vec![65536u32]);
+        std::fs::remove_file("test_u32_endian.safetensors").unwrap();
+    }
+
+    #[test]
+    fn test_save_load_roundtrip_endianness() {
+        // Test that save and load are symmetric for multi-byte types
+        let original_f32 = Tensor::from_slice(&[1.0f32, 2.0f32, 3.0f32], (3,), &Device::Cpu).unwrap();
+        let original_i32 = Tensor::from_slice(&[256i32, 512i32, 1024i32], (3,), &Device::Cpu).unwrap();
+        let original_u32 = Tensor::from_slice(&[65536u32, 131072u32, 262144u32], (3,), &Device::Cpu).unwrap();
+
+        let map: HashMap<_, _> = [
+            ("f32", original_f32.clone()),
+            ("i32", original_i32.clone()),
+            ("u32", original_u32.clone()),
+        ].into_iter().collect();
+        
+        save(&map, "test_roundtrip.safetensors").unwrap();
+        let loaded = load("test_roundtrip.safetensors", &Device::Cpu).unwrap();
+
+        let loaded_f32: Vec<f32> = loaded.get("f32").unwrap().to_vec1().unwrap();
+        let loaded_i32: Vec<i32> = loaded.get("i32").unwrap().to_vec1().unwrap();
+        let loaded_u32: Vec<u32> = loaded.get("u32").unwrap().to_vec1().unwrap();
+
+        assert_eq!(loaded_f32, vec![1.0f32, 2.0f32, 3.0f32]);
+        assert_eq!(loaded_i32, vec![256i32, 512i32, 1024i32]);
+        assert_eq!(loaded_u32, vec![65536u32, 131072u32, 262144u32]);
+
+        std::fs::remove_file("test_roundtrip.safetensors").unwrap();
+    }
+
+    #[test]
+    fn test_u16_to_u32_cast_endianness() {
+        // Test U16 to U32 casting with endianness handling
+        // U16 value 256 in little-endian is [0x00, 0x01]
+        let u16_bytes = b"6\0\0\0\0\0\0\0{\"x\":{\"dtype\":\"U16\",\"shape\":[1],\"data_offsets\":[0,2]}}\x00\x01";
+        std::fs::write("test_u16_cast.safetensors", u16_bytes).unwrap();
+        let weights = load("test_u16_cast.safetensors", &Device::Cpu).unwrap();
+        let tensor = weights.get("x").unwrap();
+        // U16 gets cast to U32
+        assert_eq!(tensor.dtype(), DType::U32);
+        let data: Vec<u32> = tensor.to_vec1().unwrap();
+        assert_eq!(data, vec![256u32]);
+        std::fs::remove_file("test_u16_cast.safetensors").unwrap();
     }
 }
