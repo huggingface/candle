@@ -88,7 +88,11 @@ impl FlashAttn {
         if head_size_og > 512 {
             candle::bail!("only supports head dimension at most 512 (got {head_size_og})")
         }
-        if !(head_size_og == 512 || head_size_og == 256 || head_size_og == 128 || head_size_og == 64) {
+        if !(head_size_og == 512
+            || head_size_og == 256
+            || head_size_og == 128
+            || head_size_og == 64)
+        {
             candle::bail!("only supports head dimension 64, 128, 256 and 512 (got {head_size_og})")
         }
         if head_size_og % 8 != 0 {
@@ -512,7 +516,11 @@ impl FlashAttnVarLen {
         if head_size_og > 512 {
             candle::bail!("only supports head dimension at most 512 (got {head_size_og})")
         }
-        if !(head_size_og == 512 || head_size_og == 256 || head_size_og == 128 || head_size_og == 64) {
+        if !(head_size_og == 512
+            || head_size_og == 256
+            || head_size_og == 128
+            || head_size_og == 64)
+        {
             candle::bail!("only supports head dimension 64, 128, 256 and 512 (got {head_size_og})")
         }
         if head_size_og % 8 != 0 {
