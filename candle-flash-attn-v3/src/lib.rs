@@ -85,11 +85,11 @@ impl FlashAttn {
         if expected_kv != v_l.shape().dims4()? {
             candle::bail!("shape mismatch q {:?} and v {:?}", q_l.shape(), v_l.shape())
         }
-        if head_size_og > 256 {
-            candle::bail!("only supports head dimension at most 256 (got {head_size_og})")
+        if head_size_og > 512 {
+            candle::bail!("only supports head dimension at most 512 (got {head_size_og})")
         }
-        if !(head_size_og == 256 || head_size_og == 128 || head_size_og == 64) {
-            candle::bail!("only supports head dimension 64, 128 and 256 (got {head_size_og})")
+        if !(head_size_og == 512 || head_size_og == 256 || head_size_og == 128 || head_size_og == 64) {
+            candle::bail!("only supports head dimension 64, 128, 256 and 512 (got {head_size_og})")
         }
         if head_size_og % 8 != 0 {
             // TODO: Handle head sizes that are not a multiple of 8 via some padding.
@@ -509,11 +509,11 @@ impl FlashAttnVarLen {
         if expected_kv != v_l.shape().dims3()? {
             candle::bail!("shape mismatch q {:?} and v {:?}", q_l.shape(), v_l.shape())
         }
-        if head_size_og > 256 {
-            candle::bail!("only supports head dimension at most 256 (got {head_size_og})")
+        if head_size_og > 512 {
+            candle::bail!("only supports head dimension at most 512 (got {head_size_og})")
         }
-        if !(head_size_og == 256 || head_size_og == 128 || head_size_og == 64) {
-            candle::bail!("only supports head dimension 64, 128 and 256 (got {head_size_og})")
+        if !(head_size_og == 512 || head_size_og == 256 || head_size_og == 128 || head_size_og == 64) {
+            candle::bail!("only supports head dimension 64, 128, 256 and 512 (got {head_size_og})")
         }
         if head_size_og % 8 != 0 {
             // TODO: Handle head sizes that are not a multiple of 8 via some padding.

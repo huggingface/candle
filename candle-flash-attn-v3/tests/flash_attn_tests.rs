@@ -337,7 +337,7 @@ fn flash_attn_varlen() -> Result<()> {
 }
 
 #[rstest(
-    head_dim => [64, 128, 256],
+    head_dim => [64, 128, 256, 512],
     seq_len => [2, 4, 9],
     use_gqa_packing => [false], // true does not make sense, as its reset to falser in the function
 )]
