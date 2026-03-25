@@ -117,16 +117,25 @@ impl Module for LayerNorm {
             DType::F16 | DType::BF16 => DType::F32,
             d => d,
         };
-        let hidden_size = x.dim(D::Minus1)?;
         let x = x.to_dtype(internal_dtype)?;
         let x = if self.remove_mean {
-            let mean_x = (x.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+            // Use mean_keepdim instead of manual division to preserve gradient flow
+            let mean_x = x.mean_keepdim(D::Minus1)?;
             x.broadcast_sub(&mean_x)?
         } else {
             x
         };
-        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
-        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+        // Use mean_keepdim for variance calculation to preserve gradient flow
+        let var_x = x.sqr()?.mean_keepdim(D::Minus1)?;
+        
+        // Create epsilon as a tensor for proper gradient flow
+        let eps_tensor = Tensor::new(&[self.eps], x.device())?.to_dtype(internal_dtype)?;
+        
+        // Use broadcast_add for adding epsilon to maintain gradient tracking
+        let std_x = var_x.broadcast_add(&eps_tensor)?.sqrt()?;
+        
+        // Use broadcast_div for normalization
+        let x_normed = x.broadcast_div(&std_x)?;
         let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)?;
         match &self.bias {
             None => Ok(x),
