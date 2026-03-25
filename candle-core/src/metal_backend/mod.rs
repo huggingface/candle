@@ -2695,7 +2695,7 @@ impl Executor for MetalDevice {
         allocator.initialize(&graph)?;
         //println!("{}", crate::lazy::graph_to_dot(&lazy_storage));
 
-        let result_buffer_id = graph.last().unwrap().buffer_id();
+        let result_node = graph.last().unwrap().clone();
         for node in graph {
             if let Err(e) = self.eval(&node, &mut allocator) {
                 println!("{}", crate::lazy::graph_to_dot(&node));
@@ -2709,6 +2709,7 @@ impl Executor for MetalDevice {
                 node.layout().shape().elem_count(),
                 node.dtype(),
             );
+            /*
             let result = storage.to_cpu_storage()?;
             match result {
                 CpuStorage::F32(data) => {
@@ -2725,9 +2726,18 @@ impl Executor for MetalDevice {
                 }
                 _ => {}
             }
+            */
         }
 
-        let buffer = allocator.get(result_buffer_id).unwrap().clone();
+        let buffer = allocator.get(result_node.buffer_id()).unwrap().clone();
+        let storage = MetalStorage::new(
+            buffer.clone().into(),
+            self.clone(),
+            result_node.layout().shape().elem_count(),
+            result_node.dtype(),
+        );
+        //let result = storage.to_cpu_storage()?;
+        //println!("result: {result:?}");
         Ok(buffer)
     }
 

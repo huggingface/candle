@@ -109,7 +109,7 @@ pub struct LazyStorage {
     custom_op_fallbacks: HashMap<String, LazyStorage>,
     layout: Layout,
     dtype: DType,
-    buffer_id: BufferId,
+    buffer_id: Arc<BufferId>,
     // potentially Arc<RwLock<...>>
     //inner: Option<CpuStorage>,
 }
@@ -122,7 +122,7 @@ impl LazyStorage {
             custom_op_fallbacks: HashMap::new(),
             layout: layout.clone(),
             dtype,
-            buffer_id: BufferId::new(),
+            buffer_id: Arc::new(BufferId::new()),
         }
     }
 
@@ -286,21 +286,27 @@ impl Dot {
     pub fn graph_fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "digraph {{ ")?;
         writeln!(f, "{}ordering=\"in\"", INDENT)?;
+        let graph = self.0.execution_order();
         // output all labels
-        for node in self.0.execution_order() {
+        let mut max_id = 0;
+        for node in graph.iter() {
+            let node_id = node.id().index();
+            if node_id > max_id {
+                max_id = node_id;
+            }
             write!(f, "{}{} [ ", INDENT, node.id().index())?;
-
             write!(f, "label = \"")?;
-
             write!(f, "{}", node.op())?;
-
             write!(f, "\" ")?;
-            //writeln!(f, "{}]", (self.get_node_attributes)(g, node))?;
             writeln!(f, "]")?;
         }
-        // output all edges
+        max_id += 1;
 
-        for node in self.0.execution_order() {
+        write!(f, "{}{} [ ", INDENT, max_id)?;
+        writeln!(f, "label = \"\"]")?;
+
+        // output all edges
+        for node in graph.iter() {
             for source in node.srcs() {
                 write!(
                     f,
@@ -322,6 +328,20 @@ impl Dot {
                 writeln!(f, "]")?;
             }
         }
+
+        let last_node = graph.last().unwrap();
+        write!(f, "{}{} -> {} [ ", INDENT, last_node.id().index(), max_id)?;
+        write!(f, "label = \"")?;
+        write!(
+            f,
+            "{} ({:?}, {:?}, {})",
+            last_node.buffer_id().inner(),
+            last_node.shape(),
+            last_node.layout().stride(),
+            last_node.dtype().as_str(),
+        )?;
+        write!(f, "\" ")?;
+        writeln!(f, "]")?;
 
         writeln!(f, "}}")?;
 
@@ -609,7 +629,7 @@ impl Display for Op {
             Op::Uninit => write!(f, "Uninit"),
             Op::Const(_) => write!(f, "Const"),
             Op::ToCpu => write!(f, "ToCpu"),
-            Op::Affine(affine) => write!(f, "Affine({},{})", affine.add, affine.mul),
+            Op::Affine(affine) => write!(f, "Affine({}, {})", affine.add, affine.mul),
             Op::Powf(_powf) => write!(f, "Powf"),
             Op::Elu(_elu) => write!(f, "Elu"),
             Op::Reduce(reduce) => write!(
