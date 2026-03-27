@@ -14,10 +14,13 @@
 //! ```
 
 pub mod cpu_flash;
+pub mod varlen;
 
 use candle::Tensor;
 
 pub use cpu_flash::flash_attn;
+pub use cpu_flash::varlen::flash_attn_varlen_cpu;
+pub use varlen::flash_attn_varlen_unfused;
 
 /// Attention mask specification.
 ///

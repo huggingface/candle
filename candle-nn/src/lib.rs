@@ -38,6 +38,10 @@ pub mod sampling;
 pub mod sequential;
 pub mod var_builder;
 pub mod var_map;
+/// Re-export of [`attention::varlen`] for backward compatibility.
+pub mod varlen_attention {
+    pub use crate::attention::varlen::*;
+}
 
 pub use activation::{prelu, Activation, PReLU};
 pub use batch_norm::{batch_norm, BatchNorm, BatchNormConfig};

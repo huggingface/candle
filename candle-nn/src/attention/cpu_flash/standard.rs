@@ -147,6 +147,25 @@ where
         );
     }
 
+    // Fast path: B=1 with contiguous last dim avoids strided gather
+    if q.shape().dims()[0] == 1 && q_stride[3] == 1 && k_stride[3] == 1 && v_stride[3] == 1 {
+        return flash_attn_cpu_single_batch(
+            q_data,
+            k_data,
+            v_data,
+            mask_data,
+            q.shape().dims(),
+            k.shape().dims(),
+            v.shape().dims(),
+            q_stride,
+            k_stride,
+            v_stride,
+            softmax_scale,
+            max_bias.unwrap_or(0.0),
+            softcap.unwrap_or(0.0),
+        );
+    }
+
     flash_attn_cpu(
         q_data,
         k_data,
@@ -484,5 +503,128 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
 
     // Build output tensor with shape (B, H, S, D) to match standard (permute 0,2,1,3)
     let out_shape = (b, h, q_len, dv);
+    Tensor::from_vec(out, out_shape, &Device::Cpu)
+}
+
+/// Optimised prefill path for B=1 with contiguous last dimension.
+///
+/// Eliminates per‑row Vec allocations by using direct slice references for
+/// Q, K, and V rows, and drops all batch‑dimension indexing.
+#[allow(clippy::too_many_arguments)]
+fn flash_attn_cpu_single_batch<T: WithDType + Sum + num_traits::real::Real>(
+    q_data: &[T],
+    k_data: &[T],
+    v_data: &[T],
+    mask_vec: Option<&[T]>,
+    qshape: &[usize],
+    kshape: &[usize],
+    vshape: &[usize],
+    qstride: &[usize],
+    kstride: &[usize],
+    vstride: &[usize],
+    scale: f32,
+    max_bias: f32,
+    logit_softcap: f32,
+) -> Result<Tensor> {
+    let (q_len, h, d) = (qshape[1], qshape[2], qshape[3]);
+    let kv_len = kshape[1];
+    let k_h = kshape[2];
+    let v_h = vshape[2];
+    let rk2 = h / k_h;
+    let rv2 = h / v_h;
+    let dv = d;
+
+    let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
+
+    let mut out = vec![0f32; h * q_len * dv];
+
+    FLASH_ATTN_POOL.install(|| {
+        out.par_chunks_mut(dv)
+            .with_min_len(64)
+            .enumerate()
+            .for_each(|(row_idx, out_chunk)| {
+                // No batch dimension — flat (h, q_pos) layout
+                let h_i = row_idx / q_len;
+                let q_pos = row_idx % q_len;
+
+                let slope = if max_bias > 0.0 {
+                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                } else {
+                    1.0
+                };
+
+                let k_head = h_i / rk2;
+                let v_head = h_i / rv2;
+
+                let mut vkq = vec![0f32; dv];
+                let mut s = 0.0f32;
+                let mut m = f32::NEG_INFINITY;
+
+                // Direct slice — contiguous last dim, no strided gather
+                let q_base = q_pos * qstride[1] + h_i * qstride[2];
+                let q_row = &q_data[q_base..q_base + d];
+
+                for kv_pos in 0..kv_len {
+                    // Mask (optional)
+                    let mv = if let Some(mv_vec) = mask_vec {
+                        let mval = mv_vec[q_pos * kv_len + kv_pos];
+                        slope * mval.to_f64() as f32
+                    } else {
+                        0.0
+                    };
+                    if mv == f32::NEG_INFINITY {
+                        continue;
+                    }
+
+                    // K row — direct slice
+                    let k_base = kv_pos * kstride[1] + k_head * kstride[2];
+                    let k_row = &k_data[k_base..k_base + d];
+
+                    // dot(Q, K)
+                    let mut s_val = vec_dot::<T>(q_row, k_row);
+                    let mut scale_applied = scale;
+                    if logit_softcap != 0.0 {
+                        scale_applied /= logit_softcap;
+                    }
+                    s_val *= T::from_f64(scale_applied as f64);
+                    if logit_softcap != 0.0 {
+                        s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
+                    }
+                    s_val += T::from_f64(mv as f64);
+
+                    // online softmax
+                    let m_old = m;
+                    let mut ms = 1.0f32;
+                    let mut vs = 1.0f32;
+                    if s_val.to_f64() as f32 > m {
+                        m = s_val.to_f64() as f32;
+                        ms = (m_old - m).exp();
+                        for v in vkq.iter_mut() {
+                            *v *= ms;
+                        }
+                    } else {
+                        vs = (s_val.to_f64() as f32 - m).exp();
+                    }
+
+                    // V row — direct slice
+                    let v_base = kv_pos * vstride[1] + v_head * vstride[2];
+                    let v_row = &v_data[v_base..v_base + dv];
+                    for d_i in 0..dv {
+                        vkq[d_i] += v_row[d_i].to_f64() as f32 * vs;
+                    }
+
+                    s = s * ms + vs;
+                }
+
+                // normalise & write out
+                let inv_s = 1.0 / s;
+                for v in vkq.iter_mut() {
+                    *v *= inv_s;
+                }
+                out_chunk.copy_from_slice(&vkq);
+            });
+    });
+
+    let out_shape = (1usize, h, q_len, dv);
     Tensor::from_vec(out, out_shape, &Device::Cpu)
 }

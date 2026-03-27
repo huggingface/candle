@@ -5,6 +5,7 @@
 
 pub mod causal;
 pub mod standard;
+pub mod varlen;
 
 use candle::{Result, Tensor, WithDType};
 use std::iter::Sum;
