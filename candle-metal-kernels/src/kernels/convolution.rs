@@ -135,6 +135,53 @@ pub fn call_upsample_nearest_2d(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn call_upsample_bilinear_2d(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    strides: &[usize],
+    out_w: usize,
+    out_h: usize,
+    align_corners: bool,
+    scale_h: Option<f64>,
+    scale_w: Option<f64>,
+    input: BufferOffset,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Conv, name)?;
+    let dst_el = out_w * out_h * shape[0] * shape[1];
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            out_w,
+            out_h,
+            align_corners,
+            scale_h.is_some(),
+            scale_h.unwrap_or(0.0) as f32,
+            scale_w.is_some(),
+            scale_w.unwrap_or(0.0) as f32,
+            shape,
+            strides,
+            &input,
+            output
+        )
+    );
+
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn call_pool2d(
     device: &Device,
     ep: impl EncoderProvider,

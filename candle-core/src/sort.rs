@@ -85,9 +85,11 @@ mod cuda {
             let ncols = self.last_dim;
             let nrows = elem_count / ncols;
             let ncols_pad = next_power_of_2(ncols);
+            // Limit block dim to 1024 threads, which is the maximum on modern CUDA gpus.
+            let block_dim = ncols_pad.min(1024);
             let cfg = LaunchConfig {
                 grid_dim: (nrows as u32, 1, 1),
-                block_dim: (ncols_pad as u32, 1, 1),
+                block_dim: (block_dim as u32, 1, 1),
                 shared_mem_bytes: (ncols_pad * std::mem::size_of::<u32>()) as u32,
             };
             let stream = dev.cuda_stream();

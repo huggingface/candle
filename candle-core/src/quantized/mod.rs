@@ -14,6 +14,7 @@ pub mod imatrix_file;
 pub mod k_quants;
 #[cfg(feature = "metal")]
 pub mod metal;
+pub mod tokenizer;
 #[cfg(not(feature = "metal"))]
 mod metal {
     pub use super::dummy_metal::*;
@@ -237,6 +238,15 @@ impl QStorage {
             }
             QStorage::Cuda(storage) => Ok(Cow::from(storage.data()?)),
             QStorage::Metal(storage) => Ok(Cow::from(storage.data()?)),
+        }
+    }
+
+    pub fn device_ptr(&self) -> Result<*const u8> {
+        match self {
+            QStorage::Cuda(storage) => storage.device_ptr(),
+            QStorage::Metal(_) | QStorage::Cpu(_) => {
+                crate::bail!("not implemented");
+            }
         }
     }
 }
@@ -667,6 +677,15 @@ impl QTensor {
             },
             _ => {
                 panic!("indexed_moe_forward is not implemented in this platform!");
+            }
+        }
+    }
+
+    pub fn device_ptr(&self) -> Result<*const u8> {
+        match &self.storage {
+            QStorage::Cuda(storage) => storage.device_ptr(),
+            QStorage::Metal(_) | QStorage::Cpu(_) => {
+                crate::bail!("not implemented");
             }
         }
     }

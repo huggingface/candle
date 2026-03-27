@@ -57,7 +57,7 @@ impl SlicePtrOrNull<usize> {
         let ds = if l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(dev.memcpy_stod(&[l.dims(), l.stride()].concat())?)
+            SlicePtrOrNull::Ptr(dev.clone_htod(&[l.dims(), l.stride()].concat())?)
         };
         Ok(ds)
     }
@@ -187,7 +187,7 @@ impl Map1 for Im2Col1D {
         let l_out = self.l_out(dims[2]);
         let threads = dims[0] * l_out * dims[1];
         let cfg = LaunchConfig::for_num_elems(threads as u32);
-        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat())?;
+        let ds = dev.clone_htod(&[dims, layout.stride()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
@@ -238,7 +238,7 @@ impl Map1 for Im2Col {
         let (h_out, w_out) = self.hw_out(dims[2], dims[3]);
         let dst_el = dims[0] * h_out * w_out * dims[1] * self.h_k * self.w_k;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat())?;
+        let ds = dev.clone_htod(&[dims, layout.stride()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
@@ -330,7 +330,7 @@ impl Map1Any for FastReduce<'_> {
             block_dim: (block_dim as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let ds = dev.memcpy_stod(&[dims.as_slice(), stride.as_slice()].concat())?;
+        let ds = dev.clone_htod(&[dims.as_slice(), stride.as_slice()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let (name, check_empty, return_index) = match self.1 {
             ReduceOp::Sum => ("fast_sum", false, false),
@@ -429,7 +429,7 @@ impl Map1 for IndexSelect<'_> {
         };
         let ids_shape = ids_l.shape();
         let ids_dims = ids_shape.dims();
-        let ds = dev.memcpy_stod(&[ids_dims, ids_l.stride()].concat())?;
+        let ds = dev.clone_htod(&[ids_dims, ids_l.stride()].concat())?;
         let src = match src_l.contiguous_offsets() {
             Some((o1, o2)) => src.slice(o1..o2),
             None => Err(crate::Error::RequiresContiguous { op: "index-select" }.bt())?,
@@ -702,7 +702,7 @@ impl Map2 for Conv1D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv1d {dims:?}")
         };
-        let ds = dev.memcpy_stod(&ds)?;
+        let ds = dev.clone_htod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el, l_out, p.stride, p.padding, p.dilation);
         builder.arg(&ds);
@@ -745,7 +745,7 @@ impl Map2 for Conv2D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv2d {dims:?}")
         };
-        let ds = dev.memcpy_stod(&ds)?;
+        let ds = dev.clone_htod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el, out_w, out_h, p.stride, p.padding, p.dilation);
         builder.arg(&ds);
@@ -816,7 +816,7 @@ impl Map2 for ConvTranspose1D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv_transpose1d {dims:?}")
         };
-        let ds = dev.memcpy_stod(&ds)?;
+        let ds = dev.clone_htod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, l_out);
@@ -864,7 +864,7 @@ impl Map2 for ConvTranspose2D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv_transpose2d {dims:?}")
         };
-        let ds = dev.memcpy_stod(&ds)?;
+        let ds = dev.clone_htod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, out_w);
@@ -924,7 +924,7 @@ impl Map1 for Pool2D {
         let func = dev.get_or_load_func(&kernel_name::<T>(kname), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
-        let ds = dev.memcpy_stod(&ds)?;
+        let ds = dev.clone_htod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, self.w_k);
@@ -963,7 +963,7 @@ impl Map1 for UpsampleNearest2D {
         let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
-        let ds = dev.memcpy_stod(&ds)?;
+        let ds = dev.clone_htod(&ds)?;
         let scale_w = dims[2] as f64 / out_w as f64;
         let scale_h = dims[3] as f64 / out_h as f64;
         let mut builder = func.builder();
@@ -974,6 +974,58 @@ impl Map1 for UpsampleNearest2D {
         builder.arg(&ds);
         builder.arg(inp);
         builder.arg(&out);
+        // SAFETY: ffi.
+        unsafe { builder.launch(cfg) }.w()?;
+        Ok(out)
+    }
+}
+
+struct UpsampleBilinear2D {
+    out_w: usize,
+    out_h: usize,
+    align_corners: bool,
+    scale_h_factor: Option<f64>,
+    scale_w_factor: Option<f64>,
+}
+
+impl Map1 for UpsampleBilinear2D {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        inp: &CudaSlice<T>,
+        dev: &CudaDevice,
+        inp_l: &Layout,
+    ) -> Result<CudaSlice<T>> {
+        let inp = &inp.slice(inp_l.start_offset()..);
+        let shape = inp_l.shape();
+        let dims = shape.dims();
+        let ds = if dims.len() == 4 {
+            [dims, inp_l.stride()].concat()
+        } else {
+            crate::bail!("unexpected input shape for upsample_bilinear2d {dims:?}")
+        };
+
+        let (out_w, out_h) = (self.out_w, self.out_h);
+        let dst_el = out_w * out_h * dims[0] * dims[1];
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let func =
+            dev.get_or_load_func(&kernel_name::<T>("upsample_bilinear2d"), &kernels::CONV)?;
+
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(dst_el)? };
+        let ds = dev.clone_htod(&ds)?;
+
+        let mut builder = func.builder();
+        barg!(builder, out_w);
+        barg!(builder, out_h);
+        barg!(builder, self.align_corners);
+        barg!(builder, self.scale_h_factor.is_some());
+        barg!(builder, self.scale_h_factor.unwrap_or(0.0));
+        barg!(builder, self.scale_w_factor.is_some());
+        barg!(builder, self.scale_w_factor.unwrap_or(0.0));
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(&out);
+
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
@@ -1015,8 +1067,8 @@ impl Map2 for WhereCond<'_> {
         let dims = shape.dims();
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
-        let ds = dev
-            .memcpy_stod(&[dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())?;
+        let ds =
+            dev.clone_htod(&[dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())?;
         let t = &t.slice(layout_t.start_offset()..);
         let f = &f.slice(layout_f.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::TERNARY)?;
@@ -1052,7 +1104,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())?)
+            SlicePtrOrNull::Ptr(dev.clone_htod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())?)
         };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
@@ -1089,7 +1141,7 @@ impl Map2Any for Cmp {
         let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())?)
+            SlicePtrOrNull::Ptr(dev.clone_htod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())?)
         };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
@@ -1204,6 +1256,87 @@ impl CudaStorage {
 
     pub fn as_cuda_slice_mut<T: CudaDType>(&mut self) -> Result<&mut CudaSlice<T>> {
         T::as_cuda_slice_mut(self)
+    }
+
+    pub fn transfer_to_device(&self, dst: &CudaDevice) -> Result<Self> {
+        let dst_stream = dst.cuda_stream();
+        let storage_slice = match self.dtype() {
+            DType::U8 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::U8(result)
+            }
+            DType::U32 => {
+                let cuda_slice = self.as_cuda_slice::<u32>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::U32(result)
+            }
+            DType::I16 => {
+                let cuda_slice = self.as_cuda_slice::<i16>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::I16(result)
+            }
+            DType::I32 => {
+                let cuda_slice = self.as_cuda_slice::<i32>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::I32(result)
+            }
+            DType::I64 => {
+                let cuda_slice = self.as_cuda_slice::<i64>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::I64(result)
+            }
+            DType::BF16 => {
+                let cuda_slice = self.as_cuda_slice::<bf16>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::BF16(result)
+            }
+            DType::F16 => {
+                let cuda_slice = self.as_cuda_slice::<f16>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::F16(result)
+            }
+            DType::F32 => {
+                let cuda_slice = self.as_cuda_slice::<f32>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::F32(result)
+            }
+            DType::F64 => {
+                let cuda_slice = self.as_cuda_slice::<f64>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::F64(result)
+            }
+            DType::F8E4M3 => {
+                let cuda_slice = self.as_cuda_slice::<float8::F8E4M3>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::F8E4M3(result)
+            }
+            DType::F6E2M3 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::F6E2M3(result)
+            }
+            DType::F6E3M2 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::F6E3M2(result)
+            }
+            DType::F4 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::F4(result)
+            }
+            DType::F8E8M0 => {
+                let cuda_slice = self.as_cuda_slice::<u8>()?;
+                let result = dst_stream.clone_dtod(cuda_slice).w()?;
+                CudaStorageSlice::F8E8M0(result)
+            }
+        };
+
+        Ok(Self {
+            slice: storage_slice,
+            device: dst.clone(),
+        })
     }
 }
 
@@ -1562,43 +1695,43 @@ impl BackendStorage for CudaStorage {
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         match &self.slice {
             CudaStorageSlice::U8(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::U8(cpu_storage))
             }
             CudaStorageSlice::U32(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::U32(cpu_storage))
             }
             CudaStorageSlice::I16(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::I16(cpu_storage))
             }
             CudaStorageSlice::I32(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::I32(cpu_storage))
             }
             CudaStorageSlice::I64(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::I64(cpu_storage))
             }
             CudaStorageSlice::BF16(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::BF16(cpu_storage))
             }
             CudaStorageSlice::F16(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::F16(cpu_storage))
             }
             CudaStorageSlice::F32(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::F32(cpu_storage))
             }
             CudaStorageSlice::F64(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::F64(cpu_storage))
             }
             CudaStorageSlice::F8E4M3(slice) => {
-                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
                 Ok(CpuStorage::F8E4M3(cpu_storage))
             }
             CudaStorageSlice::F4(_)
@@ -1978,6 +2111,27 @@ impl BackendStorage for CudaStorage {
     fn upsample_nearest2d(&self, l: &Layout, out_w: usize, out_h: usize) -> Result<Self> {
         let device = self.device().clone();
         let slice = UpsampleNearest2D(out_w, out_h).map(&self.slice, &device, l)?;
+        Ok(Self { slice, device })
+    }
+
+    fn upsample_bilinear2d(
+        &self,
+        l: &Layout,
+        out_h: usize,
+        out_w: usize,
+        align_corners: bool,
+        scale_h: Option<f64>,
+        scale_w: Option<f64>,
+    ) -> Result<Self> {
+        let device = self.device().clone();
+        let slice = UpsampleBilinear2D {
+            out_w,
+            out_h,
+            align_corners,
+            scale_h_factor: scale_h,
+            scale_w_factor: scale_w,
+        }
+        .map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
 

@@ -14,32 +14,32 @@ use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
-struct Gguf<R: Read + Seek> {
+pub struct Gguf<R: Read + Seek> {
     ct: gguf_file::Content,
     reader: R,
     device: Device,
 }
 
 impl<R: Read + Seek> Gguf<R> {
-    fn new(ct: gguf_file::Content, reader: R, device: Device) -> Self {
+    pub fn new(ct: gguf_file::Content, reader: R, device: Device) -> Self {
         Self { ct, reader, device }
     }
 
-    fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
+    pub fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
         QMatMul::from_weights(ws.into())
     }
 
-    fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm> {
+    pub fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
         RmsNorm::from_qtensor(ws, eps)
     }
 
-    fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value> {
+    pub fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value> {
         &self.ct.metadata
     }
 
-    fn tensor(&mut self, name: &str) -> Result<QTensor> {
+    pub fn tensor(&mut self, name: &str) -> Result<QTensor> {
         self.ct.tensor(&mut self.reader, name, &self.device)
     }
 }
@@ -81,13 +81,13 @@ impl Module for MlpWeights {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
+pub struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
 }
 
 impl RotaryEmbedding {
-    fn new(
+    pub fn new(
         dtype: DType,
         head_dim: usize,
         max_position_embeddings: usize,
@@ -113,7 +113,7 @@ impl RotaryEmbedding {
     }
 
     /// Apply RoPE (q, k shape: B x H x L x D)
-    fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
+    pub fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let sin = self.sin.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;

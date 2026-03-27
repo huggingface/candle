@@ -217,7 +217,7 @@ struct Args {
     tokenizer_file: Option<String>,
 
     #[arg(long)]
-    weight_files: Option<String>,
+    weight_path: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
@@ -229,6 +229,35 @@ struct Args {
 
     #[arg(long, default_value = "0.5b")]
     model: WhichModel,
+
+    /// Skip chat template formatting (use raw prompt, like base model)
+    #[arg(long)]
+    no_chat_template: bool,
+
+    /// Enable thinking/reasoning mode (allows model to show its reasoning process)
+    #[arg(long)]
+    thinking: bool,
+}
+
+impl Args {
+    fn should_use_chat_template(&self) -> bool {
+        matches!(
+            self.model,
+            WhichModel::W3_0_6b
+                | WhichModel::W3_1_7b
+                | WhichModel::W3_4b
+                | WhichModel::W3_8b
+                | WhichModel::W3MoeA3b
+        ) && !self.no_chat_template
+    }
+}
+
+fn format_prompt(prompt: &str, use_chat_template: bool, thinking: bool) -> String {
+    if !use_chat_template {
+        return prompt.to_string();
+    }
+    let think_tag = if thinking { " /think" } else { " /no_think" };
+    format!("<|im_start|>user\n{prompt}{think_tag}<|im_end|>\n<|im_start|>assistant\n")
 }
 
 fn main() -> Result<()> {
@@ -259,6 +288,8 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
+    let use_chat_template = args.should_use_chat_template();
+    let thinking = args.thinking;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
         None => {
@@ -288,15 +319,29 @@ fn main() -> Result<()> {
         RepoType::Model,
         args.revision,
     ));
-    let tokenizer_filename = match args.tokenizer_file {
-        Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+
+    let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer_file.as_ref()) {
+        (Some(_), Some(file)) => std::path::PathBuf::from(file),
+        (None, Some(file)) => std::path::PathBuf::from(file),
+        (Some(path), None) => std::path::Path::new(path).join("tokenizer.json"),
+        (None, None) => repo.get("tokenizer.json")?,
     };
-    let filenames = match args.weight_files {
-        Some(files) => files
-            .split(',')
-            .map(std::path::PathBuf::from)
-            .collect::<Vec<_>>(),
+    let config_file = match &args.weight_path {
+        Some(path) => std::path::Path::new(path).join("config.json"),
+        _ => repo.get("config.json")?,
+    };
+
+    let filenames = match args.weight_path {
+        Some(path) => {
+            if std::path::Path::new(&path)
+                .join("model.safetensors.index.json")
+                .exists()
+            {
+                candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
+            } else {
+                vec!["model.safetensors".into()]
+            }
+        }
         None => match args.model {
             WhichModel::W0_5b
             | WhichModel::W2_0_5b
@@ -324,7 +369,6 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config_file = repo.get("config.json")?;
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() || device.is_metal() {
         DType::BF16
@@ -364,6 +408,7 @@ fn main() -> Result<()> {
         args.repeat_last_n,
         &device,
     );
-    pipeline.run(&args.prompt, args.sample_len)?;
+    let prompt = format_prompt(&args.prompt, use_chat_template, thinking);
+    pipeline.run(&prompt, args.sample_len)?;
     Ok(())
 }

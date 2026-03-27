@@ -1,3 +1,17 @@
+/* 
+ * Copyright (c) 2024 Michael Feil
+ * originally published at https://github.com/Dao-AILab/flash-attention/tree/main/hopper Tri Dao, BSD-3-Clause License
+ *
+ * Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+ * http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+ * <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+ * option. This file may not be copied, modified, or distributed
+ * except according to those terms.
+
+ * Authors explaination: Provide a copy of the first two lines in each
+ redistributed version.
+ */
+
 #include "flash_fwd_launch_template.h"
 #include "flash.h"
 #include "static_switch.h"
