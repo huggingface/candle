@@ -128,6 +128,48 @@ impl ParamsConvTranspose2D {
     }
 }
 
+/// Parameters for Deformable Convolution 2D (DCNv2)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamsDeformConv2D {
+    pub(crate) b_size: usize,
+    pub(crate) i_h: usize,
+    pub(crate) i_w: usize,
+    pub(crate) k_h: usize,
+    pub(crate) k_w: usize,
+    pub(crate) c_out: usize,
+    pub(crate) c_in: usize,
+    pub(crate) stride_h: usize,
+    pub(crate) stride_w: usize,
+    pub(crate) padding_h: usize,
+    pub(crate) padding_w: usize,
+    pub(crate) dilation_h: usize,
+    pub(crate) dilation_w: usize,
+    pub(crate) groups: usize,
+    pub(crate) offset_groups: usize,
+}
+
+impl ParamsDeformConv2D {
+    pub(crate) fn out_h(&self) -> usize {
+        let ker_h = self.dilation_h * (self.k_h - 1) + 1;
+        (self.i_h + 2 * self.padding_h - ker_h) / self.stride_h + 1
+    }
+
+    pub(crate) fn out_w(&self) -> usize {
+        let ker_w = self.dilation_w * (self.k_w - 1) + 1;
+        (self.i_w + 2 * self.padding_w - ker_w) / self.stride_w + 1
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn out_dims(&self) -> Vec<usize> {
+        vec![
+            self.b_size,
+            self.c_out * self.groups,
+            self.out_h(),
+            self.out_w(),
+        ]
+    }
+}
+
 impl Tensor {
     fn conv1d_single_group(&self, kernel: &Self, params: &ParamsConv1D) -> Result<Self> {
         let storage =
@@ -383,5 +425,161 @@ impl Tensor {
         });
         let out_dims = params.out_dims();
         Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+    }
+
+    /// Performs Deformable Convolution 2D (DCNv2).
+    ///
+    /// # Arguments
+    /// * `offset` - Offset tensor of shape [batch, 2*offset_groups*kH*kW, out_h, out_w]
+    /// * `weight` - Convolution weight of shape [out_channels, in_channels/groups, kH, kW]
+    /// * `mask` - Optional modulation mask of shape [batch, offset_groups*kH*kW, out_h, out_w]
+    /// * `bias` - Optional bias of shape [out_channels]
+    /// * `stride` - Stride (stride_h, stride_w)
+    /// * `padding` - Padding (pad_h, pad_w)
+    /// * `dilation` - Dilation (dilation_h, dilation_w)
+    /// * `groups` - Number of convolution groups
+    /// * `offset_groups` - Number of offset groups
+    ///
+    /// # Returns
+    /// Output tensor of shape [batch, out_channels, out_h, out_w]
+    #[allow(clippy::too_many_arguments)]
+    pub fn deform_conv2d(
+        &self,
+        offset: &Tensor,
+        weight: &Tensor,
+        mask: Option<&Tensor>,
+        bias: Option<&Tensor>,
+        stride: (usize, usize),
+        padding: (usize, usize),
+        dilation: (usize, usize),
+        groups: usize,
+        offset_groups: usize,
+    ) -> Result<Tensor> {
+        let (batch, in_channels, in_h, in_w) = self.dims4()?;
+        let (out_channels, weight_in_c, k_h, k_w) = weight.dims4()?;
+        let (offset_batch, offset_c, offset_h, offset_w) = offset.dims4()?;
+
+        // Build params struct
+        let params = ParamsDeformConv2D {
+            b_size: batch,
+            i_h: in_h,
+            i_w: in_w,
+            k_h,
+            k_w,
+            c_out: out_channels / groups,
+            c_in: in_channels / groups,
+            stride_h: stride.0,
+            stride_w: stride.1,
+            padding_h: padding.0,
+            padding_w: padding.1,
+            dilation_h: dilation.0,
+            dilation_w: dilation.1,
+            groups,
+            offset_groups,
+        };
+
+        let out_h = params.out_h();
+        let out_w = params.out_w();
+
+        // Validate parameters
+        if batch != offset_batch {
+            crate::bail!(
+                "deform_conv2d: batch size mismatch, input: {}, offset: {}",
+                batch,
+                offset_batch
+            );
+        }
+        if offset_c != offset_groups * 2 * k_h * k_w {
+            crate::bail!(
+                "deform_conv2d: offset channels mismatch, got {}, expected {}",
+                offset_c,
+                offset_groups * 2 * k_h * k_w
+            );
+        }
+        if offset_h != out_h || offset_w != out_w {
+            crate::bail!(
+                "deform_conv2d: offset spatial size mismatch, got ({}, {}), expected ({}, {})",
+                offset_h,
+                offset_w,
+                out_h,
+                out_w
+            );
+        }
+        if in_channels % groups != 0 {
+            crate::bail!("deform_conv2d: in_channels must be divisible by groups");
+        }
+        if out_channels % groups != 0 {
+            crate::bail!("deform_conv2d: out_channels must be divisible by groups");
+        }
+        if in_channels % offset_groups != 0 {
+            crate::bail!("deform_conv2d: in_channels must be divisible by offset_groups");
+        }
+        if weight_in_c != in_channels / groups {
+            crate::bail!(
+                "deform_conv2d: weight in_channels mismatch, got {}, expected {}",
+                weight_in_c,
+                in_channels / groups
+            );
+        }
+
+        // Validate mask
+        if let Some(m) = mask {
+            let (mask_batch, mask_c, mask_h, mask_w) = m.dims4()?;
+            if mask_batch != batch {
+                crate::bail!("deform_conv2d: mask batch size mismatch");
+            }
+            if mask_c != offset_groups * k_h * k_w {
+                crate::bail!(
+                    "deform_conv2d: mask channels mismatch, got {}, expected {}",
+                    mask_c,
+                    offset_groups * k_h * k_w
+                );
+            }
+            if mask_h != out_h || mask_w != out_w {
+                crate::bail!("deform_conv2d: mask spatial size mismatch");
+            }
+        }
+
+        // Validate bias
+        if let Some(b) = bias {
+            let bias_len = b.dims1()?;
+            if bias_len != out_channels {
+                crate::bail!(
+                    "deform_conv2d: bias length mismatch, got {}, expected {}",
+                    bias_len,
+                    out_channels
+                );
+            }
+        }
+
+        // Call storage layer (handles im2col + matmul)
+        let mask_storage = mask.map(|m| m.storage());
+        let mask_layout = mask.map(|m| m.layout().clone());
+        let mask_ref = match (&mask_storage, &mask_layout) {
+            (Some(s), Some(l)) => Some((&**s, l)),
+            _ => None,
+        };
+
+        let storage = self.storage().deform_conv2d(
+            self.layout(),
+            &offset.storage(),
+            offset.layout(),
+            &weight.storage(),
+            weight.layout(),
+            mask_ref,
+            &params,
+        )?;
+
+        let shape = crate::Shape::from((batch, out_channels, out_h, out_w));
+        let op = BackpropOp::none(); // Backward pass not supported yet
+
+        let mut result = crate::tensor::from_storage(storage, shape, op, false);
+
+        // Add bias at Tensor layer
+        if let Some(b) = bias {
+            result = result.broadcast_add(&b.reshape((1, out_channels, 1, 1))?)?;
+        }
+
+        Ok(result)
     }
 }
