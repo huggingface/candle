@@ -1,5 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+//! Single-batch (B=1) CPU flash attention kernels.
+//!
+//! These kernels assume B=1 and will error on multi-batch input.
+//! For B>1, the dispatcher in `mod.rs` routes to the packed varlen path.
+//! This invariant lets every inner loop use direct slice references
+//! (no strided gather, no batch-dim indexing), which is the foundation
+//! for future SIMD / cache-tiling optimizations.
+
 use candle::{Device, Result, Storage, Tensor, WithDType};
 use std::sync::LazyLock;
 use std::{f32, iter::Sum};
@@ -10,10 +18,7 @@ use rayon::ThreadPool;
 #[cfg(target_os = "macos")]
 /// Elevate the thread QoS so macOS prefers running it on Performance (P) cores.
 unsafe fn set_thread_affinity() {
-    // USER_INTERACTIVE has the highest scheduling priority that user code
-    // can request and is most likely to be scheduled on P‑cores.
     use libc::{pthread_set_qos_class_self_np, qos_class_t::QOS_CLASS_USER_INTERACTIVE};
-    // The second argument is a relative priority within the QoS class (0 = default).
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 }
 
@@ -62,19 +67,15 @@ pub(crate) fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(
     sum
 }
 
-/// Fused attention optimized for CPU.
+/// Fused attention optimized for CPU, **B=1 only**.
 ///
 /// Computes softmax(qk^T*scale)v.
 ///
-/// **Inputs shapes:**
-/// - `q`: (bs, seq, qhead, hidden)
-/// - `k`: (bs, kv_seq, v_head, hidden)
-/// - `k`: (bs, kv_seq, kv_head_seq, v_hidden)
-/// - `scale` is applied before softmax.
+/// **Input shapes:** `(1, seq, qhead, hidden)`, `(1, kv_seq, kv_head, hidden)`, ...
 ///
-/// - This supports ALiBi with `max_bias` as well as softcapping with `softcap`.
+/// **Output shape:** `(1, qhead, seq, v_hidden)`
 ///
-/// **Output shape:** (bs, qhead, seq, v_hidden)
+/// Panics / errors if `B != 1`.
 pub fn run_flash_attn_cpu<T>(
     q: &Tensor,
     k: &Tensor,
@@ -87,6 +88,14 @@ pub fn run_flash_attn_cpu<T>(
 where
     T: WithDType + Sum + num_traits::real::Real,
 {
+    let b = q.shape().dims()[0];
+    if b != 1 {
+        candle::bail!(
+            "standard::run_flash_attn_cpu is B=1 only (got B={b}). \
+             Multi-batch should be routed through the varlen path."
+        );
+    }
+
     // Inline CPU slice extraction for q, k, v, and optional mask
     let (q_guard, q_layout) = q.storage_and_layout();
     let q_data: &[T] = if let Storage::Cpu(cpu) = &*q_guard {
@@ -122,15 +131,14 @@ where
     } else {
         None
     };
-    // q_guard, k_guard, v_guard, and m_guard (if any) are kept in scope to hold storage alive
 
     let q_stride = q.stride();
     let k_stride = k.stride();
     let v_stride = v.stride();
 
-    // Fast path for decode: q_len == 1
+    // Decode fast path: q_len == 1
     if q.shape().dims()[1] == 1 {
-        return flash_attn_cpu_single_q(
+        return flash_attn_decode(
             q_data,
             k_data,
             v_data,
@@ -147,26 +155,8 @@ where
         );
     }
 
-    // Fast path: B=1 with contiguous last dim avoids strided gather
-    if q.shape().dims()[0] == 1 && q_stride[3] == 1 && k_stride[3] == 1 && v_stride[3] == 1 {
-        return flash_attn_cpu_single_batch(
-            q_data,
-            k_data,
-            v_data,
-            mask_data,
-            q.shape().dims(),
-            k.shape().dims(),
-            v.shape().dims(),
-            q_stride,
-            k_stride,
-            v_stride,
-            softmax_scale,
-            max_bias.unwrap_or(0.0),
-            softcap.unwrap_or(0.0),
-        );
-    }
-
-    flash_attn_cpu(
+    // Prefill path (q_len > 1)
+    flash_attn_prefill(
         q_data,
         k_data,
         v_data,
@@ -183,10 +173,9 @@ where
     )
 }
 
-/// Optimised path for the common decode case: q_len == 1 but kv_len ≫ 1.
-/// We drop the inner q‑position loop and parallelise over `(batch, head)`.
+/// Decode path (B=1, q_len=1): parallelise over heads with tiled KV reduce.
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
+fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -201,11 +190,8 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     max_bias: f32,
     logit_softcap: f32,
 ) -> Result<Tensor> {
-    // Shapes: (B, 1, H, D)
-    let (b, _q_len, h, d) = (
-        qshape[0], qshape[1], // == 1
-        qshape[2], qshape[3],
-    );
+    // Shapes: (1, 1, H, D)
+    let (h, d) = (qshape[2], qshape[3]);
     let kv_len = kshape[1];
     let k_h = kshape[2];
     let v_h = vshape[2];
@@ -215,42 +201,28 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
 
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
-    // Output buffer: (B, H, 1, D)
-    let mut out = vec![0f32; b * h * dv];
+    // Output buffer: (1, H, 1, D)
+    let mut out = vec![0f32; h * dv];
 
-    // Expose a second dimension of work: split the KV axis into tiles that
-    // fit in the last‑level cache and let Rayon schedule them.
     let kv_tiles = kv_len.div_ceil(TILE_KV);
 
-    // SAFETY: `par_chunks_mut` hands out non‑overlapping &mut slices, so no two
-    // threads write the same output area.
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
             .with_min_len(64)
             .enumerate()
-            .for_each(|(row_idx, out_chunk)| {
-                let b_i = row_idx / h;
-                let h_i = row_idx % h;
-
-                // ALiBi positional bias (standard formula)
+            .for_each(|(h_i, out_chunk)| {
                 let slope = if max_bias > 0.0 {
                     2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
                 } else {
                     1.0
                 };
 
-                // For grouped‑KV we collapse multiple query heads into the same K/V head.
                 let k_head = h_i / rk2;
                 let v_head = h_i / rv2;
 
-                // ------------------------------------------------------------------
-                // Nested parallelism: each KV tile is mapped independently, then we
-                // reduce the partial results with the correct soft‑max algebra.
-                // ------------------------------------------------------------------
                 let (vkq, s_tot, _m_tot) = (0..kv_tiles)
                     .into_par_iter()
                     .map(|tile_idx| {
-                        // ---- per‑tile scratch -------------------------------------------------
                         let start = tile_idx * TILE_KV;
                         let end = (start + TILE_KV).min(kv_len);
 
@@ -258,16 +230,13 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                         let mut s = 0.0f32;
                         let mut m = f32::NEG_INFINITY;
 
-                        // ---------------- single‑Q row (already contiguous) -------------------
-                        let q_base =
-                            b_i * qstride[0] /*batch*/ + h_i * qstride[2] /*head*/;
+                        // B=1: q_base = h_i * qstride[2] (no batch offset)
+                        let q_base = h_i * qstride[2];
                         let q_row = &q_data[q_base..q_base + d];
 
-                        // ---------------- iterate over this KV slice --------------------------
                         for kv_pos in start..end {
-                            // Mask
                             let mv = if let Some(mv_vec) = mask_vec {
-                                let mval = mv_vec[(b_i * kv_len) + kv_pos];
+                                let mval = mv_vec[kv_pos];
                                 slope * mval.to_f64() as f32
                             } else {
                                 0.0
@@ -276,12 +245,9 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                                 continue;
                             }
 
-                            // K row
-                            let k_base =
-                                b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
+                            let k_base = kv_pos * kstride[1] + k_head * kstride[2];
                             let k_row = &k_data[k_base..k_base + d];
 
-                            // dot(Q, K)
                             let mut s_val = vec_dot::<T>(q_row, k_row).to_f64() as f32;
 
                             let mut scale_applied = scale;
@@ -294,7 +260,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                             }
                             s_val += mv;
 
-                            // Tile‑local online softmax ------------------------------------------
+                            // Tile‑local online softmax
                             let m_old = m;
                             let mut ms = 1.0f32;
                             let mut vs = 1.0f32;
@@ -308,20 +274,17 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                                 vs = (s_val - m).exp();
                             }
 
-                            // V row
-                            let v_base =
-                                b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
+                            let v_base = kv_pos * vstride[1] + v_head * vstride[2];
                             for d_i in 0..dv {
-                                vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
+                                vkq[d_i] +=
+                                    v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
                             }
 
                             s = s * ms + vs;
                         }
 
-                        // Return per‑tile accumulator + softmax stats
                         (vkq, s, m)
                     })
-                    // -------- reduce two tiles -----------------------------------------------
                     .reduce(
                         || (vec![0f32; dv], 0.0f32, f32::NEG_INFINITY),
                         |mut a, b| {
@@ -345,7 +308,6 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
                         },
                     );
 
-                // ---------------- final normalisation ---------------------------------------
                 let inv_s = 1.0 / s_tot;
                 for v in out_chunk.iter_mut().zip(vkq.iter()) {
                     *v.0 = *v.1 * inv_s;
@@ -353,165 +315,12 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
             });
     });
 
-    let out_shape = (b, h, 1usize, dv);
-    Tensor::from_vec(out, out_shape, &Device::Cpu)
+    Tensor::from_vec(out, (1usize, h, 1usize, dv), &Device::Cpu)
 }
 
-/// Main forward flash-attention CPU routine.
-/// Shapes follow Candle convention: (B, S, H, D)
+/// Prefill path (B=1, q_len > 1): direct slice access, no batch indexing.
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
-    q_data: &[T],
-    k_data: &[T],
-    v_data: &[T],
-    mask_vec: Option<&[T]>,
-    qshape: &[usize],
-    kshape: &[usize],
-    vshape: &[usize],
-    qstride: &[usize],
-    kstride: &[usize],
-    vstride: &[usize],
-    scale: f32,
-    max_bias: f32,
-    logit_softcap: f32,
-) -> Result<Tensor> {
-    let (b, q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
-    let kv_len = kshape[1];
-    // --- Head broadcasting factors ----------------------------------------------------
-    // Allows K and V to have fewer heads than Q (grouped‑KV); the ratio is an
-    // integer factor.  rk2 = #Q‑heads / #K‑heads,  rv2 = #Q‑heads / #V‑heads.
-    let k_h = kshape[2];
-    let v_h = vshape[2];
-    let rk2 = h / k_h; // must divide exactly; panic otherwise
-    let rv2 = h / v_h;
-    let dv = d; // value dim = key dim in this kernel
-
-    // Precompute value for ALiBi slope calculation
-    let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
-
-    let mut out = vec![0f32; b * q_len * h * dv];
-
-    // ------------------------------------------------------------------
-    // Rayon‑parallel version: each (b_i, h_i, q_pos) row is independent.
-    // ------------------------------------------------------------------
-
-    let _rows = b * h * q_len; // total independent work items
-
-    // SAFETY: `par_chunks_mut` hands out non‑overlapping &mut [f32] slices,
-    // so no two threads can write the same output area.
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(dv)
-            .with_min_len(64)
-            .enumerate()
-            .for_each(|(row_idx, out_chunk)| {
-                // Decode flat index back to (batch, head, q_pos)
-                let rows_per_batch = h * q_len;
-                let b_i = row_idx / rows_per_batch;
-                let rem = row_idx % rows_per_batch;
-                let h_i = rem / q_len;
-                let q_pos = rem % q_len;
-
-                let slope = if max_bias > 0.0 {
-                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
-                } else {
-                    1.0
-                };
-
-                // For grouped‑KV we collapse multiple query heads into the same K/V head.
-                let k_head = h_i / rk2;
-                let v_head = h_i / rv2;
-
-                // Buffers local to this row
-                let mut vkq = vec![0f32; dv];
-                let mut s = 0.0f32;
-                let mut m = f32::NEG_INFINITY;
-
-                // Allocate q_row and k_row once per row
-                let mut q_row: Vec<T> = Vec::with_capacity(d);
-                let mut k_row: Vec<T> = Vec::with_capacity(d);
-
-                // ------------------- gather Q (strided) --------------------
-                let q_base = b_i * qstride[0] + q_pos * qstride[1] + h_i * qstride[2];
-                q_row.clear();
-                for di in 0..d {
-                    q_row.push(q_data[q_base + di * qstride[3]]);
-                }
-
-                // ---------------- iterate over keys/values -----------------
-                for kv_pos in 0..kv_len {
-                    // Mask (optional)
-                    let mv = if let Some(mv_vec) = mask_vec {
-                        let mval = mv_vec[((b_i * q_len + q_pos) * kv_len) + kv_pos];
-                        slope * mval.to_f64() as f32
-                    } else {
-                        0.0
-                    };
-                    if mv == f32::NEG_INFINITY {
-                        continue;
-                    }
-
-                    // K row (strided)
-                    let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
-                    k_row.clear();
-                    for di in 0..d {
-                        k_row.push(k_data[k_base + di * kstride[3]]);
-                    }
-
-                    // dot(Q, K)
-                    let mut s_val = vec_dot::<T>(&q_row, &k_row);
-                    let mut scale_applied = scale;
-                    if logit_softcap != 0.0 {
-                        scale_applied /= logit_softcap;
-                    }
-                    s_val *= T::from_f64(scale_applied as f64);
-                    if logit_softcap != 0.0 {
-                        s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
-                    }
-                    s_val += T::from_f64(mv as f64);
-
-                    // online softmax
-                    let m_old = m;
-                    let mut ms = 1.0f32;
-                    let mut vs = 1.0f32;
-                    if s_val.to_f64() as f32 > m {
-                        m = s_val.to_f64() as f32;
-                        ms = (m_old - m).exp();
-                        for v in vkq.iter_mut() {
-                            *v *= ms;
-                        }
-                    } else {
-                        vs = (s_val.to_f64() as f32 - m).exp();
-                    }
-
-                    // V row (strided)
-                    let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
-                    for d_i in 0..dv {
-                        vkq[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
-                    }
-
-                    s = s * ms + vs;
-                }
-
-                // ------------------- normalise & write out ------------------
-                let inv_s = 1.0 / s;
-                for v in vkq.iter_mut() {
-                    *v *= inv_s;
-                }
-                out_chunk.copy_from_slice(&vkq);
-            });
-    });
-
-    // Build output tensor with shape (B, H, S, D) to match standard (permute 0,2,1,3)
-    let out_shape = (b, h, q_len, dv);
-    Tensor::from_vec(out, out_shape, &Device::Cpu)
-}
-
-/// Optimised prefill path for B=1 with contiguous last dimension.
-///
-/// Eliminates per‑row Vec allocations by using direct slice references for
-/// Q, K, and V rows, and drops all batch‑dimension indexing.
-#[allow(clippy::too_many_arguments)]
-fn flash_attn_cpu_single_batch<T: WithDType + Sum + num_traits::real::Real>(
+fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -543,7 +352,7 @@ fn flash_attn_cpu_single_batch<T: WithDType + Sum + num_traits::real::Real>(
             .with_min_len(64)
             .enumerate()
             .for_each(|(row_idx, out_chunk)| {
-                // No batch dimension — flat (h, q_pos) layout
+                // Flat (h, q_pos) layout — no batch dimension
                 let h_i = row_idx / q_len;
                 let q_pos = row_idx % q_len;
 
@@ -625,6 +434,5 @@ fn flash_attn_cpu_single_batch<T: WithDType + Sum + num_traits::real::Real>(
             });
     });
 
-    let out_shape = (1usize, h, q_len, dv);
-    Tensor::from_vec(out, out_shape, &Device::Cpu)
+    Tensor::from_vec(out, (1usize, h, q_len, dv), &Device::Cpu)
 }

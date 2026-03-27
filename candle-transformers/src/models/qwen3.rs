@@ -288,6 +288,10 @@ impl Qwen3Attention {
     }
 
     /// CPU flash attention - optimized fused kernel for CPU
+    ///
+    /// The `flash_attn` dispatcher in candle-nn automatically selects:
+    /// - B=1: single-batch optimized kernels (direct slice access)
+    /// - B>1: packed varlen path (avoids batch-dim stride overhead)
     #[cfg(not(feature = "flash-attn"))]
     fn forward_cpu_flash_attn(
         &self,
