@@ -769,9 +769,28 @@ mod tests {
     #[test]
     fn test_save_load_roundtrip_endianness() {
         // Test that save and load are symmetric for multi-byte types
-        let original_f32 = Tensor::from_slice(&[1.0f32, 2.0f32, 3.0f32], (3,), &Device::Cpu).unwrap();
-        let original_i32 = Tensor::from_slice(&[256i32, 512i32, 1024i32], (3,), &Device::Cpu).unwrap();
-        let original_u32 = Tensor::from_slice(&[65536u32, 131072u32, 262144u32], (3,), &Device::Cpu).unwrap();
+        // Covers edge cases: zero, negative, max/min, special floats, non-power-of-2
+        
+        // F32: zero, negative, special values, non-power-of-2
+        let original_f32 = Tensor::from_slice(
+            &[0.0f32, -1.5f32, 3.14159f32, f32::INFINITY, f32::NEG_INFINITY, f32::NAN],
+            (6,),
+            &Device::Cpu
+        ).unwrap();
+        
+        // I32: zero, negative, min, max, non-power-of-2
+        let original_i32 = Tensor::from_slice(
+            &[0i32, -256i32, i32::MIN, i32::MAX, 12345i32],
+            (5,),
+            &Device::Cpu
+        ).unwrap();
+        
+        // U32: zero, max, non-power-of-2
+        let original_u32 = Tensor::from_slice(
+            &[0u32, u32::MAX, 98765u32],
+            (3,),
+            &Device::Cpu
+        ).unwrap();
 
         let map: HashMap<_, _> = [
             ("f32", original_f32.clone()),
@@ -786,9 +805,16 @@ mod tests {
         let loaded_i32: Vec<i32> = loaded.get("i32").unwrap().to_vec1().unwrap();
         let loaded_u32: Vec<u32> = loaded.get("u32").unwrap().to_vec1().unwrap();
 
-        assert_eq!(loaded_f32, vec![1.0f32, 2.0f32, 3.0f32]);
-        assert_eq!(loaded_i32, vec![256i32, 512i32, 1024i32]);
-        assert_eq!(loaded_u32, vec![65536u32, 131072u32, 262144u32]);
+        // Verify exact values (NaN requires special handling)
+        assert_eq!(loaded_f32[0], 0.0f32);
+        assert_eq!(loaded_f32[1], -1.5f32);
+        assert_eq!(loaded_f32[2], 3.14159f32);
+        assert_eq!(loaded_f32[3], f32::INFINITY);
+        assert_eq!(loaded_f32[4], f32::NEG_INFINITY);
+        assert!(loaded_f32[5].is_nan()); // NaN != NaN, so use is_nan()
+        
+        assert_eq!(loaded_i32, vec![0i32, -256i32, i32::MIN, i32::MAX, 12345i32]);
+        assert_eq!(loaded_u32, vec![0u32, u32::MAX, 98765u32]);
 
         std::fs::remove_file("test_roundtrip.safetensors").unwrap();
     }
