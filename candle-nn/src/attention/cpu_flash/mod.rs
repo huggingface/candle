@@ -50,8 +50,11 @@ where
 {
     let b = q.dims()[0];
 
-    // B>1: must go through packed varlen path — the B=1 kernels hard-error on B>1.
-    if b > 1 {
+    // CANDLE_FLASH_FORCE_VARLEN=1 overrides B=1 dispatch to use varlen (for A/B benchmarking)
+    let force_varlen = std::env::var("CANDLE_FLASH_FORCE_VARLEN").map_or(false, |v| v == "1");
+
+    // B>1 (always) or B=1 with force flag: packed varlen path
+    if b > 1 || force_varlen {
         let dt = q.dtype();
         let varlen_ok = (dt == DType::F32 || dt == DType::F16) && softcap.is_none();
         let mask_ok = matches!(&attn_mask, AttnMask::Causal { .. } | AttnMask::None);
