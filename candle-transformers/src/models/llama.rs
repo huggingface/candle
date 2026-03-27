@@ -534,3 +534,37 @@ impl Llama {
         })
     }
 }
+
+/// Llama wrapper that owns its cache for use with AutoModelForCausalLM.
+pub struct LlamaForCausalLM {
+    model: Llama,
+    cache: Cache,
+}
+
+impl LlamaForCausalLM {
+    pub fn new(model: Llama, cache: Cache) -> Self {
+        Self { model, cache }
+    }
+
+    pub fn load(vb: VarBuilder, cfg: &Config, dtype: DType, device: &Device) -> Result<Self> {
+        let model = Llama::load(vb, cfg)?;
+        let cache = Cache::new(true, dtype, cfg, device)?;
+        Ok(Self { model, cache })
+    }
+}
+
+impl crate::auto::Model for LlamaForCausalLM {
+    fn model_type(&self) -> &'static str {
+        "llama"
+    }
+}
+
+impl crate::auto::CausalLM for LlamaForCausalLM {
+    fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        self.model.forward(input_ids, seqlen_offset, &mut self.cache)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
+    }
+}
