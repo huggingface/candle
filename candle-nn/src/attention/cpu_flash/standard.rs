@@ -41,9 +41,6 @@ pub(crate) static FLASH_ATTN_POOL: LazyLock<ThreadPool> = LazyLock::new(|| {
 
 const DOT_CHUNK: usize = 4;
 
-/// Size (in KV positions) processed by each inner‑tile job.
-const TILE_KV: usize = 16;
-
 #[inline]
 pub(crate) fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(
     a: &[T],
@@ -173,7 +170,9 @@ where
     )
 }
 
-/// Decode path (B=1, q_len=1): parallelise over heads with tiled KV reduce.
+/// Decode path (B=1, q_len=1): sequential KV loop per head, parallel over heads.
+///
+/// Uses thread-local accumulator via `for_each_init` to avoid per-call allocations.
 #[allow(clippy::too_many_arguments)]
 fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
@@ -190,7 +189,6 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
     max_bias: f32,
     logit_softcap: f32,
 ) -> Result<Tensor> {
-    // Shapes: (1, 1, H, D)
     let (h, d) = (qshape[2], qshape[3]);
     let kv_len = kshape[1];
     let k_h = kshape[2];
@@ -201,124 +199,106 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
 
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
-    // Output buffer: (1, H, 1, D)
-    let mut out = vec![0f32; h * dv];
+    let (scale_pre, do_softcap) = if logit_softcap != 0.0 {
+        (scale / logit_softcap, true)
+    } else {
+        (scale, false)
+    };
 
-    let kv_tiles = kv_len.div_ceil(TILE_KV);
+    let v_contiguous = vstride[3] == 1;
+
+    let mut out = vec![0f32; h * dv];
 
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
-            .with_min_len(64)
             .enumerate()
-            .for_each(|(h_i, out_chunk)| {
-                let slope = if max_bias > 0.0 {
-                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
-                } else {
-                    1.0
-                };
+            .for_each_init(
+                || vec![0f32; dv],
+                |vkq, (h_i, out_chunk)| {
+                    let slope = if max_bias > 0.0 {
+                        2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                    } else {
+                        1.0
+                    };
 
-                let k_head = h_i / rk2;
-                let v_head = h_i / rv2;
+                    let k_head = h_i / rk2;
+                    let v_head = h_i / rv2;
 
-                let (vkq, s_tot, _m_tot) = (0..kv_tiles)
-                    .into_par_iter()
-                    .map(|tile_idx| {
-                        let start = tile_idx * TILE_KV;
-                        let end = (start + TILE_KV).min(kv_len);
+                    let q_base = h_i * qstride[2];
+                    let q_row = &q_data[q_base..q_base + d];
 
-                        let mut vkq = vec![0f32; dv];
-                        let mut s = 0.0f32;
-                        let mut m = f32::NEG_INFINITY;
+                    // Reset accumulator
+                    vkq.fill(0.0);
+                    let mut s = 0.0f32;
+                    let mut m = f32::NEG_INFINITY;
 
-                        // B=1: q_base = h_i * qstride[2] (no batch offset)
-                        let q_base = h_i * qstride[2];
-                        let q_row = &q_data[q_base..q_base + d];
-
-                        for kv_pos in start..end {
-                            let mv = if let Some(mv_vec) = mask_vec {
-                                let mval = mv_vec[kv_pos];
-                                slope * mval.to_f64() as f32
-                            } else {
-                                0.0
-                            };
-                            if mv == f32::NEG_INFINITY {
-                                continue;
-                            }
-
-                            let k_base = kv_pos * kstride[1] + k_head * kstride[2];
-                            let k_row = &k_data[k_base..k_base + d];
-
-                            let mut s_val = vec_dot::<T>(q_row, k_row).to_f64() as f32;
-
-                            let mut scale_applied = scale;
-                            if logit_softcap != 0.0 {
-                                scale_applied /= logit_softcap;
-                            }
-                            s_val *= scale_applied;
-                            if logit_softcap != 0.0 {
-                                s_val = logit_softcap * s_val.tanh();
-                            }
-                            s_val += mv;
-
-                            // Tile‑local online softmax
-                            let m_old = m;
-                            let mut ms = 1.0f32;
-                            let mut vs = 1.0f32;
-                            if s_val > m {
-                                m = s_val;
-                                ms = (m_old - m).exp();
-                                for v in vkq.iter_mut() {
-                                    *v *= ms;
-                                }
-                            } else {
-                                vs = (s_val - m).exp();
-                            }
-
-                            let v_base = kv_pos * vstride[1] + v_head * vstride[2];
-                            for d_i in 0..dv {
-                                vkq[d_i] +=
-                                    v_data[v_base + d_i * vstride[3]].to_f64() as f32 * vs;
-                            }
-
-                            s = s * ms + vs;
+                    // Sequential KV loop — no tile parallelism overhead
+                    for kv_pos in 0..kv_len {
+                        // Mask
+                        let mv = if let Some(mv_vec) = mask_vec {
+                            let mval = mv_vec[kv_pos];
+                            slope * mval.to_f32().unwrap_or(0.0)
+                        } else {
+                            0.0
+                        };
+                        if mv == f32::NEG_INFINITY {
+                            continue;
                         }
 
-                        (vkq, s, m)
-                    })
-                    .reduce(
-                        || (vec![0f32; dv], 0.0f32, f32::NEG_INFINITY),
-                        |mut a, b| {
-                            let (ref mut vkq_a, mut s_a, m_a) = a;
-                            let (vkq_b, s_b, m_b) = b;
-                            if m_a >= m_b {
-                                let factor = (m_b - m_a).exp();
-                                for (va, vb) in vkq_a.iter_mut().zip(vkq_b) {
-                                    *va += vb * factor;
-                                }
-                                s_a += s_b * factor;
-                                (vkq_a.clone(), s_a, m_a)
-                            } else {
-                                let factor = (m_a - m_b).exp();
-                                let mut vkq_new = vkq_b;
-                                for (vb, va) in vkq_new.iter_mut().zip(vkq_a) {
-                                    *vb += *va * factor;
-                                }
-                                (vkq_new, s_b + s_a * factor, m_b)
-                            }
-                        },
-                    );
+                        let k_base = kv_pos * kstride[1] + k_head * kstride[2];
+                        let k_row = &k_data[k_base..k_base + d];
 
-                let inv_s = 1.0 / s_tot;
-                for v in out_chunk.iter_mut().zip(vkq.iter()) {
-                    *v.0 = *v.1 * inv_s;
-                }
-            });
+                        let mut s_val = vec_dot::<T>(q_row, k_row).to_f32().unwrap_or(0.0);
+
+                        s_val *= scale_pre;
+                        if do_softcap {
+                            s_val = logit_softcap * s_val.tanh();
+                        }
+                        s_val += mv;
+
+                        // Online softmax
+                        let m_old = m;
+                        let mut ms = 1.0f32;
+                        let mut vs = 1.0f32;
+                        if s_val > m {
+                            m = s_val;
+                            ms = (m_old - m).exp();
+                            for v in vkq.iter_mut() {
+                                *v *= ms;
+                            }
+                        } else {
+                            vs = (s_val - m).exp();
+                        }
+
+                        let v_base = kv_pos * vstride[1] + v_head * vstride[2];
+                        if v_contiguous {
+                            let v_row = &v_data[v_base..v_base + dv];
+                            for d_i in 0..dv {
+                                vkq[d_i] += v_row[d_i].to_f32().unwrap_or(0.0) * vs;
+                            }
+                        } else {
+                            for d_i in 0..dv {
+                                vkq[d_i] +=
+                                    v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0) * vs;
+                            }
+                        }
+
+                        s = s * ms + vs;
+                    }
+
+                    let inv_s = if s > 0.0 { 1.0 / s } else { 0.0 };
+                    for (out_v, acc_v) in out_chunk.iter_mut().zip(vkq.iter()) {
+                        *out_v = *acc_v * inv_s;
+                    }
+                },
+            );
     });
 
     Tensor::from_vec(out, (1usize, h, 1usize, dv), &Device::Cpu)
 }
 
 /// Prefill path (B=1, q_len > 1): direct slice access, no batch indexing.
+/// Uses thread-local buffers to avoid per-row Vec allocations.
 #[allow(clippy::too_many_arguments)]
 fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
@@ -345,93 +325,101 @@ fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real>(
 
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
 
+    let (scale_pre, do_softcap) = if logit_softcap != 0.0 {
+        (scale / logit_softcap, true)
+    } else {
+        (scale, false)
+    };
+
+    let v_contiguous = vstride[3] == 1;
+
     let mut out = vec![0f32; h * q_len * dv];
 
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv)
             .with_min_len(64)
             .enumerate()
-            .for_each(|(row_idx, out_chunk)| {
-                // Flat (h, q_pos) layout — no batch dimension
-                let h_i = row_idx / q_len;
-                let q_pos = row_idx % q_len;
+            .for_each_init(
+                || vec![0f32; dv],
+                |vkq, (row_idx, out_chunk)| {
+                    let h_i = row_idx / q_len;
+                    let q_pos = row_idx % q_len;
 
-                let slope = if max_bias > 0.0 {
-                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
-                } else {
-                    1.0
-                };
-
-                let k_head = h_i / rk2;
-                let v_head = h_i / rv2;
-
-                let mut vkq = vec![0f32; dv];
-                let mut s = 0.0f32;
-                let mut m = f32::NEG_INFINITY;
-
-                // Direct slice — contiguous last dim, no strided gather
-                let q_base = q_pos * qstride[1] + h_i * qstride[2];
-                let q_row = &q_data[q_base..q_base + d];
-
-                for kv_pos in 0..kv_len {
-                    // Mask (optional)
-                    let mv = if let Some(mv_vec) = mask_vec {
-                        let mval = mv_vec[q_pos * kv_len + kv_pos];
-                        slope * mval.to_f64() as f32
+                    let slope = if max_bias > 0.0 {
+                        2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
                     } else {
-                        0.0
+                        1.0
                     };
-                    if mv == f32::NEG_INFINITY {
-                        continue;
-                    }
 
-                    // K row — direct slice
-                    let k_base = kv_pos * kstride[1] + k_head * kstride[2];
-                    let k_row = &k_data[k_base..k_base + d];
+                    let k_head = h_i / rk2;
+                    let v_head = h_i / rv2;
 
-                    // dot(Q, K)
-                    let mut s_val = vec_dot::<T>(q_row, k_row);
-                    let mut scale_applied = scale;
-                    if logit_softcap != 0.0 {
-                        scale_applied /= logit_softcap;
-                    }
-                    s_val *= T::from_f64(scale_applied as f64);
-                    if logit_softcap != 0.0 {
-                        s_val = T::from_f64(logit_softcap as f64 * s_val.to_f64().tanh());
-                    }
-                    s_val += T::from_f64(mv as f64);
+                    // Reset accumulator
+                    vkq.fill(0.0);
+                    let mut s = 0.0f32;
+                    let mut m = f32::NEG_INFINITY;
 
-                    // online softmax
-                    let m_old = m;
-                    let mut ms = 1.0f32;
-                    let mut vs = 1.0f32;
-                    if s_val.to_f64() as f32 > m {
-                        m = s_val.to_f64() as f32;
-                        ms = (m_old - m).exp();
-                        for v in vkq.iter_mut() {
-                            *v *= ms;
+                    let q_base = q_pos * qstride[1] + h_i * qstride[2];
+                    let q_row = &q_data[q_base..q_base + d];
+
+                    for kv_pos in 0..kv_len {
+                        let mv = if let Some(mv_vec) = mask_vec {
+                            let mval = mv_vec[q_pos * kv_len + kv_pos];
+                            slope * mval.to_f32().unwrap_or(0.0)
+                        } else {
+                            0.0
+                        };
+                        if mv == f32::NEG_INFINITY {
+                            continue;
                         }
-                    } else {
-                        vs = (s_val.to_f64() as f32 - m).exp();
+
+                        let k_base = kv_pos * kstride[1] + k_head * kstride[2];
+                        let k_row = &k_data[k_base..k_base + d];
+
+                        let mut s_val = vec_dot::<T>(q_row, k_row).to_f32().unwrap_or(0.0);
+                        s_val *= scale_pre;
+                        if do_softcap {
+                            s_val = logit_softcap * s_val.tanh();
+                        }
+                        s_val += mv;
+
+                        // Online softmax
+                        let m_old = m;
+                        let mut ms = 1.0f32;
+                        let mut vs = 1.0f32;
+                        if s_val > m {
+                            m = s_val;
+                            ms = (m_old - m).exp();
+                            for v in vkq.iter_mut() {
+                                *v *= ms;
+                            }
+                        } else {
+                            vs = (s_val - m).exp();
+                        }
+
+                        let v_base = kv_pos * vstride[1] + v_head * vstride[2];
+                        if v_contiguous {
+                            let v_row = &v_data[v_base..v_base + dv];
+                            for d_i in 0..dv {
+                                vkq[d_i] += v_row[d_i].to_f32().unwrap_or(0.0) * vs;
+                            }
+                        } else {
+                            for d_i in 0..dv {
+                                vkq[d_i] +=
+                                    v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0) * vs;
+                            }
+                        }
+
+                        s = s * ms + vs;
                     }
 
-                    // V row — direct slice
-                    let v_base = kv_pos * vstride[1] + v_head * vstride[2];
-                    let v_row = &v_data[v_base..v_base + dv];
-                    for d_i in 0..dv {
-                        vkq[d_i] += v_row[d_i].to_f64() as f32 * vs;
+                    let inv_s = if s > 0.0 { 1.0 / s } else { 0.0 };
+                    for v in vkq.iter_mut() {
+                        *v *= inv_s;
                     }
-
-                    s = s * ms + vs;
-                }
-
-                // normalise & write out
-                let inv_s = 1.0 / s;
-                for v in vkq.iter_mut() {
-                    *v *= inv_s;
-                }
-                out_chunk.copy_from_slice(&vkq);
-            });
+                    out_chunk.copy_from_slice(vkq);
+                },
+            );
     });
 
     Tensor::from_vec(out, (1usize, h, q_len, dv), &Device::Cpu)
