@@ -726,23 +726,26 @@ impl ConcatKvCache {
         // Ensure inputs are contiguous for optimal concatenation performance
         let k = k.contiguous()?;
         let v = v.contiguous()?;
-        // Update K cache using concatenation
+        // Update K cache using concatenation.
+        // Detach inputs and outputs to prevent BackpropOp chain accumulation:
+        // Tensor::cat stores both operands in a BackpropOp::new2 node. If either
+        // input has track_op()==true (which KV projections always do — they derive
+        // from model weights), the old cache buffer is retained by the op graph
+        // even after the new buffer is written. Over N tokens this holds N
+        // full-buffer copies in memory regardless of cache strategy.
+        // Detaching is safe: KV caches are inference-only, no gradient flows
+        // through them.
         self.k = Some(match &self.k {
-            None => k.clone(),
+            None => k.detach(),
             Some(k_cache) => {
-                // Concatenate along the sequence dimension
-                // GPU kernel for cat is highly optimized:
-                // - Fused allocation + copy
-                // - Coalesced memory access
-                // - Single kernel launch
-                Tensor::cat(&[k_cache, &k], self.dim)?
+                Tensor::cat(&[&k_cache.detach(), &k.detach()], self.dim)?.detach()
             }
         });
 
         // Update V cache using concatenation
         self.v = Some(match &self.v {
-            None => v.clone(),
-            Some(v_cache) => Tensor::cat(&[v_cache, &v], self.dim)?,
+            None => v.detach(),
+            Some(v_cache) => Tensor::cat(&[&v_cache.detach(), &v.detach()], self.dim)?.detach(),
         });
 
         Ok((
@@ -796,6 +799,154 @@ impl ConcatKvCache {
             (Some(k), Some(v)) => Some((k, v)),
             _ => None,
         }
+    }
+}
+
+/// Default maximum sequence length for [`PreallocKvCache`].
+///
+/// 512 tokens covers most chat turns. Increase for long-context workloads.
+pub const DEFAULT_MAX_SEQ_LEN: usize = 512;
+
+/// Fixed-capacity KV cache that pre-allocates buffers once and writes via
+/// `slice_scatter`. Produces **zero net allocation growth** over arbitrarily
+/// many tokens once constructed.
+///
+/// # Memory model
+///
+/// | Event       | Allocator activity                                       |
+/// |-------------|----------------------------------------------------------|
+/// | `new()`     | 2× `(1, H, max_seq, D)` alloc — happens once at init    |
+/// | `append()`  | `slice_scatter` same-size alloc + free (uniform size)    |
+/// | `reset()`   | counter = 0 — zero dealloc, O(1)                        |
+///
+/// Because every `slice_scatter` produces the same allocation size, the CUDA
+/// and Metal allocators can always satisfy requests from previously freed blocks.
+/// This eliminates the fragmentation cascade that causes OOM after ~37 tokens
+/// with [`ConcatKvCache`] on unified-memory platforms (CUDA SM121, Apple Silicon).
+///
+/// # BackpropOp note
+///
+/// `slice_scatter` stores both operands in a `BackpropOp::new2` node. Without
+/// `.detach()`, every append chains the prior buffer in the op graph, leaking
+/// O(N²) memory over N tokens. All inputs and outputs are detached here because
+/// KV caches are inference-only — no gradient should flow through them.
+///
+/// # Usage
+///
+/// ```rust,no_run
+/// use candle::{DType, Device};
+/// use candle_nn::kv_cache::PreallocKvCache;
+///
+/// let device = Device::Cpu;
+/// let mut cache = PreallocKvCache::new(8, 64, 512, DType::F32, &device).unwrap();
+///
+/// // Autoregressive generation loop:
+/// // for _token in 0..100 {
+/// //     let new_k = /* ... */;
+/// //     let new_v = /* ... */;
+/// //     let (full_k, full_v) = cache.append(&new_k, &new_v).unwrap();
+/// //     // full_k/full_v are the accumulated sequence up to this token.
+/// // }
+///
+/// // Between conversations — O(1), no deallocation:
+/// cache.reset();
+/// ```
+///
+/// # See also
+///
+/// - [`ConcatKvCache`] — the growing-allocation baseline
+/// - Candle issues: #2950, #2271, #1599, #3197
+/// - Candle PRs: #3188 (proposed `KvCache` trait), #3143 (`ConcatKvCache`)
+#[derive(Debug, Clone)]
+pub struct PreallocKvCache {
+    k_buf: Tensor,
+    v_buf: Tensor,
+    current_pos: usize,
+    max_seq_len: usize,
+}
+
+impl PreallocKvCache {
+    /// Allocate KV buffers for one attention layer.
+    ///
+    /// # Arguments
+    ///
+    /// - `num_kv_heads` — number of KV attention heads (may be fewer than
+    ///   query heads in grouped-query attention)
+    /// - `head_dim` — per-head feature dimension
+    /// - `max_seq_len` — maximum tokens this cache will hold. Use
+    ///   [`DEFAULT_MAX_SEQ_LEN`] (512) for typical chat workloads.
+    /// - `dtype` / `device` — must match the model's weight dtype and device
+    pub fn new(
+        num_kv_heads: usize,
+        head_dim: usize,
+        max_seq_len: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let shape = (1, num_kv_heads, max_seq_len, head_dim);
+        let k_buf = Tensor::zeros(shape, dtype, device)?;
+        let v_buf = Tensor::zeros(shape, dtype, device)?;
+        Ok(Self {
+            k_buf,
+            v_buf,
+            current_pos: 0,
+            max_seq_len,
+        })
+    }
+
+    /// Append new K/V tensors and return the accumulated sequence so far.
+    ///
+    /// `new_k` and `new_v` must have shape `(batch, num_kv_heads, seq_len, head_dim)`.
+    /// Returns `(full_k, full_v)` of shape `(batch, num_kv_heads, current_seq_len, head_dim)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `current_seq_len + seq_len > max_seq_len`. Call
+    /// [`reset`](Self::reset) between conversations to reuse the buffer.
+    pub fn append(&mut self, new_k: &Tensor, new_v: &Tensor) -> Result<(Tensor, Tensor)> {
+        let seq_len = new_k.dim(2)?;
+        let end_pos = self.current_pos + seq_len;
+        if end_pos > self.max_seq_len {
+            candle::bail!(
+                "PreallocKvCache: sequence length {end_pos} exceeds max_seq_len {}. \
+                 Call reset() between conversations or increase max_seq_len.",
+                self.max_seq_len
+            );
+        }
+        // Detach inputs and outputs to prevent BackpropOp chain accumulation.
+        // See struct-level documentation for details.
+        self.k_buf = self
+            .k_buf
+            .slice_scatter(&new_k.detach(), 2, self.current_pos)?
+            .detach();
+        self.v_buf = self
+            .v_buf
+            .slice_scatter(&new_v.detach(), 2, self.current_pos)?
+            .detach();
+        self.current_pos = end_pos;
+        // Return a view of the written prefix only. Stale data beyond
+        // current_pos is invisible to callers and will be overwritten on reset.
+        let k_active = self.k_buf.narrow(2, 0, self.current_pos)?.detach();
+        let v_active = self.v_buf.narrow(2, 0, self.current_pos)?.detach();
+        Ok((k_active, v_active))
+    }
+
+    /// Reset the cache to empty without deallocating the underlying buffers.
+    ///
+    /// This is O(1). Stale data beyond the new `current_seq_len` of 0 is
+    /// invisible to callers via `narrow` and will be overwritten on next use.
+    pub fn reset(&mut self) {
+        self.current_pos = 0;
+    }
+
+    /// Number of tokens currently in the cache.
+    pub fn current_seq_len(&self) -> usize {
+        self.current_pos
+    }
+
+    /// Maximum tokens this cache can hold before returning an error.
+    pub fn max_seq_len(&self) -> usize {
+        self.max_seq_len
     }
 }
 
@@ -981,6 +1132,101 @@ mod tests {
         assert_eq!(k.dims(), &[1, 5, 8, 64]); // Concatenated on dim 1
         assert_eq!(cache.current_seq_len(), 5);
 
+        Ok(())
+    }
+
+    // ── PreallocKvCache tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_prealloc_new() -> Result<()> {
+        let c = PreallocKvCache::new(4, 64, 128, DType::F32, &Device::Cpu)?;
+        assert_eq!(c.current_seq_len(), 0);
+        assert_eq!(c.max_seq_len(), 128);
+        Ok(())
+    }
+
+    #[test]
+    fn test_prealloc_append_accumulates() -> Result<()> {
+        let device = Device::Cpu;
+        let mut c = PreallocKvCache::new(2, 8, 64, DType::F32, &device)?;
+        for i in 1..=10usize {
+            let k = Tensor::zeros((1, 2, 1, 8), DType::F32, &device)?;
+            let v = Tensor::zeros((1, 2, 1, 8), DType::F32, &device)?;
+            let (ok, ov) = c.append(&k, &v)?;
+            assert_eq!(c.current_seq_len(), i);
+            assert_eq!(ok.dim(2)?, i);
+            assert_eq!(ov.dim(2)?, i);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_prealloc_data_integrity() -> Result<()> {
+        let device = Device::Cpu;
+        let mut c = PreallocKvCache::new(1, 2, 16, DType::F32, &device)?;
+        let k0 = Tensor::zeros((1, 1, 1, 2), DType::F32, &device)?;
+        let k1 = Tensor::ones((1, 1, 1, 2), DType::F32, &device)?;
+        c.append(&k0, &k0)?;
+        let (out_k, _) = c.append(&k1, &k1)?;
+        let vals: Vec<f32> = out_k.flatten_all()?.to_vec1()?;
+        assert_eq!(vals, vec![0.0, 0.0, 1.0, 1.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_prealloc_reset_reusable() -> Result<()> {
+        let device = Device::Cpu;
+        let mut c = PreallocKvCache::new(2, 4, 32, DType::F32, &device)?;
+        for _ in 0..16 {
+            c.append(
+                &Tensor::zeros((1, 2, 1, 4), DType::F32, &device)?,
+                &Tensor::zeros((1, 2, 1, 4), DType::F32, &device)?,
+            )?;
+        }
+        assert_eq!(c.current_seq_len(), 16);
+        c.reset();
+        assert_eq!(c.current_seq_len(), 0);
+        let (ok, _) = c.append(
+            &Tensor::ones((1, 2, 1, 4), DType::F32, &device)?,
+            &Tensor::ones((1, 2, 1, 4), DType::F32, &device)?,
+        )?;
+        assert_eq!(ok.dim(2)?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_prealloc_overflow_error() -> Result<()> {
+        let device = Device::Cpu;
+        let mut c = PreallocKvCache::new(1, 4, 3, DType::F32, &device)?;
+        c.append(
+            &Tensor::zeros((1, 1, 2, 4), DType::F32, &device)?,
+            &Tensor::zeros((1, 1, 2, 4), DType::F32, &device)?,
+        )?;
+        let result = c.append(
+            &Tensor::zeros((1, 1, 2, 4), DType::F32, &device)?,
+            &Tensor::zeros((1, 1, 2, 4), DType::F32, &device)?,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max_seq_len"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_prealloc_outputs_detached() -> Result<()> {
+        // BackpropOp regression: outputs must not track ops.
+        let device = Device::Cpu;
+        let var_map = crate::VarMap::new();
+        let vb = crate::VarBuilder::from_varmap(&var_map, DType::F32, &device);
+        let k_var = vb.get((1, 2, 1, 4), "k")?;
+        assert!(k_var.track_op(), "test setup: var must track ops");
+        let v_var = vb.get((1, 2, 1, 4), "v")?;
+
+        let mut c = PreallocKvCache::new(2, 4, 64, DType::F32, &device)?;
+        for _ in 0..10 {
+            let (ok, ov) = c.append(&k_var, &v_var)?;
+            assert!(!ok.track_op(), "output K must not track ops");
+            assert!(!ov.track_op(), "output V must not track ops");
+        }
         Ok(())
     }
 }
