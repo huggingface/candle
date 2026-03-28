@@ -294,9 +294,9 @@ struct QuantizedAttention {
     rotary_emb: Option<Arc<RotaryEmbedding>>,
     skip_rope: bool,
     use_flash_attn: bool,
-    kv_cache: KvCache,
-    interleaved_cache: InterleavedKvCache,
-    raw_cache: RawInterleavedKvCache,
+    kv_cache: Option<KvCache>,
+    interleaved_cache: Option<InterleavedKvCache>,
+    raw_cache: Option<RawInterleavedKvCache>,
     /// Pre-allocated buffers for in-place RoPE during fused decode
     q_rope_buf: Vec<f32>,
     k_rope_buf: Vec<f32>,
@@ -366,9 +366,25 @@ impl QuantizedAttention {
             rotary_emb,
             skip_rope: cfg.should_skip_rope(layer_idx),
             use_flash_attn,
-            kv_cache: KvCache::new(2, 512),
-            interleaved_cache: InterleavedKvCache::new(head_dim),
-            raw_cache: RawInterleavedKvCache::new(num_kv_heads, head_dim, MAX_SEQ_LEN),
+            kv_cache: if use_flash_attn {
+                None
+            } else {
+                Some(KvCache::new(2, 512))
+            },
+            interleaved_cache: if use_flash_attn {
+                Some(InterleavedKvCache::new(head_dim))
+            } else {
+                None
+            },
+            raw_cache: if use_flash_attn {
+                Some(RawInterleavedKvCache::new(
+                    num_kv_heads,
+                    head_dim,
+                    MAX_SEQ_LEN,
+                ))
+            } else {
+                None
+            },
             q_rope_buf: vec![0f32; num_heads * head_dim],
             k_rope_buf: vec![0f32; num_kv_heads * head_dim],
         })
@@ -434,15 +450,15 @@ impl QuantizedAttention {
             }
 
             // 4. Write K, V directly into raw cache (no tensor allocation)
-            self.raw_cache
-                .write_kv(&self.k_rope_buf[..k_len], &v_flat[..k_len]);
+            let rc = self.raw_cache.as_mut().unwrap();
+            rc.write_kv(&self.k_rope_buf[..k_len], &v_flat[..k_len]);
 
             // 5. Run interleaved decode kernel
             let scale = 1.0 / (self.head_dim as f32).sqrt();
-            let kv_len = self.raw_cache.len();
+            let kv_len = rc.len();
             let ctx = causal_decode_f32_interleaved(
                 &self.q_rope_buf[..q_len],
-                self.raw_cache.data(),
+                rc.data(),
                 self.num_heads,
                 self.num_kv_heads,
                 self.head_dim,
@@ -482,9 +498,9 @@ impl QuantizedAttention {
             (q, k)
         };
 
-        if self.use_flash_attn && x.device().is_cpu() {
-            // Prefill: use InterleavedKvCache (tensor-based) + flash_attn
-            let kv = self.interleaved_cache.append(&k, &v)?;
+        if self.use_flash_attn && x.device().is_cpu() && b == 1 {
+            // Prefill (B=1 only): use InterleavedKvCache + flash_attn
+            let kv = self.interleaved_cache.as_mut().unwrap().append(&k, &v)?;
             // Also populate raw cache for subsequent decode steps
             {
                 let k_cont = k.squeeze(0)?.transpose(0, 1)?.contiguous()?;
@@ -499,7 +515,10 @@ impl QuantizedAttention {
                     Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[vl.start_offset()..],
                     _ => candle::bail!("Expected CPU"),
                 };
-                self.raw_cache.write_kv_batch(k_data, v_data, seq_len);
+                self.raw_cache
+                    .as_mut()
+                    .unwrap()
+                    .write_kv_batch(k_data, v_data, seq_len);
             }
 
             let scale = 1.0 / (self.head_dim as f32).sqrt();
@@ -524,7 +543,11 @@ impl QuantizedAttention {
                 .apply(&self.o_proj)
         } else {
             // Standard matmul attention (no flash)
-            let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
+            let (k, v) = self
+                .kv_cache
+                .as_mut()
+                .unwrap()
+                .append(&k.contiguous()?, &v.contiguous()?)?;
 
             let k = repeat_kv(k, self.num_kv_groups)?;
             let v = repeat_kv(v, self.num_kv_groups)?;
@@ -549,9 +572,15 @@ impl QuantizedAttention {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.kv_cache.reset();
-        self.interleaved_cache.reset();
-        self.raw_cache.reset();
+        if let Some(c) = &mut self.kv_cache {
+            c.reset();
+        }
+        if let Some(c) = &mut self.interleaved_cache {
+            c.reset();
+        }
+        if let Some(c) = &mut self.raw_cache {
+            c.reset();
+        }
     }
 }
 

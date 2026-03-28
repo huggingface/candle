@@ -7,6 +7,13 @@
 //! This invariant lets every inner loop use direct slice references
 //! (no strided gather, no batch-dim indexing), which is the foundation
 //! for future SIMD / cache-tiling optimizations.
+//!
+//! ## Thread pool
+//!
+//! A dedicated Rayon thread pool (`FLASH_ATTN_POOL`) is created at first use
+//! and lives for the process lifetime. On macOS, threads are elevated to
+//! `QOS_CLASS_USER_INTERACTIVE` to prefer P-cores over E-cores. This pool
+//! is shared across all flash attention calls.
 
 use candle::{Device, Result, Storage, Tensor, WithDType};
 use std::sync::LazyLock;
@@ -115,13 +122,13 @@ where
     } else {
         return Err(candle::Error::Msg("Expected CPU storage for v".into()));
     };
-    let mask_guard = mask.map(|mask| mask.storage_and_layout().0);
-    let mask_data: Option<&[T]> = if let Some(mask_guard) = &mask_guard {
-        let mask = mask.as_ref().unwrap();
-
-        if let Storage::Cpu(cpu) = &**mask_guard {
+    // Force mask contiguous — the kernel indexes as flat 2D (q_pos * kv_len + kv_pos)
+    let mask_cont = mask.map(|m| m.contiguous()).transpose()?;
+    let mask_guard = mask_cont.as_ref().map(|m| m.storage_and_layout());
+    let mask_data: Option<&[T]> = if let Some((guard, layout)) = &mask_guard {
+        if let Storage::Cpu(cpu) = &**guard {
             let data = cpu.as_slice::<T>()?;
-            Some(&data[mask.layout().start_offset()..])
+            Some(&data[layout.start_offset()..])
         } else {
             return Err(candle::Error::Msg("Expected CPU storage for mask".into()));
         }

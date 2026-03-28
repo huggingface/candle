@@ -17,9 +17,12 @@ use candle::{DType, Result, Tensor, WithDType};
 use std::iter::Sum;
 use std::sync::LazyLock;
 
-/// Read once at startup: CANDLE_FLASH_FORCE_VARLEN=1 forces varlen path for B=1 (benchmarking).
+/// Debug-only: CANDLE_FLASH_FORCE_VARLEN=1 forces varlen path for B=1 (A/B benchmarking).
+#[cfg(debug_assertions)]
 static FORCE_VARLEN: LazyLock<bool> =
     LazyLock::new(|| std::env::var("CANDLE_FLASH_FORCE_VARLEN").is_ok_and(|v| v == "1"));
+#[cfg(not(debug_assertions))]
+static FORCE_VARLEN: bool = false;
 
 use super::AttnMask;
 
@@ -55,7 +58,12 @@ where
 {
     let b = q.dims()[0];
 
-    if b > 1 || *FORCE_VARLEN {
+    #[cfg(debug_assertions)]
+    let force_varlen = *FORCE_VARLEN;
+    #[cfg(not(debug_assertions))]
+    let force_varlen = FORCE_VARLEN;
+
+    if b > 1 || force_varlen {
         let dt = q.dtype();
         let varlen_ok = (dt == DType::F32 || dt == DType::F16) && softcap.is_none();
         let mask_ok = matches!(&attn_mask, AttnMask::Causal { .. } | AttnMask::None);

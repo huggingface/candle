@@ -165,9 +165,12 @@ struct AttentionWeights {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: ConcatKvCache,
-    interleaved_cache: InterleavedKvCache,
-    raw_cache: RawInterleavedKvCache,
+    /// Standard KV cache — only allocated when !use_flash_attn
+    kv_cache: Option<ConcatKvCache>,
+    /// Interleaved tensor cache — only allocated when use_flash_attn (prefill)
+    interleaved_cache: Option<InterleavedKvCache>,
+    /// Raw pre-allocated cache — only allocated when use_flash_attn (decode)
+    raw_cache: Option<RawInterleavedKvCache>,
     use_flash_attn: bool,
     span_attn: tracing::Span,
 }
@@ -195,9 +198,21 @@ impl AttentionWeights {
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
         let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
-        let kv_cache = ConcatKvCache::new(2);
-        let interleaved_cache = InterleavedKvCache::new(head_dim);
-        let raw_cache = RawInterleavedKvCache::new(num_kv_heads, head_dim, 4096);
+        let kv_cache = if use_flash_attn {
+            None
+        } else {
+            Some(ConcatKvCache::new(2))
+        };
+        let interleaved_cache = if use_flash_attn {
+            Some(InterleavedKvCache::new(head_dim))
+        } else {
+            None
+        };
+        let raw_cache = if use_flash_attn {
+            Some(RawInterleavedKvCache::new(num_kv_heads, head_dim, 4096))
+        } else {
+            None
+        };
 
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
@@ -252,7 +267,7 @@ impl AttentionWeights {
         // RoPE
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
-        if self.use_flash_attn && x.device().is_cpu() {
+        if self.use_flash_attn && x.device().is_cpu() && b == 1 {
             let scale = 1.0 / (self.head_dim as f32).sqrt();
 
             if l == 1 && b == 1 && q.dtype() == DType::F32 {
@@ -283,14 +298,15 @@ impl AttentionWeights {
 
                 // Write K, V into raw cache (no tensor allocation)
                 let k_len = self.num_kv_heads * self.head_dim;
-                self.raw_cache.write_kv(&k_data[..k_len], &v_data[..k_len]);
+                let rc = self.raw_cache.as_mut().unwrap();
+                rc.write_kv(&k_data[..k_len], &v_data[..k_len]);
 
                 // Run interleaved decode kernel
-                let kv_len = self.raw_cache.len();
+                let kv_len = rc.len();
                 let q_len = self.num_heads * self.head_dim;
                 let ctx = causal_decode_f32_interleaved(
                     &q_data[..q_len],
-                    self.raw_cache.data(),
+                    rc.data(),
                     self.num_heads,
                     self.num_kv_heads,
                     self.head_dim,
@@ -302,7 +318,8 @@ impl AttentionWeights {
                 ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
             } else {
                 // ── Prefill: use InterleavedKvCache + flash_attn, populate raw cache ──
-                let kv = self.interleaved_cache.append(&k, &v)?;
+                let ic = self.interleaved_cache.as_mut().unwrap();
+                let kv = ic.append(&k, &v)?;
 
                 // Populate raw cache for subsequent decode steps
                 {
@@ -318,7 +335,7 @@ impl AttentionWeights {
                         Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[vl.start_offset()..],
                         _ => candle::bail!("Expected CPU"),
                     };
-                    self.raw_cache.write_kv_batch(k_d, v_d, l);
+                    self.raw_cache.as_mut().unwrap().write_kv_batch(k_d, v_d, l);
                 }
 
                 let kv_k = kv.narrow(2, 0, self.head_dim)?.unsqueeze(0)?;
@@ -342,7 +359,7 @@ impl AttentionWeights {
             }
         } else {
             // Standard matmul attention (no flash)
-            let (k, v) = self.kv_cache.append(&k, &v)?;
+            let (k, v) = self.kv_cache.as_mut().unwrap().append(&k, &v)?;
 
             let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
             let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
@@ -366,9 +383,15 @@ impl AttentionWeights {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.kv_cache.reset();
-        self.interleaved_cache.reset();
-        self.raw_cache.reset();
+        if let Some(c) = &mut self.kv_cache {
+            c.reset();
+        }
+        if let Some(c) = &mut self.interleaved_cache {
+            c.reset();
+        }
+        if let Some(c) = &mut self.raw_cache {
+            c.reset();
+        }
     }
 }
 
