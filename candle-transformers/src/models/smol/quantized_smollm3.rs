@@ -11,6 +11,72 @@ use std::sync::Arc;
 const MAX_SEQ_LEN: usize = 4096;
 use candle::IndexOp;
 
+/// Compute the row permutation that `reconstruct_qk_weights` applies.
+///
+/// Returns `perm` where `reconstructed[i] = original[perm[i]]`.
+/// The inverse `inv_perm[perm[i]] = i` maps original → reconstructed order.
+fn compute_reconstruction_perm(total_rows: usize) -> Vec<usize> {
+    let half_rows = total_rows / 2;
+    let chunk_size = 128;
+    let chunks_per_half = half_rows / chunk_size;
+    let mut perm = Vec::with_capacity(total_rows);
+
+    for half in 0..2 {
+        let half_off = half * half_rows;
+        for chunk_idx in 0..chunks_per_half {
+            let chunk_start = half_off + chunk_idx * chunk_size;
+            // Even rows
+            for i in (chunk_start..chunk_start + chunk_size).step_by(2) {
+                perm.push(i);
+            }
+            // Odd rows
+            for i in (chunk_start + 1..chunk_start + chunk_size).step_by(2) {
+                perm.push(i);
+            }
+        }
+    }
+    perm
+}
+
+/// Invert a permutation: if perm[i] = j, then inv[j] = i.
+fn invert_perm(perm: &[usize]) -> Vec<usize> {
+    let mut inv = vec![0usize; perm.len()];
+    for (i, &p) in perm.iter().enumerate() {
+        inv[p] = i;
+    }
+    inv
+}
+
+#[allow(dead_code)]
+/// Permute columns of a weight matrix to match interlaced head order.
+///
+/// The o_proj weight has shape (hidden_size, num_heads * head_dim).
+/// Column `i` corresponds to output element `i` from attention.
+/// We permute columns so o_proj expects interlaced (original) order input.
+fn permute_o_proj_for_interlaced(
+    o_weight: &Tensor,
+    num_heads: usize,
+    head_dim: usize,
+) -> Result<Tensor> {
+    let total_rows = num_heads * head_dim;
+    let perm = compute_reconstruction_perm(total_rows);
+    // perm[reconstructed_row] = original_row
+    // We want: new_weight[:, original_row] = old_weight[:, reconstructed_row]
+    // i.e. new_weight[:, perm[i]] = old_weight[:, i]
+    // This is: new_weight = old_weight.index_select(columns, inv_perm)
+    // But index_select works on rows. For columns, transpose, select, transpose back.
+    let inv_perm = invert_perm(&perm);
+    let idx = Tensor::from_vec(
+        inv_perm.iter().map(|&i| i as u32).collect::<Vec<_>>(),
+        total_rows,
+        o_weight.device(),
+    )?;
+    // o_weight shape: (hidden, num_heads*head_dim)
+    // Permute dim 1 (columns)
+    let permuted = o_weight.index_select(&idx, 1)?;
+    Ok(permuted)
+}
+
 // ===== RECONSTRUCTION FUNCTION =====
 fn reconstruct_qk_weights(gguf_weight: &Tensor, _num_heads: usize) -> Result<Tensor> {
     let total_rows = gguf_weight.dim(0)?;
@@ -264,55 +330,50 @@ impl QuantizedAttention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
 
-        // For v and o weights, use directly from VarBuilder (already quantized)
-        // VarBuilder.get_no_shape() returns Arc<QTensor>
         let v_proj = QMatMul::from_weights(vb.get_no_shape("attn_v.weight")?)?;
-        let o_proj = QMatMul::from_weights(vb.get_no_shape("attn_output.weight")?)?;
 
-        // For q and k weights, we need to dequantize, reconstruct, then re-quantize
-        // IMPORTANT: Do reconstruction on CPU to avoid VRAM exhaustion during model loading
+        use candle::quantized::{GgmlDType, QTensor};
         let device = vb.device();
         let cpu = Device::Cpu;
 
-        let q_weight_qtensor = vb.get_no_shape("attn_q.weight")?;
-        let q_weight_raw = q_weight_qtensor.dequantize(&cpu)?; // Dequantize to CPU
-        let q_weight = reconstruct_qk_weights(&q_weight_raw, num_heads)?; // Reconstruct on CPU
-        let q_weight = q_weight.to_device(device)?; // Move to GPU
+        {
+            let o_proj = QMatMul::from_weights(vb.get_no_shape("attn_output.weight")?)?;
 
-        // Re-quantize (now on GPU)
-        use candle::quantized::{GgmlDType, QTensor};
-        let q_weight_qtensor = QTensor::quantize(&q_weight, GgmlDType::Q8_0)?;
-        drop(q_weight_raw); // Explicitly free CPU memory
-        drop(q_weight);
+            let q_weight_qtensor = vb.get_no_shape("attn_q.weight")?;
+            let q_weight_raw = q_weight_qtensor.dequantize(&cpu)?;
+            let q_weight = reconstruct_qk_weights(&q_weight_raw, num_heads)?;
+            let q_weight = q_weight.to_device(device)?;
+            let q_weight_qtensor = QTensor::quantize(&q_weight, GgmlDType::Q8_0)?;
+            drop(q_weight_raw);
+            drop(q_weight);
 
-        let k_weight_qtensor = vb.get_no_shape("attn_k.weight")?;
-        let k_weight_raw = k_weight_qtensor.dequantize(&cpu)?; // Dequantize to CPU
-        let k_weight = reconstruct_qk_weights(&k_weight_raw, num_kv_heads)?; // Reconstruct on CPU
-        let k_weight = k_weight.to_device(device)?; // Move to GPU
+            let k_weight_qtensor = vb.get_no_shape("attn_k.weight")?;
+            let k_weight_raw = k_weight_qtensor.dequantize(&cpu)?;
+            let k_weight = reconstruct_qk_weights(&k_weight_raw, num_kv_heads)?;
+            let k_weight = k_weight.to_device(device)?;
+            let k_weight_qtensor = QTensor::quantize(&k_weight, GgmlDType::Q8_0)?;
+            drop(k_weight_raw);
+            drop(k_weight);
 
-        // Re-quantize (now on GPU)
-        let k_weight_qtensor = QTensor::quantize(&k_weight, GgmlDType::Q8_0)?;
-        drop(k_weight_raw); // Explicitly free CPU memory
-        drop(k_weight);
+            let q_proj = QMatMul::from_weights(Arc::new(q_weight_qtensor))?;
+            let k_proj = QMatMul::from_weights(Arc::new(k_weight_qtensor))?;
 
-        let q_proj = QMatMul::from_weights(Arc::new(q_weight_qtensor))?;
-        let k_proj = QMatMul::from_weights(Arc::new(k_weight_qtensor))?;
-
-        Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
-            num_heads,
-            num_kv_heads,
-            num_kv_groups: num_heads / num_kv_heads,
-            head_dim,
-            hidden_size: num_heads * head_dim,
-            rotary_emb,
-            skip_rope: cfg.should_skip_rope(layer_idx),
-            use_flash_attn,
-            kv_cache: KvCache::new(2, 512),
-        })
+            Ok(Self {
+                q_proj,
+                k_proj,
+                v_proj,
+                o_proj,
+                num_heads,
+                num_kv_heads,
+                num_kv_groups: num_heads / num_kv_heads,
+                head_dim,
+                hidden_size: num_heads * head_dim,
+                rotary_emb,
+                skip_rope: cfg.should_skip_rope(layer_idx),
+                use_flash_attn,
+                kv_cache: KvCache::new(2, 512),
+            })
+        }
     }
 
     fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {

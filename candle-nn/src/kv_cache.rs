@@ -984,3 +984,72 @@ mod tests {
         Ok(())
     }
 }
+
+/// KV cache that stores K and V interleaved per position.
+///
+/// Stores a single tensor with shape `(S, H_kv, 2*D)` where the first D
+/// elements are K and the next D are V. This sequence-first layout means:
+/// - The kernel reads `kv[pos * H_kv * 2D + head * 2D .. + 2D]` directly
+/// - No transpose needed before the flash kernel
+/// - K and V for the same position share cache lines
+///
+/// Input K and V have shape `(B, H_kv, S, D)` (standard attention format)
+/// and are transposed+interleaved on append.
+#[derive(Debug, Clone)]
+pub struct InterleavedKvCache {
+    /// Combined KV tensor: (S_total, H_kv, 2*D) — sequence-first
+    kv: Option<Tensor>,
+    /// Head dimension (D)
+    head_dim: usize,
+}
+
+impl InterleavedKvCache {
+    pub fn new(head_dim: usize) -> Self {
+        Self { kv: None, head_dim }
+    }
+
+    pub fn current_seq_len(&self) -> usize {
+        self.kv
+            .as_ref()
+            .and_then(|kv| kv.dims().first().copied())
+            .unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.kv.is_none()
+    }
+
+    /// Append K and V tensors.
+    ///
+    /// Input: K `(B, H_kv, S_new, D)`, V `(B, H_kv, S_new, D)` where B must be 1.
+    /// Internally converts to `(S_new, H_kv, 2*D)` and concatenates on dim 0.
+    /// Returns: combined KV tensor `(S_total, H_kv, 2*D)`.
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+        // (B, H_kv, S, D) → squeeze B → (H_kv, S, D) → transpose → (S, H_kv, D)
+        let k_seq = k.squeeze(0)?.transpose(0, 1)?.contiguous()?;
+        let v_seq = v.squeeze(0)?.transpose(0, 1)?.contiguous()?;
+        // Cat along last dim: (S, H_kv, D) + (S, H_kv, D) → (S, H_kv, 2*D)
+        let kv_new = Tensor::cat(&[&k_seq, &v_seq], 2)?;
+
+        self.kv = Some(match &self.kv {
+            None => kv_new,
+            // Concatenate on dim 0 (sequence dimension)
+            Some(kv_cache) => Tensor::cat(&[kv_cache, &kv_new], 0)?,
+        });
+
+        Ok(self.kv.as_ref().unwrap().clone())
+    }
+
+    /// Get the raw interleaved KV tensor `(S, H_kv, 2*D)`.
+    pub fn kv(&self) -> Option<&Tensor> {
+        self.kv.as_ref()
+    }
+
+    pub fn head_dim(&self) -> usize {
+        self.head_dim
+    }
+
+    pub fn reset(&mut self) {
+        self.kv = None;
+    }
+}
