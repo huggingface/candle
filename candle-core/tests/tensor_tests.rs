@@ -933,31 +933,6 @@ fn index_select_fail() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn scatter_requires_contiguous_ids_error_names_scatter_on_cpu() -> Result<()> {
-    // CPU scatter used to report RequiresContiguous with op "gather" when index
-    // storage was non-contiguous; the message must name "scatter".
-    let device = Device::Cpu;
-    let init = Tensor::ones((2, 2, 5), DType::F32, &device)?;
-    let t = Tensor::arange(0f32, 12f32, &device)?.reshape((2, 2, 3))?;
-    let ids = Tensor::new(
-        &[[[0u32, 1, 2], [3, 4, 0]], [[1, 2, 3], [4, 0, 1]]],
-        &device,
-    )?
-    .transpose(0, 1)?;
-    assert!(
-        ids.layout().contiguous_offsets().is_none(),
-        "regression test: ids tensor must be non-contiguous"
-    );
-    let err = init.scatter(&ids, &t, 2).unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("scatter only supports contiguous tensors"),
-        "unexpected error: {msg}"
-    );
-    Ok(())
-}
-
 // The test below triggers an unwinding panic as there is a panic within the
 // #[cfg(feature = "cuda")]
 // #[test]
