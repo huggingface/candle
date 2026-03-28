@@ -327,6 +327,10 @@ pub struct Model {
     sliding_window: usize,
     device: Device,
     dtype: DType,
+    /// When true, `forward_embeds` skips the final RmsNorm.
+    /// Used by VibeVoice-Streaming where the lower LM should not normalise
+    /// its output (the Python reference replaces the norm with `nn.Identity()`).
+    skip_final_norm: bool,
 }
 
 impl Model {
@@ -349,6 +353,7 @@ impl Model {
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
+            skip_final_norm: false,
         })
     }
 
@@ -427,7 +432,18 @@ impl Model {
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
-        xs.apply(&self.norm)
+        if self.skip_final_norm {
+            Ok(xs)
+        } else {
+            xs.apply(&self.norm)
+        }
+    }
+
+    /// When set to `true`, `forward` / `forward_embeds` will skip the final
+    /// RmsNorm.  This replicates the `nn.Identity()` replacement used in the
+    /// Python VibeVoice-Streaming lower LM.
+    pub fn set_skip_final_norm(&mut self, skip: bool) {
+        self.skip_final_norm = skip;
     }
 
     pub fn embed_tokens(&self) -> &candle_nn::Embedding {

@@ -419,8 +419,9 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
         0
     };
 
-    // Tokenize the TTS text
-    let encoding = tokenizer.encode(args.prompt.as_str(), false).map_err(E::msg)?;
+    // Tokenize the TTS text (Python appends "\n" to the stripped text)
+    let tts_text = format!("{}\n", args.prompt.trim());
+    let encoding = tokenizer.encode(tts_text.as_str(), false).map_err(E::msg)?;
     let tts_text_ids: Vec<u32> = encoding.get_ids().to_vec();
     let total_text_tokens = tts_text_ids.len();
     println!("TTS text tokens: {total_text_tokens}");
@@ -441,13 +442,12 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
         neg_tts_lm_hidden.i((.., neg_tts_lm_hidden.dim(1)? - 1.., ..))?;
 
     let mut audio_chunks: Vec<Tensor> = Vec::new();
+    let mut acoustic_cache = model.new_acoustic_streaming_cache();
+    let mut is_first_frame = true;
     let mut tts_text_window_index = 0;
     let mut step = 0;
     let max_steps = args.sample_len;
     let mut eos_detected = false;
-    // Track consecutive EOS frames for more robust stopping
-    let mut consecutive_eos = 0;
-    const EOS_CONSECUTIVE_THRESHOLD: usize = 3;
 
     let start_gen = std::time::Instant::now();
 
@@ -533,52 +533,26 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
             let pos_tts_kv = model.save_tts_kv_cache();
 
             // CFG diffusion sampling for one frame
-            let speech_latent = {
-                let condition =
-                    Tensor::cat(&[&positive_condition, &negative_condition], 0)?;
-                let vae_dim = config.acoustic_vae_dim;
-                let mut speech =
-                    Tensor::randn(0f32, 1f32, (2, vae_dim), device)?.to_dtype(dtype)?;
+            // Reset scheduler state for each frame (step_index, model_outputs)
+            scheduler.set_timesteps(args.diffusion_steps);
+            let speech_latent = model.sample_speech_tokens(
+                &positive_condition,
+                &negative_condition,
+                &mut scheduler,
+                args.cfg_scale,
+                device,
+                dtype,
+            )?;
 
-                let ts = scheduler.timesteps().to_vec();
-                for (ti, &t) in ts.iter().enumerate() {
-                    let half = speech.i(0..1)?;
-                    let combined = Tensor::cat(&[&half, &half], 0)?;
-                    let t_tensor =
-                        Tensor::full(t as f32, 2, device)?.to_dtype(dtype)?;
-                    let eps =
-                        model.prediction_head(&combined, &t_tensor, &condition)?;
-
-                    let cond_eps = eps.i(0..1)?;
-                    let uncond_eps = eps.i(1..2)?;
-                    let half_eps = (&uncond_eps
-                        + ((&cond_eps - &uncond_eps)? * args.cfg_scale)?)?;
-                    let full_eps = Tensor::cat(&[&half_eps, &half_eps], 0)?;
-
-                    let alpha_t = scheduler.alpha_t(t);
-                    let sigma_t = scheduler.sigma_t(t);
-                    let x0_pred =
-                        ((&speech * alpha_t)? - (&full_eps * sigma_t)?)?;
-
-                    if ti + 1 < ts.len() {
-                        let t_next = ts[ti + 1];
-                        let alpha_next = scheduler.alpha_t(t_next);
-                        let sigma_next = scheduler.sigma_t(t_next);
-                        let noise_pred =
-                            ((&speech - (&x0_pred * alpha_t)?)? / sigma_t)?;
-                        speech = ((&x0_pred * alpha_next)?
-                            + (&noise_pred * sigma_next)?)?;
-                    } else {
-                        speech = x0_pred;
-                    }
-                }
-                speech.i(0..1)? // Take positive half: (1, vae_dim)
-            };
-
-            // Decode speech latent to audio chunk
+            // Decode speech latent to audio chunk (streaming: use cache for continuity)
             let speech_for_decode = speech_latent.unsqueeze(1)?; // (1, 1, vae_dim)
-            let audio_chunk = model.decode_speech(&speech_for_decode)?;
+            let audio_chunk = model.decode_speech_streaming(
+                &speech_for_decode,
+                &mut acoustic_cache,
+                is_first_frame,
+            )?;
             audio_chunks.push(audio_chunk);
+            is_first_frame = false;
 
             // Get acoustic embedding for feedback
             let speech_for_connector = speech_latent.unsqueeze(1)?; // (1, 1, vae_dim)
@@ -618,20 +592,15 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
             // Restore positive for next iteration
             model.restore_tts_kv_cache(&pos_tts_kv_updated);
 
-            // Check EOS
+            // Check EOS – Python stops immediately when sigmoid > 0.5
             let eos_hidden = tts_lm_last_hidden
                 .i((.., tts_lm_last_hidden.dim(1)? - 1, ..))?;
             let eos_logit = model.eos_logit(&eos_hidden)?;
             let eos_prob = 1.0 / (1.0 + (-eos_logit).exp());
             if eos_prob > 0.5 {
-                consecutive_eos += 1;
-                if consecutive_eos >= EOS_CONSECUTIVE_THRESHOLD {
-                    println!("  EOS detected at step {step} (prob={eos_prob:.3}, {consecutive_eos} consecutive)");
-                    eos_detected = true;
-                    break;
-                }
-            } else {
-                consecutive_eos = 0;
+                println!("  EOS detected at step {step} (prob={eos_prob:.3})");
+                eos_detected = true;
+                break;
             }
 
             if (step % 10) == 0 {
@@ -664,7 +633,7 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
         .squeeze(0)?
         .to_dtype(DType::F32)?
         .to_vec1()?;
-    write_wav(&args.output, &audio_data, 16000)?;
+    write_wav(&args.output, &audio_data, 24000)?;
     println!("Audio saved to {}", args.output);
 
     model.clear_kv_cache();

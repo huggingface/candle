@@ -14,6 +14,45 @@ use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{conv1d, conv1d_no_bias, conv_transpose1d, Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};
 
 // ---------------------------------------------------------------------------
+// Streaming convolution cache (for VAE decoder frame-by-frame decoding)
+// ---------------------------------------------------------------------------
+
+/// Cache for streaming causal convolution / transposed convolution.
+///
+/// Each conv layer is assigned a sequential index and stores the tail of its
+/// previous input so that consecutive single-frame calls produce the same
+/// result as a single multi-frame call.
+#[derive(Debug, Clone)]
+pub struct StreamingConvCache {
+    /// Per-layer cached tensor (the "context" from the previous frame).
+    slots: Vec<Option<Tensor>>,
+    /// Counter used during a forward pass to assign each layer to the next slot.
+    cursor: usize,
+}
+
+impl StreamingConvCache {
+    /// Create a new empty cache with `n_layers` slots.
+    pub fn new(n_layers: usize) -> Self {
+        Self {
+            slots: vec![None; n_layers],
+            cursor: 0,
+        }
+    }
+
+    /// Reset the cursor to 0 (call at the start of each frame's forward pass).
+    pub fn reset_cursor(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Get the next slot index and advance the cursor.
+    fn next_slot(&mut self) -> usize {
+        let idx = self.cursor;
+        self.cursor += 1;
+        idx
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
@@ -260,6 +299,47 @@ impl CausalConv1d {
     fn padding_total(&self) -> usize {
         (self.kernel_size - 1) * self.dilation
     }
+
+    /// Context size cached between streaming frames.
+    /// Matches Python: `(kernel_size - 1) * dilation - (stride - 1)`
+    fn context_size(&self) -> usize {
+        let pt = self.padding_total();
+        pt.saturating_sub(self.stride - 1)
+    }
+
+    /// Streaming forward: prepend cached context, run conv (no extra padding),
+    /// save last `context_size` samples of the combined input.
+    fn forward_streaming(&self, xs: &Tensor, cache: &mut StreamingConvCache) -> Result<Tensor> {
+        let slot = cache.next_slot();
+        let ctx = self.context_size();
+
+        // Prepend cached context (or zeros on the first call)
+        let input = match &cache.slots[slot] {
+            Some(cached) => Tensor::cat(&[cached, xs], D::Minus1)?,
+            None if ctx > 0 => {
+                let dims = xs.dims();
+                let zeros = Tensor::zeros(
+                    &[dims[0], dims[1], ctx],
+                    xs.dtype(),
+                    xs.device(),
+                )?;
+                Tensor::cat(&[&zeros, xs], D::Minus1)?
+            }
+            None => xs.clone(),
+        };
+
+        // Run convolution directly (context replaces causal padding)
+        let output = self.conv.forward(&input)?;
+
+        // Save last context_size samples of the combined input
+        if ctx > 0 {
+            let total_len = input.dim(D::Minus1)?;
+            let start = total_len.saturating_sub(ctx);
+            cache.slots[slot] = Some(input.narrow(D::Minus1, start, ctx)?);
+        }
+
+        Ok(output)
+    }
 }
 
 impl Module for CausalConv1d {
@@ -314,6 +394,78 @@ impl CausalConvTranspose1d {
             candle_nn::conv_transpose1d_no_bias(in_c, out_c, kernel_size, cfg, vb)?
         };
         Ok(Self { conv, kernel_size, stride, causal: true })
+    }
+}
+
+impl CausalConvTranspose1d {
+    /// Context size for streaming cache.
+    /// Matches Python: `kernel_size - 1`
+    fn context_size(&self) -> usize {
+        self.kernel_size - 1
+    }
+
+    /// Streaming forward: prepend cached input, run transposed conv, trim
+    /// padding, return only the new output portion, save context.
+    fn forward_streaming(
+        &self,
+        xs: &Tensor,
+        cache: &mut StreamingConvCache,
+        is_first: bool,
+    ) -> Result<Tensor> {
+        let slot = cache.next_slot();
+        let ctx = self.context_size();
+        let t_new = xs.dim(D::Minus1)?;
+
+        // Prepend cached input (or empty on first call)
+        let full_input = match &cache.slots[slot] {
+            Some(cached) => Tensor::cat(&[cached, xs], D::Minus1)?,
+            None => xs.clone(),
+        };
+
+        // Run transposed conv
+        let full_output = self.conv.forward(&full_input)?;
+
+        // Trim padding (causal: trim right)
+        let padding_total = self.kernel_size - self.stride;
+        let full_output = if self.causal && padding_total > 0 {
+            let len = full_output.dim(D::Minus1)?;
+            full_output.narrow(D::Minus1, 0, len - padding_total)?
+        } else if !self.causal && padding_total > 0 {
+            let pad_right = padding_total / 2;
+            let pad_left = padding_total - pad_right;
+            let len = full_output.dim(D::Minus1)?;
+            full_output.narrow(D::Minus1, pad_left, len - pad_left - pad_right)?
+        } else {
+            full_output
+        };
+
+        // Extract only the new output
+        let output = if is_first {
+            // First chunk: return everything
+            full_output
+        } else {
+            // Subsequent chunks: return last T_new * stride samples
+            let expected = t_new * self.stride;
+            let out_len = full_output.dim(D::Minus1)?;
+            if out_len >= expected {
+                full_output.narrow(D::Minus1, out_len - expected, expected)?
+            } else {
+                full_output
+            }
+        };
+
+        // Save last context_size input samples
+        if ctx > 0 {
+            let total_len = full_input.dim(D::Minus1)?;
+            if total_len >= ctx {
+                cache.slots[slot] =
+                    Some(full_input.narrow(D::Minus1, total_len - ctx, ctx)?);
+            } else {
+                cache.slots[slot] = Some(full_input);
+            }
+        }
+
+        Ok(output)
     }
 }
 
@@ -424,6 +576,28 @@ impl Block1d {
         let ffn = TokenizerFfn::new(dim, ffn_dim, vb.pp("ffn"))?;
         let ffn_gamma = vb.get(dim, "ffn_gamma")?;
         Ok(Self { norm, mixer, gamma, ffn_norm, ffn, ffn_gamma })
+    }
+}
+
+impl Block1d {
+    fn forward_streaming(
+        &self,
+        xs: &Tensor,
+        cache: &mut StreamingConvCache,
+    ) -> Result<Tensor> {
+        let residual = xs.clone();
+        let xs = self.norm.forward(xs)?;
+        let xs = self.mixer.forward_streaming(&xs, cache)?;
+        let gamma = self.gamma.reshape((1, (), 1))?;
+        let xs = (xs.broadcast_mul(&gamma)? + residual)?;
+
+        let residual = xs.clone();
+        let h = self.ffn_norm.forward(&xs)?;
+        let h = h.transpose(1, 2)?;
+        let h = self.ffn.forward(&h)?;
+        let h = h.transpose(1, 2)?;
+        let ffn_gamma = self.ffn_gamma.reshape((1, (), 1))?;
+        h.broadcast_mul(&ffn_gamma)? + residual
     }
 }
 
@@ -619,6 +793,45 @@ impl TokenizerDecoder {
         Ok(Self { stem, upsample_layers, stages, head })
     }
 
+    /// Count the total number of conv layers that need cache slots.
+    fn num_cache_layers(&self) -> usize {
+        // stem (1) + stages[0] blocks (each has 1 mixer conv) +
+        // for each upsample: 1 convtr + stages[i+1] blocks
+        // + head (1)
+        let mut n = 1; // stem
+        n += self.stages[0].len(); // stage 0 blocks
+        for i in 0..self.upsample_layers.len() {
+            n += 1; // upsample convtr
+            n += self.stages[i + 1].len(); // stage blocks
+        }
+        n += 1; // head
+        n
+    }
+
+    fn forward_streaming(
+        &self,
+        xs: &Tensor,
+        cache: &mut StreamingConvCache,
+        is_first: bool,
+    ) -> Result<Tensor> {
+        // xs: (B, T', vae_dim) → (B, vae_dim, T')
+        let mut xs = xs.transpose(1, 2)?;
+
+        xs = self.stem.forward_streaming(&xs, cache)?;
+        for block in &self.stages[0] {
+            xs = block.forward_streaming(&xs, cache)?;
+        }
+
+        for i in 0..self.upsample_layers.len() {
+            xs = self.upsample_layers[i].forward_streaming(&xs, cache, is_first)?;
+            for block in &self.stages[i + 1] {
+                xs = block.forward_streaming(&xs, cache)?;
+            }
+        }
+
+        self.head.forward_streaming(&xs, cache)
+    }
+
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         // xs: (B, T', vae_dim) → (B, vae_dim, T')
         let mut xs = xs.transpose(1, 2)?;
@@ -673,6 +886,22 @@ impl AcousticTokenizer {
     pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
         // xs: (B, T', vae_dim) → (B, 1, T_audio)
         self.decoder.forward(xs)
+    }
+
+    /// Create a new streaming cache sized for this decoder.
+    pub fn new_streaming_cache(&self) -> StreamingConvCache {
+        StreamingConvCache::new(self.decoder.num_cache_layers())
+    }
+
+    /// Streaming decode: decode one frame using cached conv state.
+    pub fn decode_streaming(
+        &self,
+        xs: &Tensor,
+        cache: &mut StreamingConvCache,
+        is_first: bool,
+    ) -> Result<Tensor> {
+        cache.reset_cursor();
+        self.decoder.forward_streaming(xs, cache, is_first)
     }
 }
 
@@ -1101,28 +1330,54 @@ impl DiffusionHead {
 // DPM-Solver Multistep Scheduler
 // ---------------------------------------------------------------------------
 
+/// DPM-Solver++ Multistep Scheduler (order 2, midpoint, `lower_order_final`).
+///
+/// Matches the `DPMSolverMultistepScheduler` from HuggingFace diffusers with:
+///   `algorithm_type = "dpmsolver++"`, `solver_type = "midpoint"`,
+///   `solver_order = 2`, `lower_order_final = True`,
+///   `timestep_spacing = "linspace"`, `final_sigmas_type = "zero"`,
+///   `prediction_type = "v_prediction"`, cosine beta schedule.
 #[derive(Debug, Clone)]
 pub struct DpmSolverScheduler {
     alphas_cumprod: Vec<f64>,
+    /// DPM-solver sigmas interpolated at the timestep positions, plus a final
+    /// entry of 0.0 (`final_sigmas_type = "zero"`).  Length = N + 1.
+    sigmas: Vec<f64>,
     timesteps: Vec<usize>,
+    /// History of x0 predictions (length = solver_order = 2).
+    model_outputs: Vec<Option<Tensor>>,
+    step_index: usize,
+    lower_order_nums: usize,
     num_inference_steps: usize,
     num_train_timesteps: usize,
-    #[allow(dead_code)]
     prediction_type: String,
 }
 
 impl DpmSolverScheduler {
     pub fn new(num_train_timesteps: usize, prediction_type: &str) -> Self {
-        // Cosine beta schedule
+        // Cosine beta schedule – matches Python's betas_for_alpha_bar("cosine")
+        // followed by alphas = 1 - betas, alphas_cumprod = cumprod(alphas).
+        let alpha_bar_fn = |t: f64| -> f64 {
+            ((t + 0.008) / 1.008 * std::f64::consts::FRAC_PI_2).cos().powi(2)
+        };
+        let max_beta: f64 = 0.999;
+        let n = num_train_timesteps as f64;
         let mut alphas_cumprod = Vec::with_capacity(num_train_timesteps);
+        let mut cumprod: f64 = 1.0;
         for i in 0..num_train_timesteps {
-            let t = i as f64 / num_train_timesteps as f64;
-            let alpha_bar = ((t + 0.008) / 1.008 * std::f64::consts::FRAC_PI_2).cos().powi(2);
-            alphas_cumprod.push(alpha_bar);
+            let t1 = i as f64 / n;
+            let t2 = (i + 1) as f64 / n;
+            let beta = (1.0 - alpha_bar_fn(t2) / alpha_bar_fn(t1)).min(max_beta);
+            cumprod *= 1.0 - beta;
+            alphas_cumprod.push(cumprod);
         }
         Self {
             alphas_cumprod,
+            sigmas: Vec::new(),
             timesteps: Vec::new(),
+            model_outputs: vec![None, None],
+            step_index: 0,
+            lower_order_nums: 0,
             num_inference_steps: 0,
             num_train_timesteps,
             prediction_type: prediction_type.to_string(),
@@ -1131,11 +1386,132 @@ impl DpmSolverScheduler {
 
     pub fn set_timesteps(&mut self, num_inference_steps: usize) {
         self.num_inference_steps = num_inference_steps;
-        let step_ratio = self.num_train_timesteps / num_inference_steps;
-        self.timesteps = (0..num_inference_steps)
-            .rev()
-            .map(|i| i * step_ratio)
+        // Match Python's DPMSolverMultistepScheduler with timestep_spacing="linspace":
+        //   np.linspace(0, last_timestep - 1, num_inference_steps + 1)
+        //       .round()[::-1][:-1]
+        let last = (self.num_train_timesteps - 1) as f64;
+        let n = num_inference_steps as f64;
+        let mut ts: Vec<usize> = (0..=num_inference_steps)
+            .map(|i| (i as f64 * last / n).round() as usize)
             .collect();
+        ts.reverse();
+        ts.pop(); // drop the trailing 0 (was the first linspace point)
+        self.timesteps = ts;
+
+        // Compute sigmas = sqrt((1 - alpha_bar) / alpha_bar) for all train timesteps
+        let all_sigmas: Vec<f64> = self
+            .alphas_cumprod
+            .iter()
+            .map(|&a| ((1.0 - a) / a).sqrt())
+            .collect();
+        // Interpolate at the timestep positions (they are integers, so just index)
+        let mut interp: Vec<f64> = self.timesteps.iter().map(|&t| all_sigmas[t]).collect();
+        // final_sigmas_type = "zero"
+        interp.push(0.0);
+        self.sigmas = interp;
+
+        // Reset state
+        self.model_outputs = vec![None, None];
+        self.step_index = 0;
+        self.lower_order_nums = 0;
+    }
+
+    /// Convert a DPM-solver sigma to the diffusion (alpha_t, sigma_t) pair.
+    fn sigma_to_alpha_sigma(&self, sigma: f64) -> (f64, f64) {
+        let alpha_t = 1.0 / (sigma * sigma + 1.0).sqrt();
+        let sigma_t = sigma * alpha_t;
+        (alpha_t, sigma_t)
+    }
+
+    /// v_prediction → x0 conversion for DPM-Solver++.
+    fn convert_model_output(&self, model_output: &Tensor, sample: &Tensor) -> Result<Tensor> {
+        let sigma = self.sigmas[self.step_index];
+        let (alpha_t, sigma_t) = self.sigma_to_alpha_sigma(sigma);
+        // x0_pred = alpha_t * sample - sigma_t * model_output
+        ((sample * alpha_t)? - (model_output * sigma_t)?)
+    }
+
+    /// First-order DPM-Solver++ update (equivalent to DDIM).
+    fn first_order_update(&self, x0_pred: &Tensor, sample: &Tensor) -> Result<Tensor> {
+        let sigma_s = self.sigmas[self.step_index];
+        let sigma_t = self.sigmas[self.step_index + 1];
+        let (alpha_t, sig_t) = self.sigma_to_alpha_sigma(sigma_t);
+        let (_alpha_s, sig_s) = self.sigma_to_alpha_sigma(sigma_s);
+        let lambda_t = (alpha_t).ln() - sig_t.ln();
+        let lambda_s = self.sigma_to_alpha_sigma(sigma_s).0.ln() - sig_s.ln();
+        let h = lambda_t - lambda_s;
+        // x_t = (sigma_t / sigma_s) * sample - alpha_t * (exp(-h) - 1) * x0_pred
+        let ratio = sig_t / sig_s;
+        let coeff = alpha_t * ((-h).exp() - 1.0);
+        ((sample * ratio)? - (x0_pred * coeff)?)
+    }
+
+    /// Second-order DPM-Solver++ midpoint update.
+    fn second_order_update(
+        &self,
+        x0_cur: &Tensor,
+        x0_prev: &Tensor,
+        sample: &Tensor,
+    ) -> Result<Tensor> {
+        let sigma_s0 = self.sigmas[self.step_index];
+        let sigma_s1 = self.sigmas[self.step_index - 1];
+        let sigma_t = self.sigmas[self.step_index + 1];
+        let (alpha_t, sig_t) = self.sigma_to_alpha_sigma(sigma_t);
+        let (alpha_s0, sig_s0) = self.sigma_to_alpha_sigma(sigma_s0);
+        let (_alpha_s1, sig_s1) = self.sigma_to_alpha_sigma(sigma_s1);
+        let lambda_t = alpha_t.ln() - sig_t.ln();
+        let lambda_s0 = alpha_s0.ln() - sig_s0.ln();
+        let lambda_s1 = _alpha_s1.ln() - sig_s1.ln();
+        let h = lambda_t - lambda_s0;
+        let h_0 = lambda_s0 - lambda_s1;
+        let r0 = h_0 / h;
+        // D0 = m0, D1 = (1/r0) * (m0 - m1)
+        let d1 = ((x0_cur - x0_prev)? * (1.0 / r0))?;
+        let ratio = sig_t / sig_s0;
+        let coeff = alpha_t * ((-h).exp() - 1.0);
+        // x_t = ratio * sample - coeff * D0 - 0.5 * coeff * D1   (midpoint)
+        (((sample * ratio)? - (x0_cur * coeff)?)? - (&d1 * (0.5 * coeff))?)
+    }
+
+    /// Perform one denoising step. Matches `scheduler.step(eps, t, speech)`.
+    /// `model_output` is the raw (CFG-combined) model output (v-prediction).
+    /// Returns the denoised sample.
+    pub fn step(&mut self, model_output: &Tensor, sample: &Tensor) -> Result<Tensor> {
+        let n = self.timesteps.len();
+        // lower_order_final: use first-order on the last step when
+        // final_sigmas_type == "zero" (always true for this scheduler).
+        let lower_order_final = self.step_index == n - 1;
+
+        // Convert raw model output to x0_pred
+        let x0_pred = self.convert_model_output(model_output, sample)?;
+
+        // Shift history
+        self.model_outputs[0] = self.model_outputs[1].take();
+        self.model_outputs[1] = Some(x0_pred.clone());
+
+        // Upcast sample to f64 for numerical stability (matches Python)
+        let sample_f64 = sample.to_dtype(DType::F64)?;
+        let x0_f64 = x0_pred.to_dtype(DType::F64)?;
+
+        let prev_sample = if self.lower_order_nums < 1 || lower_order_final {
+            // First-order (DDIM)
+            self.first_order_update(&x0_f64, &sample_f64)?
+        } else {
+            // Second-order midpoint
+            let x0_prev = self.model_outputs[0]
+                .as_ref()
+                .expect("second-order needs prior x0_pred")
+                .to_dtype(DType::F64)?;
+            self.second_order_update(&x0_f64, &x0_prev, &sample_f64)?
+        };
+
+        if self.lower_order_nums < 2 {
+            self.lower_order_nums += 1;
+        }
+        self.step_index += 1;
+
+        // Cast back to original dtype
+        prev_sample.to_dtype(model_output.dtype())
     }
 
     pub fn alpha_t(&self, t: usize) -> f64 {
@@ -1516,7 +1892,10 @@ impl VibeVoiceStreamingModel {
                 format!("{cur_prefix}.{mapped}")
             }
         });
-        let language_model = qwen2::Model::new(&lm_cfg, lm_vb)?;
+        let mut language_model = qwen2::Model::new(&lm_cfg, lm_vb)?;
+        // The Python reference replaces the lower LM's final norm with
+        // nn.Identity(); replicate that by skipping the RmsNorm.
+        language_model.set_skip_final_norm(true);
 
         // Build upper TTS LM config
         let mut tts_lm_cfg = cfg.decoder_config.clone();
@@ -1660,6 +2039,9 @@ impl VibeVoiceStreaming {
     }
 
     /// CFG-guided diffusion sampling of one speech latent frame.
+    ///
+    /// Matches the Python `sample_speech_tokens` which calls
+    /// `scheduler.step(eps, t, speech)` at each timestep.
     pub fn sample_speech_tokens(
         &self,
         positive_condition: &Tensor,
@@ -1681,25 +2063,14 @@ impl VibeVoiceStreaming {
             let t_tensor = Tensor::full(t as f32, 2, device)?.to_dtype(dtype)?;
             let eps = self.model.prediction_head.forward(&combined, &t_tensor, &condition)?;
 
+            // CFG: eps = uncond + cfg_scale * (cond - uncond)
             let cond_eps = eps.i(0..1)?;
             let uncond_eps = eps.i(1..2)?;
             let half_eps = (&uncond_eps + ((&cond_eps - &uncond_eps)? * cfg_scale)?)?;
             let full_eps = Tensor::cat(&[&half_eps, &half_eps], 0)?;
 
-            let alpha_t = scheduler.alpha_t(t);
-            let sigma_t = scheduler.sigma_t(t);
-            let x0_pred = ((&speech * alpha_t)? - (&full_eps * sigma_t)?)?;
-
-            let t_idx = timesteps.iter().position(|&x| x == t).unwrap();
-            if t_idx + 1 < timesteps.len() {
-                let t_next = timesteps[t_idx + 1];
-                let alpha_next = scheduler.alpha_t(t_next);
-                let sigma_next = scheduler.sigma_t(t_next);
-                let noise_pred = ((&speech - (&x0_pred * alpha_t)?)? / sigma_t)?;
-                speech = ((&x0_pred * alpha_next)? + (&noise_pred * sigma_next)?)?;
-            } else {
-                speech = x0_pred;
-            }
+            // Let the scheduler do v_prediction→x0 conversion + DPM-Solver++ step
+            speech = scheduler.step(&full_eps, &speech)?;
         }
         speech.i(0..1)
     }
@@ -1714,6 +2085,30 @@ impl VibeVoiceStreaming {
             latent.clone()
         };
         self.model.acoustic_tokenizer.decode(&latent)
+    }
+
+    /// Create a new streaming cache for the acoustic decoder.
+    pub fn new_acoustic_streaming_cache(&self) -> StreamingConvCache {
+        self.model.acoustic_tokenizer.new_streaming_cache()
+    }
+
+    /// Streaming decode: decode one speech latent frame using cached conv state.
+    pub fn decode_speech_streaming(
+        &self,
+        latent: &Tensor,
+        cache: &mut StreamingConvCache,
+        is_first: bool,
+    ) -> Result<Tensor> {
+        let latent = if let (Some(bias), Some(scale)) =
+            (self.model.speech_bias_factor, self.model.speech_scaling_factor)
+        {
+            ((latent / scale)? - bias)?
+        } else {
+            latent.clone()
+        };
+        self.model
+            .acoustic_tokenizer
+            .decode_streaming(&latent, cache, is_first)
     }
 
     pub fn diffusion_config(&self) -> &DiffusionHeadConfig {
