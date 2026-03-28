@@ -110,6 +110,7 @@ fn dequantize_f32(
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0_f32", false, 32, nb),
         GgmlDType::Q4_1 => ("dequantize_block_q4_1_f32", false, 32, nb),
+        GgmlDType::MXFP4 => ("dequantize_block_mxfp4_f32", false, 32, nb),
         GgmlDType::Q5_0 => (
             "dequantize_block_q5_0_f32",
             false,
@@ -170,6 +171,7 @@ fn dequantize_f16(
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0_f16", false, 32, nb),
         GgmlDType::Q4_1 => ("dequantize_block_q4_1_f16", false, 32, nb),
+        GgmlDType::MXFP4 => ("dequantize_block_mxfp4_f16", false, 32, nb),
         GgmlDType::Q5_0 => (
             "dequantize_block_q5_0_f16",
             false,
@@ -238,6 +240,7 @@ fn dequantize_mul_mat_vec(
     let kernel_name = match dtype {
         GgmlDType::Q4_0 => "dequantize_mul_mat_vec_q4_0_cuda",
         GgmlDType::Q4_1 => "dequantize_mul_mat_vec_q4_1_cuda",
+        GgmlDType::MXFP4 => "dequantize_mul_mat_vec_mxfp4_cuda",
         GgmlDType::Q5_0 => "dequantize_mul_mat_vec_q5_0_cuda",
         GgmlDType::Q5_1 => "dequantize_mul_mat_vec_q5_1_cuda",
         GgmlDType::Q8_0 => "dequantize_mul_mat_vec_q8_0_cuda",
@@ -295,6 +298,7 @@ fn mul_mat_vec_via_q8_1(
     let kernel_name = match dtype {
         GgmlDType::Q4_0 => "mul_mat_vec_q4_0_q8_1_cuda",
         GgmlDType::Q4_1 => "mul_mat_vec_q4_1_q8_1_cuda",
+        GgmlDType::MXFP4 => "mul_mat_vec_mxfp4_q8_1_cuda",
         GgmlDType::Q5_0 => "mul_mat_vec_q5_0_q8_1_cuda",
         GgmlDType::Q5_1 => "mul_mat_vec_q5_1_q8_1_cuda",
         GgmlDType::Q8_0 => "mul_mat_vec_q8_0_q8_1_cuda",
@@ -368,6 +372,7 @@ fn mul_mat_via_q8_1(
     let (kernel_name, mmq_x, mmq_y) = match dtype {
         GgmlDType::Q4_0 => ("mul_mat_q4_0", 64, 128),
         GgmlDType::Q4_1 => ("mul_mat_q4_1", 64, 128),
+        GgmlDType::MXFP4 => ("mul_mat_mxfp4", 128, 64),
         GgmlDType::Q5_0 => ("mul_mat_q5_0", 128, 64),
         GgmlDType::Q5_1 => ("mul_mat_q5_1", 128, 64),
         GgmlDType::Q8_0 => ("mul_mat_q8_0", 128, 64),
@@ -418,8 +423,15 @@ fn indexed_moe_forward_fused_q8_1_input(
     dev: &CudaDevice,
 ) -> Result<(CudaStorage, crate::Shape)> {
     let (_, n, k) = w_shape.dims3()?;
-    let batch = in_shape.dims()[0];
-    let input_dim1 = in_shape.dims()[1];
+    let in_dims = in_shape.dims();
+    let (batch, input_dim1, in_k) = match in_dims {
+        [batch, in_k] => (*batch, 1usize, *in_k),
+        [batch, input_dim1, in_k] => (*batch, *input_dim1, *in_k),
+        _ => crate::bail!("indexed_moe_forward expects input rank 2 or 3, got shape {in_dims:?}"),
+    };
+    if in_k != k {
+        crate::bail!("indexed_moe_forward expects input k={k}, got {in_k}");
+    }
 
     let topk = idx_shape.dims()[1];
     assert!(batch == idx_shape.dims()[0], "batch dim not match!");
@@ -451,6 +463,7 @@ fn indexed_moe_forward_fused_q8_1_input(
         GgmlDType::Q5K => "indexed_moe_forward_q5k_q8_1",
         GgmlDType::Q6K => "indexed_moe_forward_q6k_q8_1",
         GgmlDType::Q8_0 => "indexed_moe_forward_q8_0_q8_1",
+        GgmlDType::MXFP4 => "indexed_moe_forward_mxfp4_q8_1",
         _ => crate::bail!("unsupported dtype for indexed_moe_forward {w_dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
@@ -478,13 +491,9 @@ fn indexed_moe_forward_fused_q8_1_input(
     );
     unsafe { builder.launch(cfg) }.w()?;
 
-    let mut out_shape = in_shape.dims().to_vec();
-    out_shape.pop();
-    out_shape.push(n);
-    out_shape[1] = topk;
     Ok((
         CudaStorage::wrap_cuda_slice(out, dev.clone()),
-        out_shape.into(),
+        (batch, topk, n).into(),
     ))
 }
 
@@ -500,6 +509,7 @@ impl QCudaStorage {
         if matches!(
             self.dtype(),
             GgmlDType::Q8_0
+                | GgmlDType::MXFP4
                 | GgmlDType::Q2K
                 | GgmlDType::Q3K
                 | GgmlDType::Q4K
@@ -560,6 +570,7 @@ impl QCudaStorage {
             self.dtype,
             GgmlDType::Q4_0
                 | GgmlDType::Q4_1
+                | GgmlDType::MXFP4
                 | GgmlDType::Q5_0
                 | GgmlDType::Q5_1
                 | GgmlDType::Q8_0
@@ -590,6 +601,7 @@ impl QCudaStorage {
             GgmlDType::Q5_1 => deq::<crate::quantized::BlockQ5_1>(&buffer, block_len, &mut out),
             GgmlDType::Q8_0 => deq::<crate::quantized::BlockQ8_0>(&buffer, block_len, &mut out),
             GgmlDType::Q8_1 => deq::<crate::quantized::BlockQ8_1>(&buffer, block_len, &mut out),
+            GgmlDType::MXFP4 => deq::<crate::quantized::BlockMXFP4>(&buffer, block_len, &mut out),
             GgmlDType::Q2K => deq::<crate::quantized::BlockQ2K>(&buffer, block_len, &mut out),
             GgmlDType::Q3K => deq::<crate::quantized::BlockQ3K>(&buffer, block_len, &mut out),
             GgmlDType::Q4K => deq::<crate::quantized::BlockQ4K>(&buffer, block_len, &mut out),
@@ -619,9 +631,9 @@ impl QCudaStorage {
         let data = qcpu_storage.data()?;
         let padded_len =
             data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
-        let mut inner = unsafe { self.device.alloc::<u8>(padded_len)? };
-        self.device
-            .memcpy_htod(&*data, &mut inner.slice_mut(..data.len()))?;
+        let mut host = vec![0u8; padded_len];
+        host[..data.len()].copy_from_slice(&data);
+        let inner = self.device.clone_htod(&host)?;
         self.data = PaddedCudaSlice {
             inner,
             len: data.len(),
@@ -647,9 +659,9 @@ impl QCudaStorage {
         let data = qcpu_storage.data()?;
         let padded_len =
             data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
-        let mut inner = unsafe { self.device.alloc::<u8>(padded_len)? };
-        self.device
-            .memcpy_htod(&*data, &mut inner.slice_mut(..data.len()))?;
+        let mut host = vec![0u8; padded_len];
+        host[..data.len()].copy_from_slice(&data);
+        let inner = self.device.clone_htod(&host)?;
         self.data = PaddedCudaSlice {
             inner,
             len: data.len(),
@@ -676,9 +688,9 @@ impl QCudaStorage {
         let data = qcpu_storage.data()?;
         let padded_len =
             data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
-        let mut inner = unsafe { self.device.alloc::<u8>(padded_len)? };
-        self.device
-            .memcpy_htod(&*data, &mut inner.slice_mut(..data.len()))?;
+        let mut host = vec![0u8; padded_len];
+        host[..data.len()].copy_from_slice(&data);
+        let inner = self.device.clone_htod(&host)?;
         self.data = PaddedCudaSlice {
             inner,
             len: data.len(),
@@ -700,9 +712,9 @@ impl QCudaStorage {
         let data = qcpu_storage.data()?;
         let padded_len =
             data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
-        let mut inner = unsafe { self.device.alloc::<u8>(padded_len)? };
-        self.device
-            .memcpy_htod(&*data, &mut inner.slice_mut(..data.len()))?;
+        let mut host = vec![0u8; padded_len];
+        host[..data.len()].copy_from_slice(&data);
+        let inner = self.device.clone_htod(&host)?;
         self.data = PaddedCudaSlice {
             inner,
             len: data.len(),
@@ -848,8 +860,9 @@ pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
     };
     let dtype = T::DTYPE;
     let padded_len = data.len() + MATRIX_ROW_PADDING * dtype.type_size() / dtype.block_size();
-    let mut inner = unsafe { device.alloc::<u8>(padded_len)? };
-    device.memcpy_htod(data, &mut inner.slice_mut(..data.len()))?;
+    let mut host = vec![0u8; padded_len];
+    host[..data.len()].copy_from_slice(data);
+    let inner = device.clone_htod(&host)?;
     Ok(QStorage::Cuda(QCudaStorage {
         data: PaddedCudaSlice {
             inner,

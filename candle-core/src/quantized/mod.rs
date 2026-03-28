@@ -35,7 +35,7 @@ use half::{bf16, f16};
 
 pub use k_quants::GgmlType;
 
-fn as_t_slice<T>(data: Cow<'_, [u8]>) -> &[T] {
+fn as_t_slice<T>(data: &[u8]) -> &[T] {
     let size = std::mem::size_of::<T>();
     assert_eq!(
         data.len() % size,
@@ -85,40 +85,48 @@ impl QStorage {
     pub fn from_data(data: Cow<'_, [u8]>, device: &Device, dtype: GgmlDType) -> Result<Self> {
         match device {
             Device::Cpu => Ok(Self::Cpu(dtype.from_data(data))),
-            Device::Metal(d) => match dtype {
-                GgmlDType::F32 => metal::load_quantized(d, as_t_slice::<f32>(data)),
-                GgmlDType::F16 => metal::load_quantized(d, as_t_slice::<f16>(data)),
-                GgmlDType::Q4_0 => metal::load_quantized(d, as_t_slice::<BlockQ4_0>(data)),
-                GgmlDType::Q4_1 => metal::load_quantized(d, as_t_slice::<BlockQ4_1>(data)),
-                GgmlDType::Q5_0 => metal::load_quantized(d, as_t_slice::<BlockQ5_0>(data)),
-                GgmlDType::Q5_1 => metal::load_quantized(d, as_t_slice::<BlockQ5_1>(data)),
-                GgmlDType::Q8_0 => metal::load_quantized(d, as_t_slice::<BlockQ8_0>(data)),
-                GgmlDType::Q8_1 => metal::load_quantized(d, as_t_slice::<BlockQ8_1>(data)),
-                GgmlDType::Q2K => metal::load_quantized(d, as_t_slice::<BlockQ2K>(data)),
-                GgmlDType::Q3K => metal::load_quantized(d, as_t_slice::<BlockQ3K>(data)),
-                GgmlDType::Q4K => metal::load_quantized(d, as_t_slice::<BlockQ4K>(data)),
-                GgmlDType::Q5K => metal::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
-                GgmlDType::Q6K => metal::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
-                GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
-                GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
-            },
-            Device::Cuda(d) => match dtype {
-                GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
-                GgmlDType::F16 => cuda::load_quantized(d, as_t_slice::<f16>(data)),
-                GgmlDType::Q4_0 => cuda::load_quantized(d, as_t_slice::<BlockQ4_0>(data)),
-                GgmlDType::Q4_1 => cuda::load_quantized(d, as_t_slice::<BlockQ4_1>(data)),
-                GgmlDType::Q5_0 => cuda::load_quantized(d, as_t_slice::<BlockQ5_0>(data)),
-                GgmlDType::Q5_1 => cuda::load_quantized(d, as_t_slice::<BlockQ5_1>(data)),
-                GgmlDType::Q8_0 => cuda::load_quantized(d, as_t_slice::<BlockQ8_0>(data)),
-                GgmlDType::Q8_1 => cuda::load_quantized(d, as_t_slice::<BlockQ8_1>(data)),
-                GgmlDType::Q2K => cuda::load_quantized(d, as_t_slice::<BlockQ2K>(data)),
-                GgmlDType::Q3K => cuda::load_quantized(d, as_t_slice::<BlockQ3K>(data)),
-                GgmlDType::Q4K => cuda::load_quantized(d, as_t_slice::<BlockQ4K>(data)),
-                GgmlDType::Q5K => cuda::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
-                GgmlDType::Q6K => cuda::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
-                GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
-                GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
-            },
+            Device::Metal(d) => {
+                let data = data.as_ref();
+                match dtype {
+                    GgmlDType::F32 => metal::load_quantized(d, as_t_slice::<f32>(data)),
+                    GgmlDType::F16 => metal::load_quantized(d, as_t_slice::<f16>(data)),
+                    GgmlDType::Q4_0 => metal::load_quantized(d, as_t_slice::<BlockQ4_0>(data)),
+                    GgmlDType::Q4_1 => metal::load_quantized(d, as_t_slice::<BlockQ4_1>(data)),
+                    GgmlDType::MXFP4 => metal::load_quantized(d, as_t_slice::<BlockMXFP4>(data)),
+                    GgmlDType::Q5_0 => metal::load_quantized(d, as_t_slice::<BlockQ5_0>(data)),
+                    GgmlDType::Q5_1 => metal::load_quantized(d, as_t_slice::<BlockQ5_1>(data)),
+                    GgmlDType::Q8_0 => metal::load_quantized(d, as_t_slice::<BlockQ8_0>(data)),
+                    GgmlDType::Q8_1 => metal::load_quantized(d, as_t_slice::<BlockQ8_1>(data)),
+                    GgmlDType::Q2K => metal::load_quantized(d, as_t_slice::<BlockQ2K>(data)),
+                    GgmlDType::Q3K => metal::load_quantized(d, as_t_slice::<BlockQ3K>(data)),
+                    GgmlDType::Q4K => metal::load_quantized(d, as_t_slice::<BlockQ4K>(data)),
+                    GgmlDType::Q5K => metal::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
+                    GgmlDType::Q6K => metal::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
+                    GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
+                    GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
+                }
+            }
+            Device::Cuda(d) => {
+                let data = data.as_ref();
+                match dtype {
+                    GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
+                    GgmlDType::F16 => cuda::load_quantized(d, as_t_slice::<f16>(data)),
+                    GgmlDType::Q4_0 => cuda::load_quantized(d, as_t_slice::<BlockQ4_0>(data)),
+                    GgmlDType::Q4_1 => cuda::load_quantized(d, as_t_slice::<BlockQ4_1>(data)),
+                    GgmlDType::MXFP4 => cuda::load_quantized(d, as_t_slice::<BlockMXFP4>(data)),
+                    GgmlDType::Q5_0 => cuda::load_quantized(d, as_t_slice::<BlockQ5_0>(data)),
+                    GgmlDType::Q5_1 => cuda::load_quantized(d, as_t_slice::<BlockQ5_1>(data)),
+                    GgmlDType::Q8_0 => cuda::load_quantized(d, as_t_slice::<BlockQ8_0>(data)),
+                    GgmlDType::Q8_1 => cuda::load_quantized(d, as_t_slice::<BlockQ8_1>(data)),
+                    GgmlDType::Q2K => cuda::load_quantized(d, as_t_slice::<BlockQ2K>(data)),
+                    GgmlDType::Q3K => cuda::load_quantized(d, as_t_slice::<BlockQ3K>(data)),
+                    GgmlDType::Q4K => cuda::load_quantized(d, as_t_slice::<BlockQ4K>(data)),
+                    GgmlDType::Q5K => cuda::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
+                    GgmlDType::Q6K => cuda::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
+                    GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
+                    GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
+                }
+            }
         }
     }
 
@@ -258,6 +266,7 @@ pub enum GgmlDType {
     BF16,
     Q4_0,
     Q4_1,
+    MXFP4,
     Q5_0,
     Q5_1,
     Q8_0,
@@ -277,6 +286,7 @@ impl GgmlDType {
             1 => Self::F16,
             2 => Self::Q4_0,
             3 => Self::Q4_1,
+            39 => Self::MXFP4,
             6 => Self::Q5_0,
             7 => Self::Q5_1,
             8 => Self::Q8_0,
@@ -300,6 +310,7 @@ impl GgmlDType {
             Self::F16 => 1,
             Self::Q4_0 => 2,
             Self::Q4_1 => 3,
+            Self::MXFP4 => 39,
             Self::Q5_0 => 6,
             Self::Q5_1 => 7,
             Self::Q8_0 => 8,
@@ -322,6 +333,10 @@ impl GgmlDType {
             Self::F16 => Box::new(vec![f16::zeros(); elem_count]),
             Self::Q4_0 => Box::new(vec![BlockQ4_0::zeros(); elem_count / BlockQ4_0::BLCK_SIZE]),
             Self::Q4_1 => Box::new(vec![BlockQ4_1::zeros(); elem_count / BlockQ4_1::BLCK_SIZE]),
+            Self::MXFP4 => Box::new(vec![
+                BlockMXFP4::zeros();
+                elem_count / BlockMXFP4::BLCK_SIZE
+            ]),
             Self::Q5_0 => Box::new(vec![BlockQ5_0::zeros(); elem_count / BlockQ5_0::BLCK_SIZE]),
             Self::Q5_1 => Box::new(vec![BlockQ5_1::zeros(); elem_count / BlockQ5_1::BLCK_SIZE]),
             Self::Q8_0 => Box::new(vec![BlockQ8_0::zeros(); elem_count / BlockQ8_0::BLCK_SIZE]),
@@ -337,11 +352,13 @@ impl GgmlDType {
     }
 
     pub fn from_data(&self, data: Cow<'_, [u8]>) -> Box<dyn QuantizedType> {
+        let data = data.as_ref();
         match self {
             Self::F32 => Box::new(as_t_slice::<f32>(data).to_vec()),
             Self::F16 => Box::new(as_t_slice::<f16>(data).to_vec()),
             Self::Q4_0 => Box::new(as_t_slice::<BlockQ4_0>(data).to_vec()),
             Self::Q4_1 => Box::new(as_t_slice::<BlockQ4_1>(data).to_vec()),
+            Self::MXFP4 => Box::new(as_t_slice::<BlockMXFP4>(data).to_vec()),
             Self::Q5_0 => Box::new(as_t_slice::<BlockQ5_0>(data).to_vec()),
             Self::Q5_1 => Box::new(as_t_slice::<BlockQ5_1>(data).to_vec()),
             Self::Q8_0 => Box::new(as_t_slice::<BlockQ8_0>(data).to_vec()),
@@ -364,6 +381,7 @@ impl GgmlDType {
             Self::F16 | Self::BF16 => 2,
             Self::Q4_0 => std::mem::size_of::<BlockQ4_0>(),
             Self::Q4_1 => std::mem::size_of::<BlockQ4_1>(),
+            Self::MXFP4 => std::mem::size_of::<BlockMXFP4>(),
             Self::Q5_0 => std::mem::size_of::<BlockQ5_0>(),
             Self::Q5_1 => std::mem::size_of::<BlockQ5_1>(),
             // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L932
@@ -385,6 +403,7 @@ impl GgmlDType {
             Self::F16 | Self::BF16 => 1,
             Self::Q4_0 => k_quants::QK4_0,
             Self::Q4_1 => k_quants::QK4_1,
+            Self::MXFP4 => k_quants::QK_MXFP4,
             Self::Q5_0 => k_quants::QK5_0,
             Self::Q5_1 => k_quants::QK5_1,
             Self::Q8_0 => k_quants::QK8_0,
@@ -399,6 +418,13 @@ pub trait QuantizedType: Send + Sync {
     fn dtype(&self) -> GgmlDType;
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
     fn matmul_t_f16(&self, mkn: (usize, usize, usize), lhs: &[f16], dst: &mut [f16]) -> Result<()>;
+    fn matmul_t_expert(
+        &self,
+        mkn: (usize, usize, usize),
+        lhs: &[f32],
+        expert_idx: usize,
+        dst: &mut [f32],
+    ) -> Result<()>;
     fn dequantize(&self, elem_count: usize) -> Result<CpuStorage>;
     fn storage_size_in_bytes(&self) -> usize;
     fn as_ptr(&self) -> *const u8;
@@ -416,6 +442,31 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
     }
     fn matmul_t_f16(&self, mkn: (usize, usize, usize), lhs: &[f16], dst: &mut [f16]) -> Result<()> {
         k_quants::matmul_f16(mkn, lhs, self.as_slice(), dst)
+    }
+    fn matmul_t_expert(
+        &self,
+        (m, k, n): (usize, usize, usize),
+        lhs: &[f32],
+        expert_idx: usize,
+        dst: &mut [f32],
+    ) -> Result<()> {
+        let k_in_blocks = k.div_ceil(T::BLCK_SIZE);
+        let expert_blocks = n
+            .checked_mul(k_in_blocks)
+            .ok_or_else(|| crate::Error::msg("overflow computing expert block span"))?;
+        let start = expert_idx
+            .checked_mul(expert_blocks)
+            .ok_or_else(|| crate::Error::msg("overflow computing expert block offset"))?;
+        let end = start
+            .checked_add(expert_blocks)
+            .ok_or_else(|| crate::Error::msg("overflow computing expert block end"))?;
+        if end > self.len() {
+            crate::bail!(
+                "expert index {expert_idx} out of bounds for storage len {} with n={n}, k={k}",
+                self.len()
+            )
+        }
+        k_quants::matmul((m, k, n), lhs, &self[start..end], dst)
     }
 
     fn size(&self) -> usize {
@@ -655,6 +706,87 @@ impl QTensor {
 
     pub fn indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
         match &self.storage {
+            QStorage::Cpu(s) => match (&*x.storage(), &*ids.storage()) {
+                (Storage::Cpu(x_storage), Storage::Cpu(ids_storage)) => {
+                    let x_l = x.layout();
+                    let ids_l = ids.layout();
+                    if !x_l.is_contiguous() {
+                        crate::bail!("input tensor is not contiguous {x_l:?}")
+                    }
+                    if !ids_l.is_contiguous() {
+                        crate::bail!("ids tensor is not contiguous {ids_l:?}")
+                    }
+                    if ids.dtype() != DType::U32 {
+                        crate::bail!("indexed_moe_forward ids must be u32, got {:?}", ids.dtype())
+                    }
+                    if x.dtype() != DType::F32 {
+                        crate::bail!(
+                            "indexed_moe_forward input must be f32 for cpu path, got {:?}",
+                            x.dtype()
+                        )
+                    }
+
+                    let (num_experts, n, k) = self.shape.dims3()?;
+                    let (batch, input_dim1, input_k) = match x_l.shape().dims() {
+                        [b, k] => (*b, 1usize, *k),
+                        [b, m, k] => (*b, *m, *k),
+                        shape => {
+                            crate::bail!("unexpected input shape for indexed_moe_forward {shape:?}")
+                        }
+                    };
+                    if input_k != k {
+                        crate::bail!("mismatch on input dim {input_k} != {k}")
+                    }
+
+                    let (ids_batch, topk) = ids_l.shape().dims2()?;
+                    if ids_batch != batch {
+                        crate::bail!("mismatch on ids/input batch dim {ids_batch} != {batch}")
+                    }
+                    if input_dim1 != 1 && input_dim1 != topk {
+                        crate::bail!(
+                            "input second dim must be 1 or topk, got {input_dim1} and topk {topk}"
+                        )
+                    }
+
+                    let x_start = x_l.start_offset();
+                    let x_len = x_l.shape().elem_count();
+                    let x_slice = &x_storage.as_slice::<f32>()?[x_start..x_start + x_len];
+
+                    let ids_start = ids_l.start_offset();
+                    let ids_len = ids_l.shape().elem_count();
+                    let ids_slice = &ids_storage.as_slice::<u32>()?[ids_start..ids_start + ids_len];
+
+                    let mut out = vec![0f32; batch * topk * n];
+                    for b in 0..batch {
+                        for t in 0..topk {
+                            let expert = ids_slice[b * topk + t] as usize;
+                            if expert >= num_experts {
+                                crate::bail!(
+                                    "expert id {expert} out of bounds for num_experts={num_experts}"
+                                )
+                            }
+                            let in_row = if input_dim1 == 1 {
+                                b
+                            } else {
+                                b * input_dim1 + t
+                            };
+                            let lhs = &x_slice[in_row * k..(in_row + 1) * k];
+                            let dst = &mut out[(b * topk + t) * n..(b * topk + t + 1) * n];
+                            s.matmul_t_expert((1, k, n), lhs, expert, dst)?;
+                        }
+                    }
+                    let out_shape: Shape = vec![batch, topk, n].into();
+                    Ok(crate::tensor::from_storage(
+                        Storage::Cpu(CpuStorage::F32(out)),
+                        out_shape,
+                        crate::op::BackpropOp::none(),
+                        false,
+                    ))
+                }
+                _ => {
+                    panic!("Non-cpu indexed_moe_forward is not implemented!");
+                }
+            },
             QStorage::Cuda(s) => match (&*x.storage(), &*ids.storage()) {
                 (Storage::Cuda(x_storage), Storage::Cuda(ids_storage)) => {
                     let (storage, out_shape) = s.indexed_moe_forward(
@@ -675,9 +807,26 @@ impl QTensor {
                     panic!("Non-cuda indexed_moe_forward is not implemented!");
                 }
             },
-            _ => {
-                panic!("indexed_moe_forward is not implemented in this platform!");
-            }
+            QStorage::Metal(s) => match (&*x.storage(), &*ids.storage()) {
+                (Storage::Metal(x_storage), Storage::Metal(ids_storage)) => {
+                    let (storage, out_shape) = s.indexed_moe_forward(
+                        self.shape(),
+                        x_storage,
+                        x.layout(),
+                        ids_storage,
+                        ids.layout(),
+                    )?;
+                    Ok(crate::tensor::from_storage(
+                        Storage::Metal(storage),
+                        out_shape,
+                        crate::op::BackpropOp::none(),
+                        false,
+                    ))
+                }
+                _ => {
+                    panic!("Non-metal indexed_moe_forward is not implemented!");
+                }
+            },
         }
     }
 

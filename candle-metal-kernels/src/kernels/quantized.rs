@@ -6,6 +6,7 @@ use objc2_metal::{MTLResourceUsage, MTLSize};
 pub enum GgmlDType {
     Q4_0,
     Q4_1,
+    MXFP4,
     Q5_0,
     Q5_1,
     Q8_0,
@@ -61,6 +62,7 @@ pub fn call_quantized_matmul_mv_t(
     let (nth0, nth1, align) = match dtype {
         GgmlDType::Q4_0
         | GgmlDType::Q4_1
+        | GgmlDType::MXFP4
         | GgmlDType::Q5_0
         | GgmlDType::Q5_1
         | GgmlDType::Q8_0
@@ -123,6 +125,7 @@ pub fn call_quantized_matmul_mv_t(
     let name = match dtype {
         GgmlDType::Q4_0 => "kernel_mul_mv_q4_0_f32",
         GgmlDType::Q4_1 => "kernel_mul_mv_q4_1_f32",
+        GgmlDType::MXFP4 => "kernel_mul_mv_mxfp4_f32",
         GgmlDType::Q5_0 => "kernel_mul_mv_q5_0_f32",
         GgmlDType::Q5_1 => "kernel_mul_mv_q5_1_f32",
         GgmlDType::Q8_0 => "kernel_mul_mv_q8_0_f32",
@@ -231,6 +234,7 @@ pub fn call_quantized_matmul_mm_t(
     let name = match dtype {
         GgmlDType::Q4_0 => "kernel_mul_mm_q4_0_f32",
         GgmlDType::Q4_1 => "kernel_mul_mm_q4_1_f32",
+        GgmlDType::MXFP4 => "kernel_mul_mm_mxfp4_f32",
         GgmlDType::Q5_0 => "kernel_mul_mm_q5_0_f32",
         GgmlDType::Q5_1 => "kernel_mul_mm_q5_1_f32",
         GgmlDType::Q8_0 => "kernel_mul_mm_q8_0_f32",
@@ -278,6 +282,280 @@ pub fn call_quantized_matmul_mm_t(
     encoder.use_resource(dst, MTLResourceUsage::Write);
 
     encoder.set_threadgroup_memory_length(0, 8192);
+
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mv_id_t(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    src0_shape: &[usize],
+    src0_stride: &[usize],
+    src0: &Buffer,
+    src1_shape: &[usize],
+    src1_stride: &[usize],
+    src1: &Buffer,
+    src1_offset: usize,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids: &Buffer,
+    ids_offset: usize,
+    dst_shape: &[usize],
+    dst_stride: &[usize],
+    dst_offset: usize,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let ne00 = src0_shape[src0_shape.len() - 1] as i64;
+    let ne01 = src0_shape[src0_shape.len() - 2] as i64;
+    let ne02 = src0_shape[src0_shape.len() - 3] as i64;
+
+    let nb00 = src0_stride[src0_stride.len() - 1] as i64;
+    let nb01 = src0_stride[src0_stride.len() - 2] as i64;
+    let nb02 = src0_stride[src0_stride.len() - 3] as i64;
+
+    let ne10 = src1_shape[src1_shape.len() - 1] as i64;
+    let ne11 = src1_shape[src1_shape.len() - 2] as i64;
+    let ne12 = src1_shape[src1_shape.len() - 3] as i64;
+    let ne13 = src1_shape[src1_shape.len() - 4] as i64;
+
+    let nb10 = src1_stride[src1_stride.len() - 1] as i64;
+    let nb11 = src1_stride[src1_stride.len() - 2] as i64;
+    let nb12 = src1_stride[src1_stride.len() - 3] as i64;
+
+    let nei0 = ids_shape[ids_shape.len() - 1] as i64;
+    let nei1 = ids_shape[ids_shape.len() - 2] as i64;
+    let nbi1 = ids_stride[ids_stride.len() - 2] as i64;
+
+    let ne0 = dst_shape[dst_shape.len() - 1] as i64;
+    let ne1 = dst_shape[dst_shape.len() - 2] as i64;
+    let nb1 = dst_stride[dst_stride.len() - 2] as i64;
+
+    let (nth0, nth1, align) = match dtype {
+        GgmlDType::Q4_0
+        | GgmlDType::Q4_1
+        | GgmlDType::MXFP4
+        | GgmlDType::Q5_0
+        | GgmlDType::Q5_1
+        | GgmlDType::Q8_0 => (8, 8, 8),
+        GgmlDType::Q2K => (2, 32, 4),
+        GgmlDType::Q4K => (4, 8, 4),
+        GgmlDType::Q3K | GgmlDType::Q5K => (2, 32, 4),
+        GgmlDType::Q6K => (2, 32, 2),
+        GgmlDType::F16 => (32, 1, 8),
+        GgmlDType::F32 => (32, 1, 8),
+        GgmlDType::BF16 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "BF16",
+            "qmatmul-id",
+        ))?,
+        GgmlDType::Q8_1 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "Q8_1",
+            "qmatmul-id",
+        ))?,
+        GgmlDType::Q8K => Err(MetalKernelError::UnsupportedDTypeForOp("Q8K", "qmatmul-id"))?,
+    };
+
+    let thread_groups_count = MTLSize {
+        width: divide(ne01 as usize, align),
+        height: 1,
+        depth: (nei0 * nei1) as usize,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: nth0,
+        height: nth1,
+        depth: 1,
+    };
+
+    let name = match dtype {
+        GgmlDType::Q4_0 => "kernel_mul_mv_id_q4_0_f32",
+        GgmlDType::Q4_1 => "kernel_mul_mv_id_q4_1_f32",
+        GgmlDType::MXFP4 => "kernel_mul_mv_id_mxfp4_f32",
+        GgmlDType::Q5_0 => "kernel_mul_mv_id_q5_0_f32",
+        GgmlDType::Q5_1 => "kernel_mul_mv_id_q5_1_f32",
+        GgmlDType::Q8_0 => "kernel_mul_mv_id_q8_0_f32",
+        GgmlDType::Q2K => "kernel_mul_mv_id_q2_K_f32",
+        GgmlDType::Q3K => "kernel_mul_mv_id_q3_K_f32",
+        GgmlDType::Q4K => "kernel_mul_mv_id_q4_K_f32",
+        GgmlDType::Q5K => "kernel_mul_mv_id_q5_K_f32",
+        GgmlDType::Q6K => "kernel_mul_mv_id_q6_K_f32",
+        GgmlDType::F16 => "kernel_mul_mv_id_f16_f32",
+        GgmlDType::F32 => "kernel_mul_mv_id_f32_f32",
+        GgmlDType::BF16 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "BF16",
+            "qmatmul-id",
+        ))?,
+        GgmlDType::Q8_1 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "Q8_1",
+            "qmatmul-id",
+        ))?,
+        GgmlDType::Q8K => Err(MetalKernelError::UnsupportedDTypeForOp("Q8K", "qmatmul-id"))?,
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            src0,
+            (src1, src1_offset),
+            (dst, dst_offset),
+            (ids, ids_offset),
+            nei0,
+            nei1,
+            nbi1,
+            ne00,
+            ne01,
+            ne02,
+            nb00,
+            nb01,
+            nb02,
+            ne10,
+            ne11,
+            ne12,
+            ne13,
+            nb10,
+            nb11,
+            nb12,
+            ne0,
+            ne1,
+            nb1
+        )
+    );
+
+    encoder.use_resource(src0, MTLResourceUsage::Read);
+    encoder.use_resource(src1, MTLResourceUsage::Read);
+    encoder.use_resource(ids, MTLResourceUsage::Read);
+    encoder.use_resource(dst, MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mm_id_t(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    src0_shape: &[usize],
+    src0_stride: &[usize],
+    src0: &Buffer,
+    src1_shape: &[usize],
+    src1_stride: &[usize],
+    src1: &Buffer,
+    src1_offset: usize,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids: &Buffer,
+    ids_offset: usize,
+    dst_shape: &[usize],
+    dst_stride: &[usize],
+    dst_offset: usize,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let ne00 = src0_shape[src0_shape.len() - 1] as i64;
+    let ne02 = src0_shape[src0_shape.len() - 3] as i64;
+
+    let nb01 = src0_stride[src0_stride.len() - 2] as i64;
+    let nb02 = src0_stride[src0_stride.len() - 3] as i64;
+
+    let ne11 = src1_shape[src1_shape.len() - 2] as i64;
+    let ne12 = src1_shape[src1_shape.len() - 3] as i64;
+    let ne13 = src1_shape[src1_shape.len() - 4] as i64;
+
+    let nb10 = src1_stride[src1_stride.len() - 1] as i64;
+    let nb11 = src1_stride[src1_stride.len() - 2] as i64;
+    let nb12 = src1_stride[src1_stride.len() - 3] as i64;
+
+    let nei0 = ids_shape[ids_shape.len() - 1] as i64;
+    let nei1 = ids_shape[ids_shape.len() - 2] as i64;
+    let nbi1 = ids_stride[ids_stride.len() - 2] as i64;
+
+    let ne0 = dst_shape[dst_shape.len() - 1] as i64;
+    let ne1 = dst_shape[dst_shape.len() - 2] as i64;
+    let nb1 = dst_stride[dst_stride.len() - 2] as i64;
+
+    let thread_groups_count = MTLSize {
+        width: divide((nei0 * nei1) as usize, 32),
+        height: divide(ne0 as usize, 64),
+        depth: ne02 as usize,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: 128,
+        height: 1,
+        depth: 1,
+    };
+
+    let name = match dtype {
+        GgmlDType::Q4_0 => "kernel_mul_mm_id_q4_0_f32",
+        GgmlDType::Q4_1 => "kernel_mul_mm_id_q4_1_f32",
+        GgmlDType::MXFP4 => "kernel_mul_mm_id_mxfp4_f32",
+        GgmlDType::Q5_0 => "kernel_mul_mm_id_q5_0_f32",
+        GgmlDType::Q5_1 => "kernel_mul_mm_id_q5_1_f32",
+        GgmlDType::Q8_0 => "kernel_mul_mm_id_q8_0_f32",
+        GgmlDType::Q2K => "kernel_mul_mm_id_q2_K_f32",
+        GgmlDType::Q3K => "kernel_mul_mm_id_q3_K_f32",
+        GgmlDType::Q4K => "kernel_mul_mm_id_q4_K_f32",
+        GgmlDType::Q5K => "kernel_mul_mm_id_q5_K_f32",
+        GgmlDType::Q6K => "kernel_mul_mm_id_q6_K_f32",
+        GgmlDType::F16 => "kernel_mul_mm_id_f16_f32",
+        GgmlDType::F32 => "kernel_mul_mm_id_f32_f32",
+        GgmlDType::BF16 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "BF16",
+            "qmatmul-id",
+        ))?,
+        GgmlDType::Q8_1 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "Q8_1",
+            "qmatmul-id",
+        ))?,
+        GgmlDType::Q8K => Err(MetalKernelError::UnsupportedDTypeForOp("Q8K", "qmatmul-id"))?,
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            src0,
+            (src1, src1_offset),
+            (dst, dst_offset),
+            (ids, ids_offset),
+            nei0,
+            nei1,
+            nbi1,
+            ne00,
+            ne02,
+            nb01,
+            nb02,
+            ne11,
+            ne12,
+            ne13,
+            nb10,
+            nb11,
+            nb12,
+            ne0,
+            ne1,
+            nb1
+        )
+    );
+
+    encoder.use_resource(src0, MTLResourceUsage::Read);
+    encoder.use_resource(src1, MTLResourceUsage::Read);
+    encoder.use_resource(ids, MTLResourceUsage::Read);
+    encoder.use_resource(dst, MTLResourceUsage::Write);
+
+    let rowids_bytes = (nei0 as usize)
+        .saturating_mul(nei1 as usize)
+        .saturating_mul(std::mem::size_of::<u16>() * 2);
+    encoder.set_threadgroup_memory_length(0, 8192 + rowids_bytes);
 
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())

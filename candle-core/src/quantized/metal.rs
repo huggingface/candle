@@ -65,6 +65,10 @@ impl QMetalStorage {
                 let vec: Vec<crate::quantized::BlockQ4_1> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockQ4_1::to_float(&vec, &mut out);
             }
+            GgmlDType::MXFP4 => {
+                let vec: Vec<crate::quantized::BlockMXFP4> = read_to_vec(&buffer, block_len);
+                crate::quantized::BlockMXFP4::to_float(&vec, &mut out);
+            }
             GgmlDType::Q5_0 => {
                 let vec: Vec<crate::quantized::BlockQ5_0> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockQ5_0::to_float(&vec, &mut out);
@@ -335,6 +339,143 @@ impl QMetalStorage {
         Ok((dst_storage, dst_shape))
     }
 
+    pub fn indexed_moe_forward(
+        &self,
+        self_shape: &crate::Shape, //[num_experts, n, k]
+        input: &MetalStorage,      //[batch, topk or 1, k]
+        input_l: &crate::Layout,
+        ids: &MetalStorage, //[batch, topk]
+        ids_l: &crate::Layout,
+    ) -> Result<(MetalStorage, crate::Shape)> {
+        use crate::MetalError;
+
+        if !input_l.is_contiguous() {
+            crate::bail!("input tensor is not contiguous {input_l:?}")
+        }
+        if !ids_l.is_contiguous() {
+            crate::bail!("ids tensor is not contiguous {ids_l:?}")
+        }
+        if ids.dtype() != DType::U32 {
+            crate::bail!("indexed_moe_forward ids must be u32, got {:?}", ids.dtype())
+        }
+
+        let (_num_experts, n, k) = self_shape.dims3()?;
+        let (batch, input_dim1, input_k) = match input_l.shape().dims() {
+            [b, m, k] => (*b, *m, *k),
+            [b, k] => (*b, 1, *k),
+            shape => crate::bail!("unexpected input shape for indexed_moe_forward {shape:?}"),
+        };
+        if input_k != k {
+            crate::bail!("mismatch on input dim {input_k} != {k}")
+        }
+
+        let (ids_batch, topk) = ids_l.shape().dims2()?;
+        if ids_batch != batch {
+            crate::bail!("mismatch on ids/input batch dim {ids_batch} != {batch}")
+        }
+        if input_dim1 != 1 && input_dim1 != topk {
+            crate::bail!("input second dim must be 1 or topk, got {input_dim1} and topk {topk}")
+        }
+
+        let out_shape: crate::Shape = vec![batch, topk, n].into();
+        let device = input.device().clone();
+        let dst = device.new_buffer(
+            out_shape.elem_count(),
+            DType::F32,
+            "quantized-indexed-moe-forward",
+        )?;
+        let encoder = device.command_encoder()?;
+
+        if self_shape.rank() > 4 {
+            crate::bail!("weight rank ({}) must be <= 4", self_shape.rank())
+        }
+        let src0_l = crate::Layout::contiguous(
+            [vec![1; 4 - self_shape.rank()], self_shape.dims().to_vec()].concat(),
+        );
+        let src0_stride = src0_l
+            .stride()
+            .iter()
+            .map(|x| {
+                (*x as f32 * (self.dtype.type_size() as f32 / self.dtype.block_size() as f32))
+                    as usize
+            })
+            .collect::<Vec<_>>();
+
+        let src1_dims = vec![batch, input_dim1, k];
+        let src1_l = crate::Layout::contiguous([vec![1; 4 - src1_dims.len()], src1_dims].concat());
+        let src1_stride = src1_l
+            .stride()
+            .iter()
+            .map(|x| x * input.dtype().size_in_bytes())
+            .collect::<Vec<_>>();
+
+        let ids_stride = ids_l
+            .stride()
+            .iter()
+            .map(|x| x * ids.dtype().size_in_bytes())
+            .collect::<Vec<_>>();
+        let dst_l = crate::Layout::contiguous(out_shape.dims().to_vec());
+        let dst_stride = dst_l
+            .stride()
+            .iter()
+            .map(|x| x * DType::F32.size_in_bytes())
+            .collect::<Vec<_>>();
+
+        // Small decode-like workloads are faster on the mv-id path, while larger batches/prefill
+        // are better served by mm-id.
+        let use_mv_id = batch * input_dim1 <= 8;
+        if use_mv_id {
+            candle_metal_kernels::call_quantized_matmul_mv_id_t(
+                device.device(),
+                &encoder,
+                device.kernels(),
+                self.dtype.into(),
+                src0_l.dims(),
+                &src0_stride,
+                &self.buffer,
+                src1_l.dims(),
+                &src1_stride,
+                input.buffer(),
+                input_l.start_offset() * input.dtype().size_in_bytes(),
+                ids_l.shape().dims(),
+                &ids_stride,
+                ids.buffer(),
+                ids_l.start_offset() * ids.dtype().size_in_bytes(),
+                dst_l.dims(),
+                &dst_stride,
+                0,
+                &dst,
+            )
+            .map_err(MetalError::from)?;
+        } else {
+            candle_metal_kernels::call_quantized_matmul_mm_id_t(
+                device.device(),
+                &encoder,
+                device.kernels(),
+                self.dtype.into(),
+                src0_l.dims(),
+                &src0_stride,
+                &self.buffer,
+                src1_l.dims(),
+                &src1_stride,
+                input.buffer(),
+                input_l.start_offset() * input.dtype().size_in_bytes(),
+                ids_l.shape().dims(),
+                &ids_stride,
+                ids.buffer(),
+                ids_l.start_offset() * ids.dtype().size_in_bytes(),
+                dst_l.dims(),
+                &dst_stride,
+                0,
+                &dst,
+            )
+            .map_err(MetalError::from)?;
+        }
+
+        let dst_storage = crate::MetalStorage::new(dst, device, out_shape.elem_count(), DType::F32);
+        Ok((dst_storage, out_shape))
+    }
+
     pub fn data(&self) -> Result<Vec<u8>> {
         let buffer = self.device.allocate_buffer(self.buffer.length())?;
         {
@@ -373,6 +514,7 @@ impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
         match value {
             GgmlDType::Q4_0 => candle_metal_kernels::GgmlDType::Q4_0,
             GgmlDType::Q4_1 => candle_metal_kernels::GgmlDType::Q4_1,
+            GgmlDType::MXFP4 => candle_metal_kernels::GgmlDType::MXFP4,
             GgmlDType::Q5_0 => candle_metal_kernels::GgmlDType::Q5_0,
             GgmlDType::Q5_1 => candle_metal_kernels::GgmlDType::Q5_1,
             GgmlDType::Q8_0 => candle_metal_kernels::GgmlDType::Q8_0,
