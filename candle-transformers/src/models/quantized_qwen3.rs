@@ -10,7 +10,10 @@ use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding, Module};
+use candle_nn::{
+    kv_cache::{DefaultKvCache, KvCache},
+    Activation, Embedding, Module,
+};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -124,7 +127,7 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct AttentionWeights {
+struct AttentionWeights<C: KvCache> {
     q_proj: QMatMul,
     k_proj: QMatMul,
     v_proj: QMatMul,
@@ -136,11 +139,11 @@ struct AttentionWeights {
     num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: ConcatKvCache,
+    kv_cache: C,
     span_attn: tracing::Span,
 }
 
-impl AttentionWeights {
+impl<C: KvCache> AttentionWeights<C> {
     fn new<R: Read + Seek>(
         gg: &mut Gguf<R>,
         num_heads: usize,
@@ -160,7 +163,7 @@ impl AttentionWeights {
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
         let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
-        let kv_cache = ConcatKvCache::new(2);
+        let kv_cache = C::new(2, 512);
 
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
@@ -240,14 +243,14 @@ impl AttentionWeights {
 }
 
 #[derive(Debug, Clone)]
-struct LayerWeights {
-    self_attn: AttentionWeights,
+struct LayerWeights<C: KvCache> {
+    self_attn: AttentionWeights<C>,
     mlp: MlpWeights,
     ln1: RmsNorm,
     ln2: RmsNorm,
 }
 
-impl LayerWeights {
+impl<C: KvCache> LayerWeights<C> {
     fn new<R: Read + Seek>(
         gg: &mut Gguf<R>,
         num_attention_heads: usize,
@@ -294,9 +297,9 @@ impl LayerWeights {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelWeights {
+pub struct ModelWeights<C: KvCache = DefaultKvCache> {
     embed_tokens: Embedding,
-    layers: Vec<LayerWeights>,
+    layers: Vec<LayerWeights<C>>,
     norm: RmsNorm,
     lm_head: QMatMul,
     device: Device,
@@ -305,7 +308,7 @@ pub struct ModelWeights {
     span_output: tracing::Span,
 }
 
-impl ModelWeights {
+impl<C: KvCache> ModelWeights<C> {
     pub fn from_gguf<R: Read + Seek>(
         ct: gguf_file::Content,
         reader: &mut R,

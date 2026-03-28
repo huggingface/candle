@@ -8,7 +8,7 @@ use candle::{Device, Result, Tensor};
 
 #[test]
 fn kv_cache() -> Result<()> {
-    let mut cache = candle_nn::kv_cache::Cache::new(0, 16);
+    let mut cache = candle_nn::kv_cache::InnerCache::new(0, 16);
     for _ in [0, 1] {
         assert_eq!(cache.current_seq_len(), 0);
         let data = cache.current_data()?;
