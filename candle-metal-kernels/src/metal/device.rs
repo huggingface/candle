@@ -134,6 +134,14 @@ impl Device {
     /// - 's': max
     /// - 'd': ultra
     pub fn architecture_name(&self) -> String {
+        // On tvOS/iOS simulators the emulated Metal device returns NULL from
+        // -[MTLDevice architecture], which causes objc2 to panic.  Guard
+        // against this by checking the raw pointer before dereferencing.
+        let raw_arch: *const std::ffi::c_void =
+            unsafe { objc2::msg_send![self.as_ref(), architecture] };
+        if raw_arch.is_null() {
+            return "unknown".to_string();
+        }
         let arch = self.as_ref().architecture();
         arch.name().to_string()
     }
