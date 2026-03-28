@@ -43,6 +43,7 @@ tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.15.2", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
 tekken-rs = { version = "0.1.1", optional = true }
+wetext-rs = { version = "0.1.2", optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -86,7 +87,7 @@ mkl = [
     "candle-transformers/mkl",
 ]
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
-onnx = ["candle-onnx"]
+onnx = ["candle-onnx", "candle-transformers/onnx"]
 metal = ["candle/metal", "candle-nn/metal"]
 microphone = ["cpal", "rubato"]
 encodec = ["cpal", "symphonia", "rubato"]
@@ -94,6 +95,7 @@ mimi = ["cpal", "symphonia", "rubato"]
 snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
+wetext = ["dep:wetext-rs"]
 buildtime-download = []
 
 [[example]]
@@ -163,3 +165,7 @@ required-features = ["symphonia"]
 [[example]]
 name = "bert_single_file_binary"
 required-features = ["buildtime-download"]
+
+[[example]]
+name = "cosyvoice3"
+required-features = ["symphonia"]
