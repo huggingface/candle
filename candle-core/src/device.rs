@@ -9,14 +9,17 @@ pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
     Metal { gpu_id: usize },
+    Rocm { gpu_id: usize },
 }
 
-/// Cpu, Cuda, or Metal
+/// Cpu, Cuda, Metal, or Rocm
 #[derive(Debug, Clone)]
 pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
     Metal(crate::MetalDevice),
+    #[cfg(feature = "rocm")]
+    Rocm(crate::RocmDevice),
 }
 
 pub trait NdArray {
@@ -235,11 +238,18 @@ impl Device {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
     }
 
+    #[cfg(feature = "rocm")]
+    pub fn new_rocm(ordinal: usize) -> Result<Self> {
+        Ok(Self::Rocm(crate::RocmDevice::new(ordinal)?))
+    }
+
     pub fn as_cuda_device(&self) -> Result<&crate::CudaDevice> {
         match self {
             Self::Cuda(d) => Ok(d),
             Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
             Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(_) => crate::bail!("expected a cuda device, got rocM"),
         }
     }
 
@@ -248,6 +258,18 @@ impl Device {
             Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
             Self::Cpu => crate::bail!("expected a metal device, got cpu"),
             Self::Metal(d) => Ok(d),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(_) => crate::bail!("expected a metal device, got rocM"),
+        }
+    }
+
+    #[cfg(feature = "rocm")]
+    pub fn as_rocm_device(&self) -> Result<&crate::RocmDevice> {
+        match self {
+            Self::Cuda(_) => crate::bail!("expected a rocm device, got cuda"),
+            Self::Cpu => crate::bail!("expected a rocm device, got cpu"),
+            Self::Metal(_) => crate::bail!("expected a rocm device, got Metal"),
+            Self::Rocm(d) => Ok(d),
         }
     }
 
@@ -264,6 +286,8 @@ impl Device {
             Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),
             Self::Metal(m) => m.set_seed(seed),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(r) => r.set_seed(seed),
         }
     }
 
@@ -272,6 +296,8 @@ impl Device {
             Self::Cpu => CpuDevice.get_current_seed(),
             Self::Cuda(c) => c.get_current_seed(),
             Self::Metal(m) => m.get_current_seed(),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(r) => r.get_current_seed(),
         }
     }
 
@@ -280,6 +306,8 @@ impl Device {
             (Self::Cpu, Self::Cpu) => true,
             (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
             (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => lhs.same_device(rhs),
             _ => false,
         }
     }
@@ -289,6 +317,8 @@ impl Device {
             Self::Cpu => DeviceLocation::Cpu,
             Self::Cuda(device) => device.location(),
             Device::Metal(device) => device.location(),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(device) => device.location(),
         }
     }
 
@@ -304,9 +334,19 @@ impl Device {
         matches!(self, Self::Metal(_))
     }
 
+    #[cfg(feature = "rocm")]
+    pub fn is_rocm(&self) -> bool {
+        matches!(self, Self::Rocm(_))
+    }
+
     pub fn supports_bf16(&self) -> bool {
         match self {
+            #[cfg(feature = "rocm")]
+            Self::Rocm(_) | Self::Cuda(_) | Self::Metal(_) => true,
+            Self::Cpu => false,
+            #[cfg(not(feature = "rocm"))]
             Self::Cuda(_) | Self::Metal(_) => true,
+            #[cfg(not(feature = "rocm"))]
             Self::Cpu => false,
         }
     }
