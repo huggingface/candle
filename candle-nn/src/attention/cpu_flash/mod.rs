@@ -1,13 +1,13 @@
 //! CPU flash attention implementations.
 //!
-//! - `standard`: General-purpose with explicit mask tensor (B,S,H,D)
-//! - `causal`: Optimized loop-bound causal masking (B,S,H,D), best for B=1
-//! - `varlen`: Packed variable-length sequences (total_q, H, D), best for B>1
+//! - `standard`: General-purpose with explicit mask tensor, B=1 only
+//! - `causal`: Loop-bound causal masking, B=1 only
+//! - `varlen`: Packed variable-length sequences (total_q, H, D), any batch size
 //!
 //! The top-level [`flash_attn`] function automatically dispatches:
-//! - **B=1**: single-batch optimized paths in `standard`/`causal`
-//! - **B>1** (f32/f16, no softcap): packs into varlen format for better throughput
-//! - **Fallback**: multi-batch `standard`/`causal` paths for unsupported configs
+//! - **B=1**: single-batch kernels in `standard`/`causal` (direct slice access, zero batch overhead)
+//! - **B>1** (f32/f16, no softcap): packs into varlen format
+//! - **B>1 unsupported config**: hard error (explicit mask + B>1, softcap + B>1, etc.)
 
 pub mod causal;
 pub mod standard;
