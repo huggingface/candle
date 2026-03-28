@@ -21,8 +21,10 @@ fn main() -> Result<()> {
 
     bindings.write(&ptx_path)?;
 
+    // Build MOE kernels as PTX (requires sm_70+ for WMMA)
     let mut moe_builder = KernelBuilder::default()
         .source_files(vec![
+            "src/moe/moe_utils.cu",
             "src/moe/moe_gguf.cu",
             "src/moe/moe_wmma.cu",
             "src/moe/moe_wmma_gguf.cu",
@@ -40,24 +42,15 @@ fn main() -> Result<()> {
         moe_builder = moe_builder.arg("-DNO_BF16_KERNEL");
     }
 
-    let mut is_target_msvc = false;
     if let Ok(target) = std::env::var("TARGET") {
         if target.contains("msvc") {
-            is_target_msvc = true;
             moe_builder = moe_builder.arg("-D_USE_MATH_DEFINES");
         }
     }
 
-    if !is_target_msvc {
-        moe_builder = moe_builder.arg("-Xcompiler").arg("-fPIC");
-    }
+    let moe_ptx_path = out_dir.join("moe_ptx.rs");
+    let moe_bindings = moe_builder.build_ptx()?;
+    moe_bindings.write(&moe_ptx_path)?;
 
-    moe_builder.build_lib(out_dir.join("libmoe.a"))?;
-    println!("cargo:rustc-link-search={}", out_dir.display());
-    println!("cargo:rustc-link-lib=moe");
-    println!("cargo:rustc-link-lib=dylib=cudart");
-    if !is_target_msvc {
-        println!("cargo:rustc-link-lib=stdc++");
-    }
     Ok(())
 }
