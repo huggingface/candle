@@ -1162,18 +1162,3 @@ pub fn rope_i_inplace(data: &mut [f32], cos: &[f32], sin: &[f32], num_heads: usi
     }
 }
 
-/// Apply standard (half-rotation) RoPE in-place on a flat `(H, D)` slice.
-///
-/// Pairs elements `(i, i+D/2)` with frequency `cos[i], sin[i]`.
-pub fn rope_inplace(data: &mut [f32], cos: &[f32], sin: &[f32], num_heads: usize, d: usize) {
-    let half_d = d / 2;
-    for h in 0..num_heads {
-        let base = h * d;
-        for i in 0..half_d {
-            let a = data[base + i];
-            let b = data[base + i + half_d];
-            data[base + i] = a * cos[i] - b * sin[i];
-            data[base + i + half_d] = b * cos[i] + a * sin[i];
-        }
-    }
-}

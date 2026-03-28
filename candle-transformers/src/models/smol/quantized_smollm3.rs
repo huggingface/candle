@@ -12,72 +12,6 @@ use std::sync::Arc;
 const MAX_SEQ_LEN: usize = 4096;
 use candle::IndexOp;
 
-/// Compute the row permutation that `reconstruct_qk_weights` applies.
-///
-/// Returns `perm` where `reconstructed[i] = original[perm[i]]`.
-/// The inverse `inv_perm[perm[i]] = i` maps original → reconstructed order.
-fn compute_reconstruction_perm(total_rows: usize) -> Vec<usize> {
-    let half_rows = total_rows / 2;
-    let chunk_size = 128;
-    let chunks_per_half = half_rows / chunk_size;
-    let mut perm = Vec::with_capacity(total_rows);
-
-    for half in 0..2 {
-        let half_off = half * half_rows;
-        for chunk_idx in 0..chunks_per_half {
-            let chunk_start = half_off + chunk_idx * chunk_size;
-            // Even rows
-            for i in (chunk_start..chunk_start + chunk_size).step_by(2) {
-                perm.push(i);
-            }
-            // Odd rows
-            for i in (chunk_start + 1..chunk_start + chunk_size).step_by(2) {
-                perm.push(i);
-            }
-        }
-    }
-    perm
-}
-
-/// Invert a permutation: if perm[i] = j, then inv[j] = i.
-fn invert_perm(perm: &[usize]) -> Vec<usize> {
-    let mut inv = vec![0usize; perm.len()];
-    for (i, &p) in perm.iter().enumerate() {
-        inv[p] = i;
-    }
-    inv
-}
-
-#[allow(dead_code)]
-/// Permute columns of a weight matrix to match interlaced head order.
-///
-/// The o_proj weight has shape (hidden_size, num_heads * head_dim).
-/// Column `i` corresponds to output element `i` from attention.
-/// We permute columns so o_proj expects interlaced (original) order input.
-fn permute_o_proj_for_interlaced(
-    o_weight: &Tensor,
-    num_heads: usize,
-    head_dim: usize,
-) -> Result<Tensor> {
-    let total_rows = num_heads * head_dim;
-    let perm = compute_reconstruction_perm(total_rows);
-    // perm[reconstructed_row] = original_row
-    // We want: new_weight[:, original_row] = old_weight[:, reconstructed_row]
-    // i.e. new_weight[:, perm[i]] = old_weight[:, i]
-    // This is: new_weight = old_weight.index_select(columns, inv_perm)
-    // But index_select works on rows. For columns, transpose, select, transpose back.
-    let inv_perm = invert_perm(&perm);
-    let idx = Tensor::from_vec(
-        inv_perm.iter().map(|&i| i as u32).collect::<Vec<_>>(),
-        total_rows,
-        o_weight.device(),
-    )?;
-    // o_weight shape: (hidden, num_heads*head_dim)
-    // Permute dim 1 (columns)
-    let permuted = o_weight.index_select(&idx, 1)?;
-    Ok(permuted)
-}
-
 // ===== RECONSTRUCTION FUNCTION =====
 fn reconstruct_qk_weights(gguf_weight: &Tensor, _num_heads: usize) -> Result<Tensor> {
     let total_rows = gguf_weight.dim(0)?;
@@ -373,9 +307,7 @@ impl QuantizedAttention {
 
         let device = vb.device();
         let cpu = Device::Cpu;
-
-        {
-            let o_proj = QMatMul::from_weights(vb.get_no_shape("attn_output.weight")?)?;
+        let o_proj = QMatMul::from_weights(vb.get_no_shape("attn_output.weight")?)?;
 
             let (q_proj, k_proj) = if use_flash_attn {
                 // ── Interlaced path: skip reconstruction entirely ────────
@@ -429,7 +361,6 @@ impl QuantizedAttention {
                 q_rope_buf: vec![0f32; num_heads * head_dim],
                 k_rope_buf: vec![0f32; num_kv_heads * head_dim],
             })
-        }
     }
 
     fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {

@@ -12,27 +12,6 @@ use std::iter::Sum;
 
 use super::standard::{vec_dot, FLASH_ATTN_POOL};
 
-/// Fast approximate exp(x) via Schraudolph's method.
-///
-/// Accurate to ~1e-3 relative error for x in [-88, 0] (the softmax range).
-/// ~3 cycles on ARM vs ~20 for std exp(). The bit manipulation maps the
-/// float exponent field directly: exp(x) ≈ reinterpret(2^23/ln2 * x + 127*2^23).
-#[inline(always)]
-#[allow(dead_code)]
-fn fast_exp(x: f32) -> f32 {
-    if x < -88.0 {
-        return 0.0;
-    }
-    // Constants: a = 2^23 / ln(2), b = 127 * 2^23 (float bias)
-    const A: f32 = 12102203.0;
-    const B: f32 = 1065353216.0;
-    // Adding a small correction term improves accuracy in the [-4, 0] range
-    // which is where most softmax differences land.
-    const C: f32 = 486411.0; // empirical correction ≈ 2^23 * 0.0579
-    let v = A * x + (B - C);
-    f32::from_bits((v as i32) as u32)
-}
-
 /// Prefetch a cache line for read.
 #[inline(always)]
 fn prefetch_read(ptr: *const f32) {

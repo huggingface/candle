@@ -12,7 +12,7 @@ use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Storage, Tensor};
 use candle_nn::attention::cpu_flash::causal::causal_decode_f32_interleaved;
 use candle_nn::attention::{flash_attn, AttnMask};
-use candle_nn::kv_cache::{rope_inplace, ConcatKvCache, InterleavedKvCache, RawInterleavedKvCache};
+use candle_nn::kv_cache::{ConcatKvCache, InterleavedKvCache, RawInterleavedKvCache};
 use candle_nn::{Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -163,8 +163,6 @@ struct AttentionWeights {
     interleaved_cache: InterleavedKvCache,
     raw_cache: RawInterleavedKvCache,
     use_flash_attn: bool,
-    q_rope_buf: Vec<f32>,
-    k_rope_buf: Vec<f32>,
     span_attn: tracing::Span,
 }
 
@@ -213,8 +211,6 @@ impl AttentionWeights {
             interleaved_cache,
             raw_cache,
             use_flash_attn,
-            q_rope_buf: vec![0f32; num_heads * head_dim],
-            k_rope_buf: vec![0f32; num_kv_heads * head_dim],
             span_attn,
         })
     }
