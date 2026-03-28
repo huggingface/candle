@@ -402,6 +402,10 @@ impl Device {
                 let storage = device.rand_uniform(shape, dtype, lo, up)?;
                 Ok(Storage::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(device) => {
+                todo!("rocm rand_uniform_f64")
+            }
         }
     }
 
@@ -440,6 +444,10 @@ impl Device {
                 let storage = device.rand_normal(shape, dtype, mean, std)?;
                 Ok(Storage::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(device) => {
+                todo!("rocm rand_normal_f64")
+            }
         }
     }
 
@@ -466,6 +474,10 @@ impl Device {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(device) => {
+                todo!("rocm zeros")
+            }
         }
     }
 
@@ -483,6 +495,10 @@ impl Device {
                 let storage = device.alloc_uninit(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(device) => {
+                todo!("rocm alloc_uninit")
+            }
         }
     }
 
@@ -496,6 +512,10 @@ impl Device {
             Device::Metal(device) => {
                 let storage = device.storage_from_slice(data)?;
                 Ok(Storage::Metal(storage))
+            }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(device) => {
+                todo!("rocm storage_from_slice")
             }
         }
     }
@@ -513,6 +533,10 @@ impl Device {
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(device) => {
+                todo!("rocm storage")
+            }
         }
     }
 
@@ -529,6 +553,10 @@ impl Device {
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(device) => {
+                todo!("rocm storage_owned")
+            }
         }
     }
 
@@ -537,6 +565,8 @@ impl Device {
             Self::Cpu => Ok(()),
             Self::Cuda(d) => d.synchronize(),
             Self::Metal(d) => d.synchronize(),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(d) => d.synchronize(),
         }
     }
 }

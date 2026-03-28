@@ -1,6 +1,6 @@
+use crate::DType;
 use rocm_rs::hip::error::Error as HipError;
 
-/// Error wrapper for ROCm operations
 #[derive(Debug, thiserror::Error)]
 pub enum RocmError {
     #[error("HIP error: {0}")]
@@ -22,21 +22,24 @@ pub enum RocmError {
     Internal(String),
 }
 
-impl From<crate::Error> for RocmError {
-    fn from(e: crate::Error) -> Self {
-        RocmError::Internal(e.to_string())
+impl From<RocmError> for crate::Error {
+    fn from(e: RocmError) -> Self {
+        crate::Error::Msg(e.to_string())
     }
 }
 
-/// Helper trait to convert errors
+impl From<HipError> for crate::Error {
+    fn from(e: HipError) -> Self {
+        crate::Error::Msg(format!("HIP error: {}", e))
+    }
+}
+
 pub trait WrapErr<T> {
-    fn w(self) -> Result<T, crate::Error>;
+    fn w(self) -> crate::Result<T>;
 }
 
 impl<T> WrapErr<T> for Result<T, RocmError> {
-    fn w(self) -> Result<T, crate::Error> {
+    fn w(self) -> crate::Result<T> {
         self.map_err(|e| crate::Error::Msg(e.to_string()))
     }
 }
-
-use crate::DType;
