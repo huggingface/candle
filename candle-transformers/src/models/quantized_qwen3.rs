@@ -10,6 +10,7 @@ use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor};
+use candle_nn::attention::{flash_attn, AttnMask};
 use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -135,8 +136,10 @@ struct AttentionWeights {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
+    hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     kv_cache: ConcatKvCache,
+    use_flash_attn: bool,
     span_attn: tracing::Span,
 }
 
@@ -148,9 +151,11 @@ impl AttentionWeights {
         head_dim: usize,
         rms_norm_eps: f64,
         rotary_emb: Arc<RotaryEmbedding>,
+        use_flash_attn: bool,
         prefix: &str,
     ) -> Result<Self> {
         let num_kv_groups = num_heads / num_kv_heads;
+        let hidden_size = num_heads * head_dim;
 
         let q_proj = gg.qmatmul(&format!("{prefix}.attn_q.weight"))?;
         let k_proj = gg.qmatmul(&format!("{prefix}.attn_k.weight"))?;
@@ -175,8 +180,10 @@ impl AttentionWeights {
             num_kv_heads,
             num_kv_groups,
             head_dim,
+            hidden_size,
             rotary_emb,
             kv_cache,
+            use_flash_attn,
             span_attn,
         })
     }
@@ -211,27 +218,60 @@ impl AttentionWeights {
 
         let (k, v) = self.kv_cache.append(&k, &v)?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
+        if self.use_flash_attn && x.device().is_cpu() {
+            // CPU flash attention: (B,H,L,D) → (B,L,H,D) for flash_attn
+            let q = q.transpose(1, 2)?.contiguous()?;
+            let k = k.transpose(1, 2)?.contiguous()?;
+            let v = v.transpose(1, 2)?.contiguous()?;
 
-        let scale = 1.0 / (self.head_dim as f64).sqrt();
-        let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-        if let Some(m) = attn_mask {
-            let m_dtype = m.dtype();
-            let scores_dtype = scores.dtype();
-            let mask = if m_dtype != scores_dtype {
-                m.to_dtype(scores_dtype)?
-            } else {
-                m.clone()
+            let scale = 1.0 / (self.head_dim as f32).sqrt();
+
+            let ctx = match q.dtype() {
+                DType::F32 => flash_attn::<f32>(
+                    &q, &k, &v, scale,
+                    AttnMask::causal_with_offset(offset),
+                    None, None,
+                )?,
+                DType::F16 => {
+                    let q_f32 = q.to_dtype(DType::F32)?;
+                    let k_f32 = k.to_dtype(DType::F32)?;
+                    let v_f32 = v.to_dtype(DType::F32)?;
+                    let ctx_f32 = flash_attn::<f32>(
+                        &q_f32, &k_f32, &v_f32, scale,
+                        AttnMask::causal_with_offset(offset),
+                        None, None,
+                    )?;
+                    ctx_f32.to_dtype(DType::F16)?
+                }
+                dtype => candle::bail!("Unsupported dtype for CPU flash attention: {:?}", dtype),
             };
-            scores = scores.broadcast_add(&mask)?;
+
+            // flash_attn output: (B,H,S,D) → (B,S,H,D) → (B,L,hidden)
+            let ctx = ctx.transpose(1, 2)?;
+            ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
+        } else {
+            // Standard matmul attention
+            let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+            let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
+
+            let scale = 1.0 / (self.head_dim as f64).sqrt();
+            let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            if let Some(m) = attn_mask {
+                let scores_dtype = scores.dtype();
+                let mask = if m.dtype() != scores_dtype {
+                    m.to_dtype(scores_dtype)?
+                } else {
+                    m.clone()
+                };
+                scores = scores.broadcast_add(&mask)?;
+            }
+            let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+            let ctx = probs.matmul(&v)?;
+            let reshaped_ctx = ctx
+                .transpose(1, 2)?
+                .reshape((b, l, self.hidden_size))?;
+            self.o_proj.forward(&reshaped_ctx)
         }
-        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-        let ctx = probs.matmul(&v)?; // (B, H, L, D)
-        let reshaped_ctx = ctx
-            .transpose(1, 2)?
-            .reshape((b, l, self.num_heads * self.head_dim))?;
-        self.o_proj.forward(&reshaped_ctx)
     }
 
     fn clear_kv_cache(&mut self) {
@@ -255,6 +295,7 @@ impl LayerWeights {
         head_dim: usize,
         rms_norm_eps: f64,
         rotary: Arc<RotaryEmbedding>,
+        use_flash_attn: bool,
         layer_idx: usize,
     ) -> Result<Self> {
         let prefix = format!("blk.{layer_idx}");
@@ -268,6 +309,7 @@ impl LayerWeights {
             head_dim,
             rms_norm_eps,
             rotary,
+            use_flash_attn,
             &prefix,
         )?;
         let mlp = MlpWeights::new(gg, &prefix)?;
@@ -301,6 +343,7 @@ pub struct ModelWeights {
     lm_head: QMatMul,
     device: Device,
     dtype: DType,
+    use_flash_attn: bool,
     span: tracing::Span,
     span_output: tracing::Span,
 }
@@ -310,6 +353,7 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+        use_flash_attn: bool,
     ) -> Result<Self> {
         let mut gg = Gguf::new(ct, reader, device.clone());
         let md_get = |s: &str| match gg.metadata().get(s) {
@@ -355,6 +399,7 @@ impl ModelWeights {
                 head_dim,
                 rms_norm_eps,
                 rotary.clone(),
+                use_flash_attn,
                 i,
             )?);
         }
@@ -375,6 +420,7 @@ impl ModelWeights {
             lm_head,
             device: device.clone(),
             dtype,
+            use_flash_attn,
             span,
             span_output,
         })
@@ -411,7 +457,8 @@ impl ModelWeights {
         let _enter = self.span.enter();
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
-        let causal_mask = if l == 1 {
+        // Skip mask materialization when using CPU flash attention
+        let causal_mask = if l == 1 || (self.use_flash_attn && self.device.is_cpu()) {
             None
         } else {
             Some(self.causal_mask(b, l, offset, None)?)
