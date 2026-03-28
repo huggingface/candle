@@ -115,8 +115,14 @@ impl RotaryEmbedding {
         let freqs = t.matmul(&inv_freq)?;
         let sin_t = freqs.sin()?;
         let cos_t = freqs.cos()?;
-        let cos_f32 = cos_t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
-        let sin_f32 = sin_t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let cos_f32 = cos_t
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let sin_f32 = sin_t
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
         Ok(Self {
             sin: sin_t,
             cos: cos_t,
@@ -284,7 +290,10 @@ impl AttentionWeights {
                 let ctx = causal_decode_f32_interleaved(
                     &q_data[..q_len],
                     self.raw_cache.data(),
-                    self.num_heads, self.num_kv_heads, self.head_dim, kv_len,
+                    self.num_heads,
+                    self.num_kv_heads,
+                    self.head_dim,
+                    kv_len,
                     scale,
                 )?;
 
@@ -319,9 +328,13 @@ impl AttentionWeights {
                 let v = kv_v.contiguous()?;
 
                 let ctx = flash_attn::<f32>(
-                    &q, &k, &v, scale,
+                    &q,
+                    &k,
+                    &v,
+                    scale,
                     AttnMask::causal_with_offset(offset),
-                    None, None,
+                    None,
+                    None,
                 )?;
                 let ctx = ctx.transpose(1, 2)?;
                 ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
@@ -346,9 +359,7 @@ impl AttentionWeights {
             }
             let probs = candle_nn::ops::softmax_last_dim(&scores)?;
             let ctx = probs.matmul(&v)?;
-            let reshaped_ctx = ctx
-                .transpose(1, 2)?
-                .reshape((b, l, self.hidden_size))?;
+            let reshaped_ctx = ctx.transpose(1, 2)?.reshape((b, l, self.hidden_size))?;
             self.o_proj.forward(&reshaped_ctx)
         }
     }

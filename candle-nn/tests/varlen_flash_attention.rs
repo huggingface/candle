@@ -423,18 +423,44 @@ mod tests {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
-        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-            make_varlen_inputs_prefill(batch_size, num_heads, num_kv_heads, head_dim, max_seq, &device)?;
+        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) = make_varlen_inputs_prefill(
+            batch_size,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            max_seq,
+            &device,
+        )?;
         let (q, k, v) = convert_to_precision(&q, &k, &v, precision)?;
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = impl_fn.forward(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, false, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            false,
+            None,
+            None,
         )?;
         let out_ref = reference_padded_attention(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, false, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            false,
+            None,
+            None,
         )?;
 
         assert_close(&out_var, &out_ref, precision, "prefill_noncausal")
@@ -444,18 +470,44 @@ mod tests {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
-        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-            make_varlen_inputs_prefill(batch_size, num_heads, num_kv_heads, head_dim, max_seq, &device)?;
+        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) = make_varlen_inputs_prefill(
+            batch_size,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            max_seq,
+            &device,
+        )?;
         let (q, k, v) = convert_to_precision(&q, &k, &v, precision)?;
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = impl_fn.forward(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, true, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            true,
+            None,
+            None,
         )?;
         let out_ref = reference_padded_attention(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, true, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            true,
+            None,
+            None,
         )?;
 
         assert_close(&out_var, &out_ref, precision, "prefill_causal")
@@ -465,18 +517,44 @@ mod tests {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (3, 12, 4, 64, 64);
 
-        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-            make_varlen_inputs_prefill(batch_size, num_heads, num_kv_heads, head_dim, max_seq, &device)?;
+        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) = make_varlen_inputs_prefill(
+            batch_size,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            max_seq,
+            &device,
+        )?;
         let (q, k, v) = convert_to_precision(&q, &k, &v, precision)?;
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = impl_fn.forward(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, false, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            false,
+            None,
+            None,
         )?;
         let out_ref = reference_padded_attention(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, false, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            false,
+            None,
+            None,
         )?;
 
         assert_close(&out_var, &out_ref, precision, "prefill_gqa")
@@ -486,18 +564,44 @@ mod tests {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (3, 12, 4, 64, 64);
 
-        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-            make_varlen_inputs_prefill(batch_size, num_heads, num_kv_heads, head_dim, max_seq, &device)?;
+        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) = make_varlen_inputs_prefill(
+            batch_size,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            max_seq,
+            &device,
+        )?;
         let (q, k, v) = convert_to_precision(&q, &k, &v, precision)?;
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_var = impl_fn.forward(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, true, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            true,
+            None,
+            None,
         )?;
         let out_ref = reference_padded_attention(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, true, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            true,
+            None,
+            None,
         )?;
 
         assert_close(&out_var, &out_ref, precision, "prefill_gqa_causal")
@@ -508,18 +612,44 @@ mod tests {
         let device = Device::Cpu;
         let (batch_size, num_heads, num_kv_heads, head_dim, max_seq) = (4, 8, 8, 64, 64);
 
-        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) =
-            make_varlen_inputs_prefill(batch_size, num_heads, num_kv_heads, head_dim, max_seq, &device)?;
+        let (q, k, v, seqlens_q, seqlens_k, max_q, max_k) = make_varlen_inputs_prefill(
+            batch_size,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            max_seq,
+            &device,
+        )?;
         let (q, k, v) = convert_to_precision(&q, &k, &v, precision)?;
         let softmax_scale = 1.0 / (head_dim as f64).sqrt() as f32;
 
         let out_fused = VarlenImpl::CpuFlash.forward(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, causal, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            causal,
+            None,
+            None,
         )?;
         let out_unfused = VarlenImpl::Unfused.forward(
-            &q, &k, &v, None, &seqlens_q, &seqlens_k, max_q, max_k,
-            softmax_scale, causal, None, None,
+            &q,
+            &k,
+            &v,
+            None,
+            &seqlens_q,
+            &seqlens_k,
+            max_q,
+            max_k,
+            softmax_scale,
+            causal,
+            None,
+            None,
         )?;
 
         let label = if causal {

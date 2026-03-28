@@ -1161,4 +1161,3 @@ pub fn rope_i_inplace(data: &mut [f32], cos: &[f32], sin: &[f32], num_heads: usi
         }
     }
 }
-

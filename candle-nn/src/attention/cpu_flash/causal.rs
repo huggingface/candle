@@ -85,15 +85,33 @@ where
 
         let result = if s_q == 1 {
             causal_decode_f32(
-                q_data, k_data, v_data,
-                h_q, h_kv, h_v, d, s_kv,
-                softmax_scale, max_bias, softcap,
+                q_data,
+                k_data,
+                v_data,
+                h_q,
+                h_kv,
+                h_v,
+                d,
+                s_kv,
+                softmax_scale,
+                max_bias,
+                softcap,
             )
         } else {
             causal_prefill_f32(
-                q_data, k_data, v_data,
-                s_q, h_q, h_kv, h_v, d, s_kv,
-                softmax_scale, kv_offset, max_bias, softcap,
+                q_data,
+                k_data,
+                v_data,
+                s_q,
+                h_q,
+                h_kv,
+                h_v,
+                d,
+                s_kv,
+                softmax_scale,
+                kv_offset,
+                max_bias,
+                softcap,
             )
         };
 
@@ -117,15 +135,33 @@ where
 
         let result = if s_q == 1 {
             causal_decode_generic(
-                q_data, k_data, v_data,
-                h_q, h_kv, h_v, d, s_kv,
-                softmax_scale, max_bias, softcap,
+                q_data,
+                k_data,
+                v_data,
+                h_q,
+                h_kv,
+                h_v,
+                d,
+                s_kv,
+                softmax_scale,
+                max_bias,
+                softcap,
             )
         } else {
             causal_prefill_generic(
-                q_data, k_data, v_data,
-                s_q, h_q, h_kv, h_v, d, s_kv,
-                softmax_scale, kv_offset, max_bias, softcap,
+                q_data,
+                k_data,
+                v_data,
+                s_q,
+                h_q,
+                h_kv,
+                h_v,
+                d,
+                s_kv,
+                softmax_scale,
+                kv_offset,
+                max_bias,
+                softcap,
             )
         };
 
@@ -141,10 +177,7 @@ fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
     let mut s = 0.0f32;
     let mut i = 0;
     while i + 4 <= n {
-        s += a[i] * b[i]
-            + a[i + 1] * b[i + 1]
-            + a[i + 2] * b[i + 2]
-            + a[i + 3] * b[i + 3];
+        s += a[i] * b[i] + a[i + 1] * b[i + 1] + a[i + 2] * b[i + 2] + a[i + 3] * b[i + 3];
         i += 4;
     }
     while i < n {
@@ -195,60 +228,66 @@ fn causal_decode_f32(
     let mut out = vec![0f32; h_q * d];
 
     FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d)
-            .enumerate()
-            .for_each_init(
-                || vec![0f32; d],
-                |acc, (h_i, out_chunk)| {
-                    let slope = 2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32);
-                    let k_head_off = (h_i / rk) * d;
-                    let v_head_off = (h_i / rv) * d;
-                    let q_row = &q_data[h_i * d..(h_i + 1) * d];
+        out.par_chunks_mut(d).enumerate().for_each_init(
+            || vec![0f32; d],
+            |acc, (h_i, out_chunk)| {
+                let slope = 2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32);
+                let k_head_off = (h_i / rk) * d;
+                let v_head_off = (h_i / rv) * d;
+                let q_row = &q_data[h_i * d..(h_i + 1) * d];
 
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
+                acc.fill(0.0);
+                let mut m = f32::NEG_INFINITY;
+                let mut ssum = 0.0f32;
 
-                    for kv_pos in 0..kv_len {
-                        let alibi_bias = slope * (kv_pos as f32 - (kv_len - 1) as f32);
-                        let k_base = kv_pos * k_seq_stride + k_head_off;
-                        let k_row = &k_data[k_base..k_base + d];
+                for kv_pos in 0..kv_len {
+                    let alibi_bias = slope * (kv_pos as f32 - (kv_len - 1) as f32);
+                    let k_base = kv_pos * k_seq_stride + k_head_off;
+                    let k_row = &k_data[k_base..k_base + d];
 
-                        if kv_pos + 1 < kv_len {
-                            prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
-                        }
-
-                        let mut score = dot_f32(q_row, k_row) * scale_pre;
-                        if do_softcap {
-                            score = logit_softcap * score.tanh();
-                        }
-                        score += alibi_bias;
-
-                        let v_base = kv_pos * v_seq_stride + v_head_off;
-                        let v_row = &v_data[v_base..v_base + d];
-
-                        if kv_pos + 1 < kv_len {
-                            prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
-                        }
-
-                        if score > m {
-                            let scale_old = f32::exp(m - score);
-                            for t in 0..d { acc[t] *= scale_old; }
-                            ssum *= scale_old;
-                            m = score;
-                            for t in 0..d { acc[t] += v_row[t]; }
-                            ssum += 1.0;
-                        } else {
-                            let w = f32::exp(score - m);
-                            for t in 0..d { acc[t] += v_row[t] * w; }
-                            ssum += w;
-                        }
+                    if kv_pos + 1 < kv_len {
+                        prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                     }
 
-                    let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d { out_chunk[t] = acc[t] * inv; }
-                },
-            );
+                    let mut score = dot_f32(q_row, k_row) * scale_pre;
+                    if do_softcap {
+                        score = logit_softcap * score.tanh();
+                    }
+                    score += alibi_bias;
+
+                    let v_base = kv_pos * v_seq_stride + v_head_off;
+                    let v_row = &v_data[v_base..v_base + d];
+
+                    if kv_pos + 1 < kv_len {
+                        prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
+                    }
+
+                    if score > m {
+                        let scale_old = f32::exp(m - score);
+                        for t in 0..d {
+                            acc[t] *= scale_old;
+                        }
+                        ssum *= scale_old;
+                        m = score;
+                        for t in 0..d {
+                            acc[t] += v_row[t];
+                        }
+                        ssum += 1.0;
+                    } else {
+                        let w = f32::exp(score - m);
+                        for t in 0..d {
+                            acc[t] += v_row[t] * w;
+                        }
+                        ssum += w;
+                    }
+                }
+
+                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                for t in 0..d {
+                    out_chunk[t] = acc[t] * inv;
+                }
+            },
+        );
     });
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
@@ -276,54 +315,60 @@ fn causal_decode_f32_lean(
     let mut out = vec![0f32; h_q * d];
 
     FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d)
-            .enumerate()
-            .for_each_init(
-                || vec![0f32; d],
-                |acc, (h_i, out_chunk)| {
-                    let k_head_off = (h_i / rk) * d;
-                    let v_head_off = (h_i / rv) * d;
-                    let q_row = &q_data[h_i * d..(h_i + 1) * d];
+        out.par_chunks_mut(d).enumerate().for_each_init(
+            || vec![0f32; d],
+            |acc, (h_i, out_chunk)| {
+                let k_head_off = (h_i / rk) * d;
+                let v_head_off = (h_i / rv) * d;
+                let q_row = &q_data[h_i * d..(h_i + 1) * d];
 
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
+                acc.fill(0.0);
+                let mut m = f32::NEG_INFINITY;
+                let mut ssum = 0.0f32;
 
-                    for kv_pos in 0..kv_len {
-                        let k_base = kv_pos * k_seq_stride + k_head_off;
-                        let k_row = &k_data[k_base..k_base + d];
+                for kv_pos in 0..kv_len {
+                    let k_base = kv_pos * k_seq_stride + k_head_off;
+                    let k_row = &k_data[k_base..k_base + d];
 
-                        if kv_pos + 1 < kv_len {
-                            prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
-                        }
-
-                        let score = dot_f32(q_row, k_row) * scale;
-
-                        let v_base = kv_pos * v_seq_stride + v_head_off;
-                        let v_row = &v_data[v_base..v_base + d];
-
-                        if kv_pos + 1 < kv_len {
-                            prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
-                        }
-
-                        if score > m {
-                            let scale_old = f32::exp(m - score);
-                            for t in 0..d { acc[t] *= scale_old; }
-                            ssum *= scale_old;
-                            m = score;
-                            for t in 0..d { acc[t] += v_row[t]; }
-                            ssum += 1.0;
-                        } else {
-                            let w = f32::exp(score - m);
-                            for t in 0..d { acc[t] += v_row[t] * w; }
-                            ssum += w;
-                        }
+                    if kv_pos + 1 < kv_len {
+                        prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                     }
 
-                    let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d { out_chunk[t] = acc[t] * inv; }
-                },
-            );
+                    let score = dot_f32(q_row, k_row) * scale;
+
+                    let v_base = kv_pos * v_seq_stride + v_head_off;
+                    let v_row = &v_data[v_base..v_base + d];
+
+                    if kv_pos + 1 < kv_len {
+                        prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
+                    }
+
+                    if score > m {
+                        let scale_old = f32::exp(m - score);
+                        for t in 0..d {
+                            acc[t] *= scale_old;
+                        }
+                        ssum *= scale_old;
+                        m = score;
+                        for t in 0..d {
+                            acc[t] += v_row[t];
+                        }
+                        ssum += 1.0;
+                    } else {
+                        let w = f32::exp(score - m);
+                        for t in 0..d {
+                            acc[t] += v_row[t] * w;
+                        }
+                        ssum += w;
+                    }
+                }
+
+                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                for t in 0..d {
+                    out_chunk[t] = acc[t] * inv;
+                }
+            },
+        );
     });
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
@@ -352,50 +397,56 @@ pub fn causal_decode_f32_interleaved(
     let mut out = vec![0f32; h_q * d];
 
     FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d)
-            .enumerate()
-            .for_each_init(
-                || vec![0f32; d],
-                |acc, (h_i, out_chunk)| {
-                    let kv_head = h_i / rk;
-                    let kv_head_off = kv_head * kv_head_stride;
-                    let q_row = &q_data[h_i * d..(h_i + 1) * d];
+        out.par_chunks_mut(d).enumerate().for_each_init(
+            || vec![0f32; d],
+            |acc, (h_i, out_chunk)| {
+                let kv_head = h_i / rk;
+                let kv_head_off = kv_head * kv_head_stride;
+                let q_row = &q_data[h_i * d..(h_i + 1) * d];
 
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
+                acc.fill(0.0);
+                let mut m = f32::NEG_INFINITY;
+                let mut ssum = 0.0f32;
 
-                    for kv_pos in 0..kv_len {
-                        // Single base for both K and V — adjacent in memory
-                        let kv_base = kv_pos * kv_seq_stride + kv_head_off;
-                        let k_row = &kv_data[kv_base..kv_base + d];
-                        let v_row = &kv_data[kv_base + d..kv_base + 2 * d];
+                for kv_pos in 0..kv_len {
+                    // Single base for both K and V — adjacent in memory
+                    let kv_base = kv_pos * kv_seq_stride + kv_head_off;
+                    let k_row = &kv_data[kv_base..kv_base + d];
+                    let v_row = &kv_data[kv_base + d..kv_base + 2 * d];
 
-                        // One prefetch loads both next K and V
-                        if kv_pos + 1 < kv_len {
-                            prefetch_read(kv_data[kv_base + kv_seq_stride..].as_ptr());
-                        }
-
-                        let score = dot_f32(q_row, k_row) * scale;
-
-                        if score > m {
-                            let scale_old = f32::exp(m - score);
-                            for t in 0..d { acc[t] *= scale_old; }
-                            ssum *= scale_old;
-                            m = score;
-                            for t in 0..d { acc[t] += v_row[t]; }
-                            ssum += 1.0;
-                        } else {
-                            let w = f32::exp(score - m);
-                            for t in 0..d { acc[t] += v_row[t] * w; }
-                            ssum += w;
-                        }
+                    // One prefetch loads both next K and V
+                    if kv_pos + 1 < kv_len {
+                        prefetch_read(kv_data[kv_base + kv_seq_stride..].as_ptr());
                     }
 
-                    let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d { out_chunk[t] = acc[t] * inv; }
-                },
-            );
+                    let score = dot_f32(q_row, k_row) * scale;
+
+                    if score > m {
+                        let scale_old = f32::exp(m - score);
+                        for t in 0..d {
+                            acc[t] *= scale_old;
+                        }
+                        ssum *= scale_old;
+                        m = score;
+                        for t in 0..d {
+                            acc[t] += v_row[t];
+                        }
+                        ssum += 1.0;
+                    } else {
+                        let w = f32::exp(score - m);
+                        for t in 0..d {
+                            acc[t] += v_row[t] * w;
+                        }
+                        ssum += w;
+                    }
+                }
+
+                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                for t in 0..d {
+                    out_chunk[t] = acc[t] * inv;
+                }
+            },
+        );
     });
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
@@ -593,20 +644,28 @@ fn causal_prefill_f32_lean(
 
                         if score > m {
                             let scale_old = f32::exp(m - score);
-                            for t in 0..d { acc[t] *= scale_old; }
+                            for t in 0..d {
+                                acc[t] *= scale_old;
+                            }
                             ssum *= scale_old;
                             m = score;
-                            for t in 0..d { acc[t] += v_row[t]; }
+                            for t in 0..d {
+                                acc[t] += v_row[t];
+                            }
                             ssum += 1.0;
                         } else {
                             let w = f32::exp(score - m);
-                            for t in 0..d { acc[t] += v_row[t] * w; }
+                            for t in 0..d {
+                                acc[t] += v_row[t] * w;
+                            }
                             ssum += w;
                         }
                     }
 
                     let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d { out_chunk[t] = acc[t] * inv; }
+                    for t in 0..d {
+                        out_chunk[t] = acc[t] * inv;
+                    }
                 },
             );
     });
@@ -645,54 +704,66 @@ fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real>(
     let mut out = vec![0f32; h_q * d];
 
     FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d)
-            .enumerate()
-            .for_each_init(
-                || vec![0f32; d],
-                |acc, (h_i, out_chunk)| {
-                    let slope = if max_bias > 0.0 {
-                        2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
-                    } else { 0.0 };
-                    let k_head_off = (h_i / rk) * d;
-                    let v_head_off = (h_i / rv) * d;
-                    let q_row = &q_data[h_i * d..(h_i + 1) * d];
+        out.par_chunks_mut(d).enumerate().for_each_init(
+            || vec![0f32; d],
+            |acc, (h_i, out_chunk)| {
+                let slope = if max_bias > 0.0 {
+                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                } else {
+                    0.0
+                };
+                let k_head_off = (h_i / rk) * d;
+                let v_head_off = (h_i / rv) * d;
+                let q_row = &q_data[h_i * d..(h_i + 1) * d];
 
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
+                acc.fill(0.0);
+                let mut m = f32::NEG_INFINITY;
+                let mut ssum = 0.0f32;
 
-                    for kv_pos in 0..kv_len {
-                        let alibi_bias = if max_bias > 0.0 {
-                            slope * (kv_pos as f32 - (kv_len - 1) as f32)
-                        } else { 0.0 };
-                        let k_base = kv_pos * k_seq_stride + k_head_off;
-                        let k_row = &k_data[k_base..k_base + d];
-                        let mut s_val = vec_dot::<T>(q_row, k_row).to_f32().unwrap_or(0.0);
-                        s_val *= scale_pre;
-                        if do_softcap { s_val = logit_softcap * s_val.tanh(); }
-                        s_val += alibi_bias;
-
-                        if s_val > m {
-                            let ms = (m - s_val).exp();
-                            for t in 0..d { acc[t] *= ms; }
-                            ssum *= ms;
-                            m = s_val;
-                            let v_base = kv_pos * v_seq_stride + v_head_off;
-                            let v_row = &v_data[v_base..v_base + d];
-                            for t in 0..d { acc[t] += v_row[t].to_f32().unwrap_or(0.0); }
-                            ssum += 1.0;
-                        } else {
-                            let w = (s_val - m).exp();
-                            let v_base = kv_pos * v_seq_stride + v_head_off;
-                            let v_row = &v_data[v_base..v_base + d];
-                            for t in 0..d { acc[t] += v_row[t].to_f32().unwrap_or(0.0) * w; }
-                            ssum += w;
-                        }
+                for kv_pos in 0..kv_len {
+                    let alibi_bias = if max_bias > 0.0 {
+                        slope * (kv_pos as f32 - (kv_len - 1) as f32)
+                    } else {
+                        0.0
+                    };
+                    let k_base = kv_pos * k_seq_stride + k_head_off;
+                    let k_row = &k_data[k_base..k_base + d];
+                    let mut s_val = vec_dot::<T>(q_row, k_row).to_f32().unwrap_or(0.0);
+                    s_val *= scale_pre;
+                    if do_softcap {
+                        s_val = logit_softcap * s_val.tanh();
                     }
-                    let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d { out_chunk[t] = acc[t] * inv; }
-                },
-            );
+                    s_val += alibi_bias;
+
+                    if s_val > m {
+                        let ms = (m - s_val).exp();
+                        for t in 0..d {
+                            acc[t] *= ms;
+                        }
+                        ssum *= ms;
+                        m = s_val;
+                        let v_base = kv_pos * v_seq_stride + v_head_off;
+                        let v_row = &v_data[v_base..v_base + d];
+                        for t in 0..d {
+                            acc[t] += v_row[t].to_f32().unwrap_or(0.0);
+                        }
+                        ssum += 1.0;
+                    } else {
+                        let w = (s_val - m).exp();
+                        let v_base = kv_pos * v_seq_stride + v_head_off;
+                        let v_row = &v_data[v_base..v_base + d];
+                        for t in 0..d {
+                            acc[t] += v_row[t].to_f32().unwrap_or(0.0) * w;
+                        }
+                        ssum += w;
+                    }
+                }
+                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                for t in 0..d {
+                    out_chunk[t] = acc[t] * inv;
+                }
+            },
+        );
     });
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
@@ -740,7 +811,9 @@ fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real>(
                     let q_pos = row_idx % s_q;
                     let slope = if max_bias > 0.0 {
                         2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
-                    } else { 0.0 };
+                    } else {
+                        0.0
+                    };
                     let k_head_off = (h_i / rk) * d;
                     let v_head_off = (h_i / rv) * d;
                     let q_base = q_pos * q_seq_stride + h_i * d;
@@ -754,33 +827,45 @@ fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real>(
                     for kv_pos in 0..kv_end {
                         let alibi_bias = if max_bias > 0.0 {
                             slope * (kv_pos as i64 - (q_pos + kv_offset) as i64) as f32
-                        } else { 0.0 };
+                        } else {
+                            0.0
+                        };
                         let k_base = kv_pos * k_seq_stride + k_head_off;
                         let k_row = &k_data[k_base..k_base + d];
                         let mut s_val = vec_dot::<T>(q_row, k_row).to_f32().unwrap_or(0.0);
                         s_val *= scale_pre;
-                        if do_softcap { s_val = logit_softcap * s_val.tanh(); }
+                        if do_softcap {
+                            s_val = logit_softcap * s_val.tanh();
+                        }
                         s_val += alibi_bias;
 
                         if s_val > m {
                             let ms = (m - s_val).exp();
-                            for t in 0..d { acc[t] *= ms; }
+                            for t in 0..d {
+                                acc[t] *= ms;
+                            }
                             ssum *= ms;
                             m = s_val;
                             let v_base = kv_pos * v_seq_stride + v_head_off;
                             let v_row = &v_data[v_base..v_base + d];
-                            for t in 0..d { acc[t] += v_row[t].to_f32().unwrap_or(0.0); }
+                            for t in 0..d {
+                                acc[t] += v_row[t].to_f32().unwrap_or(0.0);
+                            }
                             ssum += 1.0;
                         } else {
                             let w = (s_val - m).exp();
                             let v_base = kv_pos * v_seq_stride + v_head_off;
                             let v_row = &v_data[v_base..v_base + d];
-                            for t in 0..d { acc[t] += v_row[t].to_f32().unwrap_or(0.0) * w; }
+                            for t in 0..d {
+                                acc[t] += v_row[t].to_f32().unwrap_or(0.0) * w;
+                            }
                             ssum += w;
                         }
                     }
                     let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d { out_chunk[t] = acc[t] * inv; }
+                    for t in 0..d {
+                        out_chunk[t] = acc[t] * inv;
+                    }
                 },
             );
     });
