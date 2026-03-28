@@ -1,3 +1,6 @@
+// Index loops (for t in 0..d) are intentional for SIMD auto-vectorization.
+#![allow(clippy::needless_range_loop)]
+
 //! Single-batch (B=1) causal attention using loop-bound masking.
 //!
 //! Operates directly on raw f32 slices with precomputed contiguous strides.

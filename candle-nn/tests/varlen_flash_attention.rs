@@ -24,6 +24,7 @@ mod tests {
     }
 
     impl VarlenImpl {
+        #[allow(clippy::too_many_arguments)]
         fn forward(
             &self,
             q: &Tensor,
@@ -129,7 +130,7 @@ mod tests {
         if num_heads == num_kv_heads {
             return Ok((k.clone(), v.clone()));
         }
-        if num_heads % num_kv_heads != 0 {
+        if !num_heads.is_multiple_of(num_kv_heads) {
             candle::bail!(
                 "Invalid GQA config: num_heads={} not divisible by num_kv_heads={}",
                 num_heads,
@@ -309,7 +310,7 @@ mod tests {
     ) -> Result<Tensor> {
         let device = q_var.device();
         let (total_q, num_heads, head_dim) = q_var.dims3()?;
-        let (_total_k, num_kv_heads, _hd2) = k_var.dims3()?;
+        let (_total_k, _num_kv_heads, _hd2) = k_var.dims3()?;
         assert_eq!(head_dim, _hd2);
 
         let seqlens_q_vec = seqlens_q.to_vec1::<u32>()?;
@@ -388,8 +389,8 @@ mod tests {
         let ctx = probs.matmul(&v)?.transpose(1, 2)?; // [B,max_q,H,D]
 
         let mut outs = Vec::with_capacity(bsz);
-        for i in 0..bsz {
-            let lq = seqlens_q_vec[i] as usize;
+        for (i, &lq) in seqlens_q_vec.iter().enumerate().take(bsz) {
+            let lq = lq as usize;
             outs.push(ctx.i(i)?.narrow(0, 0, lq)?);
         }
         Tensor::cat(&outs, 0)

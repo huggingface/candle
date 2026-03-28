@@ -173,6 +173,7 @@ struct AttentionWeights {
 }
 
 impl AttentionWeights {
+    #[allow(clippy::too_many_arguments)]
     fn new<R: Read + Seek>(
         gg: &mut Gguf<R>,
         num_heads: usize,
@@ -380,6 +381,7 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
+    #[allow(clippy::too_many_arguments)]
     fn new<R: Read + Seek>(
         gg: &mut Gguf<R>,
         num_attention_heads: usize,
