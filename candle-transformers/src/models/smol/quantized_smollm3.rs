@@ -2,6 +2,7 @@ use crate::models::with_tracing::QMatMul;
 use crate::quantized_var_builder::VarBuilder;
 use candle::quantized::gguf_file;
 use candle::{DType, Device, Module, Result, Tensor};
+use candle_nn::attention::{flash_attn, AttnMask};
 use candle_nn::kv_cache::KvCache;
 use candle_nn::Activation;
 use std::io::Write;
@@ -244,8 +245,10 @@ struct QuantizedAttention {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
+    hidden_size: usize,
     rotary_emb: Option<Arc<RotaryEmbedding>>,
     skip_rope: bool,
+    use_flash_attn: bool,
     kv_cache: KvCache,
 }
 
@@ -255,6 +258,7 @@ impl QuantizedAttention {
         cfg: &QuantizedConfig,
         layer_idx: usize,
         rotary_emb: Option<Arc<RotaryEmbedding>>,
+        use_flash_attn: bool,
     ) -> Result<Self> {
         let head_dim = cfg.head_dim();
         let num_heads = cfg.num_attention_heads;
@@ -303,8 +307,10 @@ impl QuantizedAttention {
             num_kv_heads,
             num_kv_groups: num_heads / num_kv_heads,
             head_dim,
+            hidden_size: num_heads * head_dim,
             rotary_emb,
             skip_rope: cfg.should_skip_rope(layer_idx),
+            use_flash_attn,
             kv_cache: KvCache::new(2, 512),
         })
     }
@@ -336,29 +342,61 @@ impl QuantizedAttention {
             (q, k)
         };
 
-        // can remove this continguous call if using ConcatKV-Cache https://github.com/huggingface/candle/pull/3143
         let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?;
-        let v = repeat_kv(v, self.num_kv_groups)?;
+        if self.use_flash_attn && x.device().is_cpu() {
+            // CPU flash attention: (B,H,L,D) → (B,L,H,D) for flash_attn
+            let q = q.transpose(1, 2)?.contiguous()?;
+            let k = k.transpose(1, 2)?.contiguous()?;
+            let v = v.transpose(1, 2)?.contiguous()?;
 
-        let scale = 1.0 / (self.head_dim as f64).sqrt();
-        // Make q contiguous before matmul to avoid stride mismatch
-        let q = q.contiguous()?;
-        let attn_weights = (q.matmul(&k.t()?)? * scale)?;
+            let scale = 1.0 / (self.head_dim as f32).sqrt();
 
-        let mut attn_weights = match mask {
-            Some(mask) => attn_weights.broadcast_add(mask)?,
-            None => attn_weights,
-        };
+            let ctx = match q.dtype() {
+                DType::F32 => flash_attn::<f32>(
+                    &q, &k, &v, scale,
+                    AttnMask::causal_with_offset(offset),
+                    None, None,
+                )?,
+                DType::F16 => {
+                    let q = q.to_dtype(DType::F32)?;
+                    let k = k.to_dtype(DType::F32)?;
+                    let v = v.to_dtype(DType::F32)?;
+                    let ctx = flash_attn::<f32>(
+                        &q, &k, &v, scale,
+                        AttnMask::causal_with_offset(offset),
+                        None, None,
+                    )?;
+                    ctx.to_dtype(DType::F16)?
+                }
+                dtype => candle::bail!("Unsupported dtype for CPU flash attention: {:?}", dtype),
+            };
 
-        attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = attn_weights.matmul(&v)?;
+            // flash_attn output: (B,H,S,D) → (B,S,H,D) → (B,L,hidden)
+            let ctx = ctx.transpose(1, 2)?;
+            ctx.reshape((b, seq_len, self.hidden_size))?.apply(&self.o_proj)
+        } else {
+            // Standard matmul attention
+            let k = repeat_kv(k, self.num_kv_groups)?;
+            let v = repeat_kv(v, self.num_kv_groups)?;
 
-        attn_output
-            .transpose(1, 2)?
-            .reshape((b, seq_len, self.num_heads * self.head_dim))?
-            .apply(&self.o_proj)
+            let scale = 1.0 / (self.head_dim as f64).sqrt();
+            let q = q.contiguous()?;
+            let attn_weights = (q.matmul(&k.t()?)? * scale)?;
+
+            let attn_weights = match mask {
+                Some(mask) => attn_weights.broadcast_add(mask)?,
+                None => attn_weights,
+            };
+
+            let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+            let attn_output = attn_weights.matmul(&v)?;
+
+            attn_output
+                .transpose(1, 2)?
+                .reshape((b, seq_len, self.hidden_size))?
+                .apply(&self.o_proj)
+        }
     }
 
     fn clear_kv_cache(&mut self) {
@@ -380,11 +418,12 @@ impl QuantizedDecoderLayer {
         cfg: &QuantizedConfig,
         layer_idx: usize,
         rotary_emb: Option<Arc<RotaryEmbedding>>,
+        use_flash_attn: bool,
     ) -> Result<Self> {
         let attn_vb = vb.pp(format!("blk.{layer_idx}"));
 
         Ok(Self {
-            self_attn: QuantizedAttention::new(attn_vb.clone(), cfg, layer_idx, rotary_emb)?,
+            self_attn: QuantizedAttention::new(attn_vb.clone(), cfg, layer_idx, rotary_emb, use_flash_attn)?,
             mlp: QuantizedMLP::new(attn_vb.clone(), layer_idx)?,
             input_layernorm: RmsNorm::new(
                 attn_vb
@@ -425,11 +464,12 @@ pub struct QuantizedModelForCausalLM {
     norm: RmsNorm,
     lm_head: QMatMul,
     device: Device,
+    use_flash_attn: bool,
     config: QuantizedConfig,
 }
 
 impl QuantizedModelForCausalLM {
-    pub fn from_gguf<P: AsRef<std::path::Path>>(path: P, device: &Device) -> Result<Self> {
+    pub fn from_gguf<P: AsRef<std::path::Path>>(path: P, device: &Device, use_flash_attn: bool) -> Result<Self> {
         use candle::quantized::{GgmlDType, QTensor};
 
         // Open file once to read metadata
@@ -472,6 +512,7 @@ impl QuantizedModelForCausalLM {
                 &config,
                 layer_idx,
                 rotary_emb.clone(),
+                use_flash_attn,
             )?);
         }
         println!(
@@ -498,6 +539,7 @@ impl QuantizedModelForCausalLM {
             norm,
             lm_head,
             device: device.clone(),
+            use_flash_attn,
             config,
         })
     }
@@ -508,8 +550,8 @@ impl QuantizedModelForCausalLM {
         // Embed tokens
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
-        // Create causal mask if needed
-        let mask = if seq_len > 1 {
+        // Skip mask materialization when using CPU flash attention
+        let mask = if seq_len > 1 && !(self.use_flash_attn && self.device.is_cpu()) {
             Some(self.create_causal_mask(batch_size, seq_len, offset)?)
         } else {
             None
