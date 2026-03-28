@@ -4,7 +4,7 @@ use candle::quantized::gguf_file;
 use candle::{DType, Device, Module, Result, Storage, Tensor};
 use candle_nn::attention::cpu_flash::causal::causal_decode_f32_interleaved;
 use candle_nn::attention::{flash_attn, AttnMask};
-use candle_nn::kv_cache::{InterleavedKvCache, KvCache};
+use candle_nn::kv_cache::{rope_i_inplace, InterleavedKvCache, KvCache, RawInterleavedKvCache};
 use candle_nn::Activation;
 use std::io::Write;
 use std::sync::Arc;
@@ -226,10 +226,16 @@ impl RmsNorm {
 pub struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
+    /// Pre-extracted flat f32 arrays for fused in-place RoPE (no tensor ops at decode time)
+    cos_f32: Vec<f32>,
+    sin_f32: Vec<f32>,
+    half_d: usize,
+    /// When true, use interleaved RoPE (pairs adjacent elements 2i,2i+1)
+    use_interleaved: bool,
 }
 
 impl RotaryEmbedding {
-    pub fn new(dtype: DType, cfg: &QuantizedConfig, dev: &Device) -> Result<Self> {
+    pub fn new(dtype: DType, cfg: &QuantizedConfig, dev: &Device, use_interleaved: bool) -> Result<Self> {
         let dim = cfg.head_dim();
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
@@ -242,9 +248,19 @@ impl RotaryEmbedding {
             .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
+        let sin_t = freqs.sin()?;
+        let cos_t = freqs.cos()?;
+        // Pre-extract flat f32 for fused decode RoPE — shape is (max_seq_len, D/2)
+        let cos_f32 = cos_t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let sin_f32 = sin_t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let half_d = dim / 2;
         Ok(Self {
-            sin: freqs.sin()?.to_dtype(dtype)?,
-            cos: freqs.cos()?.to_dtype(dtype)?,
+            sin: sin_t.to_dtype(dtype)?,
+            cos: cos_t.to_dtype(dtype)?,
+            cos_f32,
+            sin_f32,
+            half_d,
+            use_interleaved,
         })
     }
 
@@ -257,9 +273,26 @@ impl RotaryEmbedding {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
         let sin = self.sin.narrow(0, offset, seq_len)?;
-        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+        let (q_embed, k_embed) = if self.use_interleaved {
+            // Interleaved RoPE: pairs adjacent elements (2i, 2i+1)
+            // Correct for interlaced GGUF weight layout
+            let q_embed = candle_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = candle_nn::rotary_emb::rope_i(&k.contiguous()?, &cos, &sin)?;
+            (q_embed, k_embed)
+        } else {
+            let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+            (q_embed, k_embed)
+        };
         Ok((q_embed, k_embed))
+    }
+
+    /// Get raw f32 cos/sin slices for a single position. Zero allocation.
+    #[inline]
+    pub fn cos_sin_at(&self, pos: usize) -> (&[f32], &[f32]) {
+        let start = pos * self.half_d;
+        let end = start + self.half_d;
+        (&self.cos_f32[start..end], &self.sin_f32[start..end])
     }
 }
 
@@ -318,6 +351,10 @@ struct QuantizedAttention {
     use_flash_attn: bool,
     kv_cache: KvCache,
     interleaved_cache: InterleavedKvCache,
+    raw_cache: RawInterleavedKvCache,
+    /// Pre-allocated buffers for in-place RoPE during fused decode
+    q_rope_buf: Vec<f32>,
+    k_rope_buf: Vec<f32>,
 }
 
 impl QuantizedAttention {
@@ -334,31 +371,44 @@ impl QuantizedAttention {
 
         let v_proj = QMatMul::from_weights(vb.get_no_shape("attn_v.weight")?)?;
 
-        use candle::quantized::{GgmlDType, QTensor};
         let device = vb.device();
         let cpu = Device::Cpu;
 
         {
             let o_proj = QMatMul::from_weights(vb.get_no_shape("attn_output.weight")?)?;
 
-            let q_weight_qtensor = vb.get_no_shape("attn_q.weight")?;
-            let q_weight_raw = q_weight_qtensor.dequantize(&cpu)?;
-            let q_weight = reconstruct_qk_weights(&q_weight_raw, num_heads)?;
-            let q_weight = q_weight.to_device(device)?;
-            let q_weight_qtensor = QTensor::quantize(&q_weight, GgmlDType::Q8_0)?;
-            drop(q_weight_raw);
-            drop(q_weight);
+            let (q_proj, k_proj) = if use_flash_attn {
+                // ── Interlaced path: skip reconstruction entirely ────────
+                // Q/K weights stay in native GGUF order. The interleaved
+                // RoPE (rope_i) handles the element pairing correctly.
+                // Dot product is order-independent so QK scores are correct.
+                // V is not interlaced, so attention output is standard order.
+                let q_proj = QMatMul::from_weights(vb.get_no_shape("attn_q.weight")?)?;
+                let k_proj = QMatMul::from_weights(vb.get_no_shape("attn_k.weight")?)?;
+                (q_proj, k_proj)
+            } else {
+                // ── Standard path: dequantize → reconstruct → requantize ─
+                use candle::quantized::{GgmlDType, QTensor};
+                let q_weight_qtensor = vb.get_no_shape("attn_q.weight")?;
+                let q_weight_raw = q_weight_qtensor.dequantize(&cpu)?;
+                let q_weight = reconstruct_qk_weights(&q_weight_raw, num_heads)?;
+                let q_weight = q_weight.to_device(device)?;
+                let q_weight_qtensor = QTensor::quantize(&q_weight, GgmlDType::Q8_0)?;
+                drop(q_weight_raw);
+                drop(q_weight);
 
-            let k_weight_qtensor = vb.get_no_shape("attn_k.weight")?;
-            let k_weight_raw = k_weight_qtensor.dequantize(&cpu)?;
-            let k_weight = reconstruct_qk_weights(&k_weight_raw, num_kv_heads)?;
-            let k_weight = k_weight.to_device(device)?;
-            let k_weight_qtensor = QTensor::quantize(&k_weight, GgmlDType::Q8_0)?;
-            drop(k_weight_raw);
-            drop(k_weight);
+                let k_weight_qtensor = vb.get_no_shape("attn_k.weight")?;
+                let k_weight_raw = k_weight_qtensor.dequantize(&cpu)?;
+                let k_weight = reconstruct_qk_weights(&k_weight_raw, num_kv_heads)?;
+                let k_weight = k_weight.to_device(device)?;
+                let k_weight_qtensor = QTensor::quantize(&k_weight, GgmlDType::Q8_0)?;
+                drop(k_weight_raw);
+                drop(k_weight);
 
-            let q_proj = QMatMul::from_weights(Arc::new(q_weight_qtensor))?;
-            let k_proj = QMatMul::from_weights(Arc::new(k_weight_qtensor))?;
+                let q_proj = QMatMul::from_weights(Arc::new(q_weight_qtensor))?;
+                let k_proj = QMatMul::from_weights(Arc::new(k_weight_qtensor))?;
+                (q_proj, k_proj)
+            };
 
             Ok(Self {
                 q_proj,
@@ -375,6 +425,9 @@ impl QuantizedAttention {
                 use_flash_attn,
                 kv_cache: KvCache::new(2, 512),
                 interleaved_cache: InterleavedKvCache::new(head_dim),
+                raw_cache: RawInterleavedKvCache::new(num_kv_heads, head_dim, MAX_SEQ_LEN),
+                q_rope_buf: vec![0f32; num_heads * head_dim],
+                k_rope_buf: vec![0f32; num_kv_heads * head_dim],
             })
         }
     }
@@ -382,6 +435,72 @@ impl QuantizedAttention {
     fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let (b, seq_len, _) = x.dims3()?;
 
+        // ── Fused decode: raw f32 path, zero tensor ops in hot path ─────
+        if self.use_flash_attn && x.device().is_cpu() && seq_len == 1 && b == 1
+            && x.dtype() == DType::F32
+        {
+            // 1. Run QKV projections — extract raw f32 output slices
+            let q_proj_out = self.q_proj.forward(x)?; // (1, 1, H_q * D)
+            let k_proj_out = self.k_proj.forward(x)?; // (1, 1, H_kv * D)
+            let v_proj_out = self.v_proj.forward(x)?; // (1, 1, H_kv * D)
+
+            // Extract flat f32 slices
+            let (q_g, q_l) = q_proj_out.storage_and_layout();
+            let q_flat: &[f32] = match &*q_g {
+                Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[q_l.start_offset()..],
+                _ => candle::bail!("Expected CPU storage"),
+            };
+            let (k_g, k_l) = k_proj_out.storage_and_layout();
+            let k_flat: &[f32] = match &*k_g {
+                Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[k_l.start_offset()..],
+                _ => candle::bail!("Expected CPU storage"),
+            };
+            let (v_g, v_l) = v_proj_out.storage_and_layout();
+            let v_flat: &[f32] = match &*v_g {
+                Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[v_l.start_offset()..],
+                _ => candle::bail!("Expected CPU storage"),
+            };
+
+            // 2. Copy Q and K into pre-allocated buffers for in-place RoPE (no allocation)
+            let q_len = self.num_heads * self.head_dim;
+            let k_len = self.num_kv_heads * self.head_dim;
+            self.q_rope_buf[..q_len].copy_from_slice(&q_flat[..q_len]);
+            self.k_rope_buf[..k_len].copy_from_slice(&k_flat[..k_len]);
+
+            // 3. Apply RoPE in-place (no tensor ops, no allocation)
+            if !self.skip_rope {
+                if let Some(rope) = &self.rotary_emb {
+                    let (cos, sin) = rope.cos_sin_at(offset);
+                    rope_i_inplace(&mut self.q_rope_buf[..q_len], cos, sin, self.num_heads, self.head_dim);
+                    rope_i_inplace(&mut self.k_rope_buf[..k_len], cos, sin, self.num_kv_heads, self.head_dim);
+                }
+            }
+
+            // 4. Write K, V directly into raw cache (no tensor allocation)
+            self.raw_cache.write_kv(
+                &self.k_rope_buf[..k_len],
+                &v_flat[..k_len],
+            );
+
+            // 5. Run interleaved decode kernel
+            let scale = 1.0 / (self.head_dim as f32).sqrt();
+            let kv_len = self.raw_cache.len();
+            let ctx = causal_decode_f32_interleaved(
+                &self.q_rope_buf[..q_len],
+                self.raw_cache.data(),
+                self.num_heads,
+                self.num_kv_heads,
+                self.head_dim,
+                kv_len,
+                scale,
+            )?;
+
+            // 6. Output: (H_q, 1, D) → (1, 1, H_q*D) → o_proj
+            let ctx = ctx.unsqueeze(0)?.transpose(1, 2)?;
+            return ctx.reshape((b, seq_len, self.hidden_size))?.apply(&self.o_proj);
+        }
+
+        // ── Standard path (prefill, non-f32, non-flash) ─────────────────
         let q = self
             .q_proj
             .forward(x)?
@@ -407,65 +526,40 @@ impl QuantizedAttention {
         };
 
         if self.use_flash_attn && x.device().is_cpu() {
-            // Interleaved KV cache: (S, H_kv, 2*D)
+            // Prefill: use InterleavedKvCache (tensor-based) + flash_attn
             let kv = self.interleaved_cache.append(&k, &v)?;
+            // Also populate raw cache for subsequent decode steps
+            {
+                let k_cont = k.squeeze(0)?.transpose(0, 1)?.contiguous()?;
+                let v_cont = v.squeeze(0)?.transpose(0, 1)?.contiguous()?;
+                let (kg, kl) = k_cont.storage_and_layout();
+                let k_data: &[f32] = match &*kg {
+                    Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[kl.start_offset()..],
+                    _ => candle::bail!("Expected CPU"),
+                };
+                let (vg, vl) = v_cont.storage_and_layout();
+                let v_data: &[f32] = match &*vg {
+                    Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[vl.start_offset()..],
+                    _ => candle::bail!("Expected CPU"),
+                };
+                self.raw_cache.write_kv_batch(k_data, v_data, seq_len);
+            }
 
             let scale = 1.0 / (self.head_dim as f32).sqrt();
+            let kv_k = kv.narrow(2, 0, self.head_dim)?.unsqueeze(0)?;
+            let kv_v = kv.narrow(2, self.head_dim, self.head_dim)?.unsqueeze(0)?;
 
-            if seq_len == 1 && b == 1 && kv.dtype() == DType::F32 {
-                // ── Decode: interleaved kernel on raw slices ──
-                let q_2d = q.squeeze(0)?.squeeze(1)?.contiguous()?;
+            let q = q.transpose(1, 2)?.contiguous()?;
+            let k = kv_k.contiguous()?;
+            let v = kv_v.contiguous()?;
 
-                let (kv_g, kv_l) = kv.storage_and_layout();
-                let kv_data: &[f32] = match &*kv_g {
-                    Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[kv_l.start_offset()..],
-                    _ => candle::bail!("Expected CPU storage"),
-                };
-                let (q_g, q_l) = q_2d.storage_and_layout();
-                let q_data: &[f32] = match &*q_g {
-                    Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[q_l.start_offset()..],
-                    _ => candle::bail!("Expected CPU storage"),
-                };
-
-                let kv_len = kv.dims()[0];
-                let ctx = causal_decode_f32_interleaved(
-                    q_data, kv_data,
-                    self.num_heads, self.num_kv_heads, self.head_dim, kv_len,
-                    scale,
-                )?;
-                let ctx = ctx.unsqueeze(0)?.transpose(1, 2)?;
-                ctx.reshape((b, seq_len, self.hidden_size))?.apply(&self.o_proj)
-            } else {
-                // ── Prefill or non-f32: split KV, use standard flash_attn ──
-                let kv_k = kv.narrow(2, 0, self.head_dim)?.unsqueeze(0)?;
-                let kv_v = kv.narrow(2, self.head_dim, self.head_dim)?.unsqueeze(0)?;
-
-                let q = q.transpose(1, 2)?.contiguous()?;
-                let k = kv_k.contiguous()?;
-                let v = kv_v.contiguous()?;
-
-                let ctx = match q.dtype() {
-                    DType::F32 => flash_attn::<f32>(
-                        &q, &k, &v, scale,
-                        AttnMask::causal_with_offset(offset),
-                        None, None,
-                    )?,
-                    DType::F16 => {
-                        let q = q.to_dtype(DType::F32)?;
-                        let k = k.to_dtype(DType::F32)?;
-                        let v = v.to_dtype(DType::F32)?;
-                        flash_attn::<f32>(
-                            &q, &k, &v, scale,
-                            AttnMask::causal_with_offset(offset),
-                            None, None,
-                        )?.to_dtype(DType::F16)?
-                    }
-                    dtype => candle::bail!("Unsupported dtype: {:?}", dtype),
-                };
-
-                let ctx = ctx.transpose(1, 2)?;
-                ctx.reshape((b, seq_len, self.hidden_size))?.apply(&self.o_proj)
-            }
+            let ctx = flash_attn::<f32>(
+                &q, &k, &v, scale,
+                AttnMask::causal_with_offset(offset),
+                None, None,
+            )?;
+            let ctx = ctx.transpose(1, 2)?;
+            ctx.reshape((b, seq_len, self.hidden_size))?.apply(&self.o_proj)
         } else {
             // Standard matmul attention (no flash)
             let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
@@ -495,6 +589,7 @@ impl QuantizedAttention {
     fn clear_kv_cache(&mut self) {
         self.kv_cache.reset();
         self.interleaved_cache.reset();
+        self.raw_cache.reset();
     }
 }
 
@@ -584,7 +679,7 @@ impl QuantizedModelForCausalLM {
         // Create rotary embedding if needed
         let needs_rope = (0..config.num_hidden_layers).any(|i| !config.should_skip_rope(i));
         let rotary_emb = if needs_rope {
-            Some(Arc::new(RotaryEmbedding::new(DType::F32, &config, device)?))
+            Some(Arc::new(RotaryEmbedding::new(DType::F32, &config, device, use_flash_attn)?))
         } else {
             None
         };

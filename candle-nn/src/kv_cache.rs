@@ -1048,3 +1048,132 @@ impl InterleavedKvCache {
         self.kv = None;
     }
 }
+
+/// Pre-allocated raw f32 interleaved KV cache.
+///
+/// Stores K and V interleaved in a flat `Vec<f32>` with layout
+/// `(S, H_kv, 2*D)`. No tensor allocations on append — just memcpy
+/// into the pre-allocated buffer.
+///
+/// The decode kernel reads directly from `self.data()` with zero overhead.
+#[derive(Debug, Clone)]
+pub struct RawInterleavedKvCache {
+    /// Flat buffer: capacity = max_seq * h_kv * 2 * d
+    buf: Vec<f32>,
+    h_kv: usize,
+    d: usize,
+    /// Stride per position: h_kv * 2 * d
+    pos_stride: usize,
+    /// Current number of positions written
+    len: usize,
+}
+
+impl RawInterleavedKvCache {
+    /// Create a new cache with space for `max_seq` positions.
+    pub fn new(h_kv: usize, d: usize, max_seq: usize) -> Self {
+        let pos_stride = h_kv * 2 * d;
+        Self {
+            buf: vec![0f32; max_seq * pos_stride],
+            h_kv,
+            d,
+            pos_stride,
+            len: 0,
+        }
+    }
+
+    /// Number of positions currently cached.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Write one position of K and V into the cache.
+    ///
+    /// `k_flat` and `v_flat` are flat `(H_kv * D)` slices from the projection output.
+    /// They are interleaved per-head into the buffer: `[H0_K, H0_V, H1_K, H1_V, ...]`.
+    pub fn write_kv(&mut self, k_flat: &[f32], v_flat: &[f32]) {
+        let pos = self.len;
+        let base = pos * self.pos_stride;
+        let d = self.d;
+
+        // Grow buffer if needed
+        if base + self.pos_stride > self.buf.len() {
+            self.buf.resize(self.buf.len() * 2, 0.0);
+        }
+
+        for h in 0..self.h_kv {
+            let k_src = h * d;
+            let v_src = h * d;
+            let dst = base + h * 2 * d;
+            self.buf[dst..dst + d].copy_from_slice(&k_flat[k_src..k_src + d]);
+            self.buf[dst + d..dst + 2 * d].copy_from_slice(&v_flat[v_src..v_src + d]);
+        }
+
+        self.len += 1;
+    }
+
+    /// Write multiple positions of K and V (for prefill).
+    ///
+    /// `k_flat` is `(S, H_kv * D)` row-major, `v_flat` same.
+    pub fn write_kv_batch(&mut self, k_flat: &[f32], v_flat: &[f32], seq_len: usize) {
+        let hd = self.h_kv * self.d;
+        for s in 0..seq_len {
+            let k_row = &k_flat[s * hd..(s + 1) * hd];
+            let v_row = &v_flat[s * hd..(s + 1) * hd];
+            self.write_kv(k_row, v_row);
+        }
+    }
+
+    /// Get the active portion of the cache as a slice: `(len * H_kv * 2 * D)` elements.
+    pub fn data(&self) -> &[f32] {
+        &self.buf[..self.len * self.pos_stride]
+    }
+
+    pub fn reset(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn h_kv(&self) -> usize {
+        self.h_kv
+    }
+
+    pub fn d(&self) -> usize {
+        self.d
+    }
+}
+
+/// Apply interleaved RoPE in-place on a flat `(H, D)` slice.
+///
+/// Pairs adjacent elements `(2i, 2i+1)` with frequency `cos[i], sin[i]`.
+/// `cos` and `sin` are `(D/2,)` for the current position.
+pub fn rope_i_inplace(data: &mut [f32], cos: &[f32], sin: &[f32], num_heads: usize, d: usize) {
+    let half_d = d / 2;
+    for h in 0..num_heads {
+        let base = h * d;
+        for i in 0..half_d {
+            let a = data[base + 2 * i];
+            let b = data[base + 2 * i + 1];
+            data[base + 2 * i] = a * cos[i] - b * sin[i];
+            data[base + 2 * i + 1] = b * cos[i] + a * sin[i];
+        }
+    }
+}
+
+/// Apply standard (half-rotation) RoPE in-place on a flat `(H, D)` slice.
+///
+/// Pairs elements `(i, i+D/2)` with frequency `cos[i], sin[i]`.
+pub fn rope_inplace(data: &mut [f32], cos: &[f32], sin: &[f32], num_heads: usize, d: usize) {
+    let half_d = d / 2;
+    for h in 0..num_heads {
+        let base = h * d;
+        for i in 0..half_d {
+            let a = data[base + i];
+            let b = data[base + i + half_d];
+            data[base + i] = a * cos[i] - b * sin[i];
+            data[base + i + half_d] = b * cos[i] + a * sin[i];
+        }
+    }
+}

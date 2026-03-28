@@ -18,6 +18,7 @@ use super::standard::{vec_dot, FLASH_ATTN_POOL};
 /// ~3 cycles on ARM vs ~20 for std exp(). The bit manipulation maps the
 /// float exponent field directly: exp(x) ≈ reinterpret(2^23/ln2 * x + 127*2^23).
 #[inline(always)]
+#[allow(dead_code)]
 fn fast_exp(x: f32) -> f32 {
     if x < -88.0 {
         return 0.0;
@@ -252,14 +253,14 @@ fn causal_decode_f32(
                         }
 
                         if score > m {
-                            let scale_old = fast_exp(m - score);
+                            let scale_old = f32::exp(m - score);
                             for t in 0..d { acc[t] *= scale_old; }
                             ssum *= scale_old;
                             m = score;
                             for t in 0..d { acc[t] += v_row[t]; }
                             ssum += 1.0;
                         } else {
-                            let w = fast_exp(score - m);
+                            let w = f32::exp(score - m);
                             for t in 0..d { acc[t] += v_row[t] * w; }
                             ssum += w;
                         }
@@ -327,14 +328,14 @@ fn causal_decode_f32_lean(
                         }
 
                         if score > m {
-                            let scale_old = fast_exp(m - score);
+                            let scale_old = f32::exp(m - score);
                             for t in 0..d { acc[t] *= scale_old; }
                             ssum *= scale_old;
                             m = score;
                             for t in 0..d { acc[t] += v_row[t]; }
                             ssum += 1.0;
                         } else {
-                            let w = fast_exp(score - m);
+                            let w = f32::exp(score - m);
                             for t in 0..d { acc[t] += v_row[t] * w; }
                             ssum += w;
                         }
@@ -399,14 +400,14 @@ pub fn causal_decode_f32_interleaved(
                         let score = dot_f32(q_row, k_row) * scale;
 
                         if score > m {
-                            let scale_old = fast_exp(m - score);
+                            let scale_old = f32::exp(m - score);
                             for t in 0..d { acc[t] *= scale_old; }
                             ssum *= scale_old;
                             m = score;
                             for t in 0..d { acc[t] += v_row[t]; }
                             ssum += 1.0;
                         } else {
-                            let w = fast_exp(score - m);
+                            let w = f32::exp(score - m);
                             for t in 0..d { acc[t] += v_row[t] * w; }
                             ssum += w;
                         }
@@ -518,7 +519,7 @@ fn causal_prefill_f32(
                         }
 
                         if score > m {
-                            let scale_old = fast_exp(m - score);
+                            let scale_old = f32::exp(m - score);
                             for t in 0..d {
                                 acc[t] *= scale_old;
                             }
@@ -530,7 +531,7 @@ fn causal_prefill_f32(
                             }
                             ssum += 1.0;
                         } else {
-                            let w = fast_exp(score - m);
+                            let w = f32::exp(score - m);
                             for t in 0..d {
                                 acc[t] += v_row[t] * w;
                             }
@@ -612,14 +613,14 @@ fn causal_prefill_f32_lean(
                         }
 
                         if score > m {
-                            let scale_old = fast_exp(m - score);
+                            let scale_old = f32::exp(m - score);
                             for t in 0..d { acc[t] *= scale_old; }
                             ssum *= scale_old;
                             m = score;
                             for t in 0..d { acc[t] += v_row[t]; }
                             ssum += 1.0;
                         } else {
-                            let w = fast_exp(score - m);
+                            let w = f32::exp(score - m);
                             for t in 0..d { acc[t] += v_row[t] * w; }
                             ssum += w;
                         }
