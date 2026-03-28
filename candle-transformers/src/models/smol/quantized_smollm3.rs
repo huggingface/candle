@@ -1,9 +1,10 @@
 use crate::models::with_tracing::QMatMul;
 use crate::quantized_var_builder::VarBuilder;
 use candle::quantized::gguf_file;
-use candle::{DType, Device, Module, Result, Tensor};
+use candle::{DType, Device, Module, Result, Storage, Tensor};
+use candle_nn::attention::cpu_flash::causal::causal_decode_f32_interleaved;
 use candle_nn::attention::{flash_attn, AttnMask};
-use candle_nn::kv_cache::KvCache;
+use candle_nn::kv_cache::{InterleavedKvCache, KvCache};
 use candle_nn::Activation;
 use std::io::Write;
 use std::sync::Arc;
@@ -316,6 +317,7 @@ struct QuantizedAttention {
     skip_rope: bool,
     use_flash_attn: bool,
     kv_cache: KvCache,
+    interleaved_cache: InterleavedKvCache,
 }
 
 impl QuantizedAttention {
@@ -372,6 +374,7 @@ impl QuantizedAttention {
                 skip_rope: cfg.should_skip_rope(layer_idx),
                 use_flash_attn,
                 kv_cache: KvCache::new(2, 512),
+                interleaved_cache: InterleavedKvCache::new(head_dim),
             })
         }
     }
@@ -403,41 +406,70 @@ impl QuantizedAttention {
             (q, k)
         };
 
-        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
-
         if self.use_flash_attn && x.device().is_cpu() {
-            // CPU flash attention: (B,H,L,D) → (B,L,H,D) for flash_attn
-            let q = q.transpose(1, 2)?.contiguous()?;
-            let k = k.transpose(1, 2)?.contiguous()?;
-            let v = v.transpose(1, 2)?.contiguous()?;
+            // Interleaved KV cache: (S, H_kv, 2*D)
+            let kv = self.interleaved_cache.append(&k, &v)?;
 
             let scale = 1.0 / (self.head_dim as f32).sqrt();
 
-            let ctx = match q.dtype() {
-                DType::F32 => flash_attn::<f32>(
-                    &q, &k, &v, scale,
-                    AttnMask::causal_with_offset(offset),
-                    None, None,
-                )?,
-                DType::F16 => {
-                    let q = q.to_dtype(DType::F32)?;
-                    let k = k.to_dtype(DType::F32)?;
-                    let v = v.to_dtype(DType::F32)?;
-                    let ctx = flash_attn::<f32>(
+            if seq_len == 1 && b == 1 && kv.dtype() == DType::F32 {
+                // ── Decode: interleaved kernel on raw slices ──
+                let q_2d = q.squeeze(0)?.squeeze(1)?.contiguous()?;
+
+                let (kv_g, kv_l) = kv.storage_and_layout();
+                let kv_data: &[f32] = match &*kv_g {
+                    Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[kv_l.start_offset()..],
+                    _ => candle::bail!("Expected CPU storage"),
+                };
+                let (q_g, q_l) = q_2d.storage_and_layout();
+                let q_data: &[f32] = match &*q_g {
+                    Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[q_l.start_offset()..],
+                    _ => candle::bail!("Expected CPU storage"),
+                };
+
+                let kv_len = kv.dims()[0];
+                let ctx = causal_decode_f32_interleaved(
+                    q_data, kv_data,
+                    self.num_heads, self.num_kv_heads, self.head_dim, kv_len,
+                    scale,
+                )?;
+                let ctx = ctx.unsqueeze(0)?.transpose(1, 2)?;
+                ctx.reshape((b, seq_len, self.hidden_size))?.apply(&self.o_proj)
+            } else {
+                // ── Prefill or non-f32: split KV, use standard flash_attn ──
+                let kv_k = kv.narrow(2, 0, self.head_dim)?.unsqueeze(0)?;
+                let kv_v = kv.narrow(2, self.head_dim, self.head_dim)?.unsqueeze(0)?;
+
+                let q = q.transpose(1, 2)?.contiguous()?;
+                let k = kv_k.contiguous()?;
+                let v = kv_v.contiguous()?;
+
+                let ctx = match q.dtype() {
+                    DType::F32 => flash_attn::<f32>(
                         &q, &k, &v, scale,
                         AttnMask::causal_with_offset(offset),
                         None, None,
-                    )?;
-                    ctx.to_dtype(DType::F16)?
-                }
-                dtype => candle::bail!("Unsupported dtype for CPU flash attention: {:?}", dtype),
-            };
+                    )?,
+                    DType::F16 => {
+                        let q = q.to_dtype(DType::F32)?;
+                        let k = k.to_dtype(DType::F32)?;
+                        let v = v.to_dtype(DType::F32)?;
+                        flash_attn::<f32>(
+                            &q, &k, &v, scale,
+                            AttnMask::causal_with_offset(offset),
+                            None, None,
+                        )?.to_dtype(DType::F16)?
+                    }
+                    dtype => candle::bail!("Unsupported dtype: {:?}", dtype),
+                };
 
-            // flash_attn output: (B,H,S,D) → (B,S,H,D) → (B,L,hidden)
-            let ctx = ctx.transpose(1, 2)?;
-            ctx.reshape((b, seq_len, self.hidden_size))?.apply(&self.o_proj)
+                let ctx = ctx.transpose(1, 2)?;
+                ctx.reshape((b, seq_len, self.hidden_size))?.apply(&self.o_proj)
+            }
         } else {
-            // Standard matmul attention
+            // Standard matmul attention (no flash)
+            let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
+
             let k = repeat_kv(k, self.num_kv_groups)?;
             let v = repeat_kv(v, self.num_kv_groups)?;
 
@@ -462,6 +494,7 @@ impl QuantizedAttention {
 
     fn clear_kv_cache(&mut self) {
         self.kv_cache.reset();
+        self.interleaved_cache.reset();
     }
 }
 
