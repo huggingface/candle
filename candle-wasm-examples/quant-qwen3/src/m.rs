@@ -81,7 +81,7 @@ impl Model {
 
             console_log!("GGUF file parsed, loading model weights...");
 
-            QuantizedQwen3::from_gguf(content, &mut cursor, &device)?
+            QuantizedQwen3::from_gguf(content, &mut cursor, &device, false)?
         };
 
         let load_time = (Date::now() - start) / 1000.0;
