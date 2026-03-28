@@ -769,7 +769,7 @@ impl<I: IntDType, M: ElemUpdate> Map2InPlace for Scatter<'_, I, M> {
 
         let ids = match self.ids_l.contiguous_offsets() {
             Some((a, b)) => &self.ids[a..b],
-            None => Err(Error::RequiresContiguous { op: "gather" }.bt())?,
+            None => Err(Error::RequiresContiguous { op: "scatter" }.bt())?,
         };
         for left_i in 0..ids_left_len {
             let start_ids_idx = left_i * ids_right_len * ids_dim_len;
