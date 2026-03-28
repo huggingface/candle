@@ -65,7 +65,7 @@ struct Args {
     #[arg(long)]
     tokenizer_file: Option<String>,
 
-    /// Path to a voice prompt safetensors file for TTS (converted from .pt).
+    /// Path to a voice prompt file for TTS (.safetensors or .pt format).
     #[arg(long)]
     voice_prompt: Option<String>,
 
@@ -341,6 +341,44 @@ fn run_asr(args: &Args, device: &Device) -> Result<()> {
 const TTS_TEXT_WINDOW_SIZE: usize = 5;
 const TTS_SPEECH_WINDOW_SIZE: usize = 6;
 
+/// Remap hierarchical tensor names from a .pt voice prompt pickle to the flat key
+/// format expected by [`VibeVoiceStreaming::load_voice_prompt`] and related helpers.
+///
+/// The pickle memo system clones objects, so objects modified after memo-put (e.g.
+/// DynamicCache populated via BUILD) appear stale in memo-retrieved references.
+/// The real data lives inside the `__reduce_class__` constructor args, which
+/// `extract_tensor_infos` now processes with the parent prefix, yielding
+/// positional names like `"lm.1.key_cache.0"` (Tuple index 1 = past_key_values).
+///
+/// This function handles both naming patterns:
+///   Named:      `"lm.past_key_values.key_cache.0"` → `"lm.kv.0.key"`
+///   Positional: `"lm.1.key_cache.0"`               → `"lm.kv.0.key"`
+///   Unchanged:  `"lm.last_hidden_state"`            → `"lm.last_hidden_state"`
+fn remap_pt_voice_key(key: &str) -> Option<String> {
+    // Patterns for KV cache tensors (both named and positional paths).
+    // The positional ".1." corresponds to Tuple index 1 in BaseModelOutputWithPast
+    // constructor args (index 0 = last_hidden_state, 1 = past_key_values).
+    for (segment, suffix) in [
+        (".past_key_values.key_cache.", ".key"),
+        (".past_key_values.value_cache.", ".value"),
+        (".1.key_cache.", ".key"),
+        (".1.value_cache.", ".value"),
+    ] {
+        if let Some(pos) = key.find(segment) {
+            let prefix = &key[..pos];
+            let idx_str = &key[pos + segment.len()..];
+            return Some(format!("{prefix}.kv.{idx_str}{suffix}"));
+        }
+    }
+    // Keep named keys (last_hidden_state etc.), skip positional-only duplicates
+    // like "lm.0" (duplicate of lm.last_hidden_state from Tuple index 0).
+    let last_segment = key.rsplit('.').next().unwrap_or(key);
+    if last_segment.parse::<usize>().is_ok() {
+        return None; // Skip purely positional leaf keys
+    }
+    Some(key.to_string())
+}
+
 /// Run TTS using the VibeVoice-Realtime streaming model with voice prompt and CFG diffusion.
 fn run_tts(args: &Args, device: &Device) -> Result<()> {
     let (config_filename, tokenizer_filename, filenames) = load_model_files(args, true, false)?;
@@ -364,12 +402,31 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
     let voice_prompt_path = args.voice_prompt.as_deref().ok_or_else(|| {
         anyhow::anyhow!(
             "--voice-prompt is required for TTS mode. \
-             Provide a .safetensors voice prompt file (convert .pt with convert_voice_prompt.py)."
+             Provide a voice prompt file (.safetensors or .pt format)."
         )
     })?;
 
     println!("Loading voice prompt from {voice_prompt_path}...");
-    let vp_tensors = candle::safetensors::load(voice_prompt_path, device)?;
+    let vp_tensors: std::collections::HashMap<String, Tensor> =
+        if voice_prompt_path.ends_with(".pt") || voice_prompt_path.ends_with(".pth") {
+            // The .pt file contains nested Python objects (BaseModelOutputWithPast
+            // with DynamicCache) rather than a flat state_dict.  Use recursive
+            // extraction and remap the hierarchical names to the flat key format
+            // expected by load_voice_prompt / get_voice_prompt_hidden_states.
+            let raw: std::collections::HashMap<String, Tensor> =
+                candle::pickle::read_all_recursive(voice_prompt_path)?
+                    .into_iter()
+                    .collect();
+            let mut mapped = std::collections::HashMap::new();
+            for (key, tensor) in raw {
+                if let Some(new_key) = remap_pt_voice_key(&key) {
+                    mapped.insert(new_key, tensor);
+                }
+            }
+            mapped
+        } else {
+            candle::safetensors::load(voice_prompt_path, device)?
+        };
     let (lm_seq_offset, tts_lm_seq_offset) = model.load_voice_prompt(&vp_tensors, dtype)?;
     let (_lm_hidden, tts_lm_hidden, _neg_lm_hidden, neg_tts_lm_hidden) =
         VibeVoiceStreaming::get_voice_prompt_hidden_states(&vp_tensors, dtype)?;
