@@ -1,15 +1,12 @@
-use crate::backend::{BackendDevice, BackendStorage};
-use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
+use crate::backend::BackendDevice;
+use crate::{CpuStorage, DType, Result, Shape};
 use half::{bf16, f16};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
-use super::{RocmError, RocmStorage, RocmStorageSlice, WrapErr};
-use rocm_rs::hip::{
-    kernel::AsKernelArg, Device as HipDevice, DeviceMemory, Dim3, Function, Module, Stream,
-};
+use super::{RocmError, RocmStorage, RocmStorageSlice};
+use rocm_rs::hip::{kernel::AsKernelArg, Device as HipDevice, DeviceMemory, Module, Stream};
 
-/// Unique identifier for ROCm devices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DeviceId(usize);
 
@@ -21,7 +18,6 @@ impl DeviceId {
     }
 }
 
-/// Kernel module cache
 pub struct ModuleCache {
     modules: HashMap<String, Arc<Module>>,
 }
@@ -32,24 +28,14 @@ impl ModuleCache {
             modules: HashMap::new(),
         }
     }
-
-    fn get(&self, name: &str) -> Option<Arc<Module>> {
-        self.modules.get(name).cloned()
-    }
-
-    fn insert(&mut self, name: String, module: Arc<Module>) {
-        self.modules.insert(name, module);
-    }
 }
 
 #[derive(Clone)]
 pub struct RocmDevice {
     id: DeviceId,
     device: Arc<HipDevice>,
-    stream: Arc<Stream>,
+    pub(crate) stream: Arc<Stream>,
     modules: Arc<Mutex<ModuleCache>>,
-    // TODO: rocBLAS integration
-    // blas: Arc<Mutex<rocblas::Handle>>,
 }
 
 impl std::fmt::Debug for RocmDevice {
@@ -59,17 +45,10 @@ impl std::fmt::Debug for RocmDevice {
 }
 
 impl RocmDevice {
-    /// Create a new ROCm device
     pub fn new(device_id: usize) -> Result<Self> {
-        let device = HipDevice::new(device_id as i32)
-            .map_err(|e| crate::Error::Msg(format!("Failed to create ROCm device: {}", e)))?;
-
-        device
-            .set_current()
-            .map_err(|e| crate::Error::Msg(format!("Failed to set ROCm device: {}", e)))?;
-
-        let stream = Stream::new()
-            .map_err(|e| crate::Error::Msg(format!("Failed to create ROCm stream: {}", e)))?;
+        let device = HipDevice::new(device_id as i32)?;
+        device.set_current()?;
+        let stream = device.get_stream()?;
 
         Ok(Self {
             id: DeviceId::new(),
@@ -83,14 +62,12 @@ impl RocmDevice {
         self.id
     }
 
-    /// Allocate device memory
-    pub fn alloc<T: AsKernelArg>(&self, len: usize) -> Result<DeviceMemory<T>> {
+    pub fn alloc<T>(&self, len: usize) -> Result<DeviceMemory<T>> {
         DeviceMemory::new(len)
             .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))
     }
 
-    /// Allocate zero-initialized memory
-    pub fn alloc_zeros<T: AsKernelArg + Default>(&self, len: usize) -> Result<DeviceMemory<T>> {
+    pub fn alloc_zeros<T: Default + Clone>(&self, len: usize) -> Result<DeviceMemory<T>> {
         let mut mem = DeviceMemory::new(len)
             .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))?;
         mem.memset(0)
@@ -98,145 +75,135 @@ impl RocmDevice {
         Ok(mem)
     }
 
-    /// Copy from host to device
-    pub fn memcpy_htod<T: AsKernelArg, Src: AsRef<[T]>>(
-        &self,
-        src: &Src,
-        dst: &mut DeviceMemory<T>,
-    ) -> Result<()> {
-        let slice = src.as_ref();
-        dst.copy_from_host(slice)
-            .map_err(|e| crate::Error::Msg(format!("Failed to copy HtoD: {}", e)))
-    }
-
-    /// Copy from host to device (async)
-    pub fn memcpy_htod_async<T: AsKernelArg + Clone, Src: AsRef<[T]>>(
-        &self,
-        src: &Src,
-        dst: &mut DeviceMemory<T>,
-    ) -> Result<()> {
-        let slice = src.as_ref();
-        dst.copy_from_host_async(slice.to_vec(), &self.stream)
-            .map_err(|e| crate::Error::Msg(format!("Failed to copy HtoD async: {}", e)))
-    }
-
-    /// Clone from host to device (allocates new memory)
-    pub fn clone_htod<T: AsKernelArg + Clone, Src: AsRef<[T]>>(
-        &self,
-        src: &Src,
-    ) -> Result<DeviceMemory<T>> {
-        let slice = src.as_ref();
-        let count = slice.len();
-        let mut dst = DeviceMemory::new(count)
-            .map_err(|e| crate::Error::Msg(format!("Failed to allocate: {}", e)))?;
-        dst.copy_from_host(slice)
-            .map_err(|e| crate::Error::Msg(format!("Failed to copy HtoD: {}", e)))?;
+    pub fn clone_htod<T: Clone>(&self, src: &[T]) -> Result<DeviceMemory<T>> {
+        let count = src.len();
+        let mut dst = DeviceMemory::new(count)?;
+        dst.copy_from_host(src)?;
         Ok(dst)
     }
 
-    /// Copy from device to host
-    pub fn memcpy_dtoh<T: AsKernelArg, Src: AsKernelArg>(
-        &self,
-        src: &DeviceMemory<T>,
-        dst: &mut [T],
-    ) -> Result<()> {
-        src.copy_to_host(dst)
-            .map_err(|e| crate::Error::Msg(format!("Failed to copy DtoH: {}", e)))
-    }
-
-    /// Copy device to host and return as Vec
-    pub fn clone_dtoh<T: AsKernelArg + Default + Clone>(
-        &self,
-        src: &DeviceMemory<T>,
-    ) -> Result<Vec<T>> {
+    pub fn clone_dtoh<T: Default + Clone>(&self, src: &DeviceMemory<T>) -> Result<Vec<T>> {
         let count = src.count();
         let mut dst: Vec<T> = vec![T::default(); count];
-        src.copy_to_host(&mut dst)
-            .map_err(|e| crate::Error::Msg(format!("Failed to copy DtoH: {}", e)))?;
+        src.copy_to_host(&mut dst)?;
         Ok(dst)
-    }
-
-    /// Copy device to device
-    pub fn memcpy_dtod<T: AsKernelArg>(
-        &self,
-        src: &DeviceMemory<T>,
-        dst: &mut DeviceMemory<T>,
-    ) -> Result<DeviceMemory<T>> {
-        // For now, allocate new memory and copy
-        let count = src.count().min(dst.count());
-        let slice_size = std::mem::size_of::<T>() * count;
-
-        unsafe {
-            use rocm_rs::hip::ffi::{hipMemcpy, hipMemcpyKind_hipMemcpyDeviceToDevice};
-            let result = hipMemcpy(
-                dst.as_ptr(),
-                src.as_ptr(),
-                slice_size,
-                hipMemcpyKind_hipMemcpyDeviceToDevice,
-            );
-            if result != rocm_rs::hip::ffi::hipError_t_hipSuccess {
-                return Err(crate::Error::Msg(format!(
-                    "Device to device copy failed: {}",
-                    result
-                )));
-            }
-        }
-
-        Ok(dst.clone())?;
-        unimplemented!("memcpy_dtod needs proper implementation")
-    }
-
-    /// Load or get cached kernel module
-    pub fn get_or_load_kernel(&self, kernel_name: &str) -> Result<Function> {
-        let module_name = kernel_name.split('_').next().unwrap_or("default");
-
-        // Check cache
-        {
-            let cache = self.modules.lock().unwrap();
-            if let Some(module) = cache.get(module_name) {
-                return module
-                    .get_function(kernel_name)
-                    .map_err(|e| crate::Error::Msg(format!("Failed to get function: {}", e)));
-            }
-        }
-
-        // Load module (this would need actual kernel bytes)
-        // For now, this is a placeholder - you'd embed kernel binaries
-        let kernel_bytes = get_kernel_bytes(module_name);
-        let module = Module::load_from_memory(kernel_bytes).map_err(|e| {
-            crate::Error::Msg(format!("Failed to load module {}: {}", module_name, e))
-        })?;
-
-        let module = Arc::new(module);
-
-        // Insert into cache
-        {
-            let mut cache = self.modules.lock().unwrap();
-            cache.insert(module_name.to_string(), module.clone());
-        }
-
-        module
-            .get_function(kernel_name)
-            .map_err(|e| crate::Error::Msg(format!("Failed to get function: {}", e)))
-    }
-
-    /// Get the HIP stream
-    pub fn stream(&self) -> &Stream {
-        &self.stream
     }
 
     pub fn synchronize(&self) -> Result<()> {
-        self.device
+        self.stream
             .synchronize()
             .map_err(|e| crate::Error::Msg(format!("Synchronize failed: {}", e)))
     }
 }
 
-/// Placeholder function to get kernel bytes
-/// In real implementation, these would be embedded binaries from candle-rocm-kernels
-fn get_kernel_bytes(module_name: &str) -> &'static [u8] {
-    // Placeholder - would be: &candle_rocm_kernels::AFFINE
-    &[]
+macro_rules! dispatch_dtypes {
+    ($method:ident, ($self:expr, $elem_count:expr, $dtype:expr) -> |$slice:ident| $body:expr) => {
+        match $dtype {
+            DType::U8 => {
+                let $slice = RocmStorageSlice::U8($self.$method::<u8>($elem_count)?);
+                $body
+            }
+            DType::U32 => {
+                let $slice = RocmStorageSlice::U32($self.$method::<u32>($elem_count)?);
+                $body
+            }
+            DType::I16 => {
+                let $slice = RocmStorageSlice::I16($self.$method::<i16>($elem_count)?);
+                $body
+            }
+            DType::I32 => {
+                let $slice = RocmStorageSlice::I32($self.$method::<i32>($elem_count)?);
+                $body
+            }
+            DType::I64 => {
+                let $slice = RocmStorageSlice::I64($self.$method::<i64>($elem_count)?);
+                $body
+            }
+            DType::BF16 => {
+                let $slice = RocmStorageSlice::BF16($self.$method::<bf16>($elem_count)?);
+                $body
+            }
+            DType::F16 => {
+                let $slice = RocmStorageSlice::F16($self.$method::<f16>($elem_count)?);
+                $body
+            }
+            DType::F32 => {
+                let $slice = RocmStorageSlice::F32($self.$method::<f32>($elem_count)?);
+                $body
+            }
+            DType::F64 => {
+                let $slice = RocmStorageSlice::F64($self.$method::<f64>($elem_count)?);
+                $body
+            }
+            DType::F8E4M3 => {
+                let $slice = RocmStorageSlice::F8E4M3($self.$method::<u8>($elem_count)?);
+                $body
+            }
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                return Err(crate::Error::Msg(format!(
+                    "DType {:?} not yet supported for ROCm",
+                    $dtype
+                )));
+            }
+        }
+    };
+}
+
+macro_rules! dispatch_cpu_storage {
+    ($storage:expr, $self:expr, |$data:ident, $variant:ident| $body:expr) => {
+        match $storage {
+            CpuStorage::U8($data) => {
+                let mem = $self.clone_htod($data.as_slice())?;
+                let $variant = RocmStorageSlice::U8(mem);
+                $body
+            }
+            CpuStorage::U32($data) => {
+                let mem = $self.clone_htod($data.as_slice())?;
+                let $variant = RocmStorageSlice::U32(mem);
+                $body
+            }
+            CpuStorage::I16($data) => {
+                let mem = $self.clone_htod($data.as_slice())?;
+                let $variant = RocmStorageSlice::I16(mem);
+                $body
+            }
+            CpuStorage::I32($data) => {
+                let mem = $self.clone_htod($data.as_slice())?;
+                let $variant = RocmStorageSlice::I32(mem);
+                $body
+            }
+            CpuStorage::I64($data) => {
+                let mem = $self.clone_htod($data.as_slice())?;
+                let $variant = RocmStorageSlice::I64(mem);
+                $body
+            }
+            CpuStorage::BF16($data) => {
+                let mem = $self.clone_htod($data.as_slice())?;
+                let $variant = RocmStorageSlice::BF16(mem);
+                $body
+            }
+            CpuStorage::F16($data) => {
+                let mem = $self.clone_htod($data.as_slice())?;
+                let $variant = RocmStorageSlice::F16(mem);
+                $body
+            }
+            CpuStorage::F32($data) => {
+                let mem = $self.clone_htod($data.as_slice())?;
+                let $variant = RocmStorageSlice::F32(mem);
+                $body
+            }
+            CpuStorage::F64($data) => {
+                let mem = $self.clone_htod($data.as_slice())?;
+                let $variant = RocmStorageSlice::F64(mem);
+                $body
+            }
+            _ => {
+                return Err(crate::Error::Msg(format!(
+                    "CpuStorage variant not yet supported for ROCm"
+                )));
+            }
+        }
+    };
 }
 
 impl BackendDevice for RocmDevice {
@@ -258,108 +225,61 @@ impl BackendDevice for RocmDevice {
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
         let elem_count = shape.elem_count();
-
-        let slice = match dtype {
-            DType::F32 => {
-                let mem = self.alloc_zeros::<f32>(elem_count)?;
-                RocmStorageSlice::F32(mem)
-            }
-            DType::U8 => {
-                let mem = self.alloc_zeros::<u8>(elem_count)?;
-                RocmStorageSlice::U8(mem)
-            }
-            _ => {
-                // For now, use CPU fallback for other types
-                return Err(crate::Error::Msg(format!(
-                    "DType {:?} not yet supported for ROCm zero init",
-                    dtype
-                )));
-            }
-        };
-
-        Ok(RocmStorage {
-            slice,
-            device: self.clone(),
+        dispatch_dtypes!(alloc_zeros, (self, elem_count, dtype) -> |slice| {
+            Ok(RocmStorage {
+                slice,
+                device: self.clone(),
+            })
         })
     }
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
         let elem_count = shape.elem_count();
+        dispatch_dtypes!(alloc, (self, elem_count, dtype) -> |slice| {
+            Ok(RocmStorage {
+                slice,
+                device: self.clone(),
+            })
+        })
+    }
 
-        let slice = match dtype {
-            DType::F32 => {
-                let mem = self.alloc::<f32>(elem_count)?;
-                RocmStorageSlice::F32(mem)
-            }
-            DType::U8 => {
-                let mem = self.alloc::<u8>(elem_count)?;
-                RocmStorageSlice::U8(mem)
-            }
-            _ => {
+    fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> Result<Self::Storage> {
+        let mem = self.clone_htod(data)?;
+        let slice = match T::DTYPE {
+            DType::U8 => RocmStorageSlice::U8(unsafe { std::mem::transmute(mem) }),
+            DType::U32 => RocmStorageSlice::U32(unsafe { std::mem::transmute(mem) }),
+            DType::I16 => RocmStorageSlice::I16(unsafe { std::mem::transmute(mem) }),
+            DType::I32 => RocmStorageSlice::I32(unsafe { std::mem::transmute(mem) }),
+            DType::I64 => RocmStorageSlice::I64(unsafe { std::mem::transmute(mem) }),
+            DType::BF16 => RocmStorageSlice::BF16(unsafe { std::mem::transmute(mem) }),
+            DType::F16 => RocmStorageSlice::F16(unsafe { std::mem::transmute(mem) }),
+            DType::F32 => RocmStorageSlice::F32(unsafe { std::mem::transmute(mem) }),
+            DType::F64 => RocmStorageSlice::F64(unsafe { std::mem::transmute(mem) }),
+            DType::F8E4M3 => RocmStorageSlice::F8E4M3(unsafe { std::mem::transmute(mem) }),
+            dtype => {
                 return Err(crate::Error::Msg(format!(
-                    "DType {:?} not yet supported for ROCm alloc",
+                    "DType {:?} not yet supported for ROCm storage_from_slice",
                     dtype
                 )));
             }
         };
-
         Ok(RocmStorage {
             slice,
             device: self.clone(),
         })
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> Result<Self::Storage> {
-        let mem = match T::DTYPE {
-            DType::F32 => {
-                let slice: &[f32] = bytemuck::cast_slice(data);
-                let mem = self.clone_htod(slice)?;
-                RocmStorageSlice::F32(mem)
-            }
-            DType::U8 => {
-                let mem = self.clone_htod(data)?;
-                RocmStorageSlice::U8(mem)
-            }
-            _ => {
-                return Err(crate::Error::Msg(format!(
-                    "DType {:?} not yet supported",
-                    T::DTYPE
-                )));
-            }
-        };
-
-        Ok(RocmStorage {
-            slice: mem,
-            device: self.clone(),
+    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
+        dispatch_cpu_storage!(storage, self, |data, slice| {
+            Ok(RocmStorage {
+                slice,
+                device: self.clone(),
+            })
         })
     }
 
-    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
-        // Convert CpuStorage to device storage
-        match storage {
-            CpuStorage::F32(data) => {
-                let mem = self.clone_htod(data.as_slice())?;
-                Ok(RocmStorage {
-                    slice: RocmStorageSlice::F32(mem),
-                    device: self.clone(),
-                })
-            }
-            CpuStorage::U8(data) => {
-                let mem = self.clone_htod(data.as_slice())?;
-                Ok(RocmStorage {
-                    slice: RocmStorageSlice::U8(mem),
-                    device: self.clone(),
-                })
-            }
-            _ => Err(crate::Error::Msg(
-                "Dtype not yet supported for ROCm storage_from_cpu_storage".to_string(),
-            )),
-        }
-    }
-
-    fn storage_from_cpu_storage_owned(&self, _storage: CpuStorage) -> Result<Self::Storage> {
-        // For simplicity, delegate to reference version
-        self.storage_from_cpu_storage(&_storage)
+    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<Self::Storage> {
+        self.storage_from_cpu_storage(&storage)
     }
 
     fn rand_uniform(
@@ -369,7 +289,6 @@ impl BackendDevice for RocmDevice {
         _lo: f64,
         _hi: f64,
     ) -> Result<Self::Storage> {
-        // TODO: Implement using rocRAND
         Err(crate::Error::Msg(
             "Random generation not yet implemented for ROCm".to_string(),
         ))
@@ -382,19 +301,16 @@ impl BackendDevice for RocmDevice {
         _mean: f64,
         _std: f64,
     ) -> Result<Self::Storage> {
-        // TODO: Implement using rocRAND
         Err(crate::Error::Msg(
             "Random generation not yet implemented for ROCm".to_string(),
         ))
     }
 
     fn set_seed(&self, _seed: u64) -> Result<()> {
-        // TODO: Implement rocRAND seed
         Ok(())
     }
 
     fn get_current_seed(&self) -> Result<u64> {
-        // TODO: Return actual seed
         Ok(0)
     }
 

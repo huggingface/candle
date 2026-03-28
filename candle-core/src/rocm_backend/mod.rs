@@ -1,51 +1,14 @@
-//! Implementation of Backend traits for ROCm (AMD GPU) device
-//!
-use crate::backend::{BackendDevice, BackendStorage};
+use crate::backend::BackendStorage;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, WithDType};
+use crate::{CpuStorage, DType, Layout, Result};
 use half::{bf16, f16};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use rocm_rs::hip::DeviceMemory;
 
 mod device;
 mod error;
 pub use device::{DeviceId, RocmDevice};
 pub use error::{RocmError, WrapErr};
 
-use rocm_rs::hip::{kernel::AsKernelArg, Device, DeviceMemory, Dim3, Function, Module, Stream};
-
-/// Helper enum for handling optional device pointers for non-contiguous layouts
-pub enum SlicePtrOrNull<T> {
-    Ptr(DeviceMemory<T>),
-    Null,
-}
-
-impl<T> SlicePtrOrNull<T> {
-    /// Convert to kernel argument
-    pub fn as_kernel_arg(&self) -> *mut std::ffi::c_void {
-        match self {
-            SlicePtrOrNull::Ptr(mem) => mem.as_ptr(),
-            SlicePtrOrNull::Null => std::ptr::null_mut(),
-        }
-    }
-}
-
-impl SlicePtrOrNull<usize> {
-    pub fn params_from_layout(dev: &RocmDevice, l: &Layout) -> Result<Self> {
-        let ds = if l.is_contiguous() {
-            SlicePtrOrNull::Null
-        } else {
-            // Concat dims and strides into a single buffer
-            let mut dims_strides = l.dims().to_vec();
-            dims_strides.extend_from_slice(l.stride());
-            SlicePtrOrNull::Ptr(dev.clone_htod(&dims_strides)?)
-        };
-        Ok(ds)
-    }
-}
-
-/// Storage enum for different data types on ROCm device
-#[derive(Debug)]
 pub enum RocmStorageSlice {
     U8(DeviceMemory<u8>),
     U32(DeviceMemory<u32>),
@@ -56,9 +19,24 @@ pub enum RocmStorageSlice {
     F16(DeviceMemory<f16>),
     F32(DeviceMemory<f32>),
     F64(DeviceMemory<f64>),
-    // Note: F8E4M3, F6E2M3, F6E3M2, F4, F8E8M0 are not supported on ROCm in the same way
-    // For unsupported types, we can either use CPU fallback or store as raw bytes
-    F8E4M3(DeviceMemory<u8>), // Placeholder - needs proper handling
+    F8E4M3(DeviceMemory<u8>),
+}
+
+impl std::fmt::Debug for RocmStorageSlice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RocmStorageSlice::U8(m) => write!(f, "U8({} bytes)", m.size()),
+            RocmStorageSlice::U32(m) => write!(f, "U32({} bytes)", m.size()),
+            RocmStorageSlice::I16(m) => write!(f, "I16({} bytes)", m.size()),
+            RocmStorageSlice::I32(m) => write!(f, "I32({} bytes)", m.size()),
+            RocmStorageSlice::I64(m) => write!(f, "I64({} bytes)", m.size()),
+            RocmStorageSlice::BF16(m) => write!(f, "BF16({} bytes)", m.size()),
+            RocmStorageSlice::F16(m) => write!(f, "F16({} bytes)", m.size()),
+            RocmStorageSlice::F32(m) => write!(f, "F32({} bytes)", m.size()),
+            RocmStorageSlice::F64(m) => write!(f, "F64({} bytes)", m.size()),
+            RocmStorageSlice::F8E4M3(m) => write!(f, "F8E4M3({} bytes)", m.size()),
+        }
+    }
 }
 
 impl RocmStorageSlice {
@@ -78,184 +56,347 @@ impl RocmStorageSlice {
     }
 }
 
-/// Generate kernel name based on operation and dtype
-pub fn kernel_name<T: WithDType>(root: &str) -> String {
-    let dtype = T::DTYPE.as_str();
-    format!("{root}_{dtype}")
-}
-
-/// Helper trait for mapping unary operations
-pub trait Map1 {
-    fn f<T: AsKernelArg>(
-        &self,
-        s: &DeviceMemory<T>,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<DeviceMemory<T>>;
-}
-
-/// Helper trait for mapping binary operations
-pub trait Map2 {
-    fn f<T: AsKernelArg>(
-        &self,
-        s1: &DeviceMemory<T>,
-        s2: &DeviceMemory<T>,
-        dev: &RocmDevice,
-        l1: &Layout,
-        l2: &Layout,
-    ) -> Result<DeviceMemory<T>>;
-}
-
-/// Simple clone operation
-struct Clone;
-impl Map1 for Clone {
-    fn f<T: AsKernelArg>(
-        &self,
-        s: &DeviceMemory<T>,
-        dev: &RocmDevice,
-        _: &Layout,
-    ) -> Result<DeviceMemory<T>> {
-        dev.memcpy_dtod(s, s)
-    }
-}
-
-/// Affine transformation: out = a * x + b
-struct Affine(f64, f64);
-impl Map1 for Affine {
-    fn f<T: AsKernelArg + WithDType>(
-        &self,
-        src: &DeviceMemory<T>,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<DeviceMemory<T>> {
-        let shape = layout.shape();
-        let dims = shape.dims();
-        let el = shape.elem_count();
-
-        // Get kernel function
-        let func = dev.get_or_load_kernel(&kernel_name::<T>("affine"))?;
-
-        // Allocate output
-        let mut out = DeviceMemory::<T>::new(el)?;
-
-        // Setup launch config
-        let block_size = 256;
-        let grid_dim = Dim3::new_1d(((el as u32) + block_size - 1) / block_size);
-        let block_dim = Dim3::new_1d(block_size);
-
-        // Get layout params
-        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
-
-        // Prepare kernel arguments
-        let el_u32 = el as u32;
-        let dims_len = dims.len() as u32;
-        let a_val = T::from_f64(self.0);
-        let b_val = T::from_f64(self.1);
-
-        // Pack arguments according to kernel signature:
-        // affine(el, ndims, dims_strides, src, out, a, b)
-        let mut args: Vec<*mut std::ffi::c_void> = vec![
-            &el_u32 as *const _ as *mut _,
-            &dims_len as *const _ as *mut _,
-            ds.as_kernel_arg(),
-            src.as_kernel_arg(),
-            out.as_kernel_arg(),
-            &a_val as *const _ as *mut _,
-            &b_val as *const _ as *mut _,
-        ];
-
-        // Launch kernel
-        func.launch(grid_dim, block_dim, 0, Some(&dev.stream), &mut args)?;
-
-        Ok(out)
-    }
-}
-
-/// ELU activation: x < 0 ? alpha * (exp(x) - 1) : x
-struct Elu(f64);
-impl Map1 for Elu {
-    fn f<T: AsKernelArg + WithDType>(
-        &self,
-        src: &DeviceMemory<T>,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<DeviceMemory<T>> {
-        let shape = layout.shape();
-        let dims = shape.dims();
-        let el = shape.elem_count();
-
-        let func = dev.get_or_load_kernel(&kernel_name::<T>("uelu"))?;
-        let mut out = DeviceMemory::<T>::new(el)?;
-
-        let block_size = 256;
-        let grid_dim = Dim3::new_1d(((el as u32) + block_size - 1) / block_size);
-        let block_dim = Dim3::new_1d(block_size);
-
-        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
-
-        let el_u32 = el as u32;
-        let dims_len = dims.len() as u32;
-        let alpha_val = T::from_f64(self.0);
-
-        let mut args: Vec<*mut std::ffi::c_void> = vec![
-            &el_u32 as *const _ as *mut _,
-            &dims_len as *const _ as *mut _,
-            ds.as_kernel_arg(),
-            &alpha_val as *const _ as *mut _,
-            src.as_kernel_arg(),
-            out.as_kernel_arg(),
-        ];
-
-        func.launch(grid_dim, block_dim, 0, Some(&dev.stream), &mut args)?;
-
-        Ok(out)
-    }
-}
-
-/// Powf operation: x^e
-struct Powf(f64);
-impl Map1 for Powf {
-    fn f<T: AsKernelArg + WithDType>(
-        &self,
-        src: &DeviceMemory<T>,
-        dev: &RocmDevice,
-        layout: &Layout,
-    ) -> Result<DeviceMemory<T>> {
-        let shape = layout.shape();
-        let dims = shape.dims();
-        let el = shape.elem_count();
-
-        let func = dev.get_or_load_kernel(&kernel_name::<T>("upowf"))?;
-        let mut out = DeviceMemory::<T>::new(el)?;
-
-        let block_size = 256;
-        let grid_dim = Dim3::new_1d(((el as u32) + block_size - 1) / block_size);
-        let block_dim = Dim3::new_1d(block_size);
-
-        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
-
-        let el_u32 = el as u32;
-        let dims_len = dims.len() as u32;
-        let exp_val = T::from_f64(self.0);
-
-        let mut args: Vec<*mut std::ffi::c_void> = vec![
-            &el_u32 as *const _ as *mut _,
-            &dims_len as *const _ as *mut _,
-            ds.as_kernel_arg(),
-            &exp_val as *const _ as *mut _,
-            src.as_kernel_arg(),
-            out.as_kernel_arg(),
-        ];
-
-        func.launch(grid_dim, block_dim, 0, Some(&dev.stream), &mut args)?;
-
-        Ok(out)
-    }
-}
-
-/// Storage implementation for ROCm
-#[derive(Debug)]
 pub struct RocmStorage {
     pub slice: RocmStorageSlice,
     pub device: RocmDevice,
+}
+
+impl std::fmt::Debug for RocmStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RocmStorage {{ slice: {:?}, device: {:?} }}",
+            self.slice, self.device
+        )
+    }
+}
+
+impl BackendStorage for RocmStorage {
+    type Device = RocmDevice;
+
+    fn try_clone(&self, layout: &Layout) -> Result<Self> {
+        let device = self.device.clone();
+        let elem_count = layout.shape().elem_count();
+        let slice = match &self.slice {
+            RocmStorageSlice::U8(s) => {
+                let mut dst = device.alloc::<u8>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::U8(dst)
+            }
+            RocmStorageSlice::U32(s) => {
+                let mut dst = device.alloc::<u32>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::U32(dst)
+            }
+            RocmStorageSlice::I16(s) => {
+                let mut dst = device.alloc::<i16>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::I16(dst)
+            }
+            RocmStorageSlice::I32(s) => {
+                let mut dst = device.alloc::<i32>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::I32(dst)
+            }
+            RocmStorageSlice::I64(s) => {
+                let mut dst = device.alloc::<i64>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::I64(dst)
+            }
+            RocmStorageSlice::BF16(s) => {
+                let mut dst = device.alloc::<bf16>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::BF16(dst)
+            }
+            RocmStorageSlice::F16(s) => {
+                let mut dst = device.alloc::<f16>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::F16(dst)
+            }
+            RocmStorageSlice::F32(s) => {
+                let mut dst = device.alloc::<f32>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::F32(dst)
+            }
+            RocmStorageSlice::F64(s) => {
+                let mut dst = device.alloc::<f64>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::F64(dst)
+            }
+            RocmStorageSlice::F8E4M3(s) => {
+                let mut dst = device.alloc::<u8>(elem_count)?;
+                dst.copy_from_device(s)?;
+                RocmStorageSlice::F8E4M3(dst)
+            }
+        };
+        Ok(Self { slice, device })
+    }
+
+    fn dtype(&self) -> DType {
+        self.slice.dtype()
+    }
+
+    fn device(&self) -> &Self::Device {
+        &self.device
+    }
+
+    fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        match &self.slice {
+            RocmStorageSlice::U8(s) => Ok(CpuStorage::U8(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::U32(s) => Ok(CpuStorage::U32(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::I16(s) => Ok(CpuStorage::I16(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::I32(s) => Ok(CpuStorage::I32(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::I64(s) => Ok(CpuStorage::I64(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::BF16(s) => Ok(CpuStorage::BF16(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::F16(s) => Ok(CpuStorage::F16(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::F32(s) => Ok(CpuStorage::F32(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::F64(s) => Ok(CpuStorage::F64(self.device.clone_dtoh(s)?.into())),
+            RocmStorageSlice::F8E4M3(s) => {
+                let bytes = self.device.clone_dtoh(s)?;
+                let v: Vec<float8::F8E4M3> =
+                    bytes.into_iter().map(float8::F8E4M3::from_bits).collect();
+                Ok(CpuStorage::F8E4M3(v.into()))
+            }
+        }
+    }
+
+    fn affine(&self, _l: &Layout, _a: f64, _b: f64) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "affine not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn powf(&self, _l: &Layout, _e: f64) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "powf not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn elu(&self, _l: &Layout, _alpha: f64) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "elu not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn reduce_op(&self, _op: ReduceOp, _l: &Layout, _dims: &[usize]) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "reduce_op not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn cmp(&self, _op: CmpOp, _rhs: &Self, _l1: &Layout, _l2: &Layout) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "cmp not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn to_dtype(&self, _l: &Layout, _dtype: DType) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "to_dtype not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn unary_impl<B: UnaryOpT>(&self, _l: &Layout) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "unary_impl not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn binary_impl<B: BinaryOpT>(&self, _rhs: &Self, _l1: &Layout, _l2: &Layout) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "binary_impl not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn where_cond(
+        &self,
+        _l: &Layout,
+        _a: &Self,
+        _la: &Layout,
+        _b: &Self,
+        _lb: &Layout,
+    ) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "where_cond not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn conv1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kl: &Layout,
+        _params: &crate::conv::ParamsConv1D,
+    ) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "conv1d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn conv_transpose1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kl: &Layout,
+        _params: &crate::conv::ParamsConvTranspose1D,
+    ) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "conv_transpose1d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn conv2d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kl: &Layout,
+        _params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "conv2d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn conv_transpose2d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kl: &Layout,
+        _params: &crate::conv::ParamsConvTranspose2D,
+    ) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "conv_transpose2d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn avg_pool2d(&self, _l: &Layout, _k: (usize, usize), _s: (usize, usize)) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "avg_pool2d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn max_pool2d(&self, _l: &Layout, _k: (usize, usize), _s: (usize, usize)) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "max_pool2d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn upsample_nearest1d(&self, _l: &Layout, _sz: usize) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "upsample_nearest1d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn upsample_nearest2d(&self, _l: &Layout, _w: usize, _h: usize) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "upsample_nearest2d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn upsample_bilinear2d(
+        &self,
+        _l: &Layout,
+        _w: usize,
+        _h: usize,
+        _align: bool,
+        _fh: Option<f64>,
+        _fv: Option<f64>,
+    ) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "upsample_bilinear2d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn gather(&self, _l: &Layout, _idx: &Self, _il: &Layout, _dim: usize) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "gather not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn scatter_set(
+        &mut self,
+        _l: &Layout,
+        _val: &Self,
+        _vl: &Layout,
+        _idx: &Self,
+        _il: &Layout,
+        _dim: usize,
+    ) -> Result<()> {
+        Err(crate::Error::Msg(
+            "scatter_set not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn scatter_add_set(
+        &mut self,
+        _l: &Layout,
+        _val: &Self,
+        _vl: &Layout,
+        _idx: &Self,
+        _il: &Layout,
+        _dim: usize,
+    ) -> Result<()> {
+        Err(crate::Error::Msg(
+            "scatter_add_set not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn index_select(&self, _idx: &Self, _il: &Layout, _sl: &Layout, _dim: usize) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "index_select not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn index_add(
+        &self,
+        _l: &Layout,
+        _idx: &Self,
+        _il: &Layout,
+        _val: &Self,
+        _vl: &Layout,
+        _dim: usize,
+    ) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "index_add not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn matmul(
+        &self,
+        _rhs: &Self,
+        _bmnk: (usize, usize, usize, usize),
+        _l1: &Layout,
+        _l2: &Layout,
+    ) -> Result<Self> {
+        Err(crate::Error::Msg(
+            "matmul not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn copy_strided_src(&self, _dst: &mut Self, _offset: usize, _l: &Layout) -> Result<()> {
+        Err(crate::Error::Msg(
+            "copy_strided_src not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn copy2d(
+        &self,
+        _dst: &mut Self,
+        _d1: usize,
+        _d2: usize,
+        _src_s1: usize,
+        _dst_s1: usize,
+        _src_o: usize,
+        _dst_o: usize,
+    ) -> Result<()> {
+        Err(crate::Error::Msg(
+            "copy2d not yet implemented for ROCm".to_string(),
+        ))
+    }
+
+    fn const_set(&mut self, _val: crate::scalar::Scalar, _l: &Layout) -> Result<()> {
+        Err(crate::Error::Msg(
+            "const_set not yet implemented for ROCm".to_string(),
+        ))
+    }
 }
