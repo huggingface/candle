@@ -117,6 +117,9 @@ name = "onnx_basics"
 required-features = ["onnx"]
 
 [[example]]
+name = "vibevoice"
+required-features = ["symphonia"]
+[[example]]
 name = "whisper"
 required-features = ["symphonia"]
 
