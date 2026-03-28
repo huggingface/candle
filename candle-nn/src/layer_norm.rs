@@ -127,10 +127,23 @@ impl Module for LayerNorm {
         };
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)?;
+        // Convert weight to input dtype if needed to avoid dtype mismatch in broadcast_mul
+        let weight = if self.weight.dtype() != x_dtype {
+            self.weight.to_dtype(x_dtype)?
+        } else {
+            self.weight.clone()
+        };
+        let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&weight)?;
         match &self.bias {
             None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
+            Some(bias) => {
+                let bias = if bias.dtype() != x_dtype {
+                    bias.to_dtype(x_dtype)?
+                } else {
+                    bias.clone()
+                };
+                x.broadcast_add(&bias)
+            }
         }
     }
 }

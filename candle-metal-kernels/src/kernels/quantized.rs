@@ -27,6 +27,7 @@ pub fn call_quantized_matmul_mv_t(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     dtype: GgmlDType,
+    io_dtype: GgmlDType,
     (b, m, n, k): (usize, usize, usize, usize),
     lhs: &Buffer,
     lhs_offset: usize,
@@ -120,22 +121,33 @@ pub fn call_quantized_matmul_mv_t(
         height: nth1,
         depth: 1,
     };
+    let io_suffix = match io_dtype {
+        GgmlDType::F32 => "f32",
+        GgmlDType::F16 => "f16",
+        GgmlDType::BF16 => "bf16",
+        _ => {
+            return Err(MetalKernelError::UnsupportedDTypeForOp(
+                "non-float io_dtype",
+                "quantized matmul mv",
+            ))
+        }
+    };
     let name = match dtype {
-        GgmlDType::Q4_0 => "kernel_mul_mv_q4_0_f32",
-        GgmlDType::Q4_1 => "kernel_mul_mv_q4_1_f32",
-        GgmlDType::Q5_0 => "kernel_mul_mv_q5_0_f32",
-        GgmlDType::Q5_1 => "kernel_mul_mv_q5_1_f32",
-        GgmlDType::Q8_0 => "kernel_mul_mv_q8_0_f32",
-        GgmlDType::Q8_1 => "kernel_mul_mv_q8_1_f32",
-        GgmlDType::Q2K => "kernel_mul_mv_q2_K_f32",
-        GgmlDType::Q3K => "kernel_mul_mv_q3_K_f32",
-        GgmlDType::Q4K => "kernel_mul_mv_q4_K_f32",
-        GgmlDType::Q5K => "kernel_mul_mv_q5_K_f32",
-        GgmlDType::Q6K => "kernel_mul_mv_q6_K_f32",
-        GgmlDType::Q8K => "kernel_mul_mv_q8_K_f32",
-        GgmlDType::F16 => "kernel_mul_mv_f16_f32",
-        GgmlDType::BF16 => "kernel_mul_mv_bf16_f32",
-        GgmlDType::F32 => "kernel_mul_mv_f32_f32",
+        GgmlDType::Q4_0 => format!("kernel_mul_mv_q4_0_{}", io_suffix),
+        GgmlDType::Q4_1 => format!("kernel_mul_mv_q4_1_{}", io_suffix),
+        GgmlDType::Q5_0 => format!("kernel_mul_mv_q5_0_{}", io_suffix),
+        GgmlDType::Q5_1 => format!("kernel_mul_mv_q5_1_{}", io_suffix),
+        GgmlDType::Q8_0 => format!("kernel_mul_mv_q8_0_{}", io_suffix),
+        GgmlDType::Q8_1 => format!("kernel_mul_mv_q8_1_{}", io_suffix),
+        GgmlDType::Q2K => format!("kernel_mul_mv_q2_K_{}", io_suffix),
+        GgmlDType::Q3K => format!("kernel_mul_mv_q3_K_{}", io_suffix),
+        GgmlDType::Q4K => format!("kernel_mul_mv_q4_K_{}", io_suffix),
+        GgmlDType::Q5K => format!("kernel_mul_mv_q5_K_{}", io_suffix),
+        GgmlDType::Q6K => format!("kernel_mul_mv_q6_K_{}", io_suffix),
+        GgmlDType::Q8K => format!("kernel_mul_mv_q8_K_{}", io_suffix),
+        GgmlDType::F16 => format!("kernel_mul_mv_f16_{}", io_suffix),
+        GgmlDType::BF16 => format!("kernel_mul_mv_bf16_{}", io_suffix),
+        GgmlDType::F32 => format!("kernel_mul_mv_f32_{}", io_suffix),
     };
 
     let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
@@ -183,6 +195,7 @@ pub fn call_quantized_matmul_mm_t(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     dtype: GgmlDType,
+    io_dtype: GgmlDType,
     src0_shape: &[usize],
     src0_stride: &[usize],
     src0: &Buffer,
@@ -228,22 +241,33 @@ pub fn call_quantized_matmul_mm_t(
         height: 1,
         depth: 1,
     };
+    let io_suffix = match io_dtype {
+        GgmlDType::F32 => "f32",
+        GgmlDType::F16 => "f16",
+        GgmlDType::BF16 => "bf16",
+        _ => {
+            return Err(MetalKernelError::UnsupportedDTypeForOp(
+                "non-float io_dtype",
+                "quantized matmul mm",
+            ))
+        }
+    };
     let name = match dtype {
-        GgmlDType::Q4_0 => "kernel_mul_mm_q4_0_f32",
-        GgmlDType::Q4_1 => "kernel_mul_mm_q4_1_f32",
-        GgmlDType::Q5_0 => "kernel_mul_mm_q5_0_f32",
-        GgmlDType::Q5_1 => "kernel_mul_mm_q5_1_f32",
-        GgmlDType::Q8_0 => "kernel_mul_mm_q8_0_f32",
-        GgmlDType::Q2K => "kernel_mul_mm_q2_K_f32",
-        GgmlDType::Q3K => "kernel_mul_mm_q3_K_f32",
-        GgmlDType::Q4K => "kernel_mul_mm_q4_K_f32",
-        GgmlDType::Q5K => "kernel_mul_mm_q5_K_f32",
-        GgmlDType::Q6K => "kernel_mul_mm_q6_K_f32",
-        GgmlDType::F16 => "kernel_mul_mm_f16_f32",
-        GgmlDType::BF16 => "kernel_mul_mm_bf16_f32",
-        GgmlDType::F32 => "kernel_mul_mm_f32_f32",
-        GgmlDType::Q8_1 => Err(MetalKernelError::UnsupportedDTypeForOp("Q8_1", "qmatmul"))?,
-        GgmlDType::Q8K => Err(MetalKernelError::UnsupportedDTypeForOp("Q8K", "qmatmul"))?,
+        GgmlDType::Q4_0 => format!("kernel_mul_mm_q4_0_{}", io_suffix),
+        GgmlDType::Q4_1 => format!("kernel_mul_mm_q4_1_{}", io_suffix),
+        GgmlDType::Q5_0 => format!("kernel_mul_mm_q5_0_{}", io_suffix),
+        GgmlDType::Q5_1 => format!("kernel_mul_mm_q5_1_{}", io_suffix),
+        GgmlDType::Q8_0 => format!("kernel_mul_mm_q8_0_{}", io_suffix),
+        GgmlDType::Q8_1 => format!("kernel_mul_mm_q8_1_{}", io_suffix),
+        GgmlDType::Q2K => format!("kernel_mul_mm_q2_K_{}", io_suffix),
+        GgmlDType::Q3K => format!("kernel_mul_mm_q3_K_{}", io_suffix),
+        GgmlDType::Q4K => format!("kernel_mul_mm_q4_K_{}", io_suffix),
+        GgmlDType::Q5K => format!("kernel_mul_mm_q5_K_{}", io_suffix),
+        GgmlDType::Q6K => format!("kernel_mul_mm_q6_K_{}", io_suffix),
+        GgmlDType::Q8K => format!("kernel_mul_mm_q8_K_{}", io_suffix),
+        GgmlDType::F16 => format!("kernel_mul_mm_f16_{}", io_suffix),
+        GgmlDType::BF16 => format!("kernel_mul_mm_bf16_{}", io_suffix),
+        GgmlDType::F32 => format!("kernel_mul_mm_f32_{}", io_suffix),
     };
 
     let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
