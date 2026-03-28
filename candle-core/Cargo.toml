@@ -54,6 +54,7 @@ metal = [
     "dep:objc2-metal",
     "dep:objc2-foundation",
     "dep:candle-metal-kernels",
+    "dep:libc",
     "candle-ug?/metal",
 ]
 ug = ["dep:candle-ug"]
