@@ -56,6 +56,10 @@ pub struct MetalDevice {
     /// (strong_count = 1).
     pub(crate) buffers: Arc<RwLock<BufferMap>>,
 
+    /// Same as `buffers` but uses `PRIVATE_RESOURCE_OPTIONS` (StorageModePrivate on macOS).
+    /// Intermediate compute buffers don't need CPU access so Private avoids coherency overhead.
+    pub(crate) private_buffers: Arc<RwLock<BufferMap>>,
+
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
     /// Heavily used by [`candle_metal_kernels`]
     pub(crate) kernels: Arc<Kernels>,
@@ -169,6 +173,9 @@ impl MetalDevice {
     }
 
     /// Creates a new buffer (not necessarily zeroed).
+    ///
+    /// Uses StorageModePrivate on macOS for faster GPU access (no CPU coherency overhead).
+    /// Falls back to StorageModeShared on iOS where Private is not always available.
     pub fn new_buffer(
         &self,
         element_count: usize,
@@ -176,7 +183,20 @@ impl MetalDevice {
         _name: &str,
     ) -> Result<Arc<Buffer>> {
         let size = element_count * dtype.size_in_bytes();
-        self.allocate_buffer(size)
+        let mut buffers = self.private_buffers.write().map_err(MetalError::from)?;
+        if let Some(b) = find_available_buffer(size, &buffers) {
+            return Ok(b.clone());
+        }
+        let size = buf_size(size);
+        let subbuffers = buffers.entry(size).or_insert(vec![]);
+
+        let new_buffer = self
+            .device
+            .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
+            .map_err(MetalError::from)?;
+        let new_buffer = Arc::new(new_buffer);
+        subbuffers.push(new_buffer.clone());
+        Ok(new_buffer)
     }
 
     /// Creates a new private buffer (not necessarily zeroed).
