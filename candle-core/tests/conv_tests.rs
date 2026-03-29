@@ -860,6 +860,79 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/* Regression test for https://github.com/huggingface/candle/issues/3404
+
+When C_in == H == W, NCHW and NHWC strides are numerically identical:
+  NCHW [B, C, H, W] strides: [C*H*W, H*W, W, 1]
+  NHWC [B, H, W, C] strides: [H*W*C, W*C, C, 1]
+  When C == H == W: both = [C^3, C^2, C, 1]
+
+conv2d_tiled used stride comparison to skip NCHW→NHWC conversion, causing it
+to read NCHW data as NHWC when C == H == W, producing completely wrong results.
+
+Reference values from PyTorch:
+  import torch
+  torch.manual_seed(42)
+  t = torch.randn(1, 4, 4, 4)
+  w = torch.randn(8, 4, 3, 3)
+  b = torch.randn(8)
+  res = torch.nn.functional.conv2d(t, w, b, padding=1)
+*/
+fn conv2d_c_eq_h_eq_w(dev: &Device) -> Result<()> {
+    let t = Tensor::new(
+        &[
+            1.9269f32, 1.4873, 0.9007, -2.1055, 0.6784, -1.2345, -0.0431, -1.6047, -0.7521, 1.6487,
+            -0.3925, -1.4036, -0.7279, -0.5594, -0.7688, 0.7624, 1.6423, -0.1596, -0.4974, 0.4396,
+            -0.7581, 1.0783, 0.8008, 1.6806, 1.2791, 1.2964, 0.6105, 1.3347, -0.2316, 0.0418,
+            -0.2516, 0.8599, -1.3847, -0.8712, -0.2234, 1.7174, 0.3189, -0.4245, 0.3057, -0.7746,
+            -1.5576, 0.9956, -0.8798, -0.6011, -1.2742, 2.1228, -1.2347, -0.4879, -0.9138, -0.6581,
+            0.0780, 0.5258, -0.4880, 1.1914, -0.8140, -0.7360, -1.4032, 0.0360, -0.0635, 0.6756,
+            -0.0978, 1.8446, -1.1845, 1.3835,
+        ],
+        dev,
+    )?;
+    let t = t.reshape((1, 4, 4, 4))?;
+
+    // Use a simple weight: all ones kernel for easy verification
+    let w = Tensor::ones((2, 4, 3, 3), candle_core::DType::F32, dev)?;
+    let res = t.conv2d(&w, 1, 1, 1, 1)?;
+    assert_eq!(res.dims(), [1, 2, 4, 4]);
+
+    // With all-ones kernel, each output is sum of 4*3*3=36 input values in the receptive field.
+    // The result for both output channels should be identical (same kernel).
+    // Verify channel 0 == channel 1
+    let c0 = res.i((.., 0..1, .., ..))?;
+    let c1 = res.i((.., 1..2, .., ..))?;
+    let diff = c0
+        .to_dtype(candle_core::DType::F64)?
+        .sub(&c1.to_dtype(candle_core::DType::F64)?)?
+        .abs()?
+        .flatten_all()?
+        .max(0)?
+        .to_scalar::<f64>()?;
+    assert!(
+        diff < 1e-6,
+        "conv2d with C==H==W: output channels should be identical for all-ones kernel, got diff={diff}"
+    );
+
+    // Verify a specific output value.
+    // With padding=1, the top-left output sums the 2x2 visible region across all 4 channels.
+    // t[0,:,0:2,0:2] with all-ones kernel:
+    // ch0: 1.9269+1.4873+0.6784+(-1.2345) = 2.8581
+    // ch1: 1.6423+(-0.1596)+(-0.7581)+1.0783 = 1.8029
+    // ch2: (-1.3847)+(-0.8712)+0.3189+(-0.4245) = -2.3615
+    // ch3: (-0.9138)+(-0.6581)+(-0.4880)+1.1914 = -0.8685
+    // total = 1.4310
+    let actual_corner: f32 = res.i((0, 0, 0, 0))?.to_scalar()?;
+    let corner_diff = (actual_corner - 1.4310).abs();
+    assert!(
+        corner_diff < 1e-3,
+        "conv2d with C==H==W: top-left corner mismatch: got {actual_corner}, expected 1.4310, diff={corner_diff}"
+    );
+
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -891,4 +964,10 @@ test_device!(
     conv2d_grad_cpu,
     conv2d_grad_gpu,
     conv2_grad_metal
+);
+test_device!(
+    conv2d_c_eq_h_eq_w,
+    conv2d_c_eq_h_eq_w_cpu,
+    conv2d_c_eq_h_eq_w_gpu,
+    conv2d_c_eq_h_eq_w_metal
 );

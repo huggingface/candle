@@ -139,29 +139,22 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     // Output shape: [b_size, c_out, out_h, out_w].
     let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
 
-    // Make contiguous input copy if needed.
+    // Convert NCHW input to NHWC layout for tiled im2col.
     let cont_s0 = p.i_h * p.i_w * p.c_in;
     let cont_s1 = p.i_w * p.c_in;
     let cont_s2 = p.c_in;
-    let layout_is_valid = inp_l.stride() == [cont_s0, cont_s1, cont_s2, 1];
-    let inp_cont: Cow<[T]> = if layout_is_valid {
-        Cow::Borrowed(inp)
-    } else {
-        let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
-        for b_idx in 0..p.b_size {
-            for h_idx in 0..p.i_h {
-                for w_idx in 0..p.i_w {
-                    for c_idx in 0..p.c_in {
-                        let src_idx =
-                            b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
-                        let dst_idx = b_idx * cont_s0 + h_idx * cont_s1 + w_idx * cont_s2 + c_idx;
-                        inp_cont[dst_idx] = inp[src_idx]
-                    }
+    let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
+    for b_idx in 0..p.b_size {
+        for h_idx in 0..p.i_h {
+            for w_idx in 0..p.i_w {
+                for c_idx in 0..p.c_in {
+                    let src_idx = b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
+                    let dst_idx = b_idx * cont_s0 + h_idx * cont_s1 + w_idx * cont_s2 + c_idx;
+                    inp_cont[dst_idx] = inp[src_idx]
                 }
             }
         }
-        Cow::Owned(inp_cont)
-    };
+    }
 
     // shape of k: [c_out, c_in, k_h, k_w]
     // strides of k: [k_s0, k_s1, k_s2, k_s3]
@@ -293,29 +286,22 @@ fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
     // Output shape: [b_size, c_out, out_h, out_w].
     let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
 
-    // Make contiguous input copy if needed.
+    // Convert NCHW input to NHWC layout for direct convolution.
     let cont_s0 = p.i_h * p.i_w * p.c_in;
     let cont_s1 = p.i_w * p.c_in;
     let cont_s2 = p.c_in;
-    let layout_is_valid = inp_l.stride() == [cont_s0, cont_s1, cont_s2, 1];
-    let inp_cont: Cow<[T]> = if layout_is_valid {
-        Cow::Borrowed(inp)
-    } else {
-        let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
-        for b_idx in 0..p.b_size {
-            for h_idx in 0..p.i_h {
-                for w_idx in 0..p.i_w {
-                    for c_idx in 0..p.c_in {
-                        let src_idx =
-                            b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
-                        let dst_idx = b_idx * cont_s0 + h_idx * cont_s1 + w_idx * cont_s2 + c_idx;
-                        inp_cont[dst_idx] = inp[src_idx]
-                    }
+    let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
+    for b_idx in 0..p.b_size {
+        for h_idx in 0..p.i_h {
+            for w_idx in 0..p.i_w {
+                for c_idx in 0..p.c_in {
+                    let src_idx = b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
+                    let dst_idx = b_idx * cont_s0 + h_idx * cont_s1 + w_idx * cont_s2 + c_idx;
+                    inp_cont[dst_idx] = inp[src_idx]
                 }
             }
         }
-        Cow::Owned(inp_cont)
-    };
+    }
     let inp_cont_len = inp_cont.len();
 
     let k_cache: Vec<Vec<T>> = (0..p.c_out)
