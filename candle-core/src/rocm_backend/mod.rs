@@ -3,7 +3,7 @@ use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result};
 use half::{bf16, f16};
 use rocm_rs::hip::{bindings, DeviceMemory};
-use rocm_rs::rocblas::{self, types::Operation};
+use rocm_rs::rocblas::{self, level3::GemmStridedBatchedType, types::Operation};
 
 mod device;
 mod error;
@@ -71,13 +71,17 @@ impl RocmStorageSlice {
         }
     }
 
-    pub fn elem_size(&self) -> usize {
+    fn elem_size(&self) -> usize {
         match self {
             RocmStorageSlice::U8(_) | RocmStorageSlice::F8E4M3(_) => 1,
             RocmStorageSlice::I16(_) | RocmStorageSlice::BF16(_) | RocmStorageSlice::F16(_) => 2,
             RocmStorageSlice::U32(_) | RocmStorageSlice::I32(_) | RocmStorageSlice::F32(_) => 4,
             RocmStorageSlice::I64(_) | RocmStorageSlice::F64(_) => 8,
         }
+    }
+
+    unsafe fn offset_ptr(&self, offset: usize) -> *mut std::ffi::c_void {
+        self.as_ptr().add(offset * self.elem_size())
     }
 }
 
@@ -195,9 +199,9 @@ fn gemm_config<T: Copy>(
     })
 }
 
-unsafe fn gemm_strided_batched_f32(
+unsafe fn gemm_strided_batched<T: GemmStridedBatchedType>(
     blas: &rocblas::Handle,
-    cfg: StridedBatchedConfig<f32>,
+    cfg: StridedBatchedConfig<T>,
     a: *const std::ffi::c_void,
     b: *const std::ffi::c_void,
     c: *mut std::ffi::c_void,
@@ -210,14 +214,14 @@ unsafe fn gemm_strided_batched_f32(
         cfg.gemm.n,
         cfg.gemm.k,
         &cfg.gemm.alpha,
-        a as *const f32,
+        a as *const T,
         cfg.gemm.lda,
         cfg.stride_a,
-        b as *const f32,
+        b as *const T,
         cfg.gemm.ldb,
         cfg.stride_b,
         &cfg.gemm.beta,
-        c as *mut f32,
+        c as *mut T,
         cfg.gemm.ldc,
         cfg.stride_c,
         cfg.batch_size,
@@ -225,34 +229,106 @@ unsafe fn gemm_strided_batched_f32(
     .map_err(|e| RocmError::Rocblas(e.to_string()))
 }
 
-unsafe fn gemm_strided_batched_f64(
+struct GemmExConfig {
+    alpha: f32,
+    beta: f32,
+    m: i32,
+    n: i32,
+    k: i32,
+    lda: i32,
+    ldb: i32,
+    ldc: i32,
+    transa: Operation,
+    transb: Operation,
+}
+
+struct StridedBatchedExConfig {
+    batch_size: i32,
+    gemm: GemmExConfig,
+    stride_a: i64,
+    stride_b: i64,
+    stride_c: i64,
+}
+
+fn gemm_ex_config(
+    alpha: f32,
+    beta: f32,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs_l: &Layout,
+    rhs_l: &Layout,
+) -> std::result::Result<StridedBatchedExConfig, RocmError> {
+    let inner = gemm_config(alpha, beta, (b, m, n, k), lhs_l, rhs_l)?;
+    Ok(StridedBatchedExConfig {
+        batch_size: inner.batch_size,
+        gemm: GemmExConfig {
+            alpha: inner.gemm.alpha,
+            beta: inner.gemm.beta,
+            m: inner.gemm.m,
+            n: inner.gemm.n,
+            k: inner.gemm.k,
+            lda: inner.gemm.lda,
+            ldb: inner.gemm.ldb,
+            ldc: inner.gemm.ldc,
+            transa: inner.gemm.transa,
+            transb: inner.gemm.transb,
+        },
+        stride_a: inner.stride_a,
+        stride_b: inner.stride_b,
+        stride_c: inner.stride_c,
+    })
+}
+
+unsafe fn gemm_strided_batched_ex(
     blas: &rocblas::Handle,
-    cfg: StridedBatchedConfig<f64>,
+    cfg: StridedBatchedExConfig,
     a: *const std::ffi::c_void,
     b: *const std::ffi::c_void,
     c: *mut std::ffi::c_void,
+    datatype: rocm_rs::rocblas::ffi::rocblas_datatype,
 ) -> std::result::Result<(), RocmError> {
-    rocblas::gemm_strided_batched(
-        blas,
-        cfg.gemm.transa,
-        cfg.gemm.transb,
-        cfg.gemm.m,
-        cfg.gemm.n,
-        cfg.gemm.k,
-        &cfg.gemm.alpha,
-        a as *const f64,
-        cfg.gemm.lda,
-        cfg.stride_a,
-        b as *const f64,
-        cfg.gemm.ldb,
-        cfg.stride_b,
-        &cfg.gemm.beta,
-        c as *mut f64,
-        cfg.gemm.ldc,
-        cfg.stride_c,
-        cfg.batch_size,
-    )
-    .map_err(|e| RocmError::Rocblas(e.to_string()))
+    use rocm_rs::rocblas::ffi;
+    use rocm_rs::rocblas::utils::GemmAlgo;
+
+    let status = unsafe {
+        rocblas_gemm_strided_batched_ex(
+            blas.as_raw(),
+            cfg.gemm.transa.into(),
+            cfg.gemm.transb.into(),
+            cfg.gemm.m,
+            cfg.gemm.n,
+            cfg.gemm.k,
+            &cfg.gemm.alpha as *const f32 as *const std::ffi::c_void,
+            a,
+            datatype,
+            cfg.gemm.lda,
+            cfg.stride_a,
+            b,
+            datatype,
+            cfg.gemm.ldb,
+            cfg.stride_b,
+            &cfg.gemm.beta as *const f32 as *const std::ffi::c_void,
+            c,
+            datatype,
+            cfg.gemm.ldc,
+            cfg.stride_c,
+            c,
+            datatype,
+            cfg.gemm.ldc,
+            cfg.stride_c,
+            cfg.batch_size,
+            ffi::rocblas_datatype__rocblas_datatype_f32_r,
+            GemmAlgo::Standard.into(),
+            0,
+            0,
+        )
+    };
+    if status != ffi::rocblas_status__rocblas_status_success {
+        return Err(RocmError::Rocblas(format!(
+            "rocblas_gemm_strided_batched_ex failed with status {}",
+            status
+        )));
+    }
+    Ok(())
 }
 
 extern "C" {
@@ -289,112 +365,26 @@ extern "C" {
     ) -> rocm_rs::rocblas::ffi::rocblas_status;
 }
 
-unsafe fn gemm_strided_batched_f16(
-    blas: &rocblas::Handle,
-    cfg: StridedBatchedConfig<f16>,
-    a: *const std::ffi::c_void,
-    b: *const std::ffi::c_void,
-    c: *mut std::ffi::c_void,
-) -> std::result::Result<(), RocmError> {
-    use rocm_rs::rocblas::ffi;
-    use rocm_rs::rocblas::utils::GemmAlgo;
-
-    let alpha: f32 = cfg.gemm.alpha.to_f32();
-    let beta: f32 = cfg.gemm.beta.to_f32();
-    let status = unsafe {
-        rocblas_gemm_strided_batched_ex(
-            blas.as_raw(),
-            cfg.gemm.transa.into(),
-            cfg.gemm.transb.into(),
-            cfg.gemm.m,
-            cfg.gemm.n,
-            cfg.gemm.k,
-            &alpha as *const f32 as *const std::ffi::c_void,
-            a,
-            ffi::rocblas_datatype__rocblas_datatype_f16_r,
-            cfg.gemm.lda,
-            cfg.stride_a,
-            b,
-            ffi::rocblas_datatype__rocblas_datatype_f16_r,
-            cfg.gemm.ldb,
-            cfg.stride_b,
-            &beta as *const f32 as *const std::ffi::c_void,
-            c,
-            ffi::rocblas_datatype__rocblas_datatype_f16_r,
-            cfg.gemm.ldc,
-            cfg.stride_c,
-            c,
-            ffi::rocblas_datatype__rocblas_datatype_f16_r,
-            cfg.gemm.ldc,
-            cfg.stride_c,
-            cfg.batch_size,
-            ffi::rocblas_datatype__rocblas_datatype_f32_r,
-            GemmAlgo::Standard.into(),
-            0,
-            0,
-        )
-    };
-    if status != ffi::rocblas_status__rocblas_status_success {
-        return Err(RocmError::Rocblas(format!(
-            "rocblas_gemm_strided_batched_ex failed for f16 with status {}",
-            status
-        )));
-    }
-    Ok(())
-}
-
-unsafe fn gemm_strided_batched_bf16(
-    blas: &rocblas::Handle,
-    cfg: StridedBatchedConfig<bf16>,
-    a: *const std::ffi::c_void,
-    b: *const std::ffi::c_void,
-    c: *mut std::ffi::c_void,
-) -> std::result::Result<(), RocmError> {
-    use rocm_rs::rocblas::ffi;
-    use rocm_rs::rocblas::utils::GemmAlgo;
-
-    let alpha: f32 = cfg.gemm.alpha.to_f32();
-    let beta: f32 = cfg.gemm.beta.to_f32();
-    let status = unsafe {
-        rocblas_gemm_strided_batched_ex(
-            blas.as_raw(),
-            cfg.gemm.transa.into(),
-            cfg.gemm.transb.into(),
-            cfg.gemm.m,
-            cfg.gemm.n,
-            cfg.gemm.k,
-            &alpha as *const f32 as *const std::ffi::c_void,
-            a,
-            ffi::rocblas_datatype__rocblas_datatype_bf16_r,
-            cfg.gemm.lda,
-            cfg.stride_a,
-            b,
-            ffi::rocblas_datatype__rocblas_datatype_bf16_r,
-            cfg.gemm.ldb,
-            cfg.stride_b,
-            &beta as *const f32 as *const std::ffi::c_void,
-            c,
-            ffi::rocblas_datatype__rocblas_datatype_bf16_r,
-            cfg.gemm.ldc,
-            cfg.stride_c,
-            c,
-            ffi::rocblas_datatype__rocblas_datatype_bf16_r,
-            cfg.gemm.ldc,
-            cfg.stride_c,
-            cfg.batch_size,
-            ffi::rocblas_datatype__rocblas_datatype_f32_r,
-            GemmAlgo::Standard.into(),
-            0,
-            0,
-        )
-    };
-    if status != ffi::rocblas_status__rocblas_status_success {
-        return Err(RocmError::Rocblas(format!(
-            "rocblas_gemm_strided_batched_ex failed for bf16 with status {}",
-            status
-        )));
-    }
-    Ok(())
+macro_rules! dispatch_matmul {
+    ($self:expr, $rhs:expr, $b:expr, $m:expr, $n:expr, $k:expr, $lhs_l:expr, $rhs_l:expr, $dev:expr,
+     $(($variant:ident, $rust_ty:ty, $alpha:expr, $zero:expr, $cfg_fn:expr, $gemm_fn:expr $(, $ex_datatype:expr)?)),+ $(,)?) => {{
+        let elem_count = $b * $m * $n;
+        let lhs_ptr = unsafe { $self.slice.offset_ptr($lhs_l.start_offset()) };
+        let rhs_ptr = unsafe { $rhs.slice.offset_ptr($rhs_l.start_offset()) };
+        let device = $dev.clone();
+        let slice = match (&$self.slice, &$rhs.slice) {
+            $(
+                (RocmStorageSlice::$variant(_), RocmStorageSlice::$variant(_)) => {
+                    let cfg = $cfg_fn($alpha, $zero, ($b, $m, $n, $k), $lhs_l, $rhs_l)?;
+                    let out = $dev.alloc::<$rust_ty>(elem_count)?;
+                    unsafe { $gemm_fn(&$dev.blas, cfg, rhs_ptr, lhs_ptr, out.as_ptr() $(, $ex_datatype)?)?; }
+                    RocmStorageSlice::$variant(out)
+                }
+            )+
+            _ => return Err(RocmError::Internal("dtype mismatch in matmul".into()).into()),
+        };
+        Ok(Self { slice, device })
+    }};
 }
 
 impl std::fmt::Debug for RocmStorage {
@@ -704,85 +694,38 @@ impl BackendStorage for RocmStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        let elem_count = b * m * n;
-        let dev = &self.device;
-        let slice = match (&self.slice, &rhs.slice) {
-            (RocmStorageSlice::BF16(_), RocmStorageSlice::BF16(_)) => {
-                let lhs_ptr = unsafe {
-                    self.slice
-                        .as_ptr()
-                        .add(lhs_l.start_offset() * self.slice.elem_size())
-                };
-                let rhs_ptr = unsafe {
-                    rhs.slice
-                        .as_ptr()
-                        .add(rhs_l.start_offset() * rhs.slice.elem_size())
-                };
-                let cfg = gemm_config(bf16::ONE, bf16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
-                let out = dev.alloc::<bf16>(elem_count)?;
-                unsafe {
-                    gemm_strided_batched_bf16(&dev.blas, cfg, rhs_ptr, lhs_ptr, out.as_ptr())
-                }?;
-                RocmStorageSlice::BF16(out)
-            }
-            (RocmStorageSlice::F16(_), RocmStorageSlice::F16(_)) => {
-                let lhs_ptr = unsafe {
-                    self.slice
-                        .as_ptr()
-                        .add(lhs_l.start_offset() * self.slice.elem_size())
-                };
-                let rhs_ptr = unsafe {
-                    rhs.slice
-                        .as_ptr()
-                        .add(rhs_l.start_offset() * rhs.slice.elem_size())
-                };
-                let cfg = gemm_config(f16::ONE, f16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
-                let out = dev.alloc::<f16>(elem_count)?;
-                unsafe {
-                    gemm_strided_batched_f16(&dev.blas, cfg, rhs_ptr, lhs_ptr, out.as_ptr())
-                }?;
-                RocmStorageSlice::F16(out)
-            }
-            (RocmStorageSlice::F32(_), RocmStorageSlice::F32(_)) => {
-                let lhs_ptr = unsafe {
-                    self.slice
-                        .as_ptr()
-                        .add(lhs_l.start_offset() * self.slice.elem_size())
-                };
-                let rhs_ptr = unsafe {
-                    rhs.slice
-                        .as_ptr()
-                        .add(rhs_l.start_offset() * rhs.slice.elem_size())
-                };
-                let cfg = gemm_config(1.0f32, 0.0f32, (b, m, n, k), lhs_l, rhs_l)?;
-                let out = dev.alloc::<f32>(elem_count)?;
-                unsafe {
-                    gemm_strided_batched_f32(&dev.blas, cfg, rhs_ptr, lhs_ptr, out.as_ptr())
-                }?;
-                RocmStorageSlice::F32(out)
-            }
-            (RocmStorageSlice::F64(_), RocmStorageSlice::F64(_)) => {
-                let lhs_ptr = unsafe {
-                    self.slice
-                        .as_ptr()
-                        .add(lhs_l.start_offset() * self.slice.elem_size())
-                };
-                let rhs_ptr = unsafe {
-                    rhs.slice
-                        .as_ptr()
-                        .add(rhs_l.start_offset() * rhs.slice.elem_size())
-                };
-                let cfg = gemm_config(1.0f64, 0.0f64, (b, m, n, k), lhs_l, rhs_l)?;
-                let out = dev.alloc::<f64>(elem_count)?;
-                unsafe {
-                    gemm_strided_batched_f64(&dev.blas, cfg, rhs_ptr, lhs_ptr, out.as_ptr())
-                }?;
-                RocmStorageSlice::F64(out)
-            }
-            _ => return Err(RocmError::Internal("dtype mismatch in matmul op".to_string()).into()),
-        };
-        let device = dev.clone();
-        Ok(Self { slice, device })
+        use rocm_rs::rocblas::ffi;
+        dispatch_matmul!(
+            self,
+            rhs,
+            b,
+            m,
+            n,
+            k,
+            lhs_l,
+            rhs_l,
+            &self.device,
+            (F32, f32, 1.0f32, 0.0f32, gemm_config, gemm_strided_batched),
+            (F64, f64, 1.0f64, 0.0f64, gemm_config, gemm_strided_batched),
+            (
+                F16,
+                f16,
+                1.0f32,
+                0.0f32,
+                gemm_ex_config,
+                gemm_strided_batched_ex,
+                ffi::rocblas_datatype__rocblas_datatype_f16_r
+            ),
+            (
+                BF16,
+                bf16,
+                1.0f32,
+                0.0f32,
+                gemm_ex_config,
+                gemm_strided_batched_ex,
+                ffi::rocblas_datatype__rocblas_datatype_bf16_r
+            ),
+        )
     }
 
     fn copy_strided_src(&self, _dst: &mut Self, _offset: usize, _l: &Layout) -> Result<()> {
