@@ -446,7 +446,14 @@ impl Device {
             }
             #[cfg(feature = "rocm")]
             Device::Rocm(device) => {
-                todo!("rocm rand_normal_f64")
+                // TODO: Remove the special case if we start supporting generating f16/bf16 directly.
+                if dtype == DType::F16 || dtype == DType::BF16 {
+                    let storage = device.rand_normal(shape, DType::F32, mean, std)?;
+                    Storage::Rocm(storage).to_dtype(&crate::Layout::contiguous(shape), dtype)
+                } else {
+                    let storage = device.rand_normal(shape, dtype, mean, std)?;
+                    Ok(Storage::Rocm(storage))
+                }
             }
         }
     }

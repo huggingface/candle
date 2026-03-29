@@ -2,10 +2,11 @@ use crate::backend::BackendDevice;
 use crate::{CpuStorage, DType, Result, Shape};
 use half::{bf16, f16};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use super::{RocmError, RocmStorage, RocmStorageSlice};
 use rocm_rs::hip::{kernel::AsKernelArg, Device as HipDevice, DeviceMemory, Module, Stream};
+use rocm_rs::rocrand::PseudoRng;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DeviceId(usize);
@@ -36,6 +37,8 @@ pub struct RocmDevice {
     device: Arc<HipDevice>,
     pub(crate) stream: Arc<Stream>,
     modules: Arc<Mutex<ModuleCache>>,
+    rocrand: Arc<Mutex<PseudoRng>>,
+    seed_value: Arc<RwLock<u64>>,
 }
 
 impl std::fmt::Debug for RocmDevice {
@@ -50,11 +53,20 @@ impl RocmDevice {
         device.set_current()?;
         let stream = device.get_stream()?;
 
+        let mut rocrand = PseudoRng::new(rocm_rs::rocrand::rng_type::PSEUDO_DEFAULT)
+            .map_err(|e| crate::Error::Msg(format!("Failed to create rocrand generator: {}", e)))?;
+        let seed = 299792458u64;
+        rocrand
+            .set_seed(seed)
+            .map_err(|e| crate::Error::Msg(format!("Failed to set rocrand seed: {}", e)))?;
+
         Ok(Self {
             id: DeviceId::new(),
             device: Arc::new(device),
             stream: Arc::new(stream),
             modules: Arc::new(Mutex::new(ModuleCache::new())),
+            rocrand: Arc::new(Mutex::new(rocrand)),
+            seed_value: Arc::new(RwLock::new(seed)),
         })
     }
 
@@ -296,22 +308,73 @@ impl BackendDevice for RocmDevice {
 
     fn rand_normal(
         &self,
-        _shape: &Shape,
-        _dtype: DType,
-        _mean: f64,
-        _std: f64,
+        shape: &Shape,
+        dtype: DType,
+        mean: f64,
+        std: f64,
     ) -> Result<Self::Storage> {
-        Err(crate::Error::Msg(
-            "Random generation not yet implemented for ROCm".to_string(),
-        ))
+        let elem_count = shape.elem_count();
+        let mut rocrand = self.rocrand.lock().unwrap();
+        // rocrand can only generate an even number of normal values.
+        let elem_count_round = if elem_count % 2 == 1 {
+            elem_count + 1
+        } else {
+            elem_count
+        };
+        let slice = match dtype {
+            DType::U8
+            | DType::U32
+            | DType::I16
+            | DType::I32
+            | DType::I64
+            | DType::F16
+            | DType::BF16
+            | DType::F8E4M3
+            | DType::F6E2M3
+            | DType::F6E3M2
+            | DType::F4
+            | DType::F8E8M0 => {
+                return Err(crate::Error::Msg(format!(
+                    "dtype {:?} not supported for rocm rand_normal",
+                    dtype
+                )));
+            }
+            DType::F32 => {
+                let mut data = self.alloc::<f32>(elem_count_round)?;
+                rocrand
+                    .generate_normal(&mut data, mean as f32, std as f32)
+                    .map_err(|e| {
+                        crate::Error::Msg(format!("rocrand generate_normal failed: {}", e))
+                    })?;
+                RocmStorageSlice::F32(data)
+            }
+            DType::F64 => {
+                let mut data = self.alloc::<f64>(elem_count_round)?;
+                rocrand
+                    .generate_normal_double(&mut data, mean, std)
+                    .map_err(|e| {
+                        crate::Error::Msg(format!("rocrand generate_normal_double failed: {}", e))
+                    })?;
+                RocmStorageSlice::F64(data)
+            }
+        };
+        Ok(RocmStorage {
+            slice,
+            device: self.clone(),
+        })
     }
 
-    fn set_seed(&self, _seed: u64) -> Result<()> {
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        let mut rocrand = self.rocrand.lock().unwrap();
+        rocrand
+            .set_seed(seed)
+            .map_err(|e| crate::Error::Msg(format!("Failed to set rocrand seed: {}", e)))?;
+        *self.seed_value.write().unwrap() = seed;
         Ok(())
     }
 
     fn get_current_seed(&self) -> Result<u64> {
-        Ok(0)
+        Ok(*self.seed_value.read().unwrap())
     }
 
     fn synchronize(&self) -> Result<()> {
