@@ -476,7 +476,8 @@ impl Device {
             }
             #[cfg(feature = "rocm")]
             Device::Rocm(device) => {
-                todo!("rocm zeros")
+                let storage = device.zeros_impl(shape, dtype)?;
+                Ok(Storage::Rocm(storage))
             }
         }
     }
@@ -497,7 +498,8 @@ impl Device {
             }
             #[cfg(feature = "rocm")]
             Device::Rocm(device) => {
-                todo!("rocm alloc_uninit")
+                let storage = device.alloc_uninit(shape, dtype)?;
+                Ok(Storage::Rocm(storage))
             }
         }
     }
@@ -515,7 +517,8 @@ impl Device {
             }
             #[cfg(feature = "rocm")]
             Device::Rocm(device) => {
-                todo!("rocm storage_from_slice")
+                let storage = device.storage_from_slice(data)?;
+                Ok(Storage::Rocm(storage))
             }
         }
     }
@@ -535,7 +538,9 @@ impl Device {
             }
             #[cfg(feature = "rocm")]
             Device::Rocm(device) => {
-                todo!("rocm storage")
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Rocm(storage))
             }
         }
     }
@@ -555,7 +560,9 @@ impl Device {
             }
             #[cfg(feature = "rocm")]
             Device::Rocm(device) => {
-                todo!("rocm storage_owned")
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Rocm(storage))
             }
         }
     }
