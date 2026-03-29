@@ -2322,6 +2322,13 @@ instantiate_attn_mask_helper(float16, half);
 instantiate_attn_mask_helper(bfloat16, bfloat16_t);
 instantiate_attn_mask_helper(float32, float);
 
+// BD=512: reduced tiles (BQ=8, BK=8) to fit 32KB threadgroup memory.
+// Only f16/bf16 — float32 exceeds the limit.
+instantiate_attn(float16,  half,        8, 8, 512, 1, 1, float16,  half)
+instantiate_attn(float16,  half,        8, 8, 512, 1, 1, bool_,    bool)
+instantiate_attn(bfloat16, bfloat16_t,  8, 8, 512, 1, 1, bfloat16, bfloat16_t)
+instantiate_attn(bfloat16, bfloat16_t,  8, 8, 512, 1, 1, bool_,    bool)
+
 // SDPA vector instantiations
 #define instantiate_sdpa_vector(type, head_dim)                              \
   template [[host_name("sdpa_vector_" #type "_" #head_dim)]]                 \
@@ -2379,7 +2386,8 @@ instantiate_attn_mask_helper(float32, float);
   instantiate_sdpa_vector(type, 80)         \
   instantiate_sdpa_vector(type, 96)         \
   instantiate_sdpa_vector(type, 128)         \
-  instantiate_sdpa_vector(type, 256)
+  instantiate_sdpa_vector(type, 256)         \
+  instantiate_sdpa_vector(type, 512)
 
 instantiate_sdpa_vector_heads(float)
 instantiate_sdpa_vector_heads(bfloat16_t)
