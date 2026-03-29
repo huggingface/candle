@@ -301,16 +301,51 @@ impl BackendDevice for RocmDevice {
         self.storage_from_cpu_storage(&storage)
     }
 
-    fn rand_uniform(
-        &self,
-        _shape: &Shape,
-        _dtype: DType,
-        _lo: f64,
-        _hi: f64,
-    ) -> Result<Self::Storage> {
-        Err(crate::Error::Msg(
-            "Random generation not yet implemented for ROCm".to_string(),
-        ))
+    fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, hi: f64) -> Result<Self::Storage> {
+        if lo != 0.0 || hi != 1.0 {
+            crate::bail!(
+                "rand_uniform with lo={lo} and hi={hi} is not supported on ROCm (affine not implemented)"
+            );
+        }
+        let elem_count = shape.elem_count();
+        let mut rocrand = self.rocrand.lock().unwrap();
+        let slice = match dtype {
+            DType::U8
+            | DType::U32
+            | DType::I16
+            | DType::I32
+            | DType::I64
+            | DType::F16
+            | DType::BF16
+            | DType::F8E4M3
+            | DType::F6E2M3
+            | DType::F6E3M2
+            | DType::F4
+            | DType::F8E8M0 => {
+                return Err(crate::Error::Msg(format!(
+                    "dtype {:?} not supported for rocm rand_uniform",
+                    dtype
+                )));
+            }
+            DType::F32 => {
+                let mut data = self.alloc::<f32>(elem_count)?;
+                rocrand.generate_uniform(&mut data).map_err(|e| {
+                    crate::Error::Msg(format!("rocrand generate_uniform failed: {}", e))
+                })?;
+                RocmStorageSlice::F32(data)
+            }
+            DType::F64 => {
+                let mut data = self.alloc::<f64>(elem_count)?;
+                rocrand.generate_uniform_double(&mut data).map_err(|e| {
+                    crate::Error::Msg(format!("rocrand generate_uniform_double failed: {}", e))
+                })?;
+                RocmStorageSlice::F64(data)
+            }
+        };
+        Ok(RocmStorage {
+            slice,
+            device: self.clone(),
+        })
     }
 
     fn rand_normal(
