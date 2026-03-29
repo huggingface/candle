@@ -885,7 +885,8 @@ impl AcousticTokenizer {
 
     pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
         // xs: (B, T', vae_dim) → (B, 1, T_audio)
-        self.decoder.forward(xs)
+        let xs = xs.to_dtype(DType::F32)?;
+        self.decoder.forward(&xs)
     }
 
     /// Create a new streaming cache sized for this decoder.
@@ -901,7 +902,8 @@ impl AcousticTokenizer {
         is_first: bool,
     ) -> Result<Tensor> {
         cache.reset_cursor();
-        self.decoder.forward_streaming(xs, cache, is_first)
+        let xs = xs.to_dtype(DType::F32)?;
+        self.decoder.forward_streaming(&xs, cache, is_first)
     }
 }
 
@@ -1168,7 +1170,8 @@ impl SpeechConnector {
 
 impl Module for SpeechConnector {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.fc1.forward(xs)?;
+        let xs = xs.to_dtype(self.fc1.weight().dtype())?;
+        let xs = self.fc1.forward(&xs)?;
         let xs = self.norm.forward(&xs)?;
         self.fc2.forward(&xs)
     }
@@ -1863,7 +1866,7 @@ struct VibeVoiceStreamingModel {
 }
 
 impl VibeVoiceStreamingModel {
-    fn new(cfg: &StreamingConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &StreamingConfig, vb: VarBuilder, audio_device: &Device) -> Result<Self> {
         let full_layers = cfg.decoder_config.num_hidden_layers;
         let lm_layers = full_layers - cfg.tts_backbone_num_hidden_layers;
 
@@ -1921,14 +1924,14 @@ impl VibeVoiceStreamingModel {
         )?;
 
         let acoustic_tokenizer = AcousticTokenizer::new(
-            &cfg.acoustic_tokenizer_config, vb.pp("acoustic_tokenizer"),
+            &cfg.acoustic_tokenizer_config, vb.pp("acoustic_tokenizer").set_device(audio_device.clone()).to_dtype(DType::F32),
         )?;
         let acoustic_connector = SpeechConnector::new(
             cfg.acoustic_vae_dim, cfg.decoder_config.hidden_size,
-            vb.pp("acoustic_connector"),
+            vb.pp("acoustic_connector").set_device(audio_device.clone()).to_dtype(DType::F32),
         )?;
         let prediction_head = DiffusionHead::new(
-            &cfg.diffusion_head_config, vb.pp("prediction_head"),
+            &cfg.diffusion_head_config, vb.pp("prediction_head").set_device(audio_device.clone()).to_dtype(DType::F32),
         )?;
 
         let speech_scaling_factor = vb.get((), "speech_scaling_factor").ok()
@@ -1964,8 +1967,8 @@ pub struct VibeVoiceStreaming {
 }
 
 impl VibeVoiceStreaming {
-    pub fn new(cfg: &StreamingConfig, vb: VarBuilder) -> Result<Self> {
-        let model = VibeVoiceStreamingModel::new(cfg, vb.pp("model"))?;
+    pub fn new(cfg: &StreamingConfig, vb: VarBuilder, audio_device: &Device) -> Result<Self> {
+        let model = VibeVoiceStreamingModel::new(cfg, vb.pp("model"), audio_device)?;
         // tts_eos_classifier lives at root level (not under "model.")
         let tts_eos_classifier = BinaryClassifier::new(
             cfg.decoder_config.hidden_size, vb.pp("tts_eos_classifier"),
@@ -1992,7 +1995,9 @@ impl VibeVoiceStreaming {
         embeds: &Tensor,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        self.model.language_model.forward_embeds(embeds, seqlen_offset, None)
+        let dtype = self.model.language_model.dtype();
+        let embeds = embeds.to_dtype(dtype)?;
+        self.model.language_model.forward_embeds(&embeds, seqlen_offset, None)
     }
 
     /// Run the upper TTS LM on pre-computed embeddings (already spliced
@@ -2002,7 +2007,9 @@ impl VibeVoiceStreaming {
         inputs_embeds: &Tensor,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        self.model.tts_language_model.forward_embeds(inputs_embeds, seqlen_offset, None)
+        let dtype = self.model.tts_language_model.dtype();
+        let inputs_embeds = inputs_embeds.to_dtype(dtype)?;
+        self.model.tts_language_model.forward_embeds(&inputs_embeds, seqlen_offset, None)
     }
 
     /// Get the text embedding for token ids (from the lower LM's embed_tokens).
@@ -2013,19 +2020,27 @@ impl VibeVoiceStreaming {
     /// Add tts_input_types embedding. `type_ids`: 0 = speech, 1 = text.
     pub fn add_tts_type_embedding(&self, embeds: &Tensor, type_ids: &Tensor) -> Result<Tensor> {
         let type_emb = self.model.tts_input_types.forward(type_ids)?;
+        // Ensure embeds and type_emb match (e.g. if embeds was upcast/downcast)
+        let embeds = embeds.to_dtype(type_emb.dtype())?;
         embeds.broadcast_add(&type_emb)
     }
 
     /// Run the EOS classifier on the last hidden state. Returns logit (pre-sigmoid).
     pub fn eos_logit(&self, hidden_state: &Tensor) -> Result<f32> {
-        let logit = self.tts_eos_classifier.forward(hidden_state)?;
+        let dtype = self.model.tts_language_model.dtype();
+        let logit = self.tts_eos_classifier.forward(&hidden_state.to_dtype(dtype)?)?;
         let logit = logit.to_dtype(DType::F32)?.flatten_all()?;
         logit.i(0)?.to_scalar::<f32>()
     }
 
     /// Pass speech latent through acoustic_connector to get embeddings for TTS LM input.
     pub fn acoustic_connector(&self, speech_latent: &Tensor) -> Result<Tensor> {
-        self.model.acoustic_connector.forward(speech_latent)
+        let audio_dev = self.model.acoustic_connector.fc1.weight().device();
+        let speech_audio_dev = speech_latent.to_device(audio_dev)?;
+        let out = self.model.acoustic_connector.forward(&speech_audio_dev)?;
+        let device = self.model.tts_input_types.embeddings().device();
+        let dtype = self.model.tts_input_types.embeddings().dtype();
+        out.to_device(device)?.to_dtype(dtype)
     }
 
     /// Diffusion head forward pass.
@@ -2048,19 +2063,22 @@ impl VibeVoiceStreaming {
         negative_condition: &Tensor,
         scheduler: &mut DpmSolverScheduler,
         cfg_scale: f64,
-        device: &Device,
-        dtype: DType,
+        _device: &Device,
+        _dtype: DType,
     ) -> Result<Tensor> {
-        let condition = Tensor::cat(&[positive_condition, negative_condition], 0)?;
+        let audio_dev = self.model.prediction_head.noisy_images_proj.weight().device();
+        let pos_cond = positive_condition.to_device(audio_dev)?.to_dtype(DType::F32)?;
+        let neg_cond = negative_condition.to_device(audio_dev)?.to_dtype(DType::F32)?;
+        let condition = Tensor::cat(&[&pos_cond, &neg_cond], 0)?;
         let mut speech = Tensor::randn(
-            0f32, 1f32, (2, self.cfg.acoustic_vae_dim), device,
-        )?.to_dtype(dtype)?;
+            0f32, 1f32, (2, self.cfg.acoustic_vae_dim), audio_dev,
+        )?;
 
         let timesteps = scheduler.timesteps().to_vec();
         for &t in &timesteps {
             let half = speech.i(0..1)?;
             let combined = Tensor::cat(&[&half, &half], 0)?;
-            let t_tensor = Tensor::full(t as f32, 2, device)?.to_dtype(dtype)?;
+            let t_tensor = Tensor::full(t as f32, 2, audio_dev)?;
             let eps = self.model.prediction_head.forward(&combined, &t_tensor, &condition)?;
 
             // CFG: eps = uncond + cfg_scale * (cond - uncond)
@@ -2146,18 +2164,20 @@ impl VibeVoiceStreaming {
     pub fn load_voice_prompt(
         &mut self,
         tensors: &std::collections::HashMap<String, Tensor>,
-        dtype: DType,
+        _dtype: DType,
     ) -> Result<(usize, usize)> {
-        let load_kv = |model: &mut qwen2::Model, prefix: &str, n_layers: usize, dt: DType| -> Result<usize> {
+        let load_kv = |model: &mut qwen2::Model, prefix: &str, n_layers: usize| -> Result<usize> {
             let mut pairs = Vec::with_capacity(n_layers);
             let mut seq_len = 0;
+            // Use model's native dtype for KV cache
+            let target_dt = model.dtype();
             for i in 0..n_layers {
                 let k = tensors.get(&format!("{prefix}.kv.{i}.key"))
                     .ok_or_else(|| candle::Error::Msg(format!("missing {prefix}.kv.{i}.key")))?
-                    .to_dtype(dt)?;
+                    .to_dtype(target_dt)?;
                 let v = tensors.get(&format!("{prefix}.kv.{i}.value"))
                     .ok_or_else(|| candle::Error::Msg(format!("missing {prefix}.kv.{i}.value")))?
-                    .to_dtype(dt)?;
+                    .to_dtype(target_dt)?;
                 if i == 0 {
                     seq_len = k.dim(2)?;
                 }
@@ -2170,8 +2190,8 @@ impl VibeVoiceStreaming {
         let lm_layers = self.model.language_model.num_layers();
         let tts_layers = self.model.tts_language_model.num_layers();
 
-        let lm_seq = load_kv(&mut self.model.language_model, "lm", lm_layers, dtype)?;
-        let tts_seq = load_kv(&mut self.model.tts_language_model, "tts_lm", tts_layers, dtype)?;
+        let lm_seq = load_kv(&mut self.model.language_model, "lm", lm_layers)?;
+        let tts_seq = load_kv(&mut self.model.tts_language_model, "tts_lm", tts_layers)?;
 
         Ok((lm_seq, tts_seq))
     }
