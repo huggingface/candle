@@ -97,6 +97,9 @@ tekken = ["tekken-rs"]
 buildtime-download = []
 
 [[example]]
+name = "model-comparison"
+
+[[example]]
 name = "turboquant"
 
 [[example]]

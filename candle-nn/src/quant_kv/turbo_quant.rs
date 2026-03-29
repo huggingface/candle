@@ -107,13 +107,25 @@ impl TurboQuantConfig {
             "total_bits must be at least 2.0 (1.0 for MSE + 1.0 for QJL)"
         );
 
-        // Choose level bits for PolarQuant based on mse_bits
-        // For mse_bits ≈ 2.5: use 3 bits level-1, 2 bits deeper → avg ≈ 2.5 bits
-        // For mse_bits ≈ 3.5: use 4 bits level-1, 2 bits deeper → avg ≈ 3.2 bits
-        let (bits_level1, bits_deep) = if mse_bits <= 2.0 {
-            (2u32, 2u32) // 2-bit everywhere
-        } else if mse_bits <= 3.0 {
-            (3u32, 2u32) // 3-bit level-1, 2-bit deeper
+        // Choose level bits for PolarQuant based on mse_bits.
+        //
+        // The bit width controls both the codebook size AND the packing density:
+        //   bits_level1 = 1 → pack_1bit (8 per byte) → ~1.25 bits/dim MSE stage at d=64
+        //     + QJL ~1.25 bits/dim → total ~2.5 bits/dim ✓ (2.5-bit config)
+        //
+        //   bits_level1 = 2 → pack_2bit (4 per byte) → ~2.25 bits/dim MSE stage at d=64
+        //     + QJL ~1.25 bits/dim → total ~3.5 bits/dim ✓ (3.5-bit config)
+        //
+        //   bits_level1 = 3 → pack_4bit (2 per byte, 3-bit codebook) → ~3.2 bits/dim MSE
+        //     + QJL ~1.25 bits/dim → total ~4.5 bits/dim (4.5-bit config)
+        //
+        //   bits_level1 = 4 → standard PolarQuant + QJL (higher quality, more bits)
+        let (bits_level1, bits_deep) = if mse_bits <= 1.5 {
+            (1u32, 1u32) // 1-bit everywhere: minimizes MSE-stage bits
+        } else if mse_bits <= 2.5 {
+            (2u32, 2u32) // 2-bit everywhere: ~2.25 bits/dim MSE stage
+        } else if mse_bits <= 3.5 {
+            (3u32, 2u32) // 3-bit codebook L1, 2-bit deeper
         } else {
             (4u32, 2u32) // 4-bit level-1, 2-bit deeper (standard PolarQuant)
         };

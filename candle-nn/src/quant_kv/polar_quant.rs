@@ -134,10 +134,13 @@ impl PolarQuantConfig {
 /// A PolarQuant-compressed vector.
 #[derive(Debug, Clone)]
 pub struct PolarQuantizedVec {
-    /// Quantized angle codes for level 1: 4-bit values, 2 packed per byte.
-    /// Length: ceil(dim/2) / 2 bytes, storing dim/2 four-bit values.
+    /// Quantized angle codes for level 1.
+    /// Packed as 4-bit values (2 per byte) when bits_level1 > 2,
+    /// or as 2-bit values (4 per byte) when bits_level1 <= 2.
     pub level1_codes: Vec<u8>,
-    /// Quantized angle codes for levels 2 and deeper: 2-bit values, 4 packed per byte.
+    /// Quantized angle codes for levels 2 and deeper, packed by bits_deep:
+    ///   bits_deep == 1 → pack_1bit (8 per byte)
+    ///   bits_deep == 2 → pack_2bit (4 per byte)
     /// Stored level-by-level in order: level 2, then level 3, etc.
     pub leveln_codes: Vec<u8>,
     /// The single remaining radius after full recursive decomposition (stored as f16).
@@ -146,6 +149,12 @@ pub struct PolarQuantizedVec {
     pub n_levels: usize,
     /// Original vector dimension.
     pub dim: usize,
+    /// Bits per angle at level 1 (controls both codebook size and packing density).
+    /// 1 → pack_1bit, 2 → pack_2bit, >2 → pack_4bit.
+    pub bits_level1: u32,
+    /// Bits per angle at deeper levels (controls both codebook size and packing density).
+    /// 1 → pack_1bit, otherwise pack_2bit.
+    pub bits_deep: u32,
     /// Angle counts per level (for unpacking).
     level_counts: Vec<usize>,
 }
@@ -160,6 +169,28 @@ impl PolarQuantizedVec {
     pub fn bits_per_dim(&self) -> f32 {
         (self.byte_size() * 8) as f32 / self.dim as f32
     }
+}
+
+/// Pack 1-bit values (0..1) into bytes, 8 per byte.
+#[inline]
+fn pack_1bit(codes: &[u8]) -> Vec<u8> {
+    let n = codes.len();
+    let num_bytes = n.div_ceil(8);
+    let mut packed = vec![0u8; num_bytes];
+    for (i, &code) in codes.iter().enumerate() {
+        packed[i / 8] |= (code & 0x1) << (i % 8);
+    }
+    packed
+}
+
+/// Unpack 1-bit values from a packed byte array.
+#[inline]
+fn unpack_1bit(packed: &[u8], count: usize) -> Vec<u8> {
+    let mut codes = Vec::with_capacity(count);
+    for i in 0..count {
+        codes.push((packed[i / 8] >> (i % 8)) & 0x1);
+    }
+    codes
 }
 
 /// Pack two 4-bit values (0..15) into a single byte.
@@ -274,16 +305,29 @@ pub fn polar_quantize(x: &[f32], config: &PolarQuantConfig) -> PolarQuantizedVec
 
     let final_radius = f16::from_f32(current_radii[0]);
 
-    // Step 3: Pack codes
+    // Step 3: Pack codes — use the tightest packing for the given bit width.
+    // bits_level1 == 1 → pack_1bit (8 per byte)
+    // bits_level1 == 2 → pack_2bit (4 per byte)
+    // bits_level1 <= 4 → pack_4bit (2 per byte)
     let level1_codes = if !all_angle_codes.is_empty() {
-        pack_4bit(&all_angle_codes[0])
+        if config.bits_level1 <= 1 {
+            pack_1bit(&all_angle_codes[0])
+        } else if config.bits_level1 <= 2 {
+            pack_2bit(&all_angle_codes[0])
+        } else {
+            pack_4bit(&all_angle_codes[0])
+        }
     } else {
         vec![]
     };
 
-    // Pack all deeper levels concatenated
+    // Pack all deeper levels concatenated — use bits_deep to choose packing
     let deep_codes_flat: Vec<u8> = all_angle_codes.iter().skip(1).flatten().copied().collect();
-    let leveln_codes = pack_2bit(&deep_codes_flat);
+    let leveln_codes = if config.bits_deep <= 1 {
+        pack_1bit(&deep_codes_flat)
+    } else {
+        pack_2bit(&deep_codes_flat)
+    };
 
     PolarQuantizedVec {
         level1_codes,
@@ -291,6 +335,8 @@ pub fn polar_quantize(x: &[f32], config: &PolarQuantConfig) -> PolarQuantizedVec
         final_radius,
         n_levels: all_angle_codes.len(),
         dim: d,
+        bits_level1: config.bits_level1,
+        bits_deep: config.bits_deep,
         level_counts,
     }
 }
@@ -307,13 +353,23 @@ pub fn polar_dequantize(pq: &PolarQuantizedVec, config: &PolarQuantConfig) -> Ve
         return vec![f32::from(pq.final_radius)];
     }
 
-    // Unpack level-1 codes
+    // Unpack level-1 codes — must match the packing used during quantization
     let n_level1 = pq.level_counts[0];
-    let level1_codes = unpack_4bit(&pq.level1_codes, n_level1);
+    let level1_codes = if pq.bits_level1 <= 1 {
+        unpack_1bit(&pq.level1_codes, n_level1)
+    } else if pq.bits_level1 <= 2 {
+        unpack_2bit(&pq.level1_codes, n_level1)
+    } else {
+        unpack_4bit(&pq.level1_codes, n_level1)
+    };
 
-    // Unpack deeper level codes
+    // Unpack deeper level codes — match the packing used during quantization
     let deep_total: usize = pq.level_counts.iter().skip(1).sum();
-    let deep_codes = unpack_2bit(&pq.leveln_codes, deep_total);
+    let deep_codes = if pq.bits_deep <= 1 {
+        unpack_1bit(&pq.leveln_codes, deep_total)
+    } else {
+        unpack_2bit(&pq.leveln_codes, deep_total)
+    };
 
     // Build all angle vectors per level
     let mut all_angles: Vec<Vec<f32>> = Vec::with_capacity(n_levels);

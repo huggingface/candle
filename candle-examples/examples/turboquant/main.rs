@@ -149,6 +149,19 @@ fn run_accuracy_benchmark() {
         .map(|(q, k)| q.iter().zip(k.iter()).map(|(qi, ki)| qi * ki).sum())
         .collect();
 
+    // Full-precision baseline (no quantization) — error should be 0.000
+    {
+        let errors: Vec<f32> = pairs
+            .iter()
+            .zip(true_dots.iter())
+            .map(|((q, k), &true_dot)| {
+                let est: f32 = q.iter().zip(k.iter()).map(|(qi, ki)| qi * ki).sum();
+                est - true_dot
+            })
+            .collect();
+        print_accuracy_row("FP16 (exact)", &errors);
+    }
+
     // QJL
     {
         let cfg = QjlConfig::new(d, 42);
@@ -311,6 +324,13 @@ fn run_recall_benchmark() {
         let n = n_queries as f32;
         (r1 / n, r5 / n, r10 / n)
     };
+
+    // ── Full-precision baseline (no quantization) ─────────────────────────
+    // This is the "without QuantizedKvCache" baseline; recall must be 1.000.
+    {
+        let (r1, r5, r10) = compute_recalls(&true_score_vecs);
+        println!("║ FullPrec (FP16)║ {r1:>9.3}     ║ {r5:>9.3}     ║ {r10:>9.3}     ║  16.0  ║");
+    }
 
     // ── QJL ──────────────────────────────────────────────────────────────
     {
