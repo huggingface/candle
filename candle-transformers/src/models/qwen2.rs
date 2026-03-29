@@ -377,7 +377,7 @@ impl Model {
             .collect();
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), self.dtype, &self.device)?;
+            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), mask.dtype(), &self.device)?;
             Tensor::cat(&[&mask0, &mask], D::Minus1)?
         } else {
             mask
@@ -460,6 +460,10 @@ impl Model {
 
     pub fn num_layers(&self) -> usize {
         self.layers.len()
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
     }
 
     /// Save current KV caches (for swapping between positive/negative CFG paths).
