@@ -18,6 +18,8 @@ use candle_transformers::models::vibevoice::{
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
+mod dtype_helper;
+
 #[derive(Clone, Debug, ValueEnum)]
 enum Task {
     /// Automatic speech recognition (audio → text)
@@ -104,6 +106,10 @@ struct Args {
     /// Output WAV file path for TTS mode.
     #[arg(long, default_value = "output.wav")]
     output: String,
+
+    /// Offload audio components to CPU and use F16 for the LLM to save VRAM.
+    #[arg(long)]
+    low_vram: bool,
 }
 
 fn load_audio_pcm(path: &str) -> Result<(Vec<f32>, u32)> {
@@ -122,6 +128,9 @@ fn run_asr(args: &Args, device: &Device) -> Result<()> {
     let config: AsrConfig = serde_json::from_str(&std::fs::read_to_string(&config_filename)?)?;
     let tokenizer = Tokenizer::from_file(&tokenizer_filename).map_err(E::msg)?;
     let mut tos = TokenOutputStream::new(tokenizer.clone());
+
+    let detected_dtype = dtype_helper::detect_dtype(&filenames)?;
+    println!("Detected original model dtype: {:?}", detected_dtype);
 
     // F16 on CPU: gemm uses F32 accumulation internally, NaN-critical ops
     // (attention softmax, MLP multiply, residual adds) are upcast in qwen2.rs
@@ -386,16 +395,25 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
         serde_json::from_str(&std::fs::read_to_string(&config_filename)?)?;
     let tokenizer = Tokenizer::from_file(&tokenizer_filename).map_err(E::msg)?;
 
-    let dtype = if device.is_cuda() || device.is_metal() {
-        DType::BF16
+    let detected_dtype = dtype_helper::detect_dtype(&filenames)?;
+    println!("Detected original model dtype: {:?}", detected_dtype);
+
+    let (dtype, audio_device) = if args.low_vram {
+        if device.is_cuda() || device.is_metal() {
+            (DType::F16, Device::Cpu)
+        } else {
+            (DType::F32, Device::Cpu)
+        }
     } else {
-        DType::F32
+        (DType::F32, device.clone())
     };
+
+    // Base dtype (F16 on GPU, F32 on CPU) for the LLM backbone
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
 
-    println!("Loading VibeVoice-Realtime TTS model...");
+    println!("Loading VibeVoice-Realtime TTS model (base dtype={:?}, audio device={:?})...", dtype, audio_device);
     let start = std::time::Instant::now();
-    let mut model = VibeVoiceStreaming::new(&config, vb)?;
+    let mut model = VibeVoiceStreaming::new(&config, vb, &audio_device)?;
     println!("Model loaded in {:?}", start.elapsed());
 
     // Load voice prompt if provided
@@ -420,7 +438,7 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
             let mut mapped = std::collections::HashMap::new();
             for (key, tensor) in raw {
                 if let Some(new_key) = remap_pt_voice_key(&key) {
-                    mapped.insert(new_key, tensor);
+                    mapped.insert(new_key, tensor.to_device(device)?);
                 }
             }
             mapped
@@ -428,8 +446,12 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
             candle::safetensors::load(voice_prompt_path, device)?
         };
     let (lm_seq_offset, tts_lm_seq_offset) = model.load_voice_prompt(&vp_tensors, dtype)?;
-    let (_lm_hidden, tts_lm_hidden, _neg_lm_hidden, neg_tts_lm_hidden) =
+        let (_lm_hidden, tts_lm_hidden, _neg_lm_hidden, neg_tts_lm_hidden) =
         VibeVoiceStreaming::get_voice_prompt_hidden_states(&vp_tensors, dtype)?;
+        
+    let tts_lm_hidden = tts_lm_hidden.to_dtype(dtype)?;
+    let neg_tts_lm_hidden = neg_tts_lm_hidden.to_dtype(dtype)?;
+
     println!(
         "Voice prompt loaded: LM offset={lm_seq_offset}, TTS-LM offset={tts_lm_seq_offset}"
     );
@@ -552,12 +574,15 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
                 lm_output.clone()
             } else {
                 let prefix = text_embeds.i((.., ..start_idx, ..))?;
+                // Ensure prefix and lm_output match for concatenation
+                let prefix = prefix.to_dtype(dtype)?;
+                let lm_output = lm_output.to_dtype(dtype)?;
                 Tensor::cat(&[&prefix, &lm_output], 1)?
             };
 
             // Add type embedding: text=1
             let type_ids = Tensor::ones((1, embed_len), DType::U32, device)?;
-            let inputs_embeds = model.add_tts_type_embedding(&inputs_embeds, &type_ids)?;
+            let inputs_embeds = model.add_tts_type_embedding(&inputs_embeds.to_dtype(dtype)?, &type_ids)?;
 
             let tts_output = model.forward_tts_lm(&inputs_embeds, pos_tts_lm_offset)?;
             pos_tts_lm_offset += text_len;
@@ -677,12 +702,14 @@ fn run_tts(args: &Args, device: &Device) -> Result<()> {
         audio_chunks.len()
     );
 
-    // Concatenate all audio chunks
-    if audio_chunks.is_empty() {
+    let all_audio = if audio_chunks.is_empty() {
         anyhow::bail!("No audio generated");
-    }
-
-    let all_audio = Tensor::cat(&audio_chunks, audio_chunks[0].dims().len() - 1)?;
+    } else {
+        let audio_chunks: Vec<Tensor> = audio_chunks.iter()
+            .map(|t| t.to_dtype(DType::F32))
+            .collect::<Result<Vec<_>, _>>()?;
+        Tensor::cat(&audio_chunks, audio_chunks[0].dims().len() - 1)?
+    };
     println!("Generated audio shape: {:?}", all_audio.dims());
 
     let audio_data: Vec<f32> = all_audio
