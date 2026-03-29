@@ -2,7 +2,7 @@ use crate::backend::BackendStorage;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result};
 use half::{bf16, f16};
-use rocm_rs::hip::DeviceMemory;
+use rocm_rs::hip::{bindings, DeviceMemory};
 
 mod device;
 mod error;
@@ -381,17 +381,52 @@ impl BackendStorage for RocmStorage {
 
     fn copy2d(
         &self,
-        _dst: &mut Self,
-        _d1: usize,
-        _d2: usize,
-        _src_s1: usize,
-        _dst_s1: usize,
-        _src_o: usize,
-        _dst_o: usize,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s1: usize,
+        dst_s1: usize,
+        src_o: usize,
+        dst_o: usize,
     ) -> Result<()> {
-        Err(crate::Error::Msg(
-            "copy2d not yet implemented for ROCm".to_string(),
-        ))
+        if d1 == 0 || d2 == 0 {
+            return Ok(());
+        }
+        let (src_ptr, dst_ptr, el_size) = match (&self.slice, &mut dst.slice) {
+            (RocmStorageSlice::U8(s), RocmStorageSlice::U8(d)) => (s.as_ptr(), d.as_ptr(), 1usize),
+            (RocmStorageSlice::U32(s), RocmStorageSlice::U32(d)) => (s.as_ptr(), d.as_ptr(), 4),
+            (RocmStorageSlice::I16(s), RocmStorageSlice::I16(d)) => (s.as_ptr(), d.as_ptr(), 2),
+            (RocmStorageSlice::I32(s), RocmStorageSlice::I32(d)) => (s.as_ptr(), d.as_ptr(), 4),
+            (RocmStorageSlice::I64(s), RocmStorageSlice::I64(d)) => (s.as_ptr(), d.as_ptr(), 8),
+            (RocmStorageSlice::BF16(s), RocmStorageSlice::BF16(d)) => (s.as_ptr(), d.as_ptr(), 2),
+            (RocmStorageSlice::F16(s), RocmStorageSlice::F16(d)) => (s.as_ptr(), d.as_ptr(), 2),
+            (RocmStorageSlice::F32(s), RocmStorageSlice::F32(d)) => (s.as_ptr(), d.as_ptr(), 4),
+            (RocmStorageSlice::F64(s), RocmStorageSlice::F64(d)) => (s.as_ptr(), d.as_ptr(), 8),
+            (RocmStorageSlice::F8E4M3(s), RocmStorageSlice::F8E4M3(d)) => {
+                (s.as_ptr(), d.as_ptr(), 1)
+            }
+            _ => crate::bail!("dtype mismatch in copy2d"),
+        };
+        let src_ptr = unsafe { src_ptr.add(src_o * el_size) };
+        let dst_ptr = unsafe { dst_ptr.add(dst_o * el_size) };
+        let width = d2 * el_size;
+        let spitch = src_s1 * el_size;
+        let dpitch = dst_s1 * el_size;
+        let result = unsafe {
+            bindings::hipMemcpy2D(
+                dst_ptr,
+                dpitch,
+                src_ptr,
+                spitch,
+                width,
+                d1,
+                bindings::hipMemcpyKind_hipMemcpyDeviceToDevice,
+            )
+        };
+        if result != bindings::hipError_t_hipSuccess {
+            crate::bail!("hipMemcpy2D failed with error {}", result);
+        }
+        Ok(())
     }
 
     fn const_set(&mut self, _val: crate::scalar::Scalar, _l: &Layout) -> Result<()> {
