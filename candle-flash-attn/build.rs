@@ -5,13 +5,14 @@ use cudaforge::{KernelBuilder, Result};
 use std::path::PathBuf;
 const CUTLASS_COMMIT: &str = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
 
-const KERNEL_FILES: [&str; 33] = [
+const KERNEL_FILES: [&str; 37] = [
     "kernels/flash_api.cu",
     "kernels/flash_fwd_hdim128_fp16_sm80.cu",
     "kernels/flash_fwd_hdim160_fp16_sm80.cu",
     "kernels/flash_fwd_hdim192_fp16_sm80.cu",
     "kernels/flash_fwd_hdim224_fp16_sm80.cu",
     "kernels/flash_fwd_hdim256_fp16_sm80.cu",
+    "kernels/flash_fwd_hdim512_fp16_sm80.cu",
     "kernels/flash_fwd_hdim32_fp16_sm80.cu",
     "kernels/flash_fwd_hdim64_fp16_sm80.cu",
     "kernels/flash_fwd_hdim96_fp16_sm80.cu",
@@ -20,6 +21,7 @@ const KERNEL_FILES: [&str; 33] = [
     "kernels/flash_fwd_hdim192_bf16_sm80.cu",
     "kernels/flash_fwd_hdim224_bf16_sm80.cu",
     "kernels/flash_fwd_hdim256_bf16_sm80.cu",
+    "kernels/flash_fwd_hdim512_bf16_sm80.cu",
     "kernels/flash_fwd_hdim32_bf16_sm80.cu",
     "kernels/flash_fwd_hdim64_bf16_sm80.cu",
     "kernels/flash_fwd_hdim96_bf16_sm80.cu",
@@ -28,6 +30,7 @@ const KERNEL_FILES: [&str; 33] = [
     "kernels/flash_fwd_hdim192_fp16_causal_sm80.cu",
     "kernels/flash_fwd_hdim224_fp16_causal_sm80.cu",
     "kernels/flash_fwd_hdim256_fp16_causal_sm80.cu",
+    "kernels/flash_fwd_hdim512_fp16_causal_sm80.cu",
     "kernels/flash_fwd_hdim32_fp16_causal_sm80.cu",
     "kernels/flash_fwd_hdim64_fp16_causal_sm80.cu",
     "kernels/flash_fwd_hdim96_fp16_causal_sm80.cu",
@@ -36,6 +39,7 @@ const KERNEL_FILES: [&str; 33] = [
     "kernels/flash_fwd_hdim192_bf16_causal_sm80.cu",
     "kernels/flash_fwd_hdim224_bf16_causal_sm80.cu",
     "kernels/flash_fwd_hdim256_bf16_causal_sm80.cu",
+    "kernels/flash_fwd_hdim512_bf16_causal_sm80.cu",
     "kernels/flash_fwd_hdim32_bf16_causal_sm80.cu",
     "kernels/flash_fwd_hdim64_bf16_causal_sm80.cu",
     "kernels/flash_fwd_hdim96_bf16_causal_sm80.cu",
