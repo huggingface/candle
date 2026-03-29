@@ -1778,7 +1778,7 @@ fn simple_eval_(
                         )
                     }
                     DType::BF16 | DType::F16 | DType::F32 | DType::F64 | DType::F8E4M3 => {}
-                    dt => bail!("unsupported dtype {dt:?} for LeakyRelu")
+                    dt => bail!("unsupported dtype {dt:?} for LeakyRelu"),
                 }
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(0.01);
                 let output = candle_nn::ops::leaky_relu(input, alpha.into())?;
