@@ -1,10 +1,13 @@
-use crate::DType;
+use crate::{DType, Layout};
 use rocm_rs::hip::error::Error as HipError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RocmError {
     #[error("HIP error: {0}")]
     Hip(#[from] HipError),
+
+    #[error("rocBLAS error: {0}")]
+    Rocblas(String),
 
     #[error("ROCm kernel not found: {0}")]
     KernelNotFound(String),
@@ -20,6 +23,13 @@ pub enum RocmError {
 
     #[error("internal error: {0}")]
     Internal(String),
+
+    #[error("matmul is only supported for contiguous tensors lstride: {lhs_stride:?} rstride: {rhs_stride:?} mnk: {mnk:?}")]
+    MatMulNonContiguous {
+        lhs_stride: Layout,
+        rhs_stride: Layout,
+        mnk: (usize, usize, usize),
+    },
 }
 
 impl From<RocmError> for crate::Error {

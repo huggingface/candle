@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use super::{RocmError, RocmStorage, RocmStorageSlice};
 use rocm_rs::hip::{kernel::AsKernelArg, Device as HipDevice, DeviceMemory, Module, Stream};
+use rocm_rs::rocblas;
 use rocm_rs::rocrand::PseudoRng;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -39,6 +40,7 @@ pub struct RocmDevice {
     modules: Arc<Mutex<ModuleCache>>,
     rocrand: Arc<Mutex<PseudoRng>>,
     seed_value: Arc<RwLock<u64>>,
+    pub(crate) blas: Arc<rocblas::Handle>,
 }
 
 impl std::fmt::Debug for RocmDevice {
@@ -60,6 +62,10 @@ impl RocmDevice {
             .set_seed(seed)
             .map_err(|e| crate::Error::Msg(format!("Failed to set rocrand seed: {}", e)))?;
 
+        let blas = rocblas::Handle::new().map_err(|e| RocmError::Rocblas(e.to_string()))?;
+        blas.set_stream(&stream)
+            .map_err(|e| RocmError::Rocblas(e.to_string()))?;
+
         Ok(Self {
             id: DeviceId::new(),
             device: Arc::new(device),
@@ -67,6 +73,7 @@ impl RocmDevice {
             modules: Arc::new(Mutex::new(ModuleCache::new())),
             rocrand: Arc::new(Mutex::new(rocrand)),
             seed_value: Arc::new(RwLock::new(seed)),
+            blas: Arc::new(blas),
         })
     }
 
