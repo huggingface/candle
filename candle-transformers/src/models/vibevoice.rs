@@ -1430,8 +1430,18 @@ impl DpmSolverScheduler {
     fn convert_model_output(&self, model_output: &Tensor, sample: &Tensor) -> Result<Tensor> {
         let sigma = self.sigmas[self.step_index];
         let (alpha_t, sigma_t) = self.sigma_to_alpha_sigma(sigma);
-        // x0_pred = alpha_t * sample - sigma_t * model_output
-        (sample * alpha_t)? - (model_output * sigma_t)?
+        match self.prediction_type.as_str() {
+            "v_prediction" => {
+                // x0_pred = alpha_t * sample - sigma_t * model_output
+                (sample * alpha_t)? - (model_output * sigma_t)?
+            }
+            "epsilon" => {
+                // x0_pred = (sample - sigma_t * model_output) / alpha_t
+                (sample - (model_output * sigma_t)?)? / alpha_t
+            }
+            "sample" => Ok(model_output.clone()),
+            pt => candle::bail!("Unsupported prediction_type: {}", pt),
+        }
     }
 
     /// First-order DPM-Solver++ update (equivalent to DDIM).
@@ -1473,7 +1483,7 @@ impl DpmSolverScheduler {
         let ratio = sig_t / sig_s0;
         let coeff = alpha_t * ((-h).exp() - 1.0);
         // x_t = ratio * sample - coeff * D0 - 0.5 * coeff * D1   (midpoint)
-        ((sample * ratio)? - (x0_cur * coeff)?)? - (&d1 * (0.5 * coeff))?
+        (((sample * ratio)? - (x0_cur * coeff)?)? - (&d1 * (0.5 * coeff))?)
     }
 
     /// Perform one denoising step. Matches `scheduler.step(eps, t, speech)`.
