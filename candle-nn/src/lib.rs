@@ -36,6 +36,7 @@ pub mod rotary_emb;
 pub mod sampling;
 pub mod sequential;
 pub mod var_builder;
+pub mod quant_kv;
 pub mod var_map;
 
 pub use activation::{prelu, Activation, PReLU};
