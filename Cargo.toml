@@ -47,7 +47,7 @@ candle-transformers = { path = "./candle-transformers", version = "0.9.2" }
 candle-ug = { path = "./candle-ug", version = "0.9.2" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.8", default-features = false }
-cudarc = { version = "0.19.1", features = [
+cudarc = { version = "0.19.4", features = [
     "std",
     "cublas",
     "cublaslt",
