@@ -835,7 +835,7 @@ fn load_model_files(
                     // bubble up the original error (which could be a download timeout of a shard).
                     match repo.get("model.safetensors") {
                         Ok(single_file) => vec![single_file],
-                        Err(_) => candle::bail!("Failed to load safetensors. Original error: {}", e),
+                        Err(_) => anyhow::bail!("Failed to load safetensors. Original error: {}", e),
                     }
                 }
             };
