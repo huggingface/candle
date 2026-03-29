@@ -830,7 +830,14 @@ fn load_model_files(
         let filenames =
             match candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json") {
                 Ok(f) => f,
-                Err(_) => vec![repo.get("model.safetensors")?],
+                Err(e) => {
+                    // Try to fallback to a single safetensors file, but if that fails too,
+                    // bubble up the original error (which could be a download timeout of a shard).
+                    match repo.get("model.safetensors") {
+                        Ok(single_file) => vec![single_file],
+                        Err(_) => candle::bail!("Failed to load safetensors. Original error: {}", e),
+                    }
+                }
             };
         Ok((config, tokenizer, filenames))
     }
