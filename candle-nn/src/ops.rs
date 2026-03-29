@@ -642,7 +642,13 @@ pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
             alpha.shape()
         )
     }
-    xs.apply_op2_no_bwd(alpha, &RmsNorm { eps })
+    // Handle dtype mismatch between input and alpha (weights)
+    if xs.dtype() != alpha.dtype() {
+        let alpha = alpha.to_dtype(xs.dtype())?;
+        xs.apply_op2_no_bwd(&alpha, &RmsNorm { eps })
+    } else {
+        xs.apply_op2_no_bwd(alpha, &RmsNorm { eps })
+    }
 }
 
 #[derive(Debug, Clone)]
