@@ -287,7 +287,40 @@ impl MetalDevice {
 }
 
 fn buf_size(size: usize) -> usize {
-    size.saturating_sub(1).next_power_of_two()
+    size.next_power_of_two()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buf_size_exact_powers_of_two() {
+        assert_eq!(buf_size(1), 1);
+        assert_eq!(buf_size(2), 2);
+        assert_eq!(buf_size(4), 4);
+        assert_eq!(buf_size(8), 8);
+        assert_eq!(buf_size(16), 16);
+        assert_eq!(buf_size(1024), 1024);
+    }
+
+    #[test]
+    fn test_buf_size_rounds_up() {
+        assert_eq!(buf_size(3), 4);
+        assert_eq!(buf_size(5), 8);
+        assert_eq!(buf_size(6), 8);
+        assert_eq!(buf_size(7), 8);
+        assert_eq!(buf_size(9), 16);
+        assert_eq!(buf_size(1000), 1024);
+        assert_eq!(buf_size(1025), 2048);
+    }
+
+    #[test]
+    fn test_buf_size_bf16_f16_scalar() {
+        // BF16 and F16 are 2 bytes per element. A scalar tensor requests
+        // a 2-byte buffer. This must not be rounded down to 1.
+        assert_eq!(buf_size(2), 2);
+    }
 }
 
 fn find_available_buffer(size: usize, buffers: &BufferMap) -> Option<Arc<Buffer>> {
