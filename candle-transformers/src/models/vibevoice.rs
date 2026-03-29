@@ -1431,7 +1431,7 @@ impl DpmSolverScheduler {
         let sigma = self.sigmas[self.step_index];
         let (alpha_t, sigma_t) = self.sigma_to_alpha_sigma(sigma);
         // x0_pred = alpha_t * sample - sigma_t * model_output
-        ((sample * alpha_t)? - (model_output * sigma_t)?)
+        (sample * alpha_t)? - (model_output * sigma_t)?
     }
 
     /// First-order DPM-Solver++ update (equivalent to DDIM).
@@ -1446,7 +1446,7 @@ impl DpmSolverScheduler {
         // x_t = (sigma_t / sigma_s) * sample - alpha_t * (exp(-h) - 1) * x0_pred
         let ratio = sig_t / sig_s;
         let coeff = alpha_t * ((-h).exp() - 1.0);
-        ((sample * ratio)? - (x0_pred * coeff)?)
+        (sample * ratio)? - (x0_pred * coeff)?
     }
 
     /// Second-order DPM-Solver++ midpoint update.
@@ -1473,7 +1473,7 @@ impl DpmSolverScheduler {
         let ratio = sig_t / sig_s0;
         let coeff = alpha_t * ((-h).exp() - 1.0);
         // x_t = ratio * sample - coeff * D0 - 0.5 * coeff * D1   (midpoint)
-        (((sample * ratio)? - (x0_cur * coeff)?)? - (&d1 * (0.5 * coeff))?)
+        ((sample * ratio)? - (x0_cur * coeff)?)? - (&d1 * (0.5 * coeff))?
     }
 
     /// Perform one denoising step. Matches `scheduler.step(eps, t, speech)`.
