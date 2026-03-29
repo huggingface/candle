@@ -1483,7 +1483,7 @@ impl DpmSolverScheduler {
         let ratio = sig_t / sig_s0;
         let coeff = alpha_t * ((-h).exp() - 1.0);
         // x_t = ratio * sample - coeff * D0 - 0.5 * coeff * D1   (midpoint)
-        (((sample * ratio)? - (x0_cur * coeff)?)? - (&d1 * (0.5 * coeff))?)
+        ((sample * ratio)? - (x0_cur * coeff)?)? - (&d1 * (0.5 * coeff))?
     }
 
     /// Perform one denoising step. Matches `scheduler.step(eps, t, speech)`.
