@@ -132,12 +132,11 @@ fn run_asr(args: &Args, device: &Device) -> Result<()> {
     let detected_dtype = dtype_helper::detect_dtype(&filenames)?;
     println!("Detected original model dtype: {:?}", detected_dtype);
 
-    // F16 on CPU: gemm uses F32 accumulation internally, NaN-critical ops
-    // (attention softmax, MLP multiply, residual adds) are upcast in qwen2.rs
+    // F16 on GPU: RTX 5000 (Turing) lacks native BF16 Tensor Cores, causing missing CUDA symbols if BF16 is requested.
     let dtype = if device.is_cuda() || device.is_metal() {
-        DType::BF16
-    } else {
         DType::F16
+    } else {
+        DType::F32
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
 
