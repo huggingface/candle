@@ -201,6 +201,17 @@ pub fn turbo_quantize(x: &[f32], config: &TurboQuantConfig) -> TurboQuantizedVec
     }
 }
 
+/// Reconstruct the full unbiased vector from the TurboQuant-compressed key.
+pub fn turbo_dequantize(tq: &TurboQuantizedVec, config: &TurboQuantConfig) -> Vec<f32> {
+    let mut x_mse_hat = polar_dequantize(&tq.mse_part, &config.polar_config);
+    let residual_hat = crate::quant_kv::qjl::qjl_dequantize(&tq.residual_qjl, &config.qjl_config);
+    
+    for (xi, ri) in x_mse_hat.iter_mut().zip(residual_hat.iter()) {
+        *xi += ri;
+    }
+    x_mse_hat
+}
+
 /// Compute the unbiased inner product estimate ⟨q, x⟩ from a TurboQuant-compressed key.
 ///
 /// ## Computation
@@ -219,9 +230,8 @@ pub fn turbo_quantize(x: &[f32], config: &TurboQuantConfig) -> TurboQuantizedVec
 /// * `tq` — TurboQuant compressed key
 /// * `config` — must use the same seeds as encoding
 pub fn turbo_inner_product(q: &[f32], tq: &TurboQuantizedVec, config: &TurboQuantConfig) -> f32 {
-    let score_mse = polar_inner_product(q, &tq.mse_part, &config.polar_config);
-    let score_qjl = qjl_inner_product(q, &tq.residual_qjl, &config.qjl_config);
-    score_mse + score_qjl
+    let k_hat = turbo_dequantize(tq, config);
+    q.iter().zip(k_hat.iter()).map(|(a, b)| a * b).sum()
 }
 
 /// Quantize all key tokens in a key tensor using TurboQuant.
@@ -243,7 +253,7 @@ pub fn turbo_quantize_tensor(
     };
     assert_eq!(head_dim, config.dim);
 
-    let k_f32 = k.to_dtype(candle::DType::F32)?.flatten_all()?;
+    let k_f32 = k.to_device(&candle::Device::Cpu)?.to_dtype(candle::DType::F32)?.flatten_all()?;
     let k_data = k_f32.to_vec1::<f32>()?;
 
     let mut all_heads = Vec::with_capacity(num_heads);
@@ -278,27 +288,23 @@ pub fn turbo_attention_scores(
     assert_eq!(num_heads, quantized_keys.len());
     let kv_len = if num_heads > 0 { quantized_keys[0].len() } else { 0 };
 
-    let q_f32 = q.to_dtype(candle::DType::F32)?.flatten_all()?;
-    let q_data = q_f32.to_vec1::<f32>()?;
+    if kv_len == 0 {
+        return Tensor::zeros((batch, num_heads, q_len, kv_len), q.dtype(), q.device());
+    }
 
-    let mut scores_data = vec![0.0f32; batch * num_heads * q_len * kv_len];
+    let mut k_data = Vec::with_capacity(batch * num_heads * kv_len * head_dim);
 
-    for b in 0..batch {
+    for _ in 0..batch {
         for h in 0..num_heads {
-            for qt in 0..q_len {
-                let q_offset = ((b * num_heads + h) * q_len + qt) * head_dim;
-                let q_vec = &q_data[q_offset..q_offset + head_dim];
-
-                for kt in 0..kv_len {
-                    let score = turbo_inner_product(q_vec, &quantized_keys[h][kt], config);
-                    let score_idx = ((b * num_heads + h) * q_len + qt) * kv_len + kt;
-                    scores_data[score_idx] = score;
-                }
+            for kt in 0..kv_len {
+                let k_vec = turbo_dequantize(&quantized_keys[h][kt], config);
+                k_data.extend_from_slice(&k_vec);
             }
         }
     }
 
-    Tensor::from_vec(scores_data, (batch, num_heads, q_len, kv_len), q.device())
+    let k_tensor = Tensor::from_vec(k_data, (batch, num_heads, kv_len, head_dim), q.device())?;
+    q.matmul(&k_tensor.transpose(2, 3)?)
 }
 
 #[cfg(test)]

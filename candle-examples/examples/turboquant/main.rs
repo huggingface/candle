@@ -45,7 +45,7 @@ fn random_unit_vec(d: usize, seed: u64) -> Vec<f32> {
 }
 
 /// Generate a random f32 tensor of given shape.
-fn random_tensor(shape: &[usize], seed: u64) -> Tensor {
+fn random_tensor(shape: &[usize], seed: u64, device: &Device) -> Tensor {
     let total: usize = shape.iter().product();
     let mut rng = Prng::new(seed);
     let mut data = vec![0.0f32; total];
@@ -60,7 +60,7 @@ fn random_tensor(shape: &[usize], seed: u64) -> Tensor {
             }
         }
     }
-    Tensor::from_vec(data, shape, &Device::Cpu).unwrap()
+    Tensor::from_vec(data, shape, device).unwrap()
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -252,7 +252,7 @@ fn print_accuracy_row(name: &str, errors: &[f32]) {
 ///
 /// Paper claim (TurboQuant vs KIVI on Needle-in-Haystack):
 ///   TurboQuant: 0.997, KIVI: 0.981, Full precision: 0.997
-fn run_recall_benchmark() {
+fn run_recall_benchmark(device: &Device) {
     println!("\n╔══════════════════════════════════════════════════════════════════════════╗");
     println!("║           Benchmark 3: Top-k Attention Recall (N=100 queries)           ║");
     println!("╠══════════════════════════════════════════════════════════════════════════╣");
@@ -269,11 +269,11 @@ fn run_recall_benchmark() {
     let seed_base = 12345u64;
 
     // Pre-generate all key vectors for the simulated cache
-    let k_tensor = random_tensor(&[1, num_heads, n_tokens, d], seed_base);
+    let k_tensor = random_tensor(&[1, num_heads, n_tokens, d], seed_base, device);
 
     // Pre-generate query vectors
     let q_tensors: Vec<Tensor> = (0..n_queries)
-        .map(|i| random_tensor(&[1, num_heads, 1, d], seed_base + i as u64 + 100_000))
+        .map(|i| random_tensor(&[1, num_heads, 1, d], seed_base + i as u64 + 100_000, device))
         .collect();
 
     // Full-precision baseline: Q·K^T
@@ -441,6 +441,13 @@ fn main() {
     println!("║                 efficiency-with-extreme-compression/                     ║");
     println!("╚══════════════════════════════════════════════════════════════════════════╝");
 
+    let device = if candle::utils::cuda_is_available() {
+        candle::Device::new_cuda(0).unwrap_or(candle::Device::Cpu)
+    } else {
+        candle::Device::Cpu
+    };
+    println!("\nUsing device: {:?}", device);
+
     println!("\nRunning benchmarks... (this may take a minute due to O(d²) QJL operations)");
 
     let t0 = std::time::Instant::now();
@@ -454,7 +461,7 @@ fn main() {
     println!("  (completed in {:.2}s)", (t1 - t0).as_secs_f32());
 
     let t0 = std::time::Instant::now();
-    run_recall_benchmark();
+    run_recall_benchmark(&device);
     let t1 = std::time::Instant::now();
     println!("  (completed in {:.2}s)", (t1 - t0).as_secs_f32());
 

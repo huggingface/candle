@@ -151,6 +151,35 @@ pub fn qjl_quantize(k: &[f32], config: &QjlConfig) -> QjlQuantizedKey {
     }
 }
 
+/// Reconstruct a key vector approximation from its QJL-compressed form.
+///
+/// Computes the asymmetric estimator vector: `(π / (2d)) · ||k||₂ · (S^T · σ)`.
+pub fn qjl_dequantize(qk: &QjlQuantizedKey, config: &QjlConfig) -> Vec<f32> {
+    let d = config.dim;
+    debug_assert_eq!(qk.dim, d);
+
+    let mut result = vec![0.0f32; d];
+    let mut rng = Prng::new(config.seed);
+    let mut row = vec![0.0f32; d];
+
+    for i in 0..d {
+        rng.fill_normal(&mut row);
+        let bit = (qk.sign_bits[i / 8] >> (i % 8)) & 1;
+        let sigma_i = if bit == 1 { 1.0f32 } else { -1.0f32 };
+
+        for j in 0..d {
+            result[j] += sigma_i * row[j];
+        }
+    }
+
+    let norm = f32::from(qk.norm);
+    let scale = (std::f32::consts::PI / (2.0 * d as f32)) * norm;
+    for x in &mut result {
+        *x *= scale;
+    }
+    result
+}
+
 /// Estimate the inner product ⟨q, k_original⟩ from the QJL-compressed key.
 ///
 /// Uses the asymmetric estimator:
@@ -165,34 +194,8 @@ pub fn qjl_quantize(k: &[f32], config: &QjlConfig) -> QjlQuantizedKey {
 /// * `qk` — the QJL-compressed key produced by `qjl_quantize`
 /// * `config` — must use the same `seed` as was used during encoding
 pub fn qjl_inner_product(q: &[f32], qk: &QjlQuantizedKey, config: &QjlConfig) -> f32 {
-    let d = config.dim;
-    debug_assert_eq!(q.len(), d);
-    debug_assert_eq!(qk.dim, d);
-
-    // Accumulate S^T · σ:
-    // For each row i of S, σ_i is ±1, and we add σ_i * S[i,:] to the result.
-    // After the loop, result = S^T · σ = Σ_i σ_i · S[i,:]
-    let mut result = vec![0.0f32; d];
-    let mut rng = Prng::new(config.seed);
-    let mut row = vec![0.0f32; d];
-
-    for i in 0..d {
-        rng.fill_normal(&mut row);
-        // Extract sign bit i: σ_i ∈ {-1, +1}
-        let bit = (qk.sign_bits[i / 8] >> (i % 8)) & 1;
-        let sigma_i = if bit == 1 { 1.0f32 } else { -1.0f32 };
-
-        for j in 0..d {
-            result[j] += sigma_i * row[j];
-        }
-    }
-
-    // Inner product ⟨q, S^T · σ⟩
-    let dot: f32 = q.iter().zip(result.iter()).map(|(qi, ri)| qi * ri).sum();
-
-    // Scale by (π / (2d)) · ||k||₂
-    let norm = f32::from(qk.norm);
-    (std::f32::consts::PI / (2.0 * d as f32)) * norm * dot
+    let k_hat = qjl_dequantize(qk, config);
+    q.iter().zip(k_hat.iter()).map(|(qi, ki)| qi * ki).sum()
 }
 
 /// Quantize all key tokens in a key tensor.
@@ -223,7 +226,7 @@ pub fn qjl_quantize_tensor(
     );
 
     // Flatten to f32 for processing
-    let k_f32 = k.to_dtype(candle::DType::F32)?.flatten_all()?;
+    let k_f32 = k.to_device(&candle::Device::Cpu)?.to_dtype(candle::DType::F32)?.flatten_all()?;
     let k_data = k_f32.to_vec1::<f32>()?;
 
     let mut all_heads = Vec::with_capacity(num_heads);
@@ -271,32 +274,24 @@ pub fn qjl_attention_scores(
     assert_eq!(num_heads, quantized_keys.len());
     let kv_len = if num_heads > 0 { quantized_keys[0].len() } else { 0 };
 
-    let q_f32 = q.to_dtype(candle::DType::F32)?.flatten_all()?;
-    let q_data = q_f32.to_vec1::<f32>()?;
+    if kv_len == 0 {
+        return Tensor::zeros((batch, num_heads, q_len, kv_len), q.dtype(), q.device());
+    }
 
-    let mut scores_data = vec![0.0f32; batch * num_heads * q_len * kv_len];
+    // Pre-dequantize all keys into a flat vector on CPU
+    let mut k_data = Vec::with_capacity(batch * num_heads * kv_len * head_dim);
 
-    for b in 0..batch {
+    for _ in 0..batch {
         for h in 0..num_heads {
-            for qt in 0..q_len {
-                let q_offset = ((b * num_heads + h) * q_len + qt) * head_dim;
-                let q_vec = &q_data[q_offset..q_offset + head_dim];
-
-                for kt in 0..kv_len {
-                    let score = qjl_inner_product(q_vec, &quantized_keys[h][kt], config);
-                    let score_idx = ((b * num_heads + h) * q_len + qt) * kv_len + kt;
-                    scores_data[score_idx] = score;
-                }
+            for kt in 0..kv_len {
+                let k_vec = qjl_dequantize(&quantized_keys[h][kt], config);
+                k_data.extend_from_slice(&k_vec);
             }
         }
     }
 
-    let device = q.device();
-    Tensor::from_vec(
-        scores_data,
-        (batch, num_heads, q_len, kv_len),
-        device,
-    )
+    let k_tensor = Tensor::from_vec(k_data, (batch, num_heads, kv_len, head_dim), q.device())?;
+    q.matmul(&k_tensor.transpose(2, 3)?)
 }
 
 #[cfg(test)]
