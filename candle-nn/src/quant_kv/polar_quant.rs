@@ -543,7 +543,8 @@ pub fn polar_attention_scores(
         }
     }
 
-    let k_tensor = Tensor::from_vec(k_data, (batch, num_heads, kv_len, head_dim), q.device())?;
+    let k_tensor = Tensor::from_vec(k_data, (batch, num_heads, kv_len, head_dim), q.device())?
+        .to_dtype(q.dtype())?;
     q.matmul(&k_tensor.transpose(2, 3)?)
 }
 

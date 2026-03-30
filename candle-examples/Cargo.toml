@@ -100,6 +100,18 @@ buildtime-download = []
 name = "turboquant"
 
 [[example]]
+name = "qjl"
+
+[[example]]
+name = "polarquant"
+
+[[example]]
+name = "turboquant-needle-in-a-haystack"
+
+[[example]]
+name = "turboquant-longbench"
+
+[[example]]
 name = "llama_multiprocess"
 required-features = ["cuda", "nccl", "flash-attn"]
 
