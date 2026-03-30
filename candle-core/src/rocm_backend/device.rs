@@ -1,11 +1,11 @@
 use crate::backend::BackendDevice;
 use crate::{CpuStorage, DType, Result, Shape};
+use candle_rocm_kernels::KernelManager;
 use half::{bf16, f16};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::{RocmError, RocmStorage, RocmStorageSlice};
-use rocm_rs::hip::{kernel::AsKernelArg, Device as HipDevice, DeviceMemory, Module, Stream};
+use rocm_rs::hip::{Device as HipDevice, DeviceMemory, Stream};
 use rocm_rs::rocblas;
 use rocm_rs::rocrand::PseudoRng;
 
@@ -20,27 +20,15 @@ impl DeviceId {
     }
 }
 
-pub struct ModuleCache {
-    modules: HashMap<String, Arc<Module>>,
-}
-
-impl ModuleCache {
-    fn new() -> Self {
-        Self {
-            modules: HashMap::new(),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct RocmDevice {
     id: DeviceId,
     device: Arc<HipDevice>,
     pub(crate) stream: Arc<Stream>,
-    modules: Arc<Mutex<ModuleCache>>,
     rocrand: Arc<Mutex<PseudoRng>>,
     seed_value: Arc<RwLock<u64>>,
     pub(crate) blas: Arc<rocblas::Handle>,
+    kernel_manager: Arc<Mutex<KernelManager>>,
 }
 
 impl std::fmt::Debug for RocmDevice {
@@ -66,14 +54,19 @@ impl RocmDevice {
         blas.set_stream(&stream)
             .map_err(|e| RocmError::Rocblas(e.to_string()))?;
 
+        let kernel_manager =
+            Arc::new(Mutex::new(KernelManager::new(&device).map_err(|e| {
+                crate::Error::Msg(format!("Failed to create kernel manager: {}", e))
+            })?));
+
         Ok(Self {
             id: DeviceId::new(),
             device: Arc::new(device),
             stream: Arc::new(stream),
-            modules: Arc::new(Mutex::new(ModuleCache::new())),
             rocrand: Arc::new(Mutex::new(rocrand)),
             seed_value: Arc::new(RwLock::new(seed)),
             blas: Arc::new(blas),
+            kernel_manager,
         })
     }
 
@@ -112,6 +105,10 @@ impl RocmDevice {
         self.stream
             .synchronize()
             .map_err(|e| crate::Error::Msg(format!("Synchronize failed: {}", e)))
+    }
+
+    pub(crate) fn kernel_manager(&self) -> &std::sync::Mutex<KernelManager> {
+        &self.kernel_manager
     }
 }
 
