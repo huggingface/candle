@@ -117,14 +117,14 @@ impl QjlQuantizedKey {
 /// # Arguments
 /// * `k` — key vector of length `config.dim`
 /// * `config` — QJL configuration with dimension and PRNG seed
-pub fn qjl_quantize(k: &[f32], config: &QjlConfig) -> QjlQuantizedKey {
+pub fn qjl_quantize(k: &[f32], config: &QjlConfig, token_idx: usize) -> QjlQuantizedKey {
     let d = config.dim;
     debug_assert_eq!(k.len(), d, "key length must equal config.dim");
 
     let num_bytes = (d + 7) / 8;
     let mut sign_bits = vec![0u8; num_bytes];
 
-    let mut rng = Prng::new(config.seed);
+    let mut rng = Prng::new(config.seed ^ token_idx as u64);
     let mut row = vec![0.0f32; d];
 
     for i in 0..d {
@@ -154,12 +154,12 @@ pub fn qjl_quantize(k: &[f32], config: &QjlConfig) -> QjlQuantizedKey {
 /// Reconstruct a key vector approximation from its QJL-compressed form.
 ///
 /// Computes the asymmetric estimator vector: `(π / (2d)) · ||k||₂ · (S^T · σ)`.
-pub fn qjl_dequantize(qk: &QjlQuantizedKey, config: &QjlConfig) -> Vec<f32> {
+pub fn qjl_dequantize(qk: &QjlQuantizedKey, config: &QjlConfig, token_idx: usize) -> Vec<f32> {
     let d = config.dim;
     debug_assert_eq!(qk.dim, d);
 
     let mut result = vec![0.0f32; d];
-    let mut rng = Prng::new(config.seed);
+    let mut rng = Prng::new(config.seed ^ token_idx as u64);
     let mut row = vec![0.0f32; d];
 
     for i in 0..d {
@@ -173,7 +173,7 @@ pub fn qjl_dequantize(qk: &QjlQuantizedKey, config: &QjlConfig) -> Vec<f32> {
     }
 
     let norm = f32::from(qk.norm);
-    let scale = (std::f32::consts::PI / (2.0 * d as f32)) * norm;
+    let scale = (std::f32::consts::PI / 2.0).sqrt() / d as f32 * norm;
     for x in &mut result {
         *x *= scale;
     }
@@ -193,8 +193,8 @@ pub fn qjl_dequantize(qk: &QjlQuantizedKey, config: &QjlConfig) -> Vec<f32> {
 /// * `q` — query vector of length `config.dim` (full precision, never quantized)
 /// * `qk` — the QJL-compressed key produced by `qjl_quantize`
 /// * `config` — must use the same `seed` as was used during encoding
-pub fn qjl_inner_product(q: &[f32], qk: &QjlQuantizedKey, config: &QjlConfig) -> f32 {
-    let k_hat = qjl_dequantize(qk, config);
+pub fn qjl_inner_product(q: &[f32], qk: &QjlQuantizedKey, config: &QjlConfig, token_idx: usize) -> f32 {
+    let k_hat = qjl_dequantize(qk, config, token_idx);
     q.iter().zip(k_hat.iter()).map(|(qi, ki)| qi * ki).sum()
 }
 
@@ -211,6 +211,7 @@ pub fn qjl_inner_product(q: &[f32], qk: &QjlQuantizedKey, config: &QjlConfig) ->
 pub fn qjl_quantize_tensor(
     k: &Tensor,
     config: &QjlConfig,
+    seq_offset: usize,
 ) -> Result<Vec<Vec<QjlQuantizedKey>>> {
     let dims = k.dims();
     // Support both [batch, heads, seq, dim] and [heads, seq, dim]
@@ -242,7 +243,7 @@ pub fn qjl_quantize_tensor(
                 offset
             };
             let key_slice = &k_data[offset..offset + head_dim];
-            head_keys.push(qjl_quantize(key_slice, config));
+            head_keys.push(qjl_quantize(key_slice, config, t + seq_offset));
         }
         all_heads.push(head_keys);
     }
@@ -284,7 +285,7 @@ pub fn qjl_attention_scores(
     for _ in 0..batch {
         for h in 0..num_heads {
             for kt in 0..kv_len {
-                let k_vec = qjl_dequantize(&quantized_keys[h][kt], config);
+                let k_vec = qjl_dequantize(&quantized_keys[h][kt], config, kt);
                 k_data.extend_from_slice(&k_vec);
             }
         }
@@ -334,8 +335,8 @@ mod tests {
             let k = normalize(&random_vec(d, i as u64 + 1_000_000));
 
             let true_dot: f32 = q.iter().zip(k.iter()).map(|(qi, ki)| qi * ki).sum();
-            let qk = qjl_quantize(&k, &config);
-            let estimated = qjl_inner_product(&q, &qk, &config);
+            let qk = qjl_quantize(&k, &config, i);
+            let estimated = qjl_inner_product(&q, &qk, &config, i);
 
             sum_error += (estimated - true_dot) as f64;
         }
@@ -353,7 +354,7 @@ mod tests {
         for d in [32usize, 64, 128, 256] {
             let config = QjlConfig::new(d, 1);
             let k = vec![1.0f32; d];
-            let qk = qjl_quantize(&k, &config);
+            let qk = qjl_quantize(&k, &config, 0);
             let expected = d / 8 + 2;
             assert_eq!(
                 qk.byte_size(),
@@ -385,13 +386,13 @@ mod tests {
             .collect();
         let k = Tensor::from_vec(k_data.clone(), (1, num_heads, seq_len, d), &Device::Cpu)?;
 
-        let all_keys = qjl_quantize_tensor(&k, &config)?;
+        let all_keys = qjl_quantize_tensor(&k, &config, 0)?;
 
         // Check that each head/token matches scalar API
         for h in 0..num_heads {
             for t in 0..seq_len {
                 let k_slice = &k_data[(h * seq_len + t) * d..(h * seq_len + t + 1) * d];
-                let qk_scalar = qjl_quantize(k_slice, &config);
+                let qk_scalar = qjl_quantize(k_slice, &config, t);
                 let qk_tensor = &all_keys[h][t];
 
                 assert_eq!(qk_scalar.sign_bits, qk_tensor.sign_bits);
@@ -408,7 +409,7 @@ mod tests {
         let d = 64;
         let config = QjlConfig::new(d, 1);
         let k = vec![0.0f32; d];
-        let qk = qjl_quantize(&k, &config);
+        let qk = qjl_quantize(&k, &config, 0);
         assert_eq!(f32::from(qk.norm), 0.0, "zero key should have zero norm");
     }
 
@@ -428,8 +429,8 @@ mod tests {
         let mut estimates = Vec::with_capacity(n);
         for s in 0..n {
             let cfg = QjlConfig::new(d, s as u64 + 100);
-            let qk = qjl_quantize(&k, &cfg);
-            estimates.push(qjl_inner_product(&q, &qk, &cfg));
+            let qk = qjl_quantize(&k, &cfg, 0);
+            estimates.push(qjl_inner_product(&q, &qk, &cfg, 0));
         }
 
         let mean: f32 = estimates.iter().sum::<f32>() / n as f32;

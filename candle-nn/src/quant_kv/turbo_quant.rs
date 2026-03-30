@@ -182,7 +182,7 @@ impl TurboQuantizedVec {
 ///    apply QJL (1-bit per dimension). This correction term removes the shrinkage bias.
 ///
 /// The combined encoding uses `b` bits per channel: `(b-1)` for Stage 1 + 1 for Stage 2.
-pub fn turbo_quantize(x: &[f32], config: &TurboQuantConfig) -> TurboQuantizedVec {
+pub fn turbo_quantize(x: &[f32], config: &TurboQuantConfig, token_idx: usize) -> TurboQuantizedVec {
     debug_assert_eq!(x.len(), config.dim);
 
     // Stage 1: PolarQuant MSE compression
@@ -193,7 +193,7 @@ pub fn turbo_quantize(x: &[f32], config: &TurboQuantConfig) -> TurboQuantizedVec
 
     // Stage 2: Compute residual and apply QJL
     let residual: Vec<f32> = x.iter().zip(x_mse_hat.iter()).map(|(xi, xi_hat)| xi - xi_hat).collect();
-    let residual_qjl = qjl_quantize(&residual, &config.qjl_config);
+    let residual_qjl = qjl_quantize(&residual, &config.qjl_config, token_idx);
 
     TurboQuantizedVec {
         mse_part,
@@ -202,9 +202,9 @@ pub fn turbo_quantize(x: &[f32], config: &TurboQuantConfig) -> TurboQuantizedVec
 }
 
 /// Reconstruct the full unbiased vector from the TurboQuant-compressed key.
-pub fn turbo_dequantize(tq: &TurboQuantizedVec, config: &TurboQuantConfig) -> Vec<f32> {
+pub fn turbo_dequantize(tq: &TurboQuantizedVec, config: &TurboQuantConfig, token_idx: usize) -> Vec<f32> {
     let mut x_mse_hat = polar_dequantize(&tq.mse_part, &config.polar_config);
-    let residual_hat = crate::quant_kv::qjl::qjl_dequantize(&tq.residual_qjl, &config.qjl_config);
+    let residual_hat = crate::quant_kv::qjl::qjl_dequantize(&tq.residual_qjl, &config.qjl_config, token_idx);
     
     for (xi, ri) in x_mse_hat.iter_mut().zip(residual_hat.iter()) {
         *xi += ri;
@@ -229,8 +229,8 @@ pub fn turbo_dequantize(tq: &TurboQuantizedVec, config: &TurboQuantConfig) -> Ve
 /// * `q` — query vector at full precision (never quantized)
 /// * `tq` — TurboQuant compressed key
 /// * `config` — must use the same seeds as encoding
-pub fn turbo_inner_product(q: &[f32], tq: &TurboQuantizedVec, config: &TurboQuantConfig) -> f32 {
-    let k_hat = turbo_dequantize(tq, config);
+pub fn turbo_inner_product(q: &[f32], tq: &TurboQuantizedVec, config: &TurboQuantConfig, token_idx: usize) -> f32 {
+    let k_hat = turbo_dequantize(tq, config, token_idx);
     q.iter().zip(k_hat.iter()).map(|(a, b)| a * b).sum()
 }
 
@@ -241,6 +241,7 @@ pub fn turbo_inner_product(q: &[f32], tq: &TurboQuantizedVec, config: &TurboQuan
 pub fn turbo_quantize_tensor(
     k: &Tensor,
     config: &TurboQuantConfig,
+    seq_offset: usize,
 ) -> Result<Vec<Vec<TurboQuantizedVec>>> {
     let dims = k.dims();
     let (num_heads, seq_len, head_dim) = match dims.len() {
@@ -262,7 +263,7 @@ pub fn turbo_quantize_tensor(
         for t in 0..seq_len {
             let offset = (h * seq_len + t) * head_dim;
             let key_slice = &k_data[offset..offset + head_dim];
-            head_keys.push(turbo_quantize(key_slice, config));
+            head_keys.push(turbo_quantize(key_slice, config, t + seq_offset));
         }
         all_heads.push(head_keys);
     }
@@ -297,7 +298,7 @@ pub fn turbo_attention_scores(
     for _ in 0..batch {
         for h in 0..num_heads {
             for kt in 0..kv_len {
-                let k_vec = turbo_dequantize(&quantized_keys[h][kt], config);
+                let k_vec = turbo_dequantize(&quantized_keys[h][kt], config, kt);
                 k_data.extend_from_slice(&k_vec);
             }
         }
@@ -341,8 +342,8 @@ mod tests {
             let k = random_unit_vec(d, i as u64 + 1_000_000);
 
             let true_dot: f32 = q.iter().zip(k.iter()).map(|(qi, ki)| qi * ki).sum();
-            let tq = turbo_quantize(&k, &config);
-            let estimated = turbo_inner_product(&q, &tq, &config);
+            let tq = turbo_quantize(&k, &config, i);
+            let estimated = turbo_inner_product(&q, &tq, &config, i);
             sum_error += (estimated - true_dot) as f64;
         }
 
@@ -372,8 +373,8 @@ mod tests {
             let k = random_unit_vec(d, i as u64 * 2 + 1);
 
             let true_dot: f32 = q.iter().zip(k.iter()).map(|(qi, ki)| qi * ki).sum();
-            let tq = turbo_quantize(&k, &config);
-            let estimated = turbo_inner_product(&q, &tq, &config);
+            let tq = turbo_quantize(&k, &config, i);
+            let estimated = turbo_inner_product(&q, &tq, &config, i);
             let error = (estimated - true_dot) as f64;
             sum_sq_error += error * error;
         }
@@ -397,7 +398,7 @@ mod tests {
         let d = 128;
         let config = TurboQuantConfig::new_3p5bit(d, 1);
         let k = random_unit_vec(d, 5);
-        let tq = turbo_quantize(&k, &config);
+        let tq = turbo_quantize(&k, &config, 0);
 
         let bpd = tq.bits_per_dim();
         // With 4-bit level-1 + 2-bit deeper PolarQuant and 1-bit QJL: total ≈ 3.5 bits
@@ -433,12 +434,12 @@ mod tests {
 
             let true_dot: f32 = q.iter().zip(k.iter()).map(|(qi, ki)| qi * ki).sum();
 
-            let tq = turbo_quantize(&k, &config);
+            let tq = turbo_quantize(&k, &config, 0);
 
             // PolarQuant-only score (Stage 1 only)
             let polar_score = polar_inner_product(&q, &tq.mse_part, &config.polar_config);
             // Full TurboQuant score (Stage 1 + Stage 2)
-            let turbo_score = turbo_inner_product(&q, &tq, &config);
+            let turbo_score = turbo_inner_product(&q, &tq, &config, 0);
 
             polar_sum_err += (polar_score - true_dot).abs() as f64;
             turbo_sum_err += (turbo_score - true_dot).abs() as f64;

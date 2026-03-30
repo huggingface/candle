@@ -151,6 +151,7 @@ impl QuantizedKvCache {
     ///
     /// Keys are compressed using the configured algorithm; values are stored at full precision.
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<()> {
+        let seq_offset = self.current_seq_len();
         // Quantize and append keys
         let dims = k.dims();
         let (num_heads, seq_len, head_dim) = match dims.len() {
@@ -173,7 +174,7 @@ impl QuantizedKvCache {
 
         match &self.algorithm {
             QuantAlgorithm::Qjl(cfg) => {
-                let new_keys = qjl_quantize_tensor(k, cfg)?;
+                let new_keys = qjl_quantize_tensor(k, cfg, seq_offset)?;
                 if let QuantKCache::Qjl(cache) = &mut self.k_cache {
                     for h in 0..num_heads {
                         cache[h].extend(new_keys[h].iter().cloned());
@@ -191,7 +192,7 @@ impl QuantizedKvCache {
             }
             QuantAlgorithm::TurboQuant(cfg) => {
                 let cfg = cfg.clone();
-                let new_keys = turbo_quantize_tensor(k, &cfg)?;
+                let new_keys = turbo_quantize_tensor(k, &cfg, seq_offset)?;
                 if let QuantKCache::TurboQuant(cache) = &mut self.k_cache {
                     for h in 0..num_heads {
                         cache[h].extend(new_keys[h].iter().cloned());

@@ -1,20 +1,20 @@
-//! TurboQuant Benchmark Example
+//! PolarQuant Benchmark Example
 //!
-//! This example benchmarks the TurboQuant KV cache quantization algorithm
-//! implemented in `candle_nn::quant_kv::turbo_quant`.
+//! This example benchmarks the PolarQuant KV cache quantization algorithm
+//! implemented in `candle_nn::quant_kv::polar_quant`.
 //!
-//! - **TurboQuant**: Two-stage hybrid at 3.5 bits/channel (arxiv:2504.19874)
+//! - **PolarQuant**: Recursive polar coordinate decomposition (arxiv:2502.02617)
 //!
 //! ## Running
 //!
 //! ```bash
-//! cargo run --example turboquant --release
+//! cargo run --example polarquant --release
 //! ```
 
 use candle::{DType, Device, Tensor};
 use candle_nn::quant_kv::{
     prng::Prng,
-    turbo_quant::{turbo_attention_scores, turbo_quantize, turbo_quantize_tensor, TurboQuantConfig},
+    polar_quant::{polar_attention_scores, polar_quantize, polar_quantize_tensor, PolarQuantConfig},
 };
 
 /// Generate a normalized random vector using our seeded PRNG.
@@ -54,9 +54,9 @@ fn run_compression_benchmark() {
     println!("║         Benchmark 1: Compression Ratios vs FP16         ║");
     println!("╠═════════════════════════════════════════════════════════╣");
     println!("║  Paper claims:                                          ║");
-    println!("║    TurboQuant:  ~4.5× compression at 3.5 bits           ║");
+    println!("║    PolarQuant:  ~4.2× compression                       ║");
     println!("╠══════════════╦══════════╦═══════════════════════════════╣");
-    println!("║ head_dim     ║ FP16     ║ TurboQuant 3.5b               ║");
+    println!("║ head_dim     ║ FP16     ║ PolarQuant                    ║");
     println!("║              ║ (bytes)  ║ bits/dim  (compression)       ║");
     println!("╠══════════════╬══════════╬═══════════════════════════════╣");
 
@@ -64,13 +64,13 @@ fn run_compression_benchmark() {
         let fp16_bytes = d * 2;
         let k = random_unit_vec(d, 42);
 
-        let turbo_cfg = TurboQuantConfig::new_3p5bit(d, 1);
-        let turbo_key = turbo_quantize(&k, &turbo_cfg, 0);
-        let turbo_bpd = turbo_key.bits_per_dim();
+        let polar_cfg = PolarQuantConfig::new(d, 1);
+        let polar_key = polar_quantize(&k, &polar_cfg);
+        let polar_bpd = polar_key.bits_per_dim();
 
         println!(
-            "║ d={d:<9} ║ {fp16_bytes:<8} ║ {turbo_bpd:>5.3} bits/d ({:.1}×)       ║",
-            fp16_bytes as f32 * 8.0 / (turbo_key.byte_size() as f32 * 8.0),
+            "║ d={d:<9} ║ {fp16_bytes:<8} ║ {polar_bpd:>5.3} bits/d ({:.1}×)       ║",
+            fp16_bytes as f32 * 8.0 / (polar_key.byte_size() as f32 * 8.0),
         );
     }
     println!("╚══════════════╩══════════╩═══════════════════════════════╝");
@@ -115,33 +115,17 @@ fn run_accuracy_benchmark() {
     }
 
     {
-        let cfg = TurboQuantConfig::new_3p5bit(d, 42);
+        let cfg = PolarQuantConfig::new(d, 42);
         let errors: Vec<f32> = pairs
             .iter()
-            .enumerate()
             .zip(true_dots.iter())
-            .map(|((i, (q, k)), &true_dot)| {
-                let tq = turbo_quantize(k, &cfg, i);
-                let est = candle_nn::quant_kv::turbo_quant::turbo_inner_product(q, &tq, &cfg, i);
+            .map(|((q, k), &true_dot)| {
+                let pq = polar_quantize(k, &cfg);
+                let est = candle_nn::quant_kv::polar_quant::polar_inner_product(q, &pq, &cfg);
                 est - true_dot
             })
             .collect();
-        print_accuracy_row("TurboQ-3.5b", &errors);
-    }
-
-    {
-        let cfg = TurboQuantConfig::new(d, 2.5, 42);
-        let errors: Vec<f32> = pairs
-            .iter()
-            .enumerate()
-            .zip(true_dots.iter())
-            .map(|((i, (q, k)), &true_dot)| {
-                let tq = turbo_quantize(k, &cfg, i);
-                let est = candle_nn::quant_kv::turbo_quant::turbo_inner_product(q, &tq, &cfg, i);
-                est - true_dot
-            })
-            .collect();
-        print_accuracy_row("TurboQ-2.5b", &errors);
+        print_accuracy_row("PolarQuant", &errors);
     }
 
     println!("╚═══════════════╩══════════════╩═══════════════╩══════════════╩════════════╝");
@@ -235,16 +219,16 @@ fn run_recall_benchmark(device: &Device) {
     }
 
     {
-        let cfg = TurboQuantConfig::new_3p5bit(d, seed_base);
-        let turbo_keys = turbo_quantize_tensor(&k_tensor, &cfg, 0).unwrap();
-        let avg_bpd = if num_heads > 0 && !turbo_keys[0].is_empty() {
-            turbo_keys[0][0].bits_per_dim()
+        let cfg = PolarQuantConfig::new(d, seed_base);
+        let polar_keys = polar_quantize_tensor(&k_tensor, &cfg).unwrap();
+        let avg_bpd = if num_heads > 0 && !polar_keys[0].is_empty() {
+            polar_keys[0][0].bits_per_dim()
         } else { 0.0 };
 
         let pred_vecs: Vec<Vec<f32>> = q_tensors
             .iter()
             .map(|q| {
-                turbo_attention_scores(q, &turbo_keys, &cfg)
+                polar_attention_scores(q, &polar_keys, &cfg)
                     .unwrap()
                     .flatten_all()
                     .unwrap()
@@ -253,14 +237,14 @@ fn run_recall_benchmark(device: &Device) {
             })
             .collect();
         let (r1, r5, r10) = compute_recalls(&pred_vecs);
-        println!("║ TurboQ 3.5b   ║ {r1:>9.3}     ║ {r5:>9.3}     ║ {r10:>9.3}     ║ {avg_bpd:>4.1}   ║");
+        println!("║ PolarQuant    ║ {r1:>9.3}     ║ {r5:>9.3}     ║ {r10:>9.3}     ║ {avg_bpd:>4.1}   ║");
     }
 
     println!("╚═══════════════╩═══════════════╩═══════════════╩═══════════════╩════════╝");
 }
 
 fn main() {
-    println!("TurboQuant Runtime Evaluation");
+    println!("PolarQuant Runtime Evaluation");
 
     let device = if candle::utils::cuda_is_available() {
         candle::Device::new_cuda(0).unwrap_or(candle::Device::Cpu)
