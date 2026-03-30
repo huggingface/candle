@@ -1661,7 +1661,7 @@ pub struct VibeVoiceASR {
 }
 
 impl VibeVoiceASR {
-    pub fn new(cfg: &AsrConfig, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &AsrConfig, vb: VarBuilder, audio_device: &Device) -> Result<Self> {
         // Language model: qwen2::Model expects "model.*" paths internally,
         // and ASR weights are at "language_model.model.*" — so just prepend "language_model."
         let lm_vb = vb.clone().root().rename_f(|s| {
@@ -1669,14 +1669,21 @@ impl VibeVoiceASR {
         });
         let language_model = qwen2::Model::new(&cfg.text_config, lm_vb)?;
 
+        // Audio encoders: place on the designated audio_device in F32 for precision
         let acoustic_encoder = AsrTokenizerEncoder::new(
             &cfg.acoustic_tokenizer_encoder_config,
-            vb.pp("acoustic_tokenizer_encoder"),
+            vb.pp("acoustic_tokenizer_encoder")
+                .set_device(audio_device.clone())
+                .to_dtype(DType::F32),
         )?;
         let semantic_encoder = AsrTokenizerEncoder::new(
             &cfg.semantic_tokenizer_encoder_config,
-            vb.pp("semantic_tokenizer_encoder"),
+            vb.pp("semantic_tokenizer_encoder")
+                .set_device(audio_device.clone())
+                .to_dtype(DType::F32),
         )?;
+
+        // Projector: keep on the main device (same as language_model) for efficient mixing
         let projector = AsrMultiModalProjector::new(
             cfg.acoustic_tokenizer_encoder_config.hidden_size,
             cfg.semantic_tokenizer_encoder_config.hidden_size,
@@ -1705,8 +1712,10 @@ impl VibeVoiceASR {
     /// Encode speech audio into continuous features for injection into the LLM.
     pub fn encode_speech(&self, audio: &Tensor) -> Result<Tensor> {
         // audio: (B, 1, T_samples)
-        let acoustic_latents = self.acoustic_encoder.forward(audio)?;
-        let semantic_latents = self.semantic_encoder.forward(audio)?;
+        let acoustic_latents = self.acoustic_encoder.forward(audio)?
+            .to_device(self.language_model.device())?;
+        let semantic_latents = self.semantic_encoder.forward(audio)?
+            .to_device(self.language_model.device())?;
         let acoustic_features = self.projector.forward_acoustic(&acoustic_latents)?;
         let semantic_features = self.projector.forward_semantic(&semantic_latents)?;
         acoustic_features + semantic_features

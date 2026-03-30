@@ -138,11 +138,28 @@ fn run_asr(args: &Args, device: &Device) -> Result<()> {
     } else {
         DType::F32
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
 
-    println!("Loading VibeVoice ASR model (dtype={:?})...", dtype);
+    let (lm_device, audio_device) = if args.low_vram {
+        if device.is_cuda() || device.is_metal() {
+            // GPU: language model in F16, audio encoders on CPU in F32
+            (device.clone(), Device::Cpu)
+        } else {
+            // CPU-only fallback: everything on CPU in F32
+            (Device::Cpu, Device::Cpu)
+        }
+    } else {
+        // No offloading: everything on the selected device in F32 (to avoid BF16 issues on older GPUs)
+        (device.clone(), device.clone())
+    };
+
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &lm_device)? };
+
+    println!(
+        "Loading VibeVoice ASR model (dtype={:?}, lm device={:?}, audio device={:?})...",
+        dtype, lm_device, audio_device
+    );
     let start = std::time::Instant::now();
-    let mut model = VibeVoiceASR::new(&config, vb)?;
+    let mut model = VibeVoiceASR::new(&config, vb, &audio_device)?;
     println!("Model loaded in {:?}", start.elapsed());
 
     // Special token IDs from processor_config.json

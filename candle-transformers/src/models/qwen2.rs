@@ -471,6 +471,10 @@ impl Model {
         self.layers.iter().map(|l| l.get_kv_cache()).collect()
     }
 
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
     /// Restore previously saved KV caches.
     pub fn restore_kv_cache(&mut self, cache: &[Option<(Tensor, Tensor)>]) {
         for (layer, kv) in self.layers.iter_mut().zip(cache.iter()) {
