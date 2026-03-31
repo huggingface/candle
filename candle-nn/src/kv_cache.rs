@@ -965,88 +965,65 @@ impl QuantizedKvCache {
             dtype,
         })
     }
-
-    fn dequant_4d(
-        quantizer: &TurboQuantMse,
-        indices: &Tensor,
-        norms: &Tensor,
-        batch_size: usize,
-        num_heads: usize,
-        dtype: DType,
-    ) -> Result<Tensor> {
-        let indices_u32 = indices.to_dtype(DType::U32)?;
-        let q = MseQuantized {
-            indices: indices_u32,
-            norms: norms.clone(),
-        };
-        let flat = quantizer.dequantize(&q)?;
-        let n = flat.dims()[0];
-        let d = flat.dims()[1];
-        let seq = n / (batch_size * num_heads);
-        flat.reshape((batch_size, num_heads, seq, d))?
-            .to_dtype(dtype)
-    }
 }
 
 impl KvCacheOps for QuantizedKvCache {
     fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
-        let dims = k.dims();
-        if dims.len() != 4 {
+        if k.dims().len() != 4 {
             candle::bail!(
                 "QuantizedKvCache expects 4D tensors [B,H,S,D], got {}D",
-                dims.len()
+                k.dims().len()
             );
         }
-        let (b, h, s, d) = (dims[0], dims[1], dims[2], dims[3]);
-        self.batch_size = b;
-        self.num_heads = h;
         self.dtype = k.dtype();
 
-        let n = b * h * s;
-        let k_flat = k.reshape((n, d))?;
-        let v_flat = v.reshape((n, d))?;
+        let (k_idx, k_nrm) = quantize_4d(&self.k_quantizer, &k)?;
+        let (v_idx, v_nrm) = quantize_4d(&self.v_quantizer, &v)?;
 
-        let k_q = self.k_quantizer.quantize(&k_flat)?;
-        let v_q = self.v_quantizer.quantize(&v_flat)?;
+        // Reshape to flat [n, D] / [n] for concat storage
+        let k_idx_flat = k_idx.flatten(0, 2)?;
+        let k_nrm_flat = k_nrm.flatten(0, 2)?.squeeze(1)?;
+        let v_idx_flat = v_idx.flatten(0, 2)?;
+        let v_nrm_flat = v_nrm.flatten(0, 2)?.squeeze(1)?;
 
-        let k_idx = k_q.indices.to_dtype(DType::U8)?;
-        let v_idx = v_q.indices.to_dtype(DType::U8)?;
+        self.batch_size = k.dims()[0];
+        self.num_heads = k.dims()[1];
 
         self.k_indices = Some(match &self.k_indices {
-            Some(prev) => Tensor::cat(&[prev, &k_idx], 0)?,
-            None => k_idx,
+            Some(prev) => Tensor::cat(&[prev, &k_idx_flat], 0)?,
+            None => k_idx_flat,
         });
         self.k_norms = Some(match &self.k_norms {
-            Some(prev) => Tensor::cat(&[prev, &k_q.norms], 0)?,
-            None => k_q.norms,
+            Some(prev) => Tensor::cat(&[prev, &k_nrm_flat], 0)?,
+            None => k_nrm_flat,
         });
         self.v_indices = Some(match &self.v_indices {
-            Some(prev) => Tensor::cat(&[prev, &v_idx], 0)?,
-            None => v_idx,
+            Some(prev) => Tensor::cat(&[prev, &v_idx_flat], 0)?,
+            None => v_idx_flat,
         });
         self.v_norms = Some(match &self.v_norms {
-            Some(prev) => Tensor::cat(&[prev, &v_q.norms], 0)?,
-            None => v_q.norms,
+            Some(prev) => Tensor::cat(&[prev, &v_nrm_flat], 0)?,
+            None => v_nrm_flat,
         });
 
-        let full_k = Self::dequant_4d(
-            &self.k_quantizer,
-            self.k_indices.as_ref().unwrap(),
-            self.k_norms.as_ref().unwrap(),
-            b,
-            h,
-            self.dtype,
-        )?;
-        let full_v = Self::dequant_4d(
-            &self.v_quantizer,
-            self.v_indices.as_ref().unwrap(),
-            self.v_norms.as_ref().unwrap(),
-            b,
-            h,
-            self.dtype,
-        )?;
+        // Dequantize full cache: reshape stored flat data back to 4D
+        let ki = self.k_indices.as_ref().unwrap();
+        let kn = self.k_norms.as_ref().unwrap();
+        let n = ki.dims()[0];
+        let d = ki.dims()[1];
+        let seq = n / (self.batch_size * self.num_heads);
+        let ki_4d = ki.reshape((self.batch_size, self.num_heads, seq, d))?;
+        let kn_4d = kn.reshape((self.batch_size, self.num_heads, seq, 1))?;
+        let full_k = dequantize_4d(&self.k_quantizer, &ki_4d, &kn_4d, self.dtype)?;
+
+        let vi = self.v_indices.as_ref().unwrap();
+        let vn = self.v_norms.as_ref().unwrap();
+        let vd = vi.dims()[1];
+        let vi_4d = vi.reshape((self.batch_size, self.num_heads, seq, vd))?;
+        let vn_4d = vn.reshape((self.batch_size, self.num_heads, seq, 1))?;
+        let full_v = dequantize_4d(&self.v_quantizer, &vi_4d, &vn_4d, self.dtype)?;
 
         Ok((full_k, full_v))
     }
@@ -1065,6 +1042,276 @@ impl KvCacheOps for QuantizedKvCache {
             }
             _ => 0,
         }
+    }
+
+    fn clone_box(&self) -> Box<dyn KvCacheOps> {
+        Box::new(self.clone())
+    }
+}
+
+// ============================================================================
+// Shared quantize/dequantize helpers
+// ============================================================================
+
+/// Quantize a 4D [B,H,S,D] tensor into U8 indices [B,H,S,D] and F32 norms [B,H,S,1].
+fn quantize_4d(quantizer: &TurboQuantMse, x: &Tensor) -> Result<(Tensor, Tensor)> {
+    let x = x.contiguous()?;
+    let (b, h, s, d) = x.dims4()?;
+    let flat = x.reshape((b * h * s, d))?;
+    let q = quantizer.quantize(&flat)?;
+    let indices = q.indices.to_dtype(DType::U8)?.reshape((b, h, s, d))?;
+    let norms = q.norms.reshape((b, h, s, 1))?;
+    Ok((indices, norms))
+}
+
+/// Dequantize U8 indices [B,H,S,D] + F32 norms [B,H,S,1] back to a 4D tensor.
+fn dequantize_4d(
+    quantizer: &TurboQuantMse,
+    indices: &Tensor,
+    norms: &Tensor,
+    dtype: DType,
+) -> Result<Tensor> {
+    let (b, h, s, d) = indices.dims4()?;
+    let flat_idx = indices.reshape((b * h * s, d))?.to_dtype(DType::U32)?;
+    let flat_nrm = norms.reshape((b * h * s,))?;
+    let q = MseQuantized {
+        indices: flat_idx,
+        norms: flat_nrm,
+    };
+    let flat = quantizer.dequantize(&q)?;
+    flat.reshape((b, h, s, d))?.to_dtype(dtype)
+}
+
+// ============================================================================
+// QuantizedPreAllocKvCache — TurboQuant-compressed, pre-allocated KV storage
+// ============================================================================
+
+/// KV cache that stores quantized key/value embeddings in pre-allocated buffers.
+///
+/// Uses four [`Cache`] instances to store U8 indices and F32 norms for both
+/// keys and values. Pre-allocation avoids repeated tensor concatenation,
+/// providing better performance than [`QuantizedKvCache`] for long sequences.
+#[derive(Clone)]
+pub struct QuantizedPreAllocKvCache {
+    k_quantizer: TurboQuantMse,
+    v_quantizer: TurboQuantMse,
+    k_idx: Cache,
+    k_nrm: Cache,
+    v_idx: Cache,
+    v_nrm: Cache,
+    dim: usize,
+    dtype: DType,
+}
+
+impl std::fmt::Debug for QuantizedPreAllocKvCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuantizedPreAllocKvCache")
+            .field("dim", &self.dim)
+            .field("seq_len", &self.current_seq_len())
+            .finish()
+    }
+}
+
+impl QuantizedPreAllocKvCache {
+    /// Create a new pre-allocated TurboQuant-compressed KV cache.
+    ///
+    /// # Arguments
+    /// * `dim` - Concatenation dimension (typically 2 for `[B, H, S, D]`).
+    /// * `head_dim` - Attention head dimension.
+    /// * `bit_width` - Quantization bits per coordinate (typically 2–4).
+    /// * `max_seq_len` - Maximum sequence length for pre-allocation.
+    /// * `dtype` - Data type of K/V tensors.
+    /// * `device` - Device for tensor allocation.
+    pub fn new(
+        dim: usize,
+        head_dim: usize,
+        bit_width: usize,
+        max_seq_len: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let internal_dtype = if dtype == DType::F64 {
+            DType::F64
+        } else {
+            DType::F32
+        };
+        Ok(Self {
+            k_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
+            v_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
+            k_idx: Cache::new(dim, max_seq_len),
+            k_nrm: Cache::new(dim, max_seq_len),
+            v_idx: Cache::new(dim, max_seq_len),
+            v_nrm: Cache::new(dim, max_seq_len),
+            dim,
+            dtype,
+        })
+    }
+}
+
+impl KvCacheOps for QuantizedPreAllocKvCache {
+    fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+        if k.dims().len() != 4 {
+            candle::bail!(
+                "QuantizedPreAllocKvCache expects 4D tensors [B,H,S,D], got {}D",
+                k.dims().len()
+            );
+        }
+        self.dtype = k.dtype();
+
+        let (k_idx, k_nrm) = quantize_4d(&self.k_quantizer, &k)?;
+        let (v_idx, v_nrm) = quantize_4d(&self.v_quantizer, &v)?;
+
+        self.k_idx.append(&k_idx)?;
+        self.k_nrm.append(&k_nrm)?;
+        self.v_idx.append(&v_idx)?;
+        self.v_nrm.append(&v_nrm)?;
+
+        let ki = self.k_idx.current_data()?.unwrap();
+        let kn = self.k_nrm.current_data()?.unwrap();
+        let full_k = dequantize_4d(&self.k_quantizer, &ki, &kn, self.dtype)?;
+
+        let vi = self.v_idx.current_data()?.unwrap();
+        let vn = self.v_nrm.current_data()?.unwrap();
+        let full_v = dequantize_4d(&self.v_quantizer, &vi, &vn, self.dtype)?;
+
+        Ok((full_k, full_v))
+    }
+
+    fn reset(&mut self) {
+        self.k_idx.reset();
+        self.k_nrm.reset();
+        self.v_idx.reset();
+        self.v_nrm.reset();
+    }
+
+    fn current_seq_len(&self) -> usize {
+        self.k_idx.current_seq_len()
+    }
+
+    fn clone_box(&self) -> Box<dyn KvCacheOps> {
+        Box::new(self.clone())
+    }
+}
+
+// ============================================================================
+// QuantizedRotatingKvCache — TurboQuant-compressed, rotating-buffer KV storage
+// ============================================================================
+
+/// KV cache that stores quantized key/value embeddings in a rotating buffer.
+///
+/// Uses four [`RotatingCache`] instances to store U8 indices and F32 norms for
+/// both keys and values. The rotating buffer caps memory usage at `max_seq_len`
+/// positions, making this suitable for long-context generation with bounded memory.
+#[derive(Clone)]
+pub struct QuantizedRotatingKvCache {
+    k_quantizer: TurboQuantMse,
+    v_quantizer: TurboQuantMse,
+    k_idx: RotatingCache,
+    k_nrm: RotatingCache,
+    v_idx: RotatingCache,
+    v_nrm: RotatingCache,
+    dim: usize,
+    dtype: DType,
+}
+
+impl std::fmt::Debug for QuantizedRotatingKvCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuantizedRotatingKvCache")
+            .field("dim", &self.dim)
+            .field("seq_len", &self.current_seq_len())
+            .finish()
+    }
+}
+
+impl QuantizedRotatingKvCache {
+    /// Create a new rotating TurboQuant-compressed KV cache.
+    ///
+    /// # Arguments
+    /// * `dim` - Concatenation dimension (typically 2 for `[B, H, S, D]`).
+    /// * `head_dim` - Attention head dimension.
+    /// * `bit_width` - Quantization bits per coordinate (typically 2–4).
+    /// * `max_seq_len` - Maximum sequence length (window size) for the rotating buffer.
+    /// * `dtype` - Data type of K/V tensors.
+    /// * `device` - Device for tensor allocation.
+    pub fn new(
+        dim: usize,
+        head_dim: usize,
+        bit_width: usize,
+        max_seq_len: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let internal_dtype = if dtype == DType::F64 {
+            DType::F64
+        } else {
+            DType::F32
+        };
+        Ok(Self {
+            k_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
+            v_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
+            k_idx: RotatingCache::new(dim, max_seq_len),
+            k_nrm: RotatingCache::new(dim, max_seq_len),
+            v_idx: RotatingCache::new(dim, max_seq_len),
+            v_nrm: RotatingCache::new(dim, max_seq_len),
+            dim,
+            dtype,
+        })
+    }
+
+    /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.
+    pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
+        self.k_idx.attn_mask(seq_len, device)
+    }
+
+    /// Returns the positions corresponding to all the elements that will be returned
+    /// *after* adding `seq_len` to the cache.
+    pub fn positions(&self, seq_len: usize) -> Vec<usize> {
+        self.k_idx.positions(seq_len)
+    }
+
+    /// Current write offset in the rotating buffer.
+    pub fn offset(&self) -> usize {
+        self.k_idx.offset()
+    }
+}
+
+impl KvCacheOps for QuantizedRotatingKvCache {
+    fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+        if k.dims().len() != 4 {
+            candle::bail!(
+                "QuantizedRotatingKvCache expects 4D tensors [B,H,S,D], got {}D",
+                k.dims().len()
+            );
+        }
+        self.dtype = k.dtype();
+
+        let (k_idx, k_nrm) = quantize_4d(&self.k_quantizer, &k)?;
+        let (v_idx, v_nrm) = quantize_4d(&self.v_quantizer, &v)?;
+
+        let ki = self.k_idx.append(&k_idx)?;
+        let kn = self.k_nrm.append(&k_nrm)?;
+        let full_k = dequantize_4d(&self.k_quantizer, &ki, &kn, self.dtype)?;
+
+        let vi = self.v_idx.append(&v_idx)?;
+        let vn = self.v_nrm.append(&v_nrm)?;
+        let full_v = dequantize_4d(&self.v_quantizer, &vi, &vn, self.dtype)?;
+
+        Ok((full_k, full_v))
+    }
+
+    fn reset(&mut self) {
+        self.k_idx.reset();
+        self.k_nrm.reset();
+        self.v_idx.reset();
+        self.v_nrm.reset();
+    }
+
+    fn current_seq_len(&self) -> usize {
+        self.k_idx.current_seq_len()
     }
 
     fn clone_box(&self) -> Box<dyn KvCacheOps> {
@@ -1345,6 +1592,80 @@ mod tests {
         cache.reset();
         assert_eq!(cache.current_seq_len(), 0);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_quantized_prealloc_basic() -> Result<()> {
+        let device = Device::Cpu;
+        let head_dim = 64;
+        let (batch, heads, seq) = (1, 8, 10);
+        let mut cache = QuantizedPreAllocKvCache::new(2, head_dim, 4, 512, DType::F32, &device)?;
+        let k = Tensor::randn(0f32, 1f32, (batch, heads, seq, head_dim), &device)?;
+        let v = Tensor::randn(0f32, 1f32, (batch, heads, seq, head_dim), &device)?;
+        let (ck, cv) = cache.append(&k, &v)?;
+        assert_eq!(ck.dims(), &[batch, heads, seq, head_dim]);
+        assert_eq!(cv.dims(), &[batch, heads, seq, head_dim]);
+        assert_eq!(cache.current_seq_len(), seq);
+        Ok(())
+    }
+
+    #[test]
+    fn test_quantized_prealloc_incremental() -> Result<()> {
+        let device = Device::Cpu;
+        let head_dim = 64;
+        let (batch, heads) = (1, 4);
+        let mut cache = QuantizedPreAllocKvCache::new(2, head_dim, 4, 512, DType::F32, &device)?;
+        let k0 = Tensor::randn(0f32, 1f32, (batch, heads, 8, head_dim), &device)?;
+        let v0 = Tensor::randn(0f32, 1f32, (batch, heads, 8, head_dim), &device)?;
+        cache.append(&k0, &v0)?;
+        assert_eq!(cache.current_seq_len(), 8);
+        for expected in 9..=11 {
+            let k1 = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+            let v1 = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+            let (ck, _) = cache.append(&k1, &v1)?;
+            assert_eq!(ck.dims(), &[batch, heads, expected, head_dim]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_quantized_rotating_basic() -> Result<()> {
+        let device = Device::Cpu;
+        let head_dim = 64;
+        let (batch, heads) = (1, 4);
+        let max_seq = 32;
+        let mut cache =
+            QuantizedRotatingKvCache::new(2, head_dim, 4, max_seq, DType::F32, &device)?;
+        let k = Tensor::randn(0f32, 1f32, (batch, heads, 10, head_dim), &device)?;
+        let v = Tensor::randn(0f32, 1f32, (batch, heads, 10, head_dim), &device)?;
+        let (ck, cv) = cache.append(&k, &v)?;
+        assert_eq!(ck.dims(), &[batch, heads, 10, head_dim]);
+        assert_eq!(cv.dims(), &[batch, heads, 10, head_dim]);
+        assert_eq!(cache.current_seq_len(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn test_quantized_rotating_wrap() -> Result<()> {
+        let device = Device::Cpu;
+        let head_dim = 32;
+        let (batch, heads) = (1, 2);
+        let max_seq = 8;
+        let mut cache =
+            QuantizedRotatingKvCache::new(2, head_dim, 4, max_seq, DType::F32, &device)?;
+        // Fill past capacity
+        for _ in 0..12 {
+            let k = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+            let v = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+            cache.append(&k, &v)?;
+        }
+        assert_eq!(cache.current_seq_len(), 12);
+        // After wrap, returned data should be max_seq_len wide
+        let k = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+        let v = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+        let (ck, _) = cache.append(&k, &v)?;
+        assert_eq!(ck.dims()[2], max_seq); // capped at window size
         Ok(())
     }
 }
