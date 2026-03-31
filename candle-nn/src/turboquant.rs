@@ -433,6 +433,233 @@ impl TurboQuantProd {
     }
 }
 
+// ============================================================================
+// TurboQuantKvCache
+// ============================================================================
+
+/// Concatenate a new tensor to an existing one along dim 0, or initialize.
+fn cat_or_init(existing: &Option<Tensor>, new: &Tensor) -> Result<Tensor> {
+    match existing {
+        Some(prev) => Tensor::cat(&[prev, new], 0),
+        None => Ok(new.clone()),
+    }
+}
+
+/// Dequantize stored KV cache data back to a 4D tensor `[B, H, S, D]`.
+fn dequantize_kv(
+    quantizer: &TurboQuantMse,
+    indices: &Tensor,
+    norms: &Tensor,
+    batch_size: usize,
+    num_heads: usize,
+    dtype: DType,
+) -> Result<Tensor> {
+    let indices_u32 = indices.to_dtype(DType::U32)?;
+    let q = MseQuantized {
+        indices: indices_u32,
+        norms: norms.clone(),
+    };
+    let flat = quantizer.dequantize(&q)?;
+    let n_total = flat.dims()[0];
+    let head_dim = flat.dims()[1];
+    let seq_len = n_total / (batch_size * num_heads);
+    flat.reshape((batch_size, num_heads, seq_len, head_dim))?
+        .to_dtype(dtype)
+}
+
+/// Quantized KV cache using TurboQuant for memory-efficient inference.
+///
+/// Drop-in replacement for [`crate::kv_cache::ConcatKvCache`] that stores
+/// key/value embeddings in quantized form, reducing memory by up to 4× with
+/// near-zero quality loss.
+///
+/// # How it works
+///
+/// On each [`append`](Self::append) call:
+/// 1. New K/V tensors are quantized via [`TurboQuantMse`] (b bits per coordinate)
+/// 2. Quantized representations (U8 indices + F32 norms) are concatenated with
+///    the existing cache
+/// 3. The full cache is dequantized and returned for attention computation
+///
+/// # Memory savings
+///
+/// Per vector (head_dim = D, bit_width = b):
+/// - Unquantized: `4·D` bytes (F32) or `2·D` bytes (F16)
+/// - Quantized: `D` bytes (U8 indices) + `4` bytes (F32 norm)
+/// - With D=128: **~3.7× compression** vs F32
+///
+/// # Example
+///
+/// ```no_run
+/// use candle::{Device, DType, Tensor};
+/// use candle_nn::turboquant::TurboQuantKvCache;
+///
+/// let device = Device::Cpu;
+/// let mut cache = TurboQuantKvCache::new(64, 4, DType::F32, &device).unwrap();
+///
+/// // Simulate attention: k/v of shape [batch, heads, seq_len, head_dim]
+/// let k = Tensor::randn(0f32, 1f32, (1, 8, 10, 64), &device).unwrap();
+/// let v = Tensor::randn(0f32, 1f32, (1, 8, 10, 64), &device).unwrap();
+///
+/// let (cached_k, cached_v) = cache.append(&k, &v).unwrap();
+/// assert_eq!(cached_k.dims(), &[1, 8, 10, 64]);
+/// ```
+pub struct TurboQuantKvCache {
+    k_quantizer: TurboQuantMse,
+    v_quantizer: TurboQuantMse,
+    k_indices: Option<Tensor>,
+    k_norms: Option<Tensor>,
+    v_indices: Option<Tensor>,
+    v_norms: Option<Tensor>,
+    batch_size: usize,
+    num_heads: usize,
+    dtype: DType,
+}
+
+impl TurboQuantKvCache {
+    /// Create a new quantized KV cache.
+    ///
+    /// # Arguments
+    /// * `head_dim` - Dimension of each attention head (D in `[B, H, S, D]`).
+    /// * `bit_width` - Quantization bits per coordinate (typically 2–4).
+    /// * `dtype` - Data type of the original K/V tensors.
+    /// * `device` - Device for tensor allocation.
+    pub fn new(head_dim: usize, bit_width: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let internal_dtype = if dtype == DType::F64 {
+            DType::F64
+        } else {
+            DType::F32
+        };
+        let k_quantizer = TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?;
+        let v_quantizer = TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?;
+
+        Ok(Self {
+            k_quantizer,
+            v_quantizer,
+            k_indices: None,
+            k_norms: None,
+            v_indices: None,
+            v_norms: None,
+            batch_size: 0,
+            num_heads: 0,
+            dtype,
+        })
+    }
+
+    /// Append new key/value tensors and return the full dequantized cache.
+    ///
+    /// Input tensors must have shape `[batch, heads, seq_len, head_dim]` (the
+    /// standard transformer layout with sequence on dim 2). Returns the full
+    /// accumulated (dequantized) K and V tensors in the same layout.
+    ///
+    /// This matches the API of [`crate::kv_cache::ConcatKvCache::append`].
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+        let k_dims = k.dims();
+        if k_dims.len() != 4 {
+            return Err(candle::Error::Msg(format!(
+                "TurboQuantKvCache expects 4D tensors [B, H, S, D], got {}D",
+                k_dims.len()
+            )));
+        }
+        let (b, h, s, d) = (k_dims[0], k_dims[1], k_dims[2], k_dims[3]);
+        self.batch_size = b;
+        self.num_heads = h;
+        self.dtype = k.dtype();
+
+        // Flatten to [B*H*S, D] for per-vector quantization
+        let n = b * h * s;
+        let k_flat = k.reshape((n, d))?;
+        let v_flat = v.reshape((n, d))?;
+
+        let k_q = self.k_quantizer.quantize(&k_flat)?;
+        let v_q = self.v_quantizer.quantize(&v_flat)?;
+
+        // Store indices as U8 for memory efficiency (valid for bit_width ≤ 8)
+        let k_idx = k_q.indices.to_dtype(DType::U8)?;
+        let v_idx = v_q.indices.to_dtype(DType::U8)?;
+
+        self.k_indices = Some(cat_or_init(&self.k_indices, &k_idx)?);
+        self.k_norms = Some(cat_or_init(&self.k_norms, &k_q.norms)?);
+        self.v_indices = Some(cat_or_init(&self.v_indices, &v_idx)?);
+        self.v_norms = Some(cat_or_init(&self.v_norms, &v_q.norms)?);
+
+        // Dequantize full cache for attention
+        let full_k = dequantize_kv(
+            &self.k_quantizer,
+            self.k_indices.as_ref().unwrap(),
+            self.k_norms.as_ref().unwrap(),
+            b,
+            h,
+            self.dtype,
+        )?;
+        let full_v = dequantize_kv(
+            &self.v_quantizer,
+            self.v_indices.as_ref().unwrap(),
+            self.v_norms.as_ref().unwrap(),
+            b,
+            h,
+            self.dtype,
+        )?;
+
+        Ok((full_k, full_v))
+    }
+
+    /// Number of cached sequence positions.
+    pub fn current_seq_len(&self) -> usize {
+        match &self.k_indices {
+            Some(indices) if self.batch_size > 0 && self.num_heads > 0 => {
+                indices.dims()[0] / (self.batch_size * self.num_heads)
+            }
+            _ => 0,
+        }
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.k_indices.is_none()
+    }
+
+    /// Clear all cached data.
+    pub fn reset(&mut self) {
+        self.k_indices = None;
+        self.k_norms = None;
+        self.v_indices = None;
+        self.v_norms = None;
+    }
+
+    /// Dequantize and return the full cached key tensor, if any.
+    pub fn k(&self) -> Result<Option<Tensor>> {
+        match (&self.k_indices, &self.k_norms) {
+            (Some(indices), Some(norms)) => Ok(Some(dequantize_kv(
+                &self.k_quantizer,
+                indices,
+                norms,
+                self.batch_size,
+                self.num_heads,
+                self.dtype,
+            )?)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Dequantize and return the full cached value tensor, if any.
+    pub fn v(&self) -> Result<Option<Tensor>> {
+        match (&self.v_indices, &self.v_norms) {
+            (Some(indices), Some(norms)) => Ok(Some(dequantize_kv(
+                &self.v_quantizer,
+                indices,
+                norms,
+                self.batch_size,
+                self.num_heads,
+                self.dtype,
+            )?)),
+            _ => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,6 +916,143 @@ mod tests {
             );
             prev_mse = mse;
         }
+
+        Ok(())
+    }
+
+    // ================================================================
+    // TurboQuantKvCache tests
+    // ================================================================
+
+    #[test]
+    fn test_kv_cache_append_shape() -> Result<()> {
+        let device = Device::Cpu;
+        let head_dim = 64;
+        let (batch, heads, seq) = (1, 8, 10);
+
+        let mut cache = TurboQuantKvCache::new(head_dim, 4, DType::F32, &device)?;
+        let k = Tensor::randn(0f32, 1f32, (batch, heads, seq, head_dim), &device)?;
+        let v = Tensor::randn(0f32, 1f32, (batch, heads, seq, head_dim), &device)?;
+
+        let (ck, cv) = cache.append(&k, &v)?;
+        assert_eq!(ck.dims(), &[batch, heads, seq, head_dim]);
+        assert_eq!(cv.dims(), &[batch, heads, seq, head_dim]);
+        assert_eq!(cache.current_seq_len(), seq);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kv_cache_incremental_decode() -> Result<()> {
+        let device = Device::Cpu;
+        let head_dim = 64;
+        let (batch, heads) = (1, 4);
+
+        let mut cache = TurboQuantKvCache::new(head_dim, 4, DType::F32, &device)?;
+
+        // Prefill: 8 tokens
+        let k0 = Tensor::randn(0f32, 1f32, (batch, heads, 8, head_dim), &device)?;
+        let v0 = Tensor::randn(0f32, 1f32, (batch, heads, 8, head_dim), &device)?;
+        let (ck, cv) = cache.append(&k0, &v0)?;
+        assert_eq!(ck.dims(), &[batch, heads, 8, head_dim]);
+        assert_eq!(cache.current_seq_len(), 8);
+
+        // Decode step 1: 1 new token
+        let k1 = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+        let v1 = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+        let (ck, cv) = cache.append(&k1, &v1)?;
+        assert_eq!(ck.dims(), &[batch, heads, 9, head_dim]);
+        assert_eq!(cv.dims(), &[batch, heads, 9, head_dim]);
+        assert_eq!(cache.current_seq_len(), 9);
+
+        // Decode step 2: 1 more token
+        let k2 = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+        let v2 = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+        let (ck, _cv) = cache.append(&k2, &v2)?;
+        assert_eq!(ck.dims(), &[batch, heads, 10, head_dim]);
+        assert_eq!(cache.current_seq_len(), 10);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kv_cache_attention_quality() -> Result<()> {
+        let device = Device::Cpu;
+        let head_dim = 64;
+        let (batch, heads, seq_len) = (1, 4, 16);
+
+        // Generate Q, K, V
+        let q = Tensor::randn(0f32, 1f32, (batch, heads, 1, head_dim), &device)?;
+        let k = Tensor::randn(0f32, 1f32, (batch, heads, seq_len, head_dim), &device)?;
+        let v = Tensor::randn(0f32, 1f32, (batch, heads, seq_len, head_dim), &device)?;
+
+        // Unquantized attention scores
+        let scale = 1.0 / (head_dim as f64).sqrt();
+        let scores_exact = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+
+        // Quantized KV cache attention scores
+        let mut cache = TurboQuantKvCache::new(head_dim, 4, DType::F32, &device)?;
+        let (ck, _cv) = cache.append(&k, &v)?;
+        let scores_quant = (q.matmul(&ck.transpose(2, 3)?)? * scale)?;
+
+        // Attention score error should be small for 4-bit
+        let score_err = scores_exact
+            .broadcast_sub(&scores_quant)?
+            .sqr()?
+            .mean_all()?
+            .to_scalar::<f32>()? as f64;
+        let score_mag = scores_exact.sqr()?.mean_all()?.to_scalar::<f32>()? as f64;
+        let rel_err = score_err / (score_mag + 1e-10);
+
+        assert!(
+            rel_err < 0.1,
+            "Attention score relative error too high: {rel_err:.4}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kv_cache_reset() -> Result<()> {
+        let device = Device::Cpu;
+        let head_dim = 32;
+
+        let mut cache = TurboQuantKvCache::new(head_dim, 3, DType::F32, &device)?;
+        let k = Tensor::randn(0f32, 1f32, (1, 2, 5, head_dim), &device)?;
+        let v = Tensor::randn(0f32, 1f32, (1, 2, 5, head_dim), &device)?;
+
+        cache.append(&k, &v)?;
+        assert!(!cache.is_empty());
+        assert_eq!(cache.current_seq_len(), 5);
+
+        cache.reset();
+        assert!(cache.is_empty());
+        assert_eq!(cache.current_seq_len(), 0);
+        assert!(cache.k()?.is_none());
+        assert!(cache.v()?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kv_cache_k_v_accessors() -> Result<()> {
+        let device = Device::Cpu;
+        let head_dim = 32;
+        let (batch, heads, seq) = (1, 2, 4);
+
+        let mut cache = TurboQuantKvCache::new(head_dim, 4, DType::F32, &device)?;
+
+        assert!(cache.k()?.is_none());
+        assert!(cache.v()?.is_none());
+
+        let k = Tensor::randn(0f32, 1f32, (batch, heads, seq, head_dim), &device)?;
+        let v = Tensor::randn(0f32, 1f32, (batch, heads, seq, head_dim), &device)?;
+        cache.append(&k, &v)?;
+
+        let cached_k = cache.k()?.unwrap();
+        let cached_v = cache.v()?.unwrap();
+        assert_eq!(cached_k.dims(), &[batch, heads, seq, head_dim]);
+        assert_eq!(cached_v.dims(), &[batch, heads, seq, head_dim]);
 
         Ok(())
     }
