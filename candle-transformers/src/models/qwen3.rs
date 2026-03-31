@@ -3,7 +3,7 @@ use crate::{
     utils::repeat_kv,
 };
 use candle::{DType, Device, Module, Result, Tensor};
-use candle_nn::{kv_cache::ConcatKvCache, Activation, VarBuilder};
+use candle_nn::{turboquant::KvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -24,6 +24,10 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub use_sliding_window: bool,
     pub hidden_act: Activation,
+    /// If set, quantize the KV cache to this many bits per coordinate using
+    /// TurboQuant. Typical values: 2–4. `None` (default) disables quantization.
+    #[serde(default)]
+    pub kv_quant_bits: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +112,7 @@ pub(crate) struct Qwen3Attention {
     hidden_size: usize,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
-    kv_cache: ConcatKvCache,
+    kv_cache: KvCache,
 }
 
 impl Qwen3Attention {
@@ -159,7 +163,10 @@ impl Qwen3Attention {
 
         // dim=2 because we concatenate along the sequence dimension
         // For tensors of shape [batch, heads, seq, head_dim]
-        let kv_cache = ConcatKvCache::new(2);
+        let kv_cache = match cfg.kv_quant_bits {
+            Some(bits) => KvCache::turbo_quant(head_dim, bits, vb.dtype(), vb.device())?,
+            None => KvCache::plain(2),
+        };
 
         Ok(Self {
             q_proj,

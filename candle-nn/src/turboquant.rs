@@ -37,6 +37,7 @@
 //! ```
 
 use candle::{DType, Device, Result, Tensor, D};
+use std::fmt;
 
 // ============================================================================
 // Mathematical utilities
@@ -199,12 +200,23 @@ pub struct ProdQuantized {
 /// For unit-norm vectors and bit-width b:
 /// - MSE ≤ (√3·π/2) · 1/4^b ≈ 2.72/4^b
 /// - For b=1,2,3,4: MSE ≈ 0.36, 0.117, 0.03, 0.009
+#[derive(Clone)]
 pub struct TurboQuantMse {
     dim: usize,
     bit_width: usize,
     rotation: Tensor,
     centroids: Tensor,
     dtype: DType,
+}
+
+impl fmt::Debug for TurboQuantMse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TurboQuantMse")
+            .field("dim", &self.dim)
+            .field("bit_width", &self.bit_width)
+            .field("dtype", &self.dtype)
+            .finish()
+    }
 }
 
 impl TurboQuantMse {
@@ -504,6 +516,7 @@ fn dequantize_kv(
 /// let (cached_k, cached_v) = cache.append(&k, &v).unwrap();
 /// assert_eq!(cached_k.dims(), &[1, 8, 10, 64]);
 /// ```
+#[derive(Clone)]
 pub struct TurboQuantKvCache {
     k_quantizer: TurboQuantMse,
     v_quantizer: TurboQuantMse,
@@ -514,6 +527,16 @@ pub struct TurboQuantKvCache {
     batch_size: usize,
     num_heads: usize,
     dtype: DType,
+}
+
+impl fmt::Debug for TurboQuantKvCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TurboQuantKvCache")
+            .field("k_quantizer", &self.k_quantizer)
+            .field("v_quantizer", &self.v_quantizer)
+            .field("seq_len", &self.current_seq_len())
+            .finish()
+    }
 }
 
 impl TurboQuantKvCache {
@@ -656,6 +679,98 @@ impl TurboQuantKvCache {
                 self.dtype,
             )?)),
             _ => Ok(None),
+        }
+    }
+}
+
+// ============================================================================
+// KvCache: Unified cache enum for model integration
+// ============================================================================
+
+/// A KV cache that is either plain (unquantized) or TurboQuant-compressed.
+///
+/// This enum allows models to support both modes with the same code path.
+/// When `kv_quant_bits` is specified in a model config, models can construct
+/// a `KvCache::TurboQuant` variant; otherwise they use `KvCache::Plain`.
+///
+/// # Example (inside a model's attention layer)
+///
+/// ```no_run
+/// use candle::{Device, DType, Tensor};
+/// use candle_nn::turboquant::KvCache;
+///
+/// // Plain (no quantization):
+/// let mut cache = KvCache::plain(2);
+///
+/// // Quantized (4-bit TurboQuant):
+/// let mut cache = KvCache::turbo_quant(64, 4, DType::F32, &Device::Cpu).unwrap();
+///
+/// // Both variants use the same append API:
+/// // let (k, v) = cache.append(&k, &v)?;
+/// ```
+#[derive(Debug, Clone)]
+pub enum KvCache {
+    /// Standard unquantized cache (wraps [`crate::kv_cache::ConcatKvCache`]).
+    Plain(crate::kv_cache::ConcatKvCache),
+    /// TurboQuant-compressed cache.
+    TurboQuant(TurboQuantKvCache),
+}
+
+impl KvCache {
+    /// Create an unquantized KV cache that concatenates along `dim`.
+    pub fn plain(dim: usize) -> Self {
+        Self::Plain(crate::kv_cache::ConcatKvCache::new(dim))
+    }
+
+    /// Create a TurboQuant-compressed KV cache.
+    ///
+    /// # Arguments
+    /// * `head_dim` - Attention head dimension.
+    /// * `bit_width` - Quantization bits per coordinate (typically 2–4).
+    /// * `dtype` - Data type of K/V tensors.
+    /// * `device` - Device for tensor allocation.
+    pub fn turbo_quant(
+        head_dim: usize,
+        bit_width: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        Ok(Self::TurboQuant(TurboQuantKvCache::new(
+            head_dim, bit_width, dtype, device,
+        )?))
+    }
+
+    /// Append new K/V tensors and return the full accumulated cache.
+    ///
+    /// Works identically for both plain and quantized variants.
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        match self {
+            Self::Plain(c) => c.append(k, v),
+            Self::TurboQuant(c) => c.append(k, v),
+        }
+    }
+
+    /// Number of cached sequence positions.
+    pub fn current_seq_len(&self) -> usize {
+        match self {
+            Self::Plain(c) => c.current_seq_len(),
+            Self::TurboQuant(c) => c.current_seq_len(),
+        }
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Plain(c) => c.is_empty(),
+            Self::TurboQuant(c) => c.is_empty(),
+        }
+    }
+
+    /// Clear all cached data.
+    pub fn reset(&mut self) {
+        match self {
+            Self::Plain(c) => c.reset(),
+            Self::TurboQuant(c) => c.reset(),
         }
     }
 }
