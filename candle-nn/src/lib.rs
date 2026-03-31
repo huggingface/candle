@@ -32,6 +32,7 @@ pub mod moe;
 pub mod ops;
 pub mod optim;
 pub mod polarquant;
+pub mod polarquant_nn;
 pub mod rnn;
 pub mod rotary_emb;
 pub mod sampling;
