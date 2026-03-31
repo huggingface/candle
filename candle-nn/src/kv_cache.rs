@@ -907,6 +907,13 @@ impl QuantizedKvCache {
     /// representations with existing cache along `dim`, then dequantizes and
     /// returns the full accumulated K/V sequences.
     ///
+    /// # Performance Note
+    ///
+    /// Each call dequantizes the **entire** cache (not just the new tokens).
+    /// For autoregressive generation of length S, total dequantization work is
+    /// O(S²). For long sequences, consider caching the dequantized output
+    /// externally or using [`ConcatKvCache`] for latency-sensitive decode steps.
+    ///
     /// # Arguments
     /// * `k` - Key tensor, shape `[batch, heads, seq_len, head_dim]`
     /// * `v` - Value tensor, shape `[batch, heads, seq_len, head_dim]`
@@ -1084,6 +1091,13 @@ impl QuantizedPreAllocKvCache {
 
     /// Append key/value tensors to the cache.
     ///
+    /// # Performance Note
+    ///
+    /// Each call dequantizes the **entire** cache (not just the new tokens).
+    /// For autoregressive generation of length S, total dequantization work is
+    /// O(S²). For long sequences, consider caching the dequantized output
+    /// externally or using [`KvCache`] for latency-sensitive decode steps.
+    ///
     /// # Arguments
     /// * `k` - Key tensor, shape `[batch, heads, seq_len, head_dim]`
     /// * `v` - Value tensor, shape `[batch, heads, seq_len, head_dim]`
@@ -1224,6 +1238,12 @@ impl QuantizedRotatingKvCache {
     }
 
     /// Append key/value tensors to the cache.
+    ///
+    /// # Performance Note
+    ///
+    /// Each call dequantizes the **entire** cache window (up to `max_seq_len`
+    /// positions). The rotating buffer bounds the maximum cost per call, but for
+    /// latency-sensitive decode steps consider [`RotatingKvCache`] instead.
     ///
     /// # Arguments
     /// * `k` - Key tensor, shape `[batch, heads, seq_len, head_dim]`

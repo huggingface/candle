@@ -482,6 +482,13 @@ impl PolarQuantMatMul {
     /// Indices are bit-packed for memory efficiency. At 2-bit, index storage is
     /// 4× smaller than U8; at 4-bit, 2× smaller.
     pub fn new(quantizer: &PolarQuant, indices: &Tensor, norms: &Tensor) -> Result<Self> {
+        let bit_width = quantizer.bit_width();
+        if bit_width == 0 || bit_width > 7 {
+            candle::bail!(
+                "PolarQuantMatMul requires bit_width in 1..=7, got {}",
+                bit_width
+            );
+        }
         let (out_features, in_features) = indices.dims2()?;
         let indices_u8: Vec<u8> = indices.to_dtype(DType::U8)?.flatten_all()?.to_vec1()?;
         let bit_width = quantizer.bit_width();
