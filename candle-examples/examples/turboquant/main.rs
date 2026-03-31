@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use candle::{DType, Device, Tensor};
-use candle_nn::kv_cache::{ConcatKvCache, KvCacheOps, QuantizedKvCache};
+use candle_nn::kv_cache::{ConcatKvCache, QuantizedKvCache};
 use clap::Parser;
 use std::time::Instant;
 
@@ -29,7 +29,6 @@ struct ModelConfig {
     name: &'static str,
     head_dim: usize,
     num_kv_heads: usize,
-    num_layers: usize,
 }
 
 const MODELS: &[ModelConfig] = &[
@@ -37,13 +36,11 @@ const MODELS: &[ModelConfig] = &[
         name: "Llama-3.1-8B",
         head_dim: 128,
         num_kv_heads: 8,
-        num_layers: 32,
     },
     ModelConfig {
         name: "Qwen3-4B",
         head_dim: 128,
         num_kv_heads: 8,
-        num_layers: 36,
     },
 ];
 
@@ -177,8 +174,8 @@ fn main() -> Result<()> {
 
     for model in MODELS {
         println!(
-            "Model: {} (head_dim={}, kv_heads={}, layers={})",
-            model.name, model.head_dim, model.num_kv_heads, model.num_layers
+            "Model: {} (head_dim={}, kv_heads={})",
+            model.name, model.head_dim, model.num_kv_heads
         );
         println!(
             "Sequence length: {}, Batch: {}\n",

@@ -37,11 +37,6 @@
 //! ```
 
 use candle::{DType, Device, Result, Tensor, D};
-use std::fmt;
-
-// ============================================================================
-// Mathematical utilities
-// ============================================================================
 
 /// Approximation of the error function (Abramowitz & Stegun 7.1.26, ~1.5×10⁻⁷ accuracy).
 fn erf_approx(x: f64) -> f64 {
@@ -73,10 +68,6 @@ fn normal_conditional_mean(a: f64, b: f64) -> f64 {
         (normal_pdf(a) - normal_pdf(b)) / prob
     }
 }
-
-// ============================================================================
-// Lloyd-Max codebook computation
-// ============================================================================
 
 /// Compute optimal Lloyd-Max quantizer centroids for N(0, 1).
 ///
@@ -121,10 +112,6 @@ fn lloyd_max_gaussian(bit_width: usize, max_iter: usize) -> Vec<f64> {
     centroids
 }
 
-// ============================================================================
-// Random orthogonal matrix generation
-// ============================================================================
-
 /// Generate a random orthogonal matrix via modified Gram-Schmidt.
 ///
 /// Generates a d×d random Gaussian matrix using candle's `randn`, pulls data
@@ -157,13 +144,10 @@ fn random_orthogonal_tensor(dim: usize, dtype: DType, device: &Device) -> Result
         .to_device(device)
 }
 
-// ============================================================================
-// Quantized representations
-// ============================================================================
-
 /// Result of MSE-optimized quantization.
 ///
 /// Stores centroid indices (b bits per coordinate) and original vector norms.
+#[derive(Debug, Clone)]
 pub struct MseQuantized {
     /// Centroid indices. Shape: `[n, d]`, dtype: `U32`.
     /// Each value is in `[0, 2^b)`.
@@ -175,6 +159,7 @@ pub struct MseQuantized {
 /// Result of inner-product-optimized quantization.
 ///
 /// Stores MSE quantization, QJL sign bits, and residual norms.
+#[derive(Debug, Clone)]
 pub struct ProdQuantized {
     /// MSE quantization part (b-1 bits per coordinate).
     pub mse: MseQuantized,
@@ -183,10 +168,6 @@ pub struct ProdQuantized {
     /// Residual L2 norms. Shape: `[n]`.
     pub residual_norms: Tensor,
 }
-
-// ============================================================================
-// TurboQuantMse
-// ============================================================================
 
 /// MSE-optimized TurboQuant vector quantizer.
 ///
@@ -200,23 +181,27 @@ pub struct ProdQuantized {
 /// For unit-norm vectors and bit-width b:
 /// - MSE ≤ (√3·π/2) · 1/4^b ≈ 2.72/4^b
 /// - For b=1,2,3,4: MSE ≈ 0.36, 0.117, 0.03, 0.009
-#[derive(Clone)]
+///
+/// # Example
+///
+/// ```no_run
+/// use candle::{Device, DType, Tensor};
+/// use candle_nn::turboquant::TurboQuantMse;
+///
+/// let device = Device::Cpu;
+/// let quantizer = TurboQuantMse::new(128, 4, DType::F32, &device).unwrap();
+///
+/// let x = Tensor::randn(0f32, 1f32, (10, 128), &device).unwrap();
+/// let quantized = quantizer.quantize(&x).unwrap();
+/// let reconstructed = quantizer.dequantize(&quantized).unwrap();
+/// ```
+#[derive(Debug, Clone)]
 pub struct TurboQuantMse {
     dim: usize,
     bit_width: usize,
     rotation: Tensor,
     centroids: Tensor,
     dtype: DType,
-}
-
-impl fmt::Debug for TurboQuantMse {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TurboQuantMse")
-            .field("dim", &self.dim)
-            .field("bit_width", &self.bit_width)
-            .field("dtype", &self.dtype)
-            .finish()
-    }
 }
 
 impl TurboQuantMse {
@@ -319,10 +304,6 @@ impl TurboQuantMse {
     }
 }
 
-// ============================================================================
-// TurboQuantProd
-// ============================================================================
-
 /// Inner-product-optimized TurboQuant vector quantizer.
 ///
 /// Provides unbiased inner product estimation by:
@@ -334,6 +315,21 @@ impl TurboQuantMse {
 /// - **Unbiased**: E[⟨y, x̃⟩] = ⟨y, x⟩
 /// - **Low distortion**: inner product error ≤ (√3·π²·‖y‖²/d) · 1/4^b
 /// - For b=1,2,3,4: distortion ≈ 1.57/d, 0.56/d, 0.18/d, 0.047/d
+///
+/// # Example
+///
+/// ```no_run
+/// use candle::{Device, DType, Tensor};
+/// use candle_nn::turboquant::TurboQuantProd;
+///
+/// let device = Device::Cpu;
+/// let quantizer = TurboQuantProd::new(128, 4, DType::F32, &device).unwrap();
+///
+/// let x = Tensor::randn(0f32, 1f32, (10, 128), &device).unwrap();
+/// let quantized = quantizer.quantize(&x).unwrap();
+/// let reconstructed = quantizer.dequantize(&quantized).unwrap();
+/// ```
+#[derive(Debug, Clone)]
 pub struct TurboQuantProd {
     mse: TurboQuantMse,
     projection: Tensor,
@@ -352,9 +348,7 @@ impl TurboQuantProd {
     /// * `device` - Device for tensor allocation.
     pub fn new(dim: usize, bit_width: usize, dtype: DType, device: &Device) -> Result<Self> {
         if bit_width < 1 {
-            return Err(candle::Error::Msg(
-                "TurboQuantProd requires bit_width >= 1".into(),
-            ));
+            candle::bail!("TurboQuantProd requires bit_width >= 1");
         }
 
         let mse = TurboQuantMse::new(dim, bit_width - 1, dtype, device)?;
