@@ -26,6 +26,84 @@
 
 use std::f64::consts::PI;
 
+// ============================================================================
+// Math utilities for Lloyd-Max Gaussian codebook computation
+// ============================================================================
+
+/// Approximation of the error function (Abramowitz & Stegun 7.1.26, ~1.5×10⁻⁷ accuracy).
+fn erf_approx(x: f64) -> f64 {
+    let sign = x.signum();
+    let x = x.abs();
+    let t = 1.0 / (1.0 + 0.3275911 * x);
+    let poly = t
+        * (0.254829592
+            + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+    sign * (1.0 - poly * (-x * x).exp())
+}
+
+/// Standard normal PDF: φ(x) = (1/√(2π)) exp(-x²/2)
+fn normal_pdf(x: f64) -> f64 {
+    (-x * x / 2.0).exp() / (2.0 * std::f64::consts::PI).sqrt()
+}
+
+/// Standard normal CDF: Φ(x) = ½(1 + erf(x/√2))
+fn normal_cdf(x: f64) -> f64 {
+    0.5 * (1.0 + erf_approx(x / std::f64::consts::SQRT_2))
+}
+
+/// Conditional expectation E[X | a ≤ X < b] for X ~ N(0, 1).
+fn normal_conditional_mean(a: f64, b: f64) -> f64 {
+    let prob = normal_cdf(b) - normal_cdf(a);
+    if prob < 1e-15 {
+        (a + b) / 2.0
+    } else {
+        (normal_pdf(a) - normal_pdf(b)) / prob
+    }
+}
+
+/// Compute optimal Lloyd-Max quantizer centroids for N(0, 1).
+///
+/// Uses the iterative Lloyd-Max algorithm to find `2^bit_width` centroids that
+/// minimize expected squared quantization error for the standard normal distribution.
+/// Returns centroids in ascending order.
+pub fn lloyd_max_gaussian(bit_width: usize, max_iter: usize) -> Vec<f64> {
+    let n_levels = 1usize << bit_width;
+    if n_levels == 1 {
+        return vec![0.0];
+    }
+
+    // Initialize centroids uniformly in [-3, 3] (covers >99.7% of N(0,1))
+    let mut centroids: Vec<f64> = (0..n_levels)
+        .map(|i| -3.0 + 6.0 * (i as f64 + 0.5) / n_levels as f64)
+        .collect();
+
+    for _ in 0..max_iter {
+        let mut boundaries = Vec::with_capacity(n_levels + 1);
+        boundaries.push(f64::NEG_INFINITY);
+        for i in 0..n_levels - 1 {
+            boundaries.push((centroids[i] + centroids[i + 1]) / 2.0);
+        }
+        boundaries.push(f64::INFINITY);
+
+        let new_centroids: Vec<f64> = (0..n_levels)
+            .map(|i| normal_conditional_mean(boundaries[i], boundaries[i + 1]))
+            .collect();
+
+        let max_change: f64 = centroids
+            .iter()
+            .zip(&new_centroids)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max);
+
+        centroids = new_centroids;
+        if max_change < 1e-12 {
+            break;
+        }
+    }
+
+    centroids
+}
+
 /// A scalar quantization codebook with `2^bits` levels.
 ///
 /// - `boundaries`: the `2^bits - 1` decision boundaries (thresholds) between cells, sorted
@@ -258,20 +336,27 @@ pub fn get_polar_codebook(bits: u32, level: u32) -> Codebook {
     }
 }
 
-/// Compute a simple uniform codebook for the Beta(1/2, (d-1)/2) marginal distribution of a
-/// unit-sphere coordinate after random rotation.
+/// Compute an optimal Lloyd-Max codebook for the marginal distribution of a unit-sphere
+/// coordinate after random rotation (SRHT preconditioning).
 ///
-/// For large d, this distribution is very concentrated around 0, so a uniform codebook centered
-/// on [-r, r] for a small r is near-optimal. This is used by TurboQuant Stage 1.
+/// After SRHT, each coordinate of a unit-sphere vector follows approximately N(0, 1/d).
+/// This function computes the optimal Lloyd-Max codebook for N(0,1) and scales all
+/// centroids and boundaries by 1/√d, giving lower MSE than a uniform approximation.
 ///
-/// The parameter `half_n` = (d-1)/2. For d=64: half_n=31.5.
-/// The standard deviation of the marginal is approximately 1/sqrt(d), so we cover ±3σ.
+/// This is used by TurboQuant Stage 1 (PolarQuant MSE component).
 pub fn get_sphere_marginal_codebook(bits: u32, dim: usize) -> Codebook {
-    // For a uniform sphere, the marginal x_1 has std ≈ 1/sqrt(d)
-    // We cover ±4 std to capture >99.99% of the mass
-    let std = 1.0 / (dim as f32).sqrt();
-    let range = 4.0 * std;
-    Codebook::uniform(bits, -range, range)
+    let unit_centroids = lloyd_max_gaussian(bits as usize, 1000);
+    let scale = 1.0 / (dim as f64).sqrt();
+    let scaled: Vec<f64> = unit_centroids.iter().map(|&c| c * scale).collect();
+    let boundaries: Vec<f32> = scaled
+        .windows(2)
+        .map(|w| ((w[0] + w[1]) / 2.0) as f32)
+        .collect();
+    let centroids: Vec<f32> = scaled.iter().map(|&c| c as f32).collect();
+    Codebook {
+        boundaries,
+        centroids,
+    }
 }
 
 #[cfg(test)]
@@ -351,6 +436,97 @@ mod tests {
             assert_eq!(cb.num_levels(), 1 << bits);
             assert_eq!(cb.boundaries.len(), (1 << bits) - 1);
             assert_eq!(cb.bits(), bits);
+        }
+    }
+
+    /// For 1-bit Lloyd-Max on N(0,1), optimal centroids are ±√(2/π) ≈ ±0.7979.
+    #[test]
+    fn lloyd_max_gaussian_1bit_known_value() {
+        let centroids = lloyd_max_gaussian(1, 1000);
+        assert_eq!(centroids.len(), 2);
+        let expected = (2.0 / std::f64::consts::PI).sqrt();
+        assert!(
+            (centroids[0] + expected).abs() < 1e-4,
+            "c0={}, expected ≈ {}", centroids[0], -expected
+        );
+        assert!(
+            (centroids[1] - expected).abs() < 1e-4,
+            "c1={}, expected ≈ {}", centroids[1], expected
+        );
+    }
+
+    /// For 2-bit Lloyd-Max on N(0,1), optimal centroids are ≈ ±0.4528, ±1.5104.
+    #[test]
+    fn lloyd_max_gaussian_2bit_known_value() {
+        let centroids = lloyd_max_gaussian(2, 1000);
+        assert_eq!(centroids.len(), 4);
+        assert!((centroids[0] + 1.51).abs() < 0.01, "c0={}", centroids[0]);
+        assert!((centroids[1] + 0.4528).abs() < 0.01, "c1={}", centroids[1]);
+        assert!((centroids[2] - 0.4528).abs() < 0.01, "c2={}", centroids[2]);
+        assert!((centroids[3] - 1.51).abs() < 0.01, "c3={}", centroids[3]);
+    }
+
+    /// Lloyd-Max centroids for N(0,1) should be symmetric around 0.
+    #[test]
+    fn lloyd_max_gaussian_symmetry() {
+        for b in 1..=4 {
+            let centroids = lloyd_max_gaussian(b, 1000);
+            let n = centroids.len();
+            for i in 0..n / 2 {
+                assert!(
+                    (centroids[i] + centroids[n - 1 - i]).abs() < 1e-6,
+                    "Asymmetry at b={}, i={}: {} vs {}",
+                    b, i, centroids[i], centroids[n - 1 - i]
+                );
+            }
+        }
+    }
+
+    /// MSE should strictly decrease as bit-width increases for sphere marginal codebook.
+    #[test]
+    fn sphere_marginal_distortion_decreases_with_bits() {
+        let dim = 128usize;
+        let std = 1.0 / (dim as f32).sqrt();
+        // Generate deterministic test points from N(0, 1/d) via simple linear congruential samples
+        let n = 256usize;
+        let mut prev_mse = f64::MAX;
+        for bits in 1u32..=4 {
+            let cb = get_sphere_marginal_codebook(bits, dim);
+            let mut mse = 0.0f64;
+            for i in 0..n {
+                // Evenly-spaced samples over [-4σ, 4σ] — exercises the full codebook range
+                let x = -4.0 * std + 8.0 * std * i as f32 / n as f32;
+                let idx = cb.quantize(x);
+                let x_hat = cb.dequantize(idx);
+                let err = (x - x_hat) as f64;
+                mse += err * err;
+            }
+            mse /= n as f64;
+            assert!(
+                mse < prev_mse,
+                "{}-bit MSE={mse:.6} should be < {}-bit MSE={prev_mse:.6}",
+                bits, bits - 1
+            );
+            prev_mse = mse;
+        }
+    }
+
+    /// All quantize() outputs must be valid indices for the codebook.
+    #[test]
+    fn sphere_marginal_index_range() {
+        let dim = 64usize;
+        let std = 1.0 / (dim as f32).sqrt();
+        for bits in 1u32..=4 {
+            let cb = get_sphere_marginal_codebook(bits, dim);
+            let max_valid = (1u8 << bits) - 1;
+            for i in 0..200 {
+                let x = -5.0 * std + 10.0 * std * i as f32 / 200.0;
+                let idx = cb.quantize(x);
+                assert!(
+                    idx <= max_valid,
+                    "{}-bit index {} out of range [0, {}]", bits, idx, max_valid
+                );
+            }
         }
     }
 }
