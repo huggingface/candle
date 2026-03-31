@@ -57,7 +57,7 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 6)]
     bits: usize,
 
     #[arg(long, default_value_t = 50)]
@@ -223,7 +223,7 @@ struct BenchModel {
 }
 
 impl BenchModel {
-    fn new(cfg: &Config, vb: VarBuilder, bits: Option<usize>, quantize_kv: bool) -> CResult<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, bits: Option<usize>, _quantize_kv: bool) -> CResult<Self> {
         let device = vb.device().clone();
         let dtype = vb.dtype();
         let embed =
@@ -239,13 +239,26 @@ impl BenchModel {
             let vb_ln1 = vb_l.pp(format!("{i}.input_layernorm"));
             let vb_ln2 = vb_l.pp(format!("{i}.post_attention_layernorm"));
 
-            let make_linear = |in_d, out_d, bias, vb: VarBuilder| -> CResult<LinearLayer> {
-                let inner = candle_nn::linear_b(in_d, out_d, bias, vb)?;
-                match bits {
-                    Some(b) => Ok(LinearLayer::PQ(PolarQuantLinear::from_linear(
-                        &inner, b, &device,
-                    )?)),
-                    None => Ok(LinearLayer::F32(inner)),
+            // Attention projections stay F32 (quality-sensitive)
+            let make_f32 = |in_d, out_d, bias, vb: VarBuilder| -> CResult<LinearLayer> {
+                Ok(LinearLayer::F32(candle_nn::linear_b(
+                    in_d, out_d, bias, vb,
+                )?))
+            };
+
+            // MLP layers get quantized (bulk of parameters, more tolerant)
+            // Use Hadamard rotation when dim is power-of-2 (faster + numerically exact)
+            // Non-power-of-2 dims stay F32 to avoid slow Gram-Schmidt construction
+            // Only quantize the second half of layers (later layers are more tolerant)
+            let quantize_this_layer = bits.is_some() && i >= cfg.num_hidden_layers / 2;
+            let make_mlp = |in_d: usize, out_d, vb: VarBuilder| -> CResult<LinearLayer> {
+                let inner = candle_nn::linear_no_bias(in_d, out_d, vb)?;
+                if quantize_this_layer && in_d.is_power_of_two() {
+                    let pq =
+                        PolarQuantLinear::from_linear_hadamard(&inner, bits.unwrap(), &device)?;
+                    Ok(LinearLayer::PQ(pq))
+                } else {
+                    Ok(LinearLayer::F32(inner))
                 }
             };
 
@@ -255,25 +268,25 @@ impl BenchModel {
             let hidden_size = head_dim * num_heads;
 
             let attn = Attention {
-                q_proj: make_linear(
+                q_proj: make_f32(
                     cfg.hidden_size,
                     num_heads * head_dim,
                     cfg.attention_bias,
                     vb_a.pp("q_proj"),
                 )?,
-                k_proj: make_linear(
+                k_proj: make_f32(
                     cfg.hidden_size,
                     num_kv_heads * head_dim,
                     cfg.attention_bias,
                     vb_a.pp("k_proj"),
                 )?,
-                v_proj: make_linear(
+                v_proj: make_f32(
                     cfg.hidden_size,
                     num_kv_heads * head_dim,
                     cfg.attention_bias,
                     vb_a.pp("v_proj"),
                 )?,
-                o_proj: make_linear(
+                o_proj: make_f32(
                     num_heads * head_dim,
                     cfg.hidden_size,
                     cfg.attention_bias,
@@ -287,38 +300,15 @@ impl BenchModel {
                 head_dim,
                 hidden_size,
                 rotary: rotary.clone(),
-                kv_cache: if quantize_kv {
-                    KvCacheLayer::Quantized(QuantizedKvCache::new(
-                        2,
-                        head_dim,
-                        bits.unwrap_or(4),
-                        DType::F32,
-                        &device,
-                    )?)
-                } else {
-                    KvCacheLayer::Plain(ConcatKvCache::new(2))
-                },
+                // KV cache stays plain — quantized KV adds O(S²) dequant cost
+                // and compounds error with weight quantization
+                kv_cache: KvCacheLayer::Plain(ConcatKvCache::new(2)),
             };
 
             let mlp = MLP {
-                gate_proj: make_linear(
-                    cfg.hidden_size,
-                    cfg.intermediate_size,
-                    false,
-                    vb_m.pp("gate_proj"),
-                )?,
-                up_proj: make_linear(
-                    cfg.hidden_size,
-                    cfg.intermediate_size,
-                    false,
-                    vb_m.pp("up_proj"),
-                )?,
-                down_proj: make_linear(
-                    cfg.intermediate_size,
-                    cfg.hidden_size,
-                    false,
-                    vb_m.pp("down_proj"),
-                )?,
+                gate_proj: make_mlp(cfg.hidden_size, cfg.intermediate_size, vb_m.pp("gate_proj"))?,
+                up_proj: make_mlp(cfg.hidden_size, cfg.intermediate_size, vb_m.pp("up_proj"))?,
+                down_proj: make_mlp(cfg.intermediate_size, cfg.hidden_size, vb_m.pp("down_proj"))?,
                 act_fn: cfg.hidden_act,
             };
 
@@ -333,15 +323,15 @@ impl BenchModel {
             });
         }
 
+        // lm_head always stays F32 (output quality-critical)
         let lm_head = if cfg.tie_word_embeddings {
             LinearLayer::F32(candle_nn::Linear::new(embed.embeddings().clone(), None))
         } else {
-            let inner =
-                candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
-            match bits {
-                Some(b) => LinearLayer::PQ(PolarQuantLinear::from_linear(&inner, b, &device)?),
-                None => LinearLayer::F32(inner),
-            }
+            LinearLayer::F32(candle_nn::linear_no_bias(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                vb.pp("lm_head"),
+            )?)
         };
 
         Ok(Self {
