@@ -261,9 +261,9 @@ impl LazyStorage {
                 stack.push((cur_t, cur_src + 1));
             } else if pending.contains(&precursor.id()) {
                 panic!(
-                        "Cycle detected whilst computing topological order: {:?}. Try plotting with feature `plotting`.",
-                        precursor.id()
-                    );
+                    "Cycle detected whilst computing topological order: {:?}. Try plotting with feature `plotting`.",
+                    precursor.id()
+                );
             } else {
                 pending.insert(precursor.id());
                 stack.push((cur_t, cur_src));
@@ -421,6 +421,11 @@ pub fn calculate_usage_records(
         if let Some(record) = records.get_mut(&buffer_id) {
             record.0 = Some(buffer_id.clone());
             record.1 = Some(topo_len - i);
+            // Update layout to the producer's layout to ensure allocation is large enough.
+            // or_insert_with stores a consumer's (possibly narrowed) view of the layout.
+            // Producer determines the true output size.
+            record.3 = node.layout.clone();
+            record.4 = node.dtype();
         }
     }
     //filter records with no producer
@@ -448,13 +453,26 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
 
     let mut shared_objects: Vec<BufferId> = Vec::with_capacity(record_map.len());
 
+    let current_size =
+        |layout: &Layout, dtype: &DType| layout.shape().elem_count() * dtype.size_in_bytes();
+
     for (buffer_id, (_record_buffer_id, producer, last_consumer, layout, dtype)) in
         record_map.iter()
     {
         let record_producer = producer.unwrap();
-        let mut best_buffer: Option<BufferId> = None;
+        let needed_size = current_size(layout, dtype);
+        let mut best_buffer: Option<(BufferId, usize)> = None;
 
         for obj in shared_objects.iter() {
+            // Size check: the canonical buffer must be large enough to hold this tensor.
+            let Some((obj_layout, obj_dtype)) = allocations.get(obj) else {
+                continue;
+            };
+            let obj_size = current_size(obj_layout, obj_dtype);
+            if obj_size < needed_size {
+                continue;
+            }
+
             let mut suitable = true;
             for (
                 inner_buffer_id,
@@ -471,13 +489,18 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
                 }
             }
             if suitable {
-                best_buffer = Some(obj.clone());
+                // Prefer smallest suitable buffer (best fit) to reduce fragmentation.
+                if best_buffer
+                    .as_ref()
+                    .map_or(true, |(_, best_size)| obj_size < *best_size)
+                {
+                    best_buffer = Some((obj.clone(), obj_size));
+                }
             }
         }
-        if let Some(best) = best_buffer {
+        if let Some((best, _)) = best_buffer {
             reusage.insert(buffer_id.clone(), best);
         } else {
-            //let rounded_size = (record.size - 1).next_power_of_two();
             allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
             shared_objects.push(buffer_id.clone());
         }
@@ -812,94 +835,94 @@ impl BackendStorage for LazyStorage {
 
     fn conv1d(
         &self,
-        l: &Layout,
-        kernel: &Self,
-        kernel_l: &Layout,
-        params: &crate::conv::ParamsConv1D,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
         todo!()
     }
 
     fn conv_transpose1d(
         &self,
-        l: &Layout,
-        kernel: &Self,
-        kernel_l: &Layout,
-        params: &crate::conv::ParamsConvTranspose1D,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
         todo!()
     }
 
     fn conv2d(
         &self,
-        l: &Layout,
-        kernel: &Self,
-        kernel_l: &Layout,
-        params: &crate::conv::ParamsConv2D,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
         todo!()
     }
 
     fn conv_transpose2d(
         &self,
-        l: &Layout,
-        kernel: &Self,
-        kernel_l: &Layout,
-        params: &crate::conv::ParamsConvTranspose2D,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self> {
         todo!()
     }
 
     fn avg_pool2d(
         &self,
-        l: &Layout,
-        (w_k, h_k): (usize, usize),
-        (w_stride, h_stride): (usize, usize),
+        _l: &Layout,
+        (_w_k, _h_k): (usize, usize),
+        (_w_stride, _h_stride): (usize, usize),
     ) -> Result<Self> {
         todo!()
     }
 
     fn max_pool2d(
         &self,
-        l: &Layout,
-        (w_k, h_k): (usize, usize),
-        (w_stride, h_stride): (usize, usize),
+        _l: &Layout,
+        (_w_k, _h_k): (usize, usize),
+        (_w_stride, _h_stride): (usize, usize),
     ) -> Result<Self> {
         todo!()
     }
 
-    fn upsample_nearest1d(&self, l: &Layout, sz: usize) -> Result<Self> {
+    fn upsample_nearest1d(&self, _l: &Layout, _sz: usize) -> Result<Self> {
         todo!()
     }
 
-    fn upsample_nearest2d(&self, l: &Layout, out_w: usize, out_h: usize) -> Result<Self> {
+    fn upsample_nearest2d(&self, _l: &Layout, _out_w: usize, _out_h: usize) -> Result<Self> {
         todo!()
     }
 
-    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
+    fn gather(&self, _l: &Layout, _ids: &Self, _ids_l: &Layout, _dim: usize) -> Result<Self> {
         todo!()
     }
 
     fn scatter_set(
         &mut self,
-        l: &Layout,
-        ids: &Self,
-        ids_l: &Layout,
-        src: &Self,
-        src_l: &Layout,
-        dim: usize,
+        _l: &Layout,
+        _ids: &Self,
+        _ids_l: &Layout,
+        _src: &Self,
+        _src_l: &Layout,
+        _dim: usize,
     ) -> Result<()> {
         todo!()
     }
 
     fn scatter_add_set(
         &mut self,
-        l: &Layout,
-        ids: &Self,
-        ids_l: &Layout,
-        src: &Self,
-        src_l: &Layout,
-        dim: usize,
+        _l: &Layout,
+        _ids: &Self,
+        _ids_l: &Layout,
+        _src: &Self,
+        _src_l: &Layout,
+        _dim: usize,
     ) -> Result<()> {
         todo!()
     }
@@ -929,12 +952,12 @@ impl BackendStorage for LazyStorage {
 
     fn index_add(
         &self,
-        l: &Layout,
-        ids: &Self,
-        ids_l: &Layout,
-        src: &Self,
-        src_l: &Layout,
-        dim: usize,
+        _l: &Layout,
+        _ids: &Self,
+        _ids_l: &Layout,
+        _src: &Self,
+        _src_l: &Layout,
+        _dim: usize,
     ) -> Result<Self> {
         todo!()
     }
@@ -967,14 +990,14 @@ impl BackendStorage for LazyStorage {
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         let src = LazyStorage::copy(self, src_l);
 
-        let op = Op::CopyStridedSrc(CopyStridedSrc::new(
-            src,
-            src_l.clone(),
-            dst.clone(),
-            dst.layout().clone(),
-            dst_offset,
-        ));
+        if let Op::CopyStridedSrc(copies) = dst.op() {
+            let mut copies = copies.clone();
+            copies.add(src, src_l.clone(), dst_offset);
+            dst.op = Op::CopyStridedSrc(copies).into();
+            return Ok(());
+        }
 
+        let op = Op::CopyStridedSrc(CopyStridedSrc::new(src, src_l.clone(), dst_offset));
         dst.op = op.into();
         Ok(())
     }
@@ -1005,7 +1028,7 @@ impl BackendStorage for LazyStorage {
         Ok(())
     }
 
-    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+    fn const_set(&mut self, _s: crate::scalar::Scalar, _l: &Layout) -> Result<()> {
         todo!();
     }
 

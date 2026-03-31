@@ -453,41 +453,44 @@ impl LazyOp for Matmul {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SingleCopyStridedSrc {
+    pub src: LazyStorage,
+    pub src_l: Layout,
+    pub dst_offset: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CopyStridedSrc {
-    src: LazyStorage,
-    src_l: Layout,
-    dst: LazyStorage,
-    dst_l: Layout,
-    dst_offset: usize,
+    copies: Vec<SingleCopyStridedSrc>,
 }
 
 impl CopyStridedSrc {
-    pub fn new(
-        src: LazyStorage,
-        src_l: Layout,
-        dst: LazyStorage,
-        dst_l: Layout,
-        dst_offset: usize,
-    ) -> Self {
+    pub fn new(src: LazyStorage, src_l: Layout, dst_offset: usize) -> Self {
         Self {
+            copies: vec![SingleCopyStridedSrc {
+                src,
+                src_l,
+                dst_offset,
+            }],
+        }
+    }
+
+    pub fn add(&mut self, src: LazyStorage, src_l: Layout, dst_offset: usize) {
+        self.copies.push(SingleCopyStridedSrc {
             src,
             src_l,
-            dst,
-            dst_l,
             dst_offset,
-        }
+        });
+    }
+
+    pub fn copies(&self) -> &[SingleCopyStridedSrc] {
+        &self.copies
     }
 }
 
 impl LazyOp for CopyStridedSrc {
     fn srcs(&self) -> Vec<&LazyStorage> {
-        vec![&self.src]
-    }
-}
-
-impl CopyStridedSrc {
-    pub fn dst_offset(&self) -> usize {
-        self.dst_offset
+        self.copies.iter().map(|c| &c.src).collect()
     }
 }
 

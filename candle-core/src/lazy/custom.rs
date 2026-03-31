@@ -4,12 +4,13 @@ use std::{
 };
 
 use crate::{
-    backend::BackendStorage,
     lazy::{LazyBuffer, LazyStorage},
     DType, Layout, Result, Shape, Tensor,
 };
 
-pub trait LazyCustomFn<B: LazyBuffer>: LazyCustomFnClone<B> + Send + Sync {
+pub trait LazyCustomFn<B: LazyBuffer>:
+    LazyCustomFnClone<B> + Send + Sync + std::fmt::Debug
+{
     fn call(&self, input: &[(&B, &Layout, DType)], dst: &B) -> Result<()>;
 }
 
