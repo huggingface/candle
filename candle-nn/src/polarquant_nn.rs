@@ -205,12 +205,16 @@ impl PolarQuantLinear {
 
     /// Approximate memory usage of the quantized weights in bytes.
     ///
-    /// This counts index storage (U8) + norm storage (F32), excluding the
-    /// shared rotation matrix and centroids.
+    /// Counts bit-packed index storage + norm storage (F32), excluding the
+    /// shared rotation matrix and centroids. At 2-bit with dim=768, this is
+    /// ~4× smaller than U8 index storage.
     pub fn quantized_weight_bytes(&self) -> usize {
-        // U8 indices: out_features * in_features bytes
+        let bits = self.quantizer.bit_width();
+        // Bit-packed indices: ceil(out * in * bits / 8) bytes
+        let index_bytes = (self.out_features * self.in_features * bits).div_ceil(8);
         // F32 norms: out_features * 4 bytes
-        self.out_features * self.in_features + self.out_features * 4
+        let norm_bytes = self.out_features * 4;
+        index_bytes + norm_bytes
     }
 
     /// Memory usage of the equivalent uncompressed F32 weight in bytes.
@@ -351,17 +355,21 @@ mod tests {
     fn test_compression_ratio() -> Result<()> {
         let device = Device::Cpu;
         let (out_f, in_f) = (64, 128);
-
         let w = Tensor::randn(0f32, 1f32, (out_f, in_f), &device)?;
         let linear = Linear::new(w, None);
 
-        let pq = PolarQuantLinear::from_linear(&linear, 4, &device)?;
+        // 4-bit: packed indices = 64*128*4/8 = 4096 bytes, norms = 256, total = 4352
+        // F32 weight = 32768, ratio = 32768/4352 ≈ 7.5x
+        let pq4 = PolarQuantLinear::from_linear(&linear, 4, &device)?;
+        let ratio4 = pq4.compression_ratio();
+        assert!(ratio4 > 7.0, "Expected > 7x at 4-bit, got {ratio4:.2}x");
 
-        // U8 indices: 64*128 = 8192, norms: 64*4 = 256, total = 8448
-        // F32 weight: 64*128*4 = 32768
-        // Ratio: 32768 / 8448 ≈ 3.88
-        let ratio = pq.compression_ratio();
-        assert!(ratio > 3.5, "Expected > 3.5x compression, got {ratio:.2}x");
+        // 2-bit: packed indices = 64*128*2/8 = 2048 bytes, norms = 256, total = 2304
+        // ratio = 32768/2304 ≈ 14.2x
+        let pq2 = PolarQuantLinear::from_linear(&linear, 2, &device)?;
+        let ratio2 = pq2.compression_ratio();
+        assert!(ratio2 > 14.0, "Expected > 14x at 2-bit, got {ratio2:.2}x");
+        assert!(ratio2 > ratio4, "2-bit should compress more than 4-bit");
 
         Ok(())
     }

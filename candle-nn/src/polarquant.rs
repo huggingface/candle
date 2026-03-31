@@ -429,30 +429,63 @@ impl PolarQuant {
 /// Operates on **pre-rotated** input: given `x_rot = x @ Π^T`, computes:
 ///   `output[b][row] = norms[row] * Σ_i x_rot[b][i] * centroids[indices[row][i]]`
 ///
-/// The rotation `x @ Π^T` is done outside this op using BLAS-accelerated tensor
-/// matmul. This op handles only the cheap centroid-lookup + dot-product step,
-/// which is O(batch × out × d) with no large matrix allocations.
+/// Indices are **bit-packed**: b-bit values are packed into bytes (e.g., 4 indices
+/// per byte at 2-bit, 2 per byte at 4-bit), reducing index storage by up to 4×.
 #[derive(Debug, Clone)]
 pub struct PolarQuantMatMul {
     /// Pre-computed `Π^T` tensor for BLAS-accelerated rotation. Shape: `[d, d]`.
     rotation_t: Tensor,
     /// Centroid values, length `2^b`.
     centroids: Vec<f32>,
-    /// Weight indices, `[out_features * in_features]` as U8.
-    indices: Vec<u8>,
+    /// Bit-packed weight indices. Each byte holds `8/bit_width` indices.
+    packed_indices: Vec<u8>,
     /// Weight norms, `[out_features]` as F32.
     norms: Vec<f32>,
+    /// Bits per index.
+    bit_width: usize,
     /// Number of output features.
     out_features: usize,
     /// Number of input features (= dim).
     in_features: usize,
 }
 
+/// Pack b-bit indices into bytes, little-endian within each byte.
+fn pack_indices(indices: &[u8], bit_width: usize) -> Vec<u8> {
+    if bit_width >= 8 {
+        return indices.to_vec();
+    }
+    let mask = (1u8 << bit_width) - 1;
+    let indices_per_byte = 8 / bit_width;
+    let packed_len = indices.len().div_ceil(indices_per_byte);
+    let mut packed = vec![0u8; packed_len];
+    for (i, &idx) in indices.iter().enumerate() {
+        let byte_pos = i / indices_per_byte;
+        let bit_offset = (i % indices_per_byte) * bit_width;
+        packed[byte_pos] |= (idx & mask) << bit_offset;
+    }
+    packed
+}
+
+/// Unpack a single b-bit index from packed storage.
+#[inline(always)]
+fn unpack_index(packed: &[u8], pos: usize, bit_width: usize) -> usize {
+    let indices_per_byte = 8 / bit_width;
+    let byte_pos = pos / indices_per_byte;
+    let bit_offset = (pos % indices_per_byte) * bit_width;
+    let mask = (1u8 << bit_width) - 1;
+    ((packed[byte_pos] >> bit_offset) & mask) as usize
+}
+
 impl PolarQuantMatMul {
     /// Create a fused matmul op from PolarQuant components.
+    ///
+    /// Indices are bit-packed for memory efficiency. At 2-bit, index storage is
+    /// 4× smaller than U8; at 4-bit, 2× smaller.
     pub fn new(quantizer: &PolarQuant, indices: &Tensor, norms: &Tensor) -> Result<Self> {
         let (out_features, in_features) = indices.dims2()?;
         let indices_u8: Vec<u8> = indices.to_dtype(DType::U8)?.flatten_all()?.to_vec1()?;
+        let bit_width = quantizer.bit_width();
+        let packed_indices = pack_indices(&indices_u8, bit_width);
         let norms_f32: Vec<f32> = norms.to_dtype(DType::F32)?.to_vec1()?;
         let centroids = quantizer.centroids_f32()?;
         let rotation_t = quantizer
@@ -464,8 +497,9 @@ impl PolarQuantMatMul {
         Ok(Self {
             rotation_t,
             centroids,
-            indices: indices_u8,
+            packed_indices,
             norms: norms_f32,
+            bit_width,
             out_features,
             in_features,
         })
@@ -479,6 +513,11 @@ impl PolarQuantMatMul {
     /// Number of output features.
     pub fn out_features(&self) -> usize {
         self.out_features
+    }
+
+    /// Packed index storage size in bytes.
+    pub fn packed_index_bytes(&self) -> usize {
+        self.packed_indices.len()
     }
 }
 
@@ -511,15 +550,15 @@ impl PolarQuantMatMul {
         // Step 1: BLAS-accelerated rotation: x_rot = x @ Π^T  [batch, d]
         let x_rot = x_2d.matmul(&self.rotation_t)?;
 
-        // Step 2: Build rotated-space weight matrix from centroid lookups
-        // W_rot[row][i] = centroids[indices[row*d + i]] * norms[row]
+        // Step 2: Build rotated-space weight matrix from packed centroid lookups
         let mut w_rot_data = vec![0f32; n * d];
         for row in 0..n {
             let idx_start = row * d;
             let norm = self.norms[row];
             let w_row = &mut w_rot_data[row * d..(row + 1) * d];
             for (i, w) in w_row.iter_mut().enumerate() {
-                *w = self.centroids[self.indices[idx_start + i] as usize] * norm;
+                let idx = unpack_index(&self.packed_indices, idx_start + i, self.bit_width);
+                *w = self.centroids[idx] * norm;
             }
         }
         let w_rot = Tensor::from_vec(w_rot_data, (n, d), x.device())?;
