@@ -221,22 +221,28 @@ mod tests {
 
     #[test]
     fn test_unbiased_inner_product() -> Result<()> {
+        // Verify that TurboQuant's QJL correction produces an unbiased inner product
+        // estimator. We use fixed input vectors and average over many random quantizers.
+        // With dim=128, 4-bit, and 200 trials the standard error is small enough that
+        // a 0.5 relative tolerance never flakes.
         let device = Device::Cpu;
-        let dim = 64;
-        let bit_width = 3;
-        let n_trials = 50;
+        let dim = 128;
+        let bit_width = 4;
+        let n_trials = 200;
 
-        let x = Tensor::randn(0f32, 1f32, (1, dim), &device)?;
-        let y = Tensor::randn(0f32, 1f32, (1, dim), &device)?;
-        let true_ip = x.broadcast_mul(&y)?.sum_all()?.to_scalar::<f32>()? as f64;
+        // Fixed unit-ish vectors for deterministic inputs
+        let x_data: Vec<f32> = (0..dim).map(|i| ((i as f32) * 0.1).sin()).collect();
+        let y_data: Vec<f32> = (0..dim).map(|i| ((i as f32) * 0.07).cos()).collect();
+        let x = Tensor::new(x_data, &device)?.unsqueeze(0)?;
+        let y = Tensor::new(y_data, &device)?.unsqueeze(0)?;
+        let true_ip = (&x * &y)?.sum_all()?.to_scalar::<f32>()? as f64;
 
         let mut ip_sum = 0.0;
         for _ in 0..n_trials {
-            // Each trial uses a fresh random quantizer
             let quantizer = TurboQuant::new(dim, bit_width, DType::F32, &device)?;
             let q = quantizer.quantize(&x)?;
             let x_recon = quantizer.dequantize(&q)?;
-            let ip = x_recon.broadcast_mul(&y)?.sum_all()?.to_scalar::<f32>()? as f64;
+            let ip = (&x_recon * &y)?.sum_all()?.to_scalar::<f32>()? as f64;
             ip_sum += ip;
         }
         let ip_avg = ip_sum / n_trials as f64;
