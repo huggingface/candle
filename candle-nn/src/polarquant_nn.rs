@@ -40,7 +40,7 @@
 
 use candle::{DType, Device, Result, Tensor};
 
-use crate::polarquant::{PolarQuant, PolarQuantized};
+use crate::polarquant::{PolarQuant, PolarQuantMatMul, PolarQuantized};
 use crate::Linear;
 
 /// Linear layer with PolarQuant-compressed weights.
@@ -63,6 +63,7 @@ pub struct PolarQuantLinear {
     quantizer: PolarQuant,
     indices: Tensor,
     norms: Tensor,
+    fused_op: Option<PolarQuantMatMul>,
     bias: Option<Tensor>,
     in_features: usize,
     out_features: usize,
@@ -96,11 +97,49 @@ impl PolarQuantLinear {
         };
         let quantizer = PolarQuant::new(in_features, bit_width, internal_dtype, device)?;
         let q = quantizer.quantize(weight)?;
+        let indices = q.indices.to_dtype(DType::U8)?;
+        let fused_op = PolarQuantMatMul::new(&quantizer, &indices, &q.norms).ok();
 
         Ok(Self {
             quantizer,
-            indices: q.indices.to_dtype(DType::U8)?,
+            indices,
             norms: q.norms,
+            fused_op,
+            bias: linear.bias().cloned(),
+            in_features,
+            out_features,
+        })
+    }
+
+    /// Quantize a pretrained [`Linear`] layer using fast Hadamard rotation.
+    ///
+    /// Same as [`from_linear`](Self::from_linear) but uses a randomized
+    /// Walsh-Hadamard transform instead of a dense orthogonal matrix.
+    /// Requires `in_features` to be a power of 2.
+    pub fn from_linear_hadamard(
+        linear: &Linear,
+        bit_width: usize,
+        device: &Device,
+    ) -> Result<Self> {
+        let weight = linear.weight();
+        let (out_features, in_features) = weight.dims2()?;
+
+        let dtype = weight.dtype();
+        let internal_dtype = if dtype == DType::F64 {
+            DType::F64
+        } else {
+            DType::F32
+        };
+        let quantizer = PolarQuant::new_hadamard(in_features, bit_width, internal_dtype, device)?;
+        let q = quantizer.quantize(weight)?;
+        let indices = q.indices.to_dtype(DType::U8)?;
+        let fused_op = PolarQuantMatMul::new(&quantizer, &indices, &q.norms).ok();
+
+        Ok(Self {
+            quantizer,
+            indices,
+            norms: q.norms,
+            fused_op,
             bias: linear.bias().cloned(),
             in_features,
             out_features,
@@ -121,10 +160,12 @@ impl PolarQuantLinear {
         bias: Option<Tensor>,
     ) -> Result<Self> {
         let (out_features, in_features) = indices.dims2()?;
+        let fused_op = PolarQuantMatMul::new(&quantizer, &indices, &norms).ok();
         Ok(Self {
             quantizer,
             indices,
             norms,
+            fused_op,
             bias,
             in_features,
             out_features,
@@ -181,42 +222,53 @@ impl PolarQuantLinear {
     pub fn compression_ratio(&self) -> f64 {
         self.uncompressed_weight_bytes() as f64 / self.quantized_weight_bytes() as f64
     }
-}
 
-impl crate::Module for PolarQuantLinear {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    /// Fallback forward using full weight dequantization.
+    pub(crate) fn forward_dequantize(&self, x: &Tensor) -> Result<Tensor> {
         let w = self.dequantize_weight()?;
         let wt = w.t()?;
-        let x = match *x.dims() {
+        match *x.dims() {
             [b1, b2, m, _k] => {
                 if x.is_contiguous() {
                     x.reshape((b1 * b2 * m, ()))?
                         .matmul(&wt)?
-                        .reshape((b1, b2, m, ()))?
+                        .reshape((b1, b2, m, ()))
                 } else {
                     let wt = w.broadcast_left((b1, b2))?.t()?;
-                    x.matmul(&wt)?
+                    x.matmul(&wt)
                 }
             }
             [bsize, m, _k] => {
                 if x.is_contiguous() {
                     x.reshape((bsize * m, ()))?
                         .matmul(&wt)?
-                        .reshape((bsize, m, ()))?
+                        .reshape((bsize, m, ()))
                 } else {
                     let wt = w.broadcast_left(bsize)?.t()?;
-                    x.matmul(&wt)?
+                    x.matmul(&wt)
                 }
             }
-            [_k] => {
-                let y = x.unsqueeze(0)?.matmul(&wt)?;
-                y.squeeze(0)?
+            [_k] => x.unsqueeze(0)?.matmul(&wt)?.squeeze(0),
+            _ => x.matmul(&wt),
+        }
+    }
+}
+
+impl crate::Module for PolarQuantLinear {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x_result = if let Some(ref fused) = self.fused_op {
+            if x.dtype() == DType::F32 {
+                fused.forward(x)?
+            } else {
+                self.forward_dequantize(x)?
             }
-            _ => x.matmul(&wt)?,
+        } else {
+            self.forward_dequantize(x)?
         };
+
         match &self.bias {
-            None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
+            None => Ok(x_result),
+            Some(bias) => x_result.broadcast_add(bias),
         }
     }
 }
@@ -388,6 +440,60 @@ mod tests {
             );
             prev_err = err;
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hadamard_from_linear() -> Result<()> {
+        let device = Device::Cpu;
+        let (out_f, in_f) = (32, 128); // in_f must be power of 2
+
+        let w = Tensor::randn(0f32, 1f32, (out_f, in_f), &device)?;
+        let linear = Linear::new(w, None);
+
+        let pq = PolarQuantLinear::from_linear_hadamard(&linear, 4, &device)?;
+        assert_eq!(pq.in_features(), in_f);
+        assert_eq!(pq.out_features(), out_f);
+
+        let x = Tensor::randn(0f32, 1f32, (2, in_f), &device)?;
+        let y_exact = crate::Module::forward(&linear, &x)?;
+        let y_pq = crate::Module::forward(&pq, &x)?;
+
+        let err = (&y_exact - &y_pq)?.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
+        let mag = y_exact.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
+        let rel = err / (mag + 1e-10);
+        assert!(
+            rel < 0.05,
+            "Hadamard 4-bit relative error too high: {rel:.4}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fused_matches_dequantize() -> Result<()> {
+        let device = Device::Cpu;
+        let (out_f, in_f) = (32, 64);
+
+        let w = Tensor::randn(0f32, 1f32, (out_f, in_f), &device)?;
+        let linear = Linear::new(w, None);
+        let pq = PolarQuantLinear::from_linear(&linear, 4, &device)?;
+
+        // The fused op should produce the same result as dequantize+matmul
+        let x = Tensor::randn(0f32, 1f32, (4, in_f), &device)?;
+
+        // Fused path (via Module::forward)
+        let y_fused = crate::Module::forward(&pq, &x)?;
+
+        // Dequantize path (explicit)
+        let y_deq = pq.forward_dequantize(&x)?;
+
+        let diff = (&y_fused - &y_deq)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            diff < 1e-4,
+            "Fused vs dequantize max diff: {diff} (should be ~0)"
+        );
 
         Ok(())
     }

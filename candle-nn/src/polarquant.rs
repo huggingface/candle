@@ -148,6 +148,74 @@ fn random_orthogonal_tensor(dim: usize, dtype: DType, device: &Device) -> Result
         .to_device(device)
 }
 
+/// Apply an in-place Walsh-Hadamard transform to `data` of length `n` (must be power of 2).
+///
+/// The transform is unnormalized — caller is responsible for scaling by 1/√n.
+fn hadamard_transform_inplace(data: &mut [f64], n: usize) {
+    let mut h = 1;
+    while h < n {
+        for i in (0..n).step_by(h * 2) {
+            for j in i..i + h {
+                let x = data[j];
+                let y = data[j + h];
+                data[j] = x + y;
+                data[j + h] = x - y;
+            }
+        }
+        h *= 2;
+    }
+}
+
+/// Generate a randomized Hadamard rotation matrix as a Tensor.
+///
+/// Uses a Walsh-Hadamard matrix H_d (O(d log d) to apply) with random sign
+/// flips D (diagonal ±1 matrix) to form the rotation Π = (1/√d) · H · D.
+/// This is an orthogonal transformation that is O(d log d) to apply, compared
+/// to O(d²) for a dense orthogonal matrix.
+///
+/// `dim` must be a power of 2.
+fn randomized_hadamard_matrix(dim: usize, dtype: DType, device: &Device) -> Result<Tensor> {
+    if !dim.is_power_of_two() {
+        candle::bail!(
+            "Hadamard rotation requires dim to be a power of 2, got {}",
+            dim
+        );
+    }
+
+    // Generate random signs for D: each ±1 with equal probability
+    let sign_tensor = Tensor::randn(0f64, 1f64, (dim,), &Device::Cpu)?;
+    let signs: Vec<f64> = sign_tensor.to_vec1()?;
+    let signs: Vec<f64> = signs
+        .iter()
+        .map(|&s| if s >= 0.0 { 1.0 } else { -1.0 })
+        .collect();
+
+    // Build the matrix row by row: row_i = (1/√d) * H * D * e_i
+    // This is equivalent to column i of (1/√d) * H * D
+    let scale = 1.0 / (dim as f64).sqrt();
+    let mut matrix = vec![0f64; dim * dim];
+
+    for i in 0..dim {
+        // Start with e_i scaled by sign
+        let mut col = vec![0f64; dim];
+        col[i] = signs[i];
+
+        // Apply Hadamard transform
+        hadamard_transform_inplace(&mut col, dim);
+
+        // Scale and store as row i of the transposed matrix
+        // We want rotation[i][j] = scale * H[j][i] * signs[i]
+        // but since H is symmetric, H[j][i] = H[i][j], so we store as column
+        for j in 0..dim {
+            matrix[j * dim + i] = col[j] * scale;
+        }
+    }
+
+    Tensor::from_vec(matrix, (dim, dim), &Device::Cpu)?
+        .to_dtype(dtype)?
+        .to_device(device)
+}
+
 /// Result of PolarQuant quantization.
 ///
 /// Stores centroid indices (b bits per coordinate) and original vector norms.
@@ -228,6 +296,42 @@ impl PolarQuant {
         })
     }
 
+    /// Create a new PolarQuant quantizer using fast Hadamard rotation.
+    ///
+    /// Uses a randomized Walsh-Hadamard transform instead of a dense orthogonal
+    /// matrix. Construction is O(d²) but the resulting rotation matrix enables
+    /// the fused matmul kernel to apply inverse rotation in O(d log d) per row.
+    ///
+    /// Requires `dim` to be a power of 2 (32, 64, 128, 256, ...).
+    ///
+    /// # Arguments
+    /// * `dim` - Vector dimension (d). Must be a power of 2.
+    /// * `bit_width` - Bits per coordinate (b). Typically 1–8.
+    /// * `dtype` - Data type for internal computations (F32 or F64).
+    /// * `device` - Device for tensor allocation.
+    pub fn new_hadamard(
+        dim: usize,
+        bit_width: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let unit_centroids = lloyd_max_gaussian(bit_width, 1000);
+        let scale = 1.0 / (dim as f64).sqrt();
+        let scaled: Vec<f64> = unit_centroids.iter().map(|&c| c * scale).collect();
+
+        let centroids =
+            Tensor::from_vec(scaled, (unit_centroids.len(),), device)?.to_dtype(dtype)?;
+        let rotation = randomized_hadamard_matrix(dim, dtype, device)?;
+
+        Ok(Self {
+            dim,
+            bit_width,
+            rotation,
+            centroids,
+            dtype,
+        })
+    }
+
     /// Quantize vectors.
     ///
     /// # Arguments
@@ -297,6 +401,141 @@ impl PolarQuant {
     /// Get the bit width.
     pub fn bit_width(&self) -> usize {
         self.bit_width
+    }
+
+    /// Get a reference to the centroid values.
+    pub fn centroids(&self) -> &Tensor {
+        &self.centroids
+    }
+
+    /// Get a reference to the rotation matrix.
+    pub fn rotation(&self) -> &Tensor {
+        &self.rotation
+    }
+
+    /// Get the centroids as a CPU f32 slice (for fused ops).
+    pub fn centroids_f32(&self) -> Result<Vec<f32>> {
+        self.centroids.to_dtype(DType::F32)?.to_vec1()
+    }
+
+    /// Get the rotation matrix as a CPU f32 slice (for fused ops).
+    pub fn rotation_f32(&self) -> Result<Vec<f32>> {
+        self.rotation.to_dtype(DType::F32)?.flatten_all()?.to_vec1()
+    }
+}
+
+/// Fused centroid-lookup and dot-product operation for PolarQuant-compressed weights.
+///
+/// Operates on **pre-rotated** input: given `x_rot = x @ Π^T`, computes:
+///   `output[b][row] = norms[row] * Σ_i x_rot[b][i] * centroids[indices[row][i]]`
+///
+/// The rotation `x @ Π^T` is done outside this op using BLAS-accelerated tensor
+/// matmul. This op handles only the cheap centroid-lookup + dot-product step,
+/// which is O(batch × out × d) with no large matrix allocations.
+#[derive(Debug, Clone)]
+pub struct PolarQuantMatMul {
+    /// Pre-computed `Π^T` tensor for BLAS-accelerated rotation. Shape: `[d, d]`.
+    rotation_t: Tensor,
+    /// Centroid values, length `2^b`.
+    centroids: Vec<f32>,
+    /// Weight indices, `[out_features * in_features]` as U8.
+    indices: Vec<u8>,
+    /// Weight norms, `[out_features]` as F32.
+    norms: Vec<f32>,
+    /// Number of output features.
+    out_features: usize,
+    /// Number of input features (= dim).
+    in_features: usize,
+}
+
+impl PolarQuantMatMul {
+    /// Create a fused matmul op from PolarQuant components.
+    pub fn new(quantizer: &PolarQuant, indices: &Tensor, norms: &Tensor) -> Result<Self> {
+        let (out_features, in_features) = indices.dims2()?;
+        let indices_u8: Vec<u8> = indices.to_dtype(DType::U8)?.flatten_all()?.to_vec1()?;
+        let norms_f32: Vec<f32> = norms.to_dtype(DType::F32)?.to_vec1()?;
+        let centroids = quantizer.centroids_f32()?;
+        let rotation_t = quantizer
+            .rotation()
+            .t()?
+            .contiguous()?
+            .to_dtype(DType::F32)?;
+
+        Ok(Self {
+            rotation_t,
+            centroids,
+            indices: indices_u8,
+            norms: norms_f32,
+            out_features,
+            in_features,
+        })
+    }
+
+    /// Rotation matrix transpose tensor, for BLAS-accelerated `x @ Π^T`.
+    pub fn rotation_t(&self) -> &Tensor {
+        &self.rotation_t
+    }
+
+    /// Number of output features.
+    pub fn out_features(&self) -> usize {
+        self.out_features
+    }
+}
+
+impl PolarQuantMatMul {
+    /// Compute `x @ W^T` using BLAS rotation + BLAS centroid matmul.
+    ///
+    /// Two BLAS matmuls, no scalar loops:
+    /// 1. `x_rot = x @ Π^T` — rotate input (shared `[d, d]` matmul)
+    /// 2. Build `W_rot[row][i] = centroids[indices[row][i]] * norms[row]` (cheap lookups)
+    /// 3. `output = x_rot @ W_rot^T` — standard BLAS matmul
+    ///
+    /// This avoids allocating the full `[out, in]` dequantized weight (which would
+    /// require an additional `[out, d] @ [d, d]` rotation matmul). Instead, the
+    /// rotated-space weight `W_rot` is just centroid lookups — O(out × d) with no
+    /// matrix multiply.
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let orig_dims = x.dims().to_vec();
+        let d = self.in_features;
+        let n = self.out_features;
+
+        // Flatten to 2D
+        let batch = x.elem_count() / d;
+        let x_2d = if x.dims().len() == 1 {
+            x.unsqueeze(0)?
+        } else {
+            x.reshape((batch, d))?
+        };
+        let x_2d = x_2d.contiguous()?;
+
+        // Step 1: BLAS-accelerated rotation: x_rot = x @ Π^T  [batch, d]
+        let x_rot = x_2d.matmul(&self.rotation_t)?;
+
+        // Step 2: Build rotated-space weight matrix from centroid lookups
+        // W_rot[row][i] = centroids[indices[row*d + i]] * norms[row]
+        let mut w_rot_data = vec![0f32; n * d];
+        for row in 0..n {
+            let idx_start = row * d;
+            let norm = self.norms[row];
+            let w_row = &mut w_rot_data[row * d..(row + 1) * d];
+            for (i, w) in w_row.iter_mut().enumerate() {
+                *w = self.centroids[self.indices[idx_start + i] as usize] * norm;
+            }
+        }
+        let w_rot = Tensor::from_vec(w_rot_data, (n, d), x.device())?;
+
+        // Step 3: BLAS matmul: output = x_rot @ W_rot^T  [batch, n]
+        let y_2d = x_rot.matmul(&w_rot.t()?)?;
+
+        // Reshape back
+        match orig_dims.len() {
+            1 => y_2d.squeeze(0),
+            _ => {
+                let mut out_dims = orig_dims;
+                *out_dims.last_mut().unwrap() = n;
+                y_2d.reshape(out_dims)
+            }
+        }
     }
 }
 
