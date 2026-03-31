@@ -17,9 +17,8 @@ use candle_metal_kernels::{
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
-use objc2_metal::MTLStages;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError, RwLock, TryLockError};
 mod device;
@@ -2400,6 +2399,7 @@ impl LazyBuffer for Buffer {}
 #[derive(Clone, Debug)]
 pub struct MetalAllocator {
     buffer_map: HashMap<BufferId, Buffer>,
+    reusage: BTreeMap<BufferId, BufferId>,
     device: MetalDevice,
 }
 
@@ -2407,8 +2407,14 @@ impl MetalAllocator {
     fn new(device: MetalDevice) -> Self {
         Self {
             buffer_map: HashMap::new(),
+            reusage: BTreeMap::new(),
             device,
         }
+    }
+
+    /// Resolve a buffer id through the reusage map to find the canonical allocated buffer.
+    fn resolve<'a>(&'a self, id: &'a BufferId) -> &'a BufferId {
+        self.reusage.get(id).unwrap_or(id)
     }
 }
 
@@ -2419,13 +2425,18 @@ impl LazyAllocator<Buffer> for MetalAllocator {
             allocations,
         } = crate::lazy::greedy_by_size(graph)?;
 
+        // old approach:
+        /*
         for node in graph {
             for src in node.op().srcs() {
                 if let Some(reuse) = reusage.get(&src.buffer_id()) {
                     src.set_buffer_id(reuse.clone());
                 }
             }
-        }
+        } */
+        // Store reusage plan in the allocator without mutating the shared Arc<BufferId>'s.
+        // Buffer ids used by the KV cache could be mutated between forward passes.
+        self.reusage = reusage;
 
         for (buffer_id, (layout, dtype)) in allocations.into_iter() {
             self.allocate(buffer_id, layout.shape(), dtype)?;
@@ -2448,9 +2459,10 @@ impl LazyAllocator<Buffer> for MetalAllocator {
     }
 
     fn get(&self, id: &BufferId) -> Result<&Buffer> {
+        let canonical = self.resolve(id);
         self.buffer_map
-            .get(&id)
-            .ok_or_else(|| BufferNotFound(id.clone()).into())
+            .get(canonical)
+            .ok_or_else(|| BufferNotFound(canonical.clone()).into())
     }
 
     fn get_or_allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&Buffer> {
@@ -2510,11 +2522,169 @@ pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
     }
 }
 
+#[derive(Clone, Debug)]
+struct CustomSoftmaxOverride {
+    device: MetalDevice,
+}
+#[derive(Clone, Debug)]
+struct CustomRmsNormOverride {
+    device: MetalDevice,
+    eps: f32,
+}
+#[derive(Clone, Debug)]
+struct CustomRotaryEmbOverride {
+    device: MetalDevice,
+}
+
+impl LazyCustomFn<Buffer> for CustomSoftmaxOverride {
+    fn call(&self, input: &[(&Buffer, &Layout, DType)], dst: &Buffer) -> Result<()> {
+        let (src, layout, dtype) = input[0];
+
+        let encoder = self.device.command_encoder()?;
+        encoder.set_label("softmax-override");
+        let kernels = self.device.kernels();
+
+        let name = match dtype {
+            DType::F32 => "softmax_f32",
+            DType::F16 => "softmax_f16",
+            DType::BF16 => "softmax_bf16",
+            dtype => crate::bail!("softmax-last-dim is not implemented for {dtype:?}"),
+        };
+
+        let n = layout.stride().len();
+        if !(layout.is_contiguous() && layout.stride()[n - 1] == 1) {
+            crate::bail!("Non contiguous softmax-last-dim is not implemented");
+        }
+
+        let last_dim = layout.dims()[layout.shape().rank() - 1];
+        let elem_count = layout.shape().elem_count();
+        //let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
+        candle_metal_kernels::call_last_softmax(
+            self.device.metal_device(),
+            &encoder,
+            kernels,
+            name,
+            elem_count,
+            last_dim,
+            src,
+            layout.start_offset() * dtype.size_in_bytes(),
+            dst,
+        )
+        .map_err(crate::Error::wrap)?;
+
+        Ok(())
+    }
+}
+
+impl LazyCustomFn<Buffer> for CustomRmsNormOverride {
+    fn call(&self, input: &[(&Buffer, &Layout, DType)], dst: &Buffer) -> Result<()> {
+        let (s1, l1, dtype1) = input[0];
+        let (s2, l2, dtype2) = input[1];
+
+        let device = &self.device;
+        let encoder = device.command_encoder()?;
+        encoder.set_label("rmsnorm");
+        let kernels = device.kernels();
+        let name = match (dtype1, dtype2) {
+            (DType::F32, DType::F32) => "rmsnorm_f32",
+            (DType::F16, DType::F16) => "rmsnorm_f16",
+            (DType::BF16, DType::BF16) => "rmsnorm_bf16",
+            (dt1, dt2) => crate::bail!("rmsnorm is not implemented for {dt1:?} {dt2:?}"),
+        };
+
+        if !(l1.is_contiguous() && l2.is_contiguous()) {
+            crate::bail!("Non contiguous rmsnorm is not implemented");
+        }
+
+        let last_dim = l1.dims()[l1.shape().rank() - 1];
+        let elem_count = l1.shape().elem_count();
+        candle_metal_kernels::call_rms_norm(
+            device.metal_device(),
+            &encoder,
+            kernels,
+            name,
+            elem_count,
+            last_dim,
+            self.eps,
+            s1,
+            l1.start_offset() * dtype1.size_in_bytes(),
+            s2,
+            l2.start_offset() * dtype2.size_in_bytes(),
+            dst,
+        )
+        .map_err(crate::Error::wrap)?;
+
+        Ok(())
+    }
+}
+
+impl LazyCustomFn<Buffer> for CustomRotaryEmbOverride {
+    fn call(&self, input: &[(&Buffer, &Layout, DType)], dst: &Buffer) -> Result<()> {
+        let (src, src_l, src_dtype) = input[0];
+        let (cos, cos_l, cos_dtype) = input[1];
+        let (sin, sin_l, sin_dtype) = input[2];
+
+        let device = &self.device;
+        let encoder = device.command_encoder()?;
+        encoder.set_label("rope");
+        let kernels = device.kernels();
+        if cos_dtype != src_dtype || sin_dtype != src_dtype {
+            crate::bail!(
+                "dtype mismatch in rope {:?} {:?} {:?}",
+                src_dtype,
+                cos_dtype,
+                sin_dtype
+            )
+        }
+        let name = match src_dtype {
+            DType::F32 => "rope_f32",
+            DType::F16 => "rope_f16",
+            DType::BF16 => "rope_bf16",
+            dtype => crate::bail!("rope is not implemented for {dtype:?}"),
+        };
+        let (b, h, t, d) = src_l.shape().dims4()?;
+        let stride_b = if cos_l.dims().len() == 3 && sin_l.dims().len() == 3 {
+            h * t * d
+        } else {
+            0usize
+        };
+        //let el = b * h * t * d;
+        //let output = device.new_buffer(el, src_dtype, "rope")?;
+        candle_metal_kernels::call_rope(
+            device.metal_device(),
+            &encoder,
+            kernels,
+            name,
+            b * h,
+            t * d,
+            d,
+            stride_b,
+            src,
+            src_l.start_offset() * src_dtype.size_in_bytes(),
+            cos,
+            cos_l.start_offset() * cos_dtype.size_in_bytes(),
+            sin,
+            sin_l.start_offset() * sin_dtype.size_in_bytes(),
+            &dst,
+        )
+        .map_err(crate::Error::wrap)?;
+
+        Ok(())
+    }
+}
+
 fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp1>,
         device: MetalDevice,
+    }
+    impl std::fmt::Debug for InlineCustomOp {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("InlineCustomOp1(")?;
+            f.write_str(self.op.name())?;
+            f.write_str(")")
+        }
     }
 
     impl LazyCustomFn<Buffer> for InlineCustomOp {
@@ -2561,6 +2731,13 @@ fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp2>,
         device: MetalDevice,
+    }
+    impl std::fmt::Debug for InlineCustomOp {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("InlineCustomOp2(")?;
+            f.write_str(self.op.name())?;
+            f.write_str(")")
+        }
     }
 
     impl LazyCustomFn<Buffer> for InlineCustomOp {
@@ -2610,6 +2787,13 @@ fn install_custom_op3(op: &Box<dyn crate::CustomOp3>) {
         op: Box<dyn crate::CustomOp3>,
         device: MetalDevice,
     }
+    impl std::fmt::Debug for InlineCustomOp {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("InlineCustomOp3(")?;
+            f.write_str(self.op.name())?;
+            f.write_str(")")
+        }
+    }
 
     impl LazyCustomFn<Buffer> for InlineCustomOp {
         fn call(&self, input: &[(&Buffer, &Layout, DType)], dst: &Buffer) -> Result<()> {
@@ -2639,8 +2823,8 @@ fn install_custom_op3(op: &Box<dyn crate::CustomOp3>) {
                 blit.set_label("copy_to_dst");
                 blit.copy(result.buffer(), 0, &dst, 0, size);
                 blit.end_encoding();
-                self.device.synchronize()?;
             }
+            self.device.synchronize()?;
 
             Ok(())
         }
@@ -2687,13 +2871,38 @@ impl Executor for MetalDevice {
 
         install_custom_ops(lazy_storage.custom_ops());
 
+        {
+            /*
+            let mut binding = CUSTOM_OP_HANDLER.lock().unwrap();
+            binding.custom_ops.insert(
+                "softmax-last-dim".to_string(),
+                Box::new(CustomSoftmaxOverride {
+                    device: self.clone(),
+                }),
+            );
+            binding.custom_ops.insert(
+                "rms-norm".to_string(),
+                Box::new(CustomRmsNormOverride {
+                    device: self.clone(),
+                    eps: 1.2,
+                }),
+            );
+            binding.custom_ops.insert(
+                "rotary-emb".to_string(),
+                Box::new(CustomRotaryEmbOverride {
+                    device: self.clone(),
+                }),
+            );
+            */
+        }
+
         self.optimize(&lazy_storage);
         self.specialize(&lazy_storage);
 
         let graph = lazy_storage.execution_order();
 
         allocator.initialize(&graph)?;
-        //println!("{}", crate::lazy::graph_to_dot(&lazy_storage));
+        // println!("{}", crate::lazy::graph_to_dot(&lazy_storage));
 
         let result_node = graph.last().unwrap().clone();
         for node in graph {
@@ -2701,7 +2910,7 @@ impl Executor for MetalDevice {
                 println!("{}", crate::lazy::graph_to_dot(&node));
                 Err(e)?
             }
-
+            /*
             let node_buffer = allocator.get(node.buffer_id())?;
             let storage = MetalStorage::new(
                 node_buffer.clone().into(),
@@ -2709,7 +2918,6 @@ impl Executor for MetalDevice {
                 node.layout().shape().elem_count(),
                 node.dtype(),
             );
-            /*
             let result = storage.to_cpu_storage()?;
             match result {
                 CpuStorage::F32(data) => {
@@ -2730,14 +2938,6 @@ impl Executor for MetalDevice {
         }
 
         let buffer = allocator.get(result_node.buffer_id()).unwrap().clone();
-        let storage = MetalStorage::new(
-            buffer.clone().into(),
-            self.clone(),
-            result_node.layout().shape().elem_count(),
-            result_node.dtype(),
-        );
-        //let result = storage.to_cpu_storage()?;
-        //println!("result: {result:?}");
         Ok(buffer)
     }
 
@@ -2888,12 +3088,6 @@ impl Executor for MetalDevice {
                 let rhs_buffer = allocator.get(rhs.buffer_id()).unwrap();
                 let dst = allocator.get(current.buffer_id()).unwrap();
 
-                let mut binding = self.fences.lock().unwrap();
-                let waiting_on: Vec<_> = srcs
-                    .iter()
-                    .filter_map(|src| binding.get(&src.id()))
-                    .collect();
-
                 let (b, m, n, k) = op.dims();
                 matmul(
                     self,
@@ -2905,33 +3099,28 @@ impl Executor for MetalDevice {
                     op.rhs_l(),
                     rhs.dtype(),
                     dst,
-                    &waiting_on,
+                    &[],
                 )?;
-
-                binding.insert(current.id(), self.make_fence());
             }
             CopyStridedSrc(copy_strided_src) => {
-                let src = copy_strided_src.srcs()[0];
-                let src_buffer = allocator.get(src.buffer_id()).unwrap();
-                let src_layout = src.layout();
-
-                let dst = allocator.get(current.buffer_id()).unwrap();
-
-                let src = MetalStorage::new(
-                    Arc::new(src_buffer.clone()),
-                    self.clone(),
-                    src.layout().shape().elem_count(),
-                    src.dtype(),
-                );
-
+                let dst_buffer = allocator.get(current.buffer_id()).unwrap();
                 let mut dst = MetalStorage::new(
-                    Arc::new(dst.clone()),
+                    Arc::new(dst_buffer.clone()),
                     self.clone(),
                     current.layout().shape().elem_count(),
                     current.dtype(),
                 );
 
-                src.copy_strided_src(&mut dst, copy_strided_src.dst_offset(), src_layout)?;
+                for copy in copy_strided_src.copies() {
+                    let src_buffer = allocator.get(copy.src.buffer_id()).unwrap();
+                    let src = MetalStorage::new(
+                        Arc::new(src_buffer.clone()),
+                        self.clone(),
+                        copy.src.layout().shape().elem_count(),
+                        copy.src.dtype(),
+                    );
+                    src.copy_strided_src(&mut dst, copy.dst_offset, &copy.src_l)?;
+                }
             }
             Copy2D(op) => {
                 let dst = allocator.get(current.buffer_id()).unwrap();

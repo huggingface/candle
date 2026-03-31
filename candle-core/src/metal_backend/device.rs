@@ -11,7 +11,7 @@ use candle_metal_kernels::{
     Kernels,
 };
 use objc2_foundation::NSURL;
-use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager, MTLFence};
+use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
