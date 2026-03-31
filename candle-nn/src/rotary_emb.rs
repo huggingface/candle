@@ -533,7 +533,7 @@ impl candle::CustomOp3 for RotaryEmb {
             Tensor::from_storage(sin.clone().into(), sin_l.shape(), BackpropOp::none(), false);
 
         let result = self.fallback(&[&src, &cos, &sin])?;
-        let (inner, layout) = self.extract_lazy(result)?;
+        let (inner, _layout) = self.extract_lazy(result)?;
 
         storage.add_custom_fallback(LazyCustomOp::name(self), inner);
 
