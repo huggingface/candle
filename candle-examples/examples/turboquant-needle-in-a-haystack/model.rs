@@ -304,7 +304,13 @@ impl CausalSelfAttention {
 
         let y = if cache.use_kv_cache {
             if cache.kvs[block_idx].is_none() {
-                cache.kvs[block_idx] = Some(QuantizedKvCache::new(cache.quant_algo.clone(), 2, self.num_attention_heads));
+                cache.kvs[block_idx] = Some(QuantizedKvCache::new(
+                    self.num_attention_heads,
+                    self.max_position_embeddings,
+                    self.head_dim,
+                    cache.quant_algo.clone(),
+                    &cache.device,
+                )?);
             }
             let mut att = {
                 let kv_cache = cache.kvs[block_idx].as_mut().unwrap();

@@ -5,7 +5,7 @@
 //! Implementation based on Hugging Face's [transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py)
 
 use candle_nn::{linear_no_bias as linear, Linear, RmsNorm, rms_norm};
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::{collections::HashMap, f32::consts::PI};
 use candle_nn::quant_kv::{QuantAlgorithm, QuantizedKvCache};
@@ -292,19 +292,25 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let mut v = v
+        let v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
         let q = self.apply_rotary_emb(&q, index_pos, cache)?;
-        let mut k = self.apply_rotary_emb(&k, index_pos, cache)?;
+        let k = self.apply_rotary_emb(&k, index_pos, cache)?;
 
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
         let y = if cache.use_kv_cache {
             if cache.kvs[block_idx].is_none() {
-                cache.kvs[block_idx] = Some(QuantizedKvCache::new(cache.quant_algo.clone(), 2, self.num_attention_heads));
+                cache.kvs[block_idx] = Some(QuantizedKvCache::new(
+                    self.num_attention_heads,
+                    self.max_position_embeddings,
+                    self.head_dim,
+                    cache.quant_algo.clone(),
+                    q.device(),
+                )?);
             }
             let mut att = {
                 let kv_cache = cache.kvs[block_idx].as_mut().unwrap();

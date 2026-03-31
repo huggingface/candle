@@ -28,6 +28,7 @@
 //! H^{-1} = H / n), giving:
 //!   Π^{-1} = (H · D) / √n
 
+use candle::{Result, Tensor};
 use super::prng::Prng;
 
 /// Returns the smallest power of 2 that is ≥ n.
@@ -201,6 +202,83 @@ pub fn srht_inverse(input: &[f32], seed: u64, out: &mut [f32]) {
         out[i] *= signs[i];
     }
 }
+
+/// Create a Walsh-Hadamard matrix H_n as a Tensor.
+///
+/// H_1 = [1]
+/// H_{2n} = [H_n H_n; H_n -H_n]
+pub fn hadamard_matrix(n: usize, device: &candle::Device) -> Result<Tensor> {
+    if !n.is_power_of_two() {
+        candle::bail!("hadamard_matrix: n must be a power of 2");
+    }
+    let mut h = Tensor::new(&[1.0f32], device)?.reshape((1, 1))?;
+    let mut curr_n = 1;
+    while curr_n < n {
+        let h_top = Tensor::cat(&[&h, &h], 1)?;
+        let h_bottom = Tensor::cat(&[&h, &h.neg()?], 1)?;
+        h = Tensor::cat(&[&h_top, &h_bottom], 0)?;
+        curr_n *= 2;
+    }
+    Ok(h)
+}
+
+/// Vectorized FWHT for a batch of vectors.
+///
+/// Input `t` should be of shape `[..., d]`.
+/// Returns `H · t / sqrt(d)`.
+pub fn fwht_vectorized(t: &Tensor) -> Result<Tensor> {
+    let device = t.device();
+    let dims = t.dims();
+    let d = dims[dims.len() - 1];
+    let padded_d = next_pow2(d);
+
+    let t = if padded_d != d {
+        t.pad_with_zeros(dims.len() - 1, 0, padded_d - d)?
+    } else {
+        t.clone()
+    };
+
+    let h = hadamard_matrix(padded_d, device)?;
+    let scale = 1.0 / (padded_d as f32).sqrt();
+    
+    // H is symmetric, so H*t^T is H*t if we treat vectors as columns.
+    // For batch matmul, we want t * H. (t * H^T = t * H).
+    // Reshape to 2D to ensure matmul works with high-dimensional tensors (e.g. [B, H, S, D])
+    let original_shape = t.shape().clone();
+    let t_flat = t.flatten_to(dims.len() - 2)?;
+    let res = t_flat.matmul(&h)?;
+    let res = res.reshape(original_shape)?;
+    let res = res.affine(scale as f64, 0.0)?;
+
+    if padded_d != d {
+        res.narrow(dims.len() - 1, 0, d)
+    } else {
+        Ok(res)
+    }
+}
+
+/// Vectorized Inverse SRHT for a batch of vectors.
+///
+/// Returns `D · H · t / sqrt(d)`.
+pub fn srht_inverse_vectorized(t: &Tensor, seed: u64) -> Result<Tensor> {
+    let device = t.device();
+    let dims = t.dims();
+    let d = dims[dims.len() - 1];
+
+    // Step 1: Apply FWHT
+    let h_t = fwht_vectorized(t)?;
+
+    // Step 2: Re-apply signs D
+    let mut rng = Prng::new(seed);
+    let mut signs_vec = vec![0.0f32; d];
+    rng.fill_signs(&mut signs_vec);
+    let signs = Tensor::from_vec(signs_vec, (d,), device)?
+        .to_dtype(h_t.dtype())?;
+
+    // Broadcast signs across batch/head dimensions
+    h_t.broadcast_mul(&signs)
+}
+
 
 #[cfg(test)]
 mod tests {

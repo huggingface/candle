@@ -31,7 +31,7 @@ use std::f64::consts::PI;
 /// - `boundaries`: the `2^bits - 1` decision boundaries (thresholds) between cells, sorted
 ///   in ascending order. A value x is assigned to cell k if `boundaries[k-1] ≤ x < boundaries[k]`.
 /// - `centroids`: the `2^bits` reconstruction values, one per cell.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Codebook {
     pub boundaries: Vec<f32>,
     pub centroids: Vec<f32>,

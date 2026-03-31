@@ -113,7 +113,7 @@ struct Args {
     revision: Option<String>,
 
     /// The model size to use.
-    #[arg(long, default_value = "v3")]
+    #[arg(long, default_value = "v32-1b-instruct")]
     which: Which,
 
     #[arg(long)]

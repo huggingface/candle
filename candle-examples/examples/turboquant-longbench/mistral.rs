@@ -213,6 +213,7 @@ struct Attention {
     kv_cache: Option<QuantizedKvCache>,
     use_flash_attn: bool,
     quant_algo: QuantAlgorithm,
+    max_position_embeddings: usize,
 }
 
 impl Attention {
@@ -239,6 +240,7 @@ impl Attention {
             kv_cache: None,
             use_flash_attn: cfg.use_flash_attn,
             quant_algo,
+            max_position_embeddings: cfg.max_position_embeddings,
         })
     }
 
@@ -275,7 +277,13 @@ impl Attention {
         let value_states = candle_transformers::utils::repeat_kv(value_states, self.num_kv_groups)?;
 
         if self.kv_cache.is_none() {
-            self.kv_cache = Some(QuantizedKvCache::new(self.quant_algo.clone(), 2, self.num_heads));
+            self.kv_cache = Some(QuantizedKvCache::new(
+                self.num_heads,
+                self.max_position_embeddings,
+                self.head_dim,
+                self.quant_algo.clone(),
+                query_states.device(),
+            )?);
         }
 
         let kv_cache = self.kv_cache.as_mut().unwrap();

@@ -15,7 +15,17 @@ const EOS_TOKEN: &str = "</s>";
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
+    /// LLaMA 3.1 8B Instruct (~16 GB)
+    #[value(name = "llama31-8b-instruct")]
     Llama31_8bInstruct,
+    /// LLaMA 3.2 3B Instruct (~6 GB) - good balance of quality and memory
+    #[value(name = "llama32-3b-instruct")]
+    Llama32_3bInstruct,
+    /// LLaMA 3.2 1B Instruct (~2.5 GB) - lowest memory
+    #[value(name = "llama32-1b-instruct")]
+    Llama32_1bInstruct,
+    /// Mistral 7B Instruct v0.3 (~14 GB)
+    #[value(name = "ministral7b-instruct")]
     Ministral7bInstruct,
 }
 
@@ -43,7 +53,7 @@ struct Args {
     #[arg(long)]
     dtype: Option<String>,
 
-    #[arg(long, default_value = "llama31-8b-instruct")]
+    #[arg(long, default_value = "llama32-1b-instruct")]
     which: Which,
 
     #[arg(long, default_value_t = 1.1)]
@@ -78,6 +88,8 @@ fn main() -> Result<()> {
     let api = Api::new()?;
     let model_id = match args.which {
         Which::Llama31_8bInstruct => "meta-llama/Llama-3.1-8B-Instruct",
+        Which::Llama32_3bInstruct => "meta-llama/Llama-3.2-3B-Instruct",
+        Which::Llama32_1bInstruct => "meta-llama/Llama-3.2-1B-Instruct",
         Which::Ministral7bInstruct => "mistralai/Mistral-7B-Instruct-v0.3",
     };
 
@@ -90,8 +102,12 @@ fn main() -> Result<()> {
 
     let tokenizer_filename = repo.get("tokenizer.json")?;
     let config_filename = repo.get("config.json")?;
-    let filenames = candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")
-        .unwrap_or_else(|_| vec![repo.get("model.safetensors").unwrap()]);
+    // 1B models ship as a single safetensors file; larger models use a sharded index
+    let filenames = match args.which {
+        Which::Llama32_1bInstruct => vec![repo.get("model.safetensors")?],
+        _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")
+            .unwrap_or_else(|_| vec![repo.get("model.safetensors").unwrap()]),
+    };
 
     let tokenizer = Tokenizer::from_file(tokenizer_filename.clone()).map_err(E::msg)?;
     let mut tokenizer_stream =
@@ -135,12 +151,12 @@ fn main() -> Result<()> {
     let start_gen = std::time::Instant::now();
 
     match args.which {
-        Which::Llama31_8bInstruct => {
+        Which::Llama31_8bInstruct | Which::Llama32_3bInstruct | Which::Llama32_1bInstruct => {
             let config: llama::LlamaConfig =
                 serde_json::from_slice(&std::fs::read(config_filename)?)?;
             let config = config.into_config(false);
 
-            let algo = QuantAlgorithm::TurboQuant(TurboQuantConfig::new_3p5bit(
+            let algo = QuantAlgorithm::TurboQuant(TurboQuantConfig::new_4bit(
                 config.hidden_size / config.num_attention_heads,
                 args.seed,
             ));
@@ -198,7 +214,7 @@ fn main() -> Result<()> {
                 .unwrap_or(config.hidden_size / config.num_attention_heads);
 
             let algo =
-                QuantAlgorithm::TurboQuant(TurboQuantConfig::new_3p5bit(head_dim, args.seed));
+                QuantAlgorithm::TurboQuant(TurboQuantConfig::new_4bit(head_dim, args.seed));
             let mut mistral = mistral::Model::new(&config, vb, algo)?;
             let eos_token = tokenizer.token_to_id(EOS_TOKEN).unwrap_or(2);
 
