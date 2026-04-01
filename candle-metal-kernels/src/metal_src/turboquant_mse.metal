@@ -17,82 +17,9 @@ using namespace metal;
 #define PQ_SIMD_WIDTH 32
 #define PQ_BLOCK_SIZE 32  // process 32 elements per iteration (matches SIMD width)
 
-kernel void polarquant_mv_f32_4bit(
-    device const float*   x_rot     [[buffer(0)]],
-    device const uint8_t* indices   [[buffer(1)]],
-    device const float*   norms     [[buffer(2)]],
-    device const float*   centroids [[buffer(3)]],
-    device       float*   output    [[buffer(4)]],
-    constant     uint&    d         [[buffer(5)]],
-    constant     uint&    n_out     [[buffer(6)]],
-    constant     uint&    batch     [[buffer(7)]],
-    uint3  tgpig [[threadgroup_position_in_grid]],
-    uint   tiisg [[thread_index_in_simdgroup]],
-    uint   sgitg [[simdgroup_index_in_threadgroup]]
-) {
-    const uint row_group = tgpig.x;
-    const uint batch_id  = tgpig.y;
-
-    const uint first_row = (row_group * PQ_N_SIMDGROUP + sgitg) * PQ_N_DST;
-    if (first_row >= n_out) return;
-
-    // Cache centroid table in registers (only 16 floats for 4-bit)
-    float cent[16];
-    for (uint i = 0; i < 16; i++) {
-        cent[i] = centroids[i];
-    }
-
-    device const float* xr = x_rot + batch_id * d;
-
-    float sumf[PQ_N_DST] = {0.f};
-
-    // Determine how many valid rows we have
-    const uint nr = min((uint)PQ_N_DST, n_out - first_row);
-
-    // Each thread strides by SIMD_WIDTH, processes 2 elements per packed byte.
-    // We step by 2 to process both nibbles of a byte together.
-    const uint half_d = d / 2;
-    for (uint pair = tiisg; pair < half_d; pair += PQ_SIMD_WIDTH) {
-        uint i0 = pair * 2;
-        uint i1 = i0 + 1;
-
-        // Pre-cache input pair in registers
-        float xval0 = xr[i0];
-        float xval1 = xr[i1];
-
-        for (uint row_off = 0; row_off < nr; row_off++) {
-            uint row = first_row + row_off;
-            // Read one byte = two 4-bit indices
-            uint byte_pos = row * half_d + pair;
-            uint8_t packed_byte = indices[byte_pos];
-            uint idx0 = packed_byte & 0xF;
-            uint idx1 = (packed_byte >> 4) & 0xF;
-
-            sumf[row_off] += xval0 * cent[idx0] + xval1 * cent[idx1];
-        }
-    }
-
-    // Handle odd d (if d is not divisible by 2)
-    if ((d & 1) && tiisg == 0) {
-        uint i = d - 1;
-        float xval = xr[i];
-        for (uint row_off = 0; row_off < nr; row_off++) {
-            uint row = first_row + row_off;
-            uint byte_pos = (row * d + i) / 2;
-            uint nibble_sel = (row * d + i) % 2;
-            uint idx = (indices[byte_pos] >> (nibble_sel * 4)) & 0xF;
-            sumf[row_off] += xval * cent[idx];
-        }
-    }
-
-    // SIMD reduction
-    for (uint row_off = 0; row_off < nr; row_off++) {
-        float total = simd_sum(sumf[row_off]);
-        if (tiisg == 0) {
-            output[batch_id * n_out + first_row + row_off] = total * norms[first_row + row_off];
-        }
-    }
-}
+// 4-bit uses the generic template (instantiated below) to correctly handle
+// arbitrary dimensions including odd d, where pair-based byte addressing
+// would misalign rows in the packed index array.
 
 // Fused Hadamard rotation + centroid dot product kernel.
 // Eliminates the separate x @ Π^T matmul by doing the Walsh-Hadamard
@@ -312,6 +239,12 @@ kernel void polarquant_mv_f32_generic<2>(
 
 template [[host_name("polarquant_mv_f32_3bit")]]
 kernel void polarquant_mv_f32_generic<3>(
+    device const float*, device const uint8_t*, device const float*,
+    device const float*, device float*,
+    constant uint&, constant uint&, constant uint&, uint3, uint, uint);
+
+template [[host_name("polarquant_mv_f32_4bit")]]
+kernel void polarquant_mv_f32_generic<4>(
     device const float*, device const uint8_t*, device const float*,
     device const float*, device float*,
     constant uint&, constant uint&, constant uint&, uint3, uint, uint);
