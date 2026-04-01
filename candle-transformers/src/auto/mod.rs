@@ -43,41 +43,6 @@ mod causal_lm;
 pub use config::{AutoConfig, Weights};
 pub use causal_lm::{CausalLM, AutoModelForCausalLM, AutoModelOptions, QuantizationFormat};
 
-/// Generate a `From<&$from> for $to` impl that copies a named subset of fields.
-///
-/// Useful when two config structs share a common subset of fields —
-/// e.g. an outer MoE config and the inner attention-layer config it wraps.
-///
-/// ```ignore
-/// // Instead of listing every field manually:
-/// crate::forward_config_fields!(OuterConfig => InnerConfig:
-///     vocab_size, hidden_size, num_attention_heads, use_flash_attn,
-/// );
-/// ```
-#[macro_export]
-macro_rules! forward_config_fields {
-    ($from:ty => $to:ty : $($field:ident),+ $(,)?) => {
-        impl From<&$from> for $to {
-            fn from(val: &$from) -> Self {
-                Self {
-                    $($field: val.$field,)+
-                    ..<$to>::default()
-                }
-            }
-        }
-    };
-    // Variant without default: all fields must be listed explicitly.
-    (no_default $from:ty => $to:ty : $($field:ident),+ $(,)?) => {
-        impl From<&$from> for $to {
-            fn from(val: &$from) -> Self {
-                Self {
-                    $($field: val.$field,)+
-                }
-            }
-        }
-    };
-}
-
 /// Build the `load_gguf_model` dispatch from a compact GGUF model registry.
 ///
 /// Every listed model type must implement
