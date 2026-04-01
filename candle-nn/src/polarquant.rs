@@ -668,20 +668,89 @@ impl PolarQuantMatMul {
             let w_rot = Tensor::from_vec(w_rot_data, (n, d), &Device::Cpu)?;
             x_rot.matmul(&w_rot.t()?)?
         } else {
-            // GPU: unpack indices on CPU, then index_select + matmul on device
-            let mut indices_u32 = vec![0u32; n * d];
-            for (i, idx) in indices_u32.iter_mut().enumerate() {
-                *idx = unpack_index(&self.packed_indices, i, self.bit_width) as u32;
+            // GPU: use Metal shader for fully on-device centroid dot product
+            #[cfg(feature = "metal")]
+            {
+                use candle::{backend::BackendStorage, MetalStorage, Storage};
+
+                let packed_tensor = Tensor::from_vec(
+                    self.packed_indices.clone(),
+                    (self.packed_indices.len(),),
+                    &Device::Cpu,
+                )?
+                .to_device(x.device())?;
+                let centroids_dev = self.centroids_tensor.to_device(x.device())?;
+                let norms_dev = self.norms_tensor.to_device(x.device())?;
+                let x_rot_dev = x_rot.to_device(x.device())?;
+
+                // Scope the storage guards so they drop before we create the output tensor
+                let out_metal = {
+                    let (xs, xl) = x_rot_dev.storage_and_layout();
+                    let (ps, _) = packed_tensor.storage_and_layout();
+                    let (ns, _) = norms_dev.storage_and_layout();
+                    let (cs, _) = centroids_dev.storage_and_layout();
+
+                    match (&*xs, &*ps, &*ns, &*cs) {
+                        (
+                            Storage::Metal(xm),
+                            Storage::Metal(pm),
+                            Storage::Metal(nm),
+                            Storage::Metal(cm),
+                        ) => {
+                            let dev = xm.device();
+                            let out_buf = dev.new_buffer(batch * n, DType::F32, "pq_out")?;
+                            let enc = dev.command_encoder()?;
+                            candle_metal_kernels::call_polarquant_centroid_dot(
+                                dev.device(),
+                                &enc,
+                                dev.kernels(),
+                                self.bit_width,
+                                d,
+                                n,
+                                batch,
+                                xm.buffer(),
+                                xl.start_offset() * DType::F32.size_in_bytes(),
+                                pm.buffer(),
+                                nm.buffer(),
+                                cm.buffer(),
+                                &out_buf,
+                            )
+                            .map_err(candle::Error::wrap)?;
+                            Ok::<_, candle::Error>(MetalStorage::new(
+                                out_buf,
+                                dev.clone(),
+                                batch * n,
+                                DType::F32,
+                            ))
+                        }
+                        _ => candle::bail!("Expected Metal storage"),
+                    }
+                }?;
+
+                Tensor::from_storage(
+                    Storage::Metal(out_metal),
+                    (batch, n),
+                    candle::op::BackpropOp::none(),
+                    false,
+                )
             }
-            let idx_tensor =
-                Tensor::from_vec(indices_u32, (n * d,), &Device::Cpu)?.to_device(x.device())?;
-            let centroids_dev = self.centroids_tensor.to_device(x.device())?;
-            let w_vals = centroids_dev
-                .index_select(&idx_tensor, 0)?
-                .reshape((n, d))?;
-            let norms_dev = self.norms_tensor.to_device(x.device())?;
-            let w_rot = w_vals.broadcast_mul(&norms_dev.unsqueeze(1)?)?;
-            x_rot.to_device(x.device())?.matmul(&w_rot.t()?)?
+            #[cfg(not(feature = "metal"))]
+            {
+                // Non-Metal GPU: use index_select fallback
+                let mut indices_u32 = vec![0u32; n * d];
+                for (i, idx) in indices_u32.iter_mut().enumerate() {
+                    *idx = unpack_index(&self.packed_indices, i, self.bit_width) as u32;
+                }
+                let idx_tensor =
+                    Tensor::from_vec(indices_u32, (n * d,), &Device::Cpu)?.to_device(x.device())?;
+                let centroids_dev = self.centroids_tensor.to_device(x.device())?;
+                let w_vals = centroids_dev
+                    .index_select(&idx_tensor, 0)?
+                    .reshape((n, d))?;
+                let norms_dev = self.norms_tensor.to_device(x.device())?;
+                let w_rot = w_vals.broadcast_mul(&norms_dev.unsqueeze(1)?)?;
+                x_rot.to_device(x.device())?.matmul(&w_rot.t()?)?
+            }
         };
 
         match orig_dims.len() {
