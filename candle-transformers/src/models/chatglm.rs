@@ -578,13 +578,15 @@ impl Model {
         self.encoder.reset_kv_cache()
     }
 
-    pub fn forward(&mut self, xs: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let input_embeds = xs.apply(&self.embedding)?;
-        let attention_mask = if seq_len <= 1 {
+        let attention_mask = if seq_len <= 1 && seqlen_offset == 0 {
             None
+        } else if seq_len <= 1 {
+            None // single-token decode: KV cache handles position, no causal mask needed
         } else {
-            Some(get_mask(seq_len, xs.device())?)
+            Some(crate::utils::build_causal_mask(seq_len, seqlen_offset, xs.device())?)
         };
         let xs = self.encoder.forward(&input_embeds, &attention_mask)?;
         let lm_logits = xs.i(seq_len - 1)?.apply(&self.output_layer)?;

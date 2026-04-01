@@ -197,6 +197,7 @@ impl Model {
         })
     }
 
+    ///  is unused — ALiBi position bias handles past context, not a causal mask.
     pub fn forward(&mut self, xs: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.wte)?;

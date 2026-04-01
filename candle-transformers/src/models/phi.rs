@@ -343,14 +343,14 @@ impl Model {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embed_tokens)?;
         let mask = if seq_len <= 1 {
-            None
+            None // single-token: no causal mask, KV cache + RoPE handle position
         } else {
-            Some(get_mask(seq_len, xs.device())?)
+            Some(crate::utils::build_causal_mask(seq_len, seqlen_offset, xs.device())?)
         };
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, mask.as_ref())?;
