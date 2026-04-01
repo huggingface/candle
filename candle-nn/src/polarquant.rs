@@ -174,7 +174,15 @@ fn hadamard_transform_inplace(data: &mut [f64], n: usize) {
 /// to O(d²) for a dense orthogonal matrix.
 ///
 /// `dim` must be a power of 2.
-fn randomized_hadamard_matrix(dim: usize, dtype: DType, device: &Device) -> Result<Tensor> {
+/// Generate a randomized Hadamard rotation matrix and its sign vector.
+///
+/// Returns `(matrix_tensor, signs_f32)` where signs can be used for fast
+/// O(d log d) application without the dense matrix.
+fn randomized_hadamard_matrix(
+    dim: usize,
+    dtype: DType,
+    device: &Device,
+) -> Result<(Tensor, Vec<f32>)> {
     if !dim.is_power_of_two() {
         candle::bail!(
             "Hadamard rotation requires dim to be a power of 2, got {}",
@@ -211,9 +219,12 @@ fn randomized_hadamard_matrix(dim: usize, dtype: DType, device: &Device) -> Resu
         }
     }
 
+    let signs_f32: Vec<f32> = signs.iter().map(|&s| s as f32).collect();
+
     Tensor::from_vec(matrix, (dim, dim), &Device::Cpu)?
         .to_dtype(dtype)?
         .to_device(device)
+        .map(|t| (t, signs_f32))
 }
 
 /// Result of PolarQuant quantization.
@@ -263,6 +274,8 @@ pub struct PolarQuant {
     rotation: Tensor,
     centroids: Tensor,
     dtype: DType,
+    /// Random sign vector for fast Hadamard path. None for dense rotation.
+    hadamard_signs: Option<Vec<f32>>,
 }
 
 impl PolarQuant {
@@ -293,6 +306,7 @@ impl PolarQuant {
             rotation,
             centroids,
             dtype,
+            hadamard_signs: None,
         })
     }
 
@@ -321,7 +335,7 @@ impl PolarQuant {
 
         let centroids =
             Tensor::from_vec(scaled, (unit_centroids.len(),), device)?.to_dtype(dtype)?;
-        let rotation = randomized_hadamard_matrix(dim, dtype, device)?;
+        let (rotation, signs) = randomized_hadamard_matrix(dim, dtype, device)?;
 
         Ok(Self {
             dim,
@@ -329,6 +343,7 @@ impl PolarQuant {
             rotation,
             centroids,
             dtype,
+            hadamard_signs: Some(signs),
         })
     }
 
@@ -354,8 +369,28 @@ impl PolarQuant {
         let safe_norms = norms.affine(1.0, 1e-10)?;
         let x_norm = x.broadcast_div(&safe_norms.unsqueeze(D::Minus1)?)?;
 
-        // Random rotation: y = x @ Π^T  (each row y_i = Π · x_i)
-        let y = x_norm.matmul(&self.rotation.t()?)?;
+        // Random rotation: y = x_norm @ Π^T
+        // For Hadamard: Π^T = (1/√d) · D · H, applied row-wise in O(d log d)
+        let y = if let Some(ref signs) = self.hadamard_signs {
+            let d = self.dim;
+            let n_rows = x_norm.dims()[0];
+            let scale = 1.0 / (d as f64).sqrt();
+            let mut data: Vec<f64> = x_norm.to_dtype(DType::F64)?.flatten_all()?.to_vec1()?;
+            let signs_f64: Vec<f64> = signs.iter().map(|&s| s as f64).collect();
+            for row in 0..n_rows {
+                let r = &mut data[row * d..(row + 1) * d];
+                for (val, &sign) in r.iter_mut().zip(signs_f64.iter()) {
+                    *val *= sign;
+                }
+                hadamard_transform_inplace(r, d);
+                for val in r.iter_mut() {
+                    *val *= scale;
+                }
+            }
+            Tensor::from_vec(data, (n_rows, d), x_norm.device())?.to_dtype(self.dtype)?
+        } else {
+            x_norm.matmul(&self.rotation.t()?)?
+        };
 
         // Find nearest centroid for each coordinate
         let indices = if self.bit_width == 0 {
@@ -422,22 +457,27 @@ impl PolarQuant {
     pub fn rotation_f32(&self) -> Result<Vec<f32>> {
         self.rotation.to_dtype(DType::F32)?.flatten_all()?.to_vec1()
     }
+
+    /// Get the Hadamard sign vector, if this quantizer uses Hadamard rotation.
+    pub fn hadamard_signs(&self) -> Option<&[f32]> {
+        self.hadamard_signs.as_deref()
+    }
 }
 
 /// Fused centroid-lookup and dot-product operation for PolarQuant-compressed weights.
 ///
-/// Operates on **pre-rotated** input: given `x_rot = x @ Π^T`, computes:
-///   `output[b][row] = norms[row] * Σ_i x_rot[b][i] * centroids[indices[row][i]]`
-///
-/// Indices are **bit-packed**: b-bit values are packed into bytes (e.g., 4 indices
-/// per byte at 2-bit, 2 per byte at 4-bit), reducing index storage by up to 4×.
+/// Computes `x @ W^T` without materializing the full F32 weight matrix.
+/// When Hadamard signs are available, the rotation step uses O(d log d) in-place
+/// butterfly operations instead of an O(d²) matrix multiply.
 #[derive(Debug, Clone)]
 pub struct PolarQuantMatMul {
-    /// Pre-computed `Π^T` tensor for BLAS-accelerated rotation. Shape: `[d, d]`.
+    /// Pre-computed `Π^T` tensor for BLAS rotation fallback. Shape: `[d, d]`.
     rotation_t: Tensor,
+    /// Hadamard sign vector for fast O(d log d) rotation. None for dense rotation.
+    hadamard_signs: Option<Vec<f32>>,
     /// Centroid values, length `2^b`.
     centroids: Vec<f32>,
-    /// Bit-packed weight indices. Each byte holds `8/bit_width` indices.
+    /// Bit-packed weight indices.
     packed_indices: Vec<u8>,
     /// Weight norms, `[out_features]` as F32.
     norms: Vec<f32>,
@@ -491,7 +531,6 @@ impl PolarQuantMatMul {
         }
         let (out_features, in_features) = indices.dims2()?;
         let indices_u8: Vec<u8> = indices.to_dtype(DType::U8)?.flatten_all()?.to_vec1()?;
-        let bit_width = quantizer.bit_width();
         let packed_indices = pack_indices(&indices_u8, bit_width);
         let norms_f32: Vec<f32> = norms.to_dtype(DType::F32)?.to_vec1()?;
         let centroids = quantizer.centroids_f32()?;
@@ -500,9 +539,11 @@ impl PolarQuantMatMul {
             .t()?
             .contiguous()?
             .to_dtype(DType::F32)?;
+        let hadamard_signs = quantizer.hadamard_signs().map(|s| s.to_vec());
 
         Ok(Self {
             rotation_t,
+            hadamard_signs,
             centroids,
             packed_indices,
             norms: norms_f32,
@@ -528,24 +569,33 @@ impl PolarQuantMatMul {
     }
 }
 
+/// Apply an in-place Walsh-Hadamard transform to f32 data.
+#[inline]
+fn hadamard_transform_inplace_f32(data: &mut [f32], n: usize) {
+    let mut h = 1;
+    while h < n {
+        for i in (0..n).step_by(h * 2) {
+            for j in i..i + h {
+                let x = data[j];
+                let y = data[j + h];
+                data[j] = x + y;
+                data[j + h] = x - y;
+            }
+        }
+        h *= 2;
+    }
+}
+
 impl PolarQuantMatMul {
-    /// Compute `x @ W^T` using BLAS rotation + BLAS centroid matmul.
+    /// Compute `x @ W^T`.
     ///
-    /// Two BLAS matmuls, no scalar loops:
-    /// 1. `x_rot = x @ Π^T` — rotate input (shared `[d, d]` matmul)
-    /// 2. Build `W_rot[row][i] = centroids[indices[row][i]] * norms[row]` (cheap lookups)
-    /// 3. `output = x_rot @ W_rot^T` — standard BLAS matmul
-    ///
-    /// This avoids allocating the full `[out, in]` dequantized weight (which would
-    /// require an additional `[out, d] @ [d, d]` rotation matmul). Instead, the
-    /// rotated-space weight `W_rot` is just centroid lookups — O(out × d) with no
-    /// matrix multiply.
+    /// When Hadamard signs are available, rotation is O(d log d) per input row
+    /// (sign flip + butterfly transform). Otherwise falls back to BLAS matmul.
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let orig_dims = x.dims().to_vec();
         let d = self.in_features;
         let n = self.out_features;
 
-        // Flatten to 2D
         let batch = x.elem_count() / d;
         let x_2d = if x.dims().len() == 1 {
             x.unsqueeze(0)?
@@ -554,8 +604,30 @@ impl PolarQuantMatMul {
         };
         let x_2d = x_2d.contiguous()?;
 
-        // Step 1: BLAS-accelerated rotation: x_rot = x @ Π^T  [batch, d]
-        let x_rot = x_2d.matmul(&self.rotation_t)?;
+        // Step 1: Rotate input
+        // Π = (1/√d) · H · D, so Π^T = (1/√d) · D · H^T = (1/√d) · D · H (H is symmetric)
+        // x_rot = x @ Π^T = (1/√d) · x @ D @ H
+        // Per row: sign-flip → Hadamard → scale
+        let x_rot = if let Some(ref signs) = self.hadamard_signs {
+            let scale = 1.0 / (d as f32).sqrt();
+            let mut x_data: Vec<f32> = x_2d.to_dtype(DType::F32)?.flatten_all()?.to_vec1()?;
+            for b in 0..batch {
+                let row = &mut x_data[b * d..(b + 1) * d];
+                // Apply D (sign flips)
+                for (val, &sign) in row.iter_mut().zip(signs.iter()) {
+                    *val *= sign;
+                }
+                // Apply H (Hadamard transform)
+                hadamard_transform_inplace_f32(row, d);
+                // Scale by 1/√d
+                for val in row.iter_mut() {
+                    *val *= scale;
+                }
+            }
+            Tensor::from_vec(x_data, (batch, d), x.device())?
+        } else {
+            x_2d.matmul(&self.rotation_t)?
+        };
 
         // Step 2: Build rotated-space weight matrix from packed centroid lookups
         let mut w_rot_data = vec![0f32; n * d];
@@ -570,10 +642,9 @@ impl PolarQuantMatMul {
         }
         let w_rot = Tensor::from_vec(w_rot_data, (n, d), x.device())?;
 
-        // Step 3: BLAS matmul: output = x_rot @ W_rot^T  [batch, n]
+        // Step 3: BLAS matmul: output = x_rot @ W_rot^T
         let y_2d = x_rot.matmul(&w_rot.t()?)?;
 
-        // Reshape back
         match orig_dims.len() {
             1 => y_2d.squeeze(0),
             _ => {
