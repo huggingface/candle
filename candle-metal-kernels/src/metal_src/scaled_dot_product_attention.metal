@@ -1876,9 +1876,12 @@ struct SubOp {
 };
 
 struct ExpSubOp {
+  // Guard: when y (row max) is -inf, all scores in the row are -inf (entirely masked). Return 0 instead of exp2(-inf - (-inf)) = exp2(NaN).
   template <typename T>
   METAL_FUNC static constexpr T apply(T x, T y) {
-    return fast::exp2(x - y);
+    return (y == -metal::numeric_limits<T>::infinity())
+        ? T(0)
+        : fast::exp2(x - y);
   }
 };
 
@@ -2207,9 +2210,13 @@ template <
     Stile.template row_bin_op<ExpSubOp>(new_max);
 
     // Factor exp(rowmax(Si) - rowmax(Si-1))
+    // Guard: when max_score == -inf (no valid K seen yet), the previous accumulation is all zeros so the correct rescaling factor is 0.
+    // Without this, -inf - (-inf) = NaN which poisons the output.
     STEEL_PRAGMA_UNROLL
     for (short i = 0; i < kRowsPT; ++i) {
-      factor[i] = fast::exp2(max_score[i] - new_max[i]);
+      factor[i] = (max_score[i] == -metal::numeric_limits<AccumType>::infinity())
+          ? AccumType(0)
+          : fast::exp2(max_score[i] - new_max[i]);
     }
 
     // Save max for next iteration
