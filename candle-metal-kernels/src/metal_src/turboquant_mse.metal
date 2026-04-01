@@ -333,3 +333,59 @@ kernel void polarquant_mv_f32_generic<7>(
     device const float*, device const uint8_t*, device const float*,
     device const float*, device float*,
     constant uint&, constant uint&, constant uint&, uint3, uint, uint);
+
+// Fused QJL correction kernel.
+//
+// output[b][j] = scaled_rnorms[j] * Σ_i x_proj[b][i] * unpack_sign(packed_signs, j, i)
+//
+// Signs are packed U8, 8 signs per byte, LSB-first.
+// Sign bit 1 = +1.0, sign bit 0 = -1.0.
+//
+// Uses the same SIMD group pattern as the centroid dot kernels.
+kernel void turboquant_qjl_correction_f32(
+    device const float*   x_proj       [[buffer(0)]],  // [batch, d]
+    device const uint8_t* packed_signs  [[buffer(1)]],  // [n_out, bytes_per_row]
+    device const float*   scaled_rnorms [[buffer(2)]],  // [n_out]
+    device       float*   output        [[buffer(3)]],  // [batch, n_out]
+    constant     uint&    d             [[buffer(4)]],
+    constant     uint&    n_out         [[buffer(5)]],
+    constant     uint&    batch         [[buffer(6)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    uint   tiisg [[thread_index_in_simdgroup]],
+    uint   sgitg [[simdgroup_index_in_threadgroup]]
+) {
+    const uint row_group = tgpig.x;
+    const uint batch_id  = tgpig.y;
+
+    const uint first_row = (row_group * PQ_N_SIMDGROUP + sgitg) * PQ_N_DST;
+    if (first_row >= n_out) return;
+
+    const uint bytes_per_row = (d + 7) / 8;
+
+    device const float* xp = x_proj + batch_id * d;
+
+    float sumf[PQ_N_DST] = {0.f};
+    const uint nr = min((uint)PQ_N_DST, n_out - first_row);
+
+    for (uint i = tiisg; i < d; i += PQ_SIMD_WIDTH) {
+        float xval = xp[i];
+        uint byte_idx = i / 8;
+        uint bit_idx  = i % 8;
+
+        for (uint row_off = 0; row_off < nr; row_off++) {
+            uint row = first_row + row_off;
+            uint8_t packed_byte = packed_signs[row * bytes_per_row + byte_idx];
+            float sign = ((packed_byte >> bit_idx) & 1) ? 1.0f : -1.0f;
+            sumf[row_off] += xval * sign;
+        }
+    }
+
+    // SIMD reduction and scale by pre-computed norms
+    for (uint row_off = 0; row_off < nr; row_off++) {
+        float total = simd_sum(sumf[row_off]);
+        if (tiisg == 0) {
+            uint row = first_row + row_off;
+            output[batch_id * n_out + row] = total * scaled_rnorms[row];
+        }
+    }
+}

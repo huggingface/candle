@@ -263,24 +263,85 @@ impl TurboQuantLinear {
     /// Forward with decomposed MSE fused + QJL correction.
     ///
     /// y = fused_mse(x) + √(π/2)/d · (x @ S^T) @ signs^T @ diag(residual_norms)
+    #[allow(unused_variables)]
     fn forward_fused_with_qjl(&self, fused: &TurboMseMatMul, x: &Tensor) -> Result<Tensor> {
         let orig_dims = x.dims().to_vec();
         let d = self.in_features;
+        let n = self.out_features;
         let batch = x.elem_count() / d;
 
         // MSE part via fused kernel
         let y_mse = fused.forward(x)?;
 
-        // QJL correction: unpack packed signs, then x_proj @ signs^T * scaled_residual_norms
+        // QJL correction: x_proj @ signs^T * scaled_residual_norms
         let x_2d = if x.dims().len() == 1 {
             x.unsqueeze(0)?
         } else {
             x.reshape((batch, d))?
         };
-        let signs = unpack_signs(&self.qjl_signs, self.in_features)?;
         let x_proj = x_2d.matmul(&self.qjl_projection_t)?;
-        let correction = x_proj.matmul(&signs.t()?)?;
-        let correction = correction.broadcast_mul(&self.scaled_residual_norms.unsqueeze(0)?)?;
+
+        let correction = if x.device().is_cpu() {
+            // CPU path: unpack signs, matmul, scale
+            let signs = unpack_signs(&self.qjl_signs, self.in_features)?;
+            let correction = x_proj.matmul(&signs.t()?)?;
+            correction.broadcast_mul(&self.scaled_residual_norms.unsqueeze(0)?)?
+        } else {
+            // GPU path: fused kernel reads packed signs directly
+            #[cfg(feature = "metal")]
+            {
+                use candle::{backend::BackendStorage, MetalStorage, Storage};
+
+                let x_proj = x_proj.contiguous()?;
+                let (xps, xpl) = x_proj.storage_and_layout();
+                let (ss, _) = self.qjl_signs.storage_and_layout();
+                let (rns, _) = self.scaled_residual_norms.storage_and_layout();
+
+                let out_metal = match (&*xps, &*ss, &*rns) {
+                    (Storage::Metal(xpm), Storage::Metal(sm), Storage::Metal(rnm)) => {
+                        let dev = xpm.device();
+                        let out_buf = dev.new_buffer(batch * n, DType::F32, "qjl_corr")?;
+                        let enc = dev.command_encoder()?;
+                        candle_metal_kernels::call_turboquant_qjl_correction(
+                            dev.device(),
+                            &enc,
+                            dev.kernels(),
+                            d,
+                            n,
+                            batch,
+                            xpm.buffer(),
+                            xpl.start_offset() * DType::F32.size_in_bytes(),
+                            sm.buffer(),
+                            rnm.buffer(),
+                            &out_buf,
+                        )
+                        .map_err(candle::Error::wrap)?;
+                        Ok::<_, candle::Error>(MetalStorage::new(
+                            out_buf,
+                            dev.clone(),
+                            batch * n,
+                            DType::F32,
+                        ))
+                    }
+                    _ => candle::bail!("Expected Metal storage for QJL correction"),
+                }?;
+
+                drop(xps);
+                drop(ss);
+                drop(rns);
+
+                Tensor::from_storage(
+                    Storage::Metal(out_metal),
+                    (batch, n),
+                    candle::op::BackpropOp::none(),
+                    false,
+                )
+            }
+            #[cfg(not(feature = "metal"))]
+            {
+                candle::bail!("GPU QJL correction requires metal feature")
+            }
+        };
 
         // Reshape correction to match y_mse
         let correction = match orig_dims.len() {

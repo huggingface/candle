@@ -182,3 +182,74 @@ pub fn call_turboquant_mse_fused_hadamard(
 
     Ok(())
 }
+
+/// Dispatch the fused QJL correction kernel on Metal.
+///
+/// Computes: `output[b][j] = scaled_rnorms[j] * Σ_i x_proj[b][i] * sign(packed_signs, j, i)`
+///
+/// Signs are packed U8, 8 signs per byte, LSB-first. Bit 1 = +1.0, 0 = −1.0.
+#[allow(clippy::too_many_arguments)]
+pub fn call_turboquant_qjl_correction(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    d: usize,
+    n_out: usize,
+    batch: usize,
+    x_proj: &Buffer,
+    x_proj_offset: usize,
+    packed_signs: &Buffer,
+    scaled_rnorms: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    const N_DST: usize = 8;
+    const N_SIMDGROUP: usize = 2;
+    const SIMD_WIDTH: usize = 32;
+
+    let pipeline = kernels.load_pipeline(
+        device,
+        Source::TurboQuantMse,
+        "turboquant_qjl_correction_f32",
+    )?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let d_u32 = d as u32;
+    let n_out_u32 = n_out as u32;
+    let batch_u32 = batch as u32;
+
+    set_params!(
+        encoder,
+        (
+            (x_proj, x_proj_offset),
+            packed_signs,
+            scaled_rnorms,
+            output,
+            d_u32,
+            n_out_u32,
+            batch_u32
+        )
+    );
+
+    encoder.use_resource(x_proj, MTLResourceUsage::Read);
+    encoder.use_resource(packed_signs, MTLResourceUsage::Read);
+    encoder.use_resource(scaled_rnorms, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
+
+    let n_row_groups = divide(n_out, N_DST * N_SIMDGROUP);
+    let thread_groups_count = MTLSize {
+        width: n_row_groups,
+        height: batch,
+        depth: 1,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: SIMD_WIDTH,
+        height: N_SIMDGROUP,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+
+    Ok(())
+}

@@ -453,30 +453,31 @@ impl TurboQuantMse {
         let x_norm = x.broadcast_div(&safe_norms.unsqueeze(D::Minus1)?)?;
 
         // Random rotation: y = x_norm @ Π^T
-        // For Hadamard: Π^T = (1/√d) · D · H, applied row-wise in O(d log d) on CPU
+        // For Hadamard: Π^T = (1/√d) · D · H, applied row-wise in O(d log d) on CPU.
+        // On GPU, fall back to the dense matmul path since the rotation matrix is
+        // already materialized and GPU BLAS is fast.
         let y = if let Some(ref signs) = self.hadamard_signs {
-            let d = self.dim;
-            let n_rows = x_norm.dims()[0];
-            let scale = 1.0 / (d as f32).sqrt();
-            // Pull to CPU for the in-place butterfly transform
-            let mut data: Vec<f32> = x_norm
-                .to_device(&Device::Cpu)?
-                .to_dtype(DType::F32)?
-                .flatten_all()?
-                .to_vec1()?;
-            for row in 0..n_rows {
-                let r = &mut data[row * d..(row + 1) * d];
-                for (val, &sign) in r.iter_mut().zip(signs.iter()) {
-                    *val *= sign;
+            if x_norm.device().is_cpu() {
+                let d = self.dim;
+                let n_rows = x_norm.dims()[0];
+                let scale = 1.0 / (d as f32).sqrt();
+                // In-place butterfly transform on CPU
+                let mut data: Vec<f32> = x_norm.to_dtype(DType::F32)?.flatten_all()?.to_vec1()?;
+                for row in 0..n_rows {
+                    let r = &mut data[row * d..(row + 1) * d];
+                    for (val, &sign) in r.iter_mut().zip(signs.iter()) {
+                        *val *= sign;
+                    }
+                    hadamard_transform_inplace_f32(r, d);
+                    for val in r.iter_mut() {
+                        *val *= scale;
+                    }
                 }
-                hadamard_transform_inplace_f32(r, d);
-                for val in r.iter_mut() {
-                    *val *= scale;
-                }
+                Tensor::from_vec(data, (n_rows, d), &Device::Cpu)?.to_dtype(self.dtype)?
+            } else {
+                // GPU: use dense matmul with the pre-computed rotation matrix
+                x_norm.matmul(&self.rotation.t()?)?
             }
-            Tensor::from_vec(data, (n_rows, d), &Device::Cpu)?
-                .to_dtype(self.dtype)?
-                .to_device(x_norm.device())?
         } else {
             x_norm.matmul(&self.rotation.t()?)?
         };

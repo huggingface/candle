@@ -28,5 +28,8 @@ pub use reduce::*;
 pub use sdpa::{call_sdpa_full, call_sdpa_vector, call_sdpa_vector_2pass, SdpaDType};
 pub use sort::{call_arg_sort, call_mlx_arg_sort};
 pub use ternary::call_where_cond;
-pub use turboquant_mse::{call_turboquant_mse_centroid_dot, call_turboquant_mse_fused_hadamard};
+pub use turboquant_mse::{
+    call_turboquant_mse_centroid_dot, call_turboquant_mse_fused_hadamard,
+    call_turboquant_qjl_correction,
+};
 pub use unary::*;
