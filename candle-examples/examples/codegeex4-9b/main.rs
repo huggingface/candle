@@ -72,12 +72,14 @@ impl TextGeneration {
         println!("samplelen {sample_len}");
         let mut count = 0;
         let mut result = vec![];
-        for index in 0..sample_len {
+        let mut seqlen_offset = 0usize;
+        for _ in 0..sample_len {
             count += 1;
-            let context_size = if index > 0 { 1 } else { tokens.len() };
+            let context_size = if seqlen_offset > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, 0)?;
+            let logits = self.model.forward(&input, seqlen_offset)?;
+            seqlen_offset += context_size;
             let logits = logits.squeeze(0)?.to_dtype(self.dtype)?;
             let logits = if self.repeat_penalty == 1. {
                 logits

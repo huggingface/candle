@@ -22,6 +22,7 @@ pub struct Model {
     tokens: Vec<u32>,
     repeat_penalty: f32,
     repeat_last_n: usize,
+    seqlen_offset: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -77,6 +78,7 @@ impl Model {
             logits_processor,
             repeat_penalty: 1.,
             repeat_last_n: 64,
+            seqlen_offset: 0,
         })
     }
     #[wasm_bindgen]
@@ -103,6 +105,7 @@ impl Model {
         self.repeat_penalty = repeat_penalty;
         self.repeat_last_n = repeat_last_n;
         self.tokens.clear();
+        self.seqlen_offset = 0;
         let tokens = self
             .tokenizer
             .encode(prompt, true)
@@ -129,9 +132,10 @@ impl Model {
         let dev = Device::Cpu;
         let input = Tensor::new(tokens, &dev)?.unsqueeze(0)?;
         let logits = match &mut self.model {
-            SelectedModel::MixFormer(m) => m.forward(&input, 0)?,
-            SelectedModel::Quantized(m) => m.forward(&input, 0)?,
+            SelectedModel::MixFormer(m) => m.forward(&input, self.seqlen_offset)?,
+            SelectedModel::Quantized(m) => m.forward(&input, self.seqlen_offset)?,
         };
+        self.seqlen_offset += tokens.len();
         let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
         let logits = if self.repeat_penalty == 1. {
             logits

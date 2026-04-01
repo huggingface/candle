@@ -471,7 +471,7 @@ impl Falcon {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
         let (b_sz, seq_len) = input_ids.dims2()?;
         let mut hidden_state = self.word_embeddings.forward(input_ids)?;
         let past_kv_len = match &self.blocks[0].self_attention.kv_cache {
@@ -498,3 +498,4 @@ impl Falcon {
         }
     }
 }
+crate::impl_causal_lm!(Falcon, "falcon");

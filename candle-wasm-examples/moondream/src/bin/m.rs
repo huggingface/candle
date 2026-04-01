@@ -224,12 +224,18 @@ impl Model {
         };
         let device = Device::Cpu;
         let context_size = if self.index > 0 { 1 } else { tokens.len() };
+        // seqlen_offset = number of tokens already in the KV cache from previous calls
+        let seqlen_offset = tokens.len().saturating_sub(context_size);
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
         let logits = if self.index > 0 {
             match self.model {
-                SelectedModel::Moondream(ref mut model) => model.text_model.forward(&input, 0)?,
-                SelectedModel::Quantized(ref mut model) => model.text_model.forward(&input, 0)?,
+                SelectedModel::Moondream(ref mut model) => {
+                    model.text_model.forward(&input, seqlen_offset)?
+                }
+                SelectedModel::Quantized(ref mut model) => {
+                    model.text_model.forward(&input, seqlen_offset)?
+                }
             }
         } else {
             match self.model {

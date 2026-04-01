@@ -262,7 +262,7 @@ impl Model {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.wte)?;
         let mask = if seq_len <= 1 {
@@ -296,3 +296,4 @@ pub(crate) fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Res
     let m = mask.where_cond(&on_true, on_false)?;
     Ok(m)
 }
+crate::impl_causal_lm!(Model, "mpt");

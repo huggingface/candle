@@ -88,16 +88,18 @@ impl TextGeneration {
         std::io::stdout().flush()?;
         let start_gen = std::time::Instant::now();
         let mut pos = 0;
-        for index in 0..sample_len {
-            let context_size = if index > 0 { 1 } else { tokens.len() };
+        let mut seqlen_offset = 0usize;
+        for _ in 0..sample_len {
+            let context_size = if seqlen_offset > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
             let logits = match &mut self.model {
-                Model::MixFormer(m) => m.forward(&input, 0)?,
-                Model::Phi(m) => m.forward(&input, 0)?,
-                Model::Quantized(m) => m.forward(&input, 0)?,
+                Model::MixFormer(m) => m.forward(&input, seqlen_offset)?,
+                Model::Phi(m) => m.forward(&input, seqlen_offset)?,
+                Model::Quantized(m) => m.forward(&input, seqlen_offset)?,
                 Model::Phi3(m) => m.forward(&input, pos)?.i((.., 0, ..))?,
             };
+            seqlen_offset += context_size;
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
@@ -480,19 +482,19 @@ fn mmlu<P: AsRef<std::path::Path>>(
             let logits = match &mut model {
                 Model::MixFormer(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input, 0)?
+                    m.forward(&input, seqlen_offset)?
                 }
                 Model::Phi(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input, 0)?
+                    m.forward(&input, seqlen_offset)?
                 }
                 Model::Phi3(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input, 0)?
+                    m.forward(&input, seqlen_offset)?
                 }
                 Model::Quantized(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input, 0)?
+                    m.forward(&input, seqlen_offset)?
                 }
             };
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
