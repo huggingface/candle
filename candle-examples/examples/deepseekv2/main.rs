@@ -1,282 +1,163 @@
-#[cfg(feature = "mkl")]
-extern crate intel_mkl_src;
+// Deepseekv2 text generation using AutoModelForCausalLM.
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
 
-use anyhow::{Error as E, Result};
-use clap::Parser;
-
-use candle_transformers::models::deepseek2::{DeepSeekV2, DeepSeekV2Config};
-
-use candle::{DType, Device, Tensor};
-use candle_examples::token_output_stream::TokenOutputStream;
-use candle_nn::VarBuilder;
+use anyhow::{bail, Result};
+use candle::{DType, Tensor};
+use candle_transformers::auto::{AutoModelForCausalLM, AutoModelOptions};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
+use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
+use std::io::Write;
 use tokenizers::Tokenizer;
 
-struct TextGeneration {
-    model: DeepSeekV2,
-    device: Device,
-    tokenizer: TokenOutputStream,
-    logits_processor: LogitsProcessor,
-    repeat_penalty: f32,
-    repeat_last_n: usize,
-}
-
-impl TextGeneration {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        model: DeepSeekV2,
-        tokenizer: Tokenizer,
-        seed: u64,
-        temp: Option<f64>,
-        top_p: Option<f64>,
-        top_k: Option<usize>,
-        repeat_penalty: f32,
-        repeat_last_n: usize,
-        device: &Device,
-    ) -> Self {
-        let logits_processor = {
-            let temperature = temp.unwrap_or(0.);
-            let sampling = if temperature <= 0. {
-                Sampling::ArgMax
-            } else {
-                match (top_k, top_p) {
-                    (None, None) => Sampling::All { temperature },
-                    (Some(k), None) => Sampling::TopK { k, temperature },
-                    (None, Some(p)) => Sampling::TopP { p, temperature },
-                    (Some(k), Some(p)) => Sampling::TopKThenTopP { k, p, temperature },
-                }
-            };
-            LogitsProcessor::from_sampling(seed, sampling)
-        };
-
-        Self {
-            model,
-            tokenizer: TokenOutputStream::new(tokenizer),
-            logits_processor,
-            repeat_penalty,
-            repeat_last_n,
-            device: device.clone(),
-        }
-    }
-
-    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
-        use std::io::Write;
-        self.tokenizer.clear();
-        let mut tokens = self
-            .tokenizer
-            .tokenizer()
-            .encode(prompt, true)
-            .map_err(E::msg)?
-            .get_ids()
-            .to_vec();
-        for &t in tokens.iter() {
-            if let Some(t) = self.tokenizer.next_token(t)? {
-                print!("{t}")
-            }
-        }
-        std::io::stdout().flush()?;
-
-        let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("<｜end▁of▁sentence｜>") {
-            Some(token) => token,
-            None => anyhow::bail!("cannot find the <｜end▁of▁sentence｜> token"),
-        };
-        let start_gen = std::time::Instant::now();
-        for index in 0..sample_len {
-            let context_size = if index > 0 { 1 } else { tokens.len() };
-            let start_pos = tokens.len().saturating_sub(context_size);
-            let ctxt = &tokens[start_pos..];
-            let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, start_pos)?;
-            let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-            let logits = if self.repeat_penalty == 1. {
-                logits
-            } else {
-                let start_at = tokens.len().saturating_sub(self.repeat_last_n);
-                candle_transformers::utils::apply_repeat_penalty(
-                    &logits,
-                    self.repeat_penalty,
-                    &tokens[start_at..],
-                )?
-            };
-
-            let next_token = self.logits_processor.sample(&logits)?;
-            tokens.push(next_token);
-            generated_tokens += 1;
-            if next_token == eos_token {
-                break;
-            }
-            if let Some(t) = self.tokenizer.next_token(next_token)? {
-                print!("{t}");
-                std::io::stdout().flush()?;
-            }
-        }
-        let dt = start_gen.elapsed();
-        if let Some(rest) = self.tokenizer.decode_rest().map_err(E::msg)? {
-            print!("{rest}");
-        }
-        std::io::stdout().flush()?;
-        println!(
-            "\n{generated_tokens} tokens generated ({:.2} token/s)",
-            generated_tokens as f64 / dt.as_secs_f64(),
-        );
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum Which {
-    #[value(name = "lite")]
-    Lite,
-    #[value(name = "lite-chat")]
-    LiteChat,
-    #[value(name = "coder-lite-chat")]
-    CoderLiteChat,
-    #[value(name = "v2")]
-    V2,
-    #[value(name = "v2-chat")]
-    V2Chat,
-}
-
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about)]
 struct Args {
-    /// Run on CPU rather than on GPU.
-    #[arg(long)]
-    cpu: bool,
-
-    /// Enable tracing (generates a trace-timestamp.json file).
-    #[arg(long)]
-    tracing: bool,
-
-    #[arg(long)]
-    use_flash_attn: bool,
-
-    #[arg(long)]
-    prompt: String,
-
-    /// The temperature used to generate samples.
-    #[arg(long)]
-    temperature: Option<f64>,
-
-    /// Nucleus sampling probability cutoff.
-    #[arg(long)]
-    top_p: Option<f64>,
-
-    /// Only sample among the top K samples.
-    #[arg(long)]
-    top_k: Option<usize>,
-
-    /// The seed to use when generating random samples.
-    #[arg(long, default_value_t = 299792458)]
-    seed: u64,
-
-    /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 10000)]
-    sample_len: usize,
-
-    /// The model size to use.
-    #[arg(long, default_value = "lite")]
-    which: Which,
-
-    #[arg(long)]
-    model_id: Option<String>,
+    /// HuggingFace model repo ID.
+    #[arg(long, default_value = "deepseek-ai/DeepSeek-V2-Lite")]
+    model_id: String,
 
     #[arg(long, default_value = "main")]
     revision: String,
 
-    /// Penalty to be applied for repeating tokens, 1. means no penalty.
+    #[arg(long)]
+    prompt: Option<String>,
+
+    #[arg(long)]
+    cpu: bool,
+
+    #[arg(long, default_value = "bf16")]
+    dtype: String,
+
+    #[arg(long, default_value_t = 200)]
+    sample_len: usize,
+
+    #[arg(long)]
+    temperature: Option<f64>,
+
+    #[arg(long)]
+    top_p: Option<f64>,
+
+    #[arg(long)]
+    top_k: Option<usize>,
+
+    #[arg(long, default_value_t = 299792458)]
+    seed: u64,
+
     #[arg(long, default_value_t = 1.1)]
     repeat_penalty: f32,
 
-    /// The context size to consider for the repeat penalty.
-    #[arg(long, default_value_t = 64)]
+    #[arg(long, default_value_t = 128)]
     repeat_last_n: usize,
+
+    #[arg(long)]
+    use_flash_attn: bool,
 }
 
 fn main() -> Result<()> {
-    use tracing_chrome::ChromeLayerBuilder;
-    use tracing_subscriber::prelude::*;
-
     let args = Args::parse();
-
-    let _guard = if args.tracing {
-        let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
-        tracing_subscriber::registry().with(chrome_layer).init();
-        Some(guard)
-    } else {
-        None
-    };
-    println!(
-        "avx: {}, neon: {}, simd128: {}, f16c: {}",
-        candle::utils::with_avx(),
-        candle::utils::with_neon(),
-        candle::utils::with_simd128(),
-        candle::utils::with_f16c()
-    );
-    println!(
-        "temp: {:.2} repeat-penalty: {:.2} repeat-last-n: {}",
-        args.temperature.unwrap_or(0.),
-        args.repeat_penalty,
-        args.repeat_last_n
-    );
-
-    let start = std::time::Instant::now();
-    let api = Api::new()?;
-    let model_id = match args.model_id {
-        Some(model_id) => model_id,
-        None => match args.which {
-            Which::CoderLiteChat => "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct".to_string(),
-            Which::LiteChat => "deepseek-ai/DeepSeek-V2-Lite-Chat".to_string(),
-            Which::Lite => "deepseek-ai/DeepSeek-V2-Lite".to_string(),
-            Which::V2 => "deepseek-ai/DeepSeek-V2".to_string(),
-            Which::V2Chat => "deepseek-ai/DeepSeek-V2-Chat".to_string(),
-        },
-    };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
-    let tokenizer_filename = repo.get("tokenizer.json")?;
-    let filenames = candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
-    println!("retrieved the files in {:?}", start.elapsed());
-    let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-
-    let start = std::time::Instant::now();
-    let config: DeepSeekV2Config = {
-        let config_file = repo.get("config.json")?;
-        serde_json::from_slice(&std::fs::read(config_file)?)?
-    };
     let device = candle_examples::device(args.cpu)?;
-    let (model, device) = {
-        let dtype = if device.is_cpu() {
-            DType::F16
-        } else {
-            DType::BF16
-        };
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-        let model = DeepSeekV2::new(&config, vb)?;
-        (model, device)
+    let dtype = match args.dtype.as_str() {
+        "f16" => DType::F16,
+        "bf16" => DType::BF16,
+        "f32" => DType::F32,
+        other => bail!("unsupported dtype {other}"),
     };
 
-    println!("loaded the model in {:?}", start.elapsed());
+    println!("loading {}", args.model_id);
+    let api = Api::new()?;
+    let repo = api.repo(Repo::with_revision(
+        args.model_id.clone(),
+        RepoType::Model,
+        args.revision.clone(),
+    ));
+    let tokenizer =
+        Tokenizer::from_file(repo.get("tokenizer.json")?).map_err(anyhow::Error::msg)?;
 
-    let mut pipeline = TextGeneration::new(
-        model,
-        tokenizer,
-        args.seed,
-        args.temperature,
-        args.top_p,
-        args.top_k,
-        args.repeat_penalty,
-        args.repeat_last_n,
-        &device,
+    let options = AutoModelOptions {
+        revision: Some(args.revision),
+        dtype: Some(dtype),
+        use_flash_attn: args.use_flash_attn,
+        ..Default::default()
+    };
+    let mut model = AutoModelForCausalLM::from_pretrained(&args.model_id, &device, options)?;
+    println!("loaded (type: {})", model.model_type());
+
+    let prompt = args
+        .prompt
+        .as_deref()
+        .unwrap_or("The best thing about Rust is");
+    let mut tokens = tokenizer
+        .encode(prompt, true)
+        .map_err(anyhow::Error::msg)?
+        .get_ids()
+        .to_vec();
+    let mut token_output = candle_examples::token_output_stream::TokenOutputStream::new(tokenizer);
+    let eos_token_id = token_output
+        .tokenizer()
+        .token_to_id("</s>")
+        .or_else(|| token_output.tokenizer().token_to_id("<|end_of_text|>"));
+
+    let mut logits_processor = {
+        let temperature = args.temperature.unwrap_or(0.);
+        let sampling = if temperature <= 0. {
+            Sampling::ArgMax
+        } else {
+            match (args.top_k, args.top_p) {
+                (None, None) => Sampling::All { temperature },
+                (Some(k), None) => Sampling::TopK { k, temperature },
+                (None, Some(p)) => Sampling::TopP { p, temperature },
+                (Some(k), Some(p)) => Sampling::TopKThenTopP { k, p, temperature },
+            }
+        };
+        LogitsProcessor::from_sampling(args.seed, sampling)
+    };
+
+    print!("{prompt}");
+    let start = std::time::Instant::now();
+    let mut seqlen_offset = 0usize;
+    let mut token_generated = 0usize;
+
+    for _ in 0..args.sample_len {
+        let context_size = if seqlen_offset > 0 { 1 } else { tokens.len() };
+        let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
+        let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
+        let logits = model.forward(&input, seqlen_offset)?;
+        let logits = logits.squeeze(0)?;
+        let logits = if args.repeat_penalty == 1. {
+            logits
+        } else {
+            let start_at = tokens.len().saturating_sub(args.repeat_last_n);
+            candle_transformers::utils::apply_repeat_penalty(
+                &logits,
+                args.repeat_penalty,
+                &tokens[start_at..],
+            )?
+        };
+        seqlen_offset += context_size;
+        let next_token = logits_processor.sample(&logits)?;
+        token_generated += 1;
+        tokens.push(next_token);
+        if Some(next_token) == eos_token_id {
+            break;
+        }
+        if let Some(t) = token_output.next_token(next_token)? {
+            print!("{t}");
+            std::io::stdout().flush()?;
+        }
+    }
+    if let Some(rest) = token_output.decode_rest().map_err(anyhow::Error::msg)? {
+        print!("{rest}");
+    }
+    println!();
+    let dt = start.elapsed();
+    println!(
+        "{token_generated} tokens ({:.2} token/s)",
+        token_generated as f64 / dt.as_secs_f64(),
     );
-    pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())
 }
