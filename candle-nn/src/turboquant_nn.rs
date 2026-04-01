@@ -75,9 +75,8 @@ pub struct TurboQuantLinear {
     qjl_projection_t: Tensor,
     /// QJL sign bits: [out_features, in_features], values ±1.0
     qjl_signs: Tensor,
-    /// Residual norms: [out_features]
-    residual_norms: Tensor,
-    qjl_scale: f64,
+    /// Pre-computed √(π/2)/d · residual_norms: [out_features]
+    scaled_residual_norms: Tensor,
     bias: Option<Tensor>,
     in_features: usize,
     out_features: usize,
@@ -109,6 +108,7 @@ impl TurboQuantLinear {
         let indices = q.polar.indices.to_dtype(DType::U8)?;
         let fused_op = TurboMseMatMul::new(&mse_quantizer, &indices, &q.polar.norms).ok();
         let qjl_scale = (std::f64::consts::FRAC_PI_2).sqrt() / in_features as f64;
+        let scaled_residual_norms = (&q.residual_norms * qjl_scale)?;
 
         Ok(Self {
             mse_quantizer,
@@ -117,8 +117,7 @@ impl TurboQuantLinear {
             fused_op,
             qjl_projection_t: turbo.projection().t()?.contiguous()?,
             qjl_signs: q.qjl_signs,
-            residual_norms: q.residual_norms,
-            qjl_scale,
+            scaled_residual_norms,
             bias: linear.bias().cloned(),
             in_features,
             out_features,
@@ -153,6 +152,7 @@ impl TurboQuantLinear {
         let indices = q.polar.indices.to_dtype(DType::U8)?;
         let fused_op = TurboMseMatMul::new(&mse_quantizer, &indices, &q.polar.norms).ok();
         let qjl_scale = (std::f64::consts::FRAC_PI_2).sqrt() / in_features as f64;
+        let scaled_residual_norms = (&q.residual_norms * qjl_scale)?;
 
         Ok(Self {
             mse_quantizer,
@@ -161,8 +161,7 @@ impl TurboQuantLinear {
             fused_op,
             qjl_projection_t: turbo.projection().t()?.contiguous()?,
             qjl_signs: q.qjl_signs,
-            residual_norms: q.residual_norms,
-            qjl_scale,
+            scaled_residual_norms,
             bias: linear.bias().cloned(),
             in_features,
             out_features,
@@ -183,8 +182,7 @@ impl TurboQuantLinear {
 
         // QJL correction: √(π/2)/d · diag(residual_norms) · signs · S
         let w_qjl = self.qjl_signs.matmul(&self.qjl_projection_t.t()?)?;
-        let w_qjl = (w_qjl * self.qjl_scale)?;
-        let w_qjl = w_qjl.broadcast_mul(&self.residual_norms.unsqueeze(1)?)?;
+        let w_qjl = w_qjl.broadcast_mul(&self.scaled_residual_norms.unsqueeze(1)?)?;
 
         (w_mse + w_qjl)?.contiguous()
     }
@@ -271,7 +269,7 @@ impl TurboQuantLinear {
         // MSE part via fused kernel
         let y_mse = fused.forward(x)?;
 
-        // QJL correction: x_proj @ signs^T * (scale * residual_norms)
+        // QJL correction: x_proj @ signs^T * scaled_residual_norms
         let x_2d = if x.dims().len() == 1 {
             x.unsqueeze(0)?
         } else {
@@ -279,8 +277,7 @@ impl TurboQuantLinear {
         };
         let x_proj = x_2d.matmul(&self.qjl_projection_t)?;
         let correction = x_proj.matmul(&self.qjl_signs.t()?)?;
-        let scaled_rnorms = (&self.residual_norms * self.qjl_scale)?;
-        let correction = correction.broadcast_mul(&scaled_rnorms.unsqueeze(0)?)?;
+        let correction = correction.broadcast_mul(&self.scaled_residual_norms.unsqueeze(0)?)?;
 
         // Reshape correction to match y_mse
         let correction = match orig_dims.len() {
