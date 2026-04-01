@@ -296,8 +296,9 @@ impl PolarQuant {
         let scale = 1.0 / (dim as f64).sqrt();
         let scaled: Vec<f64> = unit_centroids.iter().map(|&c| c * scale).collect();
 
-        let centroids =
-            Tensor::from_vec(scaled, (unit_centroids.len(),), device)?.to_dtype(dtype)?;
+        let centroids = Tensor::from_vec(scaled, (unit_centroids.len(),), &Device::Cpu)?
+            .to_dtype(dtype)?
+            .to_device(device)?;
         let rotation = random_orthogonal_tensor(dim, dtype, device)?;
 
         Ok(Self {
@@ -333,8 +334,9 @@ impl PolarQuant {
         let scale = 1.0 / (dim as f64).sqrt();
         let scaled: Vec<f64> = unit_centroids.iter().map(|&c| c * scale).collect();
 
-        let centroids =
-            Tensor::from_vec(scaled, (unit_centroids.len(),), device)?.to_dtype(dtype)?;
+        let centroids = Tensor::from_vec(scaled, (unit_centroids.len(),), &Device::Cpu)?
+            .to_dtype(dtype)?
+            .to_device(device)?;
         let (rotation, signs) = randomized_hadamard_matrix(dim, dtype, device)?;
 
         Ok(Self {
@@ -370,24 +372,30 @@ impl PolarQuant {
         let x_norm = x.broadcast_div(&safe_norms.unsqueeze(D::Minus1)?)?;
 
         // Random rotation: y = x_norm @ Π^T
-        // For Hadamard: Π^T = (1/√d) · D · H, applied row-wise in O(d log d)
+        // For Hadamard: Π^T = (1/√d) · D · H, applied row-wise in O(d log d) on CPU
         let y = if let Some(ref signs) = self.hadamard_signs {
             let d = self.dim;
             let n_rows = x_norm.dims()[0];
-            let scale = 1.0 / (d as f64).sqrt();
-            let mut data: Vec<f64> = x_norm.to_dtype(DType::F64)?.flatten_all()?.to_vec1()?;
-            let signs_f64: Vec<f64> = signs.iter().map(|&s| s as f64).collect();
+            let scale = 1.0 / (d as f32).sqrt();
+            // Pull to CPU for the in-place butterfly transform
+            let mut data: Vec<f32> = x_norm
+                .to_device(&Device::Cpu)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1()?;
             for row in 0..n_rows {
                 let r = &mut data[row * d..(row + 1) * d];
-                for (val, &sign) in r.iter_mut().zip(signs_f64.iter()) {
+                for (val, &sign) in r.iter_mut().zip(signs.iter()) {
                     *val *= sign;
                 }
-                hadamard_transform_inplace(r, d);
+                hadamard_transform_inplace_f32(r, d);
                 for val in r.iter_mut() {
                     *val *= scale;
                 }
             }
-            Tensor::from_vec(data, (n_rows, d), x_norm.device())?.to_dtype(self.dtype)?
+            Tensor::from_vec(data, (n_rows, d), &Device::Cpu)?
+                .to_dtype(self.dtype)?
+                .to_device(x_norm.device())?
         } else {
             x_norm.matmul(&self.rotation.t()?)?
         };
@@ -605,31 +613,30 @@ impl PolarQuantMatMul {
         let x_2d = x_2d.contiguous()?;
 
         // Step 1: Rotate input
-        // Π = (1/√d) · H · D, so Π^T = (1/√d) · D · H^T = (1/√d) · D · H (H is symmetric)
-        // x_rot = x @ Π^T = (1/√d) · x @ D @ H
-        // Per row: sign-flip → Hadamard → scale
-        let x_rot = if let Some(ref signs) = self.hadamard_signs {
+        // For Hadamard on CPU: O(d log d) butterfly transform (no matmul)
+        // For GPU or dense rotation: BLAS matmul (stays on device)
+        let use_fast_hadamard = self.hadamard_signs.is_some() && x.device().is_cpu();
+        let x_rot = if use_fast_hadamard {
+            let signs = self.hadamard_signs.as_ref().unwrap();
             let scale = 1.0 / (d as f32).sqrt();
             let mut x_data: Vec<f32> = x_2d.to_dtype(DType::F32)?.flatten_all()?.to_vec1()?;
             for b in 0..batch {
                 let row = &mut x_data[b * d..(b + 1) * d];
-                // Apply D (sign flips)
                 for (val, &sign) in row.iter_mut().zip(signs.iter()) {
                     *val *= sign;
                 }
-                // Apply H (Hadamard transform)
                 hadamard_transform_inplace_f32(row, d);
-                // Scale by 1/√d
                 for val in row.iter_mut() {
                     *val *= scale;
                 }
             }
-            Tensor::from_vec(x_data, (batch, d), x.device())?
+            Tensor::from_vec(x_data, (batch, d), &Device::Cpu)?
         } else {
             x_2d.matmul(&self.rotation_t)?
         };
 
         // Step 2: Build rotated-space weight matrix from packed centroid lookups
+        // On CPU: scalar loop. On GPU: build on CPU then transfer (centroid lookup is cheap)
         let mut w_rot_data = vec![0f32; n * d];
         for row in 0..n {
             let idx_start = row * d;
@@ -640,7 +647,8 @@ impl PolarQuantMatMul {
                 *w = self.centroids[idx] * norm;
             }
         }
-        let w_rot = Tensor::from_vec(w_rot_data, (n, d), x.device())?;
+        let w_rot =
+            Tensor::from_vec(w_rot_data, (n, d), &Device::Cpu)?.to_device(x_rot.device())?;
 
         // Step 3: BLAS matmul: output = x_rot @ W_rot^T
         let y_2d = x_rot.matmul(&w_rot.t()?)?;
