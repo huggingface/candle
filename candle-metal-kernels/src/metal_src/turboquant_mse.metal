@@ -101,7 +101,10 @@ kernel void polarquant_mv_f32_4bit(
 // Each threadgroup handles one batch element. All SIMD groups cooperate
 // on the Hadamard transform, then each processes N_DST output rows.
 #define PQ_FUSED_THREADS 256  // threads per threadgroup for Hadamard
-kernel void polarquant_mv_fused_hadamard_4bit(
+
+// Generic fused Hadamard kernel templated on bit width.
+template<uint BIT_WIDTH>
+kernel void polarquant_mv_fused_hadamard_generic(
     device const float*   x         [[buffer(0)]],
     device const uint8_t* indices   [[buffer(1)]],
     device const float*   norms     [[buffer(2)]],
@@ -129,7 +132,6 @@ kernel void polarquant_mv_fused_hadamard_4bit(
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // Step 2: In-place Walsh-Hadamard transform in shared memory
-    // All threads cooperate on the butterfly passes
     for (uint h = 1; h < d; h *= 2) {
         for (uint i = tid; i < d / 2; i += PQ_FUSED_THREADS) {
             uint grp = i / h;
@@ -149,43 +151,93 @@ kernel void polarquant_mv_fused_hadamard_4bit(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // Step 4: Centroid dot product (same as regular kernel)
+    // Step 4: Centroid dot product (generic bit-width)
     const uint n_sg = PQ_FUSED_THREADS / PQ_SIMD_WIDTH;
     const uint first_row = (row_group * n_sg + sgitg) * PQ_N_DST;
     if (first_row >= n_out) return;
 
-    float cent[16];
-    for (uint i = 0; i < 16; i++) {
+    constexpr uint n_cent = 1u << BIT_WIDTH;
+    float cent[n_cent];
+    for (uint i = 0; i < n_cent; i++) {
         cent[i] = centroids[i];
     }
 
+    constexpr uint indices_per_byte = 8 / BIT_WIDTH;
+    constexpr uint8_t mask = (1u << BIT_WIDTH) - 1;
+
     float sumf[PQ_N_DST] = {0.f};
     const uint nr = min((uint)PQ_N_DST, n_out - first_row);
-    const uint half_d = d / 2;
 
-    for (uint pair = tiisg; pair < half_d; pair += PQ_SIMD_WIDTH) {
-        uint i0 = pair * 2;
-        uint i1 = i0 + 1;
-        float xval0 = shared_x[i0];
-        float xval1 = shared_x[i1];
+    for (uint i = tiisg; i < d; i += PQ_SIMD_WIDTH) {
+        float xval = shared_x[i];
 
         for (uint row_off = 0; row_off < nr; row_off++) {
             uint row = first_row + row_off;
-            uint byte_pos = row * half_d + pair;
-            uint8_t packed_byte = indices[byte_pos];
-            uint idx0 = packed_byte & 0xF;
-            uint idx1 = (packed_byte >> 4) & 0xF;
-            sumf[row_off] += xval0 * cent[idx0] + xval1 * cent[idx1];
+            uint pos = row * d + i;
+            uint byte_pos = pos / indices_per_byte;
+            uint bit_offset = (pos % indices_per_byte) * BIT_WIDTH;
+            uint idx = (indices[byte_pos] >> bit_offset) & mask;
+            sumf[row_off] += xval * cent[idx];
         }
     }
 
     for (uint row_off = 0; row_off < nr; row_off++) {
         float total = simd_sum(sumf[row_off]);
-        if (tiisg == 0) {
+        if (tiisg == 0 && (first_row + row_off) < n_out) {
             output[batch_id * n_out + first_row + row_off] = total * norms[first_row + row_off];
         }
     }
 }
+
+// Instantiate fused Hadamard kernel for each bit width
+template [[host_name("polarquant_mv_fused_hadamard_1bit")]]
+kernel void polarquant_mv_fused_hadamard_generic<1>(
+    device const float*, device const uint8_t*, device const float*,
+    device const float*, device float*, device const float*,
+    constant uint&, constant uint&, constant uint&, constant float&,
+    threadgroup float*, uint3, uint, uint, uint);
+
+template [[host_name("polarquant_mv_fused_hadamard_2bit")]]
+kernel void polarquant_mv_fused_hadamard_generic<2>(
+    device const float*, device const uint8_t*, device const float*,
+    device const float*, device float*, device const float*,
+    constant uint&, constant uint&, constant uint&, constant float&,
+    threadgroup float*, uint3, uint, uint, uint);
+
+template [[host_name("polarquant_mv_fused_hadamard_3bit")]]
+kernel void polarquant_mv_fused_hadamard_generic<3>(
+    device const float*, device const uint8_t*, device const float*,
+    device const float*, device float*, device const float*,
+    constant uint&, constant uint&, constant uint&, constant float&,
+    threadgroup float*, uint3, uint, uint, uint);
+
+template [[host_name("polarquant_mv_fused_hadamard_4bit")]]
+kernel void polarquant_mv_fused_hadamard_generic<4>(
+    device const float*, device const uint8_t*, device const float*,
+    device const float*, device float*, device const float*,
+    constant uint&, constant uint&, constant uint&, constant float&,
+    threadgroup float*, uint3, uint, uint, uint);
+
+template [[host_name("polarquant_mv_fused_hadamard_5bit")]]
+kernel void polarquant_mv_fused_hadamard_generic<5>(
+    device const float*, device const uint8_t*, device const float*,
+    device const float*, device float*, device const float*,
+    constant uint&, constant uint&, constant uint&, constant float&,
+    threadgroup float*, uint3, uint, uint, uint);
+
+template [[host_name("polarquant_mv_fused_hadamard_6bit")]]
+kernel void polarquant_mv_fused_hadamard_generic<6>(
+    device const float*, device const uint8_t*, device const float*,
+    device const float*, device float*, device const float*,
+    constant uint&, constant uint&, constant uint&, constant float&,
+    threadgroup float*, uint3, uint, uint, uint);
+
+template [[host_name("polarquant_mv_fused_hadamard_7bit")]]
+kernel void polarquant_mv_fused_hadamard_generic<7>(
+    device const float*, device const uint8_t*, device const float*,
+    device const float*, device float*, device const float*,
+    constant uint&, constant uint&, constant uint&, constant float&,
+    threadgroup float*, uint3, uint, uint, uint);
 
 // Generic bit-width version
 template<uint BIT_WIDTH>

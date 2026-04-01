@@ -780,6 +780,7 @@ impl TurboMseMatMul {
                                 dev.device(),
                                 &enc,
                                 dev.kernels(),
+                                self.bit_width,
                                 d,
                                 n,
                                 batch,

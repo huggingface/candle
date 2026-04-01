@@ -99,6 +99,7 @@ pub fn call_turboquant_mse_fused_hadamard(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
+    bit_width: usize,
     d: usize,
     n_out: usize,
     batch: usize,
@@ -111,15 +112,26 @@ pub fn call_turboquant_mse_fused_hadamard(
     scale: f32,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    let name = match bit_width {
+        1 => "polarquant_mv_fused_hadamard_1bit",
+        2 => "polarquant_mv_fused_hadamard_2bit",
+        3 => "polarquant_mv_fused_hadamard_3bit",
+        4 => "polarquant_mv_fused_hadamard_4bit",
+        5 => "polarquant_mv_fused_hadamard_5bit",
+        6 => "polarquant_mv_fused_hadamard_6bit",
+        7 => "polarquant_mv_fused_hadamard_7bit",
+        _ => {
+            return Err(MetalKernelError::LoadLibraryError(format!(
+                "TurboQuantMse fused Hadamard: unsupported bit_width {bit_width}"
+            )))
+        }
+    };
+
     const N_DST: usize = 8;
     const THREADS_PER_TG: usize = 256;
     let n_sg = THREADS_PER_TG / 32;
 
-    let pipeline = kernels.load_pipeline(
-        device,
-        Source::TurboQuantMse,
-        "polarquant_mv_fused_hadamard_4bit",
-    )?;
+    let pipeline = kernels.load_pipeline(device, Source::TurboQuantMse, name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
