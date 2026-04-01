@@ -283,6 +283,13 @@ enum TemporalBlock {
 }
 
 impl TemporalBlock {
+    fn clear_kv_cache(&mut self) {
+        match self {
+            Self::Recurrent(_) => {}
+            Self::Attention(b) => b.kv_cache = None,
+        }
+    }
+
     fn forward(
         &mut self,
         xs: &Tensor,
@@ -433,8 +440,10 @@ impl Model {
 }
 
 impl Model {
-    /// Reset KV caches.
-    /// TODO: access kv_cache inside TemporalBlock::SdpaAttention.
-    pub fn clear_kv_cache(&mut self) {}
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.temporal_block.clear_kv_cache();
+        }
+    }
 }
 crate::impl_causal_lm!(Model, "recurrent_gemma");

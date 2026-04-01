@@ -520,6 +520,13 @@ enum TemporalBlock {
 }
 
 impl TemporalBlock {
+    fn clear_kv_cache(&mut self) {
+        match self {
+            Self::Recurrent(_) => {} // recurrent state is managed per-step, nothing to clear
+            Self::Attention(b) => b.kv_cache = None,
+        }
+    }
+
     fn forward(
         &mut self,
         xs: &Tensor,
@@ -666,4 +673,12 @@ impl Model {
         Ok(logits)
     }
 }
+impl Model {
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.temporal_block.clear_kv_cache();
+        }
+    }
+}
+
 crate::impl_causal_lm!(Model, "recurrent_gemma");
