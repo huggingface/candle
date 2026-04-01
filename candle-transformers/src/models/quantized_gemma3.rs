@@ -478,3 +478,4 @@ impl ModelWeights {
         Ok(output)
     }
 }
+crate::impl_causal_lm!(ModelWeights, "gemma3", with_reset);

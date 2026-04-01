@@ -1,6 +1,7 @@
 use candle::{DType, Device, Result};
 use candle_nn::VarBuilder;
 use serde::Deserialize;
+#[cfg(feature = "hf-hub")]
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 

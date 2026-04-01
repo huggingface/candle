@@ -453,3 +453,4 @@ impl Model {
         }
     }
 }
+crate::impl_causal_lm!(Model, "gemma2", with_reset);

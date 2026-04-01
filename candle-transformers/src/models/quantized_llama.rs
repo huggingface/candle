@@ -541,6 +541,8 @@ impl ModelWeights {
     }
 }
 
+crate::impl_causal_lm!(ModelWeights, "llama", with_reset);
+
 #[cfg(test)]
 mod tests {
     use crate::utils::build_causal_mask;

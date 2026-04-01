@@ -534,6 +534,7 @@ impl Llama {
 }
 
 /// Llama wrapper that owns its cache for use with AutoModelForCausalLM.
+#[allow(dead_code)] // fields accessed via forward/clear_kv_cache methods
 pub struct LlamaForCausalLM {
     model: Llama,
     cache: Cache,
@@ -551,18 +552,5 @@ impl LlamaForCausalLM {
     }
 }
 
-impl crate::auto::Model for LlamaForCausalLM {
-    fn model_type(&self) -> &'static str {
-        "llama"
-    }
-}
+crate::impl_causal_lm!(LlamaForCausalLM, "llama", with_reset);
 
-impl crate::auto::CausalLM for LlamaForCausalLM {
-    fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
-        self.model.forward(input_ids, seqlen_offset, &mut self.cache)
-    }
-
-    fn clear_kv_cache(&mut self) {
-        self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
-    }
-}

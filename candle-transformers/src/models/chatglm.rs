@@ -7,7 +7,7 @@ use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub num_layers: usize,
     pub padded_vocab_size: usize,
@@ -588,3 +588,4 @@ impl Model {
         Ok(lm_logits)
     }
 }
+crate::impl_causal_lm!(Model, "chatglm", stateless);

@@ -20,7 +20,7 @@ use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -362,3 +362,4 @@ impl Model {
             .apply(&self.lm_head)
     }
 }
+crate::impl_causal_lm!(Model, "yi");

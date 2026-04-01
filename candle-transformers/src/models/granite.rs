@@ -81,7 +81,7 @@ impl GraniteConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -459,3 +459,26 @@ impl Granite {
         })
     }
 }
+/// [`Granite`] wrapper that bundles the [`Cache`] for use with [`crate::auto::CausalLM`].
+pub struct GraniteForCausalLM {
+    model: Granite,
+    cache: Cache,
+}
+
+impl GraniteForCausalLM {
+    pub fn load(vb: VarBuilder, cfg: &Config) -> candle::Result<Self> {
+        let model = Granite::load(vb.clone(), cfg)?;
+        let cache = Cache::new(true, vb.dtype(), cfg, vb.device())?;
+        Ok(Self { model, cache })
+    }
+
+    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> candle::Result<Tensor> {
+        self.model.forward(input_ids, seqlen_offset, &mut self.cache)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
+    }
+}
+
+crate::impl_causal_lm!(GraniteForCausalLM, "granite", with_reset);

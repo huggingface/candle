@@ -393,3 +393,4 @@ impl Model {
         }
     }
 }
+crate::impl_causal_lm!(Model, "helium", with_reset);
