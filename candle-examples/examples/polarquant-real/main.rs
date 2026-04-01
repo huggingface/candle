@@ -75,6 +75,10 @@ struct Args {
     /// HuggingFace model ID (default: Qwen/Qwen3-8B).
     #[arg(long)]
     model_id: Option<String>,
+
+    /// Skip F32 baseline (for large models that don't fit twice in memory).
+    #[arg(long)]
+    pq_only: bool,
 }
 
 // ── PolarQuant-enabled Qwen3 model ──────────────────────────────────
@@ -468,32 +472,37 @@ fn main() -> Result<()> {
     println!("Prompt tokens: {}\n", tokens.len());
 
     // ── F32 baseline ──────────────────────────────────────────────────
-    print!("Loading F32 model... ");
-    std::io::stdout().flush()?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
-    let mut f32_model = BenchModel::new(&config, vb, None, false)?;
-    println!("done");
+    let tps_f32 = if args.pq_only {
+        println!("Skipping F32 baseline (--pq-only)");
+        None
+    } else {
+        print!("Loading F32 model... ");
+        std::io::stdout().flush()?;
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
+        let mut f32_model = BenchModel::new(&config, vb, None, false)?;
+        println!("done");
 
-    let mut logits_proc = LogitsProcessor::from_sampling(
-        args.seed,
-        Sampling::All {
-            temperature: args.temperature,
-        },
-    );
-    let (text_f32, elapsed_f32) = generate(
-        &mut f32_model,
-        &tokens,
-        args.sample_len,
-        &mut logits_proc,
-        &tokenizer,
-    )?;
-    let tps_f32 = args.sample_len as f64 / elapsed_f32.as_secs_f64();
-    println!("── F32 Generation ──────────────────────────────────");
-    println!("  Output: \"{}\"", &text_f32[..text_f32.len().min(120)]);
-    println!("  Throughput: {tps_f32:.1} tokens/sec");
+        let mut logits_proc = LogitsProcessor::from_sampling(
+            args.seed,
+            Sampling::All {
+                temperature: args.temperature,
+            },
+        );
+        let (text_f32, elapsed_f32) = generate(
+            &mut f32_model,
+            &tokens,
+            args.sample_len,
+            &mut logits_proc,
+            &tokenizer,
+        )?;
+        let tps = args.sample_len as f64 / elapsed_f32.as_secs_f64();
+        println!("── F32 Generation ──────────────────────────────────");
+        println!("  Output: \"{}\"", &text_f32[..text_f32.len().min(120)]);
+        println!("  Throughput: {tps:.1} tokens/sec");
 
-    // Free F32 model
-    drop(f32_model);
+        drop(f32_model);
+        Some(tps)
+    };
 
     // ── PQ model ──────────────────────────────────────────────────────
     print!("\nLoading + quantizing PQ-{} model... ", args.bits);
@@ -527,9 +536,14 @@ fn main() -> Result<()> {
 
     // ── Comparison ───────────────────────────────────────────────────
     println!("\n── Comparison ──────────────────────────────────────");
-    println!("  F32:  {tps_f32:.1} tokens/sec");
-    println!("  PQ-{}: {tps_pq:.1} tokens/sec", args.bits);
-    println!("  Ratio: {:.2}x", tps_f32 / tps_pq);
+    if let Some(f32_tps) = tps_f32 {
+        println!("  F32:  {f32_tps:.1} tokens/sec");
+        println!("  PQ-{}: {tps_pq:.1} tokens/sec", args.bits);
+        println!("  Ratio: {:.2}x", f32_tps / tps_pq);
+    } else {
+        println!("  PQ-{}: {tps_pq:.1} tokens/sec", args.bits);
+        println!("  (F32 baseline skipped — use without --pq-only to compare)");
+    }
 
     Ok(())
 }
