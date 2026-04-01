@@ -21,6 +21,8 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     vocab_size: usize,
     hidden_size: usize,
     intermediate_size: usize,

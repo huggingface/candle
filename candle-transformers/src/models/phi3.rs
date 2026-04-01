@@ -41,6 +41,8 @@ pub struct RopeScaling {
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub vocab_size: usize,
     pub hidden_act: candle_nn::Activation,
     pub hidden_size: usize,

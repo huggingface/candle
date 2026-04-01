@@ -43,6 +43,8 @@ pub struct LlamaConfig {
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub num_key_value_heads: Option<usize>,
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub rms_norm_eps: f64,
     #[serde(default = "default_rope")]
     pub rope_theta: f32,
@@ -541,7 +543,14 @@ pub struct LlamaForCausalLM {
 }
 
 impl LlamaForCausalLM {
-    pub fn new(model: Llama, cache: Cache) -> Self {
+    /// Standard constructor for use with [`AutoModelForCausalLM`].
+    /// Reads `use_flash_attn` and dtype/device from `cfg` / `vb`.
+    pub fn new(cfg: &LlamaConfig, vb: VarBuilder) -> candle::Result<Self> {
+        let inner_cfg = cfg.clone().into_config(cfg.use_flash_attn);
+        Self::load(vb.clone(), &inner_cfg, vb.dtype(), vb.device())
+    }
+
+    pub fn new_from_model(model: Llama, cache: Cache) -> Self {
         Self { model, cache }
     }
 

@@ -1,6 +1,5 @@
 use candle::{DType, Device, Result, Tensor};
 use candle_nn::VarBuilder;
-use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 
 use super::config::{AutoConfig, Weights};
@@ -73,16 +72,6 @@ pub struct AutoModelOptions {
 // ---------------------------------------------------------------------------
 // Internal helper
 // ---------------------------------------------------------------------------
-
-fn load<C, M, F>(config: &AutoConfig, build: F) -> Result<Box<dyn CausalLM>>
-where
-    C: DeserializeOwned,
-    M: CausalLM + 'static,
-    F: FnOnce(C) -> Result<M>,
-{
-    let cfg: C = config.parse()?;
-    Ok(Box::new(build(cfg)?))
-}
 
 fn default_dtype(device: &Device) -> DType {
     if device.is_cuda() || device.is_metal() {
@@ -214,104 +203,43 @@ impl AutoModelForCausalLM {
     fn load_float_model(
         config: &AutoConfig,
         vb: VarBuilder,
-        dtype: DType,
-        device: &Device,
+        _dtype: DType,
+        _device: &Device,
         use_flash_attn: bool,
     ) -> Result<Box<dyn CausalLM>> {
-        match config.model_type.to_lowercase().as_str() {
-            // ── Llama ──────────────────────────────────────────────────────
-            "llama" => load(config, |cfg: llama::LlamaConfig| {
-                let cfg = cfg.into_config(use_flash_attn);
-                llama::LlamaForCausalLM::load(vb, &cfg, dtype, device)
-            }),
-
-            // ── Mistral / Mixtral ──────────────────────────────────────────
-            "mistral" => load(config, |mut cfg: mistral::Config| {
-                cfg.use_flash_attn = use_flash_attn;
-                mistral::Model::new(&cfg, vb)
-            }),
-
-            "mixtral" => load(config, |mut cfg: mixtral::Config| {
-                cfg.use_flash_attn = use_flash_attn;
-                mixtral::Model::new(&cfg, vb)
-            }),
-
-            // ── Phi family ─────────────────────────────────────────────────
-            "phi" | "phi-msft" => {
-                load(config, |cfg: phi::Config| phi::Model::new(&cfg, vb))
-            }
-
-            "phi3" => load(config, |cfg: phi3::Config| phi3::Model::new(&cfg, vb)),
-
-            // ── Qwen family ────────────────────────────────────────────────
-            "qwen2" => load(config, |cfg: qwen2::Config| {
-                qwen2::ModelForCausalLM::new(&cfg, vb)
-            }),
-
-            "qwen2_moe" => load(config, |cfg: qwen2_moe::Config| {
-                qwen2_moe::Model::new(&cfg, vb)
-            }),
-
-            "qwen3" => load(config, |cfg: qwen3::Config| {
-                qwen3::ModelForCausalLM::new(&cfg, vb)
-            }),
-
-            "qwen3_moe" => load(config, |cfg: qwen3_moe::Config| {
-                qwen3_moe::ModelForCausalLM::new(&cfg, vb)
-            }),
-
-            // ── Gemma family ───────────────────────────────────────────────
-            "gemma" => load(config, |cfg: gemma::Config| {
-                gemma::Model::new(use_flash_attn, &cfg, vb)
-            }),
-
-            "gemma2" => load(config, |cfg: gemma2::Config| {
-                gemma2::Model::new(use_flash_attn, &cfg, vb)
-            }),
-
-            "gemma3" | "gemma3_text" => load(config, |cfg: gemma3::Config| {
-                gemma3::Model::new(use_flash_attn, &cfg, vb)
-            }),
-
-            // ── Other decoder-only ─────────────────────────────────────────
-            "starcoder2" => load(config, |cfg: starcoder2::Config| {
-                starcoder2::Model::new(&cfg, vb)
-            }),
-
-            "deepseek_v2" | "deepseek-v2" => load(config, |cfg: deepseek2::DeepSeekV2Config| {
-                deepseek2::DeepSeekV2::new(&cfg, vb)
-            }),
-
-            "olmo" => load(config, |cfg: olmo::Config| olmo::Model::new(&cfg, vb)),
-
-            "olmo2" => load(config, |cfg: olmo2::Config| olmo2::Model::new(&cfg, vb)),
-
-            "stablelm" | "stablelm_epoch" => load(config, |cfg: stable_lm::Config| {
-                stable_lm::Model::new(&cfg, vb)
-            }),
-
-            "yi" => load(config, |cfg: yi::Config| yi::Model::new(&cfg, vb)),
-
-            "helium" => load(config, |mut cfg: helium::Config| {
-                cfg.use_flash_attn = use_flash_attn;
-                helium::Model::new(&cfg, vb)
-            }),
-
-            "granite" => load(config, |cfg: granite::Config| {
-                granite::GraniteForCausalLM::load(vb, &cfg)
-            }),
-
-            "chatglm" => load(config, |cfg: chatglm::Config| {
-                chatglm::Model::new(&cfg, vb)
-            }),
-
-            _ => Err(candle::Error::Msg(format!(
-                "unsupported model type '{}' for safetensors loading. \
-                 Supported: {}",
-                config.model_type,
-                SUPPORTED_FLOAT_MODELS.join(", ")
-            ))),
-        }
+        crate::make_auto_map!(config, vb, use_flash_attn, {
+            // Llama family
+            "llama"          => (llama::LlamaConfig,              llama::LlamaForCausalLM),
+            // Mistral / Mixtral
+            "mistral"        => (mistral::Config,                 mistral::Model),
+            "mixtral"        => (mixtral::Config,                 mixtral::Model),
+            // Phi family
+            "phi"            => (phi::Config,                     phi::Model),
+            "phi-msft"       => (phi::Config,                     phi::Model),
+            "phi3"           => (phi3::Config,                    phi3::Model),
+            // Qwen family
+            "qwen2"          => (qwen2::Config,                   qwen2::ModelForCausalLM),
+            "qwen2_moe"      => (qwen2_moe::Config,               qwen2_moe::Model),
+            "qwen3"          => (qwen3::Config,                   qwen3::ModelForCausalLM),
+            "qwen3_moe"      => (qwen3_moe::Config,               qwen3_moe::ModelForCausalLM),
+            // Gemma family
+            "gemma"          => (gemma::Config,                   gemma::Model),
+            "gemma2"         => (gemma2::Config,                  gemma2::Model),
+            "gemma3"         => (gemma3::Config,                  gemma3::Model),
+            "gemma3_text"    => (gemma3::Config,                  gemma3::Model),
+            // Other decoder-only models
+            "starcoder2"     => (starcoder2::Config,              starcoder2::Model),
+            "deepseek_v2"    => (deepseek2::DeepSeekV2Config,     deepseek2::DeepSeekV2),
+            "deepseek-v2"    => (deepseek2::DeepSeekV2Config,     deepseek2::DeepSeekV2),
+            "olmo"           => (olmo::Config,                    olmo::Model),
+            "olmo2"          => (olmo2::Config,                   olmo2::Model),
+            "stablelm"       => (stable_lm::Config,               stable_lm::Model),
+            "stablelm_epoch" => (stable_lm::Config,               stable_lm::Model),
+            "yi"             => (yi::Config,                      yi::Model),
+            "helium"         => (helium::Config,                  helium::Model),
+            "granite"        => (granite::GraniteConfig,          granite::GraniteForCausalLM),
+            "chatglm"        => (chatglm::Config,                 chatglm::Model),
+        })
     }
 
     // ------------------------------------------------------------------
@@ -332,36 +260,15 @@ impl AutoModelForCausalLM {
         arch: &str,
         device: &Device,
     ) -> Result<Box<dyn CausalLM>> {
-        match arch.to_lowercase().as_str() {
-            "llama" => Ok(Box::new(quantized_llama::ModelWeights::from_gguf(
-                content, reader, device,
-            )?)),
-
-            "phi" | "phi-msft" => Ok(Box::new(quantized_phi::ModelWeights::from_gguf(
-                content, reader, device,
-            )?)),
-
-            "phi3" => Ok(Box::new(quantized_phi3::ModelWeights::from_gguf(
-                false, content, reader, device,
-            )?)),
-
-            "qwen2" => Ok(Box::new(quantized_qwen2::ModelWeights::from_gguf(
-                content, reader, device,
-            )?)),
-
-            "qwen3" => Ok(Box::new(quantized_qwen3::ModelWeights::from_gguf(
-                content, reader, device,
-            )?)),
-
-            "gemma" | "gemma3" => Ok(Box::new(quantized_gemma3::ModelWeights::from_gguf(
-                content, reader, device,
-            )?)),
-
-            _ => Err(candle::Error::Msg(format!(
-                "unsupported GGUF architecture '{}'. Supported: {}",
-                arch,
-                SUPPORTED_GGUF_MODELS.join(", ")
-            ))),
-        }
+        crate::make_gguf_map!(arch, content, reader, device, {
+            "llama"    => quantized_llama::ModelWeights,
+            "phi"      => quantized_phi::ModelWeights,
+            "phi-msft" => quantized_phi::ModelWeights,
+            "phi3"     => quantized_phi3::ModelWeights,
+            "qwen2"    => quantized_qwen2::ModelWeights,
+            "qwen3"    => quantized_qwen3::ModelWeights,
+            "gemma"    => quantized_gemma3::ModelWeights,
+            "gemma3"   => quantized_gemma3::ModelWeights,
+        })
     }
 }

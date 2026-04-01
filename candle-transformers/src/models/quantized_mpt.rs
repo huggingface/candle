@@ -197,7 +197,7 @@ impl Model {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.wte)?;
         let mask = if seq_len <= 1 {
@@ -217,4 +217,4 @@ impl Model {
         Ok(logits)
     }
 }
-crate::impl_causal_lm!(Model, "mpt", stateless);
+crate::impl_causal_lm!(Model, "mpt", with_reset);

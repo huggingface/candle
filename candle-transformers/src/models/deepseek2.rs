@@ -250,6 +250,8 @@ enum ScoringFunc {
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct DeepSeekV2Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,

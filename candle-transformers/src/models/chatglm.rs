@@ -9,6 +9,8 @@ use candle_nn::VarBuilder;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub num_layers: usize,
     pub padded_vocab_size: usize,
     pub hidden_size: usize,
@@ -33,6 +35,7 @@ pub struct Config {
 impl Config {
     pub fn glm3_6b() -> Self {
         Self {
+            use_flash_attn: false,
             num_layers: 28,
             padded_vocab_size: 65024,
             hidden_size: 4096,

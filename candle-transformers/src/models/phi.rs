@@ -25,6 +25,8 @@ use serde::Deserialize;
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
@@ -341,7 +343,7 @@ impl Model {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embed_tokens)?;
@@ -363,4 +365,4 @@ impl Model {
         self.layers.iter_mut().for_each(|b| b.clear_kv_cache())
     }
 }
-crate::impl_causal_lm!(Model, "phi", stateless_with_reset);
+crate::impl_causal_lm!(Model, "phi", with_reset);

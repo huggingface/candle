@@ -36,6 +36,8 @@ pub enum GraniteEosToks {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct GraniteConfig {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub vocab_size: usize,
@@ -466,6 +468,12 @@ pub struct GraniteForCausalLM {
 }
 
 impl GraniteForCausalLM {
+    /// Standard constructor for [`AutoModelForCausalLM`]: deserialises from HF config.
+    pub fn new(cfg: &GraniteConfig, vb: VarBuilder) -> candle::Result<Self> {
+        let inner = cfg.clone().into_config(cfg.use_flash_attn);
+        Self::load(vb, &inner)
+    }
+
     pub fn load(vb: VarBuilder, cfg: &Config) -> candle::Result<Self> {
         let model = Granite::load(vb.clone(), cfg)?;
         let cache = Cache::new(true, vb.dtype(), cfg, vb.device())?;

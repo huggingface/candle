@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub vocab_size: usize,
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -35,28 +37,13 @@ pub struct Config {
     pub norm_topk_prob: bool,
 }
 
-impl From<&Config> for Qwen3Config {
-    fn from(val: &Config) -> Self {
-        Qwen3Config {
-            vocab_size: val.vocab_size,
-            hidden_size: val.hidden_size,
-            intermediate_size: val.intermediate_size,
-            num_hidden_layers: val.num_hidden_layers,
-            num_attention_heads: val.num_attention_heads,
-            head_dim: val.head_dim,
-            attention_bias: val.attention_bias,
-            num_key_value_heads: val.num_key_value_heads,
-            max_position_embeddings: val.max_position_embeddings,
-            sliding_window: val.sliding_window,
-            max_window_layers: val.max_window_layers,
-            tie_word_embeddings: val.tie_word_embeddings,
-            rope_theta: val.rope_theta,
-            rms_norm_eps: val.rms_norm_eps,
-            use_sliding_window: val.use_sliding_window,
-            hidden_act: val.hidden_act,
-        }
-    }
-}
+crate::forward_config_fields!(no_default Config => Qwen3Config:
+    vocab_size, hidden_size, intermediate_size, num_hidden_layers,
+    num_attention_heads, head_dim, attention_bias, num_key_value_heads,
+    max_position_embeddings, sliding_window, max_window_layers,
+    tie_word_embeddings, rope_theta, rms_norm_eps, use_sliding_window,
+    hidden_act, use_flash_attn,
+);
 
 #[derive(Debug, Clone)]
 struct Qwen3MLPExpert {

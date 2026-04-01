@@ -43,6 +43,105 @@ mod causal_lm;
 pub use config::{AutoConfig, Weights};
 pub use causal_lm::{CausalLM, AutoModelForCausalLM, AutoModelOptions, QuantizationFormat};
 
+/// Generate a `From<&$from> for $to` impl that copies a named subset of fields.
+///
+/// Useful when two config structs share a common subset of fields —
+/// e.g. an outer MoE config and the inner attention-layer config it wraps.
+///
+/// ```ignore
+/// // Instead of listing every field manually:
+/// crate::forward_config_fields!(OuterConfig => InnerConfig:
+///     vocab_size, hidden_size, num_attention_heads, use_flash_attn,
+/// );
+/// ```
+#[macro_export]
+macro_rules! forward_config_fields {
+    ($from:ty => $to:ty : $($field:ident),+ $(,)?) => {
+        impl From<&$from> for $to {
+            fn from(val: &$from) -> Self {
+                Self {
+                    $($field: val.$field,)+
+                    ..<$to>::default()
+                }
+            }
+        }
+    };
+    // Variant without default: all fields must be listed explicitly.
+    (no_default $from:ty => $to:ty : $($field:ident),+ $(,)?) => {
+        impl From<&$from> for $to {
+            fn from(val: &$from) -> Self {
+                Self {
+                    $($field: val.$field,)+
+                }
+            }
+        }
+    };
+}
+
+/// Build the `load_gguf_model` dispatch from a compact GGUF model registry.
+///
+/// Every listed model type must implement
+/// `from_gguf(ct: Content, reader: &mut R, device: &Device) -> Result<Self>`.
+#[macro_export]
+macro_rules! make_gguf_map {
+    ($arch:expr, $content:expr, $reader:expr, $device:expr, {
+        $($name:literal => $model_ty:ty),+
+        $(,)?
+    }) => {{
+        const SUPPORTED: &[&str] = &[$($name),+];
+        match $arch.to_lowercase().as_str() {
+            $(
+                $name => Ok(Box::new(
+                    <$model_ty>::from_gguf($content, $reader, $device)?
+                ) as Box<dyn $crate::auto::CausalLM>),
+            )+
+            _ => Err(::candle::Error::Msg(format!(
+                "unsupported GGUF architecture '{}'. Supported: {}",
+                $arch,
+                SUPPORTED.join(", "),
+            ))),
+        }
+    }};
+}
+
+/// Build the `load_float_model` dispatch table from a compact model registry.
+///
+/// # Usage
+///
+/// ```ignore
+/// make_auto_map!(config, vb, use_flash_attn, {
+///     "mistral" => (mistral::Config, mistral::Model),
+///     "llama"   => (llama::LlamaConfig, llama::LlamaForCausalLM),
+/// })
+/// ```
+///
+/// Each entry deserialises `config.json` into `$cfg_ty`, sets
+/// `cfg.use_flash_attn = $flash`, then calls `<$model_ty>::new(&cfg, vb)`.
+/// All model configs must expose a `pub use_flash_attn: bool` field
+/// (add `#[serde(default)]` to keep it backward-compatible with existing
+/// `config.json` files that omit the field).
+#[macro_export]
+macro_rules! make_auto_map {
+    ($config:expr, $vb:expr, $flash:expr, {
+        $($name:literal => ($cfg_ty:ty, $model_ty:ty)),+
+        $(,)?
+    }) => {{
+        const SUPPORTED: &[&str] = &[$($name),+];
+        match $config.model_type.to_lowercase().as_str() {
+            $($name => {
+                let mut cfg: $cfg_ty = $config.parse()?;
+                cfg.use_flash_attn = $flash;
+                Ok(Box::new(<$model_ty>::new(&cfg, $vb)?) as Box<dyn $crate::auto::CausalLM>)
+            },)+
+            _ => Err(::candle::Error::Msg(format!(
+                "unsupported model type '{}'. Supported float models: {}",
+                $config.model_type,
+                SUPPORTED.join(", "),
+            ))),
+        }
+    }};
+}
+
 /// Implement the [`CausalLM`] trait for a model struct.
 ///
 /// # Variants

@@ -22,6 +22,8 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
@@ -37,6 +39,7 @@ pub struct Config {
 impl Config {
     pub fn config_6b() -> Self {
         Self {
+            use_flash_attn: false,
             vocab_size: 64000,
             hidden_size: 4096,
             intermediate_size: 11008,
@@ -52,6 +55,7 @@ impl Config {
 
     pub fn config_34b() -> Self {
         Self {
+            use_flash_attn: false,
             vocab_size: 64000,
             hidden_size: 7168,
             intermediate_size: 20480,
@@ -361,5 +365,11 @@ impl Model {
             .apply(&self.norm)?
             .apply(&self.lm_head)
     }
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.self_attn.kv_cache = None;
+        }
+    }
+
 }
-crate::impl_causal_lm!(Model, "yi");
+crate::impl_causal_lm!(Model, "yi", with_reset);

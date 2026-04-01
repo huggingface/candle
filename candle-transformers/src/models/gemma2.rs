@@ -15,6 +15,8 @@ fn default_max_position_embeddings() -> usize {
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub attention_bias: bool,
     pub head_dim: usize,
     pub hidden_activation: Activation,
@@ -185,7 +187,7 @@ impl Attention {
             attn_logit_softcapping: cfg.attn_logit_softcapping,
             rotary_emb,
             kv_cache: None,
-            use_flash_attn,
+            use_flash_attn: cfg.use_flash_attn,
         })
     }
 
@@ -296,7 +298,7 @@ impl DecoderLayer {
         cfg: &Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, use_flash_attn, cfg, vb.pp("self_attn"))?;
+        let self_attn = Attention::new(rotary_emb, cfg.use_flash_attn, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -362,7 +364,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(use_flash_attn: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -371,7 +373,7 @@ impl Model {
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer =
-                DecoderLayer::new(rotary_emb.clone(), use_flash_attn, cfg, vb_l.pp(layer_idx))?;
+                DecoderLayer::new(rotary_emb.clone(), cfg.use_flash_attn, cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
