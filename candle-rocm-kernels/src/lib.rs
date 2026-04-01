@@ -4,6 +4,7 @@ pub mod kernels;
 pub mod manager;
 pub mod source;
 pub mod utils;
+pub mod wrappers;
 
 pub use cache::CacheManager;
 pub use error::RocmKernelError;

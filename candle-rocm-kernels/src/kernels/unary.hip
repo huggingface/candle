@@ -2,6 +2,8 @@
 #define __device__
 #define __global__
 #define __forceinline__
+#else
+#include <hip/hip_runtime.h>
 #endif
 
 #include <stddef.h>
@@ -155,8 +157,8 @@ UNARY_OP(double, usilu_f64, (x / (1.0 + exp(-x))))
 UNARY_OP(float, uerf_f32, erff(x))
 UNARY_OP(double, uerf_f64, erf(x))
 
-UNARY_OP_SCALAR(float, uelu_f32, (x > 0.0f ? x : alpha * (expf(x) - 1.0f)))
-UNARY_OP_SCALAR(double, uelu_f64, (x > 0.0 ? x : alpha * (exp(x) - 1.0)))
+UNARY_OP_SCALAR(float, uelu_f32, (x > 0.0f ? x : scalar * (expf(x) - 1.0f)))
+UNARY_OP_SCALAR(double, uelu_f64, (x > 0.0 ? x : scalar * (exp(x) - 1.0)))
 
 UNARY_OP_SCALAR(float, upowf_f32, powf(x, scalar))
 UNARY_OP_SCALAR(double, upowf_f64, pow(x, scalar))

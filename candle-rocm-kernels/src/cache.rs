@@ -222,17 +222,35 @@ fn compute_source_hash(source: &str) -> String {
 /// - `source`: HIP source code
 /// - `arch`: GPU architecture (e.g., "gfx908")
 /// - `output_path`: Where to save the compiled binary
+fn find_rocm_tool(tool_name: &str) -> Result<String, RocmKernelError> {
+    let output = Command::new("hipcc")
+        .args(&["--print-prog-name", tool_name])
+        .output()
+        .map_err(|e| RocmKernelError::Compilation(format!("Failed to run hipcc: {}", e)))?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() && PathBuf::from(&path).exists() {
+            return Ok(path);
+        }
+    }
+    Err(RocmKernelError::Compilation(format!(
+        "{} not found via hipcc. Is ROCm installed?",
+        tool_name
+    )))
+}
+
 fn compile_kernel(
     name: &str,
     source: &str,
     arch: &str,
     output_path: &Path,
 ) -> Result<Vec<u8>, RocmKernelError> {
-    // Write source to temporary file
     let temp_dir = std::env::temp_dir();
     let source_hash = compute_source_hash(source);
     let source_file = temp_dir.join(format!("candle_{}_{}.hip", name, source_hash));
     let obj_file = temp_dir.join(format!("candle_{}_{}.o", name, source_hash));
+    let fatbin_file = temp_dir.join(format!("candle_{}_{}.fatbin", name, source_hash));
+    let hsaco_file = temp_dir.join(format!("candle_{}_{}.hsaco", name, source_hash));
 
     fs::write(&source_file, source).map_err(|e| {
         RocmKernelError::Compilation(format!(
@@ -242,7 +260,6 @@ fn compile_kernel(
         ))
     })?;
 
-    // Compile with hipcc
     let output = Command::new("hipcc")
         .args(&[
             &format!("--offload-arch={}", arch),
@@ -263,7 +280,6 @@ fn compile_kernel(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Clean up temp files
         let _ = fs::remove_file(&source_file);
         return Err(RocmKernelError::Compilation(format!(
             "hipcc compilation failed for {}:\n{}",
@@ -271,16 +287,73 @@ fn compile_kernel(
         )));
     }
 
-    // Read the compiled object file
-    let binary = fs::read(&obj_file).map_err(|e| {
+    let extract_output = Command::new("objcopy")
+        .args(&[
+            "-O",
+            "binary",
+            "-j",
+            ".hip_fatbin",
+            obj_file.to_str().unwrap(),
+            fatbin_file.to_str().unwrap(),
+        ])
+        .output()
+        .map_err(|e| {
+            RocmKernelError::Compilation(format!(
+                "Failed to execute objcopy: {}. Is binutils in PATH?",
+                e
+            ))
+        })?;
+
+    if !extract_output.status.success() {
+        let stderr = String::from_utf8_lossy(&extract_output.stderr);
+        let _ = fs::remove_file(&source_file);
+        let _ = fs::remove_file(&obj_file);
+        return Err(RocmKernelError::Compilation(format!(
+            "objcopy extraction failed for {}:\n{}",
+            name, stderr
+        )));
+    }
+
+    let target = format!("hipv4-amdgcn-amd-amdhsa--{}", arch);
+    let bundler_path = find_rocm_tool("clang-offload-bundler")?;
+    let unbundle_output = Command::new(&bundler_path)
+        .args(&[
+            "--unbundle",
+            "--type=o",
+            "--input",
+            fatbin_file.to_str().unwrap(),
+            "--targets",
+            &target,
+            "--output",
+            hsaco_file.to_str().unwrap(),
+        ])
+        .output()
+        .map_err(|e| {
+            RocmKernelError::Compilation(format!(
+                "Failed to execute clang-offload-bundler: {}. Is ROCm in PATH?",
+                e
+            ))
+        })?;
+
+    if !unbundle_output.status.success() {
+        let stderr = String::from_utf8_lossy(&unbundle_output.stderr);
+        let _ = fs::remove_file(&source_file);
+        let _ = fs::remove_file(&obj_file);
+        let _ = fs::remove_file(&fatbin_file);
+        return Err(RocmKernelError::Compilation(format!(
+            "clang-offload-bundler extraction failed for {}:\n{}",
+            name, stderr
+        )));
+    }
+
+    let binary = fs::read(&hsaco_file).map_err(|e| {
         RocmKernelError::Compilation(format!(
-            "Failed to read compiled binary {}: {}",
-            obj_file.display(),
+            "Failed to read code object {}: {}",
+            hsaco_file.display(),
             e
         ))
     })?;
 
-    // Save to cache
     fs::write(output_path, &binary).map_err(|e| {
         RocmKernelError::Internal(format!(
             "Failed to write cache file {}: {}",
@@ -289,9 +362,10 @@ fn compile_kernel(
         ))
     })?;
 
-    // Clean up temp files
     let _ = fs::remove_file(&source_file);
     let _ = fs::remove_file(&obj_file);
+    let _ = fs::remove_file(&fatbin_file);
+    let _ = fs::remove_file(&hsaco_file);
 
     Ok(binary)
 }

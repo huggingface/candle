@@ -2,6 +2,8 @@
 #define __device__
 #define __global__
 #define __forceinline__
+#else
+#include <hip/hip_runtime.h>
 #endif
 
 #include <stddef.h>

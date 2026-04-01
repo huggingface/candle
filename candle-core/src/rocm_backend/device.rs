@@ -4,10 +4,11 @@ use candle_rocm_kernels::KernelManager;
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex, RwLock};
 
+use super::wrappers::{
+    SendSyncDeviceMemory, SendSyncPseudoRng, SendSyncRocblasHandle, SendSyncStream,
+};
 use super::{RocmError, RocmStorage, RocmStorageSlice};
-use rocm_rs::hip::{Device as HipDevice, DeviceMemory, Stream};
-use rocm_rs::rocblas;
-use rocm_rs::rocrand::PseudoRng;
+use rocm_rs::hip::Device as HipDevice;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DeviceId(usize);
@@ -24,10 +25,10 @@ impl DeviceId {
 pub struct RocmDevice {
     id: DeviceId,
     device: Arc<HipDevice>,
-    pub(crate) stream: Arc<Stream>,
-    rocrand: Arc<Mutex<PseudoRng>>,
+    pub(crate) stream: Arc<SendSyncStream>,
+    rocrand: Arc<Mutex<SendSyncPseudoRng>>,
     seed_value: Arc<RwLock<u64>>,
-    pub(crate) blas: Arc<rocblas::Handle>,
+    pub(crate) blas: Arc<SendSyncRocblasHandle>,
     kernel_manager: Arc<Mutex<KernelManager>>,
 }
 
@@ -43,14 +44,14 @@ impl RocmDevice {
         device.set_current()?;
         let stream = device.get_stream()?;
 
-        let mut rocrand = PseudoRng::new(rocm_rs::rocrand::rng_type::PSEUDO_DEFAULT)
+        let mut rocrand = SendSyncPseudoRng::new(rocm_rs::rocrand::rng_type::PSEUDO_DEFAULT)
             .map_err(|e| crate::Error::Msg(format!("Failed to create rocrand generator: {}", e)))?;
         let seed = 299792458u64;
         rocrand
             .set_seed(seed)
             .map_err(|e| crate::Error::Msg(format!("Failed to set rocrand seed: {}", e)))?;
 
-        let blas = rocblas::Handle::new().map_err(|e| RocmError::Rocblas(e.to_string()))?;
+        let blas = SendSyncRocblasHandle::new().map_err(|e| RocmError::Rocblas(e.to_string()))?;
         blas.set_stream(&stream)
             .map_err(|e| RocmError::Rocblas(e.to_string()))?;
 
@@ -62,7 +63,7 @@ impl RocmDevice {
         Ok(Self {
             id: DeviceId::new(),
             device: Arc::new(device),
-            stream: Arc::new(stream),
+            stream: Arc::new(SendSyncStream(stream)),
             rocrand: Arc::new(Mutex::new(rocrand)),
             seed_value: Arc::new(RwLock::new(seed)),
             blas: Arc::new(blas),
@@ -74,30 +75,33 @@ impl RocmDevice {
         self.id
     }
 
-    pub fn alloc<T>(&self, len: usize) -> Result<DeviceMemory<T>> {
-        DeviceMemory::new(len)
+    pub fn alloc<T>(&self, len: usize) -> Result<SendSyncDeviceMemory<T>> {
+        SendSyncDeviceMemory::new(len)
             .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))
     }
 
-    pub fn alloc_zeros<T: Default + Clone>(&self, len: usize) -> Result<DeviceMemory<T>> {
-        let mut mem = DeviceMemory::new(len)
+    pub fn alloc_zeros<T: Default + Clone>(&self, len: usize) -> Result<SendSyncDeviceMemory<T>> {
+        let mut mem = SendSyncDeviceMemory::new(len)
             .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))?;
         mem.memset(0)
             .map_err(|e| crate::Error::Msg(format!("Failed to memset: {}", e)))?;
         Ok(mem)
     }
 
-    pub fn clone_htod<T: Clone>(&self, src: &[T]) -> Result<DeviceMemory<T>> {
+    pub fn clone_htod<T: Clone>(&self, src: &[T]) -> Result<SendSyncDeviceMemory<T>> {
         let count = src.len();
-        let mut dst = DeviceMemory::new(count)?;
-        dst.copy_from_host(src)?;
+        let mut dst = SendSyncDeviceMemory::new(count)
+            .map_err(|e| crate::Error::Msg(format!("Failed to allocate ROCm memory: {}", e)))?;
+        dst.copy_from_host(src)
+            .map_err(|e| crate::Error::Msg(format!("Failed to copy host to device: {}", e)))?;
         Ok(dst)
     }
 
-    pub fn clone_dtoh<T: Default + Clone>(&self, src: &DeviceMemory<T>) -> Result<Vec<T>> {
+    pub fn clone_dtoh<T: Default + Clone>(&self, src: &SendSyncDeviceMemory<T>) -> Result<Vec<T>> {
         let count = src.count();
         let mut dst: Vec<T> = vec![T::default(); count];
-        src.copy_to_host(&mut dst)?;
+        src.copy_to_host(&mut dst)
+            .map_err(|e| crate::Error::Msg(format!("Failed to copy device to host: {}", e)))?;
         Ok(dst)
     }
 
