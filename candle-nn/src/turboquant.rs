@@ -5,14 +5,14 @@
 //! ([arXiv:2504.19874](https://arxiv.org/abs/2504.19874))
 //!
 //! TurboQuant provides unbiased inner product estimation by composing two stages:
-//! 1. **PolarQuant** (b−1 bits): MSE-optimal scalar quantization via random rotation
-//!    and Lloyd-Max codebooks. See [`crate::polarquant`] for standalone usage.
+//! 1. **TurboQuantMse** (b−1 bits): MSE-optimal scalar quantization via random rotation
+//!    and Lloyd-Max codebooks. See [`crate::turboquant_mse`] for standalone usage.
 //! 2. **QJL** (1 bit): Quantized Johnson-Lindenstrauss correction on the residual
 //!    for unbiased inner product estimation.
 //!
-//! # When to use TurboQuant vs PolarQuant
+//! # When to use TurboQuant vs TurboQuantMse
 //!
-//! - Use [`PolarQuant`](crate::polarquant::PolarQuant) when you need MSE-optimal
+//! - Use [`TurboQuantMse`](crate::turboquant_mse::TurboQuantMse) when you need MSE-optimal
 //!   reconstruction (e.g., KV cache compression, embedding storage).
 //! - Use [`TurboQuant`] when you need **unbiased inner product estimation**
 //!   (e.g., approximate nearest neighbor search, similarity scoring).
@@ -33,26 +33,26 @@
 
 use candle::{DType, Device, Result, Tensor, D};
 
-use crate::polarquant::{PolarQuant, PolarQuantized};
+use crate::turboquant_mse::{TurboMseQuantized, TurboQuantMse};
 
 /// Result of TurboQuant quantization.
 ///
-/// Stores the PolarQuant MSE quantization (b−1 bits), QJL sign bits (1 bit),
+/// Stores the TurboQuantMse MSE quantization (b−1 bits), QJL sign bits (1 bit),
 /// and residual norms needed for unbiased inner product reconstruction.
 #[derive(Debug, Clone)]
 pub struct TurboQuantized {
-    /// PolarQuant quantization part (b−1 bits per coordinate).
-    pub polar: PolarQuantized,
+    /// TurboQuantMse quantization part (b−1 bits per coordinate).
+    pub polar: TurboMseQuantized,
     /// QJL sign bits. Shape: `[n, d]`, values in {-1.0, +1.0}.
     pub qjl_signs: Tensor,
     /// Residual L2 norms. Shape: `[n]`.
     pub residual_norms: Tensor,
 }
 
-/// Inner-product-optimized vector quantizer combining PolarQuant and QJL.
+/// Inner-product-optimized vector quantizer combining TurboQuantMse and QJL.
 ///
 /// Provides unbiased inner product estimation by:
-/// 1. Quantizing with [`PolarQuant`](crate::polarquant::PolarQuant) using b−1
+/// 1. Quantizing with [`TurboQuantMse`](crate::turboquant_mse::TurboQuantMse) using b−1
 ///    bits per coordinate for MSE-optimal reconstruction
 /// 2. Applying 1-bit QJL (Quantized Johnson-Lindenstrauss) to the residual
 ///    for unbiased inner product correction
@@ -78,7 +78,7 @@ pub struct TurboQuantized {
 /// ```
 #[derive(Debug, Clone)]
 pub struct TurboQuant {
-    polar: PolarQuant,
+    polar: TurboQuantMse,
     projection: Tensor,
     dim: usize,
     bit_width: usize,
@@ -88,12 +88,12 @@ pub struct TurboQuant {
 impl TurboQuant {
     /// Create a new TurboQuant quantizer.
     ///
-    /// Internally creates a [`PolarQuant`](crate::polarquant::PolarQuant)
+    /// Internally creates a [`TurboQuantMse`](crate::turboquant_mse::TurboQuantMse)
     /// quantizer with b−1 bits and a random Gaussian projection matrix for QJL.
     ///
     /// # Arguments
     /// * `dim` - Vector dimension (d).
-    /// * `bit_width` - Total bits per coordinate (b ≥ 1). Uses b−1 for PolarQuant + 1 for QJL.
+    /// * `bit_width` - Total bits per coordinate (b ≥ 1). Uses b−1 for TurboQuantMse + 1 for QJL.
     /// * `dtype` - Data type for internal computations.
     /// * `device` - Device for tensor allocation.
     pub fn new(dim: usize, bit_width: usize, dtype: DType, device: &Device) -> Result<Self> {
@@ -101,7 +101,7 @@ impl TurboQuant {
             candle::bail!("TurboQuant requires bit_width >= 1");
         }
 
-        let polar = PolarQuant::new(dim, bit_width - 1, dtype, device)?;
+        let polar = TurboQuantMse::new(dim, bit_width - 1, dtype, device)?;
         // Random Gaussian projection matrix for QJL
         let projection = Tensor::randn(0f64, 1f64, (dim, dim), &Device::Cpu)?
             .to_dtype(dtype)?
@@ -122,7 +122,7 @@ impl TurboQuant {
     /// * `x` - Input tensor, shape `[n, d]` or `[d]`
     ///
     /// # Returns
-    /// [`TurboQuantized`] with PolarQuant indices, QJL signs, and norms.
+    /// [`TurboQuantized`] with TurboQuantMse indices, QJL signs, and norms.
     pub fn quantize(&self, x: &Tensor) -> Result<TurboQuantized> {
         let is_single = x.dims().len() == 1;
         let x = if is_single {
@@ -132,11 +132,11 @@ impl TurboQuant {
         };
         let x = x.to_dtype(self.dtype)?;
 
-        // Stage 1: PolarQuant with b-1 bits
+        // Stage 1: TurboQuantMse with b-1 bits
         let polar_q = self.polar.quantize(&x)?;
         let x_polar = self.polar.dequantize(&polar_q)?;
 
-        // Stage 2: Compute residual r = x - PolarQuant(x)
+        // Stage 2: Compute residual r = x - TurboQuantMse(x)
         let residual = x.broadcast_sub(&x_polar)?;
         let residual_norms = residual.sqr()?.sum(D::Minus1)?.sqrt()?;
 
@@ -162,7 +162,7 @@ impl TurboQuant {
     /// # Returns
     /// Reconstructed tensor, shape `[n, d]`.
     pub fn dequantize(&self, q: &TurboQuantized) -> Result<Tensor> {
-        // Stage 1: PolarQuant dequantization
+        // Stage 1: TurboQuantMse dequantization
         let x_polar = self.polar.dequantize(&q.polar)?;
 
         // Stage 2: QJL dequantization
@@ -172,7 +172,7 @@ impl TurboQuant {
         let x_qjl = (x_qjl * scale)?;
         let x_qjl = x_qjl.broadcast_mul(&q.residual_norms.unsqueeze(D::Minus1)?)?;
 
-        // Stage 3: Combine PolarQuant reconstruction + QJL correction
+        // Stage 3: Combine TurboQuantMse reconstruction + QJL correction
         x_polar.broadcast_add(&x_qjl)
     }
 
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_bit_width_1() -> Result<()> {
-        // bit_width=1 means 0 bits for PolarQuant + 1 bit for QJL (pure QJL)
+        // bit_width=1 means 0 bits for TurboQuantMse + 1 bit for QJL (pure QJL)
         let device = Device::Cpu;
         let dim = 32;
         let quantizer = TurboQuant::new(dim, 1, DType::F32, &device)?;

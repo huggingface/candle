@@ -1,6 +1,6 @@
 //! Cache Implementations
 //!
-use crate::polarquant::{PolarQuant, PolarQuantized};
+use crate::turboquant_mse::{TurboMseQuantized, TurboQuantMse};
 use candle::{DType, Device, Result, Tensor};
 
 #[derive(Debug, Clone)]
@@ -845,8 +845,8 @@ impl ConcatKvCache {
 /// ```
 #[derive(Debug, Clone)]
 pub struct QuantizedKvCache {
-    k_quantizer: PolarQuant,
-    v_quantizer: PolarQuant,
+    k_quantizer: TurboQuantMse,
+    v_quantizer: TurboQuantMse,
     k_indices: Option<Tensor>,
     k_norms: Option<Tensor>,
     v_indices: Option<Tensor>,
@@ -856,9 +856,9 @@ pub struct QuantizedKvCache {
 }
 
 impl QuantizedKvCache {
-    /// Create a new PolarQuant-compressed KV cache.
+    /// Create a new TurboQuantMse-compressed KV cache.
     ///
-    /// Allocates two independent [`PolarQuant`](crate::turboquant::PolarQuant)
+    /// Allocates two independent [`TurboQuantMse`](crate::turboquant_mse::TurboQuantMse)
     /// quantizers (one for keys, one for values), each with their own random
     /// rotation matrix. The cache starts empty.
     ///
@@ -890,8 +890,8 @@ impl QuantizedKvCache {
             DType::F32
         };
         Ok(Self {
-            k_quantizer: PolarQuant::new(head_dim, bit_width, internal_dtype, device)?,
-            v_quantizer: PolarQuant::new(head_dim, bit_width, internal_dtype, device)?,
+            k_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
+            v_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
             k_indices: None,
             k_norms: None,
             v_indices: None,
@@ -903,7 +903,7 @@ impl QuantizedKvCache {
 
     /// Append key/value tensors to the cache.
     ///
-    /// Quantizes the input tensors via PolarQuant, concatenates the quantized
+    /// Quantizes the input tensors via TurboQuantMse, concatenates the quantized
     /// representations with existing cache along `dim`, then dequantizes and
     /// returns the full accumulated K/V sequences.
     ///
@@ -996,7 +996,7 @@ impl QuantizedKvCache {
 }
 
 /// Quantize a 4D `[B,H,S,D]` tensor into U8 indices `[B,H,S,D]` and F32 norms `[B,H,S,1]`.
-fn quantize_4d(quantizer: &PolarQuant, x: &Tensor) -> Result<(Tensor, Tensor)> {
+fn quantize_4d(quantizer: &TurboQuantMse, x: &Tensor) -> Result<(Tensor, Tensor)> {
     let x = x.contiguous()?;
     let (b, h, s, d) = x.dims4()?;
     let flat = x.reshape((b * h * s, d))?;
@@ -1008,7 +1008,7 @@ fn quantize_4d(quantizer: &PolarQuant, x: &Tensor) -> Result<(Tensor, Tensor)> {
 
 /// Dequantize U8 indices `[B,H,S,D]` + F32 norms `[B,H,S,1]` back to a 4D tensor.
 fn dequantize_4d(
-    quantizer: &PolarQuant,
+    quantizer: &TurboQuantMse,
     indices: &Tensor,
     norms: &Tensor,
     dtype: DType,
@@ -1016,7 +1016,7 @@ fn dequantize_4d(
     let (b, h, s, d) = indices.dims4()?;
     let flat_idx = indices.reshape((b * h * s, d))?.to_dtype(DType::U32)?;
     let flat_nrm = norms.reshape((b * h * s,))?;
-    let q = PolarQuantized {
+    let q = TurboMseQuantized {
         indices: flat_idx,
         norms: flat_nrm,
     };
@@ -1044,8 +1044,8 @@ fn dequantize_4d(
 /// - Bounded-memory generation with a sliding window
 #[derive(Debug, Clone)]
 pub struct QuantizedPreAllocKvCache {
-    k_quantizer: PolarQuant,
-    v_quantizer: PolarQuant,
+    k_quantizer: TurboQuantMse,
+    v_quantizer: TurboQuantMse,
     k_idx: Cache,
     k_nrm: Cache,
     v_idx: Cache,
@@ -1054,7 +1054,7 @@ pub struct QuantizedPreAllocKvCache {
 }
 
 impl QuantizedPreAllocKvCache {
-    /// Create a new pre-allocated PolarQuant-compressed KV cache.
+    /// Create a new pre-allocated TurboQuantMse-compressed KV cache.
     ///
     /// # Arguments
     /// * `dim` - The dimension along which to concatenate
@@ -1079,8 +1079,8 @@ impl QuantizedPreAllocKvCache {
             DType::F32
         };
         Ok(Self {
-            k_quantizer: PolarQuant::new(head_dim, bit_width, internal_dtype, device)?,
-            v_quantizer: PolarQuant::new(head_dim, bit_width, internal_dtype, device)?,
+            k_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
+            v_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
             k_idx: Cache::new(dim, max_seq_len),
             k_nrm: Cache::new(dim, max_seq_len),
             v_idx: Cache::new(dim, max_seq_len),
@@ -1175,8 +1175,8 @@ impl QuantizedPreAllocKvCache {
 /// - When all past positions must be retained
 #[derive(Debug, Clone)]
 pub struct QuantizedRotatingKvCache {
-    k_quantizer: PolarQuant,
-    v_quantizer: PolarQuant,
+    k_quantizer: TurboQuantMse,
+    v_quantizer: TurboQuantMse,
     k_idx: RotatingCache,
     k_nrm: RotatingCache,
     v_idx: RotatingCache,
@@ -1185,7 +1185,7 @@ pub struct QuantizedRotatingKvCache {
 }
 
 impl QuantizedRotatingKvCache {
-    /// Create a new rotating PolarQuant-compressed KV cache.
+    /// Create a new rotating TurboQuantMse-compressed KV cache.
     ///
     /// # Arguments
     /// * `dim` - The dimension along which to concatenate
@@ -1211,8 +1211,8 @@ impl QuantizedRotatingKvCache {
             DType::F32
         };
         Ok(Self {
-            k_quantizer: PolarQuant::new(head_dim, bit_width, internal_dtype, device)?,
-            v_quantizer: PolarQuant::new(head_dim, bit_width, internal_dtype, device)?,
+            k_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
+            v_quantizer: TurboQuantMse::new(head_dim, bit_width, internal_dtype, device)?,
             k_idx: RotatingCache::new(dim, max_seq_len),
             k_nrm: RotatingCache::new(dim, max_seq_len),
             v_idx: RotatingCache::new(dim, max_seq_len),

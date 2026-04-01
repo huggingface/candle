@@ -1,4 +1,4 @@
-// PolarQuant fused centroid-lookup matmul kernel (SIMD-optimized).
+// TurboQuant MSE fused centroid-lookup matmul kernel (SIMD-optimized).
 //
 // Computes: output[batch][row] = norms[row] * Σ_i x_rot[batch][i] * centroids[unpack(indices, row*d+i)]
 //

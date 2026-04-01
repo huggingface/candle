@@ -1,17 +1,17 @@
-//! PolarQuant Vector Quantization Demo
+//! TurboQuantMse Vector Quantization Demo
 //!
-//! Demonstrates standalone PolarQuant (arXiv:2502.02617) for MSE-optimal vector
+//! Demonstrates standalone TurboQuantMse (arXiv:2502.02617) for MSE-optimal vector
 //! compression. Quantizes random embedding vectors at different bit widths and
 //! reports reconstruction quality, compression ratio, and throughput.
 
 use anyhow::Result;
 use candle::{DType, Tensor};
-use candle_nn::polarquant::PolarQuant;
+use candle_nn::turboquant_mse::TurboQuantMse;
 use clap::Parser;
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
-#[command(about = "PolarQuant Vector Quantization Demo")]
+#[command(about = "TurboQuantMse Vector Quantization Demo")]
 struct Args {
     /// Vector dimension.
     #[arg(long, default_value_t = 128)]
@@ -58,7 +58,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
 
-    println!("PolarQuant Vector Quantization Demo");
+    println!("TurboQuantMse Vector Quantization Demo");
     println!("===================================");
     println!(
         "Vectors: {} × dim={}, dtype=F32\n",
@@ -86,7 +86,7 @@ fn main() -> Result<()> {
     );
 
     for &bits in BIT_WIDTHS {
-        let quantizer = PolarQuant::new(args.dim, bits, DType::F32, &device)?;
+        let quantizer = TurboQuantMse::new(args.dim, bits, DType::F32, &device)?;
 
         // Warmup
         for _ in 0..3 {
@@ -124,7 +124,7 @@ fn main() -> Result<()> {
         "  - Compression ratio relative to F32 ({} bytes/vec)",
         f32_bytes_per_vec
     );
-    println!("  - PolarQuant is data-oblivious: no training or calibration needed");
+    println!("  - TurboQuantMse is data-oblivious: no training or calibration needed");
 
     Ok(())
 }

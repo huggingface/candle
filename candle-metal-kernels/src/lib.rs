@@ -9,9 +9,9 @@ pub use err::MetalKernelError;
 pub use kernel::Kernels;
 pub use kernels::{
     affine::*, call_binary_contiguous, call_binary_strided, call_mlx_gemm,
-    call_polarquant_centroid_dot, call_polarquant_fused_hadamard, cast::*, convolution::*, fill::*,
-    indexing::*, quantized::*, random::*, reduce::*, sdpa::*, sort::*, ternary::*, unary, unary::*,
-    GemmDType, GgmlDType,
+    call_turboquant_mse_centroid_dot, call_turboquant_mse_fused_hadamard, cast::*, convolution::*,
+    fill::*, indexing::*, quantized::*, random::*, reduce::*, sdpa::*, sort::*, ternary::*, unary,
+    unary::*, GemmDType, GgmlDType,
 };
 use metal::{
     BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline,

@@ -1,38 +1,41 @@
-//! PolarQuant: MSE-Optimal Vector Quantization via Random Rotation
+//! TurboQuant MSE: MSE-Optimal Vector Quantization via Random Rotation
 //!
-//! Implementation of the PolarQuant algorithm from:
-//! "PolarQuant: Quantizing with Random Rotations for Sharp Rate-Distortion"
-//! ([arXiv:2502.02617](https://arxiv.org/abs/2502.02617))
+//! Implementation of Algorithm 1 (TurboQuant_mse) from:
+//! "TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate"
+//! ([arXiv:2504.19874](https://arxiv.org/abs/2504.19874))
 //!
-//! PolarQuant achieves near-optimal MSE distortion for vector quantization by:
+//! Inspired by PolarQuant ([arXiv:2502.02617](https://arxiv.org/abs/2502.02617)),
+//! which introduced random preconditioning for KV cache quantization.
+//!
+//! TurboQuantMse achieves near-optimal MSE distortion for vector quantization by:
 //! 1. **Random rotation**: Multiplies input by a random orthogonal matrix Π,
 //!    spreading vector energy evenly across coordinates so each follows an
-//!    approximately Gaussian distribution.
+//!    approximately Gaussian (Beta) distribution.
 //! 2. **Scalar quantization**: Applies optimal Lloyd-Max scalar quantizers
 //!    independently per coordinate, eliminating the need for learned codebooks.
 //!
-//! This makes PolarQuant **data-oblivious** — no training or calibration is
+//! This makes TurboQuantMse **data-oblivious** — no training or calibration is
 //! needed. It is suitable for online, streaming, or one-shot quantization of
 //! embeddings, activations, KV cache vectors, or any high-dimensional data.
 //!
 //! # Relationship to TurboQuant
 //!
-//! PolarQuant is the foundational MSE stage used by
+//! TurboQuantMse is the foundational MSE stage used by
 //! [`TurboQuant`](crate::turboquant::TurboQuant), which adds a 1-bit QJL
-//! correction for unbiased inner product estimation. PolarQuant can be used
+//! correction for unbiased inner product estimation. TurboQuantMse can be used
 //! independently when MSE-optimal reconstruction is sufficient.
 //!
 //! # Example
 //!
 //! ```no_run
 //! use candle::{Device, DType, Tensor};
-//! use candle_nn::polarquant::PolarQuant;
+//! use candle_nn::turboquant_mse::TurboQuantMse;
 //!
 //! let device = Device::Cpu;
 //! let dim = 128;
 //! let bit_width = 4;
 //!
-//! let quantizer = PolarQuant::new(dim, bit_width, DType::F32, &device).unwrap();
+//! let quantizer = TurboQuantMse::new(dim, bit_width, DType::F32, &device).unwrap();
 //!
 //! // Quantize a batch of 10 vectors
 //! let x = Tensor::randn(0f32, 1f32, (10, dim), &device).unwrap();
@@ -227,13 +230,13 @@ fn randomized_hadamard_matrix(
         .map(|t| (t, signs_f32))
 }
 
-/// Result of PolarQuant quantization.
+/// Result of TurboQuantMse quantization.
 ///
 /// Stores centroid indices (b bits per coordinate) and original vector norms.
 /// The indices select from Lloyd-Max centroids computed for the standard normal
 /// distribution, scaled by 1/√d.
 #[derive(Debug, Clone)]
-pub struct PolarQuantized {
+pub struct TurboMseQuantized {
     /// Centroid indices. Shape: `[n, d]`, dtype: `U32`.
     /// Each value is in `[0, 2^b)`.
     pub indices: Tensor,
@@ -258,17 +261,17 @@ pub struct PolarQuantized {
 ///
 /// ```no_run
 /// use candle::{Device, DType, Tensor};
-/// use candle_nn::polarquant::PolarQuant;
+/// use candle_nn::turboquant_mse::TurboQuantMse;
 ///
 /// let device = Device::Cpu;
-/// let quantizer = PolarQuant::new(128, 4, DType::F32, &device).unwrap();
+/// let quantizer = TurboQuantMse::new(128, 4, DType::F32, &device).unwrap();
 ///
 /// let x = Tensor::randn(0f32, 1f32, (10, 128), &device).unwrap();
 /// let quantized = quantizer.quantize(&x).unwrap();
 /// let reconstructed = quantizer.dequantize(&quantized).unwrap();
 /// ```
 #[derive(Debug, Clone)]
-pub struct PolarQuant {
+pub struct TurboQuantMse {
     dim: usize,
     bit_width: usize,
     rotation: Tensor,
@@ -278,8 +281,8 @@ pub struct PolarQuant {
     hadamard_signs: Option<Vec<f32>>,
 }
 
-impl PolarQuant {
-    /// Create a new PolarQuant quantizer.
+impl TurboQuantMse {
+    /// Create a new TurboQuantMse quantizer.
     ///
     /// Generates a random orthogonal rotation matrix and computes Lloyd-Max
     /// centroids for the standard normal distribution, scaled by 1/√d.
@@ -311,7 +314,7 @@ impl PolarQuant {
         })
     }
 
-    /// Create a new PolarQuant quantizer using fast Hadamard rotation.
+    /// Create a new TurboQuantMse quantizer using fast Hadamard rotation.
     ///
     /// Uses a randomized Walsh-Hadamard transform instead of a dense orthogonal
     /// matrix. Construction is O(d²) but the resulting rotation matrix enables
@@ -355,8 +358,8 @@ impl PolarQuant {
     /// * `x` - Input tensor, shape `[n, d]` or `[d]`
     ///
     /// # Returns
-    /// [`PolarQuantized`] with centroid indices and original norms.
-    pub fn quantize(&self, x: &Tensor) -> Result<PolarQuantized> {
+    /// [`TurboMseQuantized`] with centroid indices and original norms.
+    pub fn quantize(&self, x: &Tensor) -> Result<TurboMseQuantized> {
         let is_single = x.dims().len() == 1;
         let x = if is_single {
             x.unsqueeze(0)?
@@ -411,7 +414,7 @@ impl PolarQuant {
             diffs.argmin(D::Minus1)?
         };
 
-        Ok(PolarQuantized { indices, norms })
+        Ok(TurboMseQuantized { indices, norms })
     }
 
     /// Dequantize back to vectors.
@@ -421,7 +424,7 @@ impl PolarQuant {
     ///
     /// # Returns
     /// Reconstructed tensor, shape `[n, d]`.
-    pub fn dequantize(&self, q: &PolarQuantized) -> Result<Tensor> {
+    pub fn dequantize(&self, q: &TurboMseQuantized) -> Result<Tensor> {
         let (n, d) = q.indices.dims2()?;
 
         // Look up centroids by index
@@ -472,7 +475,7 @@ impl PolarQuant {
     }
 }
 
-/// Fused codebook-matmul operation for PolarQuant-compressed weights.
+/// Fused codebook-matmul operation for TurboQuantMse-compressed weights.
 ///
 /// Stores weights as bit-packed indices + norms + a pre-rotated codebook.
 /// The codebook contains `2^b` vectors of dimension `d`, pre-multiplied by
@@ -482,7 +485,7 @@ impl PolarQuant {
 /// — a single fused kernel with no rotation, no full-weight materialization.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct PolarQuantMatMul {
+pub struct TurboMseMatMul {
     /// Rotation matrix transpose: `[d, d]` F32 — on target device (fallback path).
     rotation_t: Tensor,
     /// Scalar centroid table: `[2^b]` F32 — on target device.
@@ -532,7 +535,7 @@ fn unpack_index(packed: &[u8], pos: usize, bit_width: usize) -> usize {
     ((packed[byte_pos] >> bit_offset) & mask) as usize
 }
 
-impl PolarQuantMatMul {
+impl TurboMseMatMul {
     /// Create a fused matmul op with compressed GPU storage.
     ///
     /// Stores 4-bit packed indices, norms, centroids, and rotation matrix
@@ -541,11 +544,11 @@ impl PolarQuantMatMul {
     /// 2. `output[j] = norms[j] * Σ_i x_rot[i] * centroids[idx[j][i]]` (from compressed indices)
     ///
     /// No F32 weight matrix is ever materialized in GPU memory.
-    pub fn new(quantizer: &PolarQuant, indices: &Tensor, norms: &Tensor) -> Result<Self> {
+    pub fn new(quantizer: &TurboQuantMse, indices: &Tensor, norms: &Tensor) -> Result<Self> {
         let bit_width = quantizer.bit_width();
         if bit_width == 0 || bit_width > 7 {
             candle::bail!(
-                "PolarQuantMatMul requires bit_width in 1..=7, got {}",
+                "TurboMseMatMul requires bit_width in 1..=7, got {}",
                 bit_width
             );
         }
@@ -623,7 +626,7 @@ fn hadamard_transform_inplace_f32(data: &mut [f32], n: usize) {
     }
 }
 
-impl PolarQuantMatMul {
+impl TurboMseMatMul {
     /// Compute `x @ W^T` using the pre-computed rotated weight matrix.
     ///
     /// Forward: `x @ W^T` from compressed 4-bit storage.
@@ -695,7 +698,7 @@ impl PolarQuantMatMul {
                             let dev = xm.device();
                             let out_buf = dev.new_buffer(batch * n, DType::F32, "pq_fused")?;
                             let enc = dev.command_encoder()?;
-                            candle_metal_kernels::call_polarquant_fused_hadamard(
+                            candle_metal_kernels::call_turboquant_mse_fused_hadamard(
                                 dev.device(),
                                 &enc,
                                 dev.kernels(),
@@ -753,7 +756,7 @@ impl PolarQuantMatMul {
                             let dev = xm.device();
                             let out_buf = dev.new_buffer(batch * n, DType::F32, "pq_out")?;
                             let enc = dev.command_encoder()?;
-                            candle_metal_kernels::call_polarquant_centroid_dot(
+                            candle_metal_kernels::call_turboquant_mse_centroid_dot(
                                 dev.device(),
                                 &enc,
                                 dev.kernels(),
@@ -794,7 +797,7 @@ impl PolarQuantMatMul {
             }
             #[cfg(not(feature = "metal"))]
             {
-                candle::bail!("GPU PolarQuantMatMul requires metal feature")
+                candle::bail!("GPU TurboMseMatMul requires metal feature")
             }
         };
 
@@ -870,7 +873,7 @@ mod tests {
         let bit_width = 4;
         let n = 8;
 
-        let quantizer = PolarQuant::new(dim, bit_width, DType::F32, &device)?;
+        let quantizer = TurboQuantMse::new(dim, bit_width, DType::F32, &device)?;
         let x = Tensor::randn(0f32, 1f32, (n, dim), &device)?;
 
         let q = quantizer.quantize(&x)?;
@@ -901,7 +904,7 @@ mod tests {
         let bit_width = 3;
         let n = 4;
 
-        let quantizer = PolarQuant::new(dim, bit_width, DType::F32, &device)?;
+        let quantizer = TurboQuantMse::new(dim, bit_width, DType::F32, &device)?;
 
         let x = Tensor::randn(0f32, 1f32, (n, dim), &device)?;
         let q = quantizer.quantize(&x)?;
@@ -926,7 +929,7 @@ mod tests {
         let device = Device::Cpu;
         let dim = 32;
 
-        let quantizer = PolarQuant::new(dim, 2, DType::F32, &device)?;
+        let quantizer = TurboQuantMse::new(dim, 2, DType::F32, &device)?;
         let x = Tensor::randn(0f32, 1f32, (dim,), &device)?;
 
         let q = quantizer.quantize(&x)?;
@@ -944,7 +947,7 @@ mod tests {
         let dim = 32;
 
         for bit_width in 1..=4 {
-            let quantizer = PolarQuant::new(dim, bit_width, DType::F32, &device)?;
+            let quantizer = TurboQuantMse::new(dim, bit_width, DType::F32, &device)?;
             let x = Tensor::randn(0f32, 1f32, (4, dim), &device)?;
             let q = quantizer.quantize(&x)?;
 
@@ -971,7 +974,7 @@ mod tests {
 
         let mut prev_mse = f64::MAX;
         for bit_width in 1..=4 {
-            let quantizer = PolarQuant::new(dim, bit_width, DType::F32, &device)?;
+            let quantizer = TurboQuantMse::new(dim, bit_width, DType::F32, &device)?;
             let q = quantizer.quantize(&x)?;
             let x_recon = quantizer.dequantize(&q)?;
 

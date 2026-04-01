@@ -1,7 +1,7 @@
-//! PolarQuant-compressed Neural Network Layers
+//! TurboQuantMse-compressed Neural Network Layers
 //!
 //! Provides drop-in replacements for standard neural network layers that store
-//! weights in PolarQuant-compressed form. Weights are dequantized on-the-fly
+//! weights in TurboQuantMse-compressed form. Weights are dequantized on-the-fly
 //! during the forward pass, reducing model memory footprint.
 //!
 //! # Compression
@@ -13,8 +13,8 @@
 //!
 //! # Supported layers
 //!
-//! - [`PolarQuantLinear`]: Drop-in replacement for [`Linear`](crate::Linear).
-//!   Quantize pretrained weights with [`from_linear`](PolarQuantLinear::from_linear),
+//! - [`TurboQuantLinear`]: Drop-in replacement for [`Linear`](crate::Linear).
+//!   Quantize pretrained weights with [`from_linear`](TurboQuantLinear::from_linear),
 //!   or construct directly from quantized data.
 //!
 //! # Example
@@ -22,15 +22,15 @@
 //! ```no_run
 //! use candle::{Device, DType, Tensor};
 //! use candle_nn::{Linear, Module};
-//! use candle_nn::polarquant_nn::PolarQuantLinear;
+//! use candle_nn::turboquant_nn::TurboQuantLinear;
 //!
 //! let device = Device::Cpu;
 //! // Start with a pretrained Linear layer
 //! let weight = Tensor::randn(0f32, 1f32, (64, 128), &device).unwrap();
 //! let linear = Linear::new(weight, None);
 //!
-//! // Compress to 4-bit PolarQuant
-//! let pq_linear = PolarQuantLinear::from_linear(&linear, 4, &device).unwrap();
+//! // Compress to 4-bit TurboQuantMse
+//! let pq_linear = TurboQuantLinear::from_linear(&linear, 4, &device).unwrap();
 //!
 //! // Same forward API
 //! let x = Tensor::randn(0f32, 1f32, (1, 128), &device).unwrap();
@@ -40,10 +40,10 @@
 
 use candle::{DType, Device, Result, Tensor};
 
-use crate::polarquant::{PolarQuant, PolarQuantMatMul, PolarQuantized};
+use crate::turboquant_mse::{TurboMseMatMul, TurboMseQuantized, TurboQuantMse};
 use crate::Linear;
 
-/// Linear layer with PolarQuant-compressed weights.
+/// Linear layer with TurboQuantMse-compressed weights.
 ///
 /// Stores the weight matrix as quantized indices + norms, dequantizing on each
 /// forward pass. This trades compute for memory — the weight matrix is never
@@ -59,18 +59,18 @@ use crate::Linear;
 /// - Training (gradients require full-precision weights)
 /// - Models small enough to fit in memory uncompressed
 #[derive(Debug, Clone)]
-pub struct PolarQuantLinear {
-    quantizer: PolarQuant,
+pub struct TurboQuantLinear {
+    quantizer: TurboQuantMse,
     indices: Tensor,
     norms: Tensor,
-    fused_op: Option<PolarQuantMatMul>,
+    fused_op: Option<TurboMseMatMul>,
     bias: Option<Tensor>,
     in_features: usize,
     out_features: usize,
 }
 
-impl PolarQuantLinear {
-    /// Quantize a pretrained [`Linear`] layer into PolarQuant-compressed form.
+impl TurboQuantLinear {
+    /// Quantize a pretrained [`Linear`] layer into TurboQuantMse-compressed form.
     ///
     /// The weight matrix (shape `[out_features, in_features]`) is quantized
     /// row-by-row. Each row becomes a vector of U8 centroid indices plus a
@@ -83,7 +83,7 @@ impl PolarQuantLinear {
     ///
     /// # Example
     /// ```ignore
-    /// let pq = PolarQuantLinear::from_linear(&pretrained_layer, 4, &device)?;
+    /// let pq = TurboQuantLinear::from_linear(&pretrained_layer, 4, &device)?;
     /// ```
     pub fn from_linear(linear: &Linear, bit_width: usize, device: &Device) -> Result<Self> {
         let weight = linear.weight();
@@ -95,10 +95,10 @@ impl PolarQuantLinear {
         } else {
             DType::F32
         };
-        let quantizer = PolarQuant::new(in_features, bit_width, internal_dtype, device)?;
+        let quantizer = TurboQuantMse::new(in_features, bit_width, internal_dtype, device)?;
         let q = quantizer.quantize(weight)?;
         let indices = q.indices.to_dtype(DType::U8)?;
-        let fused_op = PolarQuantMatMul::new(&quantizer, &indices, &q.norms).ok();
+        let fused_op = TurboMseMatMul::new(&quantizer, &indices, &q.norms).ok();
 
         Ok(Self {
             quantizer,
@@ -130,10 +130,11 @@ impl PolarQuantLinear {
         } else {
             DType::F32
         };
-        let quantizer = PolarQuant::new_hadamard(in_features, bit_width, internal_dtype, device)?;
+        let quantizer =
+            TurboQuantMse::new_hadamard(in_features, bit_width, internal_dtype, device)?;
         let q = quantizer.quantize(weight)?;
         let indices = q.indices.to_dtype(DType::U8)?;
-        let fused_op = PolarQuantMatMul::new(&quantizer, &indices, &q.norms).ok();
+        let fused_op = TurboMseMatMul::new(&quantizer, &indices, &q.norms).ok();
 
         Ok(Self {
             quantizer,
@@ -146,21 +147,21 @@ impl PolarQuantLinear {
         })
     }
 
-    /// Create a PolarQuantLinear from pre-quantized data.
+    /// Create a TurboQuantLinear from pre-quantized data.
     ///
     /// # Arguments
-    /// * `quantizer` - The PolarQuant quantizer (holds rotation matrix + centroids).
+    /// * `quantizer` - The TurboQuantMse quantizer (holds rotation matrix + centroids).
     /// * `indices` - Centroid indices, shape `[out_features, in_features]`, dtype U8.
     /// * `norms` - Row norms, shape `[out_features]`.
     /// * `bias` - Optional bias, shape `[out_features]`.
     pub fn new(
-        quantizer: PolarQuant,
+        quantizer: TurboQuantMse,
         indices: Tensor,
         norms: Tensor,
         bias: Option<Tensor>,
     ) -> Result<Self> {
         let (out_features, in_features) = indices.dims2()?;
-        let fused_op = PolarQuantMatMul::new(&quantizer, &indices, &norms).ok();
+        let fused_op = TurboMseMatMul::new(&quantizer, &indices, &norms).ok();
         Ok(Self {
             quantizer,
             indices,
@@ -176,7 +177,7 @@ impl PolarQuantLinear {
     ///
     /// Shape: `[out_features, in_features]`.
     pub fn dequantize_weight(&self) -> Result<Tensor> {
-        let q = PolarQuantized {
+        let q = TurboMseQuantized {
             indices: self.indices.to_dtype(DType::U32)?,
             norms: self.norms.clone(),
         };
@@ -258,7 +259,7 @@ impl PolarQuantLinear {
     }
 }
 
-impl crate::Module for PolarQuantLinear {
+impl crate::Module for TurboQuantLinear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x_result = if let Some(ref fused) = self.fused_op {
             if x.dtype() == DType::F32 {
@@ -290,7 +291,7 @@ mod tests {
         let b = Tensor::randn(0f32, 1f32, (out_f,), &device)?;
         let linear = Linear::new(w, Some(b));
 
-        let pq = PolarQuantLinear::from_linear(&linear, 4, &device)?;
+        let pq = TurboQuantLinear::from_linear(&linear, 4, &device)?;
         assert_eq!(pq.in_features(), in_f);
         assert_eq!(pq.out_features(), out_f);
         assert_eq!(pq.bit_width(), 4);
@@ -312,7 +313,7 @@ mod tests {
         let w = Tensor::randn(0f32, 1f32, (out_f, in_f), &device)?;
         let linear = Linear::new(w, None);
 
-        let pq = PolarQuantLinear::from_linear(&linear, 3, &device)?;
+        let pq = TurboQuantLinear::from_linear(&linear, 3, &device)?;
         assert!(pq.bias().is_none());
 
         let x = Tensor::randn(0f32, 1f32, (in_f,), &device)?;
@@ -333,7 +334,7 @@ mod tests {
         let x = Tensor::randn(0f32, 1f32, (8, in_f), &device)?;
         let y_exact = crate::Module::forward(&linear, &x)?;
 
-        let pq = PolarQuantLinear::from_linear(&linear, 4, &device)?;
+        let pq = TurboQuantLinear::from_linear(&linear, 4, &device)?;
         let y_approx = crate::Module::forward(&pq, &x)?;
 
         // Relative error should be small for 4-bit
@@ -360,13 +361,13 @@ mod tests {
 
         // 4-bit: packed indices = 64*128*4/8 = 4096 bytes, norms = 256, total = 4352
         // F32 weight = 32768, ratio = 32768/4352 ≈ 7.5x
-        let pq4 = PolarQuantLinear::from_linear(&linear, 4, &device)?;
+        let pq4 = TurboQuantLinear::from_linear(&linear, 4, &device)?;
         let ratio4 = pq4.compression_ratio();
         assert!(ratio4 > 7.0, "Expected > 7x at 4-bit, got {ratio4:.2}x");
 
         // 2-bit: packed indices = 64*128*2/8 = 2048 bytes, norms = 256, total = 2304
         // ratio = 32768/2304 ≈ 14.2x
-        let pq2 = PolarQuantLinear::from_linear(&linear, 2, &device)?;
+        let pq2 = TurboQuantLinear::from_linear(&linear, 2, &device)?;
         let ratio2 = pq2.compression_ratio();
         assert!(ratio2 > 14.0, "Expected > 14x at 2-bit, got {ratio2:.2}x");
         assert!(ratio2 > ratio4, "2-bit should compress more than 4-bit");
@@ -382,7 +383,7 @@ mod tests {
         let w = Tensor::randn(0f32, 1f32, (out_f, in_f), &device)?;
         let linear = Linear::new(w.clone(), None);
 
-        let pq = PolarQuantLinear::from_linear(&linear, 4, &device)?;
+        let pq = TurboQuantLinear::from_linear(&linear, 4, &device)?;
         let w_deq = pq.dequantize_weight()?;
 
         assert_eq!(w_deq.dims(), &[out_f, in_f]);
@@ -405,7 +406,7 @@ mod tests {
         let b = Tensor::randn(0f32, 1f32, (out_f,), &device)?;
         let linear = Linear::new(w, Some(b));
 
-        let pq = PolarQuantLinear::from_linear(&linear, 4, &device)?;
+        let pq = TurboQuantLinear::from_linear(&linear, 4, &device)?;
 
         // 3D input: [batch, seq, features]
         let x = Tensor::randn(0f32, 1f32, (2, 5, in_f), &device)?;
@@ -434,7 +435,7 @@ mod tests {
 
         let mut prev_err = f64::MAX;
         for bits in [2, 3, 4] {
-            let pq = PolarQuantLinear::from_linear(&linear, bits, &device)?;
+            let pq = TurboQuantLinear::from_linear(&linear, bits, &device)?;
             let y_approx = crate::Module::forward(&pq, &x)?;
             let err = (&y_exact - &y_approx)?
                 .sqr()?
@@ -460,7 +461,7 @@ mod tests {
         let w = Tensor::randn(0f32, 1f32, (out_f, in_f), &device)?;
         let linear = Linear::new(w, None);
 
-        let pq = PolarQuantLinear::from_linear_hadamard(&linear, 4, &device)?;
+        let pq = TurboQuantLinear::from_linear_hadamard(&linear, 4, &device)?;
         assert_eq!(pq.in_features(), in_f);
         assert_eq!(pq.out_features(), out_f);
 
@@ -486,7 +487,7 @@ mod tests {
 
         let w = Tensor::randn(0f32, 1f32, (out_f, in_f), &device)?;
         let linear = Linear::new(w, None);
-        let pq = PolarQuantLinear::from_linear(&linear, 4, &device)?;
+        let pq = TurboQuantLinear::from_linear(&linear, 4, &device)?;
 
         // The fused op should produce the same result as dequantize+matmul
         let x = Tensor::randn(0f32, 1f32, (4, in_f), &device)?;

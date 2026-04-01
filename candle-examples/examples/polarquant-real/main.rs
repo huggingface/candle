@@ -1,13 +1,13 @@
-//! PolarQuant Real-Model Benchmark (Qwen3)
+//! TurboQuantMse Real-Model Benchmark (Qwen3)
 //!
 //! Loads a Qwen3 model from HuggingFace, runs F32 generation as baseline, then
-//! quantizes all attention/MLP Linear layers with PolarQuant and re-runs
+//! quantizes all attention/MLP Linear layers with TurboQuantMse and re-runs
 //! generation to compare tok/sec and output quality.
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Module, Result as CResult, Tensor};
 use candle_nn::kv_cache::{ConcatKvCache, QuantizedKvCache};
-use candle_nn::polarquant_nn::PolarQuantLinear;
+use candle_nn::turboquant_nn::TurboQuantLinear;
 use candle_nn::{Activation, VarBuilder};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::qwen3::Config;
@@ -52,7 +52,7 @@ impl RotaryEmbedding {
 }
 
 #[derive(Parser, Debug)]
-#[command(about = "PolarQuant Real-Model Benchmark (Qwen3)")]
+#[command(about = "TurboQuantMse Real-Model Benchmark (Qwen3)")]
 struct Args {
     #[arg(long)]
     cpu: bool,
@@ -81,13 +81,13 @@ struct Args {
     pq_only: bool,
 }
 
-// ── PolarQuant-enabled Qwen3 model ──────────────────────────────────
-// Mirrors the upstream Qwen3 architecture but uses PolarQuantLinear for
+// ── TurboQuantMse-enabled Qwen3 model ──────────────────────────────────
+// Mirrors the upstream Qwen3 architecture but uses TurboQuantLinear for
 // weight storage and QuantizedKvCache for KV compression.
 
 enum LinearLayer {
     F32(candle_nn::Linear),
-    PQ(PolarQuantLinear),
+    PQ(TurboQuantLinear),
 }
 
 impl Module for LinearLayer {
@@ -263,7 +263,7 @@ impl BenchModel {
                 let inner = candle_nn::linear_no_bias(in_d, out_d, vb)?;
                 if quantize_this_layer && in_d.is_power_of_two() {
                     let pq =
-                        PolarQuantLinear::from_linear_hadamard(&inner, bits.unwrap(), &device)?;
+                        TurboQuantLinear::from_linear_hadamard(&inner, bits.unwrap(), &device)?;
                     Ok(LinearLayer::PQ(pq))
                 } else {
                     Ok(LinearLayer::F32(inner))
@@ -427,11 +427,11 @@ fn main() -> Result<()> {
 
     let model_id = args.model_id.as_deref().unwrap_or("Qwen/Qwen3-8B");
 
-    println!("PolarQuant Real-Model Benchmark");
+    println!("TurboQuantMse Real-Model Benchmark");
     println!("================================");
     println!("Model: {model_id}");
     println!(
-        "Quantization: {}-bit PolarQuant (weights + KV cache)",
+        "Quantization: {}-bit TurboQuantMse (weights + KV cache)",
         args.bits
     );
     println!("Prompt: \"{}\"\n", args.prompt);

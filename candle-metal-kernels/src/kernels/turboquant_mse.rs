@@ -6,12 +6,12 @@ fn divide(m: usize, b: usize) -> usize {
     (m + b - 1) / b
 }
 
-/// Dispatch the PolarQuant SIMD-optimized centroid-dot kernel on Metal.
+/// Dispatch the TurboQuantMse SIMD-optimized centroid-dot kernel on Metal.
 ///
 /// Uses SIMD groups (32 threads) with 4 output rows per group,
 /// matching GGML's mul_vec_q_n pattern for bandwidth-optimal access.
 #[allow(clippy::too_many_arguments)]
-pub fn call_polarquant_centroid_dot(
+pub fn call_turboquant_mse_centroid_dot(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
@@ -36,7 +36,7 @@ pub fn call_polarquant_centroid_dot(
         7 => "polarquant_mv_f32_7bit",
         _ => {
             return Err(MetalKernelError::LoadLibraryError(format!(
-                "PolarQuant: unsupported bit_width {bit_width}"
+                "TurboQuantMse: unsupported bit_width {bit_width}"
             )))
         }
     };
@@ -45,7 +45,7 @@ pub fn call_polarquant_centroid_dot(
     const N_SIMDGROUP: usize = 2;
     const SIMD_WIDTH: usize = 32;
 
-    let pipeline = kernels.load_pipeline(device, Source::PolarQuant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::TurboQuantMse, name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -95,7 +95,7 @@ pub fn call_polarquant_centroid_dot(
 /// No separate rotation matmul needed — the Hadamard transform happens
 /// in threadgroup shared memory before the centroid dot product.
 #[allow(clippy::too_many_arguments)]
-pub fn call_polarquant_fused_hadamard(
+pub fn call_turboquant_mse_fused_hadamard(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
@@ -117,7 +117,7 @@ pub fn call_polarquant_fused_hadamard(
 
     let pipeline = kernels.load_pipeline(
         device,
-        Source::PolarQuant,
+        Source::TurboQuantMse,
         "polarquant_mv_fused_hadamard_4bit",
     )?;
     let encoder = ep.encoder();

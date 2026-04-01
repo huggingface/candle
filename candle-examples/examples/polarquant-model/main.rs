@@ -1,22 +1,22 @@
-//! PolarQuant End-to-End Model Compression Benchmark
+//! TurboQuantMse End-to-End Model Compression Benchmark
 //!
 //! Builds a realistic multi-layer transformer MLP, compresses all Linear layers
-//! with PolarQuant, then benchmarks:
+//! with TurboQuantMse, then benchmarks:
 //! - Model size reduction (F32 vs quantized weights)
 //! - Output quality (relative MSE, cosine similarity vs full-precision)
 //! - Inference throughput (tokens/sec for full-precision vs quantized)
-//! - KV cache compression (plain vs PolarQuant-quantized cache)
+//! - KV cache compression (plain vs TurboQuantMse-quantized cache)
 
 use anyhow::Result;
 use candle::{DType, Device, Tensor};
 use candle_nn::kv_cache::{ConcatKvCache, QuantizedKvCache};
-use candle_nn::polarquant_nn::PolarQuantLinear;
+use candle_nn::turboquant_nn::TurboQuantLinear;
 use candle_nn::{Linear, Module};
 use clap::Parser;
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
-#[command(about = "PolarQuant End-to-End Model Compression Benchmark")]
+#[command(about = "TurboQuantMse End-to-End Model Compression Benchmark")]
 struct Args {
     /// Use CPU even when GPU is available.
     #[arg(long)]
@@ -67,13 +67,13 @@ struct TransformerLayerF32 {
 }
 
 struct TransformerLayerPQ {
-    q_proj: PolarQuantLinear,
-    k_proj: PolarQuantLinear,
-    v_proj: PolarQuantLinear,
-    o_proj: PolarQuantLinear,
-    gate_proj: PolarQuantLinear,
-    up_proj: PolarQuantLinear,
-    down_proj: PolarQuantLinear,
+    q_proj: TurboQuantLinear,
+    k_proj: TurboQuantLinear,
+    v_proj: TurboQuantLinear,
+    o_proj: TurboQuantLinear,
+    gate_proj: TurboQuantLinear,
+    up_proj: TurboQuantLinear,
+    down_proj: TurboQuantLinear,
 }
 
 impl TransformerLayerF32 {
@@ -130,13 +130,13 @@ impl TransformerLayerF32 {
 impl TransformerLayerPQ {
     fn from_f32(layer: &TransformerLayerF32, bits: usize, device: &Device) -> Result<Self> {
         Ok(Self {
-            q_proj: PolarQuantLinear::from_linear(&layer.q_proj, bits, device)?,
-            k_proj: PolarQuantLinear::from_linear(&layer.k_proj, bits, device)?,
-            v_proj: PolarQuantLinear::from_linear(&layer.v_proj, bits, device)?,
-            o_proj: PolarQuantLinear::from_linear(&layer.o_proj, bits, device)?,
-            gate_proj: PolarQuantLinear::from_linear(&layer.gate_proj, bits, device)?,
-            up_proj: PolarQuantLinear::from_linear(&layer.up_proj, bits, device)?,
-            down_proj: PolarQuantLinear::from_linear(&layer.down_proj, bits, device)?,
+            q_proj: TurboQuantLinear::from_linear(&layer.q_proj, bits, device)?,
+            k_proj: TurboQuantLinear::from_linear(&layer.k_proj, bits, device)?,
+            v_proj: TurboQuantLinear::from_linear(&layer.v_proj, bits, device)?,
+            o_proj: TurboQuantLinear::from_linear(&layer.o_proj, bits, device)?,
+            gate_proj: TurboQuantLinear::from_linear(&layer.gate_proj, bits, device)?,
+            up_proj: TurboQuantLinear::from_linear(&layer.up_proj, bits, device)?,
+            down_proj: TurboQuantLinear::from_linear(&layer.down_proj, bits, device)?,
         })
     }
 
@@ -191,13 +191,13 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
 
-    println!("PolarQuant End-to-End Model Compression Benchmark");
+    println!("TurboQuantMse End-to-End Model Compression Benchmark");
     println!("==================================================");
     println!(
         "Config: {}L, hidden={}, intermediate={}, heads={}",
         args.num_layers, args.hidden_dim, args.intermediate_dim, args.num_heads
     );
-    println!("Quantization: {}-bit PolarQuant", args.bits);
+    println!("Quantization: {}-bit TurboQuantMse", args.bits);
     println!(
         "Inference: batch={}, seq_len={}, iters={}\n",
         args.batch_size, args.seq_len, args.iters
@@ -216,8 +216,8 @@ fn main() -> Result<()> {
         bytes_to_mb(f32_bytes)
     );
 
-    // ── Phase 2: Quantize to PolarQuant ───────────────────────────────
-    print!("Quantizing to {}-bit PolarQuant... ", args.bits);
+    // ── Phase 2: Quantize to TurboQuantMse ───────────────────────────────
+    print!("Quantizing to {}-bit TurboQuantMse... ", args.bits);
     let start = Instant::now();
     let pq_layers: Vec<TransformerLayerPQ> = f32_layers
         .iter()
