@@ -264,7 +264,10 @@ pub struct ModelWeights {
     layers: Vec<LayerWeights>,
     norm: RmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
+    /// Mask cache keyed by (seq_len, kv_len).
+    /// kv_len = index_pos + seq_len, so the mask is rectangular when prefix
+    /// KV cache entries exist (index_pos > 0).
+    masks: HashMap<(usize, usize), Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
 }
@@ -475,15 +478,39 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
+    /// Build a causal attention mask of shape `(seq_len, kv_len)` where
+    /// `kv_len = index_pos + seq_len`.
+    ///
+    /// When `index_pos == 0` the mask is square `(seq_len, seq_len)` — the
+    /// classic case with an empty KV cache.
+    ///
+    /// When `index_pos > 0` the KV cache already holds `index_pos` entries from
+    /// a previously fed prefix.  The mask becomes rectangular: the first
+    /// `index_pos` columns are all 0 (every query attends to every prefix key)
+    /// and the remaining `seq_len` columns form the standard causal triangle
+    /// (query at global position `index_pos + i` cannot attend to keys at global
+    /// positions `> index_pos + i`).
+    ///
+    /// # Shape example  (index_pos=65, seq_len=4)
+    /// ```text
+    ///              kv 0..64 (prefix)   kv 65  kv 66  kv 67  kv 68
+    /// query 65:       0  0 … 0           0      1      1      1
+    /// query 66:       0  0 … 0           0      0      1      1
+    /// query 67:       0  0 … 0           0      0      0      1
+    /// query 68:       0  0 … 0           0      0      0      0
+    /// ```
+    fn mask(&mut self, seq_len: usize, index_pos: usize, device: &Device) -> Result<Tensor> {
+        let kv_len = index_pos + seq_len;
+        if let Some(mask) = self.masks.get(&(seq_len, kv_len)) {
             Ok(mask.clone())
         } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+            // mask[i][j] = 1 (block) when key position j is a future position
+            // relative to query's global position (index_pos + i).
+            let mask: Vec<_> = (0..seq_len)
+                .flat_map(|i| (0..kv_len).map(move |j| u8::from(j > index_pos + i)))
                 .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
+            let mask = Tensor::from_slice(&mask, (seq_len, kv_len), device)?;
+            self.masks.insert((seq_len, kv_len), mask.clone());
             Ok(mask)
         }
     }
@@ -493,7 +520,7 @@ impl ModelWeights {
         let mask = if seq_len == 1 {
             None
         } else {
-            Some(self.mask(seq_len, x.device())?)
+            Some(self.mask(seq_len, index_pos, x.device())?)
         };
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
