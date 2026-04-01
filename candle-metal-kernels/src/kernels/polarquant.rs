@@ -2,17 +2,14 @@ use crate::utils::EncoderProvider;
 use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
 use objc2_metal::{MTLResourceUsage, MTLSize};
 
-/// Dispatch the PolarQuant fused centroid-dot kernel on Metal.
+fn divide(m: usize, b: usize) -> usize {
+    (m + b - 1) / b
+}
+
+/// Dispatch the PolarQuant SIMD-optimized centroid-dot kernel on Metal.
 ///
-/// Computes `output[b][j] = norms[j] * Σ_i x_rot[b][i] * centroids[unpack(indices, j*d+i)]`
-/// entirely on GPU. No CPU↔GPU transfers needed during inference.
-///
-/// # Arguments
-/// * `x_rot` — pre-rotated input buffer, `[batch, d]` f32
-/// * `indices` — bit-packed centroid indices, `[n_out * d / indices_per_byte]` u8
-/// * `norms` — per-output-row weight norms, `[n_out]` f32
-/// * `centroids` — Lloyd-Max centroid table, `[2^bit_width]` f32
-/// * `output` — output buffer, `[batch, n_out]` f32
+/// Uses SIMD groups (32 threads) with 4 output rows per group,
+/// matching GGML's mul_vec_q_n pattern for bandwidth-optimal access.
 #[allow(clippy::too_many_arguments)]
 pub fn call_polarquant_centroid_dot(
     device: &Device,
@@ -30,19 +27,23 @@ pub fn call_polarquant_centroid_dot(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let name = match bit_width {
-        1 => "polarquant_centroid_dot_1bit",
-        2 => "polarquant_centroid_dot_2bit",
-        3 => "polarquant_centroid_dot_3bit",
-        4 => "polarquant_centroid_dot_4bit",
-        5 => "polarquant_centroid_dot_5bit",
-        6 => "polarquant_centroid_dot_6bit",
-        7 => "polarquant_centroid_dot_7bit",
+        1 => "polarquant_mv_f32_1bit",
+        2 => "polarquant_mv_f32_2bit",
+        3 => "polarquant_mv_f32_3bit",
+        4 => "polarquant_mv_f32_4bit",
+        5 => "polarquant_mv_f32_5bit",
+        6 => "polarquant_mv_f32_6bit",
+        7 => "polarquant_mv_f32_7bit",
         _ => {
             return Err(MetalKernelError::LoadLibraryError(format!(
                 "PolarQuant: unsupported bit_width {bit_width}"
             )))
         }
     };
+
+    const N_DST: usize = 4;
+    const N_SIMDGROUP: usize = 2;
+    const SIMD_WIDTH: usize = 32;
 
     let pipeline = kernels.load_pipeline(device, Source::PolarQuant, name)?;
     let encoder = ep.encoder();
@@ -73,18 +74,19 @@ pub fn call_polarquant_centroid_dot(
     encoder.use_resource(centroids, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
 
-    let thread_group_size = MTLSize {
-        width: 32,
-        height: 1,
-        depth: 1,
-    };
-    let grid_size = MTLSize {
-        width: n_out,
+    let n_row_groups = divide(n_out, N_DST * N_SIMDGROUP);
+    let thread_groups_count = MTLSize {
+        width: n_row_groups,
         height: batch,
         depth: 1,
     };
+    let threads_per_threadgroup = MTLSize {
+        width: SIMD_WIDTH,
+        height: N_SIMDGROUP,
+        depth: 1,
+    };
 
-    encoder.dispatch_threads(grid_size, thread_group_size);
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
 
     Ok(())
 }
