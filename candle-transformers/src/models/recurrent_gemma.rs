@@ -522,7 +522,10 @@ enum TemporalBlock {
 impl TemporalBlock {
     fn clear_kv_cache(&mut self) {
         match self {
-            Self::Recurrent(_) => {} // recurrent state is managed per-step, nothing to clear
+            Self::Recurrent(b) => {
+                b.conv1d_state = None;
+                b.rg_lru.recurrent_states = None;
+            }
             Self::Attention(b) => b.kv_cache = None,
         }
     }
