@@ -618,6 +618,9 @@ impl Model {
         self.encoder.reset_kv_cache()
     }
 
+    /// `seqlen_offset` is unused — GLM-4's attention layers derive position from
+    /// the KV cache size directly (`match &self.kv_cache { Some((k,_)) => k.dim(0)? }`).
+    /// The parameter is accepted for API uniformity with [`CausalLM`].
     pub fn forward(&mut self, xs: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let input_embeds = xs.apply(&self.embedding)?;

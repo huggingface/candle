@@ -420,6 +420,9 @@ impl MixFormerSequentialForCausalLM {
         })
     }
 
+    /// `seqlen_offset` is unused — MixFormer's attention derives position from the
+    /// KV cache size directly (`match &self.kv_cache { Some((k,_)) => k.dim(2)? }`).
+    /// The parameter is accepted for API uniformity with [`CausalLM`].
     pub fn forward(&mut self, xs: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (_b_size, seq_len) = xs.dims2()?;
