@@ -152,7 +152,7 @@ pub struct ModelWeights {
     layers: Vec<LayerWeights>,
     norm: RmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
+    masks: HashMap<(usize, usize), Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
 }
@@ -293,15 +293,13 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
+    fn mask(&mut self, seq_len: usize, index_pos: usize, device: &Device) -> Result<Tensor> {
+        let kv_len = index_pos + seq_len;
+        if let Some(mask) = self.masks.get(&(seq_len, kv_len)) {
             Ok(mask.clone())
         } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
+            let mask = crate::utils::build_causal_mask(seq_len, index_pos, device)?;
+            self.masks.insert((seq_len, kv_len), mask.clone());
             Ok(mask)
         }
     }
@@ -311,7 +309,7 @@ impl ModelWeights {
         let mask = if seq_len == 1 {
             None
         } else {
-            Some(self.mask(seq_len, x.device())?)
+            Some(self.mask(seq_len, index_pos, x.device())?)
         };
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
