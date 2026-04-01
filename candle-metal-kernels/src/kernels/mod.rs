@@ -22,7 +22,7 @@ pub use convolution::*;
 pub use fill::*;
 pub use indexing::*;
 pub use mlx_gemm::{call_mlx_gemm, GemmDType};
-pub use polarquant::call_polarquant_centroid_dot;
+pub use polarquant::{call_polarquant_centroid_dot, call_polarquant_fused_hadamard};
 pub use quantized::{call_quantized_matmul_mm_t, call_quantized_matmul_mv_t, GgmlDType};
 pub use random::*;
 pub use reduce::*;

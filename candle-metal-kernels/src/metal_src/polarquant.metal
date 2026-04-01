@@ -94,6 +94,99 @@ kernel void polarquant_mv_f32_4bit(
     }
 }
 
+// Fused Hadamard rotation + centroid dot product kernel.
+// Eliminates the separate x @ Π^T matmul by doing the Walsh-Hadamard
+// transform in threadgroup shared memory before the centroid dot.
+//
+// Each threadgroup handles one batch element. All SIMD groups cooperate
+// on the Hadamard transform, then each processes N_DST output rows.
+#define PQ_FUSED_THREADS 256  // threads per threadgroup for Hadamard
+kernel void polarquant_mv_fused_hadamard_4bit(
+    device const float*   x         [[buffer(0)]],
+    device const uint8_t* indices   [[buffer(1)]],
+    device const float*   norms     [[buffer(2)]],
+    device const float*   centroids [[buffer(3)]],
+    device       float*   output    [[buffer(4)]],
+    device const float*   signs     [[buffer(5)]],
+    constant     uint&    d         [[buffer(6)]],
+    constant     uint&    n_out     [[buffer(7)]],
+    constant     uint&    batch     [[buffer(8)]],
+    constant     float&   scale     [[buffer(9)]],
+    threadgroup  float*   shared_x  [[threadgroup(0)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    uint   tid   [[thread_index_in_threadgroup]],
+    uint   tiisg [[thread_index_in_simdgroup]],
+    uint   sgitg [[simdgroup_index_in_threadgroup]]
+) {
+    const uint row_group = tgpig.x;
+    const uint batch_id  = tgpig.y;
+
+    // Step 1: Cooperatively load input into shared memory with sign flips
+    device const float* xb = x + batch_id * d;
+    for (uint i = tid; i < d; i += PQ_FUSED_THREADS) {
+        shared_x[i] = xb[i] * signs[i];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Step 2: In-place Walsh-Hadamard transform in shared memory
+    // All threads cooperate on the butterfly passes
+    for (uint h = 1; h < d; h *= 2) {
+        for (uint i = tid; i < d / 2; i += PQ_FUSED_THREADS) {
+            uint grp = i / h;
+            uint pos = i % h;
+            uint j = grp * h * 2 + pos;
+            float a = shared_x[j];
+            float b = shared_x[j + h];
+            shared_x[j]     = a + b;
+            shared_x[j + h] = a - b;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // Step 3: Apply scale (1/√d)
+    for (uint i = tid; i < d; i += PQ_FUSED_THREADS) {
+        shared_x[i] *= scale;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Step 4: Centroid dot product (same as regular kernel)
+    const uint n_sg = PQ_FUSED_THREADS / PQ_SIMD_WIDTH;
+    const uint first_row = (row_group * n_sg + sgitg) * PQ_N_DST;
+    if (first_row >= n_out) return;
+
+    float cent[16];
+    for (uint i = 0; i < 16; i++) {
+        cent[i] = centroids[i];
+    }
+
+    float sumf[PQ_N_DST] = {0.f};
+    const uint nr = min((uint)PQ_N_DST, n_out - first_row);
+    const uint half_d = d / 2;
+
+    for (uint pair = tiisg; pair < half_d; pair += PQ_SIMD_WIDTH) {
+        uint i0 = pair * 2;
+        uint i1 = i0 + 1;
+        float xval0 = shared_x[i0];
+        float xval1 = shared_x[i1];
+
+        for (uint row_off = 0; row_off < nr; row_off++) {
+            uint row = first_row + row_off;
+            uint byte_pos = row * half_d + pair;
+            uint8_t packed_byte = indices[byte_pos];
+            uint idx0 = packed_byte & 0xF;
+            uint idx1 = (packed_byte >> 4) & 0xF;
+            sumf[row_off] += xval0 * cent[idx0] + xval1 * cent[idx1];
+        }
+    }
+
+    for (uint row_off = 0; row_off < nr; row_off++) {
+        float total = simd_sum(sumf[row_off]);
+        if (tiisg == 0) {
+            output[batch_id * n_out + first_row + row_off] = total * norms[first_row + row_off];
+        }
+    }
+}
+
 // Generic bit-width version
 template<uint BIT_WIDTH>
 kernel void polarquant_mv_f32_generic(

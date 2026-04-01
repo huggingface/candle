@@ -483,7 +483,7 @@ impl PolarQuant {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct PolarQuantMatMul {
-    /// Rotation matrix transpose: `[d, d]` F32 — on target device.
+    /// Rotation matrix transpose: `[d, d]` F32 — on target device (fallback path).
     rotation_t: Tensor,
     /// Scalar centroid table: `[2^b]` F32 — on target device.
     centroids: Tensor,
@@ -491,6 +491,8 @@ pub struct PolarQuantMatMul {
     packed_indices: Tensor,
     /// Per-row weight norms: `[n_out]` F32 — on target device.
     norms: Tensor,
+    /// Hadamard sign vector: `[d]` F32 — on target device. None for dense rotation.
+    signs: Option<Tensor>,
     /// CPU copies for CPU path.
     packed_indices_cpu: Vec<u8>,
     norms_cpu: Vec<f32>,
@@ -569,11 +571,21 @@ impl PolarQuantMatMul {
         let norms_tensor = Tensor::from_vec(norms_cpu.clone(), (norms_cpu.len(),), &Device::Cpu)?
             .to_device(device)?;
 
+        // Store Hadamard signs on device for fused kernel
+        let signs = quantizer
+            .hadamard_signs()
+            .map(|s| {
+                Tensor::from_vec(s.to_vec(), (s.len(),), &Device::Cpu)
+                    .and_then(|t| t.to_device(device))
+            })
+            .transpose()?;
+
         Ok(Self {
             rotation_t,
             centroids: centroids_tensor,
             packed_indices: packed_tensor,
             norms: norms_tensor,
+            signs,
             packed_indices_cpu: packed_cpu,
             norms_cpu,
             centroids_cpu,
@@ -635,12 +647,9 @@ impl PolarQuantMatMul {
             x.reshape((batch, d))?
         };
 
-        // Step 1: Rotate input via BLAS matmul
-        let x_rot = x_2d.matmul(&self.rotation_t.to_device(x.device())?)?;
-
-        // Step 2: Centroid dot product from compressed indices
         let y_2d = if x.device().is_cpu() {
-            // CPU path: scalar loop
+            // CPU path: Hadamard rotation + scalar centroid dot
+            let x_rot = x_2d.matmul(&self.rotation_t)?;
             let x_rot_data: Vec<f32> = x_rot.flatten_all()?.to_vec1()?;
             let mut output = vec![0f32; batch * n];
             for row in 0..n {
@@ -659,63 +668,129 @@ impl PolarQuantMatMul {
             }
             Tensor::from_vec(output, (batch, n), &Device::Cpu)?
         } else {
-            // GPU path: Metal shader
+            // GPU path: try fused Hadamard kernel, fallback to rotation + centroid dot
             #[cfg(feature = "metal")]
             {
                 use candle::{backend::BackendStorage, MetalStorage, Storage};
 
-                let (xs, xl) = x_rot.storage_and_layout();
-                let (ps, _) = self.packed_indices.storage_and_layout();
-                let (ns, _) = self.norms.storage_and_layout();
-                let (cs, _) = self.centroids.storage_and_layout();
+                if let Some(ref signs_tensor) = self.signs {
+                    // Fused path: Hadamard in shared memory, no rotation matmul
+                    let x_dev = x_2d.to_device(x.device())?.contiguous()?;
+                    let scale = 1.0f32 / (d as f32).sqrt();
 
-                let out_metal = match (&*xs, &*ps, &*ns, &*cs) {
-                    (
-                        Storage::Metal(xm),
-                        Storage::Metal(pm),
-                        Storage::Metal(nm),
-                        Storage::Metal(cm),
-                    ) => {
-                        let dev = xm.device();
-                        let out_buf = dev.new_buffer(batch * n, DType::F32, "pq_out")?;
-                        let enc = dev.command_encoder()?;
-                        candle_metal_kernels::call_polarquant_centroid_dot(
-                            dev.device(),
-                            &enc,
-                            dev.kernels(),
-                            self.bit_width,
-                            d,
-                            n,
-                            batch,
-                            xm.buffer(),
-                            xl.start_offset() * DType::F32.size_in_bytes(),
-                            pm.buffer(),
-                            nm.buffer(),
-                            cm.buffer(),
-                            &out_buf,
-                        )
-                        .map_err(candle::Error::wrap)?;
-                        Ok::<_, candle::Error>(MetalStorage::new(
-                            out_buf,
-                            dev.clone(),
-                            batch * n,
-                            DType::F32,
-                        ))
-                    }
-                    _ => candle::bail!("Expected Metal storage"),
-                }?;
+                    let (xs, xl) = x_dev.storage_and_layout();
+                    let (ps, _) = self.packed_indices.storage_and_layout();
+                    let (ns, _) = self.norms.storage_and_layout();
+                    let (cs, _) = self.centroids.storage_and_layout();
+                    let (ss, _) = signs_tensor.storage_and_layout();
 
-                drop(xs);
-                drop(ps);
-                drop(ns);
-                drop(cs);
+                    let out_metal = match (&*xs, &*ps, &*ns, &*cs, &*ss) {
+                        (
+                            Storage::Metal(xm),
+                            Storage::Metal(pm),
+                            Storage::Metal(nm),
+                            Storage::Metal(cm),
+                            Storage::Metal(sm),
+                        ) => {
+                            let dev = xm.device();
+                            let out_buf = dev.new_buffer(batch * n, DType::F32, "pq_fused")?;
+                            let enc = dev.command_encoder()?;
+                            candle_metal_kernels::call_polarquant_fused_hadamard(
+                                dev.device(),
+                                &enc,
+                                dev.kernels(),
+                                d,
+                                n,
+                                batch,
+                                xm.buffer(),
+                                xl.start_offset() * DType::F32.size_in_bytes(),
+                                pm.buffer(),
+                                nm.buffer(),
+                                cm.buffer(),
+                                sm.buffer(),
+                                scale,
+                                &out_buf,
+                            )
+                            .map_err(candle::Error::wrap)?;
+                            Ok::<_, candle::Error>(MetalStorage::new(
+                                out_buf,
+                                dev.clone(),
+                                batch * n,
+                                DType::F32,
+                            ))
+                        }
+                        _ => candle::bail!("Expected Metal storage"),
+                    }?;
 
-                Tensor::from_storage(
-                    Storage::Metal(out_metal),
-                    (batch, n),
-                    candle::op::BackpropOp::none(),
-                    false,
-                )
+                    drop(xs);
+                    drop(ps);
+                    drop(ns);
+                    drop(cs);
+                    drop(ss);
+
+                    Tensor::from_storage(
+                        Storage::Metal(out_metal),
+                        (batch, n),
+                        candle::op::BackpropOp::none(),
+                        false,
+                    )
+                } else {
+                    // Fallback: rotation matmul + centroid dot shader
+                    let x_rot = x_2d.matmul(&self.rotation_t.to_device(x.device())?)?;
+
+                    let (xs, xl) = x_rot.storage_and_layout();
+                    let (ps, _) = self.packed_indices.storage_and_layout();
+                    let (ns, _) = self.norms.storage_and_layout();
+                    let (cs, _) = self.centroids.storage_and_layout();
+
+                    let out_metal = match (&*xs, &*ps, &*ns, &*cs) {
+                        (
+                            Storage::Metal(xm),
+                            Storage::Metal(pm),
+                            Storage::Metal(nm),
+                            Storage::Metal(cm),
+                        ) => {
+                            let dev = xm.device();
+                            let out_buf = dev.new_buffer(batch * n, DType::F32, "pq_out")?;
+                            let enc = dev.command_encoder()?;
+                            candle_metal_kernels::call_polarquant_centroid_dot(
+                                dev.device(),
+                                &enc,
+                                dev.kernels(),
+                                self.bit_width,
+                                d,
+                                n,
+                                batch,
+                                xm.buffer(),
+                                xl.start_offset() * DType::F32.size_in_bytes(),
+                                pm.buffer(),
+                                nm.buffer(),
+                                cm.buffer(),
+                                &out_buf,
+                            )
+                            .map_err(candle::Error::wrap)?;
+                            Ok::<_, candle::Error>(MetalStorage::new(
+                                out_buf,
+                                dev.clone(),
+                                batch * n,
+                                DType::F32,
+                            ))
+                        }
+                        _ => candle::bail!("Expected Metal storage"),
+                    }?;
+
+                    drop(xs);
+                    drop(ps);
+                    drop(ns);
+                    drop(cs);
+
+                    Tensor::from_storage(
+                        Storage::Metal(out_metal),
+                        (batch, n),
+                        candle::op::BackpropOp::none(),
+                        false,
+                    )
+                }
             }
             #[cfg(not(feature = "metal"))]
             {
