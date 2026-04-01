@@ -56,7 +56,9 @@ fn main() -> Result<()> {
         other => bail!("unsupported dtype {other}"),
     };
 
-    let model_id = args.model_id.unwrap_or_else(|| "google/gemma-2-2b".to_string());
+    let model_id = args
+        .model_id
+        .unwrap_or_else(|| "google/gemma-2-2b".to_string());
     let revision = args.revision.unwrap_or_else(|| "main".to_string());
 
     println!("loading {model_id}");
