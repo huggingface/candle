@@ -543,7 +543,6 @@ impl ModelWeights {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::utils::build_causal_mask;
     use candle::{Device, Result};
 
