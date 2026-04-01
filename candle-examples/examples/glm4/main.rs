@@ -16,7 +16,7 @@ enum Model {
 impl Model {
     fn forward(&mut self, input_ids: &Tensor, pos: usize) -> candle::Result<Tensor> {
         match self {
-            Self::Old(m) => m.forward(input_ids),
+            Self::Old(m) => m.forward(input_ids, 0),
             Self::New(m) => m.forward(input_ids, pos),
         }
     }

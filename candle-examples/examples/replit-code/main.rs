@@ -22,10 +22,10 @@ enum Model {
 }
 
 impl Model {
-    fn forward(&mut self, xs: &Tensor) -> candle::Result<Tensor> {
+    fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> candle::Result<Tensor> {
         match self {
-            Self::M(model) => model.forward(xs),
-            Self::Q(model) => model.forward(xs),
+            Self::M(model) => model.forward(xs, seqlen_offset),
+            Self::Q(model) => model.forward(xs, seqlen_offset),
         }
     }
 }

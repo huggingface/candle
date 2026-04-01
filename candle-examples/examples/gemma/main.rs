@@ -333,18 +333,24 @@ fn main() -> Result<()> {
         | Which::CodeBase7B
         | Which::CodeInstruct2B
         | Which::CodeInstruct7B => {
-            let config: Config1 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
-            let model = Model1::new(args.use_flash_attn, &config, vb)?;
+            let mut config: Config1 =
+                serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+            config.use_flash_attn = args.use_flash_attn;
+            let model = Model1::new(&config, vb)?;
             Model::V1(model)
         }
         Which::BaseV2_2B | Which::InstructV2_2B | Which::BaseV2_9B | Which::InstructV2_9B => {
-            let config: Config2 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
-            let model = Model2::new(args.use_flash_attn, &config, vb)?;
+            let mut config: Config2 =
+                serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+            config.use_flash_attn = args.use_flash_attn;
+            let model = Model2::new(&config, vb)?;
             Model::V2(model)
         }
         Which::BaseV3_1B | Which::InstructV3_1B => {
-            let config: Config3 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
-            let model = Model3::new(args.use_flash_attn, &config, vb)?;
+            let mut config: Config3 =
+                serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+            config.use_flash_attn = args.use_flash_attn;
+            let model = Model3::new(&config, vb)?;
             Model::V3(model)
         }
     };

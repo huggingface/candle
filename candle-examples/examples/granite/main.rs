@@ -125,8 +125,8 @@ fn main() -> Result<()> {
 
         let tokenizer_filename = api.get("tokenizer.json")?;
         let config_filename = api.get("config.json")?;
-        let config: GraniteConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
-        let config = config.into_config(args.use_flash_attn);
+        let mut config: GraniteConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
+        config.use_flash_attn = args.use_flash_attn;
 
         let filenames = match args.model_type {
             GraniteModel::Granite7bInstruct => {

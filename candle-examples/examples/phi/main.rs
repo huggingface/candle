@@ -479,22 +479,23 @@ fn mmlu<P: AsRef<std::path::Path>>(
             let tokens = tokenizer.encode(prompt.as_str(), true).map_err(E::msg)?;
             let tokens = tokens.get_ids().to_vec();
             let input = Tensor::new(tokens, device)?.unsqueeze(0)?;
+            // Each question is evaluated as a fresh context (seqlen_offset=0).
             let logits = match &mut model {
                 Model::MixFormer(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input, seqlen_offset)?
+                    m.forward(&input, 0)?
                 }
                 Model::Phi(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input, seqlen_offset)?
+                    m.forward(&input, 0)?
                 }
                 Model::Phi3(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input, seqlen_offset)?
+                    m.forward(&input, 0)?
                 }
                 Model::Quantized(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input, seqlen_offset)?
+                    m.forward(&input, 0)?
                 }
             };
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;

@@ -87,7 +87,7 @@ impl TextGeneration {
             let context_size = if seqlen_offset > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = if index > 0 {
+            let logits = if seqlen_offset > 0 {
                 match self.model {
                     Model::Moondream(ref mut model) => {
                         model.text_model.forward(&input, seqlen_offset)?

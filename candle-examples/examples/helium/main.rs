@@ -317,8 +317,9 @@ fn main() -> Result<()> {
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         let model = match &config {
             Config::V1(c) => {
-                let c = c.clone().into_config(false);
-                let model = ModelV1::load(vb, &c)?;
+                let mut c = c.clone();
+                c.use_flash_attn = false;
+                let model = ModelV1::load(vb.clone(), &c)?;
                 let cache = CacheV1::new(true, dtype, &c, &device)?;
                 Model::V1 { model, cache }
             }

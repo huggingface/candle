@@ -94,8 +94,10 @@ fn main() -> Result<()> {
     let options = AutoModelOptions {
         revision: args.revision.clone(),
         use_flash_attn: args.flash_attn,
+        dtype: Some(dtype),
+        quantization: None,
     };
-    let mut model = AutoModelForCausalLM::from_pretrained(&args.model, dtype, &device, options)?;
+    let mut model = AutoModelForCausalLM::from_pretrained(&args.model, &device, options)?;
 
     println!("Model loaded: {}", model.model_type());
     println!("Generating from prompt: \"{}\"", args.prompt);

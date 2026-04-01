@@ -66,7 +66,7 @@ impl TextGeneration {
         let mut new_tokens = vec![];
         let start_gen = std::time::Instant::now();
         let mut seqlen_offset = 0usize;
-        for _ in 0..sample_len {
+        for index in 0..sample_len {
             let start_gen = std::time::Instant::now();
             let context_size = if self.model.config().use_cache && seqlen_offset > 0 {
                 1
