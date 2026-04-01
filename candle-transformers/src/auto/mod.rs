@@ -37,11 +37,11 @@
 //!    ```
 //! 2. Add a match arm in `auto/causal_lm.rs` `load_float_model()` or `load_gguf_model()`.
 
-mod config;
 mod causal_lm;
+mod config;
 
+pub use causal_lm::{AutoModelForCausalLM, AutoModelOptions, CausalLM, QuantizationFormat};
 pub use config::{AutoConfig, Weights};
-pub use causal_lm::{CausalLM, AutoModelForCausalLM, AutoModelOptions, QuantizationFormat};
 
 /// Build the `load_gguf_model` dispatch from a compact GGUF model registry.
 ///
@@ -128,9 +128,15 @@ macro_rules! make_auto_map {
 macro_rules! impl_causal_lm {
     ($ty:ty, $name:literal) => {
         impl $crate::auto::CausalLM for $ty {
-            fn model_type(&self) -> &'static str { $name }
+            fn model_type(&self) -> &'static str {
+                $name
+            }
             #[allow(unconditional_recursion)]
-            fn forward(&mut self, ids: &::candle::Tensor, offset: usize) -> ::candle::Result<::candle::Tensor> {
+            fn forward(
+                &mut self,
+                ids: &::candle::Tensor,
+                offset: usize,
+            ) -> ::candle::Result<::candle::Tensor> {
                 let m: &mut $ty = self;
                 m.forward(ids, offset)
             }
@@ -188,7 +194,8 @@ macro_rules! causal_lm_wrapper {
                 input_ids: &::candle::Tensor,
                 seqlen_offset: usize,
             ) -> ::candle::Result<::candle::Tensor> {
-                self.model.forward(input_ids, seqlen_offset, &mut self.cache)
+                self.model
+                    .forward(input_ids, seqlen_offset, &mut self.cache)
             }
 
             pub fn clear_kv_cache(&mut self) {

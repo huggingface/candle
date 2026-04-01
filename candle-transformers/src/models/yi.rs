@@ -370,6 +370,5 @@ impl Model {
             layer.self_attn.kv_cache = None;
         }
     }
-
 }
 crate::impl_causal_lm!(Model, "yi");

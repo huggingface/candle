@@ -51,7 +51,11 @@ struct Args {
     #[arg(long)]
     revision: Option<String>,
 
-    #[arg(long, default_value_t = true, long_help = "Run on CPU by default otherwise on GPU")]
+    #[arg(
+        long,
+        default_value_t = true,
+        long_help = "Run on CPU by default otherwise on GPU"
+    )]
     cpu: bool,
 
     #[arg(long, long_help = "Use Flash Attention")]
@@ -105,11 +109,7 @@ fn main() -> Result<()> {
         .to_vec();
 
     let mut token_output = TokenOutputStream::new(tokenizer);
-    let mut logits_processor = LogitsProcessor::new(
-        args.seed,
-        Some(args.temperature),
-        args.top_p,
-    );
+    let mut logits_processor = LogitsProcessor::new(args.seed, Some(args.temperature), args.top_p);
 
     let mut all_tokens = tokens.clone();
     let mut generated = 0;
@@ -146,7 +146,11 @@ fn main() -> Result<()> {
         }
 
         // Stop on EOS
-        if let Some(eos) = token_output.tokenizer().get_vocab(true).get("<|endoftext|>") {
+        if let Some(eos) = token_output
+            .tokenizer()
+            .get_vocab(true)
+            .get("<|endoftext|>")
+        {
             if next_token == *eos {
                 break;
             }
@@ -167,4 +171,3 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-

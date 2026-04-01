@@ -549,13 +549,6 @@ pub struct Model {
     output_layer: Linear,
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
-        .collect();
-    Tensor::from_slice(&mask, (size, size), device)
-}
-
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb = vb.pp("transformer");
@@ -581,12 +574,14 @@ impl Model {
     pub fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let input_embeds = xs.apply(&self.embedding)?;
-        let attention_mask = if seq_len <= 1 && seqlen_offset == 0 {
-            None
-        } else if seq_len <= 1 {
+        let attention_mask = if seq_len <= 1 {
             None // single-token decode: KV cache handles position, no causal mask needed
         } else {
-            Some(crate::utils::build_causal_mask(seq_len, seqlen_offset, xs.device())?)
+            Some(crate::utils::build_causal_mask(
+                seq_len,
+                seqlen_offset,
+                xs.device(),
+            )?)
         };
         let xs = self.encoder.forward(&input_embeds, &attention_mask)?;
         let lm_logits = xs.i(seq_len - 1)?.apply(&self.output_layer)?;

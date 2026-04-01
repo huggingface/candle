@@ -506,4 +506,3 @@ crate::causal_lm_wrapper!(LlamaForCausalLM, "llama",
     cache: Cache,
     cfg:   Config,
 );
-

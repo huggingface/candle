@@ -135,13 +135,6 @@ struct Attention {
     span: tracing::Span,
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
-        .collect();
-    Tensor::from_slice(&mask, (size, size), device)
-}
-
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
@@ -350,7 +343,11 @@ impl Model {
         let mask = if seq_len <= 1 {
             None // single-token: no causal mask, KV cache + RoPE handle position
         } else {
-            Some(crate::utils::build_causal_mask(seq_len, seqlen_offset, xs.device())?)
+            Some(crate::utils::build_causal_mask(
+                seq_len,
+                seqlen_offset,
+                xs.device(),
+            )?)
         };
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, mask.as_ref())?;

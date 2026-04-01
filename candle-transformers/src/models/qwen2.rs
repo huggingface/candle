@@ -404,4 +404,3 @@ impl ModelForCausalLM {
 }
 
 crate::impl_causal_lm!(ModelForCausalLM, "qwen2");
-

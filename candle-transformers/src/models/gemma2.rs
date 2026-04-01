@@ -372,8 +372,12 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer =
-                DecoderLayer::new(rotary_emb.clone(), cfg.use_flash_attn, cfg, vb_l.pp(layer_idx))?;
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg.use_flash_attn,
+                cfg,
+                vb_l.pp(layer_idx),
+            )?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;

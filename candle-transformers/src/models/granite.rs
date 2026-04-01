@@ -67,7 +67,6 @@ impl Config {
 /// Backward-compatible alias — `Config` is now directly deserializable.
 pub type GraniteConfig = Config;
 
-
 #[derive(Debug, Clone)]
 pub struct Cache {
     masks: HashMap<(usize, usize), Tensor>,
