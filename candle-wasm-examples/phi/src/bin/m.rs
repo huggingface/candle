@@ -129,8 +129,8 @@ impl Model {
         let dev = Device::Cpu;
         let input = Tensor::new(tokens, &dev)?.unsqueeze(0)?;
         let logits = match &mut self.model {
-            SelectedModel::MixFormer(m) => m.forward(&input)?,
-            SelectedModel::Quantized(m) => m.forward(&input)?,
+            SelectedModel::MixFormer(m) => m.forward(&input, 0)?,
+            SelectedModel::Quantized(m) => m.forward(&input, 0)?,
         };
         let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
         let logits = if self.repeat_penalty == 1. {

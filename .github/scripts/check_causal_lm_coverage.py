@@ -32,13 +32,10 @@ ALLOWLIST = {
     "text.rs":          "Sub-module used by multi-modal models",
     "transformer.rs":   "Generic transformer sub-module",
 
-    # ── External-cache pattern: needs ForCausalLM wrapper (TODO) ─────────────
-    "granitemoehybrid.rs":
-        "TODO: uses external GraniteMoeHybridCache, needs causal_lm_wrapper!",
-    "llama2_c.rs":
-        "TODO: Karpathy llama2.c variant with external Cache, needs causal_lm_wrapper!",
+    # ── quantized_llama2_c: uses quantized_var_builder::VarBuilder (not candle_nn::VarBuilder)
+    # so causal_lm_wrapper! can't be applied; requires a GGML-specific loader
     "quantized_llama2_c.rs":
-        "TODO: quantized llama2.c with external Cache, needs causal_lm_wrapper!",
+        "TODO: uses quantized_var_builder::VarBuilder, incompatible with causal_lm_wrapper!",
 
     # ── Voxtral: speech+language model, speech-specific forward ──────────────
     "voxtral_llama.rs":

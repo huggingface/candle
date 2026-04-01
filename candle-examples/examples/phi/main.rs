@@ -93,9 +93,9 @@ impl TextGeneration {
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
             let logits = match &mut self.model {
-                Model::MixFormer(m) => m.forward(&input)?,
-                Model::Phi(m) => m.forward(&input)?,
-                Model::Quantized(m) => m.forward(&input)?,
+                Model::MixFormer(m) => m.forward(&input, 0)?,
+                Model::Phi(m) => m.forward(&input, 0)?,
+                Model::Quantized(m) => m.forward(&input, 0)?,
                 Model::Phi3(m) => m.forward(&input, pos)?.i((.., 0, ..))?,
             };
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
@@ -480,11 +480,11 @@ fn mmlu<P: AsRef<std::path::Path>>(
             let logits = match &mut model {
                 Model::MixFormer(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input)?
+                    m.forward(&input, 0)?
                 }
                 Model::Phi(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input)?
+                    m.forward(&input, 0)?
                 }
                 Model::Phi3(m) => {
                     m.clear_kv_cache();
@@ -492,7 +492,7 @@ fn mmlu<P: AsRef<std::path::Path>>(
                 }
                 Model::Quantized(m) => {
                     m.clear_kv_cache();
-                    m.forward(&input)?
+                    m.forward(&input, 0)?
                 }
             };
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;

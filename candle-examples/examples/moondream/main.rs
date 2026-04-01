@@ -88,8 +88,8 @@ impl TextGeneration {
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
             let logits = if index > 0 {
                 match self.model {
-                    Model::Moondream(ref mut model) => model.text_model.forward(&input)?,
-                    Model::Quantized(ref mut model) => model.text_model.forward(&input)?,
+                    Model::Moondream(ref mut model) => model.text_model.forward(&input, 0)?,
+                    Model::Quantized(ref mut model) => model.text_model.forward(&input, 0)?,
                 }
             } else {
                 let bos_token = Tensor::new(&[bos_token], &self.device)?.unsqueeze(0)?;

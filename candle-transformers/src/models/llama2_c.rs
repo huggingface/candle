@@ -371,3 +371,30 @@ impl Llama {
         })
     }
 }
+pub struct Llama2CForCausalLM {
+    model: Llama,
+    cache: Cache,
+}
+
+impl Llama2CForCausalLM {
+    pub fn new(cfg: &Config, vb: candle_nn::VarBuilder) -> candle::Result<Self> {
+        let cache = Cache::new(true, cfg, vb.clone())?;
+        let model = Llama::load(vb, cfg.clone())?;
+        Ok(Self { model, cache })
+    }
+
+    pub fn forward(
+        &mut self,
+        input_ids: &candle::Tensor,
+        seqlen_offset: usize,
+    ) -> candle::Result<candle::Tensor> {
+        self.model
+            .forward(input_ids, seqlen_offset, &mut self.cache)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
+    }
+}
+
+crate::impl_causal_lm!(Llama2CForCausalLM, "llama2_c");

@@ -77,7 +77,7 @@ impl TextGeneration {
             let context_size = if index > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input)?;
+            let logits = self.model.forward(&input, 0)?;
             let logits = logits.squeeze(0)?.to_dtype(self.dtype)?;
             let logits = if self.repeat_penalty == 1. {
                 logits

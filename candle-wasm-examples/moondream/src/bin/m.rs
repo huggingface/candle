@@ -228,8 +228,8 @@ impl Model {
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
         let logits = if self.index > 0 {
             match self.model {
-                SelectedModel::Moondream(ref mut model) => model.text_model.forward(&input)?,
-                SelectedModel::Quantized(ref mut model) => model.text_model.forward(&input)?,
+                SelectedModel::Moondream(ref mut model) => model.text_model.forward(&input, 0)?,
+                SelectedModel::Quantized(ref mut model) => model.text_model.forward(&input, 0)?,
             }
         } else {
             match self.model {
