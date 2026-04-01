@@ -504,12 +504,7 @@ impl ModelWeights {
         if let Some(mask) = self.masks.get(&(seq_len, kv_len)) {
             Ok(mask.clone())
         } else {
-            // mask[i][j] = 1 (block) when key position j is a future position
-            // relative to query's global position (index_pos + i).
-            let mask: Vec<_> = (0..seq_len)
-                .flat_map(|i| (0..kv_len).map(move |j| u8::from(j > index_pos + i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (seq_len, kv_len), device)?;
+            let mask = crate::utils::build_causal_mask(seq_len, index_pos, device)?;
             self.masks.insert((seq_len, kv_len), mask.clone());
             Ok(mask)
         }
@@ -543,5 +538,99 @@ impl ModelWeights {
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
         self.output.forward(&x)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::{Device, Result};
+    use crate::utils::build_causal_mask;
+
+    // ── Mask shape tests ──────────────────────────────────────────────────────
+
+    /// Classic square mask: index_pos=0 produces (seq_len, seq_len).
+    #[test]
+    fn causal_mask_square_shape() -> Result<()> {
+        let mask = build_causal_mask(4, 0, &Device::Cpu)?;
+        assert_eq!(mask.dims(), [4, 4]);
+        Ok(())
+    }
+
+    /// Rectangular mask: index_pos=N produces (seq_len, N + seq_len).
+    #[test]
+    fn causal_mask_rectangular_shape() -> Result<()> {
+        let mask = build_causal_mask(4, 65, &Device::Cpu)?;
+        assert_eq!(mask.dims(), [4, 69]);
+        Ok(())
+    }
+
+    // ── Mask value tests ──────────────────────────────────────────────────────
+
+    /// Square mask values: standard lower-triangular pattern (0=attend, 1=block).
+    ///
+    /// For seq_len=3, index_pos=0:
+    ///   row 0 (global pos 0): attend to pos 0             → [0, 1, 1]
+    ///   row 1 (global pos 1): attend to pos 0..1           → [0, 0, 1]
+    ///   row 2 (global pos 2): attend to pos 0..2           → [0, 0, 0]
+    #[test]
+    fn causal_mask_square_values() -> Result<()> {
+        let mask = build_causal_mask(3, 0, &Device::Cpu)?;
+        let data: Vec<u8> = mask.flatten_all()?.to_vec1()?;
+        assert_eq!(data, [0, 1, 1, 0, 0, 1, 0, 0, 0]);
+        Ok(())
+    }
+
+    /// Rectangular mask values: prefix columns are all-zero, user columns
+    /// form the causal triangle.
+    ///
+    /// For seq_len=3, index_pos=2 → kv_len=5:
+    ///   row 0 (global pos 2): attend to kv 0..2  → [0,0, 0,1,1]
+    ///   row 1 (global pos 3): attend to kv 0..3  → [0,0, 0,0,1]
+    ///   row 2 (global pos 4): attend to kv 0..4  → [0,0, 0,0,0]
+    #[test]
+    fn causal_mask_rectangular_values() -> Result<()> {
+        let mask = build_causal_mask(3, 2, &Device::Cpu)?;
+        let data: Vec<u8> = mask.flatten_all()?.to_vec1()?;
+        #[rustfmt::skip]
+        assert_eq!(data, [
+            0, 0,  0, 1, 1,
+            0, 0,  0, 0, 1,
+            0, 0,  0, 0, 0,
+        ]);
+        Ok(())
+    }
+
+    /// A single-token query (seq_len=1) with prefix produces a single row
+    /// of all zeros — it can attend to every key including itself.
+    #[test]
+    fn causal_mask_single_query_with_prefix() -> Result<()> {
+        let mask = build_causal_mask(1, 10, &Device::Cpu)?;
+        assert_eq!(mask.dims(), [1, 11]);
+        let data: Vec<u8> = mask.flatten_all()?.to_vec1()?;
+        assert!(data.iter().all(|&v| v == 0), "single-query mask should be all-zero");
+        Ok(())
+    }
+
+    // ── Mask broadcast compatibility test ─────────────────────────────────────
+
+    /// Verify the mask can be broadcast to (batch, heads, seq_len, kv_len) —
+    /// the exact shape produced by `Q @ K^T` in forward_attn.
+    /// This is the broadcast that previously panicked when index_pos > 0.
+    #[test]
+    fn causal_mask_broadcasts_to_attention_shape() -> Result<()> {
+        let batch = 1usize;
+        let heads = 8usize;
+        let seq_len = 4usize;
+        let index_pos = 10usize;
+
+        let mask = build_causal_mask(seq_len, index_pos, &Device::Cpu)?;
+        // Simulate the attention score shape Q @ K^T → (batch, heads, seq_len, kv_len)
+        let kv_len = index_pos + seq_len;
+        let att_shape = &[batch, heads, seq_len, kv_len];
+        let broadcasted = mask.broadcast_as(att_shape.as_slice())?;
+        assert_eq!(broadcasted.dims(), att_shape);
+        Ok(())
     }
 }
