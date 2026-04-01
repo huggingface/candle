@@ -1,13 +1,12 @@
-//! TurboQuantMse Real-Model Benchmark (Qwen3)
+//! TurboQuant KV Cache Real-Model Benchmark (Qwen3)
 //!
 //! Loads a Qwen3 model from HuggingFace, runs F32 generation as baseline, then
-//! quantizes all attention/MLP Linear layers with TurboQuantMse and re-runs
+//! loads the same model with TurboQuantMse-quantized KV cache and re-runs
 //! generation to compare tok/sec and output quality.
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Module, Result as CResult, Tensor};
 use candle_nn::kv_cache::{ConcatKvCache, QuantizedKvCache};
-use candle_nn::turboquant_nn::{TurboQuantLinear, TurboQuantMseLinear};
 use candle_nn::{Activation, VarBuilder};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::qwen3::Config;
@@ -52,7 +51,7 @@ impl RotaryEmbedding {
 }
 
 #[derive(Parser, Debug)]
-#[command(about = "TurboQuantMse Real-Model Benchmark (Qwen3)")]
+#[command(about = "TurboQuant KV Cache Real-Model Benchmark (Qwen3)")]
 struct Args {
     #[arg(long)]
     cpu: bool,
@@ -78,36 +77,12 @@ struct Args {
 
     /// Skip F32 baseline (for large models that don't fit twice in memory).
     #[arg(long)]
-    pq_only: bool,
-
-    /// Quantize KV cache only (F32 weights). Tests the paper's actual claim.
-    #[arg(long)]
-    kv_only: bool,
-
-    /// Use MSE-only weight quantization (no QJL). Faster inference, full b bits for MSE.
-    #[arg(long)]
-    mse_only: bool,
+    skip_baseline: bool,
 }
 
-// ── TurboQuantMse-enabled Qwen3 model ──────────────────────────────────
-// Mirrors the upstream Qwen3 architecture but uses TurboQuantLinear for
-// weight storage and QuantizedKvCache for KV compression.
-
-enum LinearLayer {
-    F32(candle_nn::Linear),
-    PQ(TurboQuantLinear),
-    Mse(TurboQuantMseLinear),
-}
-
-impl Module for LinearLayer {
-    fn forward(&self, x: &Tensor) -> CResult<Tensor> {
-        match self {
-            Self::F32(l) => l.forward(x),
-            Self::PQ(l) => l.forward(x),
-            Self::Mse(l) => l.forward(x),
-        }
-    }
-}
+// ── TurboQuant KV-cache-enabled Qwen3 model ────────────────────────────
+// Mirrors the upstream Qwen3 architecture with F32 weights and
+// QuantizedKvCache for KV compression.
 
 enum KvCacheLayer {
     Plain(ConcatKvCache),
@@ -130,9 +105,9 @@ impl KvCacheLayer {
 }
 
 struct MLP {
-    gate_proj: LinearLayer,
-    up_proj: LinearLayer,
-    down_proj: LinearLayer,
+    gate_proj: candle_nn::Linear,
+    up_proj: candle_nn::Linear,
+    down_proj: candle_nn::Linear,
     act_fn: Activation,
 }
 
@@ -145,10 +120,10 @@ impl MLP {
 }
 
 struct Attention {
-    q_proj: LinearLayer,
-    k_proj: LinearLayer,
-    v_proj: LinearLayer,
-    o_proj: LinearLayer,
+    q_proj: candle_nn::Linear,
+    k_proj: candle_nn::Linear,
+    v_proj: candle_nn::Linear,
+    o_proj: candle_nn::Linear,
     q_norm: candle_nn::RmsNorm,
     k_norm: candle_nn::RmsNorm,
     num_heads: usize,
@@ -235,19 +210,13 @@ struct BenchModel {
     embed: candle_nn::Embedding,
     layers: Vec<Layer>,
     norm: candle_nn::RmsNorm,
-    lm_head: LinearLayer,
+    lm_head: candle_nn::Linear,
     device: Device,
     dtype: DType,
 }
 
 impl BenchModel {
-    fn new(
-        cfg: &Config,
-        vb: VarBuilder,
-        bits: Option<usize>,
-        quantize_kv: bool,
-        mse_only: bool,
-    ) -> CResult<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, quantize_kv: bool, bits: usize) -> CResult<Self> {
         let device = vb.device().clone();
         let dtype = vb.dtype();
         let embed =
@@ -263,59 +232,31 @@ impl BenchModel {
             let vb_ln1 = vb_l.pp(format!("{i}.input_layernorm"));
             let vb_ln2 = vb_l.pp(format!("{i}.post_attention_layernorm"));
 
-            // Attention projections stay F32 (quality-sensitive)
-            let make_f32 = |in_d, out_d, bias, vb: VarBuilder| -> CResult<LinearLayer> {
-                Ok(LinearLayer::F32(candle_nn::linear_b(
-                    in_d, out_d, bias, vb,
-                )?))
-            };
-
-            // MLP layers get quantized (bulk of parameters, more tolerant)
-            // Use Hadamard rotation when dim is power-of-2 (faster + numerically exact)
-            // Non-power-of-2 dims use dense QR rotation (Hadamard is faster for power-of-2)
-            // Only quantize the second half of layers (later layers are more tolerant)
-            let quantize_this_layer = bits.is_some() && i >= cfg.num_hidden_layers / 2;
-            let make_mlp = |in_d: usize, out_d, vb: VarBuilder| -> CResult<LinearLayer> {
-                let inner = candle_nn::linear_no_bias(in_d, out_d, vb)?;
-                if quantize_this_layer && in_d.is_power_of_two() {
-                    if mse_only {
-                        let mse = TurboQuantMseLinear::from_linear(&inner, bits.unwrap(), &device)?;
-                        Ok(LinearLayer::Mse(mse))
-                    } else {
-                        let pq =
-                            TurboQuantLinear::from_linear_hadamard(&inner, bits.unwrap(), &device)?;
-                        Ok(LinearLayer::PQ(pq))
-                    }
-                } else {
-                    Ok(LinearLayer::F32(inner))
-                }
-            };
-
             let head_dim = cfg.head_dim;
             let num_heads = cfg.num_attention_heads;
             let num_kv_heads = cfg.num_key_value_heads;
             let hidden_size = head_dim * num_heads;
 
             let attn = Attention {
-                q_proj: make_f32(
+                q_proj: candle_nn::linear_b(
                     cfg.hidden_size,
                     num_heads * head_dim,
                     cfg.attention_bias,
                     vb_a.pp("q_proj"),
                 )?,
-                k_proj: make_f32(
+                k_proj: candle_nn::linear_b(
                     cfg.hidden_size,
                     num_kv_heads * head_dim,
                     cfg.attention_bias,
                     vb_a.pp("k_proj"),
                 )?,
-                v_proj: make_f32(
+                v_proj: candle_nn::linear_b(
                     cfg.hidden_size,
                     num_kv_heads * head_dim,
                     cfg.attention_bias,
                     vb_a.pp("v_proj"),
                 )?,
-                o_proj: make_f32(
+                o_proj: candle_nn::linear_b(
                     num_heads * head_dim,
                     cfg.hidden_size,
                     cfg.attention_bias,
@@ -329,12 +270,11 @@ impl BenchModel {
                 head_dim,
                 hidden_size,
                 rotary: rotary.clone(),
-                // Use quantized KV cache when requested
-                kv_cache: if quantize_kv && bits.is_some() {
+                kv_cache: if quantize_kv {
                     KvCacheLayer::Quantized(QuantizedKvCache::new(
                         2,
                         head_dim,
-                        bits.unwrap(),
+                        bits,
                         vb.dtype(),
                         &device,
                     )?)
@@ -344,9 +284,21 @@ impl BenchModel {
             };
 
             let mlp = MLP {
-                gate_proj: make_mlp(cfg.hidden_size, cfg.intermediate_size, vb_m.pp("gate_proj"))?,
-                up_proj: make_mlp(cfg.hidden_size, cfg.intermediate_size, vb_m.pp("up_proj"))?,
-                down_proj: make_mlp(cfg.intermediate_size, cfg.hidden_size, vb_m.pp("down_proj"))?,
+                gate_proj: candle_nn::linear_no_bias(
+                    cfg.hidden_size,
+                    cfg.intermediate_size,
+                    vb_m.pp("gate_proj"),
+                )?,
+                up_proj: candle_nn::linear_no_bias(
+                    cfg.hidden_size,
+                    cfg.intermediate_size,
+                    vb_m.pp("up_proj"),
+                )?,
+                down_proj: candle_nn::linear_no_bias(
+                    cfg.intermediate_size,
+                    cfg.hidden_size,
+                    vb_m.pp("down_proj"),
+                )?,
                 act_fn: cfg.hidden_act,
             };
 
@@ -361,15 +313,10 @@ impl BenchModel {
             });
         }
 
-        // lm_head always stays F32 (output quality-critical)
         let lm_head = if cfg.tie_word_embeddings {
-            LinearLayer::F32(candle_nn::Linear::new(embed.embeddings().clone(), None))
+            candle_nn::Linear::new(embed.embeddings().clone(), None)
         } else {
-            LinearLayer::F32(candle_nn::linear_no_bias(
-                cfg.hidden_size,
-                cfg.vocab_size,
-                vb.pp("lm_head"),
-            )?)
+            candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
         };
 
         Ok(Self {
@@ -461,13 +408,8 @@ fn main() -> Result<()> {
     println!("================================");
     println!("Model: {model_id}");
     println!(
-        "Mode: {}-bit {}",
-        args.bits,
-        if args.mse_only {
-            "MSE-only weights (experimental, no QJL)"
-        } else {
-            "KV cache quantization (F32 weights)"
-        }
+        "Mode: {}-bit KV cache quantization (F32 weights)",
+        args.bits
     );
     println!("Prompt: \"{}\"\n", args.prompt);
 
@@ -507,14 +449,14 @@ fn main() -> Result<()> {
     println!("Prompt tokens: {}\n", tokens.len());
 
     // ── F32 baseline ──────────────────────────────────────────────────
-    let tps_f32 = if args.pq_only {
-        println!("Skipping F32 baseline (--pq-only)");
+    let tps_f32 = if args.skip_baseline {
+        println!("Skipping F32 baseline (--skip-baseline)");
         None
     } else {
         print!("Loading F32 model... ");
         std::io::stdout().flush()?;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
-        let mut f32_model = BenchModel::new(&config, vb, None, false, false)?;
+        let mut f32_model = BenchModel::new(&config, vb, false, args.bits)?;
         println!("done");
 
         let mut logits_proc = LogitsProcessor::from_sampling(
@@ -539,26 +481,13 @@ fn main() -> Result<()> {
         Some(tps)
     };
 
-    // ── Quantized model ────────────────────────────────────────────────
-    // Default: KV cache quantization only (paper's validated claim).
-    // Weight quantization available via --weight-quant but experimental.
-    let (weight_bits, quantize_kv) = if args.kv_only {
-        (None, true)
-    } else if args.mse_only {
-        (Some(args.bits), false) // MSE-only weights, plain KV
-    } else {
-        (None, true) // default: F32 weights, quantized KV
-    };
-    let mode_label = if args.mse_only {
-        format!("MSE-{}", args.bits)
-    } else {
-        format!("KV-{}", args.bits)
-    };
-    print!("\nLoading + quantizing {mode_label} model... ");
+    // ── Quantized KV cache model ───────────────────────────────────────
+    let mode_label = format!("KV-{}", args.bits);
+    print!("\nLoading {mode_label} model (F32 weights, quantized KV cache)... ");
     std::io::stdout().flush()?;
     let quant_start = std::time::Instant::now();
     let vb2 = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
-    let mut pq_model = BenchModel::new(&config, vb2, weight_bits, quantize_kv, args.mse_only)?;
+    let mut kv_model = BenchModel::new(&config, vb2, true, args.bits)?;
     let quant_elapsed = quant_start.elapsed();
     println!("done ({:.1}s)", quant_elapsed.as_secs_f64());
 
@@ -568,27 +497,27 @@ fn main() -> Result<()> {
             temperature: args.temperature,
         },
     );
-    let (text_pq, elapsed_pq) = generate(
-        &mut pq_model,
+    let (text_kv, elapsed_kv) = generate(
+        &mut kv_model,
         &tokens,
         args.sample_len,
         &mut logits_proc2,
         &tokenizer,
     )?;
-    let tps_pq = args.sample_len as f64 / elapsed_pq.as_secs_f64();
+    let tps_kv = args.sample_len as f64 / elapsed_kv.as_secs_f64();
     println!("── {mode_label} Generation ─────────────────────────────────",);
-    println!("  Output: \"{}\"", &text_pq[..text_pq.len().min(120)]);
-    println!("  Throughput: {tps_pq:.1} tokens/sec");
+    println!("  Output: \"{}\"", &text_kv[..text_kv.len().min(120)]);
+    println!("  Throughput: {tps_kv:.1} tokens/sec");
 
     // ── Comparison ───────────────────────────────────────────────────
     println!("\n── Comparison ──────────────────────────────────────");
     if let Some(f32_tps) = tps_f32 {
         println!("  F32:  {f32_tps:.1} tokens/sec");
-        println!("  {mode_label}: {tps_pq:.1} tokens/sec");
-        println!("  Ratio: {:.2}x", f32_tps / tps_pq);
+        println!("  {mode_label}: {tps_kv:.1} tokens/sec");
+        println!("  Ratio: {:.2}x", f32_tps / tps_kv);
     } else {
-        println!("  {mode_label}: {tps_pq:.1} tokens/sec");
-        println!("  (F32 baseline skipped — use without --pq-only to compare)");
+        println!("  {mode_label}: {tps_kv:.1} tokens/sec");
+        println!("  (F32 baseline skipped — use without --skip-baseline to compare)");
     }
 
     Ok(())

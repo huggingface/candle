@@ -8,10 +8,9 @@ pub mod utils;
 pub use err::MetalKernelError;
 pub use kernel::Kernels;
 pub use kernels::{
-    affine::*, call_binary_contiguous, call_binary_strided, call_mlx_gemm,
-    call_turboquant_mse_centroid_dot, call_turboquant_mse_fused_hadamard,
-    call_turboquant_qjl_correction, cast::*, convolution::*, fill::*, indexing::*, quantized::*,
-    random::*, reduce::*, sdpa::*, sort::*, ternary::*, unary, unary::*, GemmDType, GgmlDType,
+    affine::*, call_binary_contiguous, call_binary_strided, call_mlx_gemm, cast::*, convolution::*,
+    fill::*, indexing::*, quantized::*, random::*, reduce::*, sdpa::*, sort::*, ternary::*, unary,
+    unary::*, GemmDType, GgmlDType,
 };
 use metal::{
     BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline,

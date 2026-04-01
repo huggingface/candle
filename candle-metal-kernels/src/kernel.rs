@@ -1,6 +1,6 @@
 use crate::source::{
     AFFINE, BINARY, CAST, CONV, FILL, INDEXING, MLX_GEMM, MLX_SORT, QUANTIZED, RANDOM, REDUCE,
-    SDPA, SORT, TERNARY, TURBOQUANT_MSE, UNARY,
+    SDPA, SORT, TERNARY, UNARY,
 };
 use crate::utils::get_env_bool;
 use crate::{
@@ -100,7 +100,6 @@ impl Kernels {
             Source::Ternary => TERNARY,
             Source::Unary => UNARY,
             Source::Sdpa => SDPA,
-            Source::TurboQuantMse => TURBOQUANT_MSE,
         }
     }
 

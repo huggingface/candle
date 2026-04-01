@@ -37,7 +37,6 @@ pub mod sampling;
 pub mod sequential;
 pub mod turboquant;
 pub mod turboquant_mse;
-pub mod turboquant_nn;
 pub mod var_builder;
 pub mod var_map;
 

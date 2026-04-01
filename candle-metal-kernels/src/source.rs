@@ -13,7 +13,6 @@ pub const SORT: &str = include_str!("metal_src/sort.metal");
 pub const TERNARY: &str = include_str!("metal_src/ternary.metal");
 pub const UNARY: &str = include_str!("metal_src/unary.metal");
 pub const SDPA: &str = include_str!("metal_src/scaled_dot_product_attention.metal");
-pub const TURBOQUANT_MSE: &str = include_str!("metal_src/turboquant_mse.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -32,5 +31,4 @@ pub enum Source {
     Ternary,
     Unary,
     Sdpa,
-    TurboQuantMse,
 }
