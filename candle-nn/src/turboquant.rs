@@ -42,7 +42,7 @@ use crate::turboquant_mse::{TurboMseQuantized, TurboQuantMse};
 ///
 /// Bit encoding: 1 = +1.0, 0 = −1.0. Bit 0 of byte 0 holds element 0,
 /// bit 1 holds element 1, etc.
-pub fn pack_signs(signs: &Tensor) -> Result<Tensor> {
+pub(crate) fn pack_signs(signs: &Tensor) -> Result<Tensor> {
     let (n, d) = signs.dims2()?;
     let d_packed = d.div_ceil(8);
     let d_padded = d_packed * 8;
@@ -73,7 +73,7 @@ pub fn pack_signs(signs: &Tensor) -> Result<Tensor> {
 ///
 /// Input: `[n, ceil(d/8)]` U8.
 /// Output: `[n, d]` F32.
-pub fn unpack_signs(packed: &Tensor, d: usize) -> Result<Tensor> {
+pub(crate) fn unpack_signs(packed: &Tensor, d: usize) -> Result<Tensor> {
     let (n, d_packed) = packed.dims2()?;
 
     let packed_f32 = packed.to_dtype(DType::F32)?.unsqueeze(2)?; // [n, d_packed, 1]
@@ -146,7 +146,6 @@ pub struct TurboQuant {
     polar: TurboQuantMse,
     projection: Tensor,
     dim: usize,
-    bit_width: usize,
     dtype: DType,
 }
 
@@ -176,7 +175,6 @@ impl TurboQuant {
             polar,
             projection,
             dim,
-            bit_width,
             dtype,
         })
     }
@@ -241,45 +239,6 @@ impl TurboQuant {
 
         // Stage 3: Combine TurboQuantMse reconstruction + QJL correction
         x_polar.broadcast_add(&x_qjl)
-    }
-
-    /// Get the vector dimension.
-    pub fn dim(&self) -> usize {
-        self.dim
-    }
-
-    /// Get the bit width.
-    pub fn bit_width(&self) -> usize {
-        self.bit_width
-    }
-
-    /// Get a reference to the internal MSE quantizer.
-    pub fn mse_quantizer(&self) -> &TurboQuantMse {
-        &self.polar
-    }
-
-    /// Get a reference to the QJL projection matrix.
-    pub fn projection(&self) -> &Tensor {
-        &self.projection
-    }
-
-    /// Create a TurboQuant from an existing MSE quantizer.
-    ///
-    /// Generates a fresh QJL projection matrix. Useful for combining
-    /// a Hadamard-based MSE quantizer with TurboQuant's QJL correction.
-    pub fn from_mse_quantizer(mse: TurboQuantMse, dtype: DType, device: &Device) -> Result<Self> {
-        let dim = mse.dim();
-        let bit_width = mse.bit_width() + 1;
-        let projection = Tensor::randn(0f64, 1f64, (dim, dim), &Device::Cpu)?
-            .to_dtype(dtype)?
-            .to_device(device)?;
-        Ok(Self {
-            polar: mse,
-            projection,
-            dim,
-            bit_width,
-            dtype,
-        })
     }
 }
 

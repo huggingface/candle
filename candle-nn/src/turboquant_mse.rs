@@ -229,85 +229,6 @@ fn random_orthogonal_tensor(dim: usize, dtype: DType, device: &Device) -> Result
         .to_device(device)
 }
 
-/// Apply an in-place Walsh-Hadamard transform to `data` of length `n` (must be power of 2).
-///
-/// The transform is unnormalized — caller is responsible for scaling by 1/√n.
-fn hadamard_transform_inplace(data: &mut [f64], n: usize) {
-    let mut h = 1;
-    while h < n {
-        for i in (0..n).step_by(h * 2) {
-            for j in i..i + h {
-                let x = data[j];
-                let y = data[j + h];
-                data[j] = x + y;
-                data[j + h] = x - y;
-            }
-        }
-        h *= 2;
-    }
-}
-
-/// Generate a randomized Hadamard rotation matrix as a Tensor.
-///
-/// Uses a Walsh-Hadamard matrix H_d (O(d log d) to apply) with random sign
-/// flips D (diagonal ±1 matrix) to form the rotation Π = (1/√d) · H · D.
-/// This is an orthogonal transformation that is O(d log d) to apply, compared
-/// to O(d²) for a dense orthogonal matrix.
-///
-/// `dim` must be a power of 2.
-/// Generate a randomized Hadamard rotation matrix and its sign vector.
-///
-/// Returns `(matrix_tensor, signs_f32)` where signs can be used for fast
-/// O(d log d) application without the dense matrix.
-fn randomized_hadamard_matrix(
-    dim: usize,
-    dtype: DType,
-    device: &Device,
-) -> Result<(Tensor, Vec<f32>)> {
-    if !dim.is_power_of_two() {
-        candle::bail!(
-            "Hadamard rotation requires dim to be a power of 2, got {}",
-            dim
-        );
-    }
-
-    // Generate random signs for D: each ±1 with equal probability
-    let sign_tensor = Tensor::randn(0f64, 1f64, (dim,), &Device::Cpu)?;
-    let signs: Vec<f64> = sign_tensor.to_vec1()?;
-    let signs: Vec<f64> = signs
-        .iter()
-        .map(|&s| if s >= 0.0 { 1.0 } else { -1.0 })
-        .collect();
-
-    // Build the matrix row by row: row_i = (1/√d) * H * D * e_i
-    // This is equivalent to column i of (1/√d) * H * D
-    let scale = 1.0 / (dim as f64).sqrt();
-    let mut matrix = vec![0f64; dim * dim];
-
-    for i in 0..dim {
-        // Start with e_i scaled by sign
-        let mut col = vec![0f64; dim];
-        col[i] = signs[i];
-
-        // Apply Hadamard transform
-        hadamard_transform_inplace(&mut col, dim);
-
-        // Scale and store as row i of the transposed matrix
-        // We want rotation[i][j] = scale * H[j][i] * signs[i]
-        // but since H is symmetric, H[j][i] = H[i][j], so we store as column
-        for j in 0..dim {
-            matrix[j * dim + i] = col[j] * scale;
-        }
-    }
-
-    let signs_f32: Vec<f32> = signs.iter().map(|&s| s as f32).collect();
-
-    Tensor::from_vec(matrix, (dim, dim), &Device::Cpu)?
-        .to_dtype(dtype)?
-        .to_device(device)
-        .map(|t| (t, signs_f32))
-}
-
 /// Result of TurboQuantMse quantization.
 ///
 /// Stores centroid indices (b bits per coordinate) and original vector norms.
@@ -355,8 +276,6 @@ pub struct TurboQuantMse {
     rotation: Tensor,
     centroids: Tensor,
     dtype: DType,
-    /// Random sign vector for fast Hadamard path. None for dense rotation.
-    hadamard_signs: Option<Vec<f32>>,
 }
 
 impl TurboQuantMse {
@@ -388,45 +307,6 @@ impl TurboQuantMse {
             rotation,
             centroids,
             dtype,
-            hadamard_signs: None,
-        })
-    }
-
-    /// Create a new TurboQuantMse quantizer using fast Hadamard rotation.
-    ///
-    /// Uses a randomized Walsh-Hadamard transform instead of a dense orthogonal
-    /// matrix. Construction is O(d²) but the resulting rotation matrix enables
-    /// the fused matmul kernel to apply inverse rotation in O(d log d) per row.
-    ///
-    /// Requires `dim` to be a power of 2 (32, 64, 128, 256, ...).
-    ///
-    /// # Arguments
-    /// * `dim` - Vector dimension (d). Must be a power of 2.
-    /// * `bit_width` - Bits per coordinate (b). Typically 1–8.
-    /// * `dtype` - Data type for internal computations (F32 or F64).
-    /// * `device` - Device for tensor allocation.
-    pub fn new_hadamard(
-        dim: usize,
-        bit_width: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<Self> {
-        let unit_centroids = lloyd_max_gaussian(bit_width, 1000);
-        let scale = 1.0 / (dim as f64).sqrt();
-        let scaled: Vec<f64> = unit_centroids.iter().map(|&c| c * scale).collect();
-
-        let centroids = Tensor::from_vec(scaled, (unit_centroids.len(),), &Device::Cpu)?
-            .to_dtype(dtype)?
-            .to_device(device)?;
-        let (rotation, signs) = randomized_hadamard_matrix(dim, dtype, device)?;
-
-        Ok(Self {
-            dim,
-            bit_width,
-            rotation,
-            centroids,
-            dtype,
-            hadamard_signs: Some(signs),
         })
     }
 
@@ -453,34 +333,7 @@ impl TurboQuantMse {
         let x_norm = x.broadcast_div(&safe_norms.unsqueeze(D::Minus1)?)?;
 
         // Random rotation: y = x_norm @ Π^T
-        // For Hadamard: Π^T = (1/√d) · D · H, applied row-wise in O(d log d) on CPU.
-        // On GPU, fall back to the dense matmul path since the rotation matrix is
-        // already materialized and GPU BLAS is fast.
-        let y = if let Some(ref signs) = self.hadamard_signs {
-            if x_norm.device().is_cpu() {
-                let d = self.dim;
-                let n_rows = x_norm.dims()[0];
-                let scale = 1.0 / (d as f32).sqrt();
-                // In-place butterfly transform on CPU
-                let mut data: Vec<f32> = x_norm.to_dtype(DType::F32)?.flatten_all()?.to_vec1()?;
-                for row in 0..n_rows {
-                    let r = &mut data[row * d..(row + 1) * d];
-                    for (val, &sign) in r.iter_mut().zip(signs.iter()) {
-                        *val *= sign;
-                    }
-                    hadamard_transform_inplace_f32(r, d);
-                    for val in r.iter_mut() {
-                        *val *= scale;
-                    }
-                }
-                Tensor::from_vec(data, (n_rows, d), &Device::Cpu)?.to_dtype(self.dtype)?
-            } else {
-                // GPU: use dense matmul with the pre-computed rotation matrix
-                x_norm.matmul(&self.rotation.t()?)?
-            }
-        } else {
-            x_norm.matmul(&self.rotation.t()?)?
-        };
+        let y = x_norm.matmul(&self.rotation.t()?)?;
 
         // Find nearest centroid for each coordinate
         let indices = if self.bit_width == 0 {
@@ -526,33 +379,6 @@ impl TurboQuantMse {
     /// Get the bit width.
     pub fn bit_width(&self) -> usize {
         self.bit_width
-    }
-
-    /// Get a reference to the centroid values.
-    pub fn centroids(&self) -> &Tensor {
-        &self.centroids
-    }
-
-    /// Get a reference to the rotation matrix.
-    pub fn rotation(&self) -> &Tensor {
-        &self.rotation
-    }
-}
-
-/// Apply an in-place Walsh-Hadamard transform to f32 data.
-#[inline]
-fn hadamard_transform_inplace_f32(data: &mut [f32], n: usize) {
-    let mut h = 1;
-    while h < n {
-        for i in (0..n).step_by(h * 2) {
-            for j in i..i + h {
-                let x = data[j];
-                let y = data[j + h];
-                data[j] = x + y;
-                data[j + h] = x - y;
-            }
-        }
-        h *= 2;
     }
 }
 
