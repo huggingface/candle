@@ -481,11 +481,22 @@ impl PolarQuant {
 /// Forward pass: `output[j] = norms[j] * Σ_i x[i] * codebook[idx[j][i]][i]`
 /// — a single fused kernel with no rotation, no full-weight materialization.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PolarQuantMatMul {
-    /// Pre-computed dequantized weight matrix: `[n_out, d]` F32.
-    codebook: Tensor,
-    /// Bit-packed weight indices for serialization: `[packed_len]` U8.
+    /// Rotation matrix transpose: `[d, d]` F32 — on target device.
+    rotation_t: Tensor,
+    /// Scalar centroid table: `[2^b]` F32 — on target device.
+    centroids: Tensor,
+    /// Bit-packed weight indices: `[packed_len]` U8 — on target device.
+    packed_indices: Tensor,
+    /// Per-row weight norms: `[n_out]` F32 — on target device.
+    norms: Tensor,
+    /// CPU copies for CPU path.
     packed_indices_cpu: Vec<u8>,
+    norms_cpu: Vec<f32>,
+    centroids_cpu: Vec<f32>,
+    /// Bits per index.
+    bit_width: usize,
     /// Number of output features.
     out_features: usize,
     /// Number of input features (= dim).
@@ -520,10 +531,14 @@ fn unpack_index(packed: &[u8], pos: usize, bit_width: usize) -> usize {
 }
 
 impl PolarQuantMatMul {
-    /// Create a fused codebook-matmul op from PolarQuant components.
+    /// Create a fused matmul op with compressed GPU storage.
     ///
-    /// Pre-rotates the centroid table into original space so inference needs no
-    /// rotation. Indices are bit-packed for memory efficiency.
+    /// Stores 4-bit packed indices, norms, centroids, and rotation matrix
+    /// directly on the target device. Forward does:
+    /// 1. `x_rot = x @ Π^T` (BLAS matmul, rotate input)
+    /// 2. `output[j] = norms[j] * Σ_i x_rot[i] * centroids[idx[j][i]]` (from compressed indices)
+    ///
+    /// No F32 weight matrix is ever materialized in GPU memory.
     pub fn new(quantizer: &PolarQuant, indices: &Tensor, norms: &Tensor) -> Result<Self> {
         let bit_width = quantizer.bit_width();
         if bit_width == 0 || bit_width > 7 {
@@ -536,63 +551,33 @@ impl PolarQuantMatMul {
         let indices_u8: Vec<u8> = indices.to_dtype(DType::U8)?.flatten_all()?.to_vec1()?;
         let packed_cpu = pack_indices(&indices_u8, bit_width);
         let norms_cpu: Vec<f32> = norms.to_dtype(DType::F32)?.to_vec1()?;
-        let scalar_centroids = quantizer.centroids_f32()?;
-
-        let d = in_features;
-
-        // Build pre-rotated codebook: for each centroid c, compute
-        //   codebook[c] = Π @ (centroid_c * e)  for each basis vector
-        // But since centroids are scalars applied per-coordinate in rotated space,
-        // the codebook vector for centroid c is: rotation[:, :] * centroid_c
-        // rotated back: codebook_row = centroid_value * rotation_column
-        // Actually: W_original_row = Σ_i centroid[idx[i]] * rotation[i, :]
-        // So centroid c contributes rotation[coord, :] * c_value
-        // Pre-rotated codebook[c][j] = c_value * Π[coord][j] — but coord varies.
-        // This doesn't factorize per-centroid. Instead, build the full rotated weight
-        // matrix once, then extract the codebook from it.
-        //
-        // Simpler approach: the codebook in original space is just the rotation matrix
-        // rows scaled by centroid values. Since all rows share the same centroid set,
-        // codebook[c][j] = scalar_centroid[c] * Σ over applicable rotation entries.
-        //
-        // Actually the correct decomposition for fused inference:
-        //   output[j] = Σ_i x[i] * W[j][i]
-        //   W[j][i] = norms[j] * Σ_k (idx[j][k] == c ? centroid[c] : 0) * rotation[k][i]
-        //
-        // This requires per-row reconstruction. The pre-rotated codebook approach:
-        //   codebook[c] = scalar_centroid[c] * rotation_row
-        // doesn't work because each coordinate uses a different rotation row.
-        //
-        // The correct fused approach: cache the dequantized weight as the codebook IS
-        // the full weight matrix. Store it compressed via the codebook pattern:
-        //   For each unique centroid-scaled rotation row, store one copy.
-        //   But with d unique rotation rows × n_centroids values = n_centroids × d vectors.
-        //
-        // This is too much. The pragmatic solution: pre-compute W_dequant once.
-        let mut w_data = vec![0f32; out_features * d];
-        for row in 0..out_features {
-            let idx_start = row * d;
-            let norm = norms_cpu[row];
-            let w_row = &mut w_data[row * d..(row + 1) * d];
-            for (i, w) in w_row.iter_mut().enumerate() {
-                let idx = unpack_index(&packed_cpu, idx_start + i, bit_width);
-                *w = scalar_centroids[idx] * norm;
-            }
-        }
-        let w_centroid = Tensor::from_vec(w_data, (out_features, d), &Device::Cpu)?;
-        let rotation_cpu = quantizer
-            .rotation()
-            .to_dtype(DType::F32)?
-            .to_device(&Device::Cpu)?;
-        // W_original = W_centroid @ Π (inverse rotation)
-        let w_original = w_centroid.matmul(&rotation_cpu)?;
+        let centroids_cpu = quantizer.centroids_f32()?;
 
         let device = quantizer.rotation().device();
-        let codebook_tensor = w_original.to_device(device)?;
+        let rotation_t = quantizer
+            .rotation()
+            .t()?
+            .contiguous()?
+            .to_dtype(DType::F32)?
+            .to_device(device)?;
+        let centroids_tensor =
+            Tensor::from_vec(centroids_cpu.clone(), (centroids_cpu.len(),), &Device::Cpu)?
+                .to_device(device)?;
+        let packed_tensor =
+            Tensor::from_vec(packed_cpu.clone(), (packed_cpu.len(),), &Device::Cpu)?
+                .to_device(device)?;
+        let norms_tensor = Tensor::from_vec(norms_cpu.clone(), (norms_cpu.len(),), &Device::Cpu)?
+            .to_device(device)?;
 
         Ok(Self {
-            codebook: codebook_tensor,
+            rotation_t,
+            centroids: centroids_tensor,
+            packed_indices: packed_tensor,
+            norms: norms_tensor,
             packed_indices_cpu: packed_cpu,
+            norms_cpu,
+            centroids_cpu,
+            bit_width,
             out_features,
             in_features,
         })
@@ -629,8 +614,15 @@ fn hadamard_transform_inplace_f32(data: &mut [f32], n: usize) {
 impl PolarQuantMatMul {
     /// Compute `x @ W^T` using the pre-computed rotated weight matrix.
     ///
-    /// Forward uses the pre-computed dequantized weight (stored in `codebook`).
-    /// Single BLAS matmul at F32 speed, no per-token overhead.
+    /// Forward: `x @ W^T` from compressed 4-bit storage.
+    ///
+    /// 1. Rotate input: `x_rot = x @ Π^T` (BLAS matmul)
+    /// 2. Centroid dot: `output[j] = norms[j] * Σ_i x_rot[i] * centroids[idx[j][i]]`
+    ///    - Metal: custom shader reads packed indices from GPU memory
+    ///    - CPU: scalar loop with bit unpacking
+    ///
+    /// No F32 weight matrix is materialized. GPU memory holds only the compressed
+    /// indices (~8× smaller than F32 weights).
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let orig_dims = x.dims().to_vec();
         let d = self.in_features;
@@ -643,8 +635,93 @@ impl PolarQuantMatMul {
             x.reshape((batch, d))?
         };
 
-        let w = self.codebook.to_device(x.device())?;
-        let y_2d = x_2d.matmul(&w.t()?)?;
+        // Step 1: Rotate input via BLAS matmul
+        let x_rot = x_2d.matmul(&self.rotation_t.to_device(x.device())?)?;
+
+        // Step 2: Centroid dot product from compressed indices
+        let y_2d = if x.device().is_cpu() {
+            // CPU path: scalar loop
+            let x_rot_data: Vec<f32> = x_rot.flatten_all()?.to_vec1()?;
+            let mut output = vec![0f32; batch * n];
+            for row in 0..n {
+                let idx_start = row * d;
+                let norm = self.norms_cpu[row];
+                for b in 0..batch {
+                    let xr = &x_rot_data[b * d..(b + 1) * d];
+                    let mut dot = 0f32;
+                    for (i, &xr_val) in xr.iter().enumerate() {
+                        let idx =
+                            unpack_index(&self.packed_indices_cpu, idx_start + i, self.bit_width);
+                        dot += xr_val * self.centroids_cpu[idx];
+                    }
+                    output[b * n + row] = dot * norm;
+                }
+            }
+            Tensor::from_vec(output, (batch, n), &Device::Cpu)?
+        } else {
+            // GPU path: Metal shader
+            #[cfg(feature = "metal")]
+            {
+                use candle::{backend::BackendStorage, MetalStorage, Storage};
+
+                let (xs, xl) = x_rot.storage_and_layout();
+                let (ps, _) = self.packed_indices.storage_and_layout();
+                let (ns, _) = self.norms.storage_and_layout();
+                let (cs, _) = self.centroids.storage_and_layout();
+
+                let out_metal = match (&*xs, &*ps, &*ns, &*cs) {
+                    (
+                        Storage::Metal(xm),
+                        Storage::Metal(pm),
+                        Storage::Metal(nm),
+                        Storage::Metal(cm),
+                    ) => {
+                        let dev = xm.device();
+                        let out_buf = dev.new_buffer(batch * n, DType::F32, "pq_out")?;
+                        let enc = dev.command_encoder()?;
+                        candle_metal_kernels::call_polarquant_centroid_dot(
+                            dev.device(),
+                            &enc,
+                            dev.kernels(),
+                            self.bit_width,
+                            d,
+                            n,
+                            batch,
+                            xm.buffer(),
+                            xl.start_offset() * DType::F32.size_in_bytes(),
+                            pm.buffer(),
+                            nm.buffer(),
+                            cm.buffer(),
+                            &out_buf,
+                        )
+                        .map_err(candle::Error::wrap)?;
+                        Ok::<_, candle::Error>(MetalStorage::new(
+                            out_buf,
+                            dev.clone(),
+                            batch * n,
+                            DType::F32,
+                        ))
+                    }
+                    _ => candle::bail!("Expected Metal storage"),
+                }?;
+
+                drop(xs);
+                drop(ps);
+                drop(ns);
+                drop(cs);
+
+                Tensor::from_storage(
+                    Storage::Metal(out_metal),
+                    (batch, n),
+                    candle::op::BackpropOp::none(),
+                    false,
+                )
+            }
+            #[cfg(not(feature = "metal"))]
+            {
+                candle::bail!("GPU PolarQuantMatMul requires metal feature")
+            }
+        };
 
         match orig_dims.len() {
             1 => y_2d.squeeze(0),
