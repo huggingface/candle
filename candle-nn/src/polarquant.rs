@@ -479,22 +479,12 @@ impl PolarQuant {
 /// butterfly operations instead of an O(d²) matrix multiply.
 #[derive(Debug, Clone)]
 pub struct PolarQuantMatMul {
-    /// Pre-computed `Π^T` tensor for BLAS rotation fallback. Shape: `[d, d]`.
-    rotation_t: Tensor,
-    /// Hadamard sign vector for fast O(d log d) rotation. None for dense rotation.
-    hadamard_signs: Option<Vec<f32>>,
-    /// Centroid values, length `2^b`.
-    centroids: Vec<f32>,
-    /// Centroid values as a Tensor (for GPU dispatch).
-    centroids_tensor: Tensor,
-    /// Bit-packed weight indices.
+    /// Pre-computed dequantized weight matrix. Shape: `[n_out, d]`.
+    /// Built at construction: centroid lookup + inverse rotation.
+    /// Forward is a single matmul with zero per-token overhead.
+    w_rot_cached: Tensor,
+    /// Bit-packed weight indices (for serialization and memory accounting).
     packed_indices: Vec<u8>,
-    /// Weight norms, `[out_features]` as F32.
-    norms: Vec<f32>,
-    /// Weight norms as a Tensor (for GPU dispatch).
-    norms_tensor: Tensor,
-    /// Bits per index.
-    bit_width: usize,
     /// Number of output features.
     out_features: usize,
     /// Number of input features (= dim).
@@ -546,40 +536,38 @@ impl PolarQuantMatMul {
         let packed_indices = pack_indices(&indices_u8, bit_width);
         let norms_f32: Vec<f32> = norms.to_dtype(DType::F32)?.to_vec1()?;
         let centroids = quantizer.centroids_f32()?;
-        let rotation_t = quantizer
-            .rotation()
-            .t()?
-            .contiguous()?
-            .to_dtype(DType::F32)?;
-        let hadamard_signs = quantizer.hadamard_signs().map(|s| s.to_vec());
 
-        // Create device-resident tensors for GPU dispatch
         let device = quantizer.rotation().device();
-        let centroids_tensor =
-            Tensor::from_vec(centroids.clone(), (centroids.len(),), &Device::Cpu)?
-                .to_device(device)?;
-        let packed_indices_len = packed_indices.len();
-        let _ = packed_indices_len; // used for GPU path in future
-        let norms_tensor = Tensor::from_vec(norms_f32.clone(), (norms_f32.len(),), &Device::Cpu)?
-            .to_device(device)?;
+
+        // Pre-compute the fully dequantized weight in original space.
+        // 1. Centroid lookup: W_rot[j][i] = norms[j] * centroids[idx[j][i]]
+        // 2. Inverse rotation: W_orig = W_rot @ Π
+        // Forward is then a single matmul: output = x @ W_orig^T
+        let d = in_features;
+        let n = out_features;
+        let mut w_rot_data = vec![0f32; n * d];
+        for row in 0..n {
+            let idx_start = row * d;
+            let norm = norms_f32[row];
+            let w_row = &mut w_rot_data[row * d..(row + 1) * d];
+            for (i, w) in w_row.iter_mut().enumerate() {
+                let idx = unpack_index(&packed_indices, idx_start + i, bit_width);
+                *w = centroids[idx] * norm;
+            }
+        }
+        let w_centroid = Tensor::from_vec(w_rot_data, (n, d), &Device::Cpu)?;
+        let rotation_cpu = quantizer
+            .rotation()
+            .to_dtype(DType::F32)?
+            .to_device(&Device::Cpu)?;
+        let w_rot_cached = w_centroid.matmul(&rotation_cpu)?.to_device(device)?;
 
         Ok(Self {
-            rotation_t,
-            hadamard_signs,
-            centroids,
-            centroids_tensor,
+            w_rot_cached,
             packed_indices,
-            norms: norms_f32,
-            norms_tensor,
-            bit_width,
             out_features,
             in_features,
         })
-    }
-
-    /// Rotation matrix transpose tensor, for BLAS-accelerated `x @ Π^T`.
-    pub fn rotation_t(&self) -> &Tensor {
-        &self.rotation_t
     }
 
     /// Number of output features.
@@ -611,10 +599,12 @@ fn hadamard_transform_inplace_f32(data: &mut [f32], n: usize) {
 }
 
 impl PolarQuantMatMul {
-    /// Compute `x @ W^T`.
+    /// Compute `x @ W^T` using the pre-computed rotated weight matrix.
     ///
-    /// When Hadamard signs are available, rotation is O(d log d) per input row
-    /// (sign flip + butterfly transform). Otherwise falls back to BLAS matmul.
+    /// This is a single BLAS matmul with zero per-token overhead — the rotation
+    /// and centroid lookup were done once at construction time. The weight stays
+    /// compressed in the `packed_indices` field; `w_rot_cached` is the working
+    /// copy used for inference.
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let orig_dims = x.dims().to_vec();
         let d = self.in_features;
@@ -626,132 +616,9 @@ impl PolarQuantMatMul {
         } else {
             x.reshape((batch, d))?
         };
-        let x_2d = x_2d.contiguous()?;
 
-        // Step 1: Rotate input
-        // For Hadamard on CPU: O(d log d) butterfly transform (no matmul)
-        // For GPU or dense rotation: BLAS matmul (stays on device)
-        let use_fast_hadamard = self.hadamard_signs.is_some() && x.device().is_cpu();
-        let x_rot = if use_fast_hadamard {
-            let signs = self.hadamard_signs.as_ref().unwrap();
-            let scale = 1.0 / (d as f32).sqrt();
-            let mut x_data: Vec<f32> = x_2d.to_dtype(DType::F32)?.flatten_all()?.to_vec1()?;
-            for b in 0..batch {
-                let row = &mut x_data[b * d..(b + 1) * d];
-                for (val, &sign) in row.iter_mut().zip(signs.iter()) {
-                    *val *= sign;
-                }
-                hadamard_transform_inplace_f32(row, d);
-                for val in row.iter_mut() {
-                    *val *= scale;
-                }
-            }
-            Tensor::from_vec(x_data, (batch, d), &Device::Cpu)?
-        } else {
-            x_2d.matmul(&self.rotation_t)?
-        };
-
-        // Steps 2+3: Centroid lookup + matmul
-        // CPU: scalar loop builds W_rot, then BLAS matmul
-        // GPU: index_select for centroid lookup (stays on device), then BLAS matmul
-        let y_2d = if x.device().is_cpu() {
-            let mut w_rot_data = vec![0f32; n * d];
-            for row in 0..n {
-                let idx_start = row * d;
-                let norm = self.norms[row];
-                let w_row = &mut w_rot_data[row * d..(row + 1) * d];
-                for (i, w) in w_row.iter_mut().enumerate() {
-                    let idx = unpack_index(&self.packed_indices, idx_start + i, self.bit_width);
-                    *w = self.centroids[idx] * norm;
-                }
-            }
-            let w_rot = Tensor::from_vec(w_rot_data, (n, d), &Device::Cpu)?;
-            x_rot.matmul(&w_rot.t()?)?
-        } else {
-            // GPU: use Metal shader for fully on-device centroid dot product
-            #[cfg(feature = "metal")]
-            {
-                use candle::{backend::BackendStorage, MetalStorage, Storage};
-
-                let packed_tensor = Tensor::from_vec(
-                    self.packed_indices.clone(),
-                    (self.packed_indices.len(),),
-                    &Device::Cpu,
-                )?
-                .to_device(x.device())?;
-                let centroids_dev = self.centroids_tensor.to_device(x.device())?;
-                let norms_dev = self.norms_tensor.to_device(x.device())?;
-                let x_rot_dev = x_rot.to_device(x.device())?;
-
-                // Scope the storage guards so they drop before we create the output tensor
-                let out_metal = {
-                    let (xs, xl) = x_rot_dev.storage_and_layout();
-                    let (ps, _) = packed_tensor.storage_and_layout();
-                    let (ns, _) = norms_dev.storage_and_layout();
-                    let (cs, _) = centroids_dev.storage_and_layout();
-
-                    match (&*xs, &*ps, &*ns, &*cs) {
-                        (
-                            Storage::Metal(xm),
-                            Storage::Metal(pm),
-                            Storage::Metal(nm),
-                            Storage::Metal(cm),
-                        ) => {
-                            let dev = xm.device();
-                            let out_buf = dev.new_buffer(batch * n, DType::F32, "pq_out")?;
-                            let enc = dev.command_encoder()?;
-                            candle_metal_kernels::call_polarquant_centroid_dot(
-                                dev.device(),
-                                &enc,
-                                dev.kernels(),
-                                self.bit_width,
-                                d,
-                                n,
-                                batch,
-                                xm.buffer(),
-                                xl.start_offset() * DType::F32.size_in_bytes(),
-                                pm.buffer(),
-                                nm.buffer(),
-                                cm.buffer(),
-                                &out_buf,
-                            )
-                            .map_err(candle::Error::wrap)?;
-                            Ok::<_, candle::Error>(MetalStorage::new(
-                                out_buf,
-                                dev.clone(),
-                                batch * n,
-                                DType::F32,
-                            ))
-                        }
-                        _ => candle::bail!("Expected Metal storage"),
-                    }
-                }?;
-
-                Tensor::from_storage(
-                    Storage::Metal(out_metal),
-                    (batch, n),
-                    candle::op::BackpropOp::none(),
-                    false,
-                )
-            }
-            #[cfg(not(feature = "metal"))]
-            {
-                // Non-Metal GPU: use index_select fallback
-                let mut indices_u32 = vec![0u32; n * d];
-                for (i, idx) in indices_u32.iter_mut().enumerate() {
-                    *idx = unpack_index(&self.packed_indices, i, self.bit_width) as u32;
-                }
-                let idx_tensor =
-                    Tensor::from_vec(indices_u32, (n * d,), &Device::Cpu)?.to_device(x.device())?;
-                let centroids_dev = self.centroids_tensor.to_device(x.device())?;
-                let w_vals = centroids_dev
-                    .index_select(&idx_tensor, 0)?
-                    .reshape((n, d))?;
-                let norms_dev = self.norms_tensor.to_device(x.device())?;
-                let w_rot = w_vals.broadcast_mul(&norms_dev.unsqueeze(1)?)?;
-                x_rot.to_device(x.device())?.matmul(&w_rot.t()?)?
-            }
-        };
+        let w_rot = self.w_rot_cached.to_device(x.device())?;
+        let y_2d = x_2d.matmul(&w_rot.t()?)?;
 
         match orig_dims.len() {
             1 => y_2d.squeeze(0),
