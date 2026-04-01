@@ -856,6 +856,8 @@ pub struct QuantizedKvCache {
     v_norms: Option<Tensor>,
     v_qjl_signs: Option<Tensor>,
     v_residual_norms: Option<Tensor>,
+    k_dequantized: Option<Tensor>,
+    v_dequantized: Option<Tensor>,
     dim: usize,
     dtype: DType,
 }
@@ -908,6 +910,8 @@ impl QuantizedKvCache {
             v_norms: None,
             v_qjl_signs: None,
             v_residual_norms: None,
+            k_dequantized: None,
+            v_dequantized: None,
             dim,
             dtype,
         })
@@ -917,14 +921,9 @@ impl QuantizedKvCache {
     ///
     /// Quantizes the input tensors via TurboQuant (MSE + QJL), concatenates the
     /// quantized representations with existing cache along `dim`, then dequantizes
-    /// and returns the full accumulated K/V sequences with unbiased inner products.
-    ///
-    /// # Performance Note
-    ///
-    /// Each call dequantizes the **entire** cache (not just the new tokens).
-    /// For autoregressive generation of length S, total dequantization work is
-    /// O(S²). For long sequences, consider caching the dequantized output
-    /// externally or using [`ConcatKvCache`] for latency-sensitive decode steps.
+    /// only the newly appended tokens and concatenates with the cached dequantized
+    /// output. This reduces total dequantization work from O(S²) to O(S) across
+    /// an autoregressive generation of length S.
     ///
     /// # Arguments
     /// * `k` - Key tensor, shape `[batch, heads, seq_len, head_dim]`
@@ -946,7 +945,25 @@ impl QuantizedKvCache {
         let kq = turbo_quantize_4d(&self.k_quantizer, &k)?;
         let vq = turbo_quantize_4d(&self.v_quantizer, &v)?;
 
-        // Concatenate along sequence dimension
+        // Dequantize only the newly appended tokens
+        let new_k_deq = turbo_dequantize_4d(
+            &self.k_quantizer,
+            &kq.indices,
+            &kq.norms,
+            &kq.qjl_signs,
+            &kq.residual_norms,
+            self.dtype,
+        )?;
+        let new_v_deq = turbo_dequantize_4d(
+            &self.v_quantizer,
+            &vq.indices,
+            &vq.norms,
+            &vq.qjl_signs,
+            &vq.residual_norms,
+            self.dtype,
+        )?;
+
+        // Concatenate quantized representations along sequence dimension
         macro_rules! cat_or_init {
             ($field:expr, $new:expr, $dim:expr) => {
                 $field = Some(match &$field {
@@ -964,22 +981,18 @@ impl QuantizedKvCache {
         cat_or_init!(self.v_qjl_signs, vq.qjl_signs, self.dim);
         cat_or_init!(self.v_residual_norms, vq.residual_norms, self.dim);
 
-        let full_k = turbo_dequantize_4d(
-            &self.k_quantizer,
-            self.k_indices.as_ref().unwrap(),
-            self.k_norms.as_ref().unwrap(),
-            self.k_qjl_signs.as_ref().unwrap(),
-            self.k_residual_norms.as_ref().unwrap(),
-            self.dtype,
-        )?;
-        let full_v = turbo_dequantize_4d(
-            &self.v_quantizer,
-            self.v_indices.as_ref().unwrap(),
-            self.v_norms.as_ref().unwrap(),
-            self.v_qjl_signs.as_ref().unwrap(),
-            self.v_residual_norms.as_ref().unwrap(),
-            self.dtype,
-        )?;
+        // Incrementally build dequantized output by concatenating with cached
+        let full_k = match &self.k_dequantized {
+            Some(prev) => Tensor::cat(&[prev, &new_k_deq], self.dim)?,
+            None => new_k_deq,
+        };
+        let full_v = match &self.v_dequantized {
+            Some(prev) => Tensor::cat(&[prev, &new_v_deq], self.dim)?,
+            None => new_v_deq,
+        };
+
+        self.k_dequantized = Some(full_k.clone());
+        self.v_dequantized = Some(full_v.clone());
 
         Ok((full_k, full_v))
     }
@@ -994,6 +1007,8 @@ impl QuantizedKvCache {
         self.v_norms = None;
         self.v_qjl_signs = None;
         self.v_residual_norms = None;
+        self.k_dequantized = None;
+        self.v_dequantized = None;
     }
 
     /// Get current sequence length in the cache.
@@ -1029,10 +1044,11 @@ fn turbo_quantize_4d(quantizer: &TurboQuant, x: &Tensor) -> Result<Quantized4D> 
     let (b, h, s, d) = x.dims4()?;
     let flat = x.reshape((b * h * s, d))?;
     let q = quantizer.quantize(&flat)?;
+    let d_packed = d.div_ceil(8);
     Ok(Quantized4D {
         indices: q.polar.indices.to_dtype(DType::U8)?.reshape((b, h, s, d))?,
         norms: q.polar.norms.reshape((b, h, s, 1))?,
-        qjl_signs: q.qjl_signs.reshape((b, h, s, d))?,
+        qjl_signs: q.qjl_signs.reshape((b, h, s, d_packed))?,
         residual_norms: q.residual_norms.reshape((b, h, s, 1))?,
     })
 }
@@ -1048,12 +1064,13 @@ fn turbo_dequantize_4d(
 ) -> Result<Tensor> {
     let (b, h, s, d) = indices.dims4()?;
     let n = b * h * s;
+    let d_packed = qjl_signs.dims()[3];
     let q = TurboQuantized {
         polar: TurboMseQuantized {
             indices: indices.reshape((n, d))?.to_dtype(DType::U32)?,
             norms: norms.reshape((n,))?,
         },
-        qjl_signs: qjl_signs.reshape((n, d))?,
+        qjl_signs: qjl_signs.reshape((n, d_packed))?,
         residual_norms: residual_norms.reshape((n,))?,
     };
     let flat = quantizer.dequantize(&q)?;
@@ -1088,6 +1105,8 @@ pub struct QuantizedPreAllocKvCache {
     v_nrm: Cache,
     v_signs: Cache,
     v_rnrm: Cache,
+    k_dequantized: Option<Tensor>,
+    v_dequantized: Option<Tensor>,
     dtype: DType,
 }
 
@@ -1125,6 +1144,8 @@ impl QuantizedPreAllocKvCache {
             v_nrm: Cache::new(dim, max_seq_len),
             v_signs: Cache::new(dim, max_seq_len),
             v_rnrm: Cache::new(dim, max_seq_len),
+            k_dequantized: None,
+            v_dequantized: None,
             dtype,
         })
     }
@@ -1143,6 +1164,25 @@ impl QuantizedPreAllocKvCache {
         let kq = turbo_quantize_4d(&self.k_quantizer, &k)?;
         let vq = turbo_quantize_4d(&self.v_quantizer, &v)?;
 
+        // Dequantize only the newly appended tokens
+        let dim = self.k_idx.dim();
+        let new_k_deq = turbo_dequantize_4d(
+            &self.k_quantizer,
+            &kq.indices,
+            &kq.norms,
+            &kq.qjl_signs,
+            &kq.residual_norms,
+            self.dtype,
+        )?;
+        let new_v_deq = turbo_dequantize_4d(
+            &self.v_quantizer,
+            &vq.indices,
+            &vq.norms,
+            &vq.qjl_signs,
+            &vq.residual_norms,
+            self.dtype,
+        )?;
+
         self.k_idx.append(&kq.indices)?;
         self.k_nrm.append(&kq.norms)?;
         self.k_signs.append(&kq.qjl_signs)?;
@@ -1152,22 +1192,18 @@ impl QuantizedPreAllocKvCache {
         self.v_signs.append(&vq.qjl_signs)?;
         self.v_rnrm.append(&vq.residual_norms)?;
 
-        let full_k = turbo_dequantize_4d(
-            &self.k_quantizer,
-            &self.k_idx.current_data()?.unwrap(),
-            &self.k_nrm.current_data()?.unwrap(),
-            &self.k_signs.current_data()?.unwrap(),
-            &self.k_rnrm.current_data()?.unwrap(),
-            self.dtype,
-        )?;
-        let full_v = turbo_dequantize_4d(
-            &self.v_quantizer,
-            &self.v_idx.current_data()?.unwrap(),
-            &self.v_nrm.current_data()?.unwrap(),
-            &self.v_signs.current_data()?.unwrap(),
-            &self.v_rnrm.current_data()?.unwrap(),
-            self.dtype,
-        )?;
+        // Incrementally build dequantized output by concatenating with cached
+        let full_k = match &self.k_dequantized {
+            Some(prev) => Tensor::cat(&[prev, &new_k_deq], dim)?,
+            None => new_k_deq,
+        };
+        let full_v = match &self.v_dequantized {
+            Some(prev) => Tensor::cat(&[prev, &new_v_deq], dim)?,
+            None => new_v_deq,
+        };
+
+        self.k_dequantized = Some(full_k.clone());
+        self.v_dequantized = Some(full_v.clone());
 
         Ok((full_k, full_v))
     }
@@ -1182,6 +1218,8 @@ impl QuantizedPreAllocKvCache {
         self.v_nrm.reset();
         self.v_signs.reset();
         self.v_rnrm.reset();
+        self.k_dequantized = None;
+        self.v_dequantized = None;
     }
 
     /// Get current sequence length in the cache.
@@ -1222,6 +1260,8 @@ pub struct QuantizedRotatingKvCache {
     v_nrm: RotatingCache,
     v_signs: RotatingCache,
     v_rnrm: RotatingCache,
+    k_dequantized: Option<Tensor>,
+    v_dequantized: Option<Tensor>,
     dtype: DType,
 }
 
@@ -1259,6 +1299,8 @@ impl QuantizedRotatingKvCache {
             v_nrm: RotatingCache::new(dim, max_seq_len),
             v_signs: RotatingCache::new(dim, max_seq_len),
             v_rnrm: RotatingCache::new(dim, max_seq_len),
+            k_dequantized: None,
+            v_dequantized: None,
             dtype,
         })
     }
@@ -1290,6 +1332,11 @@ impl QuantizedRotatingKvCache {
             );
         }
 
+        let dim = self.k_idx.dim();
+        let seq_len = k.dim(dim)?;
+        let prev_total = self.k_idx.current_seq_len();
+        let max_seq = self.k_idx.max_seq_len();
+
         let kq = turbo_quantize_4d(&self.k_quantizer, &k)?;
         let vq = turbo_quantize_4d(&self.v_quantizer, &v)?;
 
@@ -1297,13 +1344,48 @@ impl QuantizedRotatingKvCache {
         let kn = self.k_nrm.append(&kq.norms)?;
         let ks = self.k_signs.append(&kq.qjl_signs)?;
         let kr = self.k_rnrm.append(&kq.residual_norms)?;
-        let full_k = turbo_dequantize_4d(&self.k_quantizer, &ki, &kn, &ks, &kr, self.dtype)?;
 
         let vi = self.v_idx.append(&vq.indices)?;
         let vn = self.v_nrm.append(&vq.norms)?;
         let vs = self.v_signs.append(&vq.qjl_signs)?;
         let vr = self.v_rnrm.append(&vq.residual_norms)?;
-        let full_v = turbo_dequantize_4d(&self.v_quantizer, &vi, &vn, &vs, &vr, self.dtype)?;
+
+        let (full_k, full_v) = if prev_total + seq_len <= max_seq {
+            // No wrapping — dequantize only the new tokens and concatenate
+            let new_k_deq = turbo_dequantize_4d(
+                &self.k_quantizer,
+                &kq.indices,
+                &kq.norms,
+                &kq.qjl_signs,
+                &kq.residual_norms,
+                self.dtype,
+            )?;
+            let new_v_deq = turbo_dequantize_4d(
+                &self.v_quantizer,
+                &vq.indices,
+                &vq.norms,
+                &vq.qjl_signs,
+                &vq.residual_norms,
+                self.dtype,
+            )?;
+            let fk = match &self.k_dequantized {
+                Some(prev) => Tensor::cat(&[prev, &new_k_deq], dim)?,
+                None => new_k_deq,
+            };
+            let fv = match &self.v_dequantized {
+                Some(prev) => Tensor::cat(&[prev, &new_v_deq], dim)?,
+                None => new_v_deq,
+            };
+            (fk, fv)
+        } else {
+            // Wrapping occurred — must dequantize the full window
+            let fk = turbo_dequantize_4d(&self.k_quantizer, &ki, &kn, &ks, &kr, self.dtype)?;
+            let fv = turbo_dequantize_4d(&self.v_quantizer, &vi, &vn, &vs, &vr, self.dtype)?;
+            (fk, fv)
+        };
+
+        self.k_dequantized = Some(full_k.clone());
+        self.v_dequantized = Some(full_v.clone());
 
         Ok((full_k, full_v))
     }
@@ -1318,6 +1400,8 @@ impl QuantizedRotatingKvCache {
         self.v_nrm.reset();
         self.v_signs.reset();
         self.v_rnrm.reset();
+        self.k_dequantized = None;
+        self.v_dequantized = None;
     }
 
     /// Get current sequence length in the cache.

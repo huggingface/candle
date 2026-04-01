@@ -35,15 +35,80 @@ use candle::{DType, Device, Result, Tensor, D};
 
 use crate::turboquant_mse::{TurboMseQuantized, TurboQuantMse};
 
+/// Pack F32 ±1.0 signs into U8 bytes (8 signs per byte, LSB first).
+///
+/// Input: `[n, d]` F32 with values ±1.0.
+/// Output: `[n, ceil(d/8)]` U8.
+///
+/// Bit encoding: 1 = +1.0, 0 = −1.0. Bit 0 of byte 0 holds element 0,
+/// bit 1 holds element 1, etc.
+pub fn pack_signs(signs: &Tensor) -> Result<Tensor> {
+    let (n, d) = signs.dims2()?;
+    let d_packed = d.div_ceil(8);
+    let d_padded = d_packed * 8;
+
+    // ±1.0 → {0.0, 1.0}
+    let bits = signs.to_dtype(DType::F32)?.affine(0.5, 0.5)?;
+
+    // Pad last dim to a multiple of 8
+    let bits = if d_padded > d {
+        let pad = Tensor::zeros((n, d_padded - d), DType::F32, signs.device())?;
+        Tensor::cat(&[&bits, &pad], 1)?
+    } else {
+        bits
+    };
+
+    // [n, d_packed, 8] × bit-position weights → [n, d_packed]
+    let bits = bits.reshape((n, d_packed, 8))?;
+    let powers = Tensor::new(
+        &[1.0f32, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0],
+        signs.device(),
+    )?;
+    let packed = bits.broadcast_mul(&powers)?.sum(2)?.to_dtype(DType::U8)?;
+
+    Ok(packed)
+}
+
+/// Unpack U8 packed signs back to F32 ±1.0.
+///
+/// Input: `[n, ceil(d/8)]` U8.
+/// Output: `[n, d]` F32.
+pub fn unpack_signs(packed: &Tensor, d: usize) -> Result<Tensor> {
+    let (n, d_packed) = packed.dims2()?;
+
+    let packed_f32 = packed.to_dtype(DType::F32)?.unsqueeze(2)?; // [n, d_packed, 1]
+
+    // Extract each bit: bit_i = floor(x / 2^i) − 2·floor(x / 2^(i+1))
+    let mut planes = Vec::with_capacity(8);
+    for i in 0..8u32 {
+        let div = (1u32 << i) as f64;
+        let div_next = (1u32 << (i + 1)) as f64;
+        let lo = packed_f32.affine(1.0 / div, 0.0)?.floor()?;
+        let hi = packed_f32.affine(1.0 / div_next, 0.0)?.floor()?;
+        planes.push((&lo - hi.affine(2.0, 0.0)?)?);
+    }
+    let bits = Tensor::cat(&planes, 2)?; // [n, d_packed, 8]
+    let bits = bits.reshape((n, d_packed * 8))?;
+
+    // Trim padding and map {0,1} → {−1.0, +1.0}
+    let bits = if d_packed * 8 > d {
+        bits.narrow(1, 0, d)?
+    } else {
+        bits
+    };
+    bits.affine(2.0, -1.0)
+}
+
 /// Result of TurboQuant quantization.
 ///
-/// Stores the TurboQuantMse MSE quantization (b−1 bits), QJL sign bits (1 bit),
+/// Stores the TurboQuantMse MSE quantization (b−1 bits), packed QJL sign bits (1 bit),
 /// and residual norms needed for unbiased inner product reconstruction.
 #[derive(Debug, Clone)]
 pub struct TurboQuantized {
     /// TurboQuantMse quantization part (b−1 bits per coordinate).
     pub polar: TurboMseQuantized,
-    /// QJL sign bits. Shape: `[n, d]`, values in {-1.0, +1.0}.
+    /// QJL sign bits, packed. Shape: `[n, ceil(d/8)]`, dtype U8.
+    /// Each byte packs 8 signs (LSB first): bit set = +1.0, unset = −1.0.
     pub qjl_signs: Tensor,
     /// Residual L2 norms. Shape: `[n]`.
     pub residual_norms: Tensor,
@@ -140,12 +205,13 @@ impl TurboQuant {
         let residual = x.broadcast_sub(&x_polar)?;
         let residual_norms = residual.sqr()?.sum(D::Minus1)?.sqrt()?;
 
-        // Stage 3: QJL on residual: sign(S · r)
+        // Stage 3: QJL on residual: sign(S · r), packed into U8 bits
         let sr = residual.matmul(&self.projection.t()?)?;
         let zeros = sr.zeros_like()?;
         let positive = sr.ge(&zeros)?;
-        // Map U8 {0, 1} -> {-1.0, +1.0}
-        let qjl_signs = positive.to_dtype(self.dtype)?.affine(2.0, -1.0)?;
+        // Map U8 {0, 1} -> F32 {-1.0, +1.0}, then bit-pack into U8
+        let signs_f32 = positive.to_dtype(DType::F32)?.affine(2.0, -1.0)?;
+        let qjl_signs = pack_signs(&signs_f32)?;
 
         Ok(TurboQuantized {
             polar: polar_q,
@@ -165,9 +231,10 @@ impl TurboQuant {
         // Stage 1: TurboQuantMse dequantization
         let x_polar = self.polar.dequantize(&q.polar)?;
 
-        // Stage 2: QJL dequantization
+        // Stage 2: QJL dequantization — unpack U8 packed signs to F32 ±1.0
         // x_qjl = √(π/2)/d · γ · S^T · qjl
-        let x_qjl = q.qjl_signs.matmul(&self.projection)?;
+        let signs = unpack_signs(&q.qjl_signs, self.dim)?.to_dtype(self.dtype)?;
+        let x_qjl = signs.matmul(&self.projection)?;
         let scale = (std::f64::consts::FRAC_PI_2).sqrt() / self.dim as f64;
         let x_qjl = (x_qjl * scale)?;
         let x_qjl = x_qjl.broadcast_mul(&q.residual_norms.unsqueeze(D::Minus1)?)?;
@@ -235,8 +302,13 @@ mod tests {
 
         assert_eq!(x_recon.dims(), &[n, dim]);
 
-        // QJL signs must be exactly ±1
-        let signs_abs = q.qjl_signs.abs()?;
+        // QJL signs must be packed U8 with shape [n, ceil(dim/8)]
+        assert_eq!(q.qjl_signs.dtype(), DType::U8);
+        assert_eq!(q.qjl_signs.dims(), &[n, dim.div_ceil(8)]);
+
+        // Unpack and verify all values are ±1
+        let unpacked = unpack_signs(&q.qjl_signs, dim)?;
+        let signs_abs = unpacked.abs()?;
         let ones = signs_abs.ones_like()?;
         let sign_err = signs_abs
             .broadcast_sub(&ones)?

@@ -40,7 +40,7 @@
 
 use candle::{DType, Device, Result, Tensor};
 
-use crate::turboquant::TurboQuant;
+use crate::turboquant::{unpack_signs, TurboQuant};
 use crate::turboquant_mse::{TurboMseMatMul, TurboMseQuantized, TurboQuantMse};
 use crate::Linear;
 
@@ -73,7 +73,8 @@ pub struct TurboQuantLinear {
     fused_op: Option<TurboMseMatMul>,
     /// QJL projection matrix S^T: [d, d] — shared from the TurboQuant quantizer
     qjl_projection_t: Tensor,
-    /// QJL sign bits: [out_features, in_features], values ±1.0
+    /// QJL sign bits, packed: [out_features, ceil(in_features/8)], dtype U8.
+    /// Each byte packs 8 signs (LSB first): bit set = +1.0, unset = −1.0.
     qjl_signs: Tensor,
     /// Pre-computed √(π/2)/d · residual_norms: [out_features]
     scaled_residual_norms: Tensor,
@@ -181,7 +182,8 @@ impl TurboQuantLinear {
         let w_mse = self.mse_quantizer.dequantize(&q)?;
 
         // QJL correction: √(π/2)/d · diag(residual_norms) · signs · S
-        let w_qjl = self.qjl_signs.matmul(&self.qjl_projection_t.t()?)?;
+        let signs = unpack_signs(&self.qjl_signs, self.in_features)?;
+        let w_qjl = signs.matmul(&self.qjl_projection_t.t()?)?;
         let w_qjl = w_qjl.broadcast_mul(&self.scaled_residual_norms.unsqueeze(1)?)?;
 
         (w_mse + w_qjl)?.contiguous()
@@ -269,14 +271,15 @@ impl TurboQuantLinear {
         // MSE part via fused kernel
         let y_mse = fused.forward(x)?;
 
-        // QJL correction: x_proj @ signs^T * scaled_residual_norms
+        // QJL correction: unpack packed signs, then x_proj @ signs^T * scaled_residual_norms
         let x_2d = if x.dims().len() == 1 {
             x.unsqueeze(0)?
         } else {
             x.reshape((batch, d))?
         };
+        let signs = unpack_signs(&self.qjl_signs, self.in_features)?;
         let x_proj = x_2d.matmul(&self.qjl_projection_t)?;
-        let correction = x_proj.matmul(&self.qjl_signs.t()?)?;
+        let correction = x_proj.matmul(&signs.t()?)?;
         let correction = correction.broadcast_mul(&self.scaled_residual_norms.unsqueeze(0)?)?;
 
         // Reshape correction to match y_mse
