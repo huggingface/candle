@@ -185,6 +185,35 @@ impl TurboQuant {
     pub fn bit_width(&self) -> usize {
         self.bit_width
     }
+
+    /// Get a reference to the internal MSE quantizer.
+    pub fn mse_quantizer(&self) -> &TurboQuantMse {
+        &self.polar
+    }
+
+    /// Get a reference to the QJL projection matrix.
+    pub fn projection(&self) -> &Tensor {
+        &self.projection
+    }
+
+    /// Create a TurboQuant from an existing MSE quantizer.
+    ///
+    /// Generates a fresh QJL projection matrix. Useful for combining
+    /// a Hadamard-based MSE quantizer with TurboQuant's QJL correction.
+    pub fn from_mse_quantizer(mse: TurboQuantMse, dtype: DType, device: &Device) -> Result<Self> {
+        let dim = mse.dim();
+        let bit_width = mse.bit_width() + 1;
+        let projection = Tensor::randn(0f64, 1f64, (dim, dim), &Device::Cpu)?
+            .to_dtype(dtype)?
+            .to_device(device)?;
+        Ok(Self {
+            polar: mse,
+            projection,
+            dim,
+            bit_width,
+            dtype,
+        })
+    }
 }
 
 #[cfg(test)]

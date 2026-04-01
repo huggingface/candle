@@ -119,33 +119,111 @@ fn lloyd_max_gaussian(bit_width: usize, max_iter: usize) -> Vec<f64> {
     centroids
 }
 
-/// Generate a random orthogonal matrix via modified Gram-Schmidt.
+/// Generate a random orthogonal matrix via Householder QR decomposition.
 ///
-/// Generates a d×d random Gaussian matrix using candle's `randn`, pulls data
-/// to CPU for orthogonalization, then returns the result as a Tensor.
+/// Generates a d×d random Gaussian matrix, computes its QR factorization
+/// using Householder reflections, and returns Q. This matches the TurboQuant
+/// paper's specification and is both faster and more numerically stable than
+/// Modified Gram-Schmidt.
 fn random_orthogonal_tensor(dim: usize, dtype: DType, device: &Device) -> Result<Tensor> {
     let random_mat = Tensor::randn(0f64, 1f64, (dim, dim), &Device::Cpu)?;
-    let rows: Vec<Vec<f64>> = random_mat.to_vec2()?;
+    let a: Vec<Vec<f64>> = random_mat.to_vec2()?;
 
-    let mut orth = rows;
-
+    // Column-major storage for in-place Householder QR
+    let mut col_major = vec![0f64; dim * dim];
     for i in 0..dim {
-        for j in 0..i {
-            let dot: f64 = orth[i].iter().zip(&orth[j]).map(|(a, b)| a * b).sum();
-            let orth_j = orth[j].clone();
-            for k in 0..dim {
-                orth[i][k] -= dot * orth_j[k];
-            }
+        for j in 0..dim {
+            col_major[j * dim + i] = a[i][j];
         }
-        let norm: f64 = orth[i].iter().map(|x| x * x).sum::<f64>().sqrt();
-        if norm > 1e-12 {
-            for val in &mut orth[i] {
-                *val /= norm;
+    }
+
+    // Store Householder vectors' essential parts (below diagonal) in-place
+    let mut tau = vec![0f64; dim];
+
+    for k in 0..dim {
+        // Extract column k below the diagonal
+        let mut norm_sq = 0f64;
+        for i in k..dim {
+            norm_sq += col_major[k * dim + i] * col_major[k * dim + i];
+        }
+        let norm = norm_sq.sqrt();
+
+        if norm < 1e-15 {
+            tau[k] = 0.0;
+            continue;
+        }
+
+        // Choose sign to avoid cancellation
+        let alpha = col_major[k * dim + k];
+        let beta = if alpha >= 0.0 { -norm } else { norm };
+
+        // Compute Householder vector v with v[k] = 1 (implicit)
+        // tau = 2 / (v^T v)
+        let denom = alpha - beta;
+        if denom.abs() < 1e-15 {
+            tau[k] = 0.0;
+            col_major[k * dim + k] = beta;
+            continue;
+        }
+
+        let inv_denom = 1.0 / denom;
+        for i in (k + 1)..dim {
+            col_major[k * dim + i] *= inv_denom;
+        }
+        col_major[k * dim + k] = beta;
+
+        // tau[k] = (beta - alpha) / beta = -(alpha - beta) / beta
+        tau[k] = (beta - alpha) / beta;
+
+        // Apply H_k to remaining columns: A[k:, k+1:] -= tau * v * (v^T * A[k:, k+1:])
+        for j in (k + 1)..dim {
+            // dot = v^T * A[k:, j] (v[k] = 1 implicitly)
+            let mut dot = col_major[j * dim + k];
+            for i in (k + 1)..dim {
+                dot += col_major[k * dim + i] * col_major[j * dim + i];
+            }
+            dot *= tau[k];
+            // A[k:, j] -= dot * v
+            col_major[j * dim + k] -= dot;
+            for i in (k + 1)..dim {
+                col_major[j * dim + i] -= dot * col_major[k * dim + i];
             }
         }
     }
 
-    let flat: Vec<f64> = orth.into_iter().flatten().collect();
+    // Accumulate Q = H_0 * H_1 * ... * H_{d-1} by backward accumulation
+    // Start with Q = I, then apply reflectors from right to left
+    let mut q = vec![0f64; dim * dim];
+    for i in 0..dim {
+        q[i * dim + i] = 1.0;
+    }
+
+    for k in (0..dim).rev() {
+        if tau[k].abs() < 1e-15 {
+            continue;
+        }
+        // Apply H_k to Q[k:, k:]: Q[k:, j] -= tau * v * (v^T * Q[k:, j])
+        for j in k..dim {
+            let mut dot = q[j * dim + k]; // v[k] = 1
+            for i in (k + 1)..dim {
+                dot += col_major[k * dim + i] * q[j * dim + i];
+            }
+            dot *= tau[k];
+            q[j * dim + k] -= dot;
+            for i in (k + 1)..dim {
+                q[j * dim + i] -= dot * col_major[k * dim + i];
+            }
+        }
+    }
+
+    // Convert column-major Q to row-major flat array
+    let mut flat = vec![0f64; dim * dim];
+    for i in 0..dim {
+        for j in 0..dim {
+            flat[i * dim + j] = q[j * dim + i];
+        }
+    }
+
     Tensor::from_vec(flat, (dim, dim), &Device::Cpu)?
         .to_dtype(dtype)?
         .to_device(device)

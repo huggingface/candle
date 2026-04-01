@@ -256,7 +256,7 @@ impl BenchModel {
 
             // MLP layers get quantized (bulk of parameters, more tolerant)
             // Use Hadamard rotation when dim is power-of-2 (faster + numerically exact)
-            // Non-power-of-2 dims stay F32 to avoid slow Gram-Schmidt construction
+            // Non-power-of-2 dims use dense QR rotation (Hadamard is faster for power-of-2)
             // Only quantize the second half of layers (later layers are more tolerant)
             let quantize_this_layer = bits.is_some() && i >= cfg.num_hidden_layers / 2;
             let make_mlp = |in_d: usize, out_d, vb: VarBuilder| -> CResult<LinearLayer> {

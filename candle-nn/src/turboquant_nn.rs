@@ -40,14 +40,21 @@
 
 use candle::{DType, Device, Result, Tensor};
 
+use crate::turboquant::TurboQuant;
 use crate::turboquant_mse::{TurboMseMatMul, TurboMseQuantized, TurboQuantMse};
 use crate::Linear;
 
-/// Linear layer with TurboQuantMse-compressed weights.
+/// Linear layer with TurboQuant-compressed weights.
 ///
-/// Stores the weight matrix as quantized indices + norms, dequantizing on each
-/// forward pass. This trades compute for memory — the weight matrix is never
-/// materialized in full precision until needed.
+/// Stores the weight matrix as quantized MSE indices + QJL sign corrections,
+/// providing unbiased inner product estimation (`E[⟨x, W̃ᵢ⟩] = ⟨x, Wᵢ⟩`).
+///
+/// The forward pass decomposes into:
+/// 1. **MSE path**: fused centroid-dot matmul (fast, from `TurboMseMatMul`)
+/// 2. **QJL correction**: `√(π/2)/d · (x @ S^T) @ signs^T @ diag(residual_norms)`
+///
+/// This avoids materializing the full weight matrix while preserving unbiased
+/// inner products from TurboQuant Algorithm 2.
 ///
 /// # When to Use
 ///
@@ -60,31 +67,32 @@ use crate::Linear;
 /// - Models small enough to fit in memory uncompressed
 #[derive(Debug, Clone)]
 pub struct TurboQuantLinear {
-    quantizer: TurboQuantMse,
+    mse_quantizer: TurboQuantMse,
     indices: Tensor,
     norms: Tensor,
     fused_op: Option<TurboMseMatMul>,
+    /// QJL projection matrix S^T: [d, d] — shared from the TurboQuant quantizer
+    qjl_projection_t: Tensor,
+    /// QJL sign bits: [out_features, in_features], values ±1.0
+    qjl_signs: Tensor,
+    /// Residual norms: [out_features]
+    residual_norms: Tensor,
+    qjl_scale: f64,
     bias: Option<Tensor>,
     in_features: usize,
     out_features: usize,
+    bit_width: usize,
 }
 
 impl TurboQuantLinear {
-    /// Quantize a pretrained [`Linear`] layer into TurboQuantMse-compressed form.
+    /// Quantize a pretrained [`Linear`] layer into TurboQuant-compressed form.
     ///
-    /// The weight matrix (shape `[out_features, in_features]`) is quantized
-    /// row-by-row. Each row becomes a vector of U8 centroid indices plus a
-    /// scalar norm. The bias (if present) is kept in full precision.
+    /// Uses the full TurboQuant algorithm (MSE + QJL) for unbiased inner products.
     ///
     /// # Arguments
     /// * `linear` - The pretrained linear layer to compress.
     /// * `bit_width` - Quantization bits per coordinate (typically 2–4).
     /// * `device` - Device for the quantizer's rotation matrix.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let pq = TurboQuantLinear::from_linear(&pretrained_layer, 4, &device)?;
-    /// ```
     pub fn from_linear(linear: &Linear, bit_width: usize, device: &Device) -> Result<Self> {
         let weight = linear.weight();
         let (out_features, in_features) = weight.dims2()?;
@@ -95,27 +103,34 @@ impl TurboQuantLinear {
         } else {
             DType::F32
         };
-        let quantizer = TurboQuantMse::new(in_features, bit_width, internal_dtype, device)?;
-        let q = quantizer.quantize(weight)?;
-        let indices = q.indices.to_dtype(DType::U8)?;
-        let fused_op = TurboMseMatMul::new(&quantizer, &indices, &q.norms).ok();
+        let turbo = TurboQuant::new(in_features, bit_width, internal_dtype, device)?;
+        let q = turbo.quantize(weight)?;
+        let mse_quantizer = turbo.mse_quantizer().clone();
+        let indices = q.polar.indices.to_dtype(DType::U8)?;
+        let fused_op = TurboMseMatMul::new(&mse_quantizer, &indices, &q.polar.norms).ok();
+        let qjl_scale = (std::f64::consts::FRAC_PI_2).sqrt() / in_features as f64;
 
         Ok(Self {
-            quantizer,
+            mse_quantizer,
             indices,
-            norms: q.norms,
+            norms: q.polar.norms,
             fused_op,
+            qjl_projection_t: turbo.projection().t()?.contiguous()?,
+            qjl_signs: q.qjl_signs,
+            residual_norms: q.residual_norms,
+            qjl_scale,
             bias: linear.bias().cloned(),
             in_features,
             out_features,
+            bit_width,
         })
     }
 
     /// Quantize a pretrained [`Linear`] layer using fast Hadamard rotation.
     ///
     /// Same as [`from_linear`](Self::from_linear) but uses a randomized
-    /// Walsh-Hadamard transform instead of a dense orthogonal matrix.
-    /// Requires `in_features` to be a power of 2.
+    /// Walsh-Hadamard transform for the MSE stage. Requires `in_features`
+    /// to be a power of 2.
     pub fn from_linear_hadamard(
         linear: &Linear,
         bit_width: usize,
@@ -130,58 +145,48 @@ impl TurboQuantLinear {
         } else {
             DType::F32
         };
-        let quantizer =
-            TurboQuantMse::new_hadamard(in_features, bit_width, internal_dtype, device)?;
-        let q = quantizer.quantize(weight)?;
-        let indices = q.indices.to_dtype(DType::U8)?;
-        let fused_op = TurboMseMatMul::new(&quantizer, &indices, &q.norms).ok();
+        // Use Hadamard for the MSE stage, standard Gaussian for QJL projection
+        let mse_quantizer =
+            TurboQuantMse::new_hadamard(in_features, bit_width - 1, internal_dtype, device)?;
+        let turbo = TurboQuant::from_mse_quantizer(mse_quantizer.clone(), internal_dtype, device)?;
+        let q = turbo.quantize(weight)?;
+        let indices = q.polar.indices.to_dtype(DType::U8)?;
+        let fused_op = TurboMseMatMul::new(&mse_quantizer, &indices, &q.polar.norms).ok();
+        let qjl_scale = (std::f64::consts::FRAC_PI_2).sqrt() / in_features as f64;
 
         Ok(Self {
-            quantizer,
+            mse_quantizer,
             indices,
-            norms: q.norms,
+            norms: q.polar.norms,
             fused_op,
+            qjl_projection_t: turbo.projection().t()?.contiguous()?,
+            qjl_signs: q.qjl_signs,
+            residual_norms: q.residual_norms,
+            qjl_scale,
             bias: linear.bias().cloned(),
             in_features,
             out_features,
-        })
-    }
-
-    /// Create a TurboQuantLinear from pre-quantized data.
-    ///
-    /// # Arguments
-    /// * `quantizer` - The TurboQuantMse quantizer (holds rotation matrix + centroids).
-    /// * `indices` - Centroid indices, shape `[out_features, in_features]`, dtype U8.
-    /// * `norms` - Row norms, shape `[out_features]`.
-    /// * `bias` - Optional bias, shape `[out_features]`.
-    pub fn new(
-        quantizer: TurboQuantMse,
-        indices: Tensor,
-        norms: Tensor,
-        bias: Option<Tensor>,
-    ) -> Result<Self> {
-        let (out_features, in_features) = indices.dims2()?;
-        let fused_op = TurboMseMatMul::new(&quantizer, &indices, &norms).ok();
-        Ok(Self {
-            quantizer,
-            indices,
-            norms,
-            fused_op,
-            bias,
-            in_features,
-            out_features,
+            bit_width,
         })
     }
 
     /// Dequantize and return the full-precision weight matrix.
     ///
-    /// Shape: `[out_features, in_features]`.
+    /// Includes the QJL correction for unbiased reconstruction.
     pub fn dequantize_weight(&self) -> Result<Tensor> {
+        // MSE reconstruction
         let q = TurboMseQuantized {
             indices: self.indices.to_dtype(DType::U32)?,
             norms: self.norms.clone(),
         };
-        self.quantizer.dequantize(&q)
+        let w_mse = self.mse_quantizer.dequantize(&q)?;
+
+        // QJL correction: √(π/2)/d · diag(residual_norms) · signs · S
+        let w_qjl = self.qjl_signs.matmul(&self.qjl_projection_t.t()?)?;
+        let w_qjl = (w_qjl * self.qjl_scale)?;
+        let w_qjl = w_qjl.broadcast_mul(&self.residual_norms.unsqueeze(1)?)?;
+
+        (w_mse + w_qjl)?.contiguous()
     }
 
     /// Get the bias tensor, if present.
@@ -201,21 +206,18 @@ impl TurboQuantLinear {
 
     /// Get the bit width used for quantization.
     pub fn bit_width(&self) -> usize {
-        self.quantizer.bit_width()
+        self.bit_width
     }
 
     /// Approximate memory usage of the quantized weights in bytes.
-    ///
-    /// Counts bit-packed index storage + norm storage (F32), excluding the
-    /// shared rotation matrix and centroids. At 2-bit with dim=768, this is
-    /// ~4× smaller than U8 index storage.
     pub fn quantized_weight_bytes(&self) -> usize {
-        let bits = self.quantizer.bit_width();
-        // Bit-packed indices: ceil(out * in * bits / 8) bytes
-        let index_bytes = (self.out_features * self.in_features * bits).div_ceil(8);
-        // F32 norms: out_features * 4 bytes
-        let norm_bytes = self.out_features * 4;
-        index_bytes + norm_bytes
+        let mse_bits = self.bit_width - 1;
+        // Bit-packed MSE indices + 1-bit QJL signs
+        let index_bytes = (self.out_features * self.in_features * mse_bits).div_ceil(8);
+        let sign_bytes = (self.out_features * self.in_features).div_ceil(8);
+        // F32 norms (MSE) + F32 residual norms (QJL)
+        let norm_bytes = self.out_features * 4 * 2;
+        index_bytes + sign_bytes + norm_bytes
     }
 
     /// Memory usage of the equivalent uncompressed F32 weight in bytes.
@@ -228,7 +230,7 @@ impl TurboQuantLinear {
         self.uncompressed_weight_bytes() as f64 / self.quantized_weight_bytes() as f64
     }
 
-    /// Fallback forward using full weight dequantization.
+    /// Forward using full weight dequantization (fallback).
     pub(crate) fn forward_dequantize(&self, x: &Tensor) -> Result<Tensor> {
         let w = self.dequantize_weight()?;
         let wt = w.t()?;
@@ -257,13 +259,48 @@ impl TurboQuantLinear {
             _ => x.matmul(&wt),
         }
     }
+
+    /// Forward with decomposed MSE fused + QJL correction.
+    ///
+    /// y = fused_mse(x) + √(π/2)/d · (x @ S^T) @ signs^T @ diag(residual_norms)
+    fn forward_fused_with_qjl(&self, fused: &TurboMseMatMul, x: &Tensor) -> Result<Tensor> {
+        let orig_dims = x.dims().to_vec();
+        let d = self.in_features;
+        let batch = x.elem_count() / d;
+
+        // MSE part via fused kernel
+        let y_mse = fused.forward(x)?;
+
+        // QJL correction: x_proj @ signs^T * (scale * residual_norms)
+        let x_2d = if x.dims().len() == 1 {
+            x.unsqueeze(0)?
+        } else {
+            x.reshape((batch, d))?
+        };
+        let x_proj = x_2d.matmul(&self.qjl_projection_t)?;
+        let correction = x_proj.matmul(&self.qjl_signs.t()?)?;
+        let scaled_rnorms = (&self.residual_norms * self.qjl_scale)?;
+        let correction = correction.broadcast_mul(&scaled_rnorms.unsqueeze(0)?)?;
+
+        // Reshape correction to match y_mse
+        let correction = match orig_dims.len() {
+            1 => correction.squeeze(0)?,
+            _ => {
+                let mut out_dims = orig_dims;
+                *out_dims.last_mut().unwrap() = self.out_features;
+                correction.reshape(out_dims)?
+            }
+        };
+
+        y_mse + correction
+    }
 }
 
 impl crate::Module for TurboQuantLinear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x_result = if let Some(ref fused) = self.fused_op {
             if x.dtype() == DType::F32 {
-                fused.forward(x)?
+                self.forward_fused_with_qjl(fused, x)?
             } else {
                 self.forward_dequantize(x)?
             }
@@ -337,7 +374,8 @@ mod tests {
         let pq = TurboQuantLinear::from_linear(&linear, 4, &device)?;
         let y_approx = crate::Module::forward(&pq, &x)?;
 
-        // Relative error should be small for 4-bit
+        // Relative error should be reasonable for 4-bit TurboQuant
+        // (uses 3-bit MSE + 1-bit QJL, so slightly more distortion than pure 4-bit MSE)
         let err = (&y_exact - &y_approx)?
             .sqr()?
             .sum_all()?
@@ -345,7 +383,7 @@ mod tests {
         let mag = y_exact.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
         let rel = err / (mag + 1e-10);
         assert!(
-            rel < 0.05,
+            rel < 0.15,
             "4-bit linear output relative error too high: {rel:.4}"
         );
 
@@ -359,17 +397,15 @@ mod tests {
         let w = Tensor::randn(0f32, 1f32, (out_f, in_f), &device)?;
         let linear = Linear::new(w, None);
 
-        // 4-bit: packed indices = 64*128*4/8 = 4096 bytes, norms = 256, total = 4352
-        // F32 weight = 32768, ratio = 32768/4352 ≈ 7.5x
+        // 4-bit TurboQuant: (b-1)=3-bit MSE indices + 1-bit QJL signs + norms
         let pq4 = TurboQuantLinear::from_linear(&linear, 4, &device)?;
         let ratio4 = pq4.compression_ratio();
-        assert!(ratio4 > 7.0, "Expected > 7x at 4-bit, got {ratio4:.2}x");
+        assert!(ratio4 > 5.0, "Expected > 5x at 4-bit, got {ratio4:.2}x");
 
-        // 2-bit: packed indices = 64*128*2/8 = 2048 bytes, norms = 256, total = 2304
-        // ratio = 32768/2304 ≈ 14.2x
+        // 2-bit TurboQuant: 1-bit MSE + 1-bit QJL + norms
         let pq2 = TurboQuantLinear::from_linear(&linear, 2, &device)?;
         let ratio2 = pq2.compression_ratio();
-        assert!(ratio2 > 14.0, "Expected > 14x at 2-bit, got {ratio2:.2}x");
+        assert!(ratio2 > 10.0, "Expected > 10x at 2-bit, got {ratio2:.2}x");
         assert!(ratio2 > ratio4, "2-bit should compress more than 4-bit");
 
         Ok(())
@@ -388,11 +424,11 @@ mod tests {
 
         assert_eq!(w_deq.dims(), &[out_f, in_f]);
 
-        // Dequantized weight should be close to original
+        // Dequantized weight should be close to original (includes QJL correction)
         let err = (&w - &w_deq)?.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
         let mag = w.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
         let rel = err / (mag + 1e-10);
-        assert!(rel < 0.05, "Weight reconstruction error too high: {rel:.4}");
+        assert!(rel < 0.15, "Weight reconstruction error too high: {rel:.4}");
 
         Ok(())
     }
@@ -473,7 +509,7 @@ mod tests {
         let mag = y_exact.sqr()?.sum_all()?.to_scalar::<f32>()? as f64;
         let rel = err / (mag + 1e-10);
         assert!(
-            rel < 0.05,
+            rel < 0.15,
             "Hadamard 4-bit relative error too high: {rel:.4}"
         );
 
