@@ -351,4 +351,4 @@ impl Model {
         }
     }
 }
-crate::impl_causal_lm!(Model, "starcoder2", with_reset);
+crate::impl_causal_lm!(Model, "starcoder2");

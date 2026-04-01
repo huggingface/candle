@@ -353,4 +353,4 @@ impl Model {
         }
     }
 }
-crate::impl_causal_lm!(Model, "olmo", with_reset);
+crate::impl_causal_lm!(Model, "olmo");

@@ -365,4 +365,4 @@ impl Model {
         self.layers.iter_mut().for_each(|b| b.clear_kv_cache())
     }
 }
-crate::impl_causal_lm!(Model, "phi", with_reset);
+crate::impl_causal_lm!(Model, "phi");

@@ -174,7 +174,7 @@ struct Attention {
 impl Attention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
-        use_flash_attn: bool,
+        _use_flash_attn: bool,
         cfg: &Config,
         sliding_window: Option<usize>,
         vb: VarBuilder,
@@ -320,7 +320,7 @@ struct DecoderLayer {
 
 impl DecoderLayer {
     fn new(
-        use_flash_attn: bool,
+        _use_flash_attn: bool,
         cfg: &Config,
         vb: VarBuilder,
         sliding_window: Option<usize>,
@@ -536,4 +536,4 @@ impl Model {
         }
     }
 }
-crate::impl_causal_lm!(Model, "gemma3", with_reset);
+crate::impl_causal_lm!(Model, "gemma3");

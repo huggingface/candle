@@ -484,4 +484,4 @@ impl Model {
         }
     }
 }
-crate::impl_causal_lm!(Model, "qwen2_moe", with_reset);
+crate::impl_causal_lm!(Model, "qwen2_moe");

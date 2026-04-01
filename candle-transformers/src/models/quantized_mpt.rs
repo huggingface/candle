@@ -217,4 +217,4 @@ impl Model {
         Ok(logits)
     }
 }
-crate::impl_causal_lm!(Model, "mpt", with_reset);
+crate::impl_causal_lm!(Model, "mpt");

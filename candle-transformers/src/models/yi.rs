@@ -372,4 +372,4 @@ impl Model {
     }
 
 }
-crate::impl_causal_lm!(Model, "yi", with_reset);
+crate::impl_causal_lm!(Model, "yi");

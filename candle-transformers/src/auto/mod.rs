@@ -109,12 +109,21 @@ macro_rules! make_auto_map {
 
 /// Implement the [`CausalLM`] trait for a model struct.
 ///
-/// # Variants
+/// The model must already have:
+/// - `fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor>`
+/// - `fn clear_kv_cache(&mut self)`
 ///
-/// - `impl_causal_lm!(Type, "name")` — `forward(input_ids, seqlen_offset)`, no `clear_kv_cache`
-/// - `impl_causal_lm!(Type, "name", with_reset)` — same + calls `Self::clear_kv_cache()`
-/// - `impl_causal_lm!(Type, "name", stateless)` — `forward(xs)` with no offset (ignored)
-/// - `impl_causal_lm!(Type, "name", stateless_with_reset)` — stateless + `clear_kv_cache`
+/// Every causal LM must be stateful (hold a KV cache), so `clear_kv_cache` is
+/// always required — there is no variant that omits it.
+///
+/// The `#[allow(unconditional_recursion)]` annotations silence a false-positive
+/// from the compiler's recursion checker, which cannot see through the typed
+/// binding that this calls the *inherent* method, not the trait method.
+///
+/// # Usage
+/// ```ignore
+/// crate::impl_causal_lm!(Model, "mistral");
+/// ```
 #[macro_export]
 macro_rules! impl_causal_lm {
     ($ty:ty, $name:literal) => {
@@ -122,20 +131,6 @@ macro_rules! impl_causal_lm {
             fn model_type(&self) -> &'static str { $name }
             #[allow(unconditional_recursion)]
             fn forward(&mut self, ids: &::candle::Tensor, offset: usize) -> ::candle::Result<::candle::Tensor> {
-                // Delegate to the model's own inherent method.
-                // The `#[allow]` is needed because the compiler's recursion checker
-                // cannot see through the macro that this calls the *inherent* forward,
-                // not the CausalLM trait method.
-                let m: &mut $ty = self;
-                m.forward(ids, offset)
-            }
-        }
-    };
-    ($ty:ty, $name:literal, with_reset) => {
-        impl $crate::auto::CausalLM for $ty {
-            fn model_type(&self) -> &'static str { $name }
-            #[allow(unconditional_recursion)]
-            fn forward(&mut self, ids: &::candle::Tensor, offset: usize) -> ::candle::Result<::candle::Tensor> {
                 let m: &mut $ty = self;
                 m.forward(ids, offset)
             }
@@ -146,29 +141,61 @@ macro_rules! impl_causal_lm {
             }
         }
     };
-    ($ty:ty, $name:literal, stateless) => {
-        impl $crate::auto::CausalLM for $ty {
-            fn model_type(&self) -> &'static str { $name }
-            #[allow(unconditional_recursion)]
-            fn forward(&mut self, ids: &::candle::Tensor, _offset: usize) -> ::candle::Result<::candle::Tensor> {
-                let m: &mut $ty = self;
-                m.forward(ids)
+}
+
+/// Generate a `*ForCausalLM` wrapper struct that bundles an inner model with
+/// its KV cache — the standard pattern for models whose cache is external
+/// (e.g. LLaMA, Granite).
+///
+/// Generates `new(cfg, vb)`, `forward`, `clear_kv_cache`, and the
+/// [`CausalLM`] trait impl.  The inner model must have:
+/// - `InnerModel::load(vb: VarBuilder, cfg: &InnerCfg) -> Result<Self>`
+/// - `InnerCache::new(use_kv_cache: bool, dtype: DType, cfg: &InnerCfg, device: &Device) -> Result<Self>`
+/// - `inner_model.forward(ids, offset, &mut cache) -> Result<Tensor>`
+///
+/// # Usage
+/// ```ignore
+/// crate::causal_lm_wrapper!(
+///     LlamaForCausalLM, "llama",
+///     model: llama::Llama,
+///     cache: llama::Cache,
+///     cfg:   llama::LlamaConfig,
+///     inner_cfg: llama::Config,          // optional: config type accepted by load/Cache::new
+/// );
+/// ```
+#[macro_export]
+macro_rules! causal_lm_wrapper {
+    (
+        $wrapper:ident, $name:literal,
+        model: $model_ty:ty,
+        cache: $cache_ty:ty,
+        cfg:   $cfg_ty:ty,
+    ) => {
+        pub struct $wrapper {
+            model: $model_ty,
+            cache: $cache_ty,
+        }
+
+        impl $wrapper {
+            pub fn new(cfg: &$cfg_ty, vb: ::candle_nn::VarBuilder) -> ::candle::Result<Self> {
+                let model = <$model_ty>::load(vb.clone(), cfg)?;
+                let cache = <$cache_ty>::new(true, vb.dtype(), cfg, vb.device())?;
+                Ok(Self { model, cache })
+            }
+
+            pub fn forward(
+                &mut self,
+                input_ids: &::candle::Tensor,
+                seqlen_offset: usize,
+            ) -> ::candle::Result<::candle::Tensor> {
+                self.model.forward(input_ids, seqlen_offset, &mut self.cache)
+            }
+
+            pub fn clear_kv_cache(&mut self) {
+                self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
             }
         }
-    };
-    ($ty:ty, $name:literal, stateless_with_reset) => {
-        impl $crate::auto::CausalLM for $ty {
-            fn model_type(&self) -> &'static str { $name }
-            #[allow(unconditional_recursion)]
-            fn forward(&mut self, ids: &::candle::Tensor, _offset: usize) -> ::candle::Result<::candle::Tensor> {
-                let m: &mut $ty = self;
-                m.forward(ids)
-            }
-            #[allow(unconditional_recursion)]
-            fn clear_kv_cache(&mut self) {
-                let m: &mut $ty = self;
-                m.clear_kv_cache()
-            }
-        }
+
+        $crate::impl_causal_lm!($wrapper, $name);
     };
 }

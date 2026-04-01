@@ -34,53 +34,8 @@ pub enum GraniteEosToks {
     Multiple(Vec<u32>),
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct GraniteConfig {
-    #[serde(default)]
-    pub use_flash_attn: bool,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub vocab_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: Option<usize>,
-    pub rms_norm_eps: f64,
-    #[serde(default = "default_rope")]
-    pub rope_theta: f32,
-    pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<GraniteEosToks>,
-    pub rope_scaling: Option<GraniteRopeConfig>,
-    pub max_position_embeddings: usize,
-}
-
-impl GraniteConfig {
-    pub fn num_key_value_heads(&self) -> usize {
-        self.num_key_value_heads.unwrap_or(self.num_attention_heads)
-    }
-}
-
 fn default_rope() -> f32 {
     10_000.0
-}
-
-impl GraniteConfig {
-    pub fn into_config(self, use_flash_attn: bool) -> Config {
-        Config {
-            hidden_size: self.hidden_size,
-            intermediate_size: self.intermediate_size,
-            vocab_size: self.vocab_size,
-            num_hidden_layers: self.num_hidden_layers,
-            num_attention_heads: self.num_attention_heads,
-            num_key_value_heads: self.num_key_value_heads(),
-            rms_norm_eps: self.rms_norm_eps,
-            rope_theta: self.rope_theta,
-            use_flash_attn,
-            bos_token_id: self.bos_token_id,
-            eos_token_id: self.eos_token_id,
-            rope_scaling: self.rope_scaling,
-            max_position_embeddings: self.max_position_embeddings,
-        }
-    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -90,15 +45,28 @@ pub struct Config {
     pub vocab_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
+    /// Defaults to `num_attention_heads` when absent from `config.json`.
+    pub num_key_value_heads: Option<usize>,
+    #[serde(default)]
     pub use_flash_attn: bool,
     pub rms_norm_eps: f64,
+    #[serde(default = "default_rope")]
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<GraniteEosToks>,
     pub rope_scaling: Option<GraniteRopeConfig>,
     pub max_position_embeddings: usize,
 }
+
+impl Config {
+    pub fn num_key_value_heads(&self) -> usize {
+        self.num_key_value_heads.unwrap_or(self.num_attention_heads)
+    }
+}
+
+/// Backward-compatible alias — `Config` is now directly deserializable.
+pub type GraniteConfig = Config;
+
 
 #[derive(Debug, Clone)]
 pub struct Cache {
@@ -319,7 +287,7 @@ impl CausalSelfAttention {
         let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-        let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+        let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads();
         let q_proj = linear(size_in, size_q, vb.pp("q_proj"))?;
         let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
         let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
@@ -330,7 +298,7 @@ impl CausalSelfAttention {
             v_proj,
             o_proj,
             num_attention_heads: cfg.num_attention_heads,
-            num_key_value_heads: cfg.num_key_value_heads,
+            num_key_value_heads: cfg.num_key_value_heads(),
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
             span,
@@ -461,32 +429,8 @@ impl Granite {
         })
     }
 }
-/// [`Granite`] wrapper that bundles the [`Cache`] for use with [`crate::auto::CausalLM`].
-pub struct GraniteForCausalLM {
+crate::causal_lm_wrapper!(GraniteForCausalLM, "granite",
     model: Granite,
     cache: Cache,
-}
-
-impl GraniteForCausalLM {
-    /// Standard constructor for [`AutoModelForCausalLM`]: deserialises from HF config.
-    pub fn new(cfg: &GraniteConfig, vb: VarBuilder) -> candle::Result<Self> {
-        let inner = cfg.clone().into_config(cfg.use_flash_attn);
-        Self::load(vb, &inner)
-    }
-
-    pub fn load(vb: VarBuilder, cfg: &Config) -> candle::Result<Self> {
-        let model = Granite::load(vb.clone(), cfg)?;
-        let cache = Cache::new(true, vb.dtype(), cfg, vb.device())?;
-        Ok(Self { model, cache })
-    }
-
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> candle::Result<Tensor> {
-        self.model.forward(input_ids, seqlen_offset, &mut self.cache)
-    }
-
-    pub fn clear_kv_cache(&mut self) {
-        self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
-    }
-}
-
-crate::impl_causal_lm!(GraniteForCausalLM, "granite", with_reset);
+    cfg:   Config,
+);

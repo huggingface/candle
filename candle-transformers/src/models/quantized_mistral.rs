@@ -335,4 +335,4 @@ impl Model {
         }
     }
 }
-crate::impl_causal_lm!(Model, "mistral", with_reset);
+crate::impl_causal_lm!(Model, "mistral");

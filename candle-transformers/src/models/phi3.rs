@@ -429,5 +429,5 @@ impl Model {
     }
 }
 
-crate::impl_causal_lm!(Model, "phi3", with_reset);
+crate::impl_causal_lm!(Model, "phi3");
 

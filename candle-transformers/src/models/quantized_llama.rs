@@ -541,7 +541,7 @@ impl ModelWeights {
     }
 }
 
-crate::impl_causal_lm!(ModelWeights, "llama", with_reset);
+crate::impl_causal_lm!(ModelWeights, "llama");
 
 #[cfg(test)]
 mod tests {

@@ -487,4 +487,4 @@ impl Model {
     }
 
 }
-crate::impl_causal_lm!(Model, "mixtral", with_reset);
+crate::impl_causal_lm!(Model, "mixtral");

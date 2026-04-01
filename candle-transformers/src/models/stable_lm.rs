@@ -437,4 +437,4 @@ impl Model {
     }
 
 }
-crate::impl_causal_lm!(Model, "stablelm", with_reset);
+crate::impl_causal_lm!(Model, "stablelm");

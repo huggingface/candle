@@ -299,4 +299,4 @@ impl Model {
             .apply(&self.lm_head)
     }
 }
-crate::impl_causal_lm!(Model, "stablelm", with_reset);
+crate::impl_causal_lm!(Model, "stablelm");

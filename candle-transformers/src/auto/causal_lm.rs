@@ -81,45 +81,6 @@ fn default_dtype(device: &Device) -> DType {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Supported model lists (kept as documentation; derived from match arms below)
-// ---------------------------------------------------------------------------
-
-/// Float (safetensors) model types supported by [`AutoModelForCausalLM`].
-pub const SUPPORTED_FLOAT_MODELS: &[&str] = &[
-    // Llama family
-    "llama",
-    // Mistral / Mixtral
-    "mistral",
-    "mixtral",
-    // Phi family
-    "phi",
-    "phi3",
-    // Qwen family
-    "qwen2",
-    "qwen2_moe",
-    "qwen3",
-    "qwen3_moe",
-    // Gemma family
-    "gemma",
-    "gemma2",
-    "gemma3",
-    // Other decoder-only models
-    "starcoder2",
-    "deepseek_v2",
-    "olmo",
-    "olmo2",
-    "stablelm",
-    "yi",
-    "helium",
-    "granite",
-    "chatglm",
-];
-
-/// GGUF model types supported by [`AutoModelForCausalLM::from_gguf`].
-pub const SUPPORTED_GGUF_MODELS: &[&str] = &[
-    "llama", "phi", "phi3", "qwen2", "qwen3", "gemma", "gemma3",
-];
 
 // ---------------------------------------------------------------------------
 // AutoModelForCausalLM
@@ -209,7 +170,7 @@ impl AutoModelForCausalLM {
     ) -> Result<Box<dyn CausalLM>> {
         crate::make_auto_map!(config, vb, use_flash_attn, {
             // Llama family
-            "llama"          => (llama::LlamaConfig,              llama::LlamaForCausalLM),
+            "llama"          => (llama::Config,              llama::LlamaForCausalLM),
             // Mistral / Mixtral
             "mistral"        => (mistral::Config,                 mistral::Model),
             "mixtral"        => (mixtral::Config,                 mixtral::Model),
@@ -237,7 +198,7 @@ impl AutoModelForCausalLM {
             "stablelm_epoch" => (stable_lm::Config,               stable_lm::Model),
             "yi"             => (yi::Config,                      yi::Model),
             "helium"         => (helium::Config,                  helium::Model),
-            "granite"        => (granite::GraniteConfig,          granite::GraniteForCausalLM),
+            "granite"        => (granite::Config,          granite::GraniteForCausalLM),
             "chatglm"        => (chatglm::Config,                 chatglm::Model),
         })
     }

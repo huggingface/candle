@@ -35,13 +35,18 @@ pub enum LlamaEosToks {
     Multiple(Vec<u32>),
 }
 
+fn default_rope() -> f32 {
+    10_000.0
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct LlamaConfig {
+pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub vocab_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
+    /// Defaults to `num_attention_heads` when absent from `config.json`.
     pub num_key_value_heads: Option<usize>,
     #[serde(default)]
     pub use_flash_attn: bool,
@@ -52,57 +57,18 @@ pub struct LlamaConfig {
     pub eos_token_id: Option<LlamaEosToks>,
     pub rope_scaling: Option<Llama3RopeConfig>,
     pub max_position_embeddings: usize,
-    pub tie_word_embeddings: Option<bool>,
+    #[serde(default)]
+    pub tie_word_embeddings: bool,
 }
 
-impl LlamaConfig {
+impl Config {
     pub fn num_key_value_heads(&self) -> usize {
         self.num_key_value_heads.unwrap_or(self.num_attention_heads)
     }
 }
 
-fn default_rope() -> f32 {
-    10_000.0
-}
-
-impl LlamaConfig {
-    pub fn into_config(self, use_flash_attn: bool) -> Config {
-        Config {
-            hidden_size: self.hidden_size,
-            intermediate_size: self.intermediate_size,
-            vocab_size: self.vocab_size,
-            num_hidden_layers: self.num_hidden_layers,
-            num_attention_heads: self.num_attention_heads,
-            num_key_value_heads: self.num_key_value_heads(),
-            rms_norm_eps: self.rms_norm_eps,
-            rope_theta: self.rope_theta,
-            use_flash_attn,
-            bos_token_id: self.bos_token_id,
-            eos_token_id: self.eos_token_id,
-            rope_scaling: self.rope_scaling,
-            max_position_embeddings: self.max_position_embeddings,
-            tie_word_embeddings: self.tie_word_embeddings.unwrap_or(false),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub vocab_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub use_flash_attn: bool,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f32,
-    pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<LlamaEosToks>,
-    pub rope_scaling: Option<Llama3RopeConfig>,
-    pub max_position_embeddings: usize,
-    pub tie_word_embeddings: bool,
-}
+/// Backward-compatible alias — `Config` is now directly deserializable.
+pub type LlamaConfig = Config;
 
 impl Config {
     pub fn config_7b_v1(use_flash_attn: bool) -> Self {
@@ -112,7 +78,7 @@ impl Config {
             vocab_size: 32000,
             num_hidden_layers: 32,
             num_attention_heads: 32,
-            num_key_value_heads: 32,
+            num_key_value_heads: Some(32),
             use_flash_attn,
             rms_norm_eps: 1e-6,
             rope_theta: 10_000.0,
@@ -131,7 +97,7 @@ impl Config {
             vocab_size: 32000,
             num_hidden_layers: 32,
             num_attention_heads: 32,
-            num_key_value_heads: 32,
+            num_key_value_heads: Some(32),
             use_flash_attn,
             rms_norm_eps: 1e-5,
             rope_theta: 10_000.0,
@@ -366,7 +332,7 @@ impl CausalSelfAttention {
         let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-        let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+        let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads();
         let q_proj = linear(size_in, size_q, vb.pp("q_proj"))?;
         let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
         let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
@@ -377,7 +343,7 @@ impl CausalSelfAttention {
             v_proj,
             o_proj,
             num_attention_heads: cfg.num_attention_heads,
-            num_key_value_heads: cfg.num_key_value_heads,
+            num_key_value_heads: cfg.num_key_value_heads(),
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
             span,
@@ -535,31 +501,9 @@ impl Llama {
     }
 }
 
-/// Llama wrapper that owns its cache for use with AutoModelForCausalLM.
-#[allow(dead_code)] // fields accessed via forward/clear_kv_cache methods
-pub struct LlamaForCausalLM {
+crate::causal_lm_wrapper!(LlamaForCausalLM, "llama",
     model: Llama,
     cache: Cache,
-}
-
-impl LlamaForCausalLM {
-    /// Standard constructor for use with [`AutoModelForCausalLM`].
-    /// Reads `use_flash_attn` and dtype/device from `cfg` / `vb`.
-    pub fn new(cfg: &LlamaConfig, vb: VarBuilder) -> candle::Result<Self> {
-        let inner_cfg = cfg.clone().into_config(cfg.use_flash_attn);
-        Self::load(vb.clone(), &inner_cfg, vb.dtype(), vb.device())
-    }
-
-    pub fn new_from_model(model: Llama, cache: Cache) -> Self {
-        Self { model, cache }
-    }
-
-    pub fn load(vb: VarBuilder, cfg: &Config, dtype: DType, device: &Device) -> Result<Self> {
-        let model = Llama::load(vb, cfg)?;
-        let cache = Cache::new(true, dtype, cfg, device)?;
-        Ok(Self { model, cache })
-    }
-}
-
-crate::impl_causal_lm!(LlamaForCausalLM, "llama", with_reset);
+    cfg:   Config,
+);
 
