@@ -485,10 +485,14 @@ pub struct PolarQuantMatMul {
     hadamard_signs: Option<Vec<f32>>,
     /// Centroid values, length `2^b`.
     centroids: Vec<f32>,
+    /// Centroid values as a Tensor (for GPU dispatch).
+    centroids_tensor: Tensor,
     /// Bit-packed weight indices.
     packed_indices: Vec<u8>,
     /// Weight norms, `[out_features]` as F32.
     norms: Vec<f32>,
+    /// Weight norms as a Tensor (for GPU dispatch).
+    norms_tensor: Tensor,
     /// Bits per index.
     bit_width: usize,
     /// Number of output features.
@@ -549,12 +553,24 @@ impl PolarQuantMatMul {
             .to_dtype(DType::F32)?;
         let hadamard_signs = quantizer.hadamard_signs().map(|s| s.to_vec());
 
+        // Create device-resident tensors for GPU dispatch
+        let device = quantizer.rotation().device();
+        let centroids_tensor =
+            Tensor::from_vec(centroids.clone(), (centroids.len(),), &Device::Cpu)?
+                .to_device(device)?;
+        let packed_indices_len = packed_indices.len();
+        let _ = packed_indices_len; // used for GPU path in future
+        let norms_tensor = Tensor::from_vec(norms_f32.clone(), (norms_f32.len(),), &Device::Cpu)?
+            .to_device(device)?;
+
         Ok(Self {
             rotation_t,
             hadamard_signs,
             centroids,
+            centroids_tensor,
             packed_indices,
             norms: norms_f32,
+            norms_tensor,
             bit_width,
             out_features,
             in_features,
@@ -635,23 +651,38 @@ impl PolarQuantMatMul {
             x_2d.matmul(&self.rotation_t)?
         };
 
-        // Step 2: Build rotated-space weight matrix from packed centroid lookups
-        // On CPU: scalar loop. On GPU: build on CPU then transfer (centroid lookup is cheap)
-        let mut w_rot_data = vec![0f32; n * d];
-        for row in 0..n {
-            let idx_start = row * d;
-            let norm = self.norms[row];
-            let w_row = &mut w_rot_data[row * d..(row + 1) * d];
-            for (i, w) in w_row.iter_mut().enumerate() {
-                let idx = unpack_index(&self.packed_indices, idx_start + i, self.bit_width);
-                *w = self.centroids[idx] * norm;
+        // Steps 2+3: Centroid lookup + matmul
+        // CPU: scalar loop builds W_rot, then BLAS matmul
+        // GPU: index_select for centroid lookup (stays on device), then BLAS matmul
+        let y_2d = if x.device().is_cpu() {
+            let mut w_rot_data = vec![0f32; n * d];
+            for row in 0..n {
+                let idx_start = row * d;
+                let norm = self.norms[row];
+                let w_row = &mut w_rot_data[row * d..(row + 1) * d];
+                for (i, w) in w_row.iter_mut().enumerate() {
+                    let idx = unpack_index(&self.packed_indices, idx_start + i, self.bit_width);
+                    *w = self.centroids[idx] * norm;
+                }
             }
-        }
-        let w_rot =
-            Tensor::from_vec(w_rot_data, (n, d), &Device::Cpu)?.to_device(x_rot.device())?;
-
-        // Step 3: BLAS matmul: output = x_rot @ W_rot^T
-        let y_2d = x_rot.matmul(&w_rot.t()?)?;
+            let w_rot = Tensor::from_vec(w_rot_data, (n, d), &Device::Cpu)?;
+            x_rot.matmul(&w_rot.t()?)?
+        } else {
+            // GPU: unpack indices on CPU, then index_select + matmul on device
+            let mut indices_u32 = vec![0u32; n * d];
+            for (i, idx) in indices_u32.iter_mut().enumerate() {
+                *idx = unpack_index(&self.packed_indices, i, self.bit_width) as u32;
+            }
+            let idx_tensor =
+                Tensor::from_vec(indices_u32, (n * d,), &Device::Cpu)?.to_device(x.device())?;
+            let centroids_dev = self.centroids_tensor.to_device(x.device())?;
+            let w_vals = centroids_dev
+                .index_select(&idx_tensor, 0)?
+                .reshape((n, d))?;
+            let norms_dev = self.norms_tensor.to_device(x.device())?;
+            let w_rot = w_vals.broadcast_mul(&norms_dev.unsqueeze(1)?)?;
+            x_rot.to_device(x.device())?.matmul(&w_rot.t()?)?
+        };
 
         match orig_dims.len() {
             1 => y_2d.squeeze(0),
