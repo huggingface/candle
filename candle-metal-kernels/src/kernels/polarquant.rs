@@ -41,7 +41,7 @@ pub fn call_polarquant_centroid_dot(
         }
     };
 
-    const N_DST: usize = 4;
+    const N_DST: usize = 8;
     const N_SIMDGROUP: usize = 2;
     const SIMD_WIDTH: usize = 32;
 

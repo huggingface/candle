@@ -12,7 +12,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-#define PQ_N_DST 4
+#define PQ_N_DST 8
 #define PQ_N_SIMDGROUP 2
 #define PQ_SIMD_WIDTH 32
 #define PQ_BLOCK_SIZE 32  // process 32 elements per iteration (matches SIMD width)
@@ -46,32 +46,49 @@ kernel void polarquant_mv_f32_4bit(
 
     float sumf[PQ_N_DST] = {0.f};
 
-    // Bytes per row of packed indices (4-bit: d/2 bytes per row)
-    const uint bytes_per_row = d / 2;
+    // Determine how many valid rows we have
+    const uint nr = min((uint)PQ_N_DST, n_out - first_row);
 
-    // Each thread processes elements at stride PQ_SIMD_WIDTH
-    // Process 2 elements per byte (4-bit packing)
-    for (uint i = tiisg; i < d; i += PQ_SIMD_WIDTH) {
-        float xval = xr[i];
+    // Each thread strides by SIMD_WIDTH, processes 2 elements per packed byte.
+    // We step by 2 to process both nibbles of a byte together.
+    const uint half_d = d / 2;
+    for (uint pair = tiisg; pair < half_d; pair += PQ_SIMD_WIDTH) {
+        uint i0 = pair * 2;
+        uint i1 = i0 + 1;
 
-        for (uint row_off = 0; row_off < PQ_N_DST; row_off++) {
+        // Pre-cache input pair in registers
+        float xval0 = xr[i0];
+        float xval1 = xr[i1];
+
+        for (uint row_off = 0; row_off < nr; row_off++) {
             uint row = first_row + row_off;
-            if (row >= n_out) break;
+            // Read one byte = two 4-bit indices
+            uint byte_pos = row * half_d + pair;
+            uint8_t packed_byte = indices[byte_pos];
+            uint idx0 = packed_byte & 0xF;
+            uint idx1 = (packed_byte >> 4) & 0xF;
 
-            // Read packed byte containing this element's nibble
+            sumf[row_off] += xval0 * cent[idx0] + xval1 * cent[idx1];
+        }
+    }
+
+    // Handle odd d (if d is not divisible by 2)
+    if ((d & 1) && tiisg == 0) {
+        uint i = d - 1;
+        float xval = xr[i];
+        for (uint row_off = 0; row_off < nr; row_off++) {
+            uint row = first_row + row_off;
             uint byte_pos = (row * d + i) / 2;
             uint nibble_sel = (row * d + i) % 2;
-            uint8_t packed_byte = indices[byte_pos];
-            uint idx = (packed_byte >> (nibble_sel * 4)) & 0xF;
-
+            uint idx = (indices[byte_pos] >> (nibble_sel * 4)) & 0xF;
             sumf[row_off] += xval * cent[idx];
         }
     }
 
     // SIMD reduction
-    for (uint row_off = 0; row_off < PQ_N_DST; row_off++) {
+    for (uint row_off = 0; row_off < nr; row_off++) {
         float total = simd_sum(sumf[row_off]);
-        if (tiisg == 0 && (first_row + row_off) < n_out) {
+        if (tiisg == 0) {
             output[batch_id * n_out + first_row + row_off] = total * norms[first_row + row_off];
         }
     }
