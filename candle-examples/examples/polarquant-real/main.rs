@@ -1,6 +1,6 @@
-//! PolarQuant Real-Model Benchmark (Qwen3-0.6B)
+//! PolarQuant Real-Model Benchmark (Qwen3)
 //!
-//! Loads Qwen3-0.6B from HuggingFace, runs F32 generation as baseline, then
+//! Loads a Qwen3 model from HuggingFace, runs F32 generation as baseline, then
 //! quantizes all attention/MLP Linear layers with PolarQuant and re-runs
 //! generation to compare tok/sec and output quality.
 
@@ -57,7 +57,7 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
-    #[arg(long, default_value_t = 6)]
+    #[arg(long, default_value_t = 4)]
     bits: usize,
 
     #[arg(long, default_value_t = 50)]
@@ -71,6 +71,10 @@ struct Args {
 
     #[arg(long, default_value_t = 42)]
     seed: u64,
+
+    /// HuggingFace model ID (default: Qwen/Qwen3-8B).
+    #[arg(long)]
+    model_id: Option<String>,
 }
 
 // ── PolarQuant-enabled Qwen3 model ──────────────────────────────────
@@ -417,9 +421,11 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
 
+    let model_id = args.model_id.as_deref().unwrap_or("Qwen/Qwen3-8B");
+
     println!("PolarQuant Real-Model Benchmark");
     println!("================================");
-    println!("Model: Qwen/Qwen3-0.6B");
+    println!("Model: {model_id}");
     println!(
         "Quantization: {}-bit PolarQuant (weights + KV cache)",
         args.bits
@@ -431,7 +437,7 @@ fn main() -> Result<()> {
     std::io::stdout().flush()?;
     let api = Api::new()?;
     let repo = api.repo(Repo::with_revision(
-        "Qwen/Qwen3-0.6B".to_string(),
+        model_id.to_string(),
         RepoType::Model,
         "main".to_string(),
     ));
