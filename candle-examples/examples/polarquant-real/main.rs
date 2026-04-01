@@ -7,7 +7,7 @@
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Module, Result as CResult, Tensor};
 use candle_nn::kv_cache::{ConcatKvCache, QuantizedKvCache};
-use candle_nn::turboquant_nn::TurboQuantLinear;
+use candle_nn::turboquant_nn::{TurboQuantLinear, TurboQuantMseLinear};
 use candle_nn::{Activation, VarBuilder};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::qwen3::Config;
@@ -79,6 +79,14 @@ struct Args {
     /// Skip F32 baseline (for large models that don't fit twice in memory).
     #[arg(long)]
     pq_only: bool,
+
+    /// Quantize KV cache only (F32 weights). Tests the paper's actual claim.
+    #[arg(long)]
+    kv_only: bool,
+
+    /// Use MSE-only weight quantization (no QJL). Faster inference, full b bits for MSE.
+    #[arg(long)]
+    mse_only: bool,
 }
 
 // ── TurboQuantMse-enabled Qwen3 model ──────────────────────────────────
@@ -88,6 +96,7 @@ struct Args {
 enum LinearLayer {
     F32(candle_nn::Linear),
     PQ(TurboQuantLinear),
+    Mse(TurboQuantMseLinear),
 }
 
 impl Module for LinearLayer {
@@ -95,6 +104,7 @@ impl Module for LinearLayer {
         match self {
             Self::F32(l) => l.forward(x),
             Self::PQ(l) => l.forward(x),
+            Self::Mse(l) => l.forward(x),
         }
     }
 }
@@ -231,7 +241,13 @@ struct BenchModel {
 }
 
 impl BenchModel {
-    fn new(cfg: &Config, vb: VarBuilder, bits: Option<usize>, _quantize_kv: bool) -> CResult<Self> {
+    fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        bits: Option<usize>,
+        quantize_kv: bool,
+        mse_only: bool,
+    ) -> CResult<Self> {
         let device = vb.device().clone();
         let dtype = vb.dtype();
         let embed =
@@ -262,9 +278,14 @@ impl BenchModel {
             let make_mlp = |in_d: usize, out_d, vb: VarBuilder| -> CResult<LinearLayer> {
                 let inner = candle_nn::linear_no_bias(in_d, out_d, vb)?;
                 if quantize_this_layer && in_d.is_power_of_two() {
-                    let pq =
-                        TurboQuantLinear::from_linear_hadamard(&inner, bits.unwrap(), &device)?;
-                    Ok(LinearLayer::PQ(pq))
+                    if mse_only {
+                        let mse = TurboQuantMseLinear::from_linear(&inner, bits.unwrap(), &device)?;
+                        Ok(LinearLayer::Mse(mse))
+                    } else {
+                        let pq =
+                            TurboQuantLinear::from_linear_hadamard(&inner, bits.unwrap(), &device)?;
+                        Ok(LinearLayer::PQ(pq))
+                    }
                 } else {
                     Ok(LinearLayer::F32(inner))
                 }
@@ -308,9 +329,18 @@ impl BenchModel {
                 head_dim,
                 hidden_size,
                 rotary: rotary.clone(),
-                // KV cache stays plain — quantized KV adds O(S²) dequant cost
-                // and compounds error with weight quantization
-                kv_cache: KvCacheLayer::Plain(ConcatKvCache::new(2)),
+                // Use quantized KV cache when requested
+                kv_cache: if quantize_kv && bits.is_some() {
+                    KvCacheLayer::Quantized(QuantizedKvCache::new(
+                        2,
+                        head_dim,
+                        bits.unwrap(),
+                        vb.dtype(),
+                        &device,
+                    )?)
+                } else {
+                    KvCacheLayer::Plain(ConcatKvCache::new(2))
+                },
             };
 
             let mlp = MLP {
@@ -431,8 +461,13 @@ fn main() -> Result<()> {
     println!("================================");
     println!("Model: {model_id}");
     println!(
-        "Quantization: {}-bit TurboQuantMse (weights + KV cache)",
-        args.bits
+        "Mode: {}-bit {}",
+        args.bits,
+        if args.mse_only {
+            "MSE-only weights (experimental, no QJL)"
+        } else {
+            "KV cache quantization (F32 weights)"
+        }
     );
     println!("Prompt: \"{}\"\n", args.prompt);
 
@@ -479,7 +514,7 @@ fn main() -> Result<()> {
         print!("Loading F32 model... ");
         std::io::stdout().flush()?;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
-        let mut f32_model = BenchModel::new(&config, vb, None, false)?;
+        let mut f32_model = BenchModel::new(&config, vb, None, false, false)?;
         println!("done");
 
         let mut logits_proc = LogitsProcessor::from_sampling(
@@ -504,12 +539,26 @@ fn main() -> Result<()> {
         Some(tps)
     };
 
-    // ── PQ model ──────────────────────────────────────────────────────
-    print!("\nLoading + quantizing PQ-{} model... ", args.bits);
+    // ── Quantized model ────────────────────────────────────────────────
+    // Default: KV cache quantization only (paper's validated claim).
+    // Weight quantization available via --weight-quant but experimental.
+    let (weight_bits, quantize_kv) = if args.kv_only {
+        (None, true)
+    } else if args.mse_only {
+        (Some(args.bits), false) // MSE-only weights, plain KV
+    } else {
+        (None, true) // default: F32 weights, quantized KV
+    };
+    let mode_label = if args.mse_only {
+        format!("MSE-{}", args.bits)
+    } else {
+        format!("KV-{}", args.bits)
+    };
+    print!("\nLoading + quantizing {mode_label} model... ");
     std::io::stdout().flush()?;
     let quant_start = std::time::Instant::now();
     let vb2 = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
-    let mut pq_model = BenchModel::new(&config, vb2, Some(args.bits), true)?;
+    let mut pq_model = BenchModel::new(&config, vb2, weight_bits, quantize_kv, args.mse_only)?;
     let quant_elapsed = quant_start.elapsed();
     println!("done ({:.1}s)", quant_elapsed.as_secs_f64());
 
@@ -527,10 +576,7 @@ fn main() -> Result<()> {
         &tokenizer,
     )?;
     let tps_pq = args.sample_len as f64 / elapsed_pq.as_secs_f64();
-    println!(
-        "── PQ-{} Generation ─────────────────────────────────",
-        args.bits
-    );
+    println!("── {mode_label} Generation ─────────────────────────────────",);
     println!("  Output: \"{}\"", &text_pq[..text_pq.len().min(120)]);
     println!("  Throughput: {tps_pq:.1} tokens/sec");
 
@@ -538,10 +584,10 @@ fn main() -> Result<()> {
     println!("\n── Comparison ──────────────────────────────────────");
     if let Some(f32_tps) = tps_f32 {
         println!("  F32:  {f32_tps:.1} tokens/sec");
-        println!("  PQ-{}: {tps_pq:.1} tokens/sec", args.bits);
+        println!("  {mode_label}: {tps_pq:.1} tokens/sec");
         println!("  Ratio: {:.2}x", f32_tps / tps_pq);
     } else {
-        println!("  PQ-{}: {tps_pq:.1} tokens/sec", args.bits);
+        println!("  {mode_label}: {tps_pq:.1} tokens/sec");
         println!("  (F32 baseline skipped — use without --pq-only to compare)");
     }
 

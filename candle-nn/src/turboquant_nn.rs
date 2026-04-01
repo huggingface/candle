@@ -376,6 +376,124 @@ impl crate::Module for TurboQuantLinear {
     }
 }
 
+/// Linear layer with MSE-only TurboQuant-compressed weights (no QJL).
+///
+/// Faster than [`TurboQuantLinear`] because it skips the QJL projection
+/// (`x @ S^T`), which is a dense d×d matmul per forward pass. The forward
+/// path is just:
+/// 1. Hadamard rotation of x — O(d log d)
+/// 2. Centroid dot product from packed indices — bandwidth-bound
+///
+/// The tradeoff: inner products are **biased** (no QJL correction), but for
+/// static weights this is acceptable — the bias is consistent and can be
+/// absorbed by layer norms and residual connections.
+///
+/// Gets the **full b bits** for MSE quantization (vs b−1 with TurboQuant),
+/// so 4-bit here has 16 centroid levels (same as traditional int4).
+#[derive(Debug, Clone)]
+pub struct TurboQuantMseLinear {
+    mse_quantizer: TurboQuantMse,
+    indices: Tensor,
+    norms: Tensor,
+    fused_op: Option<TurboMseMatMul>,
+    bias: Option<Tensor>,
+    in_features: usize,
+    out_features: usize,
+    bit_width: usize,
+}
+
+impl TurboQuantMseLinear {
+    /// Quantize a pretrained [`Linear`] layer using MSE-only TurboQuant.
+    ///
+    /// Uses Hadamard rotation when `in_features` is a power of 2 (faster),
+    /// falls back to dense QR rotation otherwise.
+    pub fn from_linear(linear: &Linear, bit_width: usize, device: &Device) -> Result<Self> {
+        let weight = linear.weight();
+        let (out_features, in_features) = weight.dims2()?;
+
+        let dtype = weight.dtype();
+        let internal_dtype = if dtype == DType::F64 {
+            DType::F64
+        } else {
+            DType::F32
+        };
+
+        let mse_quantizer = if in_features.is_power_of_two() {
+            TurboQuantMse::new_hadamard(in_features, bit_width, internal_dtype, device)?
+        } else {
+            TurboQuantMse::new(in_features, bit_width, internal_dtype, device)?
+        };
+
+        let q = mse_quantizer.quantize(weight)?;
+        let indices = q.indices.to_dtype(DType::U8)?;
+        let fused_op = TurboMseMatMul::new(&mse_quantizer, &indices, &q.norms).ok();
+
+        Ok(Self {
+            mse_quantizer,
+            indices,
+            norms: q.norms,
+            fused_op,
+            bias: linear.bias().cloned(),
+            in_features,
+            out_features,
+            bit_width,
+        })
+    }
+
+    /// Dequantize and return the full-precision weight matrix.
+    pub fn dequantize_weight(&self) -> Result<Tensor> {
+        let q = TurboMseQuantized {
+            indices: self.indices.to_dtype(DType::U32)?,
+            norms: self.norms.clone(),
+        };
+        self.mse_quantizer.dequantize(&q)
+    }
+
+    /// Get the bias tensor, if present.
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+
+    /// Number of input features.
+    pub fn in_features(&self) -> usize {
+        self.in_features
+    }
+
+    /// Number of output features.
+    pub fn out_features(&self) -> usize {
+        self.out_features
+    }
+
+    /// Get the bit width used for quantization.
+    pub fn bit_width(&self) -> usize {
+        self.bit_width
+    }
+}
+
+impl crate::Module for TurboQuantMseLinear {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x_result = if let Some(ref fused) = self.fused_op {
+            if x.dtype() == DType::F32 {
+                fused.forward(x)?
+            } else {
+                // Fallback: dequantize weight, matmul
+                let w = self.dequantize_weight()?;
+                let wt = w.t()?;
+                x.matmul(&wt)?
+            }
+        } else {
+            let w = self.dequantize_weight()?;
+            let wt = w.t()?;
+            x.matmul(&wt)?
+        };
+
+        match &self.bias {
+            None => Ok(x_result),
+            Some(bias) => x_result.broadcast_add(bias),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
