@@ -6,7 +6,6 @@
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use std::iter::repeat_n;
 use std::{collections::HashMap, f32::consts::PI};
 
 pub const DEFAULT_MAX_SEQ_LEN: usize = 4096;

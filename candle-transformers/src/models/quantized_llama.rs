@@ -541,12 +541,11 @@ impl ModelWeights {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle::{Device, Result};
     use crate::utils::build_causal_mask;
+    use candle::{Device, Result};
 
     // ── Mask shape tests ──────────────────────────────────────────────────────
 
@@ -609,7 +608,10 @@ mod tests {
         let mask = build_causal_mask(1, 10, &Device::Cpu)?;
         assert_eq!(mask.dims(), [1, 11]);
         let data: Vec<u8> = mask.flatten_all()?.to_vec1()?;
-        assert!(data.iter().all(|&v| v == 0), "single-query mask should be all-zero");
+        assert!(
+            data.iter().all(|&v| v == 0),
+            "single-query mask should be all-zero"
+        );
         Ok(())
     }
 
