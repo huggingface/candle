@@ -73,19 +73,29 @@ pub fn call_sdpa_full(
         m_strides: [i64; 3],
     }
 
-    const WM: usize = 4;
-    const WN: usize = 1;
-
-    const BQ: usize = 32;
     let bd = q_shape[q_shape.len() - 1];
-    if ![32, 64, 72, 80, 96, 128, 256].contains(&bd) {
+    if ![32, 64, 72, 80, 96, 128, 256, 512].contains(&bd) {
         return Err(MetalKernelError::SdpaHeadSizeMismatch {
             variation: "full",
             got: bd,
-            expected: vec![32, 64, 72, 80, 96, 128, 256],
+            expected: vec![32, 64, 72, 80, 96, 128, 256, 512],
         });
     };
-    let bk = if bd < 128 { 32 } else { 16 };
+
+    // BD=512 uses reduced tiles to fit 32KB threadgroup memory (f16/bf16 only).
+    let (bq, bk, wm, wn): (usize, usize, usize, usize) = if bd == 512 {
+        if itype == SdpaDType::F32 {
+            return Err(MetalKernelError::SdpaHeadSizeMismatch {
+                variation: "full (f32 unsupported at head_dim=512)",
+                got: bd,
+                expected: vec![32, 64, 72, 80, 96, 128, 256],
+            });
+        }
+        (8, 8, 1, 1)
+    } else {
+        let bk = if bd < 128 { 32 } else { 16 };
+        (32, bk, 4, 1)
+    };
 
     let b = q_shape[0];
     let h = q_shape[1];
@@ -95,7 +105,7 @@ pub fn call_sdpa_full(
     let ql = q_shape[2];
     let kl = k_shape[2];
 
-    let align_q = (ql % BQ) == 0;
+    let align_q = (ql % bq) == 0;
     let align_k = (kl % bk) == 0;
     let has_mask = mask_buffer.is_some();
 
@@ -111,7 +121,7 @@ pub fn call_sdpa_full(
         None => itype_repr,
     };
     let name =
-        format!("steel_attention_{itype_repr}_bq{BQ}_bk{bk}_bd{bd}_wm{WM}_wn{WN}_mask{mask_repr}");
+        format!("steel_attention_{itype_repr}_bq{bq}_bk{bk}_bd{bd}_wm{wm}_wn{wn}_mask{mask_repr}");
 
     let constants = Some(ConstantValues::new(vec![
         (200, Value::Bool(/* align_Q */ align_q)),
@@ -125,10 +135,10 @@ pub fn call_sdpa_full(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    let nq = (ql + BQ - 1) / BQ;
+    let nq = (ql + bq - 1) / bq;
     let nk = (kl + bk - 1) / bk;
 
-    let nq_aligned = ql / BQ;
+    let nq_aligned = ql / bq;
     let nk_aligned = kl / bk;
 
     let params = AttnParams {
@@ -144,7 +154,7 @@ pub fn call_sdpa_full(
         nk: nk as i32,
         nq_aligned: nq_aligned as i32,
         nk_aligned: nk_aligned as i32,
-        ql_rem: ql.wrapping_sub(nq_aligned * BQ) as i32,
+        ql_rem: ql.wrapping_sub(nq_aligned * bq) as i32,
         kl_rem: kl.wrapping_sub(nk_aligned * bk) as i32,
         ql_off: kl.wrapping_sub(ql) as i32,
         q_strides: [
@@ -224,8 +234,8 @@ pub fn call_sdpa_full(
     };
     let group_dims = MTLSize {
         width: 32,
-        height: WM,
-        depth: WN,
+        height: wm,
+        depth: wn,
     };
     encoder.use_resource(q_buffer, MTLResourceUsage::Read);
     encoder.use_resource(k_buffer, MTLResourceUsage::Read);
@@ -274,21 +284,24 @@ pub fn call_sdpa_vector(
         (96, SdpaDType::F16) => "sdpa_vector_float16_t_96",
         (128, SdpaDType::F16) => "sdpa_vector_float16_t_128",
         (256, SdpaDType::F16) => "sdpa_vector_float16_t_256",
+        (512, SdpaDType::F16) => "sdpa_vector_float16_t_512",
         (32, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_32",
         (64, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_64",
         (96, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_96",
         (128, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_128",
         (256, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_256",
+        (512, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_512",
         (32, SdpaDType::F32) => "sdpa_vector_float_32",
         (64, SdpaDType::F32) => "sdpa_vector_float_64",
         (96, SdpaDType::F32) => "sdpa_vector_float_96",
         (128, SdpaDType::F32) => "sdpa_vector_float_128",
         (256, SdpaDType::F32) => "sdpa_vector_float_256",
+        (512, SdpaDType::F32) => "sdpa_vector_float_512",
         (other, _) => {
             return Err(MetalKernelError::SdpaHeadSizeMismatch {
                 variation: "vector",
                 got: *other,
-                expected: vec![32, 64, 96, 128, 256],
+                expected: vec![32, 64, 96, 128, 256, 512],
             })
         }
     };
@@ -385,21 +398,24 @@ pub fn call_sdpa_vector_2pass(
             (96, SdpaDType::F16) => "sdpa_vector_2pass_1_float16_t_96",
             (128, SdpaDType::F16) => "sdpa_vector_2pass_1_float16_t_128",
             (256, SdpaDType::F16) => "sdpa_vector_2pass_1_float16_t_256",
+            (512, SdpaDType::F16) => "sdpa_vector_2pass_1_float16_t_512",
             (32, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_32",
             (64, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_64",
             (96, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_96",
             (128, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_128",
             (256, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_256",
+            (512, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_512",
             (32, SdpaDType::F32) => "sdpa_vector_2pass_1_float_32",
             (64, SdpaDType::F32) => "sdpa_vector_2pass_1_float_64",
             (96, SdpaDType::F32) => "sdpa_vector_2pass_1_float_96",
             (128, SdpaDType::F32) => "sdpa_vector_2pass_1_float_128",
             (256, SdpaDType::F32) => "sdpa_vector_2pass_1_float_256",
+            (512, SdpaDType::F32) => "sdpa_vector_2pass_1_float_512",
             (other, _) => {
                 return Err(MetalKernelError::SdpaHeadSizeMismatch {
                     variation: "vector_2pass_1",
                     got: *other,
-                    expected: vec![32, 64, 96, 128, 256],
+                    expected: vec![32, 64, 96, 128, 256, 512],
                 })
             }
         };
@@ -476,21 +492,24 @@ pub fn call_sdpa_vector_2pass(
             (96, SdpaDType::F16) => "sdpa_vector_2pass_2_float16_t_96",
             (128, SdpaDType::F16) => "sdpa_vector_2pass_2_float16_t_128",
             (256, SdpaDType::F16) => "sdpa_vector_2pass_2_float16_t_256",
+            (512, SdpaDType::F16) => "sdpa_vector_2pass_2_float16_t_512",
             (32, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_32",
             (64, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_64",
             (96, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_96",
             (128, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_128",
             (256, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_256",
+            (512, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_512",
             (32, SdpaDType::F32) => "sdpa_vector_2pass_2_float_32",
             (64, SdpaDType::F32) => "sdpa_vector_2pass_2_float_64",
             (96, SdpaDType::F32) => "sdpa_vector_2pass_2_float_96",
             (128, SdpaDType::F32) => "sdpa_vector_2pass_2_float_128",
             (256, SdpaDType::F32) => "sdpa_vector_2pass_2_float_256",
+            (512, SdpaDType::F32) => "sdpa_vector_2pass_2_float_512",
             (other, _) => {
                 return Err(MetalKernelError::SdpaHeadSizeMismatch {
                     variation: "vector_2pass_2",
                     got: *other,
-                    expected: vec![32, 64, 96, 128, 256],
+                    expected: vec![32, 64, 96, 128, 256, 512],
                 })
             }
         };

@@ -50,8 +50,11 @@
     } else if (HEADDIM == 128) {                                               \
       constexpr static int CONST_NAME = 128;                                   \
       return __VA_ARGS__();                                                    \
-    } else  {                                                                  \
+    } else if (HEADDIM == 256) {                                               \
       constexpr static int CONST_NAME = 256;                                   \
+      return __VA_ARGS__();                                                    \
+    } else  {                                                                  \
+      constexpr static int CONST_NAME = 512;                                   \
       return __VA_ARGS__();                                                    \
     }                                                                          \
   }()
