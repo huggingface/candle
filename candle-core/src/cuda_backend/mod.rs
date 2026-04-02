@@ -20,6 +20,26 @@ pub use device::{CudaDevice, DeviceId};
 pub use error::{CudaError, WrapErr};
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
 
+#[cfg(feature = "cudnn")]
+fn is_cudnn_conv1d_fallback_error(err: &crate::Error) -> bool {
+    use cudarc::cudnn::{sys::cudnnStatus_t, CudnnError};
+
+    match err {
+        crate::Error::WithBacktrace { inner, .. }
+        | crate::Error::Context { inner, .. }
+        | crate::Error::WithPath { inner, .. } => is_cudnn_conv1d_fallback_error(inner),
+        crate::Error::Cuda(inner) => inner.downcast_ref::<CudnnError>().is_some_and(|err| {
+            matches!(
+                err.0,
+                cudnnStatus_t::CUDNN_STATUS_NOT_SUPPORTED_ARCH_MISMATCH
+                    | cudnnStatus_t::CUDNN_STATUS_NOT_SUPPORTED
+                    | cudnnStatus_t::CUDNN_STATUS_EXECUTION_FAILED
+            )
+        }),
+        _ => false,
+    }
+}
+
 pub enum SlicePtrOrNull<T> {
     Ptr(CudaSlice<T>),
     Null,
@@ -1824,58 +1844,80 @@ impl BackendStorage for CudaStorage {
         }
         let l_out = params.l_out();
         let dst_el = params.c_out * l_out * params.b_size;
-        let slice = match (&self.slice, &kernel.slice) {
-            (S::U8(inp), S::U8(k)) => {
-                let inp = &inp.slice(inp_l.start_offset()..);
-                let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<u8>(dst_el)? };
-                crate::cudnn::launch_conv1d::<u8, u8>(inp, inp_l, k, &mut out, params, &device)
-                    .map_err(crate::Error::wrap)?;
-                S::U8(out)
+        let slice = match (|| -> Result<S> {
+            let slice = match (&self.slice, &kernel.slice) {
+                (S::U8(inp), S::U8(k)) => {
+                    let inp = &inp.slice(inp_l.start_offset()..);
+                    let k = &k.slice(kernel_l.start_offset()..);
+                    let mut out = unsafe { device.alloc::<u8>(dst_el)? };
+                    crate::cudnn::launch_conv1d::<u8, u8>(
+                        inp, inp_l, k, &mut out, params, &device,
+                    )?;
+                    S::U8(out)
+                }
+                (S::BF16(inp), S::BF16(k)) => {
+                    let inp = &inp.slice(inp_l.start_offset()..);
+                    let k = &k.slice(kernel_l.start_offset()..);
+                    let mut out = unsafe { device.alloc::<bf16>(dst_el)? };
+                    // Only PSEUDO_BFLOAT16_CONFIG is supported in cudnn, there is no "true
+                    // bfloat16" version.
+                    // https://docs.nvidia.com/deeplearning/cudnn/latest/api/cudnn-cnn-library.html#id88
+                    crate::cudnn::launch_conv1d::<bf16, f32>(
+                        inp, inp_l, k, &mut out, params, &device,
+                    )?;
+                    S::BF16(out)
+                }
+                (S::F16(inp), S::F16(k)) => {
+                    let inp = &inp.slice(inp_l.start_offset()..);
+                    let k = &k.slice(kernel_l.start_offset()..);
+                    let mut out = unsafe { device.alloc::<f16>(dst_el)? };
+                    crate::cudnn::launch_conv1d::<f16, f16>(
+                        inp, inp_l, k, &mut out, params, &device,
+                    )?;
+                    S::F16(out)
+                }
+                (S::F32(inp), S::F32(k)) => {
+                    let inp = &inp.slice(inp_l.start_offset()..);
+                    let k = &k.slice(kernel_l.start_offset()..);
+                    let mut out = unsafe { device.alloc::<f32>(dst_el)? };
+                    crate::cudnn::launch_conv1d::<f32, f32>(
+                        inp, inp_l, k, &mut out, params, &device,
+                    )?;
+                    S::F32(out)
+                }
+                (S::F64(inp), S::F64(k)) => {
+                    let inp = &inp.slice(inp_l.start_offset()..);
+                    let k = &k.slice(kernel_l.start_offset()..);
+                    let mut out = unsafe { device.alloc::<f64>(dst_el)? };
+                    crate::cudnn::launch_conv1d::<f64, f64>(
+                        inp, inp_l, k, &mut out, params, &device,
+                    )?;
+                    S::F64(out)
+                }
+                (S::U32(_), S::U32(_)) => {
+                    Err(CudaError::InternalError("conv1d does not support u32"))?
+                }
+                (S::I16(_), S::I16(_)) => {
+                    Err(CudaError::InternalError("conv1d does not support i16"))?
+                }
+                (S::I32(_), S::I32(_)) => {
+                    Err(CudaError::InternalError("conv1d does not support i32"))?
+                }
+                (S::I64(_), S::I64(_)) => {
+                    Err(CudaError::InternalError("conv1d does not support i64"))?
+                }
+                (S::F8E4M3(_), S::F8E4M3(_)) => {
+                    Err(CudaError::InternalError("conv1d does not support f8e4m3"))?
+                }
+                _ => Err(CudaError::InternalError("dtype mismatch in conv1d"))?,
+            };
+            Ok(slice)
+        })() {
+            Ok(slice) => slice,
+            Err(err) if is_cudnn_conv1d_fallback_error(&err) => {
+                Conv1D(params).map(&self.slice, inp_l, &kernel.slice, kernel_l, &device)?
             }
-            (S::BF16(inp), S::BF16(k)) => {
-                let inp = &inp.slice(inp_l.start_offset()..);
-                let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<bf16>(dst_el)? };
-                // Only PSEUDO_BFLOAT16_CONFIG is supported in cudnn, there is no "true bfloat16"
-                // version.
-                // https://docs.nvidia.com/deeplearning/cudnn/latest/api/cudnn-cnn-library.html#id88
-                crate::cudnn::launch_conv1d::<bf16, f32>(inp, inp_l, k, &mut out, params, &device)
-                    .map_err(crate::Error::wrap)?;
-                S::BF16(out)
-            }
-            (S::F16(inp), S::F16(k)) => {
-                let inp = &inp.slice(inp_l.start_offset()..);
-                let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<f16>(dst_el)? };
-                crate::cudnn::launch_conv1d::<f16, f16>(inp, inp_l, k, &mut out, params, &device)
-                    .map_err(crate::Error::wrap)?;
-                S::F16(out)
-            }
-            (S::F32(inp), S::F32(k)) => {
-                let inp = &inp.slice(inp_l.start_offset()..);
-                let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<f32>(dst_el)? };
-                crate::cudnn::launch_conv1d::<f32, f32>(inp, inp_l, k, &mut out, params, &device)
-                    .map_err(crate::Error::wrap)?;
-                S::F32(out)
-            }
-            (S::F64(inp), S::F64(k)) => {
-                let inp = &inp.slice(inp_l.start_offset()..);
-                let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<f64>(dst_el)? };
-                crate::cudnn::launch_conv1d::<f64, f64>(inp, inp_l, k, &mut out, params, &device)
-                    .map_err(crate::Error::wrap)?;
-                S::F64(out)
-            }
-            (S::U32(_), S::U32(_)) => Err(CudaError::InternalError("conv1d does not support u32"))?,
-            (S::I16(_), S::I16(_)) => Err(CudaError::InternalError("conv1d does not support i16"))?,
-            (S::I32(_), S::I32(_)) => Err(CudaError::InternalError("conv1d does not support i32"))?,
-            (S::I64(_), S::I64(_)) => Err(CudaError::InternalError("conv1d does not support i64"))?,
-            (S::F8E4M3(_), S::F8E4M3(_)) => {
-                Err(CudaError::InternalError("conv1d does not support f8e4m3"))?
-            }
-            _ => Err(CudaError::InternalError("dtype mismatch in conv1d"))?,
+            Err(err) => return Err(err),
         };
         Ok(Self { slice, device })
     }
