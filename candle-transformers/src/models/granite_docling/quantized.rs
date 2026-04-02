@@ -62,8 +62,7 @@ impl RotaryEmbedding {
             .map(|i| 1.0 / (theta as f32).powf(i as f32 / head_dim as f32))
             .collect();
         let inv_freq = Tensor::new(inv_freq.as_slice(), dev)?;
-        let positions =
-            Tensor::arange(0u32, max_seq as u32, dev)?.to_dtype(DType::F32)?;
+        let positions = Tensor::arange(0u32, max_seq as u32, dev)?.to_dtype(DType::F32)?;
         let freqs = positions.unsqueeze(1)?.matmul(&inv_freq.unsqueeze(0)?)?;
         let cos = freqs.cos()?.to_dtype(dtype)?;
         let sin = freqs.sin()?.to_dtype(dtype)?;
@@ -146,8 +145,7 @@ impl Attention {
         let q_proj = quantized_nn::linear_no_bias(h, num_heads * head_dim, vb.pp("attn_q"))?;
         let k_proj = quantized_nn::linear_no_bias(h, num_kv_heads * head_dim, vb.pp("attn_k"))?;
         let v_proj = quantized_nn::linear_no_bias(h, num_kv_heads * head_dim, vb.pp("attn_v"))?;
-        let o_proj =
-            quantized_nn::linear_no_bias(num_heads * head_dim, h, vb.pp("attn_output"))?;
+        let o_proj = quantized_nn::linear_no_bias(num_heads * head_dim, h, vb.pp("attn_output"))?;
 
         Ok(Self {
             q_proj,
@@ -435,8 +433,12 @@ impl Model {
         self.text_model.clear_kv_cache();
         let image_features = self.encode_image(pixel_values)?;
         let text_embeds = self.text_model.embed_tokens().forward(input_ids)?;
-        let input_embeds =
-            merge_image_tokens(&text_embeds, &image_features, input_ids, self.image_token_id)?;
+        let input_embeds = merge_image_tokens(
+            &text_embeds,
+            &image_features,
+            input_ids,
+            self.image_token_id,
+        )?;
         self.text_model.forward_embeds(&input_embeds)
     }
 

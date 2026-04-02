@@ -11,8 +11,8 @@ use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::granite_docling::{
     config::{Config, QuantizedVisionConfig, TextConfig},
-    Model,
     quantized::Model as QuantizedModel,
+    Model,
 };
 use tokenizers::Tokenizer;
 
@@ -79,11 +79,7 @@ struct Args {
 
 /// Resize an RGB image to exactly (w, h) and normalize to [-1, 1].
 /// Returns tensor of shape (3, h, w).
-fn resize_and_normalize(
-    img: &image::RgbImage,
-    w: u32,
-    h: u32,
-) -> Vec<f32> {
+fn resize_and_normalize(img: &image::RgbImage, w: u32, h: u32) -> Vec<f32> {
     let resized = image::imageops::resize(img, w, h, image::imageops::FilterType::Lanczos3);
     let (w, h) = (w as usize, h as usize);
     let mut data = vec![0.0f32; 3 * h * w];
@@ -127,11 +123,18 @@ fn split_image(
     // Step 3: resize to exact grid dimensions
     let grid_w = (n_cols * tile_size) as u32;
     let grid_h = (n_rows * tile_size) as u32;
-    let resized = image::imageops::resize(img, grid_w, grid_h, image::imageops::FilterType::Lanczos3);
+    let resized =
+        image::imageops::resize(img, grid_w, grid_h, image::imageops::FilterType::Lanczos3);
 
     println!(
         "Image splitting: {}x{} -> {}x{} grid ({}x{} tiles = {} + 1 global)",
-        img.width(), img.height(), grid_w, grid_h, n_rows, n_cols, n_rows * n_cols,
+        img.width(),
+        img.height(),
+        grid_w,
+        grid_h,
+        n_rows,
+        n_cols,
+        n_rows * n_cols,
     );
 
     // Step 4: extract tiles
@@ -157,9 +160,16 @@ fn split_image(
 fn load_single(img: &image::RgbImage, tile_size: usize) -> Vec<Vec<f32>> {
     println!(
         "No splitting: {}x{} -> {}x{}",
-        img.width(), img.height(), tile_size, tile_size,
+        img.width(),
+        img.height(),
+        tile_size,
+        tile_size,
     );
-    vec![resize_and_normalize(img, tile_size as u32, tile_size as u32)]
+    vec![resize_and_normalize(
+        img,
+        tile_size as u32,
+        tile_size as u32,
+    )]
 }
 
 /// Stack tile data into a single tensor of shape (num_tiles, 3, H, W).
@@ -216,21 +226,19 @@ fn build_input_ids_split(
     ids.extend_from_slice(user_text.get_ids());
     ids.push(END_OF_ROLE);
 
-    for row in 0..n_rows {
-        for col in 0..n_cols {
+    for row_tokens in ROW_COL_TOKENS.iter().take(n_rows) {
+        for &token_id in row_tokens.iter().take(n_cols) {
             ids.push(FAKE_TOKEN_AROUND_IMAGE);
-            ids.push(ROW_COL_TOKENS[row][col]);
-            ids.extend(std::iter::repeat(IMAGE_TOKEN_ID).take(image_seq_len));
+            ids.push(token_id);
+            ids.extend(std::iter::repeat_n(IMAGE_TOKEN_ID, image_seq_len));
         }
-        // \n after each row
         ids.extend_from_slice(newline_enc.get_ids());
     }
 
-    // \n<fake><global-img><image>*64<fake>
     ids.extend_from_slice(newline_enc.get_ids());
     ids.push(FAKE_TOKEN_AROUND_IMAGE);
     ids.push(GLOBAL_IMG);
-    ids.extend(std::iter::repeat(IMAGE_TOKEN_ID).take(image_seq_len));
+    ids.extend(std::iter::repeat_n(IMAGE_TOKEN_ID, image_seq_len));
     ids.push(FAKE_TOKEN_AROUND_IMAGE);
 
     // prompt text
@@ -265,7 +273,7 @@ fn build_input_ids_single(
     ids.push(END_OF_ROLE);
     ids.push(FAKE_TOKEN_AROUND_IMAGE);
     ids.push(GLOBAL_IMG);
-    ids.extend(std::iter::repeat(IMAGE_TOKEN_ID).take(image_seq_len));
+    ids.extend(std::iter::repeat_n(IMAGE_TOKEN_ID, image_seq_len));
     ids.push(FAKE_TOKEN_AROUND_IMAGE);
     ids.extend_from_slice(prompt_enc.get_ids());
     ids.push(END_OF_TEXT);
@@ -351,11 +359,16 @@ fn main() -> Result<()> {
 
         println!(
             "Config: vision {}x{} patch={}, text hidden={} layers={}, scale_factor={}",
-            tile_size, tile_size, vision_cfg.patch_size,
-            text_cfg.hidden_size, text_cfg.num_hidden_layers, vision_cfg.scale_factor,
+            tile_size,
+            tile_size,
+            vision_cfg.patch_size,
+            text_cfg.hidden_size,
+            text_cfg.num_hidden_layers,
+            vision_cfg.scale_factor,
         );
 
-        let model = QuantizedModel::new(vision_vb, &vision_cfg, text_vb, &text_cfg, IMAGE_TOKEN_ID)?;
+        let model =
+            QuantizedModel::new(vision_vb, &vision_cfg, text_vb, &text_cfg, IMAGE_TOKEN_ID)?;
         println!("Model loaded (quantized Q8_0).");
 
         (ModelWrapper::Quantized(model), tile_size, image_seq_len)
@@ -371,8 +384,12 @@ fn main() -> Result<()> {
 
         println!(
             "Config: vision {}x{} patch={}, text hidden={} layers={}, scale_factor={}",
-            tile_size, tile_size, config.vision_config.patch_size,
-            config.text_config.hidden_size, config.text_config.num_hidden_layers, config.scale_factor,
+            tile_size,
+            tile_size,
+            config.vision_config.patch_size,
+            config.text_config.hidden_size,
+            config.text_config.num_hidden_layers,
+            config.scale_factor,
         );
 
         let model_path = repo.get("model.safetensors")?;
@@ -390,8 +407,17 @@ fn main() -> Result<()> {
         .map_err(E::msg)?
         .to_rgb8();
 
-    let prompt_text = args.prompt.as_deref().unwrap_or("Convert this page to docling.");
-    let pv_dtype = if args.quantized { DType::F32 } else if args.bf16 { DType::BF16 } else { DType::F32 };
+    let prompt_text = args
+        .prompt
+        .as_deref()
+        .unwrap_or("Convert this page to docling.");
+    let pv_dtype = if args.quantized {
+        DType::F32
+    } else if args.bf16 {
+        DType::BF16
+    } else {
+        DType::F32
+    };
 
     let (pixel_values, input_ids) = if args.no_split {
         let tiles = load_single(&raw_img, tile_size);

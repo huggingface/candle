@@ -28,7 +28,7 @@ pub fn pixel_shuffle(xs: &Tensor, scale_factor: usize) -> Result<Tensor> {
     if h * w != seq_len {
         candle::bail!("pixel shuffle requires square patch grid, got {seq_len} patches (sqrt={h})");
     }
-    if h % s != 0 {
+    if !h.is_multiple_of(s) {
         candle::bail!("patch grid size {h} not divisible by scale_factor {s}");
     }
 
@@ -133,11 +133,8 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let vision_model = siglip::VisionModel::new(
-            &cfg.vision_config,
-            false,
-            vb.pp("model.vision_model"),
-        )?;
+        let vision_model =
+            siglip::VisionModel::new(&cfg.vision_config, false, vb.pp("model.vision_model"))?;
         let connector = Connector::new(cfg, vb.pp("model.connector"))?;
         let text_model = TextModel::new(&cfg.text_config, vb.pp("model.text_model"))?;
         Ok(Self {
@@ -159,8 +156,12 @@ impl Model {
         self.text_model.clear_kv_cache();
         let image_features = self.encode_image(pixel_values)?;
         let text_embeds = self.text_model.embed_tokens().forward(input_ids)?;
-        let input_embeds =
-            merge_image_tokens(&text_embeds, &image_features, input_ids, self.image_token_id)?;
+        let input_embeds = merge_image_tokens(
+            &text_embeds,
+            &image_features,
+            input_ids,
+            self.image_token_id,
+        )?;
         self.text_model.forward_embeds(&input_embeds)
     }
 

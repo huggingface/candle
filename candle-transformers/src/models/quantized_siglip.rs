@@ -3,9 +3,9 @@
 //! Loads from llama.cpp GGUF mmproj files using the standard `v.blk.*` tensor naming.
 //! Reusable by any Idefics3/SigLIP-based multimodal model (Granite-Docling, SmolVLM, etc.).
 
-use candle::{Module, Result, Tensor};
 use crate::quantized_nn::{self, Linear};
 use crate::quantized_var_builder::VarBuilder;
+use candle::{Module, Result, Tensor};
 
 // ---------------------------------------------------------------------------
 // Attention
@@ -171,15 +171,16 @@ impl VisionEmbeddings {
         // GGUF stores patch_embd.weight with dims [16, 16, 3, 768] in GGUF order.
         // Candle loads this as shape (768, 3, 16, 16) which is already Conv2d layout
         // (out_channels, in_channels, kH, kW). No reshape needed.
-        let patch_embedding_weight = if patch_embedding_weight.dims() == [hidden_size, 3, patch_size, patch_size] {
-            patch_embedding_weight
-        } else {
-            // Fallback: reshape from GGUF (patch_size, patch_size, 3, hidden_size) -> Conv2d
-            patch_embedding_weight
-                .reshape((patch_size, patch_size, 3, hidden_size))?
-                .permute((3, 2, 0, 1))?
-                .contiguous()?
-        };
+        let patch_embedding_weight =
+            if patch_embedding_weight.dims() == [hidden_size, 3, patch_size, patch_size] {
+                patch_embedding_weight
+            } else {
+                // Fallback: reshape from GGUF (patch_size, patch_size, 3, hidden_size) -> Conv2d
+                patch_embedding_weight
+                    .reshape((patch_size, patch_size, 3, hidden_size))?
+                    .permute((3, 2, 0, 1))?
+                    .contiguous()?
+            };
 
         Ok(Self {
             patch_embedding_weight,
@@ -195,14 +196,17 @@ impl VisionEmbeddings {
         // Manual Conv2d with stride = patch_size
         let embeddings = xs.conv2d(
             &self.patch_embedding_weight,
-            0,              // padding
+            0,               // padding
             self.patch_size, // stride
-            1,              // dilation
-            1,              // groups
+            1,               // dilation
+            1,               // groups
         )?;
-        let embeddings = embeddings.broadcast_add(
-            &self.patch_embedding_bias.reshape((1, self.hidden_size, 1, 1))?,
-        )?;
+        let embeddings = embeddings.broadcast_add(&self.patch_embedding_bias.reshape((
+            1,
+            self.hidden_size,
+            1,
+            1,
+        ))?)?;
         // (B, hidden, H/p, W/p) -> (B, num_patches, hidden)
         let embeddings = embeddings.flatten_from(2)?.transpose(1, 2)?;
         // Add position embeddings
@@ -222,7 +226,10 @@ pub struct VisionModel {
 }
 
 impl VisionModel {
-    pub fn new(cfg: &crate::models::granite_docling::config::QuantizedVisionConfig, vb: VarBuilder) -> Result<Self> {
+    pub fn new(
+        cfg: &crate::models::granite_docling::config::QuantizedVisionConfig,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let embeddings =
             VisionEmbeddings::new(hidden_size, cfg.image_size, cfg.patch_size, vb.clone())?;

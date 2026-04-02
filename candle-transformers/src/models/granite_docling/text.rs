@@ -6,7 +6,7 @@
 
 use super::config::TextConfig;
 use candle::{DType, Device, Module, Result, Tensor};
-use candle_nn::{linear_no_bias as linear, embedding, Linear, VarBuilder};
+use candle_nn::{embedding, linear_no_bias as linear, Linear, VarBuilder};
 
 // ---------------------------------------------------------------------------
 // RMS Norm
@@ -52,12 +52,9 @@ impl RotaryEmbedding {
             .map(|i| 1.0 / (theta as f32).powf(i as f32 / head_dim as f32))
             .collect();
         let inv_freq = Tensor::new(inv_freq.as_slice(), dev)?;
-        let positions = Tensor::arange(0u32, max_seq as u32, dev)?
-            .to_dtype(DType::F32)?;
+        let positions = Tensor::arange(0u32, max_seq as u32, dev)?.to_dtype(DType::F32)?;
         // (max_seq, head_dim/2)
-        let freqs = positions
-            .unsqueeze(1)?
-            .matmul(&inv_freq.unsqueeze(0)?)?;
+        let freqs = positions.unsqueeze(1)?.matmul(&inv_freq.unsqueeze(0)?)?;
         let cos = freqs.cos()?.to_dtype(dtype)?;
         let sin = freqs.sin()?.to_dtype(dtype)?;
         Ok(Self { cos, sin })
@@ -240,7 +237,10 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.gate_proj.forward(xs)?.apply(&candle_nn::Activation::Silu)?;
+        let gate = self
+            .gate_proj
+            .forward(xs)?
+            .apply(&candle_nn::Activation::Silu)?;
         let up = self.up_proj.forward(xs)?;
         (gate * up)?.apply(&self.down_proj)
     }
@@ -264,8 +264,11 @@ impl DecoderLayer {
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("post_attention_layernorm"))?;
+        let post_attention_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb.pp("post_attention_layernorm"),
+        )?;
         Ok(Self {
             self_attn,
             mlp,
