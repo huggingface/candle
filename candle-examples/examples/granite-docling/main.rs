@@ -9,10 +9,15 @@ use clap::Parser;
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::models::granite_docling::{config::Config, Model};
+use candle_transformers::models::granite_docling::{
+    config::{Config, QuantizedVisionConfig, TextConfig},
+    Model,
+    quantized::Model as QuantizedModel,
+};
 use tokenizers::Tokenizer;
 
 const MODEL_ID: &str = "ibm-granite/granite-docling-258M";
+const QUANTIZED_MODEL_ID: &str = "ggml-org/granite-docling-258M-GGUF";
 const IMAGE_TOKEN_ID: u32 = 100270;
 const FAKE_TOKEN_AROUND_IMAGE: u32 = 100339;
 const GLOBAL_IMG: u32 = 100340;
@@ -62,6 +67,10 @@ struct Args {
     /// Disable image splitting (single 512x512 view of entire page).
     #[arg(long)]
     no_split: bool,
+
+    /// Use quantized GGUF weights (Q8_0).
+    #[arg(long)]
+    quantized: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -263,59 +272,128 @@ fn build_input_ids_single(
 }
 
 // ---------------------------------------------------------------------------
+// Model wrapper (dispatches between f32 and quantized)
+// ---------------------------------------------------------------------------
+
+enum ModelWrapper {
+    F32(Model),
+    Quantized(QuantizedModel),
+}
+
+impl ModelWrapper {
+    fn setup(&mut self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::F32(m) => Ok(m.setup(pixel_values, input_ids)?),
+            Self::Quantized(m) => Ok(m.setup(pixel_values, input_ids)?),
+        }
+    }
+
+    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::F32(m) => Ok(m.forward(input_ids)?),
+            Self::Quantized(m) => Ok(m.forward(input_ids)?),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 fn main() -> Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if args.bf16 { DType::BF16 } else { DType::F32 };
-    let model_id = args.model_id.as_deref().unwrap_or(MODEL_ID);
-
     let api = hf_hub::api::sync::Api::new()?;
-    let repo = api.model(model_id.to_string());
 
-    // Load config
-    let config_path = repo.get("config.json")?;
-    let config: Config = serde_json::from_reader(std::fs::File::open(&config_path)?)?;
-    let tile_size = config.vision_config.image_size;
-    let image_seq_len = config.image_seq_len();
-    println!(
-        "Config: vision {}x{} patch={}, text hidden={} layers={}, scale_factor={}",
-        tile_size, tile_size,
-        config.vision_config.patch_size,
-        config.text_config.hidden_size,
-        config.text_config.num_hidden_layers,
-        config.scale_factor,
-    );
-
-    // Load tokenizer
-    let tokenizer_path = repo.get("tokenizer.json")?;
+    // Load tokenizer (from base model repo, always needed)
+    let base_repo = api.model(MODEL_ID.to_string());
+    let tokenizer_path = base_repo.get("tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(E::msg)?;
 
-    // Load model weights
-    let model_path = repo.get("model.safetensors")?;
-    println!("Loading model from {model_path:?}");
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], dtype, &device)? };
-    let mut model = Model::new(&config, vb)?;
-    println!("Model loaded.");
+    // Load model — either f32/bf16 safetensors or quantized GGUF
+    let (mut model, tile_size, image_seq_len) = if args.quantized {
+        let model_id = args.model_id.as_deref().unwrap_or(QUANTIZED_MODEL_ID);
+        let repo = api.model(model_id.to_string());
 
-    // Load and preprocess image
+        let text_path = repo.get("granite-docling-258M-Q8_0.gguf")?;
+        let vision_path = repo.get("mmproj-granite-docling-258M-Q8_0.gguf")?;
+
+        println!("Loading quantized model...");
+        println!("  Text:   {text_path:?}");
+        println!("  Vision: {vision_path:?}");
+
+        use candle_transformers::quantized_var_builder::VarBuilder as QVarBuilder;
+        let text_vb = QVarBuilder::from_gguf(&text_path, &device)?;
+        let vision_vb = QVarBuilder::from_gguf(&vision_path, &device)?;
+
+        // Read configs from GGUF metadata
+        let text_gguf = {
+            let mut f = std::fs::File::open(&text_path)?;
+            candle::quantized::gguf_file::Content::read(&mut f)?
+        };
+        let vision_gguf = {
+            let mut f = std::fs::File::open(&vision_path)?;
+            candle::quantized::gguf_file::Content::read(&mut f)?
+        };
+
+        let text_cfg = TextConfig::from_gguf(&text_gguf.metadata)?;
+        let vision_cfg = QuantizedVisionConfig::from_gguf(&vision_gguf.metadata)?;
+
+        let tile_size = vision_cfg.image_size;
+        let image_seq_len = vision_cfg.image_seq_len();
+
+        println!(
+            "Config: vision {}x{} patch={}, text hidden={} layers={}, scale_factor={}",
+            tile_size, tile_size, vision_cfg.patch_size,
+            text_cfg.hidden_size, text_cfg.num_hidden_layers, vision_cfg.scale_factor,
+        );
+
+        let model = QuantizedModel::new(vision_vb, &vision_cfg, text_vb, &text_cfg, IMAGE_TOKEN_ID)?;
+        println!("Model loaded (quantized Q8_0).");
+
+        (ModelWrapper::Quantized(model), tile_size, image_seq_len)
+    } else {
+        let dtype = if args.bf16 { DType::BF16 } else { DType::F32 };
+        let model_id = args.model_id.as_deref().unwrap_or(MODEL_ID);
+        let repo = api.model(model_id.to_string());
+
+        let config_path = repo.get("config.json")?;
+        let config: Config = serde_json::from_reader(std::fs::File::open(&config_path)?)?;
+        let tile_size = config.vision_config.image_size;
+        let image_seq_len = config.image_seq_len();
+
+        println!(
+            "Config: vision {}x{} patch={}, text hidden={} layers={}, scale_factor={}",
+            tile_size, tile_size, config.vision_config.patch_size,
+            config.text_config.hidden_size, config.text_config.num_hidden_layers, config.scale_factor,
+        );
+
+        let model_path = repo.get("model.safetensors")?;
+        println!("Loading model from {model_path:?}");
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], dtype, &device)? };
+        let model = Model::new(&config, vb)?;
+        println!("Model loaded (f32).");
+
+        (ModelWrapper::F32(model), tile_size, image_seq_len)
+    };
+
+    // Load and preprocess image (shared between both paths)
     let raw_img = image::ImageReader::open(&args.image)?
         .decode()
         .map_err(E::msg)?
         .to_rgb8();
 
     let prompt_text = args.prompt.as_deref().unwrap_or("Convert this page to docling.");
+    let pv_dtype = if args.quantized { DType::F32 } else if args.bf16 { DType::BF16 } else { DType::F32 };
 
     let (pixel_values, input_ids) = if args.no_split {
         let tiles = load_single(&raw_img, tile_size);
-        let pv = tiles_to_tensor(&tiles, tile_size, dtype, &device)?;
+        let pv = tiles_to_tensor(&tiles, tile_size, pv_dtype, &device)?;
         let ids = build_input_ids_single(&tokenizer, prompt_text, image_seq_len)?;
         (pv, ids)
     } else {
         let (n_rows, n_cols, tiles) = split_image(&raw_img, tile_size, 2048);
-        let pv = tiles_to_tensor(&tiles, tile_size, dtype, &device)?;
+        let pv = tiles_to_tensor(&tiles, tile_size, pv_dtype, &device)?;
         let ids = build_input_ids_split(&tokenizer, prompt_text, image_seq_len, n_rows, n_cols)?;
         (pv, ids)
     };
@@ -341,6 +419,7 @@ fn main() -> Result<()> {
         candle_transformers::generation::LogitsProcessor::new(42, temperature, None);
 
     let logits_last = logits.squeeze(0)?.get(logits.dim(1)? - 1)?;
+
     let mut token = logits_processor.sample(&logits_last)?;
     let mut generated = vec![token];
     print_token(&tokenizer, token);
@@ -352,7 +431,7 @@ fn main() -> Result<()> {
         let logits_last = logits.squeeze(0)?.get(logits.dim(1)? - 1)?;
         token = logits_processor.sample(&logits_last)?;
 
-        if token == config.eos_token_id || token == END_OF_TEXT {
+        if token == END_OF_TEXT {
             break;
         }
         generated.push(token);

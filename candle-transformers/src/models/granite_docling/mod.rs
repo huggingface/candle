@@ -8,6 +8,7 @@
 //! - [Idefics3 (HuggingFace)](https://huggingface.co/docs/transformers/model_doc/idefics3)
 
 pub mod config;
+pub mod quantized;
 pub mod text;
 
 use crate::models::siglip;

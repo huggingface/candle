@@ -87,6 +87,89 @@ pub struct Config {
     pub vocab_size: usize,
 }
 
+impl TextConfig {
+    /// Build TextConfig from GGUF metadata keys (llama.* namespace).
+    pub fn from_gguf(
+        metadata: &std::collections::HashMap<String, candle::quantized::gguf_file::Value>,
+    ) -> candle::Result<Self> {
+        let get = |key: &str| {
+            metadata
+                .get(key)
+                .ok_or_else(|| candle::Error::Msg(format!("missing GGUF metadata: {key}")))
+        };
+        Ok(Self {
+            vocab_size: get("llama.vocab_size")?.to_u32()? as usize,
+            hidden_size: get("llama.embedding_length")?.to_u32()? as usize,
+            intermediate_size: get("llama.feed_forward_length")?.to_u32()? as usize,
+            num_hidden_layers: get("llama.block_count")?.to_u32()? as usize,
+            num_attention_heads: get("llama.attention.head_count")?.to_u32()? as usize,
+            num_key_value_heads: get("llama.attention.head_count_kv")?.to_u32()? as usize,
+            head_dim: get("llama.attention.key_length")?.to_u32()? as usize,
+            hidden_act: candle_nn::Activation::Silu,
+            max_position_embeddings: get("llama.context_length")?.to_u32()? as usize,
+            rms_norm_eps: get("llama.attention.layer_norm_rms_epsilon")?.to_f32()? as f64,
+            rope_theta: get("llama.rope.freq_base")?.to_f32()? as f64,
+            attention_bias: false,
+            mlp_bias: false,
+            tie_word_embeddings: true,
+        })
+    }
+}
+
+/// Vision-related config extracted from mmproj GGUF metadata.
+#[derive(Clone, Debug)]
+pub struct QuantizedVisionConfig {
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub image_size: usize,
+    pub patch_size: usize,
+    pub layer_norm_eps: f64,
+    pub projection_dim: usize,
+    pub scale_factor: usize,
+}
+
+impl QuantizedVisionConfig {
+    /// Build from mmproj GGUF metadata keys (clip.vision.* namespace).
+    pub fn from_gguf(
+        metadata: &std::collections::HashMap<String, candle::quantized::gguf_file::Value>,
+    ) -> candle::Result<Self> {
+        let get = |key: &str| {
+            metadata
+                .get(key)
+                .ok_or_else(|| candle::Error::Msg(format!("missing GGUF metadata: {key}")))
+        };
+        Ok(Self {
+            hidden_size: get("clip.vision.embedding_length")?.to_u32()? as usize,
+            intermediate_size: get("clip.vision.feed_forward_length")?.to_u32()? as usize,
+            num_hidden_layers: get("clip.vision.block_count")?.to_u32()? as usize,
+            num_attention_heads: get("clip.vision.attention.head_count")?.to_u32()? as usize,
+            image_size: get("clip.vision.image_size")?.to_u32()? as usize,
+            patch_size: get("clip.vision.patch_size")?.to_u32()? as usize,
+            layer_norm_eps: get("clip.vision.attention.layer_norm_epsilon")?.to_f32()? as f64,
+            projection_dim: get("clip.vision.projection_dim")?.to_u32()? as usize,
+            scale_factor: get("clip.vision.projector.scale_factor")?.to_u32()? as usize,
+        })
+    }
+
+    pub fn num_patches(&self) -> usize {
+        (self.image_size / self.patch_size).pow(2)
+    }
+
+    pub fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
+
+    pub fn image_seq_len(&self) -> usize {
+        self.num_patches() / (self.scale_factor * self.scale_factor)
+    }
+
+    pub fn connector_input_dim(&self) -> usize {
+        self.hidden_size * self.scale_factor * self.scale_factor
+    }
+}
+
 impl Config {
     /// Number of image tokens after pixel shuffle downsampling.
     /// = num_patches / scale_factor^2

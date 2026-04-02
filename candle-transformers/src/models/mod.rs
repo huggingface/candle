@@ -104,6 +104,7 @@ pub mod quantized_qwen3_moe;
 pub mod quantized_recurrent_gemma;
 pub mod quantized_rwkv_v5;
 pub mod quantized_rwkv_v6;
+pub mod quantized_siglip;
 pub mod quantized_stable_lm;
 pub mod quantized_t5;
 pub mod qwen2;
