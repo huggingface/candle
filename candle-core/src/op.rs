@@ -135,6 +135,7 @@ pub enum Op {
         arg: Tensor,
         kernel_size: (usize, usize),
         stride: (usize, usize),
+        padding: usize,
     },
 
     UpsampleNearest1D {
