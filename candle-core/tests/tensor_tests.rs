@@ -614,6 +614,47 @@ fn max(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn max_reduction_stability(device: &Device) -> Result<()> {
+    let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(
+        tensor.max_keepdim(2)?.to_vec3::<u32>()?,
+        &[[[4], [9]], [[7], [8]]]
+    );
+    assert_eq!(
+        tensor.max_keepdim(0)?.to_vec3::<u32>()?,
+        &[[[3, 1, 7], [8, 5, 9]]],
+    );
+
+    // Regression: all-negative reductions must not collapse to 0 on CUDA.
+    // Keep reduced sizes < 32 to stress the small-block reduction path.
+    for (data, shape, expected) in [
+        (vec![-0.3740226f32], (1, 1), vec![-0.3740226f32]),
+        (
+            vec![-0.437639f32, -0.1750766, -0.21964085],
+            (1, 3),
+            vec![-0.1750766f32],
+        ),
+        (
+            vec![
+                -0.40390146f32, -0.048737526, -0.32284284,
+                -0.0018222332, -0.041230083, -0.32251203,
+            ],
+            (2, 3),
+            vec![-0.048737526f32, -0.0018222332],
+        ),
+    ] {
+        let t = Tensor::from_vec(data, shape, device)?;
+        assert_eq!(t.max(1)?.to_vec1::<f32>()?, expected);
+
+        let expected_keepdim = expected.iter().copied().map(|v| vec![v]).collect::<Vec<_>>();
+        assert_eq!(t.max_keepdim(1)?.to_vec2::<f32>()?, expected_keepdim);
+    }
+
+    Ok(())
+}
+
+
 fn argmin(device: &Device) -> Result<()> {
     let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
     let tensor = Tensor::new(data, device)?;
@@ -930,6 +971,31 @@ fn index_select_fail() -> Result<()> {
     let t = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], &Device::Cpu)?;
     let hs = t.index_select(&ids, 0);
     assert!(hs.is_err());
+    Ok(())
+}
+
+#[test]
+fn scatter_requires_contiguous_ids_error_names_scatter_on_cpu() -> Result<()> {
+    // CPU scatter used to report RequiresContiguous with op "gather" when index
+    // storage was non-contiguous; the message must name "scatter".
+    let device = Device::Cpu;
+    let init = Tensor::ones((2, 2, 5), DType::F32, &device)?;
+    let t = Tensor::arange(0f32, 12f32, &device)?.reshape((2, 2, 3))?;
+    let ids = Tensor::new(
+        &[[[0u32, 1, 2], [3, 4, 0]], [[1, 2, 3], [4, 0, 1]]],
+        &device,
+    )?
+    .transpose(0, 1)?;
+    assert!(
+        ids.layout().contiguous_offsets().is_none(),
+        "regression test: ids tensor must be non-contiguous"
+    );
+    let err = init.scatter(&ids, &t, 2).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("scatter only supports contiguous tensors"),
+        "unexpected error: {msg}"
+    );
     Ok(())
 }
 
@@ -1695,6 +1761,7 @@ test_device!(cat, cat_cpu, cat_gpu, cat_metal);
 test_device!(sum, sum_cpu, sum_gpu, sum_metal);
 test_device!(min, min_cpu, min_gpu, min_metal);
 test_device!(max, max_cpu, max_gpu, max_metal);
+test_device!(max_reduction_stability, max_reduction_stability_cpu, max_reduction_stability_gpu, max_reduction_stability_metal);
 test_device!(argmax, argmax_cpu, argmax_gpu, argmax_metal);
 test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal);
 test_device!(transpose, transpose_cpu, transpose_gpu, transpose_metal);
