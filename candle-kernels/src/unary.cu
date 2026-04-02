@@ -26,6 +26,55 @@ extern "C" __global__ void FN_NAME( \
             out[i] = FUNC; \
         } \
     } \
+}
+
+
+#if HAS_HALF2_NATIVE
+constexpr bool has_half2_native = true;
+#else
+constexpr bool has_half2_native = false;
+#endif
+
+#define UNARY_OP_F16(FN_NAME, FUNC) \
+extern "C" __global__ void FN_NAME( \
+    const size_t numel, \
+    const size_t num_dims, \
+    const size_t *info, \
+    const __half *inp, \
+    __half *out \
+) { \
+    const size_t *dims = info; \
+    const size_t *strides = info + num_dims; \
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) { \
+        unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; \
+        if constexpr (has_half2_native) { \
+            if (numel % 2 == 0) { \
+                unsigned int vec_i = i; \
+                if (vec_i < numel / 2) { \
+                    const __half2* inp_vec = reinterpret_cast<const __half2*>(inp); \
+                    __half2* out_vec = reinterpret_cast<__half2*>(out); \
+                    __half2 x2 = inp_vec ? inp_vec[vec_i] : out_vec[vec_i]; \
+                    __half x = x2.x; \
+                    __half o1 = FUNC; \
+                    x = x2.y; \
+                    __half o2 = FUNC; \
+                    out_vec[vec_i] = __halves2half2(o1, o2); \
+                } \
+                return; \
+            } \
+        } \
+        for (; i < numel; i += blockDim.x * gridDim.x) { \
+            __half x = inp ? inp[i] : out[i]; \
+            out[i] = FUNC; \
+        } \
+    } \
+    else { \
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
+            __half x = inp ? inp[strided_i] : out[i]; \
+            out[i] = FUNC; \
+        } \
+    } \
 } \
 
 template<typename T>
@@ -89,6 +138,49 @@ extern "C" __global__ void FN_NAME( \
             out[i] = FUNC; \
         } \
     } \
+}
+
+#define UNARY_OP1_F16(FN_NAME, FUNC) \
+extern "C" __global__ void FN_NAME( \
+    const size_t numel, \
+    const size_t num_dims, \
+    const size_t *info, \
+    const __half param, \
+    const __half *inp, \
+    __half *out \
+) { \
+    const size_t *dims = info; \
+    const size_t *strides = info + num_dims; \
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) { \
+        unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; \
+        if constexpr (has_half2_native) { \
+            if (numel % 2 == 0) { \
+                unsigned int vec_i = i; \
+                if (vec_i < numel / 2) { \
+                    const __half2* inp_vec = reinterpret_cast<const __half2*>(inp); \
+                    __half2* out_vec = reinterpret_cast<__half2*>(out); \
+                    __half2 x2 = inp_vec ? inp_vec[vec_i] : out_vec[vec_i]; \
+                    __half x = x2.x; \
+                    __half o1 = FUNC; \
+                    x = x2.y; \
+                    __half o2 = FUNC; \
+                    out_vec[vec_i] = __halves2half2(o1, o2); \
+                } \
+                return; \
+            } \
+        } \
+        for (; i < numel; i += blockDim.x * gridDim.x) { \
+            __half x = inp ? inp[i] : out[i]; \
+            out[i] = FUNC; \
+        } \
+    } \
+    else { \
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
+            __half x = inp ? inp[strided_i] : out[i]; \
+            out[i] = FUNC; \
+        } \
+    } \
 } \
 
 template<typename T>
@@ -96,8 +188,7 @@ __device__ T sign_(T t) {
   return static_cast<T>(t > static_cast<T>(0)) - static_cast<T>(t < static_cast<T>(0));
 }
 
-
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || ALLOW_LEGACY_BF16
 UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
 UNARY_OP(__nv_bfloat16, uneg_bf16, -x)
 UNARY_OP(__nv_bfloat16, urecip_bf16, recipg(x))
@@ -124,60 +215,60 @@ UNARY_OP(__nv_bfloat16, usign_bf16, sign_(x))
 UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
 #endif
 
-#if __CUDA_ARCH__ >= 890
+#if __CUDA_ARCH__ >= 890 || ALLOW_LEGACY_FP8
 #define F8E4M3_TO_FLOAT(x) __half2float(__nv_cvt_fp8_to_halfraw(x.__x, __NV_E4M3))
 
 UNARY_OP(__nv_fp8_e4m3, ucopy_f8_e4m3, x)
-UNARY_OP(__nv_fp8_e4m3, uneg_fp8_e4m3, __nv_fp8_e4m3(-F8E4M3_TO_FLOAT(x)))
-UNARY_OP(__nv_fp8_e4m3, urecip_fp8_e4m3, recipg(x))
-UNARY_OP(__nv_fp8_e4m3, uexp_fp8_e4m3, expg(x))
-UNARY_OP(__nv_fp8_e4m3, ulog_fp8_e4m3, logg(x))
-UNARY_OP(__nv_fp8_e4m3, usin_fp8_e4m3, sing(x))
-UNARY_OP(__nv_fp8_e4m3, ucos_fp8_e4m3, cosg(x))
-UNARY_OP(__nv_fp8_e4m3, utanh_fp8_e4m3, tanhg(x))
-UNARY_OP(__nv_fp8_e4m3, uerf_fp8_e4m3, erfg(x))
-UNARY_OP(__nv_fp8_e4m3, uceil_fp8_e4m3, ceilg(x))
-UNARY_OP(__nv_fp8_e4m3, ufloor_fp8_e4m3, floorg(x))
-UNARY_OP(__nv_fp8_e4m3, uround_fp8_e4m3, roundg(x))
-UNARY_OP(__nv_fp8_e4m3, unormcdf_fp8_e4m3, normcdfg(x))
-UNARY_OP(__nv_fp8_e4m3, uabs_fp8_e4m3, absg(x))
-UNARY_OP(__nv_fp8_e4m3, usqr_fp8_e4m3, __nv_fp8_e4m3(F8E4M3_TO_FLOAT(x)*F8E4M3_TO_FLOAT(x)))
-UNARY_OP(__nv_fp8_e4m3, usqrt_fp8_e4m3, sqrtg(x))
-UNARY_OP(__nv_fp8_e4m3, ugelu_fp8_e4m3, __nv_fp8_e4m3(gelu_fwd(F8E4M3_TO_FLOAT(x))))
-UNARY_OP(__nv_fp8_e4m3, ugelu_erf_fp8_e4m3, __nv_fp8_e4m3(gelu_erf_fwd(F8E4M3_TO_FLOAT(x))))
-UNARY_OP(__nv_fp8_e4m3, urelu_fp8_e4m3, __nv_fp8_e4m3(relu_fwd(F8E4M3_TO_FLOAT(x))))
-UNARY_OP1(__nv_fp8_e4m3, uelu_fp8_e4m3, __nv_fp8_e4m3(elu_fwd(F8E4M3_TO_FLOAT(x), F8E4M3_TO_FLOAT(param))))
-UNARY_OP(__nv_fp8_e4m3, usilu_fp8_e4m3, __nv_fp8_e4m3(silu_fwd(F8E4M3_TO_FLOAT(x))))
-UNARY_OP1(__nv_fp8_e4m3, upowf_fp8_e4m3, powg(x, param))
-UNARY_OP(__nv_fp8_e4m3, usign_fp8_e4m3, __nv_fp8_e4m3(sign_(F8E4M3_TO_FLOAT(x))))
-UNARY_OP(__nv_fp8_e4m3, usigmoid_fp8_e4m3, __nv_fp8_e4m3(sigmoid_fwd(F8E4M3_TO_FLOAT(x))))
+UNARY_OP(__nv_fp8_e4m3, uneg_f8_e4m3, __nv_fp8_e4m3(-F8E4M3_TO_FLOAT(x)))
+UNARY_OP(__nv_fp8_e4m3, urecip_f8_e4m3, recipg(x))
+UNARY_OP(__nv_fp8_e4m3, uexp_f8_e4m3, expg(x))
+UNARY_OP(__nv_fp8_e4m3, ulog_f8_e4m3, logg(x))
+UNARY_OP(__nv_fp8_e4m3, usin_f8_e4m3, sing(x))
+UNARY_OP(__nv_fp8_e4m3, ucos_f8_e4m3, cosg(x))
+UNARY_OP(__nv_fp8_e4m3, utanh_f8_e4m3, tanhg(x))
+UNARY_OP(__nv_fp8_e4m3, uerf_f8_e4m3, erfg(x))
+UNARY_OP(__nv_fp8_e4m3, uceil_f8_e4m3, ceilg(x))
+UNARY_OP(__nv_fp8_e4m3, ufloor_f8_e4m3, floorg(x))
+UNARY_OP(__nv_fp8_e4m3, uround_f8_e4m3, roundg(x))
+UNARY_OP(__nv_fp8_e4m3, unormcdf_f8_e4m3, normcdfg(x))
+UNARY_OP(__nv_fp8_e4m3, uabs_f8_e4m3, absg(x))
+UNARY_OP(__nv_fp8_e4m3, usqr_f8_e4m3, __nv_fp8_e4m3(F8E4M3_TO_FLOAT(x)*F8E4M3_TO_FLOAT(x)))
+UNARY_OP(__nv_fp8_e4m3, usqrt_f8_e4m3, sqrtg(x))
+UNARY_OP(__nv_fp8_e4m3, ugelu_f8_e4m3, __nv_fp8_e4m3(gelu_fwd(F8E4M3_TO_FLOAT(x))))
+UNARY_OP(__nv_fp8_e4m3, ugelu_erf_f8_e4m3, __nv_fp8_e4m3(gelu_erf_fwd(F8E4M3_TO_FLOAT(x))))
+UNARY_OP(__nv_fp8_e4m3, urelu_f8_e4m3, __nv_fp8_e4m3(relu_fwd(F8E4M3_TO_FLOAT(x))))
+UNARY_OP1(__nv_fp8_e4m3, uelu_f8_e4m3, __nv_fp8_e4m3(elu_fwd(F8E4M3_TO_FLOAT(x), F8E4M3_TO_FLOAT(param))))
+UNARY_OP(__nv_fp8_e4m3, usilu_f8_e4m3, __nv_fp8_e4m3(silu_fwd(F8E4M3_TO_FLOAT(x))))
+UNARY_OP1(__nv_fp8_e4m3, upowf_f8_e4m3, powg(x, param))
+UNARY_OP(__nv_fp8_e4m3, usign_f8_e4m3, __nv_fp8_e4m3(sign_(F8E4M3_TO_FLOAT(x))))
+UNARY_OP(__nv_fp8_e4m3, usigmoid_f8_e4m3, __nv_fp8_e4m3(sigmoid_fwd(F8E4M3_TO_FLOAT(x))))
 #endif
 
 #if __CUDA_ARCH__ >= 530
-UNARY_OP(__half, ucopy_f16, x)
-UNARY_OP(__half, uneg_f16, -x)
-UNARY_OP(__half, urecip_f16, recipg(x))
-UNARY_OP(__half, uexp_f16, expg(x))
-UNARY_OP(__half, ulog_f16, logg(x))
-UNARY_OP(__half, usin_f16, sing(x))
-UNARY_OP(__half, ucos_f16, cosg(x))
-UNARY_OP(__half, utanh_f16, tanhg(x))
-UNARY_OP(__half, uerf_f16, erfg(x))
-UNARY_OP(__half, uceil_f16, ceilg(x))
-UNARY_OP(__half, ufloor_f16, floorg(x))
-UNARY_OP(__half, uround_f16, roundg(x))
-UNARY_OP(__half, unormcdf_f16, normcdfg(x))
-UNARY_OP(__half, uabs_f16, absg(x))
-UNARY_OP(__half, usqr_f16, x*x)
-UNARY_OP(__half, usqrt_f16, sqrtg(x))
-UNARY_OP(__half, ugelu_f16, gelu_fwd(x))
-UNARY_OP(__half, ugelu_erf_f16, gelu_erf_fwd(x))
-UNARY_OP(__half, urelu_f16, relu_fwd(x))
-UNARY_OP1(__half, uelu_f16, elu_fwd(x, param))
-UNARY_OP(__half, usilu_f16, silu_fwd(x))
-UNARY_OP1(__half, upowf_f16, powg(x, param))
-UNARY_OP(__half, usign_f16, sign_(x))
-UNARY_OP(__half, usigmoid_f16, sigmoid_fwd(x))
+UNARY_OP_F16(ucopy_f16, x)
+UNARY_OP_F16(uneg_f16, -x)
+UNARY_OP_F16(urecip_f16, recipg(x))
+UNARY_OP_F16(uexp_f16, expg(x))
+UNARY_OP_F16(ulog_f16, logg(x))
+UNARY_OP_F16(usin_f16, sing(x))
+UNARY_OP_F16(ucos_f16, cosg(x))
+UNARY_OP_F16(utanh_f16, tanhg(x))
+UNARY_OP_F16(uerf_f16, erfg(x))
+UNARY_OP_F16(uceil_f16, ceilg(x))
+UNARY_OP_F16(ufloor_f16, floorg(x))
+UNARY_OP_F16(uround_f16, roundg(x))
+UNARY_OP_F16(unormcdf_f16, normcdfg(x))
+UNARY_OP_F16(uabs_f16, absg(x))
+UNARY_OP_F16(usqr_f16, x*x)
+UNARY_OP_F16(usqrt_f16, sqrtg(x))
+UNARY_OP_F16(ugelu_f16, gelu_fwd(x))
+UNARY_OP_F16(ugelu_erf_f16, gelu_erf_fwd(x))
+UNARY_OP_F16(urelu_f16, relu_fwd(x))
+UNARY_OP1_F16(uelu_f16, elu_fwd(x, param))
+UNARY_OP_F16(usilu_f16, silu_fwd(x))
+UNARY_OP1_F16(upowf_f16, powg(x, param))
+UNARY_OP_F16(usign_f16, sign_(x))
+UNARY_OP_F16(usigmoid_f16, sigmoid_fwd(x))
 #endif
 
 UNARY_OP(uint8_t, ucopy_u8, x)
