@@ -20,12 +20,14 @@
 #include <cassert>
 #include <cstring>
 #include "moe_utils.cuh"
-using namespace nvcuda::wmma;
-
-// Constants from original kernel
+// Constants for WMMA dimensions (used for tiling even if WMMA is disabled)
 constexpr int WMMA_M = 16;
 constexpr int WMMA_N = 16;
-constexpr int WMMA_K = 16; // This is fixed by the hardware instruction
+constexpr int WMMA_K = 16;
+
+#if __CUDA_ARCH__ >= 700
+using namespace nvcuda::wmma;
+#endif
 using VecT = float4;
 
 constexpr int VEC_SIZE = 8;
@@ -121,6 +123,7 @@ __forceinline__ __device__ void dequantize_block_warp(
  * @param size_k            Input feature dimension
  * @param gguf_dtype        GGUF quantization type ID (e.g., Q8_0)
 */
+#if __CUDA_ARCH__ >= 700
 template<typename T, int qk, typename block_q_t, int wrap_size>
 __global__ void moe_gemm_gguf_prefill_kernel(
     const T* __restrict__ input,
@@ -298,7 +301,9 @@ __global__ void moe_gemm_gguf_prefill_kernel(
         }
     } // end m_base loop
 }
+#endif
 
+#if __CUDA_ARCH__ >= 700
 #define LAUNCH_MOE_GGUF_PREFILL(DTYPE) \
     if (gguf_type == 0) {\
         dim3 block(32, WARPS_PER_BLOCK, 1);\
@@ -349,6 +354,9 @@ __global__ void moe_gemm_gguf_prefill_kernel(
             output, num_experts, topk, size_m, size_n, size_k, gguf_type\
         );\
     }
+#else
+#define LAUNCH_MOE_GGUF_PREFILL(DTYPE) (void)0;
+#endif
 
 
 extern "C" void moe_gemm_gguf_prefill(
@@ -411,9 +419,11 @@ extern "C" void moe_gemm_gguf_prefill(
     smem_bytes += C_sh_bytes;
     
     if (input_dtype == 0) {
+#if __CUDA_ARCH__ >= 700
         LAUNCH_MOE_GGUF_PREFILL(half);
+#endif
     } else {
-#ifndef NO_BF16_KERNEL
+#if __CUDA_ARCH__ >= 800
         LAUNCH_MOE_GGUF_PREFILL(nv_bfloat16);
 #endif
     }
