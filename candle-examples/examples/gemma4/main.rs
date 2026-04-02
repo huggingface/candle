@@ -243,7 +243,7 @@ fn main() -> Result<()> {
     let model_id = args
         .model_id
         .clone()
-        .unwrap_or_else(|| "google/gemma-4-12b-it".to_string());
+        .unwrap_or_else(|| "google/gemma-4-E4B-it".to_string());
     let repo = api.repo(Repo::with_revision(
         model_id,
         RepoType::Model,
