@@ -104,11 +104,14 @@ impl Model {
         })
     }
 
-    /// Encode an image through the vision encoder and connector.
-    /// Returns (B, image_seq_len, text_hidden_size) tensor.
+    /// Encode images through the vision encoder and connector.
+    /// Input: (num_images, 3, H, W) — multiple tiles from image splitting.
+    /// Returns (1, num_images * image_seq_len, text_hidden_size) — flattened for token merging.
     pub fn encode_image(&self, pixel_values: &Tensor) -> Result<Tensor> {
-        let vision_out = self.vision_model.forward(pixel_values)?;
-        self.connector.forward(&vision_out)
+        let vision_out = self.vision_model.forward(pixel_values)?; // (N, 1024, 768)
+        let connected = self.connector.forward(&vision_out)?; // (N, 64, 576)
+        let (n, seq, hidden) = connected.dims3()?;
+        connected.reshape((1, n * seq, hidden))
     }
 
     /// Initial forward pass: encode image, merge with text token embeddings

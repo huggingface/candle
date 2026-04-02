@@ -20,6 +20,14 @@ const START_OF_ROLE: u32 = 100264;
 const END_OF_ROLE: u32 = 100265;
 const END_OF_TEXT: u32 = 100257;
 
+// Row/col marker token IDs (non-contiguous in vocabulary)
+const ROW_COL_TOKENS: [[u32; 4]; 4] = [
+    [100258, 100259, 100261, 100262], // row 1: col 1-4
+    [100263, 100267, 100268, 100341], // row 2: col 1-4
+    [100342, 100343, 100344, 100345], // row 3: col 1-4
+    [100346, 100347, 100348, 100349], // row 4: col 1-4
+];
+
 #[derive(Parser, Debug)]
 #[command(about = "Granite-Docling: document image to structured markup")]
 struct Args {
@@ -50,43 +58,213 @@ struct Args {
     /// The prompt to use. Defaults to a generic document conversion prompt.
     #[arg(long)]
     prompt: Option<String>,
+
+    /// Disable image splitting (single 512x512 view of entire page).
+    #[arg(long)]
+    no_split: bool,
 }
 
-/// Load and preprocess an image following HF Idefics3ImageProcessor (no image splitting):
-///   1. Resize to 512x512 square (stretch, matching HF behavior)
-///   2. Rescale [0,255] -> [0,1], normalize with mean=0.5, std=0.5
-/// Returns (1, 3, 512, 512).
-fn load_image(path: &str, max_size: usize, device: &Device) -> Result<Tensor> {
-    let img = image::ImageReader::open(path)?
-        .decode()
-        .map_err(E::msg)?;
+// ---------------------------------------------------------------------------
+// Image preprocessing
+// ---------------------------------------------------------------------------
 
-    // Convert to RGB, then resize to exactly max_size x max_size (stretch to square)
-    let img = img.to_rgb8();
-    let (orig_w, orig_h) = (img.width(), img.height());
-    let img = image::imageops::resize(
-        &img,
-        max_size as u32,
-        max_size as u32,
-        image::imageops::FilterType::Lanczos3,
-    );
-    println!("Image: {}x{} -> {}x{}", orig_w, orig_h, max_size, max_size);
-
-    // Normalize: [0,255] -> [-1,1]
-    let mut data = vec![0.0f32; 3 * max_size * max_size];
-    for y in 0..max_size {
-        for x in 0..max_size {
-            let pixel = *img.get_pixel(x as u32, y as u32);
+/// Resize an RGB image to exactly (w, h) and normalize to [-1, 1].
+/// Returns tensor of shape (3, h, w).
+fn resize_and_normalize(
+    img: &image::RgbImage,
+    w: u32,
+    h: u32,
+) -> Vec<f32> {
+    let resized = image::imageops::resize(img, w, h, image::imageops::FilterType::Lanczos3);
+    let (w, h) = (w as usize, h as usize);
+    let mut data = vec![0.0f32; 3 * h * w];
+    for y in 0..h {
+        for x in 0..w {
+            let pixel = *resized.get_pixel(x as u32, y as u32);
             for c in 0..3 {
-                let idx = c * max_size * max_size + y * max_size + x;
-                data[idx] = (pixel[c] as f32 / 255.0 - 0.5) / 0.5;
+                data[c * h * w + y * w + x] = (pixel[c] as f32 / 255.0 - 0.5) / 0.5;
             }
         }
     }
-
-    let tensor = Tensor::from_vec(data, (1, 3, max_size, max_size), device)?;
-    Ok(tensor.to_dtype(DType::F32)?)
+    data
 }
+
+/// Split an image into tiles following HF Idefics3ImageProcessor:
+///   1. Resize so longest edge = max_long_edge (2048 default)
+///   2. Compute grid dimensions that fit in tile_size (512) tiles
+///   3. Resize to exact grid dimensions
+///   4. Extract tiles + one global view resized to tile_size x tile_size
+///
+/// Returns (num_tiles + 1 global, grid_rows, grid_cols, Vec<tile_data>)
+/// where each tile_data is (3, tile_size, tile_size) flattened.
+fn split_image(
+    img: &image::RgbImage,
+    tile_size: usize,
+    max_long_edge: usize,
+) -> (usize, usize, Vec<Vec<f32>>) {
+    let (orig_w, orig_h) = (img.width() as f64, img.height() as f64);
+    let tile = tile_size as f64;
+
+    // Step 1: compute target size (longest edge = max_long_edge)
+    let longest = orig_w.max(orig_h);
+    let scale = (max_long_edge as f64) / longest;
+    let scaled_w = (orig_w * scale).round();
+    let scaled_h = (orig_h * scale).round();
+
+    // Step 2: compute grid dimensions
+    let n_cols = (scaled_w / tile).ceil() as usize;
+    let n_rows = (scaled_h / tile).ceil() as usize;
+
+    // Step 3: resize to exact grid dimensions
+    let grid_w = (n_cols * tile_size) as u32;
+    let grid_h = (n_rows * tile_size) as u32;
+    let resized = image::imageops::resize(img, grid_w, grid_h, image::imageops::FilterType::Lanczos3);
+
+    println!(
+        "Image splitting: {}x{} -> {}x{} grid ({}x{} tiles = {} + 1 global)",
+        img.width(), img.height(), grid_w, grid_h, n_rows, n_cols, n_rows * n_cols,
+    );
+
+    // Step 4: extract tiles
+    let ts = tile_size as u32;
+    let mut tiles: Vec<Vec<f32>> = Vec::new();
+    for row in 0..n_rows {
+        for col in 0..n_cols {
+            let x0 = (col as u32) * ts;
+            let y0 = (row as u32) * ts;
+            let sub = image::imageops::crop_imm(&resized, x0, y0, ts, ts).to_image();
+            tiles.push(resize_and_normalize(&sub, ts, ts));
+        }
+    }
+
+    // Step 5: global view (entire image resized to tile_size x tile_size)
+    let global = resize_and_normalize(img, ts, ts);
+    tiles.push(global);
+
+    (n_rows, n_cols, tiles)
+}
+
+/// Load image without splitting — single 512x512 view.
+fn load_single(img: &image::RgbImage, tile_size: usize) -> Vec<Vec<f32>> {
+    println!(
+        "No splitting: {}x{} -> {}x{}",
+        img.width(), img.height(), tile_size, tile_size,
+    );
+    vec![resize_and_normalize(img, tile_size as u32, tile_size as u32)]
+}
+
+/// Stack tile data into a single tensor of shape (num_tiles, 3, H, W).
+fn tiles_to_tensor(
+    tiles: &[Vec<f32>],
+    tile_size: usize,
+    dtype: DType,
+    device: &Device,
+) -> Result<Tensor> {
+    let n = tiles.len();
+    let tile_elems = 3 * tile_size * tile_size;
+    let mut all_data = Vec::with_capacity(n * tile_elems);
+    for tile in tiles {
+        all_data.extend_from_slice(tile);
+    }
+    let tensor = Tensor::from_vec(all_data, (n, 3, tile_size, tile_size), device)?;
+    Ok(tensor.to_dtype(dtype)?)
+}
+
+// ---------------------------------------------------------------------------
+// Prompt construction
+// ---------------------------------------------------------------------------
+
+/// Build input_ids for split images following the Granite-Docling chat template:
+///   <|start_of_role|>user<|end_of_role|>
+///   <fake><row_1_col_1><image>*64 <fake><row_1_col_2><image>*64 ... \n
+///   <fake><row_2_col_1><image>*64 ... \n
+///   ...
+///   \n<fake><global-img><image>*64<fake>
+///   prompt text<|end_of_text|>\n
+///   <|start_of_role|>assistant<|end_of_role|>
+fn build_input_ids_split(
+    tokenizer: &Tokenizer,
+    prompt_text: &str,
+    image_seq_len: usize,
+    n_rows: usize,
+    n_cols: usize,
+) -> Result<Vec<u32>> {
+    let user_text = tokenizer.encode("user", false).map_err(E::msg)?;
+    let prompt_enc = tokenizer.encode(prompt_text, false).map_err(E::msg)?;
+    let assistant_text = tokenizer.encode("assistant", false).map_err(E::msg)?;
+    let newline_enc = tokenizer.encode("\n", false).map_err(E::msg)?;
+
+    let mut ids: Vec<u32> = Vec::new();
+
+    // <|start_of_role|>user<|end_of_role|>
+    ids.push(START_OF_ROLE);
+    ids.extend_from_slice(user_text.get_ids());
+    ids.push(END_OF_ROLE);
+
+    // Tile rows
+    for row in 0..n_rows {
+        for col in 0..n_cols {
+            ids.push(FAKE_TOKEN_AROUND_IMAGE);
+            ids.push(ROW_COL_TOKENS[row][col]);
+            ids.extend(std::iter::repeat(IMAGE_TOKEN_ID).take(image_seq_len));
+        }
+        // \n after each row
+        ids.extend_from_slice(newline_enc.get_ids());
+    }
+
+    // \n<fake><global-img><image>*64<fake>
+    ids.extend_from_slice(newline_enc.get_ids());
+    ids.push(FAKE_TOKEN_AROUND_IMAGE);
+    ids.push(GLOBAL_IMG);
+    ids.extend(std::iter::repeat(IMAGE_TOKEN_ID).take(image_seq_len));
+    ids.push(FAKE_TOKEN_AROUND_IMAGE);
+
+    // prompt text
+    ids.extend_from_slice(prompt_enc.get_ids());
+
+    // <|end_of_text|>\n
+    ids.push(END_OF_TEXT);
+    ids.extend_from_slice(newline_enc.get_ids());
+
+    // <|start_of_role|>assistant<|end_of_role|>
+    ids.push(START_OF_ROLE);
+    ids.extend_from_slice(assistant_text.get_ids());
+    ids.push(END_OF_ROLE);
+
+    Ok(ids)
+}
+
+/// Build input_ids for single image (no splitting).
+fn build_input_ids_single(
+    tokenizer: &Tokenizer,
+    prompt_text: &str,
+    image_seq_len: usize,
+) -> Result<Vec<u32>> {
+    let user_text = tokenizer.encode("user", false).map_err(E::msg)?;
+    let prompt_enc = tokenizer.encode(prompt_text, false).map_err(E::msg)?;
+    let assistant_text = tokenizer.encode("assistant", false).map_err(E::msg)?;
+    let newline_enc = tokenizer.encode("\n", false).map_err(E::msg)?;
+
+    let mut ids: Vec<u32> = Vec::new();
+    ids.push(START_OF_ROLE);
+    ids.extend_from_slice(user_text.get_ids());
+    ids.push(END_OF_ROLE);
+    ids.push(FAKE_TOKEN_AROUND_IMAGE);
+    ids.push(GLOBAL_IMG);
+    ids.extend(std::iter::repeat(IMAGE_TOKEN_ID).take(image_seq_len));
+    ids.push(FAKE_TOKEN_AROUND_IMAGE);
+    ids.extend_from_slice(prompt_enc.get_ids());
+    ids.push(END_OF_TEXT);
+    ids.extend_from_slice(newline_enc.get_ids());
+    ids.push(START_OF_ROLE);
+    ids.extend_from_slice(assistant_text.get_ids());
+    ids.push(END_OF_ROLE);
+    Ok(ids)
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -100,10 +278,11 @@ fn main() -> Result<()> {
     // Load config
     let config_path = repo.get("config.json")?;
     let config: Config = serde_json::from_reader(std::fs::File::open(&config_path)?)?;
+    let tile_size = config.vision_config.image_size;
+    let image_seq_len = config.image_seq_len();
     println!(
         "Config: vision {}x{} patch={}, text hidden={} layers={}, scale_factor={}",
-        config.vision_config.image_size,
-        config.vision_config.image_size,
+        tile_size, tile_size,
         config.vision_config.patch_size,
         config.text_config.hidden_size,
         config.text_config.num_hidden_layers,
@@ -122,57 +301,34 @@ fn main() -> Result<()> {
     println!("Model loaded.");
 
     // Load and preprocess image
-    let max_size = config.vision_config.image_size;
-    let pixel_values = load_image(&args.image, max_size, &device)?;
-    let pixel_values = pixel_values.to_dtype(dtype)?;
+    let raw_img = image::ImageReader::open(&args.image)?
+        .decode()
+        .map_err(E::msg)?
+        .to_rgb8();
+
+    let prompt_text = args.prompt.as_deref().unwrap_or("Convert this page to docling.");
+
+    let (pixel_values, input_ids) = if args.no_split {
+        let tiles = load_single(&raw_img, tile_size);
+        let pv = tiles_to_tensor(&tiles, tile_size, dtype, &device)?;
+        let ids = build_input_ids_single(&tokenizer, prompt_text, image_seq_len)?;
+        (pv, ids)
+    } else {
+        let (n_rows, n_cols, tiles) = split_image(&raw_img, tile_size, 2048);
+        let pv = tiles_to_tensor(&tiles, tile_size, dtype, &device)?;
+        let ids = build_input_ids_split(&tokenizer, prompt_text, image_seq_len, n_rows, n_cols)?;
+        (pv, ids)
+    };
+
+    let n_image_tokens = input_ids.iter().filter(|&&id| id == IMAGE_TOKEN_ID).count();
     println!(
-        "Image: {:?} -> tensor {:?}",
-        args.image,
-        pixel_values.shape()
+        "Input: {} tokens ({} image placeholders, {} tiles)",
+        input_ids.len(),
+        n_image_tokens,
+        pixel_values.dim(0)?,
     );
-
-    // Build input_ids matching the Granite-Docling chat template:
-    //   <|start_of_role|>user<|end_of_role|>
-    //   <fake_token_around_image><image>*N<fake_token_around_image>
-    //   Convert this page to docling.<|end_of_text|>\n
-    //   <|start_of_role|>assistant<|end_of_role|>
-    let prompt_text = args.prompt.as_deref().unwrap_or(
-        "Convert this page to docling.",
-    );
-    let image_seq_len = config.image_seq_len();
-
-    let user_text = tokenizer.encode("user", false).map_err(E::msg)?;
-    let prompt_enc = tokenizer.encode(prompt_text, false).map_err(E::msg)?;
-    let assistant_text = tokenizer.encode("assistant", false).map_err(E::msg)?;
-
-    let mut input_ids: Vec<u32> = Vec::new();
-    // <|start_of_role|>user<|end_of_role|>
-    input_ids.push(START_OF_ROLE);
-    input_ids.extend_from_slice(user_text.get_ids());
-    input_ids.push(END_OF_ROLE);
-    // <fake_token_around_image><global-img><image>*64<fake_token_around_image>
-    input_ids.push(FAKE_TOKEN_AROUND_IMAGE);
-    input_ids.push(GLOBAL_IMG);
-    input_ids.extend(std::iter::repeat(IMAGE_TOKEN_ID).take(image_seq_len));
-    input_ids.push(FAKE_TOKEN_AROUND_IMAGE);
-    // prompt text
-    input_ids.extend_from_slice(prompt_enc.get_ids());
-    // <|end_of_text|>\n
-    input_ids.push(END_OF_TEXT);
-    // Encode the literal newline that the template adds after <|end_of_text|>
-    let newline_enc = tokenizer.encode("\n", false).map_err(E::msg)?;
-    input_ids.extend_from_slice(newline_enc.get_ids());
-    // <|start_of_role|>assistant<|end_of_role|>
-    input_ids.push(START_OF_ROLE);
-    input_ids.extend_from_slice(assistant_text.get_ids());
-    input_ids.push(END_OF_ROLE);
 
     let input_ids_tensor = Tensor::new(&input_ids[..], &device)?.unsqueeze(0)?;
-    println!(
-        "Input: {} total tokens ({} image placeholders)",
-        input_ids.len(),
-        image_seq_len,
-    );
 
     // Initial forward pass with image
     let logits = model.setup(&pixel_values, &input_ids_tensor)?;
@@ -184,11 +340,8 @@ fn main() -> Result<()> {
     let mut logits_processor =
         candle_transformers::generation::LogitsProcessor::new(42, temperature, None);
 
-    // Get first generated token from last position
     let logits_last = logits.squeeze(0)?.get(logits.dim(1)? - 1)?;
-
     let mut token = logits_processor.sample(&logits_last)?;
-
     let mut generated = vec![token];
     print_token(&tokenizer, token);
 
