@@ -213,7 +213,8 @@ impl QMetalStorage {
             2 => dst_shape[0],
             n => crate::bail!("Invalid rank {n} for quantized matmul metal"),
         };
-        let last_k = dst_shape.pop().unwrap();
+        let last_k = dst_shape.pop()
+            .ok_or_else(|| crate::Error::Msg("quantized mv: empty dst_shape".to_string()))?;
         if last_k != k {
             crate::bail!("input tensor {layout:?} incompatible with {:?}", self_shape)
         }
@@ -275,7 +276,8 @@ impl QMetalStorage {
             return self.fwd_mv(self_shape, storage, layout);
         }
 
-        let last_k = dst_shape.pop().unwrap();
+        let last_k = dst_shape.pop()
+            .ok_or_else(|| crate::Error::Msg("quantized mm: empty dst_shape".to_string()))?;
         if last_k != k {
             crate::bail!("input tensor {layout:?} incompatible with {:?}", self_shape)
         }
@@ -285,7 +287,9 @@ impl QMetalStorage {
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
         let encoder = device.command_encoder()?;
 
-        assert_eq!(storage.dtype(), DType::F32);
+        if storage.dtype() != DType::F32 {
+            crate::bail!("quantized mm: expected F32 input storage, got {:?}", storage.dtype())
+        }
 
         if self_shape.rank() > 4 {
             crate::bail!("weight rank ({}) must be <= 4", self_shape.rank())

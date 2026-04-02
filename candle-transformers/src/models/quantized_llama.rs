@@ -539,6 +539,19 @@ impl ModelWeights {
         let _enter = self.span_output.enter();
         self.output.forward(&x)
     }
+
+    /// Clear all per-layer KV caches and the mask cache.
+    ///
+    /// Required as an **inherent** method so that the `impl_causal_lm!` macro
+    /// can call it without recursing into the trait method.  Without this, the
+    /// macro-generated trait impl calls itself infinitely → stack overflow →
+    /// SIGABRT on iOS (uncatchable by `catch_unwind`).
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.kv_cache = None;
+        }
+        self.masks.clear();
+    }
 }
 
 crate::impl_causal_lm!(ModelWeights, "llama");
