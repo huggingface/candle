@@ -61,10 +61,6 @@ impl TextConfig {
     pub fn head_dim(&self) -> usize {
         self.head_dim
     }
-
-    pub fn num_kv_groups(&self) -> usize {
-        self.num_attention_heads / self.num_key_value_heads
-    }
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]

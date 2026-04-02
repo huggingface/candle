@@ -149,7 +149,7 @@ impl VisionEmbeddings {
         patch_size: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let num_patches_per_side = image_size / patch_size;
+        let _num_patches_per_side = image_size / patch_size;
         // Patch embedding stored as (patch_size, patch_size, 3, hidden_size) in GGUF
         let patch_embedding_weight = vb
             .get_no_shape("patch_embd.weight")?
@@ -181,7 +181,6 @@ impl VisionEmbeddings {
                 .contiguous()?
         };
 
-        let _ = num_patches_per_side; // used implicitly via position_embedding shape
         Ok(Self {
             patch_embedding_weight,
             patch_embedding_bias,
@@ -223,33 +222,25 @@ pub struct VisionModel {
 }
 
 impl VisionModel {
-    pub fn new(
-        hidden_size: usize,
-        intermediate_size: usize,
-        num_hidden_layers: usize,
-        num_attention_heads: usize,
-        image_size: usize,
-        patch_size: usize,
-        layer_norm_eps: f64,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    pub fn new(cfg: &crate::models::granite_docling::config::QuantizedVisionConfig, vb: VarBuilder) -> Result<Self> {
+        let hidden_size = cfg.hidden_size;
         let embeddings =
-            VisionEmbeddings::new(hidden_size, image_size, patch_size, vb.clone())?;
+            VisionEmbeddings::new(hidden_size, cfg.image_size, cfg.patch_size, vb.clone())?;
 
         let vb_layers = vb.pp("blk");
-        let mut layers = Vec::with_capacity(num_hidden_layers);
-        for i in 0..num_hidden_layers {
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        for i in 0..cfg.num_hidden_layers {
             layers.push(EncoderLayer::new(
                 hidden_size,
-                intermediate_size,
-                num_attention_heads,
-                layer_norm_eps,
+                cfg.intermediate_size,
+                cfg.num_attention_heads,
+                cfg.layer_norm_eps,
                 vb_layers.pp(i),
             )?);
         }
 
         let post_layernorm =
-            quantized_nn::layer_norm(hidden_size, layer_norm_eps, vb.pp("post_ln"))?;
+            quantized_nn::layer_norm(hidden_size, cfg.layer_norm_eps, vb.pp("post_ln"))?;
 
         Ok(Self {
             embeddings,

@@ -17,14 +17,80 @@ use candle_nn::{linear_no_bias, VarBuilder};
 use config::Config;
 use text::TextModel;
 
+/// Idefics3 pixel shuffle: spatially downsample vision tokens.
+///   (B, H*W, D) → (B, H/s * W/s, D * s²)
+/// Shared by both f32 and quantized paths.
+pub fn pixel_shuffle(xs: &Tensor, scale_factor: usize) -> Result<Tensor> {
+    let (b, seq_len, dim) = xs.dims3()?;
+    let s = scale_factor;
+    let h = (seq_len as f64).sqrt() as usize;
+    let w = h;
+    if h * w != seq_len {
+        candle::bail!("pixel shuffle requires square patch grid, got {seq_len} patches (sqrt={h})");
+    }
+    if h % s != 0 {
+        candle::bail!("patch grid size {h} not divisible by scale_factor {s}");
+    }
+
+    let xs = xs.reshape((b, h, w, dim))?;
+    let xs = xs.reshape((b, h, w / s, dim * s))?;
+    let xs = xs.permute((0, 2, 1, 3))?;
+    let xs = xs.reshape((b, h / s, w / s, dim * s * s))?;
+    xs.reshape((b, (h / s) * (w / s), dim * s * s))
+}
+
+/// Replace `<image>` placeholder token embeddings with projected vision features.
+/// Identifies contiguous runs of image/text tokens and uses sliced Tensor::cat
+/// instead of per-token allocation.
+/// Shared by both f32 and quantized paths.
+pub fn merge_image_tokens(
+    text_embeds: &Tensor,
+    image_features: &Tensor,
+    input_ids: &Tensor,
+    image_token_id: u32,
+) -> Result<Tensor> {
+    let (b, seq_len, _hidden) = text_embeds.dims3()?;
+    let input_ids_vec = input_ids.flatten_all()?.to_vec1::<u32>()?;
+    let text_embeds = text_embeds.to_dtype(image_features.dtype())?;
+
+    let mut batch_results = Vec::with_capacity(b);
+    for batch_idx in 0..b {
+        let ids = &input_ids_vec[batch_idx * seq_len..(batch_idx + 1) * seq_len];
+        let mut segments: Vec<Tensor> = Vec::new();
+        let mut img_idx = 0;
+        let mut pos = 0;
+
+        while pos < seq_len {
+            if ids[pos] == image_token_id {
+                // Count contiguous image tokens
+                let start = pos;
+                while pos < seq_len && ids[pos] == image_token_id {
+                    pos += 1;
+                }
+                let count = pos - start;
+                let available = count.min(image_features.dim(1)? - img_idx);
+                if available > 0 {
+                    segments.push(image_features.i((batch_idx, img_idx..img_idx + available))?);
+                    img_idx += available;
+                }
+            } else {
+                // Count contiguous text tokens
+                let start = pos;
+                while pos < seq_len && ids[pos] != image_token_id {
+                    pos += 1;
+                }
+                segments.push(text_embeds.i((batch_idx, start..pos))?);
+            }
+        }
+
+        let batch_embeds = Tensor::cat(&segments, 0)?.unsqueeze(0)?;
+        batch_results.push(batch_embeds);
+    }
+    Tensor::cat(&batch_results, 0)
+}
+
 // ---------------------------------------------------------------------------
-// Pixel Shuffle Connector
-//
-// Spatially downsamples vision tokens by rearranging patch features:
-//   (B, H*W, D) -> reshape -> (B, H/s * W/s, D * s^2) -> linear -> (B, N, text_hidden)
-//
-// For granite-docling-258M with scale_factor=4:
-//   (B, 1024, 768) -> (B, 64, 12288) -> linear -> (B, 64, 576)
+// Connector (f32 path)
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
@@ -44,40 +110,17 @@ impl Connector {
             scale_factor: cfg.scale_factor,
         })
     }
-
-    /// Pixel shuffle matching HuggingFace Idefics3Connector.pixel_shuffle exactly:
-    ///   (B, H*W, D) → view(B, H, W, D) → view(B, H, W/s, D*s)
-    ///   → permute(0,2,1,3) → reshape(B, H/s, W/s, D*s²) → view(B, N, D*s²)
-    fn pixel_shuffle(&self, xs: &Tensor) -> Result<Tensor> {
-        let (b, seq_len, dim) = xs.dims3()?;
-        let s = self.scale_factor;
-        let h = (seq_len as f64).sqrt() as usize;
-        let w = h;
-        assert_eq!(h * w, seq_len, "pixel shuffle requires square patch grid");
-        assert_eq!(h % s, 0, "patch grid must be divisible by scale_factor");
-
-        // (B, H*W, D) → (B, H, W, D)
-        let xs = xs.reshape((b, h, w, dim))?;
-        // (B, H, W, D) → (B, H, W/s, D*s) — merge s adjacent width patches
-        let xs = xs.reshape((b, h, w / s, dim * s))?;
-        // (B, H, W/s, D*s) → (B, W/s, H, D*s) — transpose H and W/s
-        let xs = xs.permute((0, 2, 1, 3))?;
-        // (B, W/s, H, D*s) → (B, H/s, W/s, D*s²) — merge s adjacent height rows
-        let xs = xs.reshape((b, h / s, w / s, dim * s * s))?;
-        // (B, H/s, W/s, D*s²) → (B, N, D*s²)
-        xs.reshape((b, (h / s) * (w / s), dim * s * s))
-    }
 }
 
 impl Module for Connector {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.pixel_shuffle(xs)?;
+        let xs = pixel_shuffle(xs, self.scale_factor)?;
         xs.apply(&self.modality_projection)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Idefics3ForConditionalGeneration
+// Idefics3ForConditionalGeneration (f32 path)
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
@@ -92,7 +135,7 @@ impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vision_model = siglip::VisionModel::new(
             &cfg.vision_config,
-            false, // no pooling head — we need all patch tokens
+            false,
             vb.pp("model.vision_model"),
         )?;
         let connector = Connector::new(cfg, vb.pp("model.connector"))?;
@@ -105,70 +148,24 @@ impl Model {
         })
     }
 
-    /// Encode images through the vision encoder and connector.
-    /// Input: (num_images, 3, H, W) — multiple tiles from image splitting.
-    /// Returns (1, num_images * image_seq_len, text_hidden_size) — flattened for token merging.
     pub fn encode_image(&self, pixel_values: &Tensor) -> Result<Tensor> {
-        let vision_out = self.vision_model.forward(pixel_values)?; // (N, 1024, 768)
-        let connected = self.connector.forward(&vision_out)?; // (N, 64, 576)
+        let vision_out = self.vision_model.forward(pixel_values)?;
+        let connected = self.connector.forward(&vision_out)?;
         let (n, seq, hidden) = connected.dims3()?;
         connected.reshape((1, n * seq, hidden))
     }
 
-    /// Initial forward pass: encode image, merge with text token embeddings
-    /// at <image> token positions, run through decoder.
-    /// Returns logits (B, seq, vocab).
     pub fn setup(&mut self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<Tensor> {
         self.text_model.clear_kv_cache();
-
         let image_features = self.encode_image(pixel_values)?;
         let text_embeds = self.text_model.embed_tokens().forward(input_ids)?;
-
-        // Replace <image> placeholder tokens with actual image embeddings
         let input_embeds =
-            self.merge_image_tokens(&text_embeds, &image_features, input_ids)?;
-
+            merge_image_tokens(&text_embeds, &image_features, input_ids, self.image_token_id)?;
         self.text_model.forward_embeds(&input_embeds)
     }
 
-    /// Subsequent forward passes during autoregressive generation (no image).
-    /// Returns logits (B, 1, vocab).
     pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         self.text_model.forward(input_ids)
-    }
-
-    /// Replace <image> token embeddings with projected vision features.
-    /// Builds a new embedding tensor where <image> placeholder positions
-    /// are filled with the corresponding projected vision tokens.
-    fn merge_image_tokens(
-        &self,
-        text_embeds: &Tensor,
-        image_features: &Tensor,
-        input_ids: &Tensor,
-    ) -> Result<Tensor> {
-        let (b, seq_len, _hidden) = text_embeds.dims3()?;
-        let image_seq_len = image_features.dim(1)?;
-        let input_ids_vec = input_ids.flatten_all()?.to_vec1::<u32>()?;
-        let text_embeds = text_embeds.to_dtype(image_features.dtype())?;
-
-        let mut batch_results = Vec::with_capacity(b);
-        for batch_idx in 0..b {
-            let mut img_idx = 0;
-            let mut tokens = Vec::with_capacity(seq_len);
-            for pos in 0..seq_len {
-                if input_ids_vec[batch_idx * seq_len + pos] == self.image_token_id
-                    && img_idx < image_seq_len
-                {
-                    tokens.push(image_features.i((batch_idx, img_idx))?.unsqueeze(0)?);
-                    img_idx += 1;
-                } else {
-                    tokens.push(text_embeds.i((batch_idx, pos))?.unsqueeze(0)?);
-                }
-            }
-            let batch_embeds = Tensor::cat(&tokens, 0)?.unsqueeze(0)?;
-            batch_results.push(batch_embeds);
-        }
-        Tensor::cat(&batch_results, 0)
     }
 
     pub fn clear_kv_cache(&mut self) {

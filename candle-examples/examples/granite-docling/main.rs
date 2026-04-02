@@ -203,14 +203,19 @@ fn build_input_ids_split(
     let assistant_text = tokenizer.encode("assistant", false).map_err(E::msg)?;
     let newline_enc = tokenizer.encode("\n", false).map_err(E::msg)?;
 
+    if n_rows > 4 || n_cols > 4 {
+        anyhow::bail!(
+            "Image splits into {n_rows}x{n_cols} grid, but max supported is 4x4. \
+             Use a lower resolution image or --no-split."
+        );
+    }
+
     let mut ids: Vec<u32> = Vec::new();
 
-    // <|start_of_role|>user<|end_of_role|>
     ids.push(START_OF_ROLE);
     ids.extend_from_slice(user_text.get_ids());
     ids.push(END_OF_ROLE);
 
-    // Tile rows
     for row in 0..n_rows {
         for col in 0..n_cols {
             ids.push(FAKE_TOKEN_AROUND_IMAGE);
@@ -322,22 +327,24 @@ fn main() -> Result<()> {
         println!("  Text:   {text_path:?}");
         println!("  Vision: {vision_path:?}");
 
+        // Read each GGUF once: extract metadata for config + load tensors for VarBuilder
+        use candle::quantized::gguf_file;
         use candle_transformers::quantized_var_builder::VarBuilder as QVarBuilder;
-        let text_vb = QVarBuilder::from_gguf(&text_path, &device)?;
-        let vision_vb = QVarBuilder::from_gguf(&vision_path, &device)?;
 
-        // Read configs from GGUF metadata
-        let text_gguf = {
+        let (text_vb, text_cfg) = {
             let mut f = std::fs::File::open(&text_path)?;
-            candle::quantized::gguf_file::Content::read(&mut f)?
+            let content = gguf_file::Content::read(&mut f)?;
+            let cfg = TextConfig::from_gguf(&content.metadata)?;
+            let vb = QVarBuilder::from_gguf(&text_path, &device)?;
+            (vb, cfg)
         };
-        let vision_gguf = {
+        let (vision_vb, vision_cfg) = {
             let mut f = std::fs::File::open(&vision_path)?;
-            candle::quantized::gguf_file::Content::read(&mut f)?
+            let content = gguf_file::Content::read(&mut f)?;
+            let cfg = QuantizedVisionConfig::from_gguf(&content.metadata)?;
+            let vb = QVarBuilder::from_gguf(&vision_path, &device)?;
+            (vb, cfg)
         };
-
-        let text_cfg = TextConfig::from_gguf(&text_gguf.metadata)?;
-        let vision_cfg = QuantizedVisionConfig::from_gguf(&vision_gguf.metadata)?;
 
         let tile_size = vision_cfg.image_size;
         let image_seq_len = vision_cfg.image_seq_len();

@@ -5,10 +5,11 @@
 //! - Vision mmproj GGUF (`v.blk.*` + `mm.model.fc.*` tensor names)
 
 use super::config::{QuantizedVisionConfig, TextConfig};
+use super::{merge_image_tokens, pixel_shuffle};
 use crate::models::quantized_siglip;
 use crate::quantized_nn::{self, Embedding, Linear, RmsNorm};
 use crate::quantized_var_builder::VarBuilder;
-use candle::{DType, Device, IndexOp, Module, Result, Tensor};
+use candle::{DType, Device, Module, Result, Tensor};
 
 // ---------------------------------------------------------------------------
 // Pixel Shuffle Connector
@@ -31,24 +32,11 @@ impl Connector {
             scale_factor: cfg.scale_factor,
         })
     }
-
-    fn pixel_shuffle(&self, xs: &Tensor) -> Result<Tensor> {
-        let (b, seq_len, dim) = xs.dims3()?;
-        let s = self.scale_factor;
-        let h = (seq_len as f64).sqrt() as usize;
-        let w = h;
-
-        let xs = xs.reshape((b, h, w, dim))?;
-        let xs = xs.reshape((b, h, w / s, dim * s))?;
-        let xs = xs.permute((0, 2, 1, 3))?;
-        let xs = xs.reshape((b, h / s, w / s, dim * s * s))?;
-        xs.reshape((b, (h / s) * (w / s), dim * s * s))
-    }
 }
 
 impl Module for Connector {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.pixel_shuffle(xs)?;
+        let xs = pixel_shuffle(xs, self.scale_factor)?;
         xs.apply(&self.modality_projection)
     }
 }
@@ -423,16 +411,7 @@ impl Model {
         text_cfg: &TextConfig,
         image_token_id: u32,
     ) -> Result<Self> {
-        let vision_model = quantized_siglip::VisionModel::new(
-            vision_cfg.hidden_size,
-            vision_cfg.intermediate_size,
-            vision_cfg.num_hidden_layers,
-            vision_cfg.num_attention_heads,
-            vision_cfg.image_size,
-            vision_cfg.patch_size,
-            vision_cfg.layer_norm_eps,
-            vision_vb.pp("v"),
-        )?;
+        let vision_model = quantized_siglip::VisionModel::new(vision_cfg, vision_vb.pp("v"))?;
 
         let connector = Connector::new(vision_cfg, vision_vb.pp("mm"))?;
         let text_model = TextModel::new(text_cfg, text_vb)?;
@@ -454,49 +433,15 @@ impl Model {
 
     pub fn setup(&mut self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<Tensor> {
         self.text_model.clear_kv_cache();
-
         let image_features = self.encode_image(pixel_values)?;
         let text_embeds = self.text_model.embed_tokens().forward(input_ids)?;
-
         let input_embeds =
-            self.merge_image_tokens(&text_embeds, &image_features, input_ids)?;
-
+            merge_image_tokens(&text_embeds, &image_features, input_ids, self.image_token_id)?;
         self.text_model.forward_embeds(&input_embeds)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         self.text_model.forward(input_ids)
-    }
-
-    fn merge_image_tokens(
-        &self,
-        text_embeds: &Tensor,
-        image_features: &Tensor,
-        input_ids: &Tensor,
-    ) -> Result<Tensor> {
-        let (b, seq_len, _hidden) = text_embeds.dims3()?;
-        let image_seq_len = image_features.dim(1)?;
-        let input_ids_vec = input_ids.flatten_all()?.to_vec1::<u32>()?;
-        let text_embeds = text_embeds.to_dtype(image_features.dtype())?;
-
-        let mut batch_results = Vec::with_capacity(b);
-        for batch_idx in 0..b {
-            let mut img_idx = 0;
-            let mut tokens = Vec::with_capacity(seq_len);
-            for pos in 0..seq_len {
-                if input_ids_vec[batch_idx * seq_len + pos] == self.image_token_id
-                    && img_idx < image_seq_len
-                {
-                    tokens.push(image_features.i((batch_idx, img_idx))?.unsqueeze(0)?);
-                    img_idx += 1;
-                } else {
-                    tokens.push(text_embeds.i((batch_idx, pos))?.unsqueeze(0)?);
-                }
-            }
-            let batch_embeds = Tensor::cat(&tokens, 0)?.unsqueeze(0)?;
-            batch_results.push(batch_embeds);
-        }
-        Tensor::cat(&batch_results, 0)
     }
 
     pub fn clear_kv_cache(&mut self) {
