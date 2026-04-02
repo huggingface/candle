@@ -178,7 +178,7 @@ inline __device__ uint16_t float_to_half(float f) {
 }
 
 inline __device__ void from_float(half& dst, float src) {
-  dst = static_cast<half>(float_to_half(src));
+  dst = __float2half(src);
 }
 
 inline __device__ void from_float(__nv_bfloat16& dst, float src) {
