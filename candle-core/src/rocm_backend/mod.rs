@@ -1,9 +1,9 @@
 use crate::backend::BackendStorage;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, WithDType};
-use candle_rocm_kernels::source::Source;
+use candle_rocm_kernels::kernel::{BinaryKernel, KernelSource, UnaryKernel};
 use half::{bf16, f16};
-use rocm_rs::hip::{bindings, DeviceMemory};
+use rocm_rs::hip::bindings;
 use rocm_rs::rocblas::{self, level3::GemmStridedBatchedType, types::Operation};
 
 mod device;
@@ -556,6 +556,7 @@ impl<U: crate::op::UnaryOpT> Map1 for U {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
+        use candle_rocm_kernels::kernel::UnaryKernel;
         let shape = layout.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -565,7 +566,7 @@ impl<U: crate::op::UnaryOpT> Map1 for U {
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
         let module = kernel_manager
-            .get_or_compile_module(Source::Unary)
+            .get_or_load(UnaryKernel::NAME, UnaryKernel::CODE)
             .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
         let func_name = kernel_name::<T>(U::KERNEL);
@@ -615,6 +616,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         rhs_l: &Layout,
         dev: &RocmDevice,
     ) -> Result<SendSyncDeviceMemory<T>> {
+        use candle_rocm_kernels::kernel::BinaryKernel;
         let shape = lhs_l.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -624,7 +626,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
         let module = kernel_manager
-            .get_or_compile_module(Source::Binary)
+            .get_or_load(BinaryKernel::NAME, BinaryKernel::CODE)
             .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
         let func_name = kernel_name::<T>(U::KERNEL);
@@ -694,6 +696,7 @@ impl Affine {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
+        use candle_rocm_kernels::kernel::AffineKernel;
         let shape = layout.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -703,7 +706,7 @@ impl Affine {
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
         let module = kernel_manager
-            .get_or_compile_module(Source::Affine)
+            .get_or_load(AffineKernel::NAME, AffineKernel::CODE)
             .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
         let func_name = kernel_name::<T>("affine");
@@ -776,6 +779,7 @@ impl Powf {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
+        use candle_rocm_kernels::kernel::UnaryKernel;
         let shape = layout.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -785,7 +789,7 @@ impl Powf {
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
         let module = kernel_manager
-            .get_or_compile_module(Source::Unary)
+            .get_or_load(UnaryKernel::NAME, UnaryKernel::CODE)
             .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
         let func_name = kernel_name::<T>("upowf");
@@ -856,6 +860,7 @@ impl Elu {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
+        use candle_rocm_kernels::kernel::UnaryKernel;
         let shape = layout.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
@@ -865,7 +870,7 @@ impl Elu {
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
         let module = kernel_manager
-            .get_or_compile_module(Source::Unary)
+            .get_or_load(UnaryKernel::NAME, UnaryKernel::CODE)
             .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
         let func_name = kernel_name::<T>("uelu");
@@ -967,6 +972,7 @@ impl FastReduce<'_> {
         dev: &RocmDevice,
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>> {
+        use candle_rocm_kernels::kernel::ReduceKernel;
         let src_dims = layout.shape().dims();
         let src_el: usize = src_dims.iter().product();
 
@@ -992,7 +998,7 @@ impl FastReduce<'_> {
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
         let module = kernel_manager
-            .get_or_compile_module(Source::Reduce)
+            .get_or_load(ReduceKernel::NAME, ReduceKernel::CODE)
             .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
         let (name, _return_index) = match self.1 {
@@ -1439,7 +1445,10 @@ impl BackendStorage for RocmStorage {
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
         let module = kernel_manager
-            .get_or_compile_module(Source::Unary)
+            .get_or_load(
+                candle_rocm_kernels::kernel::UnaryKernel::NAME,
+                candle_rocm_kernels::kernel::UnaryKernel::CODE,
+            )
             .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
         let (grid, block) = launch_config(el_count);
@@ -1565,7 +1574,10 @@ impl BackendStorage for RocmStorage {
             .lock()
             .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
         let module = kernel_manager
-            .get_or_compile_module(Source::Fill)
+            .get_or_load(
+                candle_rocm_kernels::kernel::FillKernel::NAME,
+                candle_rocm_kernels::kernel::FillKernel::CODE,
+            )
             .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
         let (grid, block) = launch_config(el_count);

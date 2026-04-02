@@ -1,6 +1,6 @@
 use crate::backend::BackendDevice;
 use crate::{CpuStorage, DType, Result, Shape};
-use candle_rocm_kernels::KernelManager;
+use candle_rocm_kernels::compile::KernelCache;
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -29,7 +29,7 @@ pub struct RocmDevice {
     rocrand: Arc<Mutex<SendSyncPseudoRng>>,
     seed_value: Arc<RwLock<u64>>,
     pub(crate) blas: Arc<SendSyncRocblasHandle>,
-    kernel_manager: Arc<Mutex<KernelManager>>,
+    kernel_manager: Arc<Mutex<KernelCache>>,
 }
 
 impl std::fmt::Debug for RocmDevice {
@@ -56,8 +56,8 @@ impl RocmDevice {
             .map_err(|e| RocmError::Rocblas(e.to_string()))?;
 
         let kernel_manager =
-            Arc::new(Mutex::new(KernelManager::new(&device).map_err(|e| {
-                crate::Error::Msg(format!("Failed to create kernel manager: {}", e))
+            Arc::new(Mutex::new(KernelCache::new(&device).map_err(|e| {
+                crate::Error::Msg(format!("Failed to create kernel cache: {}", e))
             })?));
 
         Ok(Self {
@@ -111,7 +111,7 @@ impl RocmDevice {
             .map_err(|e| crate::Error::Msg(format!("Synchronize failed: {}", e)))
     }
 
-    pub(crate) fn kernel_manager(&self) -> &std::sync::Mutex<KernelManager> {
+    pub(crate) fn kernel_manager(&self) -> &std::sync::Mutex<KernelCache> {
         &self.kernel_manager
     }
 }

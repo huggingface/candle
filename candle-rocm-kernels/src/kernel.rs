@@ -25,6 +25,27 @@ impl KernelSource for UnaryKernel {
     const CODE: &'static str = include_str!("kernels/unary.hip");
 }
 
+/// Affine operations kernel source
+pub struct AffineKernel;
+impl KernelSource for AffineKernel {
+    const NAME: &'static str = "affine";
+    const CODE: &'static str = include_str!("kernels/affine.hip");
+}
+
+/// Fill operations kernel source
+pub struct FillKernel;
+impl KernelSource for FillKernel {
+    const NAME: &'static str = "fill";
+    const CODE: &'static str = include_str!("kernels/fill.hip");
+}
+
+/// Reduce operations kernel source
+pub struct ReduceKernel;
+impl KernelSource for ReduceKernel {
+    const NAME: &'static str = "reduce";
+    const CODE: &'static str = include_str!("kernels/reduce.hip");
+}
+
 /// Binary operation types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {

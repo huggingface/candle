@@ -7,6 +7,9 @@ pub mod wrappers;
 
 pub use compile::KernelCache;
 pub use error::KernelError;
-pub use kernel::{BinaryKernel, BinaryOp, DType, KernelSource, UnaryKernel, UnaryOp};
+pub use kernel::{
+    AffineKernel, BinaryKernel, BinaryOp, DType, FillKernel, KernelSource, ReduceKernel,
+    UnaryKernel, UnaryOp,
+};
 pub use ops::OpLauncher;
 pub use utils::BufferOffset;
