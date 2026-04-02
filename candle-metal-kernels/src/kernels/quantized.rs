@@ -79,8 +79,10 @@ pub fn call_quantized_matmul_mv_t(
             (nth0, nth1, align)
         }
         GgmlDType::Q4K => {
-            let nth0 = 4;
-            let nth1 = 8;
+            // 2 simdgroups × 32 threads = 64 threads per threadgroup
+            // Each simdgroup processes N_DST=2 rows, total 4 rows per threadgroup
+            let nth0 = 32;
+            let nth1 = 2;
             let align = 4;
             (nth0, nth1, align)
         }
@@ -342,7 +344,7 @@ pub fn call_fused_moe_swiglu(
     let ne0 = n_out as i64;
     let nb1 = (n_out * 4) as u64;
 
-    let (nth0, nth1, align) = (4usize, 8usize, 4usize); // Q4K tuning
+    let (nth0, nth1, align) = (32usize, 2usize, 4usize); // Q4K: 2 simdgroups × 32 threads
 
     let tg = MTLSize {
         width: divide(n_out, align),
