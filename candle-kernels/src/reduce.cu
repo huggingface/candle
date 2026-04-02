@@ -151,17 +151,11 @@ fast_sum(const size_t src_numel, const size_t el_to_sum_per_block,
 
 static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
     unsigned int mask = __activemask();
+    int lane_id = threadIdx.x & (WARP_SIZE - 1);
 #pragma unroll
     for (int m = 16; m > 0; m >>= 1) {
         float2 other = make_float2(__shfl_xor_sync(mask, a.x, m, 32), __shfl_xor_sync(mask, a.y, m, 32));
-        // We need a way to know the logical width of this warp reduction.
-        // In layernorm, it's block_size. But warp_reduce_sum doesn't know block_size.
-        // However, __shfl_xor_sync with a mask of active threads will return undefined
-        // if the target is not in the mask.
-        // If we assume a contiguous block of threads [0, block_size), we can use:
-        // if ((tid ^ m) < block_size) ... but we don't have block_size.
-        // Actually, if we use the mask, we can check if the bit is set.
-        if ((mask >> (threadIdx.x ^ m)) & 1) {
+        if ((mask >> (lane_id ^ m)) & 1) {
             a.x += other.x;
             a.y += other.y;
         }
@@ -171,10 +165,11 @@ static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
 
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
     unsigned int mask = __activemask();
+    int lane_id = threadIdx.x & (WARP_SIZE - 1);
 #pragma unroll
     for (int m = 16; m > 0; m >>= 1) {
         float other = __shfl_xor_sync(mask, x, m, 32);
-        if ((mask >> (threadIdx.x ^ m)) & 1) {
+        if ((mask >> (lane_id ^ m)) & 1) {
             x += other;
         }
     }
@@ -200,13 +195,14 @@ __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta,
     mean_var = warp_reduce_sum(mean_var);
     if (block_size > WARP_SIZE) {
         __shared__ float2 s_sum[32];
+        const int n_warps = (block_size + WARP_SIZE - 1) / WARP_SIZE;
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
             s_sum[warp_id] = mean_var;
         }
         __syncthreads();
-        mean_var = s_sum[lane_id];
+        mean_var = lane_id < n_warps ? s_sum[lane_id] : make_float2(0.f, 0.f);
         mean_var = warp_reduce_sum(mean_var);
     }
 
@@ -262,13 +258,14 @@ __device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, 
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
         __shared__ float s_sum[32];
+        const int n_warps = (block_size + WARP_SIZE - 1) / WARP_SIZE;
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
             s_sum[warp_id] = tmp;
         }
         __syncthreads();
-        tmp = s_sum[lane_id];
+        tmp = lane_id < n_warps ? s_sum[lane_id] : 0.f;
         tmp = warp_reduce_sum(tmp);
     }
 
