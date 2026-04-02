@@ -12,15 +12,17 @@ use super::prng::Prng;
 /// Configuration for QJL quantization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QjlConfig {
-    /// Dimension of the key/query vectors (head dimension)
+    /// Original dimension of the key/query vectors (head dimension d)
+    pub original_dim: usize,
+    /// Projected dimension m (number of random projections, typically d/8)
     pub dim: usize,
     /// Seed for the random projection matrix S.
     pub seed: u64,
 }
 
 impl QjlConfig {
-    pub fn new(dim: usize, seed: u64) -> Self {
-        Self { dim, seed }
+    pub fn new(original_dim: usize, dim: usize, seed: u64) -> Self {
+        Self { original_dim, dim, seed }
     }
 }
 
@@ -106,6 +108,58 @@ pub fn qjl_quantize_tensor(
     Ok((sign_bits_tensor, norms))
 }
 
+/// Reconstruct an approximate key tensor from QJL-compressed sign bits and norms.
+///
+/// Returns a tensor of shape `[num_heads, seq_len, original_dim]` that provides an unbiased
+/// estimate of the original key vectors. Uses the identity:
+///   k̃ = (√(π/2) / m) · ‖k‖ · Sᵀ · sign(S·k)
+pub fn qjl_reconstruct_chunk(
+    sign_bits: &Tensor,
+    norms: &Tensor,
+    config: &QjlConfig,
+) -> Result<Tensor> {
+    let device = sign_bits.device();
+    let dims = sign_bits.dims();
+    let (num_heads, seq_len) = (dims[0], dims[1]);
+
+    // Unpack U8 sign bits to ±1 float: [num_heads, seq_len, config.dim]
+    let k_bits = sign_bits.to_dtype(DType::F32)?;
+    let mut sigmas: Vec<Tensor> = Vec::with_capacity(8);
+    for i in 0..8 {
+        let shift = (1u32 << i) as f64;
+        let k_bits_scaled = (k_bits.clone() / shift)?;
+        let sigma = k_bits_scaled.clone()
+            .floor()?
+            .affine(0.5, 0.0)?
+            .floor()?
+            .affine(-2.0, 0.0)?
+            .add(&k_bits_scaled.floor()?)?
+            .affine(2.0, -1.0)?; // map 0/1 → -1/1
+        sigmas.push(sigma);
+    }
+    let sigma_tensor = Tensor::stack(&sigmas, D::Minus1)?
+        .reshape((num_heads, seq_len, config.dim))?;
+
+    // Regenerate S: [m, d]
+    let mut rng = super::prng::Prng::new(config.seed);
+    let mut s_vec = vec![0.0f32; config.dim * config.original_dim];
+    rng.fill_normal(&mut s_vec);
+    let s = Tensor::from_vec(s_vec, (config.dim, config.original_dim), device)?;
+
+    // k̃ = scale · norms · (sigma @ S)
+    // Flatten to 2D for matmul (Candle doesn't broadcast 2D rhs against 3D lhs)
+    let scale = (std::f32::consts::PI / 2.0_f32).sqrt() / config.dim as f32;
+    let sigma_2d = sigma_tensor.reshape((num_heads * seq_len, config.dim))?;
+    let norms_2d = norms.to_dtype(DType::F32)?.reshape((num_heads * seq_len, 1))?;
+    let k_2d = sigma_2d
+        .matmul(&s)?                         // [H*S, d]
+        .broadcast_mul(&norms_2d)?           // [H*S, d] * [H*S, 1]
+        .affine(scale as f64, 0.0)?;
+    let k_approx = k_2d.reshape((num_heads, seq_len, config.original_dim))?;
+
+    Ok(k_approx)
+}
+
 /// Compute attention scores using vectorized QJL estimation on GPU.
 pub fn qjl_attention_scores_vectorized(
     q: &Tensor,
@@ -131,7 +185,7 @@ pub fn qjl_attention_scores_vectorized(
     rng.fill_normal(&mut s_vec);
     let s = Tensor::from_vec(s_vec, (config.dim, d_final), device)?.to_dtype(q.dtype())?;
     
-    let original_shape = q.shape().clone();
+    let _original_shape = q.shape().clone();
     let q_flat = q.contiguous()?.reshape((num_heads * q_len, d_final))?;
     let q_proj = q_flat.matmul(&s.t()?)?;
     let q_proj = q_proj.reshape((num_heads, q_len, config.dim))?;

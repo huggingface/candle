@@ -52,4 +52,4 @@ pub mod prng;
 pub mod qjl;
 pub mod turbo_quant;
 
-pub use kv_cache::{QuantAlgorithm, QuantizedKvCache};
+pub use kv_cache::{QuantAlgorithm, QuantizedKvCache, QuantizedPreAllocKvCache, QuantizedRotatingKvCache};

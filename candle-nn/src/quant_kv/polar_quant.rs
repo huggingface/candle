@@ -114,8 +114,8 @@ pub fn polar_quantize_tensor(
     let cb_l1 = config.codebook_for_level(1);
     let k_data = k.to_dtype(candle::DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
 
-    let l1_p = (d.div_ceil(2) + 1) / 2;
-    let ln_p = (d + 7) / 8;
+    let l1_p = d.div_ceil(2).div_ceil(2);
+    let ln_p = d.div_ceil(8);
     let n_levels = config.num_levels();
     let bits_deep = config.bits_deep as usize;
 
@@ -125,9 +125,9 @@ pub fn polar_quantize_tensor(
     {
         let mut cumul = 0usize;
         let mut n_angles = d / 2; // level-1 has d/2 angles; level-2 has d/4, etc.
-        for lvl in 2..=n_levels {
+        for offset in ln_bit_offsets.iter_mut().skip(2).take(n_levels - 1) {
             n_angles /= 2;
-            ln_bit_offsets[lvl] = cumul;
+            *offset = cumul;
             cumul += n_angles * bits_deep;
         }
     }
@@ -170,15 +170,14 @@ pub fn polar_quantize_tensor(
 
         // Deep levels 2..n_levels: recursively quantize pairs of magnitudes
         let ln_base = idx * ln_p; // byte offset for this vector's ln_codes
-        for level in 2..=n_levels {
+        for (level_idx, &bit_base) in ln_bit_offsets[2..=n_levels].iter().enumerate() {
+            let level = level_idx + 2;
             let cb_deep = config.codebook_for_level(level);
             let n_pairs = current_mags.len() / 2;
             let mut next_mags = Vec::with_capacity(n_pairs);
-            let bit_base = ln_bit_offsets[level]; // bit offset within this vector's ln_codes
 
-            for j in 0..n_pairs {
-                let a = current_mags[2 * j];
-                let b = current_mags[2 * j + 1];
+            for (j, pair) in current_mags.chunks_exact(2).enumerate() {
+                let (a, b) = (pair[0], pair[1]);
                 // atan2(b, a) ∈ [0, π/2] for non-negative a, b — matches Beta codebook
                 let angle = b.atan2(a);
                 let code = cb_deep.quantize(angle);
@@ -193,7 +192,7 @@ pub fn polar_quantize_tensor(
                     }
                 }
 
-                next_mags.push((a * a + b * b).sqrt());
+                next_mags.push(a.hypot(b));
             }
             current_mags = next_mags;
         }
@@ -238,9 +237,9 @@ pub fn polar_dequantize_batch(
     {
         let mut cumul = 0usize;
         let mut n_angles = d / 2;
-        for lvl in 2..=n_levels {
+        for offset in ln_bit_offsets.iter_mut().skip(2).take(n_levels - 1) {
             n_angles /= 2;
-            ln_bit_offsets[lvl] = cumul;
+            *offset = cumul;
             cumul += n_angles * bits_deep;
         }
     }
@@ -271,7 +270,7 @@ pub fn polar_dequantize_batch(
             let bit_base = ln_bit_offsets[level];
             let mut next_mags = Vec::with_capacity(n_parents * 2);
 
-            for j in 0..n_parents {
+            for (j, &parent) in current_mags.iter().enumerate() {
                 let mut code = 0u8;
                 for bit_i in 0..bits_deep {
                     let global_bit = bit_base + j * bits_deep + bit_i;
@@ -280,7 +279,6 @@ pub fn polar_dequantize_batch(
                     code |= bit << bit_i;
                 }
                 let angle = cb_deep.dequantize(code);
-                let parent = current_mags[j];
                 next_mags.push(parent * angle.cos());
                 next_mags.push(parent * angle.sin());
             }

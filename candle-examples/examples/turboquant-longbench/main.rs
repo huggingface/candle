@@ -53,7 +53,7 @@ struct Args {
     #[arg(long)]
     dtype: Option<String>,
 
-    #[arg(long, default_value = "llama32-1b-instruct")]
+    #[arg(long, default_value = "llama32-3b-instruct")]
     which: Which,
 
     #[arg(long, default_value_t = 1.1)]
@@ -115,11 +115,19 @@ fn main() -> Result<()> {
 
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
 
-    // Fake Longbench QA Scenario
+    // LongBench QA Scenario: document repeated to reach ~2K tokens to exercise the KV cache.
+    // TurboQuant is designed for 4K+ contexts; using 3B+ models ensures quality at 4-bit.
     let document = "Extensive context spanning general knowledge regarding Paris: Paris is the capital and most populous city of France. Situated on the Seine River, in the north of the country, it is in the centre of the Île-de-France region, also known as the région parisienne, Paris Region. The City of Paris is the centre and seat of government of the region and province of Île-de-France. Paris is especially known for its museums and architectural landmarks: the Louvre was the most visited art museum in the world in 2020. Important landmarks include the Eiffel Tower and the Arc de Triomphe.";
     let question = "Based on the text above, what river is Paris situated on?";
 
-    let prompt = format!("Document Context:\n{document}\n{document}\n{document}\n{document}\nQuestion: {question}\nAnswer:");
+    // Repeat document enough times to reach ~2K tokens for a meaningful KV cache test
+    let doc_tokens = tokenizer.encode(document, false).map_err(E::msg)?.get_ids().len();
+    let reps = (2000usize / doc_tokens.max(1)).max(4);
+    let repeated_doc: String = std::iter::repeat(document)
+        .take(reps)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prompt = format!("Document Context:\n{repeated_doc}\nQuestion: {question}\nAnswer:");
     let mut tokens = tokenizer
         .encode(prompt.clone(), true)
         .map_err(E::msg)?

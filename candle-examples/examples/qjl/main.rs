@@ -64,7 +64,7 @@ fn run_compression_benchmark() {
         let fp16_bytes = d * 2;
         let k = random_unit_vec(d, 42);
 
-        let qjl_cfg = QjlConfig::new(d, 1);
+        let qjl_cfg = QjlConfig::new(d, d, 1);
         let qjl_key = qjl_quantize(&k, &qjl_cfg, 0);
         let qjl_bpd = qjl_key.bits_per_dim();
 
@@ -115,7 +115,7 @@ fn run_accuracy_benchmark() {
     }
 
     {
-        let cfg = QjlConfig::new(d, 42);
+        let cfg = QjlConfig::new(d, d, 42);
         let errors: Vec<f32> = pairs
             .iter()
             .enumerate()
@@ -220,7 +220,7 @@ fn run_recall_benchmark(device: &Device) {
     }
 
     {
-        let cfg = QjlConfig::new(d, seed_base);
+        let cfg = QjlConfig::new(d, d, seed_base);
         let qjl_keys = qjl_quantize_tensor(&k_tensor, &cfg, 0).unwrap();
         let avg_bpd = if num_heads > 0 && !qjl_keys[0].is_empty() {
             qjl_keys[0][0].bits_per_dim()
