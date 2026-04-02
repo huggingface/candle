@@ -846,4 +846,54 @@ impl Storage {
             .bt()),
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn deform_conv2d(
+        &self,
+        l: &Layout,
+        offset: &Self,
+        offset_l: &Layout,
+        weight: &Self,
+        weight_l: &Layout,
+        mask: Option<(&Self, &Layout)>,
+        params: &crate::conv::ParamsDeformConv2D,
+    ) -> Result<Self> {
+        self.same_device(offset, "deform_conv2d")?;
+        self.same_device(weight, "deform_conv2d")?;
+        self.same_dtype(offset, "deform_conv2d")?;
+        self.same_dtype(weight, "deform_conv2d")?;
+
+        match (self, offset, weight) {
+            (Storage::Cpu(inp), Storage::Cpu(off), Storage::Cpu(w)) => {
+                let mask_cpu = mask.map(|(m, ml)| match m {
+                    Storage::Cpu(ms) => (ms, ml),
+                    _ => panic!("mask storage mismatch"),
+                });
+                let s = inp.deform_conv2d(l, off, offset_l, w, weight_l, mask_cpu, params)?;
+                Ok(Self::Cpu(s))
+            }
+            (Storage::Cuda(inp), Storage::Cuda(off), Storage::Cuda(w)) => {
+                let mask_cuda = mask.map(|(m, ml)| match m {
+                    Storage::Cuda(ms) => (ms, ml),
+                    _ => panic!("mask storage mismatch"),
+                });
+                let s = inp.deform_conv2d(l, off, offset_l, w, weight_l, mask_cuda, params)?;
+                Ok(Self::Cuda(s))
+            }
+            (Storage::Metal(inp), Storage::Metal(off), Storage::Metal(w)) => {
+                let mask_metal = mask.map(|(m, ml)| match m {
+                    Storage::Metal(ms) => (ms, ml),
+                    _ => panic!("mask storage mismatch"),
+                });
+                let s = inp.deform_conv2d(l, off, offset_l, w, weight_l, mask_metal, params)?;
+                Ok(Self::Metal(s))
+            }
+            _ => Err(Error::DeviceMismatchBinaryOp {
+                lhs: self.device().location(),
+                rhs: offset.device().location(),
+                op: "deform_conv2d",
+            }
+            .bt()),
+        }
+    }
 }
