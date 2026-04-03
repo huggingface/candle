@@ -20,7 +20,9 @@ pub fn moe_gemm(
     use half::{bf16, f16};
 
     fn cuda_fwd<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: candle::cuda_backend::CudaDType
+            + candle::cuda_backend::cudarc::driver::DeviceRepr
+            + candle::cuda_backend::cudarc::driver::ValidAsZeroBits,
     >(
         input: &Tensor,
         weights: &Tensor,
@@ -46,7 +48,7 @@ pub fn moe_gemm(
             DType::F16 => 0,
             DType::BF16 => 1,
             _ => {
-                candle::bail!("moe_gemm_wmma only accepts f16/bf16 inputs")
+                candle::bail!("moe_gemm only accepts f16/bf16 inputs")
             }
         };
 
@@ -57,7 +59,7 @@ pub fn moe_gemm(
         };
         let input = match input_layout.contiguous_offsets() {
             Some((o1, o2)) => input.slice(o1..o2),
-            None => candle::bail!("input must be contiguous for moe_gemm_wmma"),
+            None => candle::bail!("input must be contiguous for moe_gemm"),
         };
 
         let (weights_storage, weights_layout) = weights.storage_and_layout();
@@ -67,7 +69,7 @@ pub fn moe_gemm(
         };
         let weights = match weights_layout.contiguous_offsets() {
             Some((o1, o2)) => weights.slice(o1..o2),
-            None => candle::bail!("weight must be contiguous for moe_gemm_wmma"),
+            None => candle::bail!("weight must be contiguous for moe_gemm"),
         };
 
         let (sorted_token_ids_storage, sorted_token_ids_layout) =
@@ -78,7 +80,7 @@ pub fn moe_gemm(
         };
         let sorted_token_ids = match sorted_token_ids_layout.contiguous_offsets() {
             Some((o1, o2)) => sorted_token_ids.slice(o1..o2),
-            None => candle::bail!("sorted_token_ids must be contiguous for moe_gemm_wmma"),
+            None => candle::bail!("sorted_token_ids must be contiguous for moe_gemm"),
         };
 
         let (experts_ids_storage, experts_ids_layout) = experts_ids.storage_and_layout();
@@ -88,7 +90,7 @@ pub fn moe_gemm(
         };
         let experts_ids = match experts_ids_layout.contiguous_offsets() {
             Some((o1, o2)) => experts_ids.slice(o1..o2),
-            None => candle::bail!("experts_ids must be contiguous for moe_gemm_wmma"),
+            None => candle::bail!("experts_ids must be contiguous for moe_gemm"),
         };
 
         let topk_weights_s_l = topk_weights.as_ref().map(|t| t.storage_and_layout());
@@ -100,13 +102,13 @@ pub fn moe_gemm(
                 };
                 Some(match topk_weights_layout.contiguous_offsets() {
                     Some((o1, o2)) => topk_weights.slice(o1..o2),
-                    None => candle::bail!("topk_weights must be contiguous for moe_gemm_wmma"),
+                    None => candle::bail!("topk_weights must be contiguous for moe_gemm"),
                 })
             } else {
                 None
             };
 
-        let output = unsafe { dev.alloc::<T>(size_m * size_n) }?;
+        let output = dev.alloc_zeros::<T>(size_m * size_n)?;
         let expert_counts = unsafe { dev.alloc::<u32>(num_experts) }?;
         let expert_offsets = unsafe { dev.alloc::<u32>(num_experts + 1) }?;
 
@@ -130,7 +132,7 @@ pub fn moe_gemm(
             let (output_ptr, _output_guard) = output.device_ptr(&stream);
             let (expert_counts_ptr, _expert_counts_guard) = expert_counts.device_ptr(&stream);
             let (expert_offsets_ptr, _expert_offsets_guard) = expert_offsets.device_ptr(&stream);
-            ffi::dispatch_moe(
+            ffi::dispatch_moe_gemm(
                 input_ptr as *const c_void,   // [size_m, size_k]
                 weights_ptr as *const c_void, // [num_experts, size_n, size_k]
                 sorted_token_ids_ptr as *const i32,
@@ -294,7 +296,7 @@ pub fn moe_gemm_gguf(
             None => candle::bail!("experts_ids must be contiguous for moe_gemm_gguf"),
         };
 
-        let output = unsafe { dev.alloc::<f32>(size_m * size_n) }?;
+        let output = dev.alloc_zeros::<f32>(size_m * size_n)?;
         let stream = dev.cuda_stream();
         let cu_stream = stream.cu_stream() as i64;
         use candle::op::BackpropOp;
