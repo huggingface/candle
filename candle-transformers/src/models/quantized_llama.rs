@@ -552,9 +552,31 @@ impl ModelWeights {
         }
         self.masks.clear();
     }
+
+    /// Capture the current per-layer KV cache as a [`LayerKvSnapshot`].
+    ///
+    /// Candle `Tensor` values are ref-counted, so this is a shallow clone —
+    /// no GPU/CPU data is copied.
+    pub fn capture_kv_cache(&self) -> Box<dyn crate::auto::CacheSnapshot> {
+        Box::new(crate::auto::LayerKvSnapshot(
+            self.layers.iter().map(|l| l.kv_cache.clone()).collect(),
+        ))
+    }
+
+    /// Restore per-layer KV caches from a [`LayerKvSnapshot`].
+    ///
+    /// Each layer's cache is replaced with a cheap tensor clone from the
+    /// snapshot; the mask cache is cleared so it is rebuilt for the new
+    /// sequence lengths.
+    pub fn apply_kv_cache(&mut self, snap: &crate::auto::LayerKvSnapshot) {
+        for (layer, entry) in self.layers.iter_mut().zip(&snap.0) {
+            layer.kv_cache = entry.clone();
+        }
+        self.masks.clear();
+    }
 }
 
-crate::impl_causal_lm!(ModelWeights, "llama");
+crate::impl_causal_lm!(ModelWeights, "llama", snapshot);
 
 #[cfg(test)]
 mod tests {

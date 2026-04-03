@@ -25,7 +25,7 @@ use crate::models::{
 ///
 /// Tensor data is reference-counted inside candle, so `clone_box` is a shallow
 /// clone — prefix K/V tensors are shared, not copied.
-pub trait CacheSnapshot: Send {
+pub trait CacheSnapshot: Send + Sync {
     /// Produce an independent clone of this snapshot.
     fn clone_box(&self) -> Box<dyn CacheSnapshot>;
     /// Expose the concrete type for downcasting in [`CausalLM::restore_cache`].
