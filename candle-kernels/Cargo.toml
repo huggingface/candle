@@ -11,7 +11,3 @@ license = "MIT OR Apache-2.0"
 
 [build-dependencies]
 cudaforge = "0.1.2"
-
-[dev-dependencies]
-half = { version = "2.4.1", features = ["num-traits"] }
-cudarc = { version = "0.19.0", features = ["driver", "cuda-version-from-build-system"] }
