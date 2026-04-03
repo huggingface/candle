@@ -1,19 +1,33 @@
 use candle_core::{test_device, DType, Device, Result, Tensor};
 
+#[cfg(feature = "cuda")]
+fn uses_legacy_fp8(device: &Device) -> bool {
+    device.is_cuda() && candle_core::cuda_backend::kernels::capabilities::ALLOW_LEGACY_FP8
+}
+
+#[cfg(not(feature = "cuda"))]
+fn uses_legacy_fp8(_device: &Device) -> bool {
+    false
+}
+
 /// Test cast roundtrip: F32 -> F8E4M3 -> F32
 fn cast_fp8(device: &Device) -> Result<()> {
     if device.is_cpu() {
         return Ok(());
     }
-    let data = &[0.5f32, 1.0, 2.0, 4.0, -1.0, -2.0, 0.0, 0.25];
+    let data = &[
+        -16.0f32, -2.0, -1.0, -0.5, -0.125, 0.0, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 16.0,
+    ];
     let t = Tensor::new(data, device)?;
     let fp8 = t.to_dtype(DType::F8E4M3)?;
     let back = fp8.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+    let abs_tol = if uses_legacy_fp8(device) { 0.5 } else { 0.25 };
+    let rel_tol = if uses_legacy_fp8(device) { 0.25 } else { 0.125 };
 
     for (orig, round) in data.iter().zip(back.iter()) {
         let diff = (orig - round).abs();
         assert!(
-            diff < 0.5,
+            diff < abs_tol || diff / orig.abs().max(1.0) < rel_tol,
             "FP8 cast roundtrip error too large: {} -> {}, diff = {}",
             orig,
             round,
@@ -88,8 +102,10 @@ fn binary_fp8(device: &Device) -> Result<()> {
     if device.is_cpu() {
         return Ok(());
     }
-    let a_data = &[1.0f32, 2.0, 3.0, 4.0];
-    let b_data = &[0.5f32, 0.5, 0.5, 0.5];
+    let a_data = &[-2.0f32, -1.0, 2.0, 4.0];
+    let b_data = &[0.5f32, -0.5, 0.5, 2.0];
+    let binary_tol = if uses_legacy_fp8(device) { 0.5 } else { 0.25 };
+    let div_tol = if uses_legacy_fp8(device) { 1.0 } else { 0.5 };
 
     let a = Tensor::new(a_data, device)?.to_dtype(DType::F8E4M3)?;
     let b = Tensor::new(b_data, device)?.to_dtype(DType::F8E4M3)?;
@@ -97,8 +113,13 @@ fn binary_fp8(device: &Device) -> Result<()> {
     // Add
     let c_add = a.broadcast_add(&b)?;
     let v_add = c_add.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-    for (act, exp) in v_add.iter().zip([1.5f32, 2.5, 3.5, 4.5].iter()) {
-        assert!((act - exp).abs() < 0.5, "add mismatch: {} vs {}", act, exp);
+    for (act, exp) in v_add.iter().zip([-1.5f32, -1.5, 2.5, 6.0].iter()) {
+        assert!(
+            (act - exp).abs() < binary_tol,
+            "add mismatch: {} vs {}",
+            act,
+            exp
+        );
         assert!(!act.is_nan(), "NaN in add");
         assert!(!act.is_infinite(), "Inf in add");
     }
@@ -106,24 +127,39 @@ fn binary_fp8(device: &Device) -> Result<()> {
     // Sub
     let c_sub = a.broadcast_sub(&b)?;
     let v_sub = c_sub.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-    for (act, exp) in v_sub.iter().zip([0.5f32, 1.5, 2.5, 3.5].iter()) {
-        assert!((act - exp).abs() < 0.5, "sub mismatch: {} vs {}", act, exp);
+    for (act, exp) in v_sub.iter().zip([-2.5f32, -0.5, 1.5, 2.0].iter()) {
+        assert!(
+            (act - exp).abs() < binary_tol,
+            "sub mismatch: {} vs {}",
+            act,
+            exp
+        );
         assert!(!act.is_nan(), "NaN in sub");
     }
 
     // Mul
     let c_mul = a.broadcast_mul(&b)?;
     let v_mul = c_mul.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-    for (act, exp) in v_mul.iter().zip([0.5f32, 1.0, 1.5, 2.0].iter()) {
-        assert!((act - exp).abs() < 0.5, "mul mismatch: {} vs {}", act, exp);
+    for (act, exp) in v_mul.iter().zip([-1.0f32, 0.5, 1.0, 8.0].iter()) {
+        assert!(
+            (act - exp).abs() < binary_tol,
+            "mul mismatch: {} vs {}",
+            act,
+            exp
+        );
         assert!(!act.is_nan(), "NaN in mul");
     }
 
     // Div
     let c_div = a.broadcast_div(&b)?;
     let v_div = c_div.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-    for (act, exp) in v_div.iter().zip([2.0f32, 4.0, 6.0, 8.0].iter()) {
-        assert!((act - exp).abs() < 1.0, "div mismatch: {} vs {}", act, exp);
+    for (act, exp) in v_div.iter().zip([-4.0f32, 2.0, 4.0, 2.0].iter()) {
+        assert!(
+            (act - exp).abs() < div_tol,
+            "div mismatch: {} vs {}",
+            act,
+            exp
+        );
         assert!(!act.is_nan(), "NaN in div");
         assert!(!act.is_infinite(), "Inf in div");
     }
