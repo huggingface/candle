@@ -8,9 +8,8 @@ use crate::models::{
     olmo2, phi, phi3, qwen2, qwen2_moe, qwen3, qwen3_moe, stable_lm, starcoder2, yi,
 };
 use crate::models::{
-    quantized_gemma3, quantized_lfm2, quantized_llama, quantized_mistral, quantized_mixformer,
-    quantized_mpt, quantized_phi, quantized_phi3, quantized_qwen2, quantized_qwen3,
-    quantized_recurrent_gemma, quantized_stable_lm,
+    quantized_gemma3, quantized_lfm2, quantized_llama, quantized_phi, quantized_phi3,
+    quantized_qwen2, quantized_qwen3,
 };
 
 // ---------------------------------------------------------------------------
@@ -276,21 +275,15 @@ impl AutoModelForCausalLM {
         device: &Device,
     ) -> Result<Box<dyn CausalLM>> {
         crate::make_gguf_map!(arch, content, reader, device, {
-            "llama"            => quantized_llama::ModelWeights,
-            "mistral"          => quantized_mistral::Model,
-            "phi"              => quantized_phi::ModelWeights,
-            "phi-msft"         => quantized_phi::ModelWeights,
-            "phi3"             => quantized_phi3::ModelWeights,
-            "qwen2"            => quantized_qwen2::ModelWeights,
-            "qwen3"            => quantized_qwen3::ModelWeights,
-            "gemma"            => quantized_gemma3::ModelWeights,
-            "gemma3"           => quantized_gemma3::ModelWeights,
-            "recurrentgemma"   => quantized_recurrent_gemma::Model,
-            "stablelm"         => quantized_stable_lm::Model,
-            "stablelm_epoch"   => quantized_stable_lm::Model,
-            "mpt"              => quantized_mpt::Model,
-            "mixformer-sequential" => quantized_mixformer::MixFormerSequentialForCausalLM,
-            "lfm2"             => quantized_lfm2::ModelWeights,
+            "llama"    => quantized_llama::ModelWeights,
+            "phi"      => quantized_phi::ModelWeights,
+            "phi-msft" => quantized_phi::ModelWeights,
+            "phi3"     => quantized_phi3::ModelWeights,
+            "qwen2"    => quantized_qwen2::ModelWeights,
+            "qwen3"    => quantized_qwen3::ModelWeights,
+            "gemma"    => quantized_gemma3::ModelWeights,
+            "gemma3"   => quantized_gemma3::ModelWeights,
+            "lfm2"     => quantized_lfm2::ModelWeights,
         })
     }
 }
