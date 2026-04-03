@@ -129,6 +129,7 @@ pub mod stella_en_v5;
 pub mod t5;
 pub mod trocr;
 pub mod vgg;
+pub mod vibevoice;
 pub mod vit;
 pub mod voxtral;
 pub mod whisper;
