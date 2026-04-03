@@ -1,5 +1,15 @@
 use candle_core::{test_device, DType, Device, Result, Tensor};
 
+#[cfg(feature = "cuda")]
+fn uses_legacy_bf16(device: &Device) -> bool {
+    device.is_cuda() && candle_core::cuda_backend::kernels::capabilities::ALLOW_LEGACY_BF16
+}
+
+#[cfg(not(feature = "cuda"))]
+fn uses_legacy_bf16(_device: &Device) -> bool {
+    false
+}
+
 fn unary_bf16(device: &Device) -> Result<()> {
     if device.is_cpu() {
         return Ok(());
@@ -13,18 +23,34 @@ fn unary_bf16(device: &Device) -> Result<()> {
 
     let expected: Vec<f32> = data.iter().map(|&x| x.exp()).collect();
     let actual = res_f32.to_vec1::<f32>()?;
+    let exp_tol = if uses_legacy_bf16(device) { 0.2 } else { 0.1 };
 
     for (e, a) in expected.iter().zip(actual.iter()) {
         let diff = (e - a).abs();
-        assert!(diff < 0.1, "exp: expected {}, got {} (diff {})", e, a, diff);
+        assert!(
+            diff < exp_tol,
+            "exp: expected {}, got {} (diff {})",
+            e,
+            a,
+            diff
+        );
     }
 
-    // Test gelu (uses many math functions)
+    // Compare BF16 GELU against an F32 reference on the CPU.
     let res_bf16 = a.gelu()?;
     let actual = res_bf16.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-    // gelu(-3) is approx -0.004
-    // gelu(1) is approx 0.8413
-    println!("GELU actual: {:?}", actual);
+    let expected = Tensor::new(data, &Device::Cpu)?.gelu()?.to_vec1::<f32>()?;
+    let gelu_tol = if uses_legacy_bf16(device) { 0.05 } else { 0.02 };
+    for (e, a) in expected.iter().zip(actual.iter()) {
+        let diff = (e - a).abs();
+        assert!(
+            diff < gelu_tol,
+            "gelu: expected {}, got {} (diff {})",
+            e,
+            a,
+            diff
+        );
+    }
 
     Ok(())
 }
@@ -169,6 +195,7 @@ fn binary_bf16(device: &Device) -> Result<()> {
     if device.is_cpu() {
         return Ok(());
     }
+    let div_tol = if uses_legacy_bf16(device) { 2e-2 } else { 1e-2 };
 
     // Create tensors
     let a_data = &[1.0f32, 2.0, 3.0, 4.0, 5.0];
@@ -198,7 +225,7 @@ fn binary_bf16(device: &Device) -> Result<()> {
     let expected_div = [0.2f32, 0.5, 1.0, 2.0, 5.0];
     for (act, exp) in v_div.iter().zip(expected_div.iter()) {
         assert!(
-            (act - exp).abs() < 1e-2,
+            (act - exp).abs() < div_tol,
             "div mismatch: act {}, exp {}",
             act,
             exp
