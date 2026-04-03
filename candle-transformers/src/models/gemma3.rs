@@ -11,6 +11,8 @@ use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub attention_bias: bool,
     pub head_dim: usize,
     pub hidden_activation: Activation,
@@ -172,7 +174,7 @@ struct Attention {
 impl Attention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
-        use_flash_attn: bool,
+        _use_flash_attn: bool,
         cfg: &Config,
         sliding_window: Option<usize>,
         vb: VarBuilder,
@@ -211,7 +213,7 @@ impl Attention {
             attn_logit_softcapping: cfg.attn_logit_softcapping,
             rotary_emb,
             kv_cache,
-            use_flash_attn,
+            use_flash_attn: cfg.use_flash_attn,
         })
     }
 
@@ -318,7 +320,7 @@ struct DecoderLayer {
 
 impl DecoderLayer {
     fn new(
-        use_flash_attn: bool,
+        _use_flash_attn: bool,
         cfg: &Config,
         vb: VarBuilder,
         sliding_window: Option<usize>,
@@ -331,7 +333,7 @@ impl DecoderLayer {
         )?);
         let self_attn = Attention::new(
             rotary_emb,
-            use_flash_attn,
+            cfg.use_flash_attn,
             cfg,
             sliding_window,
             vb.pp("self_attn"),
@@ -438,7 +440,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(use_flash_attn: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -447,7 +449,7 @@ impl Model {
         for layer_idx in 0..cfg.num_hidden_layers {
             let sliding_window = (layer_idx + 1) % cfg.sliding_window_pattern > 0;
             let layer = DecoderLayer::new(
-                use_flash_attn,
+                cfg.use_flash_attn,
                 cfg,
                 vb_l.pp(layer_idx),
                 sliding_window.then_some(cfg.sliding_window),
@@ -534,3 +536,4 @@ impl Model {
         }
     }
 }
+crate::impl_causal_lm!(Model, "gemma3");

@@ -221,7 +221,6 @@ fn precomput_freqs_cis(
 
 impl ModelWeights {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
-        use_flash_attn: bool,
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
@@ -283,7 +282,7 @@ impl ModelWeights {
                 sin: sin.clone(),
                 neg_inf: neg_inf.clone(),
                 kv_cache,
-                use_flash_attn,
+                use_flash_attn: false,
                 span_attn,
                 span_rot,
             })
@@ -336,3 +335,4 @@ impl ModelWeights {
         self.output.forward(&xs)
     }
 }
+crate::impl_causal_lm!(ModelWeights, "phi3");

@@ -41,6 +41,8 @@ pub struct RopeScaling {
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub vocab_size: usize,
     pub hidden_act: candle_nn::Activation,
     pub hidden_size: usize,
@@ -174,7 +176,7 @@ struct Attention {
     num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: candle_nn::kv_cache::KvCache,
 }
 
 impl Attention {
@@ -189,7 +191,7 @@ impl Attention {
             qkv_proj,
             o_proj,
             rotary_emb,
-            kv_cache: None,
+            kv_cache: candle_nn::kv_cache::KvCache::new(2, cfg.max_position_embeddings),
             num_heads,
             num_kv_heads,
             num_kv_groups: num_heads / num_kv_heads,
@@ -229,15 +231,7 @@ impl Attention {
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
 
-        let (key_states, value_states) = match &self.kv_cache {
-            None => (key_states, value_states),
-            Some((prev_k, prev_v)) => {
-                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
-                (key_states, value_states)
-            }
-        };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        let (key_states, value_states) = self.kv_cache.append(&key_states, &value_states)?;
 
         let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
         let value_states =
@@ -261,7 +255,7 @@ impl Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.kv_cache = None
+        self.kv_cache.reset()
     }
 }
 
@@ -426,3 +420,5 @@ impl Model {
         }
     }
 }
+
+crate::impl_causal_lm!(Model, "phi3");

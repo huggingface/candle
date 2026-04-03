@@ -98,4 +98,15 @@ jobs:
         with:
           components: clippy
       - run: cargo clippy --workspace --tests --examples --benches -- -D warnings
+
+  causal_lm_coverage:
+    name: AutoModelForCausalLM coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Check every causal-LM model is registered
+        run: python3 .github/scripts/check_causal_lm_coverage.py
  

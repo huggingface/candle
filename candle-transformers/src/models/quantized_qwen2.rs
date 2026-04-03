@@ -334,3 +334,4 @@ impl ModelWeights {
         self.output.forward(&x)
     }
 }
+crate::impl_causal_lm!(ModelWeights, "qwen2");

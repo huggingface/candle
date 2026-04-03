@@ -539,7 +539,44 @@ impl ModelWeights {
         let _enter = self.span_output.enter();
         self.output.forward(&x)
     }
+
+    /// Clear all per-layer KV caches and the mask cache.
+    ///
+    /// Required as an **inherent** method so that the `impl_causal_lm!` macro
+    /// can call it without recursing into the trait method.  Without this, the
+    /// macro-generated trait impl calls itself infinitely → stack overflow →
+    /// SIGABRT on iOS (uncatchable by `catch_unwind`).
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.kv_cache = None;
+        }
+        self.masks.clear();
+    }
+
+    /// Capture the current per-layer KV cache as a [`LayerKvSnapshot`].
+    ///
+    /// Candle `Tensor` values are ref-counted, so this is a shallow clone —
+    /// no GPU/CPU data is copied.
+    pub fn capture_kv_cache(&self) -> Box<dyn crate::auto::CacheSnapshot> {
+        Box::new(crate::auto::LayerKvSnapshot(
+            self.layers.iter().map(|l| l.kv_cache.clone()).collect(),
+        ))
+    }
+
+    /// Restore per-layer KV caches from a [`LayerKvSnapshot`].
+    ///
+    /// Each layer's cache is replaced with a cheap tensor clone from the
+    /// snapshot; the mask cache is cleared so it is rebuilt for the new
+    /// sequence lengths.
+    pub fn apply_kv_cache(&mut self, snap: &crate::auto::LayerKvSnapshot) {
+        for (layer, entry) in self.layers.iter_mut().zip(&snap.0) {
+            layer.kv_cache = entry.clone();
+        }
+        self.masks.clear();
+    }
 }
+
+crate::impl_causal_lm!(ModelWeights, "llama", snapshot);
 
 #[cfg(test)]
 mod tests {

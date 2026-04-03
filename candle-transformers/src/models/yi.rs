@@ -20,8 +20,10 @@ use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
@@ -37,6 +39,7 @@ pub struct Config {
 impl Config {
     pub fn config_6b() -> Self {
         Self {
+            use_flash_attn: false,
             vocab_size: 64000,
             hidden_size: 4096,
             intermediate_size: 11008,
@@ -52,6 +55,7 @@ impl Config {
 
     pub fn config_34b() -> Self {
         Self {
+            use_flash_attn: false,
             vocab_size: 64000,
             hidden_size: 7168,
             intermediate_size: 20480,
@@ -162,7 +166,7 @@ struct Attention {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: candle_nn::kv_cache::KvCache,
 }
 
 impl Attention {
@@ -187,7 +191,7 @@ impl Attention {
             head_dim,
             hidden_size: hidden_sz,
             rotary_emb,
-            kv_cache: None,
+            kv_cache: candle_nn::kv_cache::KvCache::new(2, cfg.max_position_embeddings),
         })
     }
 
@@ -217,15 +221,7 @@ impl Attention {
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
 
-        let (key_states, value_states) = match &self.kv_cache {
-            None => (key_states, value_states),
-            Some((prev_k, prev_v)) => {
-                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
-                (key_states, value_states)
-            }
-        };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        let (key_states, value_states) = self.kv_cache.append(&key_states, &value_states)?;
 
         let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?;
         let value_states = crate::utils::repeat_kv(value_states, self.num_kv_groups)?;
@@ -361,4 +357,10 @@ impl Model {
             .apply(&self.norm)?
             .apply(&self.lm_head)
     }
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.self_attn.kv_cache.reset();
+        }
+    }
 }
+crate::impl_causal_lm!(Model, "yi");

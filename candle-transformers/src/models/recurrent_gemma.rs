@@ -221,10 +221,14 @@ impl Rglru {
     }
 
     // https://github.com/huggingface/transformers/blob/0bd58f1ce0573c0e3269de4215a17d318add49b9/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L303
-    pub(crate) fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub(crate) fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_sz, seq_len, lru_width) = xs.dims3()?;
-        let pos = Tensor::arange(pos as u32, (pos + seq_len) as u32, xs.device())?;
-        let reset = pos.eq(0u32)?.unsqueeze(1)?.unsqueeze(0)?;
+        let seqlen_offset = Tensor::arange(
+            seqlen_offset as u32,
+            (seqlen_offset + seq_len) as u32,
+            xs.device(),
+        )?;
+        let reset = seqlen_offset.eq(0u32)?.unsqueeze(1)?.unsqueeze(0)?;
         let reshape_act = xs
             .reshape((b_sz * seq_len, self.n_heads, self.block_width))?
             .permute((1, 0, 2))?
@@ -359,12 +363,12 @@ impl RecurrentBlock {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (_b_sz, seq_len, _) = xs.dims3()?;
 
         let y_branch = xs.apply(&self.linear_y)?.apply(&self.act_fn)?;
         let x_branch = xs.apply(&self.linear_x)?.transpose(1, 2)?;
-        let x_branch = if pos == 0 {
+        let x_branch = if seqlen_offset == 0 {
             let x_len = x_branch.dim(D::Minus1)?;
             let pad = self.conv1d_width as i64 - x_len as i64 - 1;
             let padded = match pad.cmp(&0) {
@@ -383,7 +387,7 @@ impl RecurrentBlock {
                 .narrow(D::Minus1, 0, seq_len)?
         } else {
             let conv_state = match self.conv1d_state.as_ref() {
-                None => candle::bail!("empty cache despite pos > 0"),
+                None => candle::bail!("empty cache despite seqlen_offset > 0"),
                 Some(s) => Tensor::cat(&[s, &x_branch], D::Minus1)?,
             };
             let w = self.conv_1d.weight().i((.., 0, ..))?;
@@ -397,7 +401,7 @@ impl RecurrentBlock {
             x_branch
         };
         let x_branch = x_branch.transpose(1, 2)?;
-        let x_branch = self.rg_lru.forward(&x_branch, pos)?;
+        let x_branch = self.rg_lru.forward(&x_branch, seqlen_offset)?;
         (x_branch * y_branch)?.apply(&self.linear_out)
     }
 }
@@ -449,7 +453,7 @@ impl SdpaAttention {
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        pos: usize,
+        seqlen_offset: usize,
     ) -> Result<Tensor> {
         let (bsz, q_len, _) = xs.dims3()?;
 
@@ -468,9 +472,11 @@ impl SdpaAttention {
             .transpose(1, 2)?;
         let query_states = query_states.chunk(2, D::Minus1)?;
         let key_states = key_states.chunk(2, D::Minus1)?;
-        let (query_rot, key_rot) =
-            self.rotary_emb
-                .apply_rotary_emb_qkv(&query_states[0], &key_states[0], pos)?;
+        let (query_rot, key_rot) = self.rotary_emb.apply_rotary_emb_qkv(
+            &query_states[0],
+            &key_states[0],
+            seqlen_offset,
+        )?;
         let query_states = Tensor::cat(&[&query_rot, &query_states[1]], D::Minus1)?.contiguous()?;
         let key_states = Tensor::cat(&[&key_rot, &key_states[1]], D::Minus1)?.contiguous()?;
 
@@ -514,15 +520,25 @@ enum TemporalBlock {
 }
 
 impl TemporalBlock {
+    fn clear_kv_cache(&mut self) {
+        match self {
+            Self::Recurrent(b) => {
+                b.conv1d_state = None;
+                b.rg_lru.recurrent_states = None;
+            }
+            Self::Attention(b) => b.kv_cache = None,
+        }
+    }
+
     fn forward(
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        pos: usize,
+        seqlen_offset: usize,
     ) -> Result<Tensor> {
         match self {
-            Self::Recurrent(b) => b.forward(xs, pos),
-            Self::Attention(b) => b.forward(xs, attention_mask, pos),
+            Self::Recurrent(b) => b.forward(xs, seqlen_offset),
+            Self::Attention(b) => b.forward(xs, attention_mask, seqlen_offset),
         }
     }
 }
@@ -568,11 +584,13 @@ impl DecoderLayer {
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        pos: usize,
+        seqlen_offset: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = xs.apply(&self.temporal_pre_norm)?;
-        let xs = self.temporal_block.forward(&xs, attention_mask, pos)?;
+        let xs = self
+            .temporal_block
+            .forward(&xs, attention_mask, seqlen_offset)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.channel_pre_norm)?.apply(&self.mlp_block)?;
@@ -637,18 +655,18 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = xs.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None
         } else {
-            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, pos)?;
+            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
             Some(mask)
         };
         let xs = xs.apply(&self.embed_tokens)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask.as_ref(), pos)?;
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?;
         }
         let logits = xs
             .narrow(1, seq_len - 1, 1)?
@@ -658,3 +676,12 @@ impl Model {
         Ok(logits)
     }
 }
+impl Model {
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.temporal_block.clear_kv_cache();
+        }
+    }
+}
+
+crate::impl_causal_lm!(Model, "recurrent_gemma");

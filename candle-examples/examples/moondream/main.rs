@@ -82,17 +82,23 @@ impl TextGeneration {
 
         let start_gen = std::time::Instant::now();
         let mut load_t = std::time::Duration::from_secs_f64(0f64);
-        for index in 0..sample_len {
-            let context_size = if index > 0 { 1 } else { tokens.len() };
+        let mut seqlen_offset = 0usize;
+        for _ in 0..sample_len {
+            let context_size = if seqlen_offset > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = if index > 0 {
+            let logits = if seqlen_offset > 0 {
                 match self.model {
-                    Model::Moondream(ref mut model) => model.text_model.forward(&input)?,
-                    Model::Quantized(ref mut model) => model.text_model.forward(&input)?,
+                    Model::Moondream(ref mut model) => {
+                        model.text_model.forward(&input, seqlen_offset)?
+                    }
+                    Model::Quantized(ref mut model) => {
+                        model.text_model.forward(&input, seqlen_offset)?
+                    }
                 }
             } else {
                 let bos_token = Tensor::new(&[bos_token], &self.device)?.unsqueeze(0)?;
+                seqlen_offset += context_size;
                 let logits = match self.model {
                     Model::Moondream(ref mut model) => {
                         model

@@ -301,3 +301,4 @@ impl ModelWeights {
         self.output.forward(&xs)
     }
 }
+crate::impl_causal_lm!(ModelWeights, "phi");

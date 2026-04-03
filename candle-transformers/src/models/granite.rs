@@ -34,14 +34,21 @@ pub enum GraniteEosToks {
     Multiple(Vec<u32>),
 }
 
+fn default_rope() -> f32 {
+    10_000.0
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct GraniteConfig {
+pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub vocab_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
+    /// Defaults to `num_attention_heads` when absent from `config.json`.
     pub num_key_value_heads: Option<usize>,
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub rms_norm_eps: f64,
     #[serde(default = "default_rope")]
     pub rope_theta: f32,
@@ -51,58 +58,20 @@ pub struct GraniteConfig {
     pub max_position_embeddings: usize,
 }
 
-impl GraniteConfig {
+impl Config {
     pub fn num_key_value_heads(&self) -> usize {
         self.num_key_value_heads.unwrap_or(self.num_attention_heads)
     }
 }
 
-fn default_rope() -> f32 {
-    10_000.0
-}
-
-impl GraniteConfig {
-    pub fn into_config(self, use_flash_attn: bool) -> Config {
-        Config {
-            hidden_size: self.hidden_size,
-            intermediate_size: self.intermediate_size,
-            vocab_size: self.vocab_size,
-            num_hidden_layers: self.num_hidden_layers,
-            num_attention_heads: self.num_attention_heads,
-            num_key_value_heads: self.num_key_value_heads(),
-            rms_norm_eps: self.rms_norm_eps,
-            rope_theta: self.rope_theta,
-            use_flash_attn,
-            bos_token_id: self.bos_token_id,
-            eos_token_id: self.eos_token_id,
-            rope_scaling: self.rope_scaling,
-            max_position_embeddings: self.max_position_embeddings,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub vocab_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub use_flash_attn: bool,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f32,
-    pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<GraniteEosToks>,
-    pub rope_scaling: Option<GraniteRopeConfig>,
-    pub max_position_embeddings: usize,
-}
+/// Backward-compatible alias — `Config` is now directly deserializable.
+pub type GraniteConfig = Config;
 
 #[derive(Debug, Clone)]
 pub struct Cache {
     masks: HashMap<(usize, usize), Tensor>,
     pub use_kv_cache: bool,
-    kvs: Vec<Option<(Tensor, Tensor)>>,
+    pub(crate) kvs: Vec<candle_nn::kv_cache::KvCache>,
     cos: Tensor,
     sin: Tensor,
     device: Device,
@@ -162,7 +131,9 @@ impl Cache {
         Ok(Self {
             masks: HashMap::new(),
             use_kv_cache,
-            kvs: vec![None; config.num_hidden_layers],
+            kvs: (0..config.num_hidden_layers)
+                .map(|_| candle_nn::kv_cache::KvCache::new(2, config.max_position_embeddings))
+                .collect(),
             device: device.clone(),
             cos,
             sin,
@@ -250,31 +221,9 @@ impl CausalSelfAttention {
         let mut k = self.apply_rotary_emb(&k, index_pos, cache)?;
 
         if cache.use_kv_cache {
-            if let Some((cache_k, cache_v)) = &cache.kvs[block_idx] {
-                k = Tensor::cat(&[cache_k, &k], 2)?.contiguous()?;
-                v = Tensor::cat(&[cache_v, &v], 2)?.contiguous()?;
-                let k_seq_len = k.dims()[1];
-                if k_seq_len > self.max_position_embeddings {
-                    k = k
-                        .narrow(
-                            D::Minus1,
-                            k_seq_len - self.max_position_embeddings,
-                            self.max_position_embeddings,
-                        )?
-                        .contiguous()?
-                }
-                let v_seq_len = v.dims()[1];
-                if v_seq_len > 2 * self.max_position_embeddings {
-                    v = v
-                        .narrow(
-                            D::Minus1,
-                            v_seq_len - self.max_position_embeddings,
-                            self.max_position_embeddings,
-                        )?
-                        .contiguous()?
-                }
-            }
-            cache.kvs[block_idx] = Some((k.clone(), v.clone()))
+            let (k_out, v_out) = cache.kvs[block_idx].append(&k, &v)?;
+            k = k_out;
+            v = v_out;
         }
 
         let k = self.repeat_kv(k)?;
@@ -317,7 +266,7 @@ impl CausalSelfAttention {
         let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-        let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+        let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads();
         let q_proj = linear(size_in, size_q, vb.pp("q_proj"))?;
         let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
         let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
@@ -328,7 +277,7 @@ impl CausalSelfAttention {
             v_proj,
             o_proj,
             num_attention_heads: cfg.num_attention_heads,
-            num_key_value_heads: cfg.num_key_value_heads,
+            num_key_value_heads: cfg.num_key_value_heads(),
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
             span,
@@ -459,3 +408,8 @@ impl Granite {
         })
     }
 }
+crate::causal_lm_wrapper!(GraniteForCausalLM, "granite",
+    model: Granite,
+    cache: Cache,
+    cfg:   Config,
+);

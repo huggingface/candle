@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub vocab_size: usize,
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -37,7 +39,7 @@ pub struct Config {
 
 impl From<&Config> for Qwen3Config {
     fn from(val: &Config) -> Self {
-        Qwen3Config {
+        Self {
             vocab_size: val.vocab_size,
             hidden_size: val.hidden_size,
             intermediate_size: val.intermediate_size,
@@ -54,6 +56,7 @@ impl From<&Config> for Qwen3Config {
             rms_norm_eps: val.rms_norm_eps,
             use_sliding_window: val.use_sliding_window,
             hidden_act: val.hidden_act,
+            use_flash_attn: val.use_flash_attn,
         }
     }
 }
@@ -372,3 +375,4 @@ impl ModelForCausalLM {
         self.base.clear_kv_cache();
     }
 }
+crate::impl_causal_lm!(ModelForCausalLM, "qwen3_moe");

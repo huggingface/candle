@@ -7,8 +7,10 @@ use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub num_layers: usize,
     pub padded_vocab_size: usize,
     pub hidden_size: usize,
@@ -33,6 +35,7 @@ pub struct Config {
 impl Config {
     pub fn glm3_6b() -> Self {
         Self {
+            use_flash_attn: false,
             num_layers: 28,
             padded_vocab_size: 65024,
             hidden_size: 4096,
@@ -192,7 +195,7 @@ struct SelfAttention {
     num_attention_heads_per_partition: usize,
     num_multi_query_groups_per_partition: usize,
     hidden_size_per_attention_head: usize,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: candle_nn::kv_cache::KvCache,
 }
 
 impl SelfAttention {
@@ -225,12 +228,12 @@ impl SelfAttention {
             num_attention_heads_per_partition: cfg.num_attention_heads,
             num_multi_query_groups_per_partition: cfg.multi_query_group_num,
             hidden_size_per_attention_head: cfg.kv_channels,
-            kv_cache: None,
+            kv_cache: candle_nn::kv_cache::KvCache::new(0, cfg.seq_length),
         })
     }
 
     fn reset_kv_cache(&mut self) {
-        self.kv_cache = None
+        self.kv_cache.reset()
     }
 
     fn forward(
@@ -277,23 +280,12 @@ impl SelfAttention {
         ))?;
 
         // Rotary embeddings.
-        let seqlen_offset = match &self.kv_cache {
-            None => 0,
-            Some((prev_k, _)) => prev_k.dim(0)?,
-        };
+        let seqlen_offset = self.kv_cache.current_seq_len();
         let query_layer = rotary_emb.apply(&query_layer, seqlen_offset)?;
         let key_layer = rotary_emb.apply(&key_layer, seqlen_offset)?;
 
         // KV cache.
-        let (key_layer, value_layer) = match &self.kv_cache {
-            None => (key_layer, value_layer),
-            Some((prev_k, prev_v)) => {
-                let k = Tensor::cat(&[prev_k, &key_layer], 0)?;
-                let v = Tensor::cat(&[prev_v, &value_layer], 0)?;
-                (k, v)
-            }
-        };
-        self.kv_cache = Some((key_layer.clone(), value_layer.clone()));
+        let (key_layer, value_layer) = self.kv_cache.append(&key_layer, &value_layer)?;
 
         // Repeat KV.
         let ratio =
@@ -546,13 +538,6 @@ pub struct Model {
     output_layer: Linear,
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
-        .collect();
-    Tensor::from_slice(&mask, (size, size), device)
-}
-
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb = vb.pp("transformer");
@@ -571,20 +556,25 @@ impl Model {
         })
     }
 
-    pub fn reset_kv_cache(&mut self) {
+    pub fn clear_kv_cache(&mut self) {
         self.encoder.reset_kv_cache()
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let input_embeds = xs.apply(&self.embedding)?;
         let attention_mask = if seq_len <= 1 {
-            None
+            None // single-token decode: KV cache handles position, no causal mask needed
         } else {
-            Some(get_mask(seq_len, xs.device())?)
+            Some(crate::utils::build_causal_mask(
+                seq_len,
+                seqlen_offset,
+                xs.device(),
+            )?)
         };
         let xs = self.encoder.forward(&input_embeds, &attention_mask)?;
         let lm_logits = xs.i(seq_len - 1)?.apply(&self.output_layer)?;
         Ok(lm_logits)
     }
 }
+crate::impl_causal_lm!(Model, "chatglm");
