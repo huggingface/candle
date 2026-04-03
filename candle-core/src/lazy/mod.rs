@@ -102,16 +102,17 @@ impl Ord for BufferId {
 static CUSTOM_OP_REGISTRY: LazyLock<Mutex<HashMap<String, CustomOp>>> =
     LazyLock::new(|| Mutex::new(HashMap::<String, CustomOp>::new()));
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct LazyStorage {
     id: NodeId,
+    // TODO: Arc<Mutex<Op>>. Set as Op::Resolved(BufferId) when resolved
     op: Arc<Op>,
     custom_op_fallbacks: HashMap<String, LazyStorage>,
     layout: Layout,
     dtype: DType,
     buffer_id: Arc<BufferId>,
-    // potentially Arc<RwLock<...>>
-    //inner: Option<CpuStorage>,
+    // Set once by the backend executor after this node has been evaluated
+    resolved_id: Arc<std::sync::OnceLock<BufferId>>,
 }
 
 impl LazyStorage {
@@ -123,11 +124,12 @@ impl LazyStorage {
             layout: layout.clone(),
             dtype,
             buffer_id: Arc::new(BufferId::new()),
+            resolved_id: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
-    // Copy lazy storage with updated layout
     pub fn copy(source: &LazyStorage, layout: &Layout) -> Self {
+        // Creates a copy, or view, of the lazy storage with updated layout.
         Self {
             id: source.id,
             op: Arc::new(source.op().clone()),
@@ -135,6 +137,7 @@ impl LazyStorage {
             layout: layout.clone(),
             dtype: source.dtype,
             buffer_id: source.buffer_id.clone(),
+            resolved_id: source.resolved_id.clone(),
         }
     }
 
@@ -222,6 +225,14 @@ impl LazyStorage {
         &self.buffer_id
     }
 
+    pub fn resolved_buffer_id(&self) -> Option<&BufferId> {
+        self.resolved_id.get()
+    }
+
+    pub fn mark_resolved(&self, buf_id: BufferId) {
+        let _ = self.resolved_id.set(buf_id);
+    }
+
     pub fn set_buffer_id(&self, buffer_id: BufferId) {
         self.buffer_id
             .0
@@ -235,7 +246,13 @@ impl LazyStorage {
 
         let mut stack: Vec<(&LazyStorage, usize)> = vec![(self, 0)];
         while let Some((cur_t, cur_src)) = stack.pop() {
-            let all_deps_done = cur_src == cur_t.op().srcs().len();
+            // Only evaluate nodes once. If already resolved then we do not process.
+            let effective_len = if cur_t.resolved_buffer_id().is_some() {
+                0
+            } else {
+                cur_t.op().srcs().len()
+            };
+            let all_deps_done = cur_src == effective_len;
 
             if all_deps_done {
                 done.insert(cur_t.id());
@@ -270,9 +287,20 @@ impl LazyStorage {
                 stack.push((precursor, 0));
             }
         }
-        // Uncomment to change ordering to insertion order (ids are incr generated)
-        // order.sort_by(|a, b| a.id().cmp(&b.id()));
         order
+    }
+}
+
+impl PartialEq for LazyStorage {
+    fn eq(&self, other: &Self) -> bool {
+        // Two lazy storages are equal regardless of wether it has been resolved,
+        // so we exclude resolved_id from this impl.
+        self.id == other.id
+            && self.op == other.op
+            && self.custom_op_fallbacks == other.custom_op_fallbacks
+            && self.layout == other.layout
+            && self.dtype == other.dtype
+            && self.buffer_id == other.buffer_id
     }
 }
 
@@ -397,11 +425,11 @@ pub fn calculate_usage_records(
     for (i, node) in graph.iter().rev().enumerate() {
         let buffer_id = node.buffer_id();
 
-        if node.op().resolved() {
+        if node.op().resolved() || node.resolved_buffer_id().is_some() {
             continue;
         }
         for source in node.srcs() {
-            if source.op().resolved() {
+            if source.op().resolved() || source.resolved_buffer_id().is_some() {
                 continue;
             }
             let true_source = determine_tensor_source(source);
@@ -505,23 +533,6 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
             shared_objects.push(buffer_id.clone());
         }
     }
-
-    // Loop through and add inplace assignments
-    /*
-    for node in graph {
-        if node.op().resolved() {
-            continue;
-        }
-        for source in node.op().srcs() {
-            let true_source = determine_tensor_source(source);
-            if true_source.id() != source.id() {
-                if let Some(buf) = allocations.get(&true_source.buffer_id()) {
-                    ... assignments.insert(source.id(), buf.clone());
-                }
-            }
-        }
-    }
-    */
 
     // Handle final output edge
     let output = graph.last().unwrap();
@@ -760,8 +771,11 @@ impl BackendStorage for LazyStorage {
             reduction_layout.clone(),
             dst_el,
         ));
-
-        Ok(LazyStorage::new(op, &dst_layout, self.dtype()))
+        let dtype = match reduce {
+            ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
+            _ => self.dtype(),
+        };
+        Ok(LazyStorage::new(op, &dst_layout, dtype))
     }
 
     fn cmp(&self, cmp_op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {

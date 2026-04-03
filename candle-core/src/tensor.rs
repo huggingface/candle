@@ -676,7 +676,22 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Lazy(_) => todo!(),
+            Storage::Lazy(storage) => {
+                #[cfg(feature = "metal")]
+                {
+                    let device = crate::metal_backend::metal_device();
+                    let result = storage.execute(device.clone())?;
+                    device.synchronize()?;
+                    let metal_storage = crate::MetalStorage::new(
+                        result,
+                        device,
+                        storage.shape().elem_count(),
+                        storage.dtype(),
+                    );
+                    return from_cpu_storage(&metal_storage.to_cpu_storage()?);
+                }
+                todo!()
+            }
         }
     }
 
@@ -1963,11 +1978,11 @@ impl Tensor {
                 }
                 #[cfg(feature = "metal")]
                 {
-                    let device = crate::MetalDevice::new(0)?;
+                    let device = crate::metal_backend::metal_device();
                     let result = storage.execute(device.clone())?;
                     device.synchronize()?;
                     let metal_storage = crate::MetalStorage::new(
-                        Arc::new(result),
+                        result,
                         device,
                         storage.shape().elem_count(),
                         storage.dtype(),

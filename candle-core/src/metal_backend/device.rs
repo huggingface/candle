@@ -1,5 +1,6 @@
 use crate::{DType, Result};
 
+use crate::lazy::BufferId;
 use crate::lazy::NodeId;
 #[cfg(feature = "ug")]
 use candle_metal_kernels::metal::ComputePipeline;
@@ -66,6 +67,12 @@ pub struct MetalDevice {
     pub(crate) seed_value: Arc<RwLock<u64>>,
 
     pub(crate) fences: Arc<Mutex<HashMap<NodeId, MetalFence>>>,
+
+    /// Lazy eval specific concepts. Experimental
+    /// cache of const eval nodes
+    pub(crate) const_cache: Arc<Mutex<HashMap<BufferId, Arc<Buffer>>>>,
+    /// cache of already resolved nodes.
+    pub(crate) resolved: Arc<Mutex<HashMap<BufferId, Arc<Buffer>>>>,
 }
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
@@ -192,9 +199,16 @@ impl MetalDevice {
         _name: &str,
     ) -> Result<Arc<Buffer>> {
         let size = element_count * dtype.size_in_bytes();
+        self.new_private_buffer_bytes(size)
+    }
+
+    /// Creates a new private buffer with the given byte size.
+    ///
+    /// This is intentionally not in the Metal buffer pool to allow the efficient implementation of persistent buffers.
+    pub fn new_private_buffer_bytes(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
         let buffer = self
             .device
-            .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
+            .new_buffer(size_in_bytes, PRIVATE_RESOURCE_OPTIONS)
             .map_err(MetalError::from)?;
         Ok(Arc::new(buffer))
     }
