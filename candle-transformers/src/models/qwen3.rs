@@ -3,7 +3,7 @@ use crate::{
     utils::repeat_kv,
 };
 use candle::{DType, Device, Module, Result, Tensor};
-use candle_nn::{kv_cache::ConcatKvCache, Activation, VarBuilder};
+use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -110,7 +110,7 @@ pub(crate) struct Qwen3Attention {
     hidden_size: usize,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
-    kv_cache: ConcatKvCache,
+    kv_cache: candle_nn::kv_cache::KvCache,
 }
 
 impl Qwen3Attention {
@@ -159,9 +159,7 @@ impl Qwen3Attention {
         // Necessary because the hidden_size in the config isn't always accurate
         let hidden_size = head_dim * cfg.num_attention_heads;
 
-        // dim=2 because we concatenate along the sequence dimension
-        // For tensors of shape [batch, heads, seq, head_dim]
-        let kv_cache = ConcatKvCache::new(2);
+        let kv_cache = candle_nn::kv_cache::KvCache::new(2, cfg.max_position_embeddings);
 
         Ok(Self {
             q_proj,

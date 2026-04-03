@@ -124,7 +124,7 @@ struct Attention {
     k_proj: Linear,
     v_proj: Linear,
     dense: Linear,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: candle_nn::kv_cache::KvCache,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
     rotary_emb: RotaryEmbedding,
@@ -166,7 +166,7 @@ impl Attention {
             k_proj,
             v_proj,
             dense,
-            kv_cache: None,
+            kv_cache: candle_nn::kv_cache::KvCache::new(2, cfg.max_position_embeddings),
             q_layernorm,
             k_layernorm,
             rotary_emb,
@@ -209,10 +209,7 @@ impl Attention {
             .transpose(1, 2)?;
 
         // Rotary embeddings.
-        let seqlen_offset = match &self.kv_cache {
-            None => 0,
-            Some((prev_k, _)) => prev_k.dim(2)?,
-        };
+        let seqlen_offset = self.kv_cache.current_seq_len();
         let query_states = self
             .rotary_emb
             .apply_rotary_emb(&query_states, seqlen_offset)?;
@@ -221,15 +218,7 @@ impl Attention {
             .apply_rotary_emb(&key_states, seqlen_offset)?;
 
         // KV cache.
-        let (key_states, value_states) = match &self.kv_cache {
-            None => (key_states, value_states),
-            Some((prev_k, prev_v)) => {
-                let k = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let v = Tensor::cat(&[prev_v, &value_states], 2)?;
-                (k, v)
-            }
-        };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        let (key_states, value_states) = self.kv_cache.append(&key_states, &value_states)?;
 
         // Repeat kv.
         let key_states = self.repeat_kv(key_states)?.contiguous()?;
@@ -258,7 +247,7 @@ impl Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.kv_cache = None
+        self.kv_cache.reset()
     }
 }
 

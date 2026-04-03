@@ -40,7 +40,10 @@
 mod causal_lm;
 mod config;
 
-pub use causal_lm::{AutoModelForCausalLM, AutoModelOptions, CausalLM, QuantizationFormat};
+pub use causal_lm::{
+    AutoModelForCausalLM, AutoModelOptions, CausalLM, CacheSnapshot, LayerKvSnapshot,
+    QuantizationFormat,
+};
 pub use config::{AutoConfig, Weights};
 
 /// Build the `load_gguf_model` dispatch from a compact GGUF model registry.
@@ -122,7 +125,14 @@ macro_rules! make_auto_map {
 ///
 /// # Usage
 /// ```ignore
+/// // Basic (no snapshot support):
 /// crate::impl_causal_lm!(Model, "mistral");
+///
+/// // With KV-cache snapshot support for prefix caching.
+/// // Model must additionally expose:
+/// //   fn capture_kv_cache(&self) -> Box<dyn CacheSnapshot>
+/// //   fn apply_kv_cache(&mut self, snap: &LayerKvSnapshot)
+/// crate::impl_causal_lm!(Model, "mistral", snapshot);
 /// ```
 #[macro_export]
 macro_rules! impl_causal_lm {
@@ -147,6 +157,40 @@ macro_rules! impl_causal_lm {
             }
         }
     };
+
+    // Variant with KV-cache snapshot support.
+    // The model must expose two inherent methods:
+    //   fn capture_kv_cache(&self) -> Box<dyn CacheSnapshot>
+    //   fn apply_kv_cache(&mut self, snap: &LayerKvSnapshot)
+    ($ty:ty, $name:literal, snapshot) => {
+        impl $crate::auto::CausalLM for $ty {
+            fn model_type(&self) -> &'static str {
+                $name
+            }
+            #[allow(unconditional_recursion)]
+            fn forward(
+                &mut self,
+                ids: &::candle::Tensor,
+                offset: usize,
+            ) -> ::candle::Result<::candle::Tensor> {
+                let m: &mut $ty = self;
+                m.forward(ids, offset)
+            }
+            #[allow(unconditional_recursion)]
+            fn clear_kv_cache(&mut self) {
+                let m: &mut $ty = self;
+                m.clear_kv_cache()
+            }
+            fn snapshot_cache(&self) -> Option<Box<dyn $crate::auto::CacheSnapshot>> {
+                Some(self.capture_kv_cache())
+            }
+            fn restore_cache(&mut self, snap: &dyn $crate::auto::CacheSnapshot) {
+                if let Some(s) = snap.as_any().downcast_ref::<$crate::auto::LayerKvSnapshot>() {
+                    self.apply_kv_cache(s);
+                }
+            }
+        }
+    };
 }
 
 /// Generate a `*ForCausalLM` wrapper struct that bundles an inner model with
@@ -161,16 +205,30 @@ macro_rules! impl_causal_lm {
 ///
 /// # Usage
 /// ```ignore
+/// // Without snapshot support:
 /// crate::causal_lm_wrapper!(
 ///     LlamaForCausalLM, "llama",
 ///     model: llama::Llama,
 ///     cache: llama::Cache,
-///     cfg:   llama::LlamaConfig,
-///     inner_cfg: llama::Config,          // optional: config type accepted by load/Cache::new
+///     cfg:   llama::Config,
+/// );
+///
+/// // With KV-cache snapshot support (adds snapshot_cache / restore_cache).
+/// // The cache type must have a `kvs: Vec<Option<(Tensor, Tensor)>>` field
+/// // accessible from the call site (within the same module as Cache).
+/// crate::causal_lm_wrapper!(
+///     LlamaForCausalLM, "llama",
+///     model: llama::Llama,
+///     cache: llama::Cache,
+///     cfg:   llama::Config,
+///     snapshot,
 /// );
 /// ```
 #[macro_export]
 macro_rules! causal_lm_wrapper {
+    // -----------------------------------------------------------------------
+    // Base arm — no snapshot support.
+    // -----------------------------------------------------------------------
     (
         $wrapper:ident, $name:literal,
         model: $model_ty:ty,
@@ -199,10 +257,90 @@ macro_rules! causal_lm_wrapper {
             }
 
             pub fn clear_kv_cache(&mut self) {
-                self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
+                self.cache.kvs.iter_mut().for_each(|kv| kv.reset());
             }
         }
 
         $crate::impl_causal_lm!($wrapper, $name);
+    };
+
+    // -----------------------------------------------------------------------
+    // Snapshot arm — adds snapshot_cache / restore_cache to the CausalLM impl.
+    //
+    // Requirement: the cache type must have a `kvs: Vec<KvCache>` field
+    // accessible from the call site (i.e. within the same module as Cache).
+    // -----------------------------------------------------------------------
+    (
+        $wrapper:ident, $name:literal,
+        model: $model_ty:ty,
+        cache: $cache_ty:ty,
+        cfg:   $cfg_ty:ty,
+        snapshot,
+    ) => {
+        pub struct $wrapper {
+            model: $model_ty,
+            cache: $cache_ty,
+        }
+
+        impl $wrapper {
+            pub fn new(cfg: &$cfg_ty, vb: ::candle_nn::VarBuilder) -> ::candle::Result<Self> {
+                let model = <$model_ty>::load(vb.clone(), cfg)?;
+                let cache = <$cache_ty>::new(true, vb.dtype(), cfg, vb.device())?;
+                Ok(Self { model, cache })
+            }
+
+            pub fn forward(
+                &mut self,
+                input_ids: &::candle::Tensor,
+                seqlen_offset: usize,
+            ) -> ::candle::Result<::candle::Tensor> {
+                self.model
+                    .forward(input_ids, seqlen_offset, &mut self.cache)
+            }
+
+            pub fn clear_kv_cache(&mut self) {
+                self.cache.kvs.iter_mut().for_each(|kv| kv.reset());
+            }
+        }
+
+        impl $crate::auto::CausalLM for $wrapper {
+            fn model_type(&self) -> &'static str {
+                $name
+            }
+            #[allow(unconditional_recursion)]
+            fn forward(
+                &mut self,
+                ids: &::candle::Tensor,
+                offset: usize,
+            ) -> ::candle::Result<::candle::Tensor> {
+                let m: &mut $wrapper = self;
+                m.forward(ids, offset)
+            }
+            #[allow(unconditional_recursion)]
+            fn clear_kv_cache(&mut self) {
+                let m: &mut $wrapper = self;
+                m.clear_kv_cache()
+            }
+            fn snapshot_cache(&self) -> Option<Box<dyn $crate::auto::CacheSnapshot>> {
+                Some(Box::new($crate::auto::LayerKvSnapshot(
+                    self.cache.kvs.iter().map(|kv| {
+                        match (kv.k(), kv.v()) {
+                            (Ok(Some(k)), Ok(Some(v))) => Some((k, v)),
+                            _ => None,
+                        }
+                    }).collect(),
+                )))
+            }
+            fn restore_cache(&mut self, snap: &dyn $crate::auto::CacheSnapshot) {
+                if let Some(s) = snap.as_any().downcast_ref::<$crate::auto::LayerKvSnapshot>() {
+                    for (kv, slot) in self.cache.kvs.iter_mut().zip(s.0.iter()) {
+                        kv.reset();
+                        if let Some((k, v)) = slot {
+                            let _ = kv.append(k, v);
+                        }
+                    }
+                }
+            }
+        }
     };
 }

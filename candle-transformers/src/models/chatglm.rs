@@ -195,7 +195,7 @@ struct SelfAttention {
     num_attention_heads_per_partition: usize,
     num_multi_query_groups_per_partition: usize,
     hidden_size_per_attention_head: usize,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: candle_nn::kv_cache::KvCache,
 }
 
 impl SelfAttention {
@@ -228,12 +228,12 @@ impl SelfAttention {
             num_attention_heads_per_partition: cfg.num_attention_heads,
             num_multi_query_groups_per_partition: cfg.multi_query_group_num,
             hidden_size_per_attention_head: cfg.kv_channels,
-            kv_cache: None,
+            kv_cache: candle_nn::kv_cache::KvCache::new(0, cfg.seq_length),
         })
     }
 
     fn reset_kv_cache(&mut self) {
-        self.kv_cache = None
+        self.kv_cache.reset()
     }
 
     fn forward(
@@ -280,23 +280,12 @@ impl SelfAttention {
         ))?;
 
         // Rotary embeddings.
-        let seqlen_offset = match &self.kv_cache {
-            None => 0,
-            Some((prev_k, _)) => prev_k.dim(0)?,
-        };
+        let seqlen_offset = self.kv_cache.current_seq_len();
         let query_layer = rotary_emb.apply(&query_layer, seqlen_offset)?;
         let key_layer = rotary_emb.apply(&key_layer, seqlen_offset)?;
 
         // KV cache.
-        let (key_layer, value_layer) = match &self.kv_cache {
-            None => (key_layer, value_layer),
-            Some((prev_k, prev_v)) => {
-                let k = Tensor::cat(&[prev_k, &key_layer], 0)?;
-                let v = Tensor::cat(&[prev_v, &value_layer], 0)?;
-                (k, v)
-            }
-        };
-        self.kv_cache = Some((key_layer.clone(), value_layer.clone()));
+        let (key_layer, value_layer) = self.kv_cache.append(&key_layer, &value_layer)?;
 
         // Repeat KV.
         let ratio =

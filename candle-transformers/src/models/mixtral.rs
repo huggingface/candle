@@ -144,7 +144,7 @@ struct Attention {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: candle_nn::kv_cache::KvCache,
     use_flash_attn: bool,
 }
 
@@ -170,7 +170,7 @@ impl Attention {
             head_dim,
             hidden_size: hidden_sz,
             rotary_emb,
-            kv_cache: None,
+            kv_cache: candle_nn::kv_cache::KvCache::new(2, cfg.max_position_embeddings),
             use_flash_attn: cfg.use_flash_attn,
         })
     }
@@ -201,15 +201,7 @@ impl Attention {
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
 
-        let (key_states, value_states) = match &self.kv_cache {
-            None => (key_states, value_states),
-            Some((prev_k, prev_v)) => {
-                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
-                (key_states, value_states)
-            }
-        };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        let (key_states, value_states) = self.kv_cache.append(&key_states, &value_states)?;
 
         let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?;
         let value_states = crate::utils::repeat_kv(value_states, self.num_kv_groups)?;
@@ -482,7 +474,7 @@ impl Model {
     }
     pub fn clear_kv_cache(&mut self) {
         for layer in self.layers.iter_mut() {
-            layer.self_attn.kv_cache = None;
+            layer.self_attn.kv_cache.reset();
         }
     }
 }

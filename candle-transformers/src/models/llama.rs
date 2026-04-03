@@ -114,7 +114,7 @@ impl Config {
 pub struct Cache {
     masks: HashMap<(usize, usize), Tensor>,
     pub use_kv_cache: bool,
-    kvs: Vec<Option<(Tensor, Tensor)>>,
+    pub(crate) kvs: Vec<candle_nn::kv_cache::KvCache>,
     cos: Tensor,
     sin: Tensor,
     device: Device,
@@ -176,7 +176,9 @@ impl Cache {
         Ok(Self {
             masks: HashMap::new(),
             use_kv_cache,
-            kvs: vec![None; config.num_hidden_layers],
+            kvs: (0..config.num_hidden_layers)
+                .map(|_| candle_nn::kv_cache::KvCache::new(2, config.max_position_embeddings))
+                .collect(),
             device: device.clone(),
             cos,
             sin,
@@ -264,31 +266,9 @@ impl CausalSelfAttention {
         let mut k = self.apply_rotary_emb(&k, index_pos, cache)?;
 
         if cache.use_kv_cache {
-            if let Some((cache_k, cache_v)) = &cache.kvs[block_idx] {
-                k = Tensor::cat(&[cache_k, &k], 2)?.contiguous()?;
-                v = Tensor::cat(&[cache_v, &v], 2)?.contiguous()?;
-                let k_seq_len = k.dims()[1];
-                if k_seq_len > self.max_position_embeddings {
-                    k = k
-                        .narrow(
-                            D::Minus1,
-                            k_seq_len - self.max_position_embeddings,
-                            self.max_position_embeddings,
-                        )?
-                        .contiguous()?
-                }
-                let v_seq_len = v.dims()[1];
-                if v_seq_len > 2 * self.max_position_embeddings {
-                    v = v
-                        .narrow(
-                            D::Minus1,
-                            v_seq_len - self.max_position_embeddings,
-                            self.max_position_embeddings,
-                        )?
-                        .contiguous()?
-                }
-            }
-            cache.kvs[block_idx] = Some((k.clone(), v.clone()))
+            let (k_out, v_out) = cache.kvs[block_idx].append(&k, &v)?;
+            k = k_out;
+            v = v_out;
         }
 
         let k = self.repeat_kv(k)?;
@@ -505,4 +485,5 @@ crate::causal_lm_wrapper!(LlamaForCausalLM, "llama",
     model: Llama,
     cache: Cache,
     cfg:   Config,
+    snapshot,
 );
