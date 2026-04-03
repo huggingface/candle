@@ -79,4 +79,15 @@ mdl!(SORT, Sort);
 mdl!(TERNARY, Ternary);
 mdl!(UNARY, Unary);
 
+pub mod capabilities;
 pub mod ffi;
+pub mod moe_selection;
+
+#[doc(hidden)]
+pub mod adaptive {
+    pub use crate::capabilities::*;
+    pub use crate::moe_selection::{
+        select_moe_backend, select_moe_backend as select_moe_kernel, MOE_BACKEND_HFMA2,
+        MOE_BACKEND_WMMA,
+    };
+}
