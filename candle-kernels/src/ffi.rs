@@ -1,3 +1,4 @@
+use crate::moe_selection::{select_moe_backend, MOE_BACKEND_WMMA};
 use core::ffi::c_void;
 //const DTYPE_F16: i32 = 0;
 const DTYPE_BF16: i32 = 1;
@@ -44,7 +45,7 @@ extern "C" {
     );
 }
 
-pub unsafe fn dispatch_moe(
+pub unsafe fn dispatch_moe_gemm(
     input: *const c_void,
     weights: *const c_void,
     sorted_token_ids: *const i32,
@@ -62,13 +63,8 @@ pub unsafe fn dispatch_moe(
     is_prefill: bool,
     stream: i64,
 ) {
-    let kernel = crate::adaptive::select_moe_kernel(
-        size_m as usize,
-        size_n as usize,
-        size_k as usize,
-        dtype,
-    );
-    if kernel == "wmma" {
+    let backend = select_moe_backend(size_m as usize, size_n as usize, size_k as usize, dtype);
+    if backend == MOE_BACKEND_WMMA {
         moe_gemm_wmma(
             input,
             weights,
@@ -111,6 +107,44 @@ pub unsafe fn dispatch_moe(
             stream,
         );
     }
+}
+
+pub unsafe fn dispatch_moe(
+    input: *const c_void,
+    weights: *const c_void,
+    sorted_token_ids: *const i32,
+    expert_ids: *const i32,
+    topk_weights: *const f32,
+    output: *mut c_void,
+    expert_counts: *mut i32,
+    expert_offsets: *mut i32,
+    num_experts: i32,
+    topk: i32,
+    size_m: i32,
+    size_n: i32,
+    size_k: i32,
+    dtype: i32,
+    is_prefill: bool,
+    stream: i64,
+) {
+    dispatch_moe_gemm(
+        input,
+        weights,
+        sorted_token_ids,
+        expert_ids,
+        topk_weights,
+        output,
+        expert_counts,
+        expert_offsets,
+        num_experts,
+        topk,
+        size_m,
+        size_n,
+        size_k,
+        dtype,
+        is_prefill,
+        stream,
+    )
 }
 
 extern "C" {
@@ -160,7 +194,7 @@ mod tests {
     unsafe impl ValidAsZeroBits for F16 {}
 
     #[test]
-    fn test_moe_gemm_wmma() {
+    fn test_moe_gemm_dispatch_f16() {
         let ctx = CudaContext::new(0).expect("Failed to create CUDA context");
         let stream = ctx.default_stream();
 
@@ -206,7 +240,7 @@ mod tests {
             .expect("Alloc failed");
 
         unsafe {
-            moe_gemm_wmma(
+            dispatch_moe_gemm(
                 input_dev.device_ptr(&stream).0 as *const _,
                 weights_dev.device_ptr(&stream).0 as *const _,
                 sorted_token_ids_dev.device_ptr(&stream).0 as *const _,
@@ -295,7 +329,7 @@ mod tests {
             .expect("Alloc failed");
 
         unsafe {
-            dispatch_moe(
+            dispatch_moe_gemm(
                 input_dev.device_ptr(&stream).0 as *const _,
                 weights_dev.device_ptr(&stream).0 as *const _,
                 sorted_token_ids_dev.device_ptr(&stream).0 as *const _,

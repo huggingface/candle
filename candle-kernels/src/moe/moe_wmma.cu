@@ -25,7 +25,7 @@
 #include "moe_utils.cuh"
 constexpr int WMMA_K = 16;
 
-#if __CUDA_ARCH__ >= 700
+#if HAS_WMMA
 using namespace nvcuda::wmma;
 #endif
 
@@ -65,7 +65,7 @@ constexpr int K_BLK = WMMA_K;           // 16
  *  @param size_n           Output hidden dimension (per expert)
  *  @param size_k           Input hidden dimension
 */
-#if __CUDA_ARCH__ >= 700
+#if HAS_WMMA
 template<typename T, int WMMA_M, int WMMA_N, int WARPS_N>
 __global__ void moe_gemm_grouped_kernel(
     const T* __restrict__ input,           // [size_m, size_k]
@@ -224,7 +224,7 @@ __global__ void moe_gemm_grouped_kernel(
 
 }
 
-#if __CUDA_ARCH__ >= 700
+#if HAS_WMMA
 #define LAUNCH_MOE_WMMA(DTYPE, WMMA_M, WMMA_N, WARPS_N)\
     vllm_rs::moe_gemm_grouped_kernel<DTYPE, WMMA_M, WMMA_N, WARPS_N><<<grid, block, smem_bytes, stream>>>(\
         reinterpret_cast<const DTYPE*>(input),\
@@ -277,14 +277,14 @@ extern "C" void moe_gemm_wmma(
     bool is_prefill,
     cudaStream_t stream
 ) {
-    // Fallback to hfma2 for architectures without WMMA support
+    // Rust selects the preferred backend; keep a build-time fallback for direct callers/tests.
     if (data_type == 0) { // half
-#if __CUDA_ARCH__ < 700
+#if !HAS_WMMA_F16
         moe_gemm_hfma2(input, weights, sorted_token_ids, expert_ids, topk_weights, output, expert_counts, expert_offsets, num_experts, topk, size_m, size_n, size_k, data_type, is_prefill, stream);
         return;
 #endif
     } else if (data_type == 1) { // bfloat16
-#if __CUDA_ARCH__ < 800
+#if !HAS_WMMA_BF16
         moe_gemm_hfma2(input, weights, sorted_token_ids, expert_ids, topk_weights, output, expert_counts, expert_offsets, num_experts, topk, size_m, size_n, size_k, data_type, is_prefill, stream);
         return;
 #endif
@@ -309,7 +309,7 @@ extern "C" void moe_gemm_wmma(
     size_t smem_bytes = AB_bytes + pad + C_sh_bytes; // ~6KB total needed
 
     if (data_type == 0) { // half
-#if __CUDA_ARCH__ >= 700
+#if HAS_WMMA_F16
         if (is_prefill) {
             LAUNCH_MOE_WMMA(half, 16, 16, 2)
         } else {
@@ -318,7 +318,7 @@ extern "C" void moe_gemm_wmma(
         }
 #endif
     } else if (data_type == 1) { // bfloat16
-#if __CUDA_ARCH__ >= 800
+#if HAS_WMMA_BF16
         if (is_prefill) {
             LAUNCH_MOE_WMMA(nv_bfloat16, 16, 16, 2)
         } else {
