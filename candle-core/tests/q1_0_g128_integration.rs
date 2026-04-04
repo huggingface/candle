@@ -5,8 +5,8 @@
 // This test ONLY reads GGUF metadata — no inference, no matmul.
 // Memory needed: ~50MB
 
-use candle_core::{Device, Result};
 use candle_core::quantized::gguf_file;
+use candle_core::{Device, Result};
 
 #[test]
 fn test_q1_0_g128_tensor_detection() -> Result<()> {
@@ -26,7 +26,10 @@ fn test_q1_0_g128_tensor_detection() -> Result<()> {
     let mut q1_0_g128_names = Vec::new();
 
     for (name, info) in &content.tensor_infos {
-        if matches!(info.ggml_dtype, candle_core::quantized::GgmlDType::Q1_0_g128) {
+        if matches!(
+            info.ggml_dtype,
+            candle_core::quantized::GgmlDType::Q1_0_g128
+        ) {
             q1_0_g128_count += 1;
             q1_0_g128_names.push(name.clone());
         }
@@ -37,7 +40,9 @@ fn test_q1_0_g128_tensor_detection() -> Result<()> {
 
     if q1_0_g128_count == 0 {
         println!("ERROR: No Q1_0_g128 tensors found!");
-        return Err(candle_core::Error::Msg("No Q1_0_g128 tensors found".to_string()));
+        return Err(candle_core::Error::Msg(
+            "No Q1_0_g128 tensors found".to_string(),
+        ));
     }
 
     println!("Sample tensor names:");
@@ -62,20 +67,28 @@ fn test_q1_0_g128_tensor_loading() -> Result<()> {
     // Find first Q1_0_g128 tensor
     let mut first_q1_0_tensor = None;
     for (name, info) in &content.tensor_infos {
-        if matches!(info.ggml_dtype, candle_core::quantized::GgmlDType::Q1_0_g128) {
+        if matches!(
+            info.ggml_dtype,
+            candle_core::quantized::GgmlDType::Q1_0_g128
+        ) {
             first_q1_0_tensor = Some(name.clone());
             break;
         }
     }
 
-    let tensor_name = first_q1_0_tensor.ok_or_else(|| candle_core::Error::Msg("No Q1_0_g128 tensor found".to_string()))?;
+    let tensor_name = first_q1_0_tensor
+        .ok_or_else(|| candle_core::Error::Msg("No Q1_0_g128 tensor found".to_string()))?;
 
     println!("Loading tensor: {}", tensor_name);
 
     let info = &content.tensor_infos[&tensor_name];
     let loaded = info.read(&mut file, content.tensor_data_offset, &device)?;
 
-    println!("Loaded! shape={:?}, dtype={:?}", loaded.shape(), loaded.dtype());
+    println!(
+        "Loaded! shape={:?}, dtype={:?}",
+        loaded.shape(),
+        loaded.dtype()
+    );
 
     println!();
     println!("✓ Q1_0_g128 tensor loading: PASS");

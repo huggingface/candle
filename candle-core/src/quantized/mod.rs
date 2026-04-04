@@ -344,7 +344,10 @@ impl GgmlDType {
             Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
             Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
             Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
-            Self::Q1_0_g128 => Box::new(vec![BlockQ1_0_g128::zeros(); elem_count / BlockQ1_0_g128::BLCK_SIZE]),
+            Self::Q1_0_g128 => Box::new(vec![
+                BlockQ1_0_g128::zeros();
+                elem_count / BlockQ1_0_g128::BLCK_SIZE
+            ]),
         }
     }
 

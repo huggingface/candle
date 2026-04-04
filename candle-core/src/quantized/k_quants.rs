@@ -15,6 +15,15 @@ pub const K_SCALE_SIZE: usize = 12;
 
 // Q1_0_g128 — 1-bit quantization with 128-element blocks (PrismML/Bonsai format)
 // Weight = bit ? +d : -d, paired with Q8_0 for matmul
+//
+// Performance notes:
+// - Block size: 128 elements (2x larger than Q4_0's 64)
+// - Block size in bytes: 18 bytes (2 byte scale + 16 byte bits) vs Q4_0's 18 bytes
+// - Bits per weight: 1 bit (vs Q4_0's 4 bits)
+// - Memory bandwidth: ~50% of Q4_0 (1 bit vs 4 bits per weight)
+// - vec_dot pairs 1 Q1_0_g128 block with 4 Q8_0 blocks (ratio 4:1, same as Q4_0)
+// - Per-token latency expected: faster than Q4_0 due to lower memory bandwidth requirement
+// - Reference: https://github.com/PrismML-Eng/llama.cpp/blob/master/ggml/src/ggml-cpu/quants.c
 pub const QK1_0_G128: usize = 128;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2567,10 +2576,7 @@ impl GgmlType for BlockQ1_0_g128 {
             "vec_dot: {n} not divisible by {}",
             QK1_0_G128
         );
-        debug_assert!(
-            xs.len() * RATIO <= ys.len(),
-            "not enough Q8_0 blocks"
-        );
+        debug_assert!(xs.len() * RATIO <= ys.len(), "not enough Q8_0 blocks");
 
         let nb = n / QK1_0_G128;
         let mut sumf = 0f32;
@@ -2589,7 +2595,11 @@ impl GgmlType for BlockQ1_0_g128 {
                     let byte_index = bit_index / 8;
                     let bit_offset = bit_index % 8;
                     // 1-bit: 1 → +1, 0 → -1
-                    let xi = if (xs[i].qs[byte_index] >> bit_offset) & 1 != 0 { 1i32 } else { -1i32 };
+                    let xi = if (xs[i].qs[byte_index] >> bit_offset) & 1 != 0 {
+                        1i32
+                    } else {
+                        -1i32
+                    };
                     let yi = yb.qs[j] as i32;
                     sumi_block += xi * yi;
                 }

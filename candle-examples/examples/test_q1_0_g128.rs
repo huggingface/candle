@@ -4,8 +4,8 @@
 // This only loads tensor METADATA (headers), not full weight data.
 // Total memory needed: ~50MB
 
-use candle_core::{Device, Result};
 use candle_core::quantized::gguf_file;
+use candle_core::{Device, Result};
 use std::fs::File;
 
 fn main() -> Result<()> {
@@ -26,11 +26,15 @@ fn main() -> Result<()> {
 
     // Categorize all tensors by dtype
     let mut q1_0_g128_tensors = Vec::new();
-    let mut other_dtypes: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut other_dtypes: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     for (name, info) in &content.tensor_infos {
         let dtype_name = format!("{:?}", info.ggml_dtype);
-        if matches!(info.ggml_dtype, candle_core::quantized::GgmlDType::Q1_0_g128) {
+        if matches!(
+            info.ggml_dtype,
+            candle_core::quantized::GgmlDType::Q1_0_g128
+        ) {
             q1_0_g128_tensors.push((name.clone(), info.shape.clone()));
         } else {
             *other_dtypes.entry(dtype_name).or_insert(0) += 1;
@@ -46,7 +50,9 @@ fn main() -> Result<()> {
     println!("=== Q1_0_g128 tensors ({}) ===", q1_0_g128_tensors.len());
     if q1_0_g128_tensors.is_empty() {
         println!("  NONE FOUND — check if this is actually a Q1_0_g128 GGUF!");
-        return Err(candle_core::Error::Msg("No Q1_0_g128 tensors found".to_string()));
+        return Err(candle_core::Error::Msg(
+            "No Q1_0_g128 tensors found".to_string(),
+        ));
     }
     for (name, shape) in &q1_0_g128_tensors {
         println!("  ✓ {}: shape={:?}", name, shape);
