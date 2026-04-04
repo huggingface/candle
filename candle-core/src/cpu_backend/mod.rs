@@ -585,6 +585,143 @@ impl Map1 for UpsampleBilinear2D {
     }
 }
 
+/// Keys cubic kernel with a = -0.75, matching PyTorch's default.
+#[inline(always)]
+fn cubic_kernel(t: f64) -> f64 {
+    let a = -0.75_f64;
+    let t = t.abs();
+    if t < 1.0 {
+        (a + 2.0) * t * t * t - (a + 3.0) * t * t + 1.0
+    } else if t < 2.0 {
+        a * t * t * t - 5.0 * a * t * t + 8.0 * a * t - 4.0 * a
+    } else {
+        0.0
+    }
+}
+
+struct UpsampleBicubic2D {
+    target_h: usize,
+    target_w: usize,
+    align_corners: bool,
+    scale_h_factor: Option<f64>,
+    scale_w_factor: Option<f64>,
+}
+
+impl Map1 for UpsampleBicubic2D {
+    fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
+        let (batch, channels, height_in, width_in) = layout.shape().dims4()?;
+        let height_out = self.target_h;
+        let width_out = self.target_w;
+
+        if height_in == height_out && width_in == width_out {
+            return Ok(src.to_vec());
+        }
+
+        let stride = layout.stride();
+        let src_offset = layout.start_offset();
+
+        // Scale factors: match PyTorch's area_pixel_compute_scale logic
+        let scale_h = if self.align_corners {
+            if height_out > 1 {
+                (height_in - 1) as f64 / (height_out - 1) as f64
+            } else {
+                0.0
+            }
+        } else if let Some(sf) = self.scale_h_factor {
+            1.0 / sf
+        } else {
+            height_in as f64 / height_out as f64
+        };
+
+        let scale_w = if self.align_corners {
+            if width_out > 1 {
+                (width_in - 1) as f64 / (width_out - 1) as f64
+            } else {
+                0.0
+            }
+        } else if let Some(sf) = self.scale_w_factor {
+            1.0 / sf
+        } else {
+            width_in as f64 / width_out as f64
+        };
+
+        // Precompute: for each output row, the 4 clamped source rows and their kernel weights
+        let clamp_h = |v: isize| (v.max(0) as usize).min(height_in - 1);
+        let clamp_w = |v: isize| (v.max(0) as usize).min(width_in - 1);
+
+        type BicubicInfo = (usize, usize, usize, usize, f64, f64, f64, f64);
+
+        let mut h_info: Vec<BicubicInfo> = Vec::with_capacity(height_out);
+        for h_out in 0..height_out {
+            let src_h = if self.align_corners {
+                scale_h * h_out as f64
+            } else {
+                scale_h * (h_out as f64 + 0.5) - 0.5
+            };
+            let h_floor = src_h.floor() as isize;
+            let t = src_h - h_floor as f64; // in [0, 1)
+            h_info.push((
+                clamp_h(h_floor - 1),
+                clamp_h(h_floor),
+                clamp_h(h_floor + 1),
+                clamp_h(h_floor + 2),
+                cubic_kernel(t + 1.0),
+                cubic_kernel(t),
+                cubic_kernel(t - 1.0),
+                cubic_kernel(t - 2.0),
+            ));
+        }
+
+        let mut w_info: Vec<BicubicInfo> = Vec::with_capacity(width_out);
+        for w_out in 0..width_out {
+            let src_w = if self.align_corners {
+                scale_w * w_out as f64
+            } else {
+                scale_w * (w_out as f64 + 0.5) - 0.5
+            };
+            let w_floor = src_w.floor() as isize;
+            let t = src_w - w_floor as f64;
+            w_info.push((
+                clamp_w(w_floor - 1),
+                clamp_w(w_floor),
+                clamp_w(w_floor + 1),
+                clamp_w(w_floor + 2),
+                cubic_kernel(t + 1.0),
+                cubic_kernel(t),
+                cubic_kernel(t - 1.0),
+                cubic_kernel(t - 2.0),
+            ));
+        }
+
+        let mut dst = vec![T::zero(); batch * channels * height_out * width_out];
+
+        for b in 0..batch {
+            for c in 0..channels {
+                let base_idx = src_offset + b * stride[0] + c * stride[1];
+                let dst_base = (b * channels + c) * height_out * width_out;
+
+                for (h_out, &(h0, h1, h2, h3, kh0, kh1, kh2, kh3)) in h_info.iter().enumerate() {
+                    for (w_out, &(w0, w1, w2, w3, kw0, kw1, kw2, kw3)) in w_info.iter().enumerate()
+                    {
+                        // 1-D cubic interpolation along width for each of the 4 rows,
+                        // then combine along height.
+                        let row = |hr: usize| -> f64 {
+                            let r = base_idx + hr * stride[2];
+                            src[r + w0 * stride[3]].to_f64() * kw0
+                                + src[r + w1 * stride[3]].to_f64() * kw1
+                                + src[r + w2 * stride[3]].to_f64() * kw2
+                                + src[r + w3 * stride[3]].to_f64() * kw3
+                        };
+                        let value = row(h0) * kh0 + row(h1) * kh1 + row(h2) * kh2 + row(h3) * kh3;
+                        dst[dst_base + h_out * width_out + w_out] = T::from_f64(value);
+                    }
+                }
+            }
+        }
+        Ok(dst)
+    }
+}
+
 struct Gather<'a, I: IntDType> {
     ids: &'a [I],
     ids_l: &'a Layout,
@@ -2366,6 +2503,25 @@ impl BackendStorage for CpuStorage {
         scale_w: Option<f64>,
     ) -> Result<Self> {
         UpsampleBilinear2D {
+            target_h: h,
+            target_w: w,
+            align_corners,
+            scale_h_factor: scale_h,
+            scale_w_factor: scale_w,
+        }
+        .map(self, layout)
+    }
+
+    fn upsample_bicubic2d(
+        &self,
+        layout: &Layout,
+        h: usize,
+        w: usize,
+        align_corners: bool,
+        scale_h: Option<f64>,
+        scale_w: Option<f64>,
+    ) -> Result<Self> {
+        UpsampleBicubic2D {
             target_h: h,
             target_w: w,
             align_corners,
