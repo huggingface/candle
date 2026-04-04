@@ -245,8 +245,24 @@ fn tiles_to_tensor(
 }
 
 // ---------------------------------------------------------------------------
-// Prompt construction
+// Prompt construction (matches HuggingFace chat_template)
 // ---------------------------------------------------------------------------
+
+const SYSTEM_MESSAGE: &str =
+    "You are a helpful assistant. Please ensure responses are professional, accurate, and safe.";
+
+/// Expand task tags into their full prompt text (matching the HF chat template).
+fn expand_task_tag(task: &str) -> &'static str {
+    match task {
+        "tables_json" => "Identify and extract the tabls schema\n Extruct the schema of all the tables in the image sorted according to the reading order.\nThe output must be a valid JSON object containing a list of dictionaries with the following structure:\n\n                {\n                    \"dimensions\": {\n                        \"rows\": <number of data rows (excluding header rows)>,\n                        \"columns\": <number of columns>,\n                        \"header_rows\": <number of header rows>,\n                        \"total_rows\": <total number of rows including headers>\n                    },\n                    \"cells\": [\n                        {\n                        \"row\": <row index starting at 1>,\n                        \"col\": <column index starting at 1>,\n                        \"colspan\": <number of columns spanned>,\n                        \"rowspan\": <number of rows spanned>,\n                        \"type\": \"<'header' or 'data'>\",\n                        \"header_level\": <header nesting level if type=header, else omit or null>,\n                        \"content\": \"<string content of the cell>\"\n                        },\n                        ...\n                    ]\n                }",
+        "tables_html" => "Identify and extract the tabls schema\n Extruct the schema of all the tables in the image sorted according to the reading order.\nThe output must be a list of valid HTML tables",
+        "tables_otsl" => "Identify and extract the tabls schema\n Extruct the schema of all the tables in the image sorted according to the reading order.\nThe output must be a list of valid OTSL objects, each consists of the following fields: \n                        <fcel> - a cell with content in it\n                        <ecel> - an empty cell\n                        <lcel> - a cell that is merged with the cell to its left\n                        <ucel> - a cell that is merged with the cell above it\n                        <xcel> - a cell that is merged with both the cell above it and the cell to its left\n                        <nl> - a new line\n                        <ched> - a clumn header\n                        <otsl> - the beginning of the OTSL table\n                        </otsl> - the end of the OTSL table\n\n                        An example for an output:\n                        [\n                        <otsl><ched>first table header1<ched>first table header2<nl><fcel>data1<fcel>data2<nl><fcel>data with horizontal span<lcel><nl><fcell>data with vertical span<ecel><nl><ucel><fcel>data3<nl></otsl>,\n                        <otsl><ched>second table header1<ched>second table header2<nl><fcel>data1<fcel>data2<nl><fcel>data with horizontal span<lcel><nl><fcell>data with vertical span<ecel><nl><ucel><fcel>data3<nl></otsl>\n                        ]",
+        "chart2code" => "Generate code that recreates the chart as best as possible.",
+        "chart2csv" => "Please examine this chart image. Consider you are a data visualization expert, and extract the data into a CSV table.\n\nYour CSV should:\n- Include a header row with clear column names\n- Represent all data series/categories shown in the chart\n- Use numeric values that match the chart as closely as possible\n\nOutput only the CSV data, nothing else.",
+        "chart2summary" => "Can you describe this chart image?",
+        _ => "",
+    }
+}
 
 fn build_input_ids(
     tokenizer: &Tokenizer,
@@ -254,25 +270,38 @@ fn build_input_ids(
     num_image_tokens: usize,
     image_token_id: u32,
 ) -> Result<Vec<u32>> {
+    let system_text = tokenizer.encode("system", false).map_err(E::msg)?;
+    let system_msg = tokenizer.encode(SYSTEM_MESSAGE, false).map_err(E::msg)?;
     let user_text = tokenizer.encode("user", false).map_err(E::msg)?;
     let prompt_enc = tokenizer.encode(prompt_text, false).map_err(E::msg)?;
     let assistant_text = tokenizer.encode("assistant", false).map_err(E::msg)?;
 
     let mut ids: Vec<u32> = Vec::new();
 
+    // <|start_of_role|>system<|end_of_role|>{system_message}<|end_of_text|>\n
+    ids.push(START_OF_ROLE);
+    ids.extend_from_slice(system_text.get_ids());
+    ids.push(END_OF_ROLE);
+    ids.extend_from_slice(system_msg.get_ids());
+    ids.push(END_OF_TEXT);
+    // \n is token 198 for this tokenizer
+    let newline = tokenizer.encode("\n", false).map_err(E::msg)?;
+    ids.extend_from_slice(newline.get_ids());
+
     // <|start_of_role|>user<|end_of_role|>
     ids.push(START_OF_ROLE);
     ids.extend_from_slice(user_text.get_ids());
     ids.push(END_OF_ROLE);
 
-    // <image> tokens
+    // <image>\n tokens
     ids.extend(std::iter::repeat_n(image_token_id, num_image_tokens));
 
     // prompt text
     ids.extend_from_slice(prompt_enc.get_ids());
 
-    // <|end_of_text|>
+    // <|end_of_text|>\n
     ids.push(END_OF_TEXT);
+    ids.extend_from_slice(newline.get_ids());
 
     // <|start_of_role|>assistant<|end_of_role|>
     ids.push(START_OF_ROLE);
@@ -453,19 +482,17 @@ fn main() -> Result<()> {
         &device,
     )?;
 
-    // Build prompt
-    let prompt_text = args.prompt.as_deref().unwrap_or_else(|| {
-        match args.task.as_str() {
-            "tables_json" | "tables_html" | "tables_otsl" |
-            "chart2csv" | "chart2code" | "chart2summary" => "",
-            _ => "",
-        }
-    });
-    let task_tag = format!("<{}>", args.task);
-    let full_prompt = if prompt_text.is_empty() {
-        task_tag
+    // Build prompt: expand task tag to full instruction (matching HF chat_template).
+    // The \n prefix separates image tokens from instruction (matches Python template).
+    let full_prompt = if let Some(ref custom) = args.prompt {
+        format!("\n{custom}")
     } else {
-        format!("{task_tag}\n{prompt_text}")
+        let expanded = expand_task_tag(&args.task);
+        if expanded.is_empty() {
+            format!("\n<{}>", args.task)
+        } else {
+            format!("\n{expanded}")
+        }
     };
 
     let input_ids = build_input_ids(
