@@ -60,6 +60,13 @@ impl KernelSource for IndexingKernel {
     const CODE: &'static str = include_str!("kernels/indexing.hip");
 }
 
+/// Cast operations kernel source
+pub struct CastKernel;
+impl KernelSource for CastKernel {
+    const NAME: &'static str = "cast";
+    const CODE: &'static str = include_str!("kernels/cast.hip");
+}
+
 /// Binary operation types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {

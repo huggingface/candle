@@ -436,6 +436,31 @@ macro_rules! dispatch_miopen_conv {
     }};
 }
 
+macro_rules! cast_launch {
+    ($dev:expr, $kernel:expr, $grid:expr, $block:expr, $el:expr, $dims_len:expr, $ds_ptr:expr, $src_ptr:expr, $stream:expr, $rust_type:ty, $variant:ident) => {{
+        let out = $dev.alloc::<$rust_type>($el)?;
+        let out_ptr = out.as_ptr() as *mut std::ffi::c_void;
+        unsafe {
+            $kernel
+                .launch(
+                    $grid,
+                    $block,
+                    0,
+                    Some($stream),
+                    &mut [
+                        &$el as *const usize as *mut std::ffi::c_void,
+                        &$dims_len as *const usize as *mut std::ffi::c_void,
+                        (&$ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                        (&$src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                        (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    ],
+                )
+                .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+        }
+        RocmStorageSlice::$variant(out)
+    }};
+}
+
 pub fn kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> String {
     let type_name = std::any::type_name::<T>();
     let suffix = if type_name.contains("f32") {
@@ -1289,10 +1314,145 @@ impl BackendStorage for RocmStorage {
         ))
     }
 
-    fn to_dtype(&self, _l: &Layout, _dtype: DType) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "to_dtype not yet implemented for ROCm".to_string(),
-        ))
+    fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
+        use candle_rocm_kernels::CastKernel;
+
+        let shape = layout.shape();
+        let dims = shape.dims();
+        let el = shape.elem_count();
+        let dev = self.device.clone();
+
+        let ds = dims_and_strides(&dev, layout, 1)?;
+        let start_o = layout.start_offset();
+        let src_ptr = unsafe { self.slice.offset_ptr(start_o) };
+
+        let func_name = format!("cast_{}_{}", self.slice.dtype().as_str(), dtype.as_str());
+
+        let (grid, block) = launch_config(el);
+        let ds_ptr: *const usize = ds
+            .as_ref()
+            .map(|d| d.as_ptr() as *const usize)
+            .unwrap_or(std::ptr::null());
+
+        let slice = {
+            let kernel_manager = dev
+                .kernel_manager()
+                .lock()
+                .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
+            let module = kernel_manager
+                .get_or_load(CastKernel::NAME, CastKernel::CODE)
+                .map_err(|e| crate::Error::Msg(e.to_string()))?;
+            let kernel = module
+                .get_function(&func_name)
+                .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
+
+            match dtype {
+                DType::U8 => cast_launch!(
+                    dev,
+                    kernel,
+                    grid,
+                    block,
+                    el,
+                    dims.len(),
+                    ds_ptr,
+                    src_ptr,
+                    &dev.stream,
+                    u8,
+                    U8
+                ),
+                DType::U32 => cast_launch!(
+                    dev,
+                    kernel,
+                    grid,
+                    block,
+                    el,
+                    dims.len(),
+                    ds_ptr,
+                    src_ptr,
+                    &dev.stream,
+                    u32,
+                    U32
+                ),
+                DType::I64 => cast_launch!(
+                    dev,
+                    kernel,
+                    grid,
+                    block,
+                    el,
+                    dims.len(),
+                    ds_ptr,
+                    src_ptr,
+                    &dev.stream,
+                    i64,
+                    I64
+                ),
+                DType::BF16 => cast_launch!(
+                    dev,
+                    kernel,
+                    grid,
+                    block,
+                    el,
+                    dims.len(),
+                    ds_ptr,
+                    src_ptr,
+                    &dev.stream,
+                    bf16,
+                    BF16
+                ),
+                DType::F16 => cast_launch!(
+                    dev,
+                    kernel,
+                    grid,
+                    block,
+                    el,
+                    dims.len(),
+                    ds_ptr,
+                    src_ptr,
+                    &dev.stream,
+                    f16,
+                    F16
+                ),
+                DType::F32 => cast_launch!(
+                    dev,
+                    kernel,
+                    grid,
+                    block,
+                    el,
+                    dims.len(),
+                    ds_ptr,
+                    src_ptr,
+                    &dev.stream,
+                    f32,
+                    F32
+                ),
+                DType::F64 => cast_launch!(
+                    dev,
+                    kernel,
+                    grid,
+                    block,
+                    el,
+                    dims.len(),
+                    ds_ptr,
+                    src_ptr,
+                    &dev.stream,
+                    f64,
+                    F64
+                ),
+                DType::I16 | DType::I32 => {
+                    return Err(crate::Error::Msg(
+                        "i16/i32 dtypes are not supported for to_dtype on ROCm".to_string(),
+                    ))
+                }
+                DType::F8E4M3 | DType::F4 | DType::F6E2M3 | DType::F6E3M2 | DType::F8E8M0 => {
+                    return Err(crate::Error::Msg(format!(
+                        "{:?} dtype is not supported for to_dtype on ROCm",
+                        dtype
+                    )))
+                }
+            }
+        };
+
+        Ok(Self { slice, device: dev })
     }
 
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
