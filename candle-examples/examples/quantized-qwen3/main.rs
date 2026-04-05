@@ -95,6 +95,10 @@ struct Args {
     /// The model size to use.
     #[arg(long, default_value = "0.6b")]
     which: Which,
+
+    /// Use CPU flash attention (fused kernel, no mask materialization).
+    #[arg(long)]
+    use_flash_attn: bool,
 }
 
 impl Args {
@@ -203,7 +207,7 @@ fn main() -> anyhow::Result<()> {
             &format_size(total_size_in_bytes),
             start.elapsed().as_secs_f32(),
         );
-        Qwen3::from_gguf(model, &mut file, &device)?
+        Qwen3::from_gguf(model, &mut file, &device, args.use_flash_attn)?
     };
     println!("model built");
 
