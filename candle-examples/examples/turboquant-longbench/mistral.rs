@@ -5,12 +5,12 @@
 //! - [GitHub](https://github.com/mistralai/mistral-src)
 //!
 
-use candle_nn::{linear_no_bias, Linear, RmsNorm, rms_norm};
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle::{DType, Device, Module, Result, Tensor, D};
+use candle_nn::quant_kv::{QuantAlgorithm, QuantizedKvCache};
+use candle_nn::{linear_no_bias, rms_norm, Linear, RmsNorm};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
-use candle_nn::quant_kv::{QuantAlgorithm, QuantizedKvCache};
 
 fn default_num_attention_heads() -> usize {
     32
@@ -217,7 +217,12 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder, quant_algo: QuantAlgorithm) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        quant_algo: QuantAlgorithm,
+    ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -289,8 +294,9 @@ impl Attention {
         let kv_cache = self.kv_cache.as_mut().unwrap();
         kv_cache.append(&key_states, &value_states)?;
 
-        let attn_weights = (kv_cache.attention_scores(&query_states)? / (self.head_dim as f64).sqrt())?;
-        
+        let attn_weights =
+            (kv_cache.attention_scores(&query_states)? / (self.head_dim as f64).sqrt())?;
+
         let attn_weights = match attention_mask {
             None => attn_weights,
             Some(mask) => {
@@ -298,7 +304,7 @@ impl Attention {
                 attn_weights.broadcast_add(&mask)?
             }
         };
-        
+
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let v_full = kv_cache.v()?.unwrap();
         let attn_output = attn_weights.matmul(&v_full.contiguous()?)?;
@@ -321,7 +327,12 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder, quant_algo: QuantAlgorithm) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        quant_algo: QuantAlgorithm,
+    ) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), quant_algo)?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
@@ -378,7 +389,12 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), quant_algo.clone())?;
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                vb_l.pp(layer_idx),
+                quant_algo.clone(),
+            )?;
             layers.push(layer)
         }
         let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;

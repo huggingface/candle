@@ -141,10 +141,7 @@ mod tests {
         let variance = buf.iter().map(|&x| (x - mean) * (x - mean)).sum::<f32>() / n as f32;
 
         // With 100k samples, standard error of mean ≈ 1/sqrt(100k) ≈ 0.003
-        assert!(
-            mean.abs() < 0.05,
-            "mean = {mean} (expected ≈ 0)"
-        );
+        assert!(mean.abs() < 0.05, "mean = {mean} (expected ≈ 0)");
         // Variance of variance estimator is 2/(n-1) ≈ 0.00002, so std ≈ 0.004
         assert!(
             (variance - 1.0).abs() < 0.05,

@@ -143,9 +143,7 @@ fn print_accuracy_row(name: &str, errors: &[f32]) {
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let p95 = sorted[(errors.len() as f32 * 0.95) as usize];
 
-    println!(
-        "║ {name:<13} ║ {mean:>+12.4} ║ {mean_abs:>13.4} ║ {std_dev:>12.4} ║ {p95:>10.4} ║"
-    );
+    println!("║ {name:<13} ║ {mean:>+12.4} ║ {mean_abs:>13.4} ║ {std_dev:>12.4} ║ {p95:>10.4} ║");
 }
 
 fn run_recall_benchmark(device: &Device) {
@@ -165,7 +163,13 @@ fn run_recall_benchmark(device: &Device) {
     let k_tensor = random_tensor(&[1, num_heads, n_tokens, d], seed_base, device);
 
     let q_tensors: Vec<Tensor> = (0..n_queries)
-        .map(|i| random_tensor(&[1, num_heads, 1, d], seed_base + i as u64 + 100_000, device))
+        .map(|i| {
+            random_tensor(
+                &[1, num_heads, 1, d],
+                seed_base + i as u64 + 100_000,
+                device,
+            )
+        })
         .collect();
 
     fn top_k_indices(scores: &[f32], k: usize) -> Vec<usize> {
@@ -224,7 +228,9 @@ fn run_recall_benchmark(device: &Device) {
         let qjl_keys = qjl_quantize_tensor(&k_tensor, &cfg, 0).unwrap();
         let avg_bpd = if num_heads > 0 && !qjl_keys[0].is_empty() {
             qjl_keys[0][0].bits_per_dim()
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         let pred_vecs: Vec<Vec<f32>> = q_tensors
             .iter()
@@ -238,7 +244,9 @@ fn run_recall_benchmark(device: &Device) {
             })
             .collect();
         let (r1, r5, r10) = compute_recalls(&pred_vecs);
-        println!("║ QJL           ║ {r1:>9.3}     ║ {r5:>9.3}     ║ {r10:>9.3}     ║ {avg_bpd:>4.1}   ║");
+        println!(
+            "║ QJL           ║ {r1:>9.3}     ║ {r5:>9.3}     ║ {r10:>9.3}     ║ {avg_bpd:>4.1}   ║"
+        );
     }
 
     println!("╚═══════════════╩═══════════════╩═══════════════╩═══════════════╩════════╝");

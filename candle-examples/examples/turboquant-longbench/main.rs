@@ -121,7 +121,11 @@ fn main() -> Result<()> {
     let question = "Based on the text above, what river is Paris situated on?";
 
     // Repeat document enough times to reach ~2K tokens for a meaningful KV cache test
-    let doc_tokens = tokenizer.encode(document, false).map_err(E::msg)?.get_ids().len();
+    let doc_tokens = tokenizer
+        .encode(document, false)
+        .map_err(E::msg)?
+        .get_ids()
+        .len();
     let reps = (2000usize / doc_tokens.max(1)).max(4);
     let repeated_doc: String = std::iter::repeat(document)
         .take(reps)
@@ -221,8 +225,7 @@ fn main() -> Result<()> {
                 .head_dim
                 .unwrap_or(config.hidden_size / config.num_attention_heads);
 
-            let algo =
-                QuantAlgorithm::TurboQuant(TurboQuantConfig::new_4bit(head_dim, args.seed));
+            let algo = QuantAlgorithm::TurboQuant(TurboQuantConfig::new_4bit(head_dim, args.seed));
             let mut mistral = mistral::Model::new(&config, vb, algo)?;
             let eos_token = tokenizer.token_to_id(EOS_TOKEN).unwrap_or(2);
 

@@ -256,7 +256,10 @@ fn polar_angle_cdf(x: f64, level: u32, normalizer: f64) -> f64 {
 /// * `bits` — number of bits per quantized angle (typically 2 for levels ≥ 2)
 /// * `level` — the PolarQuant level (1-indexed; this function is for levels ≥ 2)
 pub fn compute_polar_codebook(bits: u32, level: u32) -> Codebook {
-    assert!(level >= 2, "use Codebook::uniform for level 1 (uniform distribution)");
+    assert!(
+        level >= 2,
+        "use Codebook::uniform for level 1 (uniform distribution)"
+    );
     assert!(bits <= 8, "bits must be ≤ 8");
 
     let n = 1usize << bits; // number of levels
@@ -309,9 +312,7 @@ pub fn compute_polar_codebook(bits: u32, level: u32) -> Codebook {
         .chain(std::iter::once(PI / 2.0))
         .collect();
     let centroids: Vec<f32> = (0..n)
-        .map(|k| {
-            polar_angle_centroid(full_boundaries[k], full_boundaries[k + 1], level) as f32
-        })
+        .map(|k| polar_angle_centroid(full_boundaries[k], full_boundaries[k + 1], level) as f32)
         .collect();
 
     Codebook {
@@ -447,11 +448,15 @@ mod tests {
         let expected = (2.0 / std::f64::consts::PI).sqrt();
         assert!(
             (centroids[0] + expected).abs() < 1e-4,
-            "c0={}, expected ≈ {}", centroids[0], -expected
+            "c0={}, expected ≈ {}",
+            centroids[0],
+            -expected
         );
         assert!(
             (centroids[1] - expected).abs() < 1e-4,
-            "c1={}, expected ≈ {}", centroids[1], expected
+            "c1={}, expected ≈ {}",
+            centroids[1],
+            expected
         );
     }
 
@@ -476,7 +481,10 @@ mod tests {
                 assert!(
                     (centroids[i] + centroids[n - 1 - i]).abs() < 1e-6,
                     "Asymmetry at b={}, i={}: {} vs {}",
-                    b, i, centroids[i], centroids[n - 1 - i]
+                    b,
+                    i,
+                    centroids[i],
+                    centroids[n - 1 - i]
                 );
             }
         }
@@ -505,7 +513,8 @@ mod tests {
             assert!(
                 mse < prev_mse,
                 "{}-bit MSE={mse:.6} should be < {}-bit MSE={prev_mse:.6}",
-                bits, bits - 1
+                bits,
+                bits - 1
             );
             prev_mse = mse;
         }
@@ -524,7 +533,10 @@ mod tests {
                 let idx = cb.quantize(x);
                 assert!(
                     idx <= max_valid,
-                    "{}-bit index {} out of range [0, {}]", bits, idx, max_valid
+                    "{}-bit index {} out of range [0, {}]",
+                    bits,
+                    idx,
+                    max_valid
                 );
             }
         }

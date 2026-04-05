@@ -15,8 +15,8 @@ use super::polar_quant::{
     PolarQuantConfig, PolarQuantTensors,
 };
 use super::qjl::{
-    qjl_attention_scores_vectorized, qjl_quantize_tensor, qjl_reconstruct_chunk,
-    QjlConfig, QjlTensors,
+    qjl_attention_scores_vectorized, qjl_quantize_tensor, qjl_reconstruct_chunk, QjlConfig,
+    QjlTensors,
 };
 
 /// Configuration for TurboQuant quantization.
@@ -34,7 +34,10 @@ impl TurboQuantConfig {
     pub fn new_2bit(dim: usize, seed: u64) -> Self {
         let polar_config = PolarQuantConfig::new(dim, seed, 2, 2);
         let qjl_config = QjlConfig::new(dim, dim / 16, seed + 1);
-        Self { polar_config, qjl_config }
+        Self {
+            polar_config,
+            qjl_config,
+        }
     }
 
     pub fn new_3p5bit(dim: usize, seed: u64) -> Self {
@@ -42,16 +45,26 @@ impl TurboQuantConfig {
         // causing catastrophic cascading reconstruction error (k_rel_mse > 1).
         // Use bits_deep=2 and projected_dim=dim/4 for small head dims to stay near
         // 3.47 bits/dim (≈3.5 bits). For dim>=128, bits_deep=1 is sufficient.
-        let (bits_deep, projected_dim) = if dim <= 64 { (2, dim / 4) } else { (1, dim / 8) };
+        let (bits_deep, projected_dim) = if dim <= 64 {
+            (2, dim / 4)
+        } else {
+            (1, dim / 8)
+        };
         let polar_config = PolarQuantConfig::new(dim, seed, 4, bits_deep);
         let qjl_config = QjlConfig::new(dim, projected_dim, seed + 1);
-        Self { polar_config, qjl_config }
+        Self {
+            polar_config,
+            qjl_config,
+        }
     }
 
     pub fn new_4bit(dim: usize, seed: u64) -> Self {
         let polar_config = PolarQuantConfig::new(dim, seed, 4, 2);
         let qjl_config = QjlConfig::new(dim, dim / 4, seed + 1);
-        Self { polar_config, qjl_config }
+        Self {
+            polar_config,
+            qjl_config,
+        }
     }
 }
 
@@ -64,18 +77,24 @@ pub struct TurboQuantTensors {
 }
 
 impl TurboQuantTensors {
-    pub fn new(num_heads: usize, max_seq_len: usize, dim: usize, device: &candle::Device) -> Result<Self> {
+    pub fn new(
+        num_heads: usize,
+        max_seq_len: usize,
+        dim: usize,
+        device: &candle::Device,
+    ) -> Result<Self> {
         let mse_tensors = PolarQuantTensors::new(num_heads, max_seq_len, dim, device)?;
         let qjl_tensors = QjlTensors::new(num_heads, max_seq_len, dim / 8, device)?;
-        Ok(Self { mse_tensors, qjl_tensors, cur_len: 0 })
+        Ok(Self {
+            mse_tensors,
+            qjl_tensors,
+            cur_len: 0,
+        })
     }
 }
 
 /// Quantize a key tensor using TurboQuant.
-pub fn turbo_quantize_tensor(
-    k: &Tensor,
-    config: &TurboQuantConfig,
-) -> Result<TurboQuantized> {
+pub fn turbo_quantize_tensor(k: &Tensor, config: &TurboQuantConfig) -> Result<TurboQuantized> {
     // Stage 1: MSE-optimized PolarQuant encoding
     let (l1, ln, r) = polar_quantize_tensor(k, &config.polar_config)?;
 
@@ -99,9 +118,7 @@ pub fn turbo_quantize_tensor(
         k_reconstructed
     };
     // Residual in original dtype so QJL's random projection dtype matches
-    let residual = k_f32
-        .sub(&k_reconstructed_matched)?
-        .to_dtype(k.dtype())?;
+    let residual = k_f32.sub(&k_reconstructed_matched)?.to_dtype(k.dtype())?;
 
     // Stage 2: QJL encoding of residual (inner-product-optimized correction)
     let qjl = qjl_quantize_tensor(&residual, &config.qjl_config)?;
@@ -125,7 +142,8 @@ pub fn turbo_dequantize_chunk(
 ) -> Result<Tensor> {
     // Stage 1: dequantize PolarQuant component
     let num_heads = l1.dim(0)?;
-    let mut temp_polar = PolarQuantTensors::new(num_heads, seq_len, config.polar_config.dim, l1.device())?;
+    let mut temp_polar =
+        PolarQuantTensors::new(num_heads, seq_len, config.polar_config.dim, l1.device())?;
     temp_polar.level1_codes.push(l1.clone());
     temp_polar.leveln_codes.push(ln.clone());
     temp_polar.radii.push(r.clone());
@@ -145,8 +163,10 @@ pub fn turbo_attention_scores_vectorized(
     k_tensors: &TurboQuantTensors,
     config: &TurboQuantConfig,
 ) -> Result<Tensor> {
-    let mse_scores = polar_attention_scores_vectorized(q, &k_tensors.mse_tensors, &config.polar_config)?;
-    let qjl_scores = qjl_attention_scores_vectorized(q, &k_tensors.qjl_tensors, &config.qjl_config)?;
-    
+    let mse_scores =
+        polar_attention_scores_vectorized(q, &k_tensors.mse_tensors, &config.polar_config)?;
+    let qjl_scores =
+        qjl_attention_scores_vectorized(q, &k_tensors.qjl_tensors, &config.qjl_config)?;
+
     mse_scores.add(&qjl_scores)
 }

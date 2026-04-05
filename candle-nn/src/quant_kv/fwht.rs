@@ -28,8 +28,8 @@
 //! H^{-1} = H / n), giving:
 //!   Π^{-1} = (H · D) / √n
 
-use candle::{Result, Tensor};
 use super::prng::Prng;
+use candle::{Result, Tensor};
 
 /// Returns the smallest power of 2 that is ≥ n.
 ///
@@ -66,7 +66,10 @@ pub fn next_pow2(n: usize) -> usize {
 ///   x[j+h] ← x[j] - x[j+h]   (using the original x[j])
 pub fn fwht_inplace(data: &mut [f32]) {
     let n = data.len();
-    debug_assert!(n.is_power_of_two() && n > 0, "fwht_inplace requires power-of-2 length");
+    debug_assert!(
+        n.is_power_of_two() && n > 0,
+        "fwht_inplace requires power-of-2 length"
+    );
 
     let mut h = 1;
     while h < n {
@@ -240,7 +243,7 @@ pub fn fwht_vectorized(t: &Tensor) -> Result<Tensor> {
 
     let h = hadamard_matrix(padded_d, device)?;
     let scale = 1.0 / (padded_d as f32).sqrt();
-    
+
     // H is symmetric, so H*t^T is H*t if we treat vectors as columns.
     // For batch matmul, we want t * H. (t * H^T = t * H).
     // Reshape to 2D to ensure matmul works with high-dimensional tensors (e.g. [B, H, S, D])
@@ -272,13 +275,11 @@ pub fn srht_inverse_vectorized(t: &Tensor, seed: u64) -> Result<Tensor> {
     let mut rng = Prng::new(seed);
     let mut signs_vec = vec![0.0f32; d];
     rng.fill_signs(&mut signs_vec);
-    let signs = Tensor::from_vec(signs_vec, (d,), device)?
-        .to_dtype(h_t.dtype())?;
+    let signs = Tensor::from_vec(signs_vec, (d,), device)?.to_dtype(h_t.dtype())?;
 
     // Broadcast signs across batch/head dimensions
     h_t.broadcast_mul(&signs)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -375,7 +376,14 @@ mod tests {
         let mut out2 = vec![0.0f32; 32];
         srht_precondition(&input, 1, &mut out1);
         srht_precondition(&input, 2, &mut out2);
-        let diff: f32 = out1.iter().zip(out2.iter()).map(|(a, b)| (a - b).abs()).sum();
-        assert!(diff > 0.0, "different seeds should produce different rotations");
+        let diff: f32 = out1
+            .iter()
+            .zip(out2.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(
+            diff > 0.0,
+            "different seeds should produce different rotations"
+        );
     }
 }

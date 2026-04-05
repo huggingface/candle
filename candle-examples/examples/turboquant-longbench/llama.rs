@@ -4,11 +4,11 @@
 //!
 //! Implementation based on Hugging Face's [transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py)
 
-use candle_nn::{linear_no_bias as linear, Linear, RmsNorm, rms_norm};
 use candle::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use std::{collections::HashMap, f32::consts::PI};
 use candle_nn::quant_kv::{QuantAlgorithm, QuantizedKvCache};
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use candle_nn::{linear_no_bias as linear, rms_norm, Linear, RmsNorm};
+use std::{collections::HashMap, f32::consts::PI};
 
 pub const DEFAULT_MAX_SEQ_LEN: usize = 4096;
 
@@ -162,7 +162,13 @@ fn calculate_default_inv_freq(cfg: &Config) -> Vec<f32> {
 }
 
 impl Cache {
-    pub fn new(use_kv_cache: bool, dtype: DType, config: &Config, device: &Device, quant_algo: QuantAlgorithm) -> Result<Self> {
+    pub fn new(
+        use_kv_cache: bool,
+        dtype: DType,
+        config: &Config,
+        device: &Device,
+        quant_algo: QuantAlgorithm,
+    ) -> Result<Self> {
         // precompute freqs_cis
         let theta = match &config.rope_scaling {
             None
@@ -317,7 +323,7 @@ impl CausalSelfAttention {
                 kv_cache.append(&k, &v)?;
                 (kv_cache.attention_scores(&q)? / (self.head_dim as f64).sqrt())?
             };
-            
+
             let in_dtype = q.dtype();
 
             if seq_len > 1 {
@@ -330,7 +336,9 @@ impl CausalSelfAttention {
             let v_full = kv_cache.v()?.unwrap();
             att.matmul(&v_full.contiguous()?)?.to_dtype(in_dtype)
         } else {
-            Err(candle::Error::Msg("QuantizedKvCache model requires cache natively enabled!".into()))
+            Err(candle::Error::Msg(
+                "QuantizedKvCache model requires cache natively enabled!".into(),
+            ))
         }?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
         let y = self.o_proj.forward(&y)?;
@@ -338,7 +346,10 @@ impl CausalSelfAttention {
     }
 
     fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        candle_transformers::utils::repeat_kv(x, self.num_attention_heads / self.num_key_value_heads)
+        candle_transformers::utils::repeat_kv(
+            x,
+            self.num_attention_heads / self.num_key_value_heads,
+        )
     }
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {

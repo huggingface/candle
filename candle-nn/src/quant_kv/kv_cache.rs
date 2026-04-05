@@ -12,21 +12,21 @@
 //! so that `attention_scores()` is a simple matmul against already-decompressed keys,
 //! rather than re-dequantizing the entire history on every call (O(S²) → O(S)).
 
-use candle::{Device, DType, Result, Tensor};
 use crate::quant_kv::{
     polar_quant::{
         polar_attention_scores_vectorized, polar_dequantize_batch, polar_quantize_tensor,
         PolarQuantConfig, PolarQuantTensors,
     },
     qjl::{
-        qjl_attention_scores_vectorized, qjl_quantize_tensor, qjl_reconstruct_chunk,
-        QjlConfig, QjlTensors,
+        qjl_attention_scores_vectorized, qjl_quantize_tensor, qjl_reconstruct_chunk, QjlConfig,
+        QjlTensors,
     },
     turbo_quant::{
         turbo_attention_scores_vectorized, turbo_dequantize_chunk, turbo_quantize_tensor,
         TurboQuantConfig, TurboQuantTensors,
     },
 };
+use candle::{DType, Device, Result, Tensor};
 
 // ── Shared algorithm enum ────────────────────────────────────────────────────
 
@@ -123,15 +123,24 @@ impl QuantizedKvCache {
         device: &Device,
     ) -> Result<Self> {
         let k_cache = match &algorithm {
-            QuantAlgorithm::Qjl(cfg) => {
-                QuantKCache::Qjl(QjlTensors::new(num_heads, max_seq_len, cfg.dim / 8, device)?)
-            }
-            QuantAlgorithm::PolarQuant(_) => {
-                QuantKCache::PolarQuant(PolarQuantTensors::new(num_heads, max_seq_len, dim, device)?)
-            }
-            QuantAlgorithm::TurboQuant(_) => {
-                QuantKCache::TurboQuant(TurboQuantTensors::new(num_heads, max_seq_len, dim, device)?)
-            }
+            QuantAlgorithm::Qjl(cfg) => QuantKCache::Qjl(QjlTensors::new(
+                num_heads,
+                max_seq_len,
+                cfg.dim / 8,
+                device,
+            )?),
+            QuantAlgorithm::PolarQuant(_) => QuantKCache::PolarQuant(PolarQuantTensors::new(
+                num_heads,
+                max_seq_len,
+                dim,
+                device,
+            )?),
+            QuantAlgorithm::TurboQuant(_) => QuantKCache::TurboQuant(TurboQuantTensors::new(
+                num_heads,
+                max_seq_len,
+                dim,
+                device,
+            )?),
         };
         Ok(Self {
             k_cache,
@@ -252,16 +261,43 @@ impl QuantizedKvCache {
                     + t.norms.iter().map(|tb| tb.elem_count() * 4).sum::<usize>()
             }
             QuantKCache::PolarQuant(t) => {
-                t.level1_codes.iter().map(|tb| tb.elem_count()).sum::<usize>()
-                    + t.leveln_codes.iter().map(|tb| tb.elem_count()).sum::<usize>()
-                    + t.radii.iter().map(|tb| tb.elem_count() * 2).sum::<usize>() // f16
+                t.level1_codes
+                    .iter()
+                    .map(|tb| tb.elem_count())
+                    .sum::<usize>()
+                    + t.leveln_codes
+                        .iter()
+                        .map(|tb| tb.elem_count())
+                        .sum::<usize>()
+                    + t.radii.iter().map(|tb| tb.elem_count() * 2).sum::<usize>()
+                // f16
             }
             QuantKCache::TurboQuant(t) => {
-                t.mse_tensors.level1_codes.iter().map(|tb| tb.elem_count()).sum::<usize>()
-                    + t.mse_tensors.leveln_codes.iter().map(|tb| tb.elem_count()).sum::<usize>()
-                    + t.mse_tensors.radii.iter().map(|tb| tb.elem_count() * 2).sum::<usize>()
-                    + t.qjl_tensors.sign_bits.iter().map(|tb| tb.elem_count()).sum::<usize>()
-                    + t.qjl_tensors.norms.iter().map(|tb| tb.elem_count() * 4).sum::<usize>()
+                t.mse_tensors
+                    .level1_codes
+                    .iter()
+                    .map(|tb| tb.elem_count())
+                    .sum::<usize>()
+                    + t.mse_tensors
+                        .leveln_codes
+                        .iter()
+                        .map(|tb| tb.elem_count())
+                        .sum::<usize>()
+                    + t.mse_tensors
+                        .radii
+                        .iter()
+                        .map(|tb| tb.elem_count() * 2)
+                        .sum::<usize>()
+                    + t.qjl_tensors
+                        .sign_bits
+                        .iter()
+                        .map(|tb| tb.elem_count())
+                        .sum::<usize>()
+                    + t.qjl_tensors
+                        .norms
+                        .iter()
+                        .map(|tb| tb.elem_count() * 4)
+                        .sum::<usize>()
             }
         }
     }
@@ -275,7 +311,12 @@ impl QuantizedKvCache {
                 t.radii.iter().map(|r| r.elem_count()).sum::<usize>() * 2
             }
             QuantKCache::TurboQuant(t) => {
-                t.mse_tensors.radii.iter().map(|r| r.elem_count()).sum::<usize>() * 2
+                t.mse_tensors
+                    .radii
+                    .iter()
+                    .map(|r| r.elem_count())
+                    .sum::<usize>()
+                    * 2
             }
         }
     }
@@ -322,7 +363,15 @@ impl QuantizedPreAllocKvCache {
     ) -> Result<Self> {
         let k_buf = Tensor::zeros((num_heads, max_seq_len, dim), DType::F32, device)?;
         let v_buf = Tensor::zeros((num_heads, max_seq_len, dim), DType::F32, device)?;
-        Ok(Self { k_buf, v_buf, cur_len: 0, algorithm, max_seq_len, num_heads, dim })
+        Ok(Self {
+            k_buf,
+            v_buf,
+            cur_len: 0,
+            algorithm,
+            max_seq_len,
+            num_heads,
+            dim,
+        })
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<()> {
@@ -337,9 +386,17 @@ impl QuantizedPreAllocKvCache {
         }
 
         let new_k = self.dequantize_k(k, seq_len)?;
-        let new_k = if new_k.dims().len() == 4 { new_k.squeeze(0)? } else { new_k };
+        let new_k = if new_k.dims().len() == 4 {
+            new_k.squeeze(0)?
+        } else {
+            new_k
+        };
         let new_v = v.to_dtype(DType::F32)?;
-        let new_v = if new_v.dims().len() == 4 { new_v.squeeze(0)? } else { new_v };
+        let new_v = if new_v.dims().len() == 4 {
+            new_v.squeeze(0)?
+        } else {
+            new_v
+        };
 
         // Write into pre-allocated buffer at cur_len..cur_len+seq_len (in-place)
         self.k_buf.slice_set(&new_k, 1, self.cur_len)?;
@@ -433,7 +490,14 @@ impl QuantizedRotatingKvCache {
     ) -> Result<Self> {
         let k_buf = Tensor::zeros((num_heads, max_seq_len, dim), DType::F32, device)?;
         let v_buf = Tensor::zeros((num_heads, max_seq_len, dim), DType::F32, device)?;
-        Ok(Self { k_buf, v_buf, cur_len: 0, offset: 0, algorithm, max_seq_len })
+        Ok(Self {
+            k_buf,
+            v_buf,
+            cur_len: 0,
+            offset: 0,
+            algorithm,
+            max_seq_len,
+        })
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<()> {
@@ -441,9 +505,17 @@ impl QuantizedRotatingKvCache {
         let seq_len = k_dims[k_dims.len() - 2];
 
         let new_k = self.dequantize_k(k, seq_len)?;
-        let new_k = if new_k.dims().len() == 4 { new_k.squeeze(0)? } else { new_k };
+        let new_k = if new_k.dims().len() == 4 {
+            new_k.squeeze(0)?
+        } else {
+            new_k
+        };
         let new_v = v.to_dtype(DType::F32)?;
-        let new_v = if new_v.dims().len() == 4 { new_v.squeeze(0)? } else { new_v };
+        let new_v = if new_v.dims().len() == 4 {
+            new_v.squeeze(0)?
+        } else {
+            new_v
+        };
 
         // Write new tokens one-by-one into the ring buffer
         for i in 0..seq_len {
@@ -553,11 +625,31 @@ mod tests {
     }
 
     fn relative_mse(a: &Tensor, b: &Tensor) -> f64 {
-        let a_f = a.to_dtype(DType::F32).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
-        let b_f = b.to_dtype(DType::F32).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
-        let mse: f64 = a_f.iter().zip(b_f.iter()).map(|(x, y)| (x - y) as f64 * (x - y) as f64).sum::<f64>() / a_f.len() as f64;
-        let var: f64 = b_f.iter().map(|y| (*y as f64) * (*y as f64)).sum::<f64>() / b_f.len() as f64;
-        if var < 1e-12 { return 0.0; }
+        let a_f = a
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let b_f = b
+            .to_dtype(DType::F32)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let mse: f64 = a_f
+            .iter()
+            .zip(b_f.iter())
+            .map(|(x, y)| (x - y) as f64 * (x - y) as f64)
+            .sum::<f64>()
+            / a_f.len() as f64;
+        let var: f64 =
+            b_f.iter().map(|y| (*y as f64) * (*y as f64)).sum::<f64>() / b_f.len() as f64;
+        if var < 1e-12 {
+            return 0.0;
+        }
         mse / var
     }
 
@@ -567,7 +659,9 @@ mod tests {
         let device = Device::Cpu;
         let (num_heads, seq_len, dim) = (2, 16, 64);
         let cfg = TurboQuantConfig::new_3p5bit(dim, 42);
-        let mut cache = QuantizedKvCache::new(num_heads, 64, dim, QuantAlgorithm::TurboQuant(cfg), &device).unwrap();
+        let mut cache =
+            QuantizedKvCache::new(num_heads, 64, dim, QuantAlgorithm::TurboQuant(cfg), &device)
+                .unwrap();
 
         let k = random_tensor(&[num_heads, seq_len, dim], 10, &device);
         let v = random_tensor(&[num_heads, seq_len, dim], 11, &device);
@@ -579,15 +673,27 @@ mod tests {
         let k_orig = k.to_dtype(DType::F32).unwrap();
         let q_3d = q.squeeze(0).unwrap().to_dtype(DType::F32).unwrap();
         let scores_exact = q_3d.matmul(&k_orig.transpose(1, 2).unwrap()).unwrap();
-        let scores_quant = cache.attention_scores(&q).unwrap()
-            .squeeze(0).unwrap().to_dtype(DType::F32).unwrap();
+        let scores_quant = cache
+            .attention_scores(&q)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap();
         let score_rel_mse = relative_mse(&scores_quant, &scores_exact);
 
         // Key reconstruction quality
-        let k_dq = cache.cached_k_dequant.as_ref().unwrap().to_dtype(DType::F32).unwrap();
+        let k_dq = cache
+            .cached_k_dequant
+            .as_ref()
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap();
         let k_rel_mse = relative_mse(&k_dq, &k_orig);
 
-        println!("dim=64 3.5bit: k_rel_mse={k_rel_mse:.4}, score_rel_mse_vs_exact={score_rel_mse:.4}");
+        println!(
+            "dim=64 3.5bit: k_rel_mse={k_rel_mse:.4}, score_rel_mse_vs_exact={score_rel_mse:.4}"
+        );
 
         // Threshold: quantization can be noisy but shouldn't be completely random
         // score_rel_mse < 2.0 means the scores are better than random noise
@@ -601,7 +707,9 @@ mod tests {
         // dim=64: QJL projected_dim = 64/8 = 8, packed_dim = 1 (valid)
         let (num_heads, dim) = (2, 64);
         let cfg = TurboQuantConfig::new_3p5bit(dim, 42);
-        let mut cache = QuantizedKvCache::new(num_heads, 64, dim, QuantAlgorithm::TurboQuant(cfg), &device).unwrap();
+        let mut cache =
+            QuantizedKvCache::new(num_heads, 64, dim, QuantAlgorithm::TurboQuant(cfg), &device)
+                .unwrap();
 
         assert_eq!(cache.current_seq_len(), 0);
 
@@ -630,7 +738,9 @@ mod tests {
         // dim=128: standard head dim, QJL projected_dim = 32, packed_dim = 4 (valid)
         let (num_heads, seq_len, dim) = (2, 16, 128);
         let cfg = TurboQuantConfig::new_4bit(dim, 42);
-        let mut cache = QuantizedKvCache::new(num_heads, 64, dim, QuantAlgorithm::TurboQuant(cfg), &device).unwrap();
+        let mut cache =
+            QuantizedKvCache::new(num_heads, 64, dim, QuantAlgorithm::TurboQuant(cfg), &device)
+                .unwrap();
 
         let k = random_tensor(&[num_heads, seq_len, dim], 10, &device);
         let v = random_tensor(&[num_heads, seq_len, dim], 11, &device);
@@ -639,22 +749,36 @@ mod tests {
         let q = random_tensor(&[1, num_heads, 1, dim], 20, &device);
 
         // 1. Verify attention_scores matches q @ cached_k^T exactly
-        let k_dq = cache.cached_k_dequant.as_ref().unwrap().to_dtype(DType::F32).unwrap(); // [H, S, D]
+        let k_dq = cache
+            .cached_k_dequant
+            .as_ref()
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap(); // [H, S, D]
         let q_3d = q.squeeze(0).unwrap().to_dtype(DType::F32).unwrap(); // [H, 1, D]
         let scores_direct = q_3d.matmul(&k_dq.transpose(1, 2).unwrap()).unwrap(); // [H, 1, S]
-        let scores_cache = cache.attention_scores(&q).unwrap()
-            .squeeze(0).unwrap().to_dtype(DType::F32).unwrap(); // [H, 1, S]
+        let scores_cache = cache
+            .attention_scores(&q)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap(); // [H, 1, S]
         let exact_rel_mse = relative_mse(&scores_cache, &scores_direct);
-        assert!(exact_rel_mse < 1e-4,
-            "attention_scores should match q @ cached_k^T exactly, rel_mse={exact_rel_mse:.6}");
+        assert!(
+            exact_rel_mse < 1e-4,
+            "attention_scores should match q @ cached_k^T exactly, rel_mse={exact_rel_mse:.6}"
+        );
 
         // 2. Verify cached K quality vs original K
         // Threshold 0.5 catches completely broken output while tolerating inherent
         // quantization noise at test dimensions (full quality at d=128 is ~5-10%).
         let k_orig = k.to_dtype(DType::F32).unwrap();
         let rel_mse_k = relative_mse(&k_dq, &k_orig);
-        assert!(rel_mse_k < 0.5,
-            "Cached K deviates too much from original: relative_mse={rel_mse_k:.4}");
+        assert!(
+            rel_mse_k < 0.5,
+            "Cached K deviates too much from original: relative_mse={rel_mse_k:.4}"
+        );
     }
 
     #[test]
@@ -665,13 +789,22 @@ mod tests {
         let cfg = TurboQuantConfig::new_4bit(dim, 7);
 
         // Batch: append all at once
-        let mut batch_cache = QuantizedKvCache::new(num_heads, 64, dim, QuantAlgorithm::TurboQuant(cfg.clone()), &device).unwrap();
+        let mut batch_cache = QuantizedKvCache::new(
+            num_heads,
+            64,
+            dim,
+            QuantAlgorithm::TurboQuant(cfg.clone()),
+            &device,
+        )
+        .unwrap();
         let k_all = random_tensor(&[num_heads, 8, dim], 5, &device);
         let v_all = random_tensor(&[num_heads, 8, dim], 6, &device);
         batch_cache.append(&k_all, &v_all).unwrap();
 
         // Incremental: append two chunks of 4
-        let mut inc_cache = QuantizedKvCache::new(num_heads, 64, dim, QuantAlgorithm::TurboQuant(cfg), &device).unwrap();
+        let mut inc_cache =
+            QuantizedKvCache::new(num_heads, 64, dim, QuantAlgorithm::TurboQuant(cfg), &device)
+                .unwrap();
         let k1 = k_all.narrow(1, 0, 4).unwrap();
         let k2 = k_all.narrow(1, 4, 4).unwrap();
         let v1 = v_all.narrow(1, 0, 4).unwrap();
@@ -693,7 +826,14 @@ mod tests {
         // dim=64: QJL projected_dim = 8, packed_dim = 1 (valid)
         let (num_heads, dim, max_seq) = (2, 64, 64);
         let cfg = TurboQuantConfig::new_3p5bit(dim, 42);
-        let mut cache = QuantizedPreAllocKvCache::new(num_heads, max_seq, dim, QuantAlgorithm::TurboQuant(cfg), &device).unwrap();
+        let mut cache = QuantizedPreAllocKvCache::new(
+            num_heads,
+            max_seq,
+            dim,
+            QuantAlgorithm::TurboQuant(cfg),
+            &device,
+        )
+        .unwrap();
 
         let k = random_tensor(&[num_heads, 5, dim], 1, &device);
         let v = random_tensor(&[num_heads, 5, dim], 2, &device);
@@ -709,7 +849,14 @@ mod tests {
         // dim=64: QJL projected_dim = 8, packed_dim = 1 (valid)
         let (num_heads, dim, max_seq) = (1, 64, 4);
         let cfg = TurboQuantConfig::new_3p5bit(dim, 42);
-        let mut cache = QuantizedRotatingKvCache::new(num_heads, max_seq, dim, QuantAlgorithm::TurboQuant(cfg), &device).unwrap();
+        let mut cache = QuantizedRotatingKvCache::new(
+            num_heads,
+            max_seq,
+            dim,
+            QuantAlgorithm::TurboQuant(cfg),
+            &device,
+        )
+        .unwrap();
 
         // Fill past max_seq_len (write 6 tokens into a window of 4)
         for i in 0..6 {

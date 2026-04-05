@@ -1,13 +1,13 @@
 //! PolarQuant: A highly accurate quantization method for KV caches.
-//! 
+//!
 //! ## Paper Reference
-//! 
+//!
 //! "PolarQuant: Quantizing Large Language Models' KV Cache in Polar Coordinates"
 //! (2024) — arxiv:2407.13246
 
+use super::codebook::{get_polar_codebook, Codebook};
 use candle::{Result, Tensor};
 use half::f16;
-use super::codebook::{get_polar_codebook, Codebook};
 
 /// Configuration for PolarQuant quantization.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,8 +78,18 @@ pub struct PolarQuantTensors {
 }
 
 impl PolarQuantTensors {
-    pub fn new(_num_heads: usize, _max_seq_len: usize, _dim: usize, _device: &candle::Device) -> Result<Self> {
-        Ok(Self { level1_codes: Vec::new(), leveln_codes: Vec::new(), radii: Vec::new(), cur_len: 0 })
+    pub fn new(
+        _num_heads: usize,
+        _max_seq_len: usize,
+        _dim: usize,
+        _device: &candle::Device,
+    ) -> Result<Self> {
+        Ok(Self {
+            level1_codes: Vec::new(),
+            leveln_codes: Vec::new(),
+            radii: Vec::new(),
+            cur_len: 0,
+        })
     }
 
     pub fn cat_level1(&self) -> Result<Tensor> {
@@ -112,7 +122,10 @@ pub fn polar_quantize_tensor(
     };
 
     let cb_l1 = config.codebook_for_level(1);
-    let k_data = k.to_dtype(candle::DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+    let k_data = k
+        .to_dtype(candle::DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
 
     let l1_p = d.div_ceil(2).div_ceil(2);
     let ln_p = d.div_ceil(8);
@@ -248,58 +261,60 @@ pub fn polar_dequantize_batch(
 
     let t_count = kv_len;
     let dim_d = d;
-    let srht_seed = config.seed;  // u64 is Copy — safe to capture by value in Rayon closure
+    let srht_seed = config.seed; // u64 is Copy — safe to capture by value in Rayon closure
 
-    all_keys_vec.par_chunks_mut(dim_d).enumerate().for_each(|(idx, out_vec): (usize, &mut [f32])| {
-        let h = idx / t_count;
-        let t = idx % t_count;
+    all_keys_vec.par_chunks_mut(dim_d).enumerate().for_each(
+        |(idx, out_vec): (usize, &mut [f32])| {
+            let h = idx / t_count;
+            let t = idx % t_count;
 
-        let l1_start = (h * t_count + t) * l1_stride;
-        let ln_base = (h * t_count + t) * ln_stride;
-        let r = radii_data[h * t_count + t];
-        let cb = config.codebook_for_level(1);
+            let l1_start = (h * t_count + t) * l1_stride;
+            let ln_base = (h * t_count + t) * ln_stride;
+            let r = radii_data[h * t_count + t];
+            let cb = config.codebook_for_level(1);
 
-        // Recover level-1 pair magnitudes by descending the deep-level tree.
-        // Start with the total radius and split level-by-level using the stored angles.
-        // This reconstructs the correct energy distribution across pairs.
-        // NOTE: Assumes d is a power of 2 (true for all standard Llama/Mistral head dims).
-        let mut current_mags: Vec<f32> = vec![r];
-        for level in (2..=n_levels).rev() {
-            let cb_deep = config.codebook_for_level(level);
-            let n_parents = current_mags.len();
-            let bit_base = ln_bit_offsets[level];
-            let mut next_mags = Vec::with_capacity(n_parents * 2);
+            // Recover level-1 pair magnitudes by descending the deep-level tree.
+            // Start with the total radius and split level-by-level using the stored angles.
+            // This reconstructs the correct energy distribution across pairs.
+            // NOTE: Assumes d is a power of 2 (true for all standard Llama/Mistral head dims).
+            let mut current_mags: Vec<f32> = vec![r];
+            for level in (2..=n_levels).rev() {
+                let cb_deep = config.codebook_for_level(level);
+                let n_parents = current_mags.len();
+                let bit_base = ln_bit_offsets[level];
+                let mut next_mags = Vec::with_capacity(n_parents * 2);
 
-            for (j, &parent) in current_mags.iter().enumerate() {
-                let mut code = 0u8;
-                for bit_i in 0..bits_deep {
-                    let global_bit = bit_base + j * bits_deep + bit_i;
-                    let byte_idx = ln_base + global_bit / 8;
-                    let bit = (ln_data[byte_idx] >> (global_bit % 8)) & 1;
-                    code |= bit << bit_i;
+                for (j, &parent) in current_mags.iter().enumerate() {
+                    let mut code = 0u8;
+                    for bit_i in 0..bits_deep {
+                        let global_bit = bit_base + j * bits_deep + bit_i;
+                        let byte_idx = ln_base + global_bit / 8;
+                        let bit = (ln_data[byte_idx] >> (global_bit % 8)) & 1;
+                        code |= bit << bit_i;
+                    }
+                    let angle = cb_deep.dequantize(code);
+                    next_mags.push(parent * angle.cos());
+                    next_mags.push(parent * angle.sin());
                 }
-                let angle = cb_deep.dequantize(code);
-                next_mags.push(parent * angle.cos());
-                next_mags.push(parent * angle.sin());
+                current_mags = next_mags;
             }
-            current_mags = next_mags;
-        }
-        // current_mags now holds the d/2 level-1 pair magnitudes.
+            // current_mags now holds the d/2 level-1 pair magnitudes.
 
-        // Reconstruct in SRHT-rotated space using recovered magnitudes and level-1 angles.
-        let mut rotated_reconstruction = vec![0.0f32; dim_d];
-        for i in 0..(dim_d / 2) {
-            let byte = l1_data[l1_start + (i / 2)];
-            let code = if i % 2 == 0 { byte & 0xF } else { byte >> 4 };
-            let angle = cb.dequantize(code);
-            let m_i = current_mags[i];
-            rotated_reconstruction[2 * i] = m_i * angle.cos();
-            rotated_reconstruction[2 * i + 1] = m_i * angle.sin();
-        }
+            // Reconstruct in SRHT-rotated space using recovered magnitudes and level-1 angles.
+            let mut rotated_reconstruction = vec![0.0f32; dim_d];
+            for i in 0..(dim_d / 2) {
+                let byte = l1_data[l1_start + (i / 2)];
+                let code = if i % 2 == 0 { byte & 0xF } else { byte >> 4 };
+                let angle = cb.dequantize(code);
+                let m_i = current_mags[i];
+                rotated_reconstruction[2 * i] = m_i * angle.cos();
+                rotated_reconstruction[2 * i + 1] = m_i * angle.sin();
+            }
 
-        // Invert SRHT to recover vectors in original key space
-        super::fwht::srht_inverse(&rotated_reconstruction, srht_seed, out_vec);
-    });
+            // Invert SRHT to recover vectors in original key space
+            super::fwht::srht_inverse(&rotated_reconstruction, srht_seed, out_vec);
+        },
+    );
 
     Tensor::from_vec(all_keys_vec, (num_heads, kv_len, d), device)
 }
@@ -325,20 +340,23 @@ pub fn polar_attention_scores_vectorized(
 
     let k_dequant = polar_dequantize_batch(k_tensors, config)?;
     let k_dequant = k_dequant.to_dtype(q.dtype())?;
-    
+
     let rank = q.dims().len();
     // k should be [num_heads, kv_len, head_dim]
     // 2. Ensure rank matches q by unsqueezing if needed
-    let k_dequant = if rank == 4 { k_dequant.unsqueeze(0)? } else { k_dequant };
+    let k_dequant = if rank == 4 {
+        k_dequant.unsqueeze(0)?
+    } else {
+        k_dequant
+    };
 
     let original_q_shape = q.shape().clone();
-    
+
     let q_reshape = q.contiguous()?.flatten_to(rank - 3)?;
     let k_reshape = k_dequant.contiguous()?.flatten_to(rank - 3)?;
-    
+
     let scores = q_reshape.matmul(&k_reshape.transpose(1, 2)?)?;
     let mut scores_shape = original_q_shape.dims().to_vec();
     scores_shape[rank - 1] = k_dequant.dim(rank - 2)?;
-    scores.reshape(scores_shape)?
-        .to_dtype(q.dtype())
+    scores.reshape(scores_shape)?.to_dtype(q.dtype())
 }

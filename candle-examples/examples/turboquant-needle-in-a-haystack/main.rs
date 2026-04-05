@@ -22,9 +22,9 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::io::Write;
 
 mod model;
-use model::{Llama, LlamaConfig};
 use candle_nn::quant_kv::turbo_quant::TurboQuantConfig;
 use candle_nn::quant_kv::QuantAlgorithm;
+use model::{Llama, LlamaConfig};
 
 const EOS_TOKEN: &str = "</s>";
 const DEFAULT_PROMPT: &str = "My favorite theorem is ";
@@ -208,7 +208,10 @@ fn main() -> Result<()> {
                 vec![api.get("model.safetensors")?]
             }
         };
-        let algo = QuantAlgorithm::TurboQuant(TurboQuantConfig::new_4bit(config.hidden_size / config.num_attention_heads, args.seed));
+        let algo = QuantAlgorithm::TurboQuant(TurboQuantConfig::new_4bit(
+            config.hidden_size / config.num_attention_heads,
+            args.seed,
+        ));
         let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device, algo)?;
 
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
@@ -228,12 +231,28 @@ fn main() -> Result<()> {
     let question = "Based on the document above, what river is Paris situated on?";
 
     // Estimate tokens per filler sentence and build haystack to reach args.haystack_len
-    let filler_tokens = tokenizer.encode(filler, false).map_err(E::msg)?.get_ids().len();
-    let needle_tokens = tokenizer.encode(needle, false).map_err(E::msg)?.get_ids().len();
+    let filler_tokens = tokenizer
+        .encode(filler, false)
+        .map_err(E::msg)?
+        .get_ids()
+        .len();
+    let needle_tokens = tokenizer
+        .encode(needle, false)
+        .map_err(E::msg)?
+        .get_ids()
+        .len();
     let header = "Document Context:\n";
     let footer = format!("\nQuestion: {question}\nAnswer:");
-    let overhead = tokenizer.encode(header, true).map_err(E::msg)?.get_ids().len()
-        + tokenizer.encode(footer.as_str(), false).map_err(E::msg)?.get_ids().len()
+    let overhead = tokenizer
+        .encode(header, true)
+        .map_err(E::msg)?
+        .get_ids()
+        .len()
+        + tokenizer
+            .encode(footer.as_str(), false)
+            .map_err(E::msg)?
+            .get_ids()
+            .len()
         + needle_tokens;
     let reps = (args.haystack_len.saturating_sub(overhead)) / filler_tokens.max(1);
     let needle_pos = ((reps as f64 * args.depth) as usize).min(reps);
@@ -247,11 +266,19 @@ fn main() -> Result<()> {
         context.push('\n');
     }
     let prompt = format!("{context}{footer}");
-    let mut tokens = tokenizer.encode(prompt, true).map_err(E::msg)?.get_ids().to_vec();
-    
-    let mut tokenizer_stream = candle_examples::token_output_stream::TokenOutputStream::new(tokenizer);
+    let mut tokens = tokenizer
+        .encode(prompt, true)
+        .map_err(E::msg)?
+        .get_ids()
+        .to_vec();
 
-    println!("Starting NIAH inference loop (Total context length: {} tokens)", tokens.len());
+    let mut tokenizer_stream =
+        candle_examples::token_output_stream::TokenOutputStream::new(tokenizer);
+
+    println!(
+        "Starting NIAH inference loop (Total context length: {} tokens)",
+        tokens.len()
+    );
     let mut generated_text = String::new();
     let mut logits_processor = {
         let temperature = args.temperature;
@@ -325,8 +352,15 @@ fn main() -> Result<()> {
         token_generated,
         (token_generated - 1) as f64 / dt.as_secs_f64(),
     );
-    
+
     let success = generated_text.to_lowercase().contains("seine");
-    println!("NIAH Evaluation Result: {}", if success { "PASS - Found Needle" } else { "FAIL - Needle Missing" });
+    println!(
+        "NIAH Evaluation Result: {}",
+        if success {
+            "PASS - Found Needle"
+        } else {
+            "FAIL - Needle Missing"
+        }
+    );
     Ok(())
 }
