@@ -437,25 +437,26 @@ macro_rules! dispatch_miopen_conv {
 }
 
 macro_rules! cast_launch {
-    ($dev:expr, $kernel:expr, $grid:expr, $block:expr, $el:expr, $dims_len:expr, $ds_ptr:expr, $src_ptr:expr, $stream:expr, $rust_type:ty, $variant:ident) => {{
+    ($dev:expr, $grid:expr, $block:expr, $el:expr, $dims_len:expr, $ds_ptr:expr, $src_ptr:expr, $src_dtype:expr, $rust_type:ty, $variant:ident) => {{
         let out = $dev.alloc::<$rust_type>($el)?;
         let out_ptr = out.as_ptr() as *mut std::ffi::c_void;
+        let func_name = format!("cast_{}_{}", $src_dtype.as_str(), stringify!($rust_type));
         unsafe {
-            $kernel
-                .launch(
-                    $grid,
-                    $block,
-                    0,
-                    Some($stream),
-                    &mut [
-                        &$el as *const usize as *mut std::ffi::c_void,
-                        &$dims_len as *const usize as *mut std::ffi::c_void,
-                        (&$ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                        (&$src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    ],
-                )
-                .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+            launch_kernel(
+                &$dev,
+                candle_rocm_kernels::kernel::CastKernel::NAME,
+                candle_rocm_kernels::kernel::CastKernel::CODE,
+                &func_name,
+                $grid,
+                $block,
+                &mut [
+                    &$el as *const usize as *mut std::ffi::c_void,
+                    &$dims_len as *const usize as *mut std::ffi::c_void,
+                    (&$ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    (&$src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                ],
+            )?;
         }
         RocmStorageSlice::$variant(out)
     }};
@@ -495,6 +496,30 @@ pub fn launch_config(num_elems: usize) -> (rocm_rs::hip::Dim3, rocm_rs::hip::Dim
         rocm_rs::hip::Dim3::from(grid_dim),
         rocm_rs::hip::Dim3::from(BLOCK_SIZE),
     )
+}
+
+unsafe fn launch_kernel(
+    dev: &RocmDevice,
+    module_name: &'static str,
+    module_source: &'static str,
+    func_name: &str,
+    grid: rocm_rs::hip::Dim3,
+    block: rocm_rs::hip::Dim3,
+    args: &mut [*mut std::ffi::c_void],
+) -> Result<()> {
+    let kernel_manager = dev
+        .kernel_manager()
+        .lock()
+        .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
+    let module = kernel_manager
+        .get_or_load(module_name, module_source)
+        .map_err(|e| crate::Error::Msg(e.to_string()))?;
+    let kernel = module
+        .get_function(func_name)
+        .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
+    kernel
+        .launch(grid, block, 0, Some(&dev.stream), args)
+        .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))
 }
 
 fn dims_and_strides(
@@ -638,19 +663,7 @@ impl<U: crate::op::UnaryOpT> Map1 for U {
         let dims = shape.dims();
         let elem_count = shape.elem_count();
 
-        let kernel_manager = dev
-            .kernel_manager()
-            .lock()
-            .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-        let module = kernel_manager
-            .get_or_load(UnaryKernel::NAME, UnaryKernel::CODE)
-            .map_err(|e| crate::Error::Msg(e.to_string()))?;
-
         let func_name = kernel_name::<T>(U::KERNEL);
-        let kernel = module
-            .get_function(&func_name)
-            .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
-
         let ds = dims_and_strides(dev, layout, 1)?;
         let output = dev.alloc::<T>(elem_count)?;
         let (grid, block) = launch_config(elem_count);
@@ -663,21 +676,21 @@ impl<U: crate::op::UnaryOpT> Map1 for U {
                 .map(|d| d.as_ptr() as *const usize)
                 .unwrap_or(std::ptr::null());
 
-            kernel
-                .launch(
-                    grid,
-                    block,
-                    0,
-                    Some(&dev.stream),
-                    &mut [
-                        &elem_count as *const usize as *mut std::ffi::c_void,
-                        &dims.len() as *const usize as *mut std::ffi::c_void,
-                        (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                        (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    ],
-                )
-                .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+            launch_kernel(
+                dev,
+                UnaryKernel::NAME,
+                UnaryKernel::CODE,
+                &func_name,
+                grid,
+                block,
+                &mut [
+                    &elem_count as *const usize as *mut std::ffi::c_void,
+                    &dims.len() as *const usize as *mut std::ffi::c_void,
+                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                ],
+            )?;
         }
 
         Ok(output)
@@ -698,19 +711,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         let dims = shape.dims();
         let elem_count = shape.elem_count();
 
-        let kernel_manager = dev
-            .kernel_manager()
-            .lock()
-            .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-        let module = kernel_manager
-            .get_or_load(BinaryKernel::NAME, BinaryKernel::CODE)
-            .map_err(|e| crate::Error::Msg(e.to_string()))?;
-
         let func_name = kernel_name::<T>(U::KERNEL);
-        let kernel = module
-            .get_function(&func_name)
-            .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
-
         let ds = dims_and_strides_pair(dev, lhs_l, rhs_l)?;
         let output = dev.alloc::<T>(elem_count)?;
         let (grid, block) = launch_config(elem_count);
@@ -724,22 +725,22 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
                 .map(|d| d.as_ptr() as *const usize)
                 .unwrap_or(std::ptr::null());
 
-            kernel
-                .launch(
-                    grid,
-                    block,
-                    0,
-                    Some(&dev.stream),
-                    &mut [
-                        &elem_count as *const usize as *mut std::ffi::c_void,
-                        &dims.len() as *const usize as *mut std::ffi::c_void,
-                        (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                        (&lhs_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        (&rhs_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    ],
-                )
-                .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+            launch_kernel(
+                dev,
+                BinaryKernel::NAME,
+                BinaryKernel::CODE,
+                &func_name,
+                grid,
+                block,
+                &mut [
+                    &elem_count as *const usize as *mut std::ffi::c_void,
+                    &dims.len() as *const usize as *mut std::ffi::c_void,
+                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    (&lhs_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&rhs_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                ],
+            )?;
         }
 
         Ok(output)
@@ -778,19 +779,7 @@ impl Affine {
         let dims = shape.dims();
         let elem_count = shape.elem_count();
 
-        let kernel_manager = dev
-            .kernel_manager()
-            .lock()
-            .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-        let module = kernel_manager
-            .get_or_load(AffineKernel::NAME, AffineKernel::CODE)
-            .map_err(|e| crate::Error::Msg(e.to_string()))?;
-
         let func_name = kernel_name::<T>("affine");
-        let kernel = module
-            .get_function(&func_name)
-            .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
-
         let ds = dims_and_strides(dev, layout, 1)?;
         let output = dev.alloc::<T>(elem_count)?;
         let (grid, block) = launch_config(elem_count);
@@ -806,23 +795,23 @@ impl Affine {
                 .map(|d| d.as_ptr() as *const usize)
                 .unwrap_or(std::ptr::null());
 
-            kernel
-                .launch(
-                    grid,
-                    block,
-                    0,
-                    Some(&dev.stream),
-                    &mut [
-                        &elem_count as *const usize as *mut std::ffi::c_void,
-                        &dims.len() as *const usize as *mut std::ffi::c_void,
-                        (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                        (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        &mul_val as *const T as *mut std::ffi::c_void,
-                        &add_val as *const T as *mut std::ffi::c_void,
-                    ],
-                )
-                .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+            launch_kernel(
+                dev,
+                AffineKernel::NAME,
+                AffineKernel::CODE,
+                &func_name,
+                grid,
+                block,
+                &mut [
+                    &elem_count as *const usize as *mut std::ffi::c_void,
+                    &dims.len() as *const usize as *mut std::ffi::c_void,
+                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    &mul_val as *const T as *mut std::ffi::c_void,
+                    &add_val as *const T as *mut std::ffi::c_void,
+                ],
+            )?;
         }
 
         Ok(output)
@@ -861,19 +850,7 @@ impl Powf {
         let dims = shape.dims();
         let elem_count = shape.elem_count();
 
-        let kernel_manager = dev
-            .kernel_manager()
-            .lock()
-            .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-        let module = kernel_manager
-            .get_or_load(UnaryKernel::NAME, UnaryKernel::CODE)
-            .map_err(|e| crate::Error::Msg(e.to_string()))?;
-
         let func_name = kernel_name::<T>("upowf");
-        let kernel = module
-            .get_function(&func_name)
-            .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
-
         let ds = dims_and_strides(dev, layout, 1)?;
         let output = dev.alloc::<T>(elem_count)?;
         let (grid, block) = launch_config(elem_count);
@@ -888,22 +865,22 @@ impl Powf {
                 .map(|d| d.as_ptr() as *const usize)
                 .unwrap_or(std::ptr::null());
 
-            kernel
-                .launch(
-                    grid,
-                    block,
-                    0,
-                    Some(&dev.stream),
-                    &mut [
-                        &elem_count as *const usize as *mut std::ffi::c_void,
-                        &dims.len() as *const usize as *mut std::ffi::c_void,
-                        (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                        (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        &scalar_val as *const T as *mut std::ffi::c_void,
-                    ],
-                )
-                .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+            launch_kernel(
+                dev,
+                UnaryKernel::NAME,
+                UnaryKernel::CODE,
+                &func_name,
+                grid,
+                block,
+                &mut [
+                    &elem_count as *const usize as *mut std::ffi::c_void,
+                    &dims.len() as *const usize as *mut std::ffi::c_void,
+                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    &scalar_val as *const T as *mut std::ffi::c_void,
+                ],
+            )?;
         }
 
         Ok(output)
@@ -942,19 +919,7 @@ impl Elu {
         let dims = shape.dims();
         let elem_count = shape.elem_count();
 
-        let kernel_manager = dev
-            .kernel_manager()
-            .lock()
-            .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-        let module = kernel_manager
-            .get_or_load(UnaryKernel::NAME, UnaryKernel::CODE)
-            .map_err(|e| crate::Error::Msg(e.to_string()))?;
-
         let func_name = kernel_name::<T>("uelu");
-        let kernel = module
-            .get_function(&func_name)
-            .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
-
         let ds = dims_and_strides(dev, layout, 1)?;
         let output = dev.alloc::<T>(elem_count)?;
         let (grid, block) = launch_config(elem_count);
@@ -969,22 +934,22 @@ impl Elu {
                 .map(|d| d.as_ptr() as *const usize)
                 .unwrap_or(std::ptr::null());
 
-            kernel
-                .launch(
-                    grid,
-                    block,
-                    0,
-                    Some(&dev.stream),
-                    &mut [
-                        &elem_count as *const usize as *mut std::ffi::c_void,
-                        &dims.len() as *const usize as *mut std::ffi::c_void,
-                        (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                        (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        &alpha_val as *const T as *mut std::ffi::c_void,
-                    ],
-                )
-                .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+            launch_kernel(
+                dev,
+                UnaryKernel::NAME,
+                UnaryKernel::CODE,
+                &func_name,
+                grid,
+                block,
+                &mut [
+                    &elem_count as *const usize as *mut std::ffi::c_void,
+                    &dims.len() as *const usize as *mut std::ffi::c_void,
+                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    &alpha_val as *const T as *mut std::ffi::c_void,
+                ],
+            )?;
         }
 
         Ok(output)
@@ -1070,14 +1035,6 @@ impl FastReduce<'_> {
         let el_to_sum_per_block = src_el / dst_el;
         let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
 
-        let kernel_manager = dev
-            .kernel_manager()
-            .lock()
-            .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-        let module = kernel_manager
-            .get_or_load(ReduceKernel::NAME, ReduceKernel::CODE)
-            .map_err(|e| crate::Error::Msg(e.to_string()))?;
-
         let (name, _return_index) = match self.1 {
             ReduceOp::Sum => ("fast_sum", false),
             ReduceOp::Min => ("fast_min", false),
@@ -1087,9 +1044,6 @@ impl FastReduce<'_> {
         };
 
         let func_name = kernel_name::<T>(name);
-        let kernel = module
-            .get_function(&func_name)
-            .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
 
         let ds_data: Vec<usize> = [dims.as_slice(), stride.as_slice()].concat();
         let ds = dev.clone_htod(&ds_data)?;
@@ -1103,22 +1057,22 @@ impl FastReduce<'_> {
             let out_ptr = output.as_ptr();
             let ds_ptr = ds.as_ptr() as *const usize;
 
-            kernel
-                .launch(
-                    grid,
-                    block,
-                    0,
-                    Some(&dev.stream),
-                    &mut [
-                        &src_el as *const usize as *mut std::ffi::c_void,
-                        &el_to_sum_per_block as *const usize as *mut std::ffi::c_void,
-                        &src_dims.len() as *const usize as *mut std::ffi::c_void,
-                        (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                        (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                        (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    ],
-                )
-                .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+            launch_kernel(
+                dev,
+                ReduceKernel::NAME,
+                ReduceKernel::CODE,
+                &func_name,
+                grid,
+                block,
+                &mut [
+                    &src_el as *const usize as *mut std::ffi::c_void,
+                    &el_to_sum_per_block as *const usize as *mut std::ffi::c_void,
+                    &src_dims.len() as *const usize as *mut std::ffi::c_void,
+                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                ],
+            )?;
         }
 
         Ok(output)
@@ -1149,19 +1103,7 @@ fn index_select_typed<T: Copy + Send + Sync + WithDType + 'static>(
 ) -> Result<SendSyncDeviceMemory<T>> {
     use candle_rocm_kernels::kernel::IndexingKernel;
 
-    let kernel_manager = device
-        .kernel_manager()
-        .lock()
-        .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-    let module = kernel_manager
-        .get_or_load(IndexingKernel::NAME, IndexingKernel::CODE)
-        .map_err(|e| crate::Error::Msg(e.to_string()))?;
-
     let func_name = kernel_name::<T>(ids_prefix);
-    let kernel = module
-        .get_function(&func_name)
-        .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
-
     let output = device.alloc::<T>(dst_el)?;
     let num_dims = ds.count() / 2;
     let (grid, block) = launch_config(dst_el);
@@ -1170,26 +1112,26 @@ fn index_select_typed<T: Copy + Send + Sync + WithDType + 'static>(
         let out_ptr = output.as_ptr();
         let ds_ptr = ds.as_ptr() as *const usize;
 
-        kernel
-            .launch(
-                grid,
-                block,
-                0,
-                Some(&device.stream),
-                &mut [
-                    &dst_el as *const usize as *mut std::ffi::c_void,
-                    &num_dims as *const usize as *mut std::ffi::c_void,
-                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
-                    (&ids_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
-                    &left_size as *const usize as *mut std::ffi::c_void,
-                    &src_dim_size as *const usize as *mut std::ffi::c_void,
-                    &ids_dim_size as *const usize as *mut std::ffi::c_void,
-                    &right_size as *const usize as *mut std::ffi::c_void,
-                ],
-            )
-            .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+        launch_kernel(
+            device,
+            IndexingKernel::NAME,
+            IndexingKernel::CODE,
+            &func_name,
+            grid,
+            block,
+            &mut [
+                &dst_el as *const usize as *mut std::ffi::c_void,
+                &num_dims as *const usize as *mut std::ffi::c_void,
+                (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                (&ids_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                &left_size as *const usize as *mut std::ffi::c_void,
+                &src_dim_size as *const usize as *mut std::ffi::c_void,
+                &ids_dim_size as *const usize as *mut std::ffi::c_void,
+                &right_size as *const usize as *mut std::ffi::c_void,
+            ],
+        )?;
     }
 
     Ok(output)
@@ -1315,8 +1257,6 @@ impl BackendStorage for RocmStorage {
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
-        use candle_rocm_kernels::CastKernel;
-
         let shape = layout.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
@@ -1326,129 +1266,108 @@ impl BackendStorage for RocmStorage {
         let start_o = layout.start_offset();
         let src_ptr = unsafe { self.slice.offset_ptr(start_o) };
 
-        let func_name = format!("cast_{}_{}", self.slice.dtype().as_str(), dtype.as_str());
-
         let (grid, block) = launch_config(el);
         let ds_ptr: *const usize = ds
             .as_ref()
             .map(|d| d.as_ptr() as *const usize)
             .unwrap_or(std::ptr::null());
 
-        let slice = {
-            let kernel_manager = dev
-                .kernel_manager()
-                .lock()
-                .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-            let module = kernel_manager
-                .get_or_load(CastKernel::NAME, CastKernel::CODE)
-                .map_err(|e| crate::Error::Msg(e.to_string()))?;
-            let kernel = module
-                .get_function(&func_name)
-                .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
-
-            match dtype {
-                DType::U8 => cast_launch!(
-                    dev,
-                    kernel,
-                    grid,
-                    block,
-                    el,
-                    dims.len(),
-                    ds_ptr,
-                    src_ptr,
-                    &dev.stream,
-                    u8,
-                    U8
-                ),
-                DType::U32 => cast_launch!(
-                    dev,
-                    kernel,
-                    grid,
-                    block,
-                    el,
-                    dims.len(),
-                    ds_ptr,
-                    src_ptr,
-                    &dev.stream,
-                    u32,
-                    U32
-                ),
-                DType::I64 => cast_launch!(
-                    dev,
-                    kernel,
-                    grid,
-                    block,
-                    el,
-                    dims.len(),
-                    ds_ptr,
-                    src_ptr,
-                    &dev.stream,
-                    i64,
-                    I64
-                ),
-                DType::BF16 => cast_launch!(
-                    dev,
-                    kernel,
-                    grid,
-                    block,
-                    el,
-                    dims.len(),
-                    ds_ptr,
-                    src_ptr,
-                    &dev.stream,
-                    bf16,
-                    BF16
-                ),
-                DType::F16 => cast_launch!(
-                    dev,
-                    kernel,
-                    grid,
-                    block,
-                    el,
-                    dims.len(),
-                    ds_ptr,
-                    src_ptr,
-                    &dev.stream,
-                    f16,
-                    F16
-                ),
-                DType::F32 => cast_launch!(
-                    dev,
-                    kernel,
-                    grid,
-                    block,
-                    el,
-                    dims.len(),
-                    ds_ptr,
-                    src_ptr,
-                    &dev.stream,
-                    f32,
-                    F32
-                ),
-                DType::F64 => cast_launch!(
-                    dev,
-                    kernel,
-                    grid,
-                    block,
-                    el,
-                    dims.len(),
-                    ds_ptr,
-                    src_ptr,
-                    &dev.stream,
-                    f64,
-                    F64
-                ),
-                DType::I16 | DType::I32 => {
-                    return Err(crate::Error::Msg(
-                        "i16/i32 dtypes are not supported for to_dtype on ROCm".to_string(),
-                    ))
-                }
-                DType::F8E4M3 | DType::F4 | DType::F6E2M3 | DType::F6E3M2 | DType::F8E8M0 => {
-                    return Err(crate::Error::Msg(format!(
-                        "{:?} dtype is not supported for to_dtype on ROCm",
-                        dtype
-                    )))
-                }
+        let src_dtype = self.slice.dtype();
+        let slice = match dtype {
+            DType::U8 => cast_launch!(
+                dev,
+                grid,
+                block,
+                el,
+                dims.len(),
+                ds_ptr,
+                src_ptr,
+                src_dtype,
+                u8,
+                U8
+            ),
+            DType::U32 => cast_launch!(
+                dev,
+                grid,
+                block,
+                el,
+                dims.len(),
+                ds_ptr,
+                src_ptr,
+                src_dtype,
+                u32,
+                U32
+            ),
+            DType::I64 => cast_launch!(
+                dev,
+                grid,
+                block,
+                el,
+                dims.len(),
+                ds_ptr,
+                src_ptr,
+                src_dtype,
+                i64,
+                I64
+            ),
+            DType::BF16 => cast_launch!(
+                dev,
+                grid,
+                block,
+                el,
+                dims.len(),
+                ds_ptr,
+                src_ptr,
+                src_dtype,
+                bf16,
+                BF16
+            ),
+            DType::F16 => cast_launch!(
+                dev,
+                grid,
+                block,
+                el,
+                dims.len(),
+                ds_ptr,
+                src_ptr,
+                src_dtype,
+                f16,
+                F16
+            ),
+            DType::F32 => cast_launch!(
+                dev,
+                grid,
+                block,
+                el,
+                dims.len(),
+                ds_ptr,
+                src_ptr,
+                src_dtype,
+                f32,
+                F32
+            ),
+            DType::F64 => cast_launch!(
+                dev,
+                grid,
+                block,
+                el,
+                dims.len(),
+                ds_ptr,
+                src_ptr,
+                src_dtype,
+                f64,
+                F64
+            ),
+            DType::I16 | DType::I32 => {
+                return Err(crate::Error::Msg(
+                    "i16/i32 dtypes are not supported for to_dtype on ROCm".to_string(),
+                ))
+            }
+            DType::F8E4M3 | DType::F4 | DType::F6E2M3 | DType::F6E3M2 | DType::F8E8M0 => {
+                return Err(crate::Error::Msg(format!(
+                    "{:?} dtype is not supported for to_dtype on ROCm",
+                    dtype
+                )))
             }
         };
 
@@ -1904,18 +1823,6 @@ impl BackendStorage for RocmStorage {
             return Ok(());
         }
 
-        let kernel_manager = self
-            .device
-            .kernel_manager()
-            .lock()
-            .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-        let module = kernel_manager
-            .get_or_load(
-                candle_rocm_kernels::kernel::UnaryKernel::NAME,
-                candle_rocm_kernels::kernel::UnaryKernel::CODE,
-            )
-            .map_err(|e| crate::Error::Msg(e.to_string()))?;
-
         let (grid, block) = launch_config(el_count);
         let ds = dims_and_strides(&self.device, src_l, 1)?;
 
@@ -1926,9 +1833,6 @@ impl BackendStorage for RocmStorage {
                     _ => crate::bail!("dtype mismatch in copy_strided_src"),
                 };
                 let func_name = format!("ucopy_{}", $suffix);
-                let kernel = module.get_function(&func_name).map_err(|e| {
-                    crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e))
-                })?;
                 let (src_ptr, dst_ptr) = unsafe {
                     (
                         src_mem.as_ptr().add(src_l.start_offset()),
@@ -1939,12 +1843,14 @@ impl BackendStorage for RocmStorage {
                     .as_ref()
                     .map(|d| d.as_ptr() as *const usize)
                     .unwrap_or(std::ptr::null());
-                kernel
-                    .launch(
+                unsafe {
+                    launch_kernel(
+                        &self.device,
+                        candle_rocm_kernels::kernel::UnaryKernel::NAME,
+                        candle_rocm_kernels::kernel::UnaryKernel::CODE,
+                        &func_name,
                         grid,
                         block,
-                        0,
-                        Some(&self.device.stream),
                         &mut [
                             &el_count as *const usize as *mut std::ffi::c_void,
                             &dims.len() as *const usize as *mut std::ffi::c_void,
@@ -1952,8 +1858,8 @@ impl BackendStorage for RocmStorage {
                             (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
                             (&dst_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
                         ],
-                    )
-                    .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+                    )?;
+                }
             }};
         }
 
@@ -2033,24 +1939,8 @@ impl BackendStorage for RocmStorage {
             return Ok(());
         }
 
-        let kernel_manager = self
-            .device
-            .kernel_manager()
-            .lock()
-            .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
-        let module = kernel_manager
-            .get_or_load(
-                candle_rocm_kernels::kernel::FillKernel::NAME,
-                candle_rocm_kernels::kernel::FillKernel::CODE,
-            )
-            .map_err(|e| crate::Error::Msg(e.to_string()))?;
-
         let (grid, block) = launch_config(el_count);
         let ds = dims_and_strides(&self.device, layout, 1)?;
-        let ds_ptr: *const usize = ds
-            .as_ref()
-            .map(|d| d.as_ptr() as *const usize)
-            .unwrap_or(std::ptr::null());
 
         macro_rules! const_set {
             ($variant:ident, $suffix:expr, $ty:ty, $val:expr) => {{
@@ -2059,17 +1949,20 @@ impl BackendStorage for RocmStorage {
                     _ => crate::bail!("dtype mismatch in const_set"),
                 };
                 let func_name = format!("const_set_{}", $suffix);
-                let kernel = module.get_function(&func_name).map_err(|e| {
-                    crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e))
-                })?;
                 let out_ptr = unsafe { mem.as_ptr().add(layout.start_offset()) };
                 let scalar_val: $ty = $val;
-                kernel
-                    .launch(
+                let ds_ptr: *const usize = ds
+                    .as_ref()
+                    .map(|d| d.as_ptr() as *const usize)
+                    .unwrap_or(std::ptr::null());
+                unsafe {
+                    launch_kernel(
+                        &self.device,
+                        candle_rocm_kernels::kernel::FillKernel::NAME,
+                        candle_rocm_kernels::kernel::FillKernel::CODE,
+                        &func_name,
                         grid,
                         block,
-                        0,
-                        Some(&self.device.stream),
                         &mut [
                             &el_count as *const usize as *mut std::ffi::c_void,
                             &dims.len() as *const usize as *mut std::ffi::c_void,
@@ -2077,8 +1970,8 @@ impl BackendStorage for RocmStorage {
                             &scalar_val as *const $ty as *mut std::ffi::c_void,
                             (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
                         ],
-                    )
-                    .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+                    )?;
+                }
             }};
         }
 
