@@ -1,17 +1,23 @@
+//! Implementation of Backend traits for ROCm device
+//!
 use crate::backend::BackendStorage;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, WithDType};
-use candle_rocm_kernels::kernel::{BinaryKernel, KernelSource, UnaryKernel};
+pub use candle_rocm_kernels as kernels;
+use candle_rocm_kernels::kernel::KernelSource;
 use half::{bf16, f16};
+pub use rocm_rs;
 use rocm_rs::hip::bindings;
 use rocm_rs::rocblas::{self, level3::GemmStridedBatchedType, types::Operation};
 
 mod device;
 mod error;
+mod miopen;
 mod wrappers;
 pub use device::{DeviceId, RocmDevice};
 pub use error::{RocmError, WrapErr};
-use wrappers::SendSyncDeviceMemory;
+pub use wrappers::SendSyncDeviceMemory;
+pub mod utils;
 
 pub enum RocmStorageSlice {
     U8(SendSyncDeviceMemory<u8>),
@@ -390,7 +396,47 @@ macro_rules! dispatch_matmul {
     }};
 }
 
-pub(crate) fn kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> String {
+macro_rules! dispatch_miopen_conv {
+    ($self:expr, $kernel:expr, $l:expr, $kernel_l:expr, $dst_el:expr, $device:expr, $handle:expr, $func:ident, $($arg:expr),* $(,)?) => {{
+        let device = $device.clone();
+        let slice = match (&$self.slice, &$kernel.slice) {
+            (RocmStorageSlice::F32(s), RocmStorageSlice::F32(w)) => {
+                let x_ptr = unsafe { s.as_ptr().add($l.start_offset()) } as *mut _;
+                let w_ptr = unsafe { w.as_ptr().add($kernel_l.start_offset()) } as *mut _;
+                let o = device.alloc_zeros::<f32>($dst_el)?;
+                $func::<f32>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
+                RocmStorageSlice::F32(o)
+            }
+            (RocmStorageSlice::F16(s), RocmStorageSlice::F16(w)) => {
+                let x_ptr = unsafe { s.as_ptr().add($l.start_offset()) } as *mut _;
+                let w_ptr = unsafe { w.as_ptr().add($kernel_l.start_offset()) } as *mut _;
+                let o = device.alloc_zeros::<f16>($dst_el)?;
+                $func::<f16>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
+                RocmStorageSlice::F16(o)
+            }
+            (RocmStorageSlice::BF16(s), RocmStorageSlice::BF16(w)) => {
+                let x_ptr = unsafe { s.as_ptr().add($l.start_offset()) } as *mut _;
+                let w_ptr = unsafe { w.as_ptr().add($kernel_l.start_offset()) } as *mut _;
+                let o = device.alloc_zeros::<bf16>($dst_el)?;
+                $func::<bf16>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
+                RocmStorageSlice::BF16(o)
+            }
+            (RocmStorageSlice::F64(s), RocmStorageSlice::F64(w)) => {
+                let x_ptr = unsafe { s.as_ptr().add($l.start_offset()) } as *mut _;
+                let w_ptr = unsafe { w.as_ptr().add($kernel_l.start_offset()) } as *mut _;
+                let o = device.alloc_zeros::<f64>($dst_el)?;
+                $func::<f64>($handle, x_ptr, w_ptr, o.as_ptr() as *mut _, $($arg),*)?;
+                RocmStorageSlice::F64(o)
+            }
+            _ => return Err(crate::Error::Msg(
+                "conv only supports f32, f16, bf16, f64 for ROCm".to_string(),
+            )),
+        };
+        Ok(Self { slice, device })
+    }};
+}
+
+pub fn kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> String {
     let type_name = std::any::type_name::<T>();
     let suffix = if type_name.contains("f32") {
         "f32"
@@ -416,7 +462,7 @@ pub(crate) fn kernel_name<T: Copy + Send + Sync + 'static>(kernel: &str) -> Stri
     format!("{}_{}", kernel, suffix)
 }
 
-pub(crate) fn launch_config(num_elems: usize) -> (rocm_rs::hip::Dim3, rocm_rs::hip::Dim3) {
+pub fn launch_config(num_elems: usize) -> (rocm_rs::hip::Dim3, rocm_rs::hip::Dim3) {
     const BLOCK_SIZE: u32 = 256;
     let num_blocks = ((num_elems as u32) + BLOCK_SIZE - 1) / BLOCK_SIZE;
     let grid_dim = num_blocks.min(65535);
@@ -470,7 +516,9 @@ fn dims_and_strides_pair(
     Ok(Some(dev.clone_htod(&data)?))
 }
 
-trait Map1 {
+/// Trait for applying unary operations to ROCm storage.
+pub trait Map1 {
+    /// Apply the operation to a single type.
     fn f<T: Copy + Send + Sync + 'static>(
         &self,
         src: &SendSyncDeviceMemory<T>,
@@ -478,6 +526,7 @@ trait Map1 {
         layout: &Layout,
     ) -> Result<SendSyncDeviceMemory<T>>;
 
+    /// Map the operation over all supported types.
     fn map(&self, s: &RocmStorageSlice, d: &RocmDevice, l: &Layout) -> Result<RocmStorageSlice> {
         let out = match s {
             RocmStorageSlice::U8(s) => RocmStorageSlice::U8(self.f(s, d, l)?),
@@ -497,7 +546,9 @@ trait Map1 {
     }
 }
 
-trait Map2 {
+/// Trait for applying binary operations to ROCm storage.
+pub trait Map2 {
+    /// Apply the operation to a single type.
     fn f<T: Copy + Send + Sync + 'static>(
         &self,
         lhs: &SendSyncDeviceMemory<T>,
@@ -507,6 +558,7 @@ trait Map2 {
         dev: &RocmDevice,
     ) -> Result<SendSyncDeviceMemory<T>>;
 
+    /// Map the operation over all supported types.
     fn map(
         &self,
         s1: &RocmStorageSlice,
@@ -669,7 +721,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
     }
 }
 
-struct Affine(f64, f64);
+pub(crate) struct Affine(pub f64, pub f64);
 
 impl Affine {
     fn map(&self, s: &RocmStorageSlice, d: &RocmDevice, l: &Layout) -> Result<RocmStorageSlice> {
@@ -1058,6 +1110,66 @@ impl std::fmt::Debug for RocmStorage {
     }
 }
 
+fn index_select_typed<T: Copy + Send + Sync + WithDType + 'static>(
+    ids_prefix: &str,
+    ids_ptr: *mut std::ffi::c_void,
+    ds: &SendSyncDeviceMemory<usize>,
+    src_ptr: *mut std::ffi::c_void,
+    left_size: usize,
+    src_dim_size: usize,
+    ids_dim_size: usize,
+    right_size: usize,
+    dst_el: usize,
+    device: &RocmDevice,
+) -> Result<SendSyncDeviceMemory<T>> {
+    use candle_rocm_kernels::kernel::IndexingKernel;
+
+    let kernel_manager = device
+        .kernel_manager()
+        .lock()
+        .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
+    let module = kernel_manager
+        .get_or_load(IndexingKernel::NAME, IndexingKernel::CODE)
+        .map_err(|e| crate::Error::Msg(e.to_string()))?;
+
+    let func_name = kernel_name::<T>(ids_prefix);
+    let kernel = module
+        .get_function(&func_name)
+        .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", func_name, e)))?;
+
+    let output = device.alloc::<T>(dst_el)?;
+    let num_dims = ds.count() / 2;
+    let (grid, block) = launch_config(dst_el);
+
+    unsafe {
+        let out_ptr = output.as_ptr();
+        let ds_ptr = ds.as_ptr() as *const usize;
+
+        kernel
+            .launch(
+                grid,
+                block,
+                0,
+                Some(&device.stream),
+                &mut [
+                    &dst_el as *const usize as *mut std::ffi::c_void,
+                    &num_dims as *const usize as *mut std::ffi::c_void,
+                    (&ds_ptr) as *const *const usize as *mut std::ffi::c_void,
+                    (&ids_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&src_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    (&out_ptr) as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                    &left_size as *const usize as *mut std::ffi::c_void,
+                    &src_dim_size as *const usize as *mut std::ffi::c_void,
+                    &ids_dim_size as *const usize as *mut std::ffi::c_void,
+                    &right_size as *const usize as *mut std::ffi::c_void,
+                ],
+            )
+            .map_err(|e| crate::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+    }
+
+    Ok(output)
+}
+
 impl BackendStorage for RocmStorage {
     type Device = RocmDevice;
 
@@ -1210,38 +1322,119 @@ impl BackendStorage for RocmStorage {
 
     fn conv1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kl: &Layout,
-        _params: &crate::conv::ParamsConv1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "conv1d not yet implemented for ROCm".to_string(),
-        ))
+        use crate::rocm_backend::miopen::conv2d_forward;
+
+        let device = self.device();
+        let miopen_handle = device.miopen();
+        let dst_el = params.b_size * params.c_out * params.l_out();
+
+        dispatch_miopen_conv!(
+            self,
+            kernel,
+            l,
+            kernel_l,
+            dst_el,
+            device,
+            &miopen_handle.0,
+            conv2d_forward,
+            params.b_size,
+            params.c_in,
+            params.c_out,
+            1,
+            params.l_in,
+            1,
+            params.k_size,
+            1,
+            params.l_out(),
+            params.padding,
+            0,
+            params.stride,
+            1,
+            params.dilation,
+            1,
+        )
     }
 
     fn conv_transpose1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kl: &Layout,
-        _params: &crate::conv::ParamsConvTranspose1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "conv_transpose1d not yet implemented for ROCm".to_string(),
-        ))
+        use crate::rocm_backend::miopen::conv_transpose1d_forward;
+
+        let device = self.device();
+        let miopen_handle = device.miopen();
+        let dst_el = params.b_size * params.c_out * params.l_out();
+
+        dispatch_miopen_conv!(
+            self,
+            kernel,
+            l,
+            kernel_l,
+            dst_el,
+            device,
+            &miopen_handle.0,
+            conv_transpose1d_forward,
+            params.b_size,
+            params.c_in,
+            params.c_out,
+            params.l_in,
+            params.k_size,
+            params.l_out(),
+            params.padding,
+            params.output_padding,
+            params.stride,
+            params.dilation,
+        )
     }
 
     fn conv2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kl: &Layout,
-        _params: &crate::conv::ParamsConv2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "conv2d not yet implemented for ROCm".to_string(),
-        ))
+        use crate::rocm_backend::miopen::conv2d_forward;
+
+        let device = self.device();
+        let miopen_handle = device.miopen();
+        let out_h = params.out_h();
+        let out_w = params.out_w();
+        let dst_el = params.b_size * params.c_out * out_h * out_w;
+
+        dispatch_miopen_conv!(
+            self,
+            kernel,
+            l,
+            kernel_l,
+            dst_el,
+            device,
+            &miopen_handle.0,
+            conv2d_forward,
+            params.b_size,
+            params.c_in,
+            params.c_out,
+            params.i_h,
+            params.i_w,
+            params.k_h,
+            params.k_w,
+            out_h,
+            out_w,
+            params.padding,
+            params.padding,
+            params.stride,
+            params.stride,
+            params.dilation,
+            params.dilation,
+        )
     }
 
     fn conv_transpose2d(
@@ -1328,10 +1521,122 @@ impl BackendStorage for RocmStorage {
         ))
     }
 
-    fn index_select(&self, _idx: &Self, _il: &Layout, _sl: &Layout, _dim: usize) -> Result<Self> {
-        Err(crate::Error::Msg(
-            "index_select not yet implemented for ROCm".to_string(),
-        ))
+    fn index_select(&self, idx: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
+        let device = self.device.clone();
+        let left_size: usize = src_l.dims()[..dim].iter().product();
+        let right_size: usize = src_l.dims()[dim + 1..].iter().product();
+        let src_dim_size = src_l.dims()[dim];
+        let ids_dim_size = ids_l.shape().elem_count();
+        let dst_el = ids_dim_size * left_size * right_size;
+
+        let ids_dims = ids_l.shape().dims();
+        let ds = device.clone_htod(&[ids_dims, ids_l.stride()].concat())?;
+
+        let src_ptr = match src_l.contiguous_offsets() {
+            Some((o1, _)) => unsafe { self.slice.offset_ptr(o1) },
+            None => Err(crate::Error::RequiresContiguous { op: "index-select" }.bt())?,
+        };
+
+        let (ids_prefix, ids_ptr) = match &idx.slice {
+            RocmStorageSlice::U32(s) => ("is_u32", unsafe { s.as_ptr().add(ids_l.start_offset()) }
+                as *mut std::ffi::c_void),
+            RocmStorageSlice::U8(s) => ("is_u8", unsafe { s.as_ptr().add(ids_l.start_offset()) }
+                as *mut std::ffi::c_void),
+            RocmStorageSlice::I64(s) => ("is_i64", unsafe { s.as_ptr().add(ids_l.start_offset()) }
+                as *mut std::ffi::c_void),
+            _ => crate::bail!("index_select ids should be u8, u32, or i64"),
+        };
+
+        let slice = match &self.slice {
+            RocmStorageSlice::F32(_) => RocmStorageSlice::F32(index_select_typed::<f32>(
+                ids_prefix,
+                ids_ptr,
+                &ds,
+                src_ptr,
+                left_size,
+                src_dim_size,
+                ids_dim_size,
+                right_size,
+                dst_el,
+                &device,
+            )?),
+            RocmStorageSlice::F64(_) => RocmStorageSlice::F64(index_select_typed::<f64>(
+                ids_prefix,
+                ids_ptr,
+                &ds,
+                src_ptr,
+                left_size,
+                src_dim_size,
+                ids_dim_size,
+                right_size,
+                dst_el,
+                &device,
+            )?),
+            RocmStorageSlice::U8(_) => RocmStorageSlice::U8(index_select_typed::<u8>(
+                ids_prefix,
+                ids_ptr,
+                &ds,
+                src_ptr,
+                left_size,
+                src_dim_size,
+                ids_dim_size,
+                right_size,
+                dst_el,
+                &device,
+            )?),
+            RocmStorageSlice::U32(_) => RocmStorageSlice::U32(index_select_typed::<u32>(
+                ids_prefix,
+                ids_ptr,
+                &ds,
+                src_ptr,
+                left_size,
+                src_dim_size,
+                ids_dim_size,
+                right_size,
+                dst_el,
+                &device,
+            )?),
+            RocmStorageSlice::I64(_) => RocmStorageSlice::I64(index_select_typed::<i64>(
+                ids_prefix,
+                ids_ptr,
+                &ds,
+                src_ptr,
+                left_size,
+                src_dim_size,
+                ids_dim_size,
+                right_size,
+                dst_el,
+                &device,
+            )?),
+            RocmStorageSlice::BF16(_) => RocmStorageSlice::BF16(index_select_typed::<half::bf16>(
+                ids_prefix,
+                ids_ptr,
+                &ds,
+                src_ptr,
+                left_size,
+                src_dim_size,
+                ids_dim_size,
+                right_size,
+                dst_el,
+                &device,
+            )?),
+            RocmStorageSlice::F16(_) => RocmStorageSlice::F16(index_select_typed::<half::f16>(
+                ids_prefix,
+                ids_ptr,
+                &ds,
+                src_ptr,
+                left_size,
+                src_dim_size,
+                ids_dim_size,
+                right_size,
+                dst_el,
+                &device,
+            )?),
+            RocmStorageSlice::I16(_) | RocmStorageSlice::I32(_) | RocmStorageSlice::F8E4M3(_) => {
+                crate::bail!("index_select does not support this dtype for ROCm")
+            }
+        };
+        Ok(Self { slice, device })
     }
 
     fn index_add(

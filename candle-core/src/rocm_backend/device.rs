@@ -1,13 +1,14 @@
 use crate::backend::BackendDevice;
-use crate::{CpuStorage, DType, Result, Shape};
+use crate::{CpuStorage, DType, Layout, Result, Shape};
 use candle_rocm_kernels::compile::KernelCache;
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::wrappers::{
-    SendSyncDeviceMemory, SendSyncPseudoRng, SendSyncRocblasHandle, SendSyncStream,
+    SendSyncDeviceMemory, SendSyncMIOpenHandle, SendSyncPseudoRng, SendSyncRocblasHandle,
+    SendSyncStream,
 };
-use super::{RocmError, RocmStorage, RocmStorageSlice};
+use super::{Affine, RocmError, RocmStorage, RocmStorageSlice};
 use rocm_rs::hip::Device as HipDevice;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -29,6 +30,7 @@ pub struct RocmDevice {
     rocrand: Arc<Mutex<SendSyncPseudoRng>>,
     seed_value: Arc<RwLock<u64>>,
     pub(crate) blas: Arc<SendSyncRocblasHandle>,
+    pub(crate) miopen: Arc<SendSyncMIOpenHandle>,
     kernel_manager: Arc<Mutex<KernelCache>>,
 }
 
@@ -55,6 +57,9 @@ impl RocmDevice {
         blas.set_stream(&stream)
             .map_err(|e| RocmError::Rocblas(e.to_string()))?;
 
+        let miopen =
+            SendSyncMIOpenHandle::new(&stream).map_err(|e| RocmError::MIOpen(e.to_string()))?;
+
         let kernel_manager =
             Arc::new(Mutex::new(KernelCache::new(&device).map_err(|e| {
                 crate::Error::Msg(format!("Failed to create kernel cache: {}", e))
@@ -67,6 +72,7 @@ impl RocmDevice {
             rocrand: Arc::new(Mutex::new(rocrand)),
             seed_value: Arc::new(RwLock::new(seed)),
             blas: Arc::new(blas),
+            miopen: Arc::new(miopen),
             kernel_manager,
         })
     }
@@ -113,6 +119,36 @@ impl RocmDevice {
 
     pub(crate) fn kernel_manager(&self) -> &std::sync::Mutex<KernelCache> {
         &self.kernel_manager
+    }
+
+    pub(crate) fn miopen(&self) -> &Arc<SendSyncMIOpenHandle> {
+        &self.miopen
+    }
+
+    /// Get a reference to the underlying HIP stream.
+    /// This is public so that candle-nn and other crates can launch custom kernels.
+    pub fn stream(&self) -> &rocm_rs::hip::Stream {
+        &self.stream.0
+    }
+
+    /// Get or load a kernel function from the cache.
+    /// This is public so that candle-nn and other crates can launch custom kernels.
+    pub fn get_or_load_func(
+        &self,
+        kernel_name: &'static str,
+        source: &'static str,
+    ) -> crate::Result<rocm_rs::hip::Function> {
+        let kernel_manager = self
+            .kernel_manager
+            .lock()
+            .map_err(|_| crate::Error::Msg("Failed to lock kernel manager".to_string()))?;
+        let module = kernel_manager
+            .get_or_load(kernel_name, source)
+            .map_err(|e| crate::Error::Msg(e.to_string()))?;
+        let func = module
+            .get_function(kernel_name)
+            .map_err(|e| crate::Error::Msg(format!("Kernel {} not found: {}", kernel_name, e)))?;
+        Ok(func)
     }
 }
 
@@ -303,11 +339,6 @@ impl BackendDevice for RocmDevice {
     }
 
     fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, hi: f64) -> Result<Self::Storage> {
-        if lo != 0.0 || hi != 1.0 {
-            crate::bail!(
-                "rand_uniform with lo={lo} and hi={hi} is not supported on ROCm (affine not implemented)"
-            );
-        }
         let elem_count = shape.elem_count();
         let mut rocrand = self.rocrand.lock().unwrap();
         let slice = match dtype {
@@ -342,6 +373,12 @@ impl BackendDevice for RocmDevice {
                 })?;
                 RocmStorageSlice::F64(data)
             }
+        };
+        let slice = if lo == 0. && hi == 1.0 {
+            slice
+        } else {
+            let layout = Layout::contiguous(shape);
+            Affine(hi - lo, lo).map(&slice, self, &layout)?
         };
         Ok(RocmStorage {
             slice,

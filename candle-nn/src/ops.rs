@@ -134,6 +134,115 @@ impl candle::CustomOp1 for Sigmoid {
         Ok((dst, layout.shape().clone()))
     }
 
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        storage: &candle::RocmStorage,
+        layout: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        use candle::rocm_backend::{
+            kernel_name, launch_config, utils::Map1, RocmStorageSlice, SendSyncDeviceMemory,
+        };
+        use candle_rocm_kernels::kernel::UnaryKernel;
+        use candle_rocm_kernels::KernelSource;
+
+        struct S {
+            kernel_name: &'static str,
+        }
+
+        impl Map1 for S {
+            fn f<T: Copy + Send + Sync + 'static>(
+                &self,
+                src: &SendSyncDeviceMemory<T>,
+                dev: &candle::RocmDevice,
+                layout: &Layout,
+            ) -> Result<SendSyncDeviceMemory<T>> {
+                let shape = layout.shape();
+                let dims = shape.dims();
+                let el_count = shape.elem_count();
+                let (grid, block) = launch_config(el_count);
+
+                // Prepare dimensions and strides for non-contiguous tensors
+                let ds = if layout.is_contiguous() {
+                    None
+                } else {
+                    let data: Vec<usize> = [layout.dims(), layout.stride()].concat();
+                    Some(dev.clone_htod(&data)?)
+                };
+
+                // Load the kernel
+                let func = dev.get_or_load_func(self.kernel_name, UnaryKernel::CODE)?;
+
+                // Allocate output
+                let out = dev.alloc::<T>(el_count)?;
+
+                unsafe {
+                    let src_ptr = src.as_ptr().add(layout.start_offset());
+                    let out_ptr = out.as_ptr();
+                    let ds_ptr: *const usize = ds
+                        .as_ref()
+                        .map(|d| d.as_ptr() as *const usize)
+                        .unwrap_or(std::ptr::null());
+
+                    func.launch(
+                        grid,
+                        block,
+                        0,
+                        Some(dev.stream()),
+                        &mut [
+                            &el_count as *const usize as *mut std::ffi::c_void,
+                            &dims.len() as *const usize as *mut std::ffi::c_void,
+                            &ds_ptr as *const *const usize as *mut std::ffi::c_void,
+                            &src_ptr as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                            &out_ptr as *const *mut std::ffi::c_void as *mut std::ffi::c_void,
+                        ],
+                    )
+                    .map_err(|e| candle::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+                }
+
+                Ok(out)
+            }
+        }
+
+        // Create kernel names for each dtype
+        let kernel_name_f16: &'static str =
+            Box::leak(kernel_name::<half::f16>("usigmoid").into_boxed_str());
+        let kernel_name_bf16: &'static str =
+            Box::leak(kernel_name::<half::bf16>("usigmoid").into_boxed_str());
+        let kernel_name_f32: &'static str =
+            Box::leak(kernel_name::<f32>("usigmoid").into_boxed_str());
+        let kernel_name_f64: &'static str =
+            Box::leak(kernel_name::<f64>("usigmoid").into_boxed_str());
+
+        let dev = storage.device();
+        let slice = match &storage.slice {
+            RocmStorageSlice::F16(_) => S {
+                kernel_name: kernel_name_f16,
+            }
+            .map(&storage.slice, dev, layout)?,
+            RocmStorageSlice::BF16(_) => S {
+                kernel_name: kernel_name_bf16,
+            }
+            .map(&storage.slice, dev, layout)?,
+            RocmStorageSlice::F32(_) => S {
+                kernel_name: kernel_name_f32,
+            }
+            .map(&storage.slice, dev, layout)?,
+            RocmStorageSlice::F64(_) => S {
+                kernel_name: kernel_name_f64,
+            }
+            .map(&storage.slice, dev, layout)?,
+            _ => candle::bail!("sigmoid is not implemented for {:?}", storage.dtype()),
+        };
+
+        let dst = candle::RocmStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, layout.shape().clone()))
+    }
+
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
@@ -424,6 +533,86 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        storage: &candle::RocmStorage,
+        layout: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        use candle::rocm_backend::kernels::kernel::KernelSource;
+        use candle::rocm_backend::kernels::ReduceKernel;
+        use candle::rocm_backend::{kernel_name, rocm_rs, SendSyncDeviceMemory};
+        use candle::RocmDevice;
+
+        struct S;
+        impl S {
+            fn f<T: Copy + Send + Sync + 'static>(
+                &self,
+                src: &SendSyncDeviceMemory<T>,
+                dev: &RocmDevice,
+                layout: &Layout,
+            ) -> Result<SendSyncDeviceMemory<T>> {
+                let el = layout.shape().elem_count();
+                let dims = layout.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let (n_rows, n_cols) = (el / dim_m1, dim_m1);
+
+                // Get contiguous slice of data
+                let (start, _end) = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => (o1, o2),
+                };
+
+                let kernel_str = Box::leak(kernel_name::<T>("softmax").into_boxed_str());
+                let func = dev.get_or_load_func(kernel_str, ReduceKernel::CODE)?;
+                // SAFETY: Set later by running the kernel.
+                let dst = dev.alloc::<T>(el)?;
+
+                // Launch config: grid_dim = (n_rows, 1, 1), block_dim = (1, 32, 1)
+                let grid = rocm_rs::hip::Dim3::from((n_rows as u32, 1u32, 1u32));
+                let block = rocm_rs::hip::Dim3::from((1u32, 32u32, 1u32));
+
+                unsafe {
+                    func.launch(
+                        grid,
+                        block,
+                        0,
+                        Some(dev.stream()),
+                        &mut [
+                            &(src.0.as_ptr().add(start)) as *const *mut std::ffi::c_void
+                                as *mut std::ffi::c_void,
+                            &(dst.0.as_ptr()) as *const *mut std::ffi::c_void
+                                as *mut std::ffi::c_void,
+                            &(n_cols as i32) as *const i32 as *mut std::ffi::c_void,
+                        ],
+                    )
+                    .map_err(|e| candle::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+                }
+                Ok(dst)
+            }
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = storage.device();
+        let slice = match &storage.slice {
+            candle::rocm_backend::RocmStorageSlice::F16(s) => {
+                candle::rocm_backend::RocmStorageSlice::F16(S.f(s, dev, layout)?)
+            }
+            candle::rocm_backend::RocmStorageSlice::F32(s) => {
+                candle::rocm_backend::RocmStorageSlice::F32(S.f(s, dev, layout)?)
+            }
+            candle::rocm_backend::RocmStorageSlice::F64(s) => {
+                candle::rocm_backend::RocmStorageSlice::F64(S.f(s, dev, layout)?)
+            }
+            _ => candle::bail!("softmax is not implemented for {:?}", storage.dtype()),
+        };
+        let dst = candle::rocm_backend::RocmStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, layout.shape().clone()))
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
@@ -616,6 +805,112 @@ impl candle::CustomOp2 for RmsNorm {
         .map_err(candle::Error::wrap)?;
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
+    }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        s1: &candle::RocmStorage,
+        l1: &Layout,
+        s2: &candle::RocmStorage,
+        l2: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        use candle::rocm_backend::kernels::kernel::KernelSource;
+        use candle::rocm_backend::kernels::ReduceKernel;
+        use candle::rocm_backend::{kernel_name, rocm_rs, SendSyncDeviceMemory};
+        use candle::RocmDevice;
+
+        struct S {
+            eps: f32,
+        }
+        impl S {
+            fn f<T: Copy + Send + Sync + 'static>(
+                &self,
+                src: &SendSyncDeviceMemory<T>,
+                layout: &Layout,
+                alpha: &SendSyncDeviceMemory<T>,
+                alpha_layout: &Layout,
+                dev: &RocmDevice,
+            ) -> Result<SendSyncDeviceMemory<T>> {
+                let el = layout.shape().elem_count();
+                let dims = layout.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let (n_rows, n_cols) = (el / dim_m1, dim_m1);
+
+                let (src_start, _src_end) = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => (o1, o2),
+                };
+                let (alpha_start, _alpha_end) = match alpha_layout.contiguous_offsets() {
+                    None => candle::bail!("alpha has to be contiguous"),
+                    Some((o1, o2)) => (o1, o2),
+                };
+
+                let block_size = if n_cols < 1024 { 32 } else { 1024 };
+                let kernel_str = Box::leak(kernel_name::<T>("rmsnorm").into_boxed_str());
+                let func = dev.get_or_load_func(kernel_str, ReduceKernel::CODE)?;
+                let dst = dev.alloc::<T>(el)?;
+
+                // Launch config
+                let grid = rocm_rs::hip::Dim3::from((n_rows as u32, 1u32, 1u32));
+                let block = rocm_rs::hip::Dim3::from((block_size as u32, 1u32, 1u32));
+
+                unsafe {
+                    func.launch(
+                        grid,
+                        block,
+                        0,
+                        Some(dev.stream()),
+                        &mut [
+                            &(src.0.as_ptr().add(src_start)) as *const *mut std::ffi::c_void
+                                as *mut std::ffi::c_void,
+                            &(dst.0.as_ptr()) as *const *mut std::ffi::c_void
+                                as *mut std::ffi::c_void,
+                            &(alpha.0.as_ptr().add(alpha_start)) as *const *mut std::ffi::c_void
+                                as *mut std::ffi::c_void,
+                            &(n_cols as i32) as *const i32 as *mut std::ffi::c_void,
+                            &(block_size as i32) as *const i32 as *mut std::ffi::c_void,
+                            &(self.eps) as *const f32 as *mut std::ffi::c_void,
+                        ],
+                    )
+                    .map_err(|e| candle::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+                }
+                Ok(dst)
+            }
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = s1.device();
+        let slice = match (&s1.slice, &s2.slice) {
+            (
+                candle::rocm_backend::RocmStorageSlice::F16(s),
+                candle::rocm_backend::RocmStorageSlice::F16(a),
+            ) => candle::rocm_backend::RocmStorageSlice::F16(
+                S { eps: self.eps }.f(s, l1, a, l2, dev)?,
+            ),
+            (
+                candle::rocm_backend::RocmStorageSlice::F32(s),
+                candle::rocm_backend::RocmStorageSlice::F32(a),
+            ) => candle::rocm_backend::RocmStorageSlice::F32(
+                S { eps: self.eps }.f(s, l1, a, l2, dev)?,
+            ),
+            (
+                candle::rocm_backend::RocmStorageSlice::F64(s),
+                candle::rocm_backend::RocmStorageSlice::F64(a),
+            ) => candle::rocm_backend::RocmStorageSlice::F64(
+                S { eps: self.eps }.f(s, l1, a, l2, dev)?,
+            ),
+            _ => candle::bail!(
+                "rmsnorm is not implemented for {:?} {:?}",
+                s1.dtype(),
+                s2.dtype()
+            ),
+        };
+        let dst = candle::rocm_backend::RocmStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, l1.shape().clone()))
     }
 }
 
@@ -863,6 +1158,126 @@ impl candle::CustomOp3 for LayerNorm {
         .map_err(candle::Error::wrap)?;
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
+    }
+
+    // TODO: Replace with MIOpen implementation once rocm-rs exposes miopenLayerNorm
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        s1: &candle::RocmStorage,
+        l1: &Layout,
+        s2: &candle::RocmStorage,
+        l2: &Layout,
+        s3: &candle::RocmStorage,
+        l3: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        use candle::rocm_backend::kernels::kernel::KernelSource;
+        use candle::rocm_backend::kernels::ReduceKernel;
+        use candle::rocm_backend::{kernel_name, rocm_rs, SendSyncDeviceMemory};
+        use candle::RocmDevice;
+
+        struct S {
+            eps: f32,
+        }
+        impl S {
+            fn f<T: Copy + Send + Sync + 'static>(
+                &self,
+                src: &SendSyncDeviceMemory<T>,
+                layout: &Layout,
+                alpha: &SendSyncDeviceMemory<T>,
+                alpha_layout: &Layout,
+                beta: &SendSyncDeviceMemory<T>,
+                beta_layout: &Layout,
+                dev: &RocmDevice,
+            ) -> Result<SendSyncDeviceMemory<T>> {
+                let el = layout.shape().elem_count();
+                let dims = layout.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let (n_rows, n_cols) = (el / dim_m1, dim_m1);
+
+                let (src_start, _src_end) = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => (o1, o2),
+                };
+                let (alpha_start, _alpha_end) = match alpha_layout.contiguous_offsets() {
+                    None => candle::bail!("alpha has to be contiguous"),
+                    Some((o1, o2)) => (o1, o2),
+                };
+                let (beta_start, _beta_end) = match beta_layout.contiguous_offsets() {
+                    None => candle::bail!("beta has to be contiguous"),
+                    Some((o1, o2)) => (o1, o2),
+                };
+
+                let block_size = if n_cols < 1024 { 32 } else { 1024 };
+                let kernel_str = Box::leak(kernel_name::<T>("layernorm").into_boxed_str());
+                let func = dev.get_or_load_func(kernel_str, ReduceKernel::CODE)?;
+                let dst = dev.alloc::<T>(el)?;
+
+                let grid = rocm_rs::hip::Dim3::from((n_rows as u32, 1u32, 1u32));
+                let block = rocm_rs::hip::Dim3::from((block_size as u32, 1u32, 1u32));
+
+                unsafe {
+                    func.launch(
+                        grid,
+                        block,
+                        0,
+                        Some(dev.stream()),
+                        &mut [
+                            &(src.0.as_ptr().add(src_start)) as *const *mut std::ffi::c_void
+                                as *mut std::ffi::c_void,
+                            &(dst.0.as_ptr()) as *const *mut std::ffi::c_void
+                                as *mut std::ffi::c_void,
+                            &(alpha.0.as_ptr().add(alpha_start)) as *const *mut std::ffi::c_void
+                                as *mut std::ffi::c_void,
+                            &(beta.0.as_ptr().add(beta_start)) as *const *mut std::ffi::c_void
+                                as *mut std::ffi::c_void,
+                            &(n_cols as i32) as *const i32 as *mut std::ffi::c_void,
+                            &(block_size as i32) as *const i32 as *mut std::ffi::c_void,
+                            &(self.eps) as *const f32 as *mut std::ffi::c_void,
+                        ],
+                    )
+                    .map_err(|e| candle::Error::Msg(format!("Kernel launch failed: {}", e)))?;
+                }
+                Ok(dst)
+            }
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = s1.device();
+        let slice = match (&s1.slice, &s2.slice, &s3.slice) {
+            (
+                candle::rocm_backend::RocmStorageSlice::F16(s),
+                candle::rocm_backend::RocmStorageSlice::F16(a),
+                candle::rocm_backend::RocmStorageSlice::F16(b),
+            ) => candle::rocm_backend::RocmStorageSlice::F16(
+                S { eps: self.eps }.f(s, l1, a, l2, b, l3, dev)?,
+            ),
+            (
+                candle::rocm_backend::RocmStorageSlice::F32(s),
+                candle::rocm_backend::RocmStorageSlice::F32(a),
+                candle::rocm_backend::RocmStorageSlice::F32(b),
+            ) => candle::rocm_backend::RocmStorageSlice::F32(
+                S { eps: self.eps }.f(s, l1, a, l2, b, l3, dev)?,
+            ),
+            (
+                candle::rocm_backend::RocmStorageSlice::F64(s),
+                candle::rocm_backend::RocmStorageSlice::F64(a),
+                candle::rocm_backend::RocmStorageSlice::F64(b),
+            ) => candle::rocm_backend::RocmStorageSlice::F64(
+                S { eps: self.eps }.f(s, l1, a, l2, b, l3, dev)?,
+            ),
+            _ => candle::bail!(
+                "layernorm is not implemented for {:?} {:?} {:?}",
+                s1.dtype(),
+                s2.dtype(),
+                s3.dtype()
+            ),
+        };
+        let dst = candle::rocm_backend::RocmStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, l1.shape().clone()))
     }
 }
 

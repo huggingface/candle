@@ -46,6 +46,20 @@ impl KernelSource for ReduceKernel {
     const CODE: &'static str = include_str!("kernels/reduce.hip");
 }
 
+/// Convolution operations kernel source
+pub struct ConvKernel;
+impl KernelSource for ConvKernel {
+    const NAME: &'static str = "conv";
+    const CODE: &'static str = include_str!("kernels/conv.hip");
+}
+
+/// Indexing operations kernel source
+pub struct IndexingKernel;
+impl KernelSource for IndexingKernel {
+    const NAME: &'static str = "indexing";
+    const CODE: &'static str = include_str!("kernels/indexing.hip");
+}
+
 /// Binary operation types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {

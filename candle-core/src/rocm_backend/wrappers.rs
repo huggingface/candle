@@ -1,6 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
 use rocm_rs::hip::{DeviceMemory, Stream};
+use rocm_rs::miopen::Handle;
 use rocm_rs::rocrand::PseudoRng;
 
 pub struct SendSyncDeviceMemory<T>(pub DeviceMemory<T>);
@@ -78,5 +79,24 @@ impl Deref for SendSyncPseudoRng {
 impl DerefMut for SendSyncPseudoRng {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+pub struct SendSyncMIOpenHandle(pub Handle);
+
+unsafe impl Send for SendSyncMIOpenHandle {}
+unsafe impl Sync for SendSyncMIOpenHandle {}
+
+impl SendSyncMIOpenHandle {
+    pub fn new(stream: &Stream) -> Result<Self, rocm_rs::miopen::error::Error> {
+        let handle = Handle::with_stream(stream)?;
+        Ok(Self(handle))
+    }
+}
+
+impl Deref for SendSyncMIOpenHandle {
+    type Target = Handle;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
