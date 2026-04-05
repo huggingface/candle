@@ -118,6 +118,7 @@ We also provide some command line based examples using state of the art models:
 
 - [SegFormer](./candle-examples/examples/segformer/): transformer based semantic segmentation model.
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
+- [Qwen3-ASR](./candle-examples/examples/qwen3-asr/): speech recognition model.
 - [EnCodec](./candle-examples/examples/encodec/): high-quality audio compression
   model using residual vector quantization.
 - [MetaVoice](./candle-examples/examples/metavoice/): foundational model for
