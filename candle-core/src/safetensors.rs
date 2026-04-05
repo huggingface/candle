@@ -274,6 +274,10 @@ impl Tensor {
                     Device::Metal(_) => {
                         return Err(Error::Msg("Metal support not compiled".to_string()));
                     }
+                    #[cfg(feature = "rocm")]
+                    Device::Rocm(_) => {
+                        return Err(Error::Msg("ROCm dummy dtype not yet supported".to_string()));
+                    }
                 };
 
                 let op = BackpropOp::none();
@@ -369,6 +373,10 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         #[cfg(not(feature = "metal"))]
         Device::Metal(_) => {
             return Err(Error::Msg("Metal support not compiled".to_string()));
+        }
+        #[cfg(feature = "rocm")]
+        Device::Rocm(_) => {
+            return Err(Error::Msg("ROCm dummy dtype not yet supported".to_string()));
         }
     };
 
