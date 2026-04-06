@@ -14,6 +14,9 @@ use candle_transformers::models::granite_docling::{
     quantized::Model as QuantizedModel,
     Model,
 };
+use image::DynamicImage;
+#[cfg(feature = "pdf2image")]
+use pdf2image::{RenderOptionsBuilder, PDF};
 use tokenizers::Tokenizer;
 
 const MODEL_ID: &str = "ibm-granite/granite-docling-258M";
@@ -44,9 +47,20 @@ struct Args {
     #[arg(long)]
     bf16: bool,
 
-    /// The image file to process.
+    /// The image file to process (PNG/JPG).
+    #[cfg_attr(not(feature = "pdf2image"), arg(long))]
+    #[cfg_attr(feature = "pdf2image", arg(long, required_unless_present = "pdf"))]
+    image: Option<String>,
+
+    /// PDF file to process (requires pdf2image feature and poppler).
+    #[cfg(feature = "pdf2image")]
+    #[arg(long, required_unless_present = "image")]
+    pdf: Option<String>,
+
+    /// Page range for PDF (e.g. "7-8" or "7"). Defaults to all pages.
+    #[cfg(feature = "pdf2image")]
     #[arg(long)]
-    image: String,
+    pages: Option<String>,
 
     /// Optional: path to a local model directory or HF model id.
     #[arg(long)]
@@ -307,6 +321,68 @@ impl ModelWrapper {
             Self::Quantized(m) => Ok(m.forward(input_ids)?),
         }
     }
+
+    fn clear_kv_cache(&mut self) {
+        match self {
+            Self::F32(m) => m.clear_kv_cache(),
+            Self::Quantized(m) => m.clear_kv_cache(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Page image loading (image file or PDF)
+// ---------------------------------------------------------------------------
+
+fn load_page_images(args: &Args) -> Result<Vec<DynamicImage>> {
+    #[cfg(feature = "pdf2image")]
+    if let Some(ref pdf_path) = args.pdf {
+        let pdf = PDF::from_file(pdf_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open PDF: {e}"))?;
+        let page_count = pdf.page_count();
+        println!("PDF: {pdf_path} ({page_count} pages)");
+
+        let pages = if let Some(ref range_str) = args.pages {
+            parse_page_range(range_str, page_count)?
+        } else {
+            pdf2image::Pages::Range(1..=page_count)
+        };
+
+        let render_opts = RenderOptionsBuilder::default().build()?;
+        let images = pdf
+            .render(pages, render_opts)
+            .map_err(|e| anyhow::anyhow!("Failed to render PDF pages: {e}"))?;
+        println!("Rendered {} page(s)", images.len());
+        return Ok(images);
+    }
+
+    // Fall back to single image file
+    let image_path = args
+        .image
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Provide either --image or --pdf"))?;
+    let img = image::ImageReader::open(image_path)?
+        .decode()
+        .map_err(E::msg)?;
+    Ok(vec![img])
+}
+
+#[cfg(feature = "pdf2image")]
+fn parse_page_range(s: &str, page_count: u32) -> Result<pdf2image::Pages> {
+    if let Some((start, end)) = s.split_once('-') {
+        let start: u32 = start.parse()?;
+        let end: u32 = end.parse()?;
+        if start < 1 || end > page_count || start > end {
+            anyhow::bail!("Invalid page range {start}-{end} (PDF has {page_count} pages)");
+        }
+        Ok(pdf2image::Pages::Range(start..=end))
+    } else {
+        let page: u32 = s.parse()?;
+        if page < 1 || page > page_count {
+            anyhow::bail!("Invalid page {page} (PDF has {page_count} pages)");
+        }
+        Ok(pdf2image::Pages::Range(page..=page))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -401,11 +477,8 @@ fn main() -> Result<()> {
         (ModelWrapper::F32(model), tile_size, image_seq_len)
     };
 
-    // Load and preprocess image (shared between both paths)
-    let raw_img = image::ImageReader::open(&args.image)?
-        .decode()
-        .map_err(E::msg)?
-        .to_rgb8();
+    // Load page images — either from a single image file or from PDF pages
+    let page_images: Vec<DynamicImage> = load_page_images(&args)?;
 
     let prompt_text = args
         .prompt
@@ -419,60 +492,75 @@ fn main() -> Result<()> {
         DType::F32
     };
 
-    let (pixel_values, input_ids) = if args.no_split {
-        let tiles = load_single(&raw_img, tile_size);
-        let pv = tiles_to_tensor(&tiles, tile_size, pv_dtype, &device)?;
-        let ids = build_input_ids_single(&tokenizer, prompt_text, image_seq_len)?;
-        (pv, ids)
-    } else {
-        let (n_rows, n_cols, tiles) = split_image(&raw_img, tile_size, 2048);
-        let pv = tiles_to_tensor(&tiles, tile_size, pv_dtype, &device)?;
-        let ids = build_input_ids_split(&tokenizer, prompt_text, image_seq_len, n_rows, n_cols)?;
-        (pv, ids)
-    };
-
-    let n_image_tokens = input_ids.iter().filter(|&&id| id == IMAGE_TOKEN_ID).count();
-    println!(
-        "Input: {} tokens ({} image placeholders, {} tiles)",
-        input_ids.len(),
-        n_image_tokens,
-        pixel_values.dim(0)?,
-    );
-
-    let input_ids_tensor = Tensor::new(&input_ids[..], &device)?.unsqueeze(0)?;
-
-    // Initial forward pass with image
-    let logits = model.setup(&pixel_values, &input_ids_tensor)?;
     let temperature = if args.temperature > 0.0 {
         Some(args.temperature)
     } else {
         None
     };
-    let mut logits_processor =
-        candle_transformers::generation::LogitsProcessor::new(42, temperature, None);
 
-    let logits_last = logits.squeeze(0)?.get(logits.dim(1)? - 1)?;
-
-    let mut token = logits_processor.sample(&logits_last)?;
-    let mut generated = vec![token];
-    print_token(&tokenizer, token);
-
-    // Autoregressive generation loop
-    for _ in 1..args.max_tokens {
-        let input = Tensor::new(&[token], &device)?.unsqueeze(0)?;
-        let logits = model.forward(&input)?;
-        let logits_last = logits.squeeze(0)?.get(logits.dim(1)? - 1)?;
-        token = logits_processor.sample(&logits_last)?;
-
-        if token == END_OF_TEXT {
-            break;
+    // Process each page
+    for (page_idx, page_img) in page_images.iter().enumerate() {
+        if page_idx > 0 {
+            model.clear_kv_cache();
         }
-        generated.push(token);
+        if page_images.len() > 1 {
+            println!("\n===== Page {} of {} =====", page_idx + 1, page_images.len());
+        }
+
+        let raw_img = page_img.to_rgb8();
+
+        let (pixel_values, input_ids) = if args.no_split {
+            let tiles = load_single(&raw_img, tile_size);
+            let pv = tiles_to_tensor(&tiles, tile_size, pv_dtype, &device)?;
+            let ids = build_input_ids_single(&tokenizer, prompt_text, image_seq_len)?;
+            (pv, ids)
+        } else {
+            let (n_rows, n_cols, tiles) = split_image(&raw_img, tile_size, 2048);
+            let pv = tiles_to_tensor(&tiles, tile_size, pv_dtype, &device)?;
+            let ids =
+                build_input_ids_split(&tokenizer, prompt_text, image_seq_len, n_rows, n_cols)?;
+            (pv, ids)
+        };
+
+        let n_image_tokens = input_ids.iter().filter(|&&id| id == IMAGE_TOKEN_ID).count();
+        println!(
+            "Input: {} tokens ({} image placeholders, {} tiles)",
+            input_ids.len(),
+            n_image_tokens,
+            pixel_values.dim(0)?,
+        );
+
+        let input_ids_tensor = Tensor::new(&input_ids[..], &device)?.unsqueeze(0)?;
+
+        // Initial forward pass with image
+        let logits = model.setup(&pixel_values, &input_ids_tensor)?;
+        let mut logits_processor =
+            candle_transformers::generation::LogitsProcessor::new(42, temperature, None);
+
+        let logits_last = logits.squeeze(0)?.get(logits.dim(1)? - 1)?;
+
+        let mut token = logits_processor.sample(&logits_last)?;
+        let mut generated = vec![token];
         print_token(&tokenizer, token);
+
+        // Autoregressive generation loop
+        for _ in 1..args.max_tokens {
+            let input = Tensor::new(&[token], &device)?.unsqueeze(0)?;
+            let logits = model.forward(&input)?;
+            let logits_last = logits.squeeze(0)?.get(logits.dim(1)? - 1)?;
+            token = logits_processor.sample(&logits_last)?;
+
+            if token == END_OF_TEXT {
+                break;
+            }
+            generated.push(token);
+            print_token(&tokenizer, token);
+        }
+
+        println!();
+        println!("Generated {} tokens.", generated.len());
     }
 
-    println!();
-    println!("Generated {} tokens.", generated.len());
     Ok(())
 }
 
