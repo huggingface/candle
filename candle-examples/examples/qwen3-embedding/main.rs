@@ -87,11 +87,50 @@ struct Args {
     log_every: usize,
 }
 
-/// A single record from the JSONL input — we only parse the field we need.
-#[derive(serde::Deserialize)]
-struct Record {
-    #[serde(flatten)]
-    fields: serde_json::Map<String, serde_json::Value>,
+/// Extract the target text field from a JSONL line.
+/// Uses string search rather than full JSON parsing to handle non-standard
+/// values like NaN that appear in numeric fields we don't need.
+fn extract_field(line: &str, field: &str) -> Option<String> {
+    // Look for "field": "value" pattern
+    let key = format!("\"{}\":", field);
+    let start = line.find(&key)? + key.len();
+    let rest = &line[start..].trim_start();
+    if !rest.starts_with('"') {
+        return None;
+    }
+    let rest = &rest[1..]; // skip opening quote
+    // Find closing quote (handle escaped quotes)
+    let mut chars = rest.chars();
+    let mut value = String::new();
+    loop {
+        match chars.next()? {
+            '\\' => {
+                let escaped = chars.next()?;
+                match escaped {
+                    '"' => value.push('"'),
+                    '\\' => value.push('\\'),
+                    'n' => value.push('\n'),
+                    't' => value.push('\t'),
+                    'r' => value.push('\r'),
+                    'u' => {
+                        // Unicode escape: \uXXXX
+                        let hex: String = chars.by_ref().take(4).collect();
+                        if let Ok(cp) = u32::from_str_radix(&hex, 16) {
+                            if let Some(c) = char::from_u32(cp) {
+                                value.push(c);
+                            }
+                        }
+                    }
+                    other => {
+                        value.push('\\');
+                        value.push(other);
+                    }
+                }
+            }
+            '"' => return Some(value),
+            c => value.push(c),
+        }
+    }
 }
 
 fn get_tokenizer(args: &Args) -> Result<Tokenizer> {
@@ -229,20 +268,13 @@ fn main() -> Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        let record: Record =
-            serde_json::from_str(&line).with_context(|| format!("Invalid JSON at line {}", i + 1))?;
-        let text = record
-            .fields
-            .get(&args.field)
-            .and_then(|v| v.as_str())
-            .with_context(|| {
-                format!(
-                    "Missing or non-string field '{}' at line {}",
-                    args.field,
-                    i + 1
-                )
-            })?
-            .to_string();
+        let text = extract_field(&line, &args.field).with_context(|| {
+            format!(
+                "Missing or non-string field '{}' at line {}",
+                args.field,
+                i + 1
+            )
+        })?;
         descriptions.push(text);
     }
     eprintln!("Read {} descriptions from {}", descriptions.len(), args.input);
