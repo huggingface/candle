@@ -337,8 +337,8 @@ impl ModelWrapper {
 fn load_page_images(args: &Args) -> Result<Vec<DynamicImage>> {
     #[cfg(feature = "pdf2image")]
     if let Some(ref pdf_path) = args.pdf {
-        let pdf = PDF::from_file(pdf_path)
-            .map_err(|e| anyhow::anyhow!("Failed to open PDF: {e}"))?;
+        let pdf =
+            PDF::from_file(pdf_path).map_err(|e| anyhow::anyhow!("Failed to open PDF: {e}"))?;
         let page_count = pdf.page_count();
         println!("PDF: {pdf_path} ({page_count} pages)");
 
@@ -504,7 +504,11 @@ fn main() -> Result<()> {
             model.clear_kv_cache();
         }
         if page_images.len() > 1 {
-            println!("\n===== Page {} of {} =====", page_idx + 1, page_images.len());
+            println!(
+                "\n===== Page {} of {} =====",
+                page_idx + 1,
+                page_images.len()
+            );
         }
 
         let raw_img = page_img.to_rgb8();

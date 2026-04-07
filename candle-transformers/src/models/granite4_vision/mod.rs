@@ -17,9 +17,9 @@ use crate::models::granitemoehybrid::{GraniteMoeHybrid, GraniteMoeHybridCache};
 use crate::models::siglip;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::VarBuilder;
-use std::collections::HashMap;
 use config::{Config, FeatureSelectStrategy};
 use downsampling::WindowQFormerDownsampler;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Helper: build an injection tensor with vision features at image positions
@@ -142,12 +142,12 @@ impl Model {
         // Run SigLIP with hidden state extraction
         let hidden_states = self.vision_tower.forward_with_hidden_states(pixel_values)?;
 
-        let strip_cls = self.config.vision_feature_select_strategy == FeatureSelectStrategy::Default;
+        let strip_cls =
+            self.config.vision_feature_select_strategy == FeatureSelectStrategy::Default;
         let mut all_features = Vec::new();
 
         // Deepstack: extract from multiple vision layers, project via Q-Former
-        for (idx, &[vision_layer, llm_layer]) in
-            self.config.deepstack_layer_map.iter().enumerate()
+        for (idx, &[vision_layer, llm_layer]) in self.config.deepstack_layer_map.iter().enumerate()
         {
             let vis_idx = self.config.resolve_vision_layer(vision_layer);
             let mut selected = hidden_states[vis_idx].clone();
@@ -162,20 +162,17 @@ impl Model {
 
         // Spatial: extract 4 offset groups from deepest vision layer
         if self.config.use_spatial_sampling {
-            let spatial_idx =
-                self.config.resolve_vision_layer(self.config.spatial_vision_layer);
+            let spatial_idx = self
+                .config
+                .resolve_vision_layer(self.config.spatial_vision_layer);
             let mut spatial_feature = hidden_states[spatial_idx].clone();
 
             if strip_cls {
-                spatial_feature =
-                    spatial_feature.narrow(1, 1, spatial_feature.dim(1)? - 1)?;
+                spatial_feature = spatial_feature.narrow(1, 1, spatial_feature.dim(1)? - 1)?;
             }
 
-            for (group_idx, &llm_layer) in
-                self.config.spatial_target_layers.iter().enumerate()
-            {
-                let projected =
-                    self.spatial_projectors[group_idx].forward(&spatial_feature)?;
+            for (group_idx, &llm_layer) in self.config.spatial_target_layers.iter().enumerate() {
+                let projected = self.spatial_projectors[group_idx].forward(&spatial_feature)?;
                 all_features.push((llm_layer, projected));
             }
         }
@@ -187,11 +184,7 @@ impl Model {
     /// pixel_values: (num_tiles, C, H, W) for one image.
     /// image_size: (height, width) of original image.
     /// Returns packed features (total_tokens, llm_hidden).
-    fn pack_image_features(
-        &self,
-        features: &Tensor,
-        image_size: (usize, usize),
-    ) -> Result<Tensor> {
+    fn pack_image_features(&self, features: &Tensor, image_size: (usize, usize)) -> Result<Tensor> {
         let num_tiles = features.dim(0)?;
 
         if num_tiles > 1 {
@@ -252,10 +245,8 @@ impl Model {
     }
 
     fn get_anyres_grid_shape(&self, image_size: (usize, usize)) -> (usize, usize) {
-        let (best_h, best_w) = select_best_resolution(
-            image_size,
-            &self.config.image_grid_pinpoints,
-        );
+        let (best_h, best_w) =
+            select_best_resolution(image_size, &self.config.image_grid_pinpoints);
         let tile = self.config.vision_config.image_size;
         (best_h / tile, best_w / tile)
     }
@@ -307,14 +298,22 @@ impl Model {
 
         // 3. Get text embeddings and zero out image positions
         let input_ids_vec = input_ids.flatten_all()?.to_vec1::<u32>()?;
-        let text_embeds = self.language_model.word_token_embedding.forward(input_ids)?;
+        let text_embeds = self
+            .language_model
+            .word_token_embedding
+            .forward(input_ids)?;
 
         let mask_vals: Vec<f32> = input_ids_vec
             .iter()
-            .map(|&id| if id == self.config.image_token_index { 0.0 } else { 1.0 })
+            .map(|&id| {
+                if id == self.config.image_token_index {
+                    0.0
+                } else {
+                    1.0
+                }
+            })
             .collect();
-        let mask = Tensor::from_vec(mask_vals, (1, seq_len, 1), device)?
-            .to_dtype(dtype)?;
+        let mask = Tensor::from_vec(mask_vals, (1, seq_len, 1), device)?.to_dtype(dtype)?;
         let text_embeds = text_embeds.to_dtype(dtype)?.broadcast_mul(&mask)?;
 
         // 4. Scale by embedding_multiplier
@@ -352,13 +351,7 @@ impl Model {
         // 7. Final norm + logits
         let hidden = self.language_model.ln_f.forward(&hidden)?;
         let hidden = hidden.i((.., seq_len - 1, ..))?.contiguous()?;
-        let logits = hidden.matmul(
-            &self
-                .language_model
-                .word_token_embedding
-                .embeddings()
-                .t()?,
-        )?;
+        let logits = hidden.matmul(&self.language_model.word_token_embedding.embeddings().t()?)?;
         let logits = logits.to_dtype(DType::F32)?;
         if (self.language_model.logits_scale - 1.0).abs() < f32::EPSILON {
             Ok(logits)
@@ -395,9 +388,7 @@ pub fn select_best_resolution(
         let effective = downscaled_h.min(ph) * downscaled_w.min(pw);
         let waste = (ph * pw).saturating_sub(effective);
 
-        if effective > max_effective
-            || (effective == max_effective && waste < min_waste)
-        {
+        if effective > max_effective || (effective == max_effective && waste < min_waste) {
             max_effective = effective;
             min_waste = waste;
             best = (ph, pw);
@@ -406,4 +397,3 @@ pub fn select_best_resolution(
 
     best
 }
-

@@ -82,7 +82,9 @@ impl Config {
     pub fn query_and_window_side(&self) -> (usize, usize) {
         let parts: Vec<&str> = self.downsample_rate.split('/').collect();
         let query_side: usize = parts[0].parse().expect("invalid downsample_rate numerator");
-        let window_side: usize = parts[1].parse().expect("invalid downsample_rate denominator");
+        let window_side: usize = parts[1]
+            .parse()
+            .expect("invalid downsample_rate denominator");
         (query_side, window_side)
     }
 

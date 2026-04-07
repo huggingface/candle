@@ -11,9 +11,7 @@ use std::collections::HashMap;
 
 use candle::{safetensors as st, DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::models::granite4_vision::{
-    config::Config, select_best_resolution, Model,
-};
+use candle_transformers::models::granite4_vision::{config::Config, select_best_resolution, Model};
 use candle_transformers::models::granitemoehybrid::GraniteMoeHybridCache;
 use image::DynamicImage;
 #[cfg(feature = "pdf2image")]
@@ -83,11 +81,7 @@ struct Args {
 // ---------------------------------------------------------------------------
 
 /// Resize image to fit within target dims (preserve aspect ratio), then pad to exact dims.
-fn resize_and_pad(
-    img: &image::RgbImage,
-    target_w: u32,
-    target_h: u32,
-) -> image::RgbImage {
+fn resize_and_pad(img: &image::RgbImage, target_w: u32, target_h: u32) -> image::RgbImage {
     let (orig_w, orig_h) = (img.width(), img.height());
     let scale = f64::min(
         target_w as f64 / orig_w as f64,
@@ -96,8 +90,7 @@ fn resize_and_pad(
     let new_w = (orig_w as f64 * scale).round() as u32;
     let new_h = (orig_h as f64 * scale).round() as u32;
 
-    let resized =
-        image::imageops::resize(img, new_w, new_h, image::imageops::FilterType::Lanczos3);
+    let resized = image::imageops::resize(img, new_w, new_h, image::imageops::FilterType::Lanczos3);
 
     // Center-pad to target dimensions
     let mut padded = image::RgbImage::new(target_w, target_h);
@@ -142,8 +135,7 @@ fn preprocess_image(
 
     if no_split {
         // Single tile: resize to tile_size x tile_size
-        let resized =
-            image::imageops::resize(img, ts, ts, image::imageops::FilterType::Lanczos3);
+        let resized = image::imageops::resize(img, ts, ts, image::imageops::FilterType::Lanczos3);
         let tile_data = normalize_to_chw(&resized);
         let ds_per_side = cfg.downsampled_patches_per_side();
         // Single tile: features + newline
@@ -156,8 +148,7 @@ fn preprocess_image(
     }
 
     // AnyRes: find best resolution and tile
-    let (best_h, best_w) =
-        select_best_resolution(image_size, &cfg.image_grid_pinpoints);
+    let (best_h, best_w) = select_best_resolution(image_size, &cfg.image_grid_pinpoints);
     let grid_h = best_h / tile_size;
     let grid_w = best_w / tile_size;
 
@@ -190,14 +181,8 @@ fn preprocess_image(
     let ds = cfg.downsampled_patches_per_side();
     let base_features = ds * ds;
 
-    let (unpadded_features, newline_features) = compute_unpadded_features(
-        image_size.0,
-        image_size.1,
-        ds,
-        ds,
-        grid_h,
-        grid_w,
-    );
+    let (unpadded_features, newline_features) =
+        compute_unpadded_features(image_size.0, image_size.1, ds, ds, grid_h, grid_w);
     let num_image_tokens = unpadded_features + newline_features + base_features;
 
     Ok(PreprocessedImage {
@@ -406,8 +391,8 @@ fn merge_lora_and_load(
 fn load_page_images(args: &Args) -> Result<Vec<DynamicImage>> {
     #[cfg(feature = "pdf2image")]
     if let Some(ref pdf_path) = args.pdf {
-        let pdf = PDF::from_file(pdf_path)
-            .map_err(|e| anyhow::anyhow!("Failed to open PDF: {e}"))?;
+        let pdf =
+            PDF::from_file(pdf_path).map_err(|e| anyhow::anyhow!("Failed to open PDF: {e}"))?;
         let page_count = pdf.page_count();
         println!("PDF: {pdf_path} ({page_count} pages)");
 
@@ -479,14 +464,8 @@ fn main() -> Result<()> {
         config.text_config.num_hidden_layers,
         config.downsample_rate,
     );
-    println!(
-        "  Deepstack: {:?}",
-        config.deepstack_layer_map
-    );
-    println!(
-        "  Spatial layers: {:?}",
-        config.spatial_target_layers
-    );
+    println!("  Deepstack: {:?}", config.deepstack_layer_map);
+    println!("  Spatial layers: {:?}", config.spatial_target_layers);
 
     // Load tokenizer
     let tokenizer_path = repo.get("tokenizer.json")?;
@@ -495,8 +474,7 @@ fn main() -> Result<()> {
     // Load model weights (with automatic LoRA merging if adapter present)
     let weight_files = {
         let index_path = repo.get("model.safetensors.index.json")?;
-        let index: serde_json::Value =
-            serde_json::from_reader(std::fs::File::open(&index_path)?)?;
+        let index: serde_json::Value = serde_json::from_reader(std::fs::File::open(&index_path)?)?;
         let weight_map = index["weight_map"]
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("missing weight_map"))?;
@@ -559,7 +537,11 @@ fn main() -> Result<()> {
     // Process each page
     for (page_idx, page_img) in page_images.iter().enumerate() {
         if page_images.len() > 1 {
-            println!("\n===== Page {} of {} =====", page_idx + 1, page_images.len());
+            println!(
+                "\n===== Page {} of {} =====",
+                page_idx + 1,
+                page_images.len()
+            );
         }
 
         let raw_img = page_img.to_rgb8();

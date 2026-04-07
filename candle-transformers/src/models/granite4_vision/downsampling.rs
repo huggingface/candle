@@ -106,8 +106,7 @@ impl QFormerLayer {
         vb: VarBuilder,
     ) -> Result<Self> {
         let attention = BertAttention::new(hidden_size, num_heads, vb.pp("attention"))?;
-        let crossattention =
-            BertAttention::new(hidden_size, num_heads, vb.pp("crossattention"))?;
+        let crossattention = BertAttention::new(hidden_size, num_heads, vb.pp("crossattention"))?;
         let intermediate_dense = candle_nn::linear(
             hidden_size,
             intermediate_size,
@@ -115,8 +114,7 @@ impl QFormerLayer {
         )?;
         let output_dense =
             candle_nn::linear(intermediate_size, hidden_size, vb.pp("output_query.dense"))?;
-        let output_layer_norm =
-            layer_norm(hidden_size, 1e-6, vb.pp("output_query.LayerNorm"))?;
+        let output_layer_norm = layer_norm(hidden_size, 1e-6, vb.pp("output_query.LayerNorm"))?;
         Ok(Self {
             attention,
             crossattention,
@@ -129,9 +127,7 @@ impl QFormerLayer {
     fn forward(&self, query: &Tensor, encoder_states: &Tensor) -> Result<Tensor> {
         let hidden = self.attention.forward(query, None)?;
         let hidden = self.crossattention.forward(&hidden, Some(encoder_states))?;
-        let intermediate = hidden
-            .apply(&self.intermediate_dense)?
-            .gelu_erf()?;
+        let intermediate = hidden.apply(&self.intermediate_dense)?.gelu_erf()?;
         let output = intermediate.apply(&self.output_dense)?;
         self.output_layer_norm.forward(&(output + hidden)?)
     }
@@ -185,11 +181,7 @@ fn area_downsample(features: &Tensor, orig_side: usize, new_side: usize) -> Resu
 }
 
 /// Spatial offset downsampler: samples one position from each 2x2 block.
-fn spatial_offset_downsample(
-    features: &Tensor,
-    orig_side: usize,
-    offset: usize,
-) -> Result<Tensor> {
+fn spatial_offset_downsample(features: &Tensor, orig_side: usize, offset: usize) -> Result<Tensor> {
     let (b, _hw, c) = features.dims3()?;
     let new_side = orig_side / 2;
     let offsets = [(0usize, 0usize), (0, 1), (1, 0), (1, 1)];
@@ -232,10 +224,13 @@ impl WindowQFormerDownsampler {
         let query_length = query_side * query_side;
 
         let norm = layer_norm(vision_hidden_size, 1e-6, vb.pp("norm"))?;
-        let out_linear = candle_nn::linear(vision_hidden_size, llm_hidden_size, vb.pp("out_linear"))?;
+        let out_linear =
+            candle_nn::linear(vision_hidden_size, llm_hidden_size, vb.pp("out_linear"))?;
         let query = vb.get((1, query_length, vision_hidden_size), "query")?;
-        let image_positions =
-            vb.get((1, window_side * window_side, vision_hidden_size), "image_positions")?;
+        let image_positions = vb.get(
+            (1, window_side * window_side, vision_hidden_size),
+            "image_positions",
+        )?;
         let qformer = QFormer::new(vision_hidden_size, num_heads, vb.pp("qformer"))?;
 
         let image_side = cfg.patches_per_side();
@@ -293,7 +288,11 @@ impl WindowQFormerDownsampler {
         // Downsample to create query seeds
         let downsampled = match self.spatial_offset {
             Some(offset) => spatial_offset_downsample(&normed, self.image_side, offset)?,
-            None => area_downsample(&normed, self.image_side, self.image_side * self.query_side / self.window_side)?,
+            None => area_downsample(
+                &normed,
+                self.image_side,
+                self.image_side * self.query_side / self.window_side,
+            )?,
         };
 
         let new_side = n * self.query_side;
