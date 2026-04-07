@@ -1,4 +1,4 @@
-use candle::{Result, Tensor, D};
+use candle::{DType, Result, Tensor, D};
 use candle_nn::{conv2d, group_norm, Conv2d, GroupNorm, VarBuilder};
 
 // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/modules/autoencoder.py#L9
@@ -50,6 +50,24 @@ impl Config {
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
+
+    // Flash attention for VAE's 4096-position spatial attention
+    #[cfg(feature = "flash-attn")]
+    if q.device().is_cuda() {
+        let orig_dtype = q.dtype();
+        let fa_dtype = if orig_dtype == DType::BF16 || orig_dtype == DType::F16 {
+            orig_dtype
+        } else {
+            DType::BF16
+        };
+        // q,k,v: (batch, 1, seq, dim) → flash needs (batch, seq, heads, dim)
+        let q_fa = q.to_dtype(fa_dtype)?.transpose(1, 2)?.contiguous()?;
+        let k_fa = k.to_dtype(fa_dtype)?.transpose(1, 2)?.contiguous()?;
+        let v_fa = v.to_dtype(fa_dtype)?.transpose(1, 2)?.contiguous()?;
+        let out = candle_flash_attn::flash_attn(&q_fa, &k_fa, &v_fa, scale_factor as f32, false)?;
+        return out.transpose(1, 2)?.to_dtype(orig_dtype);
+    }
+
     let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
     candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(v)
 }

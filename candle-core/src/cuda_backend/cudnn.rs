@@ -95,7 +95,9 @@ pub(crate) fn launch_conv2d<
         y: &y,
     };
     let alg = match params.cudnn_fwd_algo {
-        None => conv2d.pick_algorithm()?,
+        // Default to IMPLICIT_PRECOMP_GEMM — much faster than pick_algorithm() which
+        // benchmarks all algorithms on every call (no caching in candle's cuDNN wrapper)
+        None => A::CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM,
         Some(CandleAlgo::ImplicitGemm) => A::CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM,
         Some(CandleAlgo::ImplicitPrecompGemm) => {
             A::CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM

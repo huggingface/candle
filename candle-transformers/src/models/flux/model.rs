@@ -64,6 +64,24 @@ fn layer_norm(dim: usize, vb: VarBuilder) -> Result<LayerNorm> {
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
+
+    // Flash attention: ~30% faster than naive matmul even at 1026 tokens
+    #[cfg(feature = "flash-attn")]
+    if q.device().is_cuda() {
+        let orig_dtype = q.dtype();
+        let fa_dtype = if orig_dtype == DType::BF16 || orig_dtype == DType::F16 {
+            orig_dtype
+        } else {
+            DType::BF16
+        };
+        // q,k,v: (batch, heads, seq, dim) → flash needs (batch, seq, heads, dim)
+        let q_fa = q.to_dtype(fa_dtype)?.transpose(1, 2)?.contiguous()?;
+        let k_fa = k.to_dtype(fa_dtype)?.transpose(1, 2)?.contiguous()?;
+        let v_fa = v.to_dtype(fa_dtype)?.transpose(1, 2)?.contiguous()?;
+        let out = candle_flash_attn::flash_attn(&q_fa, &k_fa, &v_fa, scale_factor as f32, false)?;
+        return out.transpose(1, 2)?.to_dtype(orig_dtype);
+    }
+
     let mut batch_dims = q.dims().to_vec();
     batch_dims.pop();
     batch_dims.pop();
