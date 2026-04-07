@@ -15,6 +15,9 @@ use candle_transformers::models::granite4_vision::{
     config::Config, select_best_resolution, Model,
 };
 use candle_transformers::models::granitemoehybrid::GraniteMoeHybridCache;
+use image::DynamicImage;
+#[cfg(feature = "pdf2image")]
+use pdf2image::{RenderOptionsBuilder, PDF};
 use tokenizers::Tokenizer;
 
 const MODEL_ID: &str = "ibm-granite/granite-4.0-3b-vision";
@@ -33,9 +36,20 @@ struct Args {
     #[arg(long)]
     bf16: bool,
 
-    /// The image file to process.
+    /// The image file to process (PNG/JPG).
+    #[cfg_attr(not(feature = "pdf2image"), arg(long))]
+    #[cfg_attr(feature = "pdf2image", arg(long, required_unless_present = "pdf"))]
+    image: Option<String>,
+
+    /// PDF file to process (requires pdf2image feature and poppler).
+    #[cfg(feature = "pdf2image")]
+    #[arg(long, required_unless_present = "image")]
+    pdf: Option<String>,
+
+    /// Page range for PDF (e.g. "7-8" or "7"). Defaults to all pages.
+    #[cfg(feature = "pdf2image")]
     #[arg(long)]
-    image: String,
+    pages: Option<String>,
 
     /// Path to merged model directory (base + LoRA merged).
     /// Use merge_lora.py to prepare: python merge_lora.py --output merged/
@@ -390,6 +404,60 @@ fn merge_lora_and_load(
 }
 
 // ---------------------------------------------------------------------------
+// Page image loading (image file or PDF)
+// ---------------------------------------------------------------------------
+
+fn load_page_images(args: &Args) -> Result<Vec<DynamicImage>> {
+    #[cfg(feature = "pdf2image")]
+    if let Some(ref pdf_path) = args.pdf {
+        let pdf = PDF::from_file(pdf_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open PDF: {e}"))?;
+        let page_count = pdf.page_count();
+        println!("PDF: {pdf_path} ({page_count} pages)");
+
+        let pages = if let Some(ref range_str) = args.pages {
+            parse_page_range(range_str, page_count)?
+        } else {
+            pdf2image::Pages::Range(1..=page_count)
+        };
+
+        let render_opts = RenderOptionsBuilder::default().build()?;
+        let images = pdf
+            .render(pages, render_opts)
+            .map_err(|e| anyhow::anyhow!("Failed to render PDF pages: {e}"))?;
+        println!("Rendered {} page(s)", images.len());
+        return Ok(images);
+    }
+
+    let image_path = args
+        .image
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Provide either --image or --pdf"))?;
+    let img = image::ImageReader::open(image_path)?
+        .decode()
+        .map_err(E::msg)?;
+    Ok(vec![img])
+}
+
+#[cfg(feature = "pdf2image")]
+fn parse_page_range(s: &str, page_count: u32) -> Result<pdf2image::Pages> {
+    if let Some((start, end)) = s.split_once('-') {
+        let start: u32 = start.parse()?;
+        let end: u32 = end.parse()?;
+        if start < 1 || end > page_count || start > end {
+            anyhow::bail!("Invalid page range {start}-{end} (PDF has {page_count} pages)");
+        }
+        Ok(pdf2image::Pages::Range(start..=end))
+    } else {
+        let page: u32 = s.parse()?;
+        if page < 1 || page > page_count {
+            anyhow::bail!("Invalid page {page} (PDF has {page_count} pages)");
+        }
+        Ok(pdf2image::Pages::Range(page..=page))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -468,19 +536,8 @@ fn main() -> Result<()> {
     let model = Model::new(&config, vb)?;
     println!("Model loaded.");
 
-    // Load and preprocess image
-    let raw_img = image::ImageReader::open(&args.image)?
-        .decode()
-        .map_err(E::msg)?
-        .to_rgb8();
-
-    let preprocessed = preprocess_image(&raw_img, &config, args.no_split)?;
-    let pixel_values = tiles_to_tensor(
-        &preprocessed.tiles,
-        config.vision_config.image_size,
-        dtype,
-        &device,
-    )?;
+    // Load page images — either from a single image file or from PDF pages
+    let page_images = load_page_images(&args)?;
 
     // Build prompt: expand task tag to full instruction (matching HF chat_template).
     // The \n prefix separates image tokens from instruction (matches Python template).
@@ -495,84 +552,103 @@ fn main() -> Result<()> {
         }
     };
 
-    let input_ids = build_input_ids(
-        &tokenizer,
-        &full_prompt,
-        preprocessed.num_image_tokens,
-        config.image_token_index,
-    )?;
-
-    let n_image_tokens = input_ids
-        .iter()
-        .filter(|&&id| id == config.image_token_index)
-        .count();
-    println!(
-        "Input: {} tokens ({} image, {} tiles)",
-        input_ids.len(),
-        n_image_tokens,
-        pixel_values.dim(0)?,
-    );
-
-    if args.debug {
-        let first_ids: Vec<_> = input_ids.iter().take(20).collect();
-        let last_ids: Vec<_> = input_ids.iter().rev().take(10).rev().collect();
-        eprintln!("[DEBUG] input_ids len={} first20={:?} last10={:?}", input_ids.len(), first_ids, last_ids);
-        eprintln!("[DEBUG] image_token_id={} image_size={:?}", config.image_token_index, preprocessed.image_size);
-    }
-
-    let input_ids_tensor = Tensor::new(&input_ids[..], &device)?.unsqueeze(0)?;
-
-    // Create KV cache
-    let text_config = config.text_config.clone().into_config(false);
-    let mut cache = GraniteMoeHybridCache::new(true, dtype, &text_config, &device)?;
-
-    // Initial forward with vision
-    let logits = if args.debug {
-        model.setup_debug(
-            &input_ids_tensor,
-            &pixel_values,
-            preprocessed.image_size,
-            &mut cache,
-        )?
-    } else {
-        model.setup(
-            &input_ids_tensor,
-            &pixel_values,
-            preprocessed.image_size,
-            &mut cache,
-        )?
-    };
-
     let temperature = if args.temperature > 0.0 {
         Some(args.temperature)
     } else {
         None
     };
-    let mut logits_processor =
-        candle_transformers::generation::LogitsProcessor::new(42, temperature, None);
 
-    let logits_last = logits.squeeze(0)?.squeeze(0)?;
-    let mut token = logits_processor.sample(&logits_last)?;
-    let mut generated = vec![token];
-    print_token(&tokenizer, token);
+    let text_config = config.text_config.clone().into_config(false);
 
-    // Autoregressive generation
-    let index_pos = input_ids.len();
-    for step in 1..args.max_tokens {
-        let input = Tensor::new(&[token], &device)?.unsqueeze(0)?;
-        let logits = model.forward(&input, index_pos + step - 1, &mut cache)?;
-        let logits_last = logits.squeeze(0)?;
-        token = logits_processor.sample(&logits_last)?;
-
-        if token == END_OF_TEXT {
-            break;
+    // Process each page
+    for (page_idx, page_img) in page_images.iter().enumerate() {
+        if page_images.len() > 1 {
+            println!("\n===== Page {} of {} =====", page_idx + 1, page_images.len());
         }
-        generated.push(token);
+
+        let raw_img = page_img.to_rgb8();
+        let preprocessed = preprocess_image(&raw_img, &config, args.no_split)?;
+        let pixel_values = tiles_to_tensor(
+            &preprocessed.tiles,
+            config.vision_config.image_size,
+            dtype,
+            &device,
+        )?;
+
+        let input_ids = build_input_ids(
+            &tokenizer,
+            &full_prompt,
+            preprocessed.num_image_tokens,
+            config.image_token_index,
+        )?;
+
+        let n_image_tokens = input_ids
+            .iter()
+            .filter(|&&id| id == config.image_token_index)
+            .count();
+        println!(
+            "Input: {} tokens ({} image, {} tiles)",
+            input_ids.len(),
+            n_image_tokens,
+            pixel_values.dim(0)?,
+        );
+
+        if args.debug {
+            let first_ids: Vec<_> = input_ids.iter().take(20).collect();
+            let last_ids: Vec<_> = input_ids.iter().rev().take(10).rev().collect();
+            eprintln!("[DEBUG] input_ids len={} first20={:?} last10={:?}", input_ids.len(), first_ids, last_ids);
+            eprintln!("[DEBUG] image_token_id={} image_size={:?}", config.image_token_index, preprocessed.image_size);
+        }
+
+        let input_ids_tensor = Tensor::new(&input_ids[..], &device)?.unsqueeze(0)?;
+
+        // Fresh KV cache per page
+        let mut cache = GraniteMoeHybridCache::new(true, dtype, &text_config, &device)?;
+
+        // Initial forward with vision
+        let logits = if args.debug {
+            model.setup_debug(
+                &input_ids_tensor,
+                &pixel_values,
+                preprocessed.image_size,
+                &mut cache,
+            )?
+        } else {
+            model.setup(
+                &input_ids_tensor,
+                &pixel_values,
+                preprocessed.image_size,
+                &mut cache,
+            )?
+        };
+
+        let mut logits_processor =
+            candle_transformers::generation::LogitsProcessor::new(42, temperature, None);
+
+        let logits_last = logits.squeeze(0)?.squeeze(0)?;
+        let mut token = logits_processor.sample(&logits_last)?;
+        let mut generated = vec![token];
         print_token(&tokenizer, token);
+
+        // Autoregressive generation
+        let index_pos = input_ids.len();
+        for step in 1..args.max_tokens {
+            let input = Tensor::new(&[token], &device)?.unsqueeze(0)?;
+            let logits = model.forward(&input, index_pos + step - 1, &mut cache)?;
+            let logits_last = logits.squeeze(0)?;
+            token = logits_processor.sample(&logits_last)?;
+
+            if token == END_OF_TEXT {
+                break;
+            }
+            generated.push(token);
+            print_token(&tokenizer, token);
+        }
+
+        println!();
+        println!("Generated {} tokens.", generated.len());
     }
 
-    println!();
-    println!("Generated {} tokens.", generated.len());
     Ok(())
 }
 
