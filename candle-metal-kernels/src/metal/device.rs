@@ -3,7 +3,7 @@ use crate::{
 };
 use objc2::{rc::Retained, runtime::AnyObject, runtime::ProtocolObject};
 use objc2_foundation::NSString;
-use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice};
+use objc2_metal::{MTLCompileOptions, MTLCopyAllDevices, MTLCreateSystemDefaultDevice, MTLDevice};
 use std::{ffi::c_void, ptr};
 
 /// Metal device type classification based on Apple Silicon architecture.
@@ -47,15 +47,38 @@ impl Device {
         self.as_ref().registryID()
     }
 
+    /// Returns all Metal devices in the system.
+    ///
+    /// Uses [`MTLCopyAllDevices`] which on macOS calls the real FFI that
+    /// reliably enumerates devices in all process contexts (tmux, SSH, CI).
+    /// On iOS/tvOS/visionOS, `objc2-metal` provides a shim that wraps
+    /// `MTLCreateSystemDefaultDevice` in an array.
+    ///
+    /// `MTLCreateSystemDefaultDevice` requires CoreGraphics and can return
+    /// nil in non-GUI contexts even when Metal hardware is present.
+    /// See <https://developer.apple.com/documentation/metal/1433401-mtlcreatesystemdefaultdevice>.
     pub fn all() -> Vec<Self> {
-        MTLCreateSystemDefaultDevice()
+        MTLCopyAllDevices()
+            .to_vec()
             .into_iter()
             .map(|raw| Device { raw })
             .collect()
     }
 
+    /// Returns the system default Metal device, if available.
+    ///
+    /// Falls back to [`MTLCopyAllDevices`] if `MTLCreateSystemDefaultDevice`
+    /// returns nil (can happen on macOS in non-GUI contexts).
     pub fn system_default() -> Option<Self> {
-        MTLCreateSystemDefaultDevice().map(|raw| Device { raw })
+        MTLCreateSystemDefaultDevice()
+            .map(|raw| Device { raw })
+            .or_else(|| {
+                MTLCopyAllDevices()
+                    .to_vec()
+                    .into_iter()
+                    .next()
+                    .map(|raw| Device { raw })
+            })
     }
 
     pub fn new_buffer(
