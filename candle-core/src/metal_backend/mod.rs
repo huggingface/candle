@@ -2997,7 +2997,15 @@ impl Executor for MetalDevice {
         }
         */
         let mut newly_resolved: Vec<(BufferId, Arc<Buffer>, &LazyStorage)> = vec![];
-        for node in &graph {
+        let mut stack: Vec<&LazyStorage> = vec![result_node];
+        let mut done = HashSet::new();
+        while let Some(node) = stack.pop() {
+            for src in node.op().srcs() {
+                if !done.contains(&src.id()) {
+                    stack.push(src);
+                    done.insert(src.id());
+                }
+            }
             if matches!(node.op(), Resolved(_) | Const(_) | Output(_) | Sink(_)) {
                 continue;
             }
