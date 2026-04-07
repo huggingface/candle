@@ -21,8 +21,15 @@ fn default_projector_dropout() -> f32 {
     0.1
 }
 
-fn default_vision_feature_select_strategy() -> String {
-    "full".to_string()
+#[derive(serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FeatureSelectStrategy {
+    Full,
+    Default,
+}
+
+fn default_vision_feature_select_strategy() -> FeatureSelectStrategy {
+    FeatureSelectStrategy::Full
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]
@@ -58,7 +65,7 @@ pub struct Config {
     pub projector_dropout: f32,
 
     #[serde(default = "default_vision_feature_select_strategy")]
-    pub vision_feature_select_strategy: String,
+    pub vision_feature_select_strategy: FeatureSelectStrategy,
 
     #[serde(default)]
     pub image_token_index: u32,

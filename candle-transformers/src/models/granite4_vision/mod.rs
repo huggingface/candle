@@ -13,13 +13,12 @@
 pub mod config;
 pub mod downsampling;
 
-use crate::models::granitemoehybrid::{
-    GraniteMoeHybrid, GraniteMoeHybridCache, GraniteMoeHybridInternalConfig,
-};
+use crate::models::granitemoehybrid::{GraniteMoeHybrid, GraniteMoeHybridCache};
 use crate::models::siglip;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::VarBuilder;
-use config::Config;
+use std::collections::HashMap;
+use config::{Config, FeatureSelectStrategy};
 use downsampling::WindowQFormerDownsampler;
 
 // ---------------------------------------------------------------------------
@@ -137,17 +136,13 @@ impl Model {
         })
     }
 
-    pub fn language_model_config(&self) -> GraniteMoeHybridInternalConfig {
-        self.config.text_config.clone().into_config(false)
-    }
-
     /// Encode images and produce per-layer injection tensors for the LLM.
     /// Returns: Vec<(llm_layer_idx, features)> where features is (num_image_patches, hidden).
     fn get_image_features(&self, pixel_values: &Tensor) -> Result<Vec<(usize, Tensor)>> {
         // Run SigLIP with hidden state extraction
         let hidden_states = self.vision_tower.forward_with_hidden_states(pixel_values)?;
 
-        let strategy = &self.config.vision_feature_select_strategy;
+        let strip_cls = self.config.vision_feature_select_strategy == FeatureSelectStrategy::Default;
         let mut all_features = Vec::new();
 
         // Deepstack: extract from multiple vision layers, project via Q-Former
@@ -157,8 +152,7 @@ impl Model {
             let vis_idx = self.config.resolve_vision_layer(vision_layer);
             let mut selected = hidden_states[vis_idx].clone();
 
-            // Remove CLS token if strategy is "default"
-            if strategy == "default" {
+            if strip_cls {
                 selected = selected.narrow(1, 1, selected.dim(1)? - 1)?;
             }
 
@@ -172,7 +166,7 @@ impl Model {
                 self.config.resolve_vision_layer(self.config.spatial_vision_layer);
             let mut spatial_feature = hidden_states[spatial_idx].clone();
 
-            if strategy == "default" {
+            if strip_cls {
                 spatial_feature =
                     spatial_feature.narrow(1, 1, spatial_feature.dim(1)? - 1)?;
             }
@@ -296,28 +290,6 @@ impl Model {
         image_size: (usize, usize),
         cache: &mut GraniteMoeHybridCache,
     ) -> Result<Tensor> {
-        self.setup_inner(input_ids, pixel_values, image_size, cache, false)
-    }
-
-    /// Debug variant that dumps intermediate activations.
-    pub fn setup_debug(
-        &self,
-        input_ids: &Tensor,
-        pixel_values: &Tensor,
-        image_size: (usize, usize),
-        cache: &mut GraniteMoeHybridCache,
-    ) -> Result<Tensor> {
-        self.setup_inner(input_ids, pixel_values, image_size, cache, true)
-    }
-
-    fn setup_inner(
-        &self,
-        input_ids: &Tensor,
-        pixel_values: &Tensor,
-        image_size: (usize, usize),
-        cache: &mut GraniteMoeHybridCache,
-        debug: bool,
-    ) -> Result<Tensor> {
         let device = input_ids.device();
         let dtype = pixel_values.dtype();
         let (_b, seq_len) = input_ids.dims2()?;
@@ -326,34 +298,10 @@ impl Model {
         // 1. Get per-layer vision features
         let layer_features = self.get_image_features(pixel_values)?;
 
-        if debug {
-            for (i, (llm_layer, feat)) in layer_features.iter().enumerate() {
-                let flat = feat.flatten_all()?.to_dtype(DType::F32)?;
-                let vals: Vec<f32> = flat.to_vec1()?;
-                let min = vals.iter().cloned().fold(f32::INFINITY, f32::min);
-                let max = vals.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                let mean: f32 = vals.iter().sum::<f32>() / vals.len() as f32;
-                eprintln!(
-                    "  [DEBUG] layer_features[{i}] → llm_layer={llm_layer} shape={:?} min={min:.6} max={max:.6} mean={mean:.6} first5={:?}",
-                    feat.shape(),
-                    &vals[..5.min(vals.len())]
-                );
-            }
-        }
-
         // 2. Pack features for each injection point
         let mut deepstack_injections: Vec<(usize, Tensor)> = Vec::new();
         for (llm_layer, features) in &layer_features {
             let packed = self.pack_image_features(features, image_size)?;
-            if debug {
-                let flat = packed.flatten_all()?.to_dtype(DType::F32)?;
-                let vals: Vec<f32> = flat.to_vec1()?;
-                eprintln!(
-                    "  [DEBUG] packed[llm_layer={llm_layer}] shape={:?} first5={:?}",
-                    packed.shape(),
-                    &vals[..5.min(vals.len())]
-                );
-            }
             deepstack_injections.push((*llm_layer, packed));
         }
 
@@ -361,22 +309,6 @@ impl Model {
         let input_ids_vec = input_ids.flatten_all()?.to_vec1::<u32>()?;
         let text_embeds = self.language_model.word_token_embedding.forward(input_ids)?;
 
-        if debug {
-            let flat = text_embeds.flatten_all()?.to_dtype(DType::F32)?;
-            let vals: Vec<f32> = flat.to_vec1()?;
-            eprintln!(
-                "  [DEBUG] text_embeds shape={:?} first5={:?}",
-                text_embeds.shape(),
-                &vals[..5.min(vals.len())]
-            );
-            eprintln!(
-                "  [DEBUG] embedding_scale={} logits_scale={}",
-                self.language_model.embedding_scale,
-                self.language_model.logits_scale
-            );
-        }
-
-        // Create mask: 0 at image positions, 1 elsewhere
         let mask_vals: Vec<f32> = input_ids_vec
             .iter()
             .map(|&id| if id == self.config.image_token_index { 0.0 } else { 1.0 })
@@ -392,22 +324,8 @@ impl Model {
             text_embeds.affine(self.language_model.embedding_scale as f64, 0.)?
         };
 
-        if debug {
-            let flat = hidden.flatten_all()?.to_dtype(DType::F32)?;
-            let vals: Vec<f32> = flat.to_vec1()?;
-            // Show values at the last text token position (just before image tokens)
-            let last_text_pos = input_ids_vec.iter().position(|&id| id == self.config.image_token_index).unwrap_or(0);
-            let offset = last_text_pos.saturating_sub(1) * hidden_size;
-            eprintln!(
-                "  [DEBUG] hidden_after_embed_scale shape={:?} at_pos[{}]={:?}",
-                hidden.shape(),
-                last_text_pos.saturating_sub(1),
-                &vals[offset..offset + 5.min(vals.len() - offset)]
-            );
-        }
-
         // 5. Build injection tensors for each target layer
-        let injection_map: Vec<(usize, Tensor)> = deepstack_injections
+        let injection_map: HashMap<usize, Tensor> = deepstack_injections
             .iter()
             .map(|(layer, features)| {
                 let inj = build_injection_tensor(
@@ -421,37 +339,14 @@ impl Model {
                 )?;
                 Ok((*layer, inj))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<HashMap<_, _>>>()?;
 
         // 6. Run through LLM layers with injection
         for (block_idx, block) in self.language_model.blocks.iter().enumerate() {
-            // Inject vision features at this layer
-            for (target_layer, injection) in &injection_map {
-                if block_idx == *target_layer {
-                    hidden = (hidden + injection)?;
-                    if debug {
-                        let flat = hidden.flatten_all()?.to_dtype(DType::F32)?;
-                        let vals: Vec<f32> = flat.to_vec1()?;
-                        // Show last-position values after injection
-                        let last_pos = (seq_len - 1) * hidden_size;
-                        eprintln!(
-                            "  [DEBUG] after_inject layer={block_idx} last_pos_first5={:?}",
-                            &vals[last_pos..last_pos + 5.min(vals.len() - last_pos)]
-                        );
-                    }
-                }
+            if let Some(injection) = injection_map.get(&block_idx) {
+                hidden = (hidden + injection)?;
             }
             hidden = block.forward(&hidden, 0, block_idx, cache)?;
-
-            if debug && block_idx < 4 {
-                let flat = hidden.flatten_all()?.to_dtype(DType::F32)?;
-                let vals: Vec<f32> = flat.to_vec1()?;
-                let last_pos = (seq_len - 1) * hidden_size;
-                eprintln!(
-                    "  [DEBUG] after_block[{block_idx}] last_pos_first5={:?}",
-                    &vals[last_pos..last_pos + 5.min(vals.len() - last_pos)]
-                );
-            }
         }
 
         // 7. Final norm + logits
@@ -465,26 +360,11 @@ impl Model {
                 .t()?,
         )?;
         let logits = logits.to_dtype(DType::F32)?;
-        let logits = if (self.language_model.logits_scale - 1.0).abs() < f32::EPSILON {
-            logits
+        if (self.language_model.logits_scale - 1.0).abs() < f32::EPSILON {
+            Ok(logits)
         } else {
-            logits.affine(self.language_model.logits_scale as f64, 0.)?
-        };
-
-        if debug {
-            let flat = logits.flatten_all()?;
-            let vals: Vec<f32> = flat.to_vec1()?;
-            let (max_idx, max_val) = vals.iter().enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .unwrap();
-            eprintln!(
-                "  [DEBUG] logits shape={:?} argmax={max_idx} max_val={max_val:.4} first5={:?}",
-                logits.shape(),
-                &vals[..5.min(vals.len())]
-            );
+            Ok(logits.affine(self.language_model.logits_scale as f64, 0.)?)
         }
-
-        Ok(logits)
     }
 
     /// Subsequent autoregressive forward pass (no vision injection).
@@ -527,14 +407,3 @@ pub fn select_best_resolution(
     best
 }
 
-/// Calculate how many tiles an image will be split into for the given grid pinpoints.
-pub fn image_size_to_num_patches(
-    image_size: (usize, usize),
-    pinpoints: &[[usize; 2]],
-    tile_size: usize,
-) -> usize {
-    let (best_h, best_w) = select_best_resolution(image_size, pinpoints);
-    let grid_h = best_h / tile_size;
-    let grid_w = best_w / tile_size;
-    grid_h * grid_w + 1 // +1 for global thumbnail
-}

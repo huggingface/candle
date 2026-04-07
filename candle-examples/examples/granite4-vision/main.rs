@@ -76,10 +76,6 @@ struct Args {
     /// Disable image tiling (process as single 384x384 tile).
     #[arg(long)]
     no_split: bool,
-
-    /// Dump intermediate activations for debugging.
-    #[arg(long)]
-    debug: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -593,34 +589,18 @@ fn main() -> Result<()> {
             pixel_values.dim(0)?,
         );
 
-        if args.debug {
-            let first_ids: Vec<_> = input_ids.iter().take(20).collect();
-            let last_ids: Vec<_> = input_ids.iter().rev().take(10).rev().collect();
-            eprintln!("[DEBUG] input_ids len={} first20={:?} last10={:?}", input_ids.len(), first_ids, last_ids);
-            eprintln!("[DEBUG] image_token_id={} image_size={:?}", config.image_token_index, preprocessed.image_size);
-        }
-
         let input_ids_tensor = Tensor::new(&input_ids[..], &device)?.unsqueeze(0)?;
 
         // Fresh KV cache per page
         let mut cache = GraniteMoeHybridCache::new(true, dtype, &text_config, &device)?;
 
         // Initial forward with vision
-        let logits = if args.debug {
-            model.setup_debug(
-                &input_ids_tensor,
-                &pixel_values,
-                preprocessed.image_size,
-                &mut cache,
-            )?
-        } else {
-            model.setup(
-                &input_ids_tensor,
-                &pixel_values,
-                preprocessed.image_size,
-                &mut cache,
-            )?
-        };
+        let logits = model.setup(
+            &input_ids_tensor,
+            &pixel_values,
+            preprocessed.image_size,
+            &mut cache,
+        )?;
 
         let mut logits_processor =
             candle_transformers::generation::LogitsProcessor::new(42, temperature, None);
