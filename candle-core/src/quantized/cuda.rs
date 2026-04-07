@@ -307,7 +307,7 @@ fn mul_mat_vec_via_q8_1(
     };
     let kernel_name = format!("{kernel_name}{b_size}");
     let func = dev.get_or_load_func(&kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = dev.alloc_zeros::<f32>(nrows * b_size)?;
+    let dst = unsafe { dev.alloc::<f32>(nrows * b_size)? };
     // https://github.com/ggerganov/llama.cpp/blob/facb8b56f8fd3bb10a693bf0943ae9d69d0828ef/ggml-cuda/mmvq.cu#L98
     let (nblocks, nwarps) = match b_size {
         1 => (nrows as u32, 4),
@@ -379,7 +379,7 @@ fn mul_mat_via_q8_1(
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = dev.alloc_zeros::<f32>(x_rows * y_cols)?;
+    let dst = unsafe { dev.alloc::<f32>(x_rows * y_cols)? };
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (
             ceil_div(x_rows, mmq_y) as u32,
@@ -442,7 +442,7 @@ fn indexed_moe_forward_fused_q8_1_input(
 
     // output buffer
     let outsize = batch * topk * n;
-    let out = dev.alloc_zeros::<f32>(outsize)?;
+    let out = unsafe { dev.alloc::<f32>(outsize)? };
 
     let kernel_name = match w_dtype {
         GgmlDType::Q2K => "indexed_moe_forward_q2k_q8_1",
