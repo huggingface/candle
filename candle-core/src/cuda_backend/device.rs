@@ -155,6 +155,36 @@ impl CudaDevice {
         self.stream.clone()
     }
 
+    /// Configure the CUDA memory pool for graph capture compatibility.
+    ///
+    /// Sets `CU_MEMPOOL_ATTR_RELEASE_THRESHOLD` to `u64::MAX` so the pool never
+    /// releases memory back to the OS. This keeps device pointers stable across
+    /// allocations, which is required for CUDA graph capture with stream-ordered
+    /// memory (`cudaMallocAsync`).
+    ///
+    /// Call this once before the first `stream.begin_capture()`.
+    pub fn enable_graph_capture_mode(&self) -> Result<()> {
+        use cudarc::driver::sys;
+        let cu_device = self.context.ordinal();
+        unsafe {
+            let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+            let res = sys::cuDeviceGetDefaultMemPool(&mut pool, cu_device as i32);
+            if res != sys::CUresult::CUDA_SUCCESS {
+                crate::bail!("cuDeviceGetDefaultMemPool failed: {:?}", res);
+            }
+            let threshold: u64 = u64::MAX;
+            let res = sys::cuMemPoolSetAttribute(
+                pool,
+                sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                &threshold as *const u64 as *mut std::ffi::c_void,
+            );
+            if res != sys::CUresult::CUDA_SUCCESS {
+                crate::bail!("cuMemPoolSetAttribute failed: {:?}", res);
+            }
+        }
+        Ok(())
+    }
+
     /// When turned on, all cuda tensors **created after calling this function** will
     /// not track uses via cuda events.
     ///
