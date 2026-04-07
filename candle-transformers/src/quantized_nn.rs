@@ -1,4 +1,4 @@
-//! Utilities for quanitized network layers
+//! Utilities for quantized network layers
 //!
 //! This module contains various implementations of standard neural network layers, modules and
 //! utilities including embedding, linear layers, and various normalization techniques.
@@ -111,10 +111,23 @@ impl RmsNorm {
         Ok(Self { weight, eps, span })
     }
 
+    /// Create an RmsNorm from a QTensor (dequantizes on the QTensor's current device).
+    /// For GPU layers, prefer `from_tensor` to avoid CUDA quantized kernel issues.
     pub fn from_qtensor(weight: QTensor, eps: f64) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let weight = weight.dequantize(&weight.device())?;
         Ok(Self { weight, eps, span })
+    }
+
+    /// Create an RmsNorm from a pre-dequantized weight tensor.
+    /// Use this when you need to control the device for dequantization, e.g.:
+    ///   let w = qt.dequantize(&Device::Cpu)?.to_device(gpu_device)?;
+    ///   let norm = RmsNorm::from_tensor(w, eps);
+    /// This avoids CUDA quantized kernel issues (CUDA_ERROR_ILLEGAL_ADDRESS) that
+    /// can occur when dequantizing K-quant types (Q4_K etc.) directly on GPU.
+    pub fn from_tensor(weight: Tensor, eps: f64) -> Self {
+        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
+        Self { weight, eps, span }
     }
 }
 

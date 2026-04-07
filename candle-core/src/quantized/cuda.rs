@@ -848,6 +848,7 @@ pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
     };
     let dtype = T::DTYPE;
     let padded_len = data.len() + MATRIX_ROW_PADDING * dtype.type_size() / dtype.block_size();
+    // Use alloc_zeros to ensure padding bytes are initialized to zero.
     let mut inner = device.alloc_zeros::<u8>(padded_len)?;
     device.memcpy_htod(data, &mut inner.slice_mut(..data.len()))?;
     Ok(QStorage::Cuda(QCudaStorage {
