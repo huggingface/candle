@@ -40,9 +40,6 @@ pub struct CudaDevice {
     pub(crate) blas: Arc<cudarc::cublas::CudaBlas>,
     curand: Arc<Mutex<CudaRng>>,
     seed_value: Arc<RwLock<u64>>,
-    /// When true, use cuMemAlloc (sync) instead of cuMemAllocAsync (stream-ordered)
-    /// Required for CUDA graph capture compatibility.
-    pub(crate) use_sync_alloc: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for CudaDevice {
@@ -217,30 +214,13 @@ impl CudaDevice {
         Ok(())
     }
 
-    /// Switch from async allocator (cudaMallocAsync) to synchronous allocator
-    /// (cuMemAlloc). Required for CUDA graph capture, since cudaMallocAsync
-    /// leaves stream-ordered bookkeeping that blocks cuStreamBeginCapture.
+    /// Switch from async allocator (cuMemAllocAsync) to synchronous allocator
+    /// (cuMemAlloc). Required for CUDA graph capture, since cuMemAllocAsync
+    /// creates stream-ordered dependencies that block cuStreamBeginCapture.
     ///
-    /// Call once before graph capture. Cannot be undone.
+    /// Call once before graph capture. Cannot be undone within a session.
     pub fn use_sync_allocator(&self) {
-        // cudarc's CudaStream uses cudaMallocAsync internally.
-        // We can't change that, but we can disable the memory pool on this device
-        // so allocations fall through to cuMemAlloc.
-        use cudarc::driver::sys;
-        let ordinal = self.context.ordinal();
-        unsafe {
-            let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
-            if sys::cuDeviceGetDefaultMemPool(&mut pool, ordinal as i32) == sys::CUresult::CUDA_SUCCESS {
-                // Set release threshold to 0 — force immediate release, effectively
-                // making each alloc go through cuMemAlloc
-                let threshold: u64 = 0;
-                let _ = sys::cuMemPoolSetAttribute(
-                    pool,
-                    sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
-                    &threshold as *const u64 as *mut std::ffi::c_void,
-                );
-            }
-        }
+        self.context.disable_async_alloc();
     }
 
     /// When turned on, all cuda tensors **created after calling this function** will
