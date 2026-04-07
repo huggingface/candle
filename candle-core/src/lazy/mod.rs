@@ -12,8 +12,9 @@ use crate::{CpuStorage, DType, Layout, Result, Shape};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
-use std::sync::Arc;
-use std::sync::{atomic, LazyLock, Mutex};
+use std::ptr::NonNull;
+use std::sync::atomic::AtomicPtr;
+use std::sync::{atomic, Arc, LazyLock, Mutex};
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum LazyError {
@@ -102,24 +103,103 @@ impl Ord for BufferId {
 static CUSTOM_OP_REGISTRY: LazyLock<Mutex<HashMap<String, CustomOp>>> =
     LazyLock::new(|| Mutex::new(HashMap::<String, CustomOp>::new()));
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+pub struct AtomicOp {
+    ptr: AtomicPtr<Op>,
+}
+
+impl AtomicOp {
+    fn get_ptr(op: Op) -> *mut Op {
+        // Safe way to get raw ptr
+        let arc_op = Arc::new(op);
+        Arc::into_raw(arc_op) as *mut _
+    }
+
+    pub fn new(op: Op) -> AtomicOp {
+        AtomicOp {
+            ptr: AtomicPtr::new(AtomicOp::get_ptr(op)),
+        }
+    }
+
+    pub fn swap(&self, new: Op) -> Op {
+        let new = AtomicOp::get_ptr(new);
+        let old = self.ptr.swap(new, std::sync::atomic::Ordering::SeqCst);
+        let value = NonNull::new(old).unwrap();
+        unsafe { value.read() }
+    }
+
+    pub fn store(&self, new: Op) {
+        drop(self.swap(new));
+    }
+
+    pub fn load(&self) -> Op {
+        let raw = self.ptr.load(std::sync::atomic::Ordering::Relaxed);
+        let value = NonNull::new(raw).unwrap();
+        unsafe { value.read() }
+    }
+
+    pub fn load_ref(&self) -> &Op {
+        let raw = self.ptr.load(std::sync::atomic::Ordering::Relaxed);
+        let value = NonNull::new(raw).unwrap();
+        unsafe { value.as_ref() }
+    }
+}
+
+#[derive(Debug)]
 pub struct LazyStorage {
     id: NodeId,
-    // TODO: Arc<Mutex<Op>>. Set as Op::Resolved(BufferId) when resolved
-    op: Arc<Op>,
+    // TODO: Set as Op::Resolved(BufferId) when resolved
+    pub op: Arc<AtomicOp>,
     custom_op_fallbacks: HashMap<String, LazyStorage>,
     layout: Layout,
     dtype: DType,
     buffer_id: Arc<BufferId>,
     // Set once by the backend executor after this node has been evaluated
     resolved_id: Arc<std::sync::OnceLock<BufferId>>,
+    // pub(crate) owner: std::sync::OnceLock<std::sync::Weak<crate::tensor::Tensor_>>,
+}
+
+/*
+impl Drop for LazyStorage {
+    fn drop(&mut self) {
+        // potential lazy storage lifetime solution.
+        // Map<NodeId, AtomicUsize> tracker;
+        //
+        // On LazyStorage::new():
+        // let entry = tracker.entry(current.id()).or_insert_with(||AtomicUsize::new(0));
+        // entry.fetch_add(1, Ordering::SeqCst);
+        //
+        // On drop
+        // tracker.get(current.id()).map(|e| e.fetch_sub(1, Ordering::SeqCst));
+        // or something like that.
+        //
+        // tracker could then be used in allocator.
+        //
+        //
+        // eeeeh wait we could just keep a HashSet<NodeId> between runs...
+    }
+}
+*/
+
+impl Clone for LazyStorage {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            op: self.op.clone(),
+            custom_op_fallbacks: self.custom_op_fallbacks.clone(),
+            layout: self.layout.clone(),
+            dtype: self.dtype.clone(),
+            buffer_id: self.buffer_id.clone(),
+            resolved_id: self.resolved_id.clone(),
+        }
+    }
 }
 
 impl LazyStorage {
     pub fn new(op: Op, layout: &Layout, dtype: DType) -> Self {
         Self {
             id: NodeId::new(),
-            op: Arc::new(op),
+            op: Arc::new(AtomicOp::new(op)),
             custom_op_fallbacks: HashMap::new(),
             layout: layout.clone(),
             dtype,
@@ -132,7 +212,7 @@ impl LazyStorage {
         // Creates a copy, or view, of the lazy storage with updated layout.
         Self {
             id: source.id,
-            op: Arc::new(source.op().clone()),
+            op: source.op.clone(),
             custom_op_fallbacks: source.custom_op_fallbacks.clone(),
             layout: layout.clone(),
             dtype: source.dtype,
@@ -146,7 +226,7 @@ impl LazyStorage {
     }
 
     pub fn op(&self) -> &Op {
-        self.op.as_ref()
+        self.op.load_ref()
     }
 
     pub fn layout(&self) -> &Layout {
@@ -159,7 +239,7 @@ impl LazyStorage {
 
     pub fn output(&self) -> Result<Self> {
         // Only add output node if not already present
-        if !matches!(self.op.as_ref(), Op::Output(_)) {
+        if !matches!(self.op(), Op::Output(_)) {
             return Ok(LazyStorage::new(
                 Op::Output(Output::new(self.clone())),
                 self.layout(),
@@ -246,11 +326,13 @@ impl LazyStorage {
 
         let mut stack: Vec<(&LazyStorage, usize)> = vec![(self, 0)];
         while let Some((cur_t, cur_src)) = stack.pop() {
+            let cur_op = cur_t.op();
+            let cur_srcs = cur_op.srcs();
             // Only evaluate nodes once. If already resolved then we do not process.
             let effective_len = if cur_t.resolved_buffer_id().is_some() {
                 0
             } else {
-                cur_t.op().srcs().len()
+                cur_srcs.len()
             };
             let all_deps_done = cur_src == effective_len;
 
@@ -261,11 +343,8 @@ impl LazyStorage {
                 continue;
             }
 
-            let (srcs_with_deps, srcs_without_deps): (Vec<_>, Vec<_>) = cur_t
-                .op()
-                .srcs()
-                .iter()
-                .partition(|s| s.op().srcs().is_empty());
+            let (srcs_with_deps, srcs_without_deps): (Vec<_>, Vec<_>) =
+                cur_srcs.iter().partition(|s| s.op().srcs().is_empty());
 
             let all_srcs = srcs_with_deps
                 .into_iter()
@@ -289,6 +368,14 @@ impl LazyStorage {
         }
         order
     }
+
+    pub(crate) fn resolve(&self) -> Option<Op> {
+        if matches!(self.op(), Op::Resolved(_) | Op::Output(_) | Op::Sink(_)) {
+            None
+        } else {
+            Option::Some(self.op.swap(Op::Resolved(self.buffer_id.clone())))
+        }
+    }
 }
 
 impl PartialEq for LazyStorage {
@@ -296,7 +383,7 @@ impl PartialEq for LazyStorage {
         // Two lazy storages are equal regardless of wether it has been resolved,
         // so we exclude resolved_id from this impl.
         self.id == other.id
-            && self.op == other.op
+            && self.op() == other.op()
             && self.custom_op_fallbacks == other.custom_op_fallbacks
             && self.layout == other.layout
             && self.dtype == other.dtype
@@ -465,6 +552,7 @@ pub fn calculate_usage_records(
 pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
     let mut reusage = BTreeMap::new();
     let mut allocations = BTreeMap::new();
+    // let mut resolved = BTreeMap::new();
 
     // Plan Const (input) allocations
     for node in graph {
@@ -474,6 +562,19 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
             let shape = Shape::from(s.len());
             allocations.insert(buffer_id.clone(), (Layout::contiguous(shape), s.dtype()));
         }
+        /*
+        if let Op::Resolved(b) = node.op() {
+            let _ = resolved
+                .entry(b.as_ref().clone())
+                .or_insert_with(|| (node.layout().clone(), node.dtype()));
+        }
+
+        if binding.contains(&node.id()) {
+            //node.resolve();
+        } else {
+            binding.insert(node.id());
+        }
+         */
     }
 
     // Find buffer usage spans in the graph
@@ -590,6 +691,7 @@ impl LazyStorage {
 pub enum Op {
     Uninit,
     Const(Arc<CpuStorage>),
+    Resolved(Arc<BufferId>),
     ToCpu,
     Affine(Affine),
     Powf(Powf),
@@ -630,6 +732,7 @@ impl Op {
         match self {
             Op::Uninit => vec![],
             Op::Const(_) => vec![],
+            Op::Resolved(_) => vec![],
             Op::ToCpu => vec![],
             Op::Affine(op) => op.srcs(),
             Op::Powf(op) => op.srcs(),
@@ -653,7 +756,7 @@ impl Op {
     }
 
     fn resolved(&self) -> bool {
-        matches!(self, Op::Const(_))
+        matches!(self, Op::Resolved(_) | Op::Const(_))
     }
 }
 
@@ -662,6 +765,7 @@ impl Display for Op {
         match self {
             Op::Uninit => write!(f, "Uninit"),
             Op::Const(_) => write!(f, "Const"),
+            Op::Resolved(buffer_id) => write!(f, "Resolved({})", buffer_id.inner()),
             Op::ToCpu => write!(f, "ToCpu"),
             Op::Affine(affine) => write!(f, "Affine({}, {})", affine.add, affine.mul),
             Op::Powf(_powf) => write!(f, "Powf"),
@@ -697,7 +801,7 @@ impl Display for Op {
 
 impl LazyStorage {
     fn srcs(&self) -> Vec<&LazyStorage> {
-        self.op.srcs()
+        self.op().srcs()
     }
 }
 
@@ -1007,12 +1111,13 @@ impl BackendStorage for LazyStorage {
         if let Op::CopyStridedSrc(copies) = dst.op() {
             let mut copies = copies.clone();
             copies.add(src, src_l.clone(), dst_offset);
-            dst.op = Op::CopyStridedSrc(copies).into();
+            let op = Op::CopyStridedSrc(copies);
+            dst.op.store(op);
             return Ok(());
         }
 
         let op = Op::CopyStridedSrc(CopyStridedSrc::new(src, src_l.clone(), dst_offset));
-        dst.op = op.into();
+        dst.op.store(op);
         Ok(())
     }
 
@@ -1031,13 +1136,13 @@ impl BackendStorage for LazyStorage {
             let copy = SingleCopy2D::new(self.clone(), d1, d2, src_s, dst_s, src_o, dst_o);
             copies.add(copy);
             let op = Op::Copy2D(copies);
-            dst.op = op.into();
+            dst.op.store(op);
             return Ok(());
         }
         let copy = SingleCopy2D::new(self.clone(), d1, d2, src_s, dst_s, src_o, dst_o);
         let op = Op::Copy2D(Copy2D::new(vec![copy]));
 
-        dst.op = op.into();
+        dst.op.store(op);
 
         Ok(())
     }

@@ -677,6 +677,9 @@ impl Tensor {
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Lazy(storage) => {
+                #[cfg(not(feature = "metal"))]
+                todo!();
+
                 #[cfg(feature = "metal")]
                 {
                     let device = crate::metal_backend::metal_device();
@@ -690,7 +693,6 @@ impl Tensor {
                     );
                     return from_cpu_storage(&metal_storage.to_cpu_storage()?);
                 }
-                todo!()
             }
         }
     }

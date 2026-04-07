@@ -2976,9 +2976,29 @@ impl Executor for MetalDevice {
 
         // Copy completed node buffers to new storage.
         use crate::lazy::Op::*;
+        /*
+        let mut stack: Vec<LazyStorage> = vec![result_node.clone()];
+        let mut done = HashSet::new();
+        while let Some(node) = stack.pop() {
+            for src in node.op().srcs() {
+                if !done.contains(&src.id()) {
+                    stack.push(src.clone());
+                }
+            }
+            if node.is_buffer_shared() {
+                println!(
+                    "Node: {} - buffer count: {}",
+                    node.op(),
+                    allocator.buffer_map.len()
+                );
+                let previous = node.resolve();
+            }
+            done.insert(node.id());
+        }
+        */
         let mut newly_resolved: Vec<(BufferId, Arc<Buffer>, &LazyStorage)> = vec![];
         for node in &graph {
-            if matches!(node.op(), Const(_) | Output(_) | Sink(_)) {
+            if matches!(node.op(), Resolved(_) | Const(_) | Output(_) | Sink(_)) {
                 continue;
             }
             if node.resolved_buffer_id().is_some() {
@@ -3019,7 +3039,8 @@ impl Executor for MetalDevice {
         }
 
         match current.op() {
-            Const(s) => self.eval_const(allocator, s, current.buffer_id())?,
+            Resolved(_) => {}
+            Const(s) => self.eval_const(allocator, &s, current.buffer_id())?,
             Affine(a) => {
                 let src = allocator.get(a.src.buffer_id()).unwrap();
                 let dst = allocator.get(current.buffer_id()).unwrap();
