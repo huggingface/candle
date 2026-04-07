@@ -11,13 +11,19 @@ fn main() -> Result<()> {
     // Build for PTX
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");
-    let bindings = KernelBuilder::new()
+    let mut builder = KernelBuilder::new()
         .source_dir("src") // Scan src/ for .cu files
         .exclude(&["moe_*.cu"]) // Exclude moe kernels for ptx build
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
-        .arg("-O3")
-        .build_ptx()?;
+        .arg("-O3");
+
+    // CUDA 13+ CCCL headers require MSVC standard conforming preprocessor
+    if cfg!(target_env = "msvc") {
+        builder = builder.arg("-Xcompiler").arg("/Zc:preprocessor");
+    }
+
+    let bindings = builder.build_ptx()?;
 
     bindings.write(&ptx_path)?;
 
@@ -48,7 +54,10 @@ fn main() -> Result<()> {
         }
     }
 
-    if !is_target_msvc {
+    if is_target_msvc {
+        // CUDA 13+ CCCL headers require standard conforming preprocessor
+        moe_builder = moe_builder.arg("-Xcompiler").arg("/Zc:preprocessor");
+    } else {
         moe_builder = moe_builder.arg("-Xcompiler").arg("-fPIC");
     }
 
