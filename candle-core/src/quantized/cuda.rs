@@ -289,8 +289,7 @@ fn mul_mat_vec_via_q8_1(
     let ncols_padded = pad(ncols, MATRIX_ROW_PADDING);
     let y_size_in_bytes =
         b_size * ncols_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
-    // PERF: use alloc — fully written by quantize_q8_1 kernel
-    let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
+    let mut y_q8_1 = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
     quantize_q8_1(y, &mut y_q8_1, ncols, b_size, dev)?;
 
     let kernel_name = match dtype {
@@ -308,8 +307,7 @@ fn mul_mat_vec_via_q8_1(
     };
     let kernel_name = format!("{kernel_name}{b_size}");
     let func = dev.get_or_load_func(&kernel_name, &candle_kernels::QUANTIZED)?;
-    // PERF: use alloc (not alloc_zeros) — dst is fully written by the kernel
-    let dst = unsafe { dev.alloc::<f32>(nrows * b_size)? };
+    let dst = dev.alloc_zeros::<f32>(nrows * b_size)?;
     // https://github.com/ggerganov/llama.cpp/blob/facb8b56f8fd3bb10a693bf0943ae9d69d0828ef/ggml-cuda/mmvq.cu#L98
     let (nblocks, nwarps) = match b_size {
         1 => (nrows as u32, 4),
@@ -364,8 +362,7 @@ fn mul_mat_via_q8_1(
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let y_size_in_bytes =
         k_padded * y_cols * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
-    // PERF: use alloc — fully written by quantize_q8_1 kernel
-    let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
+    let mut y_q8_1 = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
     quantize_q8_1(y, &mut y_q8_1, k, y_cols, dev)?;
 
     let (kernel_name, mmq_x, mmq_y) = match dtype {
@@ -382,8 +379,7 @@ fn mul_mat_via_q8_1(
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
-    // PERF: use alloc (not alloc_zeros) — dst is fully written by the kernel
-    let dst = unsafe { dev.alloc::<f32>(x_rows * y_cols)? };
+    let dst = dev.alloc_zeros::<f32>(x_rows * y_cols)?;
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (
             ceil_div(x_rows, mmq_y) as u32,
