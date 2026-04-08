@@ -108,6 +108,87 @@ pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> Result<(Vec<f32>, u32)>
     Ok((pcm_data, sample_rate))
 }
 
+/// Decode all channels from an audio file (WAV, FLAC, MP3, OGG, etc.).
+///
+/// Returns `(channels, sample_rate)` where `channels[i]` contains the samples
+/// for channel `i`. For stereo files, `channels.len() == 2`.
+#[cfg(feature = "symphonia")]
+pub fn pcm_decode_all_channels<P: AsRef<std::path::Path>>(
+    path: P,
+) -> Result<(Vec<Vec<f32>>, u32)> {
+    use symphonia::core::audio::{AudioBufferRef, Signal};
+    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+    use symphonia::core::conv::FromSample;
+
+    let src = std::fs::File::open(path).map_err(candle::Error::wrap)?;
+    let mss = symphonia::core::io::MediaSourceStream::new(Box::new(src), Default::default());
+    let hint = symphonia::core::probe::Hint::new();
+    let meta_opts: symphonia::core::meta::MetadataOptions = Default::default();
+    let fmt_opts: symphonia::core::formats::FormatOptions = Default::default();
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &fmt_opts, &meta_opts)
+        .map_err(candle::Error::wrap)?;
+    let mut format = probed.format;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .ok_or_else(|| candle::Error::Msg("no supported audio tracks".to_string()))?;
+    let n_channels = track
+        .codec_params
+        .channels
+        .map_or(1, |ch| ch.count())
+        .max(1);
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|_| candle::Error::Msg("unsupported codec".to_string()))?;
+    let track_id = track.id;
+    let sample_rate = track.codec_params.sample_rate.unwrap_or(0);
+    let mut channels: Vec<Vec<f32>> = (0..n_channels).map(|_| Vec::new()).collect();
+
+    fn conv_ch<T>(
+        channels: &mut [Vec<f32>],
+        data: std::borrow::Cow<symphonia::core::audio::AudioBuffer<T>>,
+    ) where
+        T: symphonia::core::sample::Sample,
+        f32: symphonia::core::conv::FromSample<T>,
+    {
+        for (ch, buf) in channels.iter_mut().enumerate() {
+            if ch < data.spec().channels.count() {
+                buf.extend(data.chan(ch).iter().map(|v| f32::from_sample(*v)));
+            }
+        }
+    }
+
+    while let Ok(packet) = format.next_packet() {
+        while !format.metadata().is_latest() {
+            format.metadata().pop();
+        }
+        if packet.track_id() != track_id {
+            continue;
+        }
+        match decoder.decode(&packet).map_err(candle::Error::wrap)? {
+            AudioBufferRef::F32(buf) => {
+                for (ch, c) in channels.iter_mut().enumerate() {
+                    if ch < buf.spec().channels.count() {
+                        c.extend(buf.chan(ch));
+                    }
+                }
+            }
+            AudioBufferRef::U8(data) => conv_ch(&mut channels, data),
+            AudioBufferRef::U16(data) => conv_ch(&mut channels, data),
+            AudioBufferRef::U24(data) => conv_ch(&mut channels, data),
+            AudioBufferRef::U32(data) => conv_ch(&mut channels, data),
+            AudioBufferRef::S8(data) => conv_ch(&mut channels, data),
+            AudioBufferRef::S16(data) => conv_ch(&mut channels, data),
+            AudioBufferRef::S24(data) => conv_ch(&mut channels, data),
+            AudioBufferRef::S32(data) => conv_ch(&mut channels, data),
+            AudioBufferRef::F64(data) => conv_ch(&mut channels, data),
+        }
+    }
+    Ok((channels, sample_rate))
+}
+
 #[cfg(feature = "rubato")]
 pub fn resample(pcm_in: &[f32], sr_in: u32, sr_out: u32) -> Result<Vec<f32>> {
     use rubato::Resampler;
