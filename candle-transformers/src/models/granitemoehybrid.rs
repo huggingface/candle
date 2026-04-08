@@ -30,6 +30,8 @@ pub struct GraniteMoeHybridRopeConfig {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct GraniteMoeHybridConfig {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub vocab_size: usize,
@@ -577,5 +579,53 @@ fn scale_tensor(tensor: Tensor, scale: f32) -> Result<Tensor> {
         Ok(tensor)
     } else {
         tensor.affine(scale as f64, 0.)
+    }
+}
+impl GraniteMoeHybrid {
+    /// Convenience constructor accepting the HF config directly.
+    pub fn new_from_hf_config(
+        cfg: &GraniteMoeHybridConfig,
+        vb: candle_nn::VarBuilder,
+    ) -> candle::Result<Self> {
+        let internal = cfg.clone().into_config(cfg.use_flash_attn);
+        Self::load(vb, &internal)
+    }
+}
+
+impl GraniteMoeHybridCache {
+    /// Convenience constructor accepting the HF config directly.
+    pub fn new_from_hf_config(
+        use_kv_cache: bool,
+        dtype: candle::DType,
+        cfg: &GraniteMoeHybridConfig,
+        device: &candle::Device,
+    ) -> candle::Result<Self> {
+        let internal = cfg.clone().into_config(cfg.use_flash_attn);
+        Self::new(use_kv_cache, dtype, &internal, device)
+    }
+}
+pub struct GraniteHybridForCausalLM {
+    model: GraniteMoeHybrid,
+    cache: GraniteMoeHybridCache,
+}
+
+impl GraniteHybridForCausalLM {
+    pub fn new(cfg: &GraniteMoeHybridConfig, vb: candle_nn::VarBuilder) -> candle::Result<Self> {
+        let model = GraniteMoeHybrid::new_from_hf_config(cfg, vb.clone())?;
+        let cache = GraniteMoeHybridCache::new_from_hf_config(true, vb.dtype(), cfg, vb.device())?;
+        Ok(Self { model, cache })
+    }
+
+    pub fn forward(
+        &mut self,
+        input_ids: &candle::Tensor,
+        seqlen_offset: usize,
+    ) -> candle::Result<candle::Tensor> {
+        self.model
+            .forward(input_ids, seqlen_offset, &mut self.cache)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
     }
 }
