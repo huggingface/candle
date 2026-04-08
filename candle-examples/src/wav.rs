@@ -75,6 +75,12 @@ pub fn write_pcm_as_wav_stereo<W: Write, S: Sample>(
     channels: &[&[S]],
     sample_rate: u32,
 ) -> std::io::Result<()> {
+    if channels.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "channels must not be empty",
+        ));
+    }
     let n_channels = channels.len() as u16;
     let n_frames = channels[0].len();
     let data_bytes = (n_frames * n_channels as usize * 2) as u32;
@@ -145,8 +151,21 @@ pub fn read_pcm_from_wav<R: Read + Seek, S: Sample>(
         let size = u32::from_le_bytes(ch[4..8].try_into().unwrap()) as usize;
 
         if &id == b"fmt " {
+            if size < 16 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("fmt chunk too small: {size} bytes (need >= 16)"),
+                ));
+            }
             let mut fmt = vec![0u8; size];
             r.read_exact(&mut fmt)?;
+            let audio_format = u16::from_le_bytes(fmt[0..2].try_into().unwrap());
+            if audio_format != 1 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("unsupported WAV format: {audio_format} (only PCM/1 supported)"),
+                ));
+            }
             header.channels = u16::from_le_bytes(fmt[2..4].try_into().unwrap());
             header.sample_rate = u32::from_le_bytes(fmt[4..8].try_into().unwrap());
             header.bits_per_sample = u16::from_le_bytes(fmt[14..16].try_into().unwrap());

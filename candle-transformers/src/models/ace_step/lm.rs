@@ -539,19 +539,15 @@ impl LmPipeline {
         let mut generated_cot_tokens: Vec<u32> = Vec::new();
 
         // Process prompt token-by-token to build KV cache incrementally
-        // (avoids large attention matrix issues on Metal)
-        let mut next_token = 0u32;
+        // (avoids large attention matrix issues on Metal).
+        // We don't sample here — just run forward passes to populate the cache.
+        // The first generated token is always forced to <think>.
         for (pos, &token) in prompt_tokens.iter().enumerate() {
             let input = Tensor::new(&[token], &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, pos)?;
-            let logits = Self::sanitize_logits(logits)?;
-            next_token = logits_processor.sample(&logits)?;
+            let _logits = self.model.forward(&input, pos)?;
         }
 
-        // Force <think> as first generated token
-        if next_token != self.token_ids.think_start {
-            next_token = self.token_ids.think_start;
-        }
+        let mut next_token = self.token_ids.think_start;
         all_tokens.push(next_token);
         generated_cot_tokens.push(next_token);
         field_forcer.activate();
@@ -715,22 +711,8 @@ impl LmPipeline {
 
     /// Squeeze model output to 1D, pull to CPU as F32, and sanitize NaN/Inf.
     ///
-    /// Metal can produce NaN/Inf for large-vocab matmuls. We pull to CPU,
-    /// replace bad values with -inf (zero probability after softmax), and
-    /// return a clean F32 tensor on CPU for sampling.
-    fn sanitize_logits(logits: Tensor) -> Result<Tensor> {
-        let logits = logits.squeeze(0)?.squeeze(0)?;
-        let n = logits.dim(0)?;
-        let mut data = logits.to_dtype(candle::DType::F32)?.to_vec1::<f32>()?;
-        for v in data.iter_mut() {
-            if !v.is_finite() {
-                *v = f32::NEG_INFINITY;
-            }
-        }
-        Tensor::from_vec(data, n, &candle::Device::Cpu)
-    }
-
-    /// Like `sanitize_logits` but also applies a constraint function to the
+    /// Squeeze model output to 1D, pull to CPU as F32, sanitize NaN/Inf,
+    /// and apply an optional constraint function to the
     /// logit values before creating the tensor. This ensures constraints
     /// operate on logits (before softmax), not probabilities.
     fn sanitize_and_constrain(

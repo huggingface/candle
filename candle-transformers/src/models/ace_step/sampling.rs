@@ -102,12 +102,22 @@ pub fn get_custom_turbo_schedule(timesteps: &[f64]) -> Result<Vec<f64>> {
             timesteps.len()
         );
     }
+    for &t in timesteps {
+        if !t.is_finite() {
+            candle::bail!("custom timesteps contain non-finite value: {t}");
+        }
+    }
     Ok(timesteps
         .iter()
         .map(|&t| {
             *VALID_TIMESTEPS
                 .iter()
-                .min_by(|&&a, &&b| (a - t).abs().partial_cmp(&(b - t).abs()).unwrap())
+                .min_by(|&&a, &&b| {
+                    (a - t)
+                        .abs()
+                        .partial_cmp(&(b - t).abs())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .unwrap()
         })
         .collect())
@@ -182,17 +192,19 @@ impl MomentumBuffer {
 ///
 /// Operates along `dim` (typically dim=1 for sequence dimension).
 /// Uses F64 precision internally for numerical stability (matching Python).
+/// On Metal, computation is moved to CPU to avoid MPS numeric issues.
 fn project(v0: &Tensor, v1: &Tensor, dim: usize) -> Result<(Tensor, Tensor)> {
     let orig_device = v0.device().clone();
     let orig_dtype = v0.dtype();
 
-    // Move to CPU and use F64 for numerical stability (Python does v0.double(), v1.double())
-    let v0 = v0
-        .to_device(&candle::Device::Cpu)?
-        .to_dtype(candle::DType::F64)?;
-    let v1 = v1
-        .to_device(&candle::Device::Cpu)?
-        .to_dtype(candle::DType::F64)?;
+    // Use CPU for Metal (MPS numeric issues); stay on device for CUDA.
+    let compute_device = if orig_device.is_metal() {
+        candle::Device::Cpu
+    } else {
+        orig_device.clone()
+    };
+    let v0 = v0.to_device(&compute_device)?.to_dtype(candle::DType::F64)?;
+    let v1 = v1.to_device(&compute_device)?.to_dtype(candle::DType::F64)?;
 
     // L2 normalize v1 along dim
     let v1_norm = v1.sqr()?.sum_keepdim(dim)?.sqrt()?;
@@ -230,9 +242,15 @@ pub fn apg_forward(
     let orig_device = pred_cond.device().clone();
     let orig_dtype = pred_cond.dtype();
 
-    // Move everything to CPU for numerical stability (Python does this for MPS)
-    let pred_cond_cpu = pred_cond.to_device(&candle::Device::Cpu)?;
-    let pred_uncond_cpu = pred_uncond.to_device(&candle::Device::Cpu)?;
+    // On Metal, move to CPU for numerical stability (Python does this for MPS).
+    // On CUDA/CPU, stay on the original device to avoid transfer overhead.
+    let compute_device = if orig_device.is_metal() {
+        candle::Device::Cpu
+    } else {
+        orig_device.clone()
+    };
+    let pred_cond_cpu = pred_cond.to_device(&compute_device)?;
+    let pred_uncond_cpu = pred_uncond.to_device(&compute_device)?;
 
     let diff = (&pred_cond_cpu - &pred_uncond_cpu)?;
 

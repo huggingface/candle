@@ -211,7 +211,7 @@ impl AceStepConditionGenerationModel {
         // Skip entirely when is_covers is all-false (text2music) — no tokenize/detokenize needed.
         let latent_len = inputs.src_latents.dim(1)?;
 
-        let any_covers = inputs.is_covers.sum_all()?.to_scalar::<u8>()? > 0;
+        let any_covers = inputs.is_covers.gt(0u8)?.sum_all()?.to_scalar::<i64>()? > 0;
 
         let src_latents = if any_covers {
             let lm_hints_25hz = if let Some(precomputed) = inputs.precomputed_lm_hints_25hz {

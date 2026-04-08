@@ -100,11 +100,16 @@ impl Module for OobleckResidualUnit {
             .apply(&self.conv2)?;
         let xs_len = xs.dim(D::Minus1)?;
         let ys_len = ys.dim(D::Minus1)?;
-        let pad = (xs_len - ys_len) / 2;
-        if pad > 0 {
-            &ys + xs.narrow(D::Minus1, pad, ys_len)?
+        if xs_len >= ys_len {
+            let pad = (xs_len - ys_len) / 2;
+            if pad > 0 {
+                &ys + xs.narrow(D::Minus1, pad, ys_len)?
+            } else {
+                ys + xs
+            }
         } else {
-            ys + xs
+            let pad = (ys_len - xs_len) / 2;
+            &ys.narrow(D::Minus1, pad, xs_len)? + xs
         }
     }
 }
@@ -453,12 +458,12 @@ impl AutoencoderOobleck {
             return self.encode(xs);
         }
 
-        let stride = chunk_size - 2 * overlap;
-        if stride == 0 {
+        if chunk_size <= 2 * overlap {
             candle::bail!(
                 "tiled_encode: chunk_size ({chunk_size}) must be > 2 * overlap ({overlap})"
             );
         }
+        let stride = chunk_size - 2 * overlap;
         let num_steps = total_samples.div_ceil(stride);
         let mut downsample_factor: Option<f64> = None;
         let mut latent_chunks = Vec::with_capacity(num_steps);
