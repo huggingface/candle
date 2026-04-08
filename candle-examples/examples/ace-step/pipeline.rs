@@ -489,9 +489,9 @@ impl AceStepPipeline {
 
         let language = metadata.and_then(|m| m.language.as_deref()).unwrap_or("en");
         let lyric_text = if lyrics.is_empty() {
-            format!("# Languages\n{language}\n\n# Lyric\n[Instrumental]\n<|endoftext|>")
+            format!("# Languages\n{language}\n\n# Lyric\n[Instrumental]<|endoftext|>")
         } else {
-            format!("# Languages\n{language}\n\n# Lyric\n{lyrics}\n<|endoftext|>")
+            format!("# Languages\n{language}\n\n# Lyric\n{lyrics}<|endoftext|>")
         };
         let lyric_encoding = self
             .tokenizer

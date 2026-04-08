@@ -359,7 +359,17 @@ fn main() -> Result<()> {
         // Free LM weights before DiT denoising to reclaim GPU memory.
         pipeline.unload_lm();
 
-        (Some(hints), Some(lm_meta))
+        // LM audio code hints are only effective with turbo models (which were
+        // distilled to use them). Base/SFT models benefit from LM metadata
+        // (caption, BPM, keyscale) but produce noise when LM hints replace
+        // the silence context — matching the Python pipeline behaviour where
+        // non-turbo models always run with infer_type="dit".
+        let lm_hints = if is_turbo { Some(hints) } else {
+            println!("Note: non-turbo model — using LM metadata only (hints skipped)");
+            None
+        };
+
+        (lm_hints, Some(lm_meta))
     } else {
         if is_turbo {
             println!("Hint: turbo models work best with --infer-type lm-dit --lm-model ACE-Step/acestep-5Hz-lm-0.6B");
