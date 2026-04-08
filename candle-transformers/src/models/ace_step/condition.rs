@@ -594,7 +594,7 @@ impl TimbreEncoder {
         // Build the output by placing each embedding at the right (batch, position)
         let mut position_in_batch = vec![0usize; b];
         let mut result = vec![0f32; b * max_count * d];
-        let mut mask_out = vec![0i64; b * max_count];
+        let mut mask_out = vec![0f32; b * max_count];
 
         let packed_data = timbre_embs_packed.to_dtype(DType::F32)?.to_vec2::<f32>()?;
         for i in 0..n {
@@ -603,7 +603,7 @@ impl TimbreEncoder {
             position_in_batch[batch_idx] += 1;
             let dst_offset = (batch_idx * max_count + pos) * d;
             result[dst_offset..dst_offset + d].copy_from_slice(&packed_data[i]);
-            mask_out[batch_idx * max_count + pos] = 1;
+            mask_out[batch_idx * max_count + pos] = 1.0;
         }
 
         let timbre_embs =
