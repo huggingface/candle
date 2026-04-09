@@ -434,7 +434,7 @@ impl MultiLayerPercepton {
 // A Block is a actually a Transformer layer, consisting of
 // a self-attention mechanism followed by a feed-forward neural network (MLP).
 #[derive(Debug, Clone)]
-struct Block {
+pub struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
@@ -444,7 +444,7 @@ struct Block {
 }
 
 impl Block {
-    fn forward(
+    pub fn forward(
         &self,
         x: &Tensor,
         index_pos: usize,
@@ -490,11 +490,11 @@ impl Block {
 
 #[derive(Debug, Clone)]
 pub struct GraniteMoeHybrid {
-    word_token_embedding: Embedding,
-    blocks: Vec<Block>,
-    ln_f: RmsNorm,
-    logits_scale: f32,
-    embedding_scale: f32,
+    pub word_token_embedding: Embedding,
+    pub blocks: Vec<Block>,
+    pub ln_f: RmsNorm,
+    pub logits_scale: f32,
+    pub embedding_scale: f32,
 }
 
 impl GraniteMoeHybrid {
@@ -530,9 +530,12 @@ impl GraniteMoeHybrid {
         Ok(scaled_logits)
     }
 
-    pub fn load(vb: VarBuilder, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
-        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
-        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+    /// Load with weight paths relative to `vb` (no "model." prefix added).
+    /// Use this when the VarBuilder already points to the model namespace,
+    /// e.g. `vb.pp("model.language_model")` for Granite4Vision.
+    pub fn load_inner(vb: VarBuilder, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
+        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
+        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?;
         if cfg.layer_types.len() != cfg.num_hidden_layers {
             candle::bail!(
                 "layer_types length {} does not match num_hidden_layers {}",
@@ -546,11 +549,9 @@ impl GraniteMoeHybrid {
             .enumerate()
             .map(|(idx, layer_ty)| match layer_ty {
                 GraniteMoeHybridLayerType::Attention => {
-                    Block::load(vb.pp(format!("model.layers.{idx}")), cfg)
+                    Block::load(vb.pp(format!("layers.{idx}")), cfg)
                 }
                 GraniteMoeHybridLayerType::Mamba => {
-                    // TODO: Not supprting Mamba layers (blocks) for now,
-                    // so we only iterate over attention layers.
                     candle::bail!(
                         "mamba layers are not yet supported in GraniteMoeHybrid inference"
                     )
@@ -569,6 +570,10 @@ impl GraniteMoeHybrid {
             },
             embedding_scale: cfg.embedding_multiplier,
         })
+    }
+
+    pub fn load(vb: VarBuilder, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
+        Self::load_inner(vb.pp("model"), cfg)
     }
 }
 
