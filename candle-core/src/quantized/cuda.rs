@@ -411,7 +411,7 @@ fn indexed_moe_forward_fused_q8_1_input(
     weight: &CudaView<u8>,
     w_shape: &crate::Shape, //[num_experts, n, k]
     w_dtype: GgmlDType,
-    input: &CudaSlice<f32>,
+    input: &CudaView<f32>,
     in_shape: &crate::Shape, //[batch, topk or 1, k]
     ids: &CudaView<u32>,
     idx_shape: &crate::Shape, //[batch, topk]
@@ -437,8 +437,7 @@ fn indexed_moe_forward_fused_q8_1_input(
     let y_size_in_bytes = total_rows * dst_row_size_bytes;
     let mut input_quant = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
 
-    let input_view = input.slice(0..);
-    quantize_q8_1(&input_view, &mut input_quant, k, total_rows, dev)?;
+    quantize_q8_1(input, &mut input_quant, k, total_rows, dev)?;
 
     // output buffer
     let outsize = batch * topk * n;
@@ -508,13 +507,31 @@ impl QCudaStorage {
         ) {
             let input_storage = input.as_cuda_slice::<f32>()?;
             let ids_storage = ids.as_cuda_slice::<u32>()?;
+            let input_storage = match input_l.contiguous_offsets() {
+                Some((o1, o2)) => input_storage.slice(o1..o2),
+                None => {
+                    return Err(crate::Error::RequiresContiguous {
+                        op: "indexed-moe-forward-input",
+                    }
+                    .bt())
+                }
+            };
+            let ids_storage = match ids_l.contiguous_offsets() {
+                Some((o1, o2)) => ids_storage.slice(o1..o2),
+                None => {
+                    return Err(crate::Error::RequiresContiguous {
+                        op: "indexed-moe-forward-ids",
+                    }
+                    .bt())
+                }
+            };
             indexed_moe_forward_fused_q8_1_input(
                 &self.data.inner.slice(0..),
                 self_shape, //[num_experts, n, k]
                 self.dtype(),
-                input_storage,
+                &input_storage,
                 input_l.shape(), //[batch, topk or 1, k]
-                &ids_storage.slice(0..),
+                &ids_storage,
                 ids_l.shape(), //[batch, topk]
                 &self.device,
             )
@@ -978,6 +995,30 @@ mod test {
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
         let _vs = dev.clone_dtoh(&vs.as_view())?;
+        Ok(())
+    }
+
+    #[test]
+    fn indexed_moe_forward_accepts_contiguous_offset_views() -> Result<()> {
+        let device = crate::Device::new_cuda(0)?;
+
+        let weights =
+            crate::Tensor::arange(0f32, (2 * 32 * 32) as f32, &device)?.reshape((2, 32, 32))?;
+        let weights = super::super::QTensor::quantize(&weights, GgmlDType::Q8_0)?;
+
+        let input_full =
+            crate::Tensor::arange(0f32, (4 * 32) as f32, &device)?.reshape((4, 1, 32))?;
+        let input = input_full.narrow(0, 1, 3)?;
+        let input_ref = input.force_contiguous()?;
+
+        let ids_full = crate::Tensor::from_vec(vec![1u32, 0, 1, 0], (4, 1), &device)?;
+        let ids = ids_full.narrow(0, 1, 3)?;
+        let ids_ref = ids.force_contiguous()?;
+
+        let out = weights.indexed_moe_forward(&input, &ids)?;
+        let out_ref = weights.indexed_moe_forward(&input_ref, &ids_ref)?;
+
+        assert_eq!(out.to_vec3::<f32>()?, out_ref.to_vec3::<f32>()?);
         Ok(())
     }
 }

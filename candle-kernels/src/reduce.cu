@@ -13,50 +13,47 @@ const int BLOCK_SIZE = 1024;
 // observed to break on newer GPU architectures such as Blackwell).
 template <typename T>
 __device__ __forceinline__ T reduce_init_lowest() {
-  // Default implementation is used for floating-point types (__half,
-  // __nv_bfloat16, float, double). The conversion from -INFINITY (double)
-  // to these types is well-defined and produces -inf.
-  return -INFINITY;
+  if constexpr (::cuda::std::numeric_limits<T>::has_infinity) {
+    return -::cuda::std::numeric_limits<T>::infinity();
+  } else {
+    return ::cuda::std::numeric_limits<T>::lowest();
+  }
 }
 
 template <typename T>
 __device__ __forceinline__ T reduce_init_highest() {
-  // Default implementation is used for floating-point types (__half,
-  // __nv_bfloat16, float, double). The conversion from INFINITY (double)
-  // to these types is well-defined and produces +inf.
-  return INFINITY;
+  if constexpr (::cuda::std::numeric_limits<T>::has_infinity) {
+    return ::cuda::std::numeric_limits<T>::infinity();
+  } else {
+    return ::cuda::std::numeric_limits<T>::max();
+  }
 }
 
-// Integer specializations – use numeric_limits instead of +/-INFINITY.
-template <>
-__device__ __forceinline__ int64_t reduce_init_lowest<int64_t>() {
-  return ::cuda::std::numeric_limits<int64_t>::lowest();
-}
+template <typename T>
+struct AccumulatorType {
+    typedef T Type;
+};
 
+#if __CUDA_ARCH__ >= 530
 template <>
-__device__ __forceinline__ uint32_t reduce_init_lowest<uint32_t>() {
-  return ::cuda::std::numeric_limits<uint32_t>::lowest();
-}
+struct AccumulatorType<__half> {
+    typedef float Type;
+};
+#endif
 
+#if __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_BF16)
 template <>
-__device__ __forceinline__ uint8_t reduce_init_lowest<uint8_t>() {
-  return ::cuda::std::numeric_limits<uint8_t>::lowest();
-}
+struct AccumulatorType<__nv_bfloat16> {
+    typedef float Type;
+};
+#endif
 
+#if __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_FP8)
 template <>
-__device__ __forceinline__ int64_t reduce_init_highest<int64_t>() {
-  return ::cuda::std::numeric_limits<int64_t>::max();
-}
-
-template <>
-__device__ __forceinline__ uint32_t reduce_init_highest<uint32_t>() {
-  return ::cuda::std::numeric_limits<uint32_t>::max();
-}
-
-template <>
-__device__ __forceinline__ uint8_t reduce_init_highest<uint8_t>() {
-  return ::cuda::std::numeric_limits<uint8_t>::max();
-}
+struct AccumulatorType<__nv_fp8_e4m3> {
+    typedef float Type;
+};
+#endif
 
 // TODO: Maybe add some fast_sum_f16_f32 variant that not only accumulate in f32
 // but also expect a f32 output so that this can be used for normalization e.g.
@@ -71,8 +68,10 @@ fast_sum(const size_t src_numel, const size_t el_to_sum_per_block,
          const size_t num_dims, const size_t *info, const T *src, T *dst) {
   const size_t *dims = info;
   const size_t *strides = info + num_dims;
+  
+  using AccT = typename AccumulatorType<T>::Type;
 
-  __shared__ T shr[BLOCK_SIZE];
+  __shared__ AccT shr[BLOCK_SIZE];
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
@@ -83,39 +82,96 @@ fast_sum(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);
   size_t idx = start_idx + tid;
 
-  while (idx < stop_idx) {
-    // TODO: Fast version for the contiguous case.
-    size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
-    shr[tid] += src[strided_i];
-    idx += blockDim.x;
+  // Check for vectorizability: contiguous dimension, and elements aligned
+  constexpr int VEC_SIZE = VecConfig<T>::size;
+  bool is_vectorizable = VecConfig<T>::supported && 
+                         (el_to_sum_per_block % VEC_SIZE == 0) &&
+                         (start_idx % VEC_SIZE == 0) && 
+                         is_contiguous(num_dims, dims, strides);
+
+  if (is_vectorizable) {
+     using VecT = typename VecType<T>::Type;
+     const VecT* src_vec = reinterpret_cast<const VecT*>(src);
+     
+     size_t vec_start_idx = start_idx / VEC_SIZE;
+     size_t vec_stop_idx = stop_idx / VEC_SIZE;
+     size_t vec_idx = vec_start_idx + tid;
+
+     while (vec_idx < vec_stop_idx) {
+        VecT v = src_vec[vec_idx];
+        const T* vals = reinterpret_cast<const T*>(&v);
+        
+        AccT local_sum = 0;
+#pragma unroll
+        for (int i = 0; i < VEC_SIZE; i++) {
+            local_sum += static_cast<AccT>(vals[i]);
+        }
+        
+        shr[tid] += local_sum;
+        vec_idx += blockDim.x;
+     }
+  } else {
+     while (idx < stop_idx) {
+       size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
+       shr[tid] += static_cast<AccT>(src[strided_i]);
+       idx += blockDim.x;
+     }
   }
 
-  // Parallel reduction, see the slides:
+  // Parallel reduction using memory shared and warp shuffles
   // https://www.olcf.ornl.gov/wp-content/uploads/2019/12/05_Atomics_Reductions_Warp_Shuffle.pdf
-  // https://stackoverflow.com/questions/66078814/is-cuda-atomicadd-operation-faster-than-launch-another-kernel-when-we-do-reduce
-  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+  for (int s = blockDim.x / 2; s > 32; s >>= 1) {
     __syncthreads();
     if (tid < s)
       shr[tid] += shr[tid + s];
   }
+  
+  // Last 32 elements are a single warp. Use fast register shuffles instead of smem/sync.
+  if (tid < 32) {
+    // Bring partials into thread registers
+    AccT my_sum = shr[tid];
+    if (blockDim.x > 32 && tid + 32 < blockDim.x) {
+        my_sum += shr[tid + 32];
+    }
+    
+    unsigned int mask = __activemask();
+    int warp_n = min((int)blockDim.x, WARP_SIZE);
 
-  if (tid == 0)
-    dst[dst_id] = shr[0];
+    // Unroll warp shuffles 16, 8, 4, 2, 1
+#pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+         auto other = __shfl_down_sync(mask, my_sum, offset);
+         if (tid + offset < warp_n) my_sum += other;
+    }
+    
+    if (tid == 0)
+      dst[dst_id] = static_cast<T>(my_sum);
+  }
 }
 
 static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
+    unsigned int mask = __activemask();
+    int lane_id = threadIdx.x & (WARP_SIZE - 1);
 #pragma unroll
-    for (int mask = 16; mask > 0; mask >>= 1) {
-        a.x += __shfl_xor_sync(0xffffffff, a.x, mask, 32);
-        a.y += __shfl_xor_sync(0xffffffff, a.y, mask, 32);
+    for (int m = 16; m > 0; m >>= 1) {
+        float2 other = make_float2(__shfl_xor_sync(mask, a.x, m, 32), __shfl_xor_sync(mask, a.y, m, 32));
+        if ((mask >> (lane_id ^ m)) & 1) {
+            a.x += other.x;
+            a.y += other.y;
+        }
     }
     return a;
 }
 
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
+    unsigned int mask = __activemask();
+    int lane_id = threadIdx.x & (WARP_SIZE - 1);
 #pragma unroll
-    for (int mask = 16; mask > 0; mask >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, mask, 32);
+    for (int m = 16; m > 0; m >>= 1) {
+        float other = __shfl_xor_sync(mask, x, m, 32);
+        if ((mask >> (lane_id ^ m)) & 1) {
+            x += other;
+        }
     }
     return x;
 }
@@ -139,13 +195,14 @@ __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta,
     mean_var = warp_reduce_sum(mean_var);
     if (block_size > WARP_SIZE) {
         __shared__ float2 s_sum[32];
+        const int n_warps = (block_size + WARP_SIZE - 1) / WARP_SIZE;
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
             s_sum[warp_id] = mean_var;
         }
         __syncthreads();
-        mean_var = s_sum[lane_id];
+        mean_var = lane_id < n_warps ? s_sum[lane_id] : make_float2(0.f, 0.f);
         mean_var = warp_reduce_sum(mean_var);
     }
 
@@ -201,13 +258,14 @@ __device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, 
     tmp = warp_reduce_sum(tmp);
     if (block_size > WARP_SIZE) {
         __shared__ float s_sum[32];
+        const int n_warps = (block_size + WARP_SIZE - 1) / WARP_SIZE;
         int warp_id = threadIdx.x / WARP_SIZE;
         int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
             s_sum[warp_id] = tmp;
         }
         __syncthreads();
-        tmp = s_sum[lane_id];
+        tmp = lane_id < n_warps ? s_sum[lane_id] : 0.f;
         tmp = warp_reduce_sum(tmp);
     }
 
@@ -243,10 +301,18 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
     }
 
     // find the max value in the block
+    unsigned int mask = __activemask();
 #pragma unroll
-    for (int mask = 16; mask > 0; mask >>= 1) {
-        max_val = maxg(max_val, __shfl_xor_sync(0xffffffff, max_val, mask, 32));
+    for (int m = 16; m > 0; m >>= 1) {
+        T other = __shfl_xor_sync(mask, max_val, m, 32);
+        if (tid + m < block_size) max_val = maxg(max_val, other);
     }
+    // Note: After the loop above, max_val is only correct in thread 0
+    // if we use tid + m < block_size. But softmax needs it in all threads of the block.
+    // So we should broadcast it or use a symmetric reduction.
+    // Actually, for power-of-two block_size it's symmetric. For others, it's not.
+    // Let's just use a simple shuffle to broadcast from tid 0.
+    max_val = __shfl_sync(mask, max_val, 0, 32);
 
     ACC tmp = 0.;
 
@@ -259,9 +325,11 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
 
     // sum up partial sums
 #pragma unroll
-    for (int mask = 16; mask > 0; mask >>= 1) {
-        tmp += __shfl_xor_sync(0xffffffff, tmp, mask, 32);
+    for (int m = 16; m > 0; m >>= 1) {
+        ACC other = __shfl_xor_sync(mask, tmp, m, 32);
+        if (tid + m < block_size) tmp += other;
     }
+    tmp = __shfl_sync(mask, tmp, 0, 32);
 
     const ACC inv_tmp = 1. / tmp;
 
@@ -363,24 +431,67 @@ fast_max(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);
   size_t idx = start_idx + tid;
 
-  while (idx < stop_idx) {
-    // TODO: Fast version for the contiguous case.
-    size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
-    shr[tid] = maxg(shr[tid], src[strided_i]);
-    idx += blockDim.x;
+  // Check for vectorizability: contiguous dimension, and elements aligned
+  constexpr int VEC_SIZE = VecConfig<T>::size;
+  bool is_vectorizable = VecConfig<T>::supported && 
+                         (el_to_sum_per_block % VEC_SIZE == 0) &&
+                         (start_idx % VEC_SIZE == 0) && 
+                         is_contiguous(num_dims, dims, strides);
+
+  if (is_vectorizable) {
+     using VecT = typename VecType<T>::Type;
+     const VecT* src_vec = reinterpret_cast<const VecT*>(src);
+     
+     size_t vec_start_idx = start_idx / VEC_SIZE;
+     size_t vec_stop_idx = stop_idx / VEC_SIZE;
+     size_t vec_idx = vec_start_idx + tid;
+
+     while (vec_idx < vec_stop_idx) {
+        VecT v = src_vec[vec_idx];
+        const T* vals = reinterpret_cast<const T*>(&v);
+        
+        T local_max = reduce_init_lowest<T>();
+#pragma unroll
+        for (int i = 0; i < VEC_SIZE; i++) {
+            local_max = maxg(local_max, vals[i]);
+        }
+        
+        shr[tid] = maxg(shr[tid], local_max);
+        vec_idx += blockDim.x;
+     }
+  } else {
+     while (idx < stop_idx) {
+       size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
+       shr[tid] = maxg(shr[tid], src[strided_i]);
+       idx += blockDim.x;
+     }
   }
 
-  // Parallel reduction, see the slides:
-  // https://www.olcf.ornl.gov/wp-content/uploads/2019/12/05_Atomics_Reductions_Warp_Shuffle.pdf
-  // https://stackoverflow.com/questions/66078814/is-cuda-atomicadd-operation-faster-than-launch-another-kernel-when-we-do-reduce
-  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+  // Parallel reduction using memory shared and warp shuffles
+  for (int s = blockDim.x / 2; s > 32; s >>= 1) {
     __syncthreads();
     if (tid < s)
       shr[tid] = maxg(shr[tid], shr[tid + s]);
   }
+  
+  if (tid < 32) {
+    T my_max = shr[tid];
+    if (blockDim.x > 32 && tid + 32 < blockDim.x) {
+        my_max = maxg(my_max, shr[tid + 32]);
+    }
+    
+    unsigned int mask = __activemask();
+    int warp_n = min((int)blockDim.x, WARP_SIZE);
 
-  if (tid == 0)
-    dst[dst_id] = shr[0];
+#pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+         T other = __shfl_down_sync(mask, my_max, offset);
+         if (tid + offset < warp_n) my_max = maxg(my_max, other);
+    }
+    
+    if (tid == 0)
+      dst[dst_id] = my_max;
+  }
 }
 
 template <typename T>
@@ -403,24 +514,67 @@ fast_min(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);
   size_t idx = start_idx + tid;
 
-  while (idx < stop_idx) {
-    // TODO: Fast version for the contiguous case.
-    size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
-    shr[tid] = ming(shr[tid], src[strided_i]);
-    idx += blockDim.x;
+  // Check for vectorizability: contiguous dimension, and elements aligned
+  constexpr int VEC_SIZE = VecConfig<T>::size;
+  bool is_vectorizable = VecConfig<T>::supported && 
+                         (el_to_sum_per_block % VEC_SIZE == 0) &&
+                         (start_idx % VEC_SIZE == 0) && 
+                         is_contiguous(num_dims, dims, strides);
+
+  if (is_vectorizable) {
+     using VecT = typename VecType<T>::Type;
+     const VecT* src_vec = reinterpret_cast<const VecT*>(src);
+     
+     size_t vec_start_idx = start_idx / VEC_SIZE;
+     size_t vec_stop_idx = stop_idx / VEC_SIZE;
+     size_t vec_idx = vec_start_idx + tid;
+
+     while (vec_idx < vec_stop_idx) {
+        VecT v = src_vec[vec_idx];
+        const T* vals = reinterpret_cast<const T*>(&v);
+        
+        T local_min = reduce_init_highest<T>();
+#pragma unroll
+        for (int i = 0; i < VEC_SIZE; i++) {
+            local_min = ming(local_min, vals[i]);
+        }
+        
+        shr[tid] = ming(shr[tid], local_min);
+        vec_idx += blockDim.x;
+     }
+  } else {
+     while (idx < stop_idx) {
+       size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
+       shr[tid] = ming(shr[tid], src[strided_i]);
+       idx += blockDim.x;
+     }
   }
 
-  // Parallel reduction, see the slides:
-  // https://www.olcf.ornl.gov/wp-content/uploads/2019/12/05_Atomics_Reductions_Warp_Shuffle.pdf
-  // https://stackoverflow.com/questions/66078814/is-cuda-atomicadd-operation-faster-than-launch-another-kernel-when-we-do-reduce
-  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+  // Parallel reduction using memory shared and warp shuffles
+  for (int s = blockDim.x / 2; s > 32; s >>= 1) {
     __syncthreads();
     if (tid < s)
       shr[tid] = ming(shr[tid], shr[tid + s]);
   }
+  
+  if (tid < 32) {
+    T my_min = shr[tid];
+    if (blockDim.x > 32 && tid + 32 < blockDim.x) {
+        my_min = ming(my_min, shr[tid + 32]);
+    }
 
-  if (tid == 0)
-    dst[dst_id] = shr[0];
+    unsigned int mask = __activemask();
+    int warp_n = min((int)blockDim.x, WARP_SIZE);
+
+#pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+         T other = __shfl_down_sync(mask, my_min, offset);
+         if (tid + offset < warp_n) my_min = ming(my_min, other);
+    }
+    
+    if (tid == 0)
+      dst[dst_id] = my_min;
+  }
 }
 
 template <typename T>
@@ -647,12 +801,11 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
     rope_thd<TYPENAME>(src, cos, sin, dst, b, t, h, d, stride_b); \
   } \
 
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_BF16)
 SOFTMAX_OP(__nv_bfloat16, float, softmax_bf16)
 RMSNORM_OP(__nv_bfloat16, rmsnorm_bf16)
 LAYERNORM_OP(__nv_bfloat16, layernorm_bf16)
 ROPE_OP(__nv_bfloat16, rope_bf16, rope_i_bf16, rope_thd_bf16)
-SUM_OP(__nv_bfloat16, sum_bf16)
 FAST_OP(__nv_bfloat16, fast_min_bf16, fast_max_bf16, fast_argmin_bf16, fast_argmax_bf16, fast_sum_bf16)
 
 // NOTE: No reduce ops for f8
@@ -662,6 +815,16 @@ FAST_OP(__nv_bfloat16, fast_min_bf16, fast_max_bf16, fast_argmin_bf16, fast_argm
 // LAYERNORM_OP(__nv_fp8_e4m3, layernorm_fp8_e4m3)
 // ROPE_OP(__nv_fp8_e4m3, rope_fp8_e4m3, rope_i_fp8_e4m3, rope_thd_fp8_e4m3)
 // FAST_OP(__nv_fp8_e4m3, fast_min_fp8_e4m3, fast_max_fp8_e4m3, fast_argmin_fp8_e4m3, fast_argmax_fp8_e4m3, fast_sum_fp8_e4m3)
+#endif
+
+#if __CUDA_ARCH__ >= 750 || defined(ALLOW_LEGACY_BF16)
+SUM_OP(__nv_bfloat16, sum_bf16)
+#elif __CUDA_ARCH__ >= 530 &&  __CUDA_ARCH__ < 750
+// The automatic fallback mechanism for these architectures:
+// 1. Converts bfloat16 to float using __bfloat162float
+// 2. Performs atomicAdd with floats
+// 3. Converts back to bfloat16
+// SUM_OP(__nv_bfloat16, sum_bf16)
 #endif
 
 #if __CUDA_ARCH__ >= 530

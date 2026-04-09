@@ -14,13 +14,13 @@ thread_local! {
 
 impl From<cudarc::cudnn::CudnnError> for crate::Error {
     fn from(err: cudarc::cudnn::CudnnError) -> Self {
-        crate::Error::wrap(err)
+        crate::Error::Cuda(Box::new(err)).bt()
     }
 }
 
 impl From<cudarc::driver::DriverError> for crate::Error {
     fn from(err: cudarc::driver::DriverError) -> Self {
-        crate::Error::wrap(err)
+        crate::Error::Cuda(Box::new(err)).bt()
     }
 }
 
