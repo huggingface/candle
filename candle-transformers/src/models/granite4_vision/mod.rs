@@ -262,12 +262,12 @@ impl Model {
             let scale = current_w as f64 / original_w as f64;
             let new_h = (original_h as f64 * scale) as usize;
             let padding = (current_h - new_h) / 2;
-            tensor.narrow(1, padding, new_h)
+            tensor.narrow(1, padding, current_h - 2 * padding)
         } else {
             let scale = current_h as f64 / original_h as f64;
             let new_w = (original_w as f64 * scale) as usize;
             let padding = (current_w - new_w) / 2;
-            tensor.narrow(2, padding, new_w)
+            tensor.narrow(2, padding, current_w - 2 * padding)
         }
     }
 
