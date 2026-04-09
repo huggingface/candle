@@ -1485,11 +1485,7 @@ mod tests {
         let metal_result = run(&metal_dev)?;
         let round = |v: Vec<Vec<f32>>| -> Vec<Vec<f32>> {
             v.into_iter()
-                .map(|row| {
-                    row.into_iter()
-                        .map(|x| (x * 1e4).round() / 1e4)
-                        .collect()
-                })
+                .map(|row| row.into_iter().map(|x| (x * 1e4).round() / 1e4).collect())
                 .collect()
         };
         let lazy_r = round(lazy_result);
