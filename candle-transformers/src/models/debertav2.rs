@@ -1216,7 +1216,10 @@ pub struct DebertaV2NERModel {
     classifier: candle_nn::Linear,
 }
 
-fn id2label_len(config: &Config, id2label: Option<HashMap<u32, String>>) -> Result<usize> {
+pub(crate) fn id2label_len(
+    config: &Config,
+    id2label: Option<HashMap<u32, String>>,
+) -> Result<usize> {
     let id2label_len = match (&config.id2label, id2label) {
         (None, None) => bail!("Id2Label is either not present in the model configuration or not passed into DebertaV2NERModel::load as a parameter"),
         (None, Some(id2label_p)) => id2label_p.len(),
