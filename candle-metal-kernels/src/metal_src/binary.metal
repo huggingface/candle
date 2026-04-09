@@ -104,6 +104,45 @@ template <
     }
 }
 
+// Specialized kernel for broadcasting a 1D tensor along the inner dimension
+// This is much faster than the generic strided kernel for patterns like [B, N, C] + [C]
+// because it avoids the expensive multi-dimensional index calculation.
+template <typename T, typename U, typename binary, uint W = work_per_thread<T>()>
+[[kernel]] void binary_kernel_broadcast_right_inner(
+    constant size_t &dim,           // Total number of elements
+    constant size_t &inner_dim,     // Size of the inner (broadcast) dimension
+    device const T *left,           // Contiguous left tensor
+    device const T *right,          // 1D tensor to broadcast
+    device U *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    binary op;
+    const uint step = div_ceil<W>(dim);
+    #pragma clang loop unroll(full)
+    for (uint i = tid; i < dim; i += step) {
+        output[i] = static_cast<U>(op(left[i], right[i % inner_dim]));
+    }
+}
+
+// Specialized kernel for broadcasting a 1D tensor along the inner dimension (left variant)
+// For patterns like [C] + [B, N, C]
+template <typename T, typename U, typename binary, uint W = work_per_thread<T>()>
+[[kernel]] void binary_kernel_broadcast_left_inner(
+    constant size_t &dim,           // Total number of elements
+    constant size_t &inner_dim,     // Size of the inner (broadcast) dimension
+    device const T *left,           // 1D tensor to broadcast
+    device const T *right,          // Contiguous right tensor
+    device U *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    binary op;
+    const uint step = div_ceil<W>(dim);
+    #pragma clang loop unroll(full)
+    for (uint i = tid; i < dim; i += step) {
+        output[i] = static_cast<U>(op(left[i % inner_dim], right[i]));
+    }
+}
+
 // Macros to help initialize kernels
 #define init_kernel(name, func, ...) \
   template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
@@ -112,7 +151,9 @@ template <
     init_kernel(#op_name "_" #tname, binary_kernel, t, u, binary_op)                                                        \
     init_kernel(#op_name "_" #tname "_strided", binary_kernel_strided, t, u, binary_op)                                     \
     init_kernel(#op_name "_" #tname "_lstrided", binary_kernel_strided, t, u, binary_op, strided_indexer, cont_indexer)     \
-    init_kernel(#op_name "_" #tname "_rstrided", binary_kernel_strided, t, u, binary_op, cont_indexer, strided_indexer)
+    init_kernel(#op_name "_" #tname "_rstrided", binary_kernel_strided, t, u, binary_op, cont_indexer, strided_indexer)     \
+    init_kernel(#op_name "_" #tname "_bcast_r_inner", binary_kernel_broadcast_right_inner, t, u, binary_op)                 \
+    init_kernel(#op_name "_" #tname "_bcast_l_inner", binary_kernel_broadcast_left_inner, t, u, binary_op)
 
 #if defined(__HAVE_BFLOAT__)
 #define init_binary(bop)                            \
