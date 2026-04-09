@@ -22,7 +22,7 @@ use tokenizers::Tokenizer;
 
 enum ModelKind {
     TextOnly(TextModel),
-    Multimodal(Model),
+    Multimodal(Box<Model>),
 }
 
 struct TextGeneration {
@@ -281,7 +281,7 @@ fn main() -> Result<()> {
             }
         };
         let model = Model::new(&config, vb)?;
-        ModelKind::Multimodal(model)
+        ModelKind::Multimodal(Box::new(model))
     } else {
         let mut config: Gemma4TextConfig = match args.config_file {
             Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
