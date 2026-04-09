@@ -11,19 +11,13 @@ pub trait LazyOp {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Affine {
     pub src: LazyStorage,
-    pub src_l: Layout,
     pub mul: f64,
     pub add: f64,
 }
 
 impl Affine {
-    pub fn new(src: LazyStorage, src_l: Layout, mul: f64, add: f64) -> Affine {
-        Affine {
-            src,
-            src_l,
-            mul,
-            add,
-        }
+    pub fn new(src: LazyStorage, mul: f64, add: f64) -> Affine {
+        Affine { src, mul, add }
     }
 }
 
@@ -36,13 +30,12 @@ impl LazyOp for Affine {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Powf {
     src: LazyStorage,
-    src_l: Layout,
     exp: f64,
 }
 
 impl Powf {
-    pub fn new(src: LazyStorage, src_l: Layout, exp: f64) -> Powf {
-        Powf { src, src_l, exp }
+    pub fn new(src: LazyStorage, exp: f64) -> Powf {
+        Powf { src, exp }
     }
 }
 
@@ -55,13 +48,12 @@ impl LazyOp for Powf {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Elu {
     src: LazyStorage,
-    src_l: Layout,
     alpha: f64,
 }
 
 impl Elu {
-    pub fn new(src: LazyStorage, src_l: Layout, alpha: f64) -> Elu {
-        Elu { src, src_l, alpha }
+    pub fn new(src: LazyStorage, alpha: f64) -> Elu {
+        Elu { src, alpha }
     }
 }
 
@@ -123,27 +115,13 @@ impl LazyOp for Reduce {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cmp {
     lhs: LazyStorage,
-    lhs_l: Layout,
     rhs: LazyStorage,
-    rhs_l: Layout,
     cmp_op: CmpOp,
 }
 
 impl Cmp {
-    pub fn new(
-        lhs: LazyStorage,
-        lhs_l: Layout,
-        rhs: LazyStorage,
-        rhs_l: Layout,
-        cmp_op: CmpOp,
-    ) -> Self {
-        Self {
-            lhs,
-            lhs_l,
-            rhs,
-            rhs_l,
-            cmp_op,
-        }
+    pub fn new(lhs: LazyStorage, rhs: LazyStorage, cmp_op: CmpOp) -> Self {
+        Self { lhs, rhs, cmp_op }
     }
 }
 
@@ -156,13 +134,12 @@ impl LazyOp for Cmp {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToDType {
     src: LazyStorage,
-    src_l: Layout,
     pub dtype: DType,
 }
 
 impl ToDType {
-    pub fn new(src: LazyStorage, src_l: Layout, dtype: DType) -> Self {
-        Self { src, src_l, dtype }
+    pub fn new(src: LazyStorage, dtype: DType) -> Self {
+        Self { src, dtype }
     }
 }
 
@@ -175,13 +152,12 @@ impl LazyOp for ToDType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Unary {
     src: LazyStorage,
-    src_l: Layout,
     op: &'static str,
 }
 
 impl Unary {
-    pub fn new(src: LazyStorage, src_l: Layout, op: &'static str) -> Self {
-        Self { src, src_l, op }
+    pub fn new(src: LazyStorage, op: &'static str) -> Self {
+        Self { src, op }
     }
 
     pub fn op(&self) -> &'static str {
@@ -198,27 +174,13 @@ impl LazyOp for Unary {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Binary {
     lhs: LazyStorage,
-    lhs_l: Layout,
     rhs: LazyStorage,
-    rhs_l: Layout,
     op: &'static str,
 }
 
 impl Binary {
-    pub fn new(
-        lhs: LazyStorage,
-        lhs_l: Layout,
-        rhs: LazyStorage,
-        rhs_l: Layout,
-        op: &'static str,
-    ) -> Self {
-        Self {
-            lhs,
-            lhs_l,
-            rhs,
-            rhs_l,
-            op,
-        }
+    pub fn new(lhs: LazyStorage, rhs: LazyStorage, op: &'static str) -> Self {
+        Self { lhs, rhs, op }
     }
 
     pub fn op(&self) -> &'static str {
@@ -226,11 +188,11 @@ impl Binary {
     }
 
     pub fn lhs_l(&self) -> &Layout {
-        &self.lhs_l
+        self.lhs.layout()
     }
 
     pub fn rhs_l(&self) -> &Layout {
-        &self.rhs_l
+        self.rhs.layout()
     }
 }
 
@@ -243,41 +205,24 @@ impl LazyOp for Binary {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhereCond {
     src: LazyStorage,
-    src_l: Layout,
     t: LazyStorage,
-    t_l: Layout,
     f: LazyStorage,
-    f_l: Layout,
 }
 impl WhereCond {
-    pub fn new(
-        src: LazyStorage,
-        src_l: Layout,
-        t: LazyStorage,
-        t_l: Layout,
-        f: LazyStorage,
-        f_l: Layout,
-    ) -> Self {
-        Self {
-            src,
-            src_l,
-            t,
-            t_l,
-            f,
-            f_l,
-        }
+    pub fn new(src: LazyStorage, t: LazyStorage, f: LazyStorage) -> Self {
+        Self { src, t, f }
     }
 
     pub fn src_l(&self) -> &Layout {
-        &self.src_l
+        self.src.layout()
     }
 
     pub fn t_l(&self) -> &Layout {
-        &self.t_l
+        self.t.layout()
     }
 
     pub fn f_l(&self) -> &Layout {
-        &self.f_l
+        self.f.layout()
     }
 }
 
@@ -361,34 +306,20 @@ pub struct ScatterAddSet {
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexSelect {
     src: LazyStorage,
-    src_l: Layout,
     ids: LazyStorage,
-    ids_l: Layout,
     dim: usize,
 }
 impl IndexSelect {
-    pub fn new(
-        src: LazyStorage,
-        src_l: Layout,
-        ids: LazyStorage,
-        ids_l: Layout,
-        dim: usize,
-    ) -> Self {
-        Self {
-            src,
-            src_l,
-            ids,
-            ids_l,
-            dim,
-        }
+    pub fn new(src: LazyStorage, ids: LazyStorage, dim: usize) -> Self {
+        Self { src, ids, dim }
     }
 
     pub fn src_l(&self) -> &Layout {
-        &self.src_l
+        self.src.layout()
     }
 
     pub fn ids_l(&self) -> &Layout {
-        &self.ids_l
+        self.ids.layout()
     }
 
     pub fn dim(&self) -> usize {
@@ -405,9 +336,7 @@ impl LazyOp for IndexSelect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Matmul {
     lhs: LazyStorage,
-    lhs_l: Layout,
     rhs: LazyStorage,
-    rhs_l: Layout,
     b: usize,
     m: usize,
     n: usize,
@@ -416,16 +345,12 @@ pub struct Matmul {
 impl Matmul {
     pub fn new(
         lhs: LazyStorage,
-        lhs_l: Layout,
         rhs: LazyStorage,
-        rhs_l: Layout,
         (b, m, n, k): (usize, usize, usize, usize),
     ) -> Self {
         Self {
             lhs,
-            lhs_l,
             rhs,
-            rhs_l,
             b,
             m,
             n,
@@ -434,11 +359,11 @@ impl Matmul {
     }
 
     pub fn lhs_l(&self) -> &Layout {
-        &self.lhs_l
+        self.lhs.layout()
     }
 
     pub fn rhs_l(&self) -> &Layout {
-        &self.rhs_l
+        self.rhs.layout()
     }
 
     pub fn dims(&self) -> (usize, usize, usize, usize) {
@@ -455,7 +380,6 @@ impl LazyOp for Matmul {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SingleCopyStridedSrc {
     pub src: LazyStorage,
-    pub src_l: Layout,
     pub dst_offset: usize,
 }
 
@@ -465,22 +389,14 @@ pub struct CopyStridedSrc {
 }
 
 impl CopyStridedSrc {
-    pub fn new(src: LazyStorage, src_l: Layout, dst_offset: usize) -> Self {
+    pub fn new(src: LazyStorage, dst_offset: usize) -> Self {
         Self {
-            copies: vec![SingleCopyStridedSrc {
-                src,
-                src_l,
-                dst_offset,
-            }],
+            copies: vec![SingleCopyStridedSrc { src, dst_offset }],
         }
     }
 
-    pub fn add(&mut self, src: LazyStorage, src_l: Layout, dst_offset: usize) {
-        self.copies.push(SingleCopyStridedSrc {
-            src,
-            src_l,
-            dst_offset,
-        });
+    pub fn add(&mut self, src: LazyStorage, dst_offset: usize) {
+        self.copies.push(SingleCopyStridedSrc { src, dst_offset });
     }
 
     pub fn copies(&self) -> &[SingleCopyStridedSrc] {
