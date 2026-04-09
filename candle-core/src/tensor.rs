@@ -2029,7 +2029,23 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Lazy(_) => todo!(),
+            Storage::Lazy(storage) => {
+                #[cfg(feature = "metal")]
+                {
+                    let device = crate::metal_backend::metal_device();
+                    let result = storage.execute(device.clone())?;
+                    device.synchronize()?;
+                    let metal_storage = crate::MetalStorage::new(
+                        result,
+                        device,
+                        storage.shape().elem_count(),
+                        storage.dtype(),
+                    );
+                    return from_cpu_storage(&metal_storage.to_cpu_storage()?);
+                }
+                #[cfg(not(feature = "metal"))]
+                todo!()
+            }
         }
     }
 
@@ -2436,6 +2452,9 @@ impl Tensor {
                     Storage::Cuda(dst_storage)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
+                (Storage::Cpu(storage), Device::Lazy(lazy_dev)) => {
+                    Storage::Lazy(lazy_dev.storage_from_cpu_storage(storage)?)
+                }
                 _ => {
                     bail!(
                         "not implemented yet, self.device: {:?}, device: {:?}",
