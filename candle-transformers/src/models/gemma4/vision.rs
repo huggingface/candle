@@ -204,10 +204,14 @@ impl VisionAttention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
-        let q_proj = candle_nn::linear_no_bias(cfg.hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = candle_nn::linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = candle_nn::linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj = candle_nn::linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
+        let q_proj =
+            candle_nn::linear_no_bias(cfg.hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
+        let k_proj =
+            candle_nn::linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
+        let v_proj =
+            candle_nn::linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
+        let o_proj =
+            candle_nn::linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
         Ok(Self {
@@ -412,7 +416,7 @@ impl VisionPooler {
             .to_dtype(original_dtype)?;
 
         // Scale by sqrt(hidden_size)
-        Ok((output * (self.hidden_size as f64).sqrt())?)
+        output * (self.hidden_size as f64).sqrt()
     }
 
     fn forward(
@@ -523,6 +527,9 @@ impl VisionTower {
 
     /// Encode a batch of images (each may have different sizes).
     pub fn forward(&self, pixel_values_list: &[Tensor]) -> Result<Tensor> {
+        if pixel_values_list.is_empty() {
+            candle::bail!("VisionTower::forward called with empty image batch");
+        }
         let device = pixel_values_list[0].device().clone();
         let dtype = pixel_values_list[0].dtype();
 
