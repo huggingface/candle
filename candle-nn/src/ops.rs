@@ -951,6 +951,47 @@ impl candle::CustomOp3 for LayerNorm {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
+
+    fn lazy_fwd(
+        &self,
+        s1: &candle::LazyStorage,
+        l1: &Layout,
+        s2: &candle::LazyStorage,
+        l2: &Layout,
+        s3: &candle::LazyStorage,
+        l3: &Layout,
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let s1 = candle::LazyStorage::copy(s1, l1);
+        let s2 = candle::LazyStorage::copy(s2, l2);
+        let s3 = candle::LazyStorage::copy(s3, l3);
+
+        let mut out = s1.custom_op(self.clone_box(), &[(&s2, l2), (&s3, l3)])?;
+        out.register_custom_op(CustomOp::Three(Box::new(self.clone())));
+
+        let x = Tensor::from_storage(s1.clone().into(), l1.shape(), BackpropOp::none(), false);
+        let alpha = Tensor::from_storage(s2.clone().into(), l2.shape(), BackpropOp::none(), false);
+        let beta = Tensor::from_storage(s3.clone().into(), l3.shape(), BackpropOp::none(), false);
+
+        let result = self.fallback(&[&x, &alpha, &beta])?;
+        let (inner, _layout) = self.extract_lazy(result)?;
+        out.add_custom_fallback(LazyCustomOp::name(self), inner);
+
+        Ok((out, l1.shape().clone()))
+    }
+}
+
+impl candle::lazy::custom::LazyCustomOp for LayerNorm {
+    fn name(&self) -> &'static str {
+        "layer-norm"
+    }
+
+    fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
+        layer_norm_slow(tensors[0], tensors[1], tensors[2], self.eps)
+    }
+
+    fn expected_edges(&self) -> usize {
+        3
+    }
 }
 
 pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
@@ -1420,5 +1461,52 @@ mod tests {
             &[0.0, 0.8436615, 0.72075, 1.1892376]
         );
         Ok(())
+    }
+
+    #[test]
+    fn lazy_vs_metal_layer_norm() -> Result<()> {
+        let lazy_dev = Device::Lazy(LazyDevice);
+        let metal_dev = Device::new_metal(0)?;
+
+        let input_data: Vec<f32> = (0..16).map(|x| x as f32 * 0.1).collect();
+        let gamma_data: Vec<f32> = (0..8).map(|x| 1.0f32 + x as f32 * 0.1).collect();
+        let beta_data: Vec<f32> = (0..8).map(|x| x as f32 * 0.05).collect();
+
+        let run = |dev: &Device| -> Result<Vec<Vec<f32>>> {
+            let x = Tensor::from_slice(&input_data, (2usize, 8usize), dev)?;
+            let gamma = Tensor::from_slice(&gamma_data, (8usize,), dev)?;
+            let beta = Tensor::from_slice(&beta_data, (8usize,), dev)?;
+            let eps = 1e-5f64;
+            let result = layer_norm_custom(&x, &gamma, &beta, eps as f32)?;
+            result.to_vec2::<f32>()
+        };
+
+        let lazy_result = run(&lazy_dev)?;
+        let metal_result = run(&metal_dev)?;
+        let round = |v: Vec<Vec<f32>>| -> Vec<Vec<f32>> {
+            v.into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|x| (x * 1e4).round() / 1e4)
+                        .collect()
+                })
+                .collect()
+        };
+        let lazy_r = round(lazy_result);
+        let metal_r = round(metal_result);
+        if lazy_r != metal_r {
+            eprintln!("lazy:  {:?}", lazy_r);
+            eprintln!("metal: {:?}", metal_r);
+            panic!("layer_norm outputs differ");
+        }
+        Ok(())
+    }
+
+    // Helper: calls the LayerNorm CustomOp3 directly (like BERT does)
+    fn layer_norm_custom(x: &Tensor, w: &Tensor, b: &Tensor, eps: f32) -> Result<Tensor> {
+        use crate::LayerNorm;
+        use candle::Module;
+        let ln = LayerNorm::new(w.clone(), b.clone(), eps as f64);
+        ln.forward(x)
     }
 }
