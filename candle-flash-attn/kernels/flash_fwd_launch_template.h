@@ -376,8 +376,10 @@ void run_mha_fwd_hdim512(Flash_fwd_params &params, cudaStream_t stream) {
     DROPOUT_SWITCH(params.p_dropout < 1.f, Is_dropout, [&] {
         // For A100 (164KB max smem), use 64 x 32 with 4 warps (128KB smem).
         // For sm86/sm89 (100KB max smem), use 32 x 32 with 4 warps (96KB smem).
-        if (max_smem_per_block >= 2 * Headdim * (64 + 2 * 32)) {  // 128 KB
-            run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 64, 32, 4, false, false, T>, Is_dropout, Is_causal>(params, stream);
+        // kBlockN must be >= kBlockKSmem (64) for correct V transposed shared memory access.
+        // With kBlockM=64, kBlockN=64: smem = 2 * 512 * (64 + 128) = 192 KB
+        if (max_smem_per_block >= 2 * Headdim * (64 + 2 * 64)) {  // 192 KB
+            run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 64, 64, 4, false, false, T>, Is_dropout, Is_causal>(params, stream);
         } else {
             run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 32, 32, 4, false, false, T>, Is_dropout, Is_causal>(params, stream);
         }
