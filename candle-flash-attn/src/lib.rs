@@ -22,7 +22,7 @@ pub fn supports_head_dim(device: &candle::CudaDevice, head_dim: usize) -> bool {
     let max_smem = device
         .cuda_stream()
         .context()
-        .device_attribute(
+        .attribute(
             candle::cuda_backend::cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
         )
         .unwrap_or(0) as usize;
