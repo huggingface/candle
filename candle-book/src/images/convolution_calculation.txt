@@ -1,0 +1,87 @@
+Convolution Calculation Diagram Description
+
+This file describes the design for a convolution calculation visualization to be created and saved as convolution_calculation.png.
+
+OVERALL LAYOUT:
+- A horizontal flow diagram showing the convolution process from left to right
+- Clean, professional style with consistent colors and clear labels
+- Size approximately 800x400 pixels
+
+COMPONENTS WITH SAMPLE VALUES:
+
+1. INPUT MATRIX (Left side):
+   - A 5x5 grid representing an input image patch
+   - Use these specific values for clarity:
+     [1 2 3 2 1]
+     [2 3 4 3 2]
+     [3 4 5 4 3]
+     [2 3 4 3 2]
+     [1 2 3 2 1]
+   - Label: "Input (5x5)"
+   - Color: Light blue background for the matrix (#D6EAF8 or similar)
+
+2. KERNEL/FILTER (Top center):
+   - A 3x3 grid representing the convolution kernel
+   - Use these specific weights (horizontal edge detection):
+     [1  1  1]
+     [0  0  0]
+     [-1 -1 -1]
+   - Label: "Kernel (3x3)"
+   - Color: Light green background (#D5F5E3 or similar)
+
+3. SLIDING WINDOW PROCESS (Center):
+   - Show 3 positions of the kernel overlaid on the input:
+     * Position 1: Top-left corner (kernel overlapping first 3x3 region of input)
+     * Position 2: One step to the right (column 2)
+     * Position 3: One step down from position 1 (row 2, column 1)
+   - Use semi-transparent overlay (30-40% opacity) to show the kernel position
+   - Highlight the current position (Position 1) with a bold border
+
+4. CALCULATION DETAILS (Center-right):
+   - For Position 1 (top-left), show the element-wise multiplication:
+     [1×1  1×2  1×3]
+     [0×2  0×3  0×4]
+     [-1×3 -1×4 -1×5]
+   - Show the summation of these products:
+     1 + 2 + 3 + 0 + 0 + 0 + (-3) + (-4) + (-5) = 6 - 12 = -6
+   - Use arrows to indicate the mapping from multiplication to output
+   - Include the formula: Output[i,j] = Σ(Input[i+m,j+n] × Kernel[m,n])
+
+5. OUTPUT FEATURE MAP (Right side):
+   - A 3x3 grid showing the result of the convolution
+   - Include these calculated values:
+     [-6 -6 -6]
+     [-6 -6 -6]
+     [-6 -6 -6]
+   - Label: "Output Feature Map (3x3)"
+   - Color: Light orange background (#FAE5D3 or similar)
+
+ANNOTATIONS:
+- Add clear arrows showing the flow from input → kernel application → output
+- Include a brief title at the top: "2D Convolution Calculation"
+- Add a small legend explaining the color coding
+- Include a brief note explaining that this shows cross-correlation as implemented in CNNs
+- Add a note that this example uses a horizontal edge detection filter
+
+STYLE GUIDELINES:
+- Use a clean, minimalist design with adequate white space
+- Use a consistent, professional font (e.g., Arial or Helvetica)
+- Use a color scheme that's easy to distinguish but not too bright
+- Ensure all text is readable at the intended display size
+- Use thin grid lines to separate cells in matrices
+
+RECOMMENDED TOOLS:
+- Draw.io (diagrams.net) - Free, web-based or desktop application
+- Figma - Professional design tool with free tier
+- Adobe Illustrator - Professional vector graphics editor
+- PowerPoint or Keynote - Accessible options with basic shape tools
+
+EXPORT INSTRUCTIONS:
+- Export as PNG at 800x400 pixels resolution
+- Save as "convolution_calculation.png" in the src/images/ directory
+- Ensure the image has a transparent background or white background
+
+VERIFICATION:
+- After adding the image to the repository, verify it displays correctly in the documentation
+- Check that the image is properly referenced in src/13_convolution_in_cnns.md
+- Ensure the image is clear and readable at different zoom levels

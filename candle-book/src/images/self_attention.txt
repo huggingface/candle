@@ -1,0 +1,100 @@
+Self-Attention Mechanism Visualization Description
+
+This file describes the design for a self-attention mechanism visualization to be created and saved as self_attention.png.
+
+OVERALL LAYOUT:
+- A comprehensive visualization showing the self-attention mechanism workflow
+- Clean, professional style with consistent colors and clear labels
+- Size approximately 800x500 pixels
+- Split into sections showing the key components and data flow of self-attention
+
+COMPONENTS:
+
+1. INPUT SEQUENCE (Left side):
+   - A sequence of token embeddings represented as colored rectangles
+   - Each rectangle represents a token embedding vector (e.g., 4-5 tokens in a sequence)
+   - Label: "Input Embeddings"
+   - Color: Light blue background (#D6EAF8 or similar)
+   - Include small vector representations inside each rectangle to indicate embedding values
+
+2. QUERY, KEY, VALUE PROJECTIONS (Left-center):
+   - Three parallel projection operations showing how input embeddings are transformed
+   - Show matrix multiplication with weight matrices WQ, WK, WV
+   - Resulting in Query (Q), Key (K), and Value (V) vectors for each token
+   - Use different colors for Q, K, V:
+     * Queries: Purple (#9B59B6 or similar)
+     * Keys: Green (#27AE60 or similar)
+     * Values: Orange (#E67E22 or similar)
+   - Include arrows showing the flow from input to projections
+
+3. ATTENTION SCORE CALCULATION (Center):
+   - Visualization of the dot product between queries and keys
+   - Show the resulting attention score matrix (NxN where N is sequence length)
+   - Include the scaling factor (1/√d_k)
+   - Show how each query interacts with all keys
+   - Color: Light yellow background (#FEF9E7 or similar)
+   - Include the formula: Scores = (Q·K^T)/√d_k
+
+4. SOFTMAX OPERATION (Center-right):
+   - Visualization of applying softmax to the attention scores
+   - Show how scores are converted to attention weights (probabilities)
+   - Use a heat map or color gradient to represent the weights
+   - Include the formula: Weights = softmax(Scores)
+   - Color: Light purple background (#E8DAEF or similar)
+
+5. WEIGHTED AGGREGATION (Right):
+   - Visualization of how attention weights are applied to values
+   - Show the weighted sum operation
+   - Resulting in the output context vectors
+   - Include arrows connecting weights to values
+   - Include the formula: Output = Weights·V
+   - Color: Light green background (#D5F5E3 or similar)
+
+6. MULTI-HEAD ATTENTION (Bottom):
+   - A simplified view of how multiple attention heads work in parallel
+   - Show how outputs from different heads are concatenated
+   - Include the final linear projection to the output dimension
+   - Color: Light orange background (#FAE5D3 or similar)
+
+ANNOTATIONS:
+- Add clear labels for all components and operations
+- Include the key equations:
+  * Q = X·WQ, K = X·WK, V = X·WV
+  * Attention(Q,K,V) = softmax((Q·K^T)/√d_k)·V
+- Add a brief title at the top: "Self-Attention Mechanism"
+- Include a small legend explaining the color coding and symbols
+- Add brief explanations of key concepts:
+  * Queries: What information each token is looking for
+  * Keys: What information each token contains
+  * Values: The actual content to be aggregated
+  * Attention weights: How much each token should attend to others
+
+STYLE GUIDELINES:
+- Use a clean, minimalist design with adequate white space
+- Use a consistent, professional font (e.g., Arial or Helvetica)
+- Use a color scheme that's easy to distinguish but not too bright
+- Ensure all text is readable at the intended display size
+- Use thin lines for connections and thicker lines for highlighted elements
+- Use mathematical notation consistent with the chapter text
+
+SPECIFIC DETAILS:
+- For the input sequence, use 4 tokens to keep the visualization clean
+- For the attention score matrix, use a 4x4 grid corresponding to the tokens
+- For the attention weights, use a heat map with darker colors for higher weights
+- For multi-head attention, show 2-3 attention heads for simplicity
+- Include small vector representations (e.g., [0.2, 0.5, ...]) to indicate the mathematical nature of the operations
+
+RECOMMENDED TOOLS:
+- Python with matplotlib and numpy for creating the visualization
+- Use matplotlib's plotting capabilities for matrices and heat maps
+- Consider using networkx for the flow diagram elements
+
+EXPORT INSTRUCTIONS:
+- Export as PNG at 800x500 pixels resolution
+- Save as "self_attention.png" in the src/images/ directory
+- Ensure the image has a transparent background or white background
+
+VERIFICATION:
+- After adding the image to the repository, verify it displays correctly in the documentation
+- Check that the image is properly referenced in src/18_self_attention.md
+- Ensure the image is clear and readable at different zoom levels

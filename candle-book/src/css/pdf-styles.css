@@ -1,0 +1,9 @@
+/* Reduce base font size */
+body {
+    font-size: 12px;
+}
+
+/* Reduce heading sizes */
+h1 { font-size: 18px; }
+h2 { font-size: 16px; }
+h3 { font-size: 14px; }
