@@ -1,0 +1,358 @@
+<!-- Reference - https://github.com/huggingface/candle/blob/main/candle-wasm-examples/bert/lib-example.html -->
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Candle EmbeddingGemma</title>
+    <link rel="stylesheet" href="./style.css" />
+
+    <script type="module">
+      import { hcl } from "https://cdn.skypack.dev/d3-color@3";
+      import { interpolateReds } from "https://cdn.skypack.dev/d3-scale-chromatic@3";
+      import { scaleLinear } from "https://cdn.skypack.dev/d3-scale@4";
+      import {
+        getModelInfo,
+        getEmbeddings,
+        getWikiText,
+        cosineSimilarity,
+      } from "./utils.js";
+
+      const gemmaWorker = new Worker("./gemmaWorker.js", { type: "module" });
+
+      const inputContainerEL = document.querySelector("#input-container");
+      const textAreaEl = document.querySelector("#input-area");
+      const outputAreaEl = document.querySelector("#output-area");
+      const formEl = document.querySelector("#form");
+      const searchInputEl = document.querySelector("#search-input");
+      const formWikiEl = document.querySelector("#form-wiki");
+      const searchWikiEl = document.querySelector("#search-wiki");
+      const outputStatusEl = document.querySelector("#output-status");
+      const modelSelectEl = document.querySelector("#model");
+
+      const sentencesRegex =
+        /(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<![A-Z]\.)(?<=\.|\?)\s/gm;
+
+      let sentenceEmbeddings = [];
+      let currInputText = "";
+      let isCalculating = false;
+
+      // DEBUG: keep current sentence strings so we can print top matches with text
+      let currSentences = [];
+
+      function toggleTextArea(state) {
+        if (state) {
+          inputContainerEL.classList.add("editing");
+          textAreaEl.hidden = false;
+          textAreaEl.focus();
+        } else {
+          inputContainerEL.classList.remove("editing");
+          textAreaEl.hidden = true;
+        }
+      }
+
+      inputContainerEL.addEventListener("focus", () => toggleTextArea(true));
+      textAreaEl.addEventListener("blur", () => toggleTextArea(false));
+      textAreaEl.addEventListener("focusout", () => {
+        toggleTextArea(false);
+        if (currInputText === textAreaEl.value || isCalculating) return;
+        populateOutputArea(textAreaEl.value);
+        calculateEmbeddings(textAreaEl.value);
+      });
+
+      modelSelectEl.addEventListener("change", () => {
+        if (currInputText === "" || isCalculating) return;
+        populateOutputArea(textAreaEl.value);
+        calculateEmbeddings(textAreaEl.value);
+      });
+
+      function populateOutputArea(text) {
+        currInputText = text;
+
+        // DEBUG: store sentences for later printing of top matches
+        currSentences = text
+          .split(sentencesRegex)
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+
+        outputAreaEl.innerHTML = "";
+        for (const [id, sentence] of currSentences.entries()) {
+          const sentenceEl = document.createElement("span");
+          sentenceEl.id = `sentence-${id}`;
+          sentenceEl.innerText = sentence + " ";
+          outputAreaEl.appendChild(sentenceEl);
+        }
+      }
+
+      function toggleInputs(state) {
+        document.querySelectorAll(".interactive").forEach((el) => {
+          el.disabled = !!state;
+        });
+      }
+
+      function updateStatus(data) {
+        if (data?.status === "loading" || data?.status === "ready") {
+          outputStatusEl.innerText = data.message;
+          outputStatusEl.classList.remove("invisible");
+        }
+      }
+
+      async function calculateEmbeddings(text) {
+        isCalculating = true;
+        toggleInputs(true);
+
+        const modelID = modelSelectEl.value;
+        const { modelURL, dense1URL, dense2URL, tokenizerURL, configURL } =
+          getModelInfo(modelID);
+
+        // IMPORTANT: keep sentence list consistent with populateOutputArea()
+        const sentences = currSentences.length
+          ? currSentences
+          : text
+              .split(sentencesRegex)
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0);
+
+        const allEmbeddings = [];
+
+        outputStatusEl.classList.remove("invisible");
+        for (const [id, sentence] of sentences.entries()) {
+          outputStatusEl.innerText = `Calculating embeddings: sentence ${
+            id + 1
+          } of ${sentences.length}`;
+
+          const out = await getEmbeddings(
+            gemmaWorker,
+            modelURL,
+            dense1URL,
+            dense2URL,
+            tokenizerURL,
+            configURL,
+            modelID,
+            [`task: search result | document: ${sentence}`],
+            null
+          );
+
+          allEmbeddings.push(out);
+        }
+        outputStatusEl.classList.add("invisible");
+
+        sentenceEmbeddings = allEmbeddings.map((e) => e.output[0]);
+
+        isCalculating = false;
+        toggleInputs(false);
+      }
+
+      formEl.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (isCalculating || currInputText === "") return;
+
+        isCalculating = true;
+        toggleInputs(true);
+
+        const modelID = modelSelectEl.value;
+        const { modelURL, dense1URL, dense2URL, tokenizerURL, configURL } =
+          getModelInfo(modelID);
+
+        const query = searchInputEl.value.trim();
+        if (!query) {
+          isCalculating = false;
+          toggleInputs(false);
+          return;
+        }
+
+        outputStatusEl.classList.remove("invisible");
+        outputStatusEl.innerText = "Calculating embedding for query...";
+
+        const out = await getEmbeddings(
+          gemmaWorker,
+          modelURL,
+          dense1URL,
+          dense2URL,
+          tokenizerURL,
+          configURL,
+          modelID,
+          [`task: search result | query: ${query}`],
+          updateStatus
+        );
+
+        outputStatusEl.classList.add("invisible");
+
+        const queryEmbedding = out.output[0];
+
+        const distances = sentenceEmbeddings
+          .map((embedding, id) => ({
+            id,
+            similarity: cosineSimilarity(queryEmbedding, embedding),
+          }))
+          .sort((a, b) => b.similarity - a.similarity)
+          .slice(0, 10);
+
+        // DEBUG: print top 10 sentences with similarity scores
+        console.group("EmbeddingGemma top-10 matches");
+        console.table(
+          distances.map((d, rank) => ({
+            rank: rank + 1,
+            score: Number(d.similarity.toFixed(6)),
+            id: d.id,
+            sentence: currSentences[d.id] ?? "",
+          }))
+        );
+        console.groupEnd();
+
+        const colorScale = scaleLinear()
+          .domain([
+            distances[distances.length - 1].similarity,
+            distances[0].similarity,
+          ])
+          .range([0, 1])
+          .interpolate(() => interpolateReds);
+
+        outputAreaEl.querySelectorAll("span").forEach((el) => {
+          el.style.color = "unset";
+          el.style.backgroundColor = "unset";
+        });
+
+        distances.forEach((d) => {
+          const el = outputAreaEl.querySelector(`#sentence-${d.id}`);
+          const color = colorScale(d.similarity);
+          const fontColor = hcl(color).l < 70 ? "white" : "black";
+          el.style.color = fontColor;
+          el.style.backgroundColor = color;
+        });
+
+        outputAreaEl
+          .querySelector(`#sentence-${distances[0].id}`)
+          .scrollIntoView({ behavior: "smooth", block: "center" });
+
+        isCalculating = false;
+        toggleInputs(false);
+      });
+
+      searchWikiEl.addEventListener("input", () =>
+        searchWikiEl.setCustomValidity("")
+      );
+
+      formWikiEl.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if ("example" in e.submitter.dataset) {
+          searchWikiEl.value = e.submitter.innerText;
+        }
+        const text = searchWikiEl.value.trim();
+        if (isCalculating || text === "") return;
+
+        try {
+          const wikiText = await getWikiText(text);
+          searchWikiEl.setCustomValidity("");
+          textAreaEl.value = wikiText;
+          populateOutputArea(wikiText);
+          await calculateEmbeddings(wikiText);
+          searchWikiEl.value = "";
+        } catch {
+          searchWikiEl.setCustomValidity("Invalid Wikipedia article name");
+          searchWikiEl.reportValidity();
+        }
+      });
+
+      // You can optionally add an initial default text if desired.
+      // const defaultText = "Input text to perform semantic similarity search...";
+      // textAreaEl.value = defaultText;
+      // populateOutputArea(defaultText);
+      // calculateEmbeddings(defaultText);
+    </script>
+  </head>
+
+  <body class="container">
+    <main>
+      <span class="candle">🕯️</span>
+
+      <div>
+        <h1>Candle EmbeddingGemma</h1>
+        <h2>Rust/WASM Demo</h2>
+        <p>
+          Running sentence embeddings and similarity search in the browser using
+          the quantized EmbeddingGemma model written with
+          <a href="https://github.com/huggingface/candle/" target="_blank"
+            >Candle</a
+          >
+          and compiled to Wasm. Base model weights from
+          <a
+            href="https://huggingface.co/unsloth/embeddinggemma-300m-GGUF/"
+            target="_blank"
+            >Unsloth</a
+          >
+          and post-processing MLP, tokenizer/config from
+          <a
+            href="https://huggingface.co/google/embeddinggemma-300m/"
+            target="_blank"
+            >Google</a
+          >.
+        </p>
+      </div>
+
+      <div>
+        <label for="model" class="label">Model Options:</label>
+        <select id="model" class="interactive">
+          <option value="embeddinggemma_300m_q8" selected>
+            EmbeddingGemma 300M Q8_0 (348 MB)
+          </option>
+          <option value="embeddinggemma_300m_q4">
+            EmbeddingGemma 300M Q4_0 GGUF (297 MB)
+          </option>
+        </select>
+      </div>
+
+      <div>
+        <h3>Examples:</h3>
+        <form id="form-wiki" class="examples-form">
+          <input type="submit" hidden />
+          <button data-example class="small-btn interactive">Pizza</button>
+          <button data-example class="small-btn interactive">Paris</button>
+          <button data-example class="small-btn interactive">Physics</button>
+          <input
+            type="text"
+            id="search-wiki"
+            class="search-input interactive"
+            style="max-width: 180px"
+            placeholder="Load Wikipedia article..."
+            title="Search Wikipedia article by title"
+          />
+          <button
+            class="btn interactive"
+            title="Search Wikipedia article and load into input"
+          >
+            Load
+          </button>
+        </form>
+      </div>
+
+      <form id="form" class="search-form">
+        <input type="submit" hidden />
+        <input
+          type="text"
+          id="search-input"
+          class="search-input interactive"
+          placeholder="Search query here..."
+        />
+        <button class="btn interactive">Search</button>
+      </form>
+
+      <div>
+        <h3>Input text:</h3>
+        <div class="row">
+          <span id="output-status" class="status invisible">Loading…</span>
+        </div>
+
+        <div id="input-container" tabindex="0" class="panel">
+          <textarea
+            id="input-area"
+            hidden
+            class="interactive"
+            placeholder="Input text to perform semantic similarity search..."
+          ></textarea>
+          <p id="output-area"></p>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
