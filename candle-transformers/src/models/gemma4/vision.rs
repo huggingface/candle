@@ -527,6 +527,9 @@ impl VisionTower {
 
     /// Encode a batch of images (each may have different sizes).
     pub fn forward(&self, pixel_values_list: &[Tensor]) -> Result<Tensor> {
+        if pixel_values_list.is_empty() {
+            candle::bail!("VisionTower::forward called with empty image batch");
+        }
         let device = pixel_values_list[0].device().clone();
         let dtype = pixel_values_list[0].dtype();
 

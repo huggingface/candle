@@ -377,7 +377,9 @@ impl EmbeddingModel {
         let mask: Vec<_> = (0..seq_len)
             .flat_map(|i| (0..seq_len).map(move |j| if j <= i { 0f32 } else { minf }))
             .collect();
-        Tensor::from_slice(&mask, (b, 1, seq_len, seq_len), &self.device)?.to_dtype(self.dtype)
+        Tensor::from_slice(&mask, (1, 1, seq_len, seq_len), &self.device)?
+            .expand((b, 1, seq_len, seq_len))?
+            .to_dtype(self.dtype)
     }
 
     /// Forward pass returning all hidden states: (B, L, hidden_size).
