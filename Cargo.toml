@@ -18,6 +18,7 @@ exclude = [
     "candle-kernels",
     "candle-metal-kernels",
     "candle-onnx",
+    "candle-rocm-kernels",
 ]
 resolver = "2"
 
@@ -41,6 +42,7 @@ candle-flash-attn = { path = "./candle-flash-attn", version = "0.10.2" }
 candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.10.2" }
 candle-kernels = { path = "./candle-kernels", version = "0.10.2" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.10.2" }
+candle-rocm-kernels = { path = "./candle-rocm-kernels", version = "0.10.2" }
 candle-nn = { path = "./candle-nn", version = "0.10.2" }
 candle-onnx = { path = "./candle-onnx", version = "0.10.2" }
 candle-transformers = { path = "./candle-transformers", version = "0.10.2" }
@@ -61,7 +63,7 @@ cudarc = { version = "0.19.4", features = [
 ], default-features = false }
 fancy-regex = "0.17.0"
 gemm = { version = "0.19.0", features = ["wasm-simd128-enable"] }
-hf-hub = "0.4.1"
+hf-hub = { version = "0.4.1", default-features = false, features = ["rustls-tls", "ureq"] }
 half = { version = "2.5.0", features = [
     "num-traits",
     "use-intrinsics",
