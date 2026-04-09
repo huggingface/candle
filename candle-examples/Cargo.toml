@@ -40,6 +40,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 symphonia = { version = "0.5.3", features = ["all"], optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
+rustfft = "6"
 cpal = { version = "0.15.2", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
 tekken-rs = { version = "0.1.1", optional = true }
@@ -95,6 +96,9 @@ snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
 buildtime-download = []
+audio-loading = ["symphonia", "rubato"]
+timing = []
+forced-aligner = []
 
 [[example]]
 name = "llama_multiprocess"
@@ -158,6 +162,10 @@ required-features = ["pdf2image"]
 
 [[example]]
 name = "voxtral"
+required-features = ["symphonia"]
+
+[[example]]
+name = "qwen3-asr"
 required-features = ["symphonia"]
 
 [[example]]
