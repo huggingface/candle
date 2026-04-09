@@ -1246,6 +1246,115 @@ cuda_dtype!(f64, F64);
 cuda_dtype!(float8::F8E4M3, F8E4M3);
 
 impl CudaStorage {
+    #[cfg(feature = "cudnn")]
+    pub fn conv2d_with_bias(
+        &self,
+        inp_l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        bias: &Self,
+        bias_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        // The caller (Tensor::conv2d_single_group_with_bias) ensures that this
+        // method is only called when cuDNN is available and kernel is contiguous.
+        debug_assert!(kernel_l.is_contiguous());
+        let device = self.device().clone();
+        let (out_w, out_h) = (params.out_w(), params.out_h());
+        let dst_el = params.c_out * out_w * out_h * params.b_size;
+        let slice = match (&self.slice, &kernel.slice, &bias.slice) {
+            (S::U8(inp), S::U8(k), S::U8(b)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let b = &b.slice(bias_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<u8>(dst_el)? };
+                crate::cudnn::launch_conv2d_bias_activation::<u8, u8>(
+                    inp, inp_l, k, b, &mut out, params, &device,
+                )
+                .map_err(crate::Error::wrap)?;
+                S::U8(out)
+            }
+            (S::BF16(inp), S::BF16(k), S::BF16(b)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let b = &b.slice(bias_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<bf16>(dst_el)? };
+                crate::cudnn::launch_conv2d_bias_activation::<bf16, f32>(
+                    inp, inp_l, k, b, &mut out, params, &device,
+                )
+                .map_err(crate::Error::wrap)?;
+                S::BF16(out)
+            }
+            (S::F16(inp), S::F16(k), S::F16(b)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let b = &b.slice(bias_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<f16>(dst_el)? };
+                crate::cudnn::launch_conv2d_bias_activation::<f16, f16>(
+                    inp, inp_l, k, b, &mut out, params, &device,
+                )
+                .map_err(crate::Error::wrap)?;
+                S::F16(out)
+            }
+            (S::F32(inp), S::F32(k), S::F32(b)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let b = &b.slice(bias_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<f32>(dst_el)? };
+                crate::cudnn::launch_conv2d_bias_activation::<f32, f32>(
+                    inp, inp_l, k, b, &mut out, params, &device,
+                )
+                .map_err(crate::Error::wrap)?;
+                S::F32(out)
+            }
+            (S::F64(inp), S::F64(k), S::F64(b)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let b = &b.slice(bias_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<f64>(dst_el)? };
+                crate::cudnn::launch_conv2d_bias_activation::<f64, f64>(
+                    inp, inp_l, k, b, &mut out, params, &device,
+                )
+                .map_err(crate::Error::wrap)?;
+                S::F64(out)
+            }
+            (S::U32(_), S::U32(_), S::U32(_)) => Err(CudaError::InternalError(
+                "conv2d_with_bias does not support u32",
+            ))?,
+            (S::I16(_), S::I16(_), S::I16(_)) => Err(CudaError::InternalError(
+                "conv2d_with_bias does not support i16",
+            ))?,
+            (S::I32(_), S::I32(_), S::I32(_)) => Err(CudaError::InternalError(
+                "conv2d_with_bias does not support i32",
+            ))?,
+            (S::I64(_), S::I64(_), S::I64(_)) => Err(CudaError::InternalError(
+                "conv2d_with_bias does not support i64",
+            ))?,
+            (S::F8E4M3(_), S::F8E4M3(_), S::F8E4M3(_)) => Err(CudaError::InternalError(
+                "conv2d_with_bias does not support f8e4m3",
+            ))?,
+            _ => Err(CudaError::InternalError(
+                "dtype mismatch in conv2d_with_bias",
+            ))?,
+        };
+        Ok(Self { slice, device })
+    }
+
+    #[cfg(not(feature = "cudnn"))]
+    pub fn conv2d_with_bias(
+        &self,
+        _inp_l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _bias: &Self,
+        _bias_l: &Layout,
+        _params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        // The caller checks cfg!(feature = "cudnn") before calling this method,
+        // so this branch should never be reached at runtime.
+        unreachable!("conv2d_with_bias called without cuDNN support")
+    }
+
     pub fn wrap_cuda_slice<T: CudaDType>(slice: CudaSlice<T>, device: CudaDevice) -> CudaStorage {
         T::wrap_cuda_slice(slice, device)
     }

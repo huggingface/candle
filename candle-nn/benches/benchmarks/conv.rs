@@ -58,10 +58,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let device = BenchDeviceHandler::new().unwrap();
     for d in device.devices {
         run_conv2d_benchmark(c, &d, DType::F32, 3, 128, true);
+        run_conv2d_benchmark(c, &d, DType::F32, 5, 256, true);
         run_conv2d_benchmark(c, &d, DType::F32, 1, 128, false);
         run_conv2d_benchmark(c, &d, DType::F32, 5, 128, false);
         run_conv2d_benchmark(c, &d, DType::F32, 3, 512, false);
         run_conv2d_benchmark(c, &d, DType::F16, 3, 128, true);
+        run_conv2d_benchmark(c, &d, DType::F16, 5, 256, true);
         run_conv2d_benchmark(c, &d, DType::F16, 1, 128, false);
         run_conv2d_benchmark(c, &d, DType::F16, 5, 128, false);
         run_conv2d_benchmark(c, &d, DType::F16, 5, 512, false);
