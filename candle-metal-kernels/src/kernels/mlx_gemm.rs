@@ -453,3 +453,208 @@ pub fn call_mlx_gemm(
     encoder.dispatch_thread_groups(grid_size, group_size);
     Ok(())
 }
+
+/// Fused gather + matmul for MoE expert dispatch.
+///
+/// Instead of N separate matmuls (one per active expert), this does a single
+/// Metal kernel dispatch that gathers expert weights via index lookup.
+///
+/// - lhs: input tokens [batch_out, m, k] (for decode: m=1)
+/// - rhs: ALL expert weights [num_experts, k, n] (or transposed)
+/// - lhs_indices: [batch_out] u32 — which token each slot reads (identity for down proj,
+///   all-zeros for gate/up when single token)
+/// - rhs_indices: [batch_out] u32 — which expert each slot reads
+/// - output: [batch_out, m, n]
+#[allow(clippy::too_many_arguments)]
+pub fn call_gather_mm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GemmDType,
+    (batch_out, m, n, k): (usize, usize, usize, usize),
+    lhs_buffer: &Buffer,
+    lhs_offset: usize,
+    lhs_stride: &[usize],  // strides for [lhs_batch, m, k]
+    lhs_batch_size: usize,  // number of distinct inputs in lhs
+    rhs_buffer: &Buffer,
+    rhs_offset: usize,
+    rhs_stride: &[usize],  // strides for [num_experts, k, n]
+    rhs_batch_size: usize,  // num_experts
+    lhs_indices_buffer: &Buffer,
+    rhs_indices_buffer: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    #[derive(Debug)]
+    #[repr(C)]
+    struct GemmParams {
+        m: i32,
+        n: i32,
+        k: i32,
+        lda: i32,
+        ldb: i32,
+        ldd: i32,
+        tiles_n: i32,
+        tiles_m: i32,
+        batch_stride_a: isize,
+        batch_stride_b: isize,
+        batch_stride_d: isize,
+        swizzle_log: i32,
+        gemm_k_iterations_aligned: i32,
+        batch_ndim: i32,
+    }
+
+    // Determine transpose from strides
+    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+    let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
+        (k as i32, false)
+    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
+        (m as i32, true)
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        }
+        .bt())?;
+    };
+
+    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+    let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
+        (n as i32, false)
+    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        (k as i32, true)
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        }
+        .bt())?;
+    };
+
+    let device_type = device.device_type();
+    let tile = select_tile_config(dtype, m, n, k, batch_out, a_trans, b_trans, device_type);
+    let (bm, bn, bk, wm, wn) = (tile.bm, tile.bn, tile.bk, tile.wm, tile.wn);
+
+    let constants = Some(ConstantValues::new(vec![
+        (10, Value::Bool(/* has_batch */ false)),
+        (100, Value::Bool(/* use_out_source */ false)),
+        (110, Value::Bool(/* do_axpby */ false)),
+        (200, Value::Bool(/* align_m */ m % bm == 0)),
+        (201, Value::Bool(/* align_n */ n % bn == 0)),
+        (202, Value::Bool(/* align_k */ k % bk == 0)),
+        (300, Value::Bool(/* do_gather */ true)),
+    ]));
+
+    let swizzle_log = 0;
+    let tn = n.div_ceil(bn);
+    let tm = m.div_ceil(bm);
+
+    let gemm_params = GemmParams {
+        m: m as i32,
+        n: n as i32,
+        k: k as i32,
+        lda,
+        ldb,
+        ldd: n as i32,
+        tiles_n: tn as i32,
+        tiles_m: tm as i32,
+        // In gather mode, batch_stride_a/b are strides into the INDEX arrays
+        batch_stride_a: 1,
+        batch_stride_b: 1,
+        batch_stride_d: (m * n) as isize,
+        swizzle_log,
+        gemm_k_iterations_aligned: (k / bk) as i32,
+        batch_ndim: 1i32,
+    };
+
+    let dtype_str = match dtype {
+        GemmDType::F32 => "f32",
+        GemmDType::F16 => "f16",
+        GemmDType::BF16 => "bf16",
+    };
+    let trans_str = match (a_trans, b_trans) {
+        (false, false) => "nn",
+        (true, false) => "tn",
+        (false, true) => "nt",
+        (true, true) => "tt",
+    };
+    let name = format!(
+        "gemm_{}_{}_{}_{}_{}_{}_{}_{}",
+        trans_str, dtype_str, dtype_str, bm, bn, bk, wm, wn
+    );
+
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    impl EncoderParam for GemmParams {
+        fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+            encoder.set_bytes(position, &data);
+        }
+    }
+
+    // Buffers 0-7: standard GEMM params
+    let batch_strides: [isize; 2] = [1, 1]; // strides into index arrays
+    set_params!(
+        encoder,
+        (
+            (lhs_buffer, lhs_offset),   // buffer 0: A
+            (rhs_buffer, rhs_offset),   // buffer 1: B
+            (),                          // buffer 2: C (unused)
+            output,                      // buffer 3: D
+            gemm_params,                 // buffer 4: params
+            (),                          // buffer 5: addmm_params (unused)
+            batch_out as i32,            // buffer 6: batch_size
+            &batch_strides[..]           // buffer 7: batch_strides
+        )
+    );
+
+    // Buffers 10-15: gather-specific params
+    // Buffer 10: lhs_indices
+    crate::utils::set_param(encoder, 10, lhs_indices_buffer);
+    // Buffer 11: rhs_indices
+    crate::utils::set_param(encoder, 11, rhs_indices_buffer);
+    // Buffer 13: operand_shape — packed [lhs_batch_dim_sizes..., rhs_batch_dim_sizes...]
+    // For MoE: A has 1 batch dim of size lhs_batch_size, B has 1 batch dim of size rhs_batch_size
+    let operand_shape: [i32; 2] = [lhs_batch_size as i32, rhs_batch_size as i32];
+    crate::utils::set_param(encoder, 13, &operand_shape[..]);
+    // Buffer 14: operand_strides — packed [lhs_batch_strides..., rhs_batch_strides...]
+    // Stride per batch element in the actual tensor (in elements, not bytes)
+    let lhs_batch_stride = if lhs_stride.len() > 2 {
+        lhs_stride[lhs_stride.len() - 3]
+    } else {
+        m * k
+    };
+    let rhs_batch_stride = if rhs_stride.len() > 2 {
+        rhs_stride[rhs_stride.len() - 3]
+    } else {
+        k * n
+    };
+    let operand_strides: [usize; 2] = [lhs_batch_stride, rhs_batch_stride];
+    crate::utils::set_param(encoder, 14, &operand_strides[..]);
+    // Buffer 15: operand_batch_ndim — packed_int3(ndim_A, ndim_B, ndim_C)
+    let operand_batch_ndim: [i32; 3] = [1, 1, 0];
+    crate::utils::set_param(encoder, 15, &operand_batch_ndim[..]);
+
+    let grid_size = MTLSize {
+        width: tn,
+        height: tm,
+        depth: batch_out,
+    };
+    let group_size = MTLSize {
+        width: 32,
+        height: wn,
+        depth: wm,
+    };
+    encoder.use_resource(lhs_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(rhs_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(lhs_indices_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(rhs_indices_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(grid_size, group_size);
+    Ok(())
+}

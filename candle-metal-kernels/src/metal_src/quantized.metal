@@ -2303,7 +2303,7 @@ inline float block_q_n_dot_y(device const block_q5_1 * qb_curr, float sumy, thre
 }
 
 // putting them in the kernel cause a significant performance penalty
-#define N_DST 4        // each SIMD group works on 4 rows
+#define N_DST 2        // each SIMD group works on 2 rows (was 4, matching llama.cpp's N_R0_Q4_K=2)
 #define N_SIMDGROUP 2  // number of SIMD groups in a thread group
 //Note: This is a template, but strictly speaking it only applies to
 //      quantizations where the block size is 32. It also does not
@@ -4915,8 +4915,7 @@ void kernel_mul_mv_q4_K_f32_impl(
     const int r0 = tgpig.x;
     const int r1 = tgpig.y;
     const int im = tgpig.z;
-    //const int first_row = (r0 * N_SIMDGROUP + sgitg) * N_DST;
-    const int first_row = r0 * N_DST;
+    const int first_row = (r0 * N_SIMDGROUP + sgitg) * N_DST;
     const int ib_row = first_row * nb;
 
     const uint i12 = im%ne12;
@@ -7618,6 +7617,190 @@ kernel void kernel_mul_mv_id(
 }
 
 typedef decltype(kernel_mul_mv_id<mmv_fn<kernel_mul_mv_impl<float, float4, float, float4>>>) kernel_mul_mv_id_t;
+
+// ── Fused gate+up+SiLU MoE kernel ──
+// Computes silu(gate_proj @ x) * (up_proj @ x) for all active experts in one dispatch.
+// Reads input x once, does two quantized dot products per output row, applies SiLU inline.
+// Saves 2 dispatches + 1 activation dispatch per MoE layer (120 dispatches total for 40 layers).
+void kernel_mul_mv_id_swiglu_q4_K_f32_impl(
+        device const  void * gate_weights,  // [num_experts, N, K/block_size] quantized gate_proj
+        device const  void * up_weights,    // [num_experts, N, K/block_size] quantized up_proj
+        device const float * src1,          // [batch, K] input tokens
+        device       float * dst,           // [batch * topk, N] output
+        device const  char * ids,           // [batch, topk] expert indices
+        constant   int64_t & nei0,          // topk
+        constant   int64_t & nei1,          // batch
+        constant  uint64_t & nbi1,          // topk * sizeof(u32)
+        constant   int64_t & ne00,          // K (input dim)
+        constant   int64_t & ne01,          // N (output dim per projection)
+        constant  uint64_t & nb01,          // bytes per row in quantized weights
+        constant  uint64_t & nb02,          // bytes per expert
+        constant   int64_t & ne10,          // K
+        constant   int64_t & ne11,          // input_dim1
+        constant  uint64_t & nb11,          // K * sizeof(float)
+        constant  uint64_t & nb12,          // input_dim1 * nb11
+        constant   int64_t & ne0,           // N (output dim)
+        constant  uint64_t & nb1,           // N * sizeof(float) (output stride)
+        uint3                  tgpig[[threadgroup_position_in_grid]],
+        uint                   tiisg[[thread_index_in_simdgroup]],
+        uint                   sgitg[[simdgroup_index_in_threadgroup]]) {
+
+    const int iid1 = tgpig.z / nei0;   // batch index
+    const int idx  = tgpig.z % nei0;    // topk index
+
+    // Look up expert index
+    const int32_t expert_id = ((device const int32_t *)(ids + iid1*nbi1))[idx];
+
+    // Input: same for gate and up
+    const int64_t i11 = idx % ne11;
+    const int64_t i12 = iid1;
+    device const float * y = (device const float *)(src1 + i11*(ne10) + i12*(ne11*ne10));
+
+    // Gate and up expert weight pointers
+    device const block_q4_K * gate_x = (device const block_q4_K *)((device const char *)gate_weights + expert_id * nb02);
+    device const block_q4_K * up_x   = (device const block_q4_K *)((device const char *)up_weights   + expert_id * nb02);
+
+    // Output pointer
+    device float * dst_cur = dst + idx * ne0 + i12 * nei0 * ne0;
+
+    const uint16_t kmask1 = 0x3f3f;
+    const uint16_t kmask2 = 0x0f0f;
+    const uint16_t kmask3 = 0xc0c0;
+
+    const int ix = tiisg/8;
+    const int it = tiisg%8;
+    const int iq = it/4;
+    const int ir = it%4;
+
+    const int nb = ne00/QK_K;
+    const int r0 = tgpig.x;
+
+    const int first_row = r0 * N_DST;
+    const int ib_row = first_row * nb;
+
+    device const block_q4_K * gate_row = gate_x + ib_row;
+    device const block_q4_K * up_row   = up_x   + ib_row;
+
+    device const float * y4 = y + ix * QK_K + 64 * iq + 8 * ir;
+
+    float yl[16];
+    float yh[16];
+    float gate_sum[N_DST] = {0.f};
+    float up_sum[N_DST] = {0.f};
+
+    const int step = sizeof(block_q4_K) * nb / 2;
+
+    uint16_t sc16[4];
+    thread const uint8_t * sc8 = (thread const uint8_t *)sc16;
+
+    for (int ib = ix; ib < nb; ib += 4) {
+        // Load input once — shared between gate and up
+        float4 sumy = {0.f, 0.f, 0.f, 0.f};
+        for (int i = 0; i < 8; ++i) {
+            yl[i+0] = y4[i+  0]; sumy[0] += yl[i+0];
+            yl[i+8] = y4[i+ 32]; sumy[1] += yl[i+8];
+            yh[i+0] = y4[i+128]; sumy[2] += yh[i+0];
+            yh[i+8] = y4[i+160]; sumy[3] += yh[i+8];
+        }
+
+        // Gate projection dot product
+        {
+            device const uint16_t * sc = (device const uint16_t *)gate_row[ib].scales + iq;
+            device const uint16_t * q1 = (device const uint16_t *)gate_row[ib].qs + 16 * iq + 4 * ir;
+            device const half     * dh = &gate_row[ib].d;
+            for (int row = 0; row < N_DST; row++) {
+                sc16[0] = sc[0] & kmask1; sc16[1] = sc[2] & kmask1;
+                sc16[2] = ((sc[4] >> 0) & kmask2) | ((sc[0] & kmask3) >> 2);
+                sc16[3] = ((sc[4] >> 4) & kmask2) | ((sc[2] & kmask3) >> 2);
+                device const uint16_t * q2 = q1 + 32;
+                float4 acc1 = {0.f}, acc2 = {0.f};
+                for (int i = 0; i < 8; i += 2) {
+                    acc1[0] += yl[i+0] * (q1[i/2] & 0x000F); acc1[1] += yl[i+1] * (q1[i/2] & 0x0F00);
+                    acc1[2] += yl[i+8] * (q1[i/2] & 0x00F0); acc1[3] += yl[i+9] * (q1[i/2] & 0xF000);
+                    acc2[0] += yh[i+0] * (q2[i/2] & 0x000F); acc2[1] += yh[i+1] * (q2[i/2] & 0x0F00);
+                    acc2[2] += yh[i+8] * (q2[i/2] & 0x00F0); acc2[3] += yh[i+9] * (q2[i/2] & 0xF000);
+                }
+                float dall = dh[0], dmin = dh[1];
+                gate_sum[row] += dall * ((acc1[0] + 1.f/256.f * acc1[1]) * sc8[0] +
+                                         (acc1[2] + 1.f/256.f * acc1[3]) * sc8[1] * 1.f/16.f +
+                                         (acc2[0] + 1.f/256.f * acc2[1]) * sc8[4] +
+                                         (acc2[2] + 1.f/256.f * acc2[3]) * sc8[5] * 1.f/16.f) -
+                                 dmin * (sumy[0] * sc8[2] + sumy[1] * sc8[3] + sumy[2] * sc8[6] + sumy[3] * sc8[7]);
+                q1 += step; sc += step; dh += step;
+            }
+        }
+
+        // Up projection dot product (reusing yl, yh, sumy from above)
+        {
+            device const uint16_t * sc = (device const uint16_t *)up_row[ib].scales + iq;
+            device const uint16_t * q1 = (device const uint16_t *)up_row[ib].qs + 16 * iq + 4 * ir;
+            device const half     * dh = &up_row[ib].d;
+            for (int row = 0; row < N_DST; row++) {
+                sc16[0] = sc[0] & kmask1; sc16[1] = sc[2] & kmask1;
+                sc16[2] = ((sc[4] >> 0) & kmask2) | ((sc[0] & kmask3) >> 2);
+                sc16[3] = ((sc[4] >> 4) & kmask2) | ((sc[2] & kmask3) >> 2);
+                device const uint16_t * q2 = q1 + 32;
+                float4 acc1 = {0.f}, acc2 = {0.f};
+                for (int i = 0; i < 8; i += 2) {
+                    acc1[0] += yl[i+0] * (q1[i/2] & 0x000F); acc1[1] += yl[i+1] * (q1[i/2] & 0x0F00);
+                    acc1[2] += yl[i+8] * (q1[i/2] & 0x00F0); acc1[3] += yl[i+9] * (q1[i/2] & 0xF000);
+                    acc2[0] += yh[i+0] * (q2[i/2] & 0x000F); acc2[1] += yh[i+1] * (q2[i/2] & 0x0F00);
+                    acc2[2] += yh[i+8] * (q2[i/2] & 0x00F0); acc2[3] += yh[i+9] * (q2[i/2] & 0xF000);
+                }
+                float dall = dh[0], dmin = dh[1];
+                up_sum[row] += dall * ((acc1[0] + 1.f/256.f * acc1[1]) * sc8[0] +
+                                       (acc1[2] + 1.f/256.f * acc1[3]) * sc8[1] * 1.f/16.f +
+                                       (acc2[0] + 1.f/256.f * acc2[1]) * sc8[4] +
+                                       (acc2[2] + 1.f/256.f * acc2[3]) * sc8[5] * 1.f/16.f) -
+                                 dmin * (sumy[0] * sc8[2] + sumy[1] * sc8[3] + sumy[2] * sc8[6] + sumy[3] * sc8[7]);
+                q1 += step; sc += step; dh += step;
+            }
+        }
+
+        y4 += 4 * QK_K;
+    }
+
+    // Reduce and apply SiLU(gate) * up
+    for (int row = 0; row < N_DST; ++row) {
+        float g = simd_sum(gate_sum[row]);
+        float u = simd_sum(up_sum[row]);
+        if (tiisg == 0) {
+            // SiLU(g) * u = g * sigmoid(g) * u
+            float silu_g = g / (1.0f + exp(-g));
+            dst_cur[first_row + row] = silu_g * u;
+        }
+    }
+}
+
+[[host_name("kernel_mul_mv_id_swiglu_q4_K_f32")]]
+kernel void kernel_mul_mv_id_swiglu_q4_K_f32(
+        device const    char * gate_weights,
+        device const    char * up_weights,
+        device const   float * src1,
+        device         float * dst,
+        device const    char * ids,
+        constant     int64_t & nei0,
+        constant     int64_t & nei1,
+        constant    uint64_t & nbi1,
+        constant     int64_t & ne00,
+        constant     int64_t & ne01,
+        constant    uint64_t & nb01,
+        constant    uint64_t & nb02,
+        constant     int64_t & ne10,
+        constant     int64_t & ne11,
+        constant    uint64_t & nb11,
+        constant    uint64_t & nb12,
+        constant     int64_t & ne0,
+        constant    uint64_t & nb1,
+        uint3                  tgpig[[threadgroup_position_in_grid]],
+        uint                   tiisg[[thread_index_in_simdgroup]],
+        uint                   sgitg[[simdgroup_index_in_threadgroup]]) {
+    kernel_mul_mv_id_swiglu_q4_K_f32_impl(
+        gate_weights, up_weights, src1, dst, ids,
+        nei0, nei1, nbi1, ne00, ne01, nb01, nb02,
+        ne10, ne11, nb11, nb12, ne0, nb1,
+        tgpig, tiisg, sgitg);
+}
 
 template [[host_name("kernel_mul_mv_id_f32_f32")]]     kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_impl<float, float4, float, float4>>>;
 template [[host_name("kernel_mul_mv_id_f16_f32")]]     kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_impl<half, half4, float, float4>>>;

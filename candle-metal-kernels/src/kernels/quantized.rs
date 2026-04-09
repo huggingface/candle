@@ -79,8 +79,10 @@ pub fn call_quantized_matmul_mv_t(
             (nth0, nth1, align)
         }
         GgmlDType::Q4K => {
-            let nth0 = 4;
-            let nth1 = 8;
+            // 2 simdgroups × 32 threads = 64 threads per threadgroup
+            // Each simdgroup processes N_DST=2 rows, total 4 rows per threadgroup
+            let nth0 = 32;
+            let nth1 = 2;
             let align = 4;
             (nth0, nth1, align)
         }
@@ -285,4 +287,109 @@ pub fn call_quantized_matmul_mm_t(
 
 fn divide(m: usize, b: usize) -> usize {
     m.div_ceil(b)
+}
+
+/// Fused gate+up+SiLU MoE kernel: computes silu(gate_proj @ x) * (up_proj @ x)
+/// for all active experts in a single Metal dispatch.
+///
+/// - gate_weights: [num_experts, n_out, n_in/block_size] quantized gate expert weights
+/// - up_weights: [num_experts, n_out, n_in/block_size] quantized up expert weights
+/// - x: [batch, n_in] input tokens (f32)
+/// - ids: [batch, topk] expert indices (u32)
+/// - output: [batch * topk, n_out] result (f32)
+/// - nb01: bytes per row in quantized weights
+/// - nb02: bytes per expert (n_out * nb01)
+#[allow(clippy::too_many_arguments)]
+pub fn call_fused_moe_swiglu(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    gate_weights: &Buffer,
+    up_weights: &Buffer,
+    x_buffer: &Buffer,
+    x_offset: usize,
+    ids_buffer: &Buffer,
+    ids_offset: usize,
+    output: &Buffer,
+    n_out: usize,
+    n_in: usize,
+    batch: usize,
+    topk: usize,
+    input_dim1: usize,
+    nb01: u64,
+    nb02: u64,
+) -> Result<(), MetalKernelError> {
+    let kernel_name = match dtype {
+        GgmlDType::Q4K => "kernel_mul_mv_id_swiglu_q4_K_f32",
+        _ => {
+            return Err(MetalKernelError::SdpaHeadSizeMismatch {
+                variation: "fused_moe_swiglu",
+                got: 0,
+                expected: vec![],
+            }
+            .bt())
+        }
+    };
+
+    let nei0 = topk as i64;
+    let _nei1 = batch as i64;
+    let nbi1 = (topk * 4) as u64;
+    let ne00 = n_in as i64;
+    let ne01 = n_out as i64;
+    let ne10 = n_in as i64;
+    let ne11 = input_dim1 as i64;
+    let nb11 = (n_in * 4) as u64;
+    let nb12 = (input_dim1 as u64) * nb11;
+    let ne0 = n_out as i64;
+    let nb1 = (n_out * 4) as u64;
+
+    let (nth0, nth1, align) = (32usize, 2usize, 4usize); // Q4K: 2 simdgroups × 32 threads
+
+    let tg = MTLSize {
+        width: divide(n_out, align),
+        height: 1,
+        depth: batch * topk,
+    };
+    let tpg = MTLSize {
+        width: nth0,
+        height: nth1,
+        depth: 1,
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, kernel_name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            gate_weights,
+            up_weights,
+            (x_buffer, x_offset),
+            output,
+            (ids_buffer, ids_offset),
+            nei0,
+            _nei1,
+            nbi1,
+            ne00,
+            ne01,
+            nb01,
+            nb02,
+            ne10,
+            ne11,
+            nb11,
+            nb12,
+            ne0,
+            nb1
+        )
+    );
+    encoder.use_resource(gate_weights, MTLResourceUsage::Read);
+    encoder.use_resource(up_weights, MTLResourceUsage::Read);
+    encoder.use_resource(x_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(ids_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(tg, tpg);
+    Ok(())
 }
