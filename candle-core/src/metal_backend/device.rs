@@ -15,7 +15,7 @@ use objc2_foundation::NSURL;
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use super::MetalError;
 
@@ -57,6 +57,9 @@ pub struct MetalDevice {
     /// Whenever we actually allocate a new buffer, we make a full sweep to clean up unused buffers
     /// (strong_count = 1).
     pub(crate) buffers: Arc<RwLock<BufferMap>>,
+
+    pub(crate) buffer_override_lock: Arc<Mutex<()>>,
+    pub(crate) buffer_override: Arc<Mutex<Option<Arc<Buffer>>>>,
 
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
     /// Heavily used by [`candle_metal_kernels`]
@@ -101,6 +104,31 @@ impl std::ops::Deref for MetalDevice {
     }
 }
 
+pub struct TemporaryBufferOverride<'a> {
+    guard: MutexGuard<'a, ()>,
+    buffer_override: Arc<Mutex<Option<Arc<Buffer>>>>,
+}
+
+impl<'a> TemporaryBufferOverride<'a> {
+    pub fn new(
+        guard: MutexGuard<'a, ()>,
+        buffer_override: Arc<Mutex<Option<Arc<Buffer>>>>,
+        buffer: Arc<Buffer>,
+    ) -> Self {
+        *buffer_override.lock().unwrap() = Some(buffer);
+        TemporaryBufferOverride {
+            guard,
+            buffer_override: buffer_override.clone(),
+        }
+    }
+}
+
+impl<'a> Drop for TemporaryBufferOverride<'a> {
+    fn drop(&mut self) {
+        *self.buffer_override.lock().unwrap() = None;
+    }
+}
+
 impl MetalDevice {
     #[cfg(all(feature = "ug", not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn compile(
@@ -131,6 +159,15 @@ impl MetalDevice {
 
     pub fn metal_device(&self) -> &Device {
         &self.device
+    }
+
+    pub fn set_buffer_override(&self, buffer: Arc<Buffer>) -> Result<TemporaryBufferOverride<'_>> {
+        let guard = self.buffer_override_lock.lock().unwrap();
+        Ok(TemporaryBufferOverride::new(
+            guard,
+            self.buffer_override.clone(),
+            buffer,
+        ))
     }
 
     fn drop_unused_buffers(&self) -> Result<()> {
@@ -243,6 +280,10 @@ impl MetalDevice {
 
     /// The critical allocator algorithm
     pub fn allocate_buffer(&self, size: usize) -> Result<Arc<Buffer>> {
+        let binding = self.buffer_override.lock().unwrap();
+        if let Some(buffer_override) = binding.clone() {
+            return Ok(buffer_override.clone());
+        }
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         if let Some(b) = find_available_buffer(size, &buffers) {
             // Cloning also ensures we increment the strong count

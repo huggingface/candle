@@ -2189,6 +2189,8 @@ impl BackendDevice for MetalDevice {
             device,
             commands: Arc::new(RwLock::new(commands)),
             buffers: Arc::new(RwLock::new(HashMap::new())),
+            buffer_override_lock: Arc::new(Mutex::new(())),
+            buffer_override: Arc::new(Mutex::new(None)),
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
@@ -2399,7 +2401,7 @@ impl MetalDevice {
     }
 }
 
-use crate::lazy::{BufferId, LazyAllocator, LazyBuffer, Op};
+use crate::lazy::{BufferId, LazyAllocator, LazyBuffer, NodeId, Op};
 impl LazyBuffer for Arc<Buffer> {}
 
 // Allocator notes:
@@ -2437,11 +2439,11 @@ impl MetalAllocator {
 }
 
 impl LazyAllocator<Arc<Buffer>> for MetalAllocator {
-    fn initialize(&mut self, graph: &[&LazyStorage]) -> Result<()> {
+    fn initialize(&mut self, graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Result<()> {
         let MemoryPlan {
             reusage,
             allocations,
-        } = crate::lazy::greedy_by_size(graph)?;
+        } = crate::lazy::greedy_by_size(graph, pinned)?;
 
         self.reusage = reusage;
 
@@ -2561,157 +2563,6 @@ pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
     }
 }
 
-#[derive(Clone, Debug)]
-struct CustomSoftmaxOverride {
-    device: MetalDevice,
-}
-#[derive(Clone, Debug)]
-struct CustomRmsNormOverride {
-    device: MetalDevice,
-    eps: f32,
-}
-#[derive(Clone, Debug)]
-struct CustomRotaryEmbOverride {
-    device: MetalDevice,
-}
-
-impl LazyCustomFn<Arc<Buffer>> for CustomSoftmaxOverride {
-    fn call(&self, input: &[(&Arc<Buffer>, &Layout, DType)], dst: &Arc<Buffer>) -> Result<()> {
-        let (src, layout, dtype) = input[0];
-
-        let encoder = self.device.command_encoder()?;
-        encoder.set_label("softmax-override");
-        let kernels = self.device.kernels();
-
-        let name = match dtype {
-            DType::F32 => "softmax_f32",
-            DType::F16 => "softmax_f16",
-            DType::BF16 => "softmax_bf16",
-            dtype => crate::bail!("softmax-last-dim is not implemented for {dtype:?}"),
-        };
-
-        let n = layout.stride().len();
-        if !(layout.is_contiguous() && layout.stride()[n - 1] == 1) {
-            crate::bail!("Non contiguous softmax-last-dim is not implemented");
-        }
-
-        let last_dim = layout.dims()[layout.shape().rank() - 1];
-        let elem_count = layout.shape().elem_count();
-        //let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
-        candle_metal_kernels::call_last_softmax(
-            self.device.metal_device(),
-            &encoder,
-            kernels,
-            name,
-            elem_count,
-            last_dim,
-            src,
-            layout.start_offset() * dtype.size_in_bytes(),
-            dst,
-        )
-        .map_err(crate::Error::wrap)?;
-
-        Ok(())
-    }
-}
-
-impl LazyCustomFn<Arc<Buffer>> for CustomRmsNormOverride {
-    fn call(&self, input: &[(&Arc<Buffer>, &Layout, DType)], dst: &Arc<Buffer>) -> Result<()> {
-        let (s1, l1, dtype1) = input[0];
-        let (s2, l2, dtype2) = input[1];
-
-        let device = &self.device;
-        let encoder = device.command_encoder()?;
-        encoder.set_label("rmsnorm");
-        let kernels = device.kernels();
-        let name = match (dtype1, dtype2) {
-            (DType::F32, DType::F32) => "rmsnorm_f32",
-            (DType::F16, DType::F16) => "rmsnorm_f16",
-            (DType::BF16, DType::BF16) => "rmsnorm_bf16",
-            (dt1, dt2) => crate::bail!("rmsnorm is not implemented for {dt1:?} {dt2:?}"),
-        };
-
-        if !(l1.is_contiguous() && l2.is_contiguous()) {
-            crate::bail!("Non contiguous rmsnorm is not implemented");
-        }
-
-        let last_dim = l1.dims()[l1.shape().rank() - 1];
-        let elem_count = l1.shape().elem_count();
-        candle_metal_kernels::call_rms_norm(
-            device.metal_device(),
-            &encoder,
-            kernels,
-            name,
-            elem_count,
-            last_dim,
-            self.eps,
-            s1,
-            l1.start_offset() * dtype1.size_in_bytes(),
-            s2,
-            l2.start_offset() * dtype2.size_in_bytes(),
-            dst,
-        )
-        .map_err(crate::Error::wrap)?;
-
-        Ok(())
-    }
-}
-
-impl LazyCustomFn<Arc<Buffer>> for CustomRotaryEmbOverride {
-    fn call(&self, input: &[(&Arc<Buffer>, &Layout, DType)], dst: &Arc<Buffer>) -> Result<()> {
-        let (src, src_l, src_dtype) = input[0];
-        let (cos, cos_l, cos_dtype) = input[1];
-        let (sin, sin_l, sin_dtype) = input[2];
-
-        let device = &self.device;
-        let encoder = device.command_encoder()?;
-        encoder.set_label("rope");
-        let kernels = device.kernels();
-        if cos_dtype != src_dtype || sin_dtype != src_dtype {
-            crate::bail!(
-                "dtype mismatch in rope {:?} {:?} {:?}",
-                src_dtype,
-                cos_dtype,
-                sin_dtype
-            )
-        }
-        let name = match src_dtype {
-            DType::F32 => "rope_f32",
-            DType::F16 => "rope_f16",
-            DType::BF16 => "rope_bf16",
-            dtype => crate::bail!("rope is not implemented for {dtype:?}"),
-        };
-        let (b, h, t, d) = src_l.shape().dims4()?;
-        let stride_b = if cos_l.dims().len() == 3 && sin_l.dims().len() == 3 {
-            h * t * d
-        } else {
-            0usize
-        };
-        //let el = b * h * t * d;
-        //let output = device.new_buffer(el, src_dtype, "rope")?;
-        candle_metal_kernels::call_rope(
-            device.metal_device(),
-            &encoder,
-            kernels,
-            name,
-            b * h,
-            t * d,
-            d,
-            stride_b,
-            src,
-            src_l.start_offset() * src_dtype.size_in_bytes(),
-            cos,
-            cos_l.start_offset() * cos_dtype.size_in_bytes(),
-            sin,
-            sin_l.start_offset() * sin_dtype.size_in_bytes(),
-            &dst,
-        )
-        .map_err(crate::Error::wrap)?;
-
-        Ok(())
-    }
-}
-
 fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
     #[derive(Clone)]
     struct InlineCustomOp {
@@ -2735,16 +2586,9 @@ fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
             let a_l = a.1;
             let a = create_metal_storage(a);
 
-            let (result, _shape) = self.op.metal_fwd(&a, a_l)?;
-
-            {
-                let size = result.size();
-                let blit = self.device.blit_command_encoder()?;
-                blit.set_label("copy_to_dst");
-                blit.copy(result.buffer(), 0, &dst, 0, size);
-                blit.end_encoding();
-            }
-            self.device.synchronize()?;
+            let guard = self.device.set_buffer_override(dst.clone())?;
+            self.op.metal_fwd(&a, a_l)?;
+            drop(guard);
 
             Ok(())
         }
@@ -2786,15 +2630,10 @@ fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
             let b = input[1];
             let b_l = b.1;
             let b = create_metal_storage(b);
-            let (result, _shape) = self.op.metal_fwd(&a, a_l, &b, b_l)?;
-            {
-                let size = result.size();
-                let blit = self.device.blit_command_encoder()?;
-                blit.set_label("copy_to_dst");
-                blit.copy(result.buffer(), 0, &dst, 0, size);
-                blit.end_encoding();
-            }
-            self.device.synchronize()?;
+
+            let guard = self.device.set_buffer_override(dst.clone())?;
+            self.op.metal_fwd(&a, a_l, &b, b_l)?;
+            drop(guard);
 
             Ok(())
         }
@@ -2840,15 +2679,10 @@ fn install_custom_op3(op: &Box<dyn crate::CustomOp3>) {
             let c = input[2];
             let c_l = c.1;
             let c = create_metal_storage(c);
-            let (result, _shape) = self.op.metal_fwd(&a, a_l, &b, b_l, &c, c_l)?;
-            {
-                let size = result.size();
-                let blit = self.device.blit_command_encoder()?;
-                blit.set_label("copy_to_dst");
-                blit.copy(result.buffer(), 0, &dst, 0, size);
-                blit.end_encoding();
-            }
-            self.device.synchronize()?;
+
+            let guard = self.device.set_buffer_override(dst.clone())?;
+            self.op.metal_fwd(&a, a_l, &b, b_l, &c, c_l)?;
+            drop(guard);
 
             Ok(())
         }
@@ -2895,38 +2729,50 @@ impl Executor for MetalDevice {
 
         install_custom_ops(lazy_storage.custom_ops());
 
-        {
-            /*
-            let mut binding = CUSTOM_OP_HANDLER.lock().unwrap();
-            binding.custom_ops.insert(
-                "softmax-last-dim".to_string(),
-                Box::new(CustomSoftmaxOverride {
-                    device: self.clone(),
-                }),
-            );
-            binding.custom_ops.insert(
-                "rms-norm".to_string(),
-                Box::new(CustomRmsNormOverride {
-                    device: self.clone(),
-                    eps: 1.2,
-                }),
-            );
-            binding.custom_ops.insert(
-                "rotary-emb".to_string(),
-                Box::new(CustomRotaryEmbOverride {
-                    device: self.clone(),
-                }),
-            );
-            */
-        }
-
         self.optimize(&lazy_storage);
         self.specialize(&lazy_storage);
 
         let graph = lazy_storage.execution_order();
 
-        allocator.initialize(&graph)?;
-        // println!("{}", crate::lazy::graph_to_dot(&lazy_storage));
+        // Detect nodes that are referenced outside current forward pass.
+        // These nodes are "pinned" so their memory is not included in the buffer
+        // reusage scheme.
+        //
+        // Each time a node is stored as an op source its `resolved_id` Arc is cloned,
+        // incrementing the strong count. If the count is larger than the number
+        // of current graph uses this means it is also held externally (e.g. a KV cache
+        // tensor kept alive by the model).
+        use crate::lazy::Op::*;
+        let pinned: HashSet<BufferId> = {
+            let mut usage_counts: HashMap<NodeId, usize> = HashMap::new();
+            for node in &graph {
+                for src in node.op().srcs() {
+                    *usage_counts.entry(src.id()).or_default() += 1;
+                }
+            }
+            let mut set = HashSet::new();
+            for node in &graph {
+                if matches!(node.op(), Const(_) | Output(_) | Sink(_)) {
+                    continue;
+                }
+                if node.resolved_buffer_id().is_some() {
+                    continue;
+                }
+                let internal = *usage_counts.get(&node.id()).unwrap_or(&0);
+                if internal == 0 {
+                    continue;
+                }
+                if node.resolved_id_strong_count() > internal {
+                    set.insert(node.buffer_id().clone());
+                }
+            }
+            set
+        };
+
+        allocator.initialize(&graph, &pinned)?;
+        if std::env::var("CANDLE_PRINT_LAZY_GRAPH").is_ok() {
+            println!("{}", crate::lazy::graph_to_dot(&lazy_storage));
+        }
 
         let result_node = graph.last().unwrap().clone();
         for node in &graph {
@@ -2939,8 +2785,6 @@ impl Executor for MetalDevice {
                 if !matches!(node.op(), crate::lazy::Op::Const(_)) {
                     self.wait_until_completed()?;
                     if let Ok(node_buffer) = allocator.get(node.buffer_id()) {
-                        // Use the logical element count (output shape), not the physical
-                        // buffer capacity which may be rounded up and contain garbage.
                         let buf_elems = node.layout().shape().elem_count();
                         let storage = MetalStorage::new(
                             node_buffer.clone().into(),
@@ -2971,66 +2815,22 @@ impl Executor for MetalDevice {
             }
         }
 
-        // Synchronize before blit copying finished work to resolved buffers.
         self.synchronize()?;
 
-        // Copy completed node buffers to new storage.
-        use crate::lazy::Op::*;
-        /*
-        let mut stack: Vec<LazyStorage> = vec![result_node.clone()];
-        let mut done = HashSet::new();
-        while let Some(node) = stack.pop() {
-            for src in node.op().srcs() {
-                if !done.contains(&src.id()) {
-                    stack.push(src.clone());
-                }
-            }
-            if node.is_buffer_shared() {
-                println!(
-                    "Node: {} - buffer count: {}",
-                    node.op(),
-                    allocator.buffer_map.len()
-                );
-                let previous = node.resolve();
-            }
-            done.insert(node.id());
-        }
-        */
-        let mut newly_resolved: Vec<(BufferId, Arc<Buffer>, &LazyStorage)> = vec![];
-        let mut stack: Vec<&LazyStorage> = vec![result_node];
-        let mut done = HashSet::new();
-        while let Some(node) = stack.pop() {
-            for src in node.op().srcs() {
-                if !done.contains(&src.id()) {
-                    stack.push(src);
-                    done.insert(src.id());
-                }
-            }
-            if matches!(node.op(), Resolved(_) | Const(_) | Output(_) | Sink(_)) {
-                continue;
-            }
-            if node.resolved_buffer_id().is_some() {
-                continue; // already cached from a previous pass
-            }
-            if let Ok(src) = allocator.get(node.buffer_id()) {
-                let copy_size = src.length() as usize;
-                if let Ok(private) = self.new_private_buffer_bytes(copy_size) {
-                    let blit = self.blit_command_encoder()?;
-                    blit.copy(src, 0, &*private, 0, copy_size);
-                    blit.end_encoding();
-                    newly_resolved.push((node.buffer_id().clone(), private, node));
-                }
-            }
-        }
-
-        // Synchronize yet again (yes I agree this entire approach is pretty stupid)
-        self.synchronize()?;
-        // Resolve completed nodes
+        // Pin externally referenced buffers
         {
-            let mut resolved = self.resolved.lock().unwrap();
-            for (buf_id, buf, node) in newly_resolved {
-                resolved.insert(buf_id.clone(), buf);
-                node.mark_resolved(buf_id);
+            let mut resolved_map = self.resolved.lock().unwrap();
+            for node in &graph {
+                if !pinned.contains(node.buffer_id()) {
+                    continue;
+                }
+                if node.resolved_buffer_id().is_some() {
+                    continue;
+                }
+                if let Ok(buf) = allocator.get(node.buffer_id()) {
+                    resolved_map.insert(node.buffer_id().clone(), buf.clone());
+                    node.mark_resolved(node.buffer_id().clone());
+                }
             }
         }
 
@@ -3053,7 +2853,15 @@ impl Executor for MetalDevice {
                 let src = allocator.get(a.src.buffer_id()).unwrap();
                 let dst = allocator.get(current.buffer_id()).unwrap();
 
-                affine(self, src, &a.src_l, a.src.dtype(), a.mul, a.add, dst)?;
+                affine(
+                    self,
+                    src,
+                    current.layout(),
+                    a.src.dtype(),
+                    a.mul,
+                    a.add,
+                    dst,
+                )?;
             }
             ToDType(op) => {
                 let src = op.srcs()[0];
@@ -3229,7 +3037,7 @@ impl Executor for MetalDevice {
                         copy.src.layout().shape().elem_count(),
                         copy.src.dtype(),
                     );
-                    src.copy_strided_src(&mut dst, copy.dst_offset, &copy.src_l)?;
+                    src.copy_strided_src(&mut dst, copy.dst_offset, copy.src.layout())?;
                 }
             }
             Copy2D(op) => {
@@ -3264,25 +3072,16 @@ impl Executor for MetalDevice {
                     src.copy2d(&mut dst, d1, d2, src_s, dst_s, src_o, dst_o)?;
                 }
             }
-            /*
             ConstSet(scalar) => {
-                let dst_edge = graph
-                    .edges_directed(node, petgraph::Outgoing)
-                    .next()
-                    .ok_or(InvalidOutgoing(op_node.id()))?;
-                let dst_w = dst_edge.weight();
-                let dst_buffer = allocator.get(dst_w.buffer_id()).unwrap();
-
+                let dst_buffer = allocator.get(current.buffer_id()).unwrap();
                 let mut dst = MetalStorage::new(
-                    Arc::new(dst_buffer.clone()),
+                    dst_buffer.clone(),
                     self.clone(),
-                    dst_w.layout().shape().elem_count(),
-                    dst_w.dtype(),
+                    current.layout().shape().elem_count(),
+                    current.dtype(),
                 );
-
-                dst.const_set(scalar.clone(), dst_w.layout())?;
+                dst.const_set(scalar.clone(), current.layout())?;
             }
-            */
             Sink(_sink) => {}
             CustomOp(custom_op) => {
                 let expected_edges = custom_op.op().expected_edges();
