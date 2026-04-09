@@ -135,10 +135,7 @@ fn main() -> Result<()> {
     } else {
         None
     };
-
-    // TODO: Revert. Update candle_examples::device
-    let device = candle::Device::Lazy(candle::lazy::LazyDevice);
-    //let device = candle_examples::device(args.cpu)?;
+    let device = candle_examples::device(args.cpu)?;
 
     let dtype = match args.dtype.as_deref() {
         Some("f16") => DType::F16,
@@ -269,7 +266,6 @@ fn main() -> Result<()> {
             )?
         };
         index_pos += ctxt.len();
-
         let next_token = logits_processor.sample(&logits)?;
         token_generated += 1;
         tokens.push(next_token);
