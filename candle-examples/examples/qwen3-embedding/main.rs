@@ -99,7 +99,7 @@ fn extract_field(line: &str, field: &str) -> Option<String> {
         return None;
     }
     let rest = &rest[1..]; // skip opening quote
-    // Find closing quote (handle escaped quotes)
+                           // Find closing quote (handle escaped quotes)
     let mut chars = rest.chars();
     let mut value = String::new();
     loop {
@@ -277,7 +277,11 @@ fn main() -> Result<()> {
         })?;
         descriptions.push(text);
     }
-    eprintln!("Read {} descriptions from {}", descriptions.len(), args.input);
+    eprintln!(
+        "Read {} descriptions from {}",
+        descriptions.len(),
+        args.input
+    );
 
     if descriptions.is_empty() {
         anyhow::bail!("No descriptions found in input file");
@@ -311,20 +315,17 @@ fn main() -> Result<()> {
         let embedding = model.forward(&input)?;
 
         // Extract the embedding vector (1, hidden_size) → flat f32 vec
-        let emb_vec = embedding.squeeze(0)?.to_dtype(candle::DType::F32)?.to_vec1::<f32>()?;
+        let emb_vec = embedding
+            .squeeze(0)?
+            .to_dtype(candle::DType::F32)?
+            .to_vec1::<f32>()?;
         all_embeddings.extend_from_slice(&emb_vec);
 
         if (i + 1) % args.log_every == 0 || i + 1 == n {
             let elapsed = embed_start.elapsed().as_secs_f64();
             let rate = (i + 1) as f64 / elapsed;
             let eta = (n - i - 1) as f64 / rate;
-            eprintln!(
-                "[{}/{}] {:.1} desc/s, ETA {:.0}s",
-                i + 1,
-                n,
-                rate,
-                eta,
-            );
+            eprintln!("[{}/{}] {:.1} desc/s, ETA {:.0}s", i + 1, n, rate, eta,);
         }
     }
 

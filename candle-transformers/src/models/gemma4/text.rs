@@ -59,7 +59,13 @@ struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
-    fn new(dtype: DType, head_dim: usize, rope_theta: f64, max_seq_len: usize, dev: &Device) -> Result<Self> {
+    fn new(
+        dtype: DType,
+        head_dim: usize,
+        rope_theta: f64,
+        max_seq_len: usize,
+        dev: &Device,
+    ) -> Result<Self> {
         let inv_freq: Vec<_> = (0..head_dim)
             .step_by(2)
             .map(|i| 1f32 / rope_theta.powf(i as f64 / head_dim as f64) as f32)
@@ -116,9 +122,7 @@ impl ProportionalRotaryEmbedding {
             inv_freq_vec.push(1f32 / (rope_theta as f32).powf((2 * i) as f32 / head_dim as f32));
         }
         // Pad with zeros for non-rotated dimensions -> cos=1, sin=0 -> identity
-        for _ in rope_angles..half_dim {
-            inv_freq_vec.push(0f32);
-        }
+        inv_freq_vec.resize(half_dim, 0f32);
 
         let inv_freq = Tensor::from_vec(inv_freq_vec, (1, half_dim), dev)?;
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
@@ -158,7 +162,13 @@ struct MLP {
 }
 
 impl MLP {
-    fn new(hidden_size: usize, intermediate_size: usize, act: Activation, bias: bool, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        hidden_size: usize,
+        intermediate_size: usize,
+        act: Activation,
+        bias: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let gate_proj = linear_bias(hidden_size, intermediate_size, bias, vb.pp("gate_proj"))?;
         let up_proj = linear_bias(hidden_size, intermediate_size, bias, vb.pp("up_proj"))?;
         let down_proj = linear_bias(intermediate_size, hidden_size, bias, vb.pp("down_proj"))?;
@@ -447,9 +457,9 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .self_attn
-            .forward(&xs, attention_mask, sliding_attention_mask, seqlen_offset)?;
+        let xs =
+            self.self_attn
+                .forward(&xs, attention_mask, sliding_attention_mask, seqlen_offset)?;
         let xs = xs.apply(&self.post_attention_layernorm)?;
         let xs = (xs + residual)?;
         let residual = &xs;

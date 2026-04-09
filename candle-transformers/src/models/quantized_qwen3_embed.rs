@@ -375,12 +375,9 @@ impl EmbeddingModel {
     fn causal_mask(&self, b: usize, seq_len: usize) -> Result<Tensor> {
         let minf = f32::NEG_INFINITY;
         let mask: Vec<_> = (0..seq_len)
-            .flat_map(|i| {
-                (0..seq_len).map(move |j| if j <= i { 0f32 } else { minf })
-            })
+            .flat_map(|i| (0..seq_len).map(move |j| if j <= i { 0f32 } else { minf }))
             .collect();
-        Tensor::from_slice(&mask, (b, 1, seq_len, seq_len), &self.device)?
-            .to_dtype(self.dtype)
+        Tensor::from_slice(&mask, (b, 1, seq_len, seq_len), &self.device)?.to_dtype(self.dtype)
     }
 
     /// Forward pass returning all hidden states: (B, L, hidden_size).
