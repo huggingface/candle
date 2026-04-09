@@ -5,6 +5,30 @@ use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 
+/// Returns whether flash attention can correctly handle the given `head_dim` on `device`.
+///
+/// - For head_dim <= 256, flash-attn v2 works on all CUDA GPUs.
+/// - For head_dim > 256, the kernel requires `kBlockN >= 64` which needs more shared memory than some GPUs have. This function checks the GPU's max shared memory and returns false
+///
+/// Callers should fall back to eager attention when this returns false.
+pub fn supports_head_dim(device: &candle::CudaDevice, head_dim: usize) -> bool {
+    if head_dim <= 256 {
+        return true;
+    }
+    // For head_dim > 256: kBlockKSmem = 64 (since head_dim % 64 == 0), so kBlockN >= 64.
+    // Minimum config: kBlockM=32, kBlockN=64.
+    // smem = 2 * head_dim * (kBlockM + 2 * kBlockN) bytes
+    let min_smem = 2 * head_dim * (32 + 2 * 64); // smallest valid config
+    let max_smem = device
+        .cuda_stream()
+        .context()
+        .device_attribute(
+            candle::cuda_backend::cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
+        )
+        .unwrap_or(0) as usize;
+    max_smem >= min_smem
+}
+
 pub struct FlashAttn {
     pub softmax_scale: f32,
     pub alibi_slopes: Option<Tensor>,

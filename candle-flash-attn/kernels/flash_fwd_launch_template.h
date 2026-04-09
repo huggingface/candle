@@ -374,14 +374,22 @@ void run_mha_fwd_hdim512(Flash_fwd_params &params, cudaStream_t stream) {
       C10_CUDA_CHECK(status_);
     }
     DROPOUT_SWITCH(params.p_dropout < 1.f, Is_dropout, [&] {
-        // For A100 (164KB max smem), use 64 x 32 with 4 warps (128KB smem).
-        // For sm86/sm89 (100KB max smem), use 32 x 32 with 4 warps (96KB smem).
-        // kBlockN must be >= kBlockKSmem (64) for correct V transposed shared memory access.
-        // With kBlockM=64, kBlockN=64: smem = 2 * 512 * (64 + 128) = 192 KB
-        if (max_smem_per_block >= 2 * Headdim * (64 + 2 * 64)) {  // 192 KB
+        // kBlockN must be >= kBlockKSmem (64) for correct V transposed shared
+        // memory access with hdim512.
+        // Tier 1: >= 192 KB (H100, Blackwell) -> 64x64
+        // Tier 2: >= 160 KB (A100)            -> 32x64
+        // Tier 3: <  160 KB (sm86/89)         -> cannot run correctly, caller must check supports_head_dim() and use eager attention.
+        if (max_smem_per_block >= 2 * Headdim * (64 + 2 * 64)) {
             run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 64, 64, 4, false, false, T>, Is_dropout, Is_causal>(params, stream);
+        } else if (max_smem_per_block >= 2 * Headdim * (32 + 2 * 64)) {
+            run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 32, 64, 4, false, false, T>, Is_dropout, Is_causal>(params, stream);
         } else {
-            run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 32, 32, 4, false, false, T>, Is_dropout, Is_causal>(params, stream);
+            // Insufficient smem for any correct hdim512 kernel config.
+            // Caller must check supports_head_dim() and use eager attention.
+            fprintf(stderr, "FATAL: flash attention hdim512 requires >= 160 KB shared memory, "
+                    "but this GPU only has %d bytes. Use supports_head_dim() to check "
+                    "and fall back to eager attention.\n", max_smem_per_block);
+            abort();
         }
     });
 }
