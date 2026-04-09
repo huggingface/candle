@@ -148,7 +148,7 @@ impl AtomicOp {
 #[derive(Debug)]
 pub struct LazyStorage {
     id: NodeId,
-    // TODO: Set as Op::Resolved(BufferId) when resolved
+    // Consider setting as Op::Resolved() when node is resolved
     pub op: Arc<AtomicOp>,
     custom_op_fallbacks: HashMap<String, LazyStorage>,
     layout: Layout,
@@ -158,28 +158,6 @@ pub struct LazyStorage {
     resolved_id: Arc<std::sync::OnceLock<BufferId>>,
     // pub(crate) owner: std::sync::OnceLock<std::sync::Weak<crate::tensor::Tensor_>>,
 }
-
-/*
-impl Drop for LazyStorage {
-    fn drop(&mut self) {
-        // potential lazy storage lifetime solution.
-        // Map<NodeId, AtomicUsize> tracker;
-        //
-        // On LazyStorage::new():
-        // let entry = tracker.entry(current.id()).or_insert_with(||AtomicUsize::new(0));
-        // entry.fetch_add(1, Ordering::SeqCst);
-        //
-        // On drop
-        // tracker.get(current.id()).map(|e| e.fetch_sub(1, Ordering::SeqCst));
-        // or something like that.
-        //
-        // tracker could then be used in allocator.
-        //
-        //
-        // eeeeh wait we could just keep a HashSet<NodeId> between runs...
-    }
-}
-*/
 
 impl Clone for LazyStorage {
     fn clone(&self) -> Self {
@@ -209,12 +187,20 @@ impl LazyStorage {
     }
 
     pub fn copy(source: &LazyStorage, layout: &Layout) -> Self {
+        // Ensures we at least have a value in the result.
+        let safe_layout_clone = |l: &Layout| {
+            if l.dims().is_empty() {
+                Layout::contiguous(&[1])
+            } else {
+                l.clone()
+            }
+        };
         // Creates a copy, or view, of the lazy storage with updated layout.
         Self {
             id: source.id,
             op: source.op.clone(),
             custom_op_fallbacks: source.custom_op_fallbacks.clone(),
-            layout: layout.clone(),
+            layout: safe_layout_clone(layout),
             dtype: source.dtype,
             buffer_id: source.buffer_id.clone(),
             resolved_id: source.resolved_id.clone(),
@@ -309,6 +295,14 @@ impl LazyStorage {
         self.resolved_id.get()
     }
 
+    /// Returns amount of `LazyStorage` nodes that share this `resolved_id`.
+    /// `LazyStorage::copy` increments this count by 1. A count larger than
+    /// presence of this node in the graph indicates external references (e.g.
+    /// a tensor kept alive in a KV-cache).
+    pub fn resolved_id_strong_count(&self) -> usize {
+        Arc::strong_count(&self.resolved_id)
+    }
+
     pub fn mark_resolved(&self, buf_id: BufferId) {
         let _ = self.resolved_id.set(buf_id);
     }
@@ -334,6 +328,53 @@ impl LazyStorage {
             } else {
                 cur_srcs.len()
             };
+            let all_deps_done = cur_src == effective_len;
+
+            if all_deps_done {
+                done.insert(cur_t.id());
+                pending.remove(&cur_t.id());
+                order.push(cur_t);
+                continue;
+            }
+
+            let (srcs_with_deps, srcs_without_deps): (Vec<_>, Vec<_>) =
+                cur_srcs.iter().partition(|s| s.op().srcs().is_empty());
+
+            let all_srcs = srcs_with_deps
+                .into_iter()
+                .chain(srcs_without_deps)
+                .collect::<Vec<_>>();
+
+            let precursor: &LazyStorage = all_srcs[cur_src];
+
+            if done.contains(&precursor.id()) {
+                stack.push((cur_t, cur_src + 1));
+            } else if pending.contains(&precursor.id()) {
+                panic!(
+                        "Cycle detected whilst computing topological order: {:?}. Try plotting with feature `plotting`.",
+                        precursor.id()
+                    );
+            } else {
+                pending.insert(precursor.id());
+                stack.push((cur_t, cur_src));
+                stack.push((precursor, 0));
+            }
+        }
+        order
+    }
+
+    // Only used by `Dot::graph_fmt` to display the entire graph.
+    pub(crate) fn full_execution_order(&self) -> Vec<&LazyStorage> {
+        let mut done = HashSet::new();
+        let mut pending = HashSet::new();
+        let mut order = Vec::new();
+
+        let mut stack: Vec<(&LazyStorage, usize)> = vec![(self, 0)];
+        while let Some((cur_t, cur_src)) = stack.pop() {
+            let cur_op = cur_t.op();
+            let cur_srcs = cur_op.srcs();
+            // Only evaluate nodes once. If already resolved then we do not process.
+            let effective_len = cur_srcs.len();
             let all_deps_done = cur_src == effective_len;
 
             if all_deps_done {
@@ -401,21 +442,34 @@ impl Dot {
     pub fn graph_fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "digraph {{ ")?;
         writeln!(f, "{}ordering=\"in\"", INDENT)?;
-        let graph = self.0.execution_order();
+        let graph = self.0.full_execution_order();
         // output all labels
         let mut max_id = 0;
+        let mut visited = HashSet::new();
+
         for node in graph.iter() {
             let node_id = node.id().index();
+            visited.insert(node_id);
             if node_id > max_id {
                 max_id = node_id;
             }
             write!(f, "{}{} [ ", INDENT, node.id().index())?;
-            write!(f, "label = \"")?;
-            write!(f, "{}", node.op())?;
-            write!(f, "\" ")?;
-            writeln!(f, "]")?;
+            writeln!(f, "label = \"{}\"]", node.op())?;
         }
         max_id += 1;
+
+        for node in graph.iter() {
+            for source in node.srcs() {
+                if !visited.contains(&source.id().index()) {
+                    write!(f, "{}{} [ ", INDENT, source.id().index())?;
+                    if source.resolved_buffer_id().is_some() {
+                        writeln!(f, "label = \"Resolved({})\"]", source.op())?;
+                    } else {
+                        writeln!(f, "label = \"{}\"]", source.op())?;
+                    }
+                }
+            }
+        }
 
         write!(f, "{}{} [ ", INDENT, max_id)?;
         writeln!(f, "label = \"\"]")?;
@@ -477,7 +531,7 @@ pub fn graph_to_dot(node: &LazyStorage) -> String {
 pub trait LazyBuffer: Debug + Clone + PartialEq {}
 
 pub trait LazyAllocator<B: LazyBuffer> {
-    fn initialize(&mut self, graph: &[&LazyStorage]) -> Result<()>;
+    fn initialize(&mut self, graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Result<()>;
     fn insert(&mut self, id: BufferId, buffer: B) -> Result<()>;
     fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&B>;
     fn get(&self, id: &BufferId) -> Result<&B>;
@@ -543,16 +597,15 @@ pub fn calculate_usage_records(
             record.4 = node.dtype();
         }
     }
-    //filter records with no producer
+    // filter records with no producer
     records.retain(|_, v| v.1.is_some());
     records
 }
 
 // https://arxiv.org/pdf/2001.03288.pdf
-pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
+pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Result<MemoryPlan> {
     let mut reusage = BTreeMap::new();
     let mut allocations = BTreeMap::new();
-    // let mut resolved = BTreeMap::new();
 
     // Plan Const (input) allocations
     for node in graph {
@@ -561,6 +614,9 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
         if let Op::Const(s) = node.op() {
             let shape = Shape::from(s.len());
             allocations.insert(buffer_id.clone(), (Layout::contiguous(shape), s.dtype()));
+        }
+        if let Op::ConstSet(_) = node.op() {
+            allocations.insert(buffer_id.clone(), (node.layout().clone(), node.dtype()));
         }
         /*
         if let Op::Resolved(b) = node.op() {
@@ -588,6 +644,22 @@ pub fn greedy_by_size(graph: &[&LazyStorage]) -> Result<MemoryPlan> {
     for (buffer_id, (_record_buffer_id, producer, last_consumer, layout, dtype)) in
         record_map.iter()
     {
+        // Pinned buffers (external references) must never reuse another buffer.
+        // They need a dedicated allocation that survives until the post-execution pinning step.
+        // In other words not part of the buffer reusage.
+        if pinned.contains(buffer_id) {
+            allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
+            // Skipping since pinned should not be in shared_objects
+            continue;
+        }
+
+        // Debugging: disables reuse to investigate correctness
+        if std::env::var("CANDLE_LAZY_NO_REUSE").is_ok() {
+            allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
+            shared_objects.push(buffer_id.clone());
+            continue;
+        }
+
         let record_producer = producer.unwrap();
         let needed_size = current_size(layout, dtype);
         let mut best_buffer: Option<(BufferId, usize)> = None;
@@ -825,17 +897,17 @@ impl BackendStorage for LazyStorage {
     }
 
     fn affine(&self, l: &Layout, mul: f64, add: f64) -> Result<Self> {
-        let op = Op::Affine(Affine::new(self.clone(), l.clone(), mul, add));
+        let op = Op::Affine(Affine::new(self.clone(), mul, add));
         Ok(LazyStorage::new(op, l, self.dtype()))
     }
 
     fn powf(&self, l: &Layout, exp: f64) -> Result<Self> {
-        let op = Op::Powf(Powf::new(self.clone(), l.clone(), exp));
+        let op = Op::Powf(Powf::new(self.clone(), exp));
         Ok(LazyStorage::new(op, l, self.dtype()))
     }
 
     fn elu(&self, l: &Layout, alpha: f64) -> Result<Self> {
-        let op = Op::Elu(Elu::new(self.clone(), l.clone(), alpha));
+        let op = Op::Elu(Elu::new(self.clone(), alpha));
         Ok(LazyStorage::new(op, l, self.dtype()))
     }
 
@@ -883,28 +955,26 @@ impl BackendStorage for LazyStorage {
     }
 
     fn cmp(&self, cmp_op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
-        let op = Op::Cmp(Cmp::new(
-            self.clone(),
-            lhs_l.clone(),
-            rhs.clone(),
-            rhs_l.clone(),
-            cmp_op,
-        ));
-        Ok(LazyStorage::new(op, self.layout(), DType::U8))
+        let lhs = LazyStorage::copy(self, lhs_l);
+        let rhs = LazyStorage::copy(rhs, rhs_l);
+        let dst_l = Layout::contiguous(lhs.shape());
+        let op = Op::Cmp(Cmp::new(lhs, rhs, cmp_op));
+        Ok(LazyStorage::new(op, &dst_l, DType::U8))
     }
 
     fn to_dtype(&self, l: &Layout, dtype: DType) -> Result<Self> {
         let src = LazyStorage::copy(self, l);
         if self.dtype() != dtype {
-            let op = Op::ToDType(ToDType::new(src, l.clone(), dtype));
-            return Ok(LazyStorage::new(op, l, dtype));
+            let l = src.layout().clone();
+            let op = Op::ToDType(ToDType::new(src.clone(), dtype));
+            return Ok(LazyStorage::new(op, &l, dtype));
         }
         Ok(src)
     }
 
     fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
         let src = LazyStorage::copy(self, l);
-        let op = Op::Unary(Unary::new(src, l.clone(), B::KERNEL));
+        let op = Op::Unary(Unary::new(src, B::KERNEL));
         Ok(LazyStorage::new(op, l, self.dtype()))
     }
 
@@ -916,15 +986,9 @@ impl BackendStorage for LazyStorage {
     ) -> Result<Self> {
         let lhs = LazyStorage::copy(self, lhs_l);
         let rhs = LazyStorage::copy(rhs, rhs_l);
-
-        let op = Op::Binary(Binary::new(
-            lhs,
-            lhs_l.clone(),
-            rhs,
-            rhs_l.clone(),
-            B::KERNEL,
-        ));
-        Ok(LazyStorage::new(op, lhs_l, self.dtype()))
+        let dst_l = Layout::contiguous(lhs_l.shape());
+        let op = Op::Binary(Binary::new(lhs, rhs, B::KERNEL));
+        Ok(LazyStorage::new(op, &dst_l, self.dtype()))
     }
 
     fn where_cond(
@@ -938,17 +1002,11 @@ impl BackendStorage for LazyStorage {
         let src = LazyStorage::copy(self, l);
         let t = LazyStorage::copy(t, t_l);
         let f = LazyStorage::copy(f, f_l);
+        let f_l = f.layout().clone();
         let dtype = f.dtype();
 
-        let op = Op::WhereCond(WhereCond::new(
-            src,
-            l.clone(),
-            t,
-            t_l.clone(),
-            f,
-            f_l.clone(),
-        ));
-        Ok(LazyStorage::new(op, f_l, dtype))
+        let op = Op::WhereCond(WhereCond::new(src, t, f));
+        Ok(LazyStorage::new(op, &f_l, dtype))
     }
 
     fn conv1d(
@@ -1058,13 +1116,7 @@ impl BackendStorage for LazyStorage {
         let dst_el = ids_el * left_size * right_size;
         let dst_layout = Layout::contiguous(dst_el);
 
-        let op = Op::IndexSelect(IndexSelect::new(
-            src,
-            src_l.clone(),
-            ids,
-            ids_l.clone(),
-            dim,
-        ));
+        let op = Op::IndexSelect(IndexSelect::new(src, ids, dim));
         Ok(LazyStorage::new(op, &dst_layout, self.dtype()))
     }
 
@@ -1090,13 +1142,7 @@ impl BackendStorage for LazyStorage {
         let lhs = LazyStorage::copy(self, lhs_l);
         let rhs = LazyStorage::copy(rhs, rhs_l);
 
-        let op = Op::Matmul(Matmul::new(
-            lhs,
-            lhs_l.clone(),
-            rhs,
-            rhs_l.clone(),
-            (b, m, n, k),
-        ));
+        let op = Op::Matmul(Matmul::new(lhs, rhs, (b, m, n, k)));
         let lhs_dims = lhs_l.shape().dims();
         let dim = lhs_dims.len();
         let dst_shape = Shape::from(&lhs_dims[..dim - 2]).extend(&[m, n]);
@@ -1110,13 +1156,13 @@ impl BackendStorage for LazyStorage {
 
         if let Op::CopyStridedSrc(copies) = dst.op() {
             let mut copies = copies.clone();
-            copies.add(src, src_l.clone(), dst_offset);
+            copies.add(src, dst_offset);
             let op = Op::CopyStridedSrc(copies);
             dst.op.store(op);
             return Ok(());
         }
 
-        let op = Op::CopyStridedSrc(CopyStridedSrc::new(src, src_l.clone(), dst_offset));
+        let op = Op::CopyStridedSrc(CopyStridedSrc::new(src, dst_offset));
         dst.op.store(op);
         Ok(())
     }
@@ -1147,8 +1193,9 @@ impl BackendStorage for LazyStorage {
         Ok(())
     }
 
-    fn const_set(&mut self, _s: crate::scalar::Scalar, _l: &Layout) -> Result<()> {
-        todo!();
+    fn const_set(&mut self, s: crate::scalar::Scalar, _l: &Layout) -> Result<()> {
+        self.op.store(Op::ConstSet(s));
+        Ok(())
     }
 
     fn upsample_bilinear2d(
