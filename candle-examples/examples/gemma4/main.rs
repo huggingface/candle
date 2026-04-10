@@ -258,7 +258,12 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => {
+            match candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json") {
+                Ok(files) => files,
+                Err(_) => vec![repo.get("model.safetensors")?],
+            }
+        }
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
