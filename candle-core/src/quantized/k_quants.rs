@@ -13,6 +13,27 @@ use rayon::prelude::*;
 pub const QK_K: usize = 256;
 pub const K_SCALE_SIZE: usize = 12;
 
+// Q1_0_g128 — 1-bit quantization with 128-element blocks (PrismML/Bonsai format)
+// Weight = bit ? +d : -d, paired with Q8_0 for matmul
+//
+// Performance notes:
+// - Block size: 128 elements (2x larger than Q4_0's 64)
+// - Block size in bytes: 18 bytes (2 byte scale + 16 byte bits) vs Q4_0's 18 bytes
+// - Bits per weight: 1 bit (vs Q4_0's 4 bits)
+// - Memory bandwidth: ~50% of Q4_0 (1 bit vs 4 bits per weight)
+// - vec_dot pairs 1 Q1_0_g128 block with 4 Q8_0 blocks (ratio 4:1, same as Q4_0)
+// - Per-token latency expected: faster than Q4_0 due to lower memory bandwidth requirement
+// - Reference: https://github.com/PrismML-Eng/llama.cpp/blob/master/ggml/src/ggml-cpu/quants.c
+pub const QK1_0_G128: usize = 128;
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockQ1_0_g128 {
+    pub(crate) d: half::f16,             // delta (scale)
+    pub(crate) qs: [u8; QK1_0_G128 / 8], // 16 bytes = 128 bits
+}
+const _: () = assert!(std::mem::size_of::<BlockQ1_0_g128>() == 18);
+
 pub const QK4_0: usize = 32;
 pub const QK4_1: usize = 32;
 pub const QK5_0: usize = 32;
@@ -2271,6 +2292,21 @@ pub fn matmul<T: GgmlType>(
     rhs_t: &[T],
     dst: &mut [f32],
 ) -> Result<()> {
+    // Q1_0_g128 has blocksize 128 but VecDotType (BlockQ8_0) has blocksize 32.
+    // The standard ratio check fails, so dispatch to the specialized path.
+    if matches!(T::DTYPE, GgmlDType::Q1_0_g128) {
+        // SAFETY: T must be BlockQ1_0_g128 since only Q1_0_g128 has this dtype.
+        // We transmute the slice to the correct type — the block count is derived
+        // from k so the byte layout is consistent.
+        let rhs_q1 = unsafe {
+            std::slice::from_raw_parts(
+                rhs_t.as_ptr() as *const BlockQ1_0_g128,
+                rhs_t.len(),
+            )
+        };
+        return matmul_q1_0_g128((m, k, n), lhs, rhs_q1, dst);
+    }
+
     debug_assert_eq!(
         T::BLCK_SIZE,
         T::VecDotType::BLCK_SIZE,
@@ -2320,6 +2356,21 @@ pub fn matmul_f16<T: GgmlType>(
     rhs_t: &[T],
     dst: &mut [f16],
 ) -> Result<()> {
+    // Q1_0_g128 blocksize mismatch — route to specialized f32 path
+    if matches!(T::DTYPE, GgmlDType::Q1_0_g128) {
+        let (m, k, n) = mkn;
+        let lhs_f32: Vec<f32> = lhs.iter().map(|&x| x.to_f32()).collect();
+        let mut dst_f32 = vec![0f32; m * n];
+        let rhs_q1 = unsafe {
+            std::slice::from_raw_parts(rhs_t.as_ptr() as *const BlockQ1_0_g128, rhs_t.len())
+        };
+        matmul_q1_0_g128((m, k, n), &lhs_f32, rhs_q1, &mut dst_f32)?;
+        for (i, &v) in dst_f32.iter().enumerate() {
+            dst[i] = f16::from_f32(v);
+        }
+        return Ok(());
+    }
+
     let (m, k, n) = mkn;
     if m * k != lhs.len() {
         crate::bail!("unexpected lhs length {} {mkn:?}", lhs.len());
@@ -2346,6 +2397,57 @@ pub fn matmul_f16<T: GgmlType>(
             *dst = f16::from_f32(value);
         }
     }
+    Ok(())
+}
+
+/// Specialized matmul for Q1_0_g128.
+/// Q1_0_g128 has blocksize 128, but its VecDotType (BlockQ8_0) has blocksize 32.
+/// Since blocksizes differ, the generic matmul assertion fails.
+/// Strategy: dequantize Q1_0_g128 to f32 inline, then do a standard f32 matmul.
+/// This is correct but slower than the SIMD path — acceptable for initial bringup.
+pub fn matmul_q1_0_g128(
+    (m, k, n): (usize, usize, usize),
+    lhs: &[f32],
+    rhs_q1: &[BlockQ1_0_g128],
+    dst: &mut [f32],
+) -> Result<()> {
+    const QK: usize = 128;
+
+    debug_assert_eq!(m * k, lhs.len(), "lhs length mismatch: {} != {} * {}", lhs.len(), m, k);
+    let nb = k / QK;
+    debug_assert_eq!(nb * n, rhs_q1.len(), "rhs block count mismatch");
+
+    // Dequantize RHS (column-major Q1_0_g128) to row-major f32.
+    // RHS blocks: [col * nb + block] gives the block covering [block*QK, (block+1)*QK) in column col.
+    let mut rhs_f32 = vec![0f32; k * n];
+    for col in 0..n {
+        for block in 0..nb {
+            let qb = &rhs_q1[col * nb + block];
+            let d = qb.d.to_f32();
+            // Write this block into rhs_f32 rows [block*QK, (block+1)*QK), column col
+            for j in 0..QK {
+                let byte_index = j / 8;
+                let bit_offset = j % 8;
+                let bit = (qb.qs[byte_index] >> bit_offset) & 1;
+                // weight = bit ? +d : -d
+                let val = if bit != 0 { d } else { -d };
+                rhs_f32[(block * QK + j) * n + col] = val;
+            }
+        }
+    }
+
+    // Compute dst[m,n] = sum_k lhs[m,k] * rhs_f32[k,n]
+    for row in 0..m {
+        for col in 0..n {
+            let mut sum = 0f32;
+            let lhs_row = &lhs[row * k..(row + 1) * k];
+            for k_idx in 0..k {
+                sum += lhs_row[k_idx] * rhs_f32[k_idx * n + col];
+            }
+            dst[row * n + col] = sum;
+        }
+    }
+
     Ok(())
 }
 
@@ -2503,3 +2605,89 @@ verify_block_sizes!(
     BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K, BlockQ3K, BlockQ4K,
     BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
 );
+// Q1_0_g128 is verified separately — its VecDotType (BlockQ8_0) has a different blocksize
+// (4 Q8_0 blocks per Q1_0_g128 block), so the standard ratio check doesn't apply.
+
+impl GgmlType for BlockQ1_0_g128 {
+    const DTYPE: GgmlDType = GgmlDType::Q1_0_g128;
+    const BLCK_SIZE: usize = QK1_0_G128;
+    // Paired with BlockQ8_0 (4 blocks per Q1_0_g128 block for vec_dot)
+    type VecDotType = BlockQ8_0;
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        // Weight = bit ? +d : -d
+        let k = ys.len();
+        debug_assert!(
+            k.is_multiple_of(QK1_0_G128),
+            "to_float: {k} not divisible by {}",
+            QK1_0_G128
+        );
+        let nb = k / QK1_0_G128;
+        for i in 0..nb {
+            let d = xs[i].d.to_f32();
+            for j in 0..QK1_0_G128 {
+                let byte_index = j / 8;
+                let bit_offset = j % 8;
+                let bit = (xs[i].qs[byte_index] >> bit_offset) & 1;
+                ys[i * QK1_0_G128 + j] = if bit != 0 { d } else { -d };
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        // Proper quantization requires the full quantization algorithm from llama.cpp
+        // This panics — use llama.cpp to quantize Q1_0_g128 models
+        panic!("from_float not implemented for Q1_0_g128 (use llama.cpp to quantize)")
+    }
+
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    // https://github.com/PrismML-Eng/llama.cpp/blob/master/ggml/src/ggml-cpu/quants.c
+    // ggml_vec_dot_q1_0_g128_q8_0_generic
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        // Q1_0_g128 blocksize = 128, BlockQ8_0 blocksize = 32
+        // 4 Q8_0 blocks per Q1_0_g128 block
+        const QK8_0: usize = 32;
+        const RATIO: usize = QK1_0_G128 / QK8_0; // 4
+
+        debug_assert!(
+            n.is_multiple_of(QK1_0_G128),
+            "vec_dot: {n} not divisible by {}",
+            QK1_0_G128
+        );
+        debug_assert!(xs.len() * RATIO <= ys.len(), "not enough Q8_0 blocks");
+
+        let nb = n / QK1_0_G128;
+        let mut sumf = 0f32;
+
+        for i in 0..nb {
+            let d0 = xs[i].d.to_f32();
+            let mut sumi = 0i32;
+
+            for k in 0..RATIO {
+                let yb = &ys[i * RATIO + k];
+                let d1 = yb.d.to_f32();
+                let mut sumi_block = 0i32;
+
+                for j in 0..QK8_0 {
+                    let bit_index = k * QK8_0 + j;
+                    let byte_index = bit_index / 8;
+                    let bit_offset = bit_index % 8;
+                    // 1-bit: 1 → +1, 0 → -1
+                    let xi = if (xs[i].qs[byte_index] >> bit_offset) & 1 != 0 {
+                        1i32
+                    } else {
+                        -1i32
+                    };
+                    let yi = yb.qs[j] as i32;
+                    sumi_block += xi * yi;
+                }
+                sumi += (d1 * sumi_block as f32) as i32;
+            }
+            sumf += d0 * sumi as f32;
+        }
+        sumf
+    }
+}

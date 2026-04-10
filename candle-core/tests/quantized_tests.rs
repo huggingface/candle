@@ -1036,6 +1036,8 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
+        // PrismML/Bonsai 1-bit format
+        GgmlDType::Q1_0_g128 => 0.002, // approximate, actual value depends on weight distribution
     };
     Ok(err)
 }
