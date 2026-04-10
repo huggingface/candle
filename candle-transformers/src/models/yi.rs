@@ -352,6 +352,10 @@ pub struct Model {
 }
 
 impl Model {
+    pub fn from_config(cfg: &YiConfig, vb: VarBuilder) -> Result<Self> {
+        Self::new(&cfg.clone().into_config(false), vb)
+    }
+
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =

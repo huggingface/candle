@@ -132,20 +132,9 @@ impl AutoModelForCausalLM {
         vb: VarBuilder,
         use_flash_attn: bool,
     ) -> Result<Box<dyn CausalLM>> {
-        match config.model_type.to_lowercase().as_str() {
-            "llama" => {
-                let raw_cfg: llama::LlamaConfig = config.parse()?;
-                let cfg = raw_cfg.into_config(use_flash_attn);
-                let model = llama::Llama::load(vb.clone(), &cfg)?;
-                let cache = llama::Cache::new(true, vb.dtype(), &cfg, vb.device())?;
-                Ok(Box::new(llama::LlamaForCausalLM { model, cache }))
-            }
-            "yi" => {
-                let raw_cfg: yi::YiConfig = config.parse()?;
-                let cfg = raw_cfg.into_config(use_flash_attn);
-                Ok(Box::new(yi::Model::new(&cfg, vb)?))
-            }
-            _ => crate::make_auto_map!(config, vb, {
+        crate::make_auto_map!(config, vb, {
+                "llama"          => (llama::LlamaConfig,           |cfg: llama::LlamaConfig, vb: VarBuilder| llama::LlamaForCausalLM::new(&cfg, vb)),
+                "yi"             => (yi::YiConfig,                 |cfg: yi::YiConfig, vb: VarBuilder| yi::Model::from_config(&cfg, vb)),
                 "mistral"        => (mistral::Config,              |cfg: mistral::Config, vb: VarBuilder| mistral::Model::new(&cfg, vb)),
                 "mixtral"        => (mixtral::Config,              |cfg: mixtral::Config, vb: VarBuilder| mixtral::Model::new(&cfg, vb)),
                 "phi3"           => (phi3::Config,                 |cfg: phi3::Config, vb: VarBuilder| phi3::Model::new(&cfg, vb)),
@@ -169,8 +158,7 @@ impl AutoModelForCausalLM {
                 "chatglm"        => (chatglm::Config,              |cfg: chatglm::Config, vb: VarBuilder| chatglm::Model::new(&cfg, vb)),
                 "glm4"           => (glm4::Config,                 |cfg: glm4::Config, vb: VarBuilder| glm4::Model::new(&cfg, vb)),
                 "codegeex4"      => (codegeex4_9b::Config,         |cfg: codegeex4_9b::Config, vb: VarBuilder| codegeex4_9b::Model::new(&cfg, vb)),
-            }),
-        }
+        })
     }
 
     fn load_gguf(path: &Path, model_type: &str, device: &Device) -> Result<Box<dyn CausalLM>> {

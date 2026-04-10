@@ -539,6 +539,13 @@ pub struct LlamaForCausalLM {
 }
 
 impl LlamaForCausalLM {
+    pub fn new(cfg: &LlamaConfig, vb: VarBuilder) -> Result<Self> {
+        let cfg = cfg.clone().into_config(false);
+        let model = Llama::load(vb.clone(), &cfg)?;
+        let cache = Cache::new(true, vb.dtype(), &cfg, vb.device())?;
+        Ok(Self { model, cache })
+    }
+
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         self.model
             .forward(input_ids, seqlen_offset, &mut self.cache)
