@@ -383,6 +383,7 @@ impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
             GgmlDType::Q5K => candle_metal_kernels::GgmlDType::Q5K,
             GgmlDType::Q6K => candle_metal_kernels::GgmlDType::Q6K,
             GgmlDType::Q8K => candle_metal_kernels::GgmlDType::Q8K,
+            GgmlDType::Q1_0_g128 => candle_metal_kernels::GgmlDType::Q1_0_g128,
             GgmlDType::F16 => candle_metal_kernels::GgmlDType::F16,
             GgmlDType::F32 => candle_metal_kernels::GgmlDType::F32,
             GgmlDType::BF16 => candle_metal_kernels::GgmlDType::F16,
