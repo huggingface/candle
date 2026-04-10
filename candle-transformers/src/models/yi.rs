@@ -20,6 +20,57 @@ use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
+fn default_rope_theta() -> f64 {
+    5_000_000.0
+}
+
+fn default_hidden_act() -> Activation {
+    Activation::Silu
+}
+
+fn default_max_position_embeddings() -> usize {
+    4096
+}
+
+fn default_rms_norm_eps() -> f64 {
+    1e-5
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct YiConfig {
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub vocab_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: Option<usize>,
+    #[serde(default = "default_rms_norm_eps")]
+    pub rms_norm_eps: f64,
+    #[serde(default = "default_rope_theta")]
+    pub rope_theta: f64,
+    #[serde(default = "default_max_position_embeddings")]
+    pub max_position_embeddings: usize,
+    #[serde(default = "default_hidden_act")]
+    pub hidden_act: Activation,
+}
+
+impl YiConfig {
+    pub fn into_config(self, _use_flash_attn: bool) -> Config {
+        Config {
+            vocab_size: self.vocab_size,
+            hidden_size: self.hidden_size,
+            intermediate_size: self.intermediate_size,
+            num_hidden_layers: self.num_hidden_layers,
+            num_attention_heads: self.num_attention_heads,
+            num_key_value_heads: self.num_key_value_heads.unwrap_or(self.num_attention_heads),
+            hidden_act: self.hidden_act,
+            max_position_embeddings: self.max_position_embeddings,
+            rms_norm_eps: self.rms_norm_eps,
+            rope_theta: self.rope_theta,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub(crate) vocab_size: usize,
@@ -345,6 +396,12 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.self_attn.kv_cache = None;
+        }
+    }
+
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
@@ -362,3 +419,5 @@ impl Model {
             .apply(&self.lm_head)
     }
 }
+
+crate::impl_causal_lm!(Model, "yi");

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use super::config::{AutoConfig, Weights};
 use crate::models::{
-    deepseek2, gemma, gemma2, gemma3, helium, llama, mistral, mixtral, olmo, olmo2, phi3, qwen2,
-    qwen2_moe, qwen3, qwen3_moe, stable_lm, starcoder2,
+    chatglm, codegeex4_9b, deepseek2, falcon, gemma, gemma2, gemma3, glm4, helium, llama, mistral,
+    mixtral, olmo, olmo2, phi3, qwen2, qwen2_moe, qwen3, qwen3_moe, stable_lm, starcoder2, yi,
 };
 use crate::models::{quantized_llama, quantized_qwen2, quantized_qwen3};
 
@@ -137,6 +137,11 @@ impl AutoModelForCausalLM {
                 let cache = llama::Cache::new(true, vb.dtype(), &cfg, vb.device())?;
                 Ok(Box::new(llama::LlamaForCausalLM { model, cache }))
             }
+            "yi" => {
+                let raw_cfg: yi::YiConfig = config.parse()?;
+                let cfg = raw_cfg.into_config(use_flash_attn);
+                Ok(Box::new(yi::Model::new(&cfg, vb)?))
+            }
             _ => crate::make_auto_map!(config, vb, {
                 "mistral"        => (mistral::Config,              |cfg: mistral::Config, vb: VarBuilder| mistral::Model::new(&cfg, vb)),
                 "mixtral"        => (mixtral::Config,              |cfg: mixtral::Config, vb: VarBuilder| mixtral::Model::new(&cfg, vb)),
@@ -157,6 +162,10 @@ impl AutoModelForCausalLM {
                 "stablelm"       => (stable_lm::Config,            |cfg: stable_lm::Config, vb: VarBuilder| stable_lm::Model::new(&cfg, vb)),
                 "stablelm_epoch" => (stable_lm::Config,            |cfg: stable_lm::Config, vb: VarBuilder| stable_lm::Model::new(&cfg, vb)),
                 "helium"         => (helium::Config,               |cfg: helium::Config, vb: VarBuilder| helium::Model::new(&cfg, vb)),
+                "falcon"         => (falcon::Config,               |cfg: falcon::Config, vb: VarBuilder| falcon::Falcon::load(vb, cfg)),
+                "chatglm"        => (chatglm::Config,              |cfg: chatglm::Config, vb: VarBuilder| chatglm::Model::new(&cfg, vb)),
+                "glm4"           => (glm4::Config,                 |cfg: glm4::Config, vb: VarBuilder| glm4::Model::new(&cfg, vb)),
+                "codegeex4"      => (codegeex4_9b::Config,         |cfg: codegeex4_9b::Config, vb: VarBuilder| codegeex4_9b::Model::new(&cfg, vb)),
             }),
         }
     }
