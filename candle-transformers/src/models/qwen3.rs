@@ -308,7 +308,7 @@ impl Model {
         })
     }
 
-    fn clear_kv_cache(&mut self) {
+    pub fn clear_kv_cache(&mut self) {
         for l in &mut self.layers {
             l.clear_kv_cache();
         }
@@ -355,6 +355,12 @@ impl Model {
             h = layer.forward(&h, causal.as_ref(), offset)?;
         }
         self.norm.forward(&h)
+    }
+
+    /// Embed token IDs without running through transformer layers.
+    /// Returns raw token embeddings of shape `(B, L, hidden_size)`.
+    pub fn embed_tokens(&self, input: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(input)
     }
 }
 
