@@ -1,36 +1,12 @@
 //! Automatic model loading from HuggingFace Hub.
 //!
-//! This module provides composable infrastructure for loading models dynamically,
-//! similar to Python HuggingFace Transformers' `AutoModel.from_pretrained()`.
-//!
-//! ## Example
-//!
-//! ```ignore
-//! use candle::Device;
-//! use candle_transformers::auto::{AutoModelForCausalLM, AutoModelOptions};
-//!
-//! // Load from HF Hub (safetensors) — requires feature = "hf-hub"
-//! # #[cfg(feature = "hf-hub")]
-//! let model = AutoModelForCausalLM::from_pretrained(
-//!     "Qwen/Qwen2-0.5B-Instruct",
-//!     &Device::Cpu,
-//!     AutoModelOptions::default(),
-//! ).unwrap();
-//!
-//! // Load a local GGUF file
-//! let model = AutoModelForCausalLM::from_gguf(
-//!     std::path::Path::new("model.gguf"),
-//!     &Device::Cpu,
-//! ).unwrap();
-//! ```
+//! Similar to Python HuggingFace Transformers' `AutoModel.from_pretrained()`.
 //!
 //! ## Adding a new model
 //!
-//! 1. In the model file, call the macro:
-//!    ```ignore
-//!    crate::impl_causal_lm!(MyModel, "my_model_type");
-//!    ```
-//! 2. Add a match arm in `auto/causal_lm.rs` `load_float_model()` or `load_gguf_model()`.
+//! 1. Ensure the model has `forward(&mut self, ids, offset)` + `clear_kv_cache(&mut self)`.
+//! 2. Add `crate::impl_causal_lm!(MyModel, "my_model_type");` in the model file.
+//! 3. Add a match arm in `auto/causal_lm.rs` `load_float_model()` or `load_gguf_model()`.
 
 mod causal_lm;
 mod config;
@@ -41,9 +17,7 @@ pub use causal_lm::{
 };
 pub use config::{AutoConfig, Weights};
 
-/// Build the `load_gguf_model` dispatch from a compact GGUF model registry.
-///
-/// Every listed model type must implement
+/// GGUF model dispatch macro. Each model type must implement
 /// `from_gguf(ct: Content, reader: &mut R, device: &Device) -> Result<Self>`.
 #[macro_export]
 macro_rules! make_gguf_map {
@@ -67,18 +41,8 @@ macro_rules! make_gguf_map {
     }};
 }
 
-/// Build the `load_float_model` dispatch table from a compact model registry.
-///
-/// # Usage
-///
-/// ```ignore
-/// make_auto_map!(config, vb, {
-///     "mistral" => (mistral::Config, |cfg, vb| mistral::Model::new(&cfg, vb)),
-/// })
-/// ```
-///
-/// Each entry deserialises `config.json` into `$cfg_ty`, then calls the
-/// provided constructor closure.
+/// Float model dispatch macro. Each entry deserialises `config.json` into
+/// `$cfg_ty`, then calls the provided constructor closure.
 #[macro_export]
 macro_rules! make_auto_map {
     ($config:expr, $vb:expr, {
@@ -101,16 +65,8 @@ macro_rules! make_auto_map {
     }};
 }
 
-/// Implement the [`CausalLM`] trait for a model struct.
-///
-/// The model must already have:
-/// - `fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor>`
-/// - `fn clear_kv_cache(&mut self)`
-///
-/// # Usage
-/// ```ignore
-/// crate::impl_causal_lm!(Model, "mistral");
-/// ```
+/// Implement [`CausalLM`] for a model struct that has
+/// `forward(&mut self, ids, offset)` + `clear_kv_cache(&mut self)`.
 #[macro_export]
 macro_rules! impl_causal_lm {
     ($ty:ty, $name:literal) => {
@@ -133,63 +89,5 @@ macro_rules! impl_causal_lm {
                 m.clear_kv_cache()
             }
         }
-    };
-}
-
-/// Generate a `*ForCausalLM` wrapper struct that bundles an inner model with
-/// its KV cache — the standard pattern for models whose cache is external
-/// (e.g. LLaMA, Granite).
-///
-/// Generates `new(cfg, vb)`, `forward`, `clear_kv_cache`, and the
-/// [`CausalLM`] trait impl.  The inner model must have:
-/// - `InnerModel::load(vb: VarBuilder, cfg: &InnerCfg) -> Result<Self>`
-/// - `InnerCache::new(use_kv_cache: bool, dtype: DType, cfg: &InnerCfg, device: &Device) -> Result<Self>`
-/// - `inner_model.forward(ids, offset, &mut cache) -> Result<Tensor>`
-/// - The cache type must have a `kvs: Vec<Option<(Tensor, Tensor)>>` field.
-///
-/// # Usage
-/// ```ignore
-/// crate::causal_lm_wrapper!(
-///     LlamaForCausalLM, "llama",
-///     model: llama::Llama,
-///     cache: llama::Cache,
-///     cfg:   llama::Config,
-/// );
-/// ```
-#[macro_export]
-macro_rules! causal_lm_wrapper {
-    (
-        $wrapper:ident, $name:literal,
-        model: $model_ty:ty,
-        cache: $cache_ty:ty,
-        cfg:   $cfg_ty:ty,
-    ) => {
-        pub struct $wrapper {
-            model: $model_ty,
-            cache: $cache_ty,
-        }
-
-        impl $wrapper {
-            pub fn new(cfg: &$cfg_ty, vb: ::candle_nn::VarBuilder) -> ::candle::Result<Self> {
-                let model = <$model_ty>::load(vb.clone(), cfg)?;
-                let cache = <$cache_ty>::new(true, vb.dtype(), cfg, vb.device())?;
-                Ok(Self { model, cache })
-            }
-
-            pub fn forward(
-                &mut self,
-                input_ids: &::candle::Tensor,
-                seqlen_offset: usize,
-            ) -> ::candle::Result<::candle::Tensor> {
-                self.model
-                    .forward(input_ids, seqlen_offset, &mut self.cache)
-            }
-
-            pub fn clear_kv_cache(&mut self) {
-                self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
-            }
-        }
-
-        $crate::impl_causal_lm!($wrapper, $name);
     };
 }

@@ -9,10 +9,6 @@ use crate::models::{
 };
 use crate::models::{quantized_llama, quantized_qwen2, quantized_qwen3};
 
-// ---------------------------------------------------------------------------
-// CacheSnapshot
-// ---------------------------------------------------------------------------
-
 /// Opaque, cloneable snapshot of a model's KV cache state.
 pub trait CacheSnapshot: Send + Sync {
     fn clone_box(&self) -> Box<dyn CacheSnapshot>;
@@ -31,10 +27,6 @@ impl CacheSnapshot for LayerKvSnapshot {
     }
 }
 
-// ---------------------------------------------------------------------------
-// CausalLM trait
-// ---------------------------------------------------------------------------
-
 /// A causal language model that can run autoregressive inference.
 pub trait CausalLM: Send {
     fn model_type(&self) -> &'static str;
@@ -52,10 +44,6 @@ pub trait CausalLM: Send {
     fn restore_cache(&mut self, _snap: &dyn CacheSnapshot) {}
 }
 
-// ---------------------------------------------------------------------------
-// QuantizationFormat + AutoModelOptions
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone)]
 pub enum QuantizationFormat {
     Gguf { path: PathBuf },
@@ -69,10 +57,6 @@ pub struct AutoModelOptions {
     pub quantization: Option<QuantizationFormat>,
 }
 
-// ---------------------------------------------------------------------------
-// Internal helper
-// ---------------------------------------------------------------------------
-
 fn default_dtype(device: &Device) -> DType {
     if device.is_cuda() || device.is_metal() {
         DType::BF16
@@ -80,10 +64,6 @@ fn default_dtype(device: &Device) -> DType {
         DType::F32
     }
 }
-
-// ---------------------------------------------------------------------------
-// AutoModelForCausalLM
-// ---------------------------------------------------------------------------
 
 /// Factory for loading causal language models.
 pub struct AutoModelForCausalLM;
@@ -141,13 +121,8 @@ impl AutoModelForCausalLM {
             .to_string()
             .map_err(|_| candle::Error::Msg("general.architecture is not a string".to_string()))?
             .clone();
-
         Self::load_gguf_from_content(content, &mut file, &arch, device)
     }
-
-    // ------------------------------------------------------------------
-    // Internal: float (safetensors) model dispatch
-    // ------------------------------------------------------------------
 
     fn load_float_model(
         config: &AutoConfig,
@@ -155,7 +130,6 @@ impl AutoModelForCausalLM {
         use_flash_attn: bool,
     ) -> Result<Box<dyn CausalLM>> {
         match config.model_type.to_lowercase().as_str() {
-            // Llama — needs config conversion (LlamaConfig -> Config)
             "llama" => {
                 let raw_cfg: llama::LlamaConfig = config.parse()?;
                 let cfg = raw_cfg.into_config(use_flash_attn);
@@ -163,40 +137,29 @@ impl AutoModelForCausalLM {
                 let cache = llama::Cache::new(true, vb.dtype(), &cfg, vb.device())?;
                 Ok(Box::new(llama::LlamaForCausalLM { model, cache }))
             }
-            _ => {
-                crate::make_auto_map!(config, vb, {
-                    // Mistral / Mixtral
-                    "mistral"        => (mistral::Config,              |cfg: mistral::Config, vb: VarBuilder| mistral::Model::new(&cfg, vb)),
-                    "mixtral"        => (mixtral::Config,              |cfg: mixtral::Config, vb: VarBuilder| mixtral::Model::new(&cfg, vb)),
-                    // Phi3
-                    "phi3"           => (phi3::Config,                 |cfg: phi3::Config, vb: VarBuilder| phi3::Model::new(&cfg, vb)),
-                    // Qwen family
-                    "qwen2"          => (qwen2::Config,               |cfg: qwen2::Config, vb: VarBuilder| qwen2::ModelForCausalLM::new(&cfg, vb)),
-                    "qwen2_moe"      => (qwen2_moe::Config,           |cfg: qwen2_moe::Config, vb: VarBuilder| qwen2_moe::Model::new(&cfg, vb)),
-                    "qwen3"          => (qwen3::Config,               |cfg: qwen3::Config, vb: VarBuilder| qwen3::ModelForCausalLM::new(&cfg, vb)),
-                    "qwen3_moe"      => (qwen3_moe::Config,           |cfg: qwen3_moe::Config, vb: VarBuilder| qwen3_moe::ModelForCausalLM::new(&cfg, vb)),
-                    // Gemma family
-                    "gemma"          => (gemma::Config,                |cfg: gemma::Config, vb: VarBuilder| gemma::Model::new(use_flash_attn, &cfg, vb)),
-                    "gemma2"         => (gemma2::Config,               |cfg: gemma2::Config, vb: VarBuilder| gemma2::Model::new(use_flash_attn, &cfg, vb)),
-                    "gemma3"         => (gemma3::Config,               |cfg: gemma3::Config, vb: VarBuilder| gemma3::Model::new(use_flash_attn, &cfg, vb)),
-                    "gemma3_text"    => (gemma3::Config,               |cfg: gemma3::Config, vb: VarBuilder| gemma3::Model::new(use_flash_attn, &cfg, vb)),
-                    // Other decoder-only models
-                    "starcoder2"     => (starcoder2::Config,           |cfg: starcoder2::Config, vb: VarBuilder| starcoder2::Model::new(&cfg, vb)),
-                    "deepseek_v2"    => (deepseek2::DeepSeekV2Config,  |cfg: deepseek2::DeepSeekV2Config, vb: VarBuilder| deepseek2::DeepSeekV2::new(&cfg, vb)),
-                    "deepseek-v2"    => (deepseek2::DeepSeekV2Config,  |cfg: deepseek2::DeepSeekV2Config, vb: VarBuilder| deepseek2::DeepSeekV2::new(&cfg, vb)),
-                    "olmo"           => (olmo::Config,                 |cfg: olmo::Config, vb: VarBuilder| olmo::Model::new(&cfg, vb)),
-                    "olmo2"          => (olmo2::Config,                |cfg: olmo2::Config, vb: VarBuilder| olmo2::Model::new(&cfg, vb)),
-                    "stablelm"       => (stable_lm::Config,            |cfg: stable_lm::Config, vb: VarBuilder| stable_lm::Model::new(&cfg, vb)),
-                    "stablelm_epoch" => (stable_lm::Config,            |cfg: stable_lm::Config, vb: VarBuilder| stable_lm::Model::new(&cfg, vb)),
-                    "helium"         => (helium::Config,               |cfg: helium::Config, vb: VarBuilder| helium::Model::new(&cfg, vb)),
-                })
-            }
+            _ => crate::make_auto_map!(config, vb, {
+                "mistral"        => (mistral::Config,              |cfg: mistral::Config, vb: VarBuilder| mistral::Model::new(&cfg, vb)),
+                "mixtral"        => (mixtral::Config,              |cfg: mixtral::Config, vb: VarBuilder| mixtral::Model::new(&cfg, vb)),
+                "phi3"           => (phi3::Config,                 |cfg: phi3::Config, vb: VarBuilder| phi3::Model::new(&cfg, vb)),
+                "qwen2"          => (qwen2::Config,               |cfg: qwen2::Config, vb: VarBuilder| qwen2::ModelForCausalLM::new(&cfg, vb)),
+                "qwen2_moe"      => (qwen2_moe::Config,           |cfg: qwen2_moe::Config, vb: VarBuilder| qwen2_moe::Model::new(&cfg, vb)),
+                "qwen3"          => (qwen3::Config,               |cfg: qwen3::Config, vb: VarBuilder| qwen3::ModelForCausalLM::new(&cfg, vb)),
+                "qwen3_moe"      => (qwen3_moe::Config,           |cfg: qwen3_moe::Config, vb: VarBuilder| qwen3_moe::ModelForCausalLM::new(&cfg, vb)),
+                "gemma"          => (gemma::Config,                |cfg: gemma::Config, vb: VarBuilder| gemma::Model::new(use_flash_attn, &cfg, vb)),
+                "gemma2"         => (gemma2::Config,               |cfg: gemma2::Config, vb: VarBuilder| gemma2::Model::new(use_flash_attn, &cfg, vb)),
+                "gemma3"         => (gemma3::Config,               |cfg: gemma3::Config, vb: VarBuilder| gemma3::Model::new(use_flash_attn, &cfg, vb)),
+                "gemma3_text"    => (gemma3::Config,               |cfg: gemma3::Config, vb: VarBuilder| gemma3::Model::new(use_flash_attn, &cfg, vb)),
+                "starcoder2"     => (starcoder2::Config,           |cfg: starcoder2::Config, vb: VarBuilder| starcoder2::Model::new(&cfg, vb)),
+                "deepseek_v2"    => (deepseek2::DeepSeekV2Config,  |cfg: deepseek2::DeepSeekV2Config, vb: VarBuilder| deepseek2::DeepSeekV2::new(&cfg, vb)),
+                "deepseek-v2"    => (deepseek2::DeepSeekV2Config,  |cfg: deepseek2::DeepSeekV2Config, vb: VarBuilder| deepseek2::DeepSeekV2::new(&cfg, vb)),
+                "olmo"           => (olmo::Config,                 |cfg: olmo::Config, vb: VarBuilder| olmo::Model::new(&cfg, vb)),
+                "olmo2"          => (olmo2::Config,                |cfg: olmo2::Config, vb: VarBuilder| olmo2::Model::new(&cfg, vb)),
+                "stablelm"       => (stable_lm::Config,            |cfg: stable_lm::Config, vb: VarBuilder| stable_lm::Model::new(&cfg, vb)),
+                "stablelm_epoch" => (stable_lm::Config,            |cfg: stable_lm::Config, vb: VarBuilder| stable_lm::Model::new(&cfg, vb)),
+                "helium"         => (helium::Config,               |cfg: helium::Config, vb: VarBuilder| helium::Model::new(&cfg, vb)),
+            }),
         }
     }
-
-    // ------------------------------------------------------------------
-    // Internal: GGUF model dispatch
-    // ------------------------------------------------------------------
 
     fn load_gguf(path: &Path, model_type: &str, device: &Device) -> Result<Box<dyn CausalLM>> {
         let mut file = std::fs::File::open(path)
@@ -219,10 +182,6 @@ impl AutoModelForCausalLM {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -299,13 +258,11 @@ mod tests {
         assert_eq!(read_v_scalar(&model, 0), 1.0);
 
         let snap = model.snapshot_cache().expect("mock always snapshots");
-
         model.forward(&ids, 1)?;
         assert_eq!(read_v_scalar(&model, 0), 2.0);
 
         model.restore_cache(snap.as_ref());
         assert_eq!(read_v_scalar(&model, 0), 1.0);
-
         Ok(())
     }
 
@@ -320,8 +277,6 @@ mod tests {
                 unimplemented!()
             }
         }
-
-        let m = NoopModel;
-        assert!(m.snapshot_cache().is_none());
+        assert!(NoopModel.snapshot_cache().is_none());
     }
 }

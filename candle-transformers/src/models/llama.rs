@@ -533,10 +533,6 @@ impl Llama {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LlamaForCausalLM — bundles Llama + Cache for the CausalLM trait
-// ---------------------------------------------------------------------------
-
 pub struct LlamaForCausalLM {
     pub model: Llama,
     pub cache: Cache,
