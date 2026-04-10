@@ -543,12 +543,9 @@ pub struct LlamaForCausalLM {
 }
 
 impl LlamaForCausalLM {
-    pub fn forward(
-        &mut self,
-        input_ids: &Tensor,
-        seqlen_offset: usize,
-    ) -> Result<Tensor> {
-        self.model.forward(input_ids, seqlen_offset, &mut self.cache)
+    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        self.model
+            .forward(input_ids, seqlen_offset, &mut self.cache)
     }
 
     pub fn clear_kv_cache(&mut self) {

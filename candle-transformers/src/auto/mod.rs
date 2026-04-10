@@ -36,7 +36,7 @@ mod causal_lm;
 mod config;
 
 pub use causal_lm::{
-    AutoModelForCausalLM, AutoModelOptions, CausalLM, CacheSnapshot, LayerKvSnapshot,
+    AutoModelForCausalLM, AutoModelOptions, CacheSnapshot, CausalLM, LayerKvSnapshot,
     QuantizationFormat,
 };
 pub use config::{AutoConfig, Weights};
