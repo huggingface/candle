@@ -102,8 +102,7 @@ impl QStorage {
                 GgmlDType::Q6K => metal::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
-                // Q1_0_g128 is CPU-only for now (GPU kernels not yet implemented)
-                GgmlDType::Q1_0_g128 => crate::bail!("Q1_0_g128 is not yet supported on Metal"),
+                GgmlDType::Q1_0_g128 => metal::load_quantized(d, as_t_slice::<BlockQ1_0_g128>(data)),
             },
             Device::Cuda(d) => match dtype {
                 GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
@@ -121,8 +120,7 @@ impl QStorage {
                 GgmlDType::Q6K => cuda::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
-                // Q1_0_g128 is CPU-only for now (GPU kernels not yet implemented)
-                GgmlDType::Q1_0_g128 => crate::bail!("Q1_0_g128 is not yet supported on CUDA"),
+                GgmlDType::Q1_0_g128 => crate::bail!("Q1_0_g128 is not yet supported on CUDA (Metal kernels: implemented, CPU dequantize: done, CUDA dequantize: pending)"),
             },
         }
     }
