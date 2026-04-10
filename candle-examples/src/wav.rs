@@ -83,6 +83,12 @@ pub fn write_pcm_as_wav_stereo<W: Write, S: Sample>(
     }
     let n_channels = channels.len() as u16;
     let n_frames = channels[0].len();
+    if channels.iter().any(|ch| ch.len() != n_frames) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "all channels must have the same number of frames",
+        ));
+    }
     let data_bytes = (n_frames * n_channels as usize * 2) as u32;
     let block_align = n_channels * 2;
     let bytes_per_second = sample_rate * block_align as u32;
