@@ -7,7 +7,10 @@ use crate::models::{
     chatglm, codegeex4_9b, deepseek2, falcon, gemma, gemma2, gemma3, glm4, helium, llama, mistral,
     mixtral, olmo, olmo2, phi3, qwen2, qwen2_moe, qwen3, qwen3_moe, stable_lm, starcoder2, yi,
 };
-use crate::models::{quantized_llama, quantized_qwen2, quantized_qwen3};
+use crate::models::{
+    quantized_gemma3, quantized_glm4, quantized_lfm2, quantized_llama, quantized_phi,
+    quantized_phi3, quantized_qwen2, quantized_qwen3, quantized_qwen3_moe,
+};
 
 /// Opaque, cloneable snapshot of a model's KV cache state.
 pub trait CacheSnapshot: Send + Sync {
@@ -184,11 +187,34 @@ impl AutoModelForCausalLM {
         arch: &str,
         device: &Device,
     ) -> Result<Box<dyn CausalLM>> {
-        crate::make_gguf_map!(arch, content, reader, device, {
-            "llama"    => quantized_llama::ModelWeights,
-            "qwen2"    => quantized_qwen2::ModelWeights,
-            "qwen3"    => quantized_qwen3::ModelWeights,
-        })
+        match arch.to_lowercase().as_str() {
+            // Non-standard from_gguf signatures (extra args)
+            "phi3" => Ok(Box::new(quantized_phi3::ModelWeights::from_gguf(
+                false, content, reader, device,
+            )?)),
+            "glm4" => Ok(Box::new(quantized_glm4::ModelWeights::from_gguf(
+                content,
+                reader,
+                device,
+                DType::F32,
+            )?)),
+            "qwen3_moe" => Ok(Box::new(quantized_qwen3_moe::GGUFQWenMoE::from_gguf(
+                content,
+                reader,
+                device,
+                DType::F32,
+            )?)),
+            // Standard from_gguf(content, reader, device) signatures
+            _ => crate::make_gguf_map!(arch, content, reader, device, {
+                "llama"    => quantized_llama::ModelWeights,
+                "phi"      => quantized_phi::ModelWeights,
+                "qwen2"    => quantized_qwen2::ModelWeights,
+                "qwen3"    => quantized_qwen3::ModelWeights,
+                "gemma"    => quantized_gemma3::ModelWeights,
+                "gemma3"   => quantized_gemma3::ModelWeights,
+                "lfm2"     => quantized_lfm2::ModelWeights,
+            }),
+        }
     }
 }
 

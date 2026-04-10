@@ -418,6 +418,12 @@ impl GGUFQWenMoE {
         Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
     }
 
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.self_attn.kv_cache.reset();
+        }
+    }
+
     pub fn forward(&mut self, x: &Tensor, offset: usize) -> Result<Tensor> {
         let mut xs = self.tok_embeddings.forward(x)?;
         let (b, l) = x.dims2()?;
@@ -449,3 +455,5 @@ impl GGUFQWenMoE {
         self.output.forward(&xs)?.to_dtype(DType::F32)?.squeeze(1)
     }
 }
+
+crate::impl_causal_lm!(GGUFQWenMoE, "qwen3_moe");
