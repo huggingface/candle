@@ -7,15 +7,29 @@
 
 use candle_core::quantized::gguf_file;
 use candle_core::{Device, Result};
+use std::path::PathBuf;
+
+fn bonsai_path() -> PathBuf {
+    // Prefer Windows path; fall back to Linux path if not found
+    let windows = PathBuf::from(r"C:\Users\Zwmar\.openclaw\workspace\projects\starfire\models\bonsai-8b\Bonsai-8B.gguf");
+    let linux = PathBuf::from("/home/zach/models/Bonsai-8B.gguf");
+    if windows.exists() {
+        windows
+    } else if linux.exists() {
+        linux
+    } else {
+        windows // Return the Windows path anyway; the test will fail with a clear error
+    }
+}
 
 #[test]
 fn test_q1_0_g128_tensor_detection() -> Result<()> {
-    let model_path = "/home/zach/models/Bonsai-8B.gguf";
+    let model_path = bonsai_path();
 
-    println!("Loading: {}", model_path);
+    println!("Loading: {}", model_path.display());
 
-    let device = Device::Cpu;
-    let mut file = std::fs::File::open(model_path)?;
+    let _device = Device::Cpu;
+    let mut file = std::fs::File::open(&model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
 
     println!("GGUF version: {:?}", content.magic);
@@ -58,10 +72,10 @@ fn test_q1_0_g128_tensor_detection() -> Result<()> {
 
 #[test]
 fn test_q1_0_g128_tensor_loading() -> Result<()> {
-    let model_path = "/home/zach/models/Bonsai-8B.gguf";
+    let model_path = bonsai_path();
 
-    let device = Device::Cpu;
-    let mut file = std::fs::File::open(model_path)?;
+    let _device = Device::Cpu;
+    let mut file = std::fs::File::open(&model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
 
     // Find first Q1_0_g128 tensor
@@ -82,7 +96,7 @@ fn test_q1_0_g128_tensor_loading() -> Result<()> {
     println!("Loading tensor: {}", tensor_name);
 
     let info = &content.tensor_infos[&tensor_name];
-    let loaded = info.read(&mut file, content.tensor_data_offset, &device)?;
+    let loaded = info.read(&mut file, content.tensor_data_offset, &_device)?;
 
     println!(
         "Loaded! shape={:?}, dtype={:?}",
