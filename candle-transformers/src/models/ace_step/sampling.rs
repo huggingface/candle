@@ -36,6 +36,9 @@ const VALID_TIMESTEPS: [f64; 20] = [
 /// Optionally applies a time shift transformation:
 /// `t_shifted = shift * t / (1 + (shift - 1) * t)`
 pub fn get_schedule(num_steps: usize, shift: f64) -> Vec<f64> {
+    if num_steps == 0 {
+        return vec![0.0];
+    }
     let mut schedule = Vec::with_capacity(num_steps + 1);
     for i in 0..=num_steps {
         let t = 1.0 - (i as f64 / num_steps as f64);
@@ -203,8 +206,12 @@ fn project(v0: &Tensor, v1: &Tensor, dim: usize) -> Result<(Tensor, Tensor)> {
     } else {
         orig_device.clone()
     };
-    let v0 = v0.to_device(&compute_device)?.to_dtype(candle::DType::F64)?;
-    let v1 = v1.to_device(&compute_device)?.to_dtype(candle::DType::F64)?;
+    let v0 = v0
+        .to_device(&compute_device)?
+        .to_dtype(candle::DType::F64)?;
+    let v1 = v1
+        .to_device(&compute_device)?
+        .to_dtype(candle::DType::F64)?;
 
     // L2 normalize v1 along dim
     let v1_norm = v1.sqr()?.sum_keepdim(dim)?.sqrt()?;

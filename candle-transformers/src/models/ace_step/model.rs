@@ -311,7 +311,15 @@ impl AceStepConditionGenerationModel {
             };
             let num_steps = t_schedule.len();
             let cover_steps = (num_steps as f64 * opts.audio_cover_strength).round() as usize;
-            let mut active = condition;
+            let mut active = if cover_steps == 0 {
+                if let Some(nc) = non_cover_condition {
+                    nc
+                } else {
+                    condition
+                }
+            } else {
+                condition
+            };
 
             for step in 0..num_steps {
                 // Switch to non-cover condition at the transition point
@@ -380,8 +388,13 @@ impl AceStepConditionGenerationModel {
                     }
                 };
 
+            let initial_condition = if cover_steps == 0 {
+                non_cover_condition.unwrap_or(condition)
+            } else {
+                condition
+            };
             let (mut enc_cond, mut enc_mask_cond, mut ctx_doubled) =
-                build_cfg_tensors(condition, &self.null_condition_emb)?;
+                build_cfg_tensors(initial_condition, &self.null_condition_emb)?;
 
             let (cfg_start, cfg_end) = opts.cfg_interval;
 

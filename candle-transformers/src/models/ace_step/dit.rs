@@ -357,7 +357,9 @@ impl AceStepAttention {
         } else {
             // Self-attention or cross-attention without cache.
             let kv_input = if self.is_cross_attention {
-                encoder_hidden_states.expect("cross-attention requires encoder_hidden_states")
+                encoder_hidden_states.ok_or_else(|| {
+                    candle::Error::Msg("cross-attention requires encoder_hidden_states".into())
+                })?
             } else {
                 x
             };

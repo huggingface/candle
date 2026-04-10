@@ -480,16 +480,21 @@ impl AutoencoderOobleck {
             let latent_chunk = self.encode(&audio_chunk)?;
 
             // Determine downsample factor from first chunk
-            let df = downsample_factor.get_or_insert_with(|| {
-                audio_chunk.dim(2).unwrap() as f64 / latent_chunk.dim(2).unwrap() as f64
-            });
+            let df = match downsample_factor {
+                Some(df) => df,
+                None => {
+                    let df = audio_chunk.dim(2)? as f64 / latent_chunk.dim(2)? as f64;
+                    downsample_factor = Some(df);
+                    df
+                }
+            };
 
             // Trim overlap in latent space
             let added_start = core_start - win_start;
-            let trim_start = (added_start as f64 / *df).round() as usize;
+            let trim_start = (added_start as f64 / df).round() as usize;
 
             let added_end = win_end - core_end;
-            let trim_end = (added_end as f64 / *df).round() as usize;
+            let trim_end = (added_end as f64 / df).round() as usize;
 
             let latent_len = latent_chunk.dim(2)?;
             let end_idx = if trim_end > 0 {
