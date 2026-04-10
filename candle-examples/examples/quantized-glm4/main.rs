@@ -9,7 +9,7 @@ use std::io::Write;
 use tokenizers::Tokenizer;
 
 use candle::quantized::gguf_file;
-use candle::{DType, Tensor};
+use candle::Tensor;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -205,12 +205,7 @@ fn main() -> anyhow::Result<()> {
             &format_size(total_size_in_bytes),
             start.elapsed().as_secs_f32(),
         );
-        let dtype = if device.is_cuda() || device.is_metal() {
-            DType::BF16
-        } else {
-            DType::F32
-        };
-        GLM4::from_gguf(model, &mut file, &device, dtype)?
+        GLM4::from_gguf(model, &mut file, &device)?
     };
     println!("model built");
 

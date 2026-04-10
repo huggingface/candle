@@ -363,8 +363,12 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
-        dtype: DType,
     ) -> Result<Self> {
+        let dtype = if device.is_cuda() || device.is_metal() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
         let mut gg = Gguf::new(ct, reader, device.clone());
         let md_get = |s: &str| match gg.metadata().get(s) {
             None => candle::bail!("cannot find {s} in metadata"),

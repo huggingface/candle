@@ -187,34 +187,18 @@ impl AutoModelForCausalLM {
         arch: &str,
         device: &Device,
     ) -> Result<Box<dyn CausalLM>> {
-        match arch.to_lowercase().as_str() {
-            // Non-standard from_gguf signatures (extra args)
-            "phi3" => Ok(Box::new(quantized_phi3::ModelWeights::from_gguf(
-                false, content, reader, device,
-            )?)),
-            "glm4" => Ok(Box::new(quantized_glm4::ModelWeights::from_gguf(
-                content,
-                reader,
-                device,
-                DType::F32,
-            )?)),
-            "qwen3_moe" => Ok(Box::new(quantized_qwen3_moe::GGUFQWenMoE::from_gguf(
-                content,
-                reader,
-                device,
-                DType::F32,
-            )?)),
-            // Standard from_gguf(content, reader, device) signatures
-            _ => crate::make_gguf_map!(arch, content, reader, device, {
-                "llama"    => quantized_llama::ModelWeights,
-                "phi"      => quantized_phi::ModelWeights,
-                "qwen2"    => quantized_qwen2::ModelWeights,
-                "qwen3"    => quantized_qwen3::ModelWeights,
-                "gemma"    => quantized_gemma3::ModelWeights,
-                "gemma3"   => quantized_gemma3::ModelWeights,
-                "lfm2"     => quantized_lfm2::ModelWeights,
-            }),
-        }
+        crate::make_gguf_map!(arch, content, reader, device, {
+            "llama"     => quantized_llama::ModelWeights,
+            "phi"       => quantized_phi::ModelWeights,
+            "phi3"      => quantized_phi3::ModelWeights,
+            "qwen2"     => quantized_qwen2::ModelWeights,
+            "qwen3"     => quantized_qwen3::ModelWeights,
+            "qwen3_moe" => quantized_qwen3_moe::GGUFQWenMoE,
+            "gemma"     => quantized_gemma3::ModelWeights,
+            "gemma3"    => quantized_gemma3::ModelWeights,
+            "lfm2"      => quantized_lfm2::ModelWeights,
+            "glm4"      => quantized_glm4::ModelWeights,
+        })
     }
 }
 
