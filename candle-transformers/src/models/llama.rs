@@ -532,3 +532,28 @@ impl Llama {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// LlamaForCausalLM — bundles Llama + Cache for the CausalLM trait
+// ---------------------------------------------------------------------------
+
+pub struct LlamaForCausalLM {
+    pub model: Llama,
+    pub cache: Cache,
+}
+
+impl LlamaForCausalLM {
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        self.model.forward(input_ids, seqlen_offset, &mut self.cache)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.cache.kvs.iter_mut().for_each(|kv| *kv = None);
+    }
+}
+
+crate::impl_causal_lm!(LlamaForCausalLM, "llama");

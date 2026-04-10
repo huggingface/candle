@@ -1071,3 +1071,4 @@ impl DeepSeekV2 {
         }
     }
 }
+crate::impl_causal_lm!(DeepSeekV2, "deepseek_v2");
