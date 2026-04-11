@@ -1040,8 +1040,6 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         GgmlDType::I2S => 0.01,
         // llama.cpp IQ4_XS decode path currently uses dense dequant fallback in Candle.
         GgmlDType::IQ4_XS => 0.03,
-        // PrismML/Bonsai 1-bit format — high error expected at 1 bit per weight
-        GgmlDType::Q1_0_g128 => 0.03,
     };
     Ok(err)
 }

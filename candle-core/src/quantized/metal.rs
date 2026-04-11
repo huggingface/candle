@@ -113,10 +113,6 @@ impl QMetalStorage {
                 let vec: Vec<crate::quantized::BlockIQ4XS> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockIQ4XS::to_float(&vec, &mut out);
             }
-            GgmlDType::Q1_0_g128 => {
-                let vec: Vec<crate::quantized::BlockQ1_0_g128> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ1_0_g128::to_float(&vec, &mut out);
-            }
         }
 
         let buffer = self.device.new_buffer_with_data(&out)?;

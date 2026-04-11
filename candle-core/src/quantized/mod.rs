@@ -103,9 +103,6 @@ impl QStorage {
                 GgmlDType::I2S => metal::load_quantized(d, as_t_slice::<BlockI2S>(data)),
                 GgmlDType::IQ4_XS => metal::load_quantized(d, as_t_slice::<BlockIQ4XS>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
-                GgmlDType::Q1_0_g128 => crate::bail!(
-                    "Bonsai/Q1_0_g128 (GGUF dtype 41) is implemented on CPU only; Metal backend support is not yet implemented"
-                ),
             },
             Device::Cuda(d) => match dtype {
                 GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
@@ -125,9 +122,6 @@ impl QStorage {
                 GgmlDType::I2S => cuda::load_quantized(d, as_t_slice::<BlockI2S>(data)),
                 GgmlDType::IQ4_XS => cuda::load_quantized(d, as_t_slice::<BlockIQ4XS>(data)),
                 GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
-                GgmlDType::Q1_0_g128 => crate::bail!(
-                    "Bonsai/Q1_0_g128 (GGUF dtype 41) is implemented on CPU only; CUDA backend support is not yet implemented"
-                ),
             },
         }
     }
@@ -261,8 +255,9 @@ impl QStorage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// Allow non-camel-case variants to preserve ggml/llama.cpp naming conventions (e.g. IQ4_XS).
 #[allow(non_camel_case_types)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GgmlDType {
     F32,
     F16,
@@ -281,7 +276,6 @@ pub enum GgmlDType {
     Q8K,
     I2S,
     IQ4_XS,
-    Q1_0_g128,
 }
 
 impl GgmlDType {
@@ -305,9 +299,6 @@ impl GgmlDType {
             36 => Self::I2S,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             30 => Self::BF16,
-            // PrismML/Bonsai custom GGUF lane, not upstream ggml's standard K-quants.
-            // Reference: https://github.com/PrismML-Eng/llama.cpp/blob/master/ggml/src/ggml-common.h
-            41 => Self::Q1_0_g128,
             _ => crate::bail!("unknown dtype for tensor {u}"),
         };
         Ok(dtype)
@@ -333,9 +324,6 @@ impl GgmlDType {
             Self::I2S => 36,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             Self::BF16 => 30,
-            // PrismML/Bonsai custom GGUF lane, not upstream ggml's standard K-quants.
-            // Reference: https://github.com/PrismML-Eng/llama.cpp/blob/master/ggml/src/ggml-common.h
-            Self::Q1_0_g128 => 41,
         }
     }
 
@@ -362,10 +350,6 @@ impl GgmlDType {
                 elem_count / BlockIQ4XS::BLCK_SIZE
             ]),
             Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
-            Self::Q1_0_g128 => Box::new(vec![
-                BlockQ1_0_g128::zeros();
-                elem_count / BlockQ1_0_g128::BLCK_SIZE
-            ]),
         }
     }
 
@@ -388,7 +372,6 @@ impl GgmlDType {
             Self::I2S => Box::new(as_t_slice::<BlockI2S>(data).to_vec()),
             Self::IQ4_XS => Box::new(as_t_slice::<BlockIQ4XS>(data).to_vec()),
             Self::BF16 => Box::new(as_t_slice::<bf16>(data).to_vec()),
-            Self::Q1_0_g128 => Box::new(as_t_slice::<BlockQ1_0_g128>(data).to_vec()),
         }
     }
 
@@ -413,7 +396,6 @@ impl GgmlDType {
             Self::Q8K => std::mem::size_of::<BlockQ8K>(),
             Self::I2S => std::mem::size_of::<BlockI2S>(),
             Self::IQ4_XS => std::mem::size_of::<BlockIQ4XS>(),
-            Self::Q1_0_g128 => std::mem::size_of::<BlockQ1_0_g128>(),
         }
     }
 
@@ -431,7 +413,6 @@ impl GgmlDType {
             Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K | Self::Q8K => k_quants::QK_K,
             Self::I2S => k_quants::QK_I2S,
             Self::IQ4_XS => k_quants::QK_IQ4_XS,
-            Self::Q1_0_g128 => k_quants::QK1_0_G128,
         }
     }
 }
