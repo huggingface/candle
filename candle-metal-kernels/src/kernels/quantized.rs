@@ -103,7 +103,7 @@ pub fn call_quantized_matmul_mv_t(
             let align = 8;
             (nth0, nth1, align)
         }
-        GgmlDType::F32 => {
+        GgmlDType::F32 | GgmlDType::I2S => {
             let nth0 = 32;
             let nth1 = 1;
             let align = 8;
@@ -136,6 +136,7 @@ pub fn call_quantized_matmul_mv_t(
         GgmlDType::F16 => "kernel_mul_mv_f16_f32",
         GgmlDType::BF16 => "kernel_mul_mv_bf16_f32",
         GgmlDType::F32 => "kernel_mul_mv_f32_f32",
+        GgmlDType::I2S => "kernel_mul_mv_f32_f32",
     };
 
     let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;

@@ -1036,6 +1036,12 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
+        // BitNet ternary format
+        GgmlDType::I2S => 0.01,
+        // llama.cpp IQ4_XS decode path currently uses dense dequant fallback in Candle.
+        GgmlDType::IQ4_XS => 0.03,
+        // PrismML/Bonsai 1-bit format — high error expected at 1 bit per weight
+        GgmlDType::Q1_0_g128 => 0.03,
     };
     Ok(err)
 }
@@ -1398,5 +1404,36 @@ fn quantized_matmul_q8k() -> Result<()> {
     assert_eq!(dst, [1.266, 1.504, -0.204, 1.7]);
 
     ggml_matmul_error_test::<BlockQ8K>()?;
+    Ok(())
+}
+
+#[test]
+fn iq4_xs_dequant_and_matmul_fallback() -> Result<()> {
+    use std::borrow::Cow;
+
+    let cpu = &Device::Cpu;
+    let block = k_quants::BlockIQ4XS::from_parts(
+        half::f16::from_f32(1.0),
+        0xaaaa,
+        [0x11; k_quants::QK_K / 64],
+        [0x88; k_quants::QK_K / 2],
+    );
+    let raw = unsafe {
+        std::slice::from_raw_parts(
+            (&block as *const k_quants::BlockIQ4XS) as *const u8,
+            std::mem::size_of::<k_quants::BlockIQ4XS>(),
+        )
+    };
+
+    let storage = quantized::QStorage::from_data(Cow::Borrowed(raw), cpu, GgmlDType::IQ4_XS)?;
+    let qtensor = quantized::QTensor::new(storage, (1, k_quants::QK_K))?;
+    let dequant = qtensor.dequantize(cpu)?.flatten_all()?.to_vec1::<f32>()?;
+    assert!(dequant.iter().all(|v| (*v - 1.0).abs() < 1e-6));
+
+    let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
+    let lhs = Tensor::ones((1, k_quants::QK_K), DType::F32, cpu)?;
+    let out = matmul.forward(&lhs)?.flatten_all()?.to_vec1::<f32>()?;
+    assert_eq!(out.len(), 1);
+    assert!((out[0] - k_quants::QK_K as f32).abs() < 1e-3);
     Ok(())
 }

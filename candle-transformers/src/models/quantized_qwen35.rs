@@ -32,6 +32,11 @@ impl<R: Read + Seek> Gguf<R> {
         &self.device
     }
 
+    /// Changes the target device for subsequent tensor loads.
+    fn set_device(&mut self, device: Device) {
+        self.device = device;
+    }
+
     /// Loads `name` as a quantized matrix multiplication weight.
     fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
@@ -814,6 +819,20 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
+        Self::from_gguf_with_layer_limit(ct, reader, device, None, true)
+    }
+
+    /// Loads Qwen3.5 weights while optionally limiting how many layers are kept on `device`.
+    ///
+    /// This is intended for callers that need to keep large GGUFs within a local accelerator
+    /// memory budget by placing tail layers and/or embeddings on CPU.
+    pub fn from_gguf_with_layer_limit<R: Read + Seek>(
+        ct: gguf_file::Content,
+        reader: &mut R,
+        device: &Device,
+        max_device_layers: Option<usize>,
+        keep_embeddings_on_device: bool,
+    ) -> Result<Self> {
         let mut gg = Gguf::new(ct, reader, device.clone());
 
         let md_get = |s: &str| match gg.metadata().get(s) {
@@ -845,16 +864,21 @@ impl ModelWeights {
             None => DType::F16,
         };
 
+        let embed_device = if keep_embeddings_on_device {
+            device.clone()
+        } else {
+            Device::Cpu
+        };
         let embed_tensor = gg.tensor("token_embd.weight")?;
-        let embed_weight = if device.is_cuda() || device.is_metal() {
-            match embed_tensor.dequantize_f16(device) {
+        let embed_weight = if embed_device.is_cuda() || embed_device.is_metal() {
+            match embed_tensor.dequantize_f16(&embed_device) {
                 Ok(weight) => weight,
                 Err(_) => embed_tensor
-                    .dequantize(device)?
+                    .dequantize(&embed_device)?
                     .to_dtype(DType::F16)?,
             }
         } else {
-            embed_tensor.dequantize(device)?
+            embed_tensor.dequantize(&embed_device)?
         };
         let embed_tokens = Embedding::new(embed_weight, hidden_size);
         let rotary = Arc::new(RotaryEmbedding::new(
@@ -867,6 +891,11 @@ impl ModelWeights {
 
         let mut layers = Vec::with_capacity(num_layers);
         for i in 0..num_layers {
+            let layer_device = match max_device_layers {
+                Some(max) if i >= max => Device::Cpu,
+                _ => device.clone(),
+            };
+            gg.set_device(layer_device);
             layers.push(LayerWeights::new(
                 &mut gg,
                 num_attention_heads,
@@ -882,6 +911,7 @@ impl ModelWeights {
             )?);
         }
 
+        gg.set_device(device.clone());
         let norm = gg.rms_norm("output_norm.weight", rms_norm_eps)?;
         let lm_head = match gg.tensor_or_none("output.weight") {
             Some(tensor) => QMatMul::from_weights(tensor?.into())?,

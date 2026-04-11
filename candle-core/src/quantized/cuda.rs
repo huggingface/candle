@@ -43,6 +43,12 @@ fn pad(p: usize, q: usize) -> usize {
     ceil_div(p, q) * q
 }
 
+fn deq_on_cpu<T: GgmlType>(buffer: &[u8], n: usize, dst: &mut [f32]) {
+    let slice = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const T, n) };
+    let vec = slice.to_vec();
+    T::to_float(&vec, dst)
+}
+
 fn quantize_q8_1(
     src: &CudaView<f32>,
     dst: &mut CudaSlice<u8>,
@@ -167,57 +173,86 @@ fn dequantize_f16(
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
     let nb = elem_count.div_ceil(256);
-    let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
-        GgmlDType::Q4_0 => ("dequantize_block_q4_0_f16", false, 32, nb),
-        GgmlDType::Q4_1 => ("dequantize_block_q4_1_f16", false, 32, nb),
-        GgmlDType::Q5_0 => (
+    let kernel = match dtype {
+        GgmlDType::Q4_0 => Some(("dequantize_block_q4_0_f16", false, 32, nb)),
+        GgmlDType::Q4_1 => Some(("dequantize_block_q4_1_f16", false, 32, nb)),
+        GgmlDType::Q5_0 => Some((
             "dequantize_block_q5_0_f16",
             false,
             CUDA_DEQUANTIZE_BLOCK_SIZE,
             ceil_div(elem_count, 2 * CUDA_DEQUANTIZE_BLOCK_SIZE),
-        ),
-        GgmlDType::Q5_1 => (
+        )),
+        GgmlDType::Q5_1 => Some((
             "dequantize_block_q5_1_f16",
             false,
             CUDA_DEQUANTIZE_BLOCK_SIZE,
             ceil_div(elem_count, 2 * CUDA_DEQUANTIZE_BLOCK_SIZE),
-        ),
-        GgmlDType::Q8_0 => ("dequantize_block_q8_0_f16", false, 32, nb),
-        GgmlDType::Q2K => ("dequantize_block_q2_K_f16", true, 64, nb),
-        GgmlDType::Q3K => ("dequantize_block_q3_K_f16", true, 64, nb),
-        GgmlDType::Q4K => ("dequantize_block_q4_K_f16", true, 32, nb),
-        GgmlDType::Q5K => ("dequantize_block_q5_K_f16", true, 64, nb),
-        GgmlDType::Q6K => ("dequantize_block_q6_K_f16", true, 64, nb),
-        GgmlDType::Q8K => ("dequantize_block_q8_K_f16", true, 32, nb),
-        _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
-    };
-    let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f16>(elem_count)? };
-    // See e.g.
-    // https://github.com/ggerganov/llama.cpp/blob/cbbd1efa06f8c09f9dff58ff9d9af509cc4c152b/ggml-cuda.cu#L7270
-    let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (num_blocks as u32, 1, 1),
-        block_dim: (block_dim as u32, 1, 1),
-        shared_mem_bytes: 0,
+        )),
+        GgmlDType::Q8_0 => Some(("dequantize_block_q8_0_f16", false, 32, nb)),
+        GgmlDType::Q2K => Some(("dequantize_block_q2_K_f16", true, 64, nb)),
+        GgmlDType::Q3K => Some(("dequantize_block_q3_K_f16", true, 64, nb)),
+        GgmlDType::Q4K => Some(("dequantize_block_q4_K_f16", true, 32, nb)),
+        GgmlDType::Q5K => Some(("dequantize_block_q5_K_f16", true, 64, nb)),
+        GgmlDType::Q6K => Some(("dequantize_block_q6_K_f16", true, 64, nb)),
+        GgmlDType::Q8K => Some(("dequantize_block_q8_K_f16", true, 32, nb)),
+        _ => None,
     };
 
-    if is_k {
-        let mut builder = func.builder();
-        builder.arg(&data.inner);
-        builder.arg(&dst);
-        unsafe { builder.launch(cfg) }.w()?;
-    } else {
-        let nb32 = match dtype {
-            GgmlDType::Q5_0 | GgmlDType::Q5_1 => elem_count,
-            _ => elem_count / 32,
+    if let Some((kernel_name, is_k, block_dim, num_blocks)) = kernel {
+        let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
+        let dst = unsafe { dev.alloc::<f16>(elem_count)? };
+        // See e.g.
+        // https://github.com/ggerganov/llama.cpp/blob/cbbd1efa06f8c09f9dff58ff9d9af509cc4c152b/ggml-cuda.cu#L7270
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (num_blocks as u32, 1, 1),
+            block_dim: (block_dim as u32, 1, 1),
+            shared_mem_bytes: 0,
         };
-        let mut builder = func.builder();
-        builder.arg(&data.inner);
-        builder.arg(&dst);
-        barg!(builder, nb32 as i32);
-        unsafe { builder.launch(cfg) }.w()?;
+
+        if is_k {
+            let mut builder = func.builder();
+            builder.arg(&data.inner);
+            builder.arg(&dst);
+            unsafe { builder.launch(cfg) }.w()?;
+        } else {
+            let nb32 = match dtype {
+                GgmlDType::Q5_0 | GgmlDType::Q5_1 => elem_count,
+                _ => elem_count / 32,
+            };
+            let mut builder = func.builder();
+            builder.arg(&data.inner);
+            builder.arg(&dst);
+            barg!(builder, nb32 as i32);
+            unsafe { builder.launch(cfg) }.w()?;
+        }
+        return Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()));
     }
-    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+
+    let buffer = dev.clone_dtoh(&data.inner.slice(..data.len))?;
+    let mut out = vec![0.0; elem_count];
+    let block_len = elem_count / dtype.block_size();
+    match dtype {
+        GgmlDType::F32 => deq_on_cpu::<f32>(&buffer, block_len, &mut out),
+        GgmlDType::F16 => deq_on_cpu::<half::f16>(&buffer, block_len, &mut out),
+        GgmlDType::BF16 => deq_on_cpu::<half::bf16>(&buffer, block_len, &mut out),
+        GgmlDType::Q4_0 => deq_on_cpu::<crate::quantized::BlockQ4_0>(&buffer, block_len, &mut out),
+        GgmlDType::Q4_1 => deq_on_cpu::<crate::quantized::BlockQ4_1>(&buffer, block_len, &mut out),
+        GgmlDType::Q5_0 => deq_on_cpu::<crate::quantized::BlockQ5_0>(&buffer, block_len, &mut out),
+        GgmlDType::Q5_1 => deq_on_cpu::<crate::quantized::BlockQ5_1>(&buffer, block_len, &mut out),
+        GgmlDType::Q8_0 => deq_on_cpu::<crate::quantized::BlockQ8_0>(&buffer, block_len, &mut out),
+        GgmlDType::Q8_1 => deq_on_cpu::<crate::quantized::BlockQ8_1>(&buffer, block_len, &mut out),
+        GgmlDType::Q2K => deq_on_cpu::<crate::quantized::BlockQ2K>(&buffer, block_len, &mut out),
+        GgmlDType::Q3K => deq_on_cpu::<crate::quantized::BlockQ3K>(&buffer, block_len, &mut out),
+        GgmlDType::Q4K => deq_on_cpu::<crate::quantized::BlockQ4K>(&buffer, block_len, &mut out),
+        GgmlDType::Q5K => deq_on_cpu::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out),
+        GgmlDType::Q6K => deq_on_cpu::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out),
+        GgmlDType::Q8K => deq_on_cpu::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out),
+        GgmlDType::I2S => deq_on_cpu::<crate::quantized::BlockI2S>(&buffer, block_len, &mut out),
+        GgmlDType::IQ4_XS => deq_on_cpu::<crate::quantized::BlockIQ4XS>(&buffer, block_len, &mut out),
+        GgmlDType::Q1_0_g128 => deq_on_cpu::<crate::quantized::BlockQ1_0_g128>(&buffer, block_len, &mut out),
+    }
+    let out = out.into_iter().map(f16::from_f32).collect::<Vec<_>>();
+    dev.storage_from_cpu_storage(&crate::CpuStorage::F16(out))
 }
 
 fn dequantize_mul_mat_vec(
@@ -550,12 +585,6 @@ impl QCudaStorage {
     }
 
     pub fn dequantize(&self, elem_count: usize) -> Result<CudaStorage> {
-        fn deq<T: GgmlType>(buffer: &[u8], n: usize, dst: &mut [f32]) {
-            let slice = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const T, n) };
-            let vec = slice.to_vec();
-            T::to_float(&vec, dst)
-        }
-
         let fast_kernel = matches!(
             self.dtype,
             GgmlDType::Q4_0
@@ -581,21 +610,24 @@ impl QCudaStorage {
         let mut out = vec![0.0; elem_count];
         let block_len = elem_count / self.dtype.block_size();
         match self.dtype {
-            GgmlDType::F32 => deq::<f32>(&buffer, block_len, &mut out),
-            GgmlDType::F16 => deq::<half::f16>(&buffer, block_len, &mut out),
-            GgmlDType::BF16 => deq::<half::bf16>(&buffer, block_len, &mut out),
-            GgmlDType::Q4_0 => deq::<crate::quantized::BlockQ4_0>(&buffer, block_len, &mut out),
-            GgmlDType::Q4_1 => deq::<crate::quantized::BlockQ4_1>(&buffer, block_len, &mut out),
-            GgmlDType::Q5_0 => deq::<crate::quantized::BlockQ5_0>(&buffer, block_len, &mut out),
-            GgmlDType::Q5_1 => deq::<crate::quantized::BlockQ5_1>(&buffer, block_len, &mut out),
-            GgmlDType::Q8_0 => deq::<crate::quantized::BlockQ8_0>(&buffer, block_len, &mut out),
-            GgmlDType::Q8_1 => deq::<crate::quantized::BlockQ8_1>(&buffer, block_len, &mut out),
-            GgmlDType::Q2K => deq::<crate::quantized::BlockQ2K>(&buffer, block_len, &mut out),
-            GgmlDType::Q3K => deq::<crate::quantized::BlockQ3K>(&buffer, block_len, &mut out),
-            GgmlDType::Q4K => deq::<crate::quantized::BlockQ4K>(&buffer, block_len, &mut out),
-            GgmlDType::Q5K => deq::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out),
-            GgmlDType::Q6K => deq::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out),
-            GgmlDType::Q8K => deq::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out),
+            GgmlDType::F32 => deq_on_cpu::<f32>(&buffer, block_len, &mut out),
+            GgmlDType::F16 => deq_on_cpu::<half::f16>(&buffer, block_len, &mut out),
+            GgmlDType::BF16 => deq_on_cpu::<half::bf16>(&buffer, block_len, &mut out),
+            GgmlDType::Q4_0 => deq_on_cpu::<crate::quantized::BlockQ4_0>(&buffer, block_len, &mut out),
+            GgmlDType::Q4_1 => deq_on_cpu::<crate::quantized::BlockQ4_1>(&buffer, block_len, &mut out),
+            GgmlDType::Q5_0 => deq_on_cpu::<crate::quantized::BlockQ5_0>(&buffer, block_len, &mut out),
+            GgmlDType::Q5_1 => deq_on_cpu::<crate::quantized::BlockQ5_1>(&buffer, block_len, &mut out),
+            GgmlDType::Q8_0 => deq_on_cpu::<crate::quantized::BlockQ8_0>(&buffer, block_len, &mut out),
+            GgmlDType::Q8_1 => deq_on_cpu::<crate::quantized::BlockQ8_1>(&buffer, block_len, &mut out),
+            GgmlDType::Q2K => deq_on_cpu::<crate::quantized::BlockQ2K>(&buffer, block_len, &mut out),
+            GgmlDType::Q3K => deq_on_cpu::<crate::quantized::BlockQ3K>(&buffer, block_len, &mut out),
+            GgmlDType::Q4K => deq_on_cpu::<crate::quantized::BlockQ4K>(&buffer, block_len, &mut out),
+            GgmlDType::Q5K => deq_on_cpu::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out),
+            GgmlDType::Q6K => deq_on_cpu::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out),
+            GgmlDType::Q8K => deq_on_cpu::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out),
+            GgmlDType::I2S => deq_on_cpu::<crate::quantized::BlockI2S>(&buffer, block_len, &mut out),
+            GgmlDType::IQ4_XS => deq_on_cpu::<crate::quantized::BlockIQ4XS>(&buffer, block_len, &mut out),
+            GgmlDType::Q1_0_g128 => deq_on_cpu::<crate::quantized::BlockQ1_0_g128>(&buffer, block_len, &mut out),
         }
 
         self.device

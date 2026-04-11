@@ -12,6 +12,20 @@ use rayon::prelude::*;
 // Default to QK_K 256 rather than 64.
 pub const QK_K: usize = 256;
 pub const K_SCALE_SIZE: usize = 12;
+pub const QK_IQ4_XS: usize = QK_K;
+
+// Q1_0_g128 — 1-bit quantization with 128-element blocks (PrismML/Bonsai format)
+// Weight = bit ? +d : -d, paired with Q8_0 for matmul
+// Reference: https://github.com/PrismML-Eng/llama.cpp/blob/master/ggml/src/ggml-cpu/quants.c
+pub const QK1_0_G128: usize = 128;
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockQ1_0_g128 {
+    pub(crate) d: half::f16,              // delta (scale)
+    pub(crate) qs: [u8; QK1_0_G128 / 8], // 16 bytes = 128 bits
+}
+const _: () = assert!(std::mem::size_of::<BlockQ1_0_g128>() == 18);
 
 pub const QK4_0: usize = 32;
 pub const QK4_1: usize = 32;
@@ -168,6 +182,48 @@ pub struct BlockQ8K {
     pub(crate) bsums: [i16; QK_K / 16],
 }
 const _: () = assert!(4 + QK_K + QK_K / 16 * 2 == std::mem::size_of::<BlockQ8K>());
+
+const KVALUES_IQ4NL: [i8; 16] = [
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
+];
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockIQ4XS {
+    pub(crate) d: f16,
+    pub(crate) scales_h: u16,
+    pub(crate) scales_l: [u8; QK_K / 64],
+    pub(crate) qs: [u8; QK_K / 2],
+}
+const _: () = assert!(
+    std::mem::size_of::<BlockIQ4XS>()
+        == std::mem::size_of::<f16>() + std::mem::size_of::<u16>() + QK_K / 64 + QK_K / 2
+);
+
+impl BlockIQ4XS {
+    pub fn zeros() -> Self {
+        Self {
+            d: f16::ZERO,
+            scales_h: 0,
+            scales_l: [0; QK_K / 64],
+            qs: [0; QK_K / 2],
+        }
+    }
+
+    pub fn from_parts(
+        d: f16,
+        scales_h: u16,
+        scales_l: [u8; QK_K / 64],
+        qs: [u8; QK_K / 2],
+    ) -> Self {
+        Self {
+            d,
+            scales_h,
+            scales_l,
+            qs,
+        }
+    }
+}
 
 impl GgmlType for BlockQ4_0 {
     const DTYPE: GgmlDType = GgmlDType::Q4_0;
@@ -2265,6 +2321,146 @@ impl GgmlType for BlockQ8K {
 }
 
 // https://github.com/ggml-org/llama.cpp/blob/aa3ee0eb0b80efca126cedf9bcb4fb5864b46ce3/ggml/src/ggml-cpu/ggml-cpu.c#L1205
+
+pub const QK_I2S: usize = 32;
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockI2S {
+    pub(crate) qs: [u8; QK_I2S / 4],
+}
+const _: () = assert!(std::mem::size_of::<BlockI2S>() == 8);
+
+impl BlockI2S {
+    pub fn zeros() -> Self {
+        Self { qs: [0; QK_I2S / 4] }
+    }
+}
+
+impl GgmlType for BlockI2S {
+    const DTYPE: GgmlDType = GgmlDType::I2S;
+    const BLCK_SIZE: usize = QK_I2S;
+    type VecDotType = BlockI2S;
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        for (block, chunk) in xs.iter().zip(ys.chunks_exact_mut(QK_I2S)) {
+            let scale = 1.0f32;
+            for (i, &byte) in block.qs.iter().enumerate() {
+                for j in 0..4 {
+                    let v = (byte >> (j * 2)) & 0x3;
+                    chunk[i * 4 + j] = scale * match v {
+                        0 => -1.0f32,
+                        1 =>  0.0f32,
+                        _ =>  1.0f32,
+                    };
+                }
+            }
+        }
+    }
+
+    fn from_float(xs: &[f32], ys: &mut [Self]) {
+        for (block, chunk) in ys.iter_mut().zip(xs.chunks_exact(QK_I2S)) {
+            for (i, qs_byte) in block.qs.iter_mut().enumerate() {
+                let mut byte = 0u8;
+                for j in 0..4 {
+                    let v = chunk[i * 4 + j];
+                    let v_quant = if v < -0.5 { 0 } else if v > 0.5 { 2 } else { 1 };
+                    byte |= (v_quant as u8) << (j * 2);
+                }
+                *qs_byte = byte;
+            }
+        }
+    }
+
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        vec_dot_i2s(n, xs, ys)
+    }
+    
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        vec_dot_i2s(n, xs, ys)
+    }
+}
+
+impl GgmlType for BlockIQ4XS {
+    const DTYPE: GgmlDType = GgmlDType::IQ4_XS;
+    const BLCK_SIZE: usize = QK_IQ4_XS;
+    type VecDotType = BlockQ8K;
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        let k = ys.len();
+        debug_assert!(
+            k.is_multiple_of(QK_IQ4_XS),
+            "dequantize_row_iq4_xs: {k} is not divisible by {QK_IQ4_XS}"
+        );
+
+        for (block, chunk) in xs.iter().zip(ys.chunks_exact_mut(QK_IQ4_XS)) {
+            let d = block.d.to_f32();
+            let mut qs = &block.qs[..];
+
+            for ib in 0..(QK_K / 32) {
+                let ls = ((block.scales_l[ib / 2] >> (4 * (ib % 2))) & 0x0f)
+                    | ((((block.scales_h >> (2 * ib)) & 0x3) as u8) << 4);
+                let dl = d * (ls as f32 - 32.0);
+                let chunk = &mut chunk[ib * 32..(ib + 1) * 32];
+                for j in 0..16 {
+                    chunk[j] = dl * KVALUES_IQ4NL[(qs[j] & 0x0f) as usize] as f32;
+                    chunk[j + 16] = dl * KVALUES_IQ4NL[(qs[j] >> 4) as usize] as f32;
+                }
+                qs = &qs[16..];
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        panic!("from_float not implemented for IQ4_XS (use llama.cpp to quantize)")
+    }
+
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        debug_assert!(
+            n.is_multiple_of(QK_IQ4_XS),
+            "vec_dot: {n} is not divisible by {QK_IQ4_XS}"
+        );
+        let nb = n / QK_IQ4_XS;
+        let mut sum = 0f32;
+        let mut xs_f = [0f32; QK_K];
+        let mut ys_f = [0f32; QK_K];
+
+        for i in 0..nb {
+            Self::to_float(&xs[i..i + 1], &mut xs_f);
+            BlockQ8K::to_float(&ys[i..i + 1], &mut ys_f);
+            sum += xs_f.iter().zip(ys_f.iter()).map(|(x, y)| x * y).sum::<f32>();
+        }
+
+        sum
+    }
+}
+
+pub fn vec_dot_i2s(n: usize, xs: &[BlockI2S], ys: &[BlockI2S]) -> f32 {
+    if n % QK_I2S == 0 {
+        assert_eq!(n % QK_I2S, 0);
+        let nb = n / QK_I2S;
+        let mut sum = 0f32;
+        for (bx, by) in xs[..nb].iter().zip(ys[..nb].iter()) {
+            let mut block_sum = 0i32;
+            for (&qx, &qy) in bx.qs.iter().zip(by.qs.iter()) {
+                for j in 0..4 {
+                    let vx = ((qx >> (j * 2)) & 0x3) as i32 - 1;
+                    let vy = ((qy >> (j * 2)) & 0x3) as i32 - 1;
+                    block_sum += vx * vy;
+                }
+            }
+            sum += block_sum as f32;
+        }
+        sum
+    } else {
+        0.0f32
+    }
+}
+
 pub fn matmul<T: GgmlType>(
     (m, k, n): (usize, usize, usize),
     lhs: &[f32],
@@ -2272,33 +2468,30 @@ pub fn matmul<T: GgmlType>(
     dst: &mut [f32],
 ) -> Result<()> {
     debug_assert_eq!(
-        T::BLCK_SIZE,
-        T::VecDotType::BLCK_SIZE,
-        "Mismatched block sizes"
-    );
-    debug_assert_eq!(
         m * k,
         lhs.len(),
         "unexpected lhs length {} ({m},{k},{n})",
         lhs.len()
     );
-    let k_in_blocks = k.div_ceil(T::BLCK_SIZE);
+    let k_in_lhs_blocks = k.div_ceil(T::VecDotType::BLCK_SIZE);
+    let k_in_rhs_blocks = k.div_ceil(T::BLCK_SIZE);
 
     // TODO: Pre-allocate this.
-    let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_blocks];
+    let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_lhs_blocks];
     // f32, f16, and bf16 support direct copy
     if T::DIRECT_COPY {
         T::VecDotType::direct_copy(lhs, &mut lhs_b);
     } else {
         for row_idx in 0..m {
-            let lhs_b_mut = &mut lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
+            let lhs_b_mut =
+                &mut lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
             let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
             T::VecDotType::from_float(lhs, lhs_b_mut)
         }
     }
 
     for row_idx in 0..m {
-        let lhs_row = &lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
+        let lhs_row = &lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
         let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
 
         dst_row
@@ -2307,7 +2500,8 @@ pub fn matmul<T: GgmlType>(
             .with_min_len(128)
             .with_max_len(512)
             .for_each(|(col_idx, dst)| {
-                let rhs_col = &rhs_t[col_idx * k_in_blocks..(col_idx + 1) * k_in_blocks];
+                let rhs_col =
+                    &rhs_t[col_idx * k_in_rhs_blocks..(col_idx + 1) * k_in_rhs_blocks];
                 *dst = T::vec_dot(k, rhs_col, lhs_row);
             });
     }
@@ -2501,5 +2695,82 @@ macro_rules! verify_block_sizes {
 
 verify_block_sizes!(
     BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K, BlockQ3K, BlockQ4K,
-    BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
+    BlockQ5K, BlockQ6K, BlockQ8K, BlockIQ4XS, f32, f16, bf16
 );
+// Q1_0_g128 is verified separately — its VecDotType (BlockQ8_0) has a different blocksize
+// (4 Q8_0 blocks per Q1_0_g128 block), so the standard ratio check doesn't apply.
+
+impl GgmlType for BlockQ1_0_g128 {
+    const DTYPE: GgmlDType = GgmlDType::Q1_0_g128;
+    const BLCK_SIZE: usize = QK1_0_G128;
+    type VecDotType = BlockQ8_0;
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) {
+        let k = ys.len();
+        debug_assert!(
+            k.is_multiple_of(QK1_0_G128),
+            "to_float: {k} not divisible by {}",
+            QK1_0_G128
+        );
+        let nb = k / QK1_0_G128;
+        for i in 0..nb {
+            let d = xs[i].d.to_f32();
+            for j in 0..QK1_0_G128 {
+                let byte_index = j / 8;
+                let bit_offset = j % 8;
+                let bit = (xs[i].qs[byte_index] >> bit_offset) & 1;
+                ys[i * QK1_0_G128 + j] = if bit != 0 { d } else { -d };
+            }
+        }
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) {
+        panic!("from_float not implemented for Q1_0_g128 (use llama.cpp to quantize)")
+    }
+
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        const QK8_0: usize = 32;
+        const RATIO: usize = QK1_0_G128 / QK8_0; // 4
+
+        debug_assert!(
+            n.is_multiple_of(QK1_0_G128),
+            "vec_dot: {n} not divisible by {}",
+            QK1_0_G128
+        );
+        debug_assert!(xs.len() * RATIO <= ys.len(), "not enough Q8_0 blocks");
+
+        let nb = n / QK1_0_G128;
+        let mut sumf = 0f32;
+
+        for i in 0..nb {
+            let d0 = xs[i].d.to_f32();
+            let mut sumi = 0i32;
+
+            for k in 0..RATIO {
+                let yb = &ys[i * RATIO + k];
+                let d1 = yb.d.to_f32();
+                let mut sumi_block = 0i32;
+
+                for j in 0..QK8_0 {
+                    let bit_index = k * QK8_0 + j;
+                    let byte_index = bit_index / 8;
+                    let bit_offset = bit_index % 8;
+                    let xi = if (xs[i].qs[byte_index] >> bit_offset) & 1 != 0 {
+                        1i32
+                    } else {
+                        -1i32
+                    };
+                    let yi = yb.qs[j] as i32;
+                    sumi_block += xi * yi;
+                }
+                sumi += (d1 * sumi_block as f32) as i32;
+            }
+            sumf += d0 * sumi as f32;
+        }
+        sumf
+    }
+}
