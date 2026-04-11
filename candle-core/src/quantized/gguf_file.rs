@@ -33,7 +33,7 @@ pub enum VersionedMagic {
 }
 
 impl VersionedMagic {
-    fn read<R: std::io::Read>(reader: &mut R) -> Result<Self> {
+    fn read<R: std::io::Read>(reader: R) -> Result<Self> {
         let magic = reader.read_u32::<LittleEndian>()?;
         let magic = Magic::try_from(magic)?;
         let version = reader.read_u32::<LittleEndian>()?;
@@ -57,7 +57,7 @@ pub struct TensorInfo {
 impl TensorInfo {
     pub fn read<R: std::io::Seek + std::io::Read>(
         &self,
-        reader: &mut R,
+        reader: R,
         tensor_data_offset: u64,
         device: &Device,
     ) -> Result<QTensor> {
@@ -89,7 +89,7 @@ pub struct Content {
     pub tensor_data_offset: u64,
 }
 
-fn read_string<R: std::io::Read>(reader: &mut R, magic: &VersionedMagic) -> Result<String> {
+fn read_string<R: std::io::Read>(reader: R, magic: &VersionedMagic) -> Result<String> {
     let len = match magic {
         VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
         VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
@@ -273,7 +273,7 @@ impl Value {
     }
 
     fn read<R: std::io::Read>(
-        reader: &mut R,
+        reader: R,
         value_type: ValueType,
         magic: &VersionedMagic,
     ) -> Result<Self> {
@@ -393,7 +393,7 @@ impl ValueType {
 }
 
 impl Content {
-    pub fn read<R: std::io::Seek + std::io::Read>(reader: &mut R) -> Result<Self> {
+    pub fn read<R: std::io::Seek + std::io::Read>(reader: R) -> Result<Self> {
         let magic = VersionedMagic::read(reader)?;
 
         let tensor_count = match magic {
