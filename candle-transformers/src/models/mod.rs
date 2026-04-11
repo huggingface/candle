@@ -99,6 +99,7 @@ pub mod quantized_phi;
 pub mod quantized_phi3;
 pub mod quantized_qwen2;
 pub mod quantized_qwen3;
+pub mod quantized_qwen35;
 pub mod quantized_qwen3_moe;
 pub mod quantized_recurrent_gemma;
 pub mod quantized_rwkv_v5;
