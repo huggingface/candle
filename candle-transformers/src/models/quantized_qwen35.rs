@@ -331,15 +331,6 @@ impl SSMWeights {
         self.conv_state = None;
         self.recurrent_state = None;
     }
-
-    fn save_state(&self) -> (Option<Tensor>, Option<Tensor>) {
-        (self.conv_state.clone(), self.recurrent_state.clone())
-    }
-
-    fn restore_state(&mut self, saved: (Option<Tensor>, Option<Tensor>)) {
-        self.conv_state = saved.0;
-        self.recurrent_state = saved.1;
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -622,14 +613,6 @@ impl AttentionWeights {
     fn clear_kv_cache(&mut self) {
         self.kv_cache.reset();
     }
-
-    fn save_prefix_kv(&self) -> (Option<Tensor>, Option<Tensor>) {
-        (self.kv_cache.k().cloned(), self.kv_cache.v().cloned())
-    }
-
-    fn restore_prefix_kv(&mut self, saved: (Option<Tensor>, Option<Tensor>)) {
-        self.kv_cache.restore_from(saved.0, saved.1);
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -776,22 +759,6 @@ impl LayerWeights {
             linear_attn.clear_state();
         }
     }
-
-    fn save_prefix_kv(&self) -> (Option<Tensor>, Option<Tensor>) {
-        match (&self.self_attn, &self.linear_attn) {
-            (Some(self_attn), None) => self_attn.save_prefix_kv(),
-            (None, Some(linear_attn)) => linear_attn.save_state(),
-            _ => (None, None),
-        }
-    }
-
-    fn restore_prefix_kv(&mut self, saved: (Option<Tensor>, Option<Tensor>)) {
-        if let Some(self_attn) = &mut self.self_attn {
-            self_attn.restore_prefix_kv(saved);
-        } else if let Some(linear_attn) = &mut self.linear_attn {
-            linear_attn.restore_state(saved);
-        }
-    }
 }
 
 /// Quantized Qwen3.5 model weights loaded from GGUF.
@@ -883,20 +850,11 @@ impl ModelWeights {
         }
 
         let norm = gg.rms_norm("output_norm.weight", rms_norm_eps)?;
-        let lm_head = match gg.tensor_or_none("output.weight") {
-            Some(tensor) => QMatMul::from_weights(tensor?.into())?,
-            None => {
-                if embed_tokens.embeddings().dtype() == DType::F16 {
-                    QMatMul::from_inner(candle::quantized::QMatMul::TensorF16(
-                        embed_tokens.embeddings().clone(),
-                    ))
-                } else {
-                    QMatMul::from_inner(candle::quantized::QMatMul::Tensor(
-                        embed_tokens.embeddings().clone(),
-                    ))
-                }
-            }
+        let lm_head_tensor = match gg.tensor("output.weight") {
+            Ok(tensor) => tensor,
+            Err(_) => gg.tensor("token_embd.weight")?,
         };
+        let lm_head = QMatMul::from_weights(lm_head_tensor.into())?;
         let span = tracing::span!(tracing::Level::TRACE, "model");
         let span_output = tracing::span!(tracing::Level::TRACE, "output");
         Ok(Self {
@@ -972,21 +930,6 @@ impl ModelWeights {
     pub fn clear_kv_cache(&mut self) {
         for layer in &mut self.layers {
             layer.clear_kv_cache();
-        }
-    }
-
-    /// Save the current KV cache state as the prefix.
-    pub fn save_prefix_kv_cache(&self) -> Vec<(Option<Tensor>, Option<Tensor>)> {
-        self.layers
-            .iter()
-            .map(|layer| layer.save_prefix_kv())
-            .collect()
-    }
-
-    /// Restore all layer KV caches to a previously saved prefix state.
-    pub fn restore_prefix_kv_cache(&mut self, saved: Vec<(Option<Tensor>, Option<Tensor>)>) {
-        for (layer, kv) in self.layers.iter_mut().zip(saved.into_iter()) {
-            layer.restore_prefix_kv(kv);
         }
     }
 }
