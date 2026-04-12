@@ -627,7 +627,8 @@ unsafe fn multiply_accum_with_scale(
 ///   - q8_k_i ∈ [-127, 127] (Q8_0 value)
 ///   - d = Q1_0_g128 scale, d1_k = Q8_0 block scale
 ///
-/// Bit expansion for NEON uses vshr_n_u8 and masking to extract individual bits.
+/// Bit expansion for NEON uses vshrq_n_u8 + vbslq_s8 to replicate _mm_sign_epi8:
+///   sign_bit = bit 7 of each Q1 bit-byte → vbslq_s8(sign_bit, negate(y), y)
 #[inline(always)]
 pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[BlockQ8_0]) -> f32 {
     debug_assert!(
@@ -664,28 +665,40 @@ pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[Bloc
                 let y = &ys[i * RATIO + k];
                 let d1 = y.d.to_f32();
 
-                // Load Q8_0 values
+                // Load Q8_0 values — y0: elements 0-15, y1: elements 16-31
                 let y0 = vld1q_s8(y.qs.as_ptr());
                 let y1 = vld1q_s8(y.qs.as_ptr().add(16));
 
-                // Load Q1_0_g128 bits for this block
+                // Load 4 consecutive bit-bytes from Q1_0_g128
+                // byte k*4 has bits [k*32..k*32+7], byte k*4+1 has [k*32+8..k*32+15], etc.
                 let byte_idx = k * 4;
-                let bits0 = vdupq_n_u8(xs[i].qs[byte_idx]);
-                let bits1 = vdupq_n_u8(xs[i].qs[byte_idx + 1]);
-                let bits2 = vdupq_n_u8(xs[i].qs[byte_idx + 2]);
-                let bits3 = vdupq_n_u8(xs[i].qs[byte_idx + 3]);
+                let b0 = vdupq_n_u8(*xs[i].qs.get_unchecked(byte_idx));
+                let b1 = vdupq_n_u8(*xs[i].qs.get_unchecked(byte_idx + 1));
+                let b2 = vdupq_n_u8(*xs[i].qs.get_unchecked(byte_idx + 2));
+                let b3 = vdupq_n_u8(*xs[i].qs.get_unchecked(byte_idx + 3));
 
-                // Extract bit 0 from each byte, expand to ±1
-                // bit ? +1 : -1 = 2*bit - 1
-                let pm0 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits0, 0), vshrq_n_u8(bits0, 1)));
-                let pm1 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits1, 2), vshrq_n_u8(bits1, 3)));
-                let pm2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits2, 4), vshrq_n_u8(bits2, 5)));
-                let pm3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits3, 6), vshrq_n_u8(bits3, 7)));
+                // Replicate _mm_sign_epi8(y, sign_bit):
+                //   - Extract sign bit (bit 7) from each Q1 bit-byte → 0x00 or 0x80
+                //   - vshlq_n_s8(y, 7): left-shift by 7 (arithmetic), maps 0x00→0x00, 0x80→0x80
+                //   - vnegq_s8: two's-complement negate → 0→0, 0x80→0x80 (overflow, correct for -128)
+                //   - vbslq_s8(sign_bit, negated, y): select negated where sign_bit=0x80, y where 0x00
+                // Result: bit=1 → negate y, bit=0 → keep y (matches AVX2 sig8 + _mm_sign_epi8)
+                let sign0 = vreinterpretq_s8_u8(vshrq_n_u8(b0, 7));
+                let pm0 = vbslq_s8(sign0, vnegq_s8(vshlq_n_s8(y0, 7)), y0);
 
-                // Multiply and accumulate
-                sumi += d1 * (vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm0, y0))) 
+                let sign1 = vreinterpretq_s8_u8(vshrq_n_u8(b1, 7));
+                let pm1 = vbslq_s8(sign1, vnegq_s8(vshlq_n_s8(y1, 7)), y1);
+
+                let sign2 = vreinterpretq_s8_u8(vshrq_n_u8(b2, 7));
+                let pm2 = vbslq_s8(sign2, vnegq_s8(vshlq_n_s8(y0, 7)), y0);
+
+                let sign3 = vreinterpretq_s8_u8(vshrq_n_u8(b3, 7));
+                let pm3 = vbslq_s8(sign3, vnegq_s8(vshlq_n_s8(y1, 7)), y1);
+
+                // Dot products: pm0·y0_lo + pm1·y1_lo + pm2·y0_hi + pm3·y1_hi
+                sumi += d1 * (vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm0, y0)))
                            + vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm1, y1))));
-                sumi += d1 * (vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm2, y0))) 
+                sumi += d1 * (vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm2, y0)))
                            + vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm3, y1))));
             }
 
