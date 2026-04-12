@@ -636,6 +636,7 @@ pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[Bloc
     );
     const QK8_LOCAL: usize = 32;
     const RATIO: usize = QK1_0_G128 / QK8_LOCAL; // 4
+    const PREFETCH_DISTANCE: usize = 4; // Prefetch 4 iterations ahead
 
     let nb = n / QK1_0_G128;
 
@@ -645,6 +646,17 @@ pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[Bloc
         let m1 = vdupq_n_u8(1);
 
         for i in 0..nb {
+            // Prefetch next iteration's Q1_0_g128 block and associated Q8_0 blocks
+            if i + PREFETCH_DISTANCE < nb {
+                let prefetch_xs = xs.as_ptr().add(i + PREFETCH_DISTANCE);
+                let y_base = ys.as_ptr().add((i + PREFETCH_DISTANCE) * RATIO);
+                // Use __builtin_prefetch for ARM (3 = temporal, write=0)
+                for k in 0..RATIO {
+                    __builtin_prefetch(prefetch_xs as *const i8, 0, 3);
+                    __builtin_prefetch(y_base.add(k) as *const i8, 0, 3);
+                }
+            }
+
             let d0 = xs[i].d.to_f32();
             let mut sumi = 0f32;
 
