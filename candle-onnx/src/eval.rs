@@ -782,6 +782,7 @@ fn simple_eval_(
                     | DType::F8E8M0 => {
                         bail!("unsupported Range type i32/i16/f6e2m3/f6e3m2/f4/f8e8m0")
                     }
+                    dt => bail!("unsupported Range dtype {dt:?}"),
                 };
 
                 values.insert(node.output[0].clone(), output);
@@ -1777,6 +1778,7 @@ fn simple_eval_(
                         )
                     }
                     DType::BF16 | DType::F16 | DType::F32 | DType::F64 | DType::F8E4M3 => {}
+                    dt => bail!("unsupported dtype {dt:?} for LeakyRelu"),
                 }
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(0.01);
                 let output = candle_nn::ops::leaky_relu(input, alpha.into())?;
