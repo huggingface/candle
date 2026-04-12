@@ -1,5 +1,6 @@
 use super::k_quants::{
-    BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K,
+    BlockQ1_0_g128, BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K,
+    BlockQ8_0, QK1_0_G128, QK8_0, QK_K,
 };
 use byteorder::{ByteOrder, LittleEndian};
 use half::f16;
@@ -664,6 +665,88 @@ pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> f32
             let d = _mm256_set1_ps(xs.d * ys.d);
             acc = _mm256_fmadd_ps(d, _mm256_cvtepi32_ps(sumi), acc);
         }
+        hsum_float_8(acc)
+    }
+}
+
+/// SIMD-vectorized dot product for Q1_0_g128 × BlockQ8_0 using AVX2.
+///
+/// Each Q1_0_g128 block contains 128 1-bit weights (packed into 16 bytes) and a
+/// f16 scale. It is paired with 4 BlockQ8_0 blocks (each with 32 int8 values).
+///
+/// The dot product for one Q1_0_g128 block is:
+///   sum_i (d * q1_i * sum_k(d1_k * q8_k_i))
+/// where:
+///   - q1_i ∈ {-1, +1} (1-bit weight expanded)
+///   - q8_k_i ∈ [-127, 127] (Q8_0 value)
+///   - d = Q1_0_g128 scale, d1_k = Q8_0 block scale
+///
+/// Bit expansion uses the "sig8" trick:
+///   bit=0 → -1, bit=1 → +1 via: -(((bits | 0x7F) ^ 0x7F) >> 7)
+#[inline(always)]
+pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[BlockQ8_0]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK1_0_G128),
+        "vec_dot_q1_0_g128_q8_0: {n} is not divisible by {QK1_0_G128}"
+    );
+    const QK8_LOCAL: usize = 32;
+    const RATIO: usize = QK1_0_G128 / QK8_LOCAL; // 4
+
+    let nb = n / QK1_0_G128;
+
+    unsafe {
+        let mut acc = _mm256_setzero_ps();
+
+        for i in 0..nb {
+            // Q1_0_g128 block scale (delta)
+            let d0 = f16::to_f32(xs[i].d);
+
+            // Process 4 Q8_0 blocks, each covering 32 consecutive bits
+            // bit positions [k*32, k*32+31] are stored in byte k*4 of qs[]
+            let mut sumi = 0i32;
+
+            for k in 0..RATIO {
+                let y = &ys[i * RATIO + k];
+                let d1 = f16::to_f32(y.d);
+
+                // Load 4 bytes containing bits [k*32, k*32+31]
+                // Each byte contains 8 consecutive bits
+                let byte_idx = k * 4;
+                let b0 = xs[i].qs[byte_idx] as i32;
+                let b1 = xs[i].qs[byte_idx + 1] as i32;
+                let b2 = xs[i].qs[byte_idx + 2] as i32;
+                let b3 = xs[i].qs[byte_idx + 3] as i32;
+
+                // Load Q8_0 values (32 int8)
+                let y0 = _mm_loadu_si128(y.qs.as_ptr() as *const __m128i);
+
+                // Use sig8 trick to expand bits to ±1:
+                // ((byte | 0x7F) ^ 0x7F) >> 7 gives 0xFF for bit=0, 0x00 for bit=1
+                // Negate to get 0→+1, 1→-1, then use sign to convert to ±1
+                let m127 = _mm_set1_epi8(0x7F);
+
+                // Process bits 0-7 (byte 0)
+                let bits0 = _mm_set1_epi8(b0 as i8);
+                let bits_sign0 = _mm_or_si128(bits0, m127);
+                let bits_sign0 = _mm_xor_si128(bits_sign0, m127);
+                let bits_pm0 = _mm_sign_epi8(bits_sign0, bits_sign0);
+                // Multiply with Q8_0 and accumulate
+                let y_ext_lo = _mm_unpacklo_epi8(y0, _mm_set1_epi8(0));
+                let y_ext_hi = _mm_unpackhi_epi8(y0, _mm_set1_epi8(0));
+                let bits_ext_lo = _mm_unpacklo_epi8(bits_pm0, _mm_set1_epi8(0));
+                let bits_ext_hi = _mm_unpackhi_epi8(bits_pm0, _mm_set1_epi8(0));
+                let prod_lo = _mm_madd_epi16(bits_ext_lo, y_ext_lo);
+                let prod_hi = _mm_madd_epi16(bits_ext_hi, y_ext_hi);
+                sumi += _mm_cvtsi128_si32(prod_lo) + _mm_cvtsi128_si32(_mm_srli_si128(prod_lo, 8))
+                    + _mm_cvtsi128_si32(prod_hi) + _mm_cvtsi128_si32(_mm_srli_si128(prod_hi, 8));
+            }
+
+            // Scale by Q1_0_g128 delta and accumulate
+            let sumf = d0 * sumi as f32;
+            acc = _mm256_add_ps(acc, _mm256_set1_ps(sumf));
+        }
+
+        // Horizontal sum of 256-bit accumulator
         hsum_float_8(acc)
     }
 }

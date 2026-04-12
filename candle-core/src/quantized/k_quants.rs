@@ -2640,7 +2640,15 @@ impl GgmlType for BlockQ1_0_g128 {
         panic!("from_float not implemented for Q1_0_g128 (use llama.cpp to quantize)")
     }
 
+    // https://github.com/PrismML-Eng/llama.cpp/blob/master/ggml/src/ggml-cpu/quants.c
+    // ggml_vec_dot_q1_0_g128_q8_0_generic
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        #[cfg(target_feature = "avx2")]
+        return super::avx::vec_dot_q1_0_g128_q8_0(n, xs, ys);
+
+        #[cfg(target_feature = "neon")]
+        return super::neon::vec_dot_q1_0_g128_q8_0(n, xs, ys);
+
         Self::vec_dot_unopt(n, xs, ys)
     }
 
