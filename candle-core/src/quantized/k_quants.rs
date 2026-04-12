@@ -2642,6 +2642,7 @@ impl GgmlType for BlockQ1_0_g128 {
 
     // https://github.com/PrismML-Eng/llama.cpp/blob/master/ggml/src/ggml-cpu/quants.c
     // ggml_vec_dot_q1_0_g128_q8_0_generic
+    #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
         #[cfg(target_feature = "avx2")]
         return super::avx::vec_dot_q1_0_g128_q8_0(n, xs, ys);
