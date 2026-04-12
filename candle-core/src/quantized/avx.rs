@@ -707,7 +707,6 @@ pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[Bloc
 
             for k in 0..RATIO {
                 let y = &ys[i * RATIO + k];
-                let d1 = f16::to_f32(y.d);
 
                 // Load 4 bytes containing bits [k*32, k*32+31]
                 // Each byte contains 8 consecutive bits
@@ -725,20 +724,57 @@ pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[Bloc
                 // Negate to get 0→+1, 1→-1, then use sign to convert to ±1
                 let m127 = _mm_set1_epi8(0x7F);
 
-                // Process bits 0-7 (byte 0)
+                // Process byte 0 (bits 0-7)
                 let bits0 = _mm_set1_epi8(b0 as i8);
                 let bits_sign0 = _mm_or_si128(bits0, m127);
                 let bits_sign0 = _mm_xor_si128(bits_sign0, m127);
                 let bits_pm0 = _mm_sign_epi8(bits_sign0, bits_sign0);
-                // Multiply with Q8_0 and accumulate
+
+                // Process byte 1 (bits 8-15)
+                let bits1 = _mm_set1_epi8(b1 as i8);
+                let bits_sign1 = _mm_or_si128(bits1, m127);
+                let bits_sign1 = _mm_xor_si128(bits_sign1, m127);
+                let bits_pm1 = _mm_sign_epi8(bits_sign1, bits_sign1);
+
+                // Process byte 2 (bits 16-23)
+                let bits2 = _mm_set1_epi8(b2 as i8);
+                let bits_sign2 = _mm_or_si128(bits2, m127);
+                let bits_sign2 = _mm_xor_si128(bits_sign2, m127);
+                let bits_pm2 = _mm_sign_epi8(bits_sign2, bits_sign2);
+
+                // Process byte 3 (bits 24-31)
+                let bits3 = _mm_set1_epi8(b3 as i8);
+                let bits_sign3 = _mm_or_si128(bits3, m127);
+                let bits_sign3 = _mm_xor_si128(bits_sign3, m127);
+                let bits_pm3 = _mm_sign_epi8(bits_sign3, bits_sign3);
+
+                // Multiply each 8-bit chunk with y0 (only 8 low bits used)
                 let y_ext_lo = _mm_unpacklo_epi8(y0, _mm_set1_epi8(0));
                 let y_ext_hi = _mm_unpackhi_epi8(y0, _mm_set1_epi8(0));
-                let bits_ext_lo = _mm_unpacklo_epi8(bits_pm0, _mm_set1_epi8(0));
-                let bits_ext_hi = _mm_unpackhi_epi8(bits_pm0, _mm_set1_epi8(0));
-                let prod_lo = _mm_madd_epi16(bits_ext_lo, y_ext_lo);
-                let prod_hi = _mm_madd_epi16(bits_ext_hi, y_ext_hi);
-                sumi += _mm_cvtsi128_si32(prod_lo) + _mm_cvtsi128_si32(_mm_srli_si128(prod_lo, 8))
-                    + _mm_cvtsi128_si32(prod_hi) + _mm_cvtsi128_si32(_mm_srli_si128(prod_hi, 8));
+
+                // Process byte 0 with low half of y0
+                let bits_ext0 = _mm_unpacklo_epi8(bits_pm0, _mm_set1_epi8(0));
+                let prod0 = _mm_madd_epi16(bits_ext0, y_ext_lo);
+
+                // Process byte 1 with high half of y0
+                let bits_ext1 = _mm_unpackhi_epi8(bits_pm1, _mm_set1_epi8(0));
+                let prod1 = _mm_madd_epi16(bits_ext1, y_ext_hi);
+
+                // Process byte 2 with low half of y1 (if needed)
+                let y1 = _mm_loadu_si128(y.qs.as_ptr().add(16) as *const __m128i);
+                let y1_ext_lo = _mm_unpacklo_epi8(y1, _mm_set1_epi8(0));
+                let bits_ext2 = _mm_unpacklo_epi8(bits_pm2, _mm_set1_epi8(0));
+                let prod2 = _mm_madd_epi16(bits_ext2, y1_ext_lo);
+
+                // Process byte 3 with high half of y1
+                let y1_ext_hi = _mm_unpackhi_epi8(y1, _mm_set1_epi8(0));
+                let bits_ext3 = _mm_unpackhi_epi8(bits_pm3, _mm_set1_epi8(0));
+                let prod3 = _mm_madd_epi16(bits_ext3, y1_ext_hi);
+
+                sumi += _mm_cvtsi128_si32(prod0) + _mm_cvtsi128_si32(_mm_srli_si128(prod0, 8))
+                    + _mm_cvtsi128_si32(prod1) + _mm_cvtsi128_si32(_mm_srli_si128(prod1, 8))
+                    + _mm_cvtsi128_si32(prod2) + _mm_cvtsi128_si32(_mm_srli_si128(prod2, 8))
+                    + _mm_cvtsi128_si32(prod3) + _mm_cvtsi128_si32(_mm_srli_si128(prod3, 8));
             }
 
             // Scale by Q1_0_g128 delta and accumulate

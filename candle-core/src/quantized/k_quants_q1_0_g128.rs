@@ -152,4 +152,182 @@ mod tests {
             assert!((y + 3.0).abs() < 0.001, "Expected -3.0, got {y}");
         }
     }
+
+    #[test]
+    fn test_vec_dot_unopt_all_ones_vs_q8_0() {
+        // Q1_0_g128 block with all bits = 1 (weight = +d for all)
+        // paired with Q8_0 block (weight = d for all)
+        // Expected: d * sum(q8) = d * sum of Q8_0 values
+        let q1_block = BlockQ1_0_g128 {
+            d: f16::from_f32(0.5),
+            qs: [0xFF; 16], // all 128 bits set → all +0.5
+        };
+
+        // Q8_0 block with values 1..32 repeated 4 times
+        // BlockQ8_0 has d:f16 and qs:[i8; 32]
+        let q8_values: [i8; 32] = (1i8..=32i8).collect::<Vec<_>>().try_into().unwrap();
+        let q8_block = super::super::k_quants::BlockQ8_0 {
+            d: f16::from_f32(1.0),
+            qs: q8_values,
+        };
+
+        // vec_dot for Q1_0_g128 × BlockQ8_0 processes 4 Q8_0 blocks per Q1_0_g128
+        // For this test, we use 1 Q8_0 block (32 elements)
+        let q1_blocks = [q1_block];
+        let q8_blocks = [q8_block];
+
+        let result = BlockQ1_0_g128::vec_dot_unopt(32, &q1_blocks, &q8_blocks);
+
+        // Expected: d0 * sum over j of (q1_j * d1 * q8_j)
+        // q1_j = +1 for all (bit=1), d1 = 1.0, q8_j = 1..32
+        // sum = 0.5 * (1 + 2 + ... + 32) = 0.5 * 528 = 264
+        let expected = 0.5 * (1i32..=32i32).sum::<i32>() as f32;
+        assert!(
+            (result - expected).abs() < 0.1,
+            "Expected {}, got {}",
+            expected,
+            result
+        );
+    }
+
+    #[test]
+    fn test_vec_dot_unopt_all_zeros_vs_q8_0() {
+        // Q1_0_g128 block with all bits = 0 (weight = -d for all)
+        let q1_block = BlockQ1_0_g128 {
+            d: f16::from_f32(0.5),
+            qs: [0x00; 16], // all 128 bits clear → all -0.5
+        };
+
+        // Q8_0 block with values 1..32
+        let q8_values: [i8; 32] = (1i8..=32i8).collect::<Vec<_>>().try_into().unwrap();
+        let q8_block = super::super::k_quants::BlockQ8_0 {
+            d: f16::from_f32(1.0),
+            qs: q8_values,
+        };
+
+        let q1_blocks = [q1_block];
+        let q8_blocks = [q8_block];
+
+        let result = BlockQ1_0_g128::vec_dot_unopt(32, &q1_blocks, &q8_blocks);
+
+        // Expected: d0 * sum over j of (-1 * d1 * q8_j) = -d0 * sum(q8)
+        // = -0.5 * 528 = -264
+        let expected = -0.5 * (1i32..=32i32).sum::<i32>() as f32;
+        assert!(
+            (result - expected).abs() < 0.1,
+            "Expected {}, got {}",
+            expected,
+            result
+        );
+    }
+
+    #[test]
+    fn test_vec_dot_unopt_alternating_bits() {
+        // Q1_0_g128 with alternating bit pattern: 0,1,0,1,0,1,...
+        // Bit pattern 0xAA = 10101010 in binary
+        let q1_block = BlockQ1_0_g128 {
+            d: f16::from_f32(1.0),
+            qs: [0xAA; 16], // alternating 0/1 bits
+        };
+
+        // Q8_0 block with constant values
+        let q8_values = [1i8; 32];
+        let q8_block = super::super::k_quants::BlockQ8_0 {
+            d: f16::from_f32(1.0),
+            qs: q8_values,
+        };
+
+        let q1_blocks = [q1_block];
+        let q8_blocks = [q8_block];
+
+        let result = BlockQ1_0_g128::vec_dot_unopt(32, &q1_blocks, &q8_blocks);
+
+        // Expected: d0 * sum over j of (sign_j * d1 * q8_j)
+        // sign_j = +1 for bit=1, -1 for bit=0
+        // With alternating bits in first byte: +1,-1,+1,-1,+1,-1,+1,-1
+        // For constant q8=1, sum = (+1-1+1-1+1-1+1-1) = 0 per byte
+        // So total sum should be 0
+        assert!(
+            result.abs() < 0.1,
+            "Expected ~0 for alternating bits with constant values, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_vec_dot_unopt_single_bit_set() {
+        // Only bit 0 is set in Q1_0_g128
+        let q1_block = BlockQ1_0_g128 {
+            d: f16::from_f32(1.0),
+            qs: [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        };
+
+        // Q8_0 with value 5 at position 0, others 0
+        let q8_values: [i8; 32] = {
+            let mut arr = [0i8; 32];
+            arr[0] = 5;
+            arr
+        };
+        let q8_block = super::super::k_quants::BlockQ8_0 {
+            d: f16::from_f32(1.0),
+            qs: q8_values,
+        };
+
+        let q1_blocks = [q1_block];
+        let q8_blocks = [q8_block];
+
+        let result = BlockQ1_0_g128::vec_dot_unopt(32, &q1_blocks, &q8_blocks);
+
+        // Expected: d0 * (bit0 * d1 * q8_0) = 1.0 * (1 * 1.0 * 5) = 5.0
+        assert!(
+            (result - 5.0).abs() < 0.1,
+            "Expected 5.0, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_vec_dot_matches_unopt() {
+        // Test that vec_dot (which may use SIMD) matches vec_dot_unopt
+        // This test runs on any hardware - it falls back to unopt if SIMD unavailable
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        static SIMD_AVAILABLE: AtomicBool = AtomicBool::new(false);
+
+        // Check if AVX2 or NEON is available at runtime
+        #[cfg(target_feature = "avx2")]
+        {
+            SIMD_AVAILABLE.store(true, Ordering::Relaxed);
+        }
+        #[cfg(target_feature = "neon")]
+        {
+            SIMD_AVAILABLE.store(true, Ordering::Relaxed);
+        }
+
+        // Create test blocks
+        let q1_block = BlockQ1_0_g128 {
+            d: f16::from_f32(0.5),
+            qs: [0x55; 16], // alternating bit pattern
+        };
+
+        let q8_values: [i8; 32] = (1i8..=32i8).collect::<Vec<_>>().try_into().unwrap();
+        let q8_block = super::super::k_quants::BlockQ8_0 {
+            d: f16::from_f32(2.0),
+            qs: q8_values,
+        };
+
+        let q1_blocks = [q1_block];
+        let q8_blocks = [q8_block];
+
+        let unopt = BlockQ1_0_g128::vec_dot_unopt(32, &q1_blocks, &q8_blocks);
+        let result = BlockQ1_0_g128::vec_dot(32, &q1_blocks, &q8_blocks);
+
+        // Allow small floating point differences
+        assert!(
+            (result - unopt).abs() < 1.0,
+            "SIMD result {} differs from unopt {} by more than 1.0",
+            result,
+            unopt
+        );
+    }
 }

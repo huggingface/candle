@@ -614,3 +614,72 @@ unsafe fn multiply_accum_with_scale(
     let p2 = vdotq_s32(q2bytes.1, q8bytes.1);
     vaddvq_s32(p1) * aux[is + index] as i32 + vaddvq_s32(p2) * aux[is + 1 + index] as i32
 }
+
+/// SIMD-vectorized dot product for Q1_0_g128 × BlockQ8_0 using NEON.
+///
+/// Each Q1_0_g128 block contains 128 1-bit weights (packed into 16 bytes) and a
+/// f16 scale. It is paired with 4 BlockQ8_0 blocks (each with 32 int8 values).
+///
+/// The dot product for one Q1_0_g128 block is:
+///   sum_i (d * q1_i * sum_k(d1_k * q8_k_i))
+/// where:
+///   - q1_i ∈ {-1, +1} (1-bit weight expanded)
+///   - q8_k_i ∈ [-127, 127] (Q8_0 value)
+///   - d = Q1_0_g128 scale, d1_k = Q8_0 block scale
+///
+/// Bit expansion for NEON uses vshr_n_u8 and masking to extract individual bits.
+#[inline(always)]
+pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[BlockQ8_0]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK1_0_G128),
+        "vec_dot_q1_0_g128_q8_0: {n} is not divisible by {QK1_0_G128}"
+    );
+    const QK8_LOCAL: usize = 32;
+    const RATIO: usize = QK1_0_G128 / QK8_LOCAL; // 4
+
+    let nb = n / QK1_0_G128;
+
+    let mut sumv = 0f32;
+
+    unsafe {
+        let m1 = vdupq_n_u8(1);
+
+        for i in 0..nb {
+            let d0 = xs[i].d.to_f32();
+            let mut sumi = 0f32;
+
+            for k in 0..RATIO {
+                let y = &ys[i * RATIO + k];
+                let d1 = y.d.to_f32();
+
+                // Load Q8_0 values
+                let y0 = vld1q_s8(y.qs.as_ptr());
+                let y1 = vld1q_s8(y.qs.as_ptr().add(16));
+
+                // Load Q1_0_g128 bits for this block
+                let byte_idx = k * 4;
+                let bits0 = vdupq_n_u8(xs[i].qs[byte_idx]);
+                let bits1 = vdupq_n_u8(xs[i].qs[byte_idx + 1]);
+                let bits2 = vdupq_n_u8(xs[i].qs[byte_idx + 2]);
+                let bits3 = vdupq_n_u8(xs[i].qs[byte_idx + 3]);
+
+                // Extract bit 0 from each byte, expand to ±1
+                // bit ? +1 : -1 = 2*bit - 1
+                let pm0 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits0, 0), vshrq_n_u8(bits0, 1)));
+                let pm1 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits1, 2), vshrq_n_u8(bits1, 3)));
+                let pm2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits2, 4), vshrq_n_u8(bits2, 5)));
+                let pm3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits3, 6), vshrq_n_u8(bits3, 7)));
+
+                // Multiply and accumulate
+                sumi += d1 * (vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm0, y0))) 
+                           + vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm1, y1))));
+                sumi += d1 * (vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm2, y0))) 
+                           + vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm3, y1))));
+            }
+
+            sumv += d0 * sumi;
+        }
+    }
+
+    sumv
+}
