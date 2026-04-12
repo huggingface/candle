@@ -2649,6 +2649,9 @@ impl GgmlType for BlockQ1_0_g128 {
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q1_0_g128_q8_0(n, xs, ys);
 
+        #[cfg(target_feature = "simd128")]
+        return super::simd128::vec_dot_q1_0_g128_q8_0(n, xs, ys);
+
         Self::vec_dot_unopt(n, xs, ys)
     }
 
