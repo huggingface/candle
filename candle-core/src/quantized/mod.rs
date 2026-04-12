@@ -101,6 +101,7 @@ impl QStorage {
                 GgmlDType::Q5K => metal::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
                 GgmlDType::Q6K => metal::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
+                GgmlDType::IQ4_XS => metal::load_quantized(d, as_t_slice::<BlockIQ4XS>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
             },
             Device::Cuda(d) => match dtype {
@@ -118,6 +119,7 @@ impl QStorage {
                 GgmlDType::Q5K => cuda::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
                 GgmlDType::Q6K => cuda::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
+                GgmlDType::IQ4_XS => cuda::load_quantized(d, as_t_slice::<BlockIQ4XS>(data)),
                 GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
             },
         }
@@ -252,6 +254,8 @@ impl QStorage {
     }
 }
 
+// Allow non-camel-case variants to preserve ggml/llama.cpp naming conventions (e.g. IQ4_XS).
+#[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GgmlDType {
     F32,
@@ -269,6 +273,7 @@ pub enum GgmlDType {
     Q5K,
     Q6K,
     Q8K,
+    IQ4_XS,
 }
 
 impl GgmlDType {
@@ -288,6 +293,7 @@ impl GgmlDType {
             13 => Self::Q5K,
             14 => Self::Q6K,
             15 => Self::Q8K,
+            23 => Self::IQ4_XS,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             30 => Self::BF16,
             _ => crate::bail!("unknown dtype for tensor {u}"),
@@ -311,6 +317,7 @@ impl GgmlDType {
             Self::Q5K => 13,
             Self::Q6K => 14,
             Self::Q8K => 15,
+            Self::IQ4_XS => 23,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             Self::BF16 => 30,
         }
@@ -333,6 +340,10 @@ impl GgmlDType {
             Self::Q5K => Box::new(vec![BlockQ5K::zeros(); elem_count / BlockQ5K::BLCK_SIZE]),
             Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
             Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
+            Self::IQ4_XS => Box::new(vec![
+                BlockIQ4XS::zeros();
+                elem_count / BlockIQ4XS::BLCK_SIZE
+            ]),
             Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
         }
     }
@@ -353,6 +364,7 @@ impl GgmlDType {
             Self::Q5K => Box::new(as_t_slice::<BlockQ5K>(data).to_vec()),
             Self::Q6K => Box::new(as_t_slice::<BlockQ6K>(data).to_vec()),
             Self::Q8K => Box::new(as_t_slice::<BlockQ8K>(data).to_vec()),
+            Self::IQ4_XS => Box::new(as_t_slice::<BlockIQ4XS>(data).to_vec()),
             Self::BF16 => Box::new(as_t_slice::<bf16>(data).to_vec()),
         }
     }
@@ -376,6 +388,7 @@ impl GgmlDType {
             Self::Q5K => std::mem::size_of::<BlockQ5K>(),
             Self::Q6K => std::mem::size_of::<BlockQ6K>(),
             Self::Q8K => std::mem::size_of::<BlockQ8K>(),
+            Self::IQ4_XS => std::mem::size_of::<BlockIQ4XS>(),
         }
     }
 
@@ -391,6 +404,7 @@ impl GgmlDType {
             Self::Q8_0 => k_quants::QK8_0,
             Self::Q8_1 => k_quants::QK8_1,
             Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K | Self::Q8K => k_quants::QK_K,
+            Self::IQ4_XS => k_quants::QK_IQ4_XS,
         }
     }
 }
@@ -860,7 +874,21 @@ impl crate::CustomOp1 for QTensor {
 impl crate::Module for QMatMul {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Self::QTensor(t) => xs.apply_op1_no_bwd(t.as_ref()),
+            Self::QTensor(t) => {
+                match t.dtype() {
+                    GgmlDType::IQ4_XS => {
+                        let w = t.dequantize_f16(&t.device())?;
+                        let in_dtype = xs.dtype();
+                        let w = match *xs.dims() {
+                            [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
+                            [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
+                            _ => w.t()?,
+                        };
+                        xs.to_dtype(DType::F16)?.matmul(&w)?.to_dtype(in_dtype)
+                    }
+                    _ => xs.apply_op1_no_bwd(t.as_ref()),
+                }
+            }
             Self::Tensor(w) => {
                 let w = match *xs.dims() {
                     [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,

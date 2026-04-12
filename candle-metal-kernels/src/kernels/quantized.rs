@@ -109,6 +109,13 @@ pub fn call_quantized_matmul_mv_t(
             let align = 8;
             (nth0, nth1, align)
         }
+        // IQ4_XS does not have a Metal GPU matmul kernel; it is handled via CPU
+        // dequantization in QMatMul::forward and should never reach this path.
+        GgmlDType::IQ4_XS => {
+            return Err(MetalKernelError::LoadLibraryError(format!(
+                "{dtype:?} does not have a Metal matmul kernel; use QMatMul::forward which dequantizes on CPU"
+            )));
+        }
     };
     let thread_groups_count = MTLSize {
         width: divide(ne01 as usize, align),
@@ -136,6 +143,8 @@ pub fn call_quantized_matmul_mv_t(
         GgmlDType::F16 => "kernel_mul_mv_f16_f32",
         GgmlDType::BF16 => "kernel_mul_mv_bf16_f32",
         GgmlDType::F32 => "kernel_mul_mv_f32_f32",
+        // IQ4_XS is handled above and never reaches this match.
+        GgmlDType::IQ4_XS => unreachable!(),
     };
 
     let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
