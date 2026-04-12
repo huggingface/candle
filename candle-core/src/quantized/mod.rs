@@ -100,7 +100,6 @@ impl QStorage {
                 GgmlDType::Q5K => metal::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
                 GgmlDType::Q6K => metal::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
-                GgmlDType::I2S => metal::load_quantized(d, as_t_slice::<BlockI2S>(data)),
                 GgmlDType::IQ4_XS => metal::load_quantized(d, as_t_slice::<BlockIQ4XS>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
             },
@@ -119,7 +118,6 @@ impl QStorage {
                 GgmlDType::Q5K => cuda::load_quantized(d, as_t_slice::<BlockQ5K>(data)),
                 GgmlDType::Q6K => cuda::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
-                GgmlDType::I2S => cuda::load_quantized(d, as_t_slice::<BlockI2S>(data)),
                 GgmlDType::IQ4_XS => cuda::load_quantized(d, as_t_slice::<BlockIQ4XS>(data)),
                 GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
             },
@@ -274,7 +272,6 @@ pub enum GgmlDType {
     Q5K,
     Q6K,
     Q8K,
-    I2S,
     IQ4_XS,
 }
 
@@ -296,7 +293,6 @@ impl GgmlDType {
             14 => Self::Q6K,
             15 => Self::Q8K,
             23 => Self::IQ4_XS,
-            36 => Self::I2S,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             30 => Self::BF16,
             _ => crate::bail!("unknown dtype for tensor {u}"),
@@ -321,7 +317,6 @@ impl GgmlDType {
             Self::Q6K => 14,
             Self::Q8K => 15,
             Self::IQ4_XS => 23,
-            Self::I2S => 36,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             Self::BF16 => 30,
         }
@@ -344,7 +339,6 @@ impl GgmlDType {
             Self::Q5K => Box::new(vec![BlockQ5K::zeros(); elem_count / BlockQ5K::BLCK_SIZE]),
             Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
             Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
-            Self::I2S => Box::new(vec![BlockI2S::zeros(); elem_count / BlockI2S::BLCK_SIZE]),
             Self::IQ4_XS => Box::new(vec![
                 BlockIQ4XS::zeros();
                 elem_count / BlockIQ4XS::BLCK_SIZE
@@ -369,7 +363,6 @@ impl GgmlDType {
             Self::Q5K => Box::new(as_t_slice::<BlockQ5K>(data).to_vec()),
             Self::Q6K => Box::new(as_t_slice::<BlockQ6K>(data).to_vec()),
             Self::Q8K => Box::new(as_t_slice::<BlockQ8K>(data).to_vec()),
-            Self::I2S => Box::new(as_t_slice::<BlockI2S>(data).to_vec()),
             Self::IQ4_XS => Box::new(as_t_slice::<BlockIQ4XS>(data).to_vec()),
             Self::BF16 => Box::new(as_t_slice::<bf16>(data).to_vec()),
         }
@@ -394,7 +387,6 @@ impl GgmlDType {
             Self::Q5K => std::mem::size_of::<BlockQ5K>(),
             Self::Q6K => std::mem::size_of::<BlockQ6K>(),
             Self::Q8K => std::mem::size_of::<BlockQ8K>(),
-            Self::I2S => std::mem::size_of::<BlockI2S>(),
             Self::IQ4_XS => std::mem::size_of::<BlockIQ4XS>(),
         }
     }
@@ -411,7 +403,6 @@ impl GgmlDType {
             Self::Q8_0 => k_quants::QK8_0,
             Self::Q8_1 => k_quants::QK8_1,
             Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K | Self::Q8K => k_quants::QK_K,
-            Self::I2S => k_quants::QK_I2S,
             Self::IQ4_XS => k_quants::QK_IQ4_XS,
         }
     }
@@ -884,15 +875,6 @@ impl crate::Module for QMatMul {
         match self {
             Self::QTensor(t) => {
                 match t.dtype() {
-                    GgmlDType::I2S => {
-                        let w = t.dequantize(&t.device())?;
-                        let w = match *xs.dims() {
-                            [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
-                            [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
-                            _ => w.t()?,
-                        };
-                        xs.to_dtype(crate::DType::F32)?.matmul(&w)?.to_dtype(xs.dtype())
-                    }
                     GgmlDType::IQ4_XS => {
                         let w = t.dequantize_f16(&t.device())?;
                         let in_dtype = xs.dtype();

@@ -247,7 +247,6 @@ fn dequantize_f16(
         GgmlDType::Q5K => deq_on_cpu::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out),
         GgmlDType::Q6K => deq_on_cpu::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out),
         GgmlDType::Q8K => deq_on_cpu::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out),
-        GgmlDType::I2S => deq_on_cpu::<crate::quantized::BlockI2S>(&buffer, block_len, &mut out),
         GgmlDType::IQ4_XS => deq_on_cpu::<crate::quantized::BlockIQ4XS>(&buffer, block_len, &mut out),
     }
     let out = out.into_iter().map(f16::from_f32).collect::<Vec<_>>();
@@ -624,7 +623,6 @@ impl QCudaStorage {
             GgmlDType::Q5K => deq_on_cpu::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out),
             GgmlDType::Q6K => deq_on_cpu::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out),
             GgmlDType::Q8K => deq_on_cpu::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out),
-            GgmlDType::I2S => deq_on_cpu::<crate::quantized::BlockI2S>(&buffer, block_len, &mut out),
             GgmlDType::IQ4_XS => deq_on_cpu::<crate::quantized::BlockIQ4XS>(&buffer, block_len, &mut out),
         }
 

@@ -105,10 +105,6 @@ impl QMetalStorage {
                 let vec: Vec<crate::quantized::BlockQ8K> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockQ8K::to_float(&vec, &mut out);
             }
-            GgmlDType::I2S => {
-                let vec: Vec<crate::quantized::BlockI2S> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockI2S::to_float(&vec, &mut out);
-            }
             GgmlDType::IQ4_XS => {
                 let vec: Vec<crate::quantized::BlockIQ4XS> = read_to_vec(&buffer, block_len);
                 crate::quantized::BlockIQ4XS::to_float(&vec, &mut out);

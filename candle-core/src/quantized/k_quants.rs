@@ -2309,65 +2309,6 @@ impl GgmlType for BlockQ8K {
 
 // https://github.com/ggml-org/llama.cpp/blob/aa3ee0eb0b80efca126cedf9bcb4fb5864b46ce3/ggml/src/ggml-cpu/ggml-cpu.c#L1205
 
-pub const QK_I2S: usize = 32;
-
-#[derive(Debug, Clone, PartialEq)]
-#[repr(C)]
-pub struct BlockI2S {
-    pub(crate) qs: [u8; QK_I2S / 4],
-}
-const _: () = assert!(std::mem::size_of::<BlockI2S>() == 8);
-
-impl BlockI2S {
-    pub fn zeros() -> Self {
-        Self { qs: [0; QK_I2S / 4] }
-    }
-}
-
-impl GgmlType for BlockI2S {
-    const DTYPE: GgmlDType = GgmlDType::I2S;
-    const BLCK_SIZE: usize = QK_I2S;
-    type VecDotType = BlockI2S;
-
-    fn to_float(xs: &[Self], ys: &mut [f32]) {
-        for (block, chunk) in xs.iter().zip(ys.chunks_exact_mut(QK_I2S)) {
-            let scale = 1.0f32;
-            for (i, &byte) in block.qs.iter().enumerate() {
-                for j in 0..4 {
-                    let v = (byte >> (j * 2)) & 0x3;
-                    chunk[i * 4 + j] = scale * match v {
-                        0 => -1.0f32,
-                        1 =>  0.0f32,
-                        _ =>  1.0f32,
-                    };
-                }
-            }
-        }
-    }
-
-    fn from_float(xs: &[f32], ys: &mut [Self]) {
-        for (block, chunk) in ys.iter_mut().zip(xs.chunks_exact(QK_I2S)) {
-            for (i, qs_byte) in block.qs.iter_mut().enumerate() {
-                let mut byte = 0u8;
-                for j in 0..4 {
-                    let v = chunk[i * 4 + j];
-                    let v_quant = if v < -0.5 { 0 } else if v > 0.5 { 2 } else { 1 };
-                    byte |= (v_quant as u8) << (j * 2);
-                }
-                *qs_byte = byte;
-            }
-        }
-    }
-
-    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        vec_dot_i2s(n, xs, ys)
-    }
-    
-    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        vec_dot_i2s(n, xs, ys)
-    }
-}
-
 impl GgmlType for BlockIQ4XS {
     const DTYPE: GgmlDType = GgmlDType::IQ4_XS;
     const BLCK_SIZE: usize = QK_IQ4_XS;
@@ -2426,27 +2367,6 @@ impl GgmlType for BlockIQ4XS {
     }
 }
 
-pub fn vec_dot_i2s(n: usize, xs: &[BlockI2S], ys: &[BlockI2S]) -> f32 {
-    if n % QK_I2S == 0 {
-        assert_eq!(n % QK_I2S, 0);
-        let nb = n / QK_I2S;
-        let mut sum = 0f32;
-        for (bx, by) in xs[..nb].iter().zip(ys[..nb].iter()) {
-            let mut block_sum = 0i32;
-            for (&qx, &qy) in bx.qs.iter().zip(by.qs.iter()) {
-                for j in 0..4 {
-                    let vx = ((qx >> (j * 2)) & 0x3) as i32 - 1;
-                    let vy = ((qy >> (j * 2)) & 0x3) as i32 - 1;
-                    block_sum += vx * vy;
-                }
-            }
-            sum += block_sum as f32;
-        }
-        sum
-    } else {
-        0.0f32
-    }
-}
 
 pub fn matmul<T: GgmlType>(
     (m, k, n): (usize, usize, usize),

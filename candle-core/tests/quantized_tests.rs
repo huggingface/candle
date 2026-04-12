@@ -1036,8 +1036,6 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
-        // BitNet ternary format
-        GgmlDType::I2S => 0.01,
         // llama.cpp IQ4_XS decode path currently uses dense dequant fallback in Candle.
         GgmlDType::IQ4_XS => 0.03,
     };
