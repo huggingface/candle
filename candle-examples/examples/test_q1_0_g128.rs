@@ -4,8 +4,9 @@
 // This only loads tensor METADATA (headers), not full weight data.
 // Total memory needed: ~50MB
 
-use candle_core::quantized::gguf_file;
-use candle_core::{Device, Result};
+use candle::quantized::gguf_file;
+use candle::{Device, Result};
+use itertools::Itertools;
 use std::fs::File;
 
 fn main() -> Result<()> {
@@ -33,7 +34,7 @@ fn main() -> Result<()> {
         let dtype_name = format!("{:?}", info.ggml_dtype);
         if matches!(
             info.ggml_dtype,
-            candle_core::quantized::GgmlDType::Q1_0_g128
+            candle::quantized::GgmlDType::Q1_0_g128
         ) {
             q1_0_g128_tensors.push((name.clone(), info.shape.clone()));
         } else {
@@ -50,7 +51,7 @@ fn main() -> Result<()> {
     println!("=== Q1_0_g128 tensors ({}) ===", q1_0_g128_tensors.len());
     if q1_0_g128_tensors.is_empty() {
         println!("  NONE FOUND — check if this is actually a Q1_0_g128 GGUF!");
-        return Err(candle_core::Error::Msg(
+        return Err(candle::Error::Msg(
             "No Q1_0_g128 tensors found".to_string(),
         ));
     }

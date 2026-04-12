@@ -675,12 +675,25 @@ pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[Bloc
                 let bits2 = vdupq_n_u8(xs[i].qs[byte_idx + 2]);
                 let bits3 = vdupq_n_u8(xs[i].qs[byte_idx + 3]);
 
-                // Extract bit 0 from each byte, expand to ±1
-                // bit ? +1 : -1 = 2*bit - 1
-                let pm0 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits0, 0), vshrq_n_u8(bits0, 1)));
-                let pm1 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits1, 2), vshrq_n_u8(bits1, 3)));
-                let pm2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits2, 4), vshrq_n_u8(bits2, 5)));
-                let pm3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(bits3, 6), vshrq_n_u8(bits3, 7)));
+                // Extract bit b from byte: (byte >> b) & 1
+                // Map to ±1: bit=0 → -1, bit=1 → +1 via 2*bit - 1
+                //
+                // AVX2 uses the "sig8" trick via _mm_sign_epi8.
+                // For NEON, we use: pm = 2 * ((bits >> b) & 1) - 1
+                //
+                // Working with 8-bit values, where:
+                //   m1 = all 1s, vgetq_lane_u8 gives 0 or 1, then vmulq_n_s8(, 2) - 1
+                let bit0 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits0, 0), m1));
+                let pm0 = vsubq_s8(vmulq_n_s8(bit0, 2), m1);
+
+                let bit1 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits1, 2), m1));
+                let pm1 = vsubq_s8(vmulq_n_s8(bit1, 2), m1);
+
+                let bit2 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits2, 4), m1));
+                let pm2 = vsubq_s8(vmulq_n_s8(bit2, 2), m1);
+
+                let bit3 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(bits3, 6), m1));
+                let pm3 = vsubq_s8(vmulq_n_s8(bit3, 2), m1);
 
                 // Multiply and accumulate
                 sumi += d1 * (vaddvq_f32(vcvtq_f32_s32(vdotq_s32(pm0, y0))) 
