@@ -59,7 +59,7 @@ pub struct MetalDevice {
     pub(crate) buffers: Arc<RwLock<BufferMap>>,
 
     pub(crate) buffer_override_lock: Arc<Mutex<()>>,
-    pub(crate) buffer_override: Arc<Mutex<Option<Arc<Buffer>>>>,
+    pub(crate) buffer_override: Arc<RwLock<Option<Arc<Buffer>>>>,
 
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
     /// Heavily used by [`candle_metal_kernels`]
@@ -105,19 +105,19 @@ impl std::ops::Deref for MetalDevice {
 }
 
 pub struct TemporaryBufferOverride<'a> {
-    guard: MutexGuard<'a, ()>,
-    buffer_override: Arc<Mutex<Option<Arc<Buffer>>>>,
+    _guard: MutexGuard<'a, ()>,
+    buffer_override: Arc<RwLock<Option<Arc<Buffer>>>>,
 }
 
 impl<'a> TemporaryBufferOverride<'a> {
     pub fn new(
         guard: MutexGuard<'a, ()>,
-        buffer_override: Arc<Mutex<Option<Arc<Buffer>>>>,
+        buffer_override: Arc<RwLock<Option<Arc<Buffer>>>>,
         buffer: Arc<Buffer>,
     ) -> Self {
-        *buffer_override.lock().unwrap() = Some(buffer);
+        *buffer_override.write().unwrap() = Some(buffer);
         TemporaryBufferOverride {
-            guard,
+            _guard: guard,
             buffer_override: buffer_override.clone(),
         }
     }
@@ -125,7 +125,7 @@ impl<'a> TemporaryBufferOverride<'a> {
 
 impl<'a> Drop for TemporaryBufferOverride<'a> {
     fn drop(&mut self) {
-        *self.buffer_override.lock().unwrap() = None;
+        *self.buffer_override.write().unwrap() = None;
     }
 }
 
@@ -168,6 +168,22 @@ impl MetalDevice {
             self.buffer_override.clone(),
             buffer,
         ))
+    }
+
+    pub fn with_buffer_override<F, R>(&self, buffer: Arc<Buffer>, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        // Lock access to lock the buffer override
+        let _guard = self.buffer_override_lock.lock().unwrap();
+        // Update to desired buffer
+        *self.buffer_override.write().unwrap() = Some(buffer);
+        // Run fn
+        let r = f();
+        // Remove override
+        *self.buffer_override.write().unwrap() = None;
+        // Return result. Guard drops on closure exit.
+        r
     }
 
     fn drop_unused_buffers(&self) -> Result<()> {
@@ -280,7 +296,7 @@ impl MetalDevice {
 
     /// The critical allocator algorithm
     pub fn allocate_buffer(&self, size: usize) -> Result<Arc<Buffer>> {
-        let binding = self.buffer_override.lock().unwrap();
+        let binding = self.buffer_override.read().unwrap();
         if let Some(buffer_override) = binding.clone() {
             return Ok(buffer_override.clone());
         }

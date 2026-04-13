@@ -5,19 +5,17 @@ use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvT
 use crate::lazy::ops::LazyOp;
 use crate::lazy::{
     custom::{CustomOp, LazyCustomOp},
-    Executor,
+    BufferId, Executor, LazyAllocator, LazyBuffer,
     LazyError::*,
-    MemoryPlan,
+    MemoryPlan, Op,
 };
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, LazyStorage, Result, Shape};
-use candle_metal_kernels::metal::MetalFence;
 use candle_metal_kernels::{
-    metal::{Buffer, Commands, Device},
+    metal::{Buffer, Commands, Device, MetalFence},
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError, RwLock, TryLockError};
@@ -2190,7 +2188,7 @@ impl BackendDevice for MetalDevice {
             commands: Arc::new(RwLock::new(commands)),
             buffers: Arc::new(RwLock::new(HashMap::new())),
             buffer_override_lock: Arc::new(Mutex::new(())),
-            buffer_override: Arc::new(Mutex::new(None)),
+            buffer_override: Arc::new(RwLock::new(None)),
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
@@ -2401,7 +2399,6 @@ impl MetalDevice {
     }
 }
 
-use crate::lazy::{BufferId, LazyAllocator, LazyBuffer, NodeId, Op};
 impl LazyBuffer for Arc<Buffer> {}
 
 // Allocator notes:
@@ -2411,23 +2408,18 @@ impl LazyBuffer for Arc<Buffer> {}
 // Only Const and Output need to have SharedStorage setting. All other buffers can be private.
 #[derive(Clone, Debug)]
 pub struct MetalAllocator {
+    device: MetalDevice,
     buffer_map: HashMap<BufferId, Arc<Buffer>>,
     reusage: BTreeMap<BufferId, BufferId>,
-    device: MetalDevice,
-    // TODO:
-    // Currently we blit copy to new buffer to ensure contents survive the next graph run.
-    // This could be a better approach:
-    // 1. Introduce Op::Resolved(BufferId). Ensure all ops that used said buffer id get a new one and a new buffer from the pool.
-    // 2. Keep a reference to the Arc<Buffer> (like a map), which ensures it is not distributed to another op by the pool (occupied).
     reused_canonicals: HashSet<BufferId>,
 }
 
 impl MetalAllocator {
     fn new(device: MetalDevice) -> Self {
         Self {
+            device,
             buffer_map: HashMap::new(),
             reusage: BTreeMap::new(),
-            device,
             reused_canonicals: HashSet::new(),
         }
     }
@@ -2537,6 +2529,12 @@ static METAL_DEVICE: LazyLock<MetalDevice> = LazyLock::new(|| MetalDevice::new(0
 // At that point we would simply supply the MetalDevice as the Executor, and get a `Result<(MTLBuffer, Layout)>` back.
 // It is important that we return `E::BufferType`, because if we were to return a `Tensor` or `Storage` etc we would still
 // be locked into the `Storage` and `Device` enum restrictions.
+//
+// It could also be favorable to supply the `Executor` early, so that we can continuously stream work to it by self-described
+// parameters.
+// For example an executor may prefer to launch after X amount of work has been defined, while waiting until we explicitly use
+// `execute` may imply 2X amount of work.
+// Haven't verified but this pattern could require `dyn Executor`.
 pub fn metal_device() -> MetalDevice {
     METAL_DEVICE.clone()
 }
@@ -2545,6 +2543,13 @@ pub fn replace_custom_op_with_fallback(
     _lazy_storage: &LazyStorage,
     _custom_op: &Box<dyn LazyCustomOp>,
 ) {
+    //-> Result<()> {
+    //if let Some(fallback) = lazy_storage.custom_op_fallbacks.get(custom_op.name()) {
+    //    lazy_storage.set_op(fallback.op().clone())
+    //} else {
+    //    bail!("No fallback registered for {}", custom_op.name())?
+    //}
+    //Ok(())
 }
 
 pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
@@ -2586,9 +2591,8 @@ fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
             let a_l = a.1;
             let a = create_metal_storage(a);
 
-            let guard = self.device.set_buffer_override(dst.clone())?;
-            self.op.metal_fwd(&a, a_l)?;
-            drop(guard);
+            self.device
+                .with_buffer_override(dst.clone(), || self.op.metal_fwd(&a, a_l))?;
 
             Ok(())
         }
@@ -2631,9 +2635,8 @@ fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
             let b_l = b.1;
             let b = create_metal_storage(b);
 
-            let guard = self.device.set_buffer_override(dst.clone())?;
-            self.op.metal_fwd(&a, a_l, &b, b_l)?;
-            drop(guard);
+            self.device
+                .with_buffer_override(dst.clone(), || self.op.metal_fwd(&a, a_l, &b, b_l))?;
 
             Ok(())
         }
@@ -2680,9 +2683,9 @@ fn install_custom_op3(op: &Box<dyn crate::CustomOp3>) {
             let c_l = c.1;
             let c = create_metal_storage(c);
 
-            let guard = self.device.set_buffer_override(dst.clone())?;
-            self.op.metal_fwd(&a, a_l, &b, b_l, &c, c_l)?;
-            drop(guard);
+            self.device.with_buffer_override(dst.clone(), || {
+                self.op.metal_fwd(&a, a_l, &b, b_l, &c, c_l)
+            })?;
 
             Ok(())
         }
@@ -2718,7 +2721,7 @@ impl Executor for MetalDevice {
                         "No specialized op found for {}. Replacing with fallback",
                         custom_op.name()
                     );
-                    replace_custom_op_with_fallback(&ls, custom_op.op())
+                    replace_custom_op_with_fallback(&ls, custom_op.op());
                 }
             }
         }
@@ -2734,45 +2737,16 @@ impl Executor for MetalDevice {
 
         let graph = lazy_storage.execution_order();
 
-        // Detect nodes that are referenced outside current forward pass.
-        // These nodes are "pinned" so their memory is not included in the buffer
-        // reusage scheme.
-        //
-        // Each time a node is stored as an op source its `resolved_id` Arc is cloned,
-        // incrementing the strong count. If the count is larger than the number
-        // of current graph uses this means it is also held externally (e.g. a KV cache
-        // tensor kept alive by the model).
-        use crate::lazy::Op::*;
-        let pinned: HashSet<BufferId> = {
-            let mut usage_counts: HashMap<NodeId, usize> = HashMap::new();
-            for node in &graph {
-                for src in node.op().srcs() {
-                    *usage_counts.entry(src.id()).or_default() += 1;
-                }
-            }
-            let mut set = HashSet::new();
-            for node in &graph {
-                if matches!(node.op(), Const(_) | Output(_) | Sink(_)) {
-                    continue;
-                }
-                if node.resolved_buffer_id().is_some() {
-                    continue;
-                }
-                let internal = *usage_counts.get(&node.id()).unwrap_or(&0);
-                if internal == 0 {
-                    continue;
-                }
-                if node.resolved_id_strong_count() > internal {
-                    set.insert(node.buffer_id().clone());
-                }
-            }
-            set
-        };
+        // Collect nodes that have been explicitly pinned via `LazyStorage::pin()`.
+        // Pinned nodes are excluded from the buffer reuse pool and their buffers are
+        // preserved in `resolved_map`.
+        let pinned: HashSet<BufferId> = graph
+            .iter()
+            .filter(|n| n.is_pinned() && n.resolved_buffer_id().is_none())
+            .map(|n| n.buffer_id().clone())
+            .collect();
 
         allocator.initialize(&graph, &pinned)?;
-        if std::env::var("CANDLE_PRINT_LAZY_GRAPH").is_ok() {
-            println!("{}", crate::lazy::graph_to_dot(&lazy_storage));
-        }
 
         let result_node = graph.last().unwrap().clone();
         for node in &graph {
@@ -2856,7 +2830,7 @@ impl Executor for MetalDevice {
                 affine(
                     self,
                     src,
-                    current.layout(),
+                    current.producer_layout(),
                     a.src.dtype(),
                     a.mul,
                     a.add,
@@ -2872,7 +2846,7 @@ impl Executor for MetalDevice {
                     to_dtype(
                         self,
                         src_buffer,
-                        current.layout(),
+                        current.producer_layout(),
                         src.dtype(),
                         dst,
                         op.dtype,
@@ -3025,7 +2999,7 @@ impl Executor for MetalDevice {
                 let mut dst = MetalStorage::new(
                     dst_buffer.clone(),
                     self.clone(),
-                    current.layout().shape().elem_count(),
+                    current.producer_layout().shape().elem_count(),
                     current.dtype(),
                 );
 
@@ -3045,7 +3019,7 @@ impl Executor for MetalDevice {
                 let mut dst = MetalStorage::new(
                     dst.clone(),
                     self.clone(),
-                    current.layout().shape().elem_count(),
+                    current.producer_layout().shape().elem_count(),
                     current.dtype(),
                 );
 
@@ -3077,10 +3051,10 @@ impl Executor for MetalDevice {
                 let mut dst = MetalStorage::new(
                     dst_buffer.clone(),
                     self.clone(),
-                    current.layout().shape().elem_count(),
+                    current.producer_layout().shape().elem_count(),
                     current.dtype(),
                 );
-                dst.const_set(scalar.clone(), current.layout())?;
+                dst.const_set(scalar.clone(), current.producer_layout())?;
             }
             Sink(_sink) => {}
             CustomOp(custom_op) => {
