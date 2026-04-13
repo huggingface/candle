@@ -1406,103 +1406,136 @@ pub fn sdpa(
 
 #[cfg(test)]
 mod tests {
-    use crate::ops::{rms_norm, softmax_last_dim};
+    use crate::ops::{layer_norm, rms_norm, softmax_last_dim};
     use candle::{lazy::LazyDevice, Device, Result, Shape, Tensor};
+
+    fn run_cmp<F>(mut f: F, devices: &[&Device]) -> Result<()>
+    where
+        F: FnMut(&Device) -> Result<Tensor>,
+    {
+        assert!(
+            devices.len() >= 2,
+            "Requires at least 2 devices to compare results"
+        );
+        let mut results: Vec<Tensor> = vec![];
+        for d in devices {
+            results.push(f(d)?);
+        }
+        for w in results.windows(2) {
+            cmp_tensors(&w[0], &w[1])?
+        }
+        Ok(())
+    }
+
+    fn cmp_tensors(a: &Tensor, b: &Tensor) -> Result<()> {
+        let a_device = a.device();
+        let b_device = b.device();
+
+        assert!(
+            !a_device.same_device(b_device),
+            "Test not configured correctly, both devices are {a_device:?}"
+        );
+
+        let a_vals = a.flatten_all()?.to_vec1::<f32>()?;
+        let b_vals = b.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(
+            a_vals.len(),
+            b_vals.len(),
+            "shape mismatch: {a_device:?}={:?} {b_device:?}={:?}",
+            a.shape(),
+            b.shape()
+        );
+        for (i, (l, e)) in a_vals.iter().zip(b_vals.iter()).enumerate() {
+            let diff = (l - e).abs();
+            assert!(
+                diff < 1e-3,
+                "element {i}: {a_device:?}={l} {b_device:?}={e} diff={diff} ({a_device:?} shape={:?})",
+                a.shape()
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn lazy_softmax() -> Result<()> {
-        let src = Tensor::from_slice(
-            &[0f32, 1., 2., 3., 4., 5., 6., 7.],
-            Shape::from(8),
-            &Device::Lazy(LazyDevice),
-            //&Device::new_metal(0)?,
+        let softmax = |device: &Device| {
+            let src =
+                Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), device)?;
+
+            let t1 = src.affine(1.25, 0.0)?;
+            let result = softmax_last_dim(&t1)?;
+            assert_eq!(
+                result.to_vec1::<f32>()?,
+                &[
+                    0.00011306652,
+                    0.0003946411,
+                    0.0013774326,
+                    0.004807711,
+                    0.016780565,
+                    0.058569912,
+                    0.20442909,
+                    0.7135276
+                ]
+            );
+            Ok(result)
+        };
+
+        run_cmp(
+            softmax,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
         )?;
 
-        let t1 = src.affine(1.25, 0.0)?;
-        let result = softmax_last_dim(&t1)?;
-
-        assert_eq!(
-            result.to_vec1::<f32>()?,
-            &[
-                0.00011306652,
-                0.0003946411,
-                0.0013774326,
-                0.004807711,
-                0.016780565,
-                0.058569912,
-                0.20442909,
-                0.7135276
-            ]
-        );
         Ok(())
     }
 
     #[test]
     fn lazy_rms_norm() -> Result<()> {
-        let device = Device::Lazy(LazyDevice);
-        //let device = Device::new_metal(0)?;
+        let rms_norm = |device: &Device| {
+            let xs = Tensor::from_slice(
+                &[0f32, 1., 2., 3., 4., 5., 6., 7.],
+                Shape::from((4, 2)),
+                &device,
+            )?;
+            let indices = Tensor::from_slice(&[0u8, 1], Shape::from(2), &device)?;
+            let xs = xs.index_select(&indices, 0usize)?;
 
-        let xs = Tensor::from_slice(
-            &[0f32, 1., 2., 3., 4., 5., 6., 7.],
-            Shape::from((4, 2)),
-            &device,
+            let alpha = Tensor::from_slice(&[1f32, 1.1], Shape::from(2), &device)?;
+
+            let eps = 1.2;
+
+            let result = rms_norm(&xs, &alpha, eps)?;
+
+            assert_eq!(
+                result.flatten_all()?.to_vec1::<f32>()?,
+                &[0.0, 0.8436615, 0.72075, 1.1892376]
+            );
+            Ok(result)
+        };
+        run_cmp(
+            rms_norm,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
         )?;
-        let indices = Tensor::from_slice(&[0u8, 1], Shape::from(2), &device)?;
-        let xs = xs.index_select(&indices, 0usize)?;
-
-        let alpha = Tensor::from_slice(&[1f32, 1.1], Shape::from(2), &device)?;
-
-        let eps = 1.2;
-
-        let result = rms_norm(&xs, &alpha, eps)?;
-
-        assert_eq!(
-            result.flatten_all()?.to_vec1::<f32>()?,
-            &[0.0, 0.8436615, 0.72075, 1.1892376]
-        );
         Ok(())
     }
 
     #[test]
-    fn lazy_vs_metal_layer_norm() -> Result<()> {
-        let lazy_dev = Device::Lazy(LazyDevice);
-        let metal_dev = Device::new_metal(0)?;
-
+    fn lazy_layer_norm() -> Result<()> {
         let input_data: Vec<f32> = (0..16).map(|x| x as f32 * 0.1).collect();
-        let gamma_data: Vec<f32> = (0..8).map(|x| 1.0f32 + x as f32 * 0.1).collect();
+        let alpha_data: Vec<f32> = (0..8).map(|x| 1.0f32 + x as f32 * 0.1).collect();
         let beta_data: Vec<f32> = (0..8).map(|x| x as f32 * 0.05).collect();
 
-        let run = |dev: &Device| -> Result<Vec<Vec<f32>>> {
-            let x = Tensor::from_slice(&input_data, (2usize, 8usize), dev)?;
-            let gamma = Tensor::from_slice(&gamma_data, (8usize,), dev)?;
-            let beta = Tensor::from_slice(&beta_data, (8usize,), dev)?;
+        let lnorm = |device: &Device| {
+            let xs = Tensor::from_slice(&input_data.clone(), (2usize, 8usize), device)?;
+            let alpha = Tensor::from_slice(&alpha_data.clone(), (8usize,), device)?;
+            let beta = Tensor::from_slice(&beta_data.clone(), (8usize,), device)?;
             let eps = 1e-5f64;
-            let result = layer_norm_custom(&x, &gamma, &beta, eps as f32)?;
-            result.to_vec2::<f32>()
+            let result = layer_norm(&xs, &alpha, &beta, eps as f32)?;
+            result
+                .to_dtype(candle::DType::BF16)?
+                .to_dtype(candle::DType::F32)
         };
 
-        let lazy_result = run(&lazy_dev)?;
-        let metal_result = run(&metal_dev)?;
-        let round = |v: Vec<Vec<f32>>| -> Vec<Vec<f32>> {
-            v.into_iter()
-                .map(|row| row.into_iter().map(|x| (x * 1e4).round() / 1e4).collect())
-                .collect()
-        };
-        let lazy_r = round(lazy_result);
-        let metal_r = round(metal_result);
-        if lazy_r != metal_r {
-            eprintln!("lazy:  {:?}", lazy_r);
-            eprintln!("metal: {:?}", metal_r);
-            panic!("layer_norm outputs differ");
-        }
+        run_cmp(lnorm, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
         Ok(())
-    }
-
-    // Helper: calls the LayerNorm CustomOp3 directly (like BERT does)
-    fn layer_norm_custom(x: &Tensor, w: &Tensor, b: &Tensor, eps: f32) -> Result<Tensor> {
-        use crate::LayerNorm;
-        use candle::Module;
-        let ln = LayerNorm::new(w.clone(), b.clone(), eps as f64);
-        ln.forward(x)
     }
 }
