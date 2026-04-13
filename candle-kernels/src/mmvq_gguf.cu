@@ -916,7 +916,9 @@ mmvq_gguf_quantize_q8_1_f32(const float *__restrict__ x,
   extern "C" void launch_mmvq_gguf_##tag##_##dst_tag##_plain(                  \
       const void *vx, const void *vy, void *dst, int ncols_x, int nrows_x,    \
       int stride_col_y, int stride_col_dst, int b_size, void *stream) {        \
-    const unsigned int nblocks = (unsigned int)nrows_x;                        \
+    const unsigned int rows_per_block = (b_size <= 1) ? 1 : 2;                 \
+    const unsigned int nblocks =                                               \
+        (unsigned int)((nrows_x + rows_per_block - 1) / rows_per_block);      \
     unsigned int nwarps;                                                       \
     if (b_size <= 4) {                                                         \
       nwarps = 4;                                                              \
