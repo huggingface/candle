@@ -73,10 +73,7 @@ fn workspace_ensure(
         }
         std::collections::hash_map::Entry::Vacant(entry) => {
             let slice = unsafe { dev.alloc::<u8>(bytes)? };
-            entry.insert(WorkspaceSlot {
-                slice,
-                cap: bytes,
-            })
+            entry.insert(WorkspaceSlot { slice, cap: bytes })
         }
     };
     let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
