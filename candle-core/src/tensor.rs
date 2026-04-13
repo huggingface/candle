@@ -2823,6 +2823,16 @@ impl Tensor {
         (storage, &self.layout)
     }
 
+    /// If this tensor is backed by a lazy storage, mark it as pinned so its computed
+    /// buffer is preserved across forward passes (e.g. for KV-cache tensors). No-op
+    /// for non-lazy tensors.
+    pub fn lazy_pin(&self) {
+        self.storage().lazy_pin();
+    }
+    pub fn lazy_unpin(&self) {
+        self.storage().lazy_unpin();
+    }
+
     pub(crate) fn same_storage(&self, rhs: &Self) -> bool {
         let lhs: &RwLock<Storage> = self.storage.as_ref();
         let rhs: &RwLock<Storage> = rhs.storage.as_ref();

@@ -67,6 +67,22 @@ impl Storage {
         }
     }
 
+    /// If this storage is lazy, pin it so its buffer is preserved across forward passes.
+    /// No-op for non-lazy storage.
+    pub fn lazy_pin(&self) {
+        if let Self::Lazy(storage) = self {
+            storage.pin();
+        }
+    }
+
+    /// If this storage is lazy, unpin it.
+    /// No-op for non-lazy storage.
+    pub fn lazy_unpin(&self) {
+        if let Self::Lazy(storage) = self {
+            storage.unpin();
+        }
+    }
+
     pub fn dtype(&self) -> DType {
         match self {
             Self::Cpu(storage) => storage.dtype(),
