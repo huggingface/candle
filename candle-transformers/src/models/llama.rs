@@ -322,6 +322,8 @@ impl CausalSelfAttention {
                         .contiguous()?
                 }
             }
+            k.lazy_pin();
+            v.lazy_pin();
             cache.kvs[block_idx] = Some((k.clone(), v.clone()))
         }
 
