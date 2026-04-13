@@ -16,7 +16,7 @@ __device__ __forceinline__ __half __hmin_nan(__half a, __half b) {
 }
 #endif
 
-#if __CUDA_ARCH__ < 600
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 600
 // Copied from https://docs.nvidia.com/cuda/cuda-c-programming-guide/#atomic-functions
 __device__ double atomicAdd(double* address, double val) {
     unsigned long long int* address_as_ull = (unsigned long long int*)address;
@@ -35,7 +35,7 @@ __device__ double atomicAdd(double* address, double val) {
 }
 #endif
 
-#if __CUDA_ARCH__ < 700
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#atomicadd
 // The 16-bit __half floating-point version of atomicAdd() is only supported by devices of compute capability 7.x and higher.
 // Solution adapted from https://github.com/torch/cutorch/blob/master/lib/THC/THCAtomics.cuh#L96-L119
@@ -60,7 +60,7 @@ __device__ double atomicAdd(double* address, double val) {
 
 
 __device__ __forceinline__ __half atomicMaxf(__half* address, __half val) {
-#if __CUDA_ARCH__ < 700
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
     // On older GPUs we do not have access to atomicCAS for shorts, so we have to do some trickery.
     // Solution adapted from https://github.com/torch/cutorch/blob/master/lib/THC/THCAtomics.cuh#L96-L119
     unsigned int *address_as_ui = (unsigned int *) ((char *)address - ((size_t)address & 2));
@@ -112,7 +112,7 @@ __device__ __forceinline__ double atomicMaxf(double * addr, double value) {
 
 
 __device__ __forceinline__ __half atomicMinf(__half* address, __half val) {
-#if __CUDA_ARCH__ < 700
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
     // On older GPUs we do not have access to atomicCAS for shorts, so we have to do some trickery.
     // Solution adapted from https://github.com/torch/cutorch/blob/master/lib/THC/THCAtomics.cuh#L96-L119
     unsigned int *address_as_ui = (unsigned int *) ((char *)address - ((size_t)address & 2));

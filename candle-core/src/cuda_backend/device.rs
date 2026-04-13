@@ -293,6 +293,8 @@ impl CudaDevice {
     }
 
     pub fn get_or_load_func(&self, fn_name: &str, mdl: &kernels::Module) -> Result<CudaFunc> {
+        // Multi-GPU: ensure this device's CUDA context is bound to the current thread
+        self.context.bind_to_thread().w()?;
         let ms = self.modules.read().unwrap();
         if let Some(mdl) = ms.mdls[mdl.index()].as_ref() {
             let func = mdl.load_function(fn_name).w()?;

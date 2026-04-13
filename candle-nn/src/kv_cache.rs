@@ -214,6 +214,17 @@ impl RotatingCache {
         self.all_data = None;
     }
 
+    /// Roll back the valid sequence length to `new_len` without touching
+    /// the underlying buffer (no-op if `new_len >= current_seq_len`). Used
+    /// by speculative decoding to discard rejected draft K/V on partial
+    /// acceptance. The next `append` will overwrite from `new_len`.
+    pub fn trim_to(&mut self, new_len: usize) {
+        if new_len < self.current_seq_len {
+            self.current_seq_len = new_len;
+            self.offset = new_len;
+        }
+    }
+
     pub fn append(&mut self, src: &Tensor) -> Result<Tensor> {
         let seq_len = src.dim(self.dim)?;
         // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
@@ -381,6 +392,13 @@ impl RotatingKvCache {
 
     pub fn current_seq_len(&self) -> usize {
         self.k.current_seq_len()
+    }
+
+    /// Roll back the valid sequence length to `new_len` for both K and V.
+    /// Used by speculative decoding to discard rejected draft K/V.
+    pub fn trim_to(&mut self, new_len: usize) {
+        self.k.trim_to(new_len);
+        self.v.trim_to(new_len);
     }
 
     /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.

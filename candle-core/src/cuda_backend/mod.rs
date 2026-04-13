@@ -1259,6 +1259,16 @@ impl CudaStorage {
     }
 
     pub fn transfer_to_device(&self, dst: &CudaDevice) -> Result<Self> {
+        // Cross-device fallback: cudarc's `clone_dtod` issues a device-to-device
+        // memcpy in the destination stream's CUDA context, which is only valid
+        // when src and dst live on the same physical GPU. Across GPUs it copies
+        // garbage, producing NaN/Inf downstream. Until this fork grows a proper
+        // `cudaMemcpyPeerAsync` path, stage the transfer through host memory —
+        // correct at the cost of an extra copy.
+        if !self.device.same_device(dst) {
+            let cpu = self.to_cpu_storage()?;
+            return dst.storage_from_cpu_storage(&cpu);
+        }
         let dst_stream = dst.cuda_stream();
         let storage_slice = match self.dtype() {
             DType::U8 => {
