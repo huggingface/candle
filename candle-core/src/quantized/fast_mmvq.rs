@@ -62,24 +62,23 @@ fn workspace_ensure(
     let map = WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
     let device_key = dev.id();
     let mut guard = map.lock().unwrap();
-    let slot = match guard.get_mut(&device_key) {
-        Some(slot) => slot,
-        None => {
-            let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
-            guard.insert(
-                device_key,
-                WorkspaceSlot {
-                    slice,
-                    cap: bytes.max(1),
-                },
-            );
-            guard.get_mut(&device_key).unwrap()
+    let slot = match guard.entry(device_key) {
+        std::collections::hash_map::Entry::Occupied(entry) => {
+            let slot = entry.into_mut();
+            if slot.cap < bytes {
+                slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
+                slot.cap = bytes;
+            }
+            slot
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            let slice = unsafe { dev.alloc::<u8>(bytes)? };
+            entry.insert(WorkspaceSlot {
+                slice,
+                cap: bytes,
+            })
         }
     };
-    if slot.cap < bytes {
-        slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
-        slot.cap = bytes;
-    }
     let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
     Ok((ptr, guard))
 }
@@ -161,8 +160,7 @@ fn plain_launcher_f32(dtype: GgmlDType) -> Option<PlainLauncher> {
 /// Try the fast MMVQ path. Returns `Ok(None)` when the fast path is not applicable:
 /// - unsupported quant dtype
 /// - batch too large
-/// - non-BF16/F32 input,
-/// - FORCE_DMMV is set
+/// - non-BF16/F32 input
 pub fn try_fwd(
     qstorage: &QCudaStorage,
     self_shape: &Shape,
@@ -172,9 +170,6 @@ pub fn try_fwd(
     use candle_kernels::ffi;
 
     // Gate checks.
-    if super::cuda::FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
-        return Ok(None);
-    }
     let w_dtype = qstorage.dtype();
     if !supports(w_dtype) {
         return Ok(None);
