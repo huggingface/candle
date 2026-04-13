@@ -160,8 +160,6 @@ pub struct LazyStorage {
     original_layout: Option<Layout>,
     dtype: DType,
     buffer_id: Arc<BufferId>,
-    // Set once by the backend executor after this node has been evaluated
-    resolved_id: Arc<std::sync::OnceLock<BufferId>>,
     // Explicit external-reference counter. Incremented by `pin()` to signal that this
     // node's buffer must be preserved across forward passes (for example KV cache tensors).
     // TODO: Figure out a way to achieve this feature without explicit pin calls.
@@ -180,7 +178,6 @@ impl Clone for LazyStorage {
             original_layout: self.original_layout.clone(),
             dtype: self.dtype.clone(),
             buffer_id: self.buffer_id.clone(),
-            resolved_id: self.resolved_id.clone(),
             pin_count: self.pin_count.clone(),
         }
     }
@@ -196,7 +193,6 @@ impl LazyStorage {
             original_layout: None,
             dtype,
             buffer_id: Arc::new(BufferId::new()),
-            resolved_id: Arc::new(std::sync::OnceLock::new()),
             pin_count: Arc::new(atomic::AtomicUsize::new(0)),
         }
     }
@@ -223,7 +219,6 @@ impl LazyStorage {
             layout: new_layout,
             dtype: source.dtype,
             buffer_id: source.buffer_id.clone(),
-            resolved_id: source.resolved_id.clone(),
             pin_count: source.pin_count.clone(),
         }
     }
@@ -321,20 +316,12 @@ impl LazyStorage {
         &self.buffer_id
     }
 
-    pub fn resolved_buffer_id(&self) -> Option<&BufferId> {
-        self.resolved_id.get()
+    pub(crate) fn arc_buffer_id(&self) -> Arc<BufferId> {
+        self.buffer_id.clone()
     }
 
-    /// Returns amount of `LazyStorage` nodes that share this `resolved_id`.
-    /// `LazyStorage::copy` increments this count by 1. A count larger than
-    /// presence of this node in the graph indicates external references (e.g.
-    /// a tensor kept alive in a KV-cache).
-    pub fn resolved_id_strong_count(&self) -> usize {
-        Arc::strong_count(&self.resolved_id)
-    }
-
-    pub fn mark_resolved(&self, buf_id: BufferId) {
-        let _ = self.resolved_id.set(buf_id);
+    pub fn set_op(&self, op: Op) {
+        self.op.store(op);
     }
 
     /// Mark this node as externally held (e.g. stored in a KV cache) so its buffer
@@ -369,11 +356,7 @@ impl LazyStorage {
             let cur_op = cur_t.op();
             let cur_srcs = cur_op.srcs();
             // Only evaluate nodes once. If already resolved then we do not process.
-            let effective_len = if cur_t.resolved_buffer_id().is_some() {
-                0
-            } else {
-                cur_srcs.len()
-            };
+            let effective_len = cur_srcs.len();
             let all_deps_done = cur_src == effective_len;
 
             if all_deps_done {
@@ -508,11 +491,7 @@ impl Dot {
             for source in node.srcs() {
                 if !visited.contains(&source.id().index()) {
                     write!(f, "{}{} [ ", INDENT, source.id().index())?;
-                    if source.resolved_buffer_id().is_some() {
-                        writeln!(f, "label = \"Resolved({})\"]", source.op())?;
-                    } else {
-                        writeln!(f, "label = \"{}\"]", source.op())?;
-                    }
+                    writeln!(f, "label = \"{}\"]", source.op())?;
                 }
             }
         }
@@ -612,11 +591,11 @@ pub fn calculate_usage_records(
     for (i, node) in graph.iter().rev().enumerate() {
         let buffer_id = node.buffer_id();
 
-        if node.op().resolved() || node.resolved_buffer_id().is_some() {
+        if node.op().resolved() {
             continue;
         }
         for source in node.srcs() {
-            if source.op().resolved() || source.resolved_buffer_id().is_some() {
+            if source.op().resolved() {
                 continue;
             }
             let true_source = determine_tensor_source(source);

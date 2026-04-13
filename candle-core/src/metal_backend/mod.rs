@@ -2447,7 +2447,7 @@ impl LazyAllocator<Arc<Buffer>> for MetalAllocator {
         {
             let resolved_map = self.device.resolved.lock().unwrap();
             for node in graph {
-                if let Some(buf_id) = node.resolved_buffer_id() {
+                if let Op::Resolved(buf_id) = node.op() {
                     if let Some(buf) = resolved_map.get(buf_id) {
                         self.buffer_map
                             .insert(node.buffer_id().clone(), buf.clone());
@@ -2742,7 +2742,7 @@ impl Executor for MetalDevice {
         // preserved in `resolved_map`.
         let pinned: HashSet<BufferId> = graph
             .iter()
-            .filter(|n| n.is_pinned() && n.resolved_buffer_id().is_none())
+            .filter(|n| n.is_pinned() && !matches!(n.op(), Op::Resolved(_)))
             .map(|n| n.buffer_id().clone())
             .collect();
 
@@ -2798,12 +2798,12 @@ impl Executor for MetalDevice {
                 if !pinned.contains(node.buffer_id()) {
                     continue;
                 }
-                if node.resolved_buffer_id().is_some() {
+                if matches!(node.op(), Op::Resolved(_)) {
                     continue;
                 }
                 if let Ok(buf) = allocator.get(node.buffer_id()) {
                     resolved_map.insert(node.buffer_id().clone(), buf.clone());
-                    node.mark_resolved(node.buffer_id().clone());
+                    node.resolve();
                 }
             }
         }
@@ -2815,13 +2815,10 @@ impl Executor for MetalDevice {
     fn eval(&self, current: &LazyStorage, allocator: &mut MetalAllocator) -> Result<()> {
         use crate::lazy::Op::*;
 
-        // Skip nodes already evaluated in a previous forward pass.
-        if current.resolved_buffer_id().is_some() {
-            return Ok(());
-        }
-
         match current.op() {
-            Resolved(_) => {}
+            Resolved(_) => {
+                // Skip nodes already evaluated in a previous forward pass.
+            }
             Const(s) => self.eval_const(allocator, &s, current.buffer_id())?,
             Affine(a) => {
                 let src = allocator.get(a.src.buffer_id()).unwrap();
