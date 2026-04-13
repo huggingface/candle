@@ -118,6 +118,24 @@ fn plain_launcher_bf16(dtype: GgmlDType) -> Option<PlainLauncher> {
     Some(f)
 }
 
+fn plain_launcher_f16(dtype: GgmlDType) -> Option<PlainLauncher> {
+    use candle_kernels::ffi;
+    let f: PlainLauncher = match dtype {
+        GgmlDType::Q4_0 => ffi::launch_mmvq_gguf_q4_0_f16_plain,
+        GgmlDType::Q4_1 => ffi::launch_mmvq_gguf_q4_1_f16_plain,
+        GgmlDType::Q5_0 => ffi::launch_mmvq_gguf_q5_0_f16_plain,
+        GgmlDType::Q5_1 => ffi::launch_mmvq_gguf_q5_1_f16_plain,
+        GgmlDType::Q8_0 => ffi::launch_mmvq_gguf_q8_0_f16_plain,
+        GgmlDType::Q2K => ffi::launch_mmvq_gguf_q2_k_f16_plain,
+        GgmlDType::Q3K => ffi::launch_mmvq_gguf_q3_k_f16_plain,
+        GgmlDType::Q4K => ffi::launch_mmvq_gguf_q4_k_f16_plain,
+        GgmlDType::Q5K => ffi::launch_mmvq_gguf_q5_k_f16_plain,
+        GgmlDType::Q6K => ffi::launch_mmvq_gguf_q6_k_f16_plain,
+        _ => return None,
+    };
+    Some(f)
+}
+
 fn plain_launcher_f32(dtype: GgmlDType) -> Option<PlainLauncher> {
     use candle_kernels::ffi;
     let f: PlainLauncher = match dtype {
@@ -162,7 +180,7 @@ pub fn try_fwd(
         return Ok(None);
     }
     let input_dtype = rhs.dtype();
-    if !matches!(input_dtype, DType::BF16 | DType::F32) {
+    if !matches!(input_dtype, DType::BF16 | DType::F16 | DType::F32) {
         return Ok(None);
     }
 
@@ -224,6 +242,40 @@ pub fn try_fwd(
                     stream_ptr,
                 );
                 let launcher = plain_launcher_bf16(w_dtype).unwrap();
+                launcher(
+                    weight_ptr,
+                    scratch_ptr as *const std::ffi::c_void,
+                    out_ptr,
+                    k as i32,
+                    nrows as i32,
+                    stride_col_y,
+                    stride_col_dst,
+                    b_size as i32,
+                    stream_ptr,
+                );
+            }
+
+            let out_storage = CudaStorage::wrap_cuda_slice(out, dev.clone());
+            Ok(Some((out_storage, out_shape.into())))
+        }
+        DType::F16 => {
+            let rhs_slice = rhs.as_cuda_slice::<half::f16>()?;
+            let rhs_slice = rhs_slice.slice(o1..o2);
+            let out = unsafe { dev.alloc::<half::f16>(nrows * b_size)? };
+
+            let rhs_ptr = rhs_slice.device_ptr(&stream).0 as *const std::ffi::c_void;
+            let out_ptr = out.device_ptr(&stream).0 as *mut std::ffi::c_void;
+
+            unsafe {
+                ffi::launch_mmvq_gguf_quantize_q8_1_f16(
+                    rhs_ptr,
+                    scratch_ptr,
+                    k as i32,
+                    k_padded as i32,
+                    b_size as i32,
+                    stream_ptr,
+                );
+                let launcher = plain_launcher_f16(w_dtype).unwrap();
                 launcher(
                     weight_ptr,
                     scratch_ptr as *const std::ffi::c_void,

@@ -161,6 +161,57 @@ extern "C" {
         b_size: i32, stream: *mut c_void,
     );
 
+    pub fn launch_mmvq_gguf_q4_0_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q4_1_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_0_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_1_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q2_k_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q3_k_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q4_k_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q5_k_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q6_k_f16_plain(
+        vx: *const c_void, vy: *const c_void, dst: *mut c_void,
+        ncols_x: i32, nrows_x: i32, stride_col_y: i32, stride_col_dst: i32,
+        b_size: i32, stream: *mut c_void,
+    );
+
     // Quantize launchers (activation → Q8_1)
     pub fn launch_mmvq_gguf_quantize_q8_1_bf16(
         x: *const c_void, vy: *mut c_void,

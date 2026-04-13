@@ -734,7 +734,7 @@ static __device__ void mmvq_core_impl(
                             stride_col_y, stride_col_dst);                     \
   }
 
-// -- plain entries for all 10 supported quant types, batch sizes 1..8, bf16 + f32 --
+// -- plain entries for all 10 supported quant types, batch sizes 1..8, bf16 + f16 + f32 --
 #define MMVQ_PLAIN_BATCH_SET(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot) \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
                     __nv_bfloat16, 1)                                          \
@@ -752,6 +752,22 @@ static __device__ void mmvq_core_impl(
                     __nv_bfloat16, 7)                                          \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, bf16,     \
                     __nv_bfloat16, 8)                                          \
+  MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
+                    half, 1)                                                   \
+  MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
+                    half, 2)                                                   \
+  MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
+                    half, 3)                                                   \
+  MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
+                    half, 4)                                                   \
+  MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
+                    half, 5)                                                   \
+  MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
+                    half, 6)                                                   \
+  MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
+                    half, 7)                                                   \
+  MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f16,      \
+                    half, 8)                                                   \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
                     float, 1)                                                  \
   MMVQ_PLAIN_ENTRY(tag, block_q_t, qk_val, qi_val, vdr_val, vec_dot, f32,      \
@@ -966,6 +982,17 @@ MMVQ_LAUNCHER_PLAIN(q3_k, bf16, __nv_bfloat16)
 MMVQ_LAUNCHER_PLAIN(q4_k, bf16, __nv_bfloat16)
 MMVQ_LAUNCHER_PLAIN(q5_k, bf16, __nv_bfloat16)
 MMVQ_LAUNCHER_PLAIN(q6_k, bf16, __nv_bfloat16)
+
+MMVQ_LAUNCHER_PLAIN(q4_0, f16, half)
+MMVQ_LAUNCHER_PLAIN(q4_1, f16, half)
+MMVQ_LAUNCHER_PLAIN(q5_0, f16, half)
+MMVQ_LAUNCHER_PLAIN(q5_1, f16, half)
+MMVQ_LAUNCHER_PLAIN(q8_0, f16, half)
+MMVQ_LAUNCHER_PLAIN(q2_k, f16, half)
+MMVQ_LAUNCHER_PLAIN(q3_k, f16, half)
+MMVQ_LAUNCHER_PLAIN(q4_k, f16, half)
+MMVQ_LAUNCHER_PLAIN(q5_k, f16, half)
+MMVQ_LAUNCHER_PLAIN(q6_k, f16, half)
 
 MMVQ_LAUNCHER_PLAIN(q4_0, f32, float)
 MMVQ_LAUNCHER_PLAIN(q4_1, f32, float)
