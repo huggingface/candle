@@ -1,7 +1,7 @@
 use crate::{
     Buffer, CommandQueue, ComputePipeline, Function, Library, MTLResourceOptions, MetalKernelError,
 };
-use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2::{rc::Retained, runtime::AnyObject, runtime::ProtocolObject};
 use objc2_foundation::NSString;
 use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice, MTLFence};
 use std::{ffi::c_void, ptr};
@@ -134,6 +134,13 @@ impl Device {
     /// - 's': max
     /// - 'd': ultra
     pub fn architecture_name(&self) -> String {
+        // On tvOS/iOS simulators the emulated Metal device returns NULL from
+        // -[MTLDevice architecture], which causes objc2 to panic.  Guard
+        // against this by checking the raw pointer before dereferencing.
+        let raw_arch: *const AnyObject = unsafe { objc2::msg_send![self.as_ref(), architecture] };
+        if raw_arch.is_null() {
+            return "unknown".to_string();
+        }
         let arch = self.as_ref().architecture();
         arch.name().to_string()
     }

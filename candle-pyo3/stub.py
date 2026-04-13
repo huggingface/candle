@@ -7,7 +7,6 @@ import black
 from pathlib import Path
 import re
 
-
 INDENT = " " * 4
 GENERATED_COMMENT = "# Generated content DO NOT EDIT\n"
 TYPING = """from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence

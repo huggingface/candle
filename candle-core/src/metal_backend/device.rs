@@ -58,6 +58,10 @@ pub struct MetalDevice {
     /// (strong_count = 1).
     pub(crate) buffers: Arc<RwLock<BufferMap>>,
 
+    /// Same as `buffers` but uses `PRIVATE_RESOURCE_OPTIONS` (StorageModePrivate on macOS).
+    /// Intermediate compute buffers don't need CPU access so Private avoids coherency overhead.
+    pub(crate) private_buffers: Arc<RwLock<BufferMap>>,
+
     pub(crate) buffer_override_lock: Arc<Mutex<()>>,
     pub(crate) buffer_override: Arc<RwLock<Option<Arc<Buffer>>>>,
 
@@ -232,14 +236,34 @@ impl MetalDevice {
     }
 
     /// Creates a new buffer (not necessarily zeroed).
+    ///
+    /// Uses StorageModePrivate on macOS for faster GPU access (no CPU coherency overhead).
+    /// Falls back to StorageModeShared on iOS where Private is not always available.
     pub fn new_buffer(
         &self,
         element_count: usize,
         dtype: DType,
         _name: &str,
     ) -> Result<Arc<Buffer>> {
+        let binding = self.buffer_override.read().unwrap();
+        if let Some(buffer_override) = binding.clone() {
+            return Ok(buffer_override.clone());
+        }
         let size = element_count * dtype.size_in_bytes();
-        self.allocate_buffer(size)
+        let mut buffers = self.private_buffers.write().map_err(MetalError::from)?;
+        if let Some(b) = find_available_buffer(size, &buffers) {
+            return Ok(b.clone());
+        }
+        let size = buf_size(size);
+        let subbuffers = buffers.entry(size).or_insert(vec![]);
+
+        let new_buffer = self
+            .device
+            .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
+            .map_err(MetalError::from)?;
+        let new_buffer = Arc::new(new_buffer);
+        subbuffers.push(new_buffer.clone());
+        Ok(new_buffer)
     }
 
     /// Creates a new private buffer (not necessarily zeroed).
@@ -351,7 +375,40 @@ impl MetalDevice {
 }
 
 fn buf_size(size: usize) -> usize {
-    size.saturating_sub(1).next_power_of_two()
+    size.next_power_of_two()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buf_size_exact_powers_of_two() {
+        assert_eq!(buf_size(1), 1);
+        assert_eq!(buf_size(2), 2);
+        assert_eq!(buf_size(4), 4);
+        assert_eq!(buf_size(8), 8);
+        assert_eq!(buf_size(16), 16);
+        assert_eq!(buf_size(1024), 1024);
+    }
+
+    #[test]
+    fn test_buf_size_rounds_up() {
+        assert_eq!(buf_size(3), 4);
+        assert_eq!(buf_size(5), 8);
+        assert_eq!(buf_size(6), 8);
+        assert_eq!(buf_size(7), 8);
+        assert_eq!(buf_size(9), 16);
+        assert_eq!(buf_size(1000), 1024);
+        assert_eq!(buf_size(1025), 2048);
+    }
+
+    #[test]
+    fn test_buf_size_bf16_f16_scalar() {
+        // BF16 and F16 are 2 bytes per element. A scalar tensor requests
+        // a 2-byte buffer. This must not be rounded down to 1.
+        assert_eq!(buf_size(2), 2);
+    }
 }
 
 fn find_available_buffer(size: usize, buffers: &BufferMap) -> Option<Arc<Buffer>> {

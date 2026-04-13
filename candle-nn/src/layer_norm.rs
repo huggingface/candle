@@ -107,6 +107,10 @@ impl LayerNorm {
     pub fn eps(&self) -> f64 {
         self.eps
     }
+
+    pub fn remove_mean(&self) -> bool {
+        self.remove_mean
+    }
 }
 
 impl Module for LayerNorm {
@@ -179,6 +183,14 @@ impl RmsNorm {
 
     pub fn into_inner(self) -> LayerNorm {
         self.0
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        self.0.weight()
+    }
+
+    pub fn eps(&self) -> f64 {
+        self.0.eps()
     }
 
     /// Faster variant of the forward kernel, this can only be used on contiguous tensors though.

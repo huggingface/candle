@@ -62,7 +62,7 @@ impl VoxtralLlamaConfig {
 
 #[derive(Debug, Clone)]
 pub struct VoxtralLlamaCache {
-    masks: HashMap<usize, Tensor>,
+    masks: HashMap<(usize, usize), Tensor>,
     pub use_kv_cache: bool,
     kvs: Vec<Option<(Tensor, Tensor)>>,
     cos: Tensor,
@@ -110,15 +110,13 @@ impl VoxtralLlamaCache {
         })
     }
 
-    fn mask(&mut self, t: usize) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
+    fn mask(&mut self, seq_len: usize, index_pos: usize) -> Result<Tensor> {
+        let kv_len = index_pos + seq_len;
+        if let Some(mask) = self.masks.get(&(seq_len, kv_len)) {
             Ok(mask.clone())
         } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
-            self.masks.insert(t, mask.clone());
+            let mask = crate::utils::build_causal_mask(seq_len, index_pos, &self.device)?;
+            self.masks.insert((seq_len, kv_len), mask.clone());
             Ok(mask)
         }
     }
@@ -258,7 +256,7 @@ impl CausalSelfAttention {
             let att = if seq_len == 1 {
                 att
             } else {
-                let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
+                let mask = cache.mask(seq_len, index_pos)?.broadcast_as(att.shape())?;
                 masked_fill(&att, &mask, f32::NEG_INFINITY)?
             };
 

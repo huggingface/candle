@@ -904,12 +904,11 @@ fn conv2d_c_eq_h_eq_w(dev: &Device) -> Result<()> {
     let c0 = res.i((.., 0..1, .., ..))?;
     let c1 = res.i((.., 1..2, .., ..))?;
     let diff = c0
-        .to_dtype(candle_core::DType::F64)?
-        .sub(&c1.to_dtype(candle_core::DType::F64)?)?
+        .sub(&c1)?
         .abs()?
         .flatten_all()?
         .max(0)?
-        .to_scalar::<f64>()?;
+        .to_scalar::<f32>()?;
     assert!(
         diff < 1e-6,
         "conv2d with C==H==W: output channels should be identical for all-ones kernel, got diff={diff}"
