@@ -19,7 +19,7 @@ pub struct QCudaStorage {
     device: CudaDevice,
 }
 
-static FORCE_DMMV: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) static FORCE_DMMV: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_force_dmmv(f: bool) {
     FORCE_DMMV.store(f, std::sync::atomic::Ordering::Relaxed)
@@ -720,6 +720,12 @@ impl QCudaStorage {
         storage: &CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
+        // Try the fast MMVQ path first (supports BF16/F32, batch 1-8, all quant types, reuses per-device workspace).
+        if let Some(result) = super::fast_mmvq::try_fwd(self, self_shape, storage, layout)? {
+            return Ok(result);
+        }
+
+        // Fallback: existing PTX-based paths.
         let max_bm = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
             1
         } else {
