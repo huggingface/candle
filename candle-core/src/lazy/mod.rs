@@ -149,13 +149,24 @@ impl AtomicOp {
 pub struct LazyStorage {
     id: NodeId,
     // Consider setting as Op::Resolved() when node is resolved
-    pub op: Arc<AtomicOp>,
-    custom_op_fallbacks: HashMap<String, LazyStorage>,
+    op: Arc<AtomicOp>,
+    pub(crate) custom_op_fallbacks: HashMap<String, LazyStorage>,
+    // Layout after applying op. As it is used by subsequent nodes it can be
+    // considered the consumer layout.
     layout: Layout,
+    // Layout used when applying op, e.g. producer layout.
+    // Not always needed, hence optional. When this node was created via `copy()` with
+    // a different (e.g. narrowed) layout, this holds the source node's original layout.
+    original_layout: Option<Layout>,
     dtype: DType,
     buffer_id: Arc<BufferId>,
     // Set once by the backend executor after this node has been evaluated
     resolved_id: Arc<std::sync::OnceLock<BufferId>>,
+    // Explicit external-reference counter. Incremented by `pin()` to signal that this
+    // node's buffer must be preserved across forward passes (for example KV cache tensors).
+    // TODO: Figure out a way to achieve this feature without explicit pin calls.
+    // It should be automatic.
+    pin_count: Arc<atomic::AtomicUsize>,
     // pub(crate) owner: std::sync::OnceLock<std::sync::Weak<crate::tensor::Tensor_>>,
 }
 
@@ -166,9 +177,11 @@ impl Clone for LazyStorage {
             op: self.op.clone(),
             custom_op_fallbacks: self.custom_op_fallbacks.clone(),
             layout: self.layout.clone(),
+            original_layout: self.original_layout.clone(),
             dtype: self.dtype.clone(),
             buffer_id: self.buffer_id.clone(),
             resolved_id: self.resolved_id.clone(),
+            pin_count: self.pin_count.clone(),
         }
     }
 }
@@ -180,14 +193,16 @@ impl LazyStorage {
             op: Arc::new(AtomicOp::new(op)),
             custom_op_fallbacks: HashMap::new(),
             layout: layout.clone(),
+            original_layout: None,
             dtype,
             buffer_id: Arc::new(BufferId::new()),
             resolved_id: Arc::new(std::sync::OnceLock::new()),
+            pin_count: Arc::new(atomic::AtomicUsize::new(0)),
         }
     }
 
     pub fn copy(source: &LazyStorage, layout: &Layout) -> Self {
-        // Ensures we at least have a value in the result.
+        // Ensures we at least have room for one value in the result.
         let safe_layout_clone = |l: &Layout| {
             if l.dims().is_empty() {
                 Layout::contiguous(&[1])
@@ -196,14 +211,20 @@ impl LazyStorage {
             }
         };
         // Creates a copy, or view, of the lazy storage with updated layout.
+        // `original_layout` preserves the canonical (production) layout for ops
+        // that require it.
+        let new_layout = safe_layout_clone(layout);
+        let original = source.producer_layout().clone();
         Self {
             id: source.id,
             op: source.op.clone(),
             custom_op_fallbacks: source.custom_op_fallbacks.clone(),
-            layout: safe_layout_clone(layout),
+            original_layout: Some(original),
+            layout: new_layout,
             dtype: source.dtype,
             buffer_id: source.buffer_id.clone(),
             resolved_id: source.resolved_id.clone(),
+            pin_count: source.pin_count.clone(),
         }
     }
 
@@ -217,6 +238,15 @@ impl LazyStorage {
 
     pub fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    /// The layout to use when producing this node's output.
+    ///
+    /// For nodes where [`copy`] has updated the layout of a node, this
+    /// returns the source [`original_layout`].
+    /// Otherwise it is identical to [`layout`].
+    pub fn producer_layout(&self) -> &Layout {
+        self.original_layout.as_ref().unwrap_or(&self.layout)
     }
 
     pub fn add_custom_fallback<S: Into<String>>(&mut self, name: S, fallback: LazyStorage) {
@@ -305,6 +335,22 @@ impl LazyStorage {
 
     pub fn mark_resolved(&self, buf_id: BufferId) {
         let _ = self.resolved_id.set(buf_id);
+    }
+
+    /// Mark this node as externally held (e.g. stored in a KV cache) so its buffer
+    /// is preserved across forward passes. Pinning any copy pins all copies that share
+    /// this underlying computation.
+    pub fn pin(&self) {
+        self.pin_count.fetch_add(1, atomic::Ordering::Relaxed);
+    }
+
+    pub fn unpin(&self) {
+        self.pin_count.fetch_sub(1, atomic::Ordering::Relaxed);
+    }
+
+    /// Returns true if this node has been explicitly pinned via [`pin`].
+    pub fn is_pinned(&self) -> bool {
+        self.pin_count.load(atomic::Ordering::Relaxed) > 0
     }
 
     pub fn set_buffer_id(&self, buffer_id: BufferId) {
@@ -581,7 +627,7 @@ pub fn calculate_usage_records(
                         None,
                         None,
                         topo_len - i,
-                        true_source.layout.clone(),
+                        true_source.producer_layout().clone(),
                         true_source.dtype(),
                     )
                 });
@@ -590,10 +636,10 @@ pub fn calculate_usage_records(
         if let Some(record) = records.get_mut(&buffer_id) {
             record.0 = Some(buffer_id.clone());
             record.1 = Some(topo_len - i);
-            // Update layout to the producer's layout to ensure allocation is large enough.
-            // or_insert_with stores a consumer's (possibly narrowed) view of the layout.
-            // Producer determines the true output size.
-            record.3 = node.layout.clone();
+            // Use `producer_layout` so that copied nodes (which can be a narrowed view stored as
+            // a source inside another op) allocate the full buffer rather than the narrow slice.
+            // For regular nodes producer_layout == layout.
+            record.3 = node.producer_layout().clone();
             record.4 = node.dtype();
         }
     }
@@ -707,13 +753,29 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
         }
     }
 
-    // Handle final output edge
     let output = graph.last().unwrap();
+    /*
+    // TODO: Handle output node if present (current not used)
+    if let Op::Output(out) = output.op() {
+        let src = out.srcs()[0];
+        // Resolve through any reusage chain to find the canonical allocation.
+        let canonical = {
+            let mut id = src.buffer_id();
+            while let Some(mapped) = reusage.get(id) {
+                id = mapped;
+            }
+            id.clone()
+        };
+        reusage.insert(output.buffer_id().clone(), canonical);
+    } else {
+     */
+    // If the final node is not an Output wrapper, allocate a buffer for it directly.
     let source = determine_tensor_source(output);
     allocations.insert(
         output.buffer_id().clone(),
-        (source.layout.clone(), source.dtype()),
+        (source.producer_layout().clone(), source.dtype()),
     );
+    //}
 
     Ok(MemoryPlan {
         reusage,
@@ -1300,260 +1362,460 @@ impl BackendDevice for LazyDevice {
 
 #[cfg(test)]
 mod tests {
-    use crate::{lazy::LazyDevice, Device, Result, Shape, Tensor, D};
+    use crate::{lazy::LazyDevice, DType, Device, Result, Shape, Tensor, D};
+
+    fn run_cmp<F>(mut f: F, devices: &[&Device]) -> Result<()>
+    where
+        F: FnMut(&Device) -> Result<Tensor>,
+    {
+        assert!(
+            devices.len() >= 2,
+            "Requires at least 2 devices to compare results"
+        );
+        let mut results: Vec<Tensor> = vec![];
+        for d in devices {
+            results.push(f(d)?);
+        }
+        for w in results.windows(2) {
+            cmp_tensors(&w[0], &w[1])?
+        }
+        Ok(())
+    }
+
+    fn cmp_tensors(a: &Tensor, b: &Tensor) -> Result<()> {
+        let a_device = a.device();
+        let b_device = b.device();
+
+        assert!(
+            !a_device.same_device(b_device),
+            "Test not configured correctly, both devices are {a_device:?}"
+        );
+
+        let a_vals = a.flatten_all()?.to_vec1::<f32>()?;
+        let b_vals = b.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(
+            a_vals.len(),
+            b_vals.len(),
+            "shape mismatch: {a_device:?}={:?} {b_device:?}={:?}",
+            a.shape(),
+            b.shape()
+        );
+        for (i, (l, e)) in a_vals.iter().zip(b_vals.iter()).enumerate() {
+            let diff = (l - e).abs();
+            assert!(
+                diff < 1e-3,
+                "element {i}: {a_device:?}={l} {b_device:?}={e} diff={diff} ({a_device:?} shape={:?})",
+                a.shape()
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn lazy_unary() -> Result<()> {
-        let t1 = Tensor::from_slice(
-            &[1.0f32, 2.0, 3.0, 4.0],
-            Shape::from(4),
-            &Device::Lazy(LazyDevice),
-        )?;
-        let t1 = t1.sqrt()?.exp()?;
-        assert_eq!(
-            t1.to_vec1::<f32>()?,
-            &[2.718282, 4.1132507, 5.6522336, 7.389056]
-        );
+        let unary = |device: &Device| {
+            let t1 = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0], Shape::from(4), device)?;
+            let t1 = t1.sqrt()?.exp()?;
+            assert_eq!(
+                t1.to_vec1::<f32>()?,
+                &[2.718282, 4.1132507, 5.6522336, 7.389056]
+            );
 
-        let t2 = Tensor::from_slice(
-            &[5.0f32, 6.0, 7.0, 8.0],
-            Shape::from(4),
-            &Device::Lazy(LazyDevice),
-        )?;
+            let t2 = Tensor::from_slice(&[5.0f32, 6.0, 7.0, 8.0], Shape::from(4), device)?;
 
-        let t2 = t2.sqr()?.affine(0.5, 1.2)?;
-        assert_eq!(t2.to_vec1::<f32>()?, &[13.7, 19.2, 25.7, 33.2]);
+            let t2 = t2.sqr()?.affine(0.5, 1.2)?;
+            assert_eq!(t2.to_vec1::<f32>()?, &[13.7, 19.2, 25.7, 33.2]);
 
-        //let t3 = t2.powf(1.2)?;
-        //assert_eq!(t3.to_vec1::<f32>()?, &[13.7, 19.2, 25.7, 33.2]);
+            //let t3 = t2.powf(1.2)?;
+            //assert_eq!(t3.to_vec1::<f32>()?, &[13.7, 19.2, 25.7, 33.2]);
+
+            Ok(t2)
+        };
+
+        run_cmp(unary, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
 
         Ok(())
     }
 
     #[test]
     fn lazy_concat() -> Result<()> {
-        let t1 = Tensor::from_slice(
-            &[1.0f32, 2.0, 3.0, 4.0],
-            Shape::from(4),
-            &Device::Lazy(LazyDevice),
-        )?;
-        let t1 = t1.sqrt()?;
-        assert_eq!(t1.to_vec1::<f32>()?, &[1.0, 1.4142135, 1.7320508, 2.0]);
+        let concat = |device: &Device| {
+            let t1 = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0], Shape::from(4), device)?;
+            let t1 = t1.sqrt()?;
+            assert_eq!(t1.to_vec1::<f32>()?, &[1.0, 1.4142135, 1.7320508, 2.0]);
 
-        let t2 = Tensor::from_slice(
-            &[5.0f32, 6.0, 7.0, 8.0],
-            Shape::from(4),
-            &Device::Lazy(LazyDevice),
-        )?;
+            let t2 = Tensor::from_slice(&[5.0f32, 6.0, 7.0, 8.0], Shape::from(4), device)?;
 
-        // TODO: bug. copy2d uses first copy data twice _and_ applies affine to it.
-        // So even if t2 is correct below, the final result is wrong in two different ways.
-        let t2 = t2.affine(0.5, 1.2)?;
-        assert_eq!(t2.to_vec1::<f32>()?, &[3.7, 4.2, 4.7, 5.2]);
+            let t2 = t2.affine(0.5, 1.2)?;
+            assert_eq!(t2.to_vec1::<f32>()?, &[3.7, 4.2, 4.7, 5.2]);
 
-        let result = Tensor::cat(&[t1, t2], 0)?;
+            let t3 = Tensor::cat(&[t1, t2], 0)?;
 
-        let result = result.flatten_all()?.to_vec1::<f32>()?;
-        assert_eq!(
-            result,
-            &[1.0, 1.4142135, 1.7320508, 2.0, 3.7, 4.2, 4.7, 5.2]
-        );
+            let result = t3.flatten_all()?.to_vec1::<f32>()?;
+            assert_eq!(
+                result,
+                &[1.0, 1.4142135, 1.7320508, 2.0, 3.7, 4.2, 4.7, 5.2]
+            );
+
+            Ok(t3)
+        };
+
+        run_cmp(concat, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+
         Ok(())
     }
 
     #[test]
     fn lazy_binary() -> Result<()> {
-        let t1 = Tensor::from_slice(
-            &[1.0f32, 2.0, 3.0, 4.0],
-            Shape::from(4),
-            &Device::Lazy(LazyDevice),
-        )?;
+        let binary = |device: &Device| {
+            let t1 = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0], Shape::from(4), device)?;
+            let t2 = Tensor::from_slice(&[5.0f32, 6.0, 7.0, 8.0], Shape::from(4), device)?;
 
-        let t2 = Tensor::from_slice(
-            &[5.0f32, 6.0, 7.0, 8.0],
-            Shape::from(4),
-            &Device::Lazy(LazyDevice),
-        )?;
+            t1 + t2
+        };
 
-        let result = (t1 + t2)?;
+        run_cmp(binary, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
 
-        let result = result.to_vec1::<f32>()?;
-        assert_eq!(result, &[6.0, 8.0, 10.0, 12.0]);
         Ok(())
     }
 
     #[test]
     fn lazy_matmul() -> Result<()> {
-        let t1 = Tensor::from_slice(
-            &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            Shape::from((4, 2)),
-            &Device::Lazy(LazyDevice),
-        )?;
+        let matmul = |device: &Device| {
+            let t1 = Tensor::from_slice(
+                &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                Shape::from((4, 2)),
+                device,
+            )?;
 
-        let t2 = Tensor::from_slice(
-            &[1.0f32, 2.0, 3.0, 4.0],
-            Shape::from((2, 2)),
-            &Device::Lazy(LazyDevice),
-        )?;
+            let t2 = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0], Shape::from((2, 2)), device)?;
 
-        let result = t1.matmul(&t2)?;
+            t1.matmul(&t2)
+        };
 
-        let result = result.flatten_all()?.to_vec1::<f32>()?;
-        assert_eq!(result, &[7.0, 10.0, 15.0, 22.0, 23.0, 34.0, 31.0, 46.0]);
+        run_cmp(matmul, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+
         Ok(())
     }
 
     #[test]
     fn lazy_where_cond() -> Result<()> {
-        let src = Tensor::from_slice(
-            &[0u8, 1, 0, 1, 0, 0, 1, 1],
-            Shape::from(8),
-            &Device::Lazy(LazyDevice),
+        let where_cond = |device: &Device| {
+            let src = Tensor::from_slice(&[0u8, 1, 0, 1, 0, 0, 1, 1], Shape::from(8), device)?;
+
+            let t = Tensor::from_slice(
+                &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                Shape::from(8),
+                device,
+            )?;
+
+            let f = Tensor::from_slice(
+                &[9.0f32, 10., 11., 12., 13., 14., 15., 16.],
+                Shape::from(8),
+                device,
+            )?;
+
+            let result = src.where_cond(&t, &f)?;
+            assert_eq!(
+                result.to_vec1::<f32>()?,
+                &[9., 2., 11., 4., 13., 14., 7., 8.]
+            );
+
+            Ok(result)
+        };
+
+        run_cmp(
+            where_cond,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
         )?;
 
-        let t = Tensor::from_slice(
-            &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            Shape::from(8),
-            &Device::Lazy(LazyDevice),
-        )?;
-
-        let f = Tensor::from_slice(
-            &[9.0f32, 10., 11., 12., 13., 14., 15., 16.],
-            Shape::from(8),
-            &Device::Lazy(LazyDevice),
-        )?;
-
-        let result = src.where_cond(&t, &f)?;
-        assert_eq!(
-            result.to_vec1::<f32>()?,
-            &[9., 2., 11., 4., 13., 14., 7., 8.]
-        );
         Ok(())
     }
 
     #[test]
     fn lazy_reduce() -> Result<()> {
-        let t = Tensor::from_slice(
-            &[0f32, 1., 2., 3., 4., 3., 2., 1.],
-            Shape::from((4, 2)),
-            &Device::Lazy(LazyDevice),
-        )?;
+        let reduce = |device: &Device| {
+            let t = Tensor::from_slice(
+                &[0f32, 1., 2., 3., 4., 3., 2., 1.],
+                Shape::from((4, 2)),
+                device,
+            )?;
 
-        let result = t.max(1)?;
-        assert_eq!(result.to_vec1::<f32>()?, &[1., 3., 4., 2.]);
+            let result = t.max(1)?;
+            assert_eq!(result.to_vec1::<f32>()?, &[1., 3., 4., 2.]);
 
-        let t = Tensor::from_slice(
-            &[0f32, 1., 2., 3.],
-            Shape::from((4, 1)),
-            &Device::Lazy(LazyDevice),
-        )?;
+            let t = Tensor::from_slice(&[0f32, 1., 2., 3.], Shape::from((4, 1)), device)?;
 
-        let result = t.max(0)?;
-        assert_eq!(result.to_vec1::<f32>()?, &[3.0]);
+            t.max(0)
+        };
+
+        run_cmp(reduce, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+
         Ok(())
     }
 
     #[test]
     fn lazy_softmax() -> Result<()> {
-        let src = Tensor::from_slice(
-            &[0f32, 1., 2., 3., 4., 5., 6., 7.],
-            Shape::from(8),
-            &Device::Lazy(LazyDevice),
-            //&Device::new_metal(0)?,
+        let softmax = |device: &Device| {
+            let src =
+                Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), device)?;
+
+            let t1 = src.affine(1.25, 0.0)?;
+            assert_eq!(
+                t1.to_vec1::<f32>()?,
+                &[0.0, 1.25, 2.5, 3.75, 5.0, 6.25, 7.5, 8.75]
+            );
+            let t2 = t1.max_keepdim(D::Minus1)?;
+            assert_eq!(t2.to_vec1::<f32>()?, &[8.75]);
+            let t3 = src.broadcast_sub(&t2)?;
+            assert_eq!(
+                t3.to_vec1::<f32>()?,
+                &[-8.75, -7.75, -6.75, -5.75, -4.75, -3.75, -2.75, -1.75]
+            );
+            let t4 = t3.exp()?;
+
+            assert_eq!(
+                t4.to_vec1::<f32>()?,
+                &[
+                    0.0001584613,
+                    0.00043074263,
+                    0.0011708796,
+                    0.003182782,
+                    0.008651696,
+                    0.02351775,
+                    0.06392787,
+                    0.17377394
+                ]
+            );
+            let t5 = t4.sum_keepdim(D::Minus1)?;
+            assert_eq!(t5.to_vec1::<f32>()?, &[0.27481413]);
+            let result = t4.broadcast_div(&t5)?;
+
+            assert_eq!(
+                result.to_vec1::<f32>()?,
+                &[
+                    0.00057661266,
+                    0.0015673962,
+                    0.0042606234,
+                    0.011581581,
+                    0.031481992,
+                    0.08557693,
+                    0.23262219,
+                    0.6323326
+                ]
+            );
+            Ok(result)
+        };
+
+        run_cmp(
+            softmax,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
         )?;
 
-        let t1 = src.affine(1.25, 0.0)?;
-        assert_eq!(
-            t1.to_vec1::<f32>()?,
-            &[0.0, 1.25, 2.5, 3.75, 5.0, 6.25, 7.5, 8.75]
-        );
-        let t2 = t1.max_keepdim(D::Minus1)?;
-        assert_eq!(t2.to_vec1::<f32>()?, &[8.75]);
-        let t3 = src.broadcast_sub(&t2)?;
-        assert_eq!(
-            t3.to_vec1::<f32>()?,
-            &[-8.75, -7.75, -6.75, -5.75, -4.75, -3.75, -2.75, -1.75]
-        );
-        let t4 = t3.exp()?;
-
-        assert_eq!(
-            t4.to_vec1::<f32>()?,
-            &[
-                0.0001584613,
-                0.00043074263,
-                0.0011708796,
-                0.003182782,
-                0.008651696,
-                0.02351775,
-                0.06392787,
-                0.17377394
-            ]
-        );
-        let t5 = t4.sum_keepdim(D::Minus1)?;
-        assert_eq!(t5.to_vec1::<f32>()?, &[0.27481413]);
-        let result = t4.broadcast_div(&t5)?;
-
-        assert_eq!(
-            result.to_vec1::<f32>()?,
-            &[
-                0.00057661266,
-                0.0015673962,
-                0.0042606234,
-                0.011581581,
-                0.031481992,
-                0.08557693,
-                0.23262219,
-                0.6323326
-            ]
-        );
         Ok(())
     }
 
     #[test]
     fn lazy_rmsnorm() -> Result<()> {
-        let device = Device::Lazy(LazyDevice);
-        //let device = Device::new_metal(0)?;
+        let rmsnorm = |device: &Device| {
+            let x =
+                Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), &device)?;
 
-        let x = Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), &device)?;
+            let alpha = Tensor::from_slice(
+                &[1f32, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7],
+                Shape::from(8),
+                device,
+            )?;
 
-        let alpha = Tensor::from_slice(
-            &[1f32, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7],
-            Shape::from(8),
-            &device,
+            let eps = 1.2;
+            let hidden_size = x.dim(D::Minus1)?;
+            let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+            let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
+            let result = x_normed.broadcast_mul(&alpha)?;
+
+            assert_eq!(
+                result.to_vec1::<f32>()?,
+                &[
+                    0.0, 0.2543735, 0.5549967, 0.90186965, 1.2949923, 1.7343647, 2.219987,
+                    2.7518587
+                ]
+            );
+
+            Ok(result)
+        };
+
+        run_cmp(
+            rmsnorm,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
         )?;
 
-        let eps = 1.2;
-        let hidden_size = x.dim(D::Minus1)?;
-        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
-        let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
-        let result = x_normed.broadcast_mul(&alpha)?;
-
-        assert_eq!(
-            result.to_vec1::<f32>()?,
-            &[0.0, 0.2543735, 0.5549967, 0.90186965, 1.2949923, 1.7343647, 2.219987, 2.7518587]
-        );
         Ok(())
     }
 
     #[test]
-    fn lazy_binary_matmul_layout_mismatch_case() -> Result<()> {
-        let device = Device::Lazy(LazyDevice);
-        //let device = Device::new_metal(0)?;
+    fn lazy_to_dtype() -> Result<()> {
+        let dtype = |device: &Device| {
+            let data: Vec<f32> = (0..8).map(|x| x as f32 * 0.1).collect();
+            Tensor::from_slice(&data, 8, device)?
+                .to_dtype(DType::BF16)?
+                .to_dtype(DType::F32)
+        };
 
-        // buffer 1: ([128256, 2048], [2048, 1], BF16, BufferId(9))
-        // buffer 2: ([1, 2048], [4096, 1], BF16, BufferId(2368))
-        // matmul((1, 1, 128256, 2048))
-        // dst buffer: ([1, 128256], [128256, 1], BF16, BufferId(2220))
+        run_cmp(dtype, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
 
-        let x = Tensor::from_slice(
-            &[0.0f32, 1.0, 2.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            (4, 2),
-            &device,
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_index_select() -> Result<()> {
+        let index_select = |device: &Device| {
+            let data: Vec<f32> = (0..16).map(|x| x as f32).collect();
+            let ids = vec![2u32, 0, 3, 1];
+            Tensor::from_slice(&data, (4, 4), device)?
+                .index_select(&Tensor::from_slice(&ids, 4, device)?, 0)
+        };
+
+        run_cmp(
+            index_select,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
         )?;
-        let y = Tensor::from_slice(&[1.0f32, 2.0], (2, 1), &device)?;
 
-        let result = x.matmul(&y)?.flatten_all()?;
-        assert_eq!(result.to_vec1::<f32>()?, &[2.0, 10.0, 17.0, 23.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_reshape_matmul() -> Result<()> {
+        let reshape_matmul = |device: &Device| {
+            // Basic Q/K/V projection + reshape
+            // x: [1, seq, hidden] @ w: [hidden, 3 * head_dim] -> [1, seq, 3 * head_dim]
+            let (seq, hidden, heads, head_dim) = (2usize, 4usize, 2usize, 2usize);
+
+            let x_data: Vec<f32> = (0..seq * hidden).map(|i| i as f32 * 0.1).collect();
+            let w_data: Vec<f32> = (0..hidden * heads * head_dim)
+                .map(|i| (i as f32 + 1.0) * 0.1)
+                .collect();
+
+            let x = Tensor::from_slice(&x_data, (1, seq, hidden), device)?;
+            let w = Tensor::from_slice(&w_data, (hidden, heads * head_dim), device)?;
+
+            // Flatten batch + seq for matmul
+            x.flatten(0, 1)?
+                .matmul(&w)?
+                .reshape((1, seq, heads, head_dim))
+        };
+
+        run_cmp(
+            reshape_matmul,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_to_dtype_matmul() -> Result<()> {
+        let bf16_matmul = |device: &Device| {
+            // to_dtype(bf16) -> matmul
+            let x_data: Vec<f32> = (0..8).map(|i| i as f32 * 0.1).collect();
+            let w_data: Vec<f32> = (0..8).map(|i| (i as f32 + 1.0) * 0.1).collect();
+
+            // x: [1, 4], w: [4, 2] in f32, cast to bf16, matmul
+            let x = Tensor::from_slice(&x_data, (1, 4), device)?.to_dtype(DType::BF16)?;
+            let w = Tensor::from_slice(&w_data, (4, 2), device)?.to_dtype(DType::BF16)?;
+
+            x.matmul(&w)?.to_dtype(DType::F32)
+        };
+
+        run_cmp(
+            bf16_matmul,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_narrow_unary() -> Result<()> {
+        let narrow_unary = |device: &Device| {
+            let data: Vec<f32> = (0..16).map(|i| i as f32 * 0.5).collect();
+            let t = Tensor::from_slice(&data, (4, 4), device)?;
+            // narrow + affine
+            t.narrow(0, 1, 2)?.affine(2.0, 0.5)
+        };
+
+        run_cmp(
+            narrow_unary,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_narrow_mul() -> Result<()> {
+        let narrow_broadcast_mul = |device: &Device| {
+            let (b, h, s, d) = (1usize, 2usize, 2usize, 4usize);
+            let x_data: Vec<f32> = (0..b * h * s * d).map(|i| i as f32 * 0.1).collect();
+
+            let x = Tensor::from_slice(&x_data, (b, h, s, d), device)?;
+
+            // Narrow #1
+            let x1 = x.narrow(3, 0, d / 2)?;
+            // Narrow #2
+            let x2 = x.narrow(3, d / 2, d / 2)?;
+
+            // Test op after narrow
+            x1 * x2
+        };
+
+        run_cmp(
+            narrow_broadcast_mul,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_rope_like() -> Result<()> {
+        // Mimic the rotary embedding operation core:
+        //   x = [b, h, s, d/2, 2]
+        //   x_r, x_i = x.chunk(2, last_dim)
+        //   cos, sin = narrow from table
+        //   result = [x_r * cos - x_i * sin, x_r * sin + x_i * cos]
+
+        let (b, h, s, d) = (1usize, 2usize, 2usize, 4usize);
+        let x_data: Vec<f32> = (0..b * h * s * d).map(|i| i as f32 * 0.1).collect();
+        let cos_data: Vec<f32> = (0..s * (d / 2)).map(|i| (i as f32 * 0.3).cos()).collect();
+        let sin_data: Vec<f32> = (0..s * (d / 2)).map(|i| (i as f32 * 0.3).sin()).collect();
+
+        fn rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+            let (b, h, s, d) = x.dims4()?;
+            let x1 = x.narrow(3, 0, d / 2)?;
+            let x2 = x.narrow(3, d / 2, d / 2)?;
+            let cos = cos.broadcast_as((b, h, s, d / 2))?;
+            let sin = sin.broadcast_as((b, h, s, d / 2))?;
+            let r1 = (x1
+                .broadcast_mul(&cos)?
+                .broadcast_sub(&x2.broadcast_mul(&sin)?))?;
+            let r2 = (x1
+                .broadcast_mul(&sin)?
+                .broadcast_add(&x2.broadcast_mul(&cos)?))?;
+            Tensor::cat(&[r1, r2], 3)
+        }
+
+        let rope_like = |device: &Device| {
+            let x = Tensor::from_slice(&x_data, (b, h, s, d), device)?.to_dtype(DType::BF16)?;
+            let cos = Tensor::from_slice(&cos_data, (s, d / 2), device)?
+                .to_dtype(DType::BF16)?
+                .unsqueeze(0)?;
+            let sin = Tensor::from_slice(&sin_data, (s, d / 2), device)?
+                .to_dtype(DType::BF16)?
+                .unsqueeze(0)?;
+
+            rope(&x, &cos, &sin)?.to_dtype(DType::F32)
+        };
+
+        run_cmp(
+            rope_like,
+            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+        )?;
         Ok(())
     }
 }
