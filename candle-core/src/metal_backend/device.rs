@@ -13,9 +13,17 @@ use candle_metal_kernels::{
 };
 use objc2_foundation::NSURL;
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+
+// Thread-local buffer override for `with_buffer_override`.
+// Using thread-local storage prevents the override set by one thread from
+// being visible to `allocate_buffer` calls on other threads.
+thread_local! {
+    static THREAD_BUFFER_OVERRIDE: RefCell<Option<Arc<Buffer>>> = const { RefCell::new(None) };
+}
 
 use super::MetalError;
 
@@ -62,9 +70,6 @@ pub struct MetalDevice {
     /// Intermediate compute buffers don't need CPU access so Private avoids coherency overhead.
     pub(crate) private_buffers: Arc<RwLock<BufferMap>>,
 
-    pub(crate) buffer_override_lock: Arc<Mutex<()>>,
-    pub(crate) buffer_override: Arc<RwLock<Option<Arc<Buffer>>>>,
-
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
     /// Heavily used by [`candle_metal_kernels`]
     pub(crate) kernels: Arc<Kernels>,
@@ -108,31 +113,6 @@ impl std::ops::Deref for MetalDevice {
     }
 }
 
-pub struct TemporaryBufferOverride<'a> {
-    _guard: MutexGuard<'a, ()>,
-    buffer_override: Arc<RwLock<Option<Arc<Buffer>>>>,
-}
-
-impl<'a> TemporaryBufferOverride<'a> {
-    pub fn new(
-        guard: MutexGuard<'a, ()>,
-        buffer_override: Arc<RwLock<Option<Arc<Buffer>>>>,
-        buffer: Arc<Buffer>,
-    ) -> Self {
-        *buffer_override.write().unwrap() = Some(buffer);
-        TemporaryBufferOverride {
-            _guard: guard,
-            buffer_override: buffer_override.clone(),
-        }
-    }
-}
-
-impl<'a> Drop for TemporaryBufferOverride<'a> {
-    fn drop(&mut self) {
-        *self.buffer_override.write().unwrap() = None;
-    }
-}
-
 impl MetalDevice {
     #[cfg(all(feature = "ug", not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn compile(
@@ -165,28 +145,18 @@ impl MetalDevice {
         &self.device
     }
 
-    pub fn set_buffer_override(&self, buffer: Arc<Buffer>) -> Result<TemporaryBufferOverride<'_>> {
-        let guard = self.buffer_override_lock.lock().unwrap();
-        Ok(TemporaryBufferOverride::new(
-            guard,
-            self.buffer_override.clone(),
-            buffer,
-        ))
-    }
-
     pub fn with_buffer_override<F, R>(&self, buffer: Arc<Buffer>, f: F) -> R
     where
         F: FnOnce() -> R,
     {
-        // Lock access to lock the buffer override
-        let _guard = self.buffer_override_lock.lock().unwrap();
-        // Update to desired buffer
-        *self.buffer_override.write().unwrap() = Some(buffer);
-        // Run fn
+        // Use thread-local storage so the override is invisible to other threads.
+        THREAD_BUFFER_OVERRIDE.with(|o| {
+            *o.borrow_mut() = Some(buffer);
+        });
         let r = f();
-        // Remove override
-        *self.buffer_override.write().unwrap() = None;
-        // Return result. Guard drops on closure exit.
+        THREAD_BUFFER_OVERRIDE.with(|o| {
+            *o.borrow_mut() = None;
+        });
         r
     }
 
@@ -245,9 +215,9 @@ impl MetalDevice {
         dtype: DType,
         _name: &str,
     ) -> Result<Arc<Buffer>> {
-        let binding = self.buffer_override.read().unwrap();
-        if let Some(buffer_override) = binding.clone() {
-            return Ok(buffer_override.clone());
+        let override_buffer = THREAD_BUFFER_OVERRIDE.with(|o| o.borrow().clone());
+        if let Some(buffer_override) = override_buffer {
+            return Ok(buffer_override);
         }
         let size = element_count * dtype.size_in_bytes();
         let mut buffers = self.private_buffers.write().map_err(MetalError::from)?;
@@ -320,9 +290,9 @@ impl MetalDevice {
 
     /// The critical allocator algorithm
     pub fn allocate_buffer(&self, size: usize) -> Result<Arc<Buffer>> {
-        let binding = self.buffer_override.read().unwrap();
-        if let Some(buffer_override) = binding.clone() {
-            return Ok(buffer_override.clone());
+        let override_buffer = THREAD_BUFFER_OVERRIDE.with(|o| o.borrow().clone());
+        if let Some(buffer_override) = override_buffer {
+            return Ok(buffer_override);
         }
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         if let Some(b) = find_available_buffer(size, &buffers) {

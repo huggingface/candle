@@ -2188,8 +2188,6 @@ impl BackendDevice for MetalDevice {
             commands: Arc::new(RwLock::new(commands)),
             buffers: Arc::new(RwLock::new(HashMap::new())),
             private_buffers: Arc::new(RwLock::new(HashMap::new())),
-            buffer_override_lock: Arc::new(Mutex::new(())),
-            buffer_override: Arc::new(RwLock::new(None)),
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
