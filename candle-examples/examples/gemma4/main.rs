@@ -293,8 +293,7 @@ fn main() -> Result<()> {
             None => {
                 let config_file = repo.get("config.json")?;
                 // For text-only, try to parse the text_config sub-object
-                let raw: serde_json::Value =
-                    serde_json::from_slice(&std::fs::read(config_file)?)?;
+                let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(config_file)?)?;
                 if let Some(text_cfg) = raw.get("text_config") {
                     serde_json::from_value(text_cfg.clone())?
                 } else {
