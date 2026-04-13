@@ -747,8 +747,8 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
         };
         reusage.insert(output.buffer_id().clone(), canonical);
     } else {
-     */
     // If the final node is not an Output wrapper, allocate a buffer for it directly.
+     */
     let source = determine_tensor_source(output);
     allocations.insert(
         output.buffer_id().clone(),

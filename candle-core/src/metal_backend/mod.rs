@@ -2152,15 +2152,20 @@ impl MetalStorage {
     }
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
-        let size = self.count * self.dtype.size_in_bytes();
-        let buffer = self.device.allocate_buffer(size)?;
-        {
-            let blit = self.device.blit_command_encoder()?;
-            blit.set_label("blit_to_cpu");
-            blit.copy(&self.buffer, 0, &buffer, 0, size);
-            blit.end_encoding();
-        }
-        self.device.wait_until_completed()?;
+        let buffer = if self.buffer.is_private() {
+            let size = self.count * self.dtype.size_in_bytes();
+            let buffer = self.device.allocate_buffer(size)?;
+            {
+                let blit = self.device.blit_command_encoder()?;
+                blit.set_label("blit_to_cpu");
+                blit.copy(&self.buffer, 0, &buffer, 0, size);
+                blit.end_encoding();
+            }
+            self.device.wait_until_completed()?;
+            buffer
+        } else {
+            self.buffer.clone()
+        };
         Ok(read_to_vec(&buffer, self.count))
     }
 }
@@ -2455,8 +2460,16 @@ impl LazyAllocator<Arc<Buffer>> for MetalAllocator {
             }
         }
 
+        let output = graph.last().unwrap();
         for (buffer_id, (layout, dtype)) in allocations.into_iter() {
-            self.allocate(buffer_id, layout.shape(), dtype)?;
+            if &buffer_id == output.buffer_id() {
+                let buffer = self
+                    .device
+                    .allocate_buffer(layout.shape().elem_count() * dtype.size_in_bytes())?;
+                self.buffer_map.insert(buffer_id, buffer);
+            } else {
+                self.allocate(buffer_id, layout.shape(), dtype)?;
+            }
         }
 
         Ok(())
@@ -2468,9 +2481,7 @@ impl LazyAllocator<Arc<Buffer>> for MetalAllocator {
     }
 
     fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&Arc<Buffer>> {
-        let buffer = self
-            .device
-            .allocate_buffer(shape.elem_count() * dtype.size_in_bytes())?;
+        let buffer = self.device.new_buffer(shape.elem_count(), dtype, "")?;
         self.buffer_map.insert(id.clone(), buffer);
         self.get(&id)
     }

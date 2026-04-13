@@ -9,14 +9,18 @@ pub type MTLResourceOptions = objc2_metal::MTLResourceOptions;
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: Retained<ProtocolObject<dyn MTLBuffer>>,
+    options: MTLResourceOptions,
 }
 
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
 
 impl Buffer {
-    pub fn new(raw: Retained<ProtocolObject<dyn MTLBuffer>>) -> Buffer {
-        Buffer { raw }
+    pub fn new(
+        raw: Retained<ProtocolObject<dyn MTLBuffer>>,
+        options: MTLResourceOptions,
+    ) -> Buffer {
+        Buffer { raw, options }
     }
 
     pub fn contents(&self) -> *mut u8 {
@@ -34,6 +38,15 @@ impl Buffer {
 
     pub fn did_modify_range(&self, range: NSRange) {
         self.as_ref().didModifyRange(range);
+    }
+
+    pub fn options(&self) -> MTLResourceOptions {
+        self.options
+    }
+
+    pub fn is_private(&self) -> bool {
+        self.options
+            .contains(MTLResourceOptions::StorageModePrivate)
     }
 }
 

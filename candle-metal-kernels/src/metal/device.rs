@@ -65,7 +65,7 @@ impl Device {
     ) -> Result<Buffer, MetalKernelError> {
         self.as_ref()
             .newBufferWithLength_options(length, options)
-            .map(Buffer::new)
+            .map(|b| Buffer::new(b, options))
             .ok_or(MetalKernelError::FailedToCreateResource(
                 "Buffer".to_string(),
             ))
@@ -81,7 +81,7 @@ impl Device {
         unsafe {
             self.as_ref()
                 .newBufferWithBytes_length_options(pointer, length, options)
-                .map(Buffer::new)
+                .map(|b| Buffer::new(b, options))
                 .ok_or(MetalKernelError::FailedToCreateResource(
                     "Buffer".to_string(),
                 ))
