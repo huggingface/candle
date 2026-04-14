@@ -9,7 +9,7 @@ use crate::lazy::ops::{
 };
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::ptr::NonNull;
@@ -314,10 +314,6 @@ impl LazyStorage {
 
     pub(crate) fn buffer_id(&self) -> &BufferId {
         &self.buffer_id
-    }
-
-    pub(crate) fn arc_buffer_id(&self) -> Arc<BufferId> {
-        self.buffer_id.clone()
     }
 
     pub fn set_op(&self, op: Op) {
@@ -762,16 +758,91 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
     })
 }
 
+fn apply_backend_agnostic_passes(
+    _node: &LazyStorage,
+    _consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
+) -> bool {
+    // let mut changed = false;
+    // for example:
+    // changed |= fuse_elementwise_pass(node);
+    // changed
+    false
+}
+
 pub trait Executor {
     type BufferType: LazyBuffer;
     type AllocatorType: LazyAllocator<Self::BufferType>;
 
-    fn optimize(&self, _lazy_storage: &LazyStorage) {
-        // TODO: Generic optimizations
+    fn optimize(&self, leaf: &LazyStorage) {
+        let mut worklist: VecDeque<&LazyStorage> = VecDeque::new();
+        let mut visited: HashSet<NodeId> = HashSet::new();
+        let mut consumer_map: HashMap<NodeId, Vec<&LazyStorage>> = HashMap::new();
+
+        visited.insert(leaf.id());
+        worklist.push_back(leaf);
+
+        while let Some(node) = worklist.pop_front() {
+            let changed = apply_backend_agnostic_passes(&node, &consumer_map);
+            for source in node.srcs() {
+                consumer_map
+                    .entry(source.id())
+                    .and_modify(|c| c.push(node))
+                    .or_insert_with(|| vec![node]);
+                if visited.insert(source.id()) {
+                    worklist.push_back(source);
+                }
+            }
+            if changed {
+                let consumers = consumer_map
+                    .get(&node.id())
+                    .map(|c| c.as_slice())
+                    .unwrap_or_else(|| &[]);
+                for consumer in consumers {
+                    worklist.push_back(consumer);
+                }
+            }
+        }
+    }
+
+    fn specialize(&self, leaf: &LazyStorage) {
+        let mut worklist: VecDeque<&LazyStorage> = VecDeque::new();
+        let mut visited: HashSet<NodeId> = HashSet::new();
+        let mut consumer_map: HashMap<NodeId, Vec<&LazyStorage>> = HashMap::new();
+
+        visited.insert(leaf.id());
+        worklist.push_back(leaf);
+
+        while let Some(node) = worklist.pop_front() {
+            let changed = self.apply_specialize_passes(&node, &consumer_map);
+            for source in node.srcs() {
+                consumer_map
+                    .entry(source.id())
+                    .and_modify(|c| c.push(node))
+                    .or_insert_with(|| vec![node]);
+                if visited.insert(source.id()) {
+                    worklist.push_back(source);
+                }
+            }
+            if changed {
+                let consumers = consumer_map
+                    .get(&node.id())
+                    .map(|c| c.as_slice())
+                    .unwrap_or_else(|| &[]);
+                for consumer in consumers {
+                    worklist.push_back(consumer);
+                }
+            }
+        }
     }
 
     /// Backend specific optimizations. Defaults to noop.
-    fn specialize(&self, _lazy_storage: &LazyStorage) {}
+    fn apply_specialize_passes(
+        &self,
+        _node: &LazyStorage,
+        _consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
+    ) -> bool {
+        false
+    }
 
     fn run(&self, lazy_storage: LazyStorage) -> Result<Self::BufferType>;
 
@@ -791,6 +862,8 @@ pub trait Executor {
         op: &Box<dyn LazyCustomOp>,
         func: Box<dyn LazyCustomFn<Self::BufferType>>,
     ) -> Option<&Box<dyn LazyCustomFn<Self::BufferType>>>;
+
+    fn inner_precision(op: &Op) -> Option<DType>;
 }
 
 impl LazyStorage {
@@ -800,6 +873,7 @@ impl LazyStorage {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Op {
     Uninit,
@@ -913,7 +987,7 @@ impl Display for Op {
 }
 
 impl LazyStorage {
-    fn srcs(&self) -> Vec<&LazyStorage> {
+    pub fn srcs(&self) -> Vec<&LazyStorage> {
         self.op().srcs()
     }
 }

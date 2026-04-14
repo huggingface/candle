@@ -691,7 +691,8 @@ impl Tensor {
                         storage.shape().elem_count(),
                         storage.dtype(),
                     );
-                    return from_cpu_storage(&metal_storage.to_cpu_storage()?);
+                    let result = metal_storage.to_cpu_ref::<S>()?;
+                    return Ok(result[self.layout.start_offset()]);
                 }
             }
         }
@@ -1989,7 +1990,13 @@ impl Tensor {
                         storage.shape().elem_count(),
                         storage.dtype(),
                     );
-                    return from_cpu_storage(&metal_storage.to_cpu_storage()?);
+
+                    let data = metal_storage.to_cpu_ref::<S>()?;
+                    let data = match self.layout.contiguous_offsets() {
+                        Some((o1, o2)) => data[o1..o2].to_vec(),
+                        None => self.strided_index().map(|i| data[i]).collect(),
+                    };
+                    return Ok(data);
                 }
                 #[cfg(not(any(feature = "metal", feature = "cuda")))]
                 {

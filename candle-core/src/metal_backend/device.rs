@@ -78,7 +78,7 @@ pub struct MetalDevice {
     /// Last seed value set on this device.
     pub(crate) seed_value: Arc<RwLock<u64>>,
 
-    pub(crate) fences: Arc<Mutex<HashMap<NodeId, MetalFence>>>,
+    pub(crate) _fences: Arc<Mutex<HashMap<NodeId, MetalFence>>>,
 
     /// Lazy eval specific concepts. Experimental
     /// cache of const eval nodes

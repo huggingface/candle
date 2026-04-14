@@ -2,7 +2,8 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
-use crate::lazy::ops::LazyOp;
+use crate::lazy::ops::{LazyOp, ToDType};
+use crate::lazy::NodeId;
 use crate::lazy::{
     custom::{CustomOp, LazyCustomOp},
     BufferId, Executor, LazyAllocator, LazyBuffer,
@@ -2113,6 +2114,26 @@ impl MetalStorage {
         self.count * self.dtype.size_in_bytes()
     }
 
+    /*
+    fn to_cpu_storage_ref<'a>(&'a self) -> Result<CpuStorageRef<'a>> {
+        match self.dtype {
+            DType::U8 => Ok(CpuStorageRef::U8(self.to_cpu_ref()?)),
+            DType::U32 => Ok(CpuStorageRef::U32(self.to_cpu_ref()?)),
+            DType::I16 => Ok(CpuStorageRef::I16(self.to_cpu_ref()?)),
+            DType::I32 => Ok(CpuStorageRef::I32(self.to_cpu_ref()?)),
+            DType::I64 => Ok(CpuStorageRef::I64(self.to_cpu_ref()?)),
+            DType::F16 => Ok(CpuStorageRef::F16(self.to_cpu_ref()?)),
+            DType::BF16 => Ok(CpuStorageRef::BF16(self.to_cpu_ref()?)),
+            DType::F32 => Ok(CpuStorageRef::F32(self.to_cpu_ref()?)),
+            DType::F64 => Ok(CpuStorageRef::F64(self.to_cpu_ref()?)),
+            DType::F8E4M3 => Ok(CpuStorageRef::F8E4M3(self.to_cpu_ref()?)),
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                Err(crate::Error::UnsupportedDTypeForOp(self.dtype, "to_cpu_storage_ref").bt())
+            }
+        }
+    }
+    */
+
     pub fn unary(&self, op: &'static str, layout: &Layout) -> Result<Self> {
         let device = self.device();
         let el_count = layout.shape().elem_count();
@@ -2168,6 +2189,19 @@ impl MetalStorage {
         };
         Ok(read_to_vec(&buffer, self.count))
     }
+
+    pub(crate) fn to_cpu_ref<'a, T>(&'a self) -> Result<&'a [T]> {
+        if self.buffer.is_private() {
+            return Err(MetalError::Message(
+                "CPU can not directly read private metal buffers.
+                Contents must be moved to shared buffer first, or use `to_cpu` instead."
+                    .to_string(),
+            )
+            .into());
+        } else {
+            return Ok(read_to_slice(&self.buffer, self.count));
+        }
+    }
 }
 
 impl BackendDevice for MetalDevice {
@@ -2196,7 +2230,7 @@ impl BackendDevice for MetalDevice {
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
-            fences: Arc::new(Mutex::new(HashMap::new())),
+            _fences: Arc::new(Mutex::new(HashMap::new())),
             const_cache: Arc::new(Mutex::new(HashMap::new())),
             resolved: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -2716,25 +2750,106 @@ pub trait LazyMetalOp {
         Ok(())
     }
 }
+impl MetalDevice {
+    fn process_custom_op_pass(
+        &self,
+        node: &LazyStorage,
+        _consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
+    ) -> bool {
+        if let Op::CustomOp(custom_op) = node.op() {
+            if self.get_specialized_op(&custom_op.op()).is_none() {
+                println!(
+                    "No specialized op found for {}. Replacing with fallback",
+                    custom_op.name()
+                );
+                // TODO: Actually replace with fallback.
+                replace_custom_op_with_fallback(&node, custom_op.op());
+                return true;
+            }
+        }
+        false
+    }
+
+    fn elide_redundant_casts_pass(
+        node: &LazyStorage,
+        consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
+    ) -> bool {
+        // Op must have exactly one source which is a ToDType widening cast,
+        // and exactly one consumer which is a ToDType narrowing cast back to the original dtype.
+
+        // Check the single operand is a widening cast.
+        let node_srcs = node.srcs();
+        let [cast_in] = node_srcs.as_slice() else {
+            return false;
+        };
+        let Op::ToDType(wide_dtype) = cast_in.op() else {
+            return false;
+        };
+
+        // Check there is exactly one consumer and it narrows back.
+        let consumers = consumer_map
+            .get(&node.id())
+            .map(|c| c.as_slice())
+            .unwrap_or(&[]);
+        let [cast_out] = consumers else {
+            return false;
+        };
+        let Op::ToDType(narrow_dtype) = cast_out.op() else {
+            return false;
+        };
+
+        // The source dtype (before widening) must match the final dtype (after narrowing).
+        let cast_in_srcs = cast_in.srcs();
+        let [source] = cast_in_srcs.as_slice() else {
+            return false;
+        };
+        if source.dtype() != narrow_dtype.dtype {
+            return false;
+        }
+        if wide_dtype.dtype != node.dtype() {
+            return false;
+        }
+
+        // We already know we go from narrow -> wide -> narrow.
+        // If inner precision dtype == wide dtype the cast is redundant.
+        // Same is true if inner precision is `None`. This indicates taht the Op is considered
+        // precise enough in any supported dtype. For example binary mul in f16.
+        //
+        // If inner precision != wide dtype then the cast is not redundant, and we return `false`.
+        if let Some(inner_precision) = Self::inner_precision(node.op()) {
+            if inner_precision != wide_dtype.dtype {
+                return false;
+            }
+        }
+
+        // Make both casts into no-op casts
+        // TODO: imo cleaner to remove the nodes entirely.
+        cast_in.set_op(Op::ToDType(ToDType::new(
+            cast_in.srcs()[0].clone(),
+            source.dtype(),
+        )));
+        cast_out.set_op(Op::ToDType(ToDType::new(
+            cast_out.srcs()[0].clone(),
+            source.dtype(),
+        )));
+        true
+    }
+}
 
 impl Executor for MetalDevice {
     type BufferType = Arc<Buffer>;
     type AllocatorType = MetalAllocator;
 
-    fn specialize(&self, lazy_storage: &LazyStorage) {
-        use crate::lazy::Op::*;
-
-        for ls in lazy_storage.execution_order() {
-            if let CustomOp(custom_op) = ls.op() {
-                if self.get_specialized_op(&custom_op.op()).is_none() {
-                    println!(
-                        "No specialized op found for {}. Replacing with fallback",
-                        custom_op.name()
-                    );
-                    replace_custom_op_with_fallback(&ls, custom_op.op());
-                }
-            }
-        }
+    /// Backend specific optimizations. Defaults to noop.
+    fn apply_specialize_passes(
+        &self,
+        node: &LazyStorage,
+        consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
+    ) -> bool {
+        let mut changed = false;
+        changed |= self.process_custom_op_pass(node, consumer_map);
+        changed |= Self::elide_redundant_casts_pass(node, consumer_map);
+        changed
     }
 
     fn run(&self, lazy_storage: LazyStorage) -> Result<Arc<Buffer>> {
@@ -2758,7 +2873,7 @@ impl Executor for MetalDevice {
 
         allocator.initialize(&graph, &pinned)?;
 
-        let result_node = graph.last().unwrap().clone();
+        let result_node = graph.last().unwrap();
         for node in &graph {
             if let Err(e) = self.eval(node, &mut allocator) {
                 println!("{}", crate::lazy::graph_to_dot(node));
@@ -3120,6 +3235,33 @@ impl Executor for MetalDevice {
             .insert(op.name().to_string(), func);
         None
     }
+
+    fn inner_precision(op: &Op) -> Option<DType> {
+        match op {
+            Op::Reduce(_) => Some(DType::F32),
+            Op::Matmul(_) => Some(DType::F32),
+            Op::Uninit
+            | Op::Const(_)
+            | Op::Resolved(_)
+            | Op::ToCpu
+            | Op::Affine(_)
+            | Op::Powf(_)
+            | Op::Elu(_)
+            | Op::Cmp(_)
+            | Op::ToDType(_)
+            | Op::Unary(_)
+            | Op::Binary(_)
+            | Op::WhereCond(_)
+            | Op::IndexSelect(_)
+            | Op::CopyStridedSrc(_)
+            | Op::Copy2D(_)
+            | Op::ConstSet(_)
+            | Op::Sink(_)
+            | Op::Aggregate
+            | Op::CustomOp(_)
+            | Op::Output(_) => None,
+        }
+    }
 }
 
 pub fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
@@ -3127,4 +3269,10 @@ pub fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     assert!(!ptr.is_null());
     let slice = unsafe { std::slice::from_raw_parts(ptr, n) };
     slice.to_vec()
+}
+
+pub fn read_to_slice<'a, T>(buffer: &'a Buffer, n: usize) -> &'a [T] {
+    let ptr = buffer.contents() as *const T;
+    assert!(!ptr.is_null());
+    unsafe { std::slice::from_raw_parts(ptr, n) }
 }
