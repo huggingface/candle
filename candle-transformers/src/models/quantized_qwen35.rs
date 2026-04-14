@@ -7,6 +7,7 @@
 //! - [Qwen3 Models](https://huggingface.co/Qwen/Qwen3-0.6B)
 //!
 use super::with_tracing::QMatMul;
+use crate::models::qwen3_5_linear_attn_scan::{gated_delta_rule_chunked, sequential_step};
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor, D};
@@ -289,34 +290,26 @@ impl SSMWeights {
             _ => Tensor::zeros(state_shape, DType::F32, x.device())?,
         };
 
-        let mut outputs = Vec::with_capacity(seq_len);
-        for t in 0..seq_len {
-            let q_t = q.narrow(1, t, 1)?.squeeze(1)?;
-            let k_t = k.narrow(1, t, 1)?.squeeze(1)?;
-            let v_t = v.narrow(1, t, 1)?.squeeze(1)?;
-            let g_t = g.narrow(1, t, 1)?.squeeze(1)?.exp()?;
-            let beta_t = beta.narrow(1, t, 1)?.squeeze(1)?;
-            let g = g_t.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?;
-            let beta = beta_t.unsqueeze(D::Minus1)?;
-            state = state.broadcast_mul(&g)?;
-            let retrieved = k_t
-                .unsqueeze(D::Minus2)?
-                .matmul(&state)?
-                .squeeze(D::Minus2)?;
-            let delta = (&v_t - &retrieved)?.broadcast_mul(&beta)?;
-            let update = k_t
-                .unsqueeze(D::Minus1)?
-                .broadcast_mul(&delta.unsqueeze(D::Minus2)?)?;
-            state = (&state + &update)?;
-            let y_t = q_t
-                .unsqueeze(D::Minus2)?
-                .matmul(&state)?
-                .squeeze(D::Minus2)?;
-            outputs.push(y_t);
-        }
-        self.recurrent_state = Some(state);
-
-        let y = Tensor::stack(&outputs, 1)?;
+        // Dispatch: chunked parallel scan for prefill, single sequential step for decode.
+        // `g` here is log_g (= ssm_a * softplus(alpha + dt_bias), always negative).
+        // gated_delta_rule_chunked expects log_g directly; sequential_step expects exp(log_g).
+        let y = if seq_len == 1 {
+            // Decode path: single step, no chunking overhead.
+            let q_t = q.squeeze(1)?; // [b, n_heads, state_size]
+            let k_t = k.squeeze(1)?;
+            let v_t = v.squeeze(1)?;
+            let g_t = g.squeeze(1)?.exp()?; // actual decay gate ∈ (0,1)
+            let beta_t = beta.squeeze(1)?;
+            let out = sequential_step(&q_t, &k_t, &v_t, &g_t, &beta_t, &mut state)?;
+            self.recurrent_state = Some(state);
+            out.unsqueeze(1)? // [b, 1, n_heads, hv]
+        } else {
+            // Prefill path: O(T/64) chunked WY scan instead of O(T) sequential loop.
+            // State is updated in-place by the scan and returned via &mut.
+            let out = gated_delta_rule_chunked(&q, &k, &v, &g, &beta, &mut state)?;
+            self.recurrent_state = Some(state);
+            out // [b, seq_len, n_heads, hv]
+        };
         let y = y.reshape((b_sz * seq_len * self.value_head_count, self.value_head_dim))?;
         let y = self.ssm_norm.forward(&y)?;
         let y = y.reshape((b_sz, seq_len, self.value_head_count, self.value_head_dim))?;
