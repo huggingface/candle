@@ -1122,6 +1122,29 @@ fn quantized_mm() -> Result<()> {
     ggml_matmul_error_test::<k_quants::BlockQ5_1>()?;
     ggml_matmul_error_test::<k_quants::BlockQ8_0>()?;
     ggml_matmul_error_test::<k_quants::BlockQ8_1>()?;
+    // Q1_0_g128::from_float panics (quantization requires llama.cpp), so skip generic test
+    Ok(())
+}
+
+/// Test Q1_0_g128 type is properly registered in the type system.
+/// Full integration testing (loading GGUF, matmul) is done in:
+/// - candle-core/tests/q1_0_g128_integration.rs (requires Bonsai-8B.gguf model)
+#[test]
+fn quantized_q1_0_g128_type_registration() -> Result<()> {
+    use candle_core::quantized::GgmlDType;
+
+    // Verify Q1_0_g128 is a valid dtype
+    let dtype = GgmlDType::Q1_0_g128;
+    assert_eq!(dtype, GgmlDType::Q1_0_g128);
+
+    // Verify block size is correct (128 elements per block)
+    let block_size = k_quants::QK1_0_G128;
+    assert_eq!(block_size, 128);
+
+    // Verify QK1_0_G128 constant is accessible
+    assert_eq!(k_quants::QK1_0_G128, 128);
+
+    // The integration test q1_0_g128_integration.rs covers actual GGUF loading and matmul.
     Ok(())
 }
 

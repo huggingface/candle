@@ -2292,6 +2292,21 @@ pub fn matmul<T: GgmlType>(
     rhs_t: &[T],
     dst: &mut [f32],
 ) -> Result<()> {
+    // Q1_0_g128 has blocksize 128 but VecDotType (BlockQ8_0) has blocksize 32.
+    // The standard ratio check fails, so dispatch to the specialized path.
+    if matches!(T::DTYPE, GgmlDType::Q1_0_g128) {
+        // SAFETY: T must be BlockQ1_0_g128 since only Q1_0_g128 has this dtype.
+        // We transmute the slice to the correct type — the block count is derived
+        // from k so the byte layout is consistent.
+        let rhs_q1 = unsafe {
+            std::slice::from_raw_parts(
+                rhs_t.as_ptr() as *const BlockQ1_0_g128,
+                rhs_t.len(),
+            )
+        };
+        return matmul_q1_0_g128((m, k, n), lhs, rhs_q1, dst);
+    }
+
     debug_assert_eq!(
         T::BLCK_SIZE,
         T::VecDotType::BLCK_SIZE,
@@ -2341,6 +2356,21 @@ pub fn matmul_f16<T: GgmlType>(
     rhs_t: &[T],
     dst: &mut [f16],
 ) -> Result<()> {
+    // Q1_0_g128 blocksize mismatch — route to specialized f32 path
+    if matches!(T::DTYPE, GgmlDType::Q1_0_g128) {
+        let (m, k, n) = mkn;
+        let lhs_f32: Vec<f32> = lhs.iter().map(|&x| x.to_f32()).collect();
+        let mut dst_f32 = vec![0f32; m * n];
+        let rhs_q1 = unsafe {
+            std::slice::from_raw_parts(rhs_t.as_ptr() as *const BlockQ1_0_g128, rhs_t.len())
+        };
+        matmul_q1_0_g128((m, k, n), &lhs_f32, rhs_q1, &mut dst_f32)?;
+        for (i, &v) in dst_f32.iter().enumerate() {
+            dst[i] = f16::from_f32(v);
+        }
+        return Ok(());
+    }
+
     let (m, k, n) = mkn;
     if m * k != lhs.len() {
         crate::bail!("unexpected lhs length {} {mkn:?}", lhs.len());
@@ -2367,6 +2397,57 @@ pub fn matmul_f16<T: GgmlType>(
             *dst = f16::from_f32(value);
         }
     }
+    Ok(())
+}
+
+/// Specialized matmul for Q1_0_g128.
+/// Q1_0_g128 has blocksize 128, but its VecDotType (BlockQ8_0) has blocksize 32.
+/// Since blocksizes differ, the generic matmul assertion fails.
+/// Strategy: dequantize Q1_0_g128 to f32 inline, then do a standard f32 matmul.
+/// This is correct but slower than the SIMD path — acceptable for initial bringup.
+pub fn matmul_q1_0_g128(
+    (m, k, n): (usize, usize, usize),
+    lhs: &[f32],
+    rhs_q1: &[BlockQ1_0_g128],
+    dst: &mut [f32],
+) -> Result<()> {
+    const QK: usize = 128;
+
+    debug_assert_eq!(m * k, lhs.len(), "lhs length mismatch: {} != {} * {}", lhs.len(), m, k);
+    let nb = k / QK;
+    debug_assert_eq!(nb * n, rhs_q1.len(), "rhs block count mismatch");
+
+    // Dequantize RHS (column-major Q1_0_g128) to row-major f32.
+    // RHS blocks: [col * nb + block] gives the block covering [block*QK, (block+1)*QK) in column col.
+    let mut rhs_f32 = vec![0f32; k * n];
+    for col in 0..n {
+        for block in 0..nb {
+            let qb = &rhs_q1[col * nb + block];
+            let d = qb.d.to_f32();
+            // Write this block into rhs_f32 rows [block*QK, (block+1)*QK), column col
+            for j in 0..QK {
+                let byte_index = j / 8;
+                let bit_offset = j % 8;
+                let bit = (qb.qs[byte_index] >> bit_offset) & 1;
+                // weight = bit ? +d : -d
+                let val = if bit != 0 { d } else { -d };
+                rhs_f32[(block * QK + j) * n + col] = val;
+            }
+        }
+    }
+
+    // Compute dst[m,n] = sum_k lhs[m,k] * rhs_f32[k,n]
+    for row in 0..m {
+        for col in 0..n {
+            let mut sum = 0f32;
+            let lhs_row = &lhs[row * k..(row + 1) * k];
+            for k_idx in 0..k {
+                sum += lhs_row[k_idx] * rhs_f32[k_idx * n + col];
+            }
+            dst[row * n + col] = sum;
+        }
+    }
+
     Ok(())
 }
 
@@ -2559,7 +2640,19 @@ impl GgmlType for BlockQ1_0_g128 {
         panic!("from_float not implemented for Q1_0_g128 (use llama.cpp to quantize)")
     }
 
+    // https://github.com/PrismML-Eng/llama.cpp/blob/master/ggml/src/ggml-cpu/quants.c
+    // ggml_vec_dot_q1_0_g128_q8_0_generic
+    #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
+        #[cfg(target_feature = "avx2")]
+        return super::avx::vec_dot_q1_0_g128_q8_0(n, xs, ys);
+
+        #[cfg(target_feature = "neon")]
+        return super::neon::vec_dot_q1_0_g128_q8_0(n, xs, ys);
+
+        #[cfg(target_feature = "simd128")]
+        return super::simd128::vec_dot_q1_0_g128_q8_0(n, xs, ys);
+
         Self::vec_dot_unopt(n, xs, ys)
     }
 
