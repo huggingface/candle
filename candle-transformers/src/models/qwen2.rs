@@ -400,3 +400,4 @@ impl ModelForCausalLM {
         self.base_model.clear_kv_cache()
     }
 }
+crate::impl_causal_lm!(ModelForCausalLM, "qwen2");

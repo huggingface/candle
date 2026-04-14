@@ -480,4 +480,11 @@ impl Model {
             .apply(&self.norm)?
             .apply(&self.lm_head)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.self_attn.kv_cache = None;
+        }
+    }
 }
+crate::impl_causal_lm!(Model, "mixtral");

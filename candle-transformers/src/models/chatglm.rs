@@ -7,7 +7,7 @@ use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub num_layers: usize,
     pub padded_vocab_size: usize,
@@ -229,7 +229,7 @@ impl SelfAttention {
         })
     }
 
-    fn reset_kv_cache(&mut self) {
+    fn clear_kv_cache(&mut self) {
         self.kv_cache = None
     }
 
@@ -238,6 +238,7 @@ impl SelfAttention {
         xs: &Tensor,
         attention_mask: &Option<Tensor>,
         rotary_emb: &RotaryEmbedding,
+        seqlen_offset: usize,
     ) -> Result<Tensor> {
         let mixed_x_layer = xs.apply(&self.query_key_value)?;
         if !self.multi_query_attention {
@@ -277,10 +278,6 @@ impl SelfAttention {
         ))?;
 
         // Rotary embeddings.
-        let seqlen_offset = match &self.kv_cache {
-            None => 0,
-            Some((prev_k, _)) => prev_k.dim(0)?,
-        };
         let query_layer = rotary_emb.apply(&query_layer, seqlen_offset)?;
         let key_layer = rotary_emb.apply(&key_layer, seqlen_offset)?;
 
@@ -417,8 +414,8 @@ impl Block {
         })
     }
 
-    fn reset_kv_cache(&mut self) {
-        self.self_attention.reset_kv_cache()
+    fn clear_kv_cache(&mut self) {
+        self.self_attention.clear_kv_cache()
     }
 
     fn forward(
@@ -426,11 +423,15 @@ impl Block {
         xs: &Tensor,
         attention_mask: &Option<Tensor>,
         rotary_emb: &RotaryEmbedding,
+        seqlen_offset: usize,
     ) -> Result<Tensor> {
         let layernorm_output = xs.apply(&self.input_layernorm)?;
-        let attention_output =
-            self.self_attention
-                .forward(&layernorm_output, attention_mask, rotary_emb)?;
+        let attention_output = self.self_attention.forward(
+            &layernorm_output,
+            attention_mask,
+            rotary_emb,
+            seqlen_offset,
+        )?;
         let residual = if self.apply_residual_connection_post_layernorm {
             &layernorm_output
         } else {
@@ -490,16 +491,21 @@ impl Transformer {
         })
     }
 
-    fn reset_kv_cache(&mut self) {
+    fn clear_kv_cache(&mut self) {
         for block in self.layers.iter_mut() {
-            block.reset_kv_cache()
+            block.clear_kv_cache()
         }
     }
 
-    fn forward(&mut self, xs: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        attention_mask: &Option<Tensor>,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
         let mut xs = xs.clone();
         for block in self.layers.iter_mut() {
-            xs = block.forward(&xs, attention_mask, &self.rotary_emb)?
+            xs = block.forward(&xs, attention_mask, &self.rotary_emb, seqlen_offset)?
         }
         match self.final_layernorm.as_ref() {
             None => Ok(xs),
@@ -571,11 +577,11 @@ impl Model {
         })
     }
 
-    pub fn reset_kv_cache(&mut self) {
-        self.encoder.reset_kv_cache()
+    pub fn clear_kv_cache(&mut self) {
+        self.encoder.clear_kv_cache()
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let input_embeds = xs.apply(&self.embedding)?;
         let attention_mask = if seq_len <= 1 {
@@ -583,8 +589,12 @@ impl Model {
         } else {
             Some(get_mask(seq_len, xs.device())?)
         };
-        let xs = self.encoder.forward(&input_embeds, &attention_mask)?;
+        let xs = self
+            .encoder
+            .forward(&input_embeds, &attention_mask, seqlen_offset)?;
         let lm_logits = xs.i(seq_len - 1)?.apply(&self.output_layer)?;
         Ok(lm_logits)
     }
 }
+
+crate::impl_causal_lm!(Model, "chatglm");
