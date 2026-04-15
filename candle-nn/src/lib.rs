@@ -23,6 +23,7 @@ pub mod embedding;
 pub mod encoding;
 pub mod func;
 pub mod group_norm;
+pub mod hgsel;
 pub mod init;
 pub mod kv_cache;
 pub mod layer_norm;
@@ -48,6 +49,7 @@ pub use conv::{
 pub use embedding::{embedding, Embedding};
 pub use func::{func, func_t, Func, FuncT};
 pub use group_norm::{group_norm, GroupNorm};
+pub use hgsel::{HGSELLayer, HGSELDiagnostics, ExpertLoadStats, CombineMode, MultiHashRouter, RoutingStats};
 pub use init::Init;
 pub use layer_norm::{
     layer_norm, layer_norm_no_bias, rms_norm, LayerNorm, LayerNormConfig, RmsNorm,
