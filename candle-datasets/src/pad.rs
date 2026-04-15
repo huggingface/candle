@@ -35,7 +35,7 @@
 //! assert_eq!(mask.dims(), &[3, 3]);
 //! ```
 
-use candle::{Device, Result, Tensor};
+use candle::{Result, Tensor};
 
 /// Pad a batch of 1D tensors to the same length and stack them along a new
 /// batch axis, returning `(padded, mask)`.
@@ -57,52 +57,7 @@ use candle::{Device, Result, Tensor};
 /// Returns an error if `items` is empty, if any item is not 1D, or if the
 /// dtypes/devices are not uniform across the batch.
 pub fn pad_and_stack_1d(items: &[Tensor], pad_value: f64) -> Result<(Tensor, Tensor)> {
-    if items.is_empty() {
-        candle::bail!("pad_and_stack_1d: empty batch");
-    }
-    let device = items[0].device().clone();
-    let dtype = items[0].dtype();
-    for (i, t) in items.iter().enumerate() {
-        if t.dims().len() != 1 {
-            candle::bail!(
-                "pad_and_stack_1d: item {i} has rank {}, expected 1",
-                t.dims().len()
-            );
-        }
-        if t.dtype() != dtype {
-            candle::bail!(
-                "pad_and_stack_1d: item {i} has dtype {:?}, expected {:?}",
-                t.dtype(),
-                dtype
-            );
-        }
-        if !same_device(t.device(), &device) {
-            candle::bail!("pad_and_stack_1d: item {i} is on a different device");
-        }
-    }
-
-    let lengths: Vec<usize> = items.iter().map(|t| t.dims()[0]).collect();
-    let t_max = *lengths.iter().max().unwrap();
-    let b = items.len();
-
-    let mut padded_rows: Vec<Tensor> = Vec::with_capacity(b);
-    let mut mask_rows: Vec<Tensor> = Vec::with_capacity(b);
-
-    for (t, &len) in items.iter().zip(lengths.iter()) {
-        let row = if len == t_max {
-            t.clone()
-        } else {
-            let pad_len = t_max - len;
-            let pad = Tensor::full(pad_value, pad_len, &device)?.to_dtype(dtype)?;
-            Tensor::cat(&[t, &pad], 0)?
-        };
-        padded_rows.push(row);
-        mask_rows.push(make_mask_row(len, t_max, &device)?);
-    }
-
-    let padded = Tensor::stack(&padded_rows, 0)?;
-    let mask = Tensor::stack(&mask_rows, 0)?;
-    Ok((padded, mask))
+    pad_and_stack_impl(items, pad_value, 1, "pad_and_stack_1d")
 }
 
 /// Pad a batch of 2D tensors to the same first-axis length and stack them
@@ -122,35 +77,46 @@ pub fn pad_and_stack_1d(items: &[Tensor], pad_value: f64) -> Result<(Tensor, Ten
 /// Returns an error if `items` is empty, if any item is not 2D, if
 /// trailing-dim `D` disagrees, or if dtypes/devices disagree.
 pub fn pad_and_stack_2d(items: &[Tensor], pad_value: f64) -> Result<(Tensor, Tensor)> {
+    pad_and_stack_impl(items, pad_value, 2, "pad_and_stack_2d")
+}
+
+fn pad_and_stack_impl(
+    items: &[Tensor],
+    pad_value: f64,
+    expected_rank: usize,
+    fn_name: &str,
+) -> Result<(Tensor, Tensor)> {
     if items.is_empty() {
-        candle::bail!("pad_and_stack_2d: empty batch");
+        candle::bail!("{fn_name}: empty batch");
+    }
+    for (i, t) in items.iter().enumerate() {
+        if t.dims().len() != expected_rank {
+            candle::bail!(
+                "{fn_name}: item {i} has rank {}, expected {expected_rank}",
+                t.dims().len()
+            );
+        }
     }
     let device = items[0].device().clone();
     let dtype = items[0].dtype();
-    let feature_dim = items[0].dims()[1];
+    let feature_dim = if expected_rank == 2 { items[0].dims()[1] } else { 0 };
+
     for (i, t) in items.iter().enumerate() {
-        let dims = t.dims();
-        if dims.len() != 2 {
+        if expected_rank == 2 && t.dims()[1] != feature_dim {
             candle::bail!(
-                "pad_and_stack_2d: item {i} has rank {}, expected 2",
-                dims.len()
-            );
-        }
-        if dims[1] != feature_dim {
-            candle::bail!(
-                "pad_and_stack_2d: item {i} has feature dim {}, expected {feature_dim}",
-                dims[1]
+                "{fn_name}: item {i} has feature dim {}, expected {feature_dim}",
+                t.dims()[1]
             );
         }
         if t.dtype() != dtype {
             candle::bail!(
-                "pad_and_stack_2d: item {i} has dtype {:?}, expected {:?}",
+                "{fn_name}: item {i} has dtype {:?}, expected {:?}",
                 t.dtype(),
                 dtype
             );
         }
-        if !same_device(t.device(), &device) {
-            candle::bail!("pad_and_stack_2d: item {i} is on a different device");
+        if !t.device().same_device(&device) {
+            candle::bail!("{fn_name}: item {i} is on a different device");
         }
     }
 
@@ -159,39 +125,31 @@ pub fn pad_and_stack_2d(items: &[Tensor], pad_value: f64) -> Result<(Tensor, Ten
     let b = items.len();
 
     let mut padded_rows: Vec<Tensor> = Vec::with_capacity(b);
-    let mut mask_rows: Vec<Tensor> = Vec::with_capacity(b);
-
     for (t, &len) in items.iter().zip(lengths.iter()) {
         let row = if len == t_max {
             t.clone()
         } else {
             let pad_len = t_max - len;
-            let pad = Tensor::full(pad_value, (pad_len, feature_dim), &device)?
-                .to_dtype(dtype)?;
+            let pad = if expected_rank == 1 {
+                Tensor::full(pad_value, pad_len, &device)?.to_dtype(dtype)?
+            } else {
+                Tensor::full(pad_value, (pad_len, feature_dim), &device)?.to_dtype(dtype)?
+            };
             Tensor::cat(&[t, &pad], 0)?
         };
         padded_rows.push(row);
-        mask_rows.push(make_mask_row(len, t_max, &device)?);
     }
-
     let padded = Tensor::stack(&padded_rows, 0)?;
-    let mask = Tensor::stack(&mask_rows, 0)?;
-    Ok((padded, mask))
-}
 
-/// Build a single `(T_max,)` mask row with `1` in the first `real_len`
-/// positions and `0` afterwards. Returned as `U8`.
-fn make_mask_row(real_len: usize, t_max: usize, device: &Device) -> Result<Tensor> {
-    let mut data = vec![0u8; t_max];
-    for v in data.iter_mut().take(real_len) {
-        *v = 1;
+    let mut mask_data = vec![0u8; b * t_max];
+    for (i, &len) in lengths.iter().enumerate() {
+        for v in mask_data[i * t_max..i * t_max + len].iter_mut() {
+            *v = 1;
+        }
     }
-    Tensor::from_vec(data, t_max, device)
-}
+    let mask = Tensor::from_vec(mask_data, (b, t_max), &device)?;
 
-#[inline]
-fn same_device(a: &Device, b: &Device) -> bool {
-    a.same_device(b)
+    Ok((padded, mask))
 }
 
 #[cfg(test)]
