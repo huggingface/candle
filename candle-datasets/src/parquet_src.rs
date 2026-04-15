@@ -174,9 +174,7 @@ mod tests {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
             let pid = std::process::id();
-            let dir = std::env::temp_dir().join(format!(
-                "candle_datasets_test_{pid}_{nanos}_{n}"
-            ));
+            let dir = std::env::temp_dir().join(format!("candle_datasets_test_{pid}_{nanos}_{n}"));
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir.join(format!("{stem}.parquet")))
         }
@@ -275,16 +273,8 @@ mod tests {
         write_test_parquet(tmp.path(), 3);
 
         let src: ParquetSource<TestRow> = ParquetSource::open(tmp.path()).unwrap();
-        let first: Vec<i64> = src
-            .iter()
-            .unwrap()
-            .map(|r| r.unwrap().id)
-            .collect();
-        let second: Vec<i64> = src
-            .iter()
-            .unwrap()
-            .map(|r| r.unwrap().id)
-            .collect();
+        let first: Vec<i64> = src.iter().unwrap().map(|r| r.unwrap().id).collect();
+        let second: Vec<i64> = src.iter().unwrap().map(|r| r.unwrap().id).collect();
         assert_eq!(first, second);
         assert_eq!(first, vec![0, 1, 2]);
     }

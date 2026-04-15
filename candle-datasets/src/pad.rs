@@ -99,7 +99,11 @@ fn pad_and_stack_impl(
     }
     let device = items[0].device().clone();
     let dtype = items[0].dtype();
-    let feature_dim = if expected_rank == 2 { items[0].dims()[1] } else { 0 };
+    let feature_dim = if expected_rank == 2 {
+        items[0].dims()[1]
+    } else {
+        0
+    };
 
     for (i, t) in items.iter().enumerate() {
         if expected_rank == 2 && t.dims()[1] != feature_dim {

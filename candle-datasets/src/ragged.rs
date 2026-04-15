@@ -64,7 +64,10 @@ impl std::fmt::Debug for RaggedCache {
         f.debug_struct("RaggedCache")
             .field("items", &self.len())
             .field("feature_dim", &self.feature_dim())
-            .field("total_rows", &self.flat.dims().first().copied().unwrap_or(0))
+            .field(
+                "total_rows",
+                &self.flat.dims().first().copied().unwrap_or(0),
+            )
             .field("dtype", &self.flat.dtype())
             .finish()
     }
