@@ -544,9 +544,15 @@ pub fn determine_tensor_source(source: &LazyStorage) -> &LazyStorage {
     source
 }
 
-pub fn calculate_usage_records(
-    graph: &[&LazyStorage],
-) -> BTreeMap<BufferId, (Option<BufferId>, Option<usize>, usize, Layout, DType)> {
+struct UsageRecord {
+    id: Option<BufferId>,
+    producer: Option<usize>,
+    last_consumer: usize,
+    layout: Layout,
+    dtype: DType,
+}
+
+fn calculate_usage_records(graph: &[&LazyStorage]) -> BTreeMap<BufferId, UsageRecord> {
     let mut records = BTreeMap::new();
     let topo_len = graph.len() - 1;
     for (i, node) in graph.iter().rev().enumerate() {
@@ -560,29 +566,29 @@ pub fn calculate_usage_records(
                 continue;
             }
             let true_source = determine_tensor_source(source);
-            records.entry(*true_source.buffer_id()).or_insert_with(|| {
-                (
-                    None,
-                    None,
-                    topo_len - i,
-                    true_source.producer_layout().clone(),
-                    true_source.dtype(),
-                )
-            });
+            records
+                .entry(*true_source.buffer_id())
+                .or_insert_with(|| UsageRecord {
+                    id: None,
+                    producer: None,
+                    last_consumer: topo_len - i,
+                    layout: true_source.producer_layout().clone(),
+                    dtype: true_source.dtype(),
+                });
         }
 
         if let Some(record) = records.get_mut(buffer_id) {
-            record.0 = Some(*buffer_id);
-            record.1 = Some(topo_len - i);
+            record.id = Some(*buffer_id);
+            record.producer = Some(topo_len - i);
             // Use `producer_layout` so that copied nodes (which can be a narrowed view stored as
             // a source inside another op) allocate the full buffer rather than the narrow slice.
             // For regular nodes producer_layout == layout.
-            record.3 = node.producer_layout().clone();
-            record.4 = node.dtype();
+            record.layout = node.producer_layout().clone();
+            record.dtype = node.dtype();
         }
     }
     // filter records with no producer
-    records.retain(|_, v| v.1.is_some());
+    records.retain(|_, v| v.producer.is_some());
     records
 }
 
@@ -625,27 +631,25 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
     let current_size =
         |layout: &Layout, dtype: &DType| layout.shape().elem_count() * dtype.size_in_bytes();
 
-    for (buffer_id, (_record_buffer_id, producer, last_consumer, layout, dtype)) in
-        record_map.iter()
-    {
+    for (buffer_id, record) in record_map.iter() {
         // Pinned buffers (external references) must never reuse another buffer.
         // They need a dedicated allocation that survives until the post-execution pinning step.
         // In other words not part of the buffer reusage.
         if pinned.contains(buffer_id) {
-            allocations.insert(*buffer_id, (layout.clone(), *dtype));
+            allocations.insert(*buffer_id, (record.layout.clone(), record.dtype));
             // Skipping since pinned should not be in shared_objects
             continue;
         }
 
         // Debugging: disables reuse to investigate correctness
         if std::env::var("CANDLE_LAZY_NO_REUSE").is_ok() {
-            allocations.insert(*buffer_id, (layout.clone(), *dtype));
+            allocations.insert(*buffer_id, (record.layout.clone(), record.dtype));
             shared_objects.push(*buffer_id);
             continue;
         }
 
-        let record_producer = producer.unwrap();
-        let needed_size = current_size(layout, dtype);
+        let record_producer = record.producer.unwrap();
+        let needed_size = current_size(&record.layout, &record.dtype);
         let mut best_buffer: Option<(BufferId, usize)> = None;
 
         for obj in shared_objects.iter() {
@@ -659,13 +663,9 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
             }
 
             let mut suitable = true;
-            for (
-                inner_buffer_id,
-                (_, inner_producer, inner_last_consumer, _inner_layout, _inner_dtype),
-            ) in record_map.iter()
-            {
-                let max_first = std::cmp::max(record_producer, inner_producer.unwrap());
-                let min_last = *std::cmp::min(last_consumer, inner_last_consumer);
+            for (inner_buffer_id, inner) in record_map.iter() {
+                let max_first = std::cmp::max(record_producer, inner.producer.unwrap());
+                let min_last = std::cmp::min(record.last_consumer, inner.last_consumer);
                 if max_first <= min_last
                     && (inner_buffer_id == obj || reusage.get(inner_buffer_id) == Some(obj))
                 {
@@ -686,7 +686,7 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
         if let Some((best, _)) = best_buffer {
             reusage.insert(*buffer_id, best);
         } else {
-            allocations.insert(*buffer_id, (layout.clone(), *dtype));
+            allocations.insert(*buffer_id, (record.layout.clone(), record.dtype));
             shared_objects.push(*buffer_id);
         }
     }
