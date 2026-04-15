@@ -207,7 +207,40 @@ region is regenerated according to the text prompt.
 --cfg-interval-start   CFG guidance applied when timestep >= this (default: 0.0)
 --cfg-interval-end     CFG guidance applied when timestep <= this (default: 1.0)
 --infer-method         "ode" (deterministic, default) or "sde" (stochastic)
+--vae-chunk-frames     Latent frames per VAE-decode chunk; 0 = built-in default (128 ≈ 5.1s of audio)
+--vae-chunk-overlap    Latent-frame overlap on each side of a VAE-decode chunk; 0 = default (16)
 ```
+
+## Long-duration generation: tiled VAE decoding
+
+The VAE decoder is the biggest memory consumer after latent denoising — its
+widest intermediate activation scales linearly with output length. At 30+
+seconds of 48 kHz stereo this intermediate tensor alone can exceed 10–20 GB
+and trigger OOM on consumer GPUs.
+
+To work around this, the decoder runs by default in **tiled** mode: the
+latent is split along the time axis into overlapping chunks, each chunk is
+decoded independently, the overlap regions are trimmed, and the cores are
+concatenated. Because the decoder is fully convolutional with local padding
+and its receptive field is well under the default 16-frame overlap, the
+stitched output is numerically equivalent to a single full-length decode.
+
+Defaults (`--vae-chunk-frames 128 --vae-chunk-overlap 16`) cut peak decoder
+memory by roughly an order of magnitude on 30 s+ tracks. If you still hit
+OOM, shrink the chunk:
+
+```bash
+cargo run --example ace-step --release --features metal -- \
+    --prompt "..." --duration 60 \
+    --vae-chunk-frames 64 --vae-chunk-overlap 16
+```
+
+For short latents (`T_latent <= chunk`) tiling short-circuits to a plain
+forward pass, so there is no overhead on small durations.
+
+Note: the diffusion pass itself (DiT self-attention) is still O(T²) in
+sequence length, so tiled VAE does not make *arbitrarily* long generation
+possible — it just removes the VAE decoder as the binding memory limit.
 
 ## First run
 

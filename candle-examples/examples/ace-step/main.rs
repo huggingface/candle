@@ -95,6 +95,15 @@ struct Args {
     /// Sampling method: "ode" (deterministic) or "sde" (stochastic)
     #[arg(long, default_value = "ode")]
     infer_method: String,
+    /// Latent frames per VAE-decoder chunk (tiled decode). Lower = less peak
+    /// memory at the cost of compute overhead. Set to 0 to let the decoder
+    /// pick its default (128 frames ≈ 5.1 s of audio).
+    #[arg(long, default_value_t = 0)]
+    vae_chunk_frames: usize,
+    /// Overlap in latent frames on each side of a VAE-decoder chunk. Must
+    /// satisfy `chunk > 2 * overlap`. Set to 0 to use the default (16).
+    #[arg(long, default_value_t = 0)]
+    vae_chunk_overlap: usize,
 }
 
 /// Write stereo `(2, T)` tensor as 16-bit WAV with loudness normalization,
@@ -395,6 +404,8 @@ fn main() -> Result<()> {
         audio_cover_strength: args.audio_cover_strength,
         cfg_interval: (args.cfg_interval_start, args.cfg_interval_end),
         infer_method,
+        vae_chunk_frames: (args.vae_chunk_frames > 0).then_some(args.vae_chunk_frames),
+        vae_chunk_overlap: (args.vae_chunk_overlap > 0).then_some(args.vae_chunk_overlap),
     };
 
     let t = std::time::Instant::now();

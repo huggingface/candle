@@ -4,7 +4,7 @@
 //! conditioning, DiT denoising, and VAE decoding internally.
 
 use anyhow::Result;
-use candle::{DType, Device, Module, Tensor};
+use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::ace_step::{
     lm::{LmConfig, LmPipeline, TokenIds},
@@ -49,6 +49,13 @@ pub struct GenerationParams {
     pub cfg_interval: (f64, f64),
     /// ODE (deterministic) or SDE (stochastic) sampling.
     pub infer_method: sampling::InferMethod,
+    /// Latent frames per VAE-decoder chunk. `None` uses the built-in default
+    /// (128 frames ≈ 5.1 s of audio). Lower values cut peak decode memory at
+    /// the cost of more compute overhead; raise when memory is ample.
+    pub vae_chunk_frames: Option<usize>,
+    /// Overlap in latent frames on each side of a VAE-decoder chunk. `None`
+    /// uses the default (16). Must satisfy `chunk > 2 * overlap`.
+    pub vae_chunk_overlap: Option<usize>,
 }
 
 impl Default for GenerationParams {
@@ -65,6 +72,8 @@ impl Default for GenerationParams {
             audio_cover_strength: 1.0,
             cfg_interval: (0.0, 1.0),
             infer_method: sampling::InferMethod::Ode,
+            vae_chunk_frames: None,
+            vae_chunk_overlap: None,
         }
     }
 }
@@ -599,7 +608,11 @@ impl AceStepPipeline {
             self.dtype,
         )?;
 
-        let audio = self.vae_decoder.forward(&xt.transpose(1, 2)?)?;
+        let audio = self.vae_decoder.tiled_decode(
+            &xt.transpose(1, 2)?,
+            params.vae_chunk_frames,
+            params.vae_chunk_overlap,
+        )?;
         let audio = audio.squeeze(0)?;
 
         Ok(AudioOutput {

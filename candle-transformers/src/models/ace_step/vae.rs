@@ -359,6 +359,95 @@ impl OobleckDecoder {
             conv2,
         })
     }
+
+    /// Tiled decoding for long latents that may not fit in memory.
+    ///
+    /// Splits the latent along the time axis into overlapping chunks, decodes
+    /// each chunk independently via `forward`, trims the overlap regions in
+    /// audio space, and concatenates the cores. The decoder is fully
+    /// convolutional with local padding, so cores away from chunk boundaries
+    /// are numerically identical to a single full-length decode (up to the
+    /// decoder's finite receptive field, absorbed by the overlap).
+    ///
+    /// For short latents (`T_latent <= chunk_latent_frames`) this falls back
+    /// to a plain `forward` call.
+    ///
+    /// - `chunk_latent_frames`: latent frames per chunk (default 128 ≈ 5.1s of
+    ///   audio at 48 kHz with a 1920× upsample ratio).
+    /// - `overlap_latent_frames`: overlap on each side in latent frames
+    ///   (default 16). Must satisfy `chunk > 2 * overlap`.
+    ///
+    /// Input: `(B, decoder_input_channels, T_latent)`.
+    /// Output: `(B, audio_channels, T_latent * upsample_ratio)`.
+    pub fn tiled_decode(
+        &self,
+        z: &Tensor,
+        chunk_latent_frames: Option<usize>,
+        overlap_latent_frames: Option<usize>,
+    ) -> Result<Tensor> {
+        let chunk_size = chunk_latent_frames.unwrap_or(128);
+        let overlap = overlap_latent_frames.unwrap_or(16);
+        let total_frames = z.dim(2)?;
+
+        if total_frames <= chunk_size {
+            return self.forward(z);
+        }
+
+        if chunk_size <= 2 * overlap {
+            candle::bail!(
+                "tiled_decode: chunk_latent_frames ({chunk_size}) must be > 2 * overlap_latent_frames ({overlap})"
+            );
+        }
+
+        let stride = chunk_size - 2 * overlap;
+        let num_steps = total_frames.div_ceil(stride);
+        let mut upsample_factor: Option<usize> = None;
+        let mut audio_chunks = Vec::with_capacity(num_steps);
+
+        for i in 0..num_steps {
+            let core_start = i * stride;
+            let core_end = (core_start + stride).min(total_frames);
+            if core_start >= core_end {
+                break;
+            }
+
+            // Expand the window with overlap on both sides, clipped at the edges.
+            let win_start = core_start.saturating_sub(overlap);
+            let win_end = (core_end + overlap).min(total_frames);
+
+            let latent_chunk = z.narrow(2, win_start, win_end - win_start)?;
+            let audio_chunk = self.forward(&latent_chunk)?;
+
+            // Determine the upsample factor from the first chunk. The decoder
+            // is strided-conv-transpose only, so audio_len is an integer
+            // multiple of latent_len.
+            let up = match upsample_factor {
+                Some(up) => up,
+                None => {
+                    let audio_len = audio_chunk.dim(2)?;
+                    let latent_len = latent_chunk.dim(2)?;
+                    if latent_len == 0 || audio_len % latent_len != 0 {
+                        candle::bail!(
+                            "tiled_decode: audio length {audio_len} is not a multiple of latent length {latent_len}"
+                        );
+                    }
+                    let up = audio_len / latent_len;
+                    upsample_factor = Some(up);
+                    up
+                }
+            };
+
+            // Trim the overlap in audio space to recover only the core.
+            let trim_start = (core_start - win_start) * up;
+            let trim_end = (win_end - core_end) * up;
+            let audio_len = audio_chunk.dim(2)?;
+            let core_len = audio_len - trim_start - trim_end;
+            let audio_core = audio_chunk.narrow(2, trim_start, core_len)?;
+            audio_chunks.push(audio_core);
+        }
+
+        Tensor::cat(&audio_chunks.iter().collect::<Vec<_>>(), 2)
+    }
 }
 
 impl Module for OobleckDecoder {
@@ -431,6 +520,17 @@ impl AutoencoderOobleck {
     /// Output shape: `(B, audio_channels, T_audio)`
     pub fn decode(&self, z: &Tensor) -> Result<Tensor> {
         self.decoder.forward(z)
+    }
+
+    /// Tiled decoding for long latents; see [`OobleckDecoder::tiled_decode`].
+    pub fn tiled_decode(
+        &self,
+        z: &Tensor,
+        chunk_latent_frames: Option<usize>,
+        overlap_latent_frames: Option<usize>,
+    ) -> Result<Tensor> {
+        self.decoder
+            .tiled_decode(z, chunk_latent_frames, overlap_latent_frames)
     }
 
     /// Tiled encoding for long audio that may not fit in GPU memory.
@@ -508,5 +608,109 @@ impl AutoencoderOobleck {
         }
 
         Tensor::cat(&latent_chunks.iter().collect::<Vec<_>>(), 2)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::{DType, Device};
+    use candle_nn::{VarBuilder, VarMap};
+
+    /// Build a small OobleckDecoder with random weights on CPU. The
+    /// architecture is identical to the production decoder; we just shrink the
+    /// channel count so the test runs quickly.
+    fn tiny_decoder() -> Result<(OobleckDecoder, Device)> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let config = VaeConfig {
+            decoder_channels: 8,
+            decoder_input_channels: 4,
+            audio_channels: 2,
+            // Keep the real upsampling structure to exercise all 5 blocks.
+            downsampling_ratios: vec![2, 4, 4, 6, 10],
+            channel_multiples: vec![1, 1, 1, 1, 1],
+            ..VaeConfig::default()
+        };
+        let decoder = OobleckDecoder::new(&config, vb)?;
+        Ok((decoder, device))
+    }
+
+    /// Elementwise compare two tensors tolerant to matching NaN/Inf values.
+    /// The decoder has random weights with no normalization, so activations
+    /// can explode past fp32 range — but `forward` and `tiled_decode` do the
+    /// same computation on the same slice, so whatever NaN/Inf pattern
+    /// `forward` produces, `tiled_decode` must produce in the same places.
+    fn tensors_agree(a: &Tensor, b: &Tensor, atol: f32) -> Result<bool> {
+        let a = a.flatten_all()?.to_vec1::<f32>()?;
+        let b = b.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(a.len(), b.len(), "shape mismatch");
+        for (x, y) in a.iter().zip(b.iter()) {
+            let ok = match (x.is_nan(), y.is_nan()) {
+                (true, true) => true,
+                (false, false) => {
+                    if x.is_infinite() || y.is_infinite() {
+                        x == y
+                    } else {
+                        let scale = x.abs().max(y.abs()).max(1.0);
+                        (x - y).abs() <= atol * scale
+                    }
+                }
+                _ => false,
+            };
+            if !ok {
+                eprintln!("mismatch: forward={x} tiled={y}");
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    #[test]
+    fn tiled_decode_short_input_delegates_to_forward() -> Result<()> {
+        let (decoder, device) = tiny_decoder()?;
+        // total < chunk → tiled_decode must short-circuit to forward.
+        let z = Tensor::randn(0f32, 1.0, (1, 4, 64), &device)?;
+
+        let y_direct = decoder.forward(&z)?;
+        let y_tiled = decoder.tiled_decode(&z, Some(128), Some(16))?;
+
+        assert_eq!(y_tiled.dims(), y_direct.dims());
+        assert!(tensors_agree(&y_direct, &y_tiled, 1e-5)?);
+        Ok(())
+    }
+
+    #[test]
+    fn tiled_decode_matches_forward_across_chunks() -> Result<()> {
+        let (decoder, device) = tiny_decoder()?;
+        // Force multiple chunk boundaries.
+        let t_latent = 300;
+        let z = Tensor::randn(0f32, 1.0, (1, 4, t_latent), &device)?;
+
+        let y_direct = decoder.forward(&z)?;
+        let y_tiled = decoder.tiled_decode(&z, Some(64), Some(16))?;
+
+        assert_eq!(
+            y_tiled.dims(),
+            y_direct.dims(),
+            "tiled output shape must equal full-forward shape"
+        );
+        // Receptive field fits inside the 16-frame overlap, so cores should
+        // match within fp32 rounding slack. Values can be extreme due to
+        // random untrained weights; compare relative.
+        assert!(tensors_agree(&y_direct, &y_tiled, 1e-3)?);
+        Ok(())
+    }
+
+    #[test]
+    fn tiled_decode_rejects_bad_overlap() -> Result<()> {
+        let (decoder, device) = tiny_decoder()?;
+        let z = Tensor::randn(0f32, 1.0, (1, 4, 200), &device)?;
+
+        // chunk <= 2 * overlap must fail.
+        let err = decoder.tiled_decode(&z, Some(32), Some(16));
+        assert!(err.is_err(), "expected tiled_decode to reject chunk<=2*overlap");
+        Ok(())
     }
 }
