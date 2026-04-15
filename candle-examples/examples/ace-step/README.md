@@ -238,9 +238,24 @@ cargo run --example ace-step --release --features metal -- \
 For short latents (`T_latent <= chunk`) tiling short-circuits to a plain
 forward pass, so there is no overhead on small durations.
 
-Note: the diffusion pass itself (DiT self-attention) is still O(T²) in
-sequence length, so tiled VAE does not make *arbitrarily* long generation
-possible — it just removes the VAE decoder as the binding memory limit.
+### DiT sliding-window self-attention
+
+Half of the DiT's 24 layers are configured as `sliding_attention` with a
+window of 128 positions, alternating with `full_attention` layers. On those
+sliding layers the self-attention is computed in query chunks with local KV
+slices of size `window + 2*window`, so the full `L×L` score matrix is never
+materialized. Peak per-layer memory on the attention scores drops from
+O(L²) to O(L·W) — roughly two orders of magnitude at 60 s and above.
+
+This activates automatically when `L > sliding_window`. On shorter
+sequences the window covers everything and the layer falls back to full
+attention. The other half of the layers remain full-attention (they need
+global context) and still scale O(L²); they are the next binding limit
+past ~2-minute tracks.
+
+Together with tiled VAE, this means the practical ceiling for generation
+length is set by the full-attention DiT layers, not by the decoder or the
+sliding layers.
 
 ## First run
 

@@ -24,6 +24,27 @@ use candle_nn::{
 use super::AceStepConfig;
 
 // ---------------------------------------------------------------------------
+// Attention mask variant
+// ---------------------------------------------------------------------------
+
+/// How an attention layer should be masked.
+///
+/// `None` attends to every key (standard full bidirectional attention).
+/// `Additive` uses an explicit additive mask tensor broadcastable to
+/// `(B, H, Lq, Lk)` with `-inf` at positions to suppress — used by
+/// cross-attention for padding masks.
+/// `Sliding { window }` restricts each query to keys within `±window`
+/// positions and is computed in query chunks so the full `Lq×Lk` matrix is
+/// never materialized. Peak memory drops from O(L²) to O(L·W) on sliding
+/// self-attention layers.
+#[derive(Debug, Clone, Copy)]
+pub enum AttnMask<'a> {
+    None,
+    Additive(&'a Tensor),
+    Sliding { window: usize },
+}
+
+// ---------------------------------------------------------------------------
 // Rotary positional embedding
 // ---------------------------------------------------------------------------
 
@@ -295,8 +316,9 @@ impl AceStepAttention {
     /// * `x` - Hidden states of shape `(B, L, hidden_size)`.
     /// * `encoder_hidden_states` - For cross-attention: encoder output
     ///   `(B, S, encoder_hidden_size)`. Ignored for self-attention.
-    /// * `attn_mask` - Additive mask broadcastable to `(B, H, L, S)`, where
-    ///   masked positions contain `f32::NEG_INFINITY`.
+    /// * `attn_mask` - How to mask scores: `None` for full attention,
+    ///   `Additive` with a tensor of `-inf`/0 values (used for cross-attention
+    ///   padding), or `Sliding` which triggers chunked local attention.
     /// * `rotary` - Rotary embedding to apply to Q and K (self-attention only).
     ///
     /// Compute cross-attention K/V cache from encoder hidden states.
@@ -332,7 +354,7 @@ impl AceStepAttention {
         &self,
         x: &Tensor,
         encoder_hidden_states: Option<&Tensor>,
-        attn_mask: Option<&Tensor>,
+        attn_mask: AttnMask<'_>,
         rotary: Option<&RotaryEmbedding>,
         kv_cache: Option<&CrossAttentionKvCache>,
     ) -> Result<Tensor> {
@@ -393,19 +415,92 @@ impl AceStepAttention {
             (q, k, v)
         };
 
-        // Scaled dot-product attention.
         let scale = 1.0 / (self.head_dim as f64).sqrt();
-        let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-        if let Some(m) = attn_mask {
-            scores = scores.broadcast_add(m)?;
-        }
-        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-        let ctx = probs.matmul(&v)?;
+        let ctx = match attn_mask {
+            // Sliding-window self-attention: avoid materializing the full
+            // Lq×Lk matrix by computing attention in query chunks with local
+            // KV slices. Only applies when the sequence is longer than the
+            // window; otherwise full attention is equivalent and cheaper.
+            AttnMask::Sliding { window } if l > window => {
+                sliding_window_attention(&q, &k, &v, window, scale)?
+            }
+            AttnMask::Sliding { .. } | AttnMask::None => {
+                let scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+                let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+                probs.matmul(&v)?
+            }
+            AttnMask::Additive(m) => {
+                let scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+                let scores = scores.broadcast_add(m)?;
+                let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+                probs.matmul(&v)?
+            }
+        };
 
         ctx.transpose(1, 2)?
             .reshape((b, l, self.hidden_size))?
             .apply(&self.o_proj)
     }
+}
+
+/// Chunked sliding-window attention over pre-RoPE'd `(B, H, L, D)` tensors.
+///
+/// Splits Q along the sequence axis into chunks of size `window`. For each
+/// chunk covering positions `[p, p+cq)` only the keys/values in the range
+/// `[max(0, p-window), min(L, p+cq+window))` are considered, and a small
+/// chunk-local additive mask enforces the exact `|q_pos - k_pos| ≤ window`
+/// bidirectional rule. This yields the same result as a full-attention pass
+/// with `bidirectional_sliding_window_mask`, but never allocates the L×L
+/// scores matrix.
+fn sliding_window_attention(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    window: usize,
+    scale: f64,
+) -> Result<Tensor> {
+    let (_, _, l, _) = q.dims4()?;
+    let device = q.device().clone();
+    let dtype = q.dtype();
+    let chunk_size = window.max(1);
+    let minf = f32::NEG_INFINITY;
+
+    let mut chunks: Vec<Tensor> = Vec::with_capacity(l.div_ceil(chunk_size));
+    let mut p = 0;
+    while p < l {
+        let cq = chunk_size.min(l - p);
+        let kv_start = p.saturating_sub(window);
+        let kv_end = (p + cq + window).min(l);
+        let kv_len = kv_end - kv_start;
+
+        let q_chunk = q.narrow(2, p, cq)?;
+        let k_chunk = k.narrow(2, kv_start, kv_len)?;
+        let v_chunk = v.narrow(2, kv_start, kv_len)?;
+
+        let scores = (q_chunk.matmul(&k_chunk.transpose(2, 3)?)? * scale)?;
+
+        // Build a chunk-local (cq × kv_len) additive mask. The window rule is
+        // |q_abs - k_abs| <= window, where q_abs = p + i and k_abs = kv_start + j.
+        let mut mask_data = Vec::with_capacity(cq * kv_len);
+        for i in 0..cq {
+            let q_abs = p + i;
+            for j in 0..kv_len {
+                let k_abs = kv_start + j;
+                let within = q_abs.abs_diff(k_abs) <= window;
+                mask_data.push(if within { 0f32 } else { minf });
+            }
+        }
+        let mask = Tensor::from_vec(mask_data, (1, 1, cq, kv_len), &device)?.to_dtype(dtype)?;
+        let scores = scores.broadcast_add(&mask)?;
+
+        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+        let ctx_chunk = probs.matmul(&v_chunk)?;
+        chunks.push(ctx_chunk);
+
+        p += cq;
+    }
+
+    Tensor::cat(&chunks.iter().collect::<Vec<_>>(), 2)
 }
 
 // ---------------------------------------------------------------------------
@@ -471,9 +566,11 @@ impl AceStepDiTLayer {
     /// * `hidden_states` - Input tensor of shape `(B, L, hidden_size)`.
     /// * `rotary` - Rotary embedding for self-attention.
     /// * `timestep_proj` - AdaLN modulation of shape `(B, 6, hidden_size)`.
-    /// * `self_attn_mask` - Additive self-attention mask `(1, 1, L, L)`.
+    /// * `self_attn_mask` - Self-attention masking mode (see [`AttnMask`]):
+    ///   `Sliding { window }` for half the layers, `None` for the rest.
     /// * `encoder_hidden_states` - Projected encoder outputs for cross-attention.
-    /// * `cross_attn_mask` - Additive cross-attention mask `(B, 1, L, S)`.
+    /// * `cross_attn_mask` - Cross-attention masking mode, typically
+    ///   `Additive` with a padding mask or `None`.
     ///
     /// Compute cross-attention KV cache for this layer.
     pub fn compute_cross_kv_cache(
@@ -489,9 +586,9 @@ impl AceStepDiTLayer {
         hidden_states: &Tensor,
         rotary: &RotaryEmbedding,
         timestep_proj: &Tensor,
-        self_attn_mask: Option<&Tensor>,
+        self_attn_mask: AttnMask<'_>,
         encoder_hidden_states: Option<&Tensor>,
-        cross_attn_mask: Option<&Tensor>,
+        cross_attn_mask: AttnMask<'_>,
         cross_kv_cache: Option<&CrossAttentionKvCache>,
     ) -> Result<Tensor> {
         // Compute AdaLN modulation parameters: 6 vectors from scale_shift_table + temb.
@@ -758,22 +855,19 @@ impl AceStepDiTModel {
 
         let seq_len = hidden_states.dim(1)?;
 
-        // Build self-attention masks (bidirectional).
-        let sliding_mask = if self.use_sliding_window && seq_len > self.sliding_window {
-            Some(bidirectional_sliding_window_mask(
-                seq_len,
-                self.sliding_window,
-                device,
-                dtype,
-            )?)
-        } else {
-            None
-        };
+        // Self-attention kind: sliding-window layers use chunked local
+        // attention when the sequence actually exceeds the window (otherwise
+        // the window covers everything and full attention is equivalent).
+        let sliding_active = self.use_sliding_window && seq_len > self.sliding_window;
 
         // Build cross-attention mask from encoder attention mask.
-        let cross_attn_mask = match encoder_attention_mask {
+        let cross_mask_tensor = match encoder_attention_mask {
             Some(mask) => Some(expand_cross_attention_mask(mask, dtype)?),
             None => None,
+        };
+        let cross_attn_mask = match cross_mask_tensor.as_ref() {
+            Some(m) => AttnMask::Additive(m),
+            None => AttnMask::None,
         };
 
         // Build cross-attention KV cache on first call (encoder states are constant).
@@ -787,10 +881,12 @@ impl AceStepDiTModel {
         // Process through transformer layers.
         let mut hidden_states = hidden_states;
         for (i, layer) in self.layers.iter().enumerate() {
-            let self_mask = if layer.attention_type == "sliding_attention" {
-                sliding_mask.as_ref()
+            let self_mask = if sliding_active && layer.attention_type == "sliding_attention" {
+                AttnMask::Sliding {
+                    window: self.sliding_window,
+                }
             } else {
-                None
+                AttnMask::None
             };
             hidden_states = layer.forward(
                 &hidden_states,
@@ -798,7 +894,7 @@ impl AceStepDiTModel {
                 &timestep_proj,
                 self_mask,
                 Some(&encoder_hidden_states),
-                cross_attn_mask.as_ref(),
+                cross_attn_mask,
                 self.cross_kv_caches[i].as_ref(),
             )?;
         }
@@ -824,5 +920,105 @@ impl AceStepDiTModel {
 
         // Crop to original sequence length.
         hidden_states.narrow(1, 0, orig_len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reference implementation: full Q·Kᵀ with an explicit sliding-window
+    /// additive mask, softmax, then matmul with V. Used as ground truth for
+    /// [`sliding_window_attention`] equivalence tests.
+    fn dense_sliding_attention(
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        window: usize,
+        scale: f64,
+    ) -> Result<Tensor> {
+        let (_, _, l, _) = q.dims4()?;
+        let mask = bidirectional_sliding_window_mask(l, window, q.device(), q.dtype())?;
+        let scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+        let scores = scores.broadcast_add(&mask)?;
+        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
+        probs.matmul(v)
+    }
+
+    fn random_qkv(
+        b: usize,
+        h: usize,
+        l: usize,
+        d: usize,
+        device: &Device,
+    ) -> Result<(Tensor, Tensor, Tensor)> {
+        let q = Tensor::randn(0f32, 1.0, (b, h, l, d), device)?;
+        let k = Tensor::randn(0f32, 1.0, (b, h, l, d), device)?;
+        let v = Tensor::randn(0f32, 1.0, (b, h, l, d), device)?;
+        Ok((q, k, v))
+    }
+
+    fn max_abs_diff(a: &Tensor, b: &Tensor) -> Result<f32> {
+        (a - b)?.abs()?.flatten_all()?.max(0)?.to_scalar::<f32>()
+    }
+
+    #[test]
+    fn sliding_attention_matches_dense_mask() -> Result<()> {
+        let device = Device::Cpu;
+        let (b, h, l, d, window) = (2, 2, 200, 32, 16);
+        let (q, k, v) = random_qkv(b, h, l, d, &device)?;
+        let scale = 1.0 / (d as f64).sqrt();
+
+        let dense = dense_sliding_attention(&q, &k, &v, window, scale)?;
+        let chunked = sliding_window_attention(&q, &k, &v, window, scale)?;
+
+        assert_eq!(dense.dims(), chunked.dims());
+        let diff = max_abs_diff(&dense, &chunked)?;
+        assert!(diff < 1e-5, "sliding vs dense diff too large: {diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_attention_shape_at_boundaries() -> Result<()> {
+        // The chunk iteration must terminate and produce full-length output
+        // for several sequence lengths near the window boundary.
+        let device = Device::Cpu;
+        let (b, h, d, window) = (1, 1, 8, 16);
+        for l in [window + 1, window * 2, window * 2 + 1, window * 3 + 5] {
+            let (q, k, v) = random_qkv(b, h, l, d, &device)?;
+            let out = sliding_window_attention(&q, &k, &v, window, 1.0 / (d as f64).sqrt())?;
+            assert_eq!(out.dims(), &[b, h, l, d], "wrong shape for L={l}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn attention_forward_full_path_matches_none_mask() -> Result<()> {
+        // Sliding with L <= window must short-circuit to the full-attention
+        // branch and produce identical output to AttnMask::None.
+        use candle_nn::{VarBuilder, VarMap};
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let cfg = AceStepConfig {
+            hidden_size: 32,
+            num_attention_heads: 2,
+            num_key_value_heads: 2,
+            head_dim: 16,
+            ..AceStepConfig::default()
+        };
+        let attn = AceStepAttention::new(&cfg, false, vb)?;
+
+        // L < sliding window → the Sliding branch takes the dense-attention
+        // fallback inside forward(), so both calls must agree.
+        let l = 8;
+        let x = Tensor::randn(0f32, 1.0, (1, l, cfg.hidden_size), &device)?;
+        let out_full = attn.forward(&x, None, AttnMask::None, None, None)?;
+        let out_slide =
+            attn.forward(&x, None, AttnMask::Sliding { window: 64 }, None, None)?;
+
+        let diff = max_abs_diff(&out_full, &out_slide)?;
+        assert!(diff < 1e-5, "full vs sliding (L<window) diff: {diff}");
+        Ok(())
     }
 }
