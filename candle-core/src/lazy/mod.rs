@@ -55,50 +55,19 @@ impl NodeId {
     }
 }
 
-#[derive(Debug)]
-pub struct BufferId(atomic::AtomicUsize);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BufferId(usize);
 
 impl BufferId {
     fn new() -> Self {
         // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
         use std::sync::atomic;
         static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
-        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed).into())
+        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
     }
 
     pub fn inner(&self) -> usize {
-        self.0.load(atomic::Ordering::Relaxed)
-    }
-}
-
-impl Clone for BufferId {
-    fn clone(&self) -> Self {
-        Self(self.inner().into())
-    }
-}
-
-impl Hash for BufferId {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.inner().hash(state);
-    }
-}
-
-impl PartialEq for BufferId {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner() == other.inner()
-    }
-}
-impl Eq for BufferId {}
-
-impl PartialOrd for BufferId {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for BufferId {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.inner().cmp(&other.inner())
+        self.0
     }
 }
 
@@ -336,12 +305,6 @@ impl LazyStorage {
     /// Returns true if this node has been explicitly pinned via [`pin`].
     pub fn is_pinned(&self) -> bool {
         self.pin_count.load(atomic::Ordering::Relaxed) > 0
-    }
-
-    pub fn set_buffer_id(&self, buffer_id: BufferId) {
-        self.buffer_id
-            .0
-            .store(buffer_id.inner(), atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn execution_order(&self) -> Vec<&LazyStorage> {
@@ -597,21 +560,19 @@ pub fn calculate_usage_records(
                 continue;
             }
             let true_source = determine_tensor_source(source);
-            records
-                .entry(true_source.buffer_id().clone())
-                .or_insert_with(|| {
-                    (
-                        None,
-                        None,
-                        topo_len - i,
-                        true_source.producer_layout().clone(),
-                        true_source.dtype(),
-                    )
-                });
+            records.entry(*true_source.buffer_id()).or_insert_with(|| {
+                (
+                    None,
+                    None,
+                    topo_len - i,
+                    true_source.producer_layout().clone(),
+                    true_source.dtype(),
+                )
+            });
         }
 
         if let Some(record) = records.get_mut(buffer_id) {
-            record.0 = Some(buffer_id.clone());
+            record.0 = Some(*buffer_id);
             record.1 = Some(topo_len - i);
             // Use `producer_layout` so that copied nodes (which can be a narrowed view stored as
             // a source inside another op) allocate the full buffer rather than the narrow slice.
@@ -636,10 +597,10 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
 
         if let Op::Const(s) = node.op() {
             let shape = Shape::from(s.len());
-            allocations.insert(buffer_id.clone(), (Layout::contiguous(shape), s.dtype()));
+            allocations.insert(*buffer_id, (Layout::contiguous(shape), s.dtype()));
         }
         if let Op::ConstSet(_) = node.op() {
-            allocations.insert(buffer_id.clone(), (node.layout().clone(), node.dtype()));
+            allocations.insert(*buffer_id, (node.layout().clone(), node.dtype()));
         }
         /*
         if let Op::Resolved(b) = node.op() {
@@ -671,15 +632,15 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
         // They need a dedicated allocation that survives until the post-execution pinning step.
         // In other words not part of the buffer reusage.
         if pinned.contains(buffer_id) {
-            allocations.insert(buffer_id.clone(), (layout.clone(), *dtype));
+            allocations.insert(*buffer_id, (layout.clone(), *dtype));
             // Skipping since pinned should not be in shared_objects
             continue;
         }
 
         // Debugging: disables reuse to investigate correctness
         if std::env::var("CANDLE_LAZY_NO_REUSE").is_ok() {
-            allocations.insert(buffer_id.clone(), (layout.clone(), *dtype));
-            shared_objects.push(buffer_id.clone());
+            allocations.insert(*buffer_id, (layout.clone(), *dtype));
+            shared_objects.push(*buffer_id);
             continue;
         }
 
@@ -718,15 +679,15 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
                     .as_ref()
                     .is_none_or(|(_, best_size)| obj_size < *best_size)
                 {
-                    best_buffer = Some((obj.clone(), obj_size));
+                    best_buffer = Some((*obj, obj_size));
                 }
             }
         }
         if let Some((best, _)) = best_buffer {
-            reusage.insert(buffer_id.clone(), best);
+            reusage.insert(*buffer_id, best);
         } else {
-            allocations.insert(buffer_id.clone(), (layout.clone(), *dtype));
-            shared_objects.push(buffer_id.clone());
+            allocations.insert(*buffer_id, (layout.clone(), *dtype));
+            shared_objects.push(*buffer_id);
         }
     }
 
@@ -749,7 +710,7 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
      */
     let source = determine_tensor_source(output);
     allocations.insert(
-        output.buffer_id().clone(),
+        *output.buffer_id(),
         (source.producer_layout().clone(), source.dtype()),
     );
     //}

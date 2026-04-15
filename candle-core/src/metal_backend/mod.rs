@@ -2429,10 +2429,10 @@ impl MetalDevice {
         } else {
             let storage = self.storage_from_cpu_storage(s)?;
             let buffer = storage.buffer_arc();
-            cache.insert(buffer_id.clone(), buffer.clone());
+            cache.insert(*buffer_id, buffer.clone());
             buffer
         };
-        allocator.insert(buffer_id.clone(), buffer)?;
+        allocator.insert(*buffer_id, buffer)?;
         Ok(())
     }
 }
@@ -2487,8 +2487,7 @@ impl LazyAllocator<Arc<Buffer>> for MetalAllocator {
             for node in graph {
                 if let Op::Resolved(buf_id) = node.op() {
                     if let Some(buf) = resolved_map.get(buf_id) {
-                        self.buffer_map
-                            .insert(node.buffer_id().clone(), buf.clone());
+                        self.buffer_map.insert(*node.buffer_id(), buf.clone());
                     }
                 }
             }
@@ -2516,7 +2515,7 @@ impl LazyAllocator<Arc<Buffer>> for MetalAllocator {
 
     fn allocate(&mut self, id: BufferId, shape: &Shape, dtype: DType) -> Result<&Arc<Buffer>> {
         let buffer = self.device.new_buffer(shape.elem_count(), dtype, "")?;
-        self.buffer_map.insert(id.clone(), buffer);
+        self.buffer_map.insert(id, buffer);
         self.get(&id)
     }
 
@@ -2524,7 +2523,7 @@ impl LazyAllocator<Arc<Buffer>> for MetalAllocator {
         let canonical = self.resolve(id);
         self.buffer_map
             .get(canonical)
-            .ok_or_else(|| BufferNotFound(canonical.clone()).into())
+            .ok_or_else(|| BufferNotFound(*canonical).into())
     }
 
     fn get_or_allocate(
@@ -2868,7 +2867,7 @@ impl Executor for MetalDevice {
         let pinned: HashSet<BufferId> = graph
             .iter()
             .filter(|n| n.is_pinned() && !matches!(n.op(), Op::Resolved(_)))
-            .map(|n| n.buffer_id().clone())
+            .map(|n| *n.buffer_id())
             .collect();
 
         allocator.initialize(&graph, &pinned)?;
@@ -2927,7 +2926,7 @@ impl Executor for MetalDevice {
                     continue;
                 }
                 if let Ok(buf) = allocator.get(node.buffer_id()) {
-                    resolved_map.insert(node.buffer_id().clone(), buf.clone());
+                    resolved_map.insert(*node.buffer_id(), buf.clone());
                     node.resolve();
                 }
             }
