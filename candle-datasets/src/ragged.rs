@@ -225,6 +225,15 @@ impl RaggedCache {
                 offsets[0]
             );
         }
+        for i in 1..offsets.len() {
+            if offsets[i] < offsets[i - 1] {
+                candle::bail!(
+                    "RaggedCache::load: offsets not monotonically non-decreasing at index {i}: {} < {}",
+                    offsets[i],
+                    offsets[i - 1]
+                );
+            }
+        }
         let total = *offsets.last().unwrap() as usize;
         let flat_dims = flat.dims();
         if flat_dims.len() != 2 {
