@@ -815,14 +815,14 @@ pub trait Executor {
 
     fn get_specialized_op(
         &self,
-        _op: &Box<dyn LazyCustomOp>,
+        _op: &dyn LazyCustomOp,
     ) -> Option<Box<dyn LazyCustomFn<Self::BufferType>>> {
         None
     }
 
     fn install_custom_op(
         &mut self,
-        op: &Box<dyn LazyCustomOp>,
+        op: &dyn LazyCustomOp,
         func: Box<dyn LazyCustomFn<Self::BufferType>>,
     ) -> Option<&dyn LazyCustomFn<Self::BufferType>>;
 

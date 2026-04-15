@@ -2582,10 +2582,7 @@ pub fn metal_device() -> MetalDevice {
     METAL_DEVICE.clone()
 }
 
-pub fn replace_custom_op_with_fallback(
-    _lazy_storage: &LazyStorage,
-    _custom_op: &Box<dyn LazyCustomOp>,
-) {
+pub fn replace_custom_op_with_fallback(_lazy_storage: &LazyStorage, _custom_op: &dyn LazyCustomOp) {
     //-> Result<()> {
     //if let Some(fallback) = lazy_storage.custom_op_fallbacks.get(custom_op.name()) {
     //    lazy_storage.set_op(fallback.op().clone())
@@ -2596,22 +2593,22 @@ pub fn replace_custom_op_with_fallback(
 }
 
 pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
-    for (_name, op) in custom_ops.iter() {
+    for (_name, op) in custom_ops.into_iter() {
         match op {
-            CustomOp::One(ref custom_op1) => {
+            CustomOp::One(custom_op1) => {
                 install_custom_op1(custom_op1);
             }
-            CustomOp::Two(ref custom_op2) => {
+            CustomOp::Two(custom_op2) => {
                 install_custom_op2(custom_op2);
             }
-            CustomOp::Three(ref custom_op3) => {
+            CustomOp::Three(custom_op3) => {
                 install_custom_op3(custom_op3);
             }
         }
     }
 }
 
-fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
+fn install_custom_op1(op: Box<dyn crate::CustomOp1>) {
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp1>,
@@ -2645,13 +2642,13 @@ fn install_custom_op1(op: &Box<dyn crate::CustomOp1>) {
     binding.custom_ops.insert(
         op.name().to_string(),
         Box::new(InlineCustomOp {
-            op: op.clone(),
+            op,
             device: METAL_DEVICE.clone(),
         }),
     );
 }
 
-fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
+fn install_custom_op2(op: Box<dyn crate::CustomOp2>) {
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp2>,
@@ -2689,13 +2686,13 @@ fn install_custom_op2(op: &Box<dyn crate::CustomOp2>) {
     binding.custom_ops.insert(
         op.name().to_string(),
         Box::new(InlineCustomOp {
-            op: op.clone(),
+            op,
             device: METAL_DEVICE.clone(),
         }),
     );
 }
 
-fn install_custom_op3(op: &Box<dyn crate::CustomOp3>) {
+fn install_custom_op3(op: Box<dyn crate::CustomOp3>) {
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp3>,
@@ -2738,7 +2735,7 @@ fn install_custom_op3(op: &Box<dyn crate::CustomOp3>) {
     binding.custom_ops.insert(
         op.name().to_string(),
         Box::new(InlineCustomOp {
-            op: op.clone(),
+            op,
             device: METAL_DEVICE.clone(),
         }),
     );
@@ -3213,7 +3210,7 @@ impl Executor for MetalDevice {
         MetalAllocator::new(self.clone())
     }
 
-    fn get_specialized_op(&self, op: &Box<dyn LazyCustomOp>) -> Option<Box<MetalCustomFn>> {
+    fn get_specialized_op(&self, op: &dyn LazyCustomOp) -> Option<Box<MetalCustomFn>> {
         CUSTOM_OP_HANDLER
             .lock()
             .unwrap()
@@ -3224,7 +3221,7 @@ impl Executor for MetalDevice {
 
     fn install_custom_op(
         &mut self,
-        op: &Box<dyn LazyCustomOp>,
+        op: &dyn LazyCustomOp,
         func: Box<MetalCustomFn>,
     ) -> Option<&MetalCustomFn> {
         CUSTOM_OP_HANDLER

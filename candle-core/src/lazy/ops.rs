@@ -543,8 +543,8 @@ impl CustomOpContainer {
         &self.args
     }
 
-    pub fn op(&self) -> &Box<dyn LazyCustomOp> {
-        &self.op
+    pub fn op(&self) -> &dyn LazyCustomOp {
+        &*self.op
     }
 
     pub fn name(&self) -> &'static str {
