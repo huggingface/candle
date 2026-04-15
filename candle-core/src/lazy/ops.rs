@@ -161,7 +161,7 @@ impl Unary {
     }
 
     pub fn op(&self) -> &'static str {
-        &self.op
+        self.op
     }
 }
 
@@ -184,7 +184,7 @@ impl Binary {
     }
 
     pub fn op(&self) -> &'static str {
-        &self.op
+        self.op
     }
 
     pub fn lhs_l(&self) -> &Layout {

@@ -678,7 +678,10 @@ impl Tensor {
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Lazy(storage) => {
                 #[cfg(not(feature = "metal"))]
-                todo!();
+                todo!(
+                    "Lazy only implemented for metal for now. Last op: {:?}",
+                    storage.op()
+                );
 
                 #[cfg(feature = "metal")]
                 {
@@ -692,7 +695,7 @@ impl Tensor {
                         storage.dtype(),
                     );
                     let result = metal_storage.to_cpu_ref::<S>()?;
-                    return Ok(result[self.layout.start_offset()]);
+                    Ok(result[self.layout.start_offset()])
                 }
             }
         }
@@ -1968,17 +1971,12 @@ impl Tensor {
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Lazy(storage) => {
-                // TODO: Temporary solution.
-                // We may want to use a different API for lazy execution.
-                // For example it's important that we are able to execute on a specific
-                // CudaDevice.
-                // Perhaps we should track ToVec(rank: usize), though the generic S being Sized makes it
-                // not dyn-compatible, so hard to store this information in the graph.
-                #[cfg(feature = "cuda")]
-                {
-                    let result = storage.execute(crate::CudaDevice::new(0)?)?;
-                    return from_cpu_storage(&result.to_cpu_storage()?);
-                }
+                #[cfg(not(feature = "metal"))]
+                todo!(
+                    "Lazy only implemented for metal for now. Last op: {:?}",
+                    storage.op()
+                );
+
                 #[cfg(feature = "metal")]
                 {
                     let device = crate::metal_backend::metal_device();
@@ -1996,14 +1994,8 @@ impl Tensor {
                         Some((o1, o2)) => data[o1..o2].to_vec(),
                         None => self.strided_index().map(|i| data[i]).collect(),
                     };
-                    return Ok(data);
+                    Ok(data)
                 }
-                #[cfg(not(any(feature = "metal", feature = "cuda")))]
-                {
-                    let result = storage.execute(crate::cpu_backend::CpuDevice)?;
-                    return from_cpu_storage(&result.to_cpu_storage()?);
-                }
-                //from_cpu_storage(&storage.to_cpu_storage()?)
             }
         }
     }
@@ -2037,6 +2029,12 @@ impl Tensor {
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Lazy(storage) => {
+                #[cfg(not(feature = "metal"))]
+                todo!(
+                    "Lazy only implemented for metal for now. Last op: {:?}",
+                    storage.op()
+                );
+
                 #[cfg(feature = "metal")]
                 {
                     let device = crate::metal_backend::metal_device();
@@ -2048,10 +2046,8 @@ impl Tensor {
                         storage.shape().elem_count(),
                         storage.dtype(),
                     );
-                    return from_cpu_storage(&metal_storage.to_cpu_storage()?);
+                    from_cpu_storage(&metal_storage.to_cpu_storage()?)
                 }
-                #[cfg(not(feature = "metal"))]
-                todo!()
             }
         }
     }

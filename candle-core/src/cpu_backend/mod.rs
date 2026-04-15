@@ -1679,6 +1679,10 @@ impl CpuStorage {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn concat(storages: &[CpuStorage]) -> Result<CpuStorage> {
         let storage0 = &storages[0];
         let s = match storage0 {

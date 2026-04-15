@@ -34,7 +34,7 @@ pub trait CustomOp1: CustomOp1Clone + Send + Sync {
 
     /// The forward pass tracked in the lazy backend
     fn lazy_fwd(&self, _: &LazyStorage, _: &Layout) -> Result<(LazyStorage, Shape)> {
-        Err(crate::Error::Msg(
+        Err(crate::Error::Lazy(
             format!("no lazy implementation for {}", self.name()).into(),
         ))
     }
@@ -115,7 +115,7 @@ pub trait CustomOp2: CustomOp2Clone + Send + Sync {
         _: &LazyStorage,
         _: &Layout,
     ) -> Result<(LazyStorage, Shape)> {
-        Err(crate::Error::Msg(
+        Err(crate::Error::Lazy(
             format!("no lazy implementation for {}", self.name()).into(),
         ))
     }
@@ -207,7 +207,7 @@ pub trait CustomOp3: CustomOp3Clone + Send + Sync {
         _: &LazyStorage,
         _: &Layout,
     ) -> Result<(LazyStorage, Shape)> {
-        Err(crate::Error::Msg(
+        Err(crate::Error::Lazy(
             format!("no lazy implementation for {}", self.name()).into(),
         ))
     }

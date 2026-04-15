@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod custom;
 pub mod ops;
 
@@ -90,7 +92,7 @@ impl Eq for BufferId {}
 
 impl PartialOrd for BufferId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.inner().partial_cmp(&other.inner())
+        Some(self.cmp(other))
     }
 }
 
@@ -171,12 +173,12 @@ pub struct LazyStorage {
 impl Clone for LazyStorage {
     fn clone(&self) -> Self {
         Self {
-            id: self.id.clone(),
+            id: self.id,
             op: self.op.clone(),
             custom_op_fallbacks: self.custom_op_fallbacks.clone(),
             layout: self.layout.clone(),
             original_layout: self.original_layout.clone(),
-            dtype: self.dtype.clone(),
+            dtype: self.dtype,
             buffer_id: self.buffer_id.clone(),
             pin_count: self.pin_count.clone(),
         }
@@ -608,7 +610,7 @@ pub fn calculate_usage_records(
                 });
         }
 
-        if let Some(record) = records.get_mut(&buffer_id) {
+        if let Some(record) = records.get_mut(buffer_id) {
             record.0 = Some(buffer_id.clone());
             record.1 = Some(topo_len - i);
             // Use `producer_layout` so that copied nodes (which can be a narrowed view stored as
@@ -669,14 +671,14 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
         // They need a dedicated allocation that survives until the post-execution pinning step.
         // In other words not part of the buffer reusage.
         if pinned.contains(buffer_id) {
-            allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
+            allocations.insert(buffer_id.clone(), (layout.clone(), *dtype));
             // Skipping since pinned should not be in shared_objects
             continue;
         }
 
         // Debugging: disables reuse to investigate correctness
         if std::env::var("CANDLE_LAZY_NO_REUSE").is_ok() {
-            allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
+            allocations.insert(buffer_id.clone(), (layout.clone(), *dtype));
             shared_objects.push(buffer_id.clone());
             continue;
         }
@@ -714,7 +716,7 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
                 // Prefer smallest suitable buffer (best fit) to reduce fragmentation.
                 if best_buffer
                     .as_ref()
-                    .map_or(true, |(_, best_size)| obj_size < *best_size)
+                    .is_none_or(|(_, best_size)| obj_size < *best_size)
                 {
                     best_buffer = Some((obj.clone(), obj_size));
                 }
@@ -723,7 +725,7 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
         if let Some((best, _)) = best_buffer {
             reusage.insert(buffer_id.clone(), best);
         } else {
-            allocations.insert(buffer_id.clone(), (layout.clone(), dtype.clone()));
+            allocations.insert(buffer_id.clone(), (layout.clone(), *dtype));
             shared_objects.push(buffer_id.clone());
         }
     }
@@ -782,7 +784,7 @@ pub trait Executor {
         worklist.push_back(leaf);
 
         while let Some(node) = worklist.pop_front() {
-            let changed = apply_backend_agnostic_passes(&node, &consumer_map);
+            let changed = apply_backend_agnostic_passes(node, &consumer_map);
             for source in node.srcs() {
                 consumer_map
                     .entry(source.id())
@@ -813,7 +815,7 @@ pub trait Executor {
         worklist.push_back(leaf);
 
         while let Some(node) = worklist.pop_front() {
-            let changed = self.apply_specialize_passes(&node, &consumer_map);
+            let changed = self.apply_specialize_passes(node, &consumer_map);
             for source in node.srcs() {
                 consumer_map
                     .entry(source.id())
@@ -861,7 +863,7 @@ pub trait Executor {
         &mut self,
         op: &Box<dyn LazyCustomOp>,
         func: Box<dyn LazyCustomFn<Self::BufferType>>,
-    ) -> Option<&Box<dyn LazyCustomFn<Self::BufferType>>>;
+    ) -> Option<&dyn LazyCustomFn<Self::BufferType>>;
 
     fn inner_precision(op: &Op) -> Option<DType>;
 }

@@ -20,7 +20,7 @@ pub trait LazyCustomOpClone {
 
 impl<T> LazyCustomOpClone for T
 where
-    T: 'static + LazyCustomOp + Clone + ?Sized,
+    T: 'static + LazyCustomOp + Clone,
 {
     fn clone_box(&self) -> Box<dyn LazyCustomOp> {
         Box::new(self.clone())
@@ -39,7 +39,7 @@ pub trait LazyCustomFnClone<B: LazyBuffer> {
 
 impl<T, B> LazyCustomFnClone<B> for T
 where
-    T: 'static + LazyCustomFn<B> + Clone + ?Sized,
+    T: 'static + LazyCustomFn<B> + Clone,
     B: LazyBuffer + Clone,
 {
     fn clone_box(&self) -> Box<dyn LazyCustomFn<B>> {
@@ -84,7 +84,7 @@ pub trait LazyCustomOp: LazyCustomOpClone + Send + Sync {
     }
 
     fn fallback(&self, _tensors: &[&Tensor]) -> Result<crate::Tensor> {
-        Err(crate::Error::Msg(
+        Err(crate::Error::Lazy(
             format!("no lazy fallback for {}", self.name()).into(),
         ))
     }

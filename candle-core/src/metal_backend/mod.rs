@@ -102,7 +102,7 @@ pub fn affine(
     let el = shape.elem_count();
     let encoder = device.command_encoder()?;
     encoder.set_label("affine");
-    let src = buffer_o(&src_buffer, layout, dtype);
+    let src = buffer_o(src_buffer, layout, dtype);
     if layout.is_contiguous() {
         let name = match dtype {
             DType::F32 => "affine_f32",
@@ -121,7 +121,7 @@ pub fn affine(
             dtype.size_in_bytes(),
             el,
             src,
-            &dst_buffer,
+            dst_buffer,
             mul as f32,
             add as f32,
         )
@@ -144,7 +144,7 @@ pub fn affine(
             layout.dims(),
             src,
             layout.stride(),
-            &dst_buffer,
+            dst_buffer,
             mul as f32,
             add as f32,
         )
@@ -182,7 +182,7 @@ pub fn powf(
             dtype.size_in_bytes(),
             el,
             src,
-            &dst_buffer,
+            dst_buffer,
             pow as f32,
         )
         .map_err(MetalError::from)?;
@@ -201,7 +201,7 @@ pub fn powf(
             layout.dims(),
             src,
             layout.stride(),
-            &dst_buffer,
+            dst_buffer,
             pow as f32,
         )
         .map_err(MetalError::from)?;
@@ -238,7 +238,7 @@ pub fn elu(
             dtype.size_in_bytes(),
             el,
             src,
-            &dst_buffer,
+            dst_buffer,
             alpha as f32,
         )
         .map_err(MetalError::from)?;
@@ -257,7 +257,7 @@ pub fn elu(
             layout.dims(),
             src,
             layout.stride(),
-            &dst_buffer,
+            dst_buffer,
             alpha as f32,
         )
         .map_err(MetalError::from)?;
@@ -396,7 +396,7 @@ pub fn unary(
     let el_count = shape.elem_count();
     let encoder = device.command_encoder()?;
     encoder.set_label(op);
-    let src = buffer_o(&buffer, layout, dtype);
+    let src = buffer_o(buffer, layout, dtype);
 
     if layout.is_contiguous() {
         use candle_metal_kernels::unary::contiguous;
@@ -472,7 +472,7 @@ pub fn unary(
             dtype.size_in_bytes(),
             el_count,
             src,
-            &dst_buffer,
+            dst_buffer,
         )
         .map_err(MetalError::from)?;
     } else {
@@ -536,7 +536,7 @@ pub fn unary(
                 crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
             }
         };
-        let dst = BufferOffset::zero_offset(&dst_buffer);
+        let dst = BufferOffset::zero_offset(dst_buffer);
         candle_metal_kernels::call_unary_strided(
             &device.device,
             &encoder,
@@ -2190,16 +2190,16 @@ impl MetalStorage {
         Ok(read_to_vec(&buffer, self.count))
     }
 
-    pub(crate) fn to_cpu_ref<'a, T>(&'a self) -> Result<&'a [T]> {
+    pub(crate) fn to_cpu_ref<T>(&self) -> Result<&[T]> {
         if self.buffer.is_private() {
-            return Err(MetalError::Message(
+            Err(MetalError::Message(
                 "CPU can not directly read private metal buffers.
                 Contents must be moved to shared buffer first, or use `to_cpu` instead."
                     .to_string(),
             )
-            .into());
+            .into())
         } else {
-            return Ok(read_to_slice(&self.buffer, self.count));
+            Ok(read_to_slice(&self.buffer, self.count))
         }
     }
 }
@@ -2757,13 +2757,13 @@ impl MetalDevice {
         _consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
     ) -> bool {
         if let Op::CustomOp(custom_op) = node.op() {
-            if self.get_specialized_op(&custom_op.op()).is_none() {
+            if self.get_specialized_op(custom_op.op()).is_none() {
                 println!(
                     "No specialized op found for {}. Replacing with fallback",
                     custom_op.name()
                 );
                 // TODO: Actually replace with fallback.
-                replace_custom_op_with_fallback(&node, custom_op.op());
+                replace_custom_op_with_fallback(node, custom_op.op());
                 return true;
             }
         }
@@ -2880,34 +2880,34 @@ impl Executor for MetalDevice {
                 Err(e)?
             }
             // Debugging section.
-            if std::env::var("CANDLE_LAZY_DEBUG_NAN").is_ok() {
-                if !matches!(node.op(), crate::lazy::Op::Const(_)) {
-                    self.wait_until_completed()?;
-                    if let Ok(node_buffer) = allocator.get(node.buffer_id()) {
-                        let buf_elems = node.layout().shape().elem_count();
-                        let storage = MetalStorage::new(
-                            node_buffer.clone().into(),
-                            self.clone(),
-                            buf_elems,
-                            node.dtype(),
-                        );
-                        if let Ok(result) = storage.to_cpu_storage() {
-                            let has_nan = match &result {
-                                CpuStorage::F32(data) => data.iter().any(|&x| x.is_nan()),
-                                CpuStorage::BF16(data) => data.iter().any(|&x| x.is_nan()),
-                                CpuStorage::F16(data) => data.iter().any(|&x| x.is_nan()),
-                                _ => false,
-                            };
-                            if has_nan {
-                                eprintln!(
-                                    "NaN FIRST DETECTED at op: {} shape={:?} dtype={:?}",
-                                    node.op(),
-                                    node.layout().shape(),
-                                    node.dtype()
-                                );
-                                eprintln!("{}", crate::lazy::graph_to_dot(node));
-                                panic!("NaN detected in lazy graph")
-                            }
+            if std::env::var("CANDLE_LAZY_DEBUG_NAN").is_ok()
+                && !matches!(node.op(), crate::lazy::Op::Const(_))
+            {
+                self.wait_until_completed()?;
+                if let Ok(node_buffer) = allocator.get(node.buffer_id()) {
+                    let buf_elems = node.layout().shape().elem_count();
+                    let storage = MetalStorage::new(
+                        node_buffer.clone(),
+                        self.clone(),
+                        buf_elems,
+                        node.dtype(),
+                    );
+                    if let Ok(result) = storage.to_cpu_storage() {
+                        let has_nan = match &result {
+                            CpuStorage::F32(data) => data.iter().any(|&x| x.is_nan()),
+                            CpuStorage::BF16(data) => data.iter().any(|&x| x.is_nan()),
+                            CpuStorage::F16(data) => data.iter().any(|&x| x.is_nan()),
+                            _ => false,
+                        };
+                        if has_nan {
+                            eprintln!(
+                                "NaN FIRST DETECTED at op: {} shape={:?} dtype={:?}",
+                                node.op(),
+                                node.layout().shape(),
+                                node.dtype()
+                            );
+                            eprintln!("{}", crate::lazy::graph_to_dot(node));
+                            panic!("NaN detected in lazy graph")
                         }
                     }
                 }
@@ -2944,7 +2944,7 @@ impl Executor for MetalDevice {
             Resolved(_) => {
                 // Skip nodes already evaluated in a previous forward pass.
             }
-            Const(s) => self.eval_const(allocator, &s, current.buffer_id())?,
+            Const(s) => self.eval_const(allocator, s, current.buffer_id())?,
             Affine(a) => {
                 let src = allocator.get(a.src.buffer_id()).unwrap();
                 let dst = allocator.get(current.buffer_id()).unwrap();
@@ -3088,7 +3088,7 @@ impl Executor for MetalDevice {
                     is.ids_l(),
                     ids.dtype(),
                     is.dim(),
-                    &dst,
+                    dst,
                 )?;
             }
             //IndexAdd(Layout, LazyStorage, Layout, LazyStorage, Layout, usize),
@@ -3176,7 +3176,7 @@ impl Executor for MetalDevice {
                     current.producer_layout().shape().elem_count(),
                     current.dtype(),
                 );
-                dst.const_set(scalar.clone(), current.producer_layout())?;
+                dst.const_set(*scalar, current.producer_layout())?;
             }
             Sink(_sink) => {}
             CustomOp(custom_op) => {
@@ -3227,7 +3227,7 @@ impl Executor for MetalDevice {
         &mut self,
         op: &Box<dyn LazyCustomOp>,
         func: Box<MetalCustomFn>,
-    ) -> Option<&Box<MetalCustomFn>> {
+    ) -> Option<&MetalCustomFn> {
         CUSTOM_OP_HANDLER
             .lock()
             .unwrap()
@@ -3271,7 +3271,7 @@ pub fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     slice.to_vec()
 }
 
-pub fn read_to_slice<'a, T>(buffer: &'a Buffer, n: usize) -> &'a [T] {
+pub fn read_to_slice<T>(buffer: &Buffer, n: usize) -> &[T] {
     let ptr = buffer.contents() as *const T;
     assert!(!ptr.is_null());
     unsafe { std::slice::from_raw_parts(ptr, n) }
