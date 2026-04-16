@@ -3,7 +3,7 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
-use crate::shape::{Dim, Dims};
+use crate::shape::{Dim, Dims, ShapeWithOneHole};
 use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
 
@@ -185,7 +185,9 @@ impl Tensor {
     ) -> Result<Self> {
         let none = BackpropOp::none();
         let shape = shape.into();
-        let storage = device.ones(&shape, dtype)?;
+        let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
+        let layout = Layout::contiguous(shape.clone());
+        storage.const_set(crate::scalar::Scalar::one(dtype), &layout)?;
         Ok(from_storage(storage, shape, none, is_variable))
     }
 
@@ -200,6 +202,18 @@ impl Tensor {
     /// ```
     pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
         Self::ones_impl(shape, dtype, device, false)
+    }
+
+    pub fn const_set(&self, value: crate::scalar::Scalar) -> Result<()> {
+        self.storage_mut().const_set(value, self.layout())
+    }
+
+    pub fn zero_set(&self) -> Result<()> {
+        self.const_set(crate::scalar::Scalar::zero(self.dtype()))
+    }
+
+    pub fn one_set(&self) -> Result<()> {
+        self.const_set(crate::scalar::Scalar::one(self.dtype()))
     }
 
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other tensor.
@@ -254,6 +268,51 @@ impl Tensor {
     /// ```
     pub fn zeros_like(&self) -> Result<Self> {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
+    }
+
+    // Do not expose outside of the crate, the `is_variable=true` case should only be accessed from
+    // the variable module.
+    pub(crate) unsafe fn empty_impl<S: Into<Shape>>(
+        shape: S,
+        dtype: DType,
+        device: &Device,
+        is_variable: bool,
+    ) -> Result<Self> {
+        let none = BackpropOp::none();
+        let shape = shape.into();
+        let storage = device.alloc_uninit(&shape, dtype)?;
+        Ok(from_storage(storage, shape, none, is_variable))
+    }
+
+    /// Creates a new tensor filled with uninitialized memory.
+    ///
+    /// # Safety
+    /// This returns uninitialized memory.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = unsafe { Tensor::empty((2, 3), DType::F32, &Device::Cpu)? };
+    /// // a == b
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub unsafe fn empty<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+        Self::empty_impl(shape, dtype, device, false)
+    }
+
+    /// Creates a new tensor filled with uninitialized memory of the same shape, dtype, and device as the other
+    /// tensor.
+    ///
+    /// # Safety
+    /// This returns uninitialized memory.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// let b = unsafe { a.empty_like()? };
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub unsafe fn empty_like(&self) -> Result<Self> {
+        Tensor::empty(self.shape(), self.dtype(), self.device())
     }
 
     pub(crate) fn rand_impl<S: Into<Shape>, T: crate::FloatDType>(
@@ -368,8 +427,7 @@ impl Tensor {
         Self::new_impl(array, shape, device, false)
     }
 
-    /// Returns a new tensor with all the elements having the same specified value. Note that
-    /// the tensor is not contiguous so you would have to call `.contiguous()` on it if needed.
+    /// Returns a new tensor with all the elements having the same specified value.
     ///```rust
     /// use candle_core::{Tensor, Device};
     /// let a = Tensor::full(3.5, (2, 4), &Device::Cpu)?;
@@ -384,7 +442,12 @@ impl Tensor {
         shape: S,
         device: &Device,
     ) -> Result<Self> {
-        Self::from_vec_impl(vec![value], (), device, false)?.broadcast_as(shape)
+        let none = BackpropOp::none();
+        let shape = shape.into();
+        let mut storage = unsafe { device.alloc_uninit(&shape, D::DTYPE)? };
+        let layout = Layout::contiguous(shape.clone());
+        storage.const_set(value.to_scalar(), &layout)?;
+        Ok(from_storage(storage, shape, none, false))
     }
 
     /// Creates a new 1D tensor from an iterator.
@@ -452,17 +515,13 @@ impl Tensor {
         Self::from_vec_impl(data, len, device, false)
     }
 
-    pub(crate) fn from_vec_impl<S: Into<Shape>, D: crate::WithDType>(
+    pub(crate) fn from_vec_impl<S: ShapeWithOneHole, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
         device: &Device,
         is_variable: bool,
     ) -> Result<Self> {
-        let shape = shape.into();
-        let buffer_size = data.len();
-        if buffer_size != shape.elem_count() {
-            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
-        }
+        let shape = shape.into_shape(data.len())?;
         let storage = device.storage_owned(data)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, is_variable))
@@ -481,7 +540,7 @@ impl Tensor {
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn from_vec<S: Into<Shape>, D: crate::WithDType>(
+    pub fn from_vec<S: ShapeWithOneHole, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
         device: &Device,
@@ -502,17 +561,12 @@ impl Tensor {
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn from_slice<S: Into<Shape>, D: crate::WithDType>(
+    pub fn from_slice<S: ShapeWithOneHole, D: crate::WithDType>(
         array: &[D],
         shape: S,
         device: &Device,
     ) -> Result<Self> {
-        let shape = shape.into();
-        let n: usize = shape.elem_count();
-        let buffer_size: usize = array.len();
-        if buffer_size != n {
-            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
-        }
+        let shape = shape.into_shape(array.len())?;
         let storage = device.storage_from_slice(array)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, false))
@@ -537,6 +591,20 @@ impl Tensor {
     /// a variable or if it has some variable as dependencies.
     pub fn track_op(&self) -> bool {
         self.is_variable || self.op.is_some()
+    }
+
+    /// Creates a fresh tensor structure based on a storage and a shape.
+    ///
+    /// # Note
+    /// - This uses contiguous strides
+    /// - Ensure the shape is compatible with the shape of the storage.
+    pub fn from_storage<S: Into<Shape>>(
+        storage: Storage,
+        shape: S,
+        op: BackpropOp,
+        is_variable: bool,
+    ) -> Tensor {
+        from_storage(storage, shape, op, is_variable)
     }
 
     // TODO: Also make an inplace version or a pre-allocated? This could be tricky
@@ -1150,6 +1218,119 @@ impl Tensor {
         self.interpolate2d(target_h, target_w)
     }
 
+    /// Bilinear interpolation to resize the input tensor to the specified size.
+    ///
+    /// The input tensor should have four dimensions: `(batch, channels, h, w)`.
+    /// The returned tensor also has four dimensions: `(batch, channels, target_h, target_w)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_h` - Target height
+    /// * `target_w` - Target width  
+    /// * `align_corners` - If true, corner pixels are aligned. If false (default),
+    ///   pixels are treated as areas (matches PyTorch default behavior).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// # fn main() -> candle_core::Result<()> {
+    /// let t = Tensor::arange(0f32, 16f32, &Device::Cpu)?.reshape((1, 1, 4, 4))?;
+    /// let upsampled = t.upsample_bilinear2d(8, 8, false)?;
+    /// assert_eq!(upsampled.dims(), &[1, 1, 8, 8]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn upsample_bilinear2d(
+        &self,
+        target_h: usize,
+        target_w: usize,
+        align_corners: bool,
+    ) -> Result<Self> {
+        let (n, c, _h, _w) = self.dims4()?;
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleBilinear2D {
+            arg,
+            target_h,
+            target_w,
+            align_corners,
+        });
+        // Pass None for scale factors (size mode)
+        let storage = self.storage().upsample_bilinear2d(
+            self.layout(),
+            target_h,
+            target_w,
+            align_corners,
+            None,
+            None,
+        )?;
+        Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
+    }
+
+    /// Bilinear interpolation using scale factors.
+    ///
+    /// Similar to `upsample_bilinear2d` but uses scale factors instead of absolute sizes.
+    /// This matches PyTorch's `interpolate(scale_factor=...)` behavior.
+    ///
+    /// # Arguments
+    ///
+    /// * `scale_h` - Height scaling factor
+    /// * `scale_w` - Width scaling factor
+    /// * `align_corners` - If true, corner pixels are aligned
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// # fn main() -> candle_core::Result<()> {
+    /// let t = Tensor::arange(0f32, 16f32, &Device::Cpu)?.reshape((1, 1, 4, 4))?;
+    /// // Scale by 2x in both dimensions
+    /// let upsampled = t.upsample_bilinear2d_with_scale(2.0, 2.0, false)?;
+    /// assert_eq!(upsampled.dims(), &[1, 1, 8, 8]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn upsample_bilinear2d_with_scale(
+        &self,
+        scale_h: f64,
+        scale_w: f64,
+        align_corners: bool,
+    ) -> Result<Self> {
+        let (n, c, height_in, width_in) = self.dims4()?;
+
+        // Calculate output size (floor, matching PyTorch)
+        let height_out = (height_in as f64 * scale_h).floor() as usize;
+        let width_out = (width_in as f64 * scale_w).floor() as usize;
+
+        // Early return if size unchanged
+        if height_in == height_out && width_in == width_out {
+            return Ok(self.clone());
+        }
+
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleBilinear2D {
+            arg,
+            target_h: height_out,
+            target_w: width_out,
+            align_corners,
+        });
+
+        // Pass original scale factors (scale_factor mode)
+        // This ensures PyTorch-compatible scale calculation
+        let storage = self.storage().upsample_bilinear2d(
+            self.layout(),
+            height_out,
+            width_out,
+            align_corners,
+            Some(scale_h),
+            Some(scale_w),
+        )?;
+        Ok(from_storage(
+            storage,
+            (n, c, height_out, width_out),
+            op,
+            false,
+        ))
+    }
+
     /// 2D average pooling over an input tensor with multiple channels.
     ///
     /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned
@@ -1224,6 +1405,83 @@ impl Tensor {
             .storage()
             .max_pool2d(self.layout(), kernel_size, stride)?;
         Ok(from_storage(storage, (n, c, h_out, w_out), op, false))
+    }
+
+    /// Computes the dot product of two 1D tensors.
+    ///
+    /// - If inputs are 1D vectors (`[n]`), returns their scalar dot product.
+    /// - Panics if shapes are not compatible
+    /// - Not supported for integer dtypes
+    ///
+    /// # Example (vectors)
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let t1 = Tensor::new(&[1.0, 2.0, 3.0], &Device::Cpu)?;
+    /// let t2 = Tensor::new(&[4.0, 5.0, 6.0], &Device::Cpu)?;
+    /// let res = t1.dot(&t2)?;
+    /// assert_eq!(res.to_scalar::<f64>()?, 32.);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn dot(&self, rhs: &Self) -> Result<Self> {
+        if self.dims().len() != 1 || rhs.dims().len() != 1 {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "dot",
+            });
+        }
+
+        (self * rhs).and_then(|ret| ret.sum_all())
+    }
+
+    /// Computes the **Frobenius norm** (L2 norm of all elements) of the tensor.
+    /// - Output is `sqrt(sum(x^2))`.
+    /// - Always returns a scalar (`[]` shape).
+    ///
+    /// # Example
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
+    /// let norm = t.norm()?;
+    /// assert_eq!(norm.to_scalar::<f64>()?, 5.);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn norm(&self) -> Result<Self> {
+        if self.dtype().is_int() {
+            bail!("norm not supported for integer dtypes");
+        }
+
+        self.sqr().and_then(|x| x.sum_all()).and_then(|x| x.sqrt())
+    }
+
+    /// Performs strict matrix-vector multiplication (`[m, n] * [n] = [m]`).
+    ///
+    /// - If `self` is a matrix (`[m, n]`) and `rhs` is a vector (`[n]`), returns a vector (`[m]`).
+    /// - **No broadcasting**: Panics if `self` is not 2D or if `rhs` is not 1D with matching size.
+    ///
+    /// # Example
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
+    /// let vec = Tensor::new(&[1., 1., 1.], &Device::Cpu)?;
+    /// let res = mat.mv(&vec)?;
+    /// assert_eq!(res.to_vec1::<f64>()?, [6., 15.]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn mv(&self, rhs: &Self) -> Result<Self> {
+        // Strict shape checks
+        let lhs_dims = self.dims();
+        let rhs_dims = rhs.dims();
+        if lhs_dims.len() != 2 || rhs_dims.len() != 1 || lhs_dims[1] != rhs_dims[0] {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "mv",
+            });
+        }
+
+        // Direct matmul after ensuring rhs is column vector
+        self.matmul(&rhs.unsqueeze(1)?)?.squeeze(1)
     }
 
     /// Returns the matrix-multiplication of the input tensor with the other provided tensor.
@@ -1349,8 +1607,7 @@ impl Tensor {
         self.index_select(ids, 0)
     }
 
-    pub fn scatter_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
-        let dim = dim.to_index(self.shape(), "scatter-add")?;
+    fn scatter_checks(&self, indexes: &Self, source: &Self, dim: usize) -> Result<()> {
         let source_dims = source.dims();
         let self_dims = self.dims();
         let mismatch = if source_dims.len() != self_dims.len() {
@@ -1367,7 +1624,7 @@ impl Tensor {
         };
         if mismatch {
             Err(Error::ShapeMismatchBinaryOp {
-                op: "scatter-add (self, src)",
+                op: "scatter (self, src)",
                 lhs: self.shape().clone(),
                 rhs: source.shape().clone(),
             }
@@ -1375,14 +1632,64 @@ impl Tensor {
         }
         if indexes.dims() != source.dims() {
             Err(Error::ShapeMismatchBinaryOp {
-                op: "scatter-add (indexes, src)",
+                op: "scatter (indexes, src)",
                 lhs: indexes.shape().clone(),
                 rhs: source.shape().clone(),
             }
             .bt())?
         }
-        let storage = self.storage().scatter_add(
+        Ok(())
+    }
+
+    pub fn scatter<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "scatter")?;
+        self.scatter_checks(indexes, source, dim)?;
+        let shape = self.shape();
+        let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
+        self.storage()
+            .copy_strided_src(&mut storage, 0, self.layout())?;
+        let layout = Layout::contiguous(shape);
+        storage.scatter_set(
+            &layout,
+            &indexes.storage(),
+            indexes.layout(),
+            &source.storage(),
+            source.layout(),
+            dim,
+        )?;
+        let op = BackpropOp::new3(self, indexes, source, |t1, t2, t3| {
+            Op::Scatter(t1, t2, t3, dim)
+        });
+        Ok(from_storage(storage, self.shape(), op, false))
+    }
+
+    pub fn scatter_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
+        if self.same_storage(source) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
+        }
+        let dim = dim.to_index(self.shape(), "scatter-set")?;
+        self.scatter_checks(indexes, source, dim)?;
+        self.storage_mut().scatter_set(
             self.layout(),
+            &indexes.storage(),
+            indexes.layout(),
+            &source.storage(),
+            source.layout(),
+            dim,
+        )?;
+        Ok(())
+    }
+
+    pub fn scatter_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "scatter-add")?;
+        self.scatter_checks(indexes, source, dim)?;
+        let shape = self.shape();
+        let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
+        self.storage()
+            .copy_strided_src(&mut storage, 0, self.layout())?;
+        let layout = Layout::contiguous(shape);
+        storage.scatter_add(
+            &layout,
             &indexes.storage(),
             indexes.layout(),
             &source.storage(),
@@ -1393,6 +1700,23 @@ impl Tensor {
             Op::ScatterAdd(t1, t2, t3, dim)
         });
         Ok(from_storage(storage, self.shape(), op, false))
+    }
+
+    pub fn scatter_add_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
+        if self.same_storage(source) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
+        }
+        let dim = dim.to_index(self.shape(), "scatter-add-set")?;
+        self.scatter_checks(indexes, source, dim)?;
+        self.storage_mut().scatter_add(
+            self.layout(),
+            &indexes.storage(),
+            indexes.layout(),
+            &source.storage(),
+            source.layout(),
+            dim,
+        )?;
+        Ok(())
     }
 
     /// Embeds the values of the `src` tensor into the `self` tensor on the specified dimension.
@@ -1590,7 +1914,7 @@ impl Tensor {
 
     /// Returns an iterator over position of the elements in the storage when ranging over the
     /// index tuples in lexicographic order.
-    pub fn strided_index(&self) -> crate::StridedIndex {
+    pub fn strided_index(&self) -> crate::StridedIndex<'_> {
         self.layout.strided_index()
     }
 
@@ -1598,7 +1922,7 @@ impl Tensor {
     /// as well as the length of the contiguous blocks. For a contiguous tensor, the index iterator
     /// will only return the start offset and the size would be the number of elements in the
     /// tensor.
-    pub fn strided_blocks(&self) -> crate::StridedBlocks {
+    pub fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
         self.layout.strided_blocks()
     }
 
@@ -2055,10 +2379,9 @@ impl Tensor {
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
-                    // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
-                    // are the same.
-                    let cpu_storage = storage.to_cpu_storage()?;
-                    Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
+                    // can't clone storage if it's the same device because of the underlying device ptr
+                    let dst_storage = storage.transfer_to_device(cuda)?;
+                    Storage::Cuda(dst_storage)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
                 _ => {
@@ -2197,7 +2520,7 @@ impl Tensor {
     ///
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn reshape<S: crate::shape::ShapeWithOneHole>(&self, s: S) -> Result<Tensor> {
+    pub fn reshape<S: ShapeWithOneHole>(&self, s: S) -> Result<Tensor> {
         let shape = s.into_shape(self.elem_count())?;
         if shape.elem_count() != self.elem_count() {
             return Err(Error::ShapeMismatchBinaryOp {
@@ -2580,6 +2903,71 @@ impl Tensor {
     pub fn broadcast_pow(&self, rhs: &Tensor) -> Result<Self> {
         rhs.broadcast_mul(&self.log()?)?.exp()
     }
+
+    /// Returns a new tensor with the order of elements reversed along the specified dimensions.
+    /// This function makes a copy of the tensor’s data.
+    ///
+    /// ```rust
+    /// # use candle_core::{Tensor, Device};
+    /// let t = Tensor::arange(0., 6., &Device::Cpu)?.reshape((2, 3))?;
+    /// assert_eq!(t.to_vec2::<f64>()?, &[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]);
+    /// let t_flipped = t.flip(&[0])?;
+    /// assert_eq!(t_flipped.to_vec2::<f64>()?, &[[3.0, 4.0, 5.0], [0.0, 1.0, 2.0]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn flip(&self, dims: &[usize]) -> Result<Tensor> {
+        let mut result = self.clone();
+        for &dim in dims.iter() {
+            let size = result.dim(dim)?;
+            let indices: Vec<i64> = (0..size).rev().map(|x| x as i64).collect();
+            let indices_tensor = Tensor::from_vec(indices, (size,), result.device())?;
+            result = result.index_select(&indices_tensor, dim)?;
+        }
+        Ok(result)
+    }
+
+    /// Returns a view of which contains all slices of size `size` from self tensor in the dimension
+    /// `dim` and stepped by `step`.
+    pub fn unfold<D: Dim>(&self, dim: D, size: usize, step: usize) -> Result<Self> {
+        // https://github.com/pytorch/pytorch/blob/75b0720a97ac5d82e8a7a1a6ae7c5f7a87d7183d/aten/src/ATen/native/TensorShape.cpp#L3785-L3804
+        let mut sizes = self.dims().to_vec();
+        let mut strides = self.stride().to_vec();
+
+        let dim = dim.to_index(self.shape(), "unfold")?;
+
+        let max_len = if self.dims().is_empty() {
+            1
+        } else {
+            sizes[dim]
+        };
+        if size > max_len {
+            bail!(
+                "unsqueeze: maximum size for tensor at dimension {dim} is {max_len} but size is {size}"
+            )
+        }
+        sizes.push(size);
+        strides.push(if self.dims().is_empty() {
+            1
+        } else {
+            strides[dim]
+        });
+
+        if !self.dims().is_empty() {
+            sizes[dim] = ((sizes[dim] as f32 - size as f32) / step as f32 + 1.) as usize;
+            strides[dim] *= step;
+        }
+
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            layout: Layout::new(sizes.into(), strides, self.layout.start_offset()),
+            op: BackpropOp::new1(self, Op::Reshape),
+            is_variable: false,
+            dtype: self.dtype,
+            device: self.device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
+    }
 }
 
 macro_rules! bin_trait {
@@ -2718,5 +3106,11 @@ impl std::ops::Div<&Tensor> for f64 {
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: &Tensor) -> Self::Output {
         rhs.recip()? * self
+    }
+}
+
+impl<S: Into<Shape>> From<(Storage, S)> for Tensor {
+    fn from((storage, shape): (Storage, S)) -> Self {
+        from_storage(storage, shape, BackpropOp::none(), false)
     }
 }

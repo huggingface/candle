@@ -7,7 +7,7 @@ use candle::{Result, Tensor};
 /// Arguments
 ///
 /// * [inp]: The input tensor of dimensions `N, C` where `N` is the batch size and `C` the number
-///          of categories. This is expected to contain log probabilities.
+///   of categories. This is expected to contain log probabilities.
 /// * [target]: The ground truth labels as a tensor of u32 of dimension `N`.
 ///
 /// The resulting tensor is a scalar containing the average value over the batch.
@@ -34,7 +34,7 @@ pub fn nll(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
 /// Arguments
 ///
 /// * [inp]: The input tensor of dimensions `N, C` where `N` is the batch size and `C` the number
-///          of categories. This is expected to raw logits.
+///   of categories. This is expected to raw logits.
 /// * [target]: The ground truth labels as a tensor of u32 of dimension `N`.
 ///
 /// The resulting tensor is a scalar containing the average value over the batch.
@@ -56,9 +56,9 @@ pub fn mse(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
 /// Arguments
 ///
 /// * [inp]: The input tensor of dimensions `N, C` where `N` is the batch size and `C` the number
-///          of categories. This is expected to raw logits.
+///   of categories. This is expected to raw logits.
 /// * [target]: The ground truth labels as a tensor of u32 of dimension `N, C` where `N` is the batch size and `C` the number
-///          of categories.
+///   of categories.
 ///
 /// The resulting tensor is a scalar containing the average value over the batch.
 pub fn binary_cross_entropy_with_logit(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
@@ -71,4 +71,34 @@ pub fn binary_cross_entropy_with_logit(inp: &Tensor, target: &Tensor) -> Result<
     let loss = loss?.neg()?.mean_all()?;
 
     Ok(loss)
+}
+
+/// HuberLoss
+///
+/// A robust loss function that combines `MAE` and `MSE` losses:
+///
+/// - When the absolute element-wise error is less than `delta`, it uses a squared term (MSE loss).
+/// - When the absolute element-wise error is greater than or equal to `delta`, it uses a linear term (MAE loss scaled by `delta`).
+/// # Formula
+///
+/// HuberLoss =
+/// ```tex
+/// 0.5(x_n - y_n)^2, & |x_n - y_n| < delta
+/// delta(|x_n - y_n| - 0.5delta), & |x_n - y_n| >= delta
+/// ```
+pub fn huber(inp: &Tensor, target: &Tensor, delta: f64) -> Result<Tensor> {
+    if inp.dims() != target.dims() {
+        candle::bail!(
+            "input and target must have the same shape, got inp: {:?}, target: {:?}",
+            inp.dims(),
+            target.dims()
+        );
+    }
+    let diff = (inp - target)?;
+    let abs_diff = diff.abs()?;
+    let mask = abs_diff.le(delta)?;
+    let squared_loss = ((&diff * &diff)? * 0.5)?;
+    let linear_loss = ((abs_diff * delta)? - 0.5 * delta.powi(2))?;
+    let loss = mask.where_cond(&squared_loss, &linear_loss)?;
+    loss.mean_all()
 }

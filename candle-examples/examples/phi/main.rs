@@ -147,9 +147,9 @@ enum WhichModel {
     V3,
     #[value(name = "3-medium")]
     V3Medium,
-    #[value(name = "2-old")]
-    V4Mini,
     #[value(name = "4-mini")]
+    V4Mini,
+    #[value(name = "2-old")]
     V2Old,
     PuffinPhiV2,
     PhiHermes,

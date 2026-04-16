@@ -68,6 +68,7 @@ impl ResnetBlock2D {
             padding: 1,
             groups: 1,
             dilation: 1,
+            cudnn_fwd_algo: None,
         };
         let norm1 = nn::group_norm(config.groups, in_channels, config.eps, vs.pp("norm1"))?;
         let conv1 = conv2d(in_channels, out_channels, 3, conv_cfg, vs.pp("conv1"))?;
@@ -83,6 +84,7 @@ impl ResnetBlock2D {
                 padding: 0,
                 groups: 1,
                 dilation: 1,
+                cudnn_fwd_algo: None,
             };
             Some(conv2d(
                 in_channels,

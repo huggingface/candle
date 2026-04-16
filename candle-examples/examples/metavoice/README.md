@@ -13,6 +13,6 @@ Note that the current candle implementation suffers from some limitations as of
 ## Run an example
 
 ```bash
-cargo run --example metavoice --release -- \\
+cargo run --example metavoice --release -- \
   --prompt "This is a demo of text to speech by MetaVoice-1B, an open-source foundational audio model."
 ```

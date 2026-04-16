@@ -4,7 +4,7 @@
 //! model specialized to code generation. The initial model was trained on 80
 //! programming languages. See "StarCoder: A State-of-the-Art LLM for Code", Mukherjee et al. 2023
 //! - [Arxiv](https://arxiv.org/abs/2305.06161)
-//! - [Github](https://github.com/bigcode-project/starcoder)
+//! - [GitHub](https://github.com/bigcode-project/starcoder)
 //!
 //! ## Running some example
 //!

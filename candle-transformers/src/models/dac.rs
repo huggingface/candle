@@ -104,7 +104,7 @@ impl EncoderBlock {
         let snake1 = Snake1d::new(dim / 2, vb.pp(3))?;
         let cfg1 = Conv1dConfig {
             stride,
-            padding: (stride + 1) / 2,
+            padding: stride.div_ceil(2),
             ..Default::default()
         };
         let conv1 = encodec::conv1d_weight_norm(dim / 2, dim, 2 * stride, cfg1, vb.pp(4))?;
@@ -196,7 +196,7 @@ impl DecoderBlock {
         let snake1 = Snake1d::new(in_dim, vb.pp(0))?;
         let cfg = ConvTranspose1dConfig {
             stride,
-            padding: (stride + 1) / 2,
+            padding: stride.div_ceil(2),
             ..Default::default()
         };
         let conv_tr1 = encodec::conv_transpose1d_weight_norm(
@@ -330,6 +330,7 @@ impl ResidualVectorQuantizer {
         Ok(Self { quantizers })
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_codes(&self, codes: &Tensor) -> Result<Tensor> {
         let mut sum = None;
         for (idx, quantizer) in self.quantizers.iter().enumerate() {
@@ -357,7 +358,6 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let vb = vb.pp("model");
         let encoder = Encoder::new(64, &[2, 4, 8, 8], cfg.latent_dim, vb.pp("encoder"))?;
         let quantizer = ResidualVectorQuantizer::new(
             cfg.latent_dim,

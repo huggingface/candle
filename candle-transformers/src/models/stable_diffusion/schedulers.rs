@@ -44,17 +44,12 @@ pub enum PredictionType {
 /// Time step spacing for the diffusion process.
 ///
 /// "linspace", "leading", "trailing" corresponds to annotation of Table 2. of the [paper](https://arxiv.org/abs/2305.08891)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub enum TimestepSpacing {
+    #[default]
     Leading,
     Linspace,
     Trailing,
-}
-
-impl Default for TimestepSpacing {
-    fn default() -> Self {
-        Self::Leading
-    }
 }
 
 /// Create a beta schedule that discretizes the given alpha_t_bar function, which defines the cumulative product of

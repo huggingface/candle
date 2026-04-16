@@ -25,7 +25,7 @@ pub type Config = super::blip_text::Config;
 
 #[derive(Debug, Clone)]
 struct TextEmbeddings {
-    word_embedddings: Embedding,
+    word_embeddings: Embedding,
     position_embeddings: Embedding,
     layer_norm: LayerNorm,
     position_ids: Tensor,
@@ -33,7 +33,7 @@ struct TextEmbeddings {
 
 impl TextEmbeddings {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let word_embedddings =
+        let word_embeddings =
             Embedding::new(cfg.vocab_size, cfg.hidden_size, vb.pp("word_embeddings"))?;
         let position_embeddings = Embedding::new(
             cfg.max_position_embeddings,
@@ -44,7 +44,7 @@ impl TextEmbeddings {
         let position_ids =
             Tensor::arange(0, cfg.max_position_embeddings as u32, vb.device())?.unsqueeze(0)?;
         Ok(Self {
-            word_embedddings,
+            word_embeddings,
             position_embeddings,
             layer_norm,
             position_ids,
@@ -54,7 +54,7 @@ impl TextEmbeddings {
     fn forward(&self, xs: &Tensor, past_kv_len: usize) -> Result<Tensor> {
         let seq_len = xs.dim(1)?;
         let position_ids = self.position_ids.narrow(1, past_kv_len, seq_len)?;
-        let embeddings = self.word_embedddings.forward(xs)?;
+        let embeddings = self.word_embeddings.forward(xs)?;
         let position_embeddings = self.position_embeddings.forward(&position_ids)?;
         (embeddings + position_embeddings)?.apply(&self.layer_norm)
     }

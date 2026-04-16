@@ -6,8 +6,8 @@ pub fn get_noise(
     width: usize,
     device: &Device,
 ) -> Result<Tensor> {
-    let height = (height + 15) / 16 * 2;
-    let width = (width + 15) / 16 * 2;
+    let height = height.div_ceil(16) * 2;
+    let width = width.div_ceil(16) * 2;
     Tensor::randn(0f32, 1., (num_samples, 16, height, width), device)
 }
 
@@ -84,8 +84,8 @@ pub fn get_schedule(num_steps: usize, shift: Option<(usize, f64, f64)>) -> Vec<f
 
 pub fn unpack(xs: &Tensor, height: usize, width: usize) -> Result<Tensor> {
     let (b, _h_w, c_ph_pw) = xs.dims3()?;
-    let height = (height + 15) / 16;
-    let width = (width + 15) / 16;
+    let height = height.div_ceil(16);
+    let width = width.div_ceil(16);
     xs.reshape((b, height, width, c_ph_pw / 4, 2, 2))? // (b, h, w, c, ph, pw)
         .permute((0, 3, 1, 4, 2, 5))? // (b, c, h, ph, w, pw)
         .reshape((b, c_ph_pw / 4, height * 2, width * 2))

@@ -8,6 +8,7 @@ pub struct StridedIndex<'a> {
     multi_index: Vec<usize>,
     dims: &'a [usize],
     stride: &'a [usize],
+    remaining: usize,
 }
 
 impl<'a> StridedIndex<'a> {
@@ -24,6 +25,7 @@ impl<'a> StridedIndex<'a> {
             multi_index: vec![0; dims.len()],
             dims,
             stride,
+            remaining: elem_count,
         }
     }
 
@@ -35,6 +37,7 @@ impl<'a> StridedIndex<'a> {
 impl Iterator for StridedIndex<'_> {
     type Item = usize;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let storage_index = self.next_storage_index?;
         let mut updated = false;
@@ -57,12 +60,24 @@ impl Iterator for StridedIndex<'_> {
                 *multi_i = 0
             }
         }
+        self.remaining -= 1;
         self.next_storage_index = if updated {
             Some(next_storage_index)
         } else {
             None
         };
         Some(storage_index)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for StridedIndex<'_> {
+    fn len(&self) -> usize {
+        self.remaining
     }
 }
 

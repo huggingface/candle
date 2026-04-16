@@ -45,11 +45,33 @@ impl CustomOp1 for NonZero {
         let result = match storage {
             candle::CpuStorage::U8(vs) => self.nonzero(vs, layout),
             candle::CpuStorage::U32(vs) => self.nonzero(vs, layout),
+            candle::CpuStorage::I16(vs) => self.nonzero(vs, layout),
+            candle::CpuStorage::I32(vs) => self.nonzero(vs, layout),
             candle::CpuStorage::I64(vs) => self.nonzero(vs, layout),
             candle::CpuStorage::BF16(vs) => self.nonzero(vs, layout),
             candle::CpuStorage::F16(vs) => self.nonzero(vs, layout),
             candle::CpuStorage::F32(vs) => self.nonzero(vs, layout),
             candle::CpuStorage::F64(vs) => self.nonzero(vs, layout),
+            candle::CpuStorage::F8E4M3(vs) => self.nonzero(vs, layout),
+            // Dummy types don't support nonzero operation
+            candle::CpuStorage::F6E2M3(_) => {
+                return Err(
+                    candle::Error::UnsupportedDTypeForOp(candle::DType::F6E2M3, "nonzero").bt(),
+                )
+            }
+            candle::CpuStorage::F6E3M2(_) => {
+                return Err(
+                    candle::Error::UnsupportedDTypeForOp(candle::DType::F6E3M2, "nonzero").bt(),
+                )
+            }
+            candle::CpuStorage::F4(_) => {
+                return Err(candle::Error::UnsupportedDTypeForOp(candle::DType::F4, "nonzero").bt())
+            }
+            candle::CpuStorage::F8E8M0(_) => {
+                return Err(
+                    candle::Error::UnsupportedDTypeForOp(candle::DType::F8E8M0, "nonzero").bt(),
+                )
+            }
         };
         let index_len = layout.dims().len();
         let result_len = result.len() / index_len;
@@ -869,8 +891,8 @@ impl Moe {
 }
 
 enum MoeOrMlp {
-    Moe(Moe),
-    Mlp(Mlp),
+    Moe(Box<Moe>),
+    Mlp(Box<Mlp>),
 }
 
 impl MoeOrMlp {
@@ -904,18 +926,18 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
-        let moe_or_mlp = if cfg.n_routed_experts.is_some()
-            && layer_idx >= cfg.first_k_dense_replace
-            && layer_idx % cfg.moe_layer_freq == 0
-        {
-            MoeOrMlp::Moe(Moe::new(
-                cfg,
-                vb.pp("mlp"),
-                cfg.n_shared_experts,
-                cfg.n_routed_experts.unwrap(),
-            )?)
+        let moe_or_mlp = if let Some(n_routed_experts) = cfg.n_routed_experts {
+            if layer_idx >= cfg.first_k_dense_replace
+                && layer_idx.is_multiple_of(cfg.moe_layer_freq)
+            {
+                MoeOrMlp::Moe(
+                    Moe::new(cfg, vb.pp("mlp"), cfg.n_shared_experts, n_routed_experts)?.into(),
+                )
+            } else {
+                MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None)?.into())
+            }
         } else {
-            MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None)?)
+            MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None)?.into())
         };
 
         Ok(Self {

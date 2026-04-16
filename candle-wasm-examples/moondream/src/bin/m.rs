@@ -120,7 +120,7 @@ impl Model {
         } = serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
 
         let device = Device::Cpu;
-        let prompt = format!("\n\nQuestion: {0}\n\nAnswer:", prompt);
+        let prompt = format!("\n\nQuestion: {prompt}\n\nAnswer:");
         match &mut self.model {
             SelectedModel::Moondream(m) => m.text_model.clear_kv_cache(),
             SelectedModel::Quantized(m) => m.text_model.clear_kv_cache(),

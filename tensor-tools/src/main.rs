@@ -352,7 +352,7 @@ fn run_ls(
                     tensor_info.dtype,
                 );
                 if verbose {
-                    println!("    {:?}", tensor_info);
+                    println!("    {tensor_info:?}");
                 }
             }
         }

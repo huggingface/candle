@@ -5,7 +5,7 @@ SigLIP is multi-modal text-vision model that improves over CLIP by using a sigmo
 
 ### Running an example
 ```
-$ cargo run --features cuda -r --example siglip -
+$ cargo run --features cuda -r --example siglip
 softmax_image_vec: [2.1912122e-14, 2.3624872e-14, 1.0, 1.0, 2.4787932e-8, 3.2784535e-12]
 
 

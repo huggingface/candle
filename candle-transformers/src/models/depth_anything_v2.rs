@@ -124,6 +124,7 @@ impl ResidualConvUnit {
             stride: 1,
             dilation: 1,
             groups: 1,
+            cudnn_fwd_algo: None,
         };
         let conv1 = conv2d(
             conf.num_features,
@@ -208,6 +209,7 @@ impl FeatureFusionBlock {
             stride: 1,
             dilation: 1,
             groups: 1,
+            cudnn_fwd_algo: None,
         };
         let output_conv = conv2d(
             conf.num_features,
@@ -258,6 +260,7 @@ impl Scratch {
             stride: 1,
             dilation: 1,
             groups: 1,
+            cudnn_fwd_algo: None,
         };
 
         let layer1_rn = conv2d_no_bias(
@@ -319,6 +322,7 @@ impl Scratch {
             stride: 1,
             dilation: 1,
             groups: 1,
+            cudnn_fwd_algo: None,
         };
         let output_conv1 = conv2d(
             conf.num_features,
@@ -425,6 +429,7 @@ impl DPTHead {
                     stride: 2,
                     dilation: 1,
                     groups: 1,
+                    cudnn_fwd_algo: None,
                 },
                 vb.pp("resize_layers").pp("3"),
             )?),

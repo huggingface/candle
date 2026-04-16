@@ -73,7 +73,7 @@ fn main() -> Result<()> {
             Err(_) => match repo.get("pytorch_model.bin") {
                 Ok(pytorch_model) => pytorch_model,
                 Err(e) => {
-                    return Err(anyhow::Error::msg(format!("Model weights not found. The weights should either be a `model.safetensors` or `pytorch_model.bin` file.  Error: {}", e)));
+                    return Err(anyhow::Error::msg(format!("Model weights not found. The weights should either be a `model.safetensors` or `pytorch_model.bin` file.  Error: {e}")));
                 }
             },
         },

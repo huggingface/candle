@@ -4,7 +4,7 @@
 //! - Compute sentence embeddings for a prompt.
 //! - Compute similarities between a set of sentences.
 //! - [Arxiv](https://arxiv.org/abs/1810.04805) "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
-//! - Upstream [Github repo](https://github.com/google-research/bert).
+//! - Upstream [GitHub repo](https://github.com/google-research/bert).
 //! - See bert in [candle-examples](https://github.com/huggingface/candle/tree/main/candle-examples/) for runnable code
 //!
 use super::with_tracing::{layer_norm, linear, LayerNorm, Linear};
@@ -504,8 +504,9 @@ impl BertModel {
             Some(attention_mask) => attention_mask.clone(),
             None => input_ids.ones_like()?,
         };
+        let dtype = embedding_output.dtype();
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
-        let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
+        let attention_mask = get_extended_attention_mask(&attention_mask, dtype)?;
         let sequence_output = self.encoder.forward(&embedding_output, &attention_mask)?;
         Ok(sequence_output)
     }
@@ -519,8 +520,11 @@ fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<
     };
     let attention_mask = attention_mask.to_dtype(dtype)?;
     // torch.finfo(dtype).min
-    (attention_mask.ones_like()? - &attention_mask)?
-        .broadcast_mul(&Tensor::try_from(f32::MIN)?.to_device(attention_mask.device())?)
+    (attention_mask.ones_like()? - &attention_mask)?.broadcast_mul(
+        &Tensor::try_from(f32::MIN)?
+            .to_device(attention_mask.device())?
+            .to_dtype(dtype)?,
+    )
 }
 
 //https://github.com/huggingface/transformers/blob/1bd604d11c405dfb8b78bda4062d88fc75c17de0/src/transformers/models/bert/modeling_bert.py#L752-L766

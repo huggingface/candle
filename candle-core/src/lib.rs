@@ -44,7 +44,7 @@
 //! - [candle-examples](https://docs.rs/candle-examples/). Examples of Candle in Use.
 //! - [candle-onnx](https://docs.rs/candle-onnx/). Loading and using ONNX models.
 //! - [candle-pyo3](https://docs.rs/candle-pyo3/). Access to Candle from Python.
-//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implemntation of many published transformer models.
+//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implementation of many published transformer models.
 //!
 
 #[cfg(feature = "accelerate")]
@@ -62,6 +62,7 @@ mod device;
 pub mod display;
 mod dtype;
 pub mod dummy_cuda_backend;
+pub mod dummy_dtype;
 mod dummy_metal_backend;
 pub mod error;
 mod indexer;
@@ -91,9 +92,12 @@ mod variable;
 pub use cuda_backend::cudnn;
 
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
-pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
+#[cfg(feature = "ug")]
+pub use custom_op::UgIOp1;
+pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
+pub use dummy_dtype::{F4, F6E2M3, F6E3M2, F8E8M0};
 pub use error::{Context, Error, Result};
 pub use indexer::{IndexOp, TensorIndexer};
 pub use layout::Layout;
