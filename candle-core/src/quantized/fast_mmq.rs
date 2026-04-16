@@ -39,8 +39,9 @@ fn supports(dtype: GgmlDType) -> bool {
 /// qk (block quantization size) per dtype.
 fn qk_for(dtype: GgmlDType) -> usize {
     match dtype {
-        GgmlDType::Q4_0 | GgmlDType::Q4_1 | GgmlDType::Q5_0 | GgmlDType::Q5_1
-        | GgmlDType::Q8_0 => 32,
+        GgmlDType::Q4_0 | GgmlDType::Q4_1 | GgmlDType::Q5_0 | GgmlDType::Q5_1 | GgmlDType::Q8_0 => {
+            32
+        }
         GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K => 256,
         _ => unreachable!(),
     }

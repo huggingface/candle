@@ -405,13 +405,26 @@ impl ModelWeights {
             .unwrap_or_default();
         let rope_is_neox = matches!(
             arch.as_str(),
-            "qwen" | "qwen2" | "qwen2moe" | "qwen3" | "qwen3moe"
-                | "falcon" | "grok" | "dbrx"
-                | "phi2" | "phi3" | "phimoe"
-                | "stablelm" | "starcoder2"
-                | "bert" | "nomic-bert" | "jina-bert-v2"
-                | "olmo2" | "olmoe"
-                | "codeshell" | "plamo"
+            "qwen"
+                | "qwen2"
+                | "qwen2moe"
+                | "qwen3"
+                | "qwen3moe"
+                | "falcon"
+                | "grok"
+                | "dbrx"
+                | "phi2"
+                | "phi3"
+                | "phimoe"
+                | "stablelm"
+                | "starcoder2"
+                | "bert"
+                | "nomic-bert"
+                | "jina-bert-v2"
+                | "olmo2"
+                | "olmoe"
+                | "codeshell"
+                | "plamo"
         );
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;

@@ -416,7 +416,7 @@ impl VisionPooler {
             .to_dtype(original_dtype)?;
 
         // Scale by sqrt(hidden_size)
-        Ok((output * (self.hidden_size as f64).sqrt())?)
+        output * (self.hidden_size as f64).sqrt()
     }
 
     fn forward(
