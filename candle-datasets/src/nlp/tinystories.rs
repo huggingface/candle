@@ -60,8 +60,8 @@ pub struct DatasetRandomIter<'a> {
 
 impl<'a> DatasetRandomIter<'a> {
     pub fn new(ds: &'a Dataset, valid: bool, seq_len: usize, device: Device) -> Self {
+        use rand::rng;
         use rand::seq::SliceRandom;
-        use rand::thread_rng;
 
         let all_tokens = if valid {
             &ds.valid_tokens
@@ -69,13 +69,13 @@ impl<'a> DatasetRandomIter<'a> {
             &ds.train_tokens
         };
         let mut tokens = all_tokens.iter().collect::<Vec<_>>();
-        tokens.shuffle(&mut thread_rng());
+        tokens.shuffle(&mut rng());
         let current_tokens = tokens.pop().unwrap();
         let seq_len_in_bytes = seq_len * 2;
         let mut indexes_in_bytes = (0..current_tokens.len() - seq_len_in_bytes)
             .step_by(seq_len_in_bytes)
             .collect::<Vec<_>>();
-        indexes_in_bytes.shuffle(&mut thread_rng());
+        indexes_in_bytes.shuffle(&mut rng());
         Self {
             all_tokens,
             tokens,
@@ -87,26 +87,26 @@ impl<'a> DatasetRandomIter<'a> {
     }
 }
 
-impl<'a> Iterator for DatasetRandomIter<'a> {
+impl Iterator for DatasetRandomIter<'_> {
     type Item = Result<(Tensor, Tensor)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         use byteorder::{LittleEndian, ReadBytesExt};
+        use rand::rng;
         use rand::seq::SliceRandom;
-        use rand::thread_rng;
 
         let seq_len = self.seq_len;
         if self.indexes_in_bytes.is_empty() {
             if self.tokens.is_empty() {
                 self.tokens = self.all_tokens.iter().collect();
-                self.tokens.shuffle(&mut thread_rng());
+                self.tokens.shuffle(&mut rng());
             }
             self.current_tokens = self.tokens.pop().unwrap();
             let seq_len_in_bytes = self.seq_len * 2;
             self.indexes_in_bytes = (0..self.current_tokens.len() - seq_len_in_bytes)
                 .step_by(seq_len_in_bytes)
                 .collect::<Vec<_>>();
-            self.indexes_in_bytes.shuffle(&mut thread_rng());
+            self.indexes_in_bytes.shuffle(&mut rng());
         }
         let start_idx = self.indexes_in_bytes.pop().unwrap();
         let bytes = &self.current_tokens[start_idx..start_idx + 2 * (seq_len + 1)];

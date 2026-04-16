@@ -1,0 +1,576 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+    <title>Candle Phi 1.5 / Phi 2.0 Rust/WASM</title>
+  </head>
+  <body></body>
+</html>
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.8.0/build/styles/default.min.css"
+    />
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+      html,
+      body {
+        font-family: "Source Sans 3", sans-serif;
+      }
+      code,
+      output,
+      select,
+      pre {
+        font-family: "Source Code Pro", monospace;
+      }
+    </style>
+    <style type="text/tailwindcss">
+      .link {
+        @apply underline hover:text-blue-500 hover:no-underline;
+      }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import snarkdown from "https://cdn.skypack.dev/snarkdown";
+      import hljs from "https://cdn.skypack.dev/highlight.js";
+      // models base url
+      const MODELS = {
+        phi_1_5_q4k: {
+          base_url:
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
+          model: "model-q4k.gguf",
+          tokenizer: "tokenizer.json",
+          config: "phi-1_5.json",
+          quantized: true,
+          seq_len: 2048,
+          size: "800 MB",
+        },
+        phi_1_5_q80: {
+          base_url:
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
+          model: "model-q80.gguf",
+          tokenizer: "tokenizer.json",
+          config: "phi-1_5.json",
+          quantized: true,
+          seq_len: 2048,
+          size: "1.51 GB",
+        },
+        phi_2_0_q4k: {
+          base_url:
+            "https://huggingface.co/radames/phi-2-quantized/resolve/main/",
+          model: [
+            "model-v2-q4k.gguf_aa.part",
+            "model-v2-q4k.gguf_ab.part",
+            "model-v2-q4k.gguf_ac.part",
+          ],
+          tokenizer: "tokenizer.json",
+          config: "config.json",
+          quantized: true,
+          seq_len: 2048,
+          size: "1.57GB",
+        },
+        puffin_phi_v2_q4k: {
+          base_url:
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
+          model: "model-puffin-phi-v2-q4k.gguf",
+          tokenizer: "tokenizer-puffin-phi-v2.json",
+          config: "puffin-phi-v2.json",
+          quantized: true,
+          seq_len: 2048,
+          size: "798 MB",
+        },
+        puffin_phi_v2_q80: {
+          base_url:
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
+          model: "model-puffin-phi-v2-q80.gguf",
+          tokenizer: "tokenizer-puffin-phi-v2.json",
+          config: "puffin-phi-v2.json",
+          quantized: true,
+          seq_len: 2048,
+          size: "1.50 GB",
+        },
+      };
+
+      const TEMPLATES = [
+        {
+          title: "Simple prompt",
+          prompt: `Sebastien is in London today, it’s the middle of July yet it’s raining, so Sebastien is feeling gloomy. He`,
+        },
+        {
+          title: "Think step by step",
+          prompt: `Suppose Alice originally had 3 apples, then Bob gave Alice 7 apples, then Alice gave Cook 5 apples, and then Tim gave Alice 3x the amount of apples Alice had. How many apples does Alice have now?  
+Let’s think step by step.`,
+        },
+        {
+          title: "Explaining a code snippet",
+          prompt: `What does this script do?  
+\`\`\`python
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.bind(('', 0))
+s.listen(1)
+conn, addr = s.accept()
+print('Connected by', addr)
+return conn.getsockname()[1]
+\`\`\`
+Let’s think step by step.`,
+        },
+        {
+          title: "Question answering",
+          prompt: `Instruct: What is the capital of France?  
+Output:`,
+        },
+        {
+          title: "Chat mode",
+          prompt: `Alice: Can you tell me how to create a python application to go through all the files
+in one directory where the file’s name DOES NOT end with '.json'?  
+Bob:`,
+        },
+        {
+          title: "Python code completion",
+          prompt: `"""write a python function called batch(function, list) which call function(x) for x in
+list in parallel"""  
+Solution:`,
+        },
+        {
+          title: "Python Sample",
+          prompt: `"""Can you make sure those histograms appear side by side on the same plot:  
+\`\`\`python
+plt.hist(intreps_retrained[0][1].view(64,-1).norm(dim=1).detach().cpu().numpy(), bins = 20)
+plt.hist(intreps_pretrained[0][1].view(64,-1).norm(dim=1).detach().cpu().numpy(), bins = 20)
+\`\`\`  
+"""`,
+        },
+        {
+          title: "Write a Twitter post",
+          prompt: `Write a twitter post for the discovery of gravitational wave.  
+Twitter Post:`,
+        },
+        {
+          title: "Write a review",
+          prompt: `Write a polite review complaining that the video game 'Random Game' was too badly optimized and it burned my laptop.  
+Very polite review:`,
+        },
+      ];
+      const phiWorker = new Worker("./phiWorker.js", {
+        type: "module",
+      });
+      async function generateSequence(controller) {
+        const getValue = (id) => document.querySelector(`#${id}`).value;
+        const modelID = getValue("model");
+        const model = MODELS[modelID];
+        const weightsURL =
+          model.model instanceof Array
+            ? model.model.map((m) => model.base_url + m)
+            : model.base_url + model.model;
+        const tokenizerURL = model.base_url + model.tokenizer;
+        const configURL = model.base_url + model.config;
+
+        const prompt = getValue("prompt").trim();
+        const temperature = getValue("temperature");
+        const topP = getValue("top-p");
+        const repeatPenalty = getValue("repeat_penalty");
+        const seed = getValue("seed");
+        const maxSeqLen = getValue("max-seq");
+
+        function updateStatus(data) {
+          const outStatus = document.querySelector("#output-status");
+          const outGen = document.querySelector("#output-generation");
+          const outCounter = document.querySelector("#output-counter");
+
+          switch (data.status) {
+            case "loading":
+              outStatus.hidden = false;
+              outStatus.textContent = data.message;
+              outGen.hidden = true;
+              outCounter.hidden = true;
+              break;
+            case "generating":
+              const { message, prompt, sentence, tokensSec, totalTime } = data;
+              outStatus.hidden = true;
+              outCounter.hidden = false;
+              outGen.hidden = false;
+              outGen.innerHTML = snarkdown(prompt + sentence);
+              outCounter.innerHTML = `${(totalTime / 1000).toFixed(
+                2
+              )}s (${tokensSec.toFixed(2)} tok/s)`;
+              hljs.highlightAll();
+              break;
+            case "complete":
+              outStatus.hidden = true;
+              outGen.hidden = false;
+              break;
+          }
+        }
+
+        return new Promise((resolve, reject) => {
+          phiWorker.postMessage({
+            weightsURL,
+            modelID,
+            tokenizerURL,
+            configURL,
+            quantized: model.quantized,
+            prompt,
+            temp: temperature,
+            top_p: topP,
+            repeatPenalty,
+            seed: seed,
+            maxSeqLen,
+            command: "start",
+          });
+
+          const handleAbort = () => {
+            phiWorker.postMessage({ command: "abort" });
+          };
+          const handleMessage = (event) => {
+            const { status, error, message, prompt, sentence } = event.data;
+            if (status) updateStatus(event.data);
+            if (error) {
+              phiWorker.removeEventListener("message", handleMessage);
+              reject(new Error(error));
+            }
+            if (status === "aborted") {
+              phiWorker.removeEventListener("message", handleMessage);
+              resolve(event.data);
+            }
+            if (status === "complete") {
+              phiWorker.removeEventListener("message", handleMessage);
+              resolve(event.data);
+            }
+          };
+
+          controller.signal.addEventListener("abort", handleAbort);
+          phiWorker.addEventListener("message", handleMessage);
+        });
+      }
+
+      const form = document.querySelector("#form");
+      const prompt = document.querySelector("#prompt");
+      const clearBtn = document.querySelector("#clear-btn");
+      const runBtn = document.querySelector("#run");
+      const modelSelect = document.querySelector("#model");
+      const promptTemplates = document.querySelector("#prompt-templates");
+      let runController = new AbortController();
+      let isRunning = false;
+
+      document.addEventListener("DOMContentLoaded", () => {
+        for (const [id, model] of Object.entries(MODELS)) {
+          const option = document.createElement("option");
+          option.value = id;
+          option.innerText = `${id} (${model.size})`;
+          modelSelect.appendChild(option);
+        }
+        const query = new URLSearchParams(window.location.search);
+        const modelID = query.get("model");
+        if (modelID) {
+          modelSelect.value = modelID;
+        } else {
+          modelSelect.value = "phi_1_5_q4k";
+        }
+
+        for (const [i, { title, prompt }] of TEMPLATES.entries()) {
+          const div = document.createElement("div");
+          const input = document.createElement("input");
+          input.type = "radio";
+          input.name = "task";
+          input.id = `templates-${i}`;
+          input.classList.add("font-light", "cursor-pointer");
+          input.value = prompt;
+          const label = document.createElement("label");
+          label.htmlFor = `templates-${i}`;
+          label.classList.add("cursor-pointer");
+          label.innerText = title;
+          div.appendChild(input);
+          div.appendChild(label);
+          promptTemplates.appendChild(div);
+        }
+      });
+
+      promptTemplates.addEventListener("change", (e) => {
+        const template = e.target.value;
+        prompt.value = template;
+        prompt.style.height = "auto";
+        prompt.style.height = prompt.scrollHeight + "px";
+        runBtn.disabled = false;
+        clearBtn.classList.remove("invisible");
+      });
+      modelSelect.addEventListener("change", (e) => {
+        const query = new URLSearchParams(window.location.search);
+        query.set("model", e.target.value);
+        window.history.replaceState(
+          {},
+          "",
+          `${window.location.pathname}?${query}`
+        );
+        window.parent.postMessage({ queryString: "?" + query }, "*");
+        const model = MODELS[e.target.value];
+        document.querySelector("#max-seq").max = model.seq_len;
+        document.querySelector("#max-seq").nextElementSibling.value = 200;
+      });
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (isRunning) {
+          stopRunning();
+        } else {
+          startRunning();
+          await generateSequence(runController);
+          stopRunning();
+        }
+      });
+
+      function startRunning() {
+        isRunning = true;
+        runBtn.textContent = "Stop";
+      }
+
+      function stopRunning() {
+        runController.abort();
+        runController = new AbortController();
+        runBtn.textContent = "Run";
+        isRunning = false;
+      }
+      clearBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        prompt.value = "";
+        clearBtn.classList.add("invisible");
+        runBtn.disabled = true;
+        stopRunning();
+      });
+      prompt.addEventListener("input", (e) => {
+        runBtn.disabled = false;
+        if (e.target.value.length > 0) {
+          clearBtn.classList.remove("invisible");
+        } else {
+          clearBtn.classList.add("invisible");
+        }
+      });
+    </script>
+  </head>
+  <body class="container max-w-4xl mx-auto p-4 text-gray-800">
+    <main class="grid grid-cols-1 gap-8 relative">
+      <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
+      <div>
+        <h1 class="text-5xl font-bold">Candle Phi 1.5 / Phi 2.0</h1>
+        <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+        <p class="max-w-lg">
+          The
+          <a
+            href="https://huggingface.co/microsoft/phi-1_5"
+            class="link"
+            target="_blank"
+            >Phi-1.5</a
+          >
+          and
+          <a
+            href="https://huggingface.co/microsoft/phi-2"
+            class="link"
+            target="_blank"
+            >Phi-2</a
+          >
+          models achieve state-of-the-art performance with only 1.3 billion and
+          2.7 billion parameters, compared to larger models with up to 13
+          billion parameters. Here you can try the quantized versions.
+          Additional prompt examples are available in the
+          <a
+            href="https://arxiv.org/pdf/2309.05463.pdf#page=8"
+            class="link"
+            target="_blank"
+          >
+            technical report </a
+          >.
+        </p>
+        <p class="max-w-lg">
+          You can also try
+          <a
+            href="https://huggingface.co/teknium/Puffin-Phi-v2"
+            class="link"
+            target="_blank"
+            >Puffin-Phi V2
+          </a>
+          quantized version, a fine-tuned version of Phi-1.5 on the
+          <a
+            href="https://huggingface.co/datasets/LDJnr/Puffin"
+            class="link"
+            target="_blank"
+            >Puffin dataset
+          </a>
+        </p>
+      </div>
+      <div>
+        <p class="text-xs italic max-w-lg">
+          <b>Note:</b>
+          When first run, the app will download and cache the model, which could
+          take a few minutes. The models are <b>~800MB</b> or <b>~1.57GB</b> in
+          size.
+        </p>
+      </div>
+      <div>
+        <label for="model" class="font-medium">Models Options: </label>
+        <select
+          id="model"
+          class="border-2 border-gray-500 rounded-md font-light"
+        ></select>
+      </div>
+      <div>
+        <details>
+          <summary class="font-medium cursor-pointer">Prompt Templates</summary>
+          <form
+            id="prompt-templates"
+            class="grid grid-cols-1 sm:grid-cols-2 gap-1 my-2"
+          ></form>
+        </details>
+      </div>
+      <form
+        id="form"
+        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center"
+      >
+        <input type="submit" hidden />
+        <textarea
+          type="text"
+          id="prompt"
+          class="font-light text-lg w-full px-3 py-2 mx-1 resize-none outline-none"
+          oninput="this.style.height = 0;this.style.height = this.scrollHeight + 'px'"
+          placeholder="Add your prompt here..."
+        >
+Instruct: Write a detailed analogy between mathematics and a lighthouse.  
+Output:</textarea
+        >
+        <button id="clear-btn">
+          <svg
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            width="40"
+            viewBox="0 0 70 40"
+          >
+            <path opacity=".5" d="M39 .2v40.2" stroke="#1F2937" />
+            <path
+              d="M1.5 11.5 19 29.1m0-17.6L1.5 29.1"
+              opacity=".5"
+              stroke="#1F2937"
+              stroke-width="2"
+            />
+          </svg>
+        </button>
+        <button
+          id="run"
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed"
+        >
+          Run
+        </button>
+      </form>
+      <details>
+        <summary class="font-medium cursor-pointer">Advanced Options</summary>
+
+        <div class="grid grid-cols-3 max-w-md items-center gap-3 py-3">
+          <label class="text-sm font-medium" for="max-seq"
+            >Maximum length
+          </label>
+          <input
+            type="range"
+            id="max-seq"
+            name="max-seq"
+            min="1"
+            max="2048"
+            step="1"
+            value="200"
+            oninput="this.nextElementSibling.value = Number(this.value)"
+          />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+          >
+            200</output
+          >
+          <label class="text-sm font-medium" for="temperature"
+            >Temperature</label
+          >
+          <input
+            type="range"
+            id="temperature"
+            name="temperature"
+            min="0"
+            max="2"
+            step="0.01"
+            value="0.00"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+          />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+          >
+            0.00</output
+          >
+          <label class="text-sm font-medium" for="top-p">Top-p</label>
+          <input
+            type="range"
+            id="top-p"
+            name="top-p"
+            min="0"
+            max="1"
+            step="0.01"
+            value="1.00"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+          />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+          >
+            1.00</output
+          >
+
+          <label class="text-sm font-medium" for="repeat_penalty"
+            >Repeat Penalty</label
+          >
+
+          <input
+            type="range"
+            id="repeat_penalty"
+            name="repeat_penalty"
+            min="1"
+            max="2"
+            step="0.01"
+            value="1.10"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+          />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+            >1.10</output
+          >
+          <label class="text-sm font-medium" for="seed">Seed</label>
+          <input
+            type="number"
+            id="seed"
+            name="seed"
+            value="299792458"
+            class="font-light border border-gray-700 text-right rounded-md p-2"
+          />
+          <button
+            id="run"
+            onclick="document.querySelector('#seed').value = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)"
+            class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+          >
+            Rand
+          </button>
+        </div>
+      </details>
+
+      <div>
+        <h3 class="font-medium">Generation:</h3>
+        <div
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2"
+        >
+          <div
+            id="output-counter"
+            hidden
+            class="ml-auto font-semibold grid-rows-1"
+          ></div>
+          <p hidden id="output-generation" class="grid-rows-2 text-lg"></p>
+          <span id="output-status" class="m-auto font-light"
+            >No output yet</span
+          >
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

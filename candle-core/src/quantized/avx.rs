@@ -1,7 +1,6 @@
 use super::k_quants::{
     BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K,
 };
-use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::f16;
 
@@ -48,16 +47,11 @@ pub(crate) unsafe fn mul_sum_i8_pairs_float(x: __m256i, y: __m256i) -> __m256 {
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> Result<f32> {
-    let qk = QK8_0;
-    let nb = n / qk;
-    if n % QK8_0 != 0 {
-        crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {qk}")
-    }
-    if nb % 2 != 0 {
-        crate::bail!("vec_dot_q4_0_q8_0: {nb} is not even")
-    }
-
+pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK8_0),
+        "vec_dot_q4_0_q8_0: {n} is not divisible by {QK8_0}"
+    );
     unsafe {
         let mut acc = _mm256_setzero_ps();
         for (x, y) in xs.iter().zip(ys.iter()) {
@@ -69,16 +63,16 @@ pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) ->
             let q = mul_sum_i8_pairs_float(bx, by);
             acc = _mm256_fmadd_ps(d, q, acc);
         }
-        Ok(hsum_float_8(acc))
+        hsum_float_8(acc)
     }
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) -> Result<f32> {
-    let qk = QK8_0;
-    if n % QK8_0 != 0 {
-        crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
-    }
+pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK8_0),
+        "vec_dot_q8_0_q8_0: {n} is not divisible by {QK8_0}"
+    );
     unsafe {
         let mut acc = _mm256_setzero_ps();
         for (x, y) in xs.iter().zip(ys.iter()) {
@@ -88,7 +82,7 @@ pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) ->
             let q = mul_sum_i8_pairs_float(bx, by);
             acc = _mm256_fmadd_ps(d, q, acc);
         }
-        Ok(hsum_float_8(acc))
+        hsum_float_8(acc)
     }
 }
 
@@ -134,11 +128,11 @@ unsafe fn get_scale_shuffle_q3k(i: usize) -> __m256i {
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Result<f32> {
-    let qk = QK_K;
-    if n % qk != 0 {
-        crate::bail!("vec_dot_q6k_8k: {n} is not divisible by {qk}")
-    }
+pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q6k_8k: {n} is not divisible by {QK_K}"
+    );
 
     unsafe {
         let m4 = _mm256_set1_epi8(0xF);
@@ -217,7 +211,7 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
             }
             acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), _mm256_cvtepi32_ps(sumi), acc);
         }
-        Ok(hsum_float_8(acc))
+        hsum_float_8(acc)
     }
 }
 
@@ -227,10 +221,11 @@ unsafe fn mm256_set_m128i(a: __m128i, b: __m128i) -> __m256i {
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
-        crate::bail!("vec_dot_q2k_q8k: {n} is not divisible by {QK_K}")
-    }
+pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q2k_q8k: {n} is not divisible by {QK_K}"
+    );
 
     unsafe {
         let m3 = _mm256_set1_epi8(3);
@@ -304,15 +299,16 @@ pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Res
             acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), _mm256_cvtepi32_ps(sumi), acc);
         }
 
-        Ok(hsum_float_8(acc))
+        hsum_float_8(acc)
     }
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
-        crate::bail!("vec_dot_q3k_q8k: {n} is not divisible by {QK_K}")
-    }
+pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q3k_q8k: {n} is not divisible by {QK_K}"
+    );
 
     const KMASK1: u32 = 0x03030303;
     const KMASK2: u32 = 0x0f0f0f0f;
@@ -358,7 +354,7 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
                 q3 = q3.add(32);
 
                 // Prepare low and high bits
-                // We hardcode the shifts here to avoid loading them into a seperate register
+                // We hardcode the shifts here to avoid loading them into a separate register
                 let q3l_0 = _mm256_and_si256(q3bits, m3);
                 let q3h_0 = if j == 0 {
                     _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 0)), 0)
@@ -439,15 +435,16 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
             // multiply with block scale and accumulate
             acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), _mm256_cvtepi32_ps(sumi), acc);
         }
-        Ok(hsum_float_8(acc))
+        hsum_float_8(acc)
     }
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
-        crate::bail!("vec_dot_q4k_q8k: {n} is not divisible by {QK_K}")
-    }
+pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q4k_q8k: {n} is not divisible by {QK_K}"
+    );
     let mut utmp = [0u32; 4];
     const KMASK1: u32 = 0x3f3f3f3f;
     const KMASK2: u32 = 0x0f0f0f0f;
@@ -523,15 +520,16 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
         let acc_m = _mm_add_ps(acc_m, _mm_movehl_ps(acc_m, acc_m));
         let acc_m = _mm_add_ss(acc_m, _mm_movehdup_ps(acc_m));
 
-        Ok(hsum_float_8(acc) + _mm_cvtss_f32(acc_m))
+        hsum_float_8(acc) + _mm_cvtss_f32(acc_m)
     }
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
-        crate::bail!("vec_dot_q5k_q8k: {n} is not divisible by {QK_K}")
-    }
+pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q5k_q8k: {n} is not divisible by {QK_K}"
+    );
     let mut utmp = [0u32; 4];
     const KMASK1: u32 = 0x3f3f3f3f;
     const KMASK2: u32 = 0x0f0f0f0f;
@@ -591,7 +589,7 @@ pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Res
                 let q5bits = _mm256_loadu_si256(q5 as *const __m256i);
                 q5 = q5.add(32);
 
-                //Similar to q3k we hardcode the shifts here to avoid loading them into a seperate register
+                //Similar to q3k we hardcode the shifts here to avoid loading them into a separate register
                 let q5l_0 = _mm256_and_si256(q5bits, m4);
                 let q5l_0_shift_input = _mm256_and_si256(hbits, hmask);
                 let q5l_0_right_shift = match j {
@@ -635,6 +633,37 @@ pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Res
             let vd = _mm256_set1_ps(d);
             acc = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(sumi), acc);
         }
-        Ok(hsum_float_8(acc) + summs)
+        hsum_float_8(acc) + summs
+    }
+}
+
+#[inline(always)]
+pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q8k_8k: {n} is not divisible by {QK_K}"
+    );
+    unsafe {
+        let mut acc = _mm256_setzero_ps();
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
+            let mut sumi = _mm256_setzero_si256();
+            let x_qs = xs.qs.as_ptr();
+            let y_qs = ys.qs.as_ptr();
+            for j in (0..QK_K).step_by(32) {
+                let xs = _mm256_loadu_si256(x_qs.add(j) as *const __m256i);
+                let ys = _mm256_loadu_si256(y_qs.add(j) as *const __m256i);
+
+                let xs0 = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(xs, 0));
+                let ys0 = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(ys, 0));
+                sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(xs0, ys0));
+
+                let xs1 = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(xs, 1));
+                let ys1 = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(ys, 1));
+                sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(xs1, ys1));
+            }
+            let d = _mm256_set1_ps(xs.d * ys.d);
+            acc = _mm256_fmadd_ps(d, _mm256_cvtepi32_ps(sumi), acc);
+        }
+        hsum_float_8(acc)
     }
 }

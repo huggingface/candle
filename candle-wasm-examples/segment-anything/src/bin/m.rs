@@ -3,7 +3,6 @@ use candle_nn::VarBuilder;
 use candle_wasm_example_sam as sam;
 use wasm_bindgen::prelude::*;
 
-#[allow(unused)]
 struct Embeddings {
     original_width: u32,
     original_height: u32,
@@ -39,7 +38,7 @@ impl Model {
     pub fn set_image_embeddings(&mut self, image_data: Vec<u8>) -> Result<(), JsError> {
         sam::console_log!("image data: {}", image_data.len());
         let image_data = std::io::Cursor::new(image_data);
-        let image = image::io::Reader::new(image_data)
+        let image = image::ImageReader::new(image_data)
             .with_guessed_format()?
             .decode()
             .map_err(candle::Error::wrap)?;
@@ -74,17 +73,22 @@ impl Model {
         Ok(())
     }
 
-    // x and y have to be between 0 and 1
-    pub fn mask_for_point(&self, x: f64, y: f64) -> Result<JsValue, JsError> {
-        if !(0. ..=1.).contains(&x) {
-            Err(JsError::new(&format!(
-                "x has to be between 0 and 1, got {x}"
-            )))?
-        }
-        if !(0. ..=1.).contains(&y) {
-            Err(JsError::new(&format!(
-                "y has to be between 0 and 1, got {y}"
-            )))?
+    pub fn mask_for_point(&self, input: JsValue) -> Result<JsValue, JsError> {
+        let input: PointsInput =
+            serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
+        let transformed_points = input.points;
+
+        for &(x, y, _bool) in &transformed_points {
+            if !(0.0..=1.0).contains(&x) {
+                return Err(JsError::new(&format!(
+                    "x has to be between 0 and 1, got {x}"
+                )));
+            }
+            if !(0.0..=1.0).contains(&y) {
+                return Err(JsError::new(&format!(
+                    "y has to be between 0 and 1, got {y}"
+                )));
+            }
         }
         let embeddings = match &self.embeddings {
             None => Err(JsError::new("image embeddings have not been set"))?,
@@ -94,7 +98,7 @@ impl Model {
             &embeddings.data,
             embeddings.height as usize,
             embeddings.width as usize,
-            &[(x, y)],
+            &transformed_points,
             false,
         )?;
         let iou = iou_predictions.flatten(0, 1)?.to_vec1::<f32>()?[0];
@@ -132,6 +136,11 @@ struct Image {
 struct MaskImage {
     mask: Mask,
     image: Image,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PointsInput {
+    points: Vec<(f64, f64, bool)>,
 }
 
 fn main() {

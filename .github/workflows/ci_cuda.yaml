@@ -5,47 +5,15 @@ on:
   pull_request:
 
 jobs:
-  start-runner:
-    name: Start self-hosted EC2 runner
-    runs-on: ubuntu-latest
-    env:
-      AWS_REGION: us-east-1
-      EC2_AMI_ID: ami-03cfed9ea28f4b002
-      EC2_INSTANCE_TYPE: g5.xlarge
-      EC2_SUBNET_ID: subnet-931b34f5,subnet-ecb993cd,subnet-943dc2d8,subnet-45371f1a,subnet-ee93e0df,subnet-fddc3dfc
-      EC2_SECURITY_GROUP: sg-030175c435ac141d6
-    outputs:
-      label: ${{ steps.start-ec2-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      - name: Start EC2 runner
-        id: start-ec2-runner
-        uses: philschmid/philschmid-ec2-github-runner@main
-        with:
-          mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ${{ env.EC2_AMI_ID }}
-          ec2-instance-type: ${{ env.EC2_INSTANCE_TYPE }}
-          subnet-id: ${{ env.EC2_SUBNET_ID }}
-          security-group-id: ${{ env.EC2_SECURITY_GROUP }}
-          aws-resource-tags: > # optional, requires additional permissions
-            [
-              {"Key": "Name", "Value": "ec2-tgi-github-runner"},
-              {"Key": "GitHubRepository", "Value": "${{ github.repository }}"}
-            ]
-
   test-cuda:
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
-    needs: start-runner # required to start the main job when the runner is ready
-    runs-on: ${{ needs.start-runner.outputs.label }} # run the job on the newly created runner
+    runs-on:
+      group: aws-g5-4xlarge-cache
+    container:
+      image: nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+    if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
       contents: write
       packages: write
@@ -53,35 +21,15 @@ jobs:
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
       security-events: write
+    env:
+      CUDA_COMPUTE_CAP: 86
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Install dependencies
+        run: apt update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config -y
       - name: Install Rust Stable
-        run: curl https://sh.rustup.rs -sSf | sh -s -- -y
-      - uses: Swatinem/rust-cache@v2
-      - run: apt-get update -y && apt-get install libssl-dev -y
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Test (cuda)
-        run: PATH=$PATH:/usr/local/cuda-11.8/bin/ /root/.cargo/bin/cargo test --features cuda
-  stop-runner:
-    name: Stop self-hosted EC2 runner
-    needs:
-      - start-runner
-      - test-cuda
-    runs-on: ubuntu-latest
-    env:
-      AWS_REGION: us-east-1
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      - name: Stop EC2 runner
-        uses: philschmid/philschmid-ec2-github-runner@main
-        with:
-          mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-runner.outputs.ec2-instance-id }}
+        run: cargo test --features cuda

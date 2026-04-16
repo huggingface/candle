@@ -3,8 +3,24 @@
 //!
 //! Noise schedulers can be used to set the trade-off between
 //! inference speed and quality.
-
 use candle::{Result, Tensor};
+
+pub trait SchedulerConfig: std::fmt::Debug + Send + Sync {
+    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>>;
+}
+
+/// This trait represents a scheduler for the diffusion process.
+pub trait Scheduler {
+    fn timesteps(&self) -> &[usize];
+
+    fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor>;
+
+    fn init_noise_sigma(&self) -> f64;
+
+    fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor>;
+
+    fn step(&mut self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor>;
+}
 
 /// This represents how beta ranges from its minimum value to the maximum
 /// during training.
@@ -23,6 +39,17 @@ pub enum PredictionType {
     Epsilon,
     VPrediction,
     Sample,
+}
+
+/// Time step spacing for the diffusion process.
+///
+/// "linspace", "leading", "trailing" corresponds to annotation of Table 2. of the [paper](https://arxiv.org/abs/2305.08891)
+#[derive(Debug, Default, Clone, Copy)]
+pub enum TimestepSpacing {
+    #[default]
+    Leading,
+    Linspace,
+    Trailing,
 }
 
 /// Create a beta schedule that discretizes the given alpha_t_bar function, which defines the cumulative product of

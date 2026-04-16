@@ -1,20 +1,22 @@
-#See: https://raw.githubusercontent.com/huggingface/tokenizers/main/bindings/python/stub.py
+# See: https://raw.githubusercontent.com/huggingface/tokenizers/main/bindings/python/stub.py
 import argparse
 import inspect
 import os
 from typing import Optional
 import black
 from pathlib import Path
-
+import re
 
 INDENT = " " * 4
 GENERATED_COMMENT = "# Generated content DO NOT EDIT\n"
 TYPING = """from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence
 from os import PathLike
 """
-CANDLE_SPECIFIC_TYPING = "from candle.typing import _ArrayLike, Device\n"
+CANDLE_SPECIFIC_TYPING = "from candle.typing import _ArrayLike, Device, Scalar, Index, Shape\n"
 CANDLE_TENSOR_IMPORTS = "from candle import Tensor,DType,QTensor\n"
 RETURN_TYPE_MARKER = "&RETURNS&: "
+ADDITIONAL_TYPEHINTS = {}
+FORWARD_REF_PATTERN = re.compile(r"ForwardRef\('([^']+)'\)")
 
 
 def do_indent(text: Optional[str], indent: str):
@@ -23,7 +25,7 @@ def do_indent(text: Optional[str], indent: str):
     return text.replace("\n", f"\n{indent}")
 
 
-def function(obj, indent:str, text_signature:str=None):
+def function(obj, indent: str, text_signature: str = None):
     if text_signature is None:
         text_signature = obj.__text_signature__
 
@@ -32,12 +34,12 @@ def function(obj, indent:str, text_signature:str=None):
     if doc_string is None:
         doc_string = ""
 
-    # Check if we have a return type annotation in the docstring 
+    # Check if we have a return type annotation in the docstring
     return_type = None
     doc_lines = doc_string.split("\n")
     if doc_lines[-1].lstrip().startswith(RETURN_TYPE_MARKER):
         # Extract the return type and remove it from the docstring
-        return_type = doc_lines[-1].lstrip()[len(RETURN_TYPE_MARKER):].strip()
+        return_type = doc_lines[-1].lstrip()[len(RETURN_TYPE_MARKER) :].strip()
         doc_string = "\n".join(doc_lines[:-1])
 
     string = ""
@@ -115,7 +117,28 @@ def pyi_file(obj, indent=""):
             body += f"{indent+INDENT}pass\n"
             body += "\n"
 
-        for (name, fn) in fns:
+        if obj.__name__ in ADDITIONAL_TYPEHINTS:
+            additional_members = inspect.getmembers(ADDITIONAL_TYPEHINTS[obj.__name__])
+            additional_functions = []
+            for name, member in additional_members:
+                if inspect.isfunction(member):
+                    additional_functions.append((name, member))
+
+            def process_additional_function(fn):
+                signature = inspect.signature(fn)
+                cleaned_signature = re.sub(FORWARD_REF_PATTERN, r"\1", str(signature))
+                string = f"{indent}def {fn.__name__}{cleaned_signature}:\n"
+                string += (
+                    f'{indent+INDENT}"""{indent+INDENT}{do_indent(fn.__doc__, indent+INDENT)}{indent+INDENT}"""\n'
+                )
+                string += f"{indent+INDENT}pass\n"
+                string += "\n"
+                return string
+
+            for name, fn in additional_functions:
+                body += process_additional_function(fn)
+
+        for name, fn in fns:
             body += pyi_file(fn, indent=indent)
 
         if not body:
@@ -132,7 +155,7 @@ def pyi_file(obj, indent=""):
         string += function(obj, indent)
 
     elif inspect.isgetsetdescriptor(obj):
-        # TODO it would be interesing to add the setter maybe ?
+        # TODO it would be interesting to add the setter maybe ?
         string += f"{indent}@property\n"
         string += function(obj, indent, text_signature="(self)")
 
@@ -165,7 +188,6 @@ def do_black(content, is_pyi):
         line_length=119,
         is_pyi=is_pyi,
         string_normalization=True,
-        experimental_string_processing=False,
     )
     try:
         return black.format_file_contents(content, fast=True, mode=mode)
@@ -183,6 +205,8 @@ def write(module, directory, origin, check=False):
     if check:
         with open(filename, "r") as f:
             data = f.read()
+            print("generated content")
+            print(pyi_content)
             assert data == pyi_content, f"The content of {filename} seems outdated, please run `python stub.py`"
     else:
         with open(filename, "w") as f:
@@ -206,6 +230,8 @@ def write(module, directory, origin, check=False):
         if check:
             with open(filename, "r") as f:
                 data = f.read()
+                print("generated content")
+                print(py_content)
                 assert data == py_content, f"The content of {filename} seems outdated, please run `python stub.py`"
         else:
             with open(filename, "w") as f:
@@ -215,18 +241,34 @@ def write(module, directory, origin, check=False):
         write(submodule, os.path.join(directory, name), f"{name}", check=check)
 
 
+def extract_additional_types(module):
+    additional_types = {}
+    for name, member in inspect.getmembers(module):
+        if inspect.isclass(member):
+            if hasattr(member, "__name__"):
+                name = member.__name__
+            else:
+                name = str(member)
+            if name not in additional_types:
+                additional_types[name] = member
+    return additional_types
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
 
     args = parser.parse_args()
 
-    #Enable execution from the candle and candle-pyo3 directories
+    # Enable execution from the candle and candle-pyo3 directories
     cwd = Path.cwd()
     directory = "py_src/candle/"
     if cwd.name != "candle-pyo3":
         directory = f"candle-pyo3/{directory}"
-        
+
     import candle
+    import _additional_typing
+
+    ADDITIONAL_TYPEHINTS = extract_additional_types(_additional_typing)
 
     write(candle.candle, directory, "candle", check=args.check)

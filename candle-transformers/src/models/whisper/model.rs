@@ -1,55 +1,7 @@
+use super::Config;
+use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Conv1d, Conv1dConfig, Embedding, LayerNorm, Module, VarBuilder};
-use serde::Deserialize;
-
-// The names in comments correspond to the original implementation:
-// https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L17
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Config {
-    pub num_mel_bins: usize,            // n_mels
-    pub max_source_positions: usize,    // n_audio_ctx
-    pub d_model: usize,                 // n_audio_state
-    pub encoder_attention_heads: usize, // n_audio_head
-    pub encoder_layers: usize,          // n_audio_layer
-    pub vocab_size: usize,              // n_vocab
-    pub max_target_positions: usize,    //  n_text_ctx
-    // pub n_text_state: usize,
-    pub decoder_attention_heads: usize, // n_text_head
-    pub decoder_layers: usize,          // n_text_layer
-    pub suppress_tokens: Vec<u32>,
-}
-
-fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
-    Ok(Embedding::new(embeddings, hidden_size))
-}
-//
-// We wrap the `Linear` layer here to add some tracing so that it's easier to profile the resulting
-// model.
-#[derive(Debug)]
-pub struct Linear {
-    inner: candle_nn::Linear,
-    span: tracing::Span,
-}
-
-impl Linear {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
-    }
-}
-
-fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let span = tracing::span!(tracing::Level::TRACE, "linear");
-    let inner = candle_nn::linear(size1, size2, vb)?;
-    Ok(Linear { inner, span })
-}
-
-fn linear_no_bias(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let span = tracing::span!(tracing::Level::TRACE, "linear");
-    let inner = candle_nn::linear_no_bias(size1, size2, vb)?;
-    Ok(Linear { inner, span })
-}
+use candle_nn::{embedding, Conv1d, Conv1dConfig, Embedding, LayerNorm, Module, VarBuilder};
 
 fn conv1d(
     in_channels: usize,
@@ -70,6 +22,7 @@ fn layer_norm(size: usize, vb: VarBuilder) -> Result<LayerNorm> {
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L62
+#[derive(Debug, Clone)]
 struct MultiHeadAttention {
     query: Linear,
     key: Linear,
@@ -176,9 +129,14 @@ impl MultiHeadAttention {
         .flatten_from(2)?;
         Ok(wv)
     }
+
+    fn reset_kv_cache(&mut self) {
+        self.kv_cache = None;
+    }
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L111
+#[derive(Debug, Clone)]
 struct ResidualAttentionBlock {
     attn: MultiHeadAttention,
     attn_ln: LayerNorm,
@@ -239,16 +197,23 @@ impl ResidualAttentionBlock {
         )?;
         x + mlp
     }
+
+    fn reset_kv_cache(&mut self) {
+        self.attn.reset_kv_cache();
+        if let Some((attn, _)) = &mut self.cross_attn {
+            attn.reset_kv_cache();
+        }
+    }
 }
 
-fn sinusoids(length: usize, channels: usize) -> Result<Tensor> {
+fn sinusoids(length: usize, channels: usize, device: &Device) -> Result<Tensor> {
     let max_timescale = 10000f32;
     let log_timescale_increment = max_timescale.ln() / (channels / 2 - 1) as f32;
     let inv_timescales: Vec<_> = (0..channels / 2)
         .map(|i| (i as f32 * (-log_timescale_increment)).exp())
         .collect();
-    let inv_timescales = Tensor::new(inv_timescales.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
-    let arange = Tensor::arange(0, length as u32, &Device::Cpu)?
+    let inv_timescales = Tensor::new(inv_timescales.as_slice(), device)?.unsqueeze(0)?;
+    let arange = Tensor::arange(0, length as u32, device)?
         .to_dtype(candle::DType::F32)?
         .unsqueeze(1)?;
     let sh = (length, channels / 2);
@@ -258,6 +223,7 @@ fn sinusoids(length: usize, channels: usize) -> Result<Tensor> {
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L143
+#[derive(Debug, Clone)]
 pub struct AudioEncoder {
     conv1: Conv1d,
     conv2: Conv1d,
@@ -282,19 +248,21 @@ impl AudioEncoder {
             stride: 1,
             groups: 1,
             dilation: 1,
+            cudnn_fwd_algo: None,
         };
         let cfg2 = Conv1dConfig {
             padding: 1,
             stride: 2,
             groups: 1,
             dilation: 1,
+            cudnn_fwd_algo: None,
         };
         let conv1 = conv1d(cfg.num_mel_bins, n_state, 3, cfg1, vb.pp("conv1"))?;
         let conv2 = conv1d(n_state, n_state, 3, cfg2, vb.pp("conv2"))?;
-        let positional_embedding = sinusoids(n_ctx, n_state)?.to_device(vb.device())?;
+        let positional_embedding = sinusoids(n_ctx, n_state, vb.device())?;
         let blocks = (0..cfg.encoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(&format!("layers.{i}")))
+                ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(format!("layers.{i}")))
             })
             .collect::<Result<Vec<_>>>()?;
         let ln_post = layer_norm(n_state, vb.pp("layer_norm"))?;
@@ -333,6 +301,7 @@ impl AudioEncoder {
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L176
+#[derive(Debug, Clone)]
 pub struct TextDecoder {
     token_embedding: Embedding,
     positional_embedding: Tensor,
@@ -354,7 +323,7 @@ impl TextDecoder {
         let positional_embedding = vb.get((n_ctx, n_state), "embed_positions.weight")?;
         let blocks = (0..cfg.decoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(&format!("layers.{i}")))
+                ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(format!("layers.{i}")))
             })
             .collect::<Result<Vec<_>>>()?;
         let ln = layer_norm(n_state, vb.pp("layer_norm"))?;
@@ -394,9 +363,16 @@ impl TextDecoder {
         };
         Ok(logits)
     }
+
+    pub fn reset_kv_cache(&mut self) {
+        for block in self.blocks.iter_mut() {
+            block.reset_kv_cache();
+        }
+    }
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L221
+#[derive(Debug, Clone)]
 pub struct Whisper {
     pub encoder: AudioEncoder,
     pub decoder: TextDecoder,
@@ -412,5 +388,13 @@ impl Whisper {
             decoder,
             config,
         })
+    }
+
+    pub fn reset_kv_cache(&mut self) {
+        self.encoder
+            .blocks
+            .iter_mut()
+            .for_each(|b| b.reset_kv_cache());
+        self.decoder.reset_kv_cache();
     }
 }

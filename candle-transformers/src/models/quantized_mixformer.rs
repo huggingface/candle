@@ -1,4 +1,17 @@
-use crate::models::with_tracing::QMatMul;
+//! Module containing quantized MixFormer model implementation.
+//!
+//! MixFormer is an efficient transformer variant for text generation that uses
+//! mixture-of-experts and parallel attention/feed-forward blocks.
+//! This implementation provides quantization for reduced memory usage.
+//!
+//! Key features:
+//! - Parallel attention and feed-forward computation
+//! - Rotary positional embeddings
+//! - Optional key-value caching
+//! - Support for 8-bit quantization
+//!
+
+use crate::quantized_nn::{layer_norm, linear, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Activation;
@@ -7,14 +20,14 @@ pub use crate::models::mixformer::Config;
 
 const MAX_SEQ_LEN: usize = 4096;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Embedding {
-    wte: super::quantized_t5::Embedding,
+    wte: crate::quantized_nn::Embedding,
 }
 
 impl Embedding {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let wte = super::quantized_t5::Embedding::new(cfg.vocab_size, cfg.n_embd, vb.pp("wte"))?;
+        let wte = crate::quantized_nn::Embedding::new(cfg.vocab_size, cfg.n_embd, vb.pp("wte"))?;
         Ok(Self { wte })
     }
 }
@@ -23,37 +36,6 @@ impl Module for Embedding {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self.wte.forward(xs)
     }
-}
-
-#[derive(Debug)]
-struct Linear {
-    weight: QMatMul,
-    bias: Option<Tensor>,
-}
-
-impl Module for Linear {
-    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
-        let x = x.apply(&self.weight)?;
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
-        }
-    }
-}
-
-fn linear(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
-    let bias = vb.get(out_dim, "bias")?.dequantize(vb.device())?;
-    let weight = QMatMul::new(in_dim, out_dim, vb)?;
-    Ok(Linear {
-        weight,
-        bias: Some(bias),
-    })
-}
-
-fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<candle_nn::LayerNorm> {
-    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
-    let bias = vb.get(size, "bias")?.dequantize(vb.device())?;
-    Ok(candle_nn::LayerNorm::new(weight, bias, eps))
 }
 
 fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
@@ -70,7 +52,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
@@ -136,7 +118,7 @@ impl RotaryEmbedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     fc1: Linear,
@@ -163,7 +145,7 @@ impl Module for MLP {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CausalLMHead {
     ln: candle_nn::LayerNorm,
     linear: Linear,
@@ -185,7 +167,7 @@ impl Module for CausalLMHead {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MHA {
     wqkv: Linear,
@@ -256,7 +238,7 @@ impl MHA {
                 f32::NEG_INFINITY,
             )?,
         };
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
         // output = torch.einsum('bhts,bshd->bthd', attention_drop, v)
         // attn_weights: b*h,t,s, v: b*h,s,d
@@ -274,7 +256,7 @@ impl MHA {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ParallelBlock {
     ln: candle_nn::LayerNorm,
     mixer: MHA,
@@ -309,7 +291,7 @@ impl ParallelBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MixFormerSequentialForCausalLM {
     embedding: Embedding,
     blocks: Vec<ParallelBlock>,
@@ -318,13 +300,31 @@ pub struct MixFormerSequentialForCausalLM {
 }
 
 impl MixFormerSequentialForCausalLM {
+    pub fn new_v2(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let vb_head = vb.pp("lm_head");
+        let vb = vb.pp("transformer");
+        let embedding = Embedding::new(cfg, vb.pp("embd"))?;
+        let mut blocks = Vec::new();
+        for i in 0..cfg.n_layer {
+            let block = ParallelBlock::new(cfg, vb.pp("h").pp(i))?;
+            blocks.push(block)
+        }
+        let head = CausalLMHead::new(cfg, vb_head)?;
+        Ok(Self {
+            embedding,
+            blocks,
+            head,
+            span: tracing::span!(tracing::Level::TRACE, "mixformer"),
+        })
+    }
+
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb = vb.pp("layers");
         let embedding = Embedding::new(cfg, vb.pp(0))?;
         let mut blocks = Vec::new();
         for i in 0..cfg.n_layer {
             let block = ParallelBlock::new(cfg, vb.pp(i + 1))?;
-            blocks.push(block)
+            blocks.push(block);
         }
         let head = CausalLMHead::new(cfg, vb.pp(cfg.n_layer + 1))?;
         Ok(Self {
@@ -345,9 +345,33 @@ impl MixFormerSequentialForCausalLM {
             Some(get_mask(seq_len, xs.device())?)
         };
         for block in self.blocks.iter_mut() {
-            xs = block.forward(&xs, mask.as_ref())?
+            xs = block.forward(&xs, mask.as_ref())?;
         }
         xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
+    }
+
+    pub fn forward_with_img(
+        &mut self,
+        bos_token: &Tensor,
+        xs: &Tensor,
+        img_embeds: &Tensor,
+    ) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let xs = xs.apply(&self.embedding)?;
+        let bos_token = bos_token.apply(&self.embedding)?;
+        // Python implementation sequence order is <bos token embedding><img embedding><rest of text embedding>
+        // https://github.com/vikhyat/moondream/blob/a9d788a20d1543fb1479edc54106e88cff7759d3/moondream/moondream.py#L43-L56
+        let mut xs = Tensor::cat(&[bos_token, img_embeds.clone(), xs], 1)?;
+        let (_b_size, seq_len, _embds) = xs.dims3()?;
+        let mask = Some(get_mask(seq_len, xs.device())?);
+        for block in self.blocks.iter_mut() {
+            xs = block.forward(&xs, mask.as_ref())?
+        }
+        let xs = xs
+            .narrow(1, seq_len - 1, 1)?
+            .apply(&self.head)?
+            .squeeze(1)?;
+        Ok(xs)
     }
 
     pub fn clear_kv_cache(&mut self) {

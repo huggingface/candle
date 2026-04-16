@@ -32,7 +32,7 @@ Image source:
 ### Pose Estimation
 ```bash
 cargo run --example yolo-v8 --release -- \
-  candle-examples/examples/yolo-v8/assets/peoples.jpeg --task pose
+  candle-examples/examples/yolo-v8/assets/bike.jpg --task pose
 ```
 
 ![Leading group, Giro d'Italia 2021](./assets/bike.pose.jpg)

@@ -12,7 +12,7 @@ use anyhow::{Error as E, Result};
 use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::{api::sync::Api, api::sync::ApiRepo, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug, Copy, ValueEnum)]
@@ -41,6 +41,9 @@ struct Args {
 
     #[arg(long)]
     weight_file: Option<String>,
+
+    #[arg(long)]
+    config_file: Option<String>,
 
     // Enable/disable decoding.
     #[arg(long, default_value = "false")]
@@ -91,17 +94,20 @@ impl T5ModelBuilder {
         let repo = Repo::with_revision(model_id, RepoType::Model, revision);
         let api = Api::new()?;
         let api = api.repo(repo);
-        let config_filename = match args.which {
-            Which::T5Small => api.get("config.json")?,
-            Which::FlanT5Small => api.get("config-flan-t5-small.json")?,
-            Which::FlanT5Base => api.get("config-flan-t5-base.json")?,
-            Which::FlanT5Large => api.get("config-flan-t5-large.json")?,
-            Which::FlanT5Xl => api.get("config-flan-t5-xl.json")?,
-            Which::FlanT5Xxl => api.get("config-flan-t5-xxl.json")?,
+        let config_filename = match &args.config_file {
+            Some(filename) => Self::get_local_or_remote_file(filename, &api)?,
+            None => match args.which {
+                Which::T5Small => api.get("config.json")?,
+                Which::FlanT5Small => api.get("config-flan-t5-small.json")?,
+                Which::FlanT5Base => api.get("config-flan-t5-base.json")?,
+                Which::FlanT5Large => api.get("config-flan-t5-large.json")?,
+                Which::FlanT5Xl => api.get("config-flan-t5-xl.json")?,
+                Which::FlanT5Xxl => api.get("config-flan-t5-xxl.json")?,
+            },
         };
         let tokenizer_filename = api.get("tokenizer.json")?;
         let weights_filename = match &args.weight_file {
-            Some(filename) => std::path::PathBuf::from(filename),
+            Some(filename) => Self::get_local_or_remote_file(filename, &api)?,
             None => match args.which {
                 Which::T5Small => api.get("model.gguf")?,
                 Which::FlanT5Small => api.get("model-flan-t5-small.gguf")?,
@@ -126,8 +132,18 @@ impl T5ModelBuilder {
     }
 
     pub fn build_model(&self) -> Result<t5::T5ForConditionalGeneration> {
-        let vb = t5::VarBuilder::from_gguf(&self.weights_filename)?;
+        let device = Device::Cpu;
+        let vb = t5::VarBuilder::from_gguf(&self.weights_filename, &device)?;
         Ok(t5::T5ForConditionalGeneration::load(vb, &self.config)?)
+    }
+
+    fn get_local_or_remote_file(filename: &str, api: &ApiRepo) -> Result<PathBuf> {
+        let local_filename = std::path::PathBuf::from(filename);
+        if local_filename.exists() {
+            Ok(local_filename)
+        } else {
+            Ok(api.get(filename)?)
+        }
     }
 }
 
@@ -138,7 +154,6 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let _guard = if args.tracing {
-        println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
         Some(guard)
@@ -159,7 +174,11 @@ fn main() -> Result<()> {
         .to_vec();
     let input_token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
     let mut model = builder.build_model()?;
-    let mut output_token_ids = [builder.config.pad_token_id as u32].to_vec();
+    let mut output_token_ids = [builder
+        .config
+        .decoder_start_token_id
+        .unwrap_or(builder.config.pad_token_id) as u32]
+    .to_vec();
     let temperature = if args.temperature <= 0. {
         None
     } else {

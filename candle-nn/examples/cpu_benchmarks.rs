@@ -6,7 +6,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::quantized::GgmlType;
-use candle::{CpuStorage, Device, Layout, Result, Shape, Tensor, D};
+use candle::{CpuStorage, Device, Layout, Module, Result, Shape, Tensor, D};
 use clap::{Parser, Subcommand};
 
 const CHECK_CONV2D: bool = false;
@@ -180,13 +180,30 @@ impl Benchmark for Conv2dIm2Col {
     const ITERS: usize = 5;
 }
 
-struct Matmul;
-impl Benchmark for Matmul {
+struct MatMul;
+impl Benchmark for MatMul {
     type PreProcessData = (Tensor, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
         let lhs = Tensor::randn(0f32, 1., (1024, 1024), &Device::Cpu)?;
         let rhs = Tensor::randn(0f32, 1., (1024, 1024), &Device::Cpu)?;
+        Ok((lhs, rhs))
+    }
+
+    fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
+        d.0.matmul(&d.1)
+    }
+
+    const ITERS: usize = 100;
+}
+
+struct MatVec;
+impl Benchmark for MatVec {
+    type PreProcessData = (Tensor, Tensor);
+    type RunResult = Tensor;
+    fn preprocess() -> Result<Self::PreProcessData> {
+        let lhs = Tensor::randn(0f32, 1., (1024 * 4, 1024 * 4), &Device::Cpu)?;
+        let rhs = Tensor::randn(0f32, 1., (1024 * 4, 1), &Device::Cpu)?;
         Ok((lhs, rhs))
     }
 
@@ -205,8 +222,11 @@ impl Benchmark for QMatMul {
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
         let zeros = vec![candle::quantized::k_quants::BlockQ4_0::zeros(); 4096 * 11008 / 32];
-        let mm = candle::quantized::QTensor::new(zeros, (4096, 11008))?;
-        let mm = candle::quantized::QMatMul::from_qtensor(mm);
+        let mm = candle::quantized::QTensor::new(
+            candle::quantized::QStorage::Cpu(Box::new(zeros)),
+            (4096, 11008),
+        )?;
+        let mm = candle::quantized::QMatMul::from_qtensor(mm)?;
         let arg = Tensor::randn(0f32, 1., (128, 11008), &Device::Cpu)?;
         Ok((mm, arg))
     }
@@ -216,6 +236,23 @@ impl Benchmark for QMatMul {
     }
 
     const ITERS: usize = 100;
+}
+
+struct Cat;
+impl Benchmark for Cat {
+    type PreProcessData = (Tensor, Tensor);
+    type RunResult = Tensor;
+    fn preprocess() -> Result<Self::PreProcessData> {
+        let lhs = Tensor::randn(0f32, 1., (1, 32, 2000, 128), &Device::Cpu)?;
+        let rhs = Tensor::randn(0f32, 1., (1, 32, 1, 128), &Device::Cpu)?;
+        Ok((lhs, rhs))
+    }
+
+    fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
+        Tensor::cat(&[&d.0, &d.1], 2)
+    }
+
+    const ITERS: usize = 1000;
 }
 
 struct Softmax;
@@ -271,9 +308,11 @@ enum Task {
     Conv2d,
     Conv2dIm2Col,
     Matmul,
+    Matvec,
     Qmatmul,
     Softmax,
     SoftmaxLastDim,
+    Cat,
 }
 
 #[derive(Parser, Debug)]
@@ -293,10 +332,12 @@ fn main() -> Result<()> {
         Task::Conv1d => run::<Conv1d>(args.iters)?,
         Task::Conv2d => run::<Conv2d>(args.iters)?,
         Task::Conv2dIm2Col => run::<Conv2dIm2Col>(args.iters)?,
-        Task::Matmul => run::<Matmul>(args.iters)?,
+        Task::Matmul => run::<MatMul>(args.iters)?,
+        Task::Matvec => run::<MatVec>(args.iters)?,
         Task::Softmax => run::<Softmax>(args.iters)?,
         Task::SoftmaxLastDim => run::<SoftmaxLastDim>(args.iters)?,
         Task::Qmatmul => run::<QMatMul>(args.iters)?,
+        Task::Cat => run::<Cat>(args.iters)?,
     }
     Ok(())
 }

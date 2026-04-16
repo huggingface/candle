@@ -1,4 +1,7 @@
-use crate::{DType, DeviceLocation, Layout, Shape};
+//! Candle-specific Error and Result
+use std::{convert::Infallible, fmt::Display};
+
+use crate::{DType, DeviceLocation, Layout, MetalError, Shape};
 
 #[derive(Debug, Clone)]
 pub struct MatMulUnexpectedStriding {
@@ -8,8 +11,14 @@ pub struct MatMulUnexpectedStriding {
     pub msg: &'static str,
 }
 
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
 /// Main library error type.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error)]
 pub enum Error {
     // === DType Errors ===
     #[error("{msg}, expected: {expected:?}, got: {got:?}")]
@@ -142,6 +151,9 @@ pub enum Error {
     #[error("{op} expects at least one tensor")]
     OpRequiresAtLeastOneTensor { op: &'static str },
 
+    #[error("{op} expects at least two tensors")]
+    OpRequiresAtLeastTwoTensors { op: &'static str },
+
     #[error("backward is not supported for {op}")]
     BackwardNotSupported { op: &'static str },
 
@@ -149,12 +161,22 @@ pub enum Error {
     #[error("the candle crate has not been built with cuda support")]
     NotCompiledWithCudaSupport,
 
+    #[error("the candle crate has not been built with metal support")]
+    NotCompiledWithMetalSupport,
+
     #[error("cannot find tensor {path}")]
     CannotFindTensor { path: String },
 
     // === Wrapped Errors ===
     #[error(transparent)]
     Cuda(Box<dyn std::error::Error + Send + Sync>),
+
+    #[error("Metal error {0}")]
+    Metal(#[from] MetalError),
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), feature = "ug"))]
+    #[error(transparent)]
+    Ug(#[from] candle_ug::Error),
 
     #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),
@@ -170,6 +192,10 @@ pub enum Error {
     #[error(transparent)]
     ParseInt(#[from] std::num::ParseIntError),
 
+    /// Utf8 parse error.
+    #[error(transparent)]
+    FromUtf8(#[from] std::string::FromUtf8Error),
+
     /// I/O error.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -182,8 +208,21 @@ pub enum Error {
     UnsupportedSafeTensorDtype(safetensors::Dtype),
 
     /// Arbitrary errors wrapping.
-    #[error(transparent)]
-    Wrapped(Box<dyn std::error::Error + Send + Sync>),
+    #[error("{0}")]
+    Wrapped(Box<dyn std::fmt::Display + Send + Sync>),
+
+    /// Arbitrary errors wrapping with context.
+    #[error("{wrapped:?}\n{context:?}")]
+    WrappedContext {
+        wrapped: Box<dyn std::error::Error + Send + Sync>,
+        context: String,
+    },
+
+    #[error("{context}\n{inner}")]
+    Context {
+        inner: Box<Self>,
+        context: Box<dyn std::fmt::Display + Send + Sync>,
+    },
 
     /// Adding path information to an error.
     #[error("path: {path:?} {inner}")]
@@ -201,17 +240,24 @@ pub enum Error {
     /// User generated error message, typically created via `bail!`.
     #[error("{0}")]
     Msg(String),
+
+    #[error("unwrap none")]
+    UnwrapNone,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
-    pub fn wrap(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+    pub fn wrap(err: impl std::fmt::Display + Send + Sync + 'static) -> Self {
         Self::Wrapped(Box::new(err)).bt()
     }
 
-    pub fn msg(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+    pub fn msg(err: impl std::fmt::Display) -> Self {
         Self::Msg(err.to_string()).bt()
+    }
+
+    pub fn debug(err: impl std::fmt::Debug) -> Self {
+        Self::Msg(format!("{err:?}")).bt()
     }
 
     pub fn bt(self) -> Self {
@@ -230,6 +276,13 @@ impl Error {
         Self::WithPath {
             inner: Box::new(self),
             path: p.as_ref().to_path_buf(),
+        }
+    }
+
+    pub fn context(self, c: impl std::fmt::Display + Send + Sync + 'static) -> Self {
+        Self::Context {
+            inner: Box::new(self),
+            context: Box::new(c),
         }
     }
 }
@@ -252,5 +305,90 @@ pub fn zip<T, U>(r1: Result<T>, r2: Result<U>) -> Result<(T, U)> {
         (Ok(r1), Ok(r2)) => Ok((r1, r2)),
         (Err(e), _) => Err(e),
         (_, Err(e)) => Err(e),
+    }
+}
+
+pub(crate) mod private {
+    pub trait Sealed {}
+
+    impl<T, E> Sealed for std::result::Result<T, E> where E: std::error::Error {}
+    impl<T> Sealed for Option<T> {}
+}
+
+/// Attach more context to an error.
+///
+/// Inspired by [`anyhow::Context`].
+pub trait Context<T, E>: private::Sealed {
+    /// Wrap the error value with additional context.
+    fn context<C>(self, context: C) -> std::result::Result<T, Error>
+    where
+        C: Display + Send + Sync + 'static;
+
+    /// Wrap the error value with additional context that is evaluated lazily
+    /// only once an error does occur.
+    fn with_context<C, F>(self, f: F) -> std::result::Result<T, Error>
+    where
+        C: Display + Send + Sync + 'static,
+        F: FnOnce() -> C;
+}
+
+impl<T, E> Context<T, E> for std::result::Result<T, E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn context<C>(self, context: C) -> std::result::Result<T, Error>
+    where
+        C: Display + Send + Sync + 'static,
+    {
+        // Not using map_err to save 2 useless frames off the captured backtrace
+        // in ext_context.
+        match self {
+            Ok(ok) => Ok(ok),
+            Err(error) => Err(Error::WrappedContext {
+                wrapped: Box::new(error),
+                context: context.to_string(),
+            }
+            .bt()),
+        }
+    }
+
+    fn with_context<C, F>(self, context: F) -> std::result::Result<T, Error>
+    where
+        C: Display + Send + Sync + 'static,
+        F: FnOnce() -> C,
+    {
+        match self {
+            Ok(ok) => Ok(ok),
+            Err(error) => Err(Error::WrappedContext {
+                wrapped: Box::new(error),
+                context: context().to_string(),
+            }
+            .bt()),
+        }
+    }
+}
+
+impl<T> Context<T, Infallible> for Option<T> {
+    fn context<C>(self, context: C) -> std::result::Result<T, Error>
+    where
+        C: Display + Send + Sync + 'static,
+    {
+        // Not using ok_or_else to save 2 useless frames off the captured
+        // backtrace.
+        match self {
+            Some(ok) => Ok(ok),
+            None => Err(Error::msg(context).bt()),
+        }
+    }
+
+    fn with_context<C, F>(self, context: F) -> std::result::Result<T, Error>
+    where
+        C: Display + Send + Sync + 'static,
+        F: FnOnce() -> C,
+    {
+        match self {
+            Some(v) => Ok(v),
+            None => Err(Error::UnwrapNone.context(context()).bt()),
+        }
     }
 }

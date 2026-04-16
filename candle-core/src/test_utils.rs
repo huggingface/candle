@@ -4,7 +4,7 @@ use crate::{Result, Tensor};
 macro_rules! test_device {
     // TODO: Switch to generating the two last arguments automatically once concat_idents is
     // stable. https://github.com/rust-lang/rust/issues/29599
-    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident) => {
+    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident) => {
         #[test]
         fn $test_cpu() -> Result<()> {
             $fn_name(&Device::Cpu)
@@ -15,7 +15,22 @@ macro_rules! test_device {
         fn $test_cuda() -> Result<()> {
             $fn_name(&Device::new_cuda(0)?)
         }
+
+        #[cfg(feature = "metal")]
+        #[test]
+        fn $test_metal() -> Result<()> {
+            $fn_name(&Device::new_metal(0)?)
+        }
     };
+}
+
+pub fn assert_tensor_eq(t1: &Tensor, t2: &Tensor) -> Result<()> {
+    assert_eq!(t1.shape(), t2.shape());
+    // Default U8 may not be large enough to hold the sum (`t.sum_all` defaults to the dtype of `t`)
+    let eq_tensor = t1.eq(t2)?.to_dtype(crate::DType::U32)?;
+    let all_equal = eq_tensor.sum_all()?;
+    assert_eq!(all_equal.to_scalar::<u32>()?, eq_tensor.elem_count() as u32);
+    Ok(())
 }
 
 pub fn to_vec0_round(t: &Tensor, digits: i32) -> Result<f32> {

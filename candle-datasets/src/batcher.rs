@@ -78,7 +78,7 @@ impl<I: Iterator<Item = Tensor>> Iterator for Batcher<Iter1<I>> {
             match self.inner.inner.next() {
                 Some(item) => items.push(item),
                 None => {
-                    if self.return_last_incomplete_batch {
+                    if self.return_last_incomplete_batch && !items.is_empty() {
                         break;
                     }
                     return None;
@@ -102,7 +102,7 @@ impl<I: Iterator<Item = (Tensor, Tensor)>> Iterator for Batcher<Iter2<I>> {
                     ys.push(y)
                 }
                 None => {
-                    if self.return_last_incomplete_batch {
+                    if self.return_last_incomplete_batch && !xs.is_empty() && !ys.is_empty() {
                         break;
                     }
                     return None;
@@ -127,7 +127,7 @@ impl<I: Iterator<Item = Result<Tensor>>> Iterator for Batcher<IterResult1<I>> {
             match self.inner.inner.next() {
                 Some(item) => items.push(item),
                 None => {
-                    if self.return_last_incomplete_batch {
+                    if self.return_last_incomplete_batch && !items.is_empty() {
                         break;
                     }
                     return None;
@@ -154,7 +154,7 @@ impl<I: Iterator<Item = Result<(Tensor, Tensor)>>> Iterator for Batcher<IterResu
                 }
                 Some(Err(err)) => errs.push(err),
                 None => {
-                    if self.return_last_incomplete_batch {
+                    if self.return_last_incomplete_batch && !xs.is_empty() && !ys.is_empty() {
                         break;
                     }
                     return None;

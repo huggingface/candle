@@ -5,6 +5,26 @@ use hf_hub::{
 use parquet::file::reader::SerializedFileReader;
 use std::fs::File;
 
+/// Re-export of the `FileReader` trait from the `parquet` crate.
+///
+/// This trait provides access to Parquet file metadata and row groups:
+/// - [`FileReader::metadata`]
+/// - [`FileReader::num_row_groups`]
+/// - [`FileReader::get_row_group`]
+/// - [`FileReader::get_row_iter`]
+///
+/// This is re-exported so downstream users of [`from_hub`] can use these
+/// methods without needing to explicitly add `parquet` as a dependency.
+///
+/// # Example
+/// ```
+/// use candle_datasets::hub::{from_hub, FileReader};  // Re-exported trait
+/// let api = hf_hub::api::sync::Api::new().unwrap();
+/// let files = from_hub(&api, "hf-internal-testing/dummy_image_text_data".to_string()).unwrap();
+/// let num_rows = files[0].metadata().file_metadata().num_rows();
+/// ```
+pub use parquet::file::reader::FileReader;
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("ApiError : {0}")]
@@ -23,10 +43,21 @@ fn sibling_to_parquet(
 ) -> Result<SerializedFileReader<File>, Error> {
     let local = repo.get(rfilename)?;
     let file = File::open(local)?;
-    let reader = SerializedFileReader::new(file)?;
-    Ok(reader)
+    Ok(SerializedFileReader::new(file)?)
 }
 
+/// Loads all `.parquet` files from a given dataset ID on the Hugging Face Hub.
+///
+/// This returns a list of `SerializedFileReader<File>` that can be used to read Parquet content.
+///
+/// # Example
+/// ```
+/// use candle_datasets::hub::{from_hub, FileReader};
+/// let api = hf_hub::api::sync::Api::new().unwrap();
+/// let readers = from_hub(&api, "hf-internal-testing/dummy_image_text_data".to_string()).unwrap();
+/// let metadata = readers[0].metadata();
+/// assert_eq!(metadata.file_metadata().num_rows(), 20);
+/// ```
 pub fn from_hub(api: &Api, dataset_id: String) -> Result<Vec<SerializedFileReader<File>>, Error> {
     let repo = Repo::with_revision(
         dataset_id,
@@ -36,28 +67,16 @@ pub fn from_hub(api: &Api, dataset_id: String) -> Result<Vec<SerializedFileReade
     let repo = api.repo(repo);
     let info = repo.info()?;
 
-    let files: Result<Vec<_>, _> = info
-        .siblings
+    info.siblings
         .into_iter()
-        .filter_map(|s| -> Option<Result<_, _>> {
-            let filename = s.rfilename;
-            if filename.ends_with(".parquet") {
-                let reader_result = sibling_to_parquet(&filename, &repo);
-                Some(reader_result)
-            } else {
-                None
-            }
-        })
-        .collect();
-    let files = files?;
-
-    Ok(files)
+        .filter(|s| s.rfilename.ends_with(".parquet"))
+        .map(|s| sibling_to_parquet(&s.rfilename, &repo))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parquet::file::reader::FileReader;
 
     #[test]
     fn test_dataset() {

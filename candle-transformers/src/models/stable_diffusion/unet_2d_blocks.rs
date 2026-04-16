@@ -146,7 +146,7 @@ impl DownEncoderBlock2D {
             (0..(config.num_layers))
                 .map(|i| {
                     let in_channels = if i == 0 { in_channels } else { out_channels };
-                    ResnetBlock2D::new(vs.pp(&i.to_string()), in_channels, conv_cfg)
+                    ResnetBlock2D::new(vs.pp(i.to_string()), in_channels, conv_cfg)
                 })
                 .collect::<Result<Vec<_>>>()?
         };
@@ -235,7 +235,7 @@ impl UpDecoderBlock2D {
             (0..(config.num_layers))
                 .map(|i| {
                     let in_channels = if i == 0 { in_channels } else { out_channels };
-                    ResnetBlock2D::new(vs.pp(&i.to_string()), in_channels, conv_cfg)
+                    ResnetBlock2D::new(vs.pp(i.to_string()), in_channels, conv_cfg)
                 })
                 .collect::<Result<Vec<_>>>()?
         };
@@ -328,9 +328,9 @@ impl UNetMidBlock2D {
         };
         let mut attn_resnets = vec![];
         for index in 0..config.num_layers {
-            let attn = AttentionBlock::new(vs_attns.pp(&index.to_string()), in_channels, attn_cfg)?;
+            let attn = AttentionBlock::new(vs_attns.pp(index.to_string()), in_channels, attn_cfg)?;
             let resnet = ResnetBlock2D::new(
-                vs_resnets.pp(&(index + 1).to_string()),
+                vs_resnets.pp((index + 1).to_string()),
                 in_channels,
                 resnet_cfg,
             )?;
@@ -425,7 +425,7 @@ impl UNetMidBlock2DCrossAttn {
         let mut attn_resnets = vec![];
         for index in 0..config.num_layers {
             let attn = SpatialTransformer::new(
-                vs_attns.pp(&index.to_string()),
+                vs_attns.pp(index.to_string()),
                 in_channels,
                 n_heads,
                 in_channels / n_heads,
@@ -433,7 +433,7 @@ impl UNetMidBlock2DCrossAttn {
                 attn_cfg,
             )?;
             let resnet = ResnetBlock2D::new(
-                vs_resnets.pp(&(index + 1).to_string()),
+                vs_resnets.pp((index + 1).to_string()),
                 in_channels,
                 resnet_cfg,
             )?;
@@ -515,7 +515,7 @@ impl DownBlock2D {
         let resnets = (0..config.num_layers)
             .map(|i| {
                 let in_channels = if i == 0 { in_channels } else { out_channels };
-                ResnetBlock2D::new(vs_resnets.pp(&i.to_string()), in_channels, resnet_cfg)
+                ResnetBlock2D::new(vs_resnets.pp(i.to_string()), in_channels, resnet_cfg)
             })
             .collect::<Result<Vec<_>>>()?;
         let downsampler = if config.add_downsample {
@@ -619,7 +619,7 @@ impl CrossAttnDownBlock2D {
         let attentions = (0..config.downblock.num_layers)
             .map(|i| {
                 SpatialTransformer::new(
-                    vs_attn.pp(&i.to_string()),
+                    vs_attn.pp(i.to_string()),
                     out_channels,
                     n_heads,
                     out_channels / n_heads,
@@ -724,7 +724,7 @@ impl UpBlock2D {
                     out_channels
                 };
                 let in_channels = resnet_in_channels + res_skip_channels;
-                ResnetBlock2D::new(vs_resnets.pp(&i.to_string()), in_channels, resnet_cfg)
+                ResnetBlock2D::new(vs_resnets.pp(i.to_string()), in_channels, resnet_cfg)
             })
             .collect::<Result<Vec<_>>>()?;
         let upsampler = if config.add_upsample {
@@ -826,7 +826,7 @@ impl CrossAttnUpBlock2D {
         let attentions = (0..config.upblock.num_layers)
             .map(|i| {
                 SpatialTransformer::new(
-                    vs_attn.pp(&i.to_string()),
+                    vs_attn.pp(i.to_string()),
                     out_channels,
                     n_heads,
                     out_channels / n_heads,

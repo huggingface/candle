@@ -1,14 +1,22 @@
+//! MixFormer (Microsoft's Phi Architecture)
+//!
+//! See "Textbooks Are All You Need II: phi-1.5 technical report", Lin et al. 2023
+//! - [Arxiv](https://arxiv.org/abs/2309.05463)
+//! - [GitHub](https://huggingface.co/microsoft/phi-1_5)
+//!
+
 use crate::models::with_tracing::{linear, Embedding as E, Linear};
 /// MixFormer model.
 /// https://huggingface.co/microsoft/phi-1_5
 /// https://arxiv.org/abs/2309.05463
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
+use serde::Deserialize;
 
 const MAX_SEQ_LEN: usize = 4096;
 
-// https://huggingface.co/microsoft/phi-1_5/blob/main/configuration_mixformer_sequential.py
-#[derive(Debug, Clone, PartialEq)]
+// https://huggingface.co/microsoft/phi-1_5/blob/d38e6f954ec29b96fe2cf033937dad64e279b5d9/configuration_mixformer_sequential.py
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) n_positions: usize,
@@ -55,9 +63,59 @@ impl Config {
             pad_vocab_size_multiple: 64,
         }
     }
+
+    pub fn v2() -> Self {
+        Self {
+            vocab_size: 51200,
+            n_positions: 2048,
+            n_embd: 2560,
+            n_layer: 32,
+            n_inner: None,
+            n_head: 32,
+            rotary_dim: usize::min(32, 2560 / 32),
+            activation_function: Activation::Gelu,
+            layer_norm_epsilon: 1e-5,
+            tie_word_embeddings: false,
+            pad_vocab_size_multiple: 64,
+        }
+    }
+
+    // https://huggingface.co/teknium/Puffin-Phi-v2/blob/main/config.json
+    pub fn puffin_phi_v2() -> Self {
+        Self {
+            vocab_size: 50304,
+            n_positions: 2048,
+            n_embd: 2048,
+            n_layer: 24,
+            n_inner: None,
+            n_head: 32,
+            rotary_dim: usize::min(32, 2048 / 32),
+            activation_function: Activation::Gelu,
+            layer_norm_epsilon: 1e-5,
+            tie_word_embeddings: false,
+            pad_vocab_size_multiple: 64,
+        }
+    }
+
+    // https://huggingface.co/teknium/Phi-Hermes-1.3B/blob/main/config.json
+    pub fn phi_hermes_1_3b() -> Self {
+        Self {
+            vocab_size: 50304,
+            n_positions: 2048,
+            n_embd: 2048,
+            n_layer: 24,
+            n_inner: None,
+            n_head: 32,
+            rotary_dim: usize::min(32, 2048 / 32),
+            activation_function: Activation::NewGelu,
+            layer_norm_epsilon: 1e-5,
+            tie_word_embeddings: false,
+            pad_vocab_size_multiple: 64,
+        }
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Embedding {
     wte: E,
 }
@@ -75,28 +133,21 @@ impl Module for Embedding {
     }
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+fn get_mask(size: usize, dtype: DType, device: &Device) -> Result<Tensor> {
     let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
+        .flat_map(|i| (0..size).map(move |j| if j > i { f32::NEG_INFINITY } else { 0. }))
         .collect();
-    Tensor::from_slice(&mask, (size, size), device)
+    Tensor::from_slice(&mask, (size, size), device)?.to_dtype(dtype)
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
 }
 
 impl RotaryEmbedding {
-    fn new(dim: usize, max_seq_len: usize, dev: &Device) -> Result<Self> {
+    fn new(dim: usize, max_seq_len: usize, dtype: DType, dev: &Device) -> Result<Self> {
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
             .map(|i| 1f32 / 10000f32.powf(i as f32 / dim as f32))
@@ -108,8 +159,8 @@ impl RotaryEmbedding {
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
         Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
+            sin: freqs.sin()?.to_dtype(dtype)?,
+            cos: freqs.cos()?.to_dtype(dtype)?,
         })
     }
 
@@ -124,30 +175,14 @@ impl RotaryEmbedding {
         }
         let (_rotary_seqlen, rotary_dim) = self.cos.dims2()?;
         let rotary_dim = rotary_dim * 2;
-        let q_rot = qkv.i((.., .., 0, .., ..rotary_dim))?;
+        let q_rot = qkv.i((.., .., 0, .., ..rotary_dim))?.contiguous()?;
         let q_pass = qkv.i((.., .., 0, .., rotary_dim..))?;
-        let k_rot = qkv.i((.., .., 1, .., ..rotary_dim))?;
+        let k_rot = qkv.i((.., .., 1, .., ..rotary_dim))?.contiguous()?;
         let k_pass = qkv.i((.., .., 1, .., rotary_dim..))?;
-        let q12 = q_rot.chunk(2, D::Minus1)?;
-        let k12 = k_rot.chunk(2, D::Minus1)?;
-        let (q1, q2) = (&q12[0], &q12[1]);
-        let (k1, k2) = (&k12[0], &k12[1]);
-        let c = self.cos.narrow(0, seqlen_offset, seqlen)?.unsqueeze(1)?;
-        let s = self.sin.narrow(0, seqlen_offset, seqlen)?.unsqueeze(1)?;
-        let q_rot = Tensor::cat(
-            &[
-                (q1.broadcast_mul(&c)? - q2.broadcast_mul(&s)?)?,
-                (q1.broadcast_mul(&s)? + q2.broadcast_mul(&c)?)?,
-            ],
-            D::Minus1,
-        )?;
-        let k_rot = Tensor::cat(
-            &[
-                (k1.broadcast_mul(&c)? - k2.broadcast_mul(&s)?)?,
-                (k1.broadcast_mul(&s)? + k2.broadcast_mul(&c)?)?,
-            ],
-            D::Minus1,
-        )?;
+        let c = self.cos.narrow(0, seqlen_offset, seqlen)?;
+        let s = self.sin.narrow(0, seqlen_offset, seqlen)?;
+        let q_rot = candle_nn::rotary_emb::rope_thd(&q_rot, &c, &s)?;
+        let k_rot = candle_nn::rotary_emb::rope_thd(&k_rot, &c, &s)?;
         let q = Tensor::cat(&[&q_rot, &q_pass], D::Minus1)?;
         let k = Tensor::cat(&[&k_rot, &k_pass], D::Minus1)?;
         let v = qkv.i((.., .., 2))?;
@@ -155,12 +190,13 @@ impl RotaryEmbedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     fc1: Linear,
     fc2: Linear,
     act: Activation,
+    span: tracing::Span,
 }
 
 impl MLP {
@@ -172,17 +208,19 @@ impl MLP {
             fc1,
             fc2,
             act: cfg.activation_function,
+            span: tracing::span!(tracing::Level::TRACE, "mlp"),
         })
     }
 }
 
 impl Module for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         xs.apply(&self.fc1)?.apply(&self.act)?.apply(&self.fc2)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CausalLMHead {
     ln: candle_nn::LayerNorm,
     linear: Linear,
@@ -204,7 +242,7 @@ impl Module for CausalLMHead {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MHA {
     wqkv: Linear,
@@ -212,9 +250,11 @@ struct MHA {
     rotary_emb: RotaryEmbedding,
     kv_cache: Option<(Tensor, Tensor)>,
     head_dim: usize,
-    n_head: usize,
     softmax_scale: f64,
     span: tracing::Span,
+    span_rope: tracing::Span,
+    span_mask: tracing::Span,
+    span_softmax: tracing::Span,
 }
 
 impl MHA {
@@ -223,17 +263,20 @@ impl MHA {
         let op_size = cfg.n_embd;
         let wqkv = linear(cfg.n_embd, 3 * op_size, vb.pp("Wqkv"))?;
         let out_proj = linear(op_size, cfg.n_embd, vb.pp("out_proj"))?;
-        let rotary_emb = RotaryEmbedding::new(cfg.rotary_dim, MAX_SEQ_LEN, vb.device())?;
+        let rotary_emb =
+            RotaryEmbedding::new(cfg.rotary_dim, MAX_SEQ_LEN, vb.dtype(), vb.device())?;
         let softmax_scale = 1f64 / (head_dim as f64).sqrt();
         Ok(Self {
             wqkv,
             out_proj,
             head_dim,
-            n_head: cfg.n_head,
             kv_cache: None,
             rotary_emb,
             softmax_scale,
             span: tracing::span!(tracing::Level::TRACE, "mha"),
+            span_rope: tracing::span!(tracing::Level::TRACE, "rope"),
+            span_mask: tracing::span!(tracing::Level::TRACE, "mask"),
+            span_softmax: tracing::span!(tracing::Level::TRACE, "softmax"),
         })
     }
 
@@ -249,7 +292,10 @@ impl MHA {
             Some((prev_k, _)) => prev_k.dim(1)?,
         };
         // In the python implementation, a single tensor is returned with the third axis of size 3.
-        let (q, k, v) = self.rotary_emb.apply_rotary_emb_qkv(&qkv, seqlen_offset)?;
+        let (q, k, v) = {
+            let _enter = self.span_rope.enter();
+            self.rotary_emb.apply_rotary_emb_qkv(&qkv, seqlen_offset)?
+        };
         let (k, v) = match &self.kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
@@ -269,13 +315,15 @@ impl MHA {
         // scores = scores + causal_mask.to(dtype=scores.dtype)
         let attn_weights = match mask {
             None => attn_weights,
-            Some(mask) => masked_fill(
-                &attn_weights,
-                &mask.broadcast_left(b_size * self.n_head)?,
-                f32::NEG_INFINITY,
-            )?,
+            Some(mask) => {
+                let _enter = self.span_mask.enter();
+                attn_weights.broadcast_add(mask)?
+            }
         };
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = {
+            let _enter = self.span_softmax.enter();
+            candle_nn::ops::softmax_last_dim(&attn_weights)?
+        };
 
         // output = torch.einsum('bhts,bshd->bthd', attention_drop, v)
         // attn_weights: b*h,t,s, v: b*h,s,d
@@ -293,7 +341,7 @@ impl MHA {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ParallelBlock {
     ln: candle_nn::LayerNorm,
     mixer: MHA,
@@ -328,7 +376,7 @@ impl ParallelBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MixFormerSequentialForCausalLM {
     embedding: Embedding,
     blocks: Vec<ParallelBlock>,
@@ -337,6 +385,24 @@ pub struct MixFormerSequentialForCausalLM {
 }
 
 impl MixFormerSequentialForCausalLM {
+    pub fn new_v2(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let vb_head = vb.pp("lm_head");
+        let vb = vb.pp("transformer");
+        let embedding = Embedding::new(cfg, vb.pp("embd"))?;
+        let mut blocks = Vec::new();
+        for i in 0..cfg.n_layer {
+            let block = ParallelBlock::new(cfg, vb.pp("h").pp(i))?;
+            blocks.push(block)
+        }
+        let head = CausalLMHead::new(cfg, vb_head)?;
+        Ok(Self {
+            embedding,
+            blocks,
+            head,
+            span: tracing::span!(tracing::Level::TRACE, "mixformer"),
+        })
+    }
+
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb = vb.pp("layers");
         let embedding = Embedding::new(cfg, vb.pp(0))?;
@@ -361,12 +427,36 @@ impl MixFormerSequentialForCausalLM {
         let mask = if seq_len <= 1 {
             None
         } else {
-            Some(get_mask(seq_len, xs.device())?)
+            Some(get_mask(seq_len, xs.dtype(), xs.device())?)
         };
         for block in self.blocks.iter_mut() {
             xs = block.forward(&xs, mask.as_ref())?
         }
         xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
+    }
+
+    pub fn forward_with_img(
+        &mut self,
+        bos_token: &Tensor,
+        xs: &Tensor,
+        img_embeds: &Tensor,
+    ) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let xs = xs.apply(&self.embedding)?;
+        let bos_token = bos_token.apply(&self.embedding)?;
+        // Python implementation sequence order is <bos token embedding><img embedding><rest of text embedding>
+        // https://github.com/vikhyat/moondream/blob/a9d788a20d1543fb1479edc54106e88cff7759d3/moondream/moondream.py#L43-L56
+        let mut xs = Tensor::cat(&[bos_token, img_embeds.clone(), xs], 1)?;
+        let (_b_size, seq_len, _embds) = xs.dims3()?;
+        let mask = Some(get_mask(seq_len, xs.dtype(), xs.device())?);
+        for block in self.blocks.iter_mut() {
+            xs = block.forward(&xs, mask.as_ref())?
+        }
+        let xs = xs
+            .narrow(1, seq_len - 1, 1)?
+            .apply(&self.head)?
+            .squeeze(1)?;
+        Ok(xs)
     }
 
     pub fn clear_kv_cache(&mut self) {

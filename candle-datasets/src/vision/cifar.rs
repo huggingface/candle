@@ -4,7 +4,9 @@
 //! <https://www.cs.toronto.edu/~kriz/cifar.html>
 //! The binary version of the dataset is used.
 use crate::vision::Dataset;
-use candle::{DType, Device, Result, Tensor};
+use candle::{DType, Device, Error, Result, Tensor};
+use hf_hub::{api::sync::Api, Repo, RepoType};
+use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::io::{BufReader, Read};
 
@@ -55,6 +57,65 @@ pub fn load_dir<T: AsRef<std::path::Path>>(dir: T) -> Result<Dataset> {
     Ok(Dataset {
         train_images: Tensor::cat(&train_images, 0)?,
         train_labels: Tensor::cat(&train_labels, 0)?,
+        test_images,
+        test_labels,
+        labels: 10,
+    })
+}
+
+fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor, Tensor)> {
+    let samples = parquet.metadata().file_metadata().num_rows() as usize;
+    let mut buffer_images: Vec<u8> = Vec::with_capacity(samples * 1_024);
+    let mut buffer_labels: Vec<u8> = Vec::with_capacity(samples);
+    for row in parquet.into_iter().flatten() {
+        for (_name, field) in row.get_column_iter() {
+            if let parquet::record::Field::Group(subrow) = field {
+                for (_name, field) in subrow.get_column_iter() {
+                    if let parquet::record::Field::Bytes(value) = field {
+                        // image-rs crate convention is to load in (width, height, channels) order
+                        // See: https://docs.rs/image/latest/image/trait.ImageDecoder.html#tymethod.dimensions
+                        let image = image::load_from_memory(value.data()).unwrap();
+                        buffer_images.extend(image.to_rgb8().as_raw());
+                    }
+                }
+            } else if let parquet::record::Field::Long(label) = field {
+                buffer_labels.push(*label as u8);
+            }
+        }
+    }
+    // Reorder image-rs convention (width, height, channels) to candle/pytorch convolution convention (channels, height, width)
+    let images = (Tensor::from_vec(buffer_images, (samples, 32, 32, 3), &Device::Cpu)?
+        .to_dtype(DType::F32)?
+        .permute((0, 3, 2, 1))?
+        / 255.)?;
+    let labels = Tensor::from_vec(buffer_labels, (samples,), &Device::Cpu)?;
+    Ok((images, labels))
+}
+
+pub fn load() -> Result<Dataset> {
+    let api = Api::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
+    let dataset_id = "cifar10".to_string();
+    let repo = Repo::with_revision(
+        dataset_id,
+        RepoType::Dataset,
+        "refs/convert/parquet".to_string(),
+    );
+    let repo = api.repo(repo);
+    let test_parquet_filename = repo
+        .get("plain_text/test/0000.parquet")
+        .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
+    let train_parquet_filename = repo
+        .get("plain_text/train/0000.parquet")
+        .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
+    let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)
+        .map_err(|e| Error::Msg(format!("Parquet error: {e}")))?;
+    let train_parquet = SerializedFileReader::new(std::fs::File::open(train_parquet_filename)?)
+        .map_err(|e| Error::Msg(format!("Parquet error: {e}")))?;
+    let (test_images, test_labels) = load_parquet(test_parquet)?;
+    let (train_images, train_labels) = load_parquet(train_parquet)?;
+    Ok(crate::vision::Dataset {
+        train_images,
+        train_labels,
         test_images,
         test_labels,
         labels: 10,

@@ -1,20 +1,28 @@
+//! BigCode implementation in Rust based on the GPT-BigCode model.
+//!
+//! [StarCoder/BigCode](https://huggingface.co/bigcode/starcoderbase-1b) is a LLM
+//! model specialized to code generation. The initial model was trained on 80
+//! programming languages. See "StarCoder: A State-of-the-Art LLM for Code", Mukherjee et al. 2023
+//! - [Arxiv](https://arxiv.org/abs/2305.06161)
+//! - [GitHub](https://github.com/bigcode-project/starcoder)
+//!
+//! ## Running some example
+//!
+//! ```bash
+//! cargo run --example bigcode --release -- --prompt "fn fact(n: u64) -> u64"
+//!
+//! > fn fact(n: u64) -> u64  {
+//! >     if n == 0 {
+//! >         1
+//! >     } else {
+//! >         n * fact(n - 1)
+//! >     }
+//! > }
+//! ```
+//!
+
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder};
-
-fn linear(size1: usize, size2: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
-    let weight = vb.get((size2, size1), "weight")?;
-    let bias = if bias {
-        Some(vb.get(size2, "bias")?)
-    } else {
-        None
-    };
-    Ok(Linear::new(weight, bias))
-}
-
-fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
-    Ok(Embedding::new(embeddings, hidden_size))
-}
+use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 
 fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
     let weight = vb.get(size, "weight")?;
@@ -182,7 +190,7 @@ impl Attention {
         let mask_value =
             Tensor::new(f32::NEG_INFINITY, query.device())?.broadcast_as(attn_shape)?;
         let attn_weights = attention_mask.where_cond(&attn_weights, &mask_value)?;
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let value = value.contiguous()?;
         let attn_output = if self.multi_query {
             attn_weights
@@ -313,7 +321,7 @@ impl GPTBigCode {
         let wte = embedding(cfg.vocab_size, hidden_size, vb_t.pp("wte"))?;
         let wpe = embedding(cfg.max_position_embeddings, hidden_size, vb_t.pp("wpe"))?;
         let blocks = (0..cfg.num_hidden_layers)
-            .map(|i| Block::load(vb_t.pp(&format!("h.{i}")), &cfg))
+            .map(|i| Block::load(vb_t.pp(format!("h.{i}")), &cfg))
             .collect::<Result<Vec<_>>>()?;
         let ln_f = layer_norm(hidden_size, cfg.layer_norm_epsilon, vb_t.pp("ln_f"))?;
         let lm_head = linear(hidden_size, cfg.vocab_size, false, vb_t.pp("wte"))?;

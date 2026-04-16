@@ -11,11 +11,11 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { path = "../candle-core", version = "0.2.3", package = "candle-core" }
-candle-datasets = { path = "../candle-datasets", version = "0.2.3" }
-candle-nn = { path = "../candle-nn", version = "0.2.3" }
-candle-transformers = { path = "../candle-transformers", version = "0.2.3" }
-candle-flash-attn = { path = "../candle-flash-attn", version = "0.2.3", optional = true }
+candle = { workspace = true }
+candle-datasets = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+candle-flash-attn = { workspace = true, optional = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,9 +24,10 @@ intel-mkl-src = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 half = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
+anyhow = { workspace = true }
+tokio = "1.48.0"
 
 [dev-dependencies]
-anyhow = { workspace = true }
 byteorder = { workspace = true }
 hf-hub = { workspace = true, features=["tokio"]}
 clap = { workspace = true }
@@ -36,9 +37,7 @@ tokenizers = { workspace = true, features = ["onig"] }
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
-wav = { workspace = true }
 # Necessary to disambiguate with tokio in wasm examples which are 1.28.1
-tokio = "1.29.1"
 parquet = { workspace = true }
 image = { workspace = true }
 

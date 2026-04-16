@@ -1,3 +1,5 @@
+//! A `VarMap` is a store that holds named variables.
+//!
 use candle::{DType, Device, Result, Shape, Tensor, Var};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,7 +32,7 @@ impl VarMap {
     pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
         let tensor_data = self.data.lock().unwrap();
         let data = tensor_data.iter().map(|(k, v)| (k, v.as_tensor()));
-        safetensors::tensor::serialize_to_file(data, &None, path.as_ref())?;
+        safetensors::tensor::serialize_to_file(data, None, path.as_ref())?;
         Ok(())
     }
 
@@ -52,7 +54,7 @@ impl VarMap {
     }
 
     /// Set a named variable to some value.
-    pub fn set_one<K: AsRef<String>, V: AsRef<Tensor>>(&mut self, name: K, value: V) -> Result<()> {
+    pub fn set_one<K: AsRef<str>, V: AsRef<Tensor>>(&mut self, name: K, value: V) -> Result<()> {
         let tensor_data = self.data.lock().unwrap();
         let name = name.as_ref();
         match tensor_data.get(name) {
@@ -70,7 +72,7 @@ impl VarMap {
     ///
     /// If an error is returned, some of the variables might have already been set to their new
     /// values.
-    pub fn set<I: Iterator<Item = (K, V)>, K: AsRef<String>, V: AsRef<Tensor>>(
+    pub fn set<I: Iterator<Item = (K, V)>, K: AsRef<str>, V: AsRef<Tensor>>(
         &mut self,
         iter: I,
     ) -> Result<()> {

@@ -1,5 +1,5 @@
-# Generated content DO NOT EDIT
-from .. import nn
-
-silu = nn.silu
-softmax = nn.softmax
+from .module import Module
+from .container import Sequential, ModuleList, ModuleDict
+from .sparse import Embedding
+from .normalization import LayerNorm
+from .linear import Linear

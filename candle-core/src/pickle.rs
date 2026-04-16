@@ -1,7 +1,7 @@
-// Just enough pickle support to be able to read PyTorch checkpoints.
+//! Just enough pickle support to be able to read PyTorch checkpoints.
 // This hardcodes objects that are required for tensor reading, we may want to make this a bit more
 // composable/tensor agnostic at some point.
-use crate::{DType, Error as E, Layout, Result, Tensor};
+use crate::{Context, DType, Error as E, Layout, Result, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -42,9 +42,10 @@ pub enum OpCode {
     Stop = b'.',
     NewObj = 0x81,
     EmptyList = b']',
-    BinFloat = b'g',
+    BinFloat = b'G',
     Append = b'a',
     Appends = b'e',
+    Long1 = 0x8a,
 }
 
 // Avoid using FromPrimitive so as not to drag another dependency.
@@ -84,6 +85,7 @@ impl TryFrom<u8> for OpCode {
             b'G' => Ok(Self::BinFloat),
             b'a' => Ok(Self::Append),
             b'e' => Ok(Self::Appends),
+            0x8a => Ok(Self::Long1),
             value => Err(value),
         }
     }
@@ -106,6 +108,7 @@ pub enum Object {
         class_name: String,
     },
     Int(i32),
+    Long(i64),
     Float(f64),
     Unicode(String),
     Bool(bool),
@@ -170,6 +173,14 @@ impl Object {
         }
     }
 
+    pub fn int_or_long(self) -> OResult<i64> {
+        match self {
+            Self::Int(t) => Ok(t as i64),
+            Self::Long(t) => Ok(t),
+            _ => Err(self),
+        }
+    }
+
     pub fn tuple(self) -> OResult<Vec<Self>> {
         match self {
             Self::Tuple(t) => Ok(t),
@@ -192,6 +203,55 @@ impl Object {
             } => Ok((module_name, class_name)),
             _ => Err(self),
         }
+    }
+
+    pub fn into_tensor_info(
+        self,
+        name: Self,
+        dir_name: &std::path::Path,
+    ) -> Result<Option<TensorInfo>> {
+        let name = match name.unicode() {
+            Ok(name) => name,
+            Err(_) => return Ok(None),
+        };
+        let (callable, args) = match self.reduce() {
+            Ok(callable_args) => callable_args,
+            _ => return Ok(None),
+        };
+        let (callable, args) = match callable {
+            Object::Class {
+                module_name,
+                class_name,
+            } if module_name == "torch._tensor" && class_name == "_rebuild_from_type_v2" => {
+                let mut args = args.tuple()?;
+                let callable = args.remove(0);
+                let args = args.remove(1);
+                (callable, args)
+            }
+            Object::Class {
+                module_name,
+                class_name,
+            } if module_name == "torch._utils" && class_name == "_rebuild_parameter" => {
+                let mut args = args.tuple()?;
+                args.remove(0).reduce()?
+            }
+            _ => (callable, args),
+        };
+        match callable {
+            Object::Class {
+                module_name,
+                class_name,
+            } if module_name == "torch._utils" && class_name == "_rebuild_tensor_v2" => {}
+            _ => return Ok(None),
+        };
+        let (layout, dtype, file_path, storage_size) = rebuild_args(args)?;
+        Ok(Some(TensorInfo {
+            name,
+            dtype,
+            layout,
+            path: format!("{}/{}", dir_name.to_string_lossy(), file_path),
+            storage_size,
+        }))
     }
 }
 
@@ -301,8 +361,10 @@ impl Stack {
                 module_name,
                 class_name,
             } => {
-                if module_name == "collections" && class_name == "OrderedDict" {
-                    // TODO: have a separate ordered dict.
+                if module_name == "collections"
+                    && (class_name == "OrderedDict" || class_name == "defaultdict")
+                {
+                    // TODO: have a separate ordered dict and a separate default dict.
                     Some(Object::Dict(vec![]))
                 } else {
                     None
@@ -411,7 +473,10 @@ impl Stack {
                 self.push(Object::Int(arg))
             }
             OpCode::BinFloat => {
-                let arg = r.read_f64::<LittleEndian>()?;
+                // Somehow floats are encoded using BigEndian whereas int types use LittleEndian.
+                // https://github.com/python/cpython/blob/0c80da4c14d904a367968955544dd6ae58c8101c/Lib/pickletools.py#L855
+                // https://github.com/pytorch/pytorch/blob/372d078f361e726bb4ac0884ac334b04c58179ef/torch/_weights_only_unpickler.py#L243
+                let arg = r.read_f64::<byteorder::BigEndian>()?;
                 self.push(Object::Float(arg))
             }
             OpCode::BinUnicode => {
@@ -483,7 +548,7 @@ impl Stack {
                         crate::bail!("setitems: not an even number of objects")
                     }
                     while let Some(value) = objs.pop() {
-                        let key = objs.pop().unwrap();
+                        let key = objs.pop().context("empty objs")?;
                         d.push((key, value))
                     }
                 } else {
@@ -503,7 +568,7 @@ impl Stack {
                     crate::bail!("setitems: not an even number of objects")
                 }
                 while let Some(value) = objs.pop() {
-                    let key = objs.pop().unwrap();
+                    let key = objs.pop().context("empty objs")?;
                     pydict.push((key, value))
                 }
                 self.push(Object::Dict(pydict))
@@ -536,6 +601,15 @@ impl Stack {
                 let obj = self.new_obj(class, args)?;
                 self.push(obj)
             }
+            OpCode::Long1 => {
+                let n_bytes = r.read_u8()?;
+                let mut v = 0;
+                // Decode the next n bytes in little endian
+                for i in 0..n_bytes {
+                    v |= (r.read_u8()? as i64) << (i * 8);
+                }
+                self.push(Object::Long(v))
+            }
         }
         Ok(false)
     }
@@ -553,10 +627,10 @@ fn rebuild_args(args: Object) -> Result<(Layout, DType, String, usize)> {
     let mut args = args.tuple()?;
     let stride = Vec::<usize>::try_from(args.remove(3))?;
     let size = Vec::<usize>::try_from(args.remove(2))?;
-    let offset = args.remove(1).int()? as usize;
+    let offset = args.remove(1).int_or_long()? as usize;
     let storage = args.remove(0).persistent_load()?;
     let mut storage = storage.tuple()?;
-    let storage_size = storage.remove(4).int()? as usize;
+    let storage_size = storage.remove(4).int_or_long()? as usize;
     let path = storage.remove(2).unicode()?;
     let (_module_name, class_name) = storage.remove(1).class()?;
     let dtype = match class_name.as_str() {
@@ -565,11 +639,16 @@ fn rebuild_args(args: Object) -> Result<(Layout, DType, String, usize)> {
         "HalfStorage" => DType::F16,
         "BFloat16Storage" => DType::BF16,
         "ByteStorage" => DType::U8,
+        "LongStorage" => DType::I64,
         other => {
             crate::bail!("unsupported storage type {other}")
         }
     };
-    let layout = Layout::new(crate::Shape::from(size), stride, offset);
+    let layout = Layout::new(
+        crate::Shape::from(size),
+        stride,
+        offset * dtype.size_in_bytes(),
+    );
     Ok((layout, dtype, path, storage_size))
 }
 
@@ -582,9 +661,16 @@ pub struct TensorInfo {
     pub storage_size: usize,
 }
 
+/// Read the tensor info from a .pth file.
+///
+/// # Arguments
+/// * `file` - The path to the .pth file.
+/// * `verbose` - Whether to print debug information.
+/// * `key` - Optional key to retrieve `state_dict` from the pth file.
 pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
     file: P,
     verbose: bool,
+    key: Option<&str>,
 ) -> Result<Vec<TensorInfo>> {
     let file = std::fs::File::open(file)?;
     let zip_reader = std::io::BufReader::new(file);
@@ -599,15 +685,16 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
         if !file_name.ends_with("data.pkl") {
             continue;
         }
-        let dir_name = std::path::PathBuf::from(file_name.strip_suffix(".pkl").unwrap());
+        let dir_name = std::path::PathBuf::from(file_name.strip_suffix(".pkl").context("no .pkl")?);
         let reader = zip.by_name(file_name)?;
         let mut reader = std::io::BufReader::new(reader);
         let mut stack = Stack::empty();
         stack.read_loop(&mut reader)?;
         let obj = stack.finalize()?;
         if VERBOSE || verbose {
-            println!("{obj:?}");
+            println!("{obj:#?}");
         }
+
         let obj = match obj {
             Object::Build { callable, args } => match *callable {
                 Object::Reduce { callable, args: _ } => match *callable {
@@ -621,52 +708,30 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
             },
             obj => obj,
         };
+
+        // If key is provided, then we need to extract the state_dict from the object.
+        let obj = if let Some(key) = key {
+            if let Object::Dict(key_values) = obj {
+                key_values
+                    .into_iter()
+                    .find(|(k, _)| *k == Object::Unicode(key.to_owned()))
+                    .map(|(_, v)| v)
+                    .ok_or_else(|| E::Msg(format!("key {key} not found")))?
+            } else {
+                obj
+            }
+        } else {
+            obj
+        };
+
+        // If the object is a dict, then we can extract the tensor info from it.
+        // NOTE: We are assuming that the `obj` is state_dict by this stage.
         if let Object::Dict(key_values) = obj {
             for (name, value) in key_values.into_iter() {
-                let name = match name.unicode() {
-                    Ok(name) => name,
-                    Err(_) => continue,
-                };
-                let (callable, args) = match value.reduce() {
-                    Ok(callable_args) => callable_args,
-                    _ => continue,
-                };
-                let (callable, args) = match callable {
-                    Object::Class {
-                        module_name,
-                        class_name,
-                    } if module_name == "torch._tensor"
-                        && class_name == "_rebuild_from_type_v2" =>
-                    {
-                        let mut args = args.tuple()?;
-                        let callable = args.remove(0);
-                        let args = args.remove(1);
-                        (callable, args)
-                    }
-                    _ => (callable, args),
-                };
-                match callable {
-                    Object::Class {
-                        module_name,
-                        class_name,
-                    } if module_name == "torch._utils" && class_name == "_rebuild_tensor_v2" => {}
-                    _ => continue,
-                };
-                match rebuild_args(args) {
-                    Ok((layout, dtype, file_path, storage_size)) => {
-                        let mut path = dir_name.clone();
-                        path.push(file_path);
-                        tensor_infos.push(TensorInfo {
-                            name,
-                            dtype,
-                            layout,
-                            path: path.to_string_lossy().into_owned(),
-                            storage_size,
-                        })
-                    }
-                    Err(err) => {
-                        eprintln!("skipping {name}: {err:?}")
-                    }
+                match value.into_tensor_info(name, &dir_name) {
+                    Ok(Some(tensor_info)) => tensor_infos.push(tensor_info),
+                    Ok(None) => {}
+                    Err(err) => eprintln!("skipping: {err:?}"),
                 }
             }
         }
@@ -683,8 +748,8 @@ pub struct PthTensors {
 }
 
 impl PthTensors {
-    pub fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        let tensor_infos = read_pth_tensor_info(path.as_ref(), false)?;
+    pub fn new<P: AsRef<std::path::Path>>(path: P, key: Option<&str>) -> Result<Self> {
+        let tensor_infos = read_pth_tensor_info(path.as_ref(), false, key)?;
         let tensor_infos = tensor_infos
             .into_iter()
             .map(|ti| (ti.name.to_string(), ti))
@@ -698,6 +763,7 @@ impl PthTensors {
     }
 
     pub fn get(&self, name: &str) -> Result<Option<Tensor>> {
+        use std::io::Read;
         let tensor_info = match self.tensor_infos.get(name) {
             None => return Ok(None),
             Some(tensor_info) => tensor_info,
@@ -706,20 +772,70 @@ impl PthTensors {
         let zip_reader = std::io::BufReader::new(std::fs::File::open(&self.path)?);
         let mut zip = zip::ZipArchive::new(zip_reader)?;
         let mut reader = zip.by_name(&tensor_info.path)?;
+        let is_fortran_contiguous = tensor_info.layout.is_fortran_contiguous();
+        let rank = tensor_info.layout.shape().rank();
 
-        // Reading the data is a bit tricky as it can be strided, use an offset, etc.
-        // For now only support the basic case.
-        if tensor_info.layout.start_offset() != 0 || !tensor_info.layout.is_contiguous() {
+        // Reading the data is a bit tricky as it can be strided, for now only support the basic
+        // case and when the tensor is fortran contiguous.
+        if !tensor_info.layout.is_contiguous() && !is_fortran_contiguous {
             crate::bail!(
                 "cannot retrieve non-contiguous tensors {:?}",
                 tensor_info.layout
             )
+        }
+        let start_offset = tensor_info.layout.start_offset();
+        if start_offset > 0 {
+            std::io::copy(
+                &mut reader.by_ref().take(start_offset as u64),
+                &mut std::io::sink(),
+            )?;
         }
         let tensor = Tensor::from_reader(
             tensor_info.layout.shape().clone(),
             tensor_info.dtype,
             &mut reader,
         )?;
-        Ok(Some(tensor))
+
+        if rank > 1 && is_fortran_contiguous {
+            // Reverse the shape, e.g. Shape(2, 3, 4) -> Shape(4, 3, 2)
+            let shape_reversed: Vec<_> = tensor_info.layout.dims().iter().rev().cloned().collect();
+            let tensor = tensor.reshape(shape_reversed)?;
+
+            // Permute (transpose) the dimensions, e.g. Shape(4, 3, 2) -> Shape(2, 3, 4)
+            let dim_indices_reversed: Vec<_> = (0..rank).rev().collect();
+            let tensor = tensor.permute(dim_indices_reversed)?;
+            Ok(Some(tensor))
+        } else {
+            Ok(Some(tensor))
+        }
     }
+}
+
+/// Read all the tensors from a PyTorch pth file with a given key.
+///
+/// # Arguments
+/// * `path` - Path to the pth file.
+/// * `key` - Optional key to retrieve `state_dict` from the pth file. Sometimes the pth file
+///   contains multiple objects and the state_dict is the one we are interested in.
+pub fn read_all_with_key<P: AsRef<std::path::Path>>(
+    path: P,
+    key: Option<&str>,
+) -> Result<Vec<(String, Tensor)>> {
+    let pth = PthTensors::new(path, key)?;
+    let tensor_names = pth.tensor_infos.keys();
+    let mut tensors = Vec::with_capacity(tensor_names.len());
+    for name in tensor_names {
+        if let Some(tensor) = pth.get(name)? {
+            tensors.push((name.to_string(), tensor))
+        }
+    }
+    Ok(tensors)
+}
+
+/// Read all the tensors from a PyTorch pth file.
+///
+/// # Arguments
+/// * `path` - Path to the pth file.
+pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
+    read_all_with_key(path, None)
 }

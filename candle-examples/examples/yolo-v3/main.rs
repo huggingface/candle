@@ -43,6 +43,7 @@ pub fn report(
     confidence_threshold: f32,
     nms_threshold: f32,
 ) -> Result<DynamicImage> {
+    let pred = pred.to_device(&Device::Cpu)?;
     let (npreds, pred_size) = pred.dims2()?;
     let nclasses = pred_size - 5;
     // The bounding boxes grouped by (maximum) class index.
@@ -158,7 +159,7 @@ pub fn main() -> Result<()> {
         let net_width = darknet.width()?;
         let net_height = darknet.height()?;
 
-        let original_image = image::io::Reader::open(&image_name)?
+        let original_image = image::ImageReader::open(&image_name)?
             .decode()
             .map_err(candle::Error::wrap)?;
         let image = {

@@ -2,11 +2,11 @@ use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
-struct PostionEmbeddingRandom {
+struct PositionEmbeddingRandom {
     positional_encoding_gaussian_matrix: Tensor,
 }
 
-impl PostionEmbeddingRandom {
+impl PositionEmbeddingRandom {
     fn new(num_pos_feats: usize, vb: VarBuilder) -> Result<Self> {
         let positional_encoding_gaussian_matrix =
             vb.get((2, num_pos_feats), "positional_encoding_gaussian_matrix")?;
@@ -52,7 +52,7 @@ impl PostionEmbeddingRandom {
 
 #[derive(Debug)]
 pub struct PromptEncoder {
-    pe_layer: PostionEmbeddingRandom,
+    pe_layer: PositionEmbeddingRandom,
     point_embeddings: Vec<candle_nn::Embedding>,
     not_a_point_embed: candle_nn::Embedding,
     mask_downscaling_conv1: candle_nn::Conv2d,
@@ -76,7 +76,7 @@ impl PromptEncoder {
         vb: VarBuilder,
     ) -> Result<Self> {
         let num_points_embeddings = 4;
-        let pe_layer = PostionEmbeddingRandom::new(embed_dim / 2, vb.pp("pe_layer"))?;
+        let pe_layer = PositionEmbeddingRandom::new(embed_dim / 2, vb.pp("pe_layer"))?;
         let not_a_point_embed = candle_nn::embedding(1, embed_dim, vb.pp("not_a_point_embed"))?;
         let no_mask_embed = candle_nn::embedding(1, embed_dim, vb.pp("no_mask_embed"))?;
         let cfg = candle_nn::Conv2dConfig {
@@ -218,7 +218,8 @@ impl PromptEncoder {
             (Some(se_points), None) => se_points,
             (None, Some(se_boxes)) => se_boxes,
             (None, None) => {
-                Tensor::zeros((1, 0, self.embed_dim), DType::F32, &candle::Device::Cpu)?
+                let dev = self.no_mask_embed.embeddings().device();
+                Tensor::zeros((1, 0, self.embed_dim), DType::F32, dev)?
             }
         };
 

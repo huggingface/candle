@@ -1,38 +1,28 @@
-// T5 Text Model, quantized version
-// https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
+//! T5 model implementation with quantization support.
+//!
+//! T5 is an encoder-decoder model pre-trained on a multi-task mixture of supervised
+//! and unsupervised tasks. This implementation provides quantization for reduced
+//! memory and compute requirements.
+//!
+//! Key characteristics:
+//! - Encoder-decoder architecture
+//! - Layer normalization
+//! - Relative positional encodings
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - 📝 [T5 Paper](https://arxiv.org/abs/1910.10683)
+//! - 🤗 [Model Card](https://huggingface.co/t5-base)
+//! - 🤗 Original model from [T5](https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py)
 
+use crate::models::t5::{deserialize_feed_forward_proj_activation, ActivationWithOptionalGating};
 use crate::models::with_tracing::QMatMul;
+use crate::quantized_nn::Embedding;
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Activation;
 use serde::Deserialize;
 use std::sync::Arc;
-
-#[derive(Debug)]
-pub struct Embedding {
-    inner: candle_nn::Embedding,
-    span: tracing::Span,
-}
-
-impl Embedding {
-    pub fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
-        let embeddings = vb.get((d1, d2), "weight")?.dequantize(vb.device())?;
-        let inner = candle_nn::Embedding::new(embeddings, d2);
-        let span = tracing::span!(tracing::Level::TRACE, "embedding");
-        Ok(Self { inner, span })
-    }
-
-    pub fn embeddings(&self) -> &Tensor {
-        self.inner.embeddings()
-    }
-}
-
-impl Module for Embedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(xs)
-    }
-}
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -79,8 +69,8 @@ pub struct Config {
     dropout_rate: f64,
     layer_norm_epsilon: f64,
     initializer_factor: f64,
-    #[serde(default)]
-    feed_forward_proj: Activation,
+    #[serde(default, deserialize_with = "deserialize_feed_forward_proj_activation")]
+    pub feed_forward_proj: ActivationWithOptionalGating,
     #[serde(default = "default_tie_word_embeddings")]
     tie_word_embeddings: bool,
     #[serde(default = "default_is_decoder")]
@@ -90,6 +80,7 @@ pub struct Config {
     pub use_cache: bool,
     pub pad_token_id: usize,
     pub eos_token_id: usize,
+    pub decoder_start_token_id: Option<usize>,
 }
 
 impl Default for Config {
@@ -107,18 +98,22 @@ impl Default for Config {
             dropout_rate: 0.1,
             layer_norm_epsilon: 1e-6,
             initializer_factor: 1.0,
-            feed_forward_proj: Activation::Relu,
+            feed_forward_proj: ActivationWithOptionalGating {
+                gated: false,
+                activation: Activation::Relu,
+            },
             tie_word_embeddings: true,
             is_decoder: false,
             is_encoder_decoder: true,
             use_cache: true,
             pad_token_id: 0,
             eos_token_id: 1,
+            decoder_start_token_id: Some(0),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct T5LayerNorm {
     weight: Tensor,
     variance_epsilon: f64,
@@ -150,7 +145,7 @@ impl Module for T5LayerNorm {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct T5DenseActDense {
     wi: QMatMul,
     wo: QMatMul,
@@ -181,7 +176,7 @@ impl Module for T5DenseActDense {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct T5DenseGatedActDense {
     wi_0: QMatMul,
     wi_1: QMatMul,
@@ -199,7 +194,7 @@ impl T5DenseGatedActDense {
             wi_0,
             wi_1,
             wo,
-            act: Activation::NewGelu,
+            act: cfg.feed_forward_proj.activation,
             span: tracing::span!(tracing::Level::TRACE, "dense-gated-act-dense"),
         })
     }
@@ -216,7 +211,7 @@ impl Module for T5DenseGatedActDense {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct T5LayerFF {
     dense_act: Option<T5DenseActDense>,
     gated_dense_act: Option<T5DenseGatedActDense>,
@@ -228,7 +223,7 @@ impl T5LayerFF {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
-        let (dense_act, gated_dense_act) = if cfg.feed_forward_proj == Activation::NewGelu {
+        let (dense_act, gated_dense_act) = if cfg.feed_forward_proj.gated {
             (
                 None,
                 Some(T5DenseGatedActDense::load(vb.pp("DenseReluDense"), cfg)?),
@@ -261,7 +256,7 @@ impl Module for T5LayerFF {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct T5Attention {
     q: QMatMul,
     k: QMatMul,
@@ -348,21 +343,21 @@ impl T5Attention {
             .contiguous()?;
         let mut k = k
             .reshape((b_sz, kv_len, self.n_heads, self.d_kv))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         let mut v = v
             .reshape((b_sz, kv_len, self.n_heads, self.d_kv))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
 
-        if self.use_cache {
+        if self.use_cache && key_value_states.is_none() {
             let _enter = self.span_cache.enter();
             if let Some((kv_cache_k, kv_cache_v)) = &self.kv_cache {
-                k = Tensor::cat(&[kv_cache_k, &k], 2)?.contiguous()?;
-                v = Tensor::cat(&[kv_cache_v, &v], 2)?.contiguous()?;
+                k = Tensor::cat(&[kv_cache_k, &k], 2)?;
+                v = Tensor::cat(&[kv_cache_v, &v], 2)?;
             };
             self.kv_cache = Some((k.clone(), v.clone()));
         };
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
         // TODO: Use flash_attn.
         let scores = {
             let _enter = self.span_mm.enter();
@@ -441,7 +436,7 @@ impl T5Attention {
 
         let attn_weights = {
             let _enter = self.span_sm.enter();
-            candle_nn::ops::softmax(&scores, D::Minus1)?
+            candle_nn::ops::softmax_last_dim(&scores)?
         };
         let attn_output = attn_weights.matmul(&v)?;
         let attn_output = attn_output
@@ -456,7 +451,7 @@ impl T5Attention {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct T5LayerSelfAttention {
     self_attention: T5Attention,
     layer_norm: T5LayerNorm,
@@ -495,7 +490,7 @@ impl T5LayerSelfAttention {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct T5LayerCrossAttention {
     cross_attention: T5Attention,
     layer_norm: T5LayerNorm,
@@ -537,7 +532,7 @@ impl T5LayerCrossAttention {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct T5Block {
     self_attn: T5LayerSelfAttention,
     cross_attn: Option<T5LayerCrossAttention>,
@@ -608,7 +603,7 @@ impl T5Block {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct T5Stack {
     block: Vec<T5Block>,
     shared: Arc<Embedding>,
@@ -658,7 +653,7 @@ impl T5Stack {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct T5EncoderModel {
     encoder: T5Stack,
     device: Device,
@@ -667,7 +662,12 @@ pub struct T5EncoderModel {
 
 impl T5EncoderModel {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
+        let shared_vb = if vb.contains_key("shared.weight") {
+            vb.pp("shared")
+        } else {
+            vb.pp("decoder").pp("embed_tokens")
+        };
+        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, shared_vb)?;
         let shared = Arc::new(shared);
         let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg)?;
         Ok(Self {
@@ -691,7 +691,7 @@ impl T5EncoderModel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct T5ForConditionalGeneration {
     encoder: T5Stack,
     decoder: T5Stack,
@@ -708,7 +708,12 @@ impl T5ForConditionalGeneration {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         assert!(cfg.is_encoder_decoder);
         let d_model = cfg.d_model;
-        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
+        let shared_vb = if vb.contains_key("shared.weight") {
+            vb.pp("shared")
+        } else {
+            vb.pp("decoder").pp("embed_tokens")
+        };
+        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, shared_vb)?;
         let shared = Arc::new(shared);
 
         let mut encoder_cfg = cfg.clone();
@@ -775,8 +780,6 @@ impl T5ForConditionalGeneration {
                 Some(ref lm_head) => lm_head.forward(&sequence_output)?,
             }
         };
-
-        // TODO: Rescale output before projecting on vocab? * (self.model_dim**-0.5)
         Ok(output)
     }
 
