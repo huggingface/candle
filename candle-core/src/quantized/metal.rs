@@ -386,7 +386,7 @@ impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
             GgmlDType::Q8K => candle_metal_kernels::GgmlDType::Q8K,
             GgmlDType::F16 => candle_metal_kernels::GgmlDType::F16,
             GgmlDType::F32 => candle_metal_kernels::GgmlDType::F32,
-            GgmlDType::BF16 => candle_metal_kernels::GgmlDType::F16,
+            GgmlDType::BF16 => candle_metal_kernels::GgmlDType::BF16,
         }
     }
 }

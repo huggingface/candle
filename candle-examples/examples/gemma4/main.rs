@@ -20,6 +20,7 @@ use candle_transformers::generation::{LogitsProcessor, Sampling};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
+#[allow(clippy::large_enum_variant)]
 enum ModelKind {
     TextOnly(TextModel),
     Multimodal(Model),
