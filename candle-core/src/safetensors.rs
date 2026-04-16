@@ -9,15 +9,18 @@
 //! Tensors can also be serialized to safetensor format using the `save` function or
 //! `Tensor::save_safetensors` method.
 //!
+use crate::backend::BackendDevice;
 use crate::op::BackpropOp;
 use crate::storage::Storage;
 use crate::tensor::from_storage;
+use crate::tensor_source::TensorSource;
 use crate::{DType, Device, Error, Result, Tensor, WithDType};
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 impl From<DType> for st::Dtype {
     fn from(value: DType) -> Self {
@@ -423,7 +426,7 @@ pub fn save<K: AsRef<str> + Ord + std::fmt::Display, P: AsRef<Path>>(
 struct SafeTensors_<'a>(SafeTensors<'a>);
 
 pub struct MmapedSafetensors {
-    safetensors: Vec<yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>>,
+    safetensors: Vec<Arc<yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>>>,
     routing: Option<HashMap<String, usize>>,
 }
 
@@ -448,7 +451,7 @@ impl MmapedSafetensors {
             },
         )?;
         Ok(Self {
-            safetensors: vec![safetensors],
+            safetensors: vec![Arc::new(safetensors)],
             routing: None,
         })
     }
@@ -480,7 +483,7 @@ impl MmapedSafetensors {
             for k in data.get().0.names() {
                 routing.insert(k.to_string(), index);
             }
-            safetensors.push(data)
+            safetensors.push(Arc::new(data))
         }
         Ok(Self {
             safetensors,
@@ -488,7 +491,58 @@ impl MmapedSafetensors {
         })
     }
 
+    pub fn tensor_source(&self, name: &str) -> Result<MmapTensorSource> {
+        let index = match &self.routing {
+            None => 0,
+            Some(routing) => *routing.get(name).ok_or_else(|| {
+                Error::CannotFindTensor {
+                    path: name.to_string(),
+                }
+                .bt()
+            })?,
+        };
+        let yoke_arc = self.safetensors[index].clone();
+
+        // Borrow scope: compute byte range before moving yoke_arc into the source.
+        let (byte_offset, byte_len, dtype, shape) = {
+            let view = yoke_arc.get().0.tensor(name)?;
+            // data() returns &[u8] pointing directly into the mmap bytes.
+            let raw: &[u8] = view.data();
+            let mmap_base = yoke_arc.backing_cart().as_ref().as_ptr() as usize;
+            let data_ptr = raw.as_ptr() as usize;
+            // Sanity-check: the data pointer must be within the mmap.
+            debug_assert!(
+                data_ptr >= mmap_base,
+                "tensor '{name}' data pointer is outside the mmap region"
+            );
+            let byte_offset = data_ptr - mmap_base;
+            let dtype = DType::try_from(view.dtype())?;
+            let shape = view.shape().to_vec();
+            (byte_offset, raw.len(), dtype, shape)
+        };
+
+        Ok(MmapTensorSource {
+            _backing: yoke_arc,
+            byte_offset,
+            byte_len,
+            dtype,
+            shape,
+        })
+    }
+
     pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
+        if let Device::Lazy(device) = dev {
+            let source = self.tensor_source(name)?;
+            let shape = crate::Shape::from(source.shape.clone());
+            let storage = device.storage_from_tensor_source(source)?;
+
+            return Ok(from_storage(
+                Storage::Lazy(storage),
+                shape,
+                BackpropOp::none(),
+                false,
+            ));
+        }
         self.get(name)?.load(dev)
     }
 
@@ -599,6 +653,41 @@ impl MmapedFile {
         let st = safetensors::SafeTensors::deserialize(&self.inner)
             .map_err(|e| Error::from(e).with_path(&self.path))?;
         Ok(st)
+    }
+}
+
+/// A [`TensorSource`] backed by a memory-mapped safetensors file.
+///
+/// Holds an `Arc` to the [`yoke::Yoke`] that owns the `Mmap`, so the memory
+/// mapping stays alive for as long as this source exists.  The raw bytes are
+/// accessed via a stored `(byte_offset, byte_len)` pair into the mapping.
+pub struct MmapTensorSource {
+    /// Keeps the Mmap (and its SafeTensors header) alive.
+    _backing: Arc<yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>>,
+    byte_offset: usize,
+    byte_len: usize,
+    dtype: DType,
+    shape: Vec<usize>,
+}
+
+impl std::fmt::Debug for MmapTensorSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MmapTensorSource")
+            .field("byte_offset", &self.byte_offset)
+            .field("byte_len", &self.byte_len)
+            .field("dtype", &self.dtype)
+            .field("shape", &self.shape)
+            .finish()
+    }
+}
+
+impl TensorSource for MmapTensorSource {
+    fn data_u8(&self) -> &[u8] {
+        let mmap: &memmap2::Mmap = self._backing.backing_cart();
+        &mmap.as_ref()[self.byte_offset..self.byte_offset + self.byte_len]
+    }
+    fn data_type(&self) -> DType {
+        self.dtype
     }
 }
 

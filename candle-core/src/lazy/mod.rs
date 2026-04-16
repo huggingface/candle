@@ -10,6 +10,7 @@ use crate::lazy::ops::{
     Matmul, Output, Powf, Reduce, SingleCopy2D, Sink, ToDType, Unary, WhereCond,
 };
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::tensor_source::TensorSource;
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Display};
@@ -602,8 +603,8 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
         let buffer_id = node.buffer_id();
 
         if let Op::Const(s) = node.op() {
-            let shape = Shape::from(s.len());
-            allocations.insert(*buffer_id, (Layout::contiguous(shape), s.dtype()));
+            let shape = Shape::from(s.element_count());
+            allocations.insert(*buffer_id, (Layout::contiguous(shape), s.data_type()));
         }
         if let Op::ConstSet(_) = node.op() {
             allocations.insert(*buffer_id, (node.layout().clone(), node.dtype()));
@@ -837,10 +838,10 @@ impl LazyStorage {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Op {
     Uninit,
-    Const(Arc<CpuStorage>),
+    Const(Arc<dyn TensorSource>),
     Resolved(Arc<BufferId>),
     ToCpu,
     Affine(Affine),
@@ -875,6 +876,33 @@ pub enum Op {
     Aggregate,
     CustomOp(CustomOpContainer),
     Output(Output),
+}
+
+impl PartialEq for Op {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Const(a), Self::Const(b)) => Arc::ptr_eq(a, b),
+            (Self::Resolved(a), Self::Resolved(b)) => a == b,
+            (Self::Affine(a), Self::Affine(b)) => a == b,
+            (Self::Powf(a), Self::Powf(b)) => a == b,
+            (Self::Elu(a), Self::Elu(b)) => a == b,
+            (Self::Reduce(a), Self::Reduce(b)) => a == b,
+            (Self::Cmp(a), Self::Cmp(b)) => a == b,
+            (Self::ToDType(a), Self::ToDType(b)) => a == b,
+            (Self::Unary(a), Self::Unary(b)) => a == b,
+            (Self::Binary(a), Self::Binary(b)) => a == b,
+            (Self::WhereCond(a), Self::WhereCond(b)) => a == b,
+            (Self::IndexSelect(a), Self::IndexSelect(b)) => a == b,
+            (Self::Matmul(a), Self::Matmul(b)) => a == b,
+            (Self::CopyStridedSrc(a), Self::CopyStridedSrc(b)) => a == b,
+            (Self::Copy2D(a), Self::Copy2D(b)) => a == b,
+            (Self::ConstSet(a), Self::ConstSet(b)) => a == b,
+            (Self::Sink(a), Self::Sink(b)) => a == b,
+            (Self::CustomOp(a), Self::CustomOp(b)) => a == b,
+            (Self::Output(a), Self::Output(b)) => a == b,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
 }
 
 impl Op {
@@ -1337,9 +1365,20 @@ impl BackendDevice for LazyDevice {
     fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<Self::Storage> {
         let shape = Shape::from(s.len());
         let dtype = s.dtype();
-        let op = Op::Const(s.into());
+        let op = Op::Const(Arc::new(s) as Arc<dyn TensorSource>);
         let storage = LazyStorage::new(op, &Layout::contiguous(shape), dtype);
 
+        Ok(storage)
+    }
+
+    fn storage_from_tensor_source<S: TensorSource + 'static>(
+        &self,
+        source: S,
+    ) -> Result<Self::Storage> {
+        let element_count = source.element_count();
+        let dtype = source.data_type();
+        let op = Op::Const(Arc::new(source) as Arc<dyn TensorSource>);
+        let storage = LazyStorage::new(op, &Layout::contiguous(Shape::from(element_count)), dtype);
         Ok(storage)
     }
 

@@ -11,6 +11,7 @@ use crate::lazy::{
     MemoryPlan, Op,
 };
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::tensor_source::TensorSource;
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, LazyStorage, Result, Shape};
 use candle_metal_kernels::{
     metal::{Buffer, Commands, Device, MetalFence},
@@ -2320,6 +2321,31 @@ impl BackendDevice for MetalDevice {
         self.storage_from_cpu_storage(&storage)
     }
 
+    fn storage_from_dyn_tensor_source(&self, source: &dyn TensorSource) -> Result<Self::Storage> {
+        let count = source.element_count();
+        let buffer = self.new_buffer_with_data(source.data_u8())?;
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            count,
+            source.data_type(),
+        ))
+    }
+
+    fn storage_from_tensor_source<S: TensorSource + 'static>(
+        &self,
+        source: S,
+    ) -> Result<Self::Storage> {
+        let count = source.element_count();
+        let buffer = self.new_buffer_with_data(source.data_u8())?;
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            count,
+            source.data_type(),
+        ))
+    }
+
     fn rand_uniform(
         &self,
         shape: &Shape,
@@ -2420,14 +2446,14 @@ impl MetalDevice {
     fn eval_const(
         &self,
         allocator: &mut MetalAllocator,
-        s: &Arc<CpuStorage>,
+        s: &Arc<dyn TensorSource>,
         buffer_id: &BufferId,
     ) -> Result<()> {
         let mut cache = self.const_cache.lock().unwrap();
         let buffer = if let Some(cached) = cache.get(buffer_id) {
             cached.clone()
         } else {
-            let storage = self.storage_from_cpu_storage(s)?;
+            let storage = self.storage_from_dyn_tensor_source(s.as_ref())?;
             let buffer = storage.buffer_arc();
             cache.insert(*buffer_id, buffer.clone());
             buffer

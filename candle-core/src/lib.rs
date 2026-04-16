@@ -85,6 +85,7 @@ pub mod streaming;
 mod strided_index;
 mod tensor;
 mod tensor_cat;
+pub mod tensor_source;
 pub mod test_utils;
 pub mod utils;
 mod variable;
