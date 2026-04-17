@@ -3369,7 +3369,8 @@ extern "C" __global__ void quantize_q8_1(const float * __restrict__ x, void * __
     sum = warp_reduce_sum(sum);
 
     const float d = amax / 127;
-    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+    const float id = amax == 0.0f ? 0.0f : 1.0f / d;
+    const int8_t q = roundf(xi * id);
 
     y[ib].qs[iqs] = q;
 
@@ -3379,6 +3380,76 @@ extern "C" __global__ void quantize_q8_1(const float * __restrict__ x, void * __
 
     reinterpret_cast<half&>(y[ib].ds.x) = d;
     reinterpret_cast<half&>(y[ib].ds.y) = sum;
+}
+
+// GPU-native Q8_0 quantizer. Same block layout as llama.cpp's
+// quantize_row_q8_0_ref: 32 int8 quants + 1 half scale per block. Used for
+// persistent KV-cache storage where we want the cheap Q8_0 × Q8_1 gemv
+// kernels to run against the cache without a CPU roundtrip on every write.
+extern "C" __global__ void quantize_q8_0(const float * __restrict__ x, void * __restrict__ vy, const int kx, const int kx_padded) {
+    const int ix = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (ix >= kx_padded) {
+        return;
+    }
+
+    const int iy = blockDim.y*blockIdx.y + threadIdx.y;
+
+    const int i_padded = iy*kx_padded + ix;
+
+    block_q8_0 * y = (block_q8_0 *) vy;
+
+    const int ib = i_padded / QK8_0; // block index
+    const int iqs = i_padded % QK8_0; // quant index
+
+    const float xi = ix < kx ? x[iy*kx + ix] : 0.0f;
+    float amax = fabsf(xi);
+
+    amax = warp_reduce_max(amax);
+
+    const float d = amax / 127;
+    const float id = amax == 0.0f ? 0.0f : 1.0f / d;
+    const int8_t q = roundf(xi * id);
+
+    y[ib].qs[iqs] = q;
+
+    if (iqs == 0) {
+        y[ib].d = d;
+    }
+}
+
+// Half-precision input variant. Saves a promote+copy when the source is
+// already in f16 (common for K/V after attention projection in f16 models).
+extern "C" __global__ void quantize_q8_0_f16(const half * __restrict__ x, void * __restrict__ vy, const int kx, const int kx_padded) {
+    const int ix = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (ix >= kx_padded) {
+        return;
+    }
+
+    const int iy = blockDim.y*blockIdx.y + threadIdx.y;
+
+    const int i_padded = iy*kx_padded + ix;
+
+    block_q8_0 * y = (block_q8_0 *) vy;
+
+    const int ib = i_padded / QK8_0;
+    const int iqs = i_padded % QK8_0;
+
+    const float xi = ix < kx ? __half2float(x[iy*kx + ix]) : 0.0f;
+    float amax = fabsf(xi);
+
+    amax = warp_reduce_max(amax);
+
+    const float d = amax / 127;
+    const float id = amax == 0.0f ? 0.0f : 1.0f / d;
+    const int8_t q = roundf(xi * id);
+
+    y[ib].qs[iqs] = q;
+
+    if (iqs == 0) {
+        y[ib].d = d;
+    }
 }
 
 // Kernels from https://github.com/ggerganov/llama.cpp/blob/master/ggml-cuda/mmq.cu

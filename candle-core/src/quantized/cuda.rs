@@ -100,6 +100,116 @@ fn quantize_q8_1(
     Ok(())
 }
 
+/// GPU-native Q8_0 quantizer. Writes directly into a `PaddedCudaSlice`-shaped
+/// destination buffer (one `block_q8_0` per 32 source elements followed by
+/// MATRIX_ROW_PADDING worth of zero-filled blocks — the caller must zero
+/// the padding region before this call).
+///
+/// Source tensor is treated as `ky` rows of `k` elements each. The trailing
+/// `kx_padded - k` elements of each row are implicitly treated as 0 by the
+/// kernel, so they never contribute to the per-block amax.
+fn quantize_q8_0_f32(
+    src: &CudaView<f32>,
+    dst: &mut CudaSlice<u8>,
+    k: usize,
+    ky: usize,
+    dev: &CudaDevice,
+) -> Result<()> {
+    let kx_padded = pad(k, MATRIX_ROW_PADDING);
+    let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
+
+    let total_rows = ky;
+    let q8_0_block_size = GgmlDType::Q8_0.block_size();
+    let q8_0_type_size = GgmlDType::Q8_0.type_size();
+    let num_blocks_per_row = kx_padded / q8_0_block_size;
+    let dst_row_size_bytes = num_blocks_per_row * q8_0_type_size;
+
+    const CHUNK_SIZE: usize = 65535;
+    let func = dev.get_or_load_func("quantize_q8_0", &candle_kernels::QUANTIZED)?;
+
+    let mut rows_processed = 0;
+    while rows_processed < total_rows {
+        let remaining_rows = total_rows - rows_processed;
+        let rows_in_chunk = std::cmp::min(CHUNK_SIZE, remaining_rows);
+
+        let src_start_elem = rows_processed * k;
+        let src_num_elems = rows_in_chunk * k;
+        let src_chunk = src.slice(src_start_elem..(src_start_elem + src_num_elems));
+
+        let dst_start_byte = rows_processed * dst_row_size_bytes;
+        let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
+        let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
+
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
+            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let mut builder = func.builder();
+        builder.arg(&src_chunk);
+        builder.arg(&dst_chunk);
+        barg!(builder, k as i32, kx_padded as i32);
+        unsafe { builder.launch(cfg) }.w()?;
+
+        rows_processed += rows_in_chunk;
+    }
+
+    Ok(())
+}
+
+/// f16 variant of `quantize_q8_0_f32`. Avoids an f16→f32 cast + extra tensor
+/// allocation on the hot path when the source activations are already f16.
+fn quantize_q8_0_f16(
+    src: &CudaView<f16>,
+    dst: &mut CudaSlice<u8>,
+    k: usize,
+    ky: usize,
+    dev: &CudaDevice,
+) -> Result<()> {
+    let kx_padded = pad(k, MATRIX_ROW_PADDING);
+    let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
+
+    let total_rows = ky;
+    let q8_0_block_size = GgmlDType::Q8_0.block_size();
+    let q8_0_type_size = GgmlDType::Q8_0.type_size();
+    let num_blocks_per_row = kx_padded / q8_0_block_size;
+    let dst_row_size_bytes = num_blocks_per_row * q8_0_type_size;
+
+    const CHUNK_SIZE: usize = 65535;
+    let func = dev.get_or_load_func("quantize_q8_0_f16", &candle_kernels::QUANTIZED)?;
+
+    let mut rows_processed = 0;
+    while rows_processed < total_rows {
+        let remaining_rows = total_rows - rows_processed;
+        let rows_in_chunk = std::cmp::min(CHUNK_SIZE, remaining_rows);
+
+        let src_start_elem = rows_processed * k;
+        let src_num_elems = rows_in_chunk * k;
+        let src_chunk = src.slice(src_start_elem..(src_start_elem + src_num_elems));
+
+        let dst_start_byte = rows_processed * dst_row_size_bytes;
+        let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
+        let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
+
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
+            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let mut builder = func.builder();
+        builder.arg(&src_chunk);
+        builder.arg(&dst_chunk);
+        barg!(builder, k as i32, kx_padded as i32);
+        unsafe { builder.launch(cfg) }.w()?;
+
+        rows_processed += rows_in_chunk;
+    }
+
+    Ok(())
+}
+
 fn dequantize_f32(
     data: &PaddedCudaSlice,
     dtype: GgmlDType,
@@ -607,7 +717,52 @@ impl QCudaStorage {
     }
 
     pub fn quantize(&mut self, src: &CudaStorage) -> Result<()> {
-        // Run the quantization on cpu.
+        // GPU-native fast path: Q8_0 can be produced directly on-device by a
+        // small CUDA kernel, skipping the dtoh→quantize→htod roundtrip that
+        // would otherwise stall every write. Other formats still fall back
+        // to the CPU path below.
+        if self.dtype == GgmlDType::Q8_0 {
+            let elem_count = match &src.slice {
+                crate::cuda_backend::CudaStorageSlice::F32(data) => data.len(),
+                crate::cuda_backend::CudaStorageSlice::F16(data) => data.len(),
+                _ => crate::bail!("quantize_q8_0: unsupported source dtype (expected f32 or f16)"),
+            };
+            let block_size = self.dtype.block_size();
+            let type_size = self.dtype.type_size();
+            if !elem_count.is_multiple_of(block_size) {
+                crate::bail!(
+                    "quantize_q8_0: element count {elem_count} is not divisible by block size {block_size}",
+                );
+            }
+            // PaddedCudaSlice::len holds the unpadded byte count (what dequant expects).
+            // The backing `inner` is oversized by one padding row per quantization
+            // block so trailing partial blocks don't read OOB.
+            let unpadded_bytes = (elem_count / block_size) * type_size;
+            let padded_bytes =
+                unpadded_bytes + MATRIX_ROW_PADDING * type_size / block_size;
+            // Zero-fill so the padding region is valid Q8_0 blocks (scale=0, quants=0).
+            let mut inner = self.device.alloc_zeros::<u8>(padded_bytes)?;
+
+            // Treat the entire tensor as one "row" of `elem_count` elements.
+            // The kernel pads the row up to kx_padded = ceil(k, 512) internally.
+            match &src.slice {
+                crate::cuda_backend::CudaStorageSlice::F32(data) => {
+                    quantize_q8_0_f32(&data.slice(..), &mut inner, elem_count, 1, &self.device)?;
+                }
+                crate::cuda_backend::CudaStorageSlice::F16(data) => {
+                    quantize_q8_0_f16(&data.slice(..), &mut inner, elem_count, 1, &self.device)?;
+                }
+                _ => unreachable!(),
+            }
+
+            self.data = PaddedCudaSlice {
+                inner,
+                len: unpadded_bytes,
+            };
+            return Ok(());
+        }
+
+        // Fallback: run the quantization on cpu.
         let src = match &src.slice {
             crate::cuda_backend::CudaStorageSlice::F32(data) => self.device.clone_dtoh(data)?,
             _ => crate::bail!("only f32 can be quantized"),

@@ -1011,6 +1011,45 @@ test_device!(
     quantize_q8k_metal
 );
 
+fn quantize_q8_0(device: &Device) -> Result<()> {
+    let dtype = GgmlDType::Q8_0;
+    let src = get_test_vector2(0.5, 1024, device)?;
+    let quant = quantized::QTensor::quantize(&src, dtype)?;
+    let dst = quant.dequantize(device)?;
+    let src_v = src.to_vec1::<f32>()?;
+    let dst_v = dst.to_vec1::<f32>()?;
+    compare_with_error(dst_v.as_slice(), src_v.as_slice(), 0.008);
+
+    // Cross-check: quantizing the same tensor on CPU vs on the target device
+    // must dequantize to identical values (modulo f16 scale precision, which
+    // the arithmetic on both sides is constructed to match).
+    let src_cpu = get_test_vector2(0.5, 1024, &Device::Cpu)?;
+    let quant_cpu = quantized::QTensor::quantize(&src_cpu, dtype)?;
+    let dst_cpu = quant_cpu.dequantize(&Device::Cpu)?.to_vec1::<f32>()?;
+    for (i, (a, b)) in dst_v.iter().zip(dst_cpu.iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-6,
+            "CPU/device Q8_0 divergence at index {i}: device={a}, cpu={b}"
+        );
+    }
+
+    let src_big = get_test_vector2(128.0, 1024, device)?;
+    let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
+    let dst_big = quant_big.dequantize(device)?.to_vec1::<f32>()?;
+    let src_big = src_big.to_vec1::<f32>()?;
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 2.0);
+
+    ggml_quantization_error_test(dtype, device, GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
+    Ok(())
+}
+
+test_device!(
+    quantize_q8_0,
+    quantize_q8_0_cpu,
+    quantize_q8_0_cuda,
+    quantize_q8_0_metal
+);
+
 /// Very simple dot product implementation
 fn vec_dot_reference(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(a, b)| a * b).sum()
