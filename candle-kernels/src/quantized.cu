@@ -3418,6 +3418,186 @@ extern "C" __global__ void quantize_q8_0(const float * __restrict__ x, void * __
     }
 }
 
+// Small-k attention-score gemv: Q (q8_1) × K^T (q8_0) where K is per-token
+// row-major so its "n" axis is the sequence length (potentially huge) and
+// its "k" axis is head_dim (small, 64/128/256). Candle's existing
+// mul_mat_vec_q*_q8_1 kernels are tuned for large-k LLM weights and
+// underperform on this shape by 5-7× at long contexts. This kernel
+// parallelises across the large n axis and uses all 32 warp lanes for the
+// small dot product.
+//
+// Launch geometry: blockDim = (32, WARPS_PER_BLOCK), one warp per output
+// row. gridDim = (ceil(n_kv / WARPS_PER_BLOCK), b_size, 1).
+//
+// Layout assumptions:
+//   K: block_q8_0[n_kv][HEAD_DIM/32]   (per-token row of quantized blocks)
+//   Q: block_q8_1[b_size][HEAD_DIM/32] (same)
+//   dst: float[b_size][n_kv]
+template <int HEAD_DIM>
+static __device__ __forceinline__ float attn_score_row_q8_0_q8_1(
+    const block_q8_0 * __restrict__ K_row,
+    const block_q8_1 * __restrict__ Q_row,
+    int lane
+) {
+    static_assert(HEAD_DIM % 32 == 0, "HEAD_DIM must be multiple of 32");
+    constexpr int HD_BLOCKS = HEAD_DIM / 32;
+
+    if constexpr (HD_BLOCKS == 4) {
+        // head_dim=128: 4 blocks × 8 int32 = 32 lanes exactly, no waste.
+        const int bi  = lane >> 3;   // 0..3
+        const int iqs = lane & 7;    // 0..7
+        int kv = get_int_from_int8(K_row[bi].qs, iqs);
+        int qv = get_int_from_int8_aligned(Q_row[bi].qs, iqs);
+        int sumi = __dp4a(kv, qv, 0);
+        // reduce within block (8 lanes)
+        sumi += __shfl_xor_sync(0xffffffff, sumi, 4);
+        sumi += __shfl_xor_sync(0xffffffff, sumi, 2);
+        sumi += __shfl_xor_sync(0xffffffff, sumi, 1);
+        // scale at block head (iqs == 0)
+        float contrib = 0.0f;
+        if (iqs == 0) {
+            float d_k = __half2float(K_row[bi].d);
+            float d_q = __half2float(__low2half(Q_row[bi].ds));
+            contrib = sumi * d_k * d_q;
+        }
+        // reduce across the 4 block heads (lanes 0, 8, 16, 24)
+        contrib += __shfl_xor_sync(0xffffffff, contrib, 16);
+        contrib += __shfl_xor_sync(0xffffffff, contrib, 8);
+        return contrib;
+    } else if constexpr (HD_BLOCKS == 2) {
+        // head_dim=64: 2 blocks × 8 int32 = 16 lanes active, upper half idle.
+        const int bi  = lane >> 3;
+        const int iqs = lane & 7;
+        int sumi = 0;
+        if (lane < 16) {
+            int kv = get_int_from_int8(K_row[bi].qs, iqs);
+            int qv = get_int_from_int8_aligned(Q_row[bi].qs, iqs);
+            sumi = __dp4a(kv, qv, 0);
+        }
+        sumi += __shfl_xor_sync(0xffffffff, sumi, 4);
+        sumi += __shfl_xor_sync(0xffffffff, sumi, 2);
+        sumi += __shfl_xor_sync(0xffffffff, sumi, 1);
+        float contrib = 0.0f;
+        if (lane < 16 && iqs == 0) {
+            float d_k = __half2float(K_row[bi].d);
+            float d_q = __half2float(__low2half(Q_row[bi].ds));
+            contrib = sumi * d_k * d_q;
+        }
+        contrib += __shfl_xor_sync(0xffffffff, contrib, 8);
+        return contrib;
+    } else {
+        // Generic (head_dim=256, 512, ...): iterate blocks, 8 lanes per block.
+        float total = 0.0f;
+        #pragma unroll
+        for (int bi = 0; bi < HD_BLOCKS; ++bi) {
+            int sumi = 0;
+            if (lane < 8) {
+                int kv = get_int_from_int8(K_row[bi].qs, lane);
+                int qv = get_int_from_int8_aligned(Q_row[bi].qs, lane);
+                sumi = __dp4a(kv, qv, 0);
+            }
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 4);
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 2);
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 1);
+            if (lane == 0) {
+                float d_k = __half2float(K_row[bi].d);
+                float d_q = __half2float(__low2half(Q_row[bi].ds));
+                total += sumi * d_k * d_q;
+            }
+        }
+        return total;
+    }
+}
+
+// Multi-batch-per-warp variant: each warp computes dot(Q[b], K[n]) for
+// all b in [0, b_size) on the same n, so K[n] is loaded once and reused
+// across the batch loop. This is the decisive optimisation for GQA where
+// n_q (=n_head/n_kv) is 4-8 and K bandwidth dominates at long contexts.
+#define ATTN_SCORE_KERNEL(NAME, HD)                                          \
+extern "C" __global__ void NAME(                                             \
+    const void * __restrict__ K_blob,                                        \
+    const void * __restrict__ Q_blob,                                        \
+    float * __restrict__ dst,                                                \
+    int n_kv,                                                                \
+    int n_kv_stride_blocks,                                                  \
+    int b_stride_blocks,                                                     \
+    int b_size                                                               \
+) {                                                                          \
+    constexpr int HD_BLOCKS = HD / 32;                                       \
+    const int lane    = threadIdx.x;                                         \
+    const int warp_id = threadIdx.y;                                         \
+    const int n = blockIdx.x * blockDim.y + warp_id;                         \
+    if (n >= n_kv) return;                                                   \
+    const block_q8_0 * K_row =                                               \
+        reinterpret_cast<const block_q8_0 *>(K_blob) + n * n_kv_stride_blocks;\
+    const block_q8_1 * Q_blob_p = reinterpret_cast<const block_q8_1 *>(Q_blob); \
+    /* HD=128 fast path: load K once per warp into registers. */             \
+    if constexpr (HD == 128) {                                               \
+        const int bi  = lane >> 3;                                           \
+        const int iqs = lane & 7;                                            \
+        const int k_val = get_int_from_int8(K_row[bi].qs, iqs);              \
+        const float k_scale = __half2float(K_row[bi].d);                     \
+        for (int b = 0; b < b_size; ++b) {                                   \
+            const block_q8_1 * Q_row = Q_blob_p + b * b_stride_blocks;       \
+            const int q_val = get_int_from_int8_aligned(Q_row[bi].qs, iqs);  \
+            int sumi = __dp4a(k_val, q_val, 0);                              \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 4);                    \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 2);                    \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 1);                    \
+            float contrib = 0.0f;                                            \
+            if (iqs == 0) {                                                  \
+                const float q_scale = __half2float(__low2half(Q_row[bi].ds));\
+                contrib = sumi * k_scale * q_scale;                          \
+            }                                                                \
+            contrib += __shfl_xor_sync(0xffffffff, contrib, 16);             \
+            contrib += __shfl_xor_sync(0xffffffff, contrib, 8);              \
+            if (lane == 0) dst[b * n_kv + n] = contrib;                      \
+        }                                                                    \
+        return;                                                              \
+    }                                                                        \
+    /* HD=64 fast path: 2 blocks × 8 lanes = 16 active lanes, K in regs. */  \
+    if constexpr (HD == 64) {                                                \
+        const int bi  = lane >> 3;  /* 0..3 but only bi<2 is used */         \
+        const int iqs = lane & 7;                                            \
+        const bool active = (lane < 16);                                     \
+        int k_val = 0;                                                       \
+        float k_scale = 0.0f;                                                \
+        if (active) {                                                        \
+            k_val = get_int_from_int8(K_row[bi].qs, iqs);                    \
+            k_scale = __half2float(K_row[bi].d);                             \
+        }                                                                    \
+        for (int b = 0; b < b_size; ++b) {                                   \
+            const block_q8_1 * Q_row = Q_blob_p + b * b_stride_blocks;       \
+            int sumi = 0;                                                    \
+            if (active) {                                                    \
+                const int q_val = get_int_from_int8_aligned(Q_row[bi].qs, iqs);\
+                sumi = __dp4a(k_val, q_val, 0);                              \
+            }                                                                \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 4);                    \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 2);                    \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 1);                    \
+            float contrib = 0.0f;                                            \
+            if (active && iqs == 0) {                                        \
+                const float q_scale = __half2float(__low2half(Q_row[bi].ds));\
+                contrib = sumi * k_scale * q_scale;                          \
+            }                                                                \
+            contrib += __shfl_xor_sync(0xffffffff, contrib, 8);              \
+            if (lane == 0) dst[b * n_kv + n] = contrib;                      \
+        }                                                                    \
+        return;                                                              \
+    }                                                                        \
+    /* Generic fallback: reuse single-batch helper in a loop. */             \
+    for (int b = 0; b < b_size; ++b) {                                       \
+        const block_q8_1 * Q_row = Q_blob_p + b * b_stride_blocks;           \
+        float total = attn_score_row_q8_0_q8_1<HD>(K_row, Q_row, lane);      \
+        if (lane == 0) dst[b * n_kv + n] = total;                            \
+    }                                                                        \
+}
+
+ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd64,  64)
+ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd128, 128)
+ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd256, 256)
+
 // Half-precision input variant. Saves a promote+copy when the source is
 // already in f16 (common for K/V after attention projection in f16 models).
 extern "C" __global__ void quantize_q8_0_f16(const half * __restrict__ x, void * __restrict__ vy, const int kx, const int kx_padded) {

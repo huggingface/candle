@@ -650,6 +650,13 @@ impl QTensor {
         self.storage.size_in_bytes()
     }
 
+    /// Direct access to the backing storage. Needed by downstream crates that
+    /// call backend-specific quantized kernels (e.g., the attention-score
+    /// gemv) without round-tripping through `dequantize`.
+    pub fn storage(&self) -> &QStorage {
+        &self.storage
+    }
+
     pub fn data(&self) -> Result<Cow<'_, [u8]>> {
         self.storage.data()
     }
