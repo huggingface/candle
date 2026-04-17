@@ -778,6 +778,28 @@ impl ConcatKvCache {
         self.v = None;
     }
 
+    /// Truncate the cache to `new_len` valid positions along the concat
+    /// dimension. If the cache is already shorter, this is a no-op. Used
+    /// for session-persistent KV where a new request shares a common
+    /// prefix shorter than the previous request's cached sequence.
+    pub fn trim_to(&mut self, new_len: usize) -> Result<()> {
+        if new_len == 0 {
+            self.reset();
+            return Ok(());
+        }
+        let cur = self.current_seq_len();
+        if new_len >= cur {
+            return Ok(());
+        }
+        if let Some(k) = &self.k {
+            self.k = Some(k.narrow(self.dim, 0, new_len)?.contiguous()?);
+        }
+        if let Some(v) = &self.v {
+            self.v = Some(v.narrow(self.dim, 0, new_len)?.contiguous()?);
+        }
+        Ok(())
+    }
+
     /// Get reference to current K cache data
     ///
     /// Returns `None` if the cache is empty.
