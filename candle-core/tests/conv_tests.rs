@@ -949,7 +949,7 @@ fn conv2d_fused_bias(dev: &Device) -> Result<()> {
     let expected = out_no_bias.broadcast_add(&bias_reshaped)?;
 
     // Fused: conv2d_with_algo with bias
-    let fused = t.conv2d_with_algo(&w, 1, 1, 1, 1, None, &Some(bias.clone()))?;
+    let fused = t.conv2d_with_algo(&w, 1, 1, 1, 1, None, Some(bias.clone()))?;
 
     let expected_vals: Vec<f32> = expected.flatten_all()?.to_vec1()?;
     let fused_vals: Vec<f32> = fused.flatten_all()?.to_vec1()?;
@@ -981,7 +981,7 @@ fn conv2d_fused_bias_groups(dev: &Device) -> Result<()> {
     let expected = out_no_bias.broadcast_add(&bias_reshaped)?;
 
     // Fused path
-    let fused = t.conv2d_with_algo(&w, 0, 1, 1, groups, None, &Some(bias.clone()))?;
+    let fused = t.conv2d_with_algo(&w, 0, 1, 1, groups, None, Some(bias.clone()))?;
 
     let expected_vals: Vec<f32> = expected.flatten_all()?.to_vec1()?;
     let fused_vals: Vec<f32> = fused.flatten_all()?.to_vec1()?;
@@ -1011,7 +1011,7 @@ fn conv2d_fused_bias_1x1(dev: &Device) -> Result<()> {
     let expected = out_no_bias.broadcast_add(&bias_reshaped)?;
 
     // Fused
-    let fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, &Some(bias.clone()))?;
+    let fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, Some(bias.clone()))?;
 
     let expected_vals: Vec<f32> = expected.flatten_all()?.to_vec1()?;
     let fused_vals: Vec<f32> = fused.flatten_all()?.to_vec1()?;
@@ -1126,7 +1126,7 @@ fn conv2d_fused_bias_grad(dev: &Device) -> Result<()> {
     let grads_ref = loss_ref.backward()?;
 
     // Fused path
-    let out_fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, &Some(bias.as_tensor().clone()))?;
+    let out_fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, Some(bias.as_tensor().clone()))?;
     let loss_fused = out_fused.sqr()?.sum_all()?;
     let grads_fused = loss_fused.backward()?;
 
@@ -1227,7 +1227,7 @@ fn conv2d_fused_bias_grad_multi_cout(dev: &Device) -> Result<()> {
     let grads_ref = loss_ref.backward()?;
 
     // Fused
-    let out_fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, &Some(bias.as_tensor().clone()))?;
+    let out_fused = t.conv2d_with_algo(&w, 0, 1, 1, 1, None, Some(bias.as_tensor().clone()))?;
     let loss_fused = out_fused.sqr()?.sum_all()?;
     let grads_fused = loss_fused.backward()?;
 

@@ -333,7 +333,7 @@ impl Tensor {
         dilation: usize,
         groups: usize,
     ) -> Result<Self> {
-        self.conv2d_with_algo(kernel, padding, stride, dilation, groups, None, &None)
+        self.conv2d_with_algo(kernel, padding, stride, dilation, groups, None, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -345,7 +345,7 @@ impl Tensor {
         dilation: usize,
         groups: usize,
         cudnn_fwd_algo: Option<CudnnFwdAlgo>,
-        bias: &Option<Tensor>,
+        bias: Option<Tensor>,
     ) -> Result<Self> {
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_out, c_in_k, k_h, k_w) = kernel.dims4()?;
@@ -367,10 +367,9 @@ impl Tensor {
             dilation,
             cudnn_fwd_algo,
         };
-        // FIXME should bias be reshaped here already?
         match (groups == 1, bias) {
             // Single group.
-            (true, Some(bias)) => self.conv2d_single_group_with_bias(kernel, bias, &params),
+            (true, Some(bias)) => self.conv2d_single_group_with_bias(kernel, &bias, &params),
             (true, None) => self.conv2d_single_group(kernel, &params),
             // Multiple groups.
             (false, Some(bias)) => {

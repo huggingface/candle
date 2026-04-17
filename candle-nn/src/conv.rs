@@ -223,7 +223,7 @@ impl crate::Module for Conv2d {
             self.config.dilation,
             self.config.groups,
             self.config.cudnn_fwd_algo,
-            &self.bias,
+            self.bias.clone(),
         )
     }
 }
