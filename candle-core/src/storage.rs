@@ -34,12 +34,9 @@ impl From<MetalStorage> for Storage {
     }
 }
 
-// Prefer this over `Storage::Lazy(Arc::new(s))` to ensure set_self_arc is called.
 impl From<LazyStorage> for Storage {
     fn from(s: LazyStorage) -> Storage {
-        let arced = Arc::new(s);
-        arced.set_self_arc(&arced);
-        Storage::Lazy(arced)
+        Storage::Lazy(Arc::new(s))
     }
 }
 

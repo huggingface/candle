@@ -122,7 +122,7 @@ pub struct LazyStorage {
     dtype: DType,
     buffer_id: Arc<BufferId>,
     // Weak pointer back to the `Arc<LazyStorage>` in `Storage::Lazy`.
-    // Set by `from_storage` and `From<LazyStorage> for Storage`; shared across copies.
+    // Set by `from_storage`. Shared across copies.
     self_arc: Arc<std::sync::OnceLock<std::sync::Weak<LazyStorage>>>,
     // Set to true after the first `optimize()` pass so subsequent calls are no-ops.
     is_optimized: Arc<atomic::AtomicBool>,
