@@ -75,10 +75,9 @@ impl AudioOutputData_ {
             if self.input_len < self.input_buffer.len() {
                 break;
             }
-            let in_frames = self.input_buffer.len();
-            let out_frames = self.output_buffer.len();
-            let input = InterleavedSlice::new(&self.input_buffer, 1, in_frames)?;
-            let mut output = InterleavedSlice::new_mut(&mut self.output_buffer, 1, out_frames)?;
+            let out_len = self.output_buffer.len();
+            let input = InterleavedSlice::new(&self.input_buffer, 1, self.input_buffer.len())?;
+            let mut output = InterleavedSlice::new_mut(&mut self.output_buffer, 1, out_len)?;
             let (_, out_len) = self
                 .resampler
                 .process_into_buffer(&input, &mut output, None)?;
