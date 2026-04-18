@@ -10,6 +10,7 @@ use clap::Parser;
 use candle_transformers::models::gemma::{Config as Config1, Model as Model1};
 use candle_transformers::models::gemma2::{Config as Config2, Model as Model2};
 use candle_transformers::models::gemma3::{Config as Config3, Model as Model3};
+use candle_transformers::models::gemma3_vl::{Config as Config3VL, Model as Model3VL};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -52,12 +53,25 @@ enum Which {
     BaseV3_1B,
     #[value(name = "3-1b-it")]
     InstructV3_1B,
+    #[value(name = "3-4b")]
+    BaseV3_4B,
+    #[value(name = "3-4b-it")]
+    InstructV3_4B,
+    #[value(name = "3-12b")]
+    BaseV3_12B,
+    #[value(name = "3-12b-it")]
+    InstructV3_12B,
+    #[value(name = "3-27b")]
+    BaseV3_27B,
+    #[value(name = "3-27b-it")]
+    InstructV3_27B,
 }
 
 enum Model {
     V1(Model1),
     V2(Model2),
     V3(Model3),
+    V3VL(Model3VL),
 }
 
 impl Model {
@@ -66,6 +80,7 @@ impl Model {
             Self::V1(m) => m.forward(input_ids, pos),
             Self::V2(m) => m.forward(input_ids, pos),
             Self::V3(m) => m.forward(input_ids, pos),
+            Self::V3VL(m) => m.forward(input_ids, pos),
         }
     }
 }
@@ -102,7 +117,29 @@ impl TextGeneration {
         }
     }
 
-    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
+    fn load_image(path: &str, image_size: usize) -> Result<Tensor> {
+        let img = image::ImageReader::open(path)?
+            .decode()
+            .map_err(E::msg)?
+            .resize_exact(
+                image_size as u32,
+                image_size as u32,
+                image::imageops::FilterType::Triangle,
+            );
+        let img = img.to_rgb8();
+        let data = img.into_raw();
+        let data = data
+            .iter()
+            .map(|v| (*v as f32 / 255. - 0.5) / 0.5)
+            .collect::<Vec<f32>>();
+        let data = Tensor::from_vec(data, (image_size, image_size, 3), &Device::Cpu)?;
+        Ok(data
+            .permute((2, 0, 1))?
+            .unsqueeze(0)?
+            .to_dtype(DType::F32)?)
+    }
+
+    fn run(&mut self, prompt: &str, sample_len: usize, image: Option<&str>) -> Result<()> {
         use std::io::Write;
         self.tokenizer.clear();
         let mut tokens = self
@@ -135,13 +172,21 @@ impl TextGeneration {
             }
         };
 
+        let mut image_processed = false;
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
             let start_pos = tokens.len().saturating_sub(context_size);
             let ctxt = &tokens[start_pos..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, start_pos)?;
+            let logits = match (&mut self.model, &image) {
+                (Model::V3VL(m), Some(img_path)) if !image_processed => {
+                    image_processed = true;
+                    let pixel_values = Self::load_image(img_path, 896)?.to_device(&self.device)?;
+                    m.forward_with_image(&input, &pixel_values, start_pos)?
+                }
+                _ => self.model.forward(&input, start_pos)?,
+            };
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
@@ -237,6 +282,10 @@ struct Args {
 
     #[arg(long)]
     use_flash_attn: bool,
+
+    /// Path to an image file for multimodal inference (only for 3-4b and larger).
+    #[arg(long)]
+    image: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -286,6 +335,12 @@ fn main() -> Result<()> {
             Which::InstructV2_9B => "google/gemma-2-9b-it".to_string(),
             Which::BaseV3_1B => "google/gemma-3-1b-pt".to_string(),
             Which::InstructV3_1B => "google/gemma-3-1b-it".to_string(),
+            Which::BaseV3_4B => "google/gemma-3-4b-pt".to_string(),
+            Which::InstructV3_4B => "google/gemma-3-4b-it".to_string(),
+            Which::BaseV3_12B => "google/gemma-3-12b-pt".to_string(),
+            Which::InstructV3_12B => "google/gemma-3-12b-it".to_string(),
+            Which::BaseV3_27B => "google/gemma-3-27b-pt".to_string(),
+            Which::InstructV3_27B => "google/gemma-3-27b-it".to_string(),
         },
     };
     let repo = api.repo(Repo::with_revision(
@@ -308,6 +363,14 @@ fn main() -> Result<()> {
             .collect::<Vec<_>>(),
         None => match args.which {
             Which::BaseV3_1B | Which::InstructV3_1B => vec![repo.get("model.safetensors")?],
+            Which::BaseV3_4B
+            | Which::InstructV3_4B
+            | Which::BaseV3_12B
+            | Which::InstructV3_12B
+            | Which::BaseV3_27B
+            | Which::InstructV3_27B => {
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+            }
             _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
         },
     };
@@ -347,6 +410,16 @@ fn main() -> Result<()> {
             let model = Model3::new(args.use_flash_attn, &config, vb)?;
             Model::V3(model)
         }
+        Which::BaseV3_4B
+        | Which::InstructV3_4B
+        | Which::BaseV3_12B
+        | Which::InstructV3_12B
+        | Which::BaseV3_27B
+        | Which::InstructV3_27B => {
+            let config: Config3VL = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+            let model = Model3VL::new(args.use_flash_attn, &config, vb)?;
+            Model::V3VL(model)
+        }
     };
 
     println!("loaded the model in {:?}", start.elapsed());
@@ -377,15 +450,29 @@ fn main() -> Result<()> {
         | Which::InstructV2_2B
         | Which::BaseV2_9B
         | Which::InstructV2_9B
-        | Which::BaseV3_1B => args.prompt,
+        | Which::BaseV3_1B => args.prompt.clone(),
         Which::InstructV3_1B => {
             format!(
                 "<start_of_turn> user\n{}<end_of_turn>\n<start_of_turn> model\n",
                 args.prompt
             )
         }
+        Which::InstructV3_4B | Which::InstructV3_12B | Which::InstructV3_27B => {
+            if args.image.is_some() {
+                format!(
+                    "<start_of_turn>user\n<start_of_image><end_of_image>\n{}<end_of_turn>\n<start_of_turn>model\n",
+                    args.prompt
+                )
+            } else {
+                format!(
+                    "<start_of_turn>user\n{}<end_of_turn>\n<start_of_turn>model\n",
+                    args.prompt
+                )
+            }
+        }
+        Which::BaseV3_4B | Which::BaseV3_12B | Which::BaseV3_27B => args.prompt.clone(),
     };
 
-    pipeline.run(&prompt, args.sample_len)?;
+    pipeline.run(&prompt, args.sample_len, args.image.as_deref())?;
     Ok(())
 }
