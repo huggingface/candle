@@ -3701,6 +3701,126 @@ ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd64,  64)
 ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd128, 128)
 ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd256, 256)
 
+// V-path attention output: `out = probs @ V` where:
+//   probs : [n_q_heads, seq_kv]   (f32, softmax output)
+//   V     : [seq_kv, n_kv_heads, head_dim] Q8_0 blocks along head_dim
+//   out   : [n_q_heads, head_dim] (f32)
+//
+// Reduction is along seq_kv (NOT head_dim), but Q8_0 blocks pack along
+// head_dim — so one block spans 32 head_dim elements for a fixed (seq, kv).
+// Each warp owns a (kv, block_idx, qh) triple: 32 lanes cover 32 head_dim
+// outputs, one per lane, and each lane loops over seq_kv scanning its
+// d-column. The block's shared scale `d` loads once per (s, kv, block_idx)
+// iteration and is broadcast via the half-to-float conversion; there's no
+// cross-lane reduction since each lane has an independent output.
+//
+// Launch: gridDim = (head_dim / 32, n_kv_heads, n_q_per_kv),
+//         blockDim = (32, 1, 1). No shared memory needed.
+//
+// Compute bandwidth per output element: seq_kv × (1 i8 + 1/32 f16 scale +
+// 1 f32 probs). For typical qwen3 (n_q_heads=32, head_dim=128, seq_kv=2K):
+// ~33 KB V bytes per block tile × 32 tiles = 1 MB per call — memory-bound
+// and well within <100µs on any modern GPU.
+#define ATTN_OUTPUT_WARPS 32  /* warps/block splitting the seq_kv reduction */
+
+// Per-warp loop that dequantises one V row element + multiplies by each
+// of n_q_per_kv probs values, accumulating into register-resident per-qh
+// accumulators. Pulls V from global memory exactly once per (s, kv,
+// block_idx) — no re-reads across the qh dimension.
+template <int HD, int MAX_NQ_PER_KV>
+static __device__ __forceinline__ void attn_output_inner(
+    const void * __restrict__ V_blob,
+    const float * __restrict__ probs,
+    float * __restrict__ out,
+    int seq_kv,
+    int n_kv_stride_blocks,
+    int kv_head_stride_blocks,
+    int n_q_per_kv,
+    int block_idx,
+    int kv,
+    int lane,
+    int warp_id
+) {
+    const int HD_BLOCKS = HD / 32;
+    (void)HD_BLOCKS;
+
+    float acc[MAX_NQ_PER_KV];
+    #pragma unroll
+    for (int q = 0; q < MAX_NQ_PER_KV; ++q) acc[q] = 0.0f;
+
+    for (int s = warp_id; s < seq_kv; s += ATTN_OUTPUT_WARPS) {
+        const block_q8_0 * v_block =
+            reinterpret_cast<const block_q8_0 *>(V_blob)
+            + (size_t)s * n_kv_stride_blocks
+            + kv * kv_head_stride_blocks
+            + block_idx;
+        const int8_t v_i8 = v_block->qs[lane];
+        const float v_f = static_cast<float>(v_i8) * __half2float(v_block->d);
+
+        #pragma unroll
+        for (int q = 0; q < MAX_NQ_PER_KV; ++q) {
+            if (q < n_q_per_kv) {
+                const int h = kv * n_q_per_kv + q;
+                const float p = probs[(size_t)h * seq_kv + s];
+                acc[q] = fmaf(p, v_f, acc[q]);
+            }
+        }
+    }
+
+    __shared__ float shmem[ATTN_OUTPUT_WARPS][32];
+    #pragma unroll
+    for (int q = 0; q < MAX_NQ_PER_KV; ++q) {
+        if (q < n_q_per_kv) {
+            shmem[warp_id][lane] = acc[q];
+            __syncthreads();
+            if (warp_id == 0) {
+                float total = 0.0f;
+                #pragma unroll
+                for (int w = 0; w < ATTN_OUTPUT_WARPS; ++w) total += shmem[w][lane];
+                const int h = kv * n_q_per_kv + q;
+                const int d = block_idx * 32 + lane;
+                out[(size_t)h * HD + d] = total;
+            }
+            __syncthreads();
+        }
+    }
+}
+
+// Specialise on exact n_q_per_kv so the `acc[N]` array stays in registers.
+// 1 = MHA / MQA; 4 = qwen3 base GQA 8:1; 8 = qwen3-coder / Llama-3 70B;
+// fallback to a slow dynamic path for anything else.
+#define ATTN_OUTPUT_KERNEL(NAME, HD, NQ)                                     \
+extern "C" __global__ void NAME(                                             \
+    const void * __restrict__ V_blob,                                        \
+    const float * __restrict__ probs,                                        \
+    float * __restrict__ out,                                                \
+    int seq_kv,                                                              \
+    int n_kv_stride_blocks,                                                  \
+    int kv_head_stride_blocks,                                               \
+    int /* n_q_per_kv */                                                     \
+) {                                                                          \
+    const int block_idx = blockIdx.x;                                        \
+    const int kv        = blockIdx.y;                                        \
+    const int lane      = threadIdx.x;                                       \
+    const int warp_id   = threadIdx.y;                                       \
+    if (block_idx >= (HD / 32)) return;                                      \
+    attn_output_inner<HD, NQ>(                                               \
+        V_blob, probs, out, seq_kv,                                          \
+        n_kv_stride_blocks, kv_head_stride_blocks, NQ,                       \
+        block_idx, kv, lane, warp_id                                         \
+    );                                                                       \
+}
+
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd64_nq1,   64, 1)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd64_nq4,   64, 4)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd64_nq8,   64, 8)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd128_nq1, 128, 1)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd128_nq4, 128, 4)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd128_nq8, 128, 8)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd256_nq1, 256, 1)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd256_nq4, 256, 4)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd256_nq8, 256, 8)
+
 // Half-precision input variant. Saves a promote+copy when the source is
 // already in f16 (common for K/V after attention projection in f16 models).
 extern "C" __global__ void quantize_q8_0_f16(const half * __restrict__ x, void * __restrict__ vy, const int kx, const int kx_padded) {

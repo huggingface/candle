@@ -385,6 +385,84 @@ pub fn attn_score_q8_0_q8_1_gqa(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
+/// V-path attention output: `out = probs @ V` where V is a Q8_0 cache laid
+/// out `[seq_kv, n_kv_heads, head_dim]` (same packing as `Q8KvCache`).
+///
+/// `probs` is f32 `[n_q_heads, seq_kv]` (softmax output). `n_q_heads` must
+/// equal `n_kv_heads * n_q_per_kv`. Returns f32 `[n_q_heads, head_dim]`.
+///
+/// The reduction is along `seq_kv`, orthogonal to Q8_0's head_dim block
+/// direction — so we can't reuse candle's standard `mul_mat_vec_q` kernels
+/// (which reduce along the block axis). Each lane owns one head_dim output
+/// and sweeps seq_kv internally.
+#[allow(clippy::too_many_arguments)]
+pub fn attn_output_q8_0_f32_gqa(
+    v_blob: &CudaSlice<u8>,
+    probs_f32: &CudaView<f32>,
+    head_dim: usize,
+    seq_kv: usize,
+    n_kv_heads: usize,
+    n_q_per_kv: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    if !head_dim.is_multiple_of(32) {
+        crate::bail!("attn_output_q8_0_f32_gqa: head_dim {head_dim} not a multiple of 32");
+    }
+    let n_q_heads = n_kv_heads * n_q_per_kv;
+    if probs_f32.len() != n_q_heads * seq_kv {
+        crate::bail!(
+            "attn_output_q8_0_f32_gqa: probs has {} elements, expected {}",
+            probs_f32.len(),
+            n_q_heads * seq_kv
+        );
+    }
+    let kernel_name = match (head_dim, n_q_per_kv) {
+        (64, 1) => "attn_output_q8_0_f32_hd64_nq1",
+        (64, 4) => "attn_output_q8_0_f32_hd64_nq4",
+        (64, 8) => "attn_output_q8_0_f32_hd64_nq8",
+        (128, 1) => "attn_output_q8_0_f32_hd128_nq1",
+        (128, 4) => "attn_output_q8_0_f32_hd128_nq4",
+        (128, 8) => "attn_output_q8_0_f32_hd128_nq8",
+        (256, 1) => "attn_output_q8_0_f32_hd256_nq1",
+        (256, 4) => "attn_output_q8_0_f32_hd256_nq4",
+        (256, 8) => "attn_output_q8_0_f32_hd256_nq8",
+        _ => crate::bail!(
+            "attn_output_q8_0_f32_gqa: unsupported combo head_dim={head_dim} n_q_per_kv={n_q_per_kv} (want {{64,128,256}} × {{1,4,8}})",
+        ),
+    };
+    let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
+
+    let hd_blocks = head_dim / 32;
+    let n_kv_stride_blocks = n_kv_heads * hd_blocks;
+    let kv_head_stride_blocks = hd_blocks;
+
+    // Keep this in lock-step with ATTN_OUTPUT_WARPS in the .cu file.
+    // qh is iterated inside the kernel so V is loaded once per (kv, block_idx)
+    // tile and reused across n_q_per_kv query heads — critical for GQA
+    // groups with n_q_per_kv > 1 (qwen3 = 4, qwen3-coder = 8, Llama-3 70B = 8).
+    const WARPS_PER_BLOCK: u32 = 32;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (hd_blocks as u32, n_kv_heads as u32, 1),
+        block_dim: (WARP_SIZE as u32, WARPS_PER_BLOCK, 1),
+        shared_mem_bytes: 0,
+    };
+
+    let dst = unsafe { dev.alloc::<f32>(n_q_heads * head_dim)? };
+    let mut builder = func.builder();
+    builder.arg(v_blob);
+    builder.arg(probs_f32);
+    builder.arg(&dst);
+    barg!(
+        builder,
+        seq_kv as i32,
+        n_kv_stride_blocks as i32,
+        kv_head_stride_blocks as i32,
+        n_q_per_kv as i32
+    );
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
 /// Convenience: call the attention-score gemv against a pre-built QCudaStorage
 /// K. Assumes the K cache is laid out row-major over tokens with stride
 /// `head_dim / 32` blocks (the layout produced by calling `QTensor::quantize`
