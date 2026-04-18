@@ -3598,6 +3598,109 @@ ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd64,  64)
 ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd128, 128)
 ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd256, 256)
 
+// GQA variant: processes all kv-heads in a single launch (gridDim.y =
+// n_kv_heads). Each block picks its kv-head from blockIdx.y and computes
+// dot(Q[kv*n_q_per_kv + qh], K[n, kv]) for qh in [0, n_q_per_kv).
+// Payoff: eliminates n_kv_heads-1 kernel-launch latencies per decode
+// step — for GQA 8:1 with 8 kv-heads × ~10µs launch overhead each,
+// that's ~70µs saved per attention forward.
+#define ATTN_SCORE_GQA_KERNEL(NAME, HD)                                      \
+extern "C" __global__ void NAME(                                             \
+    const void * __restrict__ K_blob,                                        \
+    const void * __restrict__ Q_blob,                                        \
+    float * __restrict__ dst,                                                \
+    int n_kv,                                                                \
+    int n_kv_stride_blocks,      /* full token stride = n_kv_heads*HD/32 */  \
+    int kv_head_stride_blocks,   /* per-kv-head stride within token = HD/32*/\
+    int q_stride_blocks,         /* per-query-row stride in Q (padded) */    \
+    int n_q_per_kv                                                           \
+) {                                                                          \
+    const int kv = blockIdx.y;                                               \
+    const int lane    = threadIdx.x;                                         \
+    const int warp_id = threadIdx.y;                                         \
+    const int n = blockIdx.x * blockDim.y + warp_id;                         \
+    if (n >= n_kv) return;                                                   \
+    const block_q8_0 * K_row =                                               \
+        reinterpret_cast<const block_q8_0 *>(K_blob)                         \
+        + n * n_kv_stride_blocks                                             \
+        + kv * kv_head_stride_blocks;                                        \
+    const block_q8_1 * Q_base =                                              \
+        reinterpret_cast<const block_q8_1 *>(Q_blob)                         \
+        + kv * n_q_per_kv * q_stride_blocks;                                 \
+    if constexpr (HD == 128) {                                               \
+        const int bi  = lane >> 3;                                           \
+        const int iqs = lane & 7;                                            \
+        const int k_val = get_int_from_int8(K_row[bi].qs, iqs);              \
+        const float k_scale = __half2float(K_row[bi].d);                     \
+        for (int qh = 0; qh < n_q_per_kv; ++qh) {                            \
+            const block_q8_1 * Q_row = Q_base + qh * q_stride_blocks;        \
+            const int q_val = get_int_from_int8_aligned(Q_row[bi].qs, iqs);  \
+            int sumi = __dp4a(k_val, q_val, 0);                              \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 4);                    \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 2);                    \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 1);                    \
+            float contrib = 0.0f;                                            \
+            if (iqs == 0) {                                                  \
+                const float q_scale = __half2float(__low2half(Q_row[bi].ds));\
+                contrib = sumi * k_scale * q_scale;                          \
+            }                                                                \
+            contrib += __shfl_xor_sync(0xffffffff, contrib, 16);             \
+            contrib += __shfl_xor_sync(0xffffffff, contrib, 8);              \
+            if (lane == 0) {                                                 \
+                const int q_row = kv * n_q_per_kv + qh;                      \
+                dst[q_row * n_kv + n] = contrib;                             \
+            }                                                                \
+        }                                                                    \
+        return;                                                              \
+    }                                                                        \
+    if constexpr (HD == 64) {                                                \
+        const int bi  = lane >> 3;                                           \
+        const int iqs = lane & 7;                                            \
+        const bool active = (lane < 16);                                     \
+        int k_val = 0;                                                       \
+        float k_scale = 0.0f;                                                \
+        if (active) {                                                        \
+            k_val = get_int_from_int8(K_row[bi].qs, iqs);                    \
+            k_scale = __half2float(K_row[bi].d);                             \
+        }                                                                    \
+        for (int qh = 0; qh < n_q_per_kv; ++qh) {                            \
+            const block_q8_1 * Q_row = Q_base + qh * q_stride_blocks;        \
+            int sumi = 0;                                                    \
+            if (active) {                                                    \
+                const int q_val = get_int_from_int8_aligned(Q_row[bi].qs, iqs);\
+                sumi = __dp4a(k_val, q_val, 0);                              \
+            }                                                                \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 4);                    \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 2);                    \
+            sumi += __shfl_xor_sync(0xffffffff, sumi, 1);                    \
+            float contrib = 0.0f;                                            \
+            if (active && iqs == 0) {                                        \
+                const float q_scale = __half2float(__low2half(Q_row[bi].ds));\
+                contrib = sumi * k_scale * q_scale;                          \
+            }                                                                \
+            contrib += __shfl_xor_sync(0xffffffff, contrib, 8);              \
+            if (lane == 0) {                                                 \
+                const int q_row = kv * n_q_per_kv + qh;                      \
+                dst[q_row * n_kv + n] = contrib;                             \
+            }                                                                \
+        }                                                                    \
+        return;                                                              \
+    }                                                                        \
+    /* Generic fallback for HD=256 etc.: iterate blocks, 8 lanes per block */\
+    for (int qh = 0; qh < n_q_per_kv; ++qh) {                                \
+        const block_q8_1 * Q_row = Q_base + qh * q_stride_blocks;            \
+        float total = attn_score_row_q8_0_q8_1<HD>(K_row, Q_row, lane);      \
+        if (lane == 0) {                                                     \
+            const int q_row = kv * n_q_per_kv + qh;                          \
+            dst[q_row * n_kv + n] = total;                                   \
+        }                                                                    \
+    }                                                                        \
+}
+
+ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd64,  64)
+ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd128, 128)
+ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd256, 256)
+
 // Half-precision input variant. Saves a promote+copy when the source is
 // already in f16 (common for K/V after attention projection in f16 models).
 extern "C" __global__ void quantize_q8_0_f16(const half * __restrict__ x, void * __restrict__ vy, const int kx, const int kx_padded) {

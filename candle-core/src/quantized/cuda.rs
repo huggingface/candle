@@ -210,8 +210,9 @@ fn quantize_q8_0_f16(
     Ok(())
 }
 
-/// Attention-score gemv: `Q @ K^T` where K is a Q8_0 cache row-major over
-/// tokens (n = seq_kv, k = head_dim) and Q is per-step queries on-device.
+/// Attention-score gemv: `Q @ K^T` where K is a Q8_0 blob (row-major over
+/// tokens, stride `n_kv_stride_blocks` block_q8_0 units) and Q is per-step
+/// queries on-device in f32.
 ///
 /// Q is quantized to Q8_1 internally via the existing GPU quantize kernel
 /// before dispatch. Use this instead of `mul_mat_vec_via_q8_1` when k is
@@ -220,16 +221,21 @@ fn quantize_q8_0_f16(
 /// attention score shapes.
 ///
 /// Returns a contiguous `float[b_size, n_kv]` tensor.
-pub fn attn_score_q8_0_q8_1(
-    k: &QCudaStorage,
+///
+/// `n_kv_stride_blocks` allows striding between K rows when the caller
+/// packs a multi-kv-head cache as `[seq, n_kv_heads, head_dim]` — in that
+/// case pass `n_kv_heads * head_dim / 32` so the kernel hops over the
+/// sibling kv-heads of each token.
+pub fn attn_score_q8_0_q8_1_raw(
+    k_blob: &CudaSlice<u8>,
+    k_byte_offset: usize,
+    n_kv_stride_blocks: usize,
     q_f32: &CudaView<f32>,
     head_dim: usize,
     n_kv: usize,
     b_size: usize,
+    dev: &CudaDevice,
 ) -> Result<CudaStorage> {
-    if k.dtype != GgmlDType::Q8_0 {
-        crate::bail!("attn_score_q8_0_q8_1: K must be Q8_0, got {:?}", k.dtype);
-    }
     if !head_dim.is_multiple_of(32) {
         crate::bail!("attn_score_q8_0_q8_1: head_dim {head_dim} not a multiple of 32");
     }
@@ -240,7 +246,6 @@ pub fn attn_score_q8_0_q8_1(
             b_size * head_dim
         );
     }
-    let dev = &k.device;
 
     // Step 1: quantize Q to Q8_1 on-device (hot path allocation).
     let k_padded = pad(head_dim, MATRIX_ROW_PADDING);
@@ -248,8 +253,6 @@ pub fn attn_score_q8_0_q8_1(
         k_padded * b_size * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
     let mut q_q8_1 = unsafe { dev.alloc::<u8>(q_q8_1_bytes)? };
     quantize_q8_1(q_f32, &mut q_q8_1, head_dim, b_size, dev)?;
-
-    let k_blob = &k.data;
     let kernel_name = match head_dim {
         64 => "attn_score_q8_0_q8_1_hd64",
         128 => "attn_score_q8_0_q8_1_hd128",
@@ -260,11 +263,6 @@ pub fn attn_score_q8_0_q8_1(
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
 
-    let hd_blocks = head_dim / 32;
-    // K stride between consecutive token rows, in `block_q8_0` units.
-    // K was quantized via our GPU-native path which keeps one unpadded
-    // blob (no per-row padding), so stride is just the logical row width.
-    let n_kv_stride_blocks = hd_blocks;
     // Q stride between consecutive batch rows, in `block_q8_1` units.
     // `quantize_q8_1` pads each row up to MATRIX_ROW_PADDING elements, so
     // the physical stride is (k_padded / block_size), not hd_blocks.
@@ -281,8 +279,14 @@ pub fn attn_score_q8_0_q8_1(
     };
 
     let dst = unsafe { dev.alloc::<f32>(b_size * n_kv)? };
+    // Slice K starting at the caller-supplied byte offset.
+    let k_slice = if k_byte_offset == 0 {
+        k_blob.slice(..)
+    } else {
+        k_blob.slice(k_byte_offset..)
+    };
     let mut builder = func.builder();
-    builder.arg(&k_blob.inner);
+    builder.arg(&k_slice);
     builder.arg(&q_q8_1);
     builder.arg(&dst);
     barg!(
@@ -294,6 +298,118 @@ pub fn attn_score_q8_0_q8_1(
     );
     unsafe { builder.launch(cfg) }.w()?;
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
+/// GQA variant: compute attention scores for **all** kv-heads in a single
+/// kernel launch.
+///
+/// K layout: `[seq_kv, n_kv_heads, head_dim]` as Q8_0 blocks — the packing
+/// used by `Q8KvCache`. Pass `n_kv_stride_blocks = n_kv_heads * head_dim / 32`
+/// (total token stride) and the function derives the per-kv-head offset
+/// internally.
+///
+/// Q layout: `[n_q_heads, head_dim]` f32 on-device. `n_q_heads` must equal
+/// `n_kv_heads * n_q_per_kv`. Q is quantized to Q8_1 once, re-used across
+/// all kv-heads.
+///
+/// Output: `float[n_q_heads, n_kv]` scores. Query head `h` corresponds to
+/// kv-head `h / n_q_per_kv`.
+#[allow(clippy::too_many_arguments)]
+pub fn attn_score_q8_0_q8_1_gqa(
+    k_blob: &CudaSlice<u8>,
+    q_f32: &CudaView<f32>,
+    head_dim: usize,
+    n_kv: usize,
+    n_kv_heads: usize,
+    n_q_per_kv: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    if !head_dim.is_multiple_of(32) {
+        crate::bail!("attn_score_q8_0_q8_1_gqa: head_dim {head_dim} not a multiple of 32");
+    }
+    let n_q_heads = n_kv_heads * n_q_per_kv;
+    if q_f32.len() != n_q_heads * head_dim {
+        crate::bail!(
+            "attn_score_q8_0_q8_1_gqa: q_f32 has {} elements, expected {}",
+            q_f32.len(),
+            n_q_heads * head_dim
+        );
+    }
+    let kernel_name = match head_dim {
+        64 => "attn_score_q8_0_q8_1_gqa_hd64",
+        128 => "attn_score_q8_0_q8_1_gqa_hd128",
+        256 => "attn_score_q8_0_q8_1_gqa_hd256",
+        _ => crate::bail!(
+            "attn_score_q8_0_q8_1_gqa: unsupported head_dim {head_dim} (have 64/128/256)",
+        ),
+    };
+    let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
+
+    // Quantize Q to Q8_1 once for all kv-heads.
+    let k_padded = pad(head_dim, MATRIX_ROW_PADDING);
+    let q_q8_1_bytes =
+        k_padded * n_q_heads * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
+    let mut q_q8_1 = unsafe { dev.alloc::<u8>(q_q8_1_bytes)? };
+    quantize_q8_1(q_f32, &mut q_q8_1, head_dim, n_q_heads, dev)?;
+
+    let hd_blocks = head_dim / 32;
+    let n_kv_stride_blocks = n_kv_heads * hd_blocks; // full token stride
+    let kv_head_stride_blocks = hd_blocks;
+    let q_stride_blocks = k_padded / GgmlDType::Q8_1.block_size();
+
+    const WARPS_PER_BLOCK: u32 = 4;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (
+            (n_kv as u32).div_ceil(WARPS_PER_BLOCK),
+            n_kv_heads as u32,
+            1,
+        ),
+        block_dim: (WARP_SIZE as u32, WARPS_PER_BLOCK, 1),
+        shared_mem_bytes: 0,
+    };
+
+    let dst = unsafe { dev.alloc::<f32>(n_q_heads * n_kv)? };
+    let mut builder = func.builder();
+    builder.arg(k_blob);
+    builder.arg(&q_q8_1);
+    builder.arg(&dst);
+    barg!(
+        builder,
+        n_kv as i32,
+        n_kv_stride_blocks as i32,
+        kv_head_stride_blocks as i32,
+        q_stride_blocks as i32,
+        n_q_per_kv as i32
+    );
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
+/// Convenience: call the attention-score gemv against a pre-built QCudaStorage
+/// K. Assumes the K cache is laid out row-major over tokens with stride
+/// `head_dim / 32` blocks (the layout produced by calling `QTensor::quantize`
+/// on a `[seq, head_dim]` tensor).
+pub fn attn_score_q8_0_q8_1(
+    k: &QCudaStorage,
+    q_f32: &CudaView<f32>,
+    head_dim: usize,
+    n_kv: usize,
+    b_size: usize,
+) -> Result<CudaStorage> {
+    if k.dtype != GgmlDType::Q8_0 {
+        crate::bail!("attn_score_q8_0_q8_1: K must be Q8_0, got {:?}", k.dtype);
+    }
+    let hd_blocks = head_dim / 32;
+    attn_score_q8_0_q8_1_raw(
+        &k.data.inner,
+        0,
+        hd_blocks,
+        q_f32,
+        head_dim,
+        n_kv,
+        b_size,
+        &k.device,
+    )
 }
 
 fn dequantize_f32(
@@ -826,8 +942,20 @@ impl QCudaStorage {
             let unpadded_bytes = (elem_count / block_size) * type_size;
             let padded_bytes =
                 unpadded_bytes + MATRIX_ROW_PADDING * type_size / block_size;
-            // Zero-fill so the padding region is valid Q8_0 blocks (scale=0, quants=0).
-            let mut inner = self.device.alloc_zeros::<u8>(padded_bytes)?;
+            // Reuse the existing allocation if it is exactly the right size:
+            // this is the per-step fast path (e.g., a KV cache re-quantizing
+            // one new token every decode step) where a fresh cudaMalloc
+            // would cost ~tens of µs and scales with device memory pressure.
+            // Exact-size match keeps the padding region's zero-init intact
+            // without needing a device-side memset.
+            let mut inner = if self.data.inner.len() == padded_bytes {
+                std::mem::replace(
+                    &mut self.data.inner,
+                    self.device.alloc_zeros::<u8>(0)?,
+                )
+            } else {
+                self.device.alloc_zeros::<u8>(padded_bytes)?
+            };
 
             // Treat the entire tensor as one "row" of `elem_count` elements.
             // The kernel pads the row up to kx_padded = ceil(k, 512) internally.
@@ -983,6 +1111,22 @@ impl QCudaStorage {
         self.device
             .memcpy_dtoh(&self.data.inner.slice(..self.data.len), &mut out)?;
         Ok(out)
+    }
+
+    /// Device-side view of the unpadded Q8 bytes. Used by callers that
+    /// want to memcpy the freshly-quantized data into a larger persistent
+    /// buffer (e.g., a Q8 KV cache) without round-tripping through host.
+    pub fn data_slice_for_copy(
+        &self,
+        byte_len: usize,
+    ) -> Result<cudarc::driver::CudaView<u8>> {
+        if byte_len > self.data.len {
+            crate::bail!(
+                "data_slice_for_copy: byte_len {byte_len} exceeds unpadded length {}",
+                self.data.len
+            );
+        }
+        Ok(self.data.inner.slice(..byte_len))
     }
 
     pub fn device_ptr(&self) -> Result<*const u8> {
