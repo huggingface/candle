@@ -164,6 +164,11 @@ pub(crate) fn from_storage<S: Into<Shape>>(
 ) -> Tensor {
     let dtype = storage.dtype();
     let device = storage.device();
+
+    if let Storage::Lazy(ref lazy) = storage {
+        lazy.set_self_arc(lazy);
+    }
+
     let tensor_ = Tensor_ {
         id: TensorId::new(),
         storage: Arc::new(RwLock::new(storage)),
@@ -2456,7 +2461,7 @@ impl Tensor {
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
                 (Storage::Cpu(storage), Device::Lazy(lazy_dev)) => {
-                    Storage::Lazy(lazy_dev.storage_from_cpu_storage(storage)?)
+                    Storage::Lazy(lazy_dev.storage_from_cpu_storage(storage)?.into())
                 }
                 _ => {
                     bail!(
@@ -2824,16 +2829,6 @@ impl Tensor {
     pub fn storage_and_layout(&self) -> (std::sync::RwLockReadGuard<'_, Storage>, &Layout) {
         let storage = self.storage.read().unwrap();
         (storage, &self.layout)
-    }
-
-    /// If this tensor is backed by a lazy storage, mark it as pinned so its computed
-    /// buffer is preserved across forward passes (e.g. for KV-cache tensors). No-op
-    /// for non-lazy tensors.
-    pub fn lazy_pin(&self) {
-        self.storage().lazy_pin();
-    }
-    pub fn lazy_unpin(&self) {
-        self.storage().lazy_unpin();
     }
 
     pub(crate) fn same_storage(&self, rhs: &Self) -> bool {

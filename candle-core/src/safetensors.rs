@@ -537,7 +537,7 @@ impl MmapedSafetensors {
             let storage = device.storage_from_tensor_source(source)?;
 
             return Ok(from_storage(
-                Storage::Lazy(storage),
+                Storage::Lazy(Arc::new(storage)),
                 shape,
                 BackpropOp::none(),
                 false,

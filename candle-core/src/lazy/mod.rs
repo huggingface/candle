@@ -45,8 +45,6 @@ pub struct NodeId(usize);
 
 impl NodeId {
     fn new() -> Self {
-        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
-        use std::sync::atomic;
         static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
         Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
     }
@@ -61,8 +59,6 @@ pub struct BufferId(usize);
 
 impl BufferId {
     fn new() -> Self {
-        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
-        use std::sync::atomic;
         static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
         Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
     }
@@ -104,12 +100,6 @@ impl AtomicOp {
         drop(self.swap(new));
     }
 
-    pub fn load(&self) -> Op {
-        let raw = self.ptr.load(std::sync::atomic::Ordering::Relaxed);
-        let value = NonNull::new(raw).unwrap();
-        unsafe { value.read() }
-    }
-
     pub fn load_ref(&self) -> &Op {
         let raw = self.ptr.load(std::sync::atomic::Ordering::Relaxed);
         let value = NonNull::new(raw).unwrap();
@@ -120,7 +110,6 @@ impl AtomicOp {
 #[derive(Debug)]
 pub struct LazyStorage {
     id: NodeId,
-    // Consider setting as Op::Resolved() when node is resolved
     op: Arc<AtomicOp>,
     pub(crate) custom_op_fallbacks: HashMap<String, LazyStorage>,
     // Layout after applying op. As it is used by subsequent nodes it can be
@@ -132,12 +121,11 @@ pub struct LazyStorage {
     original_layout: Option<Layout>,
     dtype: DType,
     buffer_id: Arc<BufferId>,
-    // Explicit external-reference counter. Incremented by `pin()` to signal that this
-    // node's buffer must be preserved across forward passes (for example KV cache tensors).
-    // TODO: Figure out a way to achieve this feature without explicit pin calls.
-    // It should be automatic.
-    pin_count: Arc<atomic::AtomicUsize>,
-    // pub(crate) owner: std::sync::OnceLock<std::sync::Weak<crate::tensor::Tensor_>>,
+    // Weak pointer back to the `Arc<LazyStorage>` in `Storage::Lazy`.
+    // Set by `from_storage` and `From<LazyStorage> for Storage`; shared across copies.
+    self_arc: Arc<std::sync::OnceLock<std::sync::Weak<LazyStorage>>>,
+    // Set to true after the first `optimize()` pass so subsequent calls are no-ops.
+    is_optimized: Arc<atomic::AtomicBool>,
 }
 
 impl Clone for LazyStorage {
@@ -150,7 +138,8 @@ impl Clone for LazyStorage {
             original_layout: self.original_layout.clone(),
             dtype: self.dtype,
             buffer_id: self.buffer_id.clone(),
-            pin_count: self.pin_count.clone(),
+            self_arc: self.self_arc.clone(),
+            is_optimized: self.is_optimized.clone(),
         }
     }
 }
@@ -165,7 +154,8 @@ impl LazyStorage {
             original_layout: None,
             dtype,
             buffer_id: Arc::new(BufferId::new()),
-            pin_count: Arc::new(atomic::AtomicUsize::new(0)),
+            self_arc: Arc::new(std::sync::OnceLock::new()),
+            is_optimized: Arc::new(atomic::AtomicBool::new(false)),
         }
     }
 
@@ -179,8 +169,7 @@ impl LazyStorage {
             }
         };
         // Creates a copy, or view, of the lazy storage with updated layout.
-        // `original_layout` preserves the canonical (production) layout for ops
-        // that require it.
+        // `producer_layout` preserves the original layout for ops that require it.
         let new_layout = safe_layout_clone(layout);
         let original = source.producer_layout().clone();
         Self {
@@ -191,7 +180,8 @@ impl LazyStorage {
             layout: new_layout,
             dtype: source.dtype,
             buffer_id: source.buffer_id.clone(),
-            pin_count: source.pin_count.clone(),
+            self_arc: source.self_arc.clone(),
+            is_optimized: source.is_optimized.clone(),
         }
     }
 
@@ -292,22 +282,68 @@ impl LazyStorage {
         self.op.store(op);
     }
 
-    /// Mark this node as externally held (e.g. stored in a KV cache) so its buffer
-    /// is preserved across forward passes. Pinning any copy pins all copies that share
-    /// this underlying computation.
-    pub fn pin(&self) {
-        self.pin_count.fetch_add(1, atomic::Ordering::Relaxed);
+    /// Store a weak back-reference to the `Arc<LazyStorage>` in `Storage::Lazy`.
+    /// Shared across all copies; used by `is_externally_held` and `self_weak`.
+    pub(crate) fn set_self_arc(&self, arc: &Arc<LazyStorage>) {
+        let _ = self.self_arc.set(Arc::downgrade(arc));
     }
 
-    pub fn unpin(&self) {
-        self.pin_count.fetch_sub(1, atomic::Ordering::Relaxed);
+    /// Returns the weak back-reference set by `set_self_arc`, or `None` if not yet set.
+    pub(crate) fn self_weak(&self) -> Option<std::sync::Weak<LazyStorage>> {
+        self.self_arc.get().cloned()
     }
 
-    /// Returns true if this node has been explicitly pinned via [`pin`].
-    pub fn is_pinned(&self) -> bool {
-        self.pin_count.load(atomic::Ordering::Relaxed) > 0
+    /// Returns `true` if the owning tensor is still alive outside the graph.
+    pub(crate) fn is_externally_held(&self) -> bool {
+        self.self_arc.get().and_then(|w| w.upgrade()).is_some()
     }
 
+    /// `Arc` friendly `const_set`
+    pub(crate) fn const_set_lazy(&self, s: crate::scalar::Scalar) {
+        self.op.store(Op::ConstSet(s));
+    }
+
+    /// `Arc` friendly `copy_strided_src`
+    pub(crate) fn copy_strided_src_into(
+        &self,
+        src: &LazyStorage,
+        src_l: &Layout,
+        dst_offset: usize,
+    ) {
+        let src_copy = LazyStorage::copy(src, src_l);
+        let new_op = if let Op::CopyStridedSrc(copies) = self.op() {
+            let mut copies = copies.clone();
+            copies.add(src_copy, dst_offset);
+            Op::CopyStridedSrc(copies)
+        } else {
+            Op::CopyStridedSrc(CopyStridedSrc::new(src_copy, dst_offset))
+        };
+        self.set_op(new_op);
+    }
+
+    /// `Arc` friendly `copy2d`
+    pub(crate) fn copy2d_into(
+        &self,
+        src: &LazyStorage,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) {
+        let copy = SingleCopy2D::new(src.clone(), d1, d2, src_s, dst_s, src_o, dst_o);
+        let new_op = if let Op::Copy2D(copies) = self.op() {
+            let mut copies = copies.clone();
+            copies.add(copy);
+            Op::Copy2D(copies)
+        } else {
+            Op::Copy2D(Copy2D::new(vec![copy]))
+        };
+        self.set_op(new_op);
+    }
+
+    /// Topological order of operations in the graph from this node
     pub(crate) fn execution_order(&self) -> Vec<&LazyStorage> {
         let mut done = HashSet::new();
         let mut pending = HashSet::new();
@@ -327,16 +363,7 @@ impl LazyStorage {
                 order.push(cur_t);
                 continue;
             }
-
-            let (srcs_with_deps, srcs_without_deps): (Vec<_>, Vec<_>) =
-                cur_srcs.iter().partition(|s| s.op().srcs().is_empty());
-
-            let all_srcs = srcs_with_deps
-                .into_iter()
-                .chain(srcs_without_deps)
-                .collect::<Vec<_>>();
-
-            let precursor: &LazyStorage = all_srcs[cur_src];
+            let precursor: &LazyStorage = cur_srcs[cur_src];
 
             if done.contains(&precursor.id()) {
                 stack.push((cur_t, cur_src + 1));
@@ -374,16 +401,7 @@ impl LazyStorage {
                 order.push(cur_t);
                 continue;
             }
-
-            let (srcs_with_deps, srcs_without_deps): (Vec<_>, Vec<_>) =
-                cur_srcs.iter().partition(|s| s.op().srcs().is_empty());
-
-            let all_srcs = srcs_with_deps
-                .into_iter()
-                .chain(srcs_without_deps)
-                .collect::<Vec<_>>();
-
-            let precursor: &LazyStorage = all_srcs[cur_src];
+            let precursor: &LazyStorage = cur_srcs[cur_src];
 
             if done.contains(&precursor.id()) {
                 stack.push((cur_t, cur_src + 1));
@@ -598,31 +616,7 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
     let mut reusage = BTreeMap::new();
     let mut allocations = BTreeMap::new();
 
-    // Plan Const (input) allocations
-    for node in graph {
-        let buffer_id = node.buffer_id();
-
-        if let Op::Const(s) = node.op() {
-            let shape = Shape::from(s.element_count());
-            allocations.insert(*buffer_id, (Layout::contiguous(shape), s.data_type()));
-        }
-        if let Op::ConstSet(_) = node.op() {
-            allocations.insert(*buffer_id, (node.layout().clone(), node.dtype()));
-        }
-        /*
-        if let Op::Resolved(b) = node.op() {
-            let _ = resolved
-                .entry(b.as_ref().clone())
-                .or_insert_with(|| (node.layout().clone(), node.dtype()));
-        }
-
-        if binding.contains(&node.id()) {
-            //node.resolve();
-        } else {
-            binding.insert(node.id());
-        }
-         */
-    }
+    // Op::Const nodes are excluded. Allocated at runtime.
 
     // Find buffer usage spans in the graph
     let record_map = calculate_usage_records(graph);
@@ -635,7 +629,6 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
     for (buffer_id, record) in record_map.iter() {
         // Pinned buffers (external references) must never reuse another buffer.
         // They need a dedicated allocation that survives until the post-execution pinning step.
-        // In other words not part of the buffer reusage.
         if pinned.contains(buffer_id) {
             allocations.insert(*buffer_id, (record.layout.clone(), record.dtype));
             // Skipping since pinned should not be in shared_objects
@@ -722,6 +715,30 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
     })
 }
 
+/// Allocation plan for a lazy forward pass.
+///
+/// Stored after the first run and reused on subsequent runs with identical graph structure,
+/// skipping `greedy_by_size` entirely.
+///
+/// Rather than caching the physical buffer objects, we cache the aliasing structure, denoting
+/// which topological order position is the owner of each buffer.
+/// This requires that the topological ordering is stable between runs.
+///
+/// The fast path allocates new pool buffers every token (may already be allocated), applying the same aliasing,
+/// so every kernel always writes before it reads.
+#[derive(Debug, Clone)]
+pub struct CachedPlan {
+    /// Structural hash: op type discriminant at each topological position.
+    /// Ensures stability even as tensor shapes grow.
+    pub key: u64,
+    /// Canonical positions (position owns a buffer)
+    /// Given `let Some(value) = canonical_position[pos]`, if value is
+    ///   `value == pos`: canonical node. Allocate a fresh buffer
+    ///   `value < pos` : alias node. Share buffer allocated for this position.
+    ///   `None`        : Const, Resolved, or output node. Handled per run.
+    pub canonical_posisitons: Vec<Option<usize>>,
+}
+
 fn apply_backend_agnostic_passes(
     _node: &LazyStorage,
     _consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
@@ -737,7 +754,13 @@ pub trait Executor {
     type BufferType: LazyBuffer;
     type AllocatorType: LazyAllocator<Self::BufferType>;
 
+    /// Optimization loop
+    /// Applies both backend agnostic and backend specific passes
     fn optimize(&self, leaf: &LazyStorage) {
+        // Already optimized on a previous run - skip
+        if leaf.is_optimized.load(atomic::Ordering::Relaxed) {
+            return;
+        }
         let mut worklist: VecDeque<&LazyStorage> = VecDeque::new();
         let mut visited: HashSet<NodeId> = HashSet::new();
         let mut consumer_map: HashMap<NodeId, Vec<&LazyStorage>> = HashMap::new();
@@ -746,7 +769,8 @@ pub trait Executor {
         worklist.push_back(leaf);
 
         while let Some(node) = worklist.pop_front() {
-            let changed = apply_backend_agnostic_passes(node, &consumer_map);
+            let mut changed = apply_backend_agnostic_passes(node, &consumer_map);
+            changed |= self.apply_passes(node, &consumer_map);
             for source in node.srcs() {
                 consumer_map
                     .entry(source.id())
@@ -766,41 +790,11 @@ pub trait Executor {
                 }
             }
         }
-    }
-
-    fn specialize(&self, leaf: &LazyStorage) {
-        let mut worklist: VecDeque<&LazyStorage> = VecDeque::new();
-        let mut visited: HashSet<NodeId> = HashSet::new();
-        let mut consumer_map: HashMap<NodeId, Vec<&LazyStorage>> = HashMap::new();
-
-        visited.insert(leaf.id());
-        worklist.push_back(leaf);
-
-        while let Some(node) = worklist.pop_front() {
-            let changed = self.apply_specialize_passes(node, &consumer_map);
-            for source in node.srcs() {
-                consumer_map
-                    .entry(source.id())
-                    .and_modify(|c| c.push(node))
-                    .or_insert_with(|| vec![node]);
-                if visited.insert(source.id()) {
-                    worklist.push_back(source);
-                }
-            }
-            if changed {
-                let consumers = consumer_map
-                    .get(&node.id())
-                    .map(|c| c.as_slice())
-                    .unwrap_or_else(|| &[]);
-                for consumer in consumers {
-                    worklist.push_back(consumer);
-                }
-            }
-        }
+        leaf.is_optimized.store(true, atomic::Ordering::Relaxed);
     }
 
     /// Backend specific optimizations. Defaults to noop.
-    fn apply_specialize_passes(
+    fn apply_passes(
         &self,
         _node: &LazyStorage,
         _consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
@@ -828,6 +822,55 @@ pub trait Executor {
     ) -> Option<&dyn LazyCustomFn<Self::BufferType>>;
 
     fn inner_precision(op: &Op) -> Option<DType>;
+
+    /// Hash key of graph.
+    /// Hashing Op variant discriminants so the key is stable even
+    /// as tensor shapes grow between tokens.
+    /// This lets us cache plans and optimizations.
+    #[inline(always)]
+    fn graph_key(graph: &[&LazyStorage]) -> u64 {
+        let mut h = graph.len() as u64 * 0x9e3779b97f4a7c15_u64;
+        for (i, node) in graph.iter().enumerate() {
+            let disc: u64 = match node.op() {
+                Op::Uninit => 0,
+                Op::Const(_) => 1,
+                Op::Resolved(_) => 2,
+                Op::ToCpu => 3,
+                Op::Affine(_) => 4,
+                Op::Powf(_) => 5,
+                Op::Elu(_) => 6,
+                Op::Reduce(_) => 7,
+                Op::Cmp(_) => 8,
+                Op::ToDType(_) => 9,
+                Op::Unary(_) => 10,
+                Op::Binary(_) => 11,
+                Op::WhereCond(_) => 12,
+                Op::IndexSelect(_) => 13,
+                Op::Matmul(_) => 14,
+                Op::CopyStridedSrc(_) => 15,
+                Op::Copy2D(_) => 16,
+                Op::ConstSet(_) => 17,
+                Op::Sink(_) => 18,
+                Op::Aggregate => 19,
+                Op::CustomOp(_) => 20,
+                Op::Output(_) => 21,
+            };
+            h ^= disc
+                .wrapping_mul(0x9e3779b97f4a7c15_u64)
+                .wrapping_add(i as u64);
+        }
+        h
+    }
+
+    /// Collect buffer ids of nodes that are externally held or already resolved.
+    /// Pinned buffers indicate they should be excluded from buffer reusage.
+    fn get_pinned_buffers(graph: &[&LazyStorage]) -> HashSet<BufferId> {
+        graph
+            .iter()
+            .filter(|n| n.is_externally_held() && !matches!(n.op(), Op::Resolved(_)))
+            .map(|n| *n.buffer_id())
+            .collect()
+    }
 }
 
 impl LazyStorage {
@@ -934,7 +977,7 @@ impl Op {
     }
 
     fn resolved(&self) -> bool {
-        matches!(self, Op::Resolved(_) | Op::Const(_))
+        matches!(self, Op::Resolved(_))
     }
 }
 
@@ -1258,18 +1301,7 @@ impl BackendStorage for LazyStorage {
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
-        let src = LazyStorage::copy(self, src_l);
-
-        if let Op::CopyStridedSrc(copies) = dst.op() {
-            let mut copies = copies.clone();
-            copies.add(src, dst_offset);
-            let op = Op::CopyStridedSrc(copies);
-            dst.op.store(op);
-            return Ok(());
-        }
-
-        let op = Op::CopyStridedSrc(CopyStridedSrc::new(src, dst_offset));
-        dst.op.store(op);
+        dst.copy_strided_src_into(self, src_l, dst_offset);
         Ok(())
     }
 
@@ -1283,24 +1315,12 @@ impl BackendStorage for LazyStorage {
         src_o: usize,
         dst_o: usize,
     ) -> Result<()> {
-        if let Op::Copy2D(copies) = dst.op() {
-            let mut copies = copies.clone();
-            let copy = SingleCopy2D::new(self.clone(), d1, d2, src_s, dst_s, src_o, dst_o);
-            copies.add(copy);
-            let op = Op::Copy2D(copies);
-            dst.op.store(op);
-            return Ok(());
-        }
-        let copy = SingleCopy2D::new(self.clone(), d1, d2, src_s, dst_s, src_o, dst_o);
-        let op = Op::Copy2D(Copy2D::new(vec![copy]));
-
-        dst.op.store(op);
-
+        dst.copy2d_into(self, d1, d2, src_s, dst_s, src_o, dst_o);
         Ok(())
     }
 
     fn const_set(&mut self, s: crate::scalar::Scalar, _l: &Layout) -> Result<()> {
-        self.op.store(Op::ConstSet(s));
+        self.const_set_lazy(s);
         Ok(())
     }
 

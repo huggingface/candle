@@ -3,6 +3,7 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::lazy::ops::{LazyOp, ToDType};
+use crate::lazy::CachedPlan;
 use crate::lazy::NodeId;
 use crate::lazy::{
     custom::{CustomOp, LazyCustomOp},
@@ -18,6 +19,7 @@ use candle_metal_kernels::{
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError, RwLock, TryLockError};
@@ -2232,8 +2234,8 @@ impl BackendDevice for MetalDevice {
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
             _fences: Arc::new(Mutex::new(HashMap::new())),
-            const_cache: Arc::new(Mutex::new(HashMap::new())),
             resolved: Arc::new(Mutex::new(HashMap::new())),
+            plan_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -2449,16 +2451,13 @@ impl MetalDevice {
         s: &Arc<dyn TensorSource>,
         buffer_id: &BufferId,
     ) -> Result<()> {
-        let mut cache = self.const_cache.lock().unwrap();
-        let buffer = if let Some(cached) = cache.get(buffer_id) {
-            cached.clone()
-        } else {
-            let storage = self.storage_from_dyn_tensor_source(s.as_ref())?;
-            let buffer = storage.buffer_arc();
-            cache.insert(*buffer_id, buffer.clone());
-            buffer
-        };
-        allocator.insert(*buffer_id, buffer)?;
+        let dst = allocator.get(buffer_id)?.clone();
+        let src_bytes = s.data_u8();
+        let staging = self.new_buffer_with_data(src_bytes)?;
+        let blit = self.blit_command_encoder()?;
+        blit.set_label("eval_const");
+        blit.copy(&staging, 0, &dst, 0, src_bytes.len());
+        blit.end_encoding();
         Ok(())
     }
 }
@@ -2468,7 +2467,7 @@ impl LazyBuffer for Arc<Buffer> {}
 // Allocator notes:
 // Pre-allocate up to 95% of metal recommended limit
 // Memory planning should be backend agnostic, but there may be backend specific edge cases so
-// should be open to specializing. Let OpGraph create the initial memory plan. Override the trait fn or post-process as needed.
+// should be open to specializing. Override initial planning via trait fn or post-process as needed.
 // Only Const and Output need to have SharedStorage setting. All other buffers can be private.
 #[derive(Clone, Debug)]
 pub struct MetalAllocator {
@@ -2512,7 +2511,7 @@ impl LazyAllocator<Arc<Buffer>> for MetalAllocator {
             let resolved_map = self.device.resolved.lock().unwrap();
             for node in graph {
                 if let Op::Resolved(buf_id) = node.op() {
-                    if let Some(buf) = resolved_map.get(buf_id) {
+                    if let Some((buf, _)) = resolved_map.get(buf_id) {
                         self.buffer_map.insert(*node.buffer_id(), buf.clone());
                     }
                 }
@@ -2521,10 +2520,10 @@ impl LazyAllocator<Arc<Buffer>> for MetalAllocator {
 
         let output = graph.last().unwrap();
         for (buffer_id, (layout, dtype)) in allocations.into_iter() {
+            let size = layout.shape().elem_count() * dtype.size_in_bytes();
             if &buffer_id == output.buffer_id() {
-                let buffer = self
-                    .device
-                    .allocate_buffer(layout.shape().elem_count() * dtype.size_in_bytes())?;
+                // The output buffer must be Shared so the CPU can read the result.
+                let buffer = self.device.allocate_buffer(size)?;
                 self.buffer_map.insert(buffer_id, buffer);
             } else {
                 self.allocate(buffer_id, layout.shape(), dtype)?;
@@ -2863,7 +2862,7 @@ impl Executor for MetalDevice {
     type AllocatorType = MetalAllocator;
 
     /// Backend specific optimizations. Defaults to noop.
-    fn apply_specialize_passes(
+    fn apply_passes(
         &self,
         node: &LazyStorage,
         consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
@@ -2880,20 +2879,77 @@ impl Executor for MetalDevice {
         install_custom_ops(lazy_storage.custom_ops());
 
         self.optimize(&lazy_storage);
-        self.specialize(&lazy_storage);
-
         let graph = lazy_storage.execution_order();
+        let last_pos = graph.len().saturating_sub(1);
 
-        // Collect nodes that have been explicitly pinned via `LazyStorage::pin()`.
-        // Pinned nodes are excluded from the buffer reuse pool and their buffers are
-        // preserved in `resolved_map`.
-        let pinned: HashSet<BufferId> = graph
-            .iter()
-            .filter(|n| n.is_pinned() && !matches!(n.op(), Op::Resolved(_)))
-            .map(|n| *n.buffer_id())
-            .collect();
+        // Get graph key for cache lookup
+        let key = Self::graph_key(&graph);
 
-        allocator.initialize(&graph, &pinned)?;
+        let cached_plan = {
+            // Get cached plan only if key matches
+            let plan_guard = self.plan_cache.lock().unwrap();
+            plan_guard.as_ref().filter(|p| p.key == key).cloned()
+        };
+        let used_cache = if let Some(plan) = cached_plan {
+            // Pass 1: for each canonical position, compute the maximum byte size
+            // needed across itself and all alias positions that share its buffer.
+            let mut canonical_max_bytes: HashMap<usize, usize> = HashMap::new();
+            for (pos, node) in graph.iter().enumerate() {
+                if let Some(can_pos) = plan.canonical_posisitons[pos] {
+                    let needed =
+                        node.producer_layout().shape().elem_count() * node.dtype().size_in_bytes();
+                    let entry = canonical_max_bytes.entry(can_pos).or_insert(0);
+                    if needed > *entry {
+                        *entry = needed;
+                    }
+                }
+            }
+
+            // Pass 2: allocate a fresh buffer for each canonical position and
+            // share it with alias positions that point to the same canonical.
+            let mut canonical_bufs: HashMap<usize, Arc<Buffer>> = HashMap::new();
+            for (pos, node) in graph.iter().enumerate() {
+                let Some(cp) = plan.canonical_posisitons[pos] else {
+                    continue; // Const / Resolved / output — handled below
+                };
+                if let Entry::Vacant(e) = canonical_bufs.entry(cp) {
+                    let max_bytes = canonical_max_bytes[&cp];
+                    let buf = self.allocate_buffer(max_bytes)?;
+                    e.insert(buf);
+                }
+                let buf = canonical_bufs[&cp].clone();
+                allocator.buffer_map.insert(*node.buffer_id(), buf);
+            }
+
+            {
+                // Refresh Resolved nodes (KV-cache tensors etc.) from the resolved map.
+                let resolved_map = self.resolved.lock().unwrap();
+                for node in &graph {
+                    if let Op::Resolved(buf_id) = node.op() {
+                        if let Some((buf, _)) = resolved_map.get(buf_id) {
+                            allocator.buffer_map.insert(*node.buffer_id(), buf.clone());
+                        }
+                    }
+                }
+            }
+
+            // Always allocate a fresh output buffer.
+            let output_node = graph.last().unwrap();
+            let out_size = output_node.producer_layout().shape().elem_count()
+                * output_node.dtype().size_in_bytes();
+            let out_buf = self.allocate_buffer(out_size)?;
+            allocator
+                .buffer_map
+                .insert(*output_node.buffer_id(), out_buf);
+            true
+        } else {
+            false
+        };
+
+        let pinned = Self::get_pinned_buffers(&graph);
+        if !used_cache {
+            allocator.initialize(&graph, &pinned)?;
+        }
 
         let result_node = graph.last().unwrap();
         for node in &graph {
@@ -2938,7 +2994,45 @@ impl Executor for MetalDevice {
 
         self.synchronize()?;
 
-        // Pin externally referenced buffers
+        // Build the aliasing plan for future fast-path runs.  Must happen BEFORE
+        // node.resolve() because resolve() drops the old Op (which owns source
+        // LazyStorage values by value), potentially invalidating `graph` refs.
+        // Only built on the slow path (greedy_by_size ran), so `allocator.reusage`
+        // is populated with the canonical aliasing decisions.
+        if !used_cache {
+            // Map each graph position's buffer_id -> its position index.
+            let buf_id_to_pos: HashMap<BufferId, usize> = graph
+                .iter()
+                .enumerate()
+                .map(|(pos, node)| (*node.buffer_id(), pos))
+                .collect();
+
+            let mut canonical_positions = vec![None; graph.len()];
+            for (pos, node) in graph.iter().enumerate() {
+                if pos == last_pos {
+                    continue; // output handled per-run
+                }
+                match node.op() {
+                    Op::Resolved(_) => {} // handled per-run from resolved_map
+                    _ => {
+                        // resolve() follows the reusage chain to the canonical id.
+                        // Op::Const nodes are included here so that weight buffers
+                        // participate in temporal aliasing across layers.
+                        let canonical_id = allocator.resolve(node.buffer_id());
+                        if let Some(&cp) = buf_id_to_pos.get(canonical_id) {
+                            canonical_positions[pos] = Some(cp);
+                        }
+                    }
+                }
+            }
+            *self.plan_cache.lock().unwrap() = Some(CachedPlan {
+                key,
+                canonical_posisitons: canonical_positions,
+            });
+        }
+
+        // Preserve externally-held buffers. NOTE: node.resolve() drops the old Op,
+        // so no graph references may be accessed after this point.
         {
             let mut resolved_map = self.resolved.lock().unwrap();
             for node in &graph {
@@ -2949,10 +3043,17 @@ impl Executor for MetalDevice {
                     continue;
                 }
                 if let Ok(buf) = allocator.get(node.buffer_id()) {
-                    resolved_map.insert(*node.buffer_id(), buf.clone());
+                    let weak = node
+                        .self_weak()
+                        .expect("set_self_arc not called before run()");
+                    resolved_map.insert(*node.buffer_id(), (buf.clone(), weak));
                     node.resolve();
                 }
             }
+
+            // Must run after node.resolve() above — resolve() drops Arcs that may still
+            // be referenced during eval, so evicting earlier causes "No buffer found" panics.
+            resolved_map.retain(|_, (_, weak)| weak.upgrade().is_some());
         }
 
         let buffer = allocator.get(result_node.buffer_id()).unwrap().clone();

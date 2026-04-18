@@ -4,6 +4,7 @@ use crate::op::{self, CmpOp, ReduceOp};
 use crate::scalar::Scalar;
 use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
+use std::sync::Arc;
 
 // We do not want to implement Clone on Storage as cloning may fail because of
 // out of memory. Instead try_clone should be used.
@@ -12,7 +13,7 @@ pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
     Metal(MetalStorage),
-    Lazy(LazyStorage),
+    Lazy(Arc<LazyStorage>),
 }
 
 impl From<CpuStorage> for Storage {
@@ -33,9 +34,12 @@ impl From<MetalStorage> for Storage {
     }
 }
 
+// Prefer this over `Storage::Lazy(Arc::new(s))` to ensure set_self_arc is called.
 impl From<LazyStorage> for Storage {
     fn from(s: LazyStorage) -> Storage {
-        Storage::Lazy(s)
+        let arced = Arc::new(s);
+        arced.set_self_arc(&arced);
+        Storage::Lazy(arced)
     }
 }
 
@@ -53,7 +57,7 @@ impl Storage {
             }
             Self::Lazy(storage) => {
                 let storage = storage.try_clone(layout)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -64,22 +68,6 @@ impl Storage {
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
             Self::Metal(storage) => Device::Metal(storage.device().clone()),
             Self::Lazy(storage) => Device::Lazy(storage.device().clone()),
-        }
-    }
-
-    /// If this storage is lazy, pin it so its buffer is preserved across forward passes.
-    /// No-op for non-lazy storage.
-    pub fn lazy_pin(&self) {
-        if let Self::Lazy(storage) = self {
-            storage.pin();
-        }
-    }
-
-    /// If this storage is lazy, unpin it.
-    /// No-op for non-lazy storage.
-    pub fn lazy_unpin(&self) {
-        if let Self::Lazy(storage) = self {
-            storage.unpin();
         }
     }
 
@@ -127,7 +115,10 @@ impl Storage {
             Storage::Cpu(storage) => storage.const_set(v, l),
             Storage::Cuda(storage) => storage.const_set(v, l),
             Storage::Metal(storage) => storage.const_set(v, l),
-            Storage::Lazy(storage) => storage.const_set(v, l),
+            Storage::Lazy(storage) => {
+                let _: () = storage.const_set_lazy(v);
+                Ok(())
+            }
         }
     }
 
@@ -147,7 +138,7 @@ impl Storage {
             }
             Self::Lazy(storage) => {
                 let storage = storage.affine(layout, mul, add)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -168,7 +159,7 @@ impl Storage {
             }
             Self::Lazy(storage) => {
                 let storage = storage.powf(layout, alpha)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -189,7 +180,7 @@ impl Storage {
             }
             Self::Lazy(storage) => {
                 let storage = storage.elu(layout, alpha)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -218,7 +209,7 @@ impl Storage {
             }
             (Self::Lazy(lhs), Self::Lazy(rhs)) => {
                 let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -249,7 +240,7 @@ impl Storage {
             }
             Self::Lazy(storage) => {
                 let storage = storage.reduce_op(op, layout, s)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -270,7 +261,7 @@ impl Storage {
             }
             Self::Lazy(storage) => {
                 let storage = storage.to_dtype(layout, dtype)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -291,7 +282,7 @@ impl Storage {
             }
             Self::Lazy(storage) => {
                 let (storage, shape) = c.lazy_fwd(storage, l)?;
-                Ok((Self::Lazy(storage), shape))
+                Ok((Self::Lazy(Arc::new(storage)), shape))
             }
         }
     }
@@ -319,7 +310,7 @@ impl Storage {
             }
             (Self::Lazy(s1), Self::Lazy(s2)) => {
                 let (s, shape) = c.lazy_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Lazy(s), shape))
+                Ok((Self::Lazy(Arc::new(s)), shape))
             }
             _ => unreachable!(),
         }
@@ -351,7 +342,7 @@ impl Storage {
             }
             (Self::Lazy(s1), Self::Lazy(s2), Self::Lazy(s3)) => {
                 let (s, shape) = c.lazy_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Lazy(s), shape))
+                Ok((Self::Lazy(Arc::new(s)), shape))
             }
             _ => unreachable!(),
         }
@@ -421,7 +412,7 @@ impl Storage {
             }
             Self::Lazy(storage) => {
                 let storage = storage.unary_impl::<B>(layout)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -449,7 +440,7 @@ impl Storage {
             }
             (Self::Lazy(lhs), Self::Lazy(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -488,7 +479,7 @@ impl Storage {
             }
             (Self::Lazy(inp), Self::Lazy(kernel)) => {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
-                Ok(Self::Lazy(s))
+                Ok(Self::Lazy(Arc::new(s)))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -521,9 +512,9 @@ impl Storage {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
-            (Self::Lazy(inp), Storage::Lazy(kernel)) => {
+            (Self::Lazy(inp), Self::Lazy(kernel)) => {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
-                Ok(Self::Lazy(s))
+                Ok(Self::Lazy(Arc::new(s)))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -708,7 +699,7 @@ impl Storage {
             Storage::Lazy(storage) => {
                 let storage =
                     storage.upsample_bilinear2d(layout, h, w, align_corners, scale_h, scale_w)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -739,7 +730,7 @@ impl Storage {
             }
             (Self::Lazy(cond), Self::Lazy(t), Self::Lazy(f)) => {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
             (_, lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -882,7 +873,7 @@ impl Storage {
             }
             (Self::Lazy(lhs), Self::Lazy(rhs)) => {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -917,7 +908,7 @@ impl Storage {
             }
             (Self::Lazy(lhs), Self::Lazy(rhs)) => {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
-                Ok(Self::Lazy(storage))
+                Ok(Self::Lazy(Arc::new(storage)))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -941,7 +932,10 @@ impl Storage {
             (Self::Metal(src), Self::Metal(dst)) => {
                 Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
             }
-            (Self::Lazy(src), Self::Lazy(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
+            (Self::Lazy(src), Self::Lazy(dst)) => {
+                dst.copy_strided_src_into(src, src_l, dst_offset);
+                Ok(())
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -971,7 +965,8 @@ impl Storage {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (Self::Lazy(src), Self::Lazy(dst)) => {
-                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+                dst.copy2d_into(src, d1, d2, src_s, dst_s, src_o, dst_o);
+                Ok(())
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),

@@ -1,7 +1,6 @@
 use crate::{DType, Result};
 
-use crate::lazy::BufferId;
-use crate::lazy::NodeId;
+use crate::lazy::{BufferId, CachedPlan, LazyStorage, NodeId};
 #[cfg(feature = "ug")]
 use candle_metal_kernels::metal::ComputePipeline;
 use candle_metal_kernels::{
@@ -16,7 +15,7 @@ use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 // Thread-local buffer override for `with_buffer_override`.
 // Using thread-local storage prevents the override set by one thread from
@@ -80,11 +79,10 @@ pub struct MetalDevice {
 
     pub(crate) _fences: Arc<Mutex<HashMap<NodeId, MetalFence>>>,
 
-    /// Lazy eval specific concepts. Experimental
-    /// cache of const eval nodes
-    pub(crate) const_cache: Arc<Mutex<HashMap<BufferId, Arc<Buffer>>>>,
-    /// cache of already resolved nodes.
-    pub(crate) resolved: Arc<Mutex<HashMap<BufferId, Arc<Buffer>>>>,
+    /// Resolved node buffer cache; entries are evicted when the owning tensor is dropped.
+    pub(crate) resolved: Arc<Mutex<HashMap<BufferId, (Arc<Buffer>, Weak<LazyStorage>)>>>,
+    /// Allocation plan cache; reused across runs with identical graph structure.
+    pub(crate) plan_cache: Arc<Mutex<Option<CachedPlan>>>,
 }
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.

@@ -100,7 +100,7 @@ pub trait LazyCustomOp: LazyCustomOpClone + Send + Sync {
         let (storage, layout) = tensor.storage_and_layout();
         let storage = storage.try_clone(layout)?;
         let inner = match storage {
-            crate::Storage::Lazy(lazy) => lazy,
+            crate::Storage::Lazy(lazy) => (*lazy).clone(),
             _ => unreachable!(),
         };
 

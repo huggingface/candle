@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::backend::BackendDevice;
 use crate::cpu_backend::CpuDevice;
 use crate::lazy::LazyDevice;
@@ -256,6 +258,20 @@ impl Device {
         }
     }
 
+    /// Returns the number of bytes currently allocated on the Metal GPU, or
+    /// `None` for non-Metal devices.
+    ///
+    /// For `Device::Lazy`, queries the global Metal device that backs lazy
+    /// execution (requires the `metal` feature).
+    pub fn metal_allocated_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Metal(m) => Some(m.current_allocated_size()),
+            #[cfg(feature = "metal")]
+            Self::Lazy(_) => Some(crate::metal_backend::metal_device().current_allocated_size()),
+            _ => None,
+        }
+    }
+
     pub fn new_cuda_with_stream(ordinal: usize) -> Result<Self> {
         Ok(Self::Cuda(crate::CudaDevice::new_with_stream(ordinal)?))
     }
@@ -439,7 +455,7 @@ impl Device {
             }
             Device::Lazy(device) => {
                 let storage = device.zeros_impl(shape, dtype)?;
-                Ok(Storage::Lazy(storage))
+                Ok(Storage::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -460,7 +476,7 @@ impl Device {
             }
             Device::Lazy(device) => {
                 let storage = device.alloc_uninit(shape, dtype)?;
-                Ok(Storage::Lazy(storage))
+                Ok(Storage::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -478,7 +494,7 @@ impl Device {
             }
             Device::Lazy(device) => {
                 let storage = device.storage_from_slice(data)?;
-                Ok(Storage::Lazy(storage))
+                Ok(Storage::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -499,7 +515,7 @@ impl Device {
             Device::Lazy(device) => {
                 let storage = array.to_cpu_storage();
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Lazy(storage))
+                Ok(Storage::Lazy(Arc::new(storage)))
             }
         }
     }
@@ -520,7 +536,7 @@ impl Device {
             Device::Lazy(device) => {
                 let storage = S::to_cpu_storage_owned(data);
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Lazy(storage))
+                Ok(Storage::Lazy(Arc::new(storage)))
             }
         }
     }
