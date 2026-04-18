@@ -14,7 +14,14 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertForTokenClassification, Config as BertConfig};
 use clap::{ArgGroup, Parser};
 use hf_hub::{api::sync::Api, Repo, RepoType};
-use tokenizers::{Encoding, PaddingParams, Tokenizer};
+use tokenizers::{
+    Encoding, PaddingParams, Tokenizer, TokenizerBuilder,
+    models::wordpiece::WordPiece,
+    normalizers::BertNormalizer,
+    pre_tokenizers::bert::BertPreTokenizer,
+    processors::bert::BertProcessing,
+    decoders::wordpiece::WordPiece as WordPieceDecoder,
+};
 
 type Id2Label = HashMap<u32, String>;
 
@@ -86,7 +93,7 @@ impl Args {
                     }
 
                     let config = base_path.join("config.json");
-                    let tokenizer = base_path.join("tokenizer.json");
+                    let tokenizer = base_path.join("vocab.txt");
                     let weights = if self.use_pth {
                         base_path.join("pytorch_model.bin")
                     } else {
@@ -103,7 +110,7 @@ impl Args {
                     let api = Api::new()?;
                     let api = api.repo(repo);
                     let config = api.get("config.json")?;
-                    let tokenizer = api.get("tokenizer.json")?;
+                    let tokenizer = api.get("vocab.txt")?;
                     let weights = if self.use_pth {
                         api.get("pytorch_model.bin")?
                     } else {
@@ -138,8 +145,26 @@ impl Args {
 
         let num_labels = id2label.len();
 
-        let mut tokenizer = Tokenizer::from_file(tokenizer_filename)
-            .map_err(|e| candle::Error::Msg(format!("Tokenizer error: {e}")))?;
+        // Build BERT WordPiece tokenizer from vocab.txt.
+        // Many BERT NER models (including dslim/bert-base-NER) predate the fast tokenizer
+        // format and do not ship tokenizer.json, only vocab.txt.
+        let wordpiece = WordPiece::from_file(tokenizer_filename.to_str().ok_or(E::msg("Invalid vocab path"))?)
+            .unk_token("[UNK]".to_string())
+            .build()
+            .map_err(E::msg)?;
+
+        let mut tokenizer = TokenizerBuilder::new()
+            .with_model(wordpiece)
+            .with_normalizer(Some(BertNormalizer::new(true, true, Some(true), true)))
+            .with_pre_tokenizer(Some(BertPreTokenizer))
+            .with_decoder(Some(WordPieceDecoder::default()))
+            .with_post_processor(Some(BertProcessing::new(
+                ("[SEP]".to_string(), 102),
+                ("[CLS]".to_string(), 101),
+            )))
+            .build()
+            .map_err(E::msg)?;
+
         tokenizer.with_padding(Some(PaddingParams::default()));
 
         let vb = if self.use_pth {
@@ -160,7 +185,7 @@ impl Args {
 
         let model = BertForTokenClassification::load(vb, &config, num_labels)?;
 
-        Ok((model, config, tokenizer, id2label))
+        Ok((model, config, tokenizer.into(), id2label))
     }
 }
 
