@@ -5,7 +5,7 @@ pub const SAMPLE_RATE: usize = 24_000;
 
 pub(crate) struct AudioOutputData_ {
     resampled_data: std::collections::VecDeque<f32>,
-    resampler: rubato::FastFixedIn<f32>,
+    resampler: rubato::Async<f32>,
     output_buffer: Vec<f32>,
     input_buffer: Vec<f32>,
     input_len: usize,
@@ -17,15 +17,16 @@ impl AudioOutputData_ {
 
         let resampled_data = std::collections::VecDeque::with_capacity(output_sample_rate * 10);
         let resample_ratio = output_sample_rate as f64 / input_sample_rate as f64;
-        let resampler = rubato::FastFixedIn::new(
+        let resampler = rubato::Async::new_poly(
             resample_ratio,
             f64::max(resample_ratio, 1.0),
             rubato::PolynomialDegree::Septic,
             1024,
             1,
+            rubato::FixedAsync::Input,
         )?;
-        let input_buffer = resampler.input_buffer_allocate(true).remove(0);
-        let output_buffer = resampler.output_buffer_allocate(true).remove(0);
+        let input_buffer = vec![0f32; resampler.input_frames_max()];
+        let output_buffer = vec![0f32; resampler.output_frames_max()];
         Ok(Self {
             resampled_data,
             resampler,
@@ -62,6 +63,7 @@ impl AudioOutputData_ {
     }
 
     pub(crate) fn push_samples(&mut self, samples: &[f32]) -> Result<()> {
+        use audioadapter_buffers::direct::InterleavedSlice;
         use rubato::Resampler;
 
         let mut pos_in = 0;
@@ -73,11 +75,13 @@ impl AudioOutputData_ {
             if self.input_len < self.input_buffer.len() {
                 break;
             }
-            let (_, out_len) = self.resampler.process_into_buffer(
-                &[&self.input_buffer],
-                &mut [&mut self.output_buffer],
-                None,
-            )?;
+            let in_frames = self.input_buffer.len();
+            let out_frames = self.output_buffer.len();
+            let input = InterleavedSlice::new(&self.input_buffer, 1, in_frames)?;
+            let mut output = InterleavedSlice::new_mut(&mut self.output_buffer, 1, out_frames)?;
+            let (_, out_len) = self
+                .resampler
+                .process_into_buffer(&input, &mut output, None)?;
             for &elem in self.output_buffer[..out_len].iter() {
                 self.resampled_data.push_front(elem)
             }
@@ -246,29 +250,20 @@ pub(crate) fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> Result<(Vec<f32>
 }
 
 pub(crate) fn resample(pcm_in: &[f32], sr_in: usize, sr_out: usize) -> Result<Vec<f32>> {
-    use rubato::Resampler;
+    use audioadapter_buffers::direct::InterleavedSlice;
+    use rubato::{Fft, FixedSync, Resampler};
 
-    let mut pcm_out =
-        Vec::with_capacity((pcm_in.len() as f64 * sr_out as f64 / sr_in as f64) as usize + 1024);
+    let out_cap = (pcm_in.len() as f64 * sr_out as f64 / sr_in as f64) as usize + 1024;
+    let mut pcm_out = vec![0f32; out_cap];
 
-    let mut resampler = rubato::FftFixedInOut::<f32>::new(sr_in, sr_out, 1024, 1)?;
-    let mut output_buffer = resampler.output_buffer_allocate(true);
-    let mut pos_in = 0;
-    while pos_in + resampler.input_frames_next() < pcm_in.len() {
-        let (in_len, out_len) =
-            resampler.process_into_buffer(&[&pcm_in[pos_in..]], &mut output_buffer, None)?;
-        pos_in += in_len;
-        pcm_out.extend_from_slice(&output_buffer[0][..out_len]);
-    }
+    let mut resampler = Fft::<f32>::new(sr_in, sr_out, 1024, 1, 1, FixedSync::Input)?;
 
-    if pos_in < pcm_in.len() {
-        let (_in_len, out_len) = resampler.process_partial_into_buffer(
-            Some(&[&pcm_in[pos_in..]]),
-            &mut output_buffer,
-            None,
-        )?;
-        pcm_out.extend_from_slice(&output_buffer[0][..out_len]);
-    }
+    let input = InterleavedSlice::new(pcm_in, 1, pcm_in.len())?;
+    let mut output = InterleavedSlice::new_mut(&mut pcm_out, 1, out_cap)?;
 
+    let (_, out_len) =
+        resampler.process_all_into_buffer(&input, &mut output, pcm_in.len(), None)?;
+
+    pcm_out.truncate(out_len);
     Ok(pcm_out)
 }

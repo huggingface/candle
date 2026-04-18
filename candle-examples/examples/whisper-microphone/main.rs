@@ -585,12 +585,13 @@ pub fn main() -> Result<()> {
     let channel_count = audio_config.channels() as usize;
     let in_sample_rate = audio_config.sample_rate().0 as usize;
     let resample_ratio = 16000. / in_sample_rate as f64;
-    let mut resampler = rubato::FastFixedIn::new(
+    let mut resampler = rubato::Async::new_poly(
         resample_ratio,
         10.,
         rubato::PolynomialDegree::Septic,
         1024,
         1,
+        rubato::FixedAsync::Input,
     )?;
     let (tx, rx) = std::sync::mpsc::channel();
     let stream = audio_device.build_input_stream(
@@ -617,6 +618,7 @@ pub fn main() -> Result<()> {
     let mut buffered_pcm = vec![];
     let mut language_token_set = false;
     while let Ok(pcm) = rx.recv() {
+        use audioadapter_buffers::direct::InterleavedSlice;
         use rubato::Resampler;
 
         buffered_pcm.extend_from_slice(&pcm);
@@ -630,9 +632,10 @@ pub fn main() -> Result<()> {
         let full_chunks = buffered_pcm.len() / 1024;
         let remainder = buffered_pcm.len() % 1024;
         for chunk in 0..full_chunks {
-            let buffered_pcm = &buffered_pcm[chunk * 1024..(chunk + 1) * 1024];
-            let pcm = resampler.process(&[&buffered_pcm], None)?;
-            resampled_pcm.extend_from_slice(&pcm[0]);
+            let chunk_data = &buffered_pcm[chunk * 1024..(chunk + 1) * 1024];
+            let input = InterleavedSlice::new(chunk_data, 1, 1024)?;
+            let pcm = resampler.process(&input, 0, None)?;
+            resampled_pcm.extend_from_slice(&pcm.take_data());
         }
         let pcm = resampled_pcm;
         println!("{} {}", buffered_pcm.len(), pcm.len());
