@@ -110,7 +110,7 @@ impl MultiModalProjector {
         let x = x.transpose(1, 2)?;
 
         let x = self.mm_soft_emb_norm.forward(&x)?;
-        x.matmul(&self.mm_input_projection_weight)
+        x.broadcast_matmul(&self.mm_input_projection_weight)
     }
 }
 
