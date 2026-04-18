@@ -996,6 +996,68 @@ impl QCudaStorage {
         dequantize_f16(&self.data, self.dtype, elem_count, self.device())
     }
 
+    /// Like `quantize(&src)` but respects the source tensor's layout —
+    /// specifically the `start_offset` and element count implied by the
+    /// layout's shape. The plain `quantize` reads from raw storage offset
+    /// 0 with `src.data.len()` elements, which is wrong when `src` is a
+    /// view into a larger storage (`narrow`, `slice`, etc.). Callers that
+    /// have a `Tensor` should prefer this variant.
+    pub fn quantize_with_layout(
+        &mut self,
+        src: &CudaStorage,
+        layout: &crate::Layout,
+    ) -> Result<()> {
+        let offset = layout.start_offset();
+        let elem_count = layout.shape().elem_count();
+
+        if self.dtype == GgmlDType::Q8_0 {
+            let block_size = self.dtype.block_size();
+            let type_size = self.dtype.type_size();
+            if !elem_count.is_multiple_of(block_size) {
+                crate::bail!(
+                    "quantize_q8_0: element count {elem_count} is not divisible by block size {block_size}",
+                );
+            }
+            let unpadded_bytes = (elem_count / block_size) * type_size;
+            let padded_bytes =
+                unpadded_bytes + MATRIX_ROW_PADDING * type_size / block_size;
+            let mut inner = if self.data.inner.len() == padded_bytes {
+                std::mem::replace(
+                    &mut self.data.inner,
+                    self.device.alloc_zeros::<u8>(0)?,
+                )
+            } else {
+                self.device.alloc_zeros::<u8>(padded_bytes)?
+            };
+
+            match &src.slice {
+                crate::cuda_backend::CudaStorageSlice::F32(data) => {
+                    let view = data.slice(offset..offset + elem_count);
+                    quantize_q8_0_f32(&view, &mut inner, elem_count, 1, &self.device)?;
+                }
+                crate::cuda_backend::CudaStorageSlice::F16(data) => {
+                    let view = data.slice(offset..offset + elem_count);
+                    quantize_q8_0_f16(&view, &mut inner, elem_count, 1, &self.device)?;
+                }
+                _ => crate::bail!(
+                    "quantize_q8_0: unsupported source dtype (expected f32 or f16)"
+                ),
+            }
+
+            self.data = PaddedCudaSlice {
+                inner,
+                len: unpadded_bytes,
+            };
+            return Ok(());
+        }
+
+        // Non-Q8_0 fallback: fall through to the legacy CPU-roundtrip path.
+        // Slight quirk: the CPU path below reads `data.len()` and therefore
+        // ignores the layout. For the KV-cache use case we only care about
+        // Q8_0 on the fast path above, so this is fine for now.
+        self.quantize(src)
+    }
+
     pub fn quantize(&mut self, src: &CudaStorage) -> Result<()> {
         // GPU-native fast path: Q8_0 can be produced directly on-device by a
         // small CUDA kernel, skipping the dtoh→quantize→htod roundtrip that
