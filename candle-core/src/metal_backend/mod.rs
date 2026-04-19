@@ -2188,6 +2188,7 @@ impl MetalStorage {
             self.device.wait_until_completed()?;
             buffer
         } else {
+            self.device.wait_until_completed()?;
             self.buffer.clone()
         };
         Ok(read_to_vec(&buffer, self.count))
