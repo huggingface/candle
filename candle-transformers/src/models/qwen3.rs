@@ -30,8 +30,6 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub use_sliding_window: bool,
     pub hidden_act: Activation,
-    #[serde(default)]
-    pub use_flash_attn: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -114,7 +112,6 @@ pub(crate) struct Qwen3Attention {
     num_kv_groups: usize,
     head_dim: usize,
     hidden_size: usize,
-    use_flash_attn: bool,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
     kv_cache: ConcatKvCache,
@@ -182,7 +179,6 @@ impl Qwen3Attention {
             num_kv_groups,
             head_dim,
             hidden_size,
-            use_flash_attn: cfg.use_flash_attn,
             rotary_emb,
             kv_cache,
         })
@@ -226,24 +222,22 @@ impl Qwen3Attention {
         // 5. Accumulate KV cache
         let (k, v) = self.kv_cache.append(&k, &v)?;
 
-        // 6. Attention dispatch based on device and features
+        // 6. Attention dispatch: auto-select best available path
+        //    - CPU (no flash-attn feature): fused CPU flash kernel
+        //    - GPU (flash-attn feature):    CUDA flash attention
+        //    - Fallback:                    standard matmul attention
         let on_cpu = x.device().is_cpu();
 
+        #[cfg(not(feature = "flash-attn"))]
         if on_cpu {
-            if self.use_flash_attn {
-                // CPU with flash flag: use optimized CPU flash attention
-                self.forward_cpu_flash_attn(&q, &k, &v, offset, b, l)
-            } else {
-                // CPU without flash flag: use standard matmul (for comparison/testing)
-                self.forward_standard_attn(&q, &k, &v, attn_mask, b, l)
-            }
-        } else if self.use_flash_attn {
-            // GPU with flash-attn flag: use GPU flash attention
-            self.forward_flash_attn(&q, &k, &v, offset, b, l)
-        } else {
-            // GPU without flash-attn: use standard matmul attention
-            self.forward_standard_attn(&q, &k, &v, attn_mask, b, l)
+            return self.forward_cpu_flash_attn(&q, &k, &v, offset, b, l);
         }
+        #[cfg(feature = "flash-attn")]
+        if !on_cpu {
+            return self.forward_flash_attn(&q, &k, &v, offset, b, l);
+        }
+
+        self.forward_standard_attn(&q, &k, &v, attn_mask, b, l)
     }
 
     /// GPU flash attention path (requires flash-attn feature)
@@ -268,23 +262,6 @@ impl Qwen3Attention {
 
         // Output: (B, S, H, D) -> (B, L, hidden_size)
         ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
-    }
-
-    /// Fallback when flash-attn feature not enabled but use_flash_attn was requested
-    #[cfg(not(feature = "flash-attn"))]
-    fn forward_flash_attn(
-        &self,
-        _q: &Tensor,
-        _k: &Tensor,
-        _v: &Tensor,
-        _offset: usize,
-        _b: usize,
-        _l: usize,
-    ) -> Result<Tensor> {
-        candle::bail!(
-            "use_flash_attn=true requires compiling with --features flash-attn. \
-             For CPU, omit --use-flash-attn flag to use optimized CPU attention."
-        )
     }
 
     /// CPU flash attention - optimized fused kernel for CPU
@@ -350,22 +327,6 @@ impl Qwen3Attention {
         let ctx = ctx.transpose(1, 2)?;
 
         ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
-    }
-
-    /// Stub for when flash-attn is enabled (CPU path not needed)
-    #[cfg(feature = "flash-attn")]
-    fn forward_cpu_flash_attn(
-        &self,
-        _q: &Tensor,
-        _k: &Tensor,
-        _v: &Tensor,
-        _offset: usize,
-        _b: usize,
-        _l: usize,
-    ) -> Result<Tensor> {
-        candle::bail!(
-            "CPU inference with use_flash_attn=true requires building without --features flash-attn"
-        )
     }
 
     /// Standard matmul-based attention (works on any device)
@@ -449,7 +410,6 @@ pub struct Model {
     norm: RmsNorm,
     device: Device,
     dtype: DType,
-    use_flash_attn: bool,
 }
 
 impl Model {
@@ -468,7 +428,6 @@ impl Model {
             norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?,
             device: vb.device().clone(),
             dtype: vb.dtype(),
-            use_flash_attn: cfg.use_flash_attn,
         })
     }
 
@@ -509,9 +468,12 @@ impl Model {
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
 
-        // Build causal mask for standard attention path
-        // Flash attention (CPU or GPU) handles masking internally
-        let needs_mask = !self.use_flash_attn && l > 1;
+        // Build causal mask only for the standard attention fallback path.
+        // Both CPU flash and GPU flash handle masking internally.
+        #[cfg(not(feature = "flash-attn"))]
+        let needs_mask = !self.device.is_cpu() && l > 1;
+        #[cfg(feature = "flash-attn")]
+        let needs_mask = self.device.is_cpu() && l > 1;
         let causal = if needs_mask {
             Some(self.causal_mask(b, l, offset, None)?)
         } else {

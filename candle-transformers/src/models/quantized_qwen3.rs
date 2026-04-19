@@ -165,13 +165,12 @@ struct AttentionWeights {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    /// Standard KV cache — only allocated when !use_flash_attn
+    /// Standard KV cache — used on GPU fallback path
     kv_cache: Option<ConcatKvCache>,
-    /// Interleaved tensor cache — only allocated when use_flash_attn (prefill)
+    /// Interleaved tensor cache — used on CPU for flash prefill
     interleaved_cache: Option<InterleavedKvCache>,
-    /// Raw pre-allocated cache — only allocated when use_flash_attn (decode)
+    /// Raw pre-allocated cache — used on CPU for flash decode
     raw_cache: Option<RawInterleavedKvCache>,
-    use_flash_attn: bool,
     span_attn: tracing::Span,
 }
 
@@ -184,7 +183,7 @@ impl AttentionWeights {
         head_dim: usize,
         rms_norm_eps: f64,
         rotary_emb: Arc<RotaryEmbedding>,
-        use_flash_attn: bool,
+        device: &Device,
         prefix: &str,
     ) -> Result<Self> {
         let num_kv_groups = num_heads / num_kv_heads;
@@ -198,17 +197,20 @@ impl AttentionWeights {
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
         let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
-        let kv_cache = if use_flash_attn {
+        // CPU: use interleaved + raw caches for flash attention
+        // GPU: use standard concat KV cache (fallback path)
+        let on_cpu = device.is_cpu();
+        let kv_cache = if on_cpu {
             None
         } else {
             Some(ConcatKvCache::new(2))
         };
-        let interleaved_cache = if use_flash_attn {
+        let interleaved_cache = if on_cpu {
             Some(InterleavedKvCache::new(head_dim))
         } else {
             None
         };
-        let raw_cache = if use_flash_attn {
+        let raw_cache = if on_cpu {
             Some(RawInterleavedKvCache::new(num_kv_heads, head_dim, 4096))
         } else {
             None
@@ -232,7 +234,6 @@ impl AttentionWeights {
             kv_cache,
             interleaved_cache,
             raw_cache,
-            use_flash_attn,
             span_attn,
         })
     }
@@ -267,7 +268,9 @@ impl AttentionWeights {
         // RoPE
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
-        if self.use_flash_attn && x.device().is_cpu() && b == 1 {
+        // TODO: b > 1 falls back to standard matmul — needs varlen CPU flash
+        // with interleaved cache support for multi-batch quantized inference.
+        if x.device().is_cpu() && b == 1 {
             let scale = 1.0 / (self.head_dim as f32).sqrt();
 
             if l == 1 && b == 1 && q.dtype() == DType::F32 {
@@ -412,7 +415,7 @@ impl LayerWeights {
         head_dim: usize,
         rms_norm_eps: f64,
         rotary: Arc<RotaryEmbedding>,
-        use_flash_attn: bool,
+        device: &Device,
         layer_idx: usize,
     ) -> Result<Self> {
         let prefix = format!("blk.{layer_idx}");
@@ -426,7 +429,7 @@ impl LayerWeights {
             head_dim,
             rms_norm_eps,
             rotary,
-            use_flash_attn,
+            device,
             &prefix,
         )?;
         let mlp = MlpWeights::new(gg, &prefix)?;
@@ -460,7 +463,6 @@ pub struct ModelWeights {
     lm_head: QMatMul,
     device: Device,
     dtype: DType,
-    use_flash_attn: bool,
     span: tracing::Span,
     span_output: tracing::Span,
 }
@@ -470,7 +472,6 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
-        use_flash_attn: bool,
     ) -> Result<Self> {
         let mut gg = Gguf::new(ct, reader, device.clone());
         let md_get = |s: &str| match gg.metadata().get(s) {
@@ -516,7 +517,7 @@ impl ModelWeights {
                 head_dim,
                 rms_norm_eps,
                 rotary.clone(),
-                use_flash_attn,
+                device,
                 i,
             )?);
         }
@@ -537,7 +538,6 @@ impl ModelWeights {
             lm_head,
             device: device.clone(),
             dtype,
-            use_flash_attn,
             span,
             span_output,
         })
@@ -575,7 +575,7 @@ impl ModelWeights {
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
         // Skip mask materialization when using CPU flash attention
-        let causal_mask = if l == 1 || (self.use_flash_attn && self.device.is_cpu()) {
+        let causal_mask = if l == 1 || self.device.is_cpu() {
             None
         } else {
             Some(self.causal_mask(b, l, offset, None)?)

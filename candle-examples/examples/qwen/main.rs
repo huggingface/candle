@@ -186,9 +186,6 @@ struct Args {
     tracing: bool,
 
     #[arg(long)]
-    use_flash_attn: bool,
-
-    #[arg(long)]
     prompt: String,
 
     /// The temperature used to generate samples.
@@ -382,8 +379,7 @@ fn main() -> Result<()> {
             Model::Moe(ModelMoe::new(&config, vb)?)
         }
         WhichModel::W3_0_6b | WhichModel::W3_1_7b | WhichModel::W3_4b | WhichModel::W3_8b => {
-            let mut config: Config3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
-            config.use_flash_attn = args.use_flash_attn;
+            let config: Config3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
             Model::Base3(Model3::new(&config, vb)?)
         }
         WhichModel::W3MoeA3b => {
