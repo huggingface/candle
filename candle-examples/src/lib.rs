@@ -10,7 +10,7 @@ use candle::{Device, Result, Tensor};
 
 pub fn device(cpu: bool) -> Result<Device> {
     if std::env::var("CANDLE_LAZY").is_ok() {
-        Ok(Device::Lazy(candle::lazy::LazyDevice))
+        Ok(Device::new_lazy(0)?)
     } else if cpu {
         Ok(Device::Cpu)
     } else if cuda_is_available() {

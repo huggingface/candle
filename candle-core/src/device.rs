@@ -280,6 +280,10 @@ impl Device {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
 
+    pub fn new_lazy(ordinal: usize) -> Result<Self> {
+        Ok(Self::Lazy(crate::lazy::LazyDevice::new(ordinal)?))
+    }
+
     pub fn set_seed(&self, seed: u64) -> Result<()> {
         match self {
             Self::Cpu => CpuDevice.set_seed(seed),

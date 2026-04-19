@@ -126,6 +126,8 @@ pub struct LazyStorage {
     self_arc: Arc<std::sync::OnceLock<std::sync::Weak<LazyStorage>>>,
     // Set to true after the first `optimize()` pass so subsequent calls are no-ops.
     is_optimized: Arc<atomic::AtomicBool>,
+    // The lazy device that owns this storage and will evaluate it.
+    lazy_device: LazyDevice,
 }
 
 impl Clone for LazyStorage {
@@ -140,12 +142,13 @@ impl Clone for LazyStorage {
             buffer_id: self.buffer_id.clone(),
             self_arc: self.self_arc.clone(),
             is_optimized: self.is_optimized.clone(),
+            lazy_device: self.lazy_device.clone(),
         }
     }
 }
 
 impl LazyStorage {
-    pub fn new(op: Op, layout: &Layout, dtype: DType) -> Self {
+    pub fn new(op: Op, layout: &Layout, dtype: DType, lazy_device: LazyDevice) -> Self {
         Self {
             id: NodeId::new(),
             op: Arc::new(AtomicOp::new(op)),
@@ -156,6 +159,7 @@ impl LazyStorage {
             buffer_id: Arc::new(BufferId::new()),
             self_arc: Arc::new(std::sync::OnceLock::new()),
             is_optimized: Arc::new(atomic::AtomicBool::new(false)),
+            lazy_device,
         }
     }
 
@@ -182,6 +186,7 @@ impl LazyStorage {
             buffer_id: source.buffer_id.clone(),
             self_arc: source.self_arc.clone(),
             is_optimized: source.is_optimized.clone(),
+            lazy_device: source.lazy_device.clone(),
         }
     }
 
@@ -217,6 +222,7 @@ impl LazyStorage {
                 Op::Output(Output::new(self.clone())),
                 self.layout(),
                 self.dtype(),
+                self.lazy_device.clone(),
             ));
         };
 
@@ -267,6 +273,7 @@ impl LazyStorage {
             Op::CustomOp(container),
             self.layout(),
             self.dtype(),
+            self.lazy_device.clone(),
         ))
     }
 
@@ -686,28 +693,16 @@ pub fn greedy_by_size(graph: &[&LazyStorage], pinned: &HashSet<BufferId>) -> Res
     }
 
     let output = graph.last().unwrap();
-    /*
-    // TODO: Handle output node if present (current not used)
-    if let Op::Output(out) = output.op() {
-        let src = out.srcs()[0];
-        // Resolve through any reusage chain to find the canonical allocation.
-        let canonical = {
-            let mut id = src.buffer_id();
-            while let Some(mapped) = reusage.get(id) {
-                id = mapped;
-            }
-            id.clone()
-        };
-        reusage.insert(output.buffer_id().clone(), canonical);
-    } else {
-    // If the final node is not an Output wrapper, allocate a buffer for it directly.
-     */
-    let source = determine_tensor_source(output);
-    allocations.insert(
-        *output.buffer_id(),
-        (source.producer_layout().clone(), source.dtype()),
-    );
-    //}
+    // Resolved nodes already have a buffer saved in the resolved_map; initialize() will
+    // restore it.  Do not add them to allocations here or initialize() would overwrite the
+    // resolved buffer with a freshly-allocated (uninitialized) one.
+    if !output.op().resolved() {
+        let source = determine_tensor_source(output);
+        allocations.insert(
+            *output.buffer_id(),
+            (source.producer_layout().clone(), source.dtype()),
+        );
+    }
 
     Ok(MemoryPlan {
         reusage,
@@ -738,7 +733,6 @@ pub struct CachedPlan {
     ///   `None`        : Const, Resolved, or output node. Handled per run.
     pub canonical_posisitons: Vec<Option<usize>>,
 }
-
 fn apply_backend_agnostic_passes(
     _node: &LazyStorage,
     _consumer_map: &HashMap<NodeId, Vec<&LazyStorage>>,
@@ -829,7 +823,7 @@ pub trait Executor {
     /// This lets us cache plans and optimizations.
     #[inline(always)]
     fn graph_key(graph: &[&LazyStorage]) -> u64 {
-        let mut h = graph.len() as u64 * 0x9e3779b97f4a7c15_u64;
+        let mut h = (graph.len() as u64).saturating_mul(0x9e3779b97f4a7c15_u64);
         for (i, node) in graph.iter().enumerate() {
             let disc: u64 = match node.op() {
                 Op::Uninit => 0,
@@ -976,7 +970,7 @@ impl Op {
         }
     }
 
-    fn resolved(&self) -> bool {
+    pub fn resolved(&self) -> bool {
         matches!(self, Op::Resolved(_))
     }
 }
@@ -1038,7 +1032,7 @@ impl BackendStorage for LazyStorage {
     }
 
     fn device(&self) -> &Self::Device {
-        &LazyDevice
+        &self.lazy_device
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
@@ -1047,17 +1041,32 @@ impl BackendStorage for LazyStorage {
 
     fn affine(&self, l: &Layout, mul: f64, add: f64) -> Result<Self> {
         let op = Op::Affine(Affine::new(self.clone(), mul, add));
-        Ok(LazyStorage::new(op, l, self.dtype()))
+        Ok(LazyStorage::new(
+            op,
+            l,
+            self.dtype(),
+            self.lazy_device.clone(),
+        ))
     }
 
     fn powf(&self, l: &Layout, exp: f64) -> Result<Self> {
         let op = Op::Powf(Powf::new(self.clone(), exp));
-        Ok(LazyStorage::new(op, l, self.dtype()))
+        Ok(LazyStorage::new(
+            op,
+            l,
+            self.dtype(),
+            self.lazy_device.clone(),
+        ))
     }
 
     fn elu(&self, l: &Layout, alpha: f64) -> Result<Self> {
         let op = Op::Elu(Elu::new(self.clone(), alpha));
-        Ok(LazyStorage::new(op, l, self.dtype()))
+        Ok(LazyStorage::new(
+            op,
+            l,
+            self.dtype(),
+            self.lazy_device.clone(),
+        ))
     }
 
     fn reduce_op(&self, reduce: ReduceOp, l: &Layout, reduce_dims: &[usize]) -> Result<Self> {
@@ -1100,7 +1109,12 @@ impl BackendStorage for LazyStorage {
             ReduceOp::ArgMin | ReduceOp::ArgMax => DType::U32,
             _ => self.dtype(),
         };
-        Ok(LazyStorage::new(op, &dst_layout, dtype))
+        Ok(LazyStorage::new(
+            op,
+            &dst_layout,
+            dtype,
+            self.lazy_device.clone(),
+        ))
     }
 
     fn cmp(&self, cmp_op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
@@ -1108,7 +1122,12 @@ impl BackendStorage for LazyStorage {
         let rhs = LazyStorage::copy(rhs, rhs_l);
         let dst_l = Layout::contiguous(lhs.shape());
         let op = Op::Cmp(Cmp::new(lhs, rhs, cmp_op));
-        Ok(LazyStorage::new(op, &dst_l, DType::U8))
+        Ok(LazyStorage::new(
+            op,
+            &dst_l,
+            DType::U8,
+            self.lazy_device.clone(),
+        ))
     }
 
     fn to_dtype(&self, l: &Layout, dtype: DType) -> Result<Self> {
@@ -1116,7 +1135,7 @@ impl BackendStorage for LazyStorage {
         if self.dtype() != dtype {
             let l = src.layout().clone();
             let op = Op::ToDType(ToDType::new(src.clone(), dtype));
-            return Ok(LazyStorage::new(op, &l, dtype));
+            return Ok(LazyStorage::new(op, &l, dtype, self.lazy_device.clone()));
         }
         Ok(src)
     }
@@ -1124,7 +1143,12 @@ impl BackendStorage for LazyStorage {
     fn unary_impl<B: UnaryOpT>(&self, l: &Layout) -> Result<Self> {
         let src = LazyStorage::copy(self, l);
         let op = Op::Unary(Unary::new(src, B::KERNEL));
-        Ok(LazyStorage::new(op, l, self.dtype()))
+        Ok(LazyStorage::new(
+            op,
+            l,
+            self.dtype(),
+            self.lazy_device.clone(),
+        ))
     }
 
     fn binary_impl<B: BinaryOpT>(
@@ -1137,7 +1161,12 @@ impl BackendStorage for LazyStorage {
         let rhs = LazyStorage::copy(rhs, rhs_l);
         let dst_l = Layout::contiguous(lhs_l.shape());
         let op = Op::Binary(Binary::new(lhs, rhs, B::KERNEL));
-        Ok(LazyStorage::new(op, &dst_l, self.dtype()))
+        Ok(LazyStorage::new(
+            op,
+            &dst_l,
+            self.dtype(),
+            self.lazy_device.clone(),
+        ))
     }
 
     fn where_cond(
@@ -1155,7 +1184,7 @@ impl BackendStorage for LazyStorage {
         let dtype = f.dtype();
 
         let op = Op::WhereCond(WhereCond::new(src, t, f));
-        Ok(LazyStorage::new(op, &f_l, dtype))
+        Ok(LazyStorage::new(op, &f_l, dtype, self.lazy_device.clone()))
     }
 
     fn conv1d(
@@ -1266,7 +1295,12 @@ impl BackendStorage for LazyStorage {
         let dst_layout = Layout::contiguous(dst_el);
 
         let op = Op::IndexSelect(IndexSelect::new(src, ids, dim));
-        Ok(LazyStorage::new(op, &dst_layout, self.dtype()))
+        Ok(LazyStorage::new(
+            op,
+            &dst_layout,
+            self.dtype(),
+            self.lazy_device.clone(),
+        ))
     }
 
     fn index_add(
@@ -1297,7 +1331,12 @@ impl BackendStorage for LazyStorage {
         let dst_shape = Shape::from(&lhs_dims[..dim - 2]).extend(&[m, n]);
         let dst_layout = Layout::contiguous(dst_shape);
 
-        Ok(LazyStorage::new(op, &dst_layout, self.dtype()))
+        Ok(LazyStorage::new(
+            op,
+            &dst_layout,
+            self.dtype(),
+            self.lazy_device.clone(),
+        ))
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
@@ -1337,22 +1376,30 @@ impl BackendStorage for LazyStorage {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct LazyDevice;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LazyDevice {
+    ordinal: usize,
+}
+
+impl LazyDevice {
+    pub fn ordinal(&self) -> usize {
+        self.ordinal
+    }
+}
 
 impl BackendDevice for LazyDevice {
     type Storage = LazyStorage;
 
-    fn new(_ordinal: usize) -> Result<Self> {
-        Ok(LazyDevice)
+    fn new(ordinal: usize) -> Result<Self> {
+        Ok(Self { ordinal })
     }
 
     fn location(&self) -> crate::DeviceLocation {
         crate::DeviceLocation::Lazy
     }
 
-    fn same_device(&self, _rhs: &Self) -> bool {
-        true
+    fn same_device(&self, rhs: &Self) -> bool {
+        self.ordinal == rhs.ordinal
     }
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
@@ -1360,6 +1407,7 @@ impl BackendDevice for LazyDevice {
             Op::Uninit,
             &Layout::contiguous(shape),
             dtype,
+            self.clone(),
         ))
     }
 
@@ -1386,7 +1434,7 @@ impl BackendDevice for LazyDevice {
         let shape = Shape::from(s.len());
         let dtype = s.dtype();
         let op = Op::Const(Arc::new(s) as Arc<dyn TensorSource>);
-        let storage = LazyStorage::new(op, &Layout::contiguous(shape), dtype);
+        let storage = LazyStorage::new(op, &Layout::contiguous(shape), dtype, self.clone());
 
         Ok(storage)
     }
@@ -1398,7 +1446,12 @@ impl BackendDevice for LazyDevice {
         let element_count = source.element_count();
         let dtype = source.data_type();
         let op = Op::Const(Arc::new(source) as Arc<dyn TensorSource>);
-        let storage = LazyStorage::new(op, &Layout::contiguous(Shape::from(element_count)), dtype);
+        let storage = LazyStorage::new(
+            op,
+            &Layout::contiguous(Shape::from(element_count)),
+            dtype,
+            self.clone(),
+        );
         Ok(storage)
     }
 
@@ -1437,6 +1490,7 @@ impl BackendDevice for LazyDevice {
 
 #[cfg(test)]
 mod tests {
+    use crate::backend::BackendDevice;
     use crate::{lazy::LazyDevice, DType, Device, Result, Shape, Tensor, D};
 
     fn run_cmp<F>(mut f: F, devices: &[&Device]) -> Result<()>
@@ -1507,7 +1561,10 @@ mod tests {
             Ok(t2)
         };
 
-        run_cmp(unary, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+        run_cmp(
+            unary,
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
+        )?;
 
         Ok(())
     }
@@ -1535,7 +1592,10 @@ mod tests {
             Ok(t3)
         };
 
-        run_cmp(concat, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+        run_cmp(
+            concat,
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
+        )?;
 
         Ok(())
     }
@@ -1549,7 +1609,10 @@ mod tests {
             t1 + t2
         };
 
-        run_cmp(binary, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+        run_cmp(
+            binary,
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
+        )?;
 
         Ok(())
     }
@@ -1568,7 +1631,10 @@ mod tests {
             t1.matmul(&t2)
         };
 
-        run_cmp(matmul, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+        run_cmp(
+            matmul,
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
+        )?;
 
         Ok(())
     }
@@ -1601,7 +1667,7 @@ mod tests {
 
         run_cmp(
             where_cond,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
         )?;
 
         Ok(())
@@ -1624,7 +1690,10 @@ mod tests {
             t.max(0)
         };
 
-        run_cmp(reduce, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+        run_cmp(
+            reduce,
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
+        )?;
 
         Ok(())
     }
@@ -1684,7 +1753,7 @@ mod tests {
 
         run_cmp(
             softmax,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
         )?;
 
         Ok(())
@@ -1721,7 +1790,7 @@ mod tests {
 
         run_cmp(
             rmsnorm,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
         )?;
 
         Ok(())
@@ -1736,7 +1805,10 @@ mod tests {
                 .to_dtype(DType::F32)
         };
 
-        run_cmp(dtype, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+        run_cmp(
+            dtype,
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
+        )?;
 
         Ok(())
     }
@@ -1752,7 +1824,7 @@ mod tests {
 
         run_cmp(
             index_select,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
         )?;
 
         Ok(())
@@ -1781,7 +1853,7 @@ mod tests {
 
         run_cmp(
             reshape_matmul,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
         )?;
         Ok(())
     }
@@ -1802,7 +1874,7 @@ mod tests {
 
         run_cmp(
             bf16_matmul,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
         )?;
         Ok(())
     }
@@ -1818,7 +1890,7 @@ mod tests {
 
         run_cmp(
             narrow_unary,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
         )?;
         Ok(())
     }
@@ -1842,7 +1914,7 @@ mod tests {
 
         run_cmp(
             narrow_broadcast_mul,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
         )?;
         Ok(())
     }
@@ -1889,7 +1961,7 @@ mod tests {
 
         run_cmp(
             rope_like,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
+            &[&Device::Lazy(LazyDevice::new(0)?), &Device::new_metal(0)?],
         )?;
         Ok(())
     }

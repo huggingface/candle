@@ -1411,7 +1411,7 @@ pub fn sdpa(
 #[cfg(test)]
 mod tests {
     use crate::ops::{layer_norm, rms_norm, softmax_last_dim};
-    use candle::{lazy::LazyDevice, Device, Result, Shape, Tensor};
+    use candle::{backend::BackendDevice, lazy::LazyDevice, Device, Result, Shape, Tensor};
 
     fn run_cmp<F>(mut f: F, devices: &[&Device]) -> Result<()>
     where
@@ -1484,10 +1484,7 @@ mod tests {
             Ok(result)
         };
 
-        run_cmp(
-            softmax,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
-        )?;
+        run_cmp(softmax, &[&Device::new_lazy(0)?, &Device::new_metal(0)?])?;
 
         Ok(())
     }
@@ -1515,10 +1512,7 @@ mod tests {
             );
             Ok(result)
         };
-        run_cmp(
-            rms_norm,
-            &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?],
-        )?;
+        run_cmp(rms_norm, &[&Device::new_lazy(0)?, &Device::new_metal(0)?])?;
         Ok(())
     }
 
@@ -1539,7 +1533,7 @@ mod tests {
                 .to_dtype(candle::DType::F32)
         };
 
-        run_cmp(lnorm, &[&Device::Lazy(LazyDevice), &Device::new_metal(0)?])?;
+        run_cmp(lnorm, &[&Device::new_lazy(0)?, &Device::new_metal(0)?])?;
         Ok(())
     }
 }

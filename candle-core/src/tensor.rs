@@ -690,7 +690,8 @@ impl Tensor {
 
                 #[cfg(feature = "metal")]
                 {
-                    let device = crate::metal_backend::metal_device();
+                    let device =
+                        crate::metal_backend::get_lazy_metal_device(storage.device().ordinal())?;
                     let result = storage.execute(device.clone())?;
                     device.synchronize()?;
                     let metal_storage = crate::MetalStorage::new(
@@ -1984,7 +1985,8 @@ impl Tensor {
 
                 #[cfg(feature = "metal")]
                 {
-                    let device = crate::metal_backend::metal_device();
+                    let device =
+                        crate::metal_backend::get_lazy_metal_device(storage.device().ordinal())?;
                     let result = storage.execute(device.clone())?;
                     device.synchronize()?;
                     let metal_storage = crate::MetalStorage::new(
@@ -2042,7 +2044,8 @@ impl Tensor {
 
                 #[cfg(feature = "metal")]
                 {
-                    let device = crate::metal_backend::metal_device();
+                    let device =
+                        crate::metal_backend::get_lazy_metal_device(storage.device().ordinal())?;
                     let result = storage.execute(device.clone())?;
                     device.synchronize()?;
                     let metal_storage = crate::MetalStorage::new(

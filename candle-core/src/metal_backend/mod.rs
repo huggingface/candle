@@ -2585,8 +2585,11 @@ impl MetalCustomOpHandler {
     }
 }
 
-static CUSTOM_OP_HANDLER: LazyLock<Mutex<MetalCustomOpHandler>> =
-    LazyLock::new(|| Mutex::new(MetalCustomOpHandler::new()));
+// Per-thread custom-op handler so each executor thread uses its own MetalDevice.
+thread_local! {
+    static CUSTOM_OP_HANDLER: std::cell::RefCell<MetalCustomOpHandler> =
+        std::cell::RefCell::new(MetalCustomOpHandler::new());
+}
 
 static METAL_DEVICE: LazyLock<MetalDevice> = LazyLock::new(|| MetalDevice::new(0).unwrap());
 
@@ -2607,6 +2610,25 @@ pub fn metal_device() -> MetalDevice {
     METAL_DEVICE.clone()
 }
 
+// Per-thread MetalDevice cache used when materialising lazy tensors.
+// Each thread gets its own isolated device, so parallel tests cannot interfere.
+thread_local! {
+    static LAZY_METAL_DEVICES: std::cell::RefCell<std::collections::HashMap<usize, MetalDevice>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+pub fn get_lazy_metal_device(ordinal: usize) -> Result<MetalDevice> {
+    LAZY_METAL_DEVICES.with(|cache| {
+        let mut map = cache.borrow_mut();
+        if let Some(dev) = map.get(&ordinal) {
+            return Ok(dev.clone());
+        }
+        let dev = MetalDevice::new(ordinal)?;
+        map.insert(ordinal, dev.clone());
+        Ok(dev)
+    })
+}
+
 pub fn replace_custom_op_with_fallback(_lazy_storage: &LazyStorage, _custom_op: &dyn LazyCustomOp) {
     //-> Result<()> {
     //if let Some(fallback) = lazy_storage.custom_op_fallbacks.get(custom_op.name()) {
@@ -2617,23 +2639,23 @@ pub fn replace_custom_op_with_fallback(_lazy_storage: &LazyStorage, _custom_op: 
     //Ok(())
 }
 
-pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>) {
+pub fn install_custom_ops(custom_ops: HashMap<String, CustomOp>, device: MetalDevice) {
     for (_name, op) in custom_ops.into_iter() {
         match op {
             CustomOp::One(custom_op1) => {
-                install_custom_op1(custom_op1);
+                install_custom_op1(custom_op1, device.clone());
             }
             CustomOp::Two(custom_op2) => {
-                install_custom_op2(custom_op2);
+                install_custom_op2(custom_op2, device.clone());
             }
             CustomOp::Three(custom_op3) => {
-                install_custom_op3(custom_op3);
+                install_custom_op3(custom_op3, device.clone());
             }
         }
     }
 }
 
-fn install_custom_op1(op: Box<dyn crate::CustomOp1>) {
+fn install_custom_op1(op: Box<dyn crate::CustomOp1>, device: MetalDevice) {
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp1>,
@@ -2663,17 +2685,15 @@ fn install_custom_op1(op: Box<dyn crate::CustomOp1>) {
         }
     }
 
-    let mut binding = CUSTOM_OP_HANDLER.lock().unwrap();
-    binding.custom_ops.insert(
-        op.name().to_string(),
-        Box::new(InlineCustomOp {
-            op,
-            device: METAL_DEVICE.clone(),
-        }),
-    );
+    CUSTOM_OP_HANDLER.with(|h| {
+        h.borrow_mut().custom_ops.insert(
+            op.name().to_string(),
+            Box::new(InlineCustomOp { op, device }),
+        );
+    });
 }
 
-fn install_custom_op2(op: Box<dyn crate::CustomOp2>) {
+fn install_custom_op2(op: Box<dyn crate::CustomOp2>, device: MetalDevice) {
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp2>,
@@ -2707,17 +2727,15 @@ fn install_custom_op2(op: Box<dyn crate::CustomOp2>) {
         }
     }
 
-    let mut binding = CUSTOM_OP_HANDLER.lock().unwrap();
-    binding.custom_ops.insert(
-        op.name().to_string(),
-        Box::new(InlineCustomOp {
-            op,
-            device: METAL_DEVICE.clone(),
-        }),
-    );
+    CUSTOM_OP_HANDLER.with(|h| {
+        h.borrow_mut().custom_ops.insert(
+            op.name().to_string(),
+            Box::new(InlineCustomOp { op, device }),
+        );
+    });
 }
 
-fn install_custom_op3(op: Box<dyn crate::CustomOp3>) {
+fn install_custom_op3(op: Box<dyn crate::CustomOp3>, device: MetalDevice) {
     #[derive(Clone)]
     struct InlineCustomOp {
         op: Box<dyn crate::CustomOp3>,
@@ -2756,14 +2774,12 @@ fn install_custom_op3(op: Box<dyn crate::CustomOp3>) {
         }
     }
 
-    let mut binding = CUSTOM_OP_HANDLER.lock().unwrap();
-    binding.custom_ops.insert(
-        op.name().to_string(),
-        Box::new(InlineCustomOp {
-            op,
-            device: METAL_DEVICE.clone(),
-        }),
-    );
+    CUSTOM_OP_HANDLER.with(|h| {
+        h.borrow_mut().custom_ops.insert(
+            op.name().to_string(),
+            Box::new(InlineCustomOp { op, device }),
+        );
+    });
 }
 
 pub trait LazyMetalOp {
@@ -2876,7 +2892,7 @@ impl Executor for MetalDevice {
     fn run(&self, lazy_storage: LazyStorage) -> Result<Arc<Buffer>> {
         let mut allocator = self.allocator();
 
-        install_custom_ops(lazy_storage.custom_ops());
+        install_custom_ops(lazy_storage.custom_ops(), self.clone());
 
         self.optimize(&lazy_storage);
         let graph = lazy_storage.execution_order();
@@ -2933,14 +2949,17 @@ impl Executor for MetalDevice {
                 }
             }
 
-            // Always allocate a fresh output buffer.
+            // Allocate a fresh output buffer unless the output is already Resolved
+            // (i.e. this graph has been executed before and its result is cached).
             let output_node = graph.last().unwrap();
-            let out_size = output_node.producer_layout().shape().elem_count()
-                * output_node.dtype().size_in_bytes();
-            let out_buf = self.allocate_buffer(out_size)?;
-            allocator
-                .buffer_map
-                .insert(*output_node.buffer_id(), out_buf);
+            if !output_node.op().resolved() {
+                let out_size = output_node.producer_layout().shape().elem_count()
+                    * output_node.dtype().size_in_bytes();
+                let out_buf = self.allocate_buffer(out_size)?;
+                allocator
+                    .buffer_map
+                    .insert(*output_node.buffer_id(), out_buf);
+            }
             true
         } else {
             false
@@ -3338,12 +3357,7 @@ impl Executor for MetalDevice {
     }
 
     fn get_specialized_op(&self, op: &dyn LazyCustomOp) -> Option<Box<MetalCustomFn>> {
-        CUSTOM_OP_HANDLER
-            .lock()
-            .unwrap()
-            .custom_ops
-            .get(op.name())
-            .cloned()
+        CUSTOM_OP_HANDLER.with(|h| h.borrow().custom_ops.get(op.name()).cloned())
     }
 
     fn install_custom_op(
@@ -3351,11 +3365,11 @@ impl Executor for MetalDevice {
         op: &dyn LazyCustomOp,
         func: Box<MetalCustomFn>,
     ) -> Option<&MetalCustomFn> {
-        CUSTOM_OP_HANDLER
-            .lock()
-            .unwrap()
-            .custom_ops
-            .insert(op.name().to_string(), func);
+        CUSTOM_OP_HANDLER.with(|h| {
+            h.borrow_mut()
+                .custom_ops
+                .insert(op.name().to_string(), func)
+        });
         None
     }
 
