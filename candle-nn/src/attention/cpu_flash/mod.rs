@@ -15,9 +15,9 @@ pub mod varlen;
 
 use candle::{DType, Result, Tensor, WithDType};
 use std::iter::Sum;
-use std::sync::LazyLock;
-
 /// Debug-only: CANDLE_FLASH_FORCE_VARLEN=1 forces varlen path for B=1 (A/B benchmarking).
+#[cfg(debug_assertions)]
+use std::sync::LazyLock;
 #[cfg(debug_assertions)]
 static FORCE_VARLEN: LazyLock<bool> =
     LazyLock::new(|| std::env::var("CANDLE_FLASH_FORCE_VARLEN").is_ok_and(|v| v == "1"));
