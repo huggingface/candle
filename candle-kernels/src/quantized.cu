@@ -3418,6 +3418,92 @@ extern "C" __global__ void quantize_q8_0(const float * __restrict__ x, void * __
     }
 }
 
+// GPU-native Q4_0 quantizer. Block layout: 1 half scale + 16 bytes qs (two
+// 4-bit nibbles per byte), 32 input elements per block. Follows llama.cpp's
+// quantize_row_q4_0_ref: the scale is signed ("max / -8") so the dequantize
+// step `(nibble - 8) * d` recovers the original sign; the +8 bias lets the
+// stored value fit in an unsigned nibble.
+extern "C" __global__ void quantize_q4_0(const float * __restrict__ x, void * __restrict__ vy,
+                                         const int kx, const int kx_padded) {
+    const int ix = blockDim.x * blockIdx.x + threadIdx.x;
+    if (ix >= kx_padded) return;
+
+    const int iy = blockDim.y * blockIdx.y + threadIdx.y;
+    const int i_padded = iy * kx_padded + ix;
+
+    block_q4_0 * y = (block_q4_0 *) vy;
+    const int ib = i_padded / QK4_0;
+    const int iqs = i_padded % QK4_0;
+
+    const float xi = ix < kx ? x[iy * kx + ix] : 0.0f;
+
+    // Warp reduction: find the signed value whose absolute magnitude is
+    // largest across the 32 lanes of this block. We can't just take the
+    // signed max — the scale must key off the most-extreme magnitude.
+    float amax = fabsf(xi);
+    float mval = xi;
+    for (int off = 16; off > 0; off /= 2) {
+        float a2 = __shfl_xor_sync(0xffffffff, amax, off);
+        float v2 = __shfl_xor_sync(0xffffffff, mval, off);
+        if (a2 > amax) { amax = a2; mval = v2; }
+    }
+
+    const float d  = mval / -8.0f;
+    const float id = d != 0.0f ? 1.0f / d : 0.0f;
+
+    // +8 bias → unsigned nibble in [0, 15]. Clamp matches llama.cpp's ref.
+    int q_int = (int)(xi * id + 8.5f);
+    q_int = q_int < 0 ? 0 : (q_int > 15 ? 15 : q_int);
+
+    // Pack: lane j in [0, 16) stores qs[j] with low nibble from x[j] and
+    // high nibble from x[j + 16]; we pull the high value via warp shuffle.
+    if (iqs < 16) {
+        int q_high = __shfl_down_sync(0xffffffff, q_int, 16);
+        y[ib].qs[iqs] = (uint8_t)((q_int & 0xF) | ((q_high & 0xF) << 4));
+    }
+
+    if (iqs == 0) {
+        y[ib].d = __float2half(d);
+    }
+}
+
+extern "C" __global__ void quantize_q4_0_f16(const half * __restrict__ x, void * __restrict__ vy,
+                                              const int kx, const int kx_padded) {
+    const int ix = blockDim.x * blockIdx.x + threadIdx.x;
+    if (ix >= kx_padded) return;
+
+    const int iy = blockDim.y * blockIdx.y + threadIdx.y;
+    const int i_padded = iy * kx_padded + ix;
+
+    block_q4_0 * y = (block_q4_0 *) vy;
+    const int ib = i_padded / QK4_0;
+    const int iqs = i_padded % QK4_0;
+
+    const float xi = ix < kx ? __half2float(x[iy * kx + ix]) : 0.0f;
+
+    float amax = fabsf(xi);
+    float mval = xi;
+    for (int off = 16; off > 0; off /= 2) {
+        float a2 = __shfl_xor_sync(0xffffffff, amax, off);
+        float v2 = __shfl_xor_sync(0xffffffff, mval, off);
+        if (a2 > amax) { amax = a2; mval = v2; }
+    }
+
+    const float d  = mval / -8.0f;
+    const float id = d != 0.0f ? 1.0f / d : 0.0f;
+    int q_int = (int)(xi * id + 8.5f);
+    q_int = q_int < 0 ? 0 : (q_int > 15 ? 15 : q_int);
+
+    if (iqs < 16) {
+        int q_high = __shfl_down_sync(0xffffffff, q_int, 16);
+        y[ib].qs[iqs] = (uint8_t)((q_int & 0xF) | ((q_high & 0xF) << 4));
+    }
+
+    if (iqs == 0) {
+        y[ib].d = __float2half(d);
+    }
+}
+
 // Small-k attention-score gemv: Q (q8_1) × K^T (q8_0) where K is per-token
 // row-major so its "n" axis is the sequence length (potentially huge) and
 // its "k" axis is head_dim (small, 64/128/256). Candle's existing

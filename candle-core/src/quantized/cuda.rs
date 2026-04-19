@@ -210,6 +210,110 @@ fn quantize_q8_0_f16(
     Ok(())
 }
 
+/// GPU-native Q4_0 quantizer (f32 source). Mirrors `quantize_q8_0_f32` but
+/// emits 18-byte blocks (1 half scale + 16 bytes of nibble-packed quants) for
+/// half the bytes per element. Used for KV cache storage at long contexts
+/// where the Q8_0 memory footprint doesn't fit.
+fn quantize_q4_0_f32(
+    src: &CudaView<f32>,
+    dst: &mut CudaSlice<u8>,
+    k: usize,
+    ky: usize,
+    dev: &CudaDevice,
+) -> Result<()> {
+    let kx_padded = pad(k, MATRIX_ROW_PADDING);
+    let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
+
+    let total_rows = ky;
+    let q4_0_block_size = GgmlDType::Q4_0.block_size();
+    let q4_0_type_size = GgmlDType::Q4_0.type_size();
+    let num_blocks_per_row = kx_padded / q4_0_block_size;
+    let dst_row_size_bytes = num_blocks_per_row * q4_0_type_size;
+
+    const CHUNK_SIZE: usize = 65535;
+    let func = dev.get_or_load_func("quantize_q4_0", &candle_kernels::QUANTIZED)?;
+
+    let mut rows_processed = 0;
+    while rows_processed < total_rows {
+        let remaining_rows = total_rows - rows_processed;
+        let rows_in_chunk = std::cmp::min(CHUNK_SIZE, remaining_rows);
+
+        let src_start_elem = rows_processed * k;
+        let src_num_elems = rows_in_chunk * k;
+        let src_chunk = src.slice(src_start_elem..(src_start_elem + src_num_elems));
+
+        let dst_start_byte = rows_processed * dst_row_size_bytes;
+        let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
+        let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
+
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
+            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let mut builder = func.builder();
+        builder.arg(&src_chunk);
+        builder.arg(&dst_chunk);
+        barg!(builder, k as i32, kx_padded as i32);
+        unsafe { builder.launch(cfg) }.w()?;
+
+        rows_processed += rows_in_chunk;
+    }
+
+    Ok(())
+}
+
+fn quantize_q4_0_f16(
+    src: &CudaView<f16>,
+    dst: &mut CudaSlice<u8>,
+    k: usize,
+    ky: usize,
+    dev: &CudaDevice,
+) -> Result<()> {
+    let kx_padded = pad(k, MATRIX_ROW_PADDING);
+    let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
+
+    let total_rows = ky;
+    let q4_0_block_size = GgmlDType::Q4_0.block_size();
+    let q4_0_type_size = GgmlDType::Q4_0.type_size();
+    let num_blocks_per_row = kx_padded / q4_0_block_size;
+    let dst_row_size_bytes = num_blocks_per_row * q4_0_type_size;
+
+    const CHUNK_SIZE: usize = 65535;
+    let func = dev.get_or_load_func("quantize_q4_0_f16", &candle_kernels::QUANTIZED)?;
+
+    let mut rows_processed = 0;
+    while rows_processed < total_rows {
+        let remaining_rows = total_rows - rows_processed;
+        let rows_in_chunk = std::cmp::min(CHUNK_SIZE, remaining_rows);
+
+        let src_start_elem = rows_processed * k;
+        let src_num_elems = rows_in_chunk * k;
+        let src_chunk = src.slice(src_start_elem..(src_start_elem + src_num_elems));
+
+        let dst_start_byte = rows_processed * dst_row_size_bytes;
+        let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
+        let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
+
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
+            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let mut builder = func.builder();
+        builder.arg(&src_chunk);
+        builder.arg(&dst_chunk);
+        barg!(builder, k as i32, kx_padded as i32);
+        unsafe { builder.launch(cfg) }.w()?;
+
+        rows_processed += rows_in_chunk;
+    }
+
+    Ok(())
+}
+
 /// Attention-score gemv: `Q @ K^T` where K is a Q8_0 blob (row-major over
 /// tokens, stride `n_kv_stride_blocks` block_q8_0 units) and Q is per-step
 /// queries on-device in f32.
@@ -568,6 +672,35 @@ pub fn dequantize_q8_0_blob_f16(
     }
     let nb = elem_count.div_ceil(256);
     let func = dev.get_or_load_func("dequantize_block_q8_0_f16", &candle_kernels::QUANTIZED)?;
+    let dst = unsafe { dev.alloc::<f16>(elem_count)? };
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (nb as u32, 1, 1),
+        block_dim: (32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let nb32 = (elem_count / 32) as i32;
+    let mut builder = func.builder();
+    builder.arg(data);
+    builder.arg(&dst);
+    barg!(builder, nb32);
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
+/// Dequantize a Q4_0 byte blob to F16. Mirror of `dequantize_q8_0_blob_f16`
+/// for the Q4 KV cache: each 18-byte block becomes 32 F16 elements. Used by
+/// the "dequant then standard attention" fallback path until the fused Q4
+/// attention kernels land.
+pub fn dequantize_q4_0_blob_f16(
+    data: &CudaSlice<u8>,
+    elem_count: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    if !elem_count.is_multiple_of(32) {
+        crate::bail!("dequantize_q4_0_blob_f16: elem_count {elem_count} must be multiple of 32");
+    }
+    let nb = elem_count.div_ceil(256);
+    let func = dev.get_or_load_func("dequantize_block_q4_0_f16", &candle_kernels::QUANTIZED)?;
     let dst = unsafe { dev.alloc::<f16>(elem_count)? };
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (nb as u32, 1, 1),
@@ -1043,12 +1176,19 @@ impl QCudaStorage {
         let offset = layout.start_offset();
         let elem_count = layout.shape().elem_count();
 
-        if self.dtype == GgmlDType::Q8_0 {
+        // Q8_0 / Q4_0 share a fast path: GPU-native quantize kernels that
+        // read the source layout directly into a PaddedCudaSlice, without
+        // the dtoh→quantize→htod roundtrip the CPU fallback does. Both are
+        // used by the KV cache on every decode step, so avoiding the host
+        // stall is the point of the fast path.
+        if self.dtype == GgmlDType::Q8_0 || self.dtype == GgmlDType::Q4_0 {
+            let is_q4 = self.dtype == GgmlDType::Q4_0;
             let block_size = self.dtype.block_size();
             let type_size = self.dtype.type_size();
             if !elem_count.is_multiple_of(block_size) {
                 crate::bail!(
-                    "quantize_q8_0: element count {elem_count} is not divisible by block size {block_size}",
+                    "quantize_{}: element count {elem_count} is not divisible by block size {block_size}",
+                    if is_q4 { "q4_0" } else { "q8_0" },
                 );
             }
             let unpadded_bytes = (elem_count / block_size) * type_size;
@@ -1063,17 +1203,26 @@ impl QCudaStorage {
                 self.device.alloc_zeros::<u8>(padded_bytes)?
             };
 
-            match &src.slice {
-                crate::cuda_backend::CudaStorageSlice::F32(data) => {
+            match (&src.slice, is_q4) {
+                (crate::cuda_backend::CudaStorageSlice::F32(data), false) => {
                     let view = data.slice(offset..offset + elem_count);
                     quantize_q8_0_f32(&view, &mut inner, elem_count, 1, &self.device)?;
                 }
-                crate::cuda_backend::CudaStorageSlice::F16(data) => {
+                (crate::cuda_backend::CudaStorageSlice::F16(data), false) => {
                     let view = data.slice(offset..offset + elem_count);
                     quantize_q8_0_f16(&view, &mut inner, elem_count, 1, &self.device)?;
                 }
+                (crate::cuda_backend::CudaStorageSlice::F32(data), true) => {
+                    let view = data.slice(offset..offset + elem_count);
+                    quantize_q4_0_f32(&view, &mut inner, elem_count, 1, &self.device)?;
+                }
+                (crate::cuda_backend::CudaStorageSlice::F16(data), true) => {
+                    let view = data.slice(offset..offset + elem_count);
+                    quantize_q4_0_f16(&view, &mut inner, elem_count, 1, &self.device)?;
+                }
                 _ => crate::bail!(
-                    "quantize_q8_0: unsupported source dtype (expected f32 or f16)"
+                    "quantize_{}: unsupported source dtype (expected f32 or f16)",
+                    if is_q4 { "q4_0" } else { "q8_0" },
                 ),
             }
 
@@ -1084,10 +1233,10 @@ impl QCudaStorage {
             return Ok(());
         }
 
-        // Non-Q8_0 fallback: fall through to the legacy CPU-roundtrip path.
+        // Other GGML dtypes fall through to the legacy CPU-roundtrip path.
         // Slight quirk: the CPU path below reads `data.len()` and therefore
         // ignores the layout. For the KV-cache use case we only care about
-        // Q8_0 on the fast path above, so this is fine for now.
+        // Q8_0 / Q4_0 on the fast path above, so this is fine for now.
         self.quantize(src)
     }
 
