@@ -114,40 +114,15 @@ impl MultiModalProjector {
     }
 }
 
-fn broadcast_embed_to_mask(embeds: &Tensor, mask: &Tensor) -> Result<Tensor> {
-    let (b_sz, seq_len) = mask.dims2()?;
-    let hidden = embeds.dim(D::Minus1)?;
-    let mask_f32 = mask.to_dtype(DType::F32)?;
-
-    let zeros = Tensor::zeros((b_sz, seq_len, hidden), embeds.dtype(), embeds.device())?;
-
-    if b_sz == 1 {
-        let num_tokens = mask_f32.sum_all()?.to_scalar::<f32>()? as usize;
-        if num_tokens == 0 {
-            return Ok(zeros);
-        }
-        let embed_len = embeds.dim(0)?;
-        if embed_len >= seq_len {
-            return embeds.narrow(0, 0, seq_len)?.unsqueeze(0);
-        }
-        let padding = Tensor::zeros(
-            (seq_len - embed_len, hidden),
-            embeds.dtype(),
-            embeds.device(),
-        )?;
-        let padded = Tensor::cat(&[embeds, &padding], 0)?;
-        return padded.unsqueeze(0);
-    }
-
-    Ok(zeros)
-}
-
 #[derive(Debug, Clone)]
 pub struct Model {
     vision_tower: siglip::VisionModel,
     multi_modal_projector: MultiModalProjector,
     language_model: gemma3::Model,
     image_token_index: usize,
+    boi_token_index: usize,
+    eoi_token_index: usize,
+    mm_tokens_per_image: usize,
 }
 
 impl Model {
@@ -168,7 +143,36 @@ impl Model {
             multi_modal_projector,
             language_model,
             image_token_index: cfg.image_token_index,
+            boi_token_index: cfg.boi_token_index,
+            eoi_token_index: cfg.eoi_token_index,
+            mm_tokens_per_image: cfg.mm_tokens_per_image,
         })
+    }
+
+    pub fn image_token_index(&self) -> usize {
+        self.image_token_index
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.language_model.dtype()
+    }
+
+    pub fn expand_image_tokens(&self, tokens: &[u32]) -> Vec<u32> {
+        let boi = self.boi_token_index as u32;
+        let eoi = self.eoi_token_index as u32;
+        let img = self.image_token_index as u32;
+        let n = self.mm_tokens_per_image;
+
+        let mut result = Vec::with_capacity(tokens.len() + n);
+        let mut i = 0;
+        while i < tokens.len() {
+            result.push(tokens[i]);
+            if tokens[i] == boi && i + 1 < tokens.len() && tokens[i + 1] == eoi {
+                result.extend(std::iter::repeat(img).take(n));
+            }
+            i += 1;
+        }
+        result
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
@@ -181,9 +185,14 @@ impl Model {
         pixel_values: &Tensor,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        let image_mask = input_ids
-            .to_dtype(DType::F32)?
-            .eq(self.image_token_index as f64)?;
+        let input_ids_vec = input_ids.squeeze(0)?.to_vec1::<u32>()?;
+        let img_token = self.image_token_index as u32;
+
+        let mask_vec: Vec<u8> = input_ids_vec
+            .iter()
+            .map(|&t| if t == img_token { 1u8 } else { 0u8 })
+            .collect();
+        let image_mask = Tensor::from_vec(mask_vec, (1, input_ids_vec.len()), input_ids.device())?;
 
         let clamped_ids = input_ids.clamp(
             0u32,
@@ -191,20 +200,24 @@ impl Model {
         )?;
         let mut input_embeds = self.language_model.embed_tokens().forward(&clamped_ids)?;
 
-        let vision_outputs = self.vision_tower.forward(pixel_values)?;
+        let hidden_size = self.language_model.embed_tokens().embeddings().dim(1)?;
+        input_embeds = (input_embeds * (hidden_size as f64).sqrt())?;
+
+        let pixel_values = pixel_values.to_dtype(input_embeds.dtype())?;
+        let vision_outputs = self.vision_tower.forward(&pixel_values)?;
         let image_embeds = self
             .multi_modal_projector
             .forward(&vision_outputs)?
             .to_dtype(input_embeds.dtype())?;
 
-        let image_embeds_flat = image_embeds.squeeze(0)?;
-        let mask_expanded = image_mask
-            .unsqueeze(D::Minus1)?
-            .broadcast_as(input_embeds.shape())?
-            .to_dtype(input_embeds.dtype())?;
-        let image_embeds_broadcast = broadcast_embed_to_mask(&image_embeds_flat, &image_mask)?;
-        input_embeds = ((mask_expanded.clone() * image_embeds_broadcast)?
-            + ((1.0 - mask_expanded)? * input_embeds)?)?;
+        if let Some(start) = input_ids_vec.iter().position(|&t| t == img_token) {
+            let num_image = image_embeds.dim(1)?;
+            let seq_len = input_embeds.dim(1)?;
+            let before = input_embeds.narrow(1, 0, start)?;
+            let after_start = start + num_image;
+            let after = input_embeds.narrow(1, after_start, seq_len - after_start)?;
+            input_embeds = Tensor::cat(&[&before, &image_embeds, &after], 1)?;
+        }
 
         self.language_model
             .forward_embeds(&input_embeds, seqlen_offset, Some(&image_mask))

@@ -82,6 +82,17 @@ pub struct Config {
     pub sliding_window_pattern: usize,
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
+    pub rope_scaling: Option<RopeScaling>,
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct RopeScaling {
+    #[serde(default = "default_rope_scaling_factor")]
+    pub factor: f64,
+}
+
+fn default_rope_scaling_factor() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone)]
@@ -134,9 +145,16 @@ impl RotaryEmbedding {
         } else {
             cfg.rope_theta
         };
+        let rope_scaling_factor = if sliding_window.is_none() {
+            cfg.rope_scaling.as_ref().map(|s| s.factor).unwrap_or(1.0)
+        } else {
+            1.0
+        };
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / rope_freq.powf(i as f64 / dim as f64) as f32)
+            .map(|i| {
+                (1f32 / rope_freq.powf(i as f64 / dim as f64) as f32) / rope_scaling_factor as f32
+            })
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
@@ -522,6 +540,10 @@ impl Model {
         })
     }
 
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
     pub fn embed_tokens(&self) -> &candle_nn::Embedding {
         &self.embed_tokens
     }
@@ -533,23 +555,22 @@ impl Model {
         image_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _) = xs.dims3()?;
-        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+        let mut xs = xs.clone();
 
         let (attention_mask, sliding_attention_mask) =
             self.create_attention_masks(b_size, seq_len, seqlen_offset)?;
 
         let (attention_mask, sliding_attention_mask) = if let Some(img_mask) = image_mask {
             let img_mask_f = img_mask.to_dtype(self.dtype)?;
-            let img_q = img_mask_f.unsqueeze(D::Minus1)?;
-            let img_k = img_mask_f.unsqueeze(1)?;
-            let bidirectional = img_q.matmul(&img_k)?.unsqueeze(1)?;
+            let is_image_query = img_mask_f.unsqueeze(1)?.unsqueeze(D::Minus1)?;
 
             let apply_override = |mask: Option<Tensor>| -> Result<Option<Tensor>> {
                 match mask {
                     None => Ok(None),
                     Some(m) => {
-                        let override_mask = (1.0 - &bidirectional)?;
-                        Ok(Some(m.broadcast_mul(&override_mask)?))
+                        let is_img = is_image_query.broadcast_as(m.shape())?;
+                        let zero = Tensor::zeros_like(&m)?;
+                        Ok(Some(is_img.gt(0.0)?.where_cond(&zero, &m)?))
                     }
                 }
             };

@@ -83,6 +83,20 @@ impl Model {
             Self::V3VL(m) => m.forward(input_ids, pos),
         }
     }
+
+    fn expand_image_tokens(&self, tokens: &[u32]) -> Option<Vec<u32>> {
+        match self {
+            Self::V3VL(m) => Some(m.expand_image_tokens(tokens)),
+            _ => None,
+        }
+    }
+
+    fn image_token_index(&self) -> Option<u32> {
+        match self {
+            Self::V3VL(m) => Some(m.image_token_index() as u32),
+            _ => None,
+        }
+    }
 }
 
 struct TextGeneration {
@@ -149,7 +163,16 @@ impl TextGeneration {
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
+        if image.is_some() {
+            if let Some(expanded) = self.model.expand_image_tokens(&tokens) {
+                tokens = expanded;
+            }
+        }
+        let img_token = self.model.image_token_index();
         for &t in tokens.iter() {
+            if img_token == Some(t) {
+                continue;
+            }
             if let Some(t) = self.tokenizer.next_token(t)? {
                 print!("{t}")
             }
@@ -182,7 +205,9 @@ impl TextGeneration {
             let logits = match (&mut self.model, &image) {
                 (Model::V3VL(m), Some(img_path)) if !image_processed => {
                     image_processed = true;
-                    let pixel_values = Self::load_image(img_path, 896)?.to_device(&self.device)?;
+                    let pixel_values = Self::load_image(img_path, 896)?
+                        .to_device(&self.device)?
+                        .to_dtype(m.dtype())?;
                     m.forward_with_image(&input, &pixel_values, start_pos)?
                 }
                 _ => self.model.forward(&input, start_pos)?,
@@ -283,7 +308,6 @@ struct Args {
     #[arg(long)]
     use_flash_attn: bool,
 
-    /// Path to an image file for multimodal inference (only for 3-4b and larger).
     #[arg(long)]
     image: Option<String>,
 }
@@ -379,7 +403,7 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
+    let dtype = if device.is_cuda() || device.is_metal() {
         DType::BF16
     } else {
         DType::F32
