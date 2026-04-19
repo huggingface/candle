@@ -1011,14 +1011,15 @@ struct RMSReduceOp {
         return { 0, 0 };
     }
 
+    // RMSLoadOp accumulates a running sum of squares into `mean` (the field name
+    // is inherited from the Welford-style merge used for LayerNorm). Merging two
+    // partial sums-of-squares in a tree reduction is therefore plain addition.
+    // Keeping it a pure sum also avoids intermediate `delta*delta` products that
+    // can overflow F32 when the input has magnitudes around 1e9 or larger, which
+    // would poison the reduction with Inf*0 = NaN.
     METAL_FUNC RMS<T> operator()(RMS<T> a, RMS<T> b) {
-        uint new_count = a.count + b.count;
-        uint nb_over_n = b.count / new_count;
-        T delta = b.mean - a.mean;
-        //a.mean += delta * nb_over_n;
-        a.mean += b.mean + delta * delta * a.count * nb_over_n;
-        // *m2 += b_m2 + delta * delta * (*count) * nb_over_n;
-        a.count = new_count;
+        a.mean += b.mean;
+        a.count += b.count;
         return a;
     }
 };
