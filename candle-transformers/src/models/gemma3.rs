@@ -550,12 +550,12 @@ impl Model {
 
     pub fn forward_embeds(
         &mut self,
-        xs: &Tensor,
+        xs: Tensor,
         seqlen_offset: usize,
         image_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _) = xs.dims3()?;
-        let mut xs = xs.clone();
+        let mut xs = xs;
 
         let (attention_mask, sliding_attention_mask) =
             self.create_attention_masks(b_size, seq_len, seqlen_offset)?;

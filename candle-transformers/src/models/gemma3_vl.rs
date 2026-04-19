@@ -220,7 +220,7 @@ impl Model {
         }
 
         self.language_model
-            .forward_embeds(&input_embeds, seqlen_offset, Some(&image_mask))
+            .forward_embeds(input_embeds, seqlen_offset, Some(&image_mask))
     }
 
     pub fn clear_kv_cache(&mut self) {
