@@ -550,6 +550,39 @@ fn dequantize_f32(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
+/// Dequantize a Q8_0 byte blob straight to an F16 CudaStorage. Intended
+/// for callers that hold a raw `CudaSlice<u8>` of Q8_0 blocks (for
+/// example a KV cache that owns the storage directly rather than via a
+/// QCudaStorage/QTensor) and need an f16 view for downstream attention
+/// kernels (like flash-attn) that don't consume quantized inputs.
+///
+/// `elem_count` is the logical (dequantized) element count — must be a
+/// multiple of 32 (Q8_0 block size).
+pub fn dequantize_q8_0_blob_f16(
+    data: &CudaSlice<u8>,
+    elem_count: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    if !elem_count.is_multiple_of(32) {
+        crate::bail!("dequantize_q8_0_blob_f16: elem_count {elem_count} must be multiple of 32");
+    }
+    let nb = elem_count.div_ceil(256);
+    let func = dev.get_or_load_func("dequantize_block_q8_0_f16", &candle_kernels::QUANTIZED)?;
+    let dst = unsafe { dev.alloc::<f16>(elem_count)? };
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (nb as u32, 1, 1),
+        block_dim: (32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let nb32 = (elem_count / 32) as i32;
+    let mut builder = func.builder();
+    builder.arg(data);
+    builder.arg(&dst);
+    barg!(builder, nb32);
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
 fn dequantize_f16(
     data: &PaddedCudaSlice,
     dtype: GgmlDType,
