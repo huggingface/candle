@@ -2319,7 +2319,17 @@ template <
     instantiate_attn(iname, itype, 32, 32,  80, 4, 1, mname, mtype) \
     instantiate_attn(iname, itype, 32, 32,  72, 4, 1, mname, mtype) \
     instantiate_attn(iname, itype, 32, 32,  64, 4, 1, mname, mtype) \
-    instantiate_attn(iname, itype, 32, 32,  32, 4, 1, mname, mtype)
+    instantiate_attn(iname, itype, 32, 32,  32, 4, 1, mname, mtype) \
+    /* BQ=8 variants for speculative-decoding verify batches where Q seq */\
+    /* sits in [2, 8]. Padding to BQ=32 wastes ~75% of query work; BQ=8 */\
+    /* keeps padding under 1/8 at the cost of more threadgroups on grid.y.*/\
+    instantiate_attn(iname, itype,  8, 16, 256, 1, 1, mname, mtype) \
+    instantiate_attn(iname, itype,  8, 16, 128, 1, 1, mname, mtype) \
+    instantiate_attn(iname, itype,  8, 32,  96, 1, 1, mname, mtype) \
+    instantiate_attn(iname, itype,  8, 32,  80, 1, 1, mname, mtype) \
+    instantiate_attn(iname, itype,  8, 32,  72, 1, 1, mname, mtype) \
+    instantiate_attn(iname, itype,  8, 32,  64, 1, 1, mname, mtype) \
+    instantiate_attn(iname, itype,  8, 32,  32, 1, 1, mname, mtype)
 
 #define instantiate_attn_mask_helper(iname, itype) \
     instantiate_attn_shapes_helper(iname, itype, iname, itype) \

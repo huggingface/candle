@@ -94,7 +94,17 @@ pub fn call_sdpa_full(
         (8, 8, 1, 1)
     } else {
         let bk = if bd < 128 { 32 } else { 16 };
-        (32, bk, 4, 1)
+        // For short Q sequences (speculative-decoding verify batches, short
+        // prefills), use BQ=8 to avoid padding Q to 32 and wasting up to
+        // 75% of query threads. The BQ=8 kernels are instantiated alongside
+        // the BQ=32 ones in `scaled_dot_product_attention.metal` for every
+        // supported head_dim.
+        let ql = q_shape[2];
+        if ql <= 8 {
+            (8, bk, 1, 1)
+        } else {
+            (32, bk, 4, 1)
+        }
     };
 
     let b = q_shape[0];
