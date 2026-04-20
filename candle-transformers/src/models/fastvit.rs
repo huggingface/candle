@@ -197,11 +197,7 @@ fn mobileone_block(
     use_act: bool,
     vb: VarBuilder,
 ) -> Result<Func<'static>> {
-    let groups = if group_size == 0 {
-        1
-    } else {
-        in_channels / group_size
-    };
+    let groups = in_channels.checked_div(group_size).unwrap_or(1);
 
     let padding = kernel / 2;
     let conv2d_cfg = Conv2dConfig {
