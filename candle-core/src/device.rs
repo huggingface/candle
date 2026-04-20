@@ -258,20 +258,6 @@ impl Device {
         }
     }
 
-    /// Returns the number of bytes currently allocated on the Metal GPU, or
-    /// `None` for non-Metal devices.
-    ///
-    /// For `Device::Lazy`, queries the global Metal device that backs lazy
-    /// execution (requires the `metal` feature).
-    pub fn metal_allocated_bytes(&self) -> Option<usize> {
-        match self {
-            Self::Metal(m) => Some(m.current_allocated_size()),
-            #[cfg(feature = "metal")]
-            Self::Lazy(_) => Some(crate::metal_backend::metal_device().current_allocated_size()),
-            _ => None,
-        }
-    }
-
     pub fn new_cuda_with_stream(ordinal: usize) -> Result<Self> {
         Ok(Self::Cuda(crate::CudaDevice::new_with_stream(ordinal)?))
     }
