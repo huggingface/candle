@@ -3457,8 +3457,14 @@ extern "C" __global__ void quantize_q4_0(const float * __restrict__ x, void * __
 
     // Pack: lane j in [0, 16) stores qs[j] with low nibble from x[j] and
     // high nibble from x[j + 16]; we pull the high value via warp shuffle.
+    //
+    // All 32 lanes must participate in __shfl_down_sync with the same mask
+    // — conditioning the shuffle on `iqs < 16` is undefined behaviour and
+    // empirically zeroed every high nibble (positions 16..31 of each block
+    // all dequantised to the block's max). Do the shuffle unconditionally,
+    // then guard only the write.
+    int q_high = __shfl_down_sync(0xffffffff, q_int, 16);
     if (iqs < 16) {
-        int q_high = __shfl_down_sync(0xffffffff, q_int, 16);
         y[ib].qs[iqs] = (uint8_t)((q_int & 0xF) | ((q_high & 0xF) << 4));
     }
 
@@ -3494,8 +3500,9 @@ extern "C" __global__ void quantize_q4_0_f16(const half * __restrict__ x, void *
     int q_int = (int)(xi * id + 8.5f);
     q_int = q_int < 0 ? 0 : (q_int > 15 ? 15 : q_int);
 
+    // See f32 variant for why the shuffle must be outside the write guard.
+    int q_high = __shfl_down_sync(0xffffffff, q_int, 16);
     if (iqs < 16) {
-        int q_high = __shfl_down_sync(0xffffffff, q_int, 16);
         y[ib].qs[iqs] = (uint8_t)((q_int & 0xF) | ((q_high & 0xF) << 4));
     }
 
