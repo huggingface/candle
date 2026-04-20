@@ -567,17 +567,25 @@ pub fn attn_output_q8_0_f32_gqa(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
-/// Q4_0 K-path attention score, KIVI layout. K laid out
-/// `[seq_blocks, n_kv, head_dim]` in 18-byte Q4_0 cells where each cell
-/// spans 32 consecutive seq positions of one (head, channel). Q is f32
-/// `[n_q_heads, head_dim]`. Returns f32 `[n_q_heads, seq_kv]` scores.
+/// Q4_0 K-path attention score, KIVI layout.
 ///
-/// Only produces scores for the flushed-block portion of the cache. The
-/// caller must separately compute scores for the residual F16 partial
-/// block (positions `[full_seq, current_seq_len)`) and concatenate.
+/// K state is split between two buffers:
+///   - `k_blocks`: `[seq_blocks, n_kv, head_dim]` of 18-byte Q4_0 cells.
+///     Each cell holds 32 consecutive seq positions of one (head, channel).
+///   - `k_residual`: `[n_kv, head_dim, 32]` f16 — the not-yet-flushed
+///     partial seq block. Values at slot `s` correspond to seq position
+///     `full_blocks * 32 + s`.
+///
+/// Q is f32 `[n_q_heads, head_dim]`. Returns f32 `[n_q_heads, seq_kv]`
+/// scores covering the full `seq_kv` range (flushed blocks + residual).
+///
+/// The kernel handles the partial block internally — no separate host-side
+/// matmul + concat is needed. Grid dimension 0 covers `ceil(seq_kv/32)`
+/// blocks; the last block is the partial one when `seq_kv % 32 != 0`.
 #[allow(clippy::too_many_arguments)]
 pub fn attn_score_q4_0_f32_kivi(
     k_blocks: &CudaSlice<u8>,
+    k_residual: &CudaSlice<f16>,
     q_f32: &CudaView<f32>,
     head_dim: usize,
     seq_kv: usize,
@@ -596,7 +604,8 @@ pub fn attn_score_q4_0_f32_kivi(
             n_q_heads * head_dim
         );
     }
-    let seq_blocks = seq_kv.div_ceil(32);
+    let full_blocks = seq_kv / 32;
+    let total_blocks = seq_kv.div_ceil(32);
     let kernel_name = match (head_dim, n_q_per_kv) {
         (64, 1) => "attn_score_q4_0_f32_kivi_hd64_nq1",
         (64, 4) => "attn_score_q4_0_f32_kivi_hd64_nq4",
@@ -613,12 +622,12 @@ pub fn attn_score_q4_0_f32_kivi(
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
 
-    // Grid = (seq_blocks, n_kv_heads) — the kernel internally fans out to
-    // all n_q_per_kv query heads sharing each kv head so that K is loaded
-    // once per (sb, kv) tile rather than once per q-head.
+    // Grid = (total_blocks, n_kv_heads). Last block of the x axis is the
+    // partial residual block when seq_kv is not a multiple of 32; the
+    // kernel handles it via the `sb == full_blocks` path.
     const N_WARPS: u32 = 16;
     let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (seq_blocks as u32, n_kv_heads as u32, 1),
+        grid_dim: (total_blocks as u32, n_kv_heads as u32, 1),
         block_dim: (WARP_SIZE as u32, N_WARPS, 1),
         shared_mem_bytes: (N_WARPS * WARP_SIZE as u32 * 4) as u32,
     };
@@ -626,11 +635,13 @@ pub fn attn_score_q4_0_f32_kivi(
     let dst = unsafe { dev.alloc::<f32>(n_q_heads * seq_kv)? };
     let mut builder = func.builder();
     builder.arg(k_blocks);
+    builder.arg(k_residual);
     builder.arg(q_f32);
     builder.arg(&dst);
     barg!(
         builder,
         seq_kv as i32,
+        full_blocks as i32,
         n_kv_heads as i32,
         n_q_per_kv as i32
     );

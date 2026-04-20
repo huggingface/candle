@@ -3826,12 +3826,20 @@ ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd256, 256)
 // global memory traffic by a factor of n_q_per_kv (8 for qwen3-coder,
 // 4 for qwen3 base). Without it the kernel re-reads every K block
 // n_q_per_kv times, which is what made the naive version bandwidth-bound.
+//
+// The LAST block (block_idx == full_blocks, when seq_kv % 32 != 0) is the
+// partial residual — positions [full_blocks*32, seq_kv) live in the F16
+// residual buffer, not the Q4 blob. The kernel reads those from
+// `K_residual` instead of the Q4 blob, so scores for the whole valid
+// seq_kv range (full blocks + residual) come from one kernel launch.
 template <int HD, int MAX_NQ_PER_KV>
 static __device__ __forceinline__ void attn_score_q4_inner(
     const void * __restrict__ K_blocks,   // [seq_blocks, n_kv, head_dim] q4_0 cells
+    const half * __restrict__ K_residual, // [n_kv, head_dim, 32] f16 (partial block)
     const float * __restrict__ Q,         // [n_q_heads, head_dim] f32
     float * __restrict__ scores,          // [n_q_heads, seq_kv] f32
     int seq_kv,
+    int full_blocks,
     int n_kv,
     int n_q_per_kv,
     int sb,                               // seq-block index
@@ -3843,21 +3851,40 @@ static __device__ __forceinline__ void attn_score_q4_inner(
     const int nib_byte = lane & 15;
     const bool is_high = lane >= 16;
     const int out_token = sb * 32 + lane;
+    const bool is_partial = (sb == full_blocks);
+
+    // Out-of-range tokens in the last (partial) block skip everything.
+    if (out_token >= seq_kv) {
+        // Still participate in __syncthreads below so the warp reduction
+        // doesn't deadlock. We compute with k_val=0, which contributes 0.
+    }
 
     float acc[MAX_NQ_PER_KV];
     #pragma unroll
     for (int q = 0; q < MAX_NQ_PER_KV; ++q) acc[q] = 0.0f;
 
     for (int c = warp_id; c < HD; c += n_warps) {
-        const size_t block_idx =
-            (size_t)sb * ((size_t)n_kv * (size_t)HD)
-            + (size_t)h_kv * (size_t)HD
-            + (size_t)c;
-        const block_q4_0 * k_block =
-            reinterpret_cast<const block_q4_0 *>(K_blocks) + block_idx;
-        const uint8_t byte = k_block->qs[nib_byte];
-        const int nib = is_high ? (byte >> 4) : (byte & 0xF);
-        const float k_val = (nib - 8) * __half2float(k_block->d);
+        float k_val;
+        if (is_partial) {
+            // Residual F16 read. Layout is [n_kv, head_dim, 32]: the
+            // `lane` axis directly indexes the slot within the partial
+            // block.
+            const size_t r_idx =
+                (size_t)h_kv * (size_t)HD * 32
+                + (size_t)c * 32
+                + (size_t)lane;
+            k_val = (out_token < seq_kv) ? __half2float(K_residual[r_idx]) : 0.0f;
+        } else {
+            const size_t block_idx =
+                (size_t)sb * ((size_t)n_kv * (size_t)HD)
+                + (size_t)h_kv * (size_t)HD
+                + (size_t)c;
+            const block_q4_0 * k_block =
+                reinterpret_cast<const block_q4_0 *>(K_blocks) + block_idx;
+            const uint8_t byte = k_block->qs[nib_byte];
+            const int nib = is_high ? (byte >> 4) : (byte & 0xF);
+            k_val = (nib - 8) * __half2float(k_block->d);
+        }
 
         #pragma unroll
         for (int q = 0; q < MAX_NQ_PER_KV; ++q) {
@@ -3894,9 +3921,11 @@ static __device__ __forceinline__ void attn_score_q4_inner(
 #define ATTN_SCORE_Q4_KERNEL(NAME, HD, NQ)                                    \
 extern "C" __global__ void NAME(                                              \
     const void * __restrict__ K_blocks,                                       \
+    const half * __restrict__ K_residual,                                     \
     const float * __restrict__ Q,                                             \
     float * __restrict__ scores,                                              \
     int seq_kv,                                                               \
+    int full_blocks,                                                          \
     int n_kv,                                                                 \
     int /* n_q_per_kv */                                                      \
 ) {                                                                           \
@@ -3906,7 +3935,7 @@ extern "C" __global__ void NAME(                                              \
     const int warp = threadIdx.y;                                             \
     const int n_warps = blockDim.y;                                           \
     attn_score_q4_inner<HD, NQ>(                                              \
-        K_blocks, Q, scores, seq_kv, n_kv, NQ,                                \
+        K_blocks, K_residual, Q, scores, seq_kv, full_blocks, n_kv, NQ,       \
         sb, h_kv, lane, warp, n_warps                                         \
     );                                                                        \
 }
