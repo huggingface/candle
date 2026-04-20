@@ -823,7 +823,7 @@ pub trait Executor {
     /// This lets us cache plans and optimizations.
     #[inline(always)]
     fn graph_key(graph: &[&LazyStorage]) -> u64 {
-        let mut h = (graph.len() as u64).saturating_mul(0x9e3779b97f4a7c15_u64);
+        let mut h = (graph.len() as u64).wrapping_mul(0x9e3779b97f4a7c15_u64);
         for (i, node) in graph.iter().enumerate() {
             let disc: u64 = match node.op() {
                 Op::Uninit => 0,
