@@ -2547,6 +2547,11 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
+            // https://onnx.ai/onnx/operators/onnx__NonZero.html
+            "NonZero" => {
+                let input = get(&node.input[0])?;
+                bail!("NonZero: operator not yet implemented");
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
