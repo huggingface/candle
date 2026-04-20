@@ -1763,7 +1763,7 @@ mod tests {
     fn lazy_rmsnorm() -> Result<()> {
         let rmsnorm = |device: &Device| {
             let x =
-                Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), &device)?;
+                Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), device)?;
 
             let alpha = Tensor::from_slice(
                 &[1f32, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7],
@@ -1774,7 +1774,7 @@ mod tests {
             let eps = 1.2;
             let hidden_size = x.dim(D::Minus1)?;
             let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
-            let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
+            let x_normed = x.broadcast_div(&(norm_x + eps)?.sqrt()?)?;
             let result = x_normed.broadcast_mul(&alpha)?;
 
             assert_eq!(

@@ -1411,7 +1411,7 @@ pub fn sdpa(
 #[cfg(test)]
 mod tests {
     use crate::ops::{layer_norm, rms_norm, softmax_last_dim};
-    use candle::{backend::BackendDevice, lazy::LazyDevice, Device, Result, Shape, Tensor};
+    use candle::{Device, Result, Shape, Tensor};
 
     fn run_cmp<F>(mut f: F, devices: &[&Device]) -> Result<()>
     where
@@ -1495,12 +1495,12 @@ mod tests {
             let xs = Tensor::from_slice(
                 &[0f32, 1., 2., 3., 4., 5., 6., 7.],
                 Shape::from((4, 2)),
-                &device,
+                device,
             )?;
-            let indices = Tensor::from_slice(&[0u8, 1], Shape::from(2), &device)?;
+            let indices = Tensor::from_slice(&[0u8, 1], Shape::from(2), device)?;
             let xs = xs.index_select(&indices, 0usize)?;
 
-            let alpha = Tensor::from_slice(&[1f32, 1.1], Shape::from(2), &device)?;
+            let alpha = Tensor::from_slice(&[1f32, 1.1], Shape::from(2), device)?;
 
             let eps = 1.2;
 

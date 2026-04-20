@@ -80,10 +80,12 @@ pub struct MetalDevice {
     pub(crate) _fences: Arc<Mutex<HashMap<NodeId, MetalFence>>>,
 
     /// Resolved node buffer cache; entries are evicted when the owning tensor is dropped.
-    pub(crate) resolved: Arc<Mutex<HashMap<BufferId, (Arc<Buffer>, Weak<LazyStorage>)>>>,
+    pub(crate) resolved: Arc<Mutex<ResolvedBufferMap>>,
     /// Allocation plan cache; reused across runs with identical graph structure.
     pub(crate) plan_cache: Arc<Mutex<Option<CachedPlan>>>,
 }
+
+type ResolvedBufferMap = HashMap<BufferId, (Arc<Buffer>, Weak<LazyStorage>)>;
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
 pub const RESOURCE_OPTIONS: MTLResourceOptions =
@@ -342,6 +344,22 @@ impl MetalDevice {
     }
 }
 
+fn find_available_buffer(size: usize, buffers: &BufferMap) -> Option<Arc<Buffer>> {
+    let mut best_buffer: Option<&Arc<Buffer>> = None;
+    let mut best_buffer_size = usize::MAX;
+    for (buffer_size, subbuffers) in buffers.iter() {
+        if buffer_size >= &size && buffer_size < &best_buffer_size {
+            for sub in subbuffers {
+                if Arc::strong_count(sub) == 1 {
+                    best_buffer = Some(sub);
+                    best_buffer_size = *buffer_size;
+                }
+            }
+        }
+    }
+    best_buffer.cloned()
+}
+
 fn buf_size(size: usize) -> usize {
     size.next_power_of_two()
 }
@@ -377,20 +395,4 @@ mod tests {
         // a 2-byte buffer. This must not be rounded down to 1.
         assert_eq!(buf_size(2), 2);
     }
-}
-
-fn find_available_buffer(size: usize, buffers: &BufferMap) -> Option<Arc<Buffer>> {
-    let mut best_buffer: Option<&Arc<Buffer>> = None;
-    let mut best_buffer_size = usize::MAX;
-    for (buffer_size, subbuffers) in buffers.iter() {
-        if buffer_size >= &size && buffer_size < &best_buffer_size {
-            for sub in subbuffers {
-                if Arc::strong_count(sub) == 1 {
-                    best_buffer = Some(sub);
-                    best_buffer_size = *buffer_size;
-                }
-            }
-        }
-    }
-    best_buffer.cloned()
 }
