@@ -567,6 +567,144 @@ pub fn attn_output_q8_0_f32_gqa(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
+/// Q4_0 K-path attention score, KIVI layout. K laid out
+/// `[seq_blocks, n_kv, head_dim]` in 18-byte Q4_0 cells where each cell
+/// spans 32 consecutive seq positions of one (head, channel). Q is f32
+/// `[n_q_heads, head_dim]`. Returns f32 `[n_q_heads, seq_kv]` scores.
+///
+/// Only produces scores for the flushed-block portion of the cache. The
+/// caller must separately compute scores for the residual F16 partial
+/// block (positions `[full_seq, current_seq_len)`) and concatenate.
+#[allow(clippy::too_many_arguments)]
+pub fn attn_score_q4_0_f32_kivi(
+    k_blocks: &CudaSlice<u8>,
+    q_f32: &CudaView<f32>,
+    head_dim: usize,
+    seq_kv: usize,
+    n_kv_heads: usize,
+    n_q_per_kv: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    if !head_dim.is_multiple_of(32) {
+        crate::bail!("attn_score_q4_0_f32_kivi: head_dim {head_dim} not a multiple of 32");
+    }
+    let n_q_heads = n_kv_heads * n_q_per_kv;
+    if q_f32.len() != n_q_heads * head_dim {
+        crate::bail!(
+            "attn_score_q4_0_f32_kivi: Q has {} elems, expected {}",
+            q_f32.len(),
+            n_q_heads * head_dim
+        );
+    }
+    let seq_blocks = seq_kv.div_ceil(32);
+    let kernel_name = match (head_dim, n_q_per_kv) {
+        (64, 1) => "attn_score_q4_0_f32_kivi_hd64_nq1",
+        (64, 4) => "attn_score_q4_0_f32_kivi_hd64_nq4",
+        (64, 8) => "attn_score_q4_0_f32_kivi_hd64_nq8",
+        (128, 1) => "attn_score_q4_0_f32_kivi_hd128_nq1",
+        (128, 4) => "attn_score_q4_0_f32_kivi_hd128_nq4",
+        (128, 8) => "attn_score_q4_0_f32_kivi_hd128_nq8",
+        (256, 1) => "attn_score_q4_0_f32_kivi_hd256_nq1",
+        (256, 4) => "attn_score_q4_0_f32_kivi_hd256_nq4",
+        (256, 8) => "attn_score_q4_0_f32_kivi_hd256_nq8",
+        _ => crate::bail!(
+            "attn_score_q4_0_f32_kivi: unsupported (head_dim={head_dim}, n_q_per_kv={n_q_per_kv})",
+        ),
+    };
+    let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
+
+    // Grid = (seq_blocks, n_kv_heads) — the kernel internally fans out to
+    // all n_q_per_kv query heads sharing each kv head so that K is loaded
+    // once per (sb, kv) tile rather than once per q-head.
+    const N_WARPS: u32 = 16;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (seq_blocks as u32, n_kv_heads as u32, 1),
+        block_dim: (WARP_SIZE as u32, N_WARPS, 1),
+        shared_mem_bytes: (N_WARPS * WARP_SIZE as u32 * 4) as u32,
+    };
+
+    let dst = unsafe { dev.alloc::<f32>(n_q_heads * seq_kv)? };
+    let mut builder = func.builder();
+    builder.arg(k_blocks);
+    builder.arg(q_f32);
+    builder.arg(&dst);
+    barg!(
+        builder,
+        seq_kv as i32,
+        n_kv_heads as i32,
+        n_q_per_kv as i32
+    );
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
+/// Q4_0 variant of `attn_output_q8_0_f32_gqa`. Same call shape, V laid out
+/// `[seq_kv, n_kv_heads, head_dim]` in 18-byte Q4_0 blocks (half the byte
+/// count of Q8_0 for the same element count).
+#[allow(clippy::too_many_arguments)]
+pub fn attn_output_q4_0_f32_gqa(
+    v_blob: &CudaSlice<u8>,
+    probs_f32: &CudaView<f32>,
+    head_dim: usize,
+    seq_kv: usize,
+    n_kv_heads: usize,
+    n_q_per_kv: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    if !head_dim.is_multiple_of(32) {
+        crate::bail!("attn_output_q4_0_f32_gqa: head_dim {head_dim} not a multiple of 32");
+    }
+    let n_q_heads = n_kv_heads * n_q_per_kv;
+    if probs_f32.len() != n_q_heads * seq_kv {
+        crate::bail!(
+            "attn_output_q4_0_f32_gqa: probs has {} elements, expected {}",
+            probs_f32.len(),
+            n_q_heads * seq_kv
+        );
+    }
+    let kernel_name = match (head_dim, n_q_per_kv) {
+        (64, 1) => "attn_output_q4_0_f32_hd64_nq1",
+        (64, 4) => "attn_output_q4_0_f32_hd64_nq4",
+        (64, 8) => "attn_output_q4_0_f32_hd64_nq8",
+        (128, 1) => "attn_output_q4_0_f32_hd128_nq1",
+        (128, 4) => "attn_output_q4_0_f32_hd128_nq4",
+        (128, 8) => "attn_output_q4_0_f32_hd128_nq8",
+        (256, 1) => "attn_output_q4_0_f32_hd256_nq1",
+        (256, 4) => "attn_output_q4_0_f32_hd256_nq4",
+        (256, 8) => "attn_output_q4_0_f32_hd256_nq8",
+        _ => crate::bail!(
+            "attn_output_q4_0_f32_gqa: unsupported combo head_dim={head_dim} n_q_per_kv={n_q_per_kv}",
+        ),
+    };
+    let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
+
+    let hd_blocks = head_dim / 32;
+    let n_kv_stride_blocks = n_kv_heads * hd_blocks;
+    let kv_head_stride_blocks = hd_blocks;
+
+    const WARPS_PER_BLOCK: u32 = 32;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (hd_blocks as u32, n_kv_heads as u32, 1),
+        block_dim: (WARP_SIZE as u32, WARPS_PER_BLOCK, 1),
+        shared_mem_bytes: 0,
+    };
+
+    let dst = unsafe { dev.alloc::<f32>(n_q_heads * head_dim)? };
+    let mut builder = func.builder();
+    builder.arg(v_blob);
+    builder.arg(probs_f32);
+    builder.arg(&dst);
+    barg!(
+        builder,
+        seq_kv as i32,
+        n_kv_stride_blocks as i32,
+        kv_head_stride_blocks as i32,
+        n_q_per_kv as i32
+    );
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
 /// Convenience: call the attention-score gemv against a pre-built QCudaStorage
 /// K. Assumes the K cache is laid out row-major over tokens with stride
 /// `head_dim / 32` blocks (the layout produced by calling `QTensor::quantize`
