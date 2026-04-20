@@ -277,10 +277,8 @@ mod metal_sdpa_tests {
                     }
                 }
             }
-            let mask =
-                Tensor::from_vec(mask_data, (r, l), &device)?.broadcast_as((BS, H, r, l))?;
-            let att_masked =
-                (att.to_dtype(DType::F32)? + mask.to_dtype(DType::F32)?)?;
+            let mask = Tensor::from_vec(mask_data, (r, l), &device)?.broadcast_as((BS, H, r, l))?;
+            let att_masked = (att.to_dtype(DType::F32)? + mask.to_dtype(DType::F32)?)?;
             let att = candle_nn::ops::softmax_last_dim(&att_masked)?.to_dtype(q.dtype())?;
             let reference = att.matmul(&v.clone())?;
 
