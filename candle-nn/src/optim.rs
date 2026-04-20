@@ -299,22 +299,46 @@ impl<O: Optimizer> GradAccumulator<O> {
     }
 
     /// Scale the accumulated gradients by 1/K and apply a single
-    /// optimizer step. Resets the accumulator. No-op if nothing is
-    /// pending.
+    /// optimizer step. Resets the accumulator on success. No-op if
+    /// nothing is pending.
+    ///
+    /// On error the accumulator state is preserved so the caller may
+    /// retry `step()`. Scaling is atomic — a mid-scale failure leaves
+    /// the buffer untouched, and once scaling has committed the count
+    /// collapses to 1 so a subsequent retry scales by `1/1` rather than
+    /// re-applying `1/K` to already-averaged gradients.
+    ///
+    /// After a failed `step()`, prefer retrying `step()` over calling
+    /// [`accumulate`](Self::accumulate) — adding new micro-batches on
+    /// top of an already-averaged buffer mixes scales. Call
+    /// [`reset`](Self::reset) if you want to discard the pending state
+    /// and start over.
     pub fn step(&mut self) -> Result<()> {
-        let Some(mut store) = self.accum.take() else {
-            return Ok(());
-        };
         if self.count == 0 {
             return Ok(());
         }
+        let Some(store) = self.accum.as_mut() else {
+            return Ok(());
+        };
         let scale = 1.0 / self.count as f64;
+        // Compute all scaled tensors up-front. If any scaling op errors
+        // the buffer is untouched, so retry is safe.
         let ids: Vec<_> = store.get_ids().copied().collect();
-        for id in ids {
-            let scaled = (store.get_id(id).unwrap() * scale)?;
-            store.insert_id(id, scaled);
+        let mut scaled: Vec<(_, Tensor)> = Vec::with_capacity(ids.len());
+        for id in &ids {
+            let g = store.get_id(*id).unwrap();
+            scaled.push((*id, (g * scale)?));
         }
-        self.opt.step(&store)?;
+        // All scaling succeeded — commit. The buffer now holds one
+        // averaged gradient; collapsing count to 1 means that if
+        // opt.step errors below and the caller retries, scaling will be
+        // a no-op (1/1) rather than wrongly re-applying 1/K.
+        for (id, g) in scaled {
+            store.insert_id(id, g);
+        }
+        self.count = 1;
+        self.opt.step(store)?;
+        self.accum = None;
         self.count = 0;
         Ok(())
     }
