@@ -658,6 +658,104 @@ impl QTensor {
         self.storage.data()
     }
 
+    /// Concatenate quantized tensors along `dim` without dequantizing them.
+    pub fn cat(qtensors: &[&Self], dim: usize) -> Result<Self> {
+        let Some(first) = qtensors.first() else {
+            crate::bail!("cannot concatenate an empty list of quantized tensors")
+        };
+        if first.rank() == 0 {
+            crate::bail!("cannot concatenate scalar quantized tensors")
+        }
+        if dim >= first.rank() {
+            crate::bail!(
+                "dimension {} out of range for quantized tensor with rank {}",
+                dim,
+                first.rank()
+            )
+        }
+
+        let dtype = first.dtype();
+        let device = first.device();
+        let dims = first.shape().dims();
+        let block_size = dtype.block_size();
+        let type_size = dtype.type_size();
+        let prefix_elems = dims[..dim].iter().product::<usize>().max(1);
+
+        let mut out_dims = dims.to_vec();
+        out_dims[dim] = 0;
+        let mut chunks = Vec::with_capacity(qtensors.len());
+        let mut total_bytes = 0usize;
+
+        for qtensor in qtensors {
+            if qtensor.dtype() != dtype {
+                crate::bail!(
+                    "cannot concatenate quantized tensors with different dtypes: {:?} vs {:?}",
+                    dtype,
+                    qtensor.dtype()
+                )
+            }
+            if qtensor.device().location() != device.location() {
+                crate::bail!(
+                    "cannot concatenate quantized tensors on different devices: {:?} vs {:?}",
+                    device.location(),
+                    qtensor.device().location()
+                )
+            }
+            if qtensor.rank() != first.rank() {
+                crate::bail!(
+                    "cannot concatenate quantized tensors with different ranks: {} vs {}",
+                    first.rank(),
+                    qtensor.rank()
+                )
+            }
+            for (axis, (&lhs_dim, &rhs_dim)) in dims.iter().zip(qtensor.shape().dims()).enumerate()
+            {
+                if axis != dim && lhs_dim != rhs_dim {
+                    crate::bail!(
+                        "cannot concatenate quantized tensors with mismatched shapes {:?} and {:?} on dim {}",
+                        first.shape(),
+                        qtensor.shape(),
+                        dim
+                    )
+                }
+            }
+
+            let suffix_elems = qtensor.shape().dims()[dim..].iter().product::<usize>();
+            if !suffix_elems.is_multiple_of(block_size) {
+                crate::bail!(
+                    "quantized tensor suffix from dim {} must be divisible by block size {}: {:?}",
+                    dim,
+                    block_size,
+                    qtensor.shape()
+                )
+            }
+            let chunk_bytes = suffix_elems / block_size * type_size;
+            let data = qtensor.data()?;
+            if data.len() != prefix_elems * chunk_bytes {
+                crate::bail!(
+                    "unexpected quantized storage size for {:?}: got {}, expected {}",
+                    qtensor.shape(),
+                    data.len(),
+                    prefix_elems * chunk_bytes
+                )
+            }
+            total_bytes += data.len();
+            out_dims[dim] += qtensor.shape().dims()[dim];
+            chunks.push((data, chunk_bytes));
+        }
+
+        let mut data = Vec::with_capacity(total_bytes);
+        for prefix_idx in 0..prefix_elems {
+            for (chunk, chunk_bytes) in &chunks {
+                let start = prefix_idx * *chunk_bytes;
+                let end = start + *chunk_bytes;
+                data.extend_from_slice(&chunk[start..end]);
+            }
+        }
+
+        ggml_file::qtensor_from_ggml(dtype, &data, out_dims, &device)
+    }
+
     pub fn indexed_moe_forward(&self, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
         match &self.storage {
             QStorage::Cuda(s) => match (&*x.storage(), &*ids.storage()) {
