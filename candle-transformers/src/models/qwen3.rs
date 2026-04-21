@@ -338,7 +338,9 @@ impl Model {
                 })
             })
             .collect();
-        Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
+        Tensor::from_slice(&mask, (1, 1, tgt, tgt + offset), &self.device)?
+            .broadcast_as((b, 1, tgt, tgt + offset))?
+            .to_dtype(self.dtype)
     }
 
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
