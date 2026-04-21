@@ -1,6 +1,7 @@
 //! Traits to Define Backend Behavior
 //!
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::tensor_source::TensorSource;
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
 pub trait BackendStorage: Sized {
@@ -161,6 +162,18 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage>;
 
     fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage>;
+
+    fn storage_from_dyn_tensor_source(&self, _: &dyn TensorSource) -> Result<Self::Storage> {
+        Err(crate::Error::Msg(
+            "`storage_from_dyn_tensor_source` not implemented for this device".to_string(),
+        ))
+    }
+
+    fn storage_from_tensor_source<S: TensorSource + 'static>(&self, _: S) -> Result<Self::Storage> {
+        Err(crate::Error::Msg(
+            "`storage_from_tensor_source` not implemented for this device".to_string(),
+        ))
+    }
 
     fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
 

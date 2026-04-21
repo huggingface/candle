@@ -1,6 +1,10 @@
 //! Rotary Embeddings
 //!
-use candle::{CpuStorage, Layout, Result, Shape, Tensor, D};
+use candle::{
+    lazy::custom::{CustomOp, LazyCustomOp},
+    op::BackpropOp,
+    CpuStorage, Layout, Result, Shape, Tensor, D,
+};
 use rayon::prelude::*;
 
 /// Interleaved variant of rotary embeddings.
@@ -507,6 +511,48 @@ impl candle::CustomOp3 for RotaryEmb {
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }
+
+    fn lazy_fwd(
+        &self,
+        src: &candle::LazyStorage,
+        src_l: &Layout,
+        cos: &candle::LazyStorage,
+        cos_l: &Layout,
+        sin: &candle::LazyStorage,
+        sin_l: &Layout,
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let (mut storage, _) =
+            LazyCustomOp::fwd(self, &[(src, src_l), (cos, cos_l), (sin, sin_l)])?;
+        storage.register_custom_op(CustomOp::Three(Box::new(self.clone())));
+
+        let src =
+            Tensor::from_storage(src.clone().into(), src_l.shape(), BackpropOp::none(), false);
+        let cos =
+            Tensor::from_storage(cos.clone().into(), cos_l.shape(), BackpropOp::none(), false);
+        let sin =
+            Tensor::from_storage(sin.clone().into(), sin_l.shape(), BackpropOp::none(), false);
+
+        let result = self.fallback(&[&src, &cos, &sin])?;
+        let (inner, _layout) = self.extract_lazy(result)?;
+
+        storage.add_custom_fallback(LazyCustomOp::name(self), inner);
+
+        Ok((storage, src_l.shape().clone()))
+    }
+}
+
+impl candle::lazy::custom::LazyCustomOp for RotaryEmb {
+    fn name(&self) -> &'static str {
+        "rotary-emb"
+    }
+
+    fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
+        rope_slow(tensors[0], tensors[1], tensors[2])
+    }
+
+    fn expected_edges(&self) -> usize {
+        3
+    }
 }
 
 pub fn rope(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
@@ -561,7 +607,7 @@ struct RotaryEmbThd;
 
 impl candle::CustomOp3 for RotaryEmbThd {
     fn name(&self) -> &'static str {
-        "rotary-emb"
+        "rotary-emb-thd"
     }
 
     fn cpu_fwd(

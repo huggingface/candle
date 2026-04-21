@@ -1,19 +1,28 @@
 use crate::{DType, Result};
 
+use crate::lazy::{BufferId, CachedPlan, LazyStorage, NodeId};
 #[cfg(feature = "ug")]
 use candle_metal_kernels::metal::ComputePipeline;
 use candle_metal_kernels::{
     metal::{
         BlitCommandEncoder, Buffer, BufferMap, Commands, ComputeCommandEncoder, Device,
-        MTLResourceOptions,
+        MTLResourceOptions, MetalFence,
     },
     Kernels,
 };
 use objc2_foundation::NSURL;
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
-
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
+
+// Thread-local buffer override for `with_buffer_override`.
+// Using thread-local storage prevents the override set by one thread from
+// being visible to `allocate_buffer` calls on other threads.
+thread_local! {
+    static THREAD_BUFFER_OVERRIDE: RefCell<Option<Arc<Buffer>>> = const { RefCell::new(None) };
+}
 
 use super::MetalError;
 
@@ -67,7 +76,16 @@ pub struct MetalDevice {
     pub(crate) seed: Arc<Mutex<Buffer>>,
     /// Last seed value set on this device.
     pub(crate) seed_value: Arc<RwLock<u64>>,
+
+    pub(crate) _fences: Arc<Mutex<HashMap<NodeId, MetalFence>>>,
+
+    /// Resolved node buffer cache; entries are evicted when the owning tensor is dropped.
+    pub(crate) resolved: Arc<Mutex<ResolvedBufferMap>>,
+    /// Allocation plan cache; reused across runs with identical graph structure.
+    pub(crate) plan_cache: Arc<Mutex<Option<CachedPlan>>>,
 }
+
+type ResolvedBufferMap = HashMap<BufferId, (Arc<Buffer>, Weak<LazyStorage>)>;
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
 pub const RESOURCE_OPTIONS: MTLResourceOptions =
@@ -127,6 +145,21 @@ impl MetalDevice {
         &self.device
     }
 
+    pub fn with_buffer_override<F, R>(&self, buffer: Arc<Buffer>, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        // Use thread-local storage so the override is invisible to other threads.
+        THREAD_BUFFER_OVERRIDE.with(|o| {
+            *o.borrow_mut() = Some(buffer);
+        });
+        let r = f();
+        THREAD_BUFFER_OVERRIDE.with(|o| {
+            *o.borrow_mut() = None;
+        });
+        r
+    }
+
     fn drop_unused_buffers(&self) -> Result<()> {
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         for subbuffers in buffers.values_mut() {
@@ -182,6 +215,10 @@ impl MetalDevice {
         dtype: DType,
         _name: &str,
     ) -> Result<Arc<Buffer>> {
+        let override_buffer = THREAD_BUFFER_OVERRIDE.with(|o| o.borrow().clone());
+        if let Some(buffer_override) = override_buffer {
+            return Ok(buffer_override);
+        }
         let size = element_count * dtype.size_in_bytes();
         let mut buffers = self.private_buffers.write().map_err(MetalError::from)?;
         if let Some(b) = find_available_buffer(size, &buffers) {
@@ -209,9 +246,16 @@ impl MetalDevice {
         _name: &str,
     ) -> Result<Arc<Buffer>> {
         let size = element_count * dtype.size_in_bytes();
+        self.new_private_buffer_bytes(size)
+    }
+
+    /// Creates a new private buffer with the given byte size.
+    ///
+    /// This is intentionally not in the Metal buffer pool to allow the efficient implementation of persistent buffers.
+    pub fn new_private_buffer_bytes(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
         let buffer = self
             .device
-            .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
+            .new_buffer(size_in_bytes, PRIVATE_RESOURCE_OPTIONS)
             .map_err(MetalError::from)?;
         Ok(Arc::new(buffer))
     }
@@ -246,6 +290,10 @@ impl MetalDevice {
 
     /// The critical allocator algorithm
     pub fn allocate_buffer(&self, size: usize) -> Result<Arc<Buffer>> {
+        let override_buffer = THREAD_BUFFER_OVERRIDE.with(|o| o.borrow().clone());
+        if let Some(buffer_override) = override_buffer {
+            return Ok(buffer_override);
+        }
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         if let Some(b) = find_available_buffer(size, &buffers) {
             // Cloning also ensures we increment the strong count
@@ -260,6 +308,16 @@ impl MetalDevice {
             .map_err(MetalError::from)?;
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
+        Ok(new_buffer)
+    }
+
+    /// Allocate without using the cache
+    pub fn allocate_untracked(&self, size: usize) -> Result<Buffer> {
+        let new_buffer = self
+            .device
+            .new_buffer(size, RESOURCE_OPTIONS)
+            .map_err(MetalError::from)?;
+
         Ok(new_buffer)
     }
 
@@ -284,6 +342,22 @@ impl MetalDevice {
             .map_err(|e| MetalError::from(e.to_string()))?;
         Ok(())
     }
+}
+
+fn find_available_buffer(size: usize, buffers: &BufferMap) -> Option<Arc<Buffer>> {
+    let mut best_buffer: Option<&Arc<Buffer>> = None;
+    let mut best_buffer_size = usize::MAX;
+    for (buffer_size, subbuffers) in buffers.iter() {
+        if buffer_size >= &size && buffer_size < &best_buffer_size {
+            for sub in subbuffers {
+                if Arc::strong_count(sub) == 1 {
+                    best_buffer = Some(sub);
+                    best_buffer_size = *buffer_size;
+                }
+            }
+        }
+    }
+    best_buffer.cloned()
 }
 
 fn buf_size(size: usize) -> usize {
@@ -321,20 +395,4 @@ mod tests {
         // a 2-byte buffer. This must not be rounded down to 1.
         assert_eq!(buf_size(2), 2);
     }
-}
-
-fn find_available_buffer(size: usize, buffers: &BufferMap) -> Option<Arc<Buffer>> {
-    let mut best_buffer: Option<&Arc<Buffer>> = None;
-    let mut best_buffer_size = usize::MAX;
-    for (buffer_size, subbuffers) in buffers.iter() {
-        if buffer_size >= &size && buffer_size < &best_buffer_size {
-            for sub in subbuffers {
-                if Arc::strong_count(sub) == 1 {
-                    best_buffer = Some(sub);
-                    best_buffer_size = *buffer_size;
-                }
-            }
-        }
-    }
-    best_buffer.cloned()
 }

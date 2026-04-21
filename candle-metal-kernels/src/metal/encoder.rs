@@ -1,8 +1,11 @@
-use crate::metal::{Buffer, CommandSemaphore, CommandStatus, ComputePipeline, MetalResource};
+use crate::metal::{
+    Buffer, CommandSemaphore, CommandStatus, ComputePipeline, MetalFence, MetalResource,
+};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLCommandEncoder, MTLComputeCommandEncoder, MTLResourceUsage, MTLSize,
+    MTLStages,
 };
 use std::{ffi::c_void, ptr, sync::Arc};
 
@@ -46,6 +49,10 @@ impl ComputeCommandEncoder {
             threadgroups_per_grid,
             threads_per_threadgroup,
         )
+    }
+
+    pub fn wait_for_fence(&self, fence: &MetalFence) {
+        self.raw.waitForFence(fence.as_ref());
     }
 
     pub fn set_buffer(&self, index: usize, buffer: Option<&Buffer>, offset: usize) {
@@ -134,7 +141,7 @@ impl BlitCommandEncoder {
         self.raw.setLabel(Some(&NSString::from_str(label)))
     }
 
-    pub fn copy_from_buffer(
+    pub fn copy(
         &self,
         src_buffer: &Buffer,
         src_offset: usize,
@@ -163,5 +170,10 @@ impl BlitCommandEncoder {
             },
             value,
         )
+    }
+
+    pub fn barrier(&self, after_queue_stages: MTLStages, before_stages: MTLStages) {
+        self.raw
+            .barrierAfterQueueStages_beforeStages(after_queue_stages, before_stages);
     }
 }

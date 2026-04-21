@@ -478,6 +478,10 @@ pub struct Llama {
 }
 
 impl Llama {
+    pub fn ln_f(&self) -> &candle_nn::RmsNorm {
+        self.ln_f.inner()
+    }
+
     // required by LLaVA
     pub fn embed(&self, x: &Tensor) -> Result<Tensor> {
         self.wte.forward(x)

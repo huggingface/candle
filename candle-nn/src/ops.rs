@@ -1,7 +1,10 @@
 //! Tensor ops.
 //!
-
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{
+    lazy::custom::{CustomOp, LazyCustomOp, LazyCustomOpClone},
+    op::BackpropOp,
+    CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D,
+};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -46,6 +49,7 @@ pub fn swiglu(xs: &Tensor) -> Result<Tensor> {
     &xs[0].silu()? * &xs[1]
 }
 
+#[derive(Clone)]
 struct Sigmoid;
 
 impl candle::CustomOp1 for Sigmoid {
@@ -278,6 +282,7 @@ impl candle::ModuleT for Dropout {
     }
 }
 
+#[derive(Clone)]
 struct SoftmaxLastDim;
 
 impl candle::CustomOp1 for SoftmaxLastDim {
@@ -424,6 +429,42 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
+
+    fn lazy_fwd(
+        &self,
+        storage: &candle::LazyStorage,
+        layout: &Layout,
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let mut storage = storage.custom_op(self.clone_box(), &[])?;
+        storage.register_custom_op(CustomOp::One(Box::new(self.clone())));
+
+        let xs = Tensor::from_storage(
+            storage.clone().into(),
+            layout.shape(),
+            BackpropOp::none(),
+            false,
+        );
+        let result = self.fallback(&[&xs])?;
+        let (inner, layout) = self.extract_lazy(result)?;
+
+        storage.add_custom_fallback(LazyCustomOp::name(self), inner);
+        let _shape = storage.layout().shape().clone();
+        Ok((storage, layout.shape().clone()))
+    }
+}
+
+impl candle::lazy::custom::LazyCustomOp for SoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim"
+    }
+
+    fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
+        softmax(tensors[0], D::Minus1)
+    }
+
+    fn expected_edges(&self) -> usize {
+        1
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
@@ -431,8 +472,14 @@ pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
 }
 
 #[derive(Debug, Clone)]
-struct RmsNorm {
+pub struct RmsNorm {
     eps: f32,
+}
+
+impl RmsNorm {
+    pub fn new(eps: f32) -> Self {
+        Self { eps }
+    }
 }
 
 impl candle::CustomOp2 for RmsNorm {
@@ -616,6 +663,46 @@ impl candle::CustomOp2 for RmsNorm {
         .map_err(candle::Error::wrap)?;
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
+    }
+
+    fn lazy_fwd(
+        &self,
+        s1: &candle::LazyStorage,
+        l1: &Layout,
+        s2: &candle::LazyStorage,
+        l2: &Layout,
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let s1 = candle::LazyStorage::copy(s1, l1);
+        let s2 = candle::LazyStorage::copy(s2, l2);
+
+        let mut s1 = s1.custom_op(self.clone_box(), &[(&s2, l2)])?;
+
+        s1.register_custom_op(CustomOp::Two(Box::new(self.clone())));
+
+        // fallback
+        let x = Tensor::from_storage(s1.clone().into(), l1.shape(), BackpropOp::none(), false);
+        let alpha = Tensor::from_storage(s2.clone().into(), l2.shape(), BackpropOp::none(), false);
+
+        let result = self.fallback(&[&x, &alpha])?;
+        let (inner, _layout) = self.extract_lazy(result)?;
+
+        s1.add_custom_fallback(LazyCustomOp::name(self), inner);
+
+        Ok((s1, l1.shape().clone()))
+    }
+}
+
+impl candle::lazy::custom::LazyCustomOp for RmsNorm {
+    fn name(&self) -> &'static str {
+        "rms-norm"
+    }
+
+    fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
+        rms_norm_slow(tensors[0], tensors[1], self.eps)
+    }
+
+    fn expected_edges(&self) -> usize {
+        2
     }
 }
 
@@ -864,6 +951,47 @@ impl candle::CustomOp3 for LayerNorm {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
+
+    fn lazy_fwd(
+        &self,
+        s1: &candle::LazyStorage,
+        l1: &Layout,
+        s2: &candle::LazyStorage,
+        l2: &Layout,
+        s3: &candle::LazyStorage,
+        l3: &Layout,
+    ) -> Result<(candle::LazyStorage, Shape)> {
+        let s1 = candle::LazyStorage::copy(s1, l1);
+        let s2 = candle::LazyStorage::copy(s2, l2);
+        let s3 = candle::LazyStorage::copy(s3, l3);
+
+        let mut out = s1.custom_op(self.clone_box(), &[(&s2, l2), (&s3, l3)])?;
+        out.register_custom_op(CustomOp::Three(Box::new(self.clone())));
+
+        let x = Tensor::from_storage(s1.clone().into(), l1.shape(), BackpropOp::none(), false);
+        let alpha = Tensor::from_storage(s2.clone().into(), l2.shape(), BackpropOp::none(), false);
+        let beta = Tensor::from_storage(s3.clone().into(), l3.shape(), BackpropOp::none(), false);
+
+        let result = self.fallback(&[&x, &alpha, &beta])?;
+        let (inner, _layout) = self.extract_lazy(result)?;
+        out.add_custom_fallback(LazyCustomOp::name(self), inner);
+
+        Ok((out, l1.shape().clone()))
+    }
+}
+
+impl candle::lazy::custom::LazyCustomOp for LayerNorm {
+    fn name(&self) -> &'static str {
+        "layer-norm"
+    }
+
+    fn fallback(&self, tensors: &[&Tensor]) -> Result<Tensor> {
+        layer_norm_slow(tensors[0], tensors[1], tensors[2], self.eps)
+    }
+
+    fn expected_edges(&self) -> usize {
+        3
+    }
 }
 
 pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
@@ -962,6 +1090,7 @@ impl Module for Identity {
 }
 
 #[allow(dead_code)]
+#[derive(Clone)]
 struct Sdpa {
     scale: f32,
     softcapping: f32,
@@ -1277,4 +1406,134 @@ pub fn sdpa(
             do_causal,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ops::{layer_norm, rms_norm, softmax_last_dim};
+    use candle::{Device, Result, Shape, Tensor};
+
+    fn run_cmp<F>(mut f: F, devices: &[&Device]) -> Result<()>
+    where
+        F: FnMut(&Device) -> Result<Tensor>,
+    {
+        assert!(
+            devices.len() >= 2,
+            "Requires at least 2 devices to compare results"
+        );
+        let mut results: Vec<Tensor> = vec![];
+        for d in devices {
+            results.push(f(d)?);
+        }
+        for w in results.windows(2) {
+            cmp_tensors(&w[0], &w[1])?
+        }
+        Ok(())
+    }
+
+    fn cmp_tensors(a: &Tensor, b: &Tensor) -> Result<()> {
+        let a_device = a.device();
+        let b_device = b.device();
+
+        assert!(
+            !a_device.same_device(b_device),
+            "Test not configured correctly, both devices are {a_device:?}"
+        );
+
+        let a_vals = a.flatten_all()?.to_vec1::<f32>()?;
+        let b_vals = b.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(
+            a_vals.len(),
+            b_vals.len(),
+            "shape mismatch: {a_device:?}={:?} {b_device:?}={:?}",
+            a.shape(),
+            b.shape()
+        );
+        for (i, (l, e)) in a_vals.iter().zip(b_vals.iter()).enumerate() {
+            let diff = (l - e).abs();
+            assert!(
+                diff < 1e-3,
+                "element {i}: {a_device:?}={l} {b_device:?}={e} diff={diff} ({a_device:?} shape={:?})",
+                a.shape()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_softmax() -> Result<()> {
+        let softmax = |device: &Device| {
+            let src =
+                Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], Shape::from(8), device)?;
+
+            let t1 = src.affine(1.25, 0.0)?;
+            let result = softmax_last_dim(&t1)?;
+            assert_eq!(
+                result.to_vec1::<f32>()?,
+                &[
+                    0.00011306652,
+                    0.0003946411,
+                    0.0013774326,
+                    0.004807711,
+                    0.016780565,
+                    0.058569912,
+                    0.20442909,
+                    0.7135276
+                ]
+            );
+            Ok(result)
+        };
+
+        run_cmp(softmax, &[&Device::new_lazy(0)?, &Device::new_metal(0)?])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_rms_norm() -> Result<()> {
+        let rms_norm = |device: &Device| {
+            let xs = Tensor::from_slice(
+                &[0f32, 1., 2., 3., 4., 5., 6., 7.],
+                Shape::from((4, 2)),
+                device,
+            )?;
+            let indices = Tensor::from_slice(&[0u8, 1], Shape::from(2), device)?;
+            let xs = xs.index_select(&indices, 0usize)?;
+
+            let alpha = Tensor::from_slice(&[1f32, 1.1], Shape::from(2), device)?;
+
+            let eps = 1.2;
+
+            let result = rms_norm(&xs, &alpha, eps)?;
+
+            assert_eq!(
+                result.flatten_all()?.to_vec1::<f32>()?,
+                &[0.0, 0.8436615, 0.72075, 1.1892376]
+            );
+            Ok(result)
+        };
+        run_cmp(rms_norm, &[&Device::new_lazy(0)?, &Device::new_metal(0)?])?;
+        Ok(())
+    }
+
+    #[test]
+    fn lazy_layer_norm() -> Result<()> {
+        let input_data: Vec<f32> = (0..16).map(|x| x as f32 * 0.1).collect();
+        let alpha_data: Vec<f32> = (0..8).map(|x| 1.0f32 + x as f32 * 0.1).collect();
+        let beta_data: Vec<f32> = (0..8).map(|x| x as f32 * 0.05).collect();
+
+        let lnorm = |device: &Device| {
+            let xs = Tensor::from_slice(&input_data.clone(), (2usize, 8usize), device)?;
+            let alpha = Tensor::from_slice(&alpha_data.clone(), (8usize,), device)?;
+            let beta = Tensor::from_slice(&beta_data.clone(), (8usize,), device)?;
+            let eps = 1e-5f64;
+            let result = layer_norm(&xs, &alpha, &beta, eps as f32)?;
+            result
+                .to_dtype(candle::DType::BF16)?
+                .to_dtype(candle::DType::F32)
+        };
+
+        run_cmp(lnorm, &[&Device::new_lazy(0)?, &Device::new_metal(0)?])?;
+        Ok(())
+    }
 }

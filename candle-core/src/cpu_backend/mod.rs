@@ -1,6 +1,9 @@
 //! Implementation of Backend Fns for CPU
+use std::slice;
+
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::tensor_source::TensorSource;
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
@@ -18,7 +21,7 @@ const USE_COL2IM_CONV1D_TR: bool = true;
 
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
 // intercept the oom errors to avoid panicking and provide a proper error.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CpuStorage {
     U8(Vec<u8>),
     U32(Vec<u32>),
@@ -1660,6 +1663,29 @@ impl CpuStorage {
         D::cpu_storage_as_slice(self)
     }
 
+    pub fn len(&self) -> usize {
+        match self {
+            Self::U8(s) => s.len(),
+            Self::U32(s) => s.len(),
+            Self::I16(s) => s.len(),
+            Self::I32(s) => s.len(),
+            Self::I64(s) => s.len(),
+            Self::BF16(s) => s.len(),
+            Self::F16(s) => s.len(),
+            Self::F32(s) => s.len(),
+            Self::F64(s) => s.len(),
+            Self::F8E4M3(s) => s.len(),
+            Self::F6E2M3(s) => s.len(),
+            Self::F6E3M2(s) => s.len(),
+            Self::F4(s) => s.len(),
+            Self::F8E8M0(s) => s.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn concat(storages: &[CpuStorage]) -> Result<CpuStorage> {
         let storage0 = &storages[0];
         let s = match storage0 {
@@ -3045,6 +3071,63 @@ impl BackendDevice for CpuDevice {
     fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<Self::Storage> {
         Ok(s)
     }
+    /*
+       fn storage_from_dyn_tensor_source(&self, source: &dyn TensorSource) -> Result<Self::Storage> {
+           fn as_slice<T: WithDType>(source: &dyn TensorSource) -> &[T] {
+               unsafe {
+                   slice::from_raw_parts(
+                       source.data_u8().as_ptr().cast::<T>(),
+                       source.element_count(),
+                   )
+               }
+           }
+           match source.data_type() {
+               DType::U8 => self.storage_from_slice(source.data_u8()),
+               DType::U32 => self.storage_from_slice(as_slice::<u32>(source)),
+               DType::I16 => self.storage_from_slice(as_slice::<i16>(source)),
+               DType::I32 => self.storage_from_slice(as_slice::<i32>(source)),
+               DType::I64 => self.storage_from_slice(as_slice::<i64>(source)),
+               DType::BF16 => self.storage_from_slice(as_slice::<bf16>(source)),
+               DType::F16 => self.storage_from_slice(as_slice::<f16>(source)),
+               DType::F32 => self.storage_from_slice(as_slice::<f32>(source)),
+               DType::F64 => self.storage_from_slice(as_slice::<f64>(source)),
+               DType::F8E4M3 => self.storage_from_slice(as_slice::<float8::F8E4M3>(source)),
+               DType::F6E2M3 => Ok(CpuStorage::F6E2M3(source.data_u8().to_vec())),
+               DType::F6E3M2 => Ok(CpuStorage::F6E3M2(source.data_u8().to_vec())),
+               DType::F4 => Ok(CpuStorage::F4(source.data_u8().to_vec())),
+               DType::F8E8M0 => Ok(CpuStorage::F8E8M0(source.data_u8().to_vec())),
+           }
+       }
+    */
+    fn storage_from_tensor_source<S: TensorSource + 'static>(
+        &self,
+        source: S,
+    ) -> Result<Self::Storage> {
+        fn as_slice<'a, T: WithDType, S: TensorSource>(source: S) -> &'a [T] {
+            unsafe {
+                slice::from_raw_parts(
+                    source.data_u8().as_ptr().cast::<T>(),
+                    source.element_count(),
+                )
+            }
+        }
+        match source.data_type() {
+            DType::U8 => self.storage_from_slice(source.data_u8()),
+            DType::U32 => self.storage_from_slice(as_slice::<u32, _>(source)),
+            DType::I16 => self.storage_from_slice(as_slice::<i16, _>(source)),
+            DType::I32 => self.storage_from_slice(as_slice::<i32, _>(source)),
+            DType::I64 => self.storage_from_slice(as_slice::<i64, _>(source)),
+            DType::BF16 => self.storage_from_slice(as_slice::<bf16, _>(source)),
+            DType::F16 => self.storage_from_slice(as_slice::<f16, _>(source)),
+            DType::F32 => self.storage_from_slice(as_slice::<f32, _>(source)),
+            DType::F64 => self.storage_from_slice(as_slice::<f64, _>(source)),
+            DType::F8E4M3 => self.storage_from_slice(as_slice::<float8::F8E4M3, _>(source)),
+            DType::F6E2M3 => Ok(CpuStorage::F6E2M3(source.data_u8().to_vec())),
+            DType::F6E3M2 => Ok(CpuStorage::F6E3M2(source.data_u8().to_vec())),
+            DType::F4 => Ok(CpuStorage::F4(source.data_u8().to_vec())),
+            DType::F8E8M0 => Ok(CpuStorage::F8E8M0(source.data_u8().to_vec())),
+        }
+    }
 
     fn new(_: usize) -> Result<Self> {
         Ok(Self)
@@ -3270,6 +3353,50 @@ impl BackendDevice for CpuDevice {
 
     fn synchronize(&self) -> Result<()> {
         Ok(())
+    }
+}
+
+impl TensorSource for CpuStorage {
+    fn data_u8(&self) -> &[u8] {
+        match self {
+            CpuStorage::U8(v) => v.as_slice(),
+            CpuStorage::U32(v) => unsafe {
+                slice::from_raw_parts(v.as_ptr().cast::<u8>(), v.len() * 4)
+            },
+            CpuStorage::I16(v) => unsafe {
+                slice::from_raw_parts(v.as_ptr().cast::<u8>(), v.len() * 2)
+            },
+            CpuStorage::I32(v) => unsafe {
+                slice::from_raw_parts(v.as_ptr().cast::<u8>(), v.len() * 4)
+            },
+            CpuStorage::I64(v) => unsafe {
+                slice::from_raw_parts(v.as_ptr().cast::<u8>(), v.len() * 8)
+            },
+            CpuStorage::BF16(v) => unsafe {
+                slice::from_raw_parts(v.as_ptr().cast::<u8>(), v.len() * 2)
+            },
+            CpuStorage::F16(v) => unsafe {
+                slice::from_raw_parts(v.as_ptr().cast::<u8>(), v.len() * 2)
+            },
+            CpuStorage::F32(v) => unsafe {
+                slice::from_raw_parts(v.as_ptr().cast::<u8>(), v.len() * 4)
+            },
+            CpuStorage::F64(v) => unsafe {
+                slice::from_raw_parts(v.as_ptr().cast::<u8>(), v.len() * 8)
+            },
+            CpuStorage::F8E4M3(v) => unsafe {
+                slice::from_raw_parts(v.as_ptr().cast::<u8>(), v.len())
+            },
+            // Dummy u8-backed variants.
+            CpuStorage::F6E2M3(v)
+            | CpuStorage::F6E3M2(v)
+            | CpuStorage::F4(v)
+            | CpuStorage::F8E8M0(v) => v.as_slice(),
+        }
+    }
+
+    fn data_type(&self) -> DType {
+        self.dtype()
     }
 }
 

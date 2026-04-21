@@ -3,7 +3,7 @@ use crate::{
 };
 use objc2::{rc::Retained, runtime::AnyObject, runtime::ProtocolObject};
 use objc2_foundation::NSString;
-use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice};
+use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice, MTLFence};
 use std::{ffi::c_void, ptr};
 
 /// Metal device type classification based on Apple Silicon architecture.
@@ -65,7 +65,7 @@ impl Device {
     ) -> Result<Buffer, MetalKernelError> {
         self.as_ref()
             .newBufferWithLength_options(length, options)
-            .map(Buffer::new)
+            .map(|b| Buffer::new(b, options))
             .ok_or(MetalKernelError::FailedToCreateResource(
                 "Buffer".to_string(),
             ))
@@ -81,7 +81,7 @@ impl Device {
         unsafe {
             self.as_ref()
                 .newBufferWithBytes_length_options(pointer, length, options)
-                .map(Buffer::new)
+                .map(|b| Buffer::new(b, options))
                 .ok_or(MetalKernelError::FailedToCreateResource(
                     "Buffer".to_string(),
                 ))
@@ -158,5 +158,25 @@ impl Device {
             Some('d') => MetalDeviceType::Ultra,
             _ => MetalDeviceType::Medium,
         }
+    }
+
+    pub fn make_fence(&self) -> MetalFence {
+        MetalFence::new(self.raw.newFence().unwrap())
+    }
+}
+
+pub struct MetalFence {
+    raw: Retained<ProtocolObject<dyn MTLFence>>,
+}
+
+impl MetalFence {
+    fn new(raw: Retained<ProtocolObject<dyn MTLFence>>) -> MetalFence {
+        MetalFence { raw }
+    }
+}
+
+impl AsRef<ProtocolObject<dyn MTLFence>> for MetalFence {
+    fn as_ref(&self) -> &ProtocolObject<dyn MTLFence> {
+        &self.raw
     }
 }

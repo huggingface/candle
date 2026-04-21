@@ -1,6 +1,7 @@
 //! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
+use crate::lazy::LazyBackend;
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims, ShapeWithOneHole};
@@ -164,6 +165,11 @@ pub(crate) fn from_storage<S: Into<Shape>>(
 ) -> Tensor {
     let dtype = storage.dtype();
     let device = storage.device();
+
+    if let Storage::Lazy(ref lazy) = storage {
+        lazy.set_self_arc(lazy);
+    }
+
     let tensor_ = Tensor_ {
         id: TensorId::new(),
         storage: Arc::new(RwLock::new(storage)),
@@ -676,6 +682,29 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Lazy(storage) => {
+                #[cfg(not(feature = "metal"))]
+                todo!(
+                    "Lazy only implemented for metal for now. Last op: {:?}",
+                    storage.op()
+                );
+
+                #[cfg(feature = "metal")]
+                {
+                    let device =
+                        crate::metal_backend::get_lazy_metal_device(storage.device().ordinal())?;
+                    let result = storage.execute(device.clone())?;
+                    device.synchronize()?;
+                    let metal_storage = crate::MetalStorage::new(
+                        result,
+                        device,
+                        storage.shape().elem_count(),
+                        storage.dtype(),
+                    );
+                    let result = metal_storage.to_cpu_ref::<S>()?;
+                    Ok(result[self.layout.start_offset()])
+                }
+            }
         }
     }
 
@@ -1226,7 +1255,7 @@ impl Tensor {
     /// # Arguments
     ///
     /// * `target_h` - Target height
-    /// * `target_w` - Target width  
+    /// * `target_w` - Target width
     /// * `align_corners` - If true, corner pixels are aligned. If false (default),
     ///   pixels are treated as areas (matches PyTorch default behavior).
     ///
@@ -1926,6 +1955,16 @@ impl Tensor {
         self.layout.strided_blocks()
     }
 
+    pub fn execute<LB: LazyBackend>(&self, lb: LB) -> Result<(LB::BufferType, Layout)> {
+        if let Storage::Lazy(storage) = &*self.storage() {
+            let result = storage.execute(lb)?;
+            let layout = storage.layout().clone();
+            Ok((result, layout))
+        } else {
+            bail!("wat")
+        }
+    }
+
     /// Returns the data contained in a 1D tensor as a vector of scalar values.
     pub fn to_vec1<S: crate::WithDType>(&self) -> Result<Vec<S>> {
         if self.rank() != 1 {
@@ -1948,6 +1987,34 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Lazy(storage) => {
+                #[cfg(not(feature = "metal"))]
+                todo!(
+                    "Lazy only implemented for metal for now. Last op: {:?}",
+                    storage.op()
+                );
+
+                #[cfg(feature = "metal")]
+                {
+                    let device =
+                        crate::metal_backend::get_lazy_metal_device(storage.device().ordinal())?;
+                    let result = storage.execute(device.clone())?;
+                    device.synchronize()?;
+                    let metal_storage = crate::MetalStorage::new(
+                        result,
+                        device,
+                        storage.shape().elem_count(),
+                        storage.dtype(),
+                    );
+
+                    let data = metal_storage.to_cpu_ref::<S>()?;
+                    let data = match self.layout.contiguous_offsets() {
+                        Some((o1, o2)) => data[o1..o2].to_vec(),
+                        None => self.strided_index().map(|i| data[i]).collect(),
+                    };
+                    Ok(data)
+                }
+            }
         }
     }
 
@@ -1979,6 +2046,28 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Lazy(storage) => {
+                #[cfg(not(feature = "metal"))]
+                todo!(
+                    "Lazy only implemented for metal for now. Last op: {:?}",
+                    storage.op()
+                );
+
+                #[cfg(feature = "metal")]
+                {
+                    let device =
+                        crate::metal_backend::get_lazy_metal_device(storage.device().ordinal())?;
+                    let result = storage.execute(device.clone())?;
+                    device.synchronize()?;
+                    let metal_storage = crate::MetalStorage::new(
+                        result,
+                        device,
+                        storage.shape().elem_count(),
+                        storage.dtype(),
+                    );
+                    from_cpu_storage(&metal_storage.to_cpu_storage()?)
+                }
+            }
         }
     }
 
@@ -2020,6 +2109,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Lazy(_) => todo!(),
         }
     }
 
@@ -2384,6 +2474,9 @@ impl Tensor {
                     Storage::Cuda(dst_storage)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
+                (Storage::Cpu(storage), Device::Lazy(lazy_dev)) => {
+                    Storage::Lazy(lazy_dev.storage_from_cpu_storage(storage)?.into())
+                }
                 _ => {
                     bail!(
                         "not implemented yet, self.device: {:?}, device: {:?}",

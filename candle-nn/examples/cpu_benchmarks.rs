@@ -21,6 +21,7 @@ trait Benchmark {
     const ITERS: usize;
 }
 
+#[derive(Clone)]
 struct Im2Col {
     h_k: usize,
     w_k: usize,

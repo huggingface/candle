@@ -18,6 +18,7 @@ impl Tensor {
             crate::DeviceLocation::Metal { gpu_id } => {
                 format!(", metal:{gpu_id}")
             }
+            crate::DeviceLocation::Lazy => ", lazy".to_owned(),
         };
 
         write!(f, "Tensor[")?;
@@ -545,6 +546,7 @@ impl std::fmt::Display for Tensor {
             crate::DeviceLocation::Metal { gpu_id } => {
                 format!(", metal:{gpu_id}")
             }
+            crate::DeviceLocation::Lazy => ", lazy".to_string(),
         };
 
         write!(

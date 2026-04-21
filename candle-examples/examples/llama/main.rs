@@ -135,8 +135,8 @@ fn main() -> Result<()> {
     } else {
         None
     };
-
     let device = candle_examples::device(args.cpu)?;
+
     let dtype = match args.dtype.as_deref() {
         Some("f16") => DType::F16,
         Some("bf16") => DType::BF16,
@@ -207,6 +207,7 @@ fn main() -> Result<()> {
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         (Llama::load(vb, &config)?, tokenizer_filename, cache, config)
     };
+
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
     let eos_token_id = config.eos_token_id.or_else(|| {
         tokenizer
@@ -265,7 +266,6 @@ fn main() -> Result<()> {
             )?
         };
         index_pos += ctxt.len();
-
         let next_token = logits_processor.sample(&logits)?;
         token_generated += 1;
         tokens.push(next_token);

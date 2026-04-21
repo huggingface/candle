@@ -41,6 +41,7 @@ impl Module for PatchEmbed {
 //   .reshape((b, q_h * q_w, k_h * k_w))
 // Ideally we would perform this operation in place but this is not supported in candle at the
 // moment. We should also investigate using f16 rather than f32.
+#[derive(Clone)]
 struct Add3(usize, usize, usize, usize, usize);
 impl candle::CustomOp3 for Add3 {
     fn name(&self) -> &'static str {

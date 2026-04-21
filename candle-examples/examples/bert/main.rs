@@ -128,11 +128,14 @@ fn main() -> Result<()> {
         let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
         let token_type_ids = token_ids.zeros_like()?;
         println!("Loaded and encoded {:?}", start.elapsed());
+
         for idx in 0..args.n {
             let start = std::time::Instant::now();
             let ys = model.forward(&token_ids, &token_type_ids, None)?;
+
             if idx == 0 {
-                println!("{ys}");
+                let result: Vec<f32> = ys.flatten_all()?.to_vec1()?;
+                println!("{result:?}");
             }
             println!("Took {:?}", start.elapsed());
         }
@@ -209,10 +212,11 @@ fn main() -> Result<()> {
             let e_i = embeddings.get(i)?;
             for j in (i + 1)..n_sentences {
                 let e_j = embeddings.get(j)?;
-                let sum_ij = (&e_i * &e_j)?.sum_all()?.to_scalar::<f32>()?;
-                let sum_i2 = (&e_i * &e_i)?.sum_all()?.to_scalar::<f32>()?;
-                let sum_j2 = (&e_j * &e_j)?.sum_all()?.to_scalar::<f32>()?;
-                let cosine_similarity = sum_ij / (sum_i2 * sum_j2).sqrt();
+                let sum_ij = (&e_i * &e_j)?.sum_all()?;
+                let sum_i2 = (&e_i * &e_i)?.sum_all()?;
+                let sum_j2 = (&e_j * &e_j)?.sum_all()?;
+                let cosine_similarity =
+                    (sum_ij / (sum_i2 * sum_j2)?.sqrt()?)?.to_scalar::<f32>()?;
                 similarities.push((cosine_similarity, i, j))
             }
         }

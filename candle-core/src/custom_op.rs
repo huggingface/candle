@@ -1,10 +1,10 @@
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
-use crate::{CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
+use crate::{CpuStorage, CudaStorage, Layout, LazyStorage, MetalStorage, Result, Shape, Tensor};
 use std::sync::Arc;
 
 /// Unary ops that can be defined in user-land.
-pub trait CustomOp1 {
+pub trait CustomOp1: CustomOp1Clone + Send + Sync {
     // Box<dyn> does not support const yet, so use a function to get the name.
     fn name(&self) -> &'static str;
 
@@ -32,6 +32,13 @@ pub trait CustomOp1 {
         ))
     }
 
+    /// The forward pass tracked in the lazy backend
+    fn lazy_fwd(&self, _: &LazyStorage, _: &Layout) -> Result<(LazyStorage, Shape)> {
+        Err(crate::Error::Lazy(
+            format!("no lazy implementation for {}", self.name()).into(),
+        ))
+    }
+
     /// This function takes as argument the argument `arg` used in the forward pass, the result
     /// produced by the forward operation `res` and the gradient of the result `grad_res`.
     /// The function should return the gradient of the argument.
@@ -40,7 +47,26 @@ pub trait CustomOp1 {
     }
 }
 
-pub trait CustomOp2 {
+pub trait CustomOp1Clone {
+    fn clone_box(&self) -> Box<dyn CustomOp1>;
+}
+
+impl<T> CustomOp1Clone for T
+where
+    T: 'static + CustomOp1 + Clone,
+{
+    fn clone_box(&self) -> Box<dyn CustomOp1> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn CustomOp1> {
+    fn clone(&self) -> Box<dyn CustomOp1> {
+        self.clone_box()
+    }
+}
+
+pub trait CustomOp2: CustomOp2Clone + Send + Sync {
     fn name(&self) -> &'static str;
 
     /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
@@ -81,6 +107,19 @@ pub trait CustomOp2 {
         ))
     }
 
+    /// The forward pass tracked in the lazy backend
+    fn lazy_fwd(
+        &self,
+        _: &LazyStorage,
+        _: &Layout,
+        _: &LazyStorage,
+        _: &Layout,
+    ) -> Result<(LazyStorage, Shape)> {
+        Err(crate::Error::Lazy(
+            format!("no lazy implementation for {}", self.name()).into(),
+        ))
+    }
+
     fn bwd(
         &self,
         _arg1: &Tensor,
@@ -92,7 +131,26 @@ pub trait CustomOp2 {
     }
 }
 
-pub trait CustomOp3 {
+pub trait CustomOp2Clone {
+    fn clone_box(&self) -> Box<dyn CustomOp2>;
+}
+
+impl<T> CustomOp2Clone for T
+where
+    T: 'static + CustomOp2 + Clone,
+{
+    fn clone_box(&self) -> Box<dyn CustomOp2> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn CustomOp2> {
+    fn clone(&self) -> Box<dyn CustomOp2> {
+        self.clone_box()
+    }
+}
+
+pub trait CustomOp3: CustomOp3Clone + Send + Sync {
     fn name(&self) -> &'static str;
 
     /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
@@ -139,6 +197,21 @@ pub trait CustomOp3 {
         ))
     }
 
+    /// The forward pass tracked in the lazy backend
+    fn lazy_fwd(
+        &self,
+        _: &LazyStorage,
+        _: &Layout,
+        _: &LazyStorage,
+        _: &Layout,
+        _: &LazyStorage,
+        _: &Layout,
+    ) -> Result<(LazyStorage, Shape)> {
+        Err(crate::Error::Lazy(
+            format!("no lazy implementation for {}", self.name()).into(),
+        ))
+    }
+
     fn bwd(
         &self,
         _arg1: &Tensor,
@@ -148,6 +221,25 @@ pub trait CustomOp3 {
         _grad_res: &Tensor,
     ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
+    }
+}
+
+pub trait CustomOp3Clone {
+    fn clone_box(&self) -> Box<dyn CustomOp3>;
+}
+
+impl<T> CustomOp3Clone for T
+where
+    T: 'static + CustomOp3 + Clone,
+{
+    fn clone_box(&self) -> Box<dyn CustomOp3> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn CustomOp3> {
+    fn clone(&self) -> Box<dyn CustomOp3> {
+        self.clone_box()
     }
 }
 

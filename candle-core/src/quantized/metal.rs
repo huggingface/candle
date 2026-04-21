@@ -4,6 +4,7 @@ use crate::{DType, MetalDevice, MetalStorage, Result, Shape, D};
 use candle_metal_kernels::metal::Buffer;
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct QMetalStorage {
     dtype: GgmlDType,
     device: MetalDevice,
@@ -39,7 +40,7 @@ impl QMetalStorage {
         let buffer = self.device.allocate_buffer(self.buffer.length())?;
         let blit = self.device.blit_command_encoder()?;
         blit.set_label("blit_to_cpu");
-        blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+        blit.copy(&self.buffer, 0, &buffer, 0, self.buffer.length());
         blit.end_encoding();
         self.device.wait_until_completed()?;
         let mut out = vec![0.0; elem_count];
@@ -340,7 +341,7 @@ impl QMetalStorage {
         {
             let blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+            blit.copy(&self.buffer, 0, &buffer, 0, self.buffer.length());
             blit.end_encoding();
         }
         self.device.wait_until_completed()?;

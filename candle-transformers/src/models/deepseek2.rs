@@ -10,6 +10,7 @@ use candle_nn::{embedding, rms_norm, Activation, Embedding, Linear, Module, RmsN
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
+#[derive(Clone)]
 struct NonZero {}
 
 impl NonZero {

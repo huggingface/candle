@@ -24,6 +24,7 @@ struct Args {
     cpu: bool,
 }
 
+#[derive(Clone)]
 struct LayerNorm {
     eps: f32,
 }
