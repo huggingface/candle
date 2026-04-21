@@ -1,6 +1,7 @@
 //! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
+use crate::lazy::LazyBackend;
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims, ShapeWithOneHole};
@@ -1952,6 +1953,16 @@ impl Tensor {
     /// tensor.
     pub fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
         self.layout.strided_blocks()
+    }
+
+    pub fn execute<LB: LazyBackend>(&self, lb: LB) -> Result<(LB::BufferType, Layout)> {
+        if let Storage::Lazy(storage) = &*self.storage() {
+            let result = storage.execute(lb)?;
+            let layout = storage.layout().clone();
+            Ok((result, layout))
+        } else {
+            bail!("wat")
+        }
     }
 
     /// Returns the data contained in a 1D tensor as a vector of scalar values.

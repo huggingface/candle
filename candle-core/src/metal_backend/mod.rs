@@ -7,7 +7,7 @@ use crate::lazy::CachedPlan;
 use crate::lazy::NodeId;
 use crate::lazy::{
     custom::{CustomOp, LazyCustomOp},
-    BufferId, Executor, LazyAllocator, LazyBuffer,
+    BufferId, LazyAllocator, LazyBackend, LazyBuffer,
     LazyError::*,
     MemoryPlan, Op,
 };
@@ -2597,16 +2597,16 @@ static METAL_DEVICE: LazyLock<MetalDevice> = LazyLock::new(|| MetalDevice::new(0
 // Returns a clone of the shared Metal device used for lazy graph execution.
 // TODO: This is because we use `to_vec1`, `to_scalar`, etc.
 // Soon we will expose new tensor fns specifically targeted at execution of the lazy storage,
-// For example `fn execute<E: Executor>(&self, e: &E) -> Result<(E::BufferType, Layout)>`.
-// At that point we would simply supply the MetalDevice as the Executor, and get a `Result<(MTLBuffer, Layout)>` back.
+// For example `fn execute<LB: LazyBackend>(&self, lb: LB) -> Result<(LB::BufferType, Layout)>`.
+// At that point we would simply supply the MetalDevice as the LazyBackend, and get a `Result<(MTLBuffer, Layout)>` back.
 // It is important that we return `E::BufferType`, because if we were to return a `Tensor` or `Storage` etc we would still
 // be locked into the `Storage` and `Device` enum restrictions.
 //
-// It could also be favorable to supply the `Executor` early, so that we can continuously stream work to it by self-described
+// It could also be favorable to supply the `LazyBackend` early, so that we can continuously stream work to it by self-described
 // parameters.
-// For example an executor may prefer to launch after X amount of work has been defined, while waiting until we explicitly use
+// For example the lazy backend may prefer to launch after X amount of work has been defined, while waiting until we explicitly use
 // `execute` may imply 2X amount of work.
-// Haven't verified but this pattern could require `dyn Executor`.
+// Haven't verified but this pattern could require `dyn LazyBackend`.
 pub fn metal_device() -> MetalDevice {
     METAL_DEVICE.clone()
 }
@@ -2874,7 +2874,7 @@ impl MetalDevice {
     }
 }
 
-impl Executor for MetalDevice {
+impl LazyBackend for MetalDevice {
     type BufferType = Arc<Buffer>;
     type AllocatorType = MetalAllocator;
 

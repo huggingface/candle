@@ -744,7 +744,7 @@ fn apply_backend_agnostic_passes(
     false
 }
 
-pub trait Executor {
+pub trait LazyBackend {
     type BufferType: LazyBuffer;
     type AllocatorType: LazyAllocator<Self::BufferType>;
 
@@ -868,9 +868,9 @@ pub trait Executor {
 }
 
 impl LazyStorage {
-    pub fn execute<E: Executor>(&self, executor: E) -> Result<E::BufferType> {
+    pub fn execute<LB: LazyBackend>(&self, lb: LB) -> Result<LB::BufferType> {
         // TODO: Apply backend agnostic optimizations
-        executor.run(self.clone())
+        lb.run(self.clone())
     }
 }
 
