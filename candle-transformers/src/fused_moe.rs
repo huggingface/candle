@@ -109,18 +109,34 @@ impl FusedMoe {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        let (expert_ids, sorted_token_ids) = if is_prefill {
-            // For long-context (32K+), need to use custom sort kernel
-            // #[cfg(feature = "cuda")]
-            // {
-            //     use attention_rs::sort::ArgSortOp;
-            //     topk_ids.flatten_all()?.sort(true)?
-            // }
-            // #[cfg(not(feature = "cuda"))]
-            topk_ids.flatten_all()?.sort_last_dim(true)?
-        } else {
-            topk_ids.flatten_all()?.sort_last_dim(true)?
+        // Candle's on-GPU bitonic sort_last_dim caps out at ~4096 elements
+        // per row — qwen3-coder hits that at seq ≈ 512 tokens
+        // (seq * num_experts_per_tok = 4096) and returns
+        // CUDA_ERROR_INVALID_VALUE at launch beyond it. The sort here is
+        // a once-per-MoE-layer grouping of (expert, token) pairs; pulling
+        // the ~n_tokens*topk u32 keys through CPU sorts them in a few ms
+        // per layer even at 128K (~1M keys). Decode (seq=1) stays on
+        // the GPU sort path to avoid the host hop at per-token cadence.
+        let (expert_ids, sorted_token_ids) = {
+            let topk_flat = topk_ids.flatten_all()?;
+            let n = topk_flat.dim(0)?;
+            if n > 4096 {
+                let device = topk_flat.device().clone();
+                let flat_cpu = topk_flat.to_device(&candle::Device::Cpu)?;
+                let mut vals: Vec<u32> = flat_cpu.to_vec1()?;
+                let mut idx: Vec<u32> = (0..n as u32).collect();
+                idx.sort_by_key(|&i| vals[i as usize]);
+                vals.sort();
+                let vals_t = Tensor::from_vec(vals, (n,), &candle::Device::Cpu)?
+                    .to_device(&device)?;
+                let idx_t = Tensor::from_vec(idx, (n,), &candle::Device::Cpu)?
+                    .to_device(&device)?;
+                (vals_t, idx_t)
+            } else {
+                topk_flat.sort_last_dim(true)?
+            }
         };
+        let _ = is_prefill; // both paths now gate on size, not the hint
 
         //out (M, top_k, N)
         let gate_up = moe::moe_gemm(
@@ -246,18 +262,34 @@ impl FusedMoeGGUF {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        let (expert_ids, sorted_token_ids) = if is_prefill {
-            // For long-context (32K+), need to use custom sort kernel
-            // #[cfg(feature = "cuda")]
-            // {
-            //     use attention_rs::sort::ArgSortOp;
-            //     topk_ids.flatten_all()?.sort(true)?
-            // }
-            // #[cfg(not(feature = "cuda"))]
-            topk_ids.flatten_all()?.sort_last_dim(true)?
-        } else {
-            topk_ids.flatten_all()?.sort_last_dim(true)?
+        // Candle's on-GPU bitonic sort_last_dim caps out at ~4096 elements
+        // per row — qwen3-coder hits that at seq ≈ 512 tokens
+        // (seq * num_experts_per_tok = 4096) and returns
+        // CUDA_ERROR_INVALID_VALUE at launch beyond it. The sort here is
+        // a once-per-MoE-layer grouping of (expert, token) pairs; pulling
+        // the ~n_tokens*topk u32 keys through CPU sorts them in a few ms
+        // per layer even at 128K (~1M keys). Decode (seq=1) stays on
+        // the GPU sort path to avoid the host hop at per-token cadence.
+        let (expert_ids, sorted_token_ids) = {
+            let topk_flat = topk_ids.flatten_all()?;
+            let n = topk_flat.dim(0)?;
+            if n > 4096 {
+                let device = topk_flat.device().clone();
+                let flat_cpu = topk_flat.to_device(&candle::Device::Cpu)?;
+                let mut vals: Vec<u32> = flat_cpu.to_vec1()?;
+                let mut idx: Vec<u32> = (0..n as u32).collect();
+                idx.sort_by_key(|&i| vals[i as usize]);
+                vals.sort();
+                let vals_t = Tensor::from_vec(vals, (n,), &candle::Device::Cpu)?
+                    .to_device(&device)?;
+                let idx_t = Tensor::from_vec(idx, (n,), &candle::Device::Cpu)?
+                    .to_device(&device)?;
+                (vals_t, idx_t)
+            } else {
+                topk_flat.sort_last_dim(true)?
+            }
         };
+        let _ = is_prefill; // both paths now gate on size, not the hint
 
         let ys = {
             let gate = moe::moe_gemm_gguf(
