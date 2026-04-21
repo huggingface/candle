@@ -9,7 +9,7 @@
 use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
-use candle::{DType, Device, Result, Tensor};
+use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -46,24 +46,42 @@ impl<R: Read + Seek> Gguf<R> {
 
 #[derive(Debug, Clone)]
 struct MlpWeights {
-    gate_proj: QMatMul,
-    up_proj: QMatMul,
+    gate_up_proj: QMatMul,
     down_proj: QMatMul,
+    intermediate_size: usize,
     act_fn: Activation,
     span: tracing::Span,
 }
 
 impl MlpWeights {
     fn new<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
-        let gate_proj = gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?;
-        let up_proj = gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?;
+        let gate_proj = gg.tensor(&format!("{prefix}.ffn_gate.weight"))?;
+        let up_proj = gg.tensor(&format!("{prefix}.ffn_up.weight"))?;
+        let gate_dims = gate_proj.shape().dims();
+        let up_dims = up_proj.shape().dims();
+        if gate_dims.len() != 2 || up_dims.len() != 2 {
+            candle::bail!(
+                "expected 2D SwiGLU weights, got gate {:?} and up {:?}",
+                gate_proj.shape(),
+                up_proj.shape()
+            )
+        }
+        if gate_dims[0] != up_dims[0] {
+            candle::bail!(
+                "expected equal gate/up projection sizes, got {} and {}",
+                gate_dims[0],
+                up_dims[0]
+            )
+        }
+        let intermediate_size = gate_dims[0];
+        let gate_up_proj = QMatMul::from_weights(QTensor::cat(&[&gate_proj, &up_proj], 0)?.into())?;
         let down_proj = gg.qmatmul(&format!("{prefix}.ffn_down.weight"))?;
         let act_fn = Activation::Silu;
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
         Ok(Self {
-            gate_proj,
-            up_proj,
+            gate_up_proj,
             down_proj,
+            intermediate_size,
             act_fn,
             span,
         })
@@ -73,8 +91,11 @@ impl MlpWeights {
 impl Module for MlpWeights {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let gate = self.gate_proj.forward(x)?.apply(&self.act_fn)?;
-        let up = self.up_proj.forward(x)?;
+        let gate_up = self.gate_up_proj.forward(x)?;
+        let gate = gate_up
+            .narrow(D::Minus1, 0, self.intermediate_size)?
+            .apply(&self.act_fn)?;
+        let up = gate_up.narrow(D::Minus1, self.intermediate_size, self.intermediate_size)?;
         let gated = (gate * up)?;
         self.down_proj.forward(&gated)
     }
@@ -429,5 +450,68 @@ impl ModelWeights {
         for layer in &mut self.layers {
             layer.clear_kv_cache();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use candle::quantized::{GgmlDType, QMatMul, QTensor};
+    use candle::{Device, Module, Result, Tensor, D};
+
+    #[test]
+    fn fused_gate_up_qmatmul_matches_split_path() -> Result<()> {
+        let device = Device::Cpu;
+        let hidden_size = 256;
+        let intermediate_size = 512;
+        let batch_size = 3;
+
+        let xs = Tensor::from_vec(
+            (0..batch_size * hidden_size)
+                .map(|i| (i as f32 - 128.) / 128.)
+                .collect(),
+            (batch_size, hidden_size),
+            &device,
+        )?;
+
+        let gate_weight = Tensor::from_vec(
+            (0..intermediate_size * hidden_size)
+                .map(|i| ((i % 97) as f32 - 48.) / 32.)
+                .collect(),
+            (intermediate_size, hidden_size),
+            &device,
+        )?;
+        let up_weight = Tensor::from_vec(
+            (0..intermediate_size * hidden_size)
+                .map(|i| ((i % 89) as f32 - 44.) / 28.)
+                .collect(),
+            (intermediate_size, hidden_size),
+            &device,
+        )?;
+
+        let gate_q = QTensor::quantize(&gate_weight, GgmlDType::Q4K)?;
+        let up_q = QTensor::quantize(&up_weight, GgmlDType::Q4K)?;
+        let fused_q = QTensor::cat(&[&gate_q, &up_q], 0)?;
+        assert_eq!(fused_q.shape().dims(), [intermediate_size * 2, hidden_size]);
+        let gate_bytes = gate_q.data()?;
+        let up_bytes = up_q.data()?;
+        let fused_bytes = fused_q.data()?;
+        assert_eq!(&fused_bytes[..gate_bytes.len()], gate_bytes.as_ref());
+        assert_eq!(&fused_bytes[gate_bytes.len()..], up_bytes.as_ref());
+
+        let gate = QMatMul::from_qtensor(gate_q)?.forward(&xs)?;
+        let up = QMatMul::from_qtensor(up_q)?.forward(&xs)?;
+        let fused = QMatMul::from_qtensor(fused_q)?.forward(&xs)?;
+        let fused_gate = fused.narrow(D::Minus1, 0, intermediate_size)?;
+        let fused_up = fused.narrow(D::Minus1, intermediate_size, intermediate_size)?;
+
+        let gate_diff = (&gate - &fused_gate)?
+            .abs()?
+            .sum_all()?
+            .to_scalar::<f32>()?;
+        let up_diff = (&up - &fused_up)?.abs()?.sum_all()?.to_scalar::<f32>()?;
+        assert_eq!(gate_diff, 0.0);
+        assert_eq!(up_diff, 0.0);
+
+        Ok(())
     }
 }
