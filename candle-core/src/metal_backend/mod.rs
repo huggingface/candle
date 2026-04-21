@@ -1858,11 +1858,24 @@ impl MetalStorage {
             "eq" | "ne" | "le" | "lt" | "ge" | "gt" => DType::U8,
             _ => self.dtype,
         };
+        let lhs_is_scalar = lhs_l.is_scalar_broadcast();
+        let rhs_is_scalar = rhs_l.is_scalar_broadcast();
         let lhs_contiguous = lhs_l.is_contiguous();
         let rhs_contiguous = rhs_l.is_contiguous();
 
+        let kernel = match (lhs_is_scalar, rhs_is_scalar, lhs_contiguous, rhs_contiguous) {
+            (true, true, _, _) => kernel_name(op, &self.dtype, "_scalar"),
+            (true, false, _, true) => kernel_name(op, &self.dtype, "_sc"),
+            (true, false, _, false) => kernel_name(op, &self.dtype, "_rss"),
+            (false, true, true, _) => kernel_name(op, &self.dtype, "_cs"),
+            (false, true, false, _) => kernel_name(op, &self.dtype, "_lss"),
+            (false, false, true, true) => kernel_name(op, &self.dtype, ""),
+            (false, false, true, false) => kernel_name(op, &self.dtype, "_rstrided"),
+            (false, false, false, true) => kernel_name(op, &self.dtype, "_lstrided"),
+            (false, false, false, false) => kernel_name(op, &self.dtype, "_strided"),
+        };
+
         let buffer = if lhs_contiguous && rhs_contiguous {
-            let kernel = kernel_name(op, &self.dtype, "");
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_contiguous(
                 &device.device,
@@ -1878,14 +1891,6 @@ impl MetalStorage {
             .map_err(MetalError::from)?;
             buffer
         } else {
-            let strided_suffix = if lhs_contiguous {
-                "_rstrided"
-            } else if rhs_contiguous {
-                "_lstrided"
-            } else {
-                "_strided"
-            };
-            let kernel = kernel_name(op, &self.dtype, strided_suffix);
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_strided(
                 &device.device,
