@@ -3,7 +3,9 @@ use crate::{
 };
 use objc2::{rc::Retained, runtime::AnyObject, runtime::ProtocolObject};
 use objc2_foundation::NSString;
-use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice};
+use objc2_metal::{
+    MTLCompileOptions, MTLCopyAllDevices, MTLCreateSystemDefaultDevice, MTLDevice,
+};
 use std::{ffi::c_void, ptr};
 
 /// Metal device type classification based on Apple Silicon architecture.
@@ -48,14 +50,52 @@ impl Device {
     }
 
     pub fn all() -> Vec<Self> {
-        MTLCreateSystemDefaultDevice()
-            .into_iter()
+        // Use MTLCopyAllDevices — the real enumeration API. The singular
+        // MTLCreateSystemDefaultDevice() can return nil on some macOS
+        // configurations (reproduced on an M3 Pro running macOS 14.5) even
+        // though a GPU is attached, which would leave `all()` empty and
+        // panic any downstream `.swap_remove(0)`. MTLCopyAllDevices
+        // reliably returns the attached devices.
+        //
+        // objc2-metal's MTLCopyAllDevices is available on every Apple
+        // target: on macOS / Mac Catalyst it calls the native symbol, on
+        // iOS / tvOS / visionOS it is polyfilled as a 0- or 1-element
+        // NSArray around MTLCreateSystemDefaultDevice. No cfg gate needed.
+        //
+        // On multi-GPU Macs MTLCopyAllDevices does not guarantee that the
+        // system-default device sits at index 0. Reorder so it does, to
+        // preserve the long-standing expectation that
+        // `candle-core::MetalDevice::new(0)` gives callers the default
+        // device on dGPU+iGPU or eGPU setups.
+        let mut devices: Vec<Device> = MTLCopyAllDevices()
+            .iter()
             .map(|raw| Device { raw })
-            .collect()
+            .collect();
+        if devices.len() > 1 {
+            if let Some(default) = MTLCreateSystemDefaultDevice() {
+                let default_id = default.registryID();
+                if let Some(pos) = devices
+                    .iter()
+                    .position(|d| d.registry_id() == default_id)
+                {
+                    if pos != 0 {
+                        devices.swap(0, pos);
+                    }
+                }
+            }
+        }
+        devices
     }
 
     pub fn system_default() -> Option<Self> {
-        MTLCreateSystemDefaultDevice().map(|raw| Device { raw })
+        // Mirror the fallback used in `all()`: if MTLCreateSystemDefaultDevice
+        // returns nil on a machine where MTLCopyAllDevices reports a GPU,
+        // fall through to the first enumerated device so callers of
+        // `system_default()` see the same GPU as `all()` and don't
+        // spuriously .unwrap() to a panic.
+        MTLCreateSystemDefaultDevice()
+            .map(|raw| Device { raw })
+            .or_else(|| Device::all().into_iter().next())
     }
 
     pub fn new_buffer(
