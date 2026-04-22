@@ -1,13 +1,7 @@
 // Index loops (for t in 0..d) are intentional for SIMD auto-vectorization.
 #![allow(clippy::needless_range_loop)]
 
-//! Single-batch (B=1) causal attention using loop-bound masking.
-//!
-//! Operates directly on raw f32 slices with precomputed contiguous strides.
-//! No tensor operations in the hot path — all reshaping is done via pointer
-//! arithmetic on the input slices.
-//!
-//! For B>1, the dispatcher in `mod.rs` routes to the packed varlen path.
+// Single-batch (B=1) causal attention using loop-bound masking.
 
 use candle::{DType, Device, Result, Storage, Tensor, WithDType};
 use rayon::prelude::*;

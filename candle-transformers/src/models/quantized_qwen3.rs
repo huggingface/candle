@@ -165,11 +165,8 @@ struct AttentionWeights {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    /// Standard KV cache — used on GPU fallback path
     kv_cache: Option<ConcatKvCache>,
-    /// Interleaved tensor cache — used on CPU for flash prefill
     interleaved_cache: Option<InterleavedKvCache>,
-    /// Raw pre-allocated cache — used on CPU for flash decode
     raw_cache: Option<RawInterleavedKvCache>,
     span_attn: tracing::Span,
 }

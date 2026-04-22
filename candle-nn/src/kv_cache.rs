@@ -977,8 +977,6 @@ mod tests {
     }
 }
 
-/// KV cache that stores K and V interleaved per position.
-///
 /// Stores a single tensor with shape `(S, H_kv, 2*D)` where the first D
 /// elements are K and the next D are V. This sequence-first layout means:
 /// - The kernel reads `kv[pos * H_kv * 2D + head * 2D .. + 2D]` directly
@@ -989,9 +987,7 @@ mod tests {
 /// and are transposed+interleaved on append.
 #[derive(Debug, Clone)]
 pub struct InterleavedKvCache {
-    /// Combined KV tensor: (S_total, H_kv, 2*D) — sequence-first
     kv: Option<Tensor>,
-    /// Head dimension (D)
     head_dim: usize,
 }
 
@@ -1011,11 +1007,8 @@ impl InterleavedKvCache {
         self.kv.is_none()
     }
 
-    /// Append K and V tensors.
-    ///
-    /// Input: K `(B, H_kv, S_new, D)`, V `(B, H_kv, S_new, D)` where B must be 1.
-    /// Internally converts to `(S_new, H_kv, 2*D)` and concatenates on dim 0.
-    /// Returns: combined KV tensor `(S_total, H_kv, 2*D)`.
+    /// Append K, V of shape `(1, H_kv, S_new, D)`. Batch must be 1.
+    /// Returns the full cache `(S_total, H_kv, 2*D)`.
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<Tensor> {
         // Detach to break BackpropOp chain - KV caches are inference-only.
         let k_seq = k.squeeze(0)?.transpose(0, 1)?.contiguous()?.detach();
@@ -1044,22 +1037,13 @@ impl InterleavedKvCache {
     }
 }
 
-/// Pre-allocated raw f32 interleaved KV cache.
-///
-/// Stores K and V interleaved in a flat `Vec<f32>` with layout
-/// `(S, H_kv, 2*D)`. No tensor allocations on append — just memcpy
-/// into the pre-allocated buffer.
-///
-/// The decode kernel reads directly from `self.data()` with zero overhead.
+// Work with KV cache directly in interleaved space.
 #[derive(Debug, Clone)]
 pub struct RawInterleavedKvCache {
-    /// Flat buffer: capacity = max_seq * h_kv * 2 * d
     buf: Vec<f32>,
     h_kv: usize,
     d: usize,
-    /// Stride per position: h_kv * 2 * d
     pos_stride: usize,
-    /// Current number of positions written
     len: usize,
 }
 

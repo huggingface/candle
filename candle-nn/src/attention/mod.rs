@@ -1,18 +1,3 @@
-//! Attention implementations for Candle.
-//!
-//! ```ignore
-//! use candle_nn::attention::{flash_attn, AttnMask};
-//!
-//! // Causal (optimized loop-bound path)
-//! let out = flash_attn::<f32>(&q, &k, &v, scale, AttnMask::causal(), None, None)?;
-//!
-//! // With KV cache offset
-//! let out = flash_attn::<f32>(&q, &k, &v, scale, AttnMask::causal_with_offset(cache_len), None, None)?;
-//!
-//! // Custom mask tensor
-//! let out = flash_attn::<f32>(&q, &k, &v, scale, AttnMask::Mask(mask), None, None)?;
-//! ```
-
 pub mod cpu_flash;
 pub mod varlen;
 
@@ -22,11 +7,6 @@ pub use cpu_flash::flash_attn;
 pub use cpu_flash::varlen::flash_attn_varlen_cpu;
 pub use varlen::flash_attn_varlen_unfused;
 
-/// Attention mask specification.
-///
-/// - `None`: Full bidirectional attention
-/// - `Causal`: Loop-bound masking (skips ~50% of work, no tensor allocation)
-/// - `Mask`: Explicit tensor for arbitrary patterns (sliding window, block-sparse)
 #[derive(Debug, Clone, Default)]
 pub enum AttnMask {
     #[default]
