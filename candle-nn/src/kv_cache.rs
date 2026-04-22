@@ -723,9 +723,7 @@ impl ConcatKvCache {
     /// Tuple of `(full_k, full_v)` containing all cached keys and values,
     /// including the newly appended data.
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
-        // Detach inputs to break BackpropOp chain — KV caches are inference-only,
-        // no gradients flow through them. Without detach, Tensor::cat stores
-        // references to prior cache buffers in the op graph, causing O(N²) memory.
+        // Detach inputs to break BackpropOp chain - KV caches are inference-only.
         let k = k.contiguous()?.detach();
         let v = v.contiguous()?.detach();
 
@@ -1019,16 +1017,13 @@ impl InterleavedKvCache {
     /// Internally converts to `(S_new, H_kv, 2*D)` and concatenates on dim 0.
     /// Returns: combined KV tensor `(S_total, H_kv, 2*D)`.
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-        // Detach inputs to break BackpropOp chain — prevents O(N²) memory leak.
-        // (B, H_kv, S, D) → squeeze B → (H_kv, S, D) → transpose → (S, H_kv, D)
+        // Detach to break BackpropOp chain - KV caches are inference-only.
         let k_seq = k.squeeze(0)?.transpose(0, 1)?.contiguous()?.detach();
         let v_seq = v.squeeze(0)?.transpose(0, 1)?.contiguous()?.detach();
-        // Cat along last dim: (S, H_kv, D) + (S, H_kv, D) → (S, H_kv, 2*D)
         let kv_new = Tensor::cat(&[&k_seq, &v_seq], 2)?.detach();
 
         self.kv = Some(match &self.kv {
             None => kv_new,
-            // Concatenate on dim 0 (sequence dimension)
             Some(kv_cache) => Tensor::cat(&[kv_cache, &kv_new], 0)?.detach(),
         });
 
