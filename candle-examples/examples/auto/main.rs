@@ -13,7 +13,7 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle::{DType, Device, Tensor};
+use candle::Tensor;
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_transformers::auto::{AutoModelForCausalLM, AutoModelOptions};
 use candle_transformers::generation::LogitsProcessor;
@@ -53,7 +53,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = true,
+        default_value_t = false,
         long_help = "Run on CPU by default otherwise on GPU"
     )]
     cpu: bool,
@@ -67,17 +67,8 @@ fn main() -> Result<()> {
 
     println!("Loading model: {}", args.model);
 
-    let device = if args.cpu {
-        Device::Cpu
-    } else {
-        Device::cuda_if_available(0)?
-    };
-
-    let dtype = if device.is_cuda() {
-        DType::BF16
-    } else {
-        DType::F32
-    };
+    let device = candle_examples::device(args.cpu)?;
+    let dtype = device.bf16_default_to_f32();
 
     // Load tokenizer
     let api = Api::new()?;
@@ -116,9 +107,16 @@ fn main() -> Result<()> {
     let mut all_tokens = tokens.clone();
     let mut generated = 0;
 
+    let mut start_gen = std::time::Instant::now();
+
     // Generate tokens
     for index in 0..args.max_tokens {
         let context_size = if index == 0 { tokens.len() } else { 1 };
+
+        if index == 1 {
+            start_gen = std::time::Instant::now()
+        }
+
         let start_pos = all_tokens.len().saturating_sub(context_size);
         let input = Tensor::new(&all_tokens[start_pos..], &device)?.unsqueeze(0)?;
 
@@ -163,13 +161,18 @@ fn main() -> Result<()> {
             }
         }
     }
+    let dt = start_gen.elapsed();
 
     // Flush remaining tokens
     if let Some(text) = token_output.decode_rest().map_err(E::msg)? {
         print!("{text}");
     }
     println!();
-    println!("\n[Generated {} tokens]", generated);
+    println!(
+        "\n[Generated {} tokens ({} token/s)]",
+        generated,
+        (generated - 1) as f64 / dt.as_secs_f64(),
+    );
 
     Ok(())
 }
