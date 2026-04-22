@@ -789,7 +789,7 @@ impl GradStore {
                     let new_grad = if do_not_detach {
                         new_grad
                     } else {
-                        new_grad.detach()?
+                        new_grad.detach()
                     };
 
                     *entry.get_mut() = new_grad;
