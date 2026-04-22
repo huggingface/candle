@@ -1,10 +1,12 @@
+//! Activation Functions
+//!
 use candle::{Result, Tensor};
-use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Activation {
     #[default]
+    #[serde(alias = "gelu")]
     Gelu,
     #[serde(alias = "gelu_new")]
     NewGelu,
@@ -16,9 +18,12 @@ pub enum Activation {
     HardSigmoid,
     Swiglu,
     Swish,
+    Mish,
     HardSwish,
     Elu(f64),
     LeakyRelu(f64),
+    #[serde(alias = "gelu_pytorch_tanh")]
+    GeluPytorchTanh,
 }
 
 impl super::Module for Activation {
@@ -30,14 +35,16 @@ impl super::Module for Activation {
             Self::Relu => xs.relu(),
             Self::Relu2 => xs.relu()?.sqr(),
             Self::Relu6 => xs.clamp(0f32, 6f32),
-            Self::Silu => crate::ops::silu(xs),
+            Self::Silu => xs.silu(),
             Self::Sigmoid => crate::ops::sigmoid(xs),
             Self::HardSigmoid => crate::ops::hard_sigmoid(xs),
             Self::Swiglu => crate::ops::swiglu(xs),
             Self::Swish => xs * crate::ops::sigmoid(xs)?,
             Self::HardSwish => xs * crate::ops::hard_sigmoid(xs)?,
+            Self::Mish => crate::ops::mish(xs),
             &Self::Elu(alpha) => xs.elu(alpha),
             &Self::LeakyRelu(negative_slope) => crate::ops::leaky_relu(xs, negative_slope),
+            Self::GeluPytorchTanh => xs.gelu(),
         }
     }
 }
@@ -66,6 +73,8 @@ impl candle::Module for PReLU {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let weight = if self.is_scalar {
             self.weight.reshape(())?
+        } else if xs.shape() == self.weight.shape() {
+            self.weight.clone()
         } else if xs.rank() >= 2 {
             let num_channels = xs.dim(1)?;
             let num_weights = self.weight.elem_count();
@@ -73,7 +82,7 @@ impl candle::Module for PReLU {
                 candle::bail!("error in prelu: unexpected number of channels for the input, got {num_channels}, weight dim is {num_weights}")
             }
             let mut s = vec![1; xs.rank()];
-            s[1] = self.weight.elem_count();
+            s[1] = num_weights;
             self.weight.reshape(s)?
         } else {
             self.weight.clone()
@@ -89,9 +98,9 @@ impl candle::Module for PReLU {
 /// # Arguments
 ///
 /// * `num_channels` - The number of channels. Use `None` to have as single trainable value and
-/// `Some` for a 1D vector with the appropriate number of channels. When applying the `forward`
-/// function, the input tensor shape `s` should either be one dimension with this number of
-/// channels or if `s.len() >= 2` it should have `s[1]` equal to this number.
+///   `Some` for a 1D vector with the appropriate number of channels. When applying the `forward`
+///   function, the input tensor shape `s` should either be one dimension with this number of
+///   channels or if `s.len() >= 2` it should have `s[1]` equal to this number.
 pub fn prelu(num_channels: Option<usize>, vs: crate::VarBuilder) -> Result<PReLU> {
     let init_ws = crate::init::Init::Const(0.25);
     // When using a scalar weight, the PyTorch encoding is to use a 1d vector of length 1.

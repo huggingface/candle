@@ -1,7 +1,18 @@
 //! VGG-16 model implementation.
 //!
-//! See Very Deep Convolutional Networks for Large-Scale Image Recognition
-//! <https://arxiv.org/abs/1409.1556>
+//! VGG-16 is a convolutional neural network architecture. It consists of 13
+//! convolutional layers followed by 3 fully connected layers.
+//!
+//! Key characteristics:
+//! - Conv layers with 3x3 filters
+//! - Max pooling after every 2-3 conv layers
+//! - Three fully connected layers of 4096, 4096, 1000 units
+//! - ReLU activation and dropout
+//!
+//! References:
+//! - [Very Deep Convolutional Networks for Large-Scale Image Recognition](https://arxiv.org/abs/1409.1556)
+//!
+
 use candle::{ModuleT, Result, Tensor};
 use candle_nn::{FuncT, VarBuilder};
 
@@ -54,8 +65,7 @@ impl ModuleT for Vgg<'_> {
 fn conv2d_block(convs: &[(usize, usize, &str)], vb: &VarBuilder) -> Result<FuncT<'static>> {
     let layers = convs
         .iter()
-        .enumerate()
-        .map(|(_, &(in_c, out_c, name))| {
+        .map(|&(in_c, out_c, name)| {
             candle_nn::conv2d(
                 in_c,
                 out_c,

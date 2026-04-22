@@ -43,43 +43,22 @@ impl From<usize> for Shape {
     }
 }
 
-impl From<(usize,)> for Shape {
-    fn from(d1: (usize,)) -> Self {
-        Self(vec![d1.0])
+macro_rules! impl_from_tuple {
+    ($tuple:ty, $($index:tt),+) => {
+        impl From<$tuple> for Shape {
+            fn from(d: $tuple) -> Self {
+                Self(vec![$(d.$index,)+])
+            }
+        }
     }
 }
 
-impl From<(usize, usize)> for Shape {
-    fn from(d12: (usize, usize)) -> Self {
-        Self(vec![d12.0, d12.1])
-    }
-}
-
-impl From<(usize, usize, usize)> for Shape {
-    fn from(d123: (usize, usize, usize)) -> Self {
-        Self(vec![d123.0, d123.1, d123.2])
-    }
-}
-
-impl From<(usize, usize, usize, usize)> for Shape {
-    fn from(d1234: (usize, usize, usize, usize)) -> Self {
-        Self(vec![d1234.0, d1234.1, d1234.2, d1234.3])
-    }
-}
-
-impl From<(usize, usize, usize, usize, usize)> for Shape {
-    fn from(d12345: (usize, usize, usize, usize, usize)) -> Self {
-        Self(vec![d12345.0, d12345.1, d12345.2, d12345.3, d12345.4])
-    }
-}
-
-impl From<(usize, usize, usize, usize, usize, usize)> for Shape {
-    fn from(d123456: (usize, usize, usize, usize, usize, usize)) -> Self {
-        Self(vec![
-            d123456.0, d123456.1, d123456.2, d123456.3, d123456.4, d123456.5,
-        ])
-    }
-}
+impl_from_tuple!((usize,), 0);
+impl_from_tuple!((usize, usize), 0, 1);
+impl_from_tuple!((usize, usize, usize), 0, 1, 2);
+impl_from_tuple!((usize, usize, usize, usize), 0, 1, 2, 3);
+impl_from_tuple!((usize, usize, usize, usize, usize), 0, 1, 2, 3, 4);
+impl_from_tuple!((usize, usize, usize, usize, usize, usize), 0, 1, 2, 3, 4, 5);
 
 impl From<Vec<usize>> for Shape {
     fn from(dims: Vec<usize>) -> Self {
@@ -142,6 +121,12 @@ impl Shape {
         &self.0
     }
 
+    /// The dimension size for a specified dimension index.
+    pub fn dim<D: Dim>(&self, dim: D) -> Result<usize> {
+        let dim = dim.to_index(self, "dim")?;
+        Ok(self.dims()[dim])
+    }
+
     /// The total number of elements, this is the product of all dimension sizes.
     pub fn elem_count(&self) -> usize {
         self.0.iter().product()
@@ -171,7 +156,7 @@ impl Shape {
         }
         let mut acc = 1;
         for (&stride, &dim) in stride.iter().zip(self.0.iter()).rev() {
-            if stride != acc {
+            if dim > 1 && stride != acc {
                 return false;
             }
             acc *= dim;
@@ -186,7 +171,7 @@ impl Shape {
         }
         let mut acc = 1;
         for (&stride, &dim) in stride.iter().zip(self.0.iter()) {
-            if stride != acc {
+            if dim > 1 && stride != acc {
                 return false;
             }
             acc *= dim;
@@ -304,6 +289,7 @@ impl Dim for usize {
 pub enum D {
     Minus1,
     Minus2,
+    Minus(usize),
 }
 
 impl D {
@@ -311,6 +297,7 @@ impl D {
         let dim = match self {
             Self::Minus1 => -1,
             Self::Minus2 => -2,
+            Self::Minus(u) => -(*u as i32),
         };
         Error::DimOutOfRange {
             shape: shape.clone(),
@@ -327,6 +314,7 @@ impl Dim for D {
         match self {
             Self::Minus1 if rank >= 1 => Ok(rank - 1),
             Self::Minus2 if rank >= 2 => Ok(rank - 2),
+            Self::Minus(u) if *u > 0 && rank >= *u => Ok(rank - *u),
             _ => Err(self.out_of_range(shape, op)),
         }
     }
@@ -336,6 +324,7 @@ impl Dim for D {
         match self {
             Self::Minus1 => Ok(rank),
             Self::Minus2 if rank >= 1 => Ok(rank - 1),
+            Self::Minus(u) if *u > 0 && rank + 1 >= *u => Ok(rank + 1 - *u),
             _ => Err(self.out_of_range(shape, op)),
         }
     }
@@ -498,7 +487,7 @@ fn hole_size(el_count: usize, prod_d: usize, s: &dyn std::fmt::Debug) -> Result<
     if prod_d == 0 {
         crate::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
     }
-    if el_count % prod_d != 0 {
+    if !el_count.is_multiple_of(prod_d) {
         crate::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
     }
     Ok(el_count / prod_d)
@@ -625,5 +614,21 @@ mod tests {
         assert_eq!(shape.stride_contiguous(), [1337, 1]);
         let shape = Shape::from((299, 792, 458));
         assert_eq!(shape.stride_contiguous(), [458 * 792, 458, 1]);
+    }
+
+    #[test]
+    fn test_from_tuple() {
+        let shape = Shape::from((2,));
+        assert_eq!(shape.dims(), &[2]);
+        let shape = Shape::from((2, 3));
+        assert_eq!(shape.dims(), &[2, 3]);
+        let shape = Shape::from((2, 3, 4));
+        assert_eq!(shape.dims(), &[2, 3, 4]);
+        let shape = Shape::from((2, 3, 4, 5));
+        assert_eq!(shape.dims(), &[2, 3, 4, 5]);
+        let shape = Shape::from((2, 3, 4, 5, 6));
+        assert_eq!(shape.dims(), &[2, 3, 4, 5, 6]);
+        let shape = Shape::from((2, 3, 4, 5, 6, 7));
+        assert_eq!(shape.dims(), &[2, 3, 4, 5, 6, 7]);
     }
 }

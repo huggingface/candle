@@ -128,14 +128,14 @@ impl PyONNXModel {
     }
 
     #[getter]
-    /// The producer of the model.  
-    /// &RETURNS&: str      
+    /// The producer of the model.
+    /// &RETURNS&: str
     fn producer_name(&self) -> String {
         self.0.producer_name.clone()
     }
 
     #[getter]
-    /// The version of the producer of the model.       
+    /// The version of the producer of the model.
     /// &RETURNS&: str
     fn producer_version(&self) -> String {
         self.0.producer_version.clone()

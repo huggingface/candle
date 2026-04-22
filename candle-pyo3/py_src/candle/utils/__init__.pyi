@@ -33,9 +33,7 @@ def has_mkl() -> bool:
     pass
 
 @staticmethod
-def load_ggml(
-    path: Union[str, PathLike], device: Optional[Device] = None
-) -> Tuple[Dict[str, QTensor], Dict[str, Any], List[str]]:
+def load_ggml(path, device=None) -> Tuple[Dict[str, QTensor], Dict[str, Any], List[str]]:
     """
     Load a GGML file. Returns a tuple of three objects: a dictionary mapping tensor names to tensors,
     a dictionary mapping hyperparameter names to hyperparameter values, and a vocabulary.
@@ -43,9 +41,7 @@ def load_ggml(
     pass
 
 @staticmethod
-def load_gguf(
-    path: Union[str, PathLike], device: Optional[Device] = None
-) -> Tuple[Dict[str, QTensor], Dict[str, Any]]:
+def load_gguf(path, device=None) -> Tuple[Dict[str, QTensor], Dict[str, Any]]:
     """
     Loads a GGUF file. Returns a tuple of two dictionaries: the first maps tensor names to tensors,
     and the second maps metadata keys to metadata values.
@@ -60,9 +56,9 @@ def load_safetensors(path: Union[str, PathLike]) -> Dict[str, Tensor]:
     pass
 
 @staticmethod
-def save_gguf(path: Union[str, PathLike], tensors: Dict[str, QTensor], metadata: Dict[str, Any]):
+def save_gguf(path, tensors, metadata):
     """
-    Save quanitzed tensors and metadata to a GGUF file.
+    Save quantized tensors and metadata to a GGUF file.
     """
     pass
 

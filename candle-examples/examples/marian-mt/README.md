@@ -18,21 +18,19 @@ I know you are waiting for me. I will go through the forest, I will go through t
 mountain. I cannot stay far from you any longer.</s>
 ```
 
+### Changing model and language pairs
+
+```bash
+$ cargo run --example marian-mt --release -- --text "hello, how are you." --which base --language-pair en-zh
+
+你好,你好吗?
+```
+
 ## Generating the tokenizer.json files
 
-You can use the following script to generate the `tokenizer.json` config files
-from the hf-hub repos. This requires the `tokenizers` and `sentencepiece`
-packages to be install and use the `convert_slow_tokenizer.py` script from this
-directory.
-
-```python
-from convert_slow_tokenizer import MarianConverter
-from transformers import AutoTokenizer
-
-
-tokenizer = AutoTokenizer.from_pretrained("Helsinki-NLP/opus-mt-fr-en", use_fast=False)
-fast_tokenizer = MarianConverter(tokenizer, index=0).converted()
-fast_tokenizer.save(f"tokenizer-marian-base-fr.json")
-fast_tokenizer = MarianConverter(tokenizer, index=1).converted()
-fast_tokenizer.save(f"tokenizer-marian-base-en.json")
-```
+The tokenizer for each `marian-mt` model was trained independently, 
+meaning each new model needs unique tokenizer encoders and decoders.
+You can use the `./python/convert_slow_tokenizer.py` script in this directory to generate 
+the `tokenizer.json` config files from the hf-hub repos.
+The script requires all the packages in `./python/requirements.txt` or `./python/uv.lock` 
+to be installed, and has only been tested for `python 3.12.7`.  

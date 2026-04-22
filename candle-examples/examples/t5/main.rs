@@ -12,11 +12,22 @@ use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 const DTYPE: DType = DType::F32;
+
+#[derive(Clone, Debug, Copy, ValueEnum)]
+enum Which {
+    T5Base,
+    T5Small,
+    T5Large,
+    T5_3B,
+    Mt5Base,
+    Mt5Small,
+    Mt5Large,
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -35,6 +46,15 @@ struct Args {
 
     #[arg(long)]
     revision: Option<String>,
+
+    #[arg(long)]
+    model_file: Option<String>,
+
+    #[arg(long)]
+    tokenizer_file: Option<String>,
+
+    #[arg(long)]
+    config_file: Option<String>,
 
     /// Enable decoding.
     #[arg(long)]
@@ -71,6 +91,10 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
+
+    /// The model to be used.
+    #[arg(long, default_value = "t5-small")]
+    which: Which,
 }
 
 struct T5ModelBuilder {
@@ -82,8 +106,17 @@ struct T5ModelBuilder {
 impl T5ModelBuilder {
     pub fn load(args: &Args) -> Result<(Self, Tokenizer)> {
         let device = candle_examples::device(args.cpu)?;
-        let default_model = "t5-small".to_string();
-        let default_revision = "refs/pr/15".to_string();
+        let (default_model, default_revision) = match args.which {
+            Which::T5Base => ("t5-base", "main"),
+            Which::T5Small => ("t5-small", "refs/pr/15"),
+            Which::T5Large => ("t5-large", "main"),
+            Which::T5_3B => ("t5-3b", "main"),
+            Which::Mt5Base => ("google/mt5-base", "refs/pr/5"),
+            Which::Mt5Small => ("google/mt5-small", "refs/pr/6"),
+            Which::Mt5Large => ("google/mt5-large", "refs/pr/2"),
+        };
+        let default_model = default_model.to_string();
+        let default_revision = default_revision.to_string();
         let (model_id, revision) = match (args.model_id.to_owned(), args.revision.to_owned()) {
             (Some(model_id), Some(revision)) => (model_id, revision),
             (Some(model_id), None) => (model_id, "main".to_string()),
@@ -93,14 +126,35 @@ impl T5ModelBuilder {
 
         let repo = Repo::with_revision(model_id.clone(), RepoType::Model, revision);
         let api = Api::new()?;
-        let api = api.repo(repo);
-        let config_filename = api.get("config.json")?;
-        let tokenizer_filename = api.get("tokenizer.json")?;
-        let weights_filename = if model_id == "google/flan-t5-xxl" || model_id == "google/flan-ul2"
-        {
-            candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
-        } else {
-            vec![api.get("model.safetensors")?]
+        let repo = api.repo(repo);
+        let config_filename = match &args.config_file {
+            None => repo.get("config.json")?,
+            Some(f) => f.into(),
+        };
+        let tokenizer_filename = match &args.tokenizer_file {
+            None => match args.which {
+                Which::Mt5Base => api
+                    .model("lmz/mt5-tokenizers".into())
+                    .get("mt5-base.tokenizer.json")?,
+                Which::Mt5Small => api
+                    .model("lmz/mt5-tokenizers".into())
+                    .get("mt5-small.tokenizer.json")?,
+                Which::Mt5Large => api
+                    .model("lmz/mt5-tokenizers".into())
+                    .get("mt5-large.tokenizer.json")?,
+                _ => repo.get("tokenizer.json")?,
+            },
+            Some(f) => f.into(),
+        };
+        let weights_filename = match &args.model_file {
+            Some(f) => f.split(',').map(|v| v.into()).collect::<Vec<_>>(),
+            None => {
+                if model_id == "google/flan-t5-xxl" || model_id == "google/flan-ul2" {
+                    candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+                } else {
+                    vec![repo.get("model.safetensors")?]
+                }
+            }
         };
         let config = std::fs::read_to_string(config_filename)?;
         let mut config: t5::Config = serde_json::from_str(&config)?;

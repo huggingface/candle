@@ -46,7 +46,8 @@ The default scheduler for the XL Turbo version is the Euler Ancestral scheduler.
 - `--cpu`: use the cpu rather than the gpu (much slower).
 - `--height`, `--width`: set the height and width for the generated image.
 - `--n-steps`: the number of steps to be used in the diffusion process.
-- `--num-samples`: the number of samples to generate.
+- `--num-samples`: the number of samples to generate iteratively.
+- `--bsize`: the numbers of samples to generate simultaneously.
 - `--final-image`: the filename for the generated image(s).
 
 ### Using flash-attention
@@ -57,7 +58,7 @@ The downside is some long compilation time. You can set the
 `/home/user/.candle` to ensures that the compilation artifacts are properly
 cached.
 
-Enabling flash-attention requires both a feature flag, `--feature flash-attn`
+Enabling flash-attention requires both a feature flag, `--features flash-attn`
 and using the command line flag `--use-flash-attn`.
 
 Note that flash-attention-v2 is only compatible with Ampere, Ada, or Hopper GPUs

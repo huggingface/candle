@@ -55,7 +55,7 @@ const SEP_TOKEN_ID: u32 = 102;
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 384, 384). OpenAI normalization is applied.
 pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(384, 384, image::imageops::FilterType::Triangle);

@@ -12,8 +12,8 @@ extern "C" __global__ void FN_NAME( \
     const size_t *dims = dims_and_strides; \
     const size_t *lhs_strides = dims_and_strides + 1 * num_dims; \
     const size_t *rhs_strides = dims_and_strides + 2 * num_dims; \
-    bool lhs_cont = is_contiguous(num_dims, dims, lhs_strides); \
-    bool rhs_cont = is_contiguous(num_dims, dims, rhs_strides); \
+    bool lhs_cont = dims_and_strides == nullptr || is_contiguous(num_dims, dims, lhs_strides); \
+    bool rhs_cont = dims_and_strides == nullptr || is_contiguous(num_dims, dims, rhs_strides); \
     if (lhs_cont && rhs_cont) { \
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
             TYPENAME x = lhs[i]; \

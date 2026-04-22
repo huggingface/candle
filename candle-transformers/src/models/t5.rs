@@ -1,11 +1,95 @@
-// T5 Text Model
-// https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
+//! T5 model implementation.
+//!
+//! T5 (Text-to-Text Transfer Transformer) is a unified text-to-text transformer model.
+//! This implementation follows the original model architecture.
+//!
+//! Key characteristics:
+//! - Text-to-text framework
+//! - Relative positional embeddings
+//! - T5-specific layer normalization
+//! - Encoder-decoder architecture
+//! - Support for sequence-to-sequence tasks
+//!
+//! References:
+//! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm)
+//! - 💻[GH Model](https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py)
+//! - 🤗 [HF Link](https://huggingface.co/docs/transformers/model_doc/t5)
+//! - 📝 [T5 Paper](https://arxiv.org/abs/1910.10683)
+//!
+//! # Encoder-decoder example:
+//!
+//! ```bash
+//! cargo run --example t5 --release -- \
+//!   --model-id "t5-small" \
+//!   --prompt "translate to German: A beautiful candle." \
+//!   --decode
+//! > ...
+//! >  Eine schöne Kerze.
+//! > 9 tokens generated (2.42 token/s)
+//! ```
+//!
+//! Variants such as [flan-t5](https://huggingface.co/google/flan-t5-small), [flan-ul2](https://huggingface.co/google/flan-ul2) (with `--revision "refs/pr/25"`), and [Co-EdIT](https://huggingface.co/grammarly/coedit-large) are also supported.
+//!
+//! # Translation with MADLAD
+//!
+//!
+//! [MADLAD-400](https://arxiv.org/abs/2309.04662) is a series of multilingual machine translation T5 models trained on 250 billion tokens covering over 450 languages using publicly available data. These models are competitive with significantly larger models.
+//!
+//! ```bash
+//! cargo run --example t5 --release  -- \
+//!   --model-id "jbochi/madlad400-3b-mt" \
+//!   --prompt "<2de> How are you, my friend?" \
+//!   --decode --temperature 0
+//! ...
+//!  Wie geht es dir, mein Freund?
+//! ```
+//!
+//! ## Sentence embedding example
+//!
+//! ```bash
+//! cargo run --example t5 --release -- \
+//!   --model-id "t5-small" --prompt "A beautiful candle."
+//! ...
+//! [[[ 0.0515, -0.0541, -0.0761, ..., -0.0392,  0.1511, -0.0265],
+//!   [-0.0974,  0.0998, -0.1659, ..., -0.2450,  0.1738, -0.0164],
+//!   [ 0.0624, -0.1024,  0.0430, ..., -0.1388,  0.0564, -0.2962],
+//!   [-0.0389, -0.1173,  0.0026, ...,  0.1064, -0.1065,  0.0990],
+//!   [ 0.1300,  0.0027, -0.0326, ...,  0.0026, -0.0317,  0.0851]]]
+//! Tensor[[1, 5, 512], f32]
+//! Took 303.766583ms
+//! ```
 
-use crate::models::with_tracing::{linear_no_bias, Embedding, Linear};
+use crate::models::with_tracing::Embedding;
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub struct Linear {
+    weight: Tensor,
+    span: tracing::Span,
+}
+
+pub fn linear_no_bias(d1: usize, d2: usize, vb: VarBuilder) -> Result<Linear> {
+    let init_ws = candle_nn::init::DEFAULT_KAIMING_NORMAL;
+    let weight = vb.get_with_hints((d2, d1), "weight", init_ws)?;
+    let span = tracing::span!(tracing::Level::TRACE, "linear");
+    Ok(Linear { weight, span })
+}
+
+impl Module for Linear {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let weight = self.weight.to_dtype(xs.dtype())?;
+        let w = match *xs.dims() {
+            [b1, b2, _, _] => weight.broadcast_left((b1, b2))?.t()?,
+            [bsize, _, _] => weight.broadcast_left(bsize)?.t()?,
+            _ => weight.t()?,
+        };
+        xs.matmul(&w)
+    }
+}
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -70,26 +154,26 @@ where
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
-    vocab_size: usize,
-    d_model: usize,
-    d_kv: usize,
-    d_ff: usize,
-    num_layers: usize,
-    num_decoder_layers: Option<usize>,
-    num_heads: usize,
-    relative_attention_num_buckets: usize,
+    pub vocab_size: usize,
+    pub d_model: usize,
+    pub d_kv: usize,
+    pub d_ff: usize,
+    pub num_layers: usize,
+    pub num_decoder_layers: Option<usize>,
+    pub num_heads: usize,
+    pub relative_attention_num_buckets: usize,
     #[serde(default = "default_relative_attention_max_distance")]
-    relative_attention_max_distance: usize,
-    dropout_rate: f64,
-    layer_norm_epsilon: f64,
-    initializer_factor: f64,
+    pub relative_attention_max_distance: usize,
+    pub dropout_rate: f64,
+    pub layer_norm_epsilon: f64,
+    pub initializer_factor: f64,
     #[serde(default, deserialize_with = "deserialize_feed_forward_proj_activation")]
-    feed_forward_proj: ActivationWithOptionalGating,
+    pub feed_forward_proj: ActivationWithOptionalGating,
     #[serde(default = "default_tie_word_embeddings")]
-    tie_word_embeddings: bool,
+    pub tie_word_embeddings: bool,
     #[serde(default = "default_is_decoder")]
-    is_decoder: bool,
-    is_encoder_decoder: bool,
+    pub is_decoder: bool,
+    pub is_encoder_decoder: bool,
     #[serde(default = "default_use_cache")]
     pub use_cache: bool,
     pub pad_token_id: usize,
@@ -183,9 +267,9 @@ impl Module for T5LayerNorm {
         let xs_f32 = xs.to_dtype(DType::F32)?;
         // variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
         let variance = xs_f32.sqr()?.mean_keepdim(D::Minus1)?;
-        let xs = xs.broadcast_div(&(variance + self.variance_epsilon)?.sqrt()?)?;
+        let xs = xs_f32.broadcast_div(&(variance + self.variance_epsilon)?.sqrt()?)?;
         let xs = xs.to_dtype(dtype)?;
-        let xs = xs.broadcast_mul(&self.weight)?;
+        let xs = xs.broadcast_mul(&self.weight.to_dtype(dtype)?)?;
         Ok(xs)
     }
 }
@@ -472,7 +556,8 @@ impl T5Attention {
                     let position_bias = relative_attention_bias
                         .forward(&relative_buckets)?
                         .permute((2, 0, 1))?
-                        .unsqueeze(0)?;
+                        .unsqueeze(0)?
+                        .to_dtype(scores.dtype())?;
                     (scores.broadcast_add(&position_bias)?, Some(position_bias))
                     // TODO: position_bias_masked?
                 }
@@ -601,7 +686,7 @@ impl T5Block {
             None
         };
         let ff_i = if cross_attn.is_some() { 2 } else { 1 };
-        let ff = T5LayerFF::load(vb.pp(&ff_i.to_string()), cfg)?;
+        let ff = T5LayerFF::load(vb.pp(ff_i.to_string()), cfg)?;
         Ok(Self {
             self_attn,
             cross_attn,
@@ -659,7 +744,7 @@ struct T5Stack {
 impl T5Stack {
     fn load(decoder: bool, vb: VarBuilder, shared: &Arc<Embedding>, cfg: &Config) -> Result<Self> {
         let block = (0..cfg.num_layers)
-            .map(|i| T5Block::load(i == 0, decoder, vb.pp(&format!("block.{i}")), cfg))
+            .map(|i| T5Block::load(i == 0, decoder, vb.pp(format!("block.{i}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let final_layer_norm = T5LayerNorm::load(
             cfg.d_model,
@@ -679,8 +764,21 @@ impl T5Stack {
         input_ids: &Tensor,
         encoder_hidden_states: Option<&Tensor>,
     ) -> Result<Tensor> {
+        self.forward_dt(input_ids, encoder_hidden_states, None)
+    }
+
+    fn forward_dt(
+        &mut self,
+        input_ids: &Tensor,
+        encoder_hidden_states: Option<&Tensor>,
+        dtype: Option<DType>,
+    ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
+        let input_embeds = match dtype {
+            None => input_embeds,
+            Some(dtype) => input_embeds.to_dtype(dtype)?,
+        };
         let mut hidden_states = input_embeds;
         let mut position_bias = None;
         for block in self.block.iter_mut() {
@@ -709,8 +807,10 @@ impl T5EncoderModel {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let shared_vb = if vb.contains_tensor("shared.weight") {
             vb.pp("shared")
-        } else {
+        } else if vb.contains_tensor("decoder.embed_tokens") {
             vb.pp("decoder").pp("embed_tokens")
+        } else {
+            vb.pp("encoder").pp("embed_tokens")
         };
         let shared = Embedding::new(cfg.vocab_size, cfg.d_model, shared_vb)?;
         let shared = Arc::new(shared);
@@ -725,6 +825,11 @@ impl T5EncoderModel {
     pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         self.encoder.forward(input_ids, None)
+    }
+
+    pub fn forward_dt(&mut self, input_ids: &Tensor, dtype: Option<DType>) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        self.encoder.forward_dt(input_ids, None, dtype)
     }
 
     pub fn device(&self) -> &Device {

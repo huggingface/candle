@@ -13,7 +13,7 @@ struct Block {
 
 impl Block {
     fn get(&self, key: &str) -> Result<&str> {
-        match self.parameters.get(&key.to_string()) {
+        match self.parameters.get(key) {
             None => candle::bail!("cannot find {} in {}", key, self.block_type),
             Some(value) => Ok(value),
         }
@@ -28,7 +28,7 @@ pub struct Darknet {
 
 impl Darknet {
     fn get(&self, key: &str) -> Result<&str> {
-        match self.parameters.get(&key.to_string()) {
+        match self.parameters.get(key) {
             None => candle::bail!("cannot find {} in net parameters", key),
             Some(value) => Ok(value),
         }
@@ -123,7 +123,7 @@ fn conv(vb: VarBuilder, index: usize, p: usize, b: &Block) -> Result<(usize, Bl)
     let padding = if pad != 0 { (size - 1) / 2 } else { 0 };
     let (bn, bias) = match b.parameters.get("batch_normalize") {
         Some(p) if p.parse::<usize>()? != 0 => {
-            let bn = batch_norm(filters, 1e-5, vb.pp(&format!("batch_norm_{index}")))?;
+            let bn = batch_norm(filters, 1e-5, vb.pp(format!("batch_norm_{index}")))?;
             (Some(bn), false)
         }
         Some(_) | None => (None, true),
@@ -133,11 +133,12 @@ fn conv(vb: VarBuilder, index: usize, p: usize, b: &Block) -> Result<(usize, Bl)
         padding,
         groups: 1,
         dilation: 1,
+        cudnn_fwd_algo: None,
     };
     let conv = if bias {
-        conv2d(p, filters, size, conv_cfg, vb.pp(&format!("conv_{index}")))?
+        conv2d(p, filters, size, conv_cfg, vb.pp(format!("conv_{index}")))?
     } else {
-        conv2d_no_bias(p, filters, size, conv_cfg, vb.pp(&format!("conv_{index}")))?
+        conv2d_no_bias(p, filters, size, conv_cfg, vb.pp(format!("conv_{index}")))?
     };
     let leaky = match activation {
         "leaky" => true,
@@ -216,7 +217,7 @@ fn detect(
     xs: &Tensor,
     image_height: usize,
     classes: usize,
-    anchors: &Vec<(usize, usize)>,
+    anchors: &[(usize, usize)],
 ) -> Result<Tensor> {
     let (bsize, _channels, height, _width) = xs.dims4()?;
     let stride = image_height / height;
@@ -267,12 +268,12 @@ impl Darknet {
         Ok(image_width)
     }
 
-    pub fn build_model(&self, vb: VarBuilder) -> Result<Func> {
+    pub fn build_model(&self, vb: VarBuilder) -> Result<Func<'_>> {
         let mut blocks: Vec<(usize, Bl)> = vec![];
         let mut prev_channels: usize = 3;
         for (index, block) in self.blocks.iter().enumerate() {
             let channels_and_bl = match block.block_type.as_str() {
-                "convolutional" => conv(vb.pp(&index.to_string()), index, prev_channels, block)?,
+                "convolutional" => conv(vb.pp(index.to_string()), index, prev_channels, block)?,
                 "upsample" => upsample(prev_channels)?,
                 "shortcut" => shortcut(index, prev_channels, block)?,
                 "route" => route(index, &blocks, block)?,

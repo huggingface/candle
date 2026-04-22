@@ -39,7 +39,7 @@ struct Args {
 
     /// The detection threshold for the mask, 0 is the default value, negative values mean a larger
     /// mask, positive makes the mask more selective.
-    #[arg(long, default_value_t = 0.)]
+    #[arg(long, allow_hyphen_values = true, default_value_t = 0.)]
     threshold: f32,
 
     /// Enable tracing (generates a trace-timestamp.json file).
@@ -139,7 +139,7 @@ pub fn main() -> anyhow::Result<()> {
         let (_one, h, w) = mask.dims3()?;
         let mask = mask.expand((3, h, w))?;
 
-        let mut img = image::io::Reader::open(&args.image)?
+        let mut img = image::ImageReader::open(&args.image)?
             .decode()
             .map_err(candle::Error::wrap)?;
         let mask_pixels = mask.permute((1, 2, 0))?.flatten_all()?.to_vec1::<u8>()?;

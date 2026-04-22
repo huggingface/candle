@@ -1,0 +1,32 @@
+[package]
+name = "candle-wasm-example-moondream"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+candle = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+tokenizers = { workspace = true, features = ["unstable_wasm"] }
+num-traits = { workspace = true }
+
+# App crates.
+anyhow = { workspace = true }
+byteorder = { workspace = true }
+getrandom = { version = "0.2", features = ["js"] }
+image = { workspace = true }
+log = { workspace = true }
+safetensors = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Wasm specific crates.
+console_error_panic_hook = "0.1.7"
+wasm-bindgen = "0.2.87"
+js-sys = "0.3.64"
+serde-wasm-bindgen = "0.6.5"
