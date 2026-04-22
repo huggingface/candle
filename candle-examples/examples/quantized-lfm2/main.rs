@@ -285,7 +285,7 @@ fn main() -> Result<()> {
         next_token
     };
 
-    let mut index_pos = tokens.len();
+    let index_pos_start = tokens.len();
     let prompt_dt = start_prompt_processing.elapsed();
 
     all_tokens.push(next_token);
@@ -297,7 +297,7 @@ fn main() -> Result<()> {
     let eos_token = guess_eos_id(tos.tokenizer());
     let mut sampled = 0;
     let start_post_prompt = std::time::Instant::now();
-    for _ in 0..to_sample {
+    for (index_pos, _) in (index_pos_start..).zip(0..to_sample) {
         if let Some(max_ctx) = context_length {
             if index_pos + 1 > max_ctx {
                 println!("\n\ncontext window of {max_ctx} reached, stopping generation");
@@ -319,7 +319,6 @@ fn main() -> Result<()> {
             )?
         };
         next_token = logits_processor.sample(&logits)?;
-        index_pos += 1;
         all_tokens.push(next_token);
         if let Some(t) = tos.next_token(next_token)? {
             print!("{t}");
