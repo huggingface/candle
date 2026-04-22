@@ -89,6 +89,20 @@ const HW_CAPABILITIES: &[HwCapability] = &[
     },
 ];
 
+const PTX_WATCH_FILES: &[&str] = &[
+    "src/compatibility.cuh",
+    "src/cuda_utils.cuh",
+    "src/binary_op_macros.cuh",
+];
+
+const MOE_WATCH_FILES: &[&str] = &[
+    "src/compatibility.cuh",
+    "src/cuda_utils.cuh",
+    "src/binary_op_macros.cuh",
+    "src/moe/gguf.cuh",
+    "src/moe/moe_utils.cuh",
+];
+
 /// Emit `cargo::rustc-check-cfg` declarations so that Cargo doesn't warn
 /// about unknown cfgs.
 fn emit_check_cfgs() {
@@ -130,11 +144,7 @@ fn main() -> Result<()> {
     let mut builder = KernelBuilder::new()
         .compute_cap(compute_cap)
         .source_dir("src")
-        .watch([
-            "src/compatibility.cuh",
-            "src/cuda_utils.cuh",
-            "src/binary_op_macros.cuh",
-        ])
+        .watch(PTX_WATCH_FILES.iter().copied())
         .exclude(&["moe_*.cu"])
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
@@ -157,6 +167,7 @@ fn main() -> Result<()> {
     // ── MOE static library builder ──────────────────────────────────────────
     let mut moe_builder = KernelBuilder::new()
         .compute_cap(compute_cap)
+        .watch(MOE_WATCH_FILES.iter().copied())
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3")
