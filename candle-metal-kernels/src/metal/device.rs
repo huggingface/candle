@@ -63,7 +63,7 @@ impl Device {
     pub fn system_default() -> Option<Self> {
         MTLCreateSystemDefaultDevice()
             .map(|raw| Device { raw })
-            .or_else(|| Device::all().first())
+            .or_else(|| Device::all().first().cloned())
     }
 
     pub fn new_buffer(
