@@ -3,7 +3,7 @@ use crate::{
 };
 use objc2::{rc::Retained, runtime::AnyObject, runtime::ProtocolObject};
 use objc2_foundation::NSString;
-use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice};
+use objc2_metal::{MTLCompileOptions, MTLCopyAllDevices, MTLCreateSystemDefaultDevice, MTLDevice};
 use std::{ffi::c_void, ptr};
 
 /// Metal device type classification based on Apple Silicon architecture.
@@ -47,15 +47,23 @@ impl Device {
         self.as_ref().registryID()
     }
 
+    /// Returns all Metal devices in the system.
     pub fn all() -> Vec<Self> {
-        MTLCreateSystemDefaultDevice()
+        MTLCopyAllDevices()
+            .to_vec()
             .into_iter()
             .map(|raw| Device { raw })
             .collect()
     }
 
+    /// Returns the system default Metal device, if available.
+    ///
+    /// Falls back to first device from `all` if `MTLCreateSystemDefaultDevice`
+    /// returns nil.
     pub fn system_default() -> Option<Self> {
-        MTLCreateSystemDefaultDevice().map(|raw| Device { raw })
+        MTLCreateSystemDefaultDevice()
+            .map(|raw| Device { raw })
+            .or_else(|| Device::all().first().cloned())
     }
 
     pub fn new_buffer(
