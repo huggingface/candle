@@ -99,7 +99,7 @@ pub fn report_detect(
     let h_ratio = initial_h as f32 / h as f32;
     let mut img = img.to_rgb8();
     let font = Vec::from(include_bytes!("roboto-mono-stripped.ttf") as &[u8]);
-    let font = rusttype::Font::try_from_vec(font);
+    let font = ab_glyph::FontRef::try_from_slice(&font).map_err(candle::Error::wrap)?;
     for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
         for b in bboxes_for_class.iter() {
             println!(
@@ -119,27 +119,28 @@ pub fn report_detect(
                 );
             }
             if legend_size > 0 {
-                if let Some(font) = font.as_ref() {
-                    imageproc::drawing::draw_filled_rect_mut(
-                        &mut img,
-                        imageproc::rect::Rect::at(xmin, ymin).of_size(dx as u32, legend_size),
-                        image::Rgb([170, 0, 0]),
-                    );
-                    let legend = format!(
-                        "{}   {:.0}%",
-                        candle_examples::coco_classes::NAMES[class_index],
-                        100. * b.confidence
-                    );
-                    imageproc::drawing::draw_text_mut(
-                        &mut img,
-                        image::Rgb([255, 255, 255]),
-                        xmin,
-                        ymin,
-                        rusttype::Scale::uniform(legend_size as f32 - 1.),
-                        font,
-                        &legend,
-                    )
-                }
+                imageproc::drawing::draw_filled_rect_mut(
+                    &mut img,
+                    imageproc::rect::Rect::at(xmin, ymin).of_size(dx as u32, legend_size),
+                    image::Rgb([170, 0, 0]),
+                );
+                let legend = format!(
+                    "{}   {:.0}%",
+                    candle_examples::coco_classes::NAMES[class_index],
+                    100. * b.confidence
+                );
+                imageproc::drawing::draw_text_mut(
+                    &mut img,
+                    image::Rgb([255, 255, 255]),
+                    xmin,
+                    ymin,
+                    ab_glyph::PxScale {
+                        x: legend_size as f32 - 1.,
+                        y: legend_size as f32 - 1.,
+                    },
+                    &font,
+                    &legend,
+                )
             }
         }
     }
@@ -389,7 +390,7 @@ pub fn run<T: Task>(args: Args) -> anyhow::Result<()> {
     for image_name in args.images.iter() {
         println!("processing {image_name}");
         let mut image_name = std::path::PathBuf::from(image_name);
-        let original_image = image::io::Reader::open(&image_name)?
+        let original_image = image::ImageReader::open(&image_name)?
             .decode()
             .map_err(candle::Error::wrap)?;
         let (width, height) = {

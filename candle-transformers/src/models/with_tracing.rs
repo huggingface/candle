@@ -47,6 +47,12 @@ impl Linear {
     }
 }
 
+pub fn linear_b(d1: usize, d2: usize, b: bool, vb: VarBuilder) -> Result<Linear> {
+    let inner = candle_nn::linear_b(d1, d2, b, vb)?;
+    let span = tracing::span!(tracing::Level::TRACE, "linear");
+    Ok(Linear { inner, span })
+}
+
 pub fn linear(d1: usize, d2: usize, vb: VarBuilder) -> Result<Linear> {
     let inner = candle_nn::linear(d1, d2, vb)?;
     let span = tracing::span!(tracing::Level::TRACE, "linear");
@@ -110,6 +116,12 @@ impl QMatMul {
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         Ok(Self { inner, span })
     }
+
+    pub fn from_weights(ws: std::sync::Arc<candle::quantized::QTensor>) -> Result<Self> {
+        let inner = candle::quantized::QMatMul::from_arc(ws)?;
+        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
+        Ok(Self { inner, span })
+    }
 }
 
 impl Module for QMatMul {
@@ -154,4 +166,30 @@ pub fn layer_norm<C: Into<candle_nn::LayerNormConfig>>(
     let inner = candle_nn::layer_norm(size, c, vb)?;
     let span = tracing::span!(tracing::Level::TRACE, "layer-norm");
     Ok(LayerNorm { inner, span })
+}
+
+#[derive(Debug, Clone)]
+pub struct RmsNorm {
+    inner: candle_nn::RmsNorm,
+    span: tracing::Span,
+}
+
+impl RmsNorm {
+    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
+        let inner = candle_nn::rms_norm(size, eps, vb)?;
+        Ok(Self { inner, span })
+    }
+
+    pub fn forward_diff(&self, x: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        self.inner.forward_diff(x)
+    }
+}
+
+impl Module for RmsNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        self.inner.forward(x)
+    }
 }

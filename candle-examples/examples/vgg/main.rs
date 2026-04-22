@@ -33,7 +33,7 @@ struct Args {
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
-    let image = candle_examples::imagenet::load_image224(args.image)?;
+    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device)?;
 
     println!("loaded image {image:?}");
 

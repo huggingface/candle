@@ -1,16 +1,15 @@
 use super::k_quants::{BlockQ2K, BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K};
-use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::f16;
 
 use core::arch::wasm32::*;
 
 #[inline(always)]
-pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> Result<f32> {
-    let qk = QK8_0;
-    if n % QK8_0 != 0 {
-        crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {qk}")
-    }
+pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK8_0),
+        "vec_dot_q4_0_q8_0: {n} is not divisible by {QK8_0}"
+    );
     unsafe {
         let mut acc = f32x4_splat(0.0f32);
         for (x, y) in xs.iter().zip(ys.iter()) {
@@ -47,16 +46,16 @@ pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) ->
             + f32x4_extract_lane::<1>(acc)
             + f32x4_extract_lane::<2>(acc)
             + f32x4_extract_lane::<3>(acc);
-        Ok(res)
+        res
     }
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) -> Result<f32> {
-    let qk = QK8_0;
-    if n % QK8_0 != 0 {
-        crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
-    }
+pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK8_0),
+        "vec_dot_q8_0_q8_0: {n} is not divisible by {QK8_0}"
+    );
     unsafe {
         let mut acc = f32x4_splat(0.0f32);
         for (x, y) in xs.iter().zip(ys.iter()) {
@@ -87,15 +86,16 @@ pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) ->
             + f32x4_extract_lane::<1>(acc)
             + f32x4_extract_lane::<2>(acc)
             + f32x4_extract_lane::<3>(acc);
-        Ok(res)
+        res
     }
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
-        crate::bail!("vec_dot_q2k_q8k: {n} is not divisible by {QK_K}")
-    }
+pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q2k_q8k: {n} is not divisible by {QK_K}"
+    );
     unsafe {
         let mut sumf = f32x4_splat(0f32);
         for (x, y) in xs.iter().zip(ys.iter()) {
@@ -171,16 +171,16 @@ pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Res
             + f32x4_extract_lane::<1>(sumf)
             + f32x4_extract_lane::<2>(sumf)
             + f32x4_extract_lane::<3>(sumf);
-        Ok(sumf)
+        sumf
     }
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
-        crate::bail!("vec_dot_q4k_q8k: {n} is not divisible by {QK_K}")
-    }
-
+pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q4k_q8k: {n} is not divisible by {QK_K}"
+    );
     const KMASK1: u32 = 0x3f3f3f3f;
     const KMASK2: u32 = 0x0f0f0f0f;
     const KMASK3: u32 = 0x03030303;
@@ -261,16 +261,16 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
             + f32x4_extract_lane::<1>(sums)
             + f32x4_extract_lane::<2>(sums)
             + f32x4_extract_lane::<3>(sums);
-        Ok(sums)
+        sums
     }
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
-        crate::bail!("vec_dot_q6k_q8k: {n} is not divisible by {QK_K}")
-    }
-
+pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q6k_q8k: {n} is not divisible by {QK_K}"
+    );
     let mut aux8 = [0i8; QK_K];
     unsafe {
         let mut sums = f32x4_splat(0f32);
@@ -384,17 +384,16 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
             + f32x4_extract_lane::<1>(sums)
             + f32x4_extract_lane::<2>(sums)
             + f32x4_extract_lane::<3>(sums);
-        Ok(sums)
+        sums
     }
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> Result<f32> {
-    let qk = QK_K;
-    if n % QK_K != 0 {
-        crate::bail!("vec_dot_q8k_q8k: {n} is not divisible by {qk}")
-    }
-
+pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_q8k_q8k: {n} is not divisible by {QK_K}"
+    );
     unsafe {
         let mut acc = f32x4_splat(0.0f32);
         for (xs, ys) in xs.iter().zip(ys.iter()) {
@@ -414,6 +413,6 @@ pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> Res
             + f32x4_extract_lane::<1>(acc)
             + f32x4_extract_lane::<2>(acc)
             + f32x4_extract_lane::<3>(acc);
-        Ok(res)
+        res
     }
 }

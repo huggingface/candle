@@ -104,6 +104,7 @@ impl TextGeneration {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
+                let t = t.replace("<|im_end|>", "\n");
                 print!("{t}");
                 std::io::stdout().flush()?;
             }
@@ -218,21 +219,7 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => match args.which {
-            Which::L6b => vec![
-                repo.get("model-00001-of-00002.safetensors")?,
-                repo.get("model-00002-of-00002.safetensors")?,
-            ],
-            Which::L34b => vec![
-                repo.get("model-00001-of-00007.safetensors")?,
-                repo.get("model-00002-of-00007.safetensors")?,
-                repo.get("model-00003-of-00007.safetensors")?,
-                repo.get("model-00004-of-00007.safetensors")?,
-                repo.get("model-00005-of-00007.safetensors")?,
-                repo.get("model-00006-of-00007.safetensors")?,
-                repo.get("model-00007-of-00007.safetensors")?,
-            ],
-        },
+        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;

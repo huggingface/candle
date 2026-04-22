@@ -8,6 +8,8 @@ Card](https://huggingface.co/stabilityai/stablelm-3b-4e1t).
 Note that this model is gated so you will have to request access on the Hub in
 order to be able to use it.
 
+Other available models are Stable-Code-3B, StableLM-2 and Zephyr variants.
+
 ## Running some example
 
 ```bash

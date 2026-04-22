@@ -8,13 +8,12 @@ use yew_agent::{Bridge, Bridged};
 async fn fetch_url(url: &str) -> Result<Vec<u8>, JsValue> {
     use web_sys::{Request, RequestCache, RequestInit, RequestMode, Response};
     let window = web_sys::window().ok_or("window")?;
-    let mut opts = RequestInit::new();
-    let opts = opts
-        .method("GET")
-        .mode(RequestMode::Cors)
-        .cache(RequestCache::NoCache);
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+    opts.set_cache(RequestCache::NoCache);
 
-    let request = Request::new_with_str_and_init(url, opts)?;
+    let request = Request::new_with_str_and_init(url, &opts)?;
 
     let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
 
@@ -33,8 +32,8 @@ pub enum Msg {
     Run,
     UpdateStatus(String),
     SetModel(ModelData),
-    WorkerInMsg(WorkerInput),
-    WorkerOutMsg(Result<WorkerOutput, String>),
+    WorkerIn(WorkerInput),
+    WorkerOut(Result<WorkerOutput, String>),
 }
 
 pub struct CurrentDecode {
@@ -117,7 +116,7 @@ impl Component for App {
         let status = "loading weights".to_string();
         let cb = {
             let link = ctx.link().clone();
-            move |e| link.send_message(Self::Message::WorkerOutMsg(e))
+            move |e| link.send_message(Self::Message::WorkerOut(e))
         };
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
@@ -146,7 +145,7 @@ impl Component for App {
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::SetModel(md) => {
-                self.status = "weights loaded succesfully!".to_string();
+                self.status = "weights loaded successfully!".to_string();
                 self.loaded = true;
                 console_log!("loaded weights");
                 self.worker.send(WorkerInput::ModelData(md));
@@ -166,7 +165,7 @@ impl Component for App {
                                 let status = format!("{err:?}");
                                 Msg::UpdateStatus(status)
                             }
-                            Ok(image_data) => Msg::WorkerInMsg(WorkerInput::RunData(RunData {
+                            Ok(image_data) => Msg::WorkerIn(WorkerInput::RunData(RunData {
                                 image_data,
                                 conf_threshold: 0.5,
                                 iou_threshold: 0.5,
@@ -176,7 +175,7 @@ impl Component for App {
                 }
                 true
             }
-            Msg::WorkerOutMsg(output) => {
+            Msg::WorkerOut(output) => {
                 match output {
                     Ok(WorkerOutput::WeightsLoaded) => self.status = "weights loaded!".to_string(),
                     Ok(WorkerOutput::ProcessingDone(Err(err))) => {
@@ -205,7 +204,7 @@ impl Component for App {
                         });
                         self.status = match dt {
                             None => "processing succeeded!".to_string(),
-                            Some(dt) => format!("processing succeeded in {:.2}s", dt,),
+                            Some(dt) => format!("processing succeeded in {dt:.2}s",),
                         };
                         self.current_decode = None;
                         if let Err(err) = draw_bboxes(bboxes) {
@@ -218,7 +217,7 @@ impl Component for App {
                 }
                 true
             }
-            Msg::WorkerInMsg(inp) => {
+            Msg::WorkerIn(inp) => {
                 self.worker.send(inp);
                 true
             }

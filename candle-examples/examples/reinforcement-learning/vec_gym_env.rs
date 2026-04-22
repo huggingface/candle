@@ -1,9 +1,8 @@
-#![allow(unused)]
 //! Vectorized version of the gym environment.
 use candle::{DType, Device, Result, Tensor};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
+#[allow(unused)]
 #[derive(Debug)]
 pub struct Step {
     pub obs: Tensor,
@@ -11,6 +10,7 @@ pub struct Step {
     pub is_done: Tensor,
 }
 
+#[allow(unused)]
 pub struct VecGymEnv {
     env: PyObject,
     action_space: usize,
@@ -21,16 +21,17 @@ fn w(res: PyErr) -> candle::Error {
     candle::Error::wrap(res)
 }
 
+#[allow(unused)]
 impl VecGymEnv {
     pub fn new(name: &str, img_dir: Option<&str>, nprocesses: usize) -> Result<VecGymEnv> {
         Python::with_gil(|py| {
-            let sys = py.import("sys")?;
+            let sys = py.import_bound("sys")?;
             let path = sys.getattr("path")?;
             let _ = path.call_method1(
                 "append",
                 ("candle-examples/examples/reinforcement-learning",),
             )?;
-            let gym = py.import("atari_wrappers")?;
+            let gym = py.import_bound("atari_wrappers")?;
             let make = gym.getattr("make")?;
             let env = make.call1((name, img_dir, nprocesses))?;
             let action_space = env.getattr("action_space")?;
@@ -60,10 +61,10 @@ impl VecGymEnv {
 
     pub fn step(&self, action: Vec<usize>) -> Result<Step> {
         let (obs, reward, is_done) = Python::with_gil(|py| {
-            let step = self.env.call_method(py, "step", (action,), None)?;
-            let step = step.as_ref(py);
+            let step = self.env.call_method_bound(py, "step", (action,), None)?;
+            let step = step.bind(py);
             let obs = step.get_item(0)?.call_method("flatten", (), None)?;
-            let obs_buffer = pyo3::buffer::PyBuffer::get(obs)?;
+            let obs_buffer = pyo3::buffer::PyBuffer::get_bound(&obs)?;
             let obs: Vec<u8> = obs_buffer.to_vec(py)?;
             let reward: Vec<f32> = step.get_item(1)?.extract()?;
             let is_done: Vec<f32> = step.get_item(2)?.extract()?;

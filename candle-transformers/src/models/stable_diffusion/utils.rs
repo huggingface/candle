@@ -21,7 +21,7 @@ struct LinearInterpolator<'x, 'y> {
     cache: usize,
 }
 
-impl<'x, 'y> LinearInterpolator<'x, 'y> {
+impl LinearInterpolator<'_, '_> {
     fn accel_find(&mut self, x: f64) -> usize {
         let xidx = self.cache;
         if x < self.xp[xidx] {

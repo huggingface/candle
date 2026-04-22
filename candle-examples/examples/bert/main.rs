@@ -49,6 +49,10 @@ struct Args {
     /// Use tanh based approximation for Gelu instead of erf implementation.
     #[arg(long, default_value = "false")]
     approximate_gelu: bool,
+
+    /// Include padding token embeddings when performing mean pooling. By default, these are masked away.
+    #[arg(long, default_value = "false")]
+    include_padding_embeddings: bool,
 }
 
 impl Args {
@@ -126,7 +130,7 @@ fn main() -> Result<()> {
         println!("Loaded and encoded {:?}", start.elapsed());
         for idx in 0..args.n {
             let start = std::time::Instant::now();
-            let ys = model.forward(&token_ids, &token_type_ids)?;
+            let ys = model.forward(&token_ids, &token_type_ids, None)?;
             if idx == 0 {
                 println!("{ys}");
             }
@@ -163,15 +167,36 @@ fn main() -> Result<()> {
                 Ok(Tensor::new(tokens.as_slice(), device)?)
             })
             .collect::<Result<Vec<_>>>()?;
+        let attention_mask = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_attention_mask().to_vec();
+                Ok(Tensor::new(tokens.as_slice(), device)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let token_ids = Tensor::stack(&token_ids, 0)?;
+        let attention_mask = Tensor::stack(&attention_mask, 0)?;
         let token_type_ids = token_ids.zeros_like()?;
         println!("running inference on batch {:?}", token_ids.shape());
-        let embeddings = model.forward(&token_ids, &token_type_ids)?;
+        let embeddings = model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
         println!("generated embeddings {:?}", embeddings.shape());
-        // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
-        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
-        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
+        let embeddings = if args.include_padding_embeddings {
+            // Apply avg-pooling by taking the mean embedding value for all
+            // tokens, including padding. This was the original behavior of this
+            // example, and we'd like to preserve it for posterity.
+            let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
+            (embeddings.sum(1)? / (n_tokens as f64))?
+        } else {
+            // Apply avg-pooling by taking the mean embedding value for all
+            // tokens (after applying the attention mask from tokenization).
+            // This should produce the same numeric result as the
+            // `sentence_transformers` Python library.
+            let attention_mask_for_pooling = attention_mask.to_dtype(DTYPE)?.unsqueeze(2)?;
+            let sum_mask = attention_mask_for_pooling.sum(1)?;
+            let embeddings = (embeddings.broadcast_mul(&attention_mask_for_pooling)?).sum(1)?;
+            embeddings.broadcast_div(&sum_mask)?
+        };
         let embeddings = if args.normalize_embeddings {
             normalize_l2(&embeddings)?
         } else {
