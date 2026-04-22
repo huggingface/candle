@@ -288,11 +288,7 @@ impl Attention {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let num_kv_groups = if num_kv_heads > 0 {
-            num_heads / num_kv_heads
-        } else {
-            0
-        };
+        let num_kv_groups = num_heads.checked_div(num_kv_heads).unwrap_or(0);
         let head_dim = hidden_sz / num_heads;
 
         let (qkv_proj, o_proj) = match cfg.variant {
