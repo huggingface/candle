@@ -21,7 +21,7 @@ macro_rules! console_log {
 }
 
 // Communication to the worker happens through bincode, the model weights and configs are fetched
-// on the main thread and transfered via the following structure.
+// on the main thread and transferred via the following structure.
 #[derive(Serialize, Deserialize)]
 pub struct ModelData {
     pub weights: Vec<u8>,
@@ -48,7 +48,7 @@ impl Model {
     ) -> Result<Vec<Vec<Bbox>>> {
         console_log!("image data: {}", image_data.len());
         let image_data = std::io::Cursor::new(image_data);
-        let original_image = image::io::Reader::new(image_data)
+        let original_image = image::ImageReader::new(image_data)
             .with_guessed_format()?
             .decode()
             .map_err(candle::Error::wrap)?;
@@ -127,7 +127,7 @@ impl ModelPose {
     ) -> Result<Vec<Bbox>> {
         console_log!("image data: {}", image_data.len());
         let image_data = std::io::Cursor::new(image_data);
-        let original_image = image::io::Reader::new(image_data)
+        let original_image = image::ImageReader::new(image_data)
             .with_guessed_format()?
             .decode()
             .map_err(candle::Error::wrap)?;

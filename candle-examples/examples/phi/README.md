@@ -1,8 +1,9 @@
 # candle-phi: 1.3b and 2.7b LLM with state of the art performance for <10b models.
 
-[Phi-1.5](https://huggingface.co/microsoft/phi-1_5) and
-[Phi-2](https://huggingface.co/microsoft/phi-2) are language models using
-only 1.3 and 2.7 billion parameters but with state of the art performance compared to
+[Phi-1.5](https://huggingface.co/microsoft/phi-1_5), 
+[Phi-2](https://huggingface.co/microsoft/phi-2), and
+[Phi-3](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct) are language models using
+only 1.3, 2.7, and 3.8 billion parameters but with state of the art performance compared to
 models with up to 10 billion parameters.
 
 The candle implementation provides both the standard version as well as a
@@ -12,22 +13,19 @@ quantized variant.
 
 For the v2 version.
 ```bash
-$ cargo run --example phi --release cuda -- --prompt "def print_prime(n): " --model 2
-def print_prime(n):
-    if n <= 1:
-        print("Not a prime number")
-    else:
-        for i in range(2, int(n**0.5)+1):
-            if (n % i) == 0:
-                print("Not a prime number")
-                break
-        else:
-            print("Prime number")
+$ cargo run --example phi --release -- --model 2 \
+  --prompt "A skier slides down a frictionless slope of height 40m and length 80m. What's the skier speed at the bottom?"
 
+A skier slides down a frictionless slope of height 40m and length 80m. What's the skier speed at the bottom?
 
-# Driver code
-n = 17
-print_prime(n)
+Solution:
+The potential energy of the skier is converted into kinetic energy as it slides down the slope. The formula for potential energy is mgh, where m is mass, g is acceleration due to gravity (9.8 m/s^2), and h is height. Since there's no friction, all the potential energy is converted into kinetic energy at the bottom of the slope. The formula for kinetic energy is 1/2mv^2, where v is velocity. We can equate these two formulas:
+mgh = 1/2mv^2
+Solving for v, we get:
+v = sqrt(2gh)
+Substituting the given values, we get:
+v = sqrt(2*9.8*40) = 28 m/s
+Therefore, the skier speed at the bottom of the slope is 28 m/s.
 ```
 
 For the v1.5 version.

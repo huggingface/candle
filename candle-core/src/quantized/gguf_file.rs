@@ -1,9 +1,9 @@
-//! Support for the GGUF file format.
+//! Support for the [GGUF file format](https://github.com/philpax/ggml/blob/gguf-spec/docs/gguf.md).
 //!
-//! Spec: https://github.com/philpax/ggml/blob/gguf-spec/docs/gguf.md
+//! Spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md  
 
 use super::{GgmlDType, QTensor};
-use crate::Result;
+use crate::{Context, Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
 
@@ -41,7 +41,7 @@ impl VersionedMagic {
             (Magic::Gguf, 1) => Self::GgufV1,
             (Magic::Gguf, 2) => Self::GgufV2,
             (Magic::Gguf, 3) => Self::GgufV3,
-            _ => crate::bail!("ggml: unsupported magic/version {magic:?}/{version}"),
+            _ => crate::bail!("gguf: unsupported magic/version {magic:?}/{version}"),
         };
         Ok(versioned_magic)
     }
@@ -59,19 +59,25 @@ impl TensorInfo {
         &self,
         reader: &mut R,
         tensor_data_offset: u64,
+        device: &Device,
     ) -> Result<QTensor> {
         let tensor_elems = self.shape.elem_count();
-        let blck_size = self.ggml_dtype.blck_size();
-        if tensor_elems % blck_size != 0 {
+        let block_size = self.ggml_dtype.block_size();
+        if !tensor_elems.is_multiple_of(block_size) {
             crate::bail!(
-            "the number of elements {tensor_elems} is not divisible by the block size {blck_size}"
+            "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )
         }
-        let size_in_bytes = tensor_elems / blck_size * self.ggml_dtype.type_size();
+        let size_in_bytes = tensor_elems / block_size * self.ggml_dtype.type_size();
         let mut raw_data = vec![0u8; size_in_bytes];
         reader.seek(std::io::SeekFrom::Start(tensor_data_offset + self.offset))?;
         reader.read_exact(&mut raw_data)?;
-        super::ggml_file::qtensor_from_ggml(self.ggml_dtype, &raw_data, self.shape.dims().to_vec())
+        super::ggml_file::qtensor_from_ggml(
+            self.ggml_dtype,
+            &raw_data,
+            self.shape.dims().to_vec(),
+            device,
+        )
     }
 }
 
@@ -129,7 +135,6 @@ pub enum ValueType {
     // The value is a UTF-8 non-null-terminated string, with length prepended.
     String,
     // The value is an array of other values, with the length and type prepended.
-    ///
     // Arrays can be nested, and the length of the array is the number of elements in the array, not the number of bytes.
     Array,
 }
@@ -212,10 +217,16 @@ impl Value {
         }
     }
 
+    /// This will also automatically upcast any integral types which will not truncate.
     pub fn to_u64(&self) -> Result<u64> {
         match self {
             Self::U64(v) => Ok(*v),
-            v => crate::bail!("not a u64 {v:?}"),
+            // Autoupcast cases here
+            Self::U8(v) => Ok(*v as u64),
+            Self::U16(v) => Ok(*v as u64),
+            Self::U32(v) => Ok(*v as u64),
+            Self::Bool(v) => Ok(*v as u64),
+            v => crate::bail!("not a u64 or upcastable to u64 {v:?}"),
         }
     }
 
@@ -328,7 +339,7 @@ impl Value {
                     if value_type.len() != 1 {
                         crate::bail!("multiple value-types in the same array {value_type:?}")
                     }
-                    value_type.into_iter().next().unwrap()
+                    value_type.into_iter().next().context("empty value_type")?
                 };
                 w.write_u32::<LittleEndian>(value_type.to_u32())?;
                 w.write_u64::<LittleEndian>(v.len() as u64)?;
@@ -447,7 +458,7 @@ impl Content {
             Some(Value::I32(v)) if *v >= 0 => *v as u64,
             _ => DEFAULT_ALIGNMENT,
         };
-        let tensor_data_offset = (position + alignment - 1) / alignment * alignment;
+        let tensor_data_offset = position.div_ceil(alignment) * alignment;
         Ok(Self {
             magic,
             metadata,
@@ -460,12 +471,13 @@ impl Content {
         &self,
         reader: &mut R,
         name: &str,
+        device: &Device,
     ) -> Result<QTensor> {
         let tensor_info = match self.tensor_infos.get(name) {
             Some(tensor_info) => tensor_info,
-            None => crate::bail!("cannot find tensor-infor for {name}"),
+            None => crate::bail!("cannot find tensor info for {name}"),
         };
-        tensor_info.read(reader, self.tensor_data_offset)
+        tensor_info.read(reader, self.tensor_data_offset, device)
     }
 }
 
@@ -517,10 +529,9 @@ pub fn write<W: std::io::Seek + std::io::Write>(
                 "internal error, unexpected current position {tensor_start_pos} {offset} {pos}"
             )
         }
-        let data_ptr = tensor.as_ptr();
-        let size_in_bytes = tensor.storage_size_in_bytes();
-        let data = unsafe { std::slice::from_raw_parts(data_ptr, size_in_bytes) };
-        w.write_all(data)?;
+        let data = tensor.data()?;
+        let size_in_bytes = data.len();
+        w.write_all(&data)?;
         let padding = 31 - (31 + size_in_bytes) % 32;
         w.write_all(&vec![0u8; padding])?;
     }

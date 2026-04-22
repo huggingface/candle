@@ -1,3 +1,16 @@
+//! Module containing quantized MixFormer model implementation.
+//!
+//! MixFormer is an efficient transformer variant for text generation that uses
+//! mixture-of-experts and parallel attention/feed-forward blocks.
+//! This implementation provides quantization for reduced memory usage.
+//!
+//! Key features:
+//! - Parallel attention and feed-forward computation
+//! - Rotary positional embeddings
+//! - Optional key-value caching
+//! - Support for 8-bit quantization
+//!
+
 use crate::quantized_nn::{layer_norm, linear, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -311,7 +324,7 @@ impl MixFormerSequentialForCausalLM {
         let mut blocks = Vec::new();
         for i in 0..cfg.n_layer {
             let block = ParallelBlock::new(cfg, vb.pp(i + 1))?;
-            blocks.push(block)
+            blocks.push(block);
         }
         let head = CausalLMHead::new(cfg, vb.pp(cfg.n_layer + 1))?;
         Ok(Self {
@@ -332,9 +345,33 @@ impl MixFormerSequentialForCausalLM {
             Some(get_mask(seq_len, xs.device())?)
         };
         for block in self.blocks.iter_mut() {
-            xs = block.forward(&xs, mask.as_ref())?
+            xs = block.forward(&xs, mask.as_ref())?;
         }
         xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
+    }
+
+    pub fn forward_with_img(
+        &mut self,
+        bos_token: &Tensor,
+        xs: &Tensor,
+        img_embeds: &Tensor,
+    ) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let xs = xs.apply(&self.embedding)?;
+        let bos_token = bos_token.apply(&self.embedding)?;
+        // Python implementation sequence order is <bos token embedding><img embedding><rest of text embedding>
+        // https://github.com/vikhyat/moondream/blob/a9d788a20d1543fb1479edc54106e88cff7759d3/moondream/moondream.py#L43-L56
+        let mut xs = Tensor::cat(&[bos_token, img_embeds.clone(), xs], 1)?;
+        let (_b_size, seq_len, _embds) = xs.dims3()?;
+        let mask = Some(get_mask(seq_len, xs.device())?);
+        for block in self.blocks.iter_mut() {
+            xs = block.forward(&xs, mask.as_ref())?
+        }
+        let xs = xs
+            .narrow(1, seq_len - 1, 1)?
+            .apply(&self.head)?
+            .squeeze(1)?;
+        Ok(xs)
     }
 
     pub fn clear_kv_cache(&mut self) {

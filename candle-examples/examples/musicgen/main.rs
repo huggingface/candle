@@ -10,9 +10,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-mod encodec_model;
 mod musicgen_model;
-mod nn;
 
 use musicgen_model::{GenConfig, MusicgenForConditionalGeneration};
 

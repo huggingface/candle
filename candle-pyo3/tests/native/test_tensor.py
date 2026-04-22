@@ -84,7 +84,7 @@ def assert_bool(t: Tensor, expected: bool):
     assert bool(t.values()) == expected
 
 
-def test_tensor_supports_equality_opperations_with_scalars():
+def test_tensor_supports_equality_operations_with_scalars():
     t = Tensor(42.0)
 
     assert_bool(t == 42.0, True)
@@ -106,7 +106,7 @@ def test_tensor_supports_equality_opperations_with_scalars():
     assert_bool(t <= 42.0, True)
 
 
-def test_tensor_supports_equality_opperations_with_tensors():
+def test_tensor_supports_equality_operations_with_tensors():
     t = Tensor(42.0)
     same = Tensor(42.0)
     other = Tensor(43.0)
@@ -130,7 +130,7 @@ def test_tensor_supports_equality_opperations_with_tensors():
     assert_bool(t <= other, True)
 
 
-def test_tensor_equality_opperations_can_broadcast():
+def test_tensor_equality_operations_can_broadcast():
     # Create a decoder attention mask as a test case
     # e.g.
     # [[1,0,0]

@@ -61,7 +61,7 @@ impl Model {
 
         let start = Date::now();
         let model: SelectedModel = if quantized {
-            let vb = quantized_blip::VarBuilder::from_gguf_buffer(&weights)?;
+            let vb = quantized_blip::VarBuilder::from_gguf_buffer(&weights, &device)?;
             let model = quantized_blip::BlipForConditionalGeneration::new(&config, vb)?;
             SelectedModel::Q(model)
         } else {
@@ -124,7 +124,7 @@ impl Model {
 impl Model {
     fn load_image(&self, image: Vec<u8>) -> Result<Tensor, JsError> {
         let device = &Device::Cpu;
-        let img = image::io::Reader::new(std::io::Cursor::new(image))
+        let img = image::ImageReader::new(std::io::Cursor::new(image))
             .with_guessed_format()?
             .decode()
             .map_err(|e| JsError::new(&e.to_string()))?

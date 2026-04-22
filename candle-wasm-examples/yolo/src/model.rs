@@ -98,6 +98,7 @@ impl ConvBlock {
             stride,
             groups: 1,
             dilation: 1,
+            cudnn_fwd_algo: None,
         };
         let conv = conv2d_no_bias(c1, c2, k, cfg, vb.pp("conv"))?;
         let bn = batch_norm(c2, 1e-3, vb.pp("bn"))?;
@@ -107,8 +108,7 @@ impl ConvBlock {
 
 impl Module for ConvBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.conv.forward(xs)?;
-        let xs = self.bn.forward(&xs)?;
+        let xs = self.conv.forward(xs)?.apply_t(&self.bn, false)?;
         candle_nn::ops::silu(&xs)
     }
 }
@@ -156,7 +156,7 @@ impl C2f {
         let cv2 = ConvBlock::load(vb.pp("cv2"), (2 + n) * c, c2, 1, 1, None)?;
         let mut bottleneck = Vec::with_capacity(n);
         for idx in 0..n {
-            let b = Bottleneck::load(vb.pp(&format!("bottleneck.{idx}")), c, c, shortcut)?;
+            let b = Bottleneck::load(vb.pp(format!("bottleneck.{idx}")), c, c, shortcut)?;
             bottleneck.push(b)
         }
         Ok(Self {

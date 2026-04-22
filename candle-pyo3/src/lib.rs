@@ -1,15 +1,15 @@
 #![allow(clippy::redundant_closure_call)]
+#![allow(clippy::useless_conversion)]
+use float8::F8E4M3;
+use half::{bf16, f16};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
-use pyo3::types::{IntoPyDict, PyDict, PyTuple};
-use pyo3::ToPyObject;
+use pyo3::types::{IntoPyDict, PyDict, PyString, PyTuple};
+use pyo3::{IntoPyObject, IntoPyObjectExt};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::os::raw::c_long;
 use std::sync::Arc;
-
-use half::{bf16, f16};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -56,16 +56,15 @@ impl PyDType {
         self.__repr__()
     }
 }
-
 impl PyDType {
-    fn from_pyobject(ob: PyObject, py: Python<'_>) -> PyResult<Self> {
+    fn from_pyobject(obj: Py<PyAny>, py: Python<'_>) -> PyResult<Self> {
         use std::str::FromStr;
-        if let Ok(dtype) = ob.extract::<&str>(py) {
-            let dtype = DType::from_str(dtype)
+        if let Ok(dtype) = obj.extract::<String>(py) {
+            let dtype = DType::from_str(&dtype)
                 .map_err(|_| PyTypeError::new_err(format!("invalid dtype '{dtype}'")))?;
             Ok(Self(dtype))
         } else {
-            ob.extract(py)
+            obj.extract(py).map_err(Into::into)
         }
     }
 }
@@ -114,38 +113,46 @@ impl PyDevice {
     }
 }
 
-impl<'source> FromPyObject<'source> for PyDevice {
-    fn extract(ob: &'source PyAny) -> PyResult<Self> {
-        let device: &str = ob.extract()?;
-        let device = match device {
+impl FromPyObject<'_, '_> for PyDevice {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        let device: String = obj.extract()?;
+        let device = match device.as_str() {
             "cpu" => PyDevice::Cpu,
             "cuda" => PyDevice::Cuda,
+            "metal" => PyDevice::Metal,
             _ => Err(PyTypeError::new_err(format!("invalid device '{device}'")))?,
         };
         Ok(device)
     }
 }
 
-impl ToPyObject for PyDevice {
-    fn to_object(&self, py: Python<'_>) -> PyObject {
+impl<'py> IntoPyObject<'py> for PyDevice {
+    type Target = PyString;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
         let str = match self {
             PyDevice::Cpu => "cpu",
             PyDevice::Cuda => "cuda",
             PyDevice::Metal => "metal",
         };
-        str.to_object(py)
+        Ok(str.into_pyobject(py).unwrap())
     }
 }
 
 trait PyWithDType: WithDType {
-    fn to_py(&self, py: Python<'_>) -> PyObject;
+    fn to_py(&self, py: Python<'_>) -> Py<PyAny>;
 }
 
 macro_rules! pydtype {
     ($ty:ty, $conv:expr) => {
         impl PyWithDType for $ty {
-            fn to_py(&self, py: Python<'_>) -> PyObject {
-                $conv(*self).to_object(py)
+            fn to_py(&self, py: Python<'_>) -> Py<PyAny> {
+                // This into_pyobject is infallible, so unwrap is safe.
+                $conv(*self).into_pyobject(py).unwrap().into()
             }
         }
     };
@@ -158,6 +165,7 @@ pydtype!(f16, f32::from);
 pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
 pydtype!(f64, |v| v);
+pydtype!(F8E4M3, f32::from);
 
 fn actual_index(t: &Tensor, dim: usize, index: i64) -> ::candle::Result<usize> {
     let dim = t.dim(dim)?;
@@ -205,6 +213,24 @@ trait MapDType {
             DType::F16 => self.f::<f16>(t),
             DType::F32 => self.f::<f32>(t),
             DType::F64 => self.f::<f64>(t),
+            DType::I16 => Err(PyErr::new::<PyTypeError, _>(
+                "i16 dtype is not supported in Python interface",
+            )),
+            DType::I32 => Err(PyErr::new::<PyTypeError, _>(
+                "i32 dtype is not supported in Python interface",
+            )),
+            DType::F8E4M3 => Err(PyErr::new::<PyTypeError, _>(
+                "f8e4m3 dtype is not supported in Python interface",
+            )),
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                Err(PyErr::new::<PyTypeError, _>(format!(
+                    "Dummy dtype {:?} is not supported",
+                    t.dtype()
+                )))
+            }
+            dtype => Err(PyErr::new::<PyTypeError, _>(format!(
+                "{dtype:?} dtype is not supported in Python interface",
+            ))),
         }
     }
 }
@@ -212,17 +238,19 @@ trait MapDType {
 enum Indexer {
     Index(usize),
     Slice(usize, usize),
-    Elipsis,
+    Ellipsis,
     Expand,
     IndexSelect(Tensor),
 }
 
-#[derive(Clone, Debug)]
-struct TorchTensor(PyObject);
+#[derive(Debug)]
+struct TorchTensor(Py<PyAny>);
 
-impl<'source> pyo3::FromPyObject<'source> for TorchTensor {
-    fn extract(ob: &'source PyAny) -> PyResult<Self> {
-        let numpy_value: PyObject = ob.getattr("numpy")?.call0()?.extract()?;
+impl pyo3::FromPyObject<'_, '_> for TorchTensor {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        let numpy_value: Py<PyAny> = obj.getattr("numpy")?.call0()?.extract()?;
         Ok(TorchTensor(numpy_value))
     }
 }
@@ -233,7 +261,7 @@ impl PyTensor {
     #[pyo3(text_signature = "(self, data:_ArrayLike)")]
     // TODO: Handle arbitrary input dtype and shape.
     /// Creates a new tensor from a Python value. The value can be a scalar or array-like object.
-    fn new(py: Python<'_>, data: PyObject) -> PyResult<Self> {
+    fn new(py: Python<'_>, data: Py<PyAny>) -> PyResult<Self> {
         use Device::Cpu;
         let tensor = if let Ok(vs) = data.extract::<u32>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
@@ -265,7 +293,7 @@ impl PyTensor {
         } else if let Ok(TorchTensor(numpy)) = data.extract::<TorchTensor>(py) {
             return PyTensor::new(py, numpy);
         } else {
-            let ty = data.as_ref(py).get_type();
+            let ty = data.bind(py).get_type();
             Err(PyTypeError::new_err(format!(
                 "incorrect type {ty} for tensor"
             )))?
@@ -275,17 +303,17 @@ impl PyTensor {
 
     /// Gets the tensor's data as a Python scalar or array-like object.
     /// &RETURNS&: _ArrayLike
-    fn values(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn values(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         struct M<'a>(Python<'a>);
-        impl<'a> MapDType for M<'a> {
-            type Output = PyObject;
+        impl MapDType for M<'_> {
+            type Output = Py<PyAny>;
             fn f<T: PyWithDType>(&self, t: &Tensor) -> PyResult<Self::Output> {
                 match t.rank() {
                     0 => Ok(t.to_scalar::<T>().map_err(wrap_err)?.to_py(self.0)),
                     1 => {
                         let v = t.to_vec1::<T>().map_err(wrap_err)?;
                         let v = v.iter().map(|v| v.to_py(self.0)).collect::<Vec<_>>();
-                        Ok(v.to_object(self.0))
+                        v.into_py_any(self.0)
                     }
                     2 => {
                         let v = t.to_vec2::<T>().map_err(wrap_err)?;
@@ -293,7 +321,7 @@ impl PyTensor {
                             .iter()
                             .map(|v| v.iter().map(|v| v.to_py(self.0)).collect())
                             .collect::<Vec<Vec<_>>>();
-                        Ok(v.to_object(self.0))
+                        v.into_py_any(self.0)
                     }
                     3 => {
                         let v = t.to_vec3::<T>().map_err(wrap_err)?;
@@ -305,10 +333,10 @@ impl PyTensor {
                                     .collect()
                             })
                             .collect::<Vec<Vec<Vec<_>>>>();
-                        Ok(v.to_object(self.0))
+                        v.into_py_any(self.0)
                     }
                     n => Err(PyTypeError::new_err(format!(
-                        "TODO: conversion to PyObject is not handled for rank {n}"
+                        "TODO: conversion to Py<PyAny> is not handled for rank {n}"
                     )))?,
                 }
             }
@@ -319,9 +347,9 @@ impl PyTensor {
 
     /// Converts candle's tensor to pytorch's tensor
     /// &RETURNS&: torch.Tensor
-    fn to_torch(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_torch(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let candle_values = self.values(py)?;
-        let torch_tensor: PyObject = py
+        let torch_tensor: Py<PyAny> = py
             .import("torch")?
             .getattr("tensor")?
             .call1((candle_values,))?
@@ -332,8 +360,8 @@ impl PyTensor {
     #[getter]
     /// Gets the tensor's shape.
     /// &RETURNS&: Tuple[int]
-    fn shape(&self, py: Python<'_>) -> PyObject {
-        PyTuple::new(py, self.0.dims()).to_object(py)
+    fn shape<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.0.dims())
     }
 
     #[getter]
@@ -346,8 +374,8 @@ impl PyTensor {
     #[getter]
     /// Gets the tensor's strides.
     /// &RETURNS&: Tuple[int]
-    fn stride(&self, py: Python<'_>) -> PyObject {
-        PyTuple::new(py, self.0.stride()).to_object(py)
+    fn stride<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.0.stride())
     }
 
     #[getter]
@@ -360,8 +388,8 @@ impl PyTensor {
     #[getter]
     /// Gets the tensor's device.
     /// &RETURNS&: Device
-    fn device(&self, py: Python<'_>) -> PyObject {
-        PyDevice::from_device(self.0.device()).to_object(py)
+    fn device<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyString>> {
+        PyDevice::from_device(self.0.device()).into_pyobject(py)
     }
 
     #[getter]
@@ -448,6 +476,12 @@ impl PyTensor {
         Ok(PyTensor(self.0.index_select(rhs, dim).map_err(wrap_err)?))
     }
 
+    /// Gathers values along an axis specified by dim.
+    fn gather(&self, index: &Self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.gather(index, dim).map_err(wrap_err)?))
+    }
+
     #[pyo3(text_signature = "(self, rhs:Tensor)")]
     /// Performs a matrix multiplication between the two tensors.
     /// &RETURNS&: Tensor
@@ -497,7 +531,7 @@ impl PyTensor {
     #[getter]
     /// Index a tensor.
     /// &RETURNS&: Tensor
-    fn __getitem__(&self, py: Python, idx: PyObject) -> PyResult<Self> {
+    fn __getitem__(&self, py: Python, idx: Py<PyAny>) -> PyResult<Self> {
         let mut indexers: Vec<Indexer> = vec![];
         let dims = self.0.shape().dims();
 
@@ -512,16 +546,14 @@ impl PyTensor {
             // Check that the index is in range
             if actual_index < 0 || actual_index >= dims[current_dim] as isize {
                 return Err(PyValueError::new_err(format!(
-                    "index out of range for dimension '{i}' with indexer '{value}'",
-                    i = current_dim,
-                    value = index
+                    "index out of range for dimension '{current_dim}' with indexer '{index}'"
                 )));
             }
             Ok(actual_index as usize)
         }
 
         fn extract_indexer(
-            py_indexer: &PyAny,
+            py_indexer: &Bound<PyAny>,
             current_dim: usize,
             dims: &[usize],
             index_argument_count: usize,
@@ -532,9 +564,9 @@ impl PyTensor {
                     Indexer::Index(to_absolute_index(index, current_dim, dims)?),
                     current_dim + 1,
                 ))
-            } else if let Ok(slice) = py_indexer.downcast::<pyo3::types::PySlice>() {
+            } else if let Ok(slice) = py_indexer.cast::<pyo3::types::PySlice>() {
                 // Handle a single slice e.g. tensor[0:1] or tensor[0:-1]
-                let index = slice.indices(dims[current_dim] as c_long)?;
+                let index = slice.indices(dims[current_dim] as isize)?;
                 Ok((
                     Indexer::Slice(index.start as usize, index.stop as usize),
                     current_dim + 1,
@@ -548,7 +580,7 @@ impl PyTensor {
                     ));
                 }
                 Ok((Indexer::IndexSelect(t), current_dim + 1))
-            } else if let Ok(list) = py_indexer.downcast::<pyo3::types::PyList>() {
+            } else if let Ok(list) = py_indexer.cast::<pyo3::types::PyList>() {
                 // Handle a list of indices e.g. tensor[[0,1]]
                 let mut indexes = vec![];
                 for item in list.iter() {
@@ -561,26 +593,25 @@ impl PyTensor {
                     ),
                     current_dim + 1,
                 ))
-            } else if py_indexer.is_ellipsis() {
+            } else if py_indexer.is(py_indexer.py().Ellipsis()) {
                 // Handle '...' e.g. tensor[..., 0]
                 if current_dim > 0 {
                     return Err(PyTypeError::new_err(
                         "Ellipsis ('...') can only be used at the start of an indexing operation",
                     ));
                 }
-                Ok((Indexer::Elipsis, dims.len() - (index_argument_count - 1)))
+                Ok((Indexer::Ellipsis, dims.len() - (index_argument_count - 1)))
             } else if py_indexer.is_none() {
                 // Handle None e.g. tensor[None, 0]
                 Ok((Indexer::Expand, current_dim))
             } else {
                 Err(PyTypeError::new_err(format!(
-                    "unsupported indexer {}",
-                    py_indexer
+                    "unsupported indexer {py_indexer}"
                 )))
             }
         }
 
-        if let Ok(tuple) = idx.downcast::<pyo3::types::PyTuple>(py) {
+        if let Ok(tuple) = idx.cast_bound::<pyo3::types::PyTuple>(py) {
             let not_none_count: usize = tuple.iter().filter(|x| !x.is_none()).count();
 
             if not_none_count > dims.len() {
@@ -590,12 +621,12 @@ impl PyTensor {
             let mut current_dim = 0;
             for item in tuple.iter() {
                 let (indexer, new_current_dim) =
-                    extract_indexer(item, current_dim, dims, not_none_count)?;
+                    extract_indexer(&item, current_dim, dims, not_none_count)?;
                 current_dim = new_current_dim;
                 indexers.push(indexer);
             }
         } else {
-            let (indexer, _) = extract_indexer(idx.downcast::<PyAny>(py)?, 0, dims, 1)?;
+            let (indexer, _) = extract_indexer(idx.cast_bound::<PyAny>(py)?, 0, dims, 1)?;
             indexers.push(indexer);
         }
 
@@ -616,8 +647,9 @@ impl PyTensor {
                     current_dim += 1;
                     out
                 }
-                Indexer::Elipsis => {
-                    // Elipsis is a special case, it means that all remaining dimensions should be selected => advance the current_dim to the last dimension we have indexers for
+                Indexer::Ellipsis => {
+                    // Ellipsis is a special case, it means that all remaining dimensions should be
+                    // selected => advance the current_dim to the last dimension we have indexers for
                     current_dim += dims.len() - (indexers.len() - 1);
                     x
                 }
@@ -645,7 +677,7 @@ impl PyTensor {
 
     /// Add two tensors.
     /// &RETURNS&: Tensor
-    fn __add__(&self, rhs: &PyAny) -> PyResult<Self> {
+    fn __add__(&self, rhs: &Bound<PyAny>) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
             self.0.broadcast_add(&rhs.0).map_err(wrap_err)?
         } else if let Ok(rhs) = rhs.extract::<f64>() {
@@ -656,13 +688,13 @@ impl PyTensor {
         Ok(Self(tensor))
     }
 
-    fn __radd__(&self, rhs: &PyAny) -> PyResult<Self> {
+    fn __radd__(&self, rhs: &Bound<PyAny>) -> PyResult<Self> {
         self.__add__(rhs)
     }
 
     /// Multiply two tensors.
     /// &RETURNS&: Tensor
-    fn __mul__(&self, rhs: &PyAny) -> PyResult<Self> {
+    fn __mul__(&self, rhs: &Bound<PyAny>) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
             self.0.broadcast_mul(&rhs.0).map_err(wrap_err)?
         } else if let Ok(rhs) = rhs.extract::<f64>() {
@@ -673,13 +705,13 @@ impl PyTensor {
         Ok(Self(tensor))
     }
 
-    fn __rmul__(&self, rhs: &PyAny) -> PyResult<Self> {
+    fn __rmul__(&self, rhs: &Bound<PyAny>) -> PyResult<Self> {
         self.__mul__(rhs)
     }
 
     /// Subtract two tensors.
     /// &RETURNS&: Tensor
-    fn __sub__(&self, rhs: &PyAny) -> PyResult<Self> {
+    fn __sub__(&self, rhs: &Bound<PyAny>) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
             self.0.broadcast_sub(&rhs.0).map_err(wrap_err)?
         } else if let Ok(rhs) = rhs.extract::<f64>() {
@@ -692,7 +724,7 @@ impl PyTensor {
 
     /// Divide two tensors.
     /// &RETURNS&: Tensor
-    fn __truediv__(&self, rhs: &PyAny) -> PyResult<Self> {
+    fn __truediv__(&self, rhs: &Bound<PyAny>) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
             self.0.broadcast_div(&rhs.0).map_err(wrap_err)?
         } else if let Ok(rhs) = rhs.extract::<f64>() {
@@ -704,7 +736,7 @@ impl PyTensor {
     }
     /// Rich-compare two tensors.
     /// &RETURNS&: Tensor
-    fn __richcmp__(&self, rhs: &PyAny, op: CompareOp) -> PyResult<Self> {
+    fn __richcmp__(&self, rhs: &Bound<PyAny>, op: CompareOp) -> PyResult<Self> {
         let compare = |lhs: &Tensor, rhs: &Tensor| {
             let t = match op {
                 CompareOp::Eq => lhs.eq(rhs),
@@ -741,7 +773,7 @@ impl PyTensor {
 
             compare(&self.0, &scalar_tensor)
         } else {
-            return Err(PyTypeError::new_err("unsupported rhs for __richcmp__"));
+            Err(PyTypeError::new_err("unsupported rhs for __richcmp__"))
         }
     }
 
@@ -863,7 +895,7 @@ impl PyTensor {
     #[pyo3(text_signature = "(self, dim:Union[int, List[int]])")]
     /// Returns the sum of all elements in the input tensor. The sum is performed over all the input dimensions.
     /// &RETURNS&: Tensor
-    fn sum_keepdim(&self, dims: PyObject, py: Python<'_>) -> PyResult<Self> {
+    fn sum_keepdim(&self, dims: Py<PyAny>, py: Python<'_>) -> PyResult<Self> {
         let dims = if let Ok(dim) = dims.extract::<usize>(py) {
             vec![dim]
         } else {
@@ -937,8 +969,8 @@ impl PyTensor {
 
     /// Detach the tensor from the computation graph.
     /// &RETURNS&: Tensor
-    fn detach(&self) -> PyResult<Self> {
-        Ok(PyTensor(self.0.detach().map_err(wrap_err)?))
+    fn detach(&self) -> Self {
+        PyTensor(self.0.detach())
     }
 
     /// Returns a copy of the tensor.
@@ -950,7 +982,7 @@ impl PyTensor {
     #[pyo3(signature = (*args, **kwargs), text_signature = "(self, *args, **kwargs)")]
     /// Performs Tensor dtype and/or device conversion.
     /// &RETURNS&: Tensor
-    fn to(&self, args: &PyTuple, kwargs: Option<&PyDict>) -> PyResult<Self> {
+    fn to(&self, args: &Bound<PyTuple>, kwargs: Option<&Bound<PyDict>>) -> PyResult<Self> {
         let mut device: Option<PyDevice> = None;
         let mut dtype: Option<PyDType> = None;
         let mut other: Option<PyTensor> = None;
@@ -960,11 +992,11 @@ impl PyTensor {
             extraction_result: PyResult<T>,
             err_msg: &'static str,
         ) -> PyResult<()> {
-            if let Ok(sucessfull_extraction) = extraction_result {
+            if let Ok(successful_extraction) = extraction_result {
                 if opt.is_some() {
                     return Err(PyValueError::new_err(err_msg));
                 }
-                *opt = Some(sucessfull_extraction);
+                *opt = Some(successful_extraction);
             }
             Ok(())
         }
@@ -980,13 +1012,13 @@ impl PyTensor {
             } else if arg.extract::<PyDType>().is_ok() {
                 handle_duplicates(
                     &mut dtype,
-                    arg.extract::<PyDType>(),
+                    arg.extract::<PyDType>().map_err(PyErr::from),
                     "cannot specify multiple dtypes",
                 )?;
             } else if arg.extract::<PyTensor>().is_ok() {
                 handle_duplicates(
                     &mut other,
-                    arg.extract::<PyTensor>(),
+                    arg.extract::<PyTensor>().map_err(PyErr::from),
                     "cannot specify multiple output tensors",
                 )?;
             } else {
@@ -1001,7 +1033,7 @@ impl PyTensor {
             if let Ok(Some(any)) = kwargs.get_item("dtype") {
                 handle_duplicates(
                     &mut dtype,
-                    any.extract::<PyDType>(),
+                    any.extract::<PyDType>().map_err(PyErr::from),
                     "cannot specify multiple dtypes",
                 )?;
             }
@@ -1015,7 +1047,7 @@ impl PyTensor {
             if let Ok(Some(any)) = kwargs.get_item("other") {
                 handle_duplicates(
                     &mut other,
-                    any.extract::<PyTensor>(),
+                    any.extract::<PyTensor>().map_err(PyErr::from),
                     "cannot specify multiple output tensors",
                 )?;
             }
@@ -1045,9 +1077,7 @@ impl PyTensor {
                 .map_err(wrap_err)?,
             (Some(device), None) => self.0.to_device(&device.as_device()?).map_err(wrap_err)?,
             (None, Some(dtype)) => self.0.to_dtype(dtype.0).map_err(wrap_err)?,
-            (None, None) => {
-                return Err(PyTypeError::new_err("No valide dtype or device specified"))
-            }
+            (None, None) => return Err(PyTypeError::new_err("No valid dtype or device specified")),
         };
 
         Ok(PyTensor(result))
@@ -1056,7 +1086,7 @@ impl PyTensor {
     #[pyo3(text_signature = "(self, dtype:Union[str,DType])")]
     /// Convert the tensor to a new dtype.
     /// &RETURNS&: Tensor
-    fn to_dtype(&self, dtype: PyObject, py: Python<'_>) -> PyResult<Self> {
+    fn to_dtype(&self, dtype: Py<PyAny>, py: Python<'_>) -> PyResult<Self> {
         let dtype = PyDType::from_pyobject(dtype, py)?;
         Ok(PyTensor(self.0.to_dtype(dtype.0).map_err(wrap_err)?))
     }
@@ -1075,20 +1105,20 @@ impl PyTensor {
     fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
         use ::candle::quantized;
         let res = match quantized_dtype.to_lowercase().as_str() {
-            "q2k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ2K>(self),
-            "q3k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ3K>(self),
-            "q4_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4_0>(self),
-            "q4_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4_1>(self),
-            "q4k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4K>(self),
-            "q5_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5_0>(self),
-            "q5_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5_1>(self),
-            "q5k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5K>(self),
-            "q6k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ6K>(self),
-            "q8_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8_0>(self),
-            "q8_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8_1>(self),
-            "q8k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8K>(self),
-            "f16" => quantized::QTensor::quantize::<f16>(self),
-            "f32" => quantized::QTensor::quantize::<f32>(self),
+            "q2k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q2K),
+            "q3k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q3K),
+            "q4_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q4_0),
+            "q4_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q4_1),
+            "q4k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q4K),
+            "q5_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q5_0),
+            "q5_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q5_1),
+            "q5k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q5K),
+            "q6k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q6K),
+            "q8_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8_0),
+            "q8_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8_1),
+            "q8k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8K),
+            "f16" => quantized::QTensor::quantize(self, quantized::GgmlDType::F16),
+            "f32" => quantized::QTensor::quantize(self, quantized::GgmlDType::F32),
             dt => {
                 return Err(PyErr::new::<PyValueError, _>(format!(
                     "unknown quantized-dtype {dt}"
@@ -1127,7 +1157,7 @@ fn stack(tensors: Vec<PyTensor>, dim: usize) -> PyResult<PyTensor> {
 #[pyo3(text_signature = "(data:_ArrayLike)")]
 /// Creates a new tensor from a Python value. The value can be a scalar or array-like object.
 /// &RETURNS&: Tensor
-fn tensor(py: Python<'_>, data: PyObject) -> PyResult<PyTensor> {
+fn tensor(py: Python<'_>, data: Py<PyAny>) -> PyResult<PyTensor> {
     PyTensor::new(py, data)
 }
 
@@ -1158,7 +1188,7 @@ fn randn(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<
 fn ones(
     py: Python<'_>,
     shape: PyShape,
-    dtype: Option<PyObject>,
+    dtype: Option<Py<PyAny>>,
     device: Option<PyDevice>,
 ) -> PyResult<PyTensor> {
     let dtype = match dtype {
@@ -1177,7 +1207,7 @@ fn ones(
 fn zeros(
     py: Python<'_>,
     shape: PyShape,
-    dtype: Option<PyObject>,
+    dtype: Option<Py<PyAny>>,
     device: Option<PyDevice>,
 ) -> PyResult<PyTensor> {
     let dtype = match dtype {
@@ -1221,8 +1251,8 @@ impl PyQTensor {
     #[getter]
     ///Gets the shape of the tensor.
     /// &RETURNS&: Tuple[int]
-    fn shape(&self, py: Python<'_>) -> PyObject {
-        PyTuple::new(py, self.0.shape().dims()).to_object(py)
+    fn shape<'py>(&self, py: Python<'py>) -> Bound<'py, PyTuple> {
+        PyTuple::new(py, self.0.shape().dims()).unwrap()
     }
 
     fn __repr__(&self) -> String {
@@ -1234,7 +1264,7 @@ impl PyQTensor {
     }
 
     /// Dequantizes the tensor.
-    /// &RETURNS&: Tensor  
+    /// &RETURNS&: Tensor
     fn dequantize(&self) -> PyResult<PyTensor> {
         let tensor = self.0.dequantize(&Device::Cpu).map_err(wrap_err)?;
         Ok(PyTensor(tensor))
@@ -1254,13 +1284,13 @@ impl PyQTensor {
 #[pyo3(text_signature = "(path:Union[str,PathLike])")]
 /// Loads a safetensors file. Returns a dictionary mapping tensor names to tensors.
 /// &RETURNS&: Dict[str,Tensor]
-fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<PyObject> {
+fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<Py<PyAny>> {
     let res = ::candle::safetensors::load(path, &Device::Cpu).map_err(wrap_err)?;
     let res = res
         .into_iter()
-        .map(|(key, value)| (key, PyTensor(value).into_py(py)))
+        .map(|(key, value)| (key, PyTensor(value)))
         .collect::<Vec<_>>();
-    Ok(res.into_py_dict(py).to_object(py))
+    res.into_py_dict(py)?.into_pyobject(py)?.into_py_any(py)
 }
 
 #[pyfunction]
@@ -1279,20 +1309,25 @@ fn save_safetensors(
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike])")]
+#[pyo3(signature = (path, device = None))]
 /// Load a GGML file. Returns a tuple of three objects: a dictionary mapping tensor names to tensors,
 /// a dictionary mapping hyperparameter names to hyperparameter values, and a vocabulary.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any], List[str]]
-fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObject)> {
+fn load_ggml<'py>(
+    path: &str,
+    device: Option<PyDevice>,
+    py: Python<'py>,
+) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDict>, Py<PyAny>)> {
     let mut file = std::fs::File::open(path)?;
-    let ggml = ::candle::quantized::ggml_file::Content::read(&mut file).map_err(wrap_err)?;
+    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
+    let ggml =
+        ::candle::quantized::ggml_file::Content::read(&mut file, &device).map_err(wrap_err)?;
     let tensors = ggml
         .tensors
         .into_iter()
-        .map(|(key, qtensor)| Ok((key, PyQTensor(Arc::new(qtensor)).into_py(py))))
-        .collect::<::candle::Result<Vec<_>>>()
-        .map_err(wrap_err)?;
-    let tensors = tensors.into_py_dict(py).to_object(py);
+        .map(|(key, qtensor)| Ok((key, PyQTensor(Arc::new(qtensor)))))
+        .collect::<PyResult<Vec<_>>>()?;
+    let tensors = tensors.into_py_dict(py)?;
     let hparams = [
         ("n_vocab", ggml.hparams.n_vocab),
         ("n_embd", ggml.hparams.n_embd),
@@ -1302,38 +1337,43 @@ fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObje
         ("n_rot", ggml.hparams.n_rot),
         ("ftype", ggml.hparams.ftype),
     ];
-    let hparams = hparams.into_py_dict(py).to_object(py);
+    let hparams = hparams.into_py_dict(py)?;
     let vocab = ggml
         .vocab
         .token_score_pairs
         .iter()
         .map(|(bytes, _)| String::from_utf8_lossy(bytes.as_slice()).to_string())
         .collect::<Vec<String>>()
-        .to_object(py);
+        .into_py_any(py)?;
     Ok((tensors, hparams, vocab))
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike])")]
+#[pyo3(signature = (path, device = None))]
 /// Loads a GGUF file. Returns a tuple of two dictionaries: the first maps tensor names to tensors,
 /// and the second maps metadata keys to metadata values.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any]]
-fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+fn load_gguf<'py>(
+    path: &str,
+    device: Option<PyDevice>,
+    py: Python<'py>,
+) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDict>)> {
+    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
     use ::candle::quantized::gguf_file;
-    fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {
-        let v: PyObject = match v {
-            gguf_file::Value::U8(x) => x.into_py(py),
-            gguf_file::Value::I8(x) => x.into_py(py),
-            gguf_file::Value::U16(x) => x.into_py(py),
-            gguf_file::Value::I16(x) => x.into_py(py),
-            gguf_file::Value::U32(x) => x.into_py(py),
-            gguf_file::Value::I32(x) => x.into_py(py),
-            gguf_file::Value::U64(x) => x.into_py(py),
-            gguf_file::Value::I64(x) => x.into_py(py),
-            gguf_file::Value::F32(x) => x.into_py(py),
-            gguf_file::Value::F64(x) => x.into_py(py),
-            gguf_file::Value::Bool(x) => x.into_py(py),
-            gguf_file::Value::String(x) => x.into_py(py),
+    fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let v: Py<PyAny> = match v {
+            gguf_file::Value::U8(x) => x.into_py_any(py)?,
+            gguf_file::Value::I8(x) => x.into_py_any(py)?,
+            gguf_file::Value::U16(x) => x.into_py_any(py)?,
+            gguf_file::Value::I16(x) => x.into_py_any(py)?,
+            gguf_file::Value::U32(x) => x.into_py_any(py)?,
+            gguf_file::Value::I32(x) => x.into_py_any(py)?,
+            gguf_file::Value::U64(x) => x.into_py_any(py)?,
+            gguf_file::Value::I64(x) => x.into_py_any(py)?,
+            gguf_file::Value::F32(x) => x.into_py_any(py)?,
+            gguf_file::Value::F64(x) => x.into_py_any(py)?,
+            gguf_file::Value::Bool(x) => x.into_py_any(py)?,
+            gguf_file::Value::String(x) => x.into_py_any(py)?,
             gguf_file::Value::Array(x) => {
                 let list = pyo3::types::PyList::empty(py);
                 for elem in x.iter() {
@@ -1350,31 +1390,29 @@ fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
         .tensor_infos
         .keys()
         .map(|key| {
-            let qtensor = gguf.tensor(&mut file, key)?;
-            Ok((key, PyQTensor(Arc::new(qtensor)).into_py(py)))
+            let qtensor = gguf.tensor(&mut file, key, &device).map_err(wrap_err)?;
+            Ok((key, PyQTensor(Arc::new(qtensor))))
         })
-        .collect::<::candle::Result<Vec<_>>>()
-        .map_err(wrap_err)?;
-    let tensors = tensors.into_py_dict(py).to_object(py);
+        .collect::<PyResult<Vec<(&String, PyQTensor)>>>()?;
+    let tensors = tensors.into_py_dict(py)?;
     let metadata = gguf
         .metadata
         .iter()
         .map(|(key, value)| Ok((key, gguf_value_to_pyobject(value, py)?)))
         .collect::<PyResult<Vec<_>>>()?
-        .into_py_dict(py)
-        .to_object(py);
+        .into_py_dict(py)?;
     Ok((tensors, metadata))
 }
 
 #[pyfunction]
 #[pyo3(
-    text_signature = "(path:Union[str,PathLike], tensors:Dict[str,QTensor], metadata:Dict[str,Any])"
+    signature = (path, tensors, metadata)
 )]
-/// Save quanitzed tensors and metadata to a GGUF file.
-fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) -> PyResult<()> {
+/// Save quantized tensors and metadata to a GGUF file.
+fn save_gguf(path: &str, tensors: Py<PyAny>, metadata: Py<PyAny>, py: Python<'_>) -> PyResult<()> {
     use ::candle::quantized::gguf_file;
 
-    fn pyobject_to_gguf_value(v: &PyAny, py: Python<'_>) -> PyResult<gguf_file::Value> {
+    fn pyobject_to_gguf_value(v: &Bound<PyAny>, py: Python<'_>) -> PyResult<gguf_file::Value> {
         let v: gguf_file::Value = if let Ok(x) = v.extract::<u8>() {
             gguf_file::Value::U8(x)
         } else if let Ok(x) = v.extract::<i8>() {
@@ -1399,22 +1437,21 @@ fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) 
             gguf_file::Value::Bool(x)
         } else if let Ok(x) = v.extract::<String>() {
             gguf_file::Value::String(x)
-        } else if let Ok(x) = v.extract::<Vec<PyObject>>() {
+        } else if let Ok(x) = v.extract::<Vec<Py<PyAny>>>() {
             let x = x
                 .into_iter()
-                .map(|f| pyobject_to_gguf_value(f.as_ref(py), py))
+                .map(|f| pyobject_to_gguf_value(f.bind(py), py))
                 .collect::<PyResult<Vec<_>>>()?;
             gguf_file::Value::Array(x)
         } else {
             return Err(PyErr::new::<PyValueError, _>(format!(
-                "unsupported type {:?}",
-                v
+                "unsupported type {v:?}"
             )));
         };
         Ok(v)
     }
     let tensors = tensors
-        .extract::<&PyDict>(py)
+        .cast_bound::<PyDict>(py)
         .map_err(|_| PyErr::new::<PyValueError, _>("expected a dict"))?
         .iter()
         .map(|(key, value)| {
@@ -1427,14 +1464,14 @@ fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) 
         .collect::<PyResult<Vec<_>>>()?;
 
     let metadata = metadata
-        .extract::<&PyDict>(py)
+        .cast_bound::<PyDict>(py)
         .map_err(|_| PyErr::new::<PyValueError, _>("expected a dict"))?
         .iter()
         .map(|(key, value)| {
             Ok((
                 key.extract::<String>()
                     .map_err(|_| PyErr::new::<PyValueError, _>("keys must be strings"))?,
-                pyobject_to_gguf_value(value, py)?,
+                pyobject_to_gguf_value(&value.as_borrowed(), py)?,
             ))
         })
         .collect::<PyResult<Vec<_>>>()?;
@@ -1482,7 +1519,7 @@ fn get_num_threads() -> usize {
     ::candle::utils::get_num_threads()
 }
 
-fn candle_utils(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn candle_utils(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cuda_is_available, m)?)?;
     m.add_function(wrap_pyfunction!(get_num_threads, m)?)?;
     m.add_function(wrap_pyfunction!(has_accelerate, m)?)?;
@@ -1563,7 +1600,7 @@ fn tanh(tensor: PyTensor) -> PyResult<PyTensor> {
     Ok(PyTensor(s))
 }
 
-fn candle_functional_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn candle_functional_m(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(silu, m)?)?;
     m.add_function(wrap_pyfunction!(softmax, m)?)?;
     m.add_function(wrap_pyfunction!(max_pool2d, m)?)?;
@@ -1575,7 +1612,7 @@ fn candle_functional_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 }
 
 #[cfg(feature = "onnx")]
-fn candle_onnx_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn candle_onnx_m(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     use onnx::{PyONNXModel, PyONNXTensorDescriptor};
     m.add_class::<PyONNXModel>()?;
     m.add_class::<PyONNXTensorDescriptor>()?;
@@ -1583,18 +1620,18 @@ fn candle_onnx_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 }
 
 #[pymodule]
-fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn candle(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let utils = PyModule::new(py, "utils")?;
-    candle_utils(py, utils)?;
-    m.add_submodule(utils)?;
+    candle_utils(py, &utils)?;
+    m.add_submodule(&utils)?;
     let nn = PyModule::new(py, "functional")?;
-    candle_functional_m(py, nn)?;
-    m.add_submodule(nn)?;
+    candle_functional_m(py, &nn)?;
+    m.add_submodule(&nn)?;
     #[cfg(feature = "onnx")]
     {
         let onnx = PyModule::new(py, "onnx")?;
-        candle_onnx_m(py, onnx)?;
-        m.add_submodule(onnx)?;
+        candle_onnx_m(py, &onnx)?;
+        m.add_submodule(&onnx)?;
     }
     m.add_class::<PyTensor>()?;
     m.add_class::<PyQTensor>()?;

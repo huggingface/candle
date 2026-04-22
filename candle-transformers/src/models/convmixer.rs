@@ -1,3 +1,10 @@
+//! ConvMixer implementation.
+//!
+//! See "Patches Are All You Need?" by Trockman et al. 2022
+//!
+//! - 📝 [Arxiv](https://arxiv.org/abs/2201.09792)
+//! - 💻 [GitHub](https://github.com/locuslab/convmixer)
+//!
 use candle::Result;
 use candle_nn::{batch_norm, Conv2dConfig, Module, VarBuilder};
 
@@ -14,8 +21,8 @@ fn conv2d_same(
     let module = candle_nn::func(move |xs| {
         let ih = xs.dim(2)?;
         let iw = xs.dim(3)?;
-        let oh = (ih + s - 1) / s;
-        let ow = (iw + s - 1) / s;
+        let oh = ih.div_ceil(s);
+        let ow = iw.div_ceil(s);
         let pad_h = usize::max((oh - 1) * s + k - ih, 0);
         let pad_w = usize::max((ow - 1) * s + k - iw, 0);
         if pad_h > 0 || pad_w > 0 {
@@ -40,8 +47,8 @@ fn block(dim: usize, kernel_size: usize, vb: VarBuilder) -> Result<impl Module> 
     let conv2 = candle_nn::conv2d(dim, dim, 1, Default::default(), vb.pp(1))?;
     let bn2 = batch_norm(dim, 1e-5, vb.pp(3))?;
     Ok(candle_nn::func(move |xs| {
-        let ys = xs.apply(&conv1)?.gelu_erf()?.apply(&bn1)?;
-        (xs + ys)?.apply(&conv2)?.gelu_erf()?.apply(&bn2)
+        let ys = xs.apply(&conv1)?.gelu_erf()?.apply_t(&bn1, false)?;
+        (xs + ys)?.apply(&conv2)?.gelu_erf()?.apply_t(&bn2, false)
     }))
 }
 
@@ -64,7 +71,7 @@ fn convmixer(
         .collect::<Result<Vec<_>>>()?;
     let fc = candle_nn::linear(dim, nclasses, vb.pp(25))?;
     Ok(candle_nn::func(move |xs| {
-        let mut xs = xs.apply(&conv1)?.gelu_erf()?.apply(&bn1)?;
+        let mut xs = xs.apply(&conv1)?.gelu_erf()?.apply_t(&bn1, false)?;
         for block in blocks.iter() {
             xs = xs.apply(block)?
         }

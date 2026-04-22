@@ -132,7 +132,8 @@ impl T5ModelBuilder {
     }
 
     pub fn build_model(&self) -> Result<t5::T5ForConditionalGeneration> {
-        let vb = t5::VarBuilder::from_gguf(&self.weights_filename)?;
+        let device = Device::Cpu;
+        let vb = t5::VarBuilder::from_gguf(&self.weights_filename, &device)?;
         Ok(t5::T5ForConditionalGeneration::load(vb, &self.config)?)
     }
 

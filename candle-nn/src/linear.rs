@@ -41,12 +41,36 @@ impl Linear {
 
 impl super::Module for Linear {
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
-        let w = match *x.dims() {
-            [b1, b2, _, _] => self.weight.broadcast_left((b1, b2))?.t()?,
-            [bsize, _, _] => self.weight.broadcast_left(bsize)?.t()?,
-            _ => self.weight.t()?,
+        // When possible, we avoid using a broadcasted matmul as it is much slower
+        // than the standard matmul for the cuda and cpu backends.
+        let x = match *x.dims() {
+            [b1, b2, m, k] => {
+                if x.is_contiguous() {
+                    let w = self.weight.t()?;
+                    x.reshape((b1 * b2 * m, k))?
+                        .matmul(&w)?
+                        .reshape((b1, b2, m, ()))?
+                } else {
+                    let w = self.weight.broadcast_left((b1, b2))?.t()?;
+                    x.matmul(&w)?
+                }
+            }
+            [bsize, m, k] => {
+                if x.is_contiguous() {
+                    let w = self.weight.t()?;
+                    x.reshape((bsize * m, k))?
+                        .matmul(&w)?
+                        .reshape((bsize, m, ()))?
+                } else {
+                    let w = self.weight.broadcast_left(bsize)?.t()?;
+                    x.matmul(&w)?
+                }
+            }
+            _ => {
+                let w = self.weight.t()?;
+                x.matmul(&w)?
+            }
         };
-        let x = x.matmul(&w)?;
         match &self.bias {
             None => Ok(x),
             Some(bias) => x.broadcast_add(bias),
@@ -57,21 +81,34 @@ impl super::Module for Linear {
 /// Create or initialize a new linear layer.
 ///
 /// This uses some default names for weights and biases, namely `"weight"` and `"bias"`.
-pub fn linear(in_dim: usize, out_dim: usize, vs: crate::VarBuilder) -> Result<Linear> {
+pub fn linear(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Linear> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
+    let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
     let bound = 1. / (in_dim as f64).sqrt();
     let init_bs = crate::Init::Uniform {
         lo: -bound,
         up: bound,
     };
-    let bs = vs.get_with_hints(out_dim, "bias", init_bs)?;
+    let bs = vb.get_with_hints(out_dim, "bias", init_bs)?;
     Ok(Linear::new(ws, Some(bs)))
 }
 
 /// Create or initialize a new linear layer without biases.
-pub fn linear_no_bias(in_dim: usize, out_dim: usize, vs: crate::VarBuilder) -> Result<Linear> {
+pub fn linear_no_bias(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Linear> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
+    let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
     Ok(Linear::new(ws, None))
+}
+
+pub fn linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: crate::VarBuilder,
+) -> Result<Linear> {
+    if bias {
+        linear(in_dim, out_dim, vb)
+    } else {
+        linear_no_bias(in_dim, out_dim, vb)
+    }
 }

@@ -24,7 +24,7 @@ macro_rules! console_log {
 }
 
 // Communication to the worker happens through bincode, the model weights and configs are fetched
-// on the main thread and transfered via the following structure.
+// on the main thread and transferred via the following structure.
 #[derive(Serialize, Deserialize)]
 pub struct ModelData {
     pub tokenizer: Vec<u8>,
@@ -190,7 +190,7 @@ impl TransformerWeights {
         })
     }
 
-    fn var_builder(&self, cfg: &Config, device: &Device) -> Result<VarBuilder> {
+    fn var_builder(&self, cfg: &Config, device: &Device) -> Result<VarBuilder<'_>> {
         let mut ws = std::collections::HashMap::new();
         let mut insert = |name: &str, t: Tensor| {
             ws.insert(name.to_string(), t);

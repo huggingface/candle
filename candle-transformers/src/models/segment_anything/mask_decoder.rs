@@ -182,7 +182,7 @@ impl MaskDecoder {
         sparse_prompt_embeddings: &Tensor,
         dense_prompt_embeddings: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
-        // Concatenate ouput tokens.
+        // Concatenate output tokens.
         let output_tokens = Tensor::cat(
             &[self.iou_token.embeddings(), self.mask_tokens.embeddings()],
             0,

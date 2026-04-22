@@ -1,3 +1,4 @@
+//! Tensor Layouts including contiguous or sparse strides
 use crate::{Error, Result, Shape};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -35,6 +36,12 @@ impl Layout {
         self.shape.dims()
     }
 
+    /// The dimension size for a specified dimension index.
+    pub fn dim<D: crate::shape::Dim>(&self, dim: D) -> Result<usize> {
+        let dim = dim.to_index(&self.shape, "dim")?;
+        Ok(self.dims()[dim])
+    }
+
     pub fn shape(&self) -> &Shape {
         &self.shape
     }
@@ -70,7 +77,7 @@ impl Layout {
         self.shape.is_fortran_contiguous(&self.stride)
     }
 
-    pub(crate) fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self> {
+    pub fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self> {
         let dims = self.shape().dims();
         if dim >= dims.len() {
             Err(Error::DimOutOfRange {
@@ -99,7 +106,7 @@ impl Layout {
         })
     }
 
-    pub(crate) fn transpose(&self, dim1: usize, dim2: usize) -> Result<Self> {
+    pub fn transpose(&self, dim1: usize, dim2: usize) -> Result<Self> {
         let rank = self.shape.rank();
         if rank <= dim1 || rank <= dim2 {
             Err(Error::UnexpectedNumberOfDims {
@@ -120,7 +127,7 @@ impl Layout {
         })
     }
 
-    pub(crate) fn permute(&self, idxs: &[usize]) -> Result<Self> {
+    pub fn permute(&self, idxs: &[usize]) -> Result<Self> {
         let is_permutation =
             idxs.len() == self.shape.rank() && (0..idxs.len()).all(|i| idxs.contains(&i));
         if !is_permutation {
@@ -180,11 +187,11 @@ impl Layout {
         })
     }
 
-    pub(crate) fn strided_index(&self) -> crate::StridedIndex {
+    pub(crate) fn strided_index(&self) -> crate::StridedIndex<'_> {
         crate::StridedIndex::from_layout(self)
     }
 
-    pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks {
+    pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
         let mut block_len = 1;
         let mut contiguous_dims = 0; // These are counted from the right.
         for (&stride, &dim) in self.stride().iter().zip(self.dims().iter()).rev() {
