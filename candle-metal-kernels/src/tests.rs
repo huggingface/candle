@@ -1,6 +1,11 @@
 use super::*;
+use crate::metal::{create_command_buffer, CommandSemaphore, Commands};
+use core::ffi::c_void;
 use half::{bf16, f16};
-use metal::MTLResourceOptions;
+use rand::prelude::SliceRandom;
+use rand::{rng, Rng};
+use std::sync::Arc;
+use std::thread;
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
@@ -10,10 +15,10 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
 }
 
 fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
-    let options = MTLResourceOptions::StorageModeManaged;
+    let options = RESOURCE_OPTIONS;
     let ptr = data.as_ptr() as *const c_void;
-    let size = (data.len() * std::mem::size_of::<T>()) as u64;
-    device.new_buffer_with_data(ptr, size, options)
+    let size = std::mem::size_of_val(data);
+    device.new_buffer_with_data(ptr, size, options).unwrap()
 }
 
 fn device() -> Device {
@@ -38,17 +43,23 @@ fn approx_bf16(v: Vec<bf16>, digits: i32) -> Vec<f32> {
 fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
+    let input = BufferOffset {
+        buffer: &input,
+        offset_in_bytes: 0,
+    };
     let output = new_buffer(&device, v);
     call_unary_contiguous(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         v.len(),
-        &input,
+        input,
         &output,
     )
     .unwrap();
@@ -57,23 +68,27 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     read_to_vec(&output, v.len())
 }
 
-fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> Vec<T> {
+fn run_binary<T: Clone, S: ToString>(x: &[T], y: &[T], name: S) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
-    let options = MTLResourceOptions::StorageModeManaged;
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+    let options = RESOURCE_OPTIONS;
     let left = new_buffer(&device, x);
     let right = new_buffer(&device, y);
-    let output = device.new_buffer(std::mem::size_of_val(x) as u64, options);
+    let output = device
+        .new_buffer(std::mem::size_of_val(x), options)
+        .unwrap();
     call_binary_contiguous(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         x.len(),
-        &left,
-        &right,
+        BufferOffset::zero_offset(&left),
+        BufferOffset::zero_offset(&right),
         &output,
     )
     .unwrap();
@@ -90,27 +105,34 @@ fn run_strided<T: Clone>(
     offset: usize,
 ) -> Vec<T> {
     let device = device();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
-    let output = new_buffer(&device, v);
+    let input = BufferOffset {
+        buffer: &input,
+        offset_in_bytes: offset,
+    };
+    let output_b = new_buffer(&device, v);
+    let output = BufferOffset {
+        buffer: &output_b,
+        offset_in_bytes: 0,
+    };
     let kernels = Kernels::new();
     call_unary_strided(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         kernel,
         shape,
-        &input,
+        input,
         strides,
-        offset,
-        &output,
-        0,
+        output,
     )
     .unwrap();
     command_buffer.commit();
     command_buffer.wait_until_completed();
-    read_to_vec(&output, v.len())
+    read_to_vec(&output_b, v.len())
 }
 
 #[test]
@@ -218,9 +240,9 @@ fn gelu_f16() {
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect();
-    let expected: Vec<f32> = vec![-0.0, -0.16, 0.0, 0.84, 1.96, 3.0, 10.0, 20.0];
+    let expected: Vec<f32> = vec![-0.0, -0.159, 0.0, 0.841, 1.954, 2.996, 10.0, 20.0];
     let results = run(&v, unary::contiguous::gelu::HALF);
-    assert_eq!(approx_f16(results, 2), expected);
+    assert_eq!(approx_f16(results, 3), expected);
 }
 
 #[test]
@@ -254,7 +276,7 @@ fn silu_f32() {
 fn binary_add_f32() {
     let left = vec![1.0f32, 2.0, 3.0];
     let right = vec![2.0f32, 3.1, 4.2];
-    let results = run_binary(&left, &right, binary::contiguous::add::FLOAT);
+    let results = run_binary(&left, &right, "badd_f32");
     let expected: Vec<_> = left
         .iter()
         .zip(right.iter())
@@ -273,43 +295,47 @@ fn binary_ops_bf16() {
         .collect();
 
     macro_rules! binary_op {
-        ($opname:ident, $opexpr:expr) => {{
-            let results = run_binary(&lhs, &rhs, binary::contiguous::$opname::BFLOAT);
+        ($opname:ident, $dtype:ident, $opexpr:expr) => {{
+            let results = run_binary(
+                &lhs,
+                &rhs,
+                concat!(stringify!($opname), "_", stringify!($dtype)),
+            );
             let expected: Vec<bf16> = lhs
                 .iter()
                 .zip(rhs.iter())
-                .map(|(x, y): (&bf16, &bf16)| $opexpr(*x, *y))
+                .map(|(x, y): (&$dtype, &$dtype)| $opexpr(*x, *y))
                 .collect();
             assert_eq!(results, expected);
         }};
     }
-
-    binary_op!(add, |x, y| x + y);
-    binary_op!(sub, |x, y| x - y);
-    binary_op!(mul, |x, y| x * y);
-    binary_op!(div, |x, y| x / y);
-    binary_op!(min, |x: bf16, y| x.min(y));
-    binary_op!(max, |x: bf16, y| x.max(y));
+    binary_op!(badd, bf16, |x, y| x + y);
+    binary_op!(bsub, bf16, |x, y| x - y);
+    binary_op!(bmul, bf16, |x, y| x * y);
+    binary_op!(bdiv, bf16, |x, y| x / y);
+    binary_op!(bminimum, bf16, |x: bf16, y| x.min(y));
+    binary_op!(bmaximum, bf16, |x: bf16, y| x.max(y));
 }
 
 fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
-    let options = MTLResourceOptions::StorageModeManaged;
-    let size = (v.len() * std::mem::size_of::<U>()) as u64;
-    let output = device.new_buffer(size, options);
+    let options = RESOURCE_OPTIONS;
+    let size = v.len() * std::mem::size_of::<U>();
+    let output = device.new_buffer(size, options).unwrap();
 
     call_cast_contiguous(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         v.len(),
-        &input,
-        0,
+        BufferOffset::zero_offset(&input),
         &output,
     )
     .unwrap();
@@ -320,7 +346,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
 
 #[test]
 fn cast_f32() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -351,7 +377,7 @@ fn cast_f32() {
 
 #[test]
 fn cast_f16() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -382,7 +408,7 @@ fn cast_f16() {
 
 #[test]
 fn cast_bf16() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -413,7 +439,7 @@ fn cast_bf16() {
 
 #[test]
 fn cast_u32() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -444,7 +470,7 @@ fn cast_u32() {
 
 #[test]
 fn cast_u8() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -475,7 +501,7 @@ fn cast_u8() {
 
 #[test]
 fn cast_i64() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -507,8 +533,9 @@ fn cast_i64() {
 fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
@@ -517,11 +544,12 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
 
     call_affine(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         "affine_f32",
+        size_of::<T>(),
         size,
-        &input,
+        BufferOffset::zero_offset(&input),
         &output,
         mul as f32,
         add as f32,
@@ -542,21 +570,21 @@ fn run_affine_strided<T: Clone>(
 ) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
 
     call_affine_strided(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         "affine_f32_strided",
         shape,
-        &input,
+        BufferOffset::zero_offset(&input),
         strides,
-        0,
         &output,
         mul as f32,
         add as f32,
@@ -596,6 +624,70 @@ fn affine_strided() {
     assert_eq!(result, vec![2.6, 5.6, 8.6, 11.6]);
 }
 
+fn run_mlx_sort<T: Clone>(v: &[T], ncols: usize) -> Vec<u32> {
+    let nrows = v.len() / ncols;
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+
+    let input = new_buffer(&device, v);
+    let indexes = vec![0u32; v.len()];
+    let output = new_buffer(&device, &indexes);
+
+    call_mlx_arg_sort(
+        &device,
+        &command_buffer,
+        &kernels,
+        DType::F32,
+        nrows,
+        ncols,
+        BufferOffset::zero_offset(&input),
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+    read_to_vec(&output, v.len())
+}
+
+#[test]
+fn mlx_sort() {
+    use rand::SeedableRng;
+    use rand_distr::Distribution;
+
+    let input: Vec<_> = (0..8).map(|v| v as f32).collect();
+    let result = run_mlx_sort(&input, 4);
+    assert_eq!(result, [0, 1, 2, 3, 0, 1, 2, 3]);
+    let input: Vec<_> = (0..8).rev().map(|v| v as f32).collect();
+    let result = run_mlx_sort(&input, 4);
+    assert_eq!(result, [3, 2, 1, 0, 3, 2, 1, 0]);
+    let input: Vec<_> = (0..1000).rev().map(|v| v as f32).collect();
+    let result = run_mlx_sort(&input, 200);
+    let out: Vec<_> = (0..200).rev().collect();
+    assert_eq!(&result[..200], out);
+    assert_eq!(&result[200..400], out);
+    assert_eq!(&result[400..600], out);
+    assert_eq!(&result[600..800], out);
+    assert_eq!(&result[800..], out);
+
+    // Multi-block test
+    let ncols = 16000;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(299792458);
+    let normal = rand_distr::Normal::new(0.0, 1.0).unwrap();
+    let input: Vec<f32> = (0..ncols * 16).map(|_| normal.sample(&mut rng)).collect();
+    let result = run_mlx_sort(&input, ncols);
+    for start in 0..16 {
+        let slice = &input[start * ncols..(start + 1) * ncols];
+        let result = &result[start * ncols..(start + 1) * ncols];
+        let mut perm: Vec<usize> = (0..ncols).collect();
+        perm.sort_by(|i1, i2| slice[*i1].total_cmp(&slice[*i2]));
+        let perm: Vec<_> = perm.into_iter().map(|v| v as u32).collect();
+        assert_eq!(perm, result);
+    }
+}
+
 #[test]
 fn index_select() {
     let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
@@ -633,7 +725,7 @@ fn index_select_strided() {
 fn index_select_f16() {
     let embedding: Vec<_> = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
         .into_iter()
-        .map(|x| f16::from_f32(x))
+        .map(f16::from_f32)
         .collect();
     let shape = [5, 2];
     let stride = [2, 1];
@@ -675,6 +767,39 @@ fn index_select_is_u8_bf16() {
 }
 
 #[test]
+fn index_select_is_u32_i64() {
+    let embedding: Vec<i64> = (1..=10).map(|x| x as i64).collect();
+    let shape = [5, 2];
+    let stride = [2, 1];
+    let ids = [0u32, 4, 2];
+    let dim = 0;
+    let result = run_index_select(&embedding, &shape, &stride, &ids, dim, "is_u32_i64");
+    assert_eq!(result, vec![1i64, 2, 9, 10, 5, 6]);
+}
+
+#[test]
+fn index_select_is_u8_i64() {
+    let embedding: Vec<i64> = (1..=10).map(|x| x as i64).collect();
+    let shape = [5, 2];
+    let stride = [2, 1];
+    let ids = [0u8, 4, 2];
+    let dim = 0;
+    let result = run_index_select(&embedding, &shape, &stride, &ids, dim, "is_u8_i64");
+    assert_eq!(result, vec![1i64, 2, 9, 10, 5, 6]);
+}
+
+#[test]
+fn index_select_is_i64_i64() {
+    let embedding: Vec<i64> = (1..=10).map(|x| x as i64).collect();
+    let shape = [5, 2];
+    let stride = [2, 1];
+    let ids = [0i64, 4, 2];
+    let dim = 0;
+    let result = run_index_select(&embedding, &shape, &stride, &ids, dim, "is_i64_i64");
+    assert_eq!(result, vec![1i64, 2, 9, 10, 5, 6]);
+}
+
+#[test]
 fn index_select_dim1() {
     let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
     let shape = [5, 2];
@@ -698,10 +823,11 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
 ) -> Vec<T> {
     let device = Device::system_default().expect("no device found");
 
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
-    let embeddings_buffer = new_buffer(&device, &embeddings);
-    let ids_buffer = new_buffer(&device, &ids);
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+    let embeddings_buffer = new_buffer(&device, embeddings);
+    let ids_buffer = new_buffer(&device, ids);
 
     let left_size: usize = shape[..dim].iter().product();
     let right_size: usize = shape[dim + 1..].iter().product();
@@ -720,10 +846,8 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
         true,
         shape,
         stride,
-        &embeddings_buffer,
-        0,
-        &ids_buffer,
-        0,
+        BufferOffset::zero_offset(&embeddings_buffer),
+        BufferOffset::zero_offset(&ids_buffer),
         &dst_buffer,
     )
     .unwrap();
@@ -744,10 +868,11 @@ fn run_index_select_strided<T: Clone, I: Clone + std::fmt::Debug>(
 ) -> Vec<T> {
     let device = Device::system_default().expect("no device found");
 
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
-    let embeddings_buffer = new_buffer(&device, &embeddings);
-    let ids_buffer = new_buffer(&device, &ids);
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+    let embeddings_buffer = new_buffer(&device, embeddings);
+    let ids_buffer = new_buffer(&device, ids);
 
     let left_size: usize = shape[..dim].iter().product();
     let right_size: usize = shape[dim + 1..].iter().product();
@@ -766,10 +891,8 @@ fn run_index_select_strided<T: Clone, I: Clone + std::fmt::Debug>(
         false,
         shape,
         stride,
-        &embeddings_buffer,
-        0,
-        &ids_buffer,
-        0,
+        BufferOffset::zero_offset(&embeddings_buffer),
+        BufferOffset::zero_offset(&ids_buffer),
         &dst_buffer,
     )
     .unwrap();
@@ -792,30 +915,40 @@ fn cos_f16() {
     assert_eq!(approx_f16(expected, 2), vec![0.54, -0.42, -0.99]);
 }
 
-fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T> {
+fn run_reduce<T, U: Clone>(
+    v: &[T],
+    in_length: usize,
+    out_length: usize,
+    name: &'static str,
+) -> Vec<U> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
 
-    let options = MTLResourceOptions::StorageModeManaged;
-    let output = device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
-    let dims = vec![v.len()];
-    let strides = vec![1];
-    call_reduce_strided(
+    let options = RESOURCE_OPTIONS;
+    let output = device
+        .new_buffer(out_length * core::mem::size_of::<U>(), options)
+        .unwrap();
+    let shape = vec![in_length];
+    match call_reduce_contiguous(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
-        &dims,
-        &strides,
+        &shape,
         out_length,
-        &input,
-        0,
+        BufferOffset::zero_offset(&input),
         &output,
-    )
-    .unwrap();
+    ) {
+        Ok(_) => {}
+        Err(e) => {
+            println!("{e}");
+            panic!();
+        }
+    }
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -825,13 +958,14 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
 fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'static str) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
     call_last_softmax(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
         v.len(),
@@ -847,22 +981,187 @@ fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'sta
     read_to_vec(&output, v.len())
 }
 
-#[test]
-fn reduce_sum() {
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let out_length = 1;
+const fn create_array<const N: usize>() -> [f32; N] {
+    let mut array: [f32; N] = [0.0; N];
+    let mut i = 1;
+    while i <= N {
+        array[i - 1] = i as f32;
+        i += 1;
+    }
+    array
+}
 
-    let results = run_reduce(&v, out_length, "fast_sum_f32_strided");
-    assert_eq!(approx(results, 4), vec![21.0]);
+const fn correct_sum<const N: usize, const D: usize>() -> [f32; D] {
+    let mut sum = 0;
+    let mut results: [f32; D] = [0.0; D];
+    let mut i = 1;
+    let mut j = 1;
+    while i <= N {
+        sum += i;
+        i += 1;
+        if i > j * N / D {
+            results[j - 1] = sum as f32;
+            j += 1;
+            sum = 0;
+        }
+    }
+    results
+}
+
+const fn correct_max<const N: usize, const D: usize>() -> [f32; D] {
+    let mut results: [f32; D] = [0.0; D];
+    let mut i = 1;
+    let mut j = 1;
+    while i <= N {
+        i += 1;
+        if i > j * (N / D) {
+            results[j - 1] = (i - 1) as f32;
+            j += 1;
+        }
+    }
+    results
+}
+
+fn correct_argmax<const N: usize, const D: usize>(arr: [f32; N]) -> [u32; D] {
+    let mut max = 0.0;
+    let mut max_index: u32 = 0;
+    let mut results: [u32; D] = [0; D];
+    let mut i = 0;
+    let mut j = 1;
+    while i <= N {
+        if i >= (j * N / D) {
+            results[j - 1] = max_index;
+            max = 0.0;
+            max_index = 0;
+            j += 1;
+        }
+        if i == N {
+            break;
+        }
+        if arr[i] > max {
+            max = arr[i];
+            max_index = i as u32;
+        }
+        i += 1;
+    }
+    results
+}
+
+fn reduce_sum_case<const N: usize, const D: usize>() {
+    let mut v = create_array::<N>();
+    if D == 1 {
+        // Hardens 1-dimensional test cases
+        v.shuffle(&mut rng());
+    }
+    let results = run_reduce(&v, N, D, "fast_sum_f32");
+    assert_eq!(approx(results, 4), correct_sum::<N, D>());
+}
+
+fn reduce_max_case<const N: usize, const D: usize>() {
+    let mut v = create_array::<N>();
+    if D == 1 {
+        // Hardens 1-dimensional test cases
+        v.shuffle(&mut rng());
+    }
+    let results = run_reduce(&v, N, D, "fast_max_f32");
+    assert_eq!(approx(results, 4), correct_max::<N, D>());
+}
+
+fn reduce_argmax_case<const N: usize, const D: usize>() {
+    let mut v = create_array::<N>();
+    if D == 1 {
+        // Hardens 1-dimensional test cases
+        v.shuffle(&mut rng());
+    }
+    let results: Vec<u32> = run_reduce(&v, N, D, "fast_argmax_f32");
+    assert_eq!(results, correct_argmax::<N, D>(v));
+}
+
+#[test]
+fn reduce_sum1() {
+    reduce_sum_case::<9, 1>();
+    reduce_sum_case::<6, 1>();
+    reduce_sum_case::<10, 1>();
+    reduce_sum_case::<64, 1>();
+    reduce_sum_case::<128, 1>();
+    reduce_sum_case::<256, 1>();
+    reduce_sum_case::<512, 1>();
+    reduce_sum_case::<1024, 1>();
+    reduce_sum_case::<2048, 1>();
+    reduce_sum_case::<4096, 1>();
 }
 
 #[test]
 fn reduce_sum2() {
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let out_length = 2;
+    reduce_sum_case::<6, 2>();
+    reduce_sum_case::<10, 2>();
+    reduce_sum_case::<64, 2>();
+    reduce_sum_case::<128, 2>();
+    reduce_sum_case::<256, 2>();
+    reduce_sum_case::<512, 2>();
+    reduce_sum_case::<1024, 2>();
+    reduce_sum_case::<2048, 2>();
+    reduce_sum_case::<4096, 2>();
+}
 
-    let results = run_reduce(&v, out_length, "fast_sum_f32_strided");
-    assert_eq!(approx(results, 4), vec![6.0, 15.0]);
+#[test]
+fn reduce_max() {
+    reduce_max_case::<6, 1>();
+    reduce_max_case::<9, 1>();
+    reduce_max_case::<10, 1>();
+    reduce_max_case::<64, 1>();
+    reduce_max_case::<128, 1>();
+    reduce_max_case::<256, 1>();
+    reduce_max_case::<512, 1>();
+    reduce_max_case::<1024, 1>();
+    reduce_max_case::<2048, 1>();
+    reduce_max_case::<4096, 1>();
+
+    reduce_max_case::<6, 2>();
+    reduce_max_case::<10, 2>();
+    reduce_max_case::<64, 2>();
+    reduce_max_case::<128, 2>();
+    reduce_max_case::<256, 2>();
+    reduce_max_case::<512, 2>();
+    reduce_max_case::<1024, 2>();
+    reduce_max_case::<2048, 2>();
+    reduce_max_case::<4096, 2>();
+
+    reduce_max_case::<6, 3>();
+    reduce_max_case::<10, 3>();
+    reduce_max_case::<64, 3>();
+    reduce_max_case::<128, 3>();
+    reduce_max_case::<256, 3>();
+    reduce_max_case::<512, 3>();
+    reduce_max_case::<1024, 3>();
+    reduce_max_case::<2048, 3>();
+    reduce_max_case::<4096, 3>();
+}
+
+#[test]
+fn reduce_argmax() {
+    reduce_argmax_case::<6, 1>();
+    reduce_argmax_case::<9, 1>();
+    reduce_argmax_case::<10, 1>();
+    reduce_argmax_case::<64, 1>();
+    reduce_argmax_case::<128, 1>();
+    reduce_argmax_case::<256, 1>();
+    reduce_argmax_case::<512, 1>();
+    reduce_argmax_case::<1024, 1>();
+    reduce_argmax_case::<2048, 1>();
+}
+
+#[test]
+fn reduce_argmax2() {
+    reduce_argmax_case::<6, 2>();
+    reduce_argmax_case::<10, 2>();
+    reduce_argmax_case::<64, 2>();
+    reduce_argmax_case::<128, 2>();
+    reduce_argmax_case::<256, 2>();
+    reduce_argmax_case::<512, 2>();
+    reduce_argmax_case::<1024, 2>();
+    reduce_argmax_case::<2048, 2>();
+    reduce_argmax_case::<4096, 2>();
 }
 
 #[test]
@@ -908,7 +1207,7 @@ fn softmax() {
         vec![0.0900, 0.2447, 0.6652, 0.0900, 0.2447, 0.6652]
     );
 
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let v = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -916,10 +1215,10 @@ fn softmax() {
     let results = run_softmax(&v, last_dim, "softmax_f16");
     assert_eq!(
         approx_f16(results, 4),
-        vec![0.0043, 0.0116, 0.0316, 0.0858, 0.2332, 0.6338]
+        vec![0.0043, 0.0116, 0.0315, 0.0858, 0.2332, 0.6338]
     );
 
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let v = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
         .iter()
         .map(|v| bf16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -931,6 +1230,7 @@ fn softmax() {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_where_cond<I: Clone, T: Clone>(
     shape: &[usize],
     cond: &[I],
@@ -943,40 +1243,65 @@ fn run_where_cond<I: Clone, T: Clone>(
 ) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
-    let options = MTLResourceOptions::StorageModeManaged;
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+    let options = RESOURCE_OPTIONS;
 
     let length = cond.len();
-    let cond = device.new_buffer_with_data(
-        cond.as_ptr() as *const core::ffi::c_void,
-        std::mem::size_of_val(cond) as u64,
-        options,
-    );
-    let left = device.new_buffer_with_data(
-        left_true.as_ptr() as *const core::ffi::c_void,
-        (length * core::mem::size_of::<T>()) as u64,
-        options,
-    );
-    let right = device.new_buffer_with_data(
-        right_false.as_ptr() as *const core::ffi::c_void,
-        (length * core::mem::size_of::<T>()) as u64,
-        options,
-    );
+    let cond = device
+        .new_buffer_with_data(
+            cond.as_ptr() as *const core::ffi::c_void,
+            std::mem::size_of_val(cond),
+            options,
+        )
+        .unwrap();
+    let left = device
+        .new_buffer_with_data(
+            left_true.as_ptr() as *const core::ffi::c_void,
+            length * core::mem::size_of::<T>(),
+            options,
+        )
+        .unwrap();
+    let right = device
+        .new_buffer_with_data(
+            right_false.as_ptr() as *const core::ffi::c_void,
+            length * core::mem::size_of::<T>(),
+            options,
+        )
+        .unwrap();
 
-    let output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
-    call_where_cond_strided(
+    let output = device
+        .new_buffer(length * core::mem::size_of::<T>(), options)
+        .unwrap();
+    let cond = BufferOffset {
+        buffer: &cond,
+        offset_in_bytes: cond_offset,
+    };
+    let left = BufferOffset {
+        buffer: &left,
+        offset_in_bytes: left_offset,
+    };
+    let right = BufferOffset {
+        buffer: &right,
+        offset_in_bytes: cond_offset,
+    };
+    call_where_cond(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
+        size_of::<T>(),
         shape,
-        &cond,
-        (&cond_stride, cond_offset),
-        &left,
-        (&left_stride, left_offset),
-        &right,
-        (&cond_stride, cond_offset),
+        cond,
+        &cond_stride,
+        true,
+        left,
+        &left_stride,
+        true,
+        right,
+        &cond_stride,
+        true,
         &output,
     )
     .unwrap();
@@ -1007,44 +1332,74 @@ fn where_cond() {
     );
     assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
 }
+#[test]
+fn where_cond_u32_f32() {
+    let shape = vec![6];
+    let cond = vec![0u32, 1, 0, 0, 1, 1];
+    let cond_l = (vec![1], 0);
+    let left_true = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let left_l = (vec![1], 0);
+    let right_false = vec![-1.0f32, -2.0, -3.0, -4.0, -5.0, -6.0];
+    let right_l = (vec![1], 0);
+    let results = run_where_cond(
+        &shape,
+        &cond,
+        cond_l,
+        &left_true,
+        left_l,
+        &right_false,
+        right_l,
+        "where_u32_f32",
+    );
+    assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
+}
 
-fn run_gemm<T: Clone>(
+#[allow(clippy::too_many_arguments)]
+fn run_mlx_gemm<T: Clone>(
+    dtype: GemmDType,
     (b, m, n, k): (usize, usize, usize, usize),
     lhs: &[T],
-    lhs_stride: Vec<usize>,
+    lhs_stride: &[usize],
     lhs_offset: usize,
     rhs: &[T],
-    rhs_stride: Vec<usize>,
+    rhs_stride: &[usize],
     rhs_offset: usize,
 ) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
-    let options = MTLResourceOptions::StorageModeManaged;
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+    let options = RESOURCE_OPTIONS;
 
-    let lhs = device.new_buffer_with_data(
-        lhs.as_ptr() as *const core::ffi::c_void,
-        std::mem::size_of_val(lhs) as u64,
-        options,
-    );
-    let rhs = device.new_buffer_with_data(
-        rhs.as_ptr() as *const core::ffi::c_void,
-        std::mem::size_of_val(rhs) as u64,
-        options,
-    );
+    let lhs = device
+        .new_buffer_with_data(
+            lhs.as_ptr() as *const core::ffi::c_void,
+            std::mem::size_of_val(lhs),
+            options,
+        )
+        .unwrap();
+    let rhs = device
+        .new_buffer_with_data(
+            rhs.as_ptr() as *const core::ffi::c_void,
+            std::mem::size_of_val(rhs),
+            options,
+        )
+        .unwrap();
     let length = b * m * n;
-    let output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
-    call_gemm(
+    let output = device
+        .new_buffer(length * core::mem::size_of::<T>(), options)
+        .unwrap();
+    call_mlx_gemm(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
-        "sgemm",
+        dtype,
         (b, m, n, k),
-        &lhs_stride,
+        lhs_stride,
         lhs_offset,
         &lhs,
-        &rhs_stride,
+        rhs_stride,
         rhs_offset,
         &rhs,
         &output,
@@ -1057,24 +1412,38 @@ fn run_gemm<T: Clone>(
 }
 
 #[test]
-fn gemm() {
+fn mlx_gemm() {
     let (b, m, n, k) = (1, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
-    let rhs_stride = vec![n * k, n, 1];
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
-    let results = run_gemm((b, m, n, k), &lhs, lhs_stride, 0, &rhs, rhs_stride, 0);
+    let results = run_mlx_gemm(
+        GemmDType::F32,
+        (b, m, n, k),
+        &lhs,
+        &[m * k, k, 1],
+        0,
+        &rhs,
+        &[n * k, n, 1],
+        0,
+    );
     assert_eq!(
         approx(results, 4),
         vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
     );
 
     let (b, m, n, k) = (2, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
-    let rhs_stride = vec![n * k, n, 1];
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
-    let results = run_gemm((b, m, n, k), &lhs, lhs_stride, 0, &rhs, rhs_stride, 0);
+    let results = run_mlx_gemm(
+        GemmDType::F32,
+        (b, m, n, k),
+        &lhs,
+        &[m * k, k, 1],
+        0,
+        &rhs,
+        &[n * k, n, 1],
+        0,
+    );
     assert_eq!(
         approx(results, 4),
         vec![
@@ -1085,37 +1454,91 @@ fn gemm() {
 
     // OFFSET
     let (b, m, n, k) = (2, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
-    let rhs_stride = vec![n * k, n, 1];
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
     // Manually set batch_size=1 and offset 12 elements * 4 the number of bytes for f32
-    let results = run_gemm((1, m, n, k), &lhs, lhs_stride, 0, &rhs, rhs_stride, 12 * 4);
+    let results = run_mlx_gemm(
+        GemmDType::F32,
+        (1, m, n, k),
+        &lhs,
+        &[m * k, k, 1],
+        0,
+        &rhs,
+        &[n * k, n, 1],
+        12 * 4,
+    );
     assert_eq!(
         approx(results, 4),
         vec![56.0, 59.0, 62.0, 65.0, 200.0, 212.0, 224.0, 236.0]
     );
+
+    // bgemm sanity test
+    {
+        let (b, m, n, k) = (1, 2, 4, 3);
+        let lhs: Vec<bf16> = (0..b * m * k).map(|f| bf16::from_f32(f as f32)).collect();
+        let rhs: Vec<bf16> = (0..b * n * k).map(|f| bf16::from_f32(f as f32)).collect();
+        let results = run_mlx_gemm(
+            GemmDType::BF16,
+            (b, m, n, k),
+            &lhs,
+            &[m * k, k, 1],
+            0,
+            &rhs,
+            &[n * k, n, 1],
+            0,
+        );
+        assert_eq!(
+            approx_bf16(results, 4),
+            vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
+        );
+    }
+
+    {
+        // hgemm sanity test
+        let (b, m, n, k) = (1, 2, 4, 3);
+        let lhs: Vec<f16> = (0..b * m * k).map(|f| f16::from_f32(f as f32)).collect();
+        let rhs: Vec<f16> = (0..b * n * k).map(|f| f16::from_f32(f as f32)).collect();
+        let results = run_mlx_gemm(
+            GemmDType::F16,
+            (b, m, n, k),
+            &lhs,
+            &[m * k, k, 1],
+            0,
+            &rhs,
+            &[n * k, n, 1],
+            0,
+        );
+        assert_eq!(
+            approx_f16(results, 4),
+            vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
+        );
+    }
 }
 
-fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b: f32) -> Vec<T> {
+fn run_random<T: Clone>(name: &'static str, seed: u64, length: usize, a: f32, b: f32) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
-    let options = MTLResourceOptions::StorageModeManaged;
-    let output = device.new_buffer((length * core::mem::size_of::<T>()) as NSUInteger, options);
+    let options = RESOURCE_OPTIONS;
+    let output = device
+        .new_buffer(length * core::mem::size_of::<T>(), options)
+        .unwrap();
 
-    let seed = device.new_buffer_with_data(
-        &seed as *const u32 as *const core::ffi::c_void,
-        std::mem::size_of::<u32>() as NSUInteger,
-        options,
-    );
+    let seed = device
+        .new_buffer_with_data(
+            &seed as *const u64 as *const core::ffi::c_void,
+            std::mem::size_of::<u64>(),
+            options,
+        )
+        .unwrap();
 
     if name.starts_with("rand_uniform") {
         call_random_uniform(
             &device,
-            command_buffer,
+            &command_buffer,
             &kernels,
             name,
             a,
@@ -1128,7 +1551,7 @@ fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b:
     } else {
         call_random_normal(
             &device,
-            command_buffer,
+            &command_buffer,
             &kernels,
             name,
             a,
@@ -1148,7 +1571,7 @@ fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b:
 #[test]
 fn random() {
     fn calc_mean(data: &[f32]) -> f32 {
-        let sum = data.iter().sum::<f32>() as f32;
+        let sum = data.iter().sum::<f32>();
         let count = data.len();
         assert!(count > 0);
         sum / count as f32
@@ -1162,7 +1585,7 @@ fn random() {
         let variance = data
             .iter()
             .map(|value| {
-                let diff = mean - (*value as f32);
+                let diff = mean - *value;
                 diff * diff
             })
             .sum::<f32>()
@@ -1171,10 +1594,10 @@ fn random() {
         variance.sqrt()
     }
 
-    let shape = vec![1024, 10];
+    let shape = [1024, 10];
 
     let length = shape.iter().product::<usize>();
-    let seed = 299792458;
+    let seed = 299792458u64;
 
     let min = -30.0;
     let max = 30.0;
@@ -1227,25 +1650,26 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
 ) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
-    let options = MTLResourceOptions::StorageModeManaged;
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+    let options = RESOURCE_OPTIONS;
     let input_buffer = new_buffer(&device, input);
     let ids_buffer = new_buffer(&device, ids);
-    let output = device.new_buffer(std::mem::size_of_val(input) as u64, options);
-    call_scatter_add(
+    let output = device
+        .new_buffer(std::mem::size_of_val(input), options)
+        .unwrap();
+    call_scatter(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
         shape,
         shape,
         dim,
-        &input_buffer,
-        0,
-        &ids_buffer,
-        0,
-        &output,
+        BufferOffset::zero_offset(&input_buffer),
+        BufferOffset::zero_offset(&ids_buffer),
+        BufferOffset::zero_offset(&output),
     )
     .unwrap();
     command_buffer.commit();
@@ -1332,24 +1756,23 @@ fn run_index_add<T: Clone, I: Clone + std::fmt::Debug>(
 ) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input_buffer = new_buffer(&device, right);
     let output = new_buffer(&device, left);
     let indices_buffer = new_buffer(&device, indices);
     call_index_add(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
         shape,
         shape,
         shape,
         dim,
-        &input_buffer,
-        0,
-        &indices_buffer,
-        0,
+        BufferOffset::zero_offset(&input_buffer),
+        BufferOffset::zero_offset(&indices_buffer),
         &output,
     )
     .unwrap();
@@ -1447,8 +1870,9 @@ fn run_pool2d<T: Clone>(
     name: &'static str,
 ) -> Vec<T> {
     let device = device();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let out_w = (shape[2] - w_k) / w_stride + 1;
     let out_h = (shape[3] - h_k) / h_stride + 1;
     let dst_el = out_w * out_h * shape[0] * shape[1];
@@ -1457,7 +1881,7 @@ fn run_pool2d<T: Clone>(
     let kernels = Kernels::new();
     call_pool2d(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
         shape,
@@ -1531,7 +1955,7 @@ fn max_pool2d_f16() {
         &strides,
         "max_pool2d_f16",
     );
-    let expected = vec![5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
+    let expected = [5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
         .iter()
         .map(|v| half::f16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1551,7 +1975,7 @@ fn max_pool2d_f16() {
         &strides,
         "max_pool2d_f16",
     );
-    let expected = vec![5.0, 7.0, 13.0, 15.0]
+    let expected = [5.0, 7.0, 13.0, 15.0]
         .iter()
         .map(|v| half::f16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1574,7 +1998,7 @@ fn max_pool2d_bf16() {
         &strides,
         "max_pool2d_bf16",
     );
-    let expected = vec![5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
+    let expected = [5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
         .iter()
         .map(|v| half::bf16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1594,7 +2018,7 @@ fn max_pool2d_bf16() {
         &strides,
         "max_pool2d_bf16",
     );
-    let expected = vec![5.0, 7.0, 13.0, 15.0]
+    let expected = [5.0, 7.0, 13.0, 15.0]
         .iter()
         .map(|v| half::bf16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1713,7 +2137,7 @@ fn avg_pool2d_f16() {
         &strides,
         "avg_pool2d_f16",
     );
-    let expected = vec![
+    let expected = [
         2.5000, 3.5000, 4.5000, 6.5000, 7.5000, 8.5000, 10.5000, 11.5000, 12.5000,
     ]
     .iter()
@@ -1738,7 +2162,7 @@ fn avg_pool2d_bf16() {
         &strides,
         "avg_pool2d_bf16",
     );
-    let expected = vec![
+    let expected = [
         2.5000, 3.5000, 4.5000, 6.5000, 7.5000, 8.5000, 10.5000, 11.5000, 12.5000,
     ]
     .iter()
@@ -1787,6 +2211,7 @@ fn avg_pool2d_u32() {
     assert_eq!(results, expected);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_conv_transpose1d<T: Clone>(
     input: &[T],
     input_shape: &[usize],
@@ -1801,8 +2226,9 @@ fn run_conv_transpose1d<T: Clone>(
     name: &'static str,
 ) -> Vec<T> {
     let device = device();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
+    let command_queue = device.new_command_queue().unwrap();
+    let semaphore = Arc::new(CommandSemaphore::new());
+    let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
     let c_out = kernel_shape[1];
     let k_size = kernel_shape[2];
@@ -1818,7 +2244,7 @@ fn run_conv_transpose1d<T: Clone>(
 
     call_conv_transpose1d(
         &device,
-        command_buffer,
+        &command_buffer,
         &kernels,
         name,
         dilation,
@@ -1875,14 +2301,14 @@ fn conv_transpose1d_f32() {
 
 #[test]
 fn conv_transpose1d_f16() {
-    let input: Vec<f16> = vec![1.0, 2.0, 3.0, 4.0]
+    let input: Vec<f16> = [1.0, 2.0, 3.0, 4.0]
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect();
     let input_shape = &[1, 1, 4];
     let input_stride = &[4, 4, 1];
 
-    let kernel: Vec<f16> = vec![1.0, 2.0, 3.0, 4.0]
+    let kernel: Vec<f16> = [1.0, 2.0, 3.0, 4.0]
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect();
@@ -1903,7 +2329,7 @@ fn conv_transpose1d_f16() {
         "conv_transpose1d_f16",
     );
 
-    let expected = vec![1., 4., 10., 20., 25., 24., 16.]
+    let expected = [1., 4., 10., 20., 25., 24., 16.]
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1912,14 +2338,14 @@ fn conv_transpose1d_f16() {
 
 #[test]
 fn conv_transpose1d_bf16() {
-    let input: Vec<bf16> = vec![1.0, 2.0, 3.0, 4.0]
+    let input: Vec<bf16> = [1.0, 2.0, 3.0, 4.0]
         .iter()
         .map(|v| bf16::from_f32(*v))
         .collect();
     let input_shape = &[1, 1, 4];
     let input_stride = &[4, 4, 1];
 
-    let kernel: Vec<bf16> = vec![1.0, 2.0, 3.0, 4.0]
+    let kernel: Vec<bf16> = [1.0, 2.0, 3.0, 4.0]
         .iter()
         .map(|v| bf16::from_f32(*v))
         .collect();
@@ -1940,7 +2366,7 @@ fn conv_transpose1d_bf16() {
         "conv_transpose1d_bf16",
     );
 
-    let expected = vec![1., 4., 10., 20., 25., 24., 16.]
+    let expected = [1., 4., 10., 20., 25., 24., 16.]
         .iter()
         .map(|v| bf16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -2001,4 +2427,96 @@ fn conv_transpose1d_u32() {
 
     let expected = vec![1, 4, 10, 20, 25, 24, 16];
     assert_eq!(results, expected);
+}
+
+#[test]
+fn const_fill() {
+    fn constant_fill<T: Clone + EncoderParam>(name: &'static str, len: usize, value: T) -> Vec<T> {
+        let dev = device();
+        let kernels = Kernels::new();
+        let command_queue = dev.new_command_queue().unwrap();
+        let semaphore = Arc::new(CommandSemaphore::new());
+        let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
+        let buffer = dev
+            .new_buffer(len * std::mem::size_of::<T>(), RESOURCE_OPTIONS)
+            .unwrap();
+        call_const_fill(&dev, &command_buffer, &kernels, name, len, &buffer, value).unwrap();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        read_to_vec::<T>(&buffer, len)
+    }
+    fn test<T: Clone + Copy + EncoderParam + PartialEq + std::fmt::Debug, F: FnOnce(f32) -> T>(
+        name: &'static str,
+        f: F,
+    ) {
+        let len = rand::rng().random_range(2..16) * rand::rng().random_range(4..16);
+        let value = rand::rng().random_range(1. ..19.);
+        let value = f(value);
+        let v = constant_fill::<T>(name, len, value);
+        assert_eq!(v, vec![value; len])
+    }
+    test::<u8, _>("fill_u8", |v| v as u8);
+    test::<u32, _>("fill_u32", |v| v as u32);
+    test::<i64, _>("fill_i64", |v| v as i64);
+    test::<f16, _>("fill_f16", f16::from_f32);
+    test::<bf16, _>("fill_bf16", bf16::from_f32);
+    test::<f32, _>("fill_f32", |v| v);
+}
+
+#[test]
+fn commands_creation_and_encoder() {
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let commands = Commands::new(queue).unwrap();
+
+    let (_flush, encoder) = commands.command_encoder().unwrap();
+    drop(encoder);
+}
+
+#[test]
+fn commands_rotation_threshold() {
+    std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "2");
+
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let commands = Commands::new(queue).unwrap();
+
+    let mut flush_count = 0;
+    for _ in 0..6 {
+        let (flush, encoder) = commands.command_encoder().unwrap();
+        flush_count += flush as usize;
+        drop(encoder);
+    }
+
+    assert!(flush_count >= 2);
+
+    // Flushes pending work and blocks until all in‑flight command buffers complete.
+    // Ensures completion and surfaces any GPU errors before the test ends.
+    commands.wait_until_completed().unwrap();
+}
+
+#[test]
+fn commands_concurrent_acquisition() {
+    std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "2");
+    std::env::set_var("CANDLE_METAL_COMMAND_POOL_SIZE", "4");
+
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let commands = Arc::new(Commands::new(queue).unwrap());
+
+    let mut handles = vec![];
+
+    for _ in 0..16 {
+        let c = Arc::clone(&commands);
+        handles.push(thread::spawn(move || {
+            let (_flush, encoder) = c.command_encoder().unwrap();
+            drop(encoder);
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    commands.wait_until_completed().unwrap();
 }

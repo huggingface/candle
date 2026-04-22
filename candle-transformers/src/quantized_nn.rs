@@ -1,3 +1,9 @@
+//! Utilities for quanitized network layers
+//!
+//! This module contains various implementations of standard neural network layers, modules and
+//! utilities including embedding, linear layers, and various normalization techniques.
+//! Most implementations provide quantized weights support.
+
 use crate::models::with_tracing::QMatMul;
 use crate::quantized_var_builder::VarBuilder;
 use candle::quantized::QTensor;

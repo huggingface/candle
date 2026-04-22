@@ -1,4 +1,4 @@
-/// Methods for backpropagation of gradients.
+//! Methods for backpropagation of gradients.
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
 use std::collections::{hash_map::Entry, HashMap};
@@ -32,7 +32,7 @@ impl Tensor {
     /// elements having dependencies on the latter ones, e.g. the first element if any is the
     /// argument.
     /// This assumes that the op graph is a DAG.
-    fn sorted_nodes(&self) -> Vec<&Tensor> {
+    pub fn sorted_nodes(&self) -> Vec<&Tensor> {
         // The vec of sorted nodes is passed as an owned value rather than a mutable reference
         // to get around some lifetime limitations.
         fn walk<'a>(
@@ -53,6 +53,7 @@ impl Tensor {
             } else if let Some(op) = node.op() {
                 match op {
                     Op::IndexAdd(t1, t2, t3, _)
+                    | Op::Scatter(t1, t2, t3, _)
                     | Op::ScatterAdd(t1, t2, t3, _)
                     | Op::CustomOp3(t1, t2, t3, _)
                     | Op::WhereCond(t1, t2, t3) => {
@@ -112,10 +113,12 @@ impl Tensor {
                     }
                     Op::Unary(_node, UnaryOp::Ceil)
                     | Op::Unary(_node, UnaryOp::Floor)
-                    | Op::Unary(_node, UnaryOp::Round) => nodes,
+                    | Op::Unary(_node, UnaryOp::Round)
+                    | Op::Unary(_node, UnaryOp::Sign) => nodes,
                     Op::Reshape(node)
                     | Op::UpsampleNearest1D { arg: node, .. }
                     | Op::UpsampleNearest2D { arg: node, .. }
+                    | Op::UpsampleBilinear2D { arg: node, .. }
                     | Op::AvgPool2D { arg: node, .. }
                     | Op::MaxPool2D { arg: node, .. }
                     | Op::Copy(node)
@@ -319,13 +322,13 @@ impl Tensor {
                         dilation,
                         output_padding: _output_padding,
                     } => {
-                        let grad_arg = grad.conv2d(kernel, *padding, *dilation, *stride, 1)?;
+                        let grad_arg = grad.conv2d(kernel, *padding, *stride, *dilation, 1)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
 
                         let grad_kernel = grad
                             .transpose(0, 1)?
-                            .conv2d(&arg.transpose(0, 1)?, *padding, *stride, *dilation, 1)?
+                            .conv2d(&arg.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
                             .transpose(0, 1)?;
                         let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0, k1) = kernel.dims4()?;
@@ -405,6 +408,9 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = conv_sum;
                     }
+                    Op::UpsampleBilinear2D { .. } => {
+                        crate::bail!("backward not supported for upsample_bilinear2d")
+                    }
                     Op::SliceScatter0(lhs, rhs, start_rhs) => {
                         let rhs_sum_grad = grads.or_insert(rhs)?;
                         let rhs_grad = grad.narrow(0, *start_rhs, rhs.dim(0)?)?;
@@ -418,9 +424,19 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.scatter_add(indexes, &grad, *dim)?;
                     }
-                    Op::ScatterAdd(init, indexes, src, dim) => {
+                    Op::Scatter(init, indexes, src, dim) => {
                         let init_sum_grad = grads.or_insert(init)?;
                         *init_sum_grad = init_sum_grad.add(&grad)?;
+
+                        let src_grad = grad.gather(indexes, *dim)?;
+                        let src_sum_grad = grads.or_insert(src)?;
+                        *src_sum_grad = src_sum_grad.add(&src_grad)?;
+                    }
+                    Op::ScatterAdd(init, indexes, src, dim) => {
+                        let init_sum_grad = grads.or_insert(init)?;
+                        let mask = init.ones_like()?;
+                        let mask = mask.scatter(indexes, &mask.zeros_like()?, *dim)?;
+                        *init_sum_grad = init_sum_grad.add(&grad.mul(&mask)?)?;
 
                         let src_grad = grad.gather(indexes, *dim)?;
                         let src_sum_grad = grads.or_insert(src)?;
@@ -488,7 +504,6 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad)?;
                     }
-                    Op::Cmp(_args, _) => {}
                     Op::Reduce(arg, ReduceOp::Max, reduced_dims) => {
                         let node = broadcast_back(arg, node, reduced_dims)?;
                         let grad = broadcast_back(arg, &grad, reduced_dims)?;
@@ -578,20 +593,18 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
-                    Op::Reduce(_, ReduceOp::ArgMin, _) => {}
-                    Op::Reduce(_, ReduceOp::ArgMax, _) => {}
+                    Op::Unary(_, UnaryOp::Floor)
+                    | Op::Unary(_, UnaryOp::Round)
+                    | Op::Reduce(_, ReduceOp::ArgMin, _)
+                    | Op::Reduce(_, ReduceOp::ArgMax, _)
+                    | Op::Unary(_, UnaryOp::Sign)
+                    | Op::Cmp(_, _) => {}
                     Op::Reshape(arg) => {
                         let arg_grad = grad.reshape(arg.dims())?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
                     Op::Unary(_, UnaryOp::Ceil) => Err(Error::BackwardNotSupported { op: "ceil" })?,
-                    Op::Unary(_, UnaryOp::Floor) => {
-                        Err(Error::BackwardNotSupported { op: "floor" })?
-                    }
-                    Op::Unary(_, UnaryOp::Round) => {
-                        Err(Error::BackwardNotSupported { op: "round" })?
-                    }
                     Op::Unary(arg, UnaryOp::Gelu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let cube = arg.powf(3.)?;
@@ -625,9 +638,9 @@ impl Tensor {
                     }
                     Op::Unary(arg, UnaryOp::Silu) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
-                        let sigmoid_arg = (*node / arg)?;
-                        let silu_grad = (&sigmoid_arg * (1. + (arg * (1. - &sigmoid_arg)?)?)?)?;
+                        // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x))) = sigmoid(x) * (1 - node) + node
+                        let sigmoid_arg = (arg.neg()?.exp()? + 1.)?.recip()?;
+                        let silu_grad = &sigmoid_arg * (1. - *node) + *node;
                         *sum_grad = sum_grad.add(&(&grad * silu_grad)?)?
                     }
                     Op::Elu(arg, alpha) => {
@@ -636,7 +649,8 @@ impl Tensor {
                         let zeros = arg.zeros_like()?;
                         let positive_mask = arg.gt(&zeros)?.to_dtype(arg.dtype())?;
                         let negative_mask = arg.le(&zeros)?.to_dtype(arg.dtype())?;
-                        let negative_exp_mask = ((negative_mask * arg.exp())? * *alpha)?;
+                        // node == alpha * (e^x - 1) for x <= 0, reuse it
+                        let negative_exp_mask = (negative_mask * (*node + *alpha))?;
                         let combined_mask = (positive_mask + negative_exp_mask)?;
                         *sum_grad = sum_grad.add(&(grad * combined_mask)?)?
                     }
@@ -744,6 +758,11 @@ impl GradStore {
         self.0.insert(tensor.id(), grad)
     }
 
+    /// Insert a gradient tensor associated with the given tensor id, returning the previous gradient tensor if it existed
+    pub fn insert_id(&mut self, id: TensorId, grad: Tensor) -> Option<Tensor> {
+        self.0.insert(id, grad)
+    }
+
     /// Get the gradient tensor associated with the given tensor, or, if it does not exist,
     /// insert a tensor of zeroes, with the same shape and type as the given tensors and return it
     fn or_insert(&mut self, tensor: &Tensor) -> Result<&mut Tensor> {
@@ -757,6 +776,9 @@ impl GradStore {
         Ok(grad)
     }
 
+    /// Extend this gradient store with the contents of another.
+    /// If an entry is already occupied, updates and ensures new tensor follows correct detach semantics.
+    /// Otherwise simply inserts.
     pub fn extend(&mut self, other: Self) -> Result<()> {
         for (id, grad) in other.0 {
             match self.0.entry(id) {
@@ -778,5 +800,10 @@ impl GradStore {
             }
         }
         Ok(())
+    }
+
+    /// Get the tensor ids of the stored gradient tensors
+    pub fn get_ids(&self) -> impl Iterator<Item = &TensorId> {
+        self.0.keys()
     }
 }

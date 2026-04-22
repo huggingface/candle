@@ -448,9 +448,9 @@ pub fn reduce_stereo_in_place(left: Windows100ms<&mut [Power]>, right: Windows10
 /// Perform gating and averaging for a BS.1770-4 integrated loudness measurement.
 ///
 /// The integrated loudness measurement is not just the average power over the
-/// entire signal. BS.1770-4 defines defines two stages of gating that exclude
+/// entire signal. BS.1770-4 defines two stages of gating that exclude
 /// parts of the signal, to ensure that silent parts do not contribute to the
-/// loudness measurment. This function performs that gating, and returns the
+/// loudness measurement. This function performs that gating, and returns the
 /// average power over the windows that were not excluded.
 ///
 /// The result of this function is the integrated loudness measurement.

@@ -1,3 +1,19 @@
+//! Quantized Llama2 model implementation.
+//!
+//! This provides an 8-bit quantized implementation of Meta's LLaMA2 language model
+//! for reduced memory usage and faster inference.
+//!
+//! Key characteristics:
+//! - Decoder-only transformer architecture
+//! - RoPE position embeddings
+//! - Grouped Query Attention
+//! - 8-bit quantization of weights
+//!
+//! References:
+//! - [LLaMA2 Paper](https://arxiv.org/abs/2307.09288)
+//! - [LLaMA2 Technical Report](https://ai.meta.com/research/publications/llama-2-open-foundation-and-fine-tuned-chat-models/)
+//!
+
 use super::llama2_c::{Cache, Config};
 use crate::quantized_nn::{linear_no_bias as linear, Embedding, Linear, RmsNorm};
 pub use crate::quantized_var_builder::VarBuilder;
@@ -74,7 +90,7 @@ impl CausalSelfAttention {
         let att = if seq_len <= 1 {
             att
         } else {
-            let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
+            let mask = cache.mask(seq_len, index_pos)?.broadcast_as(att.shape())?;
             masked_fill(&att, &mask, f32::NEG_INFINITY)?
         };
         let att = candle_nn::ops::softmax(&att, D::Minus1)?;

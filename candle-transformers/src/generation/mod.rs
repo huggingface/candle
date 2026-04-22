@@ -1,5 +1,10 @@
+//! Logit Processing and Sampling
+//!
+//! Functionality for modeling sampling strategies and logits processing in text generation
+//! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
+//! and combinations thereof.
 use candle::{DType, Error, Result, Tensor};
-use rand::{distributions::Distribution, SeedableRng};
+use rand::{distr::Distribution, SeedableRng};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
@@ -7,6 +12,9 @@ pub enum Sampling {
     All { temperature: f64 },
     TopK { k: usize, temperature: f64 },
     TopP { p: f64, temperature: f64 },
+    TopKThenTopP { k: usize, p: f64, temperature: f64 },
+    // Note that the rng is not used for the Gumbel-Softmax sampling.
+    GumbelSoftmax { temperature: f64 },
 }
 
 pub struct LogitsProcessor {
@@ -33,18 +41,16 @@ impl LogitsProcessor {
     }
 
     fn sample_argmax(&mut self, logits: Tensor) -> Result<u32> {
-        let logits_v: Vec<f32> = logits.to_vec1()?;
-        let next_token = logits_v
-            .iter()
-            .enumerate()
-            .max_by(|(_, u), (_, v)| u.total_cmp(v))
-            .map(|(i, _)| i as u32)
-            .unwrap();
-        Ok(next_token)
+        logits.argmax(candle::D::Minus1)?.to_scalar::<u32>()
+    }
+
+    fn sample_gumbel_softmax(&mut self, logits: &Tensor, temperature: f64) -> Result<u32> {
+        let sampled = candle_nn::sampling::gumbel_softmax(logits, temperature, candle::D::Minus1)?;
+        sampled.to_scalar::<u32>()
     }
 
     fn sample_multinomial(&mut self, prs: &Vec<f32>) -> Result<u32> {
-        let distr = rand::distributions::WeightedIndex::new(prs).map_err(Error::wrap)?;
+        let distr = rand::distr::weighted::WeightedIndex::new(prs).map_err(Error::wrap)?;
         let next_token = distr.sample(&mut self.rng) as u32;
         Ok(next_token)
     }
@@ -77,11 +83,30 @@ impl LogitsProcessor {
             self.sample_multinomial(prs)
         } else {
             let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
-            // Sort by descending probability.
             let (indices, _, _) =
                 argsort_indices.select_nth_unstable_by(top_k, |&i, &j| prs[j].total_cmp(&prs[i]));
             let prs = indices.iter().map(|&i| prs[i]).collect::<Vec<_>>();
             let index = self.sample_multinomial(&prs)?;
+            Ok(indices[index as usize] as u32)
+        }
+    }
+
+    // top-k sampling samples from the k tokens with the largest probabilities.
+    // then top-p sampling.
+    fn sample_topk_topp(&mut self, prs: &mut Vec<f32>, top_k: usize, top_p: f32) -> Result<u32> {
+        if top_k >= prs.len() {
+            self.sample_topp(prs, top_p)
+        } else {
+            let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
+            let (indices, _, _) =
+                argsort_indices.select_nth_unstable_by(top_k, |&i, &j| prs[j].total_cmp(&prs[i]));
+            let mut prs = indices.iter().map(|&i| prs[i]).collect::<Vec<_>>();
+            let sum_p = prs.iter().sum::<f32>();
+            let index = if top_p <= 0.0 || top_p >= sum_p {
+                self.sample_multinomial(&prs)?
+            } else {
+                self.sample_topp(&mut prs, top_p)?
+            };
             Ok(indices[index as usize] as u32)
         }
     }
@@ -102,6 +127,9 @@ impl LogitsProcessor {
 
         let next_token = match &self.sampling {
             Sampling::ArgMax => self.sample_argmax(logits)?,
+            Sampling::GumbelSoftmax { temperature } => {
+                self.sample_gumbel_softmax(&logits, *temperature)?
+            }
             Sampling::All { temperature } => {
                 let prs = prs(*temperature)?;
                 self.sample_multinomial(&prs)?
@@ -119,6 +147,10 @@ impl LogitsProcessor {
             Sampling::TopK { k, temperature } => {
                 let mut prs = prs(*temperature)?;
                 self.sample_topk(&mut prs, *k)?
+            }
+            Sampling::TopKThenTopP { k, p, temperature } => {
+                let mut prs = prs(*temperature)?;
+                self.sample_topk_topp(&mut prs, *k, *p as f32)?
             }
         };
         Ok(next_token)

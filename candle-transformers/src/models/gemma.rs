@@ -1,7 +1,13 @@
+//! Gemma inference implementation.
+//!
+//! See ["Gemma: Open Models Based on Gemini Technology"](https://blog.google/technology/developers/gemma-open-ai-model/)
+//!
+//! Based on implementation from Google and PyTorch
+
 use std::sync::Arc;
 
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Linear, VarBuilder};
+use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
 
 fn default_max_position_embeddings() -> usize {
     4096
@@ -11,7 +17,9 @@ fn default_max_position_embeddings() -> usize {
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
-    pub hidden_act: candle_nn::Activation,
+    // The code gemma configs include both hidden_act and hidden_activation.
+    pub hidden_act: Option<Activation>,
+    pub hidden_activation: Option<Activation>,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_attention_heads: usize,
@@ -23,6 +31,16 @@ pub struct Config {
 
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
+}
+
+impl Config {
+    fn hidden_act(&self) -> Result<Activation> {
+        match (self.hidden_act, self.hidden_activation) {
+            (None, Some(act)) | (Some(act), None) => Ok(act),
+            (Some(_), Some(_)) => candle::bail!("both hidden_act and hidden_activation are set"),
+            (None, None) => candle::bail!("none of hidden_act and hidden_activation are set"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -61,13 +79,6 @@ struct RotaryEmbedding {
     cos: Tensor,
 }
 
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let last_dim = xs.dim(D::Minus1)?;
-    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
-}
-
 impl RotaryEmbedding {
     fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
         let dim = cfg.head_dim;
@@ -82,7 +93,6 @@ impl RotaryEmbedding {
             .to_dtype(dtype)?
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
         Ok(Self {
             sin: freqs.sin()?,
             cos: freqs.cos()?,
@@ -98,10 +108,8 @@ impl RotaryEmbedding {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
-        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
+        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
         Ok((q_embed, k_embed))
     }
 }
@@ -126,7 +134,7 @@ impl MLP {
             gate_proj,
             up_proj,
             down_proj,
-            act_fn: cfg.hidden_act,
+            act_fn: cfg.hidden_act()?,
         })
     }
 }
@@ -151,10 +159,16 @@ struct Attention {
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     kv_cache: Option<(Tensor, Tensor)>,
+    use_flash_attn: bool,
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        use_flash_attn: bool,
+        cfg: &Config,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -176,19 +190,8 @@ impl Attention {
             head_dim,
             rotary_emb,
             kv_cache: None,
+            use_flash_attn,
         })
-    }
-
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
     }
 
     fn forward(
@@ -227,10 +230,18 @@ impl Attention {
         };
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
-        let key_states = self.repeat_kv(key_states)?.contiguous()?;
-        let value_states = self.repeat_kv(value_states)?.contiguous()?;
+        let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
+        let value_states =
+            crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
 
-        let attn_output = {
+        let attn_output = if self.use_flash_attn {
+            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
+            let q = query_states.transpose(1, 2)?;
+            let k = key_states.transpose(1, 2)?;
+            let v = value_states.transpose(1, 2)?;
+            let scale = 1f32 / (self.head_dim as f32).sqrt();
+            flash_attn(&q, &k, &v, scale, attention_mask.is_some())?.transpose(1, 2)?
+        } else {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
 
@@ -252,6 +263,22 @@ impl Attention {
     }
 }
 
+#[cfg(feature = "flash-attn")]
+fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+    unimplemented!("compile with '--features flash-attn'")
+}
+
 #[derive(Debug, Clone)]
 struct DecoderLayer {
     self_attn: Attention,
@@ -261,8 +288,13 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        use_flash_attn: bool,
+        cfg: &Config,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let self_attn = Attention::new(rotary_emb, use_flash_attn, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -311,7 +343,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(use_flash_attn: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -319,7 +351,8 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            let layer =
+                DecoderLayer::new(rotary_emb.clone(), use_flash_attn, cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -333,6 +366,10 @@ impl Model {
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
         })
+    }
+
+    pub fn embed_tokens(&self) -> &candle_nn::Embedding {
+        &self.embed_tokens
     }
 
     fn prepare_decoder_attention_mask(
@@ -371,6 +408,36 @@ impl Model {
         xs.narrow(1, seq_len - 1, 1)?
             .apply(&self.norm)?
             .apply(&self.lm_head)
+    }
+    pub fn forward_embeds(
+        &mut self,
+        xs: &Tensor,
+        attn_mask: Option<&Tensor>,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        let (_, seq_len, _) = xs.dims3()?;
+        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+        for layer in self.layers.iter_mut() {
+            xs = layer.forward(&xs, attn_mask, seqlen_offset)?
+        }
+        xs.narrow(1, seq_len - 1, 1)?
+            .apply(&self.norm)?
+            .apply(&self.lm_head)
+    }
+
+    // Forward the model and return the hidden states without the lm_head
+    pub fn forward_embeds_without_projection(
+        &mut self,
+        xs: &Tensor,
+        attn_mask: Option<&Tensor>,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        let (_, _, _) = xs.dims3()?;
+        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+        for layer in self.layers.iter_mut() {
+            xs = layer.forward(&xs, attn_mask, seqlen_offset)?
+        }
+        Ok(xs)
     }
 
     pub fn clear_kv_cache(&mut self) {

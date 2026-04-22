@@ -1,3 +1,20 @@
+//! Mistral model implementation with quantization support.
+//!
+//! Mistral is a large language model optimized for efficiency.
+//! This implementation provides quantization for reduced memory and compute.
+//!
+//! Key characteristics:
+//! - Sliding window attention mechanism
+//! - Grouped query attention (GQA)
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [Mistral Paper](https://arxiv.org/abs/2310.06825)
+//! - [Model Card](https://huggingface.co/mistralai/Mistral-7B-v0.1)
+//!
+
 use crate::quantized_nn::{linear_no_bias, Embedding, Linear, RmsNorm};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};
@@ -122,18 +139,6 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     fn forward(
         &mut self,
         xs: &Tensor,
@@ -172,8 +177,8 @@ impl Attention {
         };
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
-        let key_states = self.repeat_kv(key_states)?;
-        let value_states = self.repeat_kv(value_states)?;
+        let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?;
+        let value_states = crate::utils::repeat_kv(value_states, self.num_kv_groups)?;
 
         let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);

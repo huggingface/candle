@@ -284,11 +284,11 @@ impl MusicgenDecoder {
         };
         let embed_dim = cfg.vocab_size + 1;
         let embed_tokens = (0..cfg.num_codebooks)
-            .map(|i| embedding(embed_dim, h, vb.pp(&format!("embed_tokens.{i}"))))
+            .map(|i| embedding(embed_dim, h, vb.pp(format!("embed_tokens.{i}"))))
             .collect::<Result<Vec<_>>>()?;
         let embed_positions = MusicgenSinusoidalPositionalEmbedding::load(vb.clone(), cfg)?;
         let layers = (0..cfg.num_hidden_layers)
-            .map(|i| MusicgenDecoderLayer::load(vb.pp(&format!("layers.{i}")), cfg))
+            .map(|i| MusicgenDecoderLayer::load(vb.pp(format!("layers.{i}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let layer_norm = layer_norm(h, 1e-5, vb.pp("layer_norm"))?;
         Ok(Self {
@@ -341,7 +341,7 @@ impl MusicgenForCausalLM {
         let h = cfg.hidden_size;
         let decoder = MusicgenDecoder::load(vb.pp("model.decoder"), cfg)?;
         let lm_heads = (0..cfg.num_codebooks)
-            .map(|i| linear_no_bias(h, cfg.vocab_size, vb.pp(&format!("lm_heads.{i}"))))
+            .map(|i| linear_no_bias(h, cfg.vocab_size, vb.pp(format!("lm_heads.{i}"))))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             decoder,

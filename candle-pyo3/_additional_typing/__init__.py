@@ -3,7 +3,7 @@ from typing import Union, Sequence
 
 class Tensor:
     """
-    This contains the type hints for the magic methodes of the `candle.Tensor` class.
+    This contains the type hints for the magic methods of the `candle.Tensor` class.
     """
 
     def __add__(self, rhs: Union["Tensor", "Scalar"]) -> "Tensor":

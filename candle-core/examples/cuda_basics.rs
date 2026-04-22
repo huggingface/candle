@@ -5,32 +5,19 @@ extern crate accelerate_src;
 extern crate intel_mkl_src;
 
 use anyhow::Result;
-use candle_core::{Device, Module, Tensor};
-
-use candle_core::quantized::{QMatMul, QTensor};
-
+use candle_core::{Device, Tensor};
+// xs: [1024, 64, 1924], c Tensor[dims 128, 64, 8; f32, cuda:0] Conv1dConfig { padding: 0, stride: 4, dilation: 1, groups: 1 }
 fn main() -> Result<()> {
     let device = Device::new_cuda(0)?;
-    let q = Tensor::randn(0f32, 1.0, (72, 256), &device)?;
-    let q_cpu = q.to_device(&Device::Cpu)?;
-    let q = QTensor::quantize(&q, candle_core::quantized::GgmlDType::Q8K)?;
-    let q = QMatMul::from_qtensor(q)?;
-    let x = Tensor::randn(0f32, 1.0, (5, 256), &device)?;
-    let res_q_cuda = q.forward(&x)?;
-    println!("{res_q_cuda}");
-
-    let q_cpu = QTensor::quantize(&q_cpu, candle_core::quantized::GgmlDType::Q8K)?;
-    let q_cpu_tensor = q_cpu.dequantize(&Device::Cpu)?;
-    let q_cpu = QMatMul::from_qtensor(q_cpu)?;
-    let x_cpu = x.to_device(&Device::Cpu)?;
-    let res_q_cpu = q_cpu.forward(&x_cpu)?;
-    println!("{res_q_cpu}");
-
-    let res_mm = x_cpu.matmul(&q_cpu_tensor.t()?)?;
-    let diff = (res_mm - res_q_cuda.to_device(&Device::Cpu))?
-        .abs()?
-        .flatten_all()?
-        .max(0)?;
-    println!("{diff}");
+    let x = Tensor::randn(0f32, 1.0, (1024, 64, 1924), &device)?;
+    let c = Tensor::randn(0f32, 1.0, (128, 64, 8), &device)?;
+    let _x1 = x.conv1d(&c, 0, 4, 1, 1)?;
+    drop(_x1);
+    for _ in 0..20 {
+        let start_time = std::time::Instant::now();
+        let _x1 = x.conv1d(&c, 0, 4, 1, 1)?;
+        device.synchronize()?;
+        println!("conv1d: {:?}", start_time.elapsed());
+    }
     Ok(())
 }

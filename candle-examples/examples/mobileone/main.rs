@@ -28,7 +28,7 @@ impl Which {
             Self::S3 => "s3",
             Self::S4 => "s4",
         };
-        format!("timm/mobileone_{}.apple_in1k", name)
+        format!("timm/mobileone_{name}.apple_in1k")
     }
 
     fn config(&self) -> mobileone::Config {

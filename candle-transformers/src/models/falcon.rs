@@ -1,5 +1,12 @@
+//! Falcon language model inference implementation
+//!
+//! See ["Falcon: a new approach to large language models"](https://huggingface.co/blog/falcon)
+//!
+//! Based on implementation from [Huggingface Transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/falcon)
+
 use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
+use serde::Deserialize;
 
 const MAX_SEQ_LEN: usize = 5000;
 
@@ -18,7 +25,7 @@ fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
 }
 
 // https://raw.githubusercontent.com/huggingface/transformers/030c863aaa0165e98352b61697430bf69bf33755/src/transformers/models/falcon/configuration_falcon.py
-#[derive(Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_size: usize,
@@ -119,7 +126,7 @@ fn rotate_half(x: &Tensor) -> Result<Tensor> {
     Ok(x21)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconRotaryEmbedding {
     inv_freq: Tensor,
     cache: Option<(usize, Tensor, Tensor)>,
@@ -178,12 +185,14 @@ impl FalconRotaryEmbedding {
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
     let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
+    let on_true = Tensor::new(on_true, on_false.device())?
+        .to_dtype(on_false.dtype())?
+        .broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
     Ok(m)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconAttention {
     query_key_value: Linear,
     dense: Linear,
@@ -312,9 +321,13 @@ impl FalconAttention {
         let attn_output = self.dense.forward(&attn_output)?;
         Ok(attn_output)
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconMlp {
     dense_h_to_4h: Linear,
     dense_4h_to_h: Linear,
@@ -339,7 +352,7 @@ impl FalconMlp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconDecoderLayer {
     inp_layernorm: LayerNorm,
     self_attention: FalconAttention,
@@ -399,9 +412,13 @@ impl FalconDecoderLayer {
         let output = (mlp_output + residual)?;
         Ok(output)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.self_attention.clear_kv_cache()
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Falcon {
     word_embeddings: Embedding,
     blocks: Vec<FalconDecoderLayer>,
@@ -437,7 +454,7 @@ impl Falcon {
             vb.pp("transformer.word_embeddings"),
         )?;
         let blocks = (0..cfg.num_hidden_layers)
-            .map(|i| FalconDecoderLayer::load(vb.pp(&format!("transformer.h.{i}")), &cfg))
+            .map(|i| FalconDecoderLayer::load(vb.pp(format!("transformer.h.{i}")), &cfg))
             .collect::<Result<Vec<_>>>()?;
         let ln_f = layer_norm(
             cfg.hidden_size,
@@ -473,5 +490,11 @@ impl Falcon {
         let hidden_state = hidden_state.narrow(1, seq_len - 1, 1)?;
         let logits = self.lm_head.forward(&hidden_state)?.squeeze(1)?;
         Ok(logits)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for block in self.blocks.iter_mut() {
+            block.clear_kv_cache()
+        }
     }
 }

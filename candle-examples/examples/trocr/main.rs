@@ -93,7 +93,7 @@ pub fn main() -> anyhow::Result<()> {
                 .get("model.safetensors")?
             }
         };
-        println!("model: {:?}", model);
+        println!("model: {model:?}");
         unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? }
     };
 
@@ -115,7 +115,7 @@ pub fn main() -> anyhow::Result<()> {
     let processor = image_processor::ViTImageProcessor::new(&processor_config);
 
     let image = vec![args.image.as_str()];
-    let image = processor.preprocess(image)?;
+    let image = processor.preprocess(image)?.to_device(&device)?;
 
     let encoder_xs = model.encoder().forward(&image)?;
 

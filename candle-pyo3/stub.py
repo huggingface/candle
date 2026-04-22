@@ -7,7 +7,6 @@ import black
 from pathlib import Path
 import re
 
-
 INDENT = " " * 4
 GENERATED_COMMENT = "# Generated content DO NOT EDIT\n"
 TYPING = """from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence
@@ -206,6 +205,8 @@ def write(module, directory, origin, check=False):
     if check:
         with open(filename, "r") as f:
             data = f.read()
+            print("generated content")
+            print(pyi_content)
             assert data == pyi_content, f"The content of {filename} seems outdated, please run `python stub.py`"
     else:
         with open(filename, "w") as f:
@@ -229,6 +230,8 @@ def write(module, directory, origin, check=False):
         if check:
             with open(filename, "r") as f:
                 data = f.read()
+                print("generated content")
+                print(py_content)
                 assert data == py_content, f"The content of {filename} seems outdated, please run `python stub.py`"
         else:
             with open(filename, "w") as f:

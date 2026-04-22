@@ -24,7 +24,37 @@ impl QCudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub fn dequantize_f16(&self, _elem_count: usize) -> Result<CudaStorage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub fn quantize(&mut self, _src: &CudaStorage) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn quantize_imatrix(
+        &mut self,
+        _src: &CudaStorage,
+        _imatrix_weights: &[f32],
+        _n_per_row: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn quantize_imatrix_onto(
+        &mut self,
+        _src: &crate::CpuStorage,
+        _imatrix_weights: &[f32],
+        _n_per_row: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn quantize_onto(&mut self, _src: &crate::CpuStorage) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn device_ptr(&self) -> Result<*const u8> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -37,6 +67,21 @@ impl QCudaStorage {
         _self_shape: &crate::Shape,
         _storage: &CudaStorage,
         _layout: &crate::Layout,
+    ) -> Result<(CudaStorage, crate::Shape)> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn data(&self) -> Result<Vec<u8>> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn indexed_moe_forward(
+        &self,
+        _: &crate::Shape,
+        _: &CudaStorage,
+        _: &crate::Layout,
+        _: &CudaStorage,
+        _: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
         Err(Error::NotCompiledWithCudaSupport)
     }

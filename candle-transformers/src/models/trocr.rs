@@ -1,3 +1,19 @@
+//! TrOCR model implementation.
+//!
+//! TrOCR is a Transformer-based OCR model that uses a Vision Transformer encoder
+//! and a BART-like decoder for optical character recognition.
+//!
+//! Key characteristics:
+//! - Vision Transformer encoder for image processing
+//! - BART-style decoder for text generation
+//! - Learned positional embeddings
+//! - Layer normalization and self-attention
+//!
+//! References:
+//! - [Paper](https://arxiv.org/abs/2109.10282)
+//! - [Model Card](https://huggingface.co/microsoft/trocr-base-handwritten)
+//!
+
 use crate::models::vit::{Config, Embeddings, Encoder};
 use candle::{DType, Result, Tensor};
 use candle_nn::{
