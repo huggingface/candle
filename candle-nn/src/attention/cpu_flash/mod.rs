@@ -109,7 +109,6 @@ fn flash_attn_via_varlen(
 
     let causal = attn_mask.is_causal();
 
-    // Pack (B, S, H, D) → (B*S, H, D)
     let q_packed = q.contiguous()?.reshape((b * s_q, h_q, d))?;
     let k_packed = k.contiguous()?.reshape((b * s_kv, h_kv, d))?;
     let v_packed = v.contiguous()?.reshape((b * s_kv, h_kv, d))?;
@@ -149,6 +148,5 @@ fn flash_attn_via_varlen(
         None,
     )?;
 
-    // ctx: (B*S_q, H_q, D) → (B, S_q, H_q, D) → (B, H_q, S_q, D)
     ctx.reshape((b, s_q, h_q, d))?.transpose(1, 2)?.contiguous()
 }

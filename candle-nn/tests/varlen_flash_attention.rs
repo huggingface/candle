@@ -15,7 +15,7 @@ mod tests {
     use candle::{DType, Device, IndexOp, Tensor};
     use rand::prelude::*;
 
-    // ── Implementation dispatch ─────────────────────────────────────────
+    // Implementation dispatch
 
     #[derive(Debug, Clone, Copy)]
     enum VarlenImpl {
@@ -73,7 +73,7 @@ mod tests {
         }
     }
 
-    // ── Helpers ─────────────────────────────────────────────────────────
+    // Helpers
 
     fn convert_to_precision(
         q: &Tensor,
@@ -149,7 +149,7 @@ mod tests {
         Ok((k, v))
     }
 
-    // ── Input generators ────────────────────────────────────────────────
+    // Input generators
 
     #[allow(clippy::type_complexity)]
     fn make_varlen_inputs_prefill(
@@ -193,7 +193,7 @@ mod tests {
         Ok((q, k, v, seqlens_q, seqlens_k, max_l, max_l))
     }
 
-    // ── Reference implementation ────────────────────────────────────────
+    // Reference implementation
 
     #[allow(clippy::too_many_arguments)]
     fn build_reference_bias(
@@ -396,7 +396,7 @@ mod tests {
         Tensor::cat(&outs, 0)
     }
 
-    // ── Assertion helper ────────────────────────────────────────────────
+    // Assertion helper
 
     fn assert_close(
         out_var: &Tensor,
@@ -418,7 +418,7 @@ mod tests {
         Ok(())
     }
 
-    // ── Test functions ──────────────────────────────────────────────────
+    // Test functions
 
     fn test_prefill_noncausal(impl_fn: VarlenImpl, precision: DType) -> Result<()> {
         let device = Device::Cpu;
@@ -661,7 +661,7 @@ mod tests {
         assert_close(&out_fused, &out_unfused, precision, label)
     }
 
-    // ── Parameterized test entries ──────────────────────────────────────
+    // Parameterized test entries
 
     // Prefill noncausal
     #[test]

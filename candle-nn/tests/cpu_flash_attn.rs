@@ -48,7 +48,7 @@ fn assert_close(a: &Tensor, b: &Tensor, tol: f32, label: &str) -> Result<()> {
     Ok(())
 }
 
-// ── Causal decode (q_len=1) ─────────────────────────────────────────────
+// Causal decode (q_len=1)
 
 #[test]
 fn causal_decode_b1() -> Result<()> {
@@ -76,7 +76,7 @@ fn causal_decode_b1() -> Result<()> {
     assert_close(&out, &expected, 1e-5, "causal_decode_b1")
 }
 
-// ── Causal prefill ──────────────────────────────────────────────────────
+// Causal prefill
 
 #[test]
 fn causal_prefill_b1() -> Result<()> {
@@ -103,7 +103,7 @@ fn causal_prefill_b1() -> Result<()> {
     assert_close(&out, &expected, 1e-5, "causal_prefill_b1")
 }
 
-// ── Causal prefill with KV offset (simulating KV cache) ─────────────────
+// Causal prefill with KV offset (simulating KV cache)
 
 #[test]
 fn causal_prefill_with_offset() -> Result<()> {
@@ -131,7 +131,7 @@ fn causal_prefill_with_offset() -> Result<()> {
     assert_close(&out, &expected, 1e-5, "causal_prefill_with_offset")
 }
 
-// ── GQA (fewer KV heads) ────────────────────────────────────────────────
+// GQA (fewer KV heads)
 
 #[test]
 fn causal_decode_gqa() -> Result<()> {
@@ -169,7 +169,7 @@ fn causal_decode_gqa() -> Result<()> {
     assert_close(&out, &expected, 1e-5, "causal_decode_gqa")
 }
 
-// ── Standard (no mask) ──────────────────────────────────────────────────
+// Standard (no mask)
 
 #[test]
 fn standard_no_mask_b1() -> Result<()> {
@@ -196,7 +196,7 @@ fn standard_no_mask_b1() -> Result<()> {
     assert_close(&out, &expected, 1e-5, "standard_no_mask_b1")
 }
 
-// ── Standard with explicit mask ─────────────────────────────────────────
+// Standard with explicit mask
 
 #[test]
 fn standard_with_mask_b1() -> Result<()> {
@@ -233,7 +233,7 @@ fn standard_with_mask_b1() -> Result<()> {
     assert_close(&out, &expected, 1e-4, "standard_with_mask_b1")
 }
 
-// ── Interleaved KV decode ───────────────────────────────────────────────
+// Interleaved KV decode
 
 #[test]
 fn interleaved_kv_decode() -> Result<()> {
@@ -259,8 +259,7 @@ fn interleaved_kv_decode() -> Result<()> {
         .reshape((1, h_q, kv_len, d))?;
     let expected = reference_sdpa(&q, &k_exp, &v_exp, scale)?;
 
-    // Build interleaved KV: (kv_len, h_kv, 2*d)
-    // K is (1, h_kv, kv_len, d) → squeeze → (h_kv, kv_len, d) → transpose → (kv_len, h_kv, d)
+    // Build interleaved KV: (kv_len, h_kv, 2*d).
     let k_seq = k.squeeze(0)?.transpose(0, 1)?.contiguous()?;
     let v_seq = v.squeeze(0)?.transpose(0, 1)?.contiguous()?;
     let kv = Tensor::cat(&[&k_seq, &v_seq], 2)?.contiguous()?; // (kv_len, h_kv, 2*d)
@@ -275,7 +274,6 @@ fn interleaved_kv_decode() -> Result<()> {
 
     let out = causal_decode_f32_interleaved(&q_flat, &kv_data, h_q, h_kv, d, kv_len, scale)?;
 
-    // out: (h_q, 1, d) → unsqueeze → (1, h_q, 1, d)
     let out = out.unsqueeze(0)?;
     assert_close(&out, &expected, 1e-5, "interleaved_kv_decode")
 }

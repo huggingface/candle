@@ -268,14 +268,12 @@ impl AttentionWeights {
         // RoPE
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
-        // TODO: b > 1 falls back to standard matmul — needs varlen CPU flash
-        // with interleaved cache support for multi-batch quantized inference.
+        // TODO: b > 1 needs varlen CPU flash with interleaved cache support.
         if x.device().is_cpu() && b == 1 {
             let scale = 1.0 / (self.head_dim as f32).sqrt();
 
             if l == 1 && b == 1 && q.dtype() == DType::F32 {
-                // ── Fused decode: extract raw slices → raw cache → kernel ──
-                // Q: (1, H_q, 1, D) → flat (H_q * D)
+                // Fused decode: raw slices -> raw cache -> kernel.
                 let q_cont = q.squeeze(0)?.squeeze(1)?.contiguous()?;
                 let (q_g, q_l) = q_cont.storage_and_layout();
                 let q_data: &[f32] = match &*q_g {
@@ -283,7 +281,6 @@ impl AttentionWeights {
                     _ => candle::bail!("Expected CPU storage"),
                 };
 
-                // K: (1, H_kv, 1, D) → flat (H_kv * D)
                 let k_cont = k.squeeze(0)?.squeeze(1)?.contiguous()?;
                 let (k_g, k_l) = k_cont.storage_and_layout();
                 let k_data: &[f32] = match &*k_g {
@@ -291,7 +288,6 @@ impl AttentionWeights {
                     _ => candle::bail!("Expected CPU storage"),
                 };
 
-                // V: (1, H_kv, 1, D) → flat (H_kv * D)
                 let v_cont = v.squeeze(0)?.squeeze(1)?.contiguous()?;
                 let (v_g, v_l) = v_cont.storage_and_layout();
                 let v_data: &[f32] = match &*v_g {
@@ -320,7 +316,7 @@ impl AttentionWeights {
                 let ctx = ctx.unsqueeze(0)?.transpose(1, 2)?;
                 ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
             } else {
-                // ── Prefill: use InterleavedKvCache + flash_attn, populate raw cache ──
+                // Prefill: interleaved cache + flash_attn; also populate raw cache for decode.
                 let ic = self.interleaved_cache.as_mut().unwrap();
                 let kv = ic.append(&k, &v)?;
 

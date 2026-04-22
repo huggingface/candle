@@ -122,7 +122,7 @@ where
     } else {
         return Err(candle::Error::Msg("Expected CPU storage for v".into()));
     };
-    // Force mask contiguous — the kernel indexes as flat 2D (q_pos * kv_len + kv_pos)
+    // Kernel indexes mask as flat 2D (q_pos * kv_len + kv_pos), so force contiguous.
     let mask_cont = mask.map(|m| m.contiguous()).transpose()?;
     let mask_guard = mask_cont.as_ref().map(|m| m.storage_and_layout());
     let mask_data: Option<&[T]> = if let Some((guard, layout)) = &mask_guard {
@@ -237,7 +237,6 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
                 let mut s = 0.0f32;
                 let mut m = f32::NEG_INFINITY;
 
-                // Sequential KV loop — no tile parallelism overhead
                 for kv_pos in 0..kv_len {
                     // Mask
                     let mv = if let Some(mv_vec) = mask_vec {

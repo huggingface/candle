@@ -57,7 +57,6 @@ where
         );
     }
 
-    // Squeeze batch dim: (1, S, H, D) → contiguous (S, H, D)
     let q = q.squeeze(0)?.contiguous()?;
     let k = k.squeeze(0)?.contiguous()?;
     let v = v.squeeze(0)?.contiguous()?;
@@ -172,7 +171,7 @@ where
     }
 }
 
-// ── f32 dot product ─────────────────────────────────────────────────────
+// f32 dot product
 
 #[inline(always)]
 fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
@@ -190,11 +189,9 @@ fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
     s
 }
 
-// ── f32 decode (q_len=1) ────────────────────────────────────────────────
-//
-// Input data layout: contiguous (1, S, H, D), we index past the batch dim.
-// For q with S=1: q[h] starts at h*D.
-// For k/v with S=kv_len: k[pos, h] starts at pos*H_kv*D + h*D.
+// f32 decode (q_len=1).
+// Input layout is contiguous (1, S, H, D); we index past the batch dim.
+// q[h] starts at h*D; k/v[pos, h] starts at pos*H_kv*D + h*D.
 
 #[allow(clippy::too_many_arguments)]
 fn causal_decode_f32(
@@ -377,10 +374,9 @@ fn causal_decode_f32_lean(
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
 
-// ── Interleaved KV decode ────────────────────────────────────────────────
-//
-// KV data layout: contiguous (S, H_kv, 2*D) where K=[..,:D], V=[..,D:2D].
-// One base address per KV position, one prefetch loads both K and V.
+// Interleaved KV decode.
+// KV layout is contiguous (S, H_kv, 2*D) with K=[..,:D] and V=[..,D:2D],
+// so one base pointer per position and one prefetch covers both.
 
 /// Decode with interleaved KV cache. No ALiBi, no softcap.
 #[allow(clippy::too_many_arguments)]
@@ -412,7 +408,7 @@ pub fn causal_decode_f32_interleaved(
                 let mut ssum = 0.0f32;
 
                 for kv_pos in 0..kv_len {
-                    // Single base for both K and V — adjacent in memory
+                    // K and V share a base pointer (adjacent in memory)
                     let kv_base = kv_pos * kv_seq_stride + kv_head_off;
                     let k_row = &kv_data[kv_base..kv_base + d];
                     let v_row = &kv_data[kv_base + d..kv_base + 2 * d];
@@ -455,7 +451,7 @@ pub fn causal_decode_f32_interleaved(
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
 
-// ── f32 prefill (q_len > 1) ────────────────────────────────────────────
+// f32 prefill (q_len > 1)
 
 #[allow(clippy::too_many_arguments)]
 fn causal_prefill_f32(
@@ -676,7 +672,7 @@ fn causal_prefill_f32_lean(
     Tensor::from_vec(out, (h_q, s_q, d), &Device::Cpu)
 }
 
-// ── Generic fallback (non-f32) ──────────────────────────────────────────
+// Generic fallback (non-f32)
 
 #[allow(clippy::too_many_arguments)]
 fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real>(

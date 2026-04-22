@@ -189,7 +189,7 @@ impl RotaryEmbedding {
         let freqs = t.matmul(&inv_freq)?;
         let sin_t = freqs.sin()?;
         let cos_t = freqs.cos()?;
-        // Pre-extract flat f32 for fused decode RoPE — shape is (max_seq_len, D/2)
+        // Flat f32 RoPE tables used by the fused decode path.
         let cos_f32 = cos_t
             .to_dtype(DType::F32)?
             .flatten_all()?
@@ -321,16 +321,14 @@ impl QuantizedAttention {
         let o_proj = QMatMul::from_weights(vb.get_no_shape("attn_output.weight")?)?;
 
         let (q_proj, k_proj) = if use_flash_attn {
-            // ── Interlaced path: skip reconstruction entirely ────────
-            // Q/K weights stay in native GGUF order. The interleaved
-            // RoPE (rope_i) handles the element pairing correctly.
-            // Dot product is order-independent so QK scores are correct.
-            // V is not interlaced, so attention output is standard order.
+            // Interlaced path: keep Q/K in native GGUF order. The interleaved RoPE
+            // handles pairing; dot products are order-independent so QK scores match.
+            // V is not interlaced, so attention output stays in standard order.
             let q_proj = QMatMul::from_weights(vb.get_no_shape("attn_q.weight")?)?;
             let k_proj = QMatMul::from_weights(vb.get_no_shape("attn_k.weight")?)?;
             (q_proj, k_proj)
         } else {
-            // ── Standard path: dequantize → reconstruct → requantize ─
+            // Standard path: dequantize, reconstruct, requantize.
             use candle::quantized::{GgmlDType, QTensor};
             let q_weight_qtensor = vb.get_no_shape("attn_q.weight")?;
             let q_weight_raw = q_weight_qtensor.dequantize(&cpu)?;
@@ -393,14 +391,14 @@ impl QuantizedAttention {
     fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let (b, seq_len, _) = x.dims3()?;
 
-        // ── Fused decode: raw f32 path, zero tensor ops in hot path ─────
+        // Fused decode: raw f32, no tensor ops in hot path.
         if self.use_flash_attn
             && x.device().is_cpu()
             && seq_len == 1
             && b == 1
             && x.dtype() == DType::F32
         {
-            // 1. Run QKV projections — extract raw f32 output slices
+            // 1. QKV projections (raw f32 output slices)
             let q_proj_out = self.q_proj.forward(x)?; // (1, 1, H_q * D)
             let k_proj_out = self.k_proj.forward(x)?; // (1, 1, H_kv * D)
             let v_proj_out = self.v_proj.forward(x)?; // (1, 1, H_kv * D)
@@ -466,14 +464,14 @@ impl QuantizedAttention {
                 scale,
             )?;
 
-            // 6. Output: (H_q, 1, D) → (1, 1, H_q*D) → o_proj
+            // 6. Output projection
             let ctx = ctx.unsqueeze(0)?.transpose(1, 2)?;
             return ctx
                 .reshape((b, seq_len, self.hidden_size))?
                 .apply(&self.o_proj);
         }
 
-        // ── Standard path (prefill, non-f32, non-flash) ─────────────────
+        // Standard path: prefill, non-f32, or non-flash.
         let q = self
             .q_proj
             .forward(x)?
