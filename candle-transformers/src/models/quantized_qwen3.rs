@@ -74,7 +74,7 @@ impl MlpWeights {
             )
         }
         let intermediate_size = gate_dims[0];
-        let gate_up_proj = QMatMul::from_weights(QTensor::cat(&[&gate_proj, &up_proj], 0)?.into())?;
+        let gate_up_proj = QMatMul::from_qtensor(QTensor::cat(&[&gate_proj, &up_proj], 0)?)?;
         let down_proj = gg.qmatmul(&format!("{prefix}.ffn_down.weight"))?;
         let act_fn = Activation::Silu;
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
