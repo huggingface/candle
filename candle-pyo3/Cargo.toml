@@ -16,7 +16,7 @@ crate-type = ["cdylib"]
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 candle = { workspace = true, features = ["default"] }
-candle-nn = { workspace = true }
+candle-nn = { workspace = true, features = ["default"] }
 candle-onnx = { workspace = true, optional = true }
 half = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }

@@ -13,7 +13,7 @@ readme = "README.md"
 accelerate-src = { workspace = true, optional = true }
 candle = { workspace = true, features = ["default"] }
 candle-datasets = { workspace = true, optional = true }
-candle-nn = { workspace = true }
+candle-nn = { workspace = true, features = ["default"] }
 candle-transformers = { workspace = true }
 candle-flash-attn = { workspace = true, optional = true }
 candle-onnx = { workspace = true, optional = true }
