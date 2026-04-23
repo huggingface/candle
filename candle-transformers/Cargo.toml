@@ -12,7 +12,7 @@ readme = "README.md"
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
-candle = { workspace = true }
+candle = { workspace = true, default-features = false }
 candle-flash-attn = { workspace = true, optional = true }
 candle-nn = { workspace = true }
 fancy-regex = { workspace = true }
@@ -26,7 +26,8 @@ serde_plain = { workspace = true }
 tracing = { workspace = true }
 
 [features]
-default = []
+default = ["candle/default", "candle-nn/default"]
+tokenizers = ["candle/tokenizers", "candle-nn/tokenizers"]
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda"]
 cudnn = ["candle/cudnn", "candle-nn/cudnn"]

@@ -10,7 +10,7 @@ license.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-candle = { workspace = true }
+candle = { workspace = true, features = ["default"] }
 clap = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }

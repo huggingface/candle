@@ -14,7 +14,7 @@ pub mod imatrix_file;
 pub mod k_quants;
 #[cfg(feature = "metal")]
 pub mod metal;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "tokenizers"))]
 pub mod tokenizer;
 #[cfg(not(feature = "metal"))]
 mod metal {

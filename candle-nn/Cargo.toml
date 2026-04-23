@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { workspace = true }
+candle = { workspace = true, default-features = false }
 half = { workspace = true }
 thiserror = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -31,7 +31,8 @@ rand_distr = { workspace = true }
 criterion = { workspace = true }
 
 [features]
-default = []
+default = ["candle/default"]
+tokenizers = ["candle/tokenizers"]
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
 cudnn = ["candle/cudnn"]
