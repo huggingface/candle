@@ -1481,3 +1481,59 @@ instantiate_gemm_transpose_helper(f16, half, f16, half, 32, 64, 16, 1, 2)
 #if defined(__HAVE_BFLOAT__)
 instantiate_gemm_transpose_helper(bf16, bfloat, bf16, bfloat, 32, 64, 16, 1, 2)
 #endif
+
+// ============================================================
+// Naive GEMM fallback for GPUs without simdgroup_matrix support
+// (e.g., Intel integrated GPUs on x86 Macs).
+// Uses one thread per output element — slow but universally compatible.
+// Buffer layout intentionally matches the main gemm kernel.
+// ============================================================
+
+template<typename T, bool ta, bool tb>
+[[kernel]] void naive_gemm(
+    const device T *A              [[buffer(0)]],
+    const device T *B              [[buffer(1)]],
+    device T *D                    [[buffer(3)]],
+    constant GEMMParams &params    [[buffer(4)]],
+    constant int &batch_size       [[buffer(6)]],
+    constant long *batch_strides   [[buffer(7)]],
+    uint3 gid [[thread_position_in_grid]])
+{
+    const int row   = gid.x;
+    const int col   = gid.y;
+    const int batch = gid.z;
+
+    if (row >= params.M || col >= params.N) return;
+
+    A += batch_strides[0] * batch;
+    B += batch_strides[1] * batch;
+    D += params.batch_stride_d * (size_t)batch;
+
+    float acc = 0.0f;
+    for (int k = 0; k < params.K; k++) {
+        const float a = ta ? float(A[k * params.lda + row]) : float(A[row * params.lda + k]);
+        const float b = tb ? float(B[col * params.ldb + k]) : float(B[k * params.ldb + col]);
+        acc += a * b;
+    }
+    D[row * params.ldd + col] = T(acc);
+}
+
+typedef decltype(naive_gemm<float, false, false>) naive_gemm_f32_t;
+template [[host_name("naive_gemm_nn_f32")]] kernel naive_gemm_f32_t naive_gemm<float, false, false>;
+template [[host_name("naive_gemm_tn_f32")]] kernel naive_gemm_f32_t naive_gemm<float, true,  false>;
+template [[host_name("naive_gemm_nt_f32")]] kernel naive_gemm_f32_t naive_gemm<float, false, true>;
+template [[host_name("naive_gemm_tt_f32")]] kernel naive_gemm_f32_t naive_gemm<float, true,  true>;
+
+typedef decltype(naive_gemm<half, false, false>) naive_gemm_f16_t;
+template [[host_name("naive_gemm_nn_f16")]] kernel naive_gemm_f16_t naive_gemm<half, false, false>;
+template [[host_name("naive_gemm_tn_f16")]] kernel naive_gemm_f16_t naive_gemm<half, true,  false>;
+template [[host_name("naive_gemm_nt_f16")]] kernel naive_gemm_f16_t naive_gemm<half, false, true>;
+template [[host_name("naive_gemm_tt_f16")]] kernel naive_gemm_f16_t naive_gemm<half, true,  true>;
+
+#if defined(__HAVE_BFLOAT__)
+typedef decltype(naive_gemm<bfloat, false, false>) naive_gemm_bf16_t;
+template [[host_name("naive_gemm_nn_bf16")]] kernel naive_gemm_bf16_t naive_gemm<bfloat, false, false>;
+template [[host_name("naive_gemm_tn_bf16")]] kernel naive_gemm_bf16_t naive_gemm<bfloat, true,  false>;
+template [[host_name("naive_gemm_nt_bf16")]] kernel naive_gemm_bf16_t naive_gemm<bfloat, false, true>;
+template [[host_name("naive_gemm_tt_bf16")]] kernel naive_gemm_bf16_t naive_gemm<bfloat, true,  true>;
+#endif

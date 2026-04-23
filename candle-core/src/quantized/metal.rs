@@ -309,6 +309,10 @@ impl QMetalStorage {
             [vec![1; 4 - src_shape.rank()], src_shape.dims().to_vec()].concat(),
         );
 
+        if device.device().device_type() == candle_metal_kernels::metal::MetalDeviceType::IntelMac {
+            return self.fwd_mv(self_shape, storage, layout);
+        }
+
         candle_metal_kernels::call_quantized_matmul_mm_t(
             device.device(),
             &encoder,

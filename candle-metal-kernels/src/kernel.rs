@@ -60,11 +60,15 @@ impl From<String> for KernelName {
 
 type Libraries = HashMap<Source, Library>;
 type Pipelines = HashMap<(KernelName, Option<ConstantValues>), ComputePipeline>;
+// Tracks kernel names that failed pipeline creation (e.g. unsupported on the current GPU).
+// Keyed by name alone since failing kernels are unconditionally unsupported.
+type FailedPipelines = std::collections::HashSet<KernelName>;
 
 #[derive(Debug)]
 pub struct Kernels {
     libraries: RwLock<Libraries>,
     pipelines: RwLock<Pipelines>,
+    failed_pipelines: RwLock<FailedPipelines>,
 }
 
 impl Default for Kernels {
@@ -77,9 +81,11 @@ impl Kernels {
     pub fn new() -> Self {
         let libraries = RwLock::new(Libraries::new());
         let pipelines = RwLock::new(Pipelines::new());
+        let failed_pipelines = RwLock::new(FailedPipelines::new());
         Self {
             libraries,
             pipelines,
+            failed_pipelines,
         }
     }
 
@@ -149,8 +155,21 @@ impl Kernels {
         name: impl Into<KernelName>,
         constants: Option<ConstantValues>,
     ) -> Result<ComputePipeline, MetalKernelError> {
+        let name: KernelName = name.into();
+
+        // Fast-path: return a cached failure for kernels that are known to be unsupported.
+        {
+            let failed = self.failed_pipelines.read()?;
+            if failed.contains(&name) {
+                return Err(MetalKernelError::FailedToCreatePipeline(format!(
+                    "kernel '{}' is not supported on this GPU (cached)",
+                    name.as_ref()
+                )));
+            }
+        }
+
         let mut pipelines = self.pipelines.write()?;
-        let key = (name.into(), constants);
+        let key = (name, constants);
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())
         } else {
@@ -158,7 +177,13 @@ impl Kernels {
             let func = self.load_function(device, source, name.as_ref(), constants.as_ref())?;
             let pipeline = device
                 .new_compute_pipeline_state_with_function(&func)
-                .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
+                .map_err(|e| {
+                    // Cache the failure so we don't retry this kernel.
+                    if let Ok(mut failed) = self.failed_pipelines.write() {
+                        failed.insert(name.clone());
+                    }
+                    MetalKernelError::FailedToCreatePipeline(e.to_string())
+                })?;
             pipelines.insert((name, constants), pipeline.clone());
 
             Ok(pipeline)

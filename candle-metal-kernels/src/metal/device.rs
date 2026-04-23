@@ -25,6 +25,8 @@ pub enum MetalDeviceType {
     Max,
     /// Ultra device (M1/M2 Ultra, 'd' suffix)
     Ultra,
+    /// Intel GPU on x86 Mac (no architecture name available, no simdgroup_matrix)
+    IntelMac,
     /// Unknown or medium device (default)
     Medium,
 }
@@ -143,6 +145,8 @@ impl Device {
     /// - 'g': base/pro
     /// - 's': max
     /// - 'd': ultra
+    ///
+    /// Returns `"unknown"` if the architecture is not available (e.g., on x86 Macs).
     pub fn architecture_name(&self) -> String {
         // On tvOS/iOS simulators the emulated Metal device returns NULL from
         // -[MTLDevice architecture], which causes objc2 to panic.  Guard
@@ -161,6 +165,9 @@ impl Device {
     /// Reference: refs/mlx/mlx/backend/metal/device.cpp
     pub fn device_type(&self) -> MetalDeviceType {
         let arch = self.architecture_name();
+        if arch == "unknown" && cfg!(target_arch = "x86_64") {
+            return MetalDeviceType::IntelMac;
+        }
         match arch.chars().last() {
             Some('p') => MetalDeviceType::Phone,
             Some('g') => MetalDeviceType::BasePro,

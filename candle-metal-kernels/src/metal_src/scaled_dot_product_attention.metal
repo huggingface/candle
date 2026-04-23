@@ -258,6 +258,7 @@ bfloat_inplace_op_addr_space_helper(/, operator/=);
 /////////////////////////////////////////////////////////////////////////////
 
 typedef struct _MLX_BFloat16 bfloat16_t;
+typedef half float16_t;
 
 #endif
 
