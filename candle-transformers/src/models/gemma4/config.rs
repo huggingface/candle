@@ -46,6 +46,12 @@ fn default_global_head_dim() -> usize {
 fn default_use_flash_attn() -> bool {
     false
 }
+fn default_use_double_wide_mlp() -> bool {
+    false
+}
+fn default_num_kv_shared_layers() -> usize {
+    0
+}
 
 // ── Rope parameters ─────────────────────────────────────────────────────────
 
@@ -89,6 +95,7 @@ pub struct Gemma4TextConfig {
     #[serde(default = "default_vocab_size")]
     pub vocab_size: usize,
     pub sliding_window: usize,
+    pub attn_logit_softcapping: Option<f64>,
     pub final_logit_softcapping: Option<f64>,
     #[serde(default = "default_query_pre_attn_scalar")]
     pub query_pre_attn_scalar: usize,
@@ -109,6 +116,12 @@ pub struct Gemma4TextConfig {
     pub use_bidirectional_attention: Option<String>,
     #[serde(default = "default_use_flash_attn")]
     pub use_flash_attn: bool,
+    #[serde(default = "default_use_double_wide_mlp")]
+    pub use_double_wide_mlp: bool,
+    #[serde(default = "default_num_kv_shared_layers")]
+    pub num_kv_shared_layers: usize,
+    pub hidden_size_per_layer_input: Option<usize>,
+    pub vocab_size_per_layer_input: Option<usize>,
 }
 
 impl Gemma4TextConfig {
