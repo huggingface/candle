@@ -125,6 +125,8 @@ pub mod copy2d {
     pub const HALF: Kernel = Kernel("copy2d_f16");
     pub const BFLOAT: Kernel = Kernel("copy2d_bf16");
     pub const I64: Kernel = Kernel("copy2d_i64");
+    pub const I32: Kernel = Kernel("copy2d_i32");
+    pub const I16: Kernel = Kernel("copy2d_i16");
     pub const U32: Kernel = Kernel("copy2d_u32");
     pub const U8: Kernel = Kernel("copy2d_u8");
 }
