@@ -694,6 +694,16 @@ impl QTensor {
             }
         }
     }
+
+    /// Get the Metal buffer and dtype for direct kernel dispatch.
+    /// Returns the raw quantized weight buffer without any dequantization.
+    #[cfg(feature = "metal")]
+    pub fn metal_storage(&self) -> Result<&metal::QMetalStorage> {
+        match &self.storage {
+            QStorage::Metal(s) => Ok(s),
+            _ => crate::bail!("QTensor is not on Metal device"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

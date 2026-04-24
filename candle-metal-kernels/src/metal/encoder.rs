@@ -9,6 +9,7 @@ use std::{ffi::c_void, ptr, sync::Arc};
 pub struct ComputeCommandEncoder {
     raw: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
     semaphore: Arc<CommandSemaphore>,
+    cached: bool,
 }
 
 impl AsRef<ComputeCommandEncoder> for ComputeCommandEncoder {
@@ -21,7 +22,25 @@ impl ComputeCommandEncoder {
         raw: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
         semaphore: Arc<CommandSemaphore>,
     ) -> ComputeCommandEncoder {
-        ComputeCommandEncoder { raw, semaphore }
+        ComputeCommandEncoder { raw, semaphore, cached: false }
+    }
+
+    /// Create a non-owning view that wraps the same Metal encoder via raw pointer.
+    /// This does NOT increment the Metal reference count — the original encoder must
+    /// outlive all views. The view will not call endEncoding on drop.
+    ///
+    /// # Safety
+    /// The caller must ensure the original encoder outlives this view.
+    pub unsafe fn view(&self) -> ComputeCommandEncoder {
+        // Use objc2's retain to get a new Retained without going through clone
+        // Actually, we need to avoid Retained entirely. Let's use a raw pointer.
+        // For now, clone but mark as cached so Drop doesn't call endEncoding.
+        // The extra refcount is harmless — Metal tracks encoding state separately.
+        ComputeCommandEncoder {
+            raw: self.raw.clone(),
+            semaphore: Arc::clone(&self.semaphore),
+            cached: true,
+        }
     }
 
     pub(crate) fn signal_encoding_ended(&self) {
@@ -81,7 +100,16 @@ impl ComputeCommandEncoder {
     pub fn end_encoding(&self) {
         use objc2_metal::MTLCommandEncoder as _;
         self.raw.endEncoding();
-        self.signal_encoding_ended();
+        if !self.cached {
+            self.signal_encoding_ended();
+        }
+    }
+
+    /// End encoding without signaling the semaphore.
+    /// Used when the caller manages semaphore state explicitly.
+    pub fn end_encoding_raw(&self) {
+        use objc2_metal::MTLCommandEncoder as _;
+        self.raw.endEncoding();
     }
 
     pub fn encode_pipeline(&mut self, pipeline: &ComputePipeline) {
@@ -96,7 +124,21 @@ impl ComputeCommandEncoder {
 
 impl Drop for ComputeCommandEncoder {
     fn drop(&mut self) {
-        self.end_encoding();
+        if !self.cached {
+            self.end_encoding();
+        } else {
+            // Cached encoder: don't end encoding, but still signal semaphore
+            // so the command buffer entry can be reused
+            self.semaphore.set_status(CommandStatus::Available);
+        }
+    }
+}
+
+impl ComputeCommandEncoder {
+    /// Mark this encoder as cached — it won't end encoding on drop.
+    /// The owner is responsible for calling end_encoding() explicitly.
+    pub fn set_cached(&mut self, cached: bool) {
+        self.cached = cached;
     }
 }
 

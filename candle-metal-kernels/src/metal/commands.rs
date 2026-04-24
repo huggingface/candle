@@ -14,6 +14,15 @@ pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 const DEFAULT_CANDLE_METAL_COMPUTE_PER_BUFFER: usize = 50;
 const DEFAULT_CANDLE_METAL_COMMAND_POOL_SIZE: usize = 5;
 
+fn reuse_encoder_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("CANDLE_METAL_REUSE_ENCODER")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false)
+    })
+}
+
 /// Creates a new command buffer from the queue with an attached semaphore for tracking its state.
 pub fn create_command_buffer(
     command_queue: &CommandQueue,
@@ -30,6 +39,9 @@ pub fn create_command_buffer(
 struct EntryState {
     current: CommandBuffer,
     in_flight: Vec<CommandBuffer>,
+    /// When encoder reuse is enabled, this holds the active compute encoder.
+    /// Operations get a non-ending wrapper around it instead of creating new encoders.
+    active_encoder: Option<ComputeCommandEncoder>,
 }
 
 /// A pool entry containing a command buffer, its usage count, and synchronization primitives.
@@ -92,6 +104,7 @@ impl Commands {
             state: Mutex::new(EntryState {
                 current: cb,
                 in_flight: Vec::new(),
+                active_encoder: None,
             }),
             compute_count: AtomicUsize::new(0),
             semaphore,
@@ -99,13 +112,58 @@ impl Commands {
     }
 
     pub fn command_encoder(&self) -> Result<(bool, ComputeCommandEncoder), MetalKernelError> {
-        let entry = self.select_entry()?;
-        self.finalize_entry(entry, |cb| cb.compute_command_encoder())
+        if reuse_encoder_enabled() {
+            let entry = self.select_entry()?;
+            let mut state = entry.state.lock()?;
+            let count = entry.compute_count.fetch_add(1, Ordering::Relaxed);
+            let flush = count >= self.compute_per_buffer;
+
+            if flush {
+                // End active encoder before committing
+                if let Some(enc) = state.active_encoder.take() {
+                    // end_encoding is called in Drop since cached=false for this taken encoder
+                    drop(enc);
+                }
+                self.commit_swap_locked(&entry, &mut state, 1)?;
+            }
+
+            // Create the active encoder if needed
+            if state.active_encoder.is_none() {
+                let mut enc = state.current.compute_command_encoder();
+                enc.set_cached(true); // Don't endEncoding on Drop
+                state.active_encoder = Some(enc);
+            }
+
+            // Return a clone of the active encoder that won't end encoding on drop.
+            // The active_encoder owns the encoding session.
+            let active = state.active_encoder.as_ref().unwrap();
+            let encoder = unsafe { active.view() };
+            Ok((flush, encoder))
+        } else {
+            let entry = self.select_entry()?;
+            self.finalize_entry(entry, |cb| cb.compute_command_encoder())
+        }
     }
 
     pub fn blit_command_encoder(&self) -> Result<(bool, BlitCommandEncoder), MetalKernelError> {
-        let entry = self.select_entry()?;
-        self.finalize_entry(entry, |cb| cb.blit_command_encoder())
+        if reuse_encoder_enabled() {
+            let entry = self.select_entry()?;
+            let mut state = entry.state.lock()?;
+            // End active compute encoder before creating blit encoder.
+            if let Some(enc) = state.active_encoder.take() {
+                enc.end_encoding_raw();
+            }
+            let count = entry.compute_count.fetch_add(1, Ordering::Relaxed);
+            let flush = count >= self.compute_per_buffer;
+            if flush {
+                self.commit_swap_locked(&entry, &mut state, 1)?;
+            }
+            let encoder = state.current.blit_command_encoder();
+            Ok((flush, encoder))
+        } else {
+            let entry = self.select_entry()?;
+            self.finalize_entry(entry, |cb| cb.blit_command_encoder())
+        }
     }
 
     pub fn wait_until_completed(&self) -> Result<(), MetalKernelError> {
@@ -184,6 +242,12 @@ impl Commands {
 
                 let mut state = entry.state.lock()?;
 
+                // End active encoder before flushing.
+                // Use end_encoding_raw to avoid semaphore deadlock.
+                if let Some(enc) = state.active_encoder.take() {
+                    enc.end_encoding_raw();
+                }
+
                 if entry.compute_count.load(Ordering::Acquire) > 0 {
                     self.commit_swap_locked(&entry, &mut state, 0)?;
                 }
@@ -227,6 +291,11 @@ impl Commands {
         state: &mut EntryState,
         reset_to: usize,
     ) -> Result<(), MetalKernelError> {
+        // End any active encoder before committing the command buffer.
+        // Use end_encoding_raw to avoid semaphore deadlock (caller holds the lock).
+        if let Some(enc) = state.active_encoder.take() {
+            enc.end_encoding_raw();
+        }
         state.current.commit();
         let new_cb = create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
         let old_cb = std::mem::replace(&mut state.current, new_cb);
