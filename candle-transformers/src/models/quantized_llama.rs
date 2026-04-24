@@ -584,6 +584,12 @@ impl ModelWeights {
         let _enter = self.span_output.enter();
         self.output.forward(&x)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.kv_cache = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -680,3 +686,4 @@ mod tests {
         Ok(())
     }
 }
+crate::impl_causal_lm!(ModelWeights, "llama");

@@ -363,8 +363,12 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
-        dtype: DType,
     ) -> Result<Self> {
+        let dtype = if device.is_cuda() || device.is_metal() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
         let mut gg = Gguf::new(ct, reader, device.clone());
         let md_get = |s: &str| match gg.metadata().get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
@@ -454,6 +458,12 @@ impl ModelWeights {
         Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
     }
 
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.self_attn.kv_cache.reset();
+        }
+    }
+
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (b, l) = input.dims2()?;
@@ -475,3 +485,5 @@ impl ModelWeights {
         self.lm_head.forward(&last_hidden)?.squeeze(1)
     }
 }
+
+crate::impl_causal_lm!(ModelWeights, "glm4");

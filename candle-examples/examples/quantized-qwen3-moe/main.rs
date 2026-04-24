@@ -8,8 +8,8 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 use tokenizers::Tokenizer;
 
+use candle::quantized::gguf_file;
 use candle::Tensor;
-use candle::{quantized::gguf_file, DType};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -213,14 +213,6 @@ fn main() -> anyhow::Result<()> {
         args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
-    let dtype = match args.dtype.as_str() {
-        "bf16" => DType::BF16,
-        "f16" => DType::F16, // Used for V100
-        _ => {
-            panic!("Not supported dtype!")
-        }
-    };
-
     let model_path = args.model()?;
     let mut file = std::fs::File::open(&model_path)?;
     let start = std::time::Instant::now();
@@ -240,7 +232,7 @@ fn main() -> anyhow::Result<()> {
             &format_size(total_size_in_bytes),
             start.elapsed().as_secs_f32(),
         );
-        Qwen3_MoE::from_gguf(model, &mut file, &device, dtype)?
+        Qwen3_MoE::from_gguf(model, &mut file, &device)?
     };
     println!("model built");
 

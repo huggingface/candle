@@ -221,11 +221,11 @@ fn precomput_freqs_cis(
 
 impl ModelWeights {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
-        use_flash_attn: bool,
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
+        let use_flash_attn = false;
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
             Some(v) => Ok(v),
@@ -335,4 +335,11 @@ impl ModelWeights {
         let _enter = self.span_output.enter();
         self.output.forward(&xs)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.kv_cache.reset();
+        }
+    }
 }
+crate::impl_causal_lm!(ModelWeights, "phi3");
