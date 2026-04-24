@@ -52,6 +52,12 @@ mod ffi {
         pub fn vvlog(dst: *mut c_double, src: *const c_double, len: *const c_int);
         pub fn vvtanhf(dst: *mut c_float, src: *const c_float, len: *const c_int);
         pub fn vvtanh(dst: *mut c_double, src: *const c_double, len: *const c_int);
+        pub fn vvasinf(dst: *mut c_float, src: *const c_float, len: *const c_int);
+        pub fn vvasin(dst: *mut c_double, src: *const c_double, len: *const c_int);
+        pub fn vvacosf(dst: *mut c_float, src: *const c_float, len: *const c_int);
+        pub fn vvacos(dst: *mut c_double, src: *const c_double, len: *const c_int);
+        pub fn vvatanf(dst: *mut c_float, src: *const c_float, len: *const c_int);
+        pub fn vvatan(dst: *mut c_double, src: *const c_double, len: *const c_int);
 
         pub fn vDSP_vaddD(
             _: *const c_double,
@@ -462,6 +468,66 @@ macro_rules! binary_op {
         }
     };
 }
+#[inline]
+pub fn vs_asin(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvasinf(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vd_asin(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvasin(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vs_acos(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvacosf(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vd_acos(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvacos(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vs_atan(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvatanf(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vd_atan(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvatan(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
 binary_op!(vs_add, f32, vDSP_vadd);
 binary_op!(vd_add, f64, vDSP_vaddD);
 binary_op!(vs_sub, f32, vDSP_vsub);
