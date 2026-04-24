@@ -25,24 +25,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Run macos with metal
-        if: matrix.os == 'macOS-latest' 
-        run: cargo check --workspace --features metal
+        if: matrix.os == 'macOS-latest'
+        run: |
+          cargo check --workspace --features metal
+          cargo check --examples -p candle-examples --features metal
 
       - name: Run normal cpu
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
-        run: cargo check --workspace
+        run: |
+          cargo check --workspace
+          cargo check --examples -p candle-examples
 
       - name: Run with avx2
         if: matrix.os == 'ubuntu-24.04'
         run: |
           export RUSTFLAGS="-C target-feature=avx2"
-          cargo check --workspace 
+          cargo check --workspace
+          cargo check --examples -p candle-examples
 
       - name: Run with arm neon
         if: matrix.os == 'ubuntu-24.04-arm'
         run: |
           export RUSTFLAGS="-C target-feature=neon"
-          cargo check --workspace 
+          cargo check --workspace
+          cargo check --examples -p candle-examples
 
   test:
     name: Test Suite
