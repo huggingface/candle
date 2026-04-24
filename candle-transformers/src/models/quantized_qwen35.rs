@@ -33,6 +33,11 @@ impl<R: Read + Seek> Gguf<R> {
         &self.device
     }
 
+    /// Updates the current target device for subsequent tensor loads.
+    fn set_device(&mut self, device: Device) {
+        self.device = device;
+    }
+
     /// Loads `name` as a quantized matrix multiplication weight.
     fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
@@ -924,5 +929,155 @@ impl ModelWeights {
         for layer in &mut self.layers {
             layer.clear_kv_cache();
         }
+    }
+
+    pub fn save_prefix_kv_cache(&self) -> Vec<(Option<Tensor>, Option<Tensor>)> {
+        self.layers
+            .iter()
+            .map(|l| l.save_prefix_kv_cache())
+            .collect()
+    }
+
+    pub fn restore_prefix_kv_cache(&mut self, saved: Vec<(Option<Tensor>, Option<Tensor>)>) {
+        for (layer, (k, v)) in self.layers.iter_mut().zip(saved) {
+            layer.restore_prefix_kv_cache(k, v);
+        }
+    }
+
+    /// Load model from GGUF, optionally limiting layers to GPU.
+    pub fn from_gguf_with_layer_limit<R: std::io::Read + std::io::Seek>(
+        ct: gguf_file::Content,
+        reader: &mut R,
+        device: &Device,
+        gpu_layers: Option<usize>,
+        keep_embeddings_on_gpu: bool,
+        keep_output_on_gpu: bool,
+    ) -> Result<Self> {
+        let mut gg = Gguf::new(ct, reader, device.clone());
+
+        let md_get = |s: &str| match gg.metadata().get(s) {
+            None => candle::bail!("cannot find {s} in metadata"),
+            Some(v) => Ok(v),
+        };
+
+        let num_attention_heads = md_get("qwen35.attention.head_count")?.to_u32()? as usize;
+        let head_dim = md_get("qwen35.attention.key_length")?.to_u32()? as usize;
+        let num_layers = md_get("qwen35.block_count")?.to_u32()? as usize;
+        let hidden_size = md_get("qwen35.embedding_length")?.to_u32()? as usize;
+
+        let num_kv_heads = md_get("qwen35.attention.head_count_kv")?.to_u32()? as usize;
+        let max_position_embeddings = md_get("qwen35.context_length")?.to_u32()? as usize;
+        let rms_norm_eps = md_get("qwen35.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
+        let rope_freq_base = md_get("qwen35.rope.freq_base")?.to_f32()? as f64;
+        let rope_dim = md_get("qwen35.rope.dimension_count")?.to_u32()? as usize;
+        let ssm_group_count = md_get("qwen35.ssm.group_count")?.to_u32()? as usize;
+        let ssm_state_size = md_get("qwen35.ssm.state_size")?.to_u32()? as usize;
+        let ssm_inner_size = md_get("qwen35.ssm.inner_size")?.to_u32()? as usize;
+        let ssm_conv_kernel = md_get("qwen35.ssm.conv_kernel")?.to_u32()? as usize;
+
+        let dtype = match gg.metadata().get("general.dtype") {
+            Some(v) => match v.to_u32() {
+                Ok(0) => DType::F32,
+                Ok(1) => DType::F16,
+                _ => DType::F16,
+            },
+            None => DType::F16,
+        };
+
+        let cpu_device = Device::Cpu;
+        let gpu_layer_count = gpu_layers.unwrap_or(num_layers).min(num_layers);
+        let embed_device = if keep_embeddings_on_gpu {
+            device.clone()
+        } else {
+            cpu_device.clone()
+        };
+        let output_device = if keep_output_on_gpu {
+            device.clone()
+        } else {
+            cpu_device.clone()
+        };
+
+        gg.set_device(embed_device.clone());
+        let embed_tensor = gg.tensor("token_embd.weight")?;
+        let embed_weight = if embed_device.is_cuda() || embed_device.is_metal() {
+            match embed_tensor.dequantize_f16(&embed_device) {
+                Ok(weight) => weight,
+                Err(_) => embed_tensor.dequantize(&embed_device)?.to_dtype(DType::F16)?,
+            }
+        } else {
+            embed_tensor.dequantize(&embed_device)?
+        };
+        let embed_tokens = Embedding::new(embed_weight, hidden_size);
+
+        let rotary_gpu = Arc::new(RotaryEmbedding::new(
+            dtype,
+            rope_dim,
+            max_position_embeddings,
+            rope_freq_base,
+            device,
+        )?);
+        let rotary_cpu = if gpu_layer_count < num_layers || !keep_embeddings_on_gpu {
+            Some(Arc::new(RotaryEmbedding::new(
+                dtype,
+                rope_dim,
+                max_position_embeddings,
+                rope_freq_base,
+                &cpu_device,
+            )?))
+        } else {
+            None
+        };
+
+        let mut layers = Vec::with_capacity(num_layers);
+        for i in 0..num_layers {
+            let layer_on_gpu = i < gpu_layer_count;
+            let layer_device = if layer_on_gpu {
+                device.clone()
+            } else {
+                cpu_device.clone()
+            };
+            let rotary = if layer_on_gpu {
+                rotary_gpu.clone()
+            } else {
+                rotary_cpu
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_else(|| rotary_gpu.clone())
+            };
+            gg.set_device(layer_device);
+            layers.push(LayerWeights::new(
+                &mut gg,
+                num_attention_heads,
+                num_kv_heads,
+                head_dim,
+                rms_norm_eps,
+                rotary,
+                i,
+                ssm_group_count,
+                ssm_state_size,
+                ssm_inner_size,
+                ssm_conv_kernel,
+            )?);
+        }
+
+        gg.set_device(output_device.clone());
+        let norm = gg.rms_norm("output_norm.weight", rms_norm_eps)?;
+        let lm_head_tensor = match gg.tensor("output.weight") {
+            Ok(tensor) => tensor,
+            Err(_) => gg.tensor("token_embd.weight")?,
+        };
+        let lm_head = QMatMul::from_weights(lm_head_tensor.into())?;
+        let span = tracing::span!(tracing::Level::TRACE, "model");
+        let span_output = tracing::span!(tracing::Level::TRACE, "output");
+        Ok(Self {
+            embed_tokens,
+            layers,
+            norm,
+            lm_head,
+            device: output_device,
+            dtype,
+            span,
+            span_output,
+        })
     }
 }

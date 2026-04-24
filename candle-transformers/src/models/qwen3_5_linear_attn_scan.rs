@@ -289,20 +289,12 @@ pub fn gated_delta_rule_chunked(
         outputs.push(out_ci.unsqueeze(2)?); // [b, n_h, 1, S, hv]
 
         // State update: compute decay from chunk start to chunk end
-        let g_end = gc_ci
-            .narrow(D::Minus1, chunk - 1, 1)?
-            .squeeze(D::Minus1)?; // [b, n_h]
-        let g_end_exp = g_end
-            .exp()?
-            .unsqueeze(D::Minus1)?
-            .unsqueeze(D::Minus1)?; // [b, n_h, 1, 1]
+        let g_end = gc_ci.narrow(D::Minus1, chunk - 1, 1)?.squeeze(D::Minus1)?; // [b, n_h]
+        let g_end_exp = g_end.exp()?.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?; // [b, n_h, 1, 1]
 
         // decay_to_end[j] = exp(g_cumsum[S-1] - g_cumsum[j])
         let gc_last = gc_ci.narrow(D::Minus1, chunk - 1, 1)?; // [b, n_h, 1]
-        let decay_to_end = gc_last
-            .broadcast_sub(&gc_ci)?
-            .exp()?
-            .unsqueeze(D::Minus1)?; // [b, n_h, S, 1]
+        let decay_to_end = gc_last.broadcast_sub(&gc_ci)?.exp()?.unsqueeze(D::Minus1)?; // [b, n_h, S, 1]
 
         // state = state * exp(g_cumsum[-1]) + k_weighted^T @ v_corrected
         // [bn, hk, S] @ [bn, S, hv] -> [bn, hk, hv]

@@ -74,8 +74,7 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
     let mut model = {
-        let ct = gguf_file::Content::read(&mut file)
-            .map_err(|e| e.with_path(&args.model))?;
+        let ct = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(&args.model))?;
         println!(
             "loaded {} tensors in {:.2}s",
             ct.tensor_infos.len(),
@@ -85,16 +84,14 @@ fn main() -> anyhow::Result<()> {
     };
     println!("model built");
 
-    let tokenizer =
-        Tokenizer::from_file(&args.tokenizer).map_err(anyhow::Error::msg)?;
+    let tokenizer = Tokenizer::from_file(&args.tokenizer).map_err(anyhow::Error::msg)?;
     let mut tos = TokenOutputStream::new(tokenizer);
 
     let prompt_str = args
         .prompt
         .clone()
         .unwrap_or_else(|| DEFAULT_PROMPT.to_string());
-    let prompt_str =
-        format!("<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n");
+    let prompt_str = format!("<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n");
     print!("prompt: {}", &prompt_str);
 
     let tokens = tos
