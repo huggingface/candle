@@ -215,12 +215,15 @@ impl crate::CustomOp1 for ArgSort {
         };
         let device = storage.device();
         let kernels = device.kernels();
-        let command_encoder = device.command_encoder()?;
         let el = layout.shape().elem_count();
         let ncols = self.last_dim;
         let nrows = el / ncols;
         let src = crate::metal_backend::buffer_o(storage.buffer(), layout, storage.dtype());
         let dst = device.new_buffer(el, DType::U32, "asort")?;
+
+        // Allocate the destination buffer before acquiring an encoder to avoid allocator-triggered
+        // waits while an encoder is still encoding, and it's very risky so.
+        let command_encoder = device.command_encoder()?;
         let mut ncols_pad = 1;
         while ncols_pad < ncols {
             ncols_pad *= 2;
