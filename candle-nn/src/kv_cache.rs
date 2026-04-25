@@ -723,26 +723,18 @@ impl ConcatKvCache {
     /// Tuple of `(full_k, full_v)` containing all cached keys and values,
     /// including the newly appended data.
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
-        // Ensure inputs are contiguous for optimal concatenation performance
-        let k = k.contiguous()?;
-        let v = v.contiguous()?;
-        // Update K cache using concatenation
+        // Detach inputs to break BackpropOp chain - KV caches are inference-only.
+        let k = k.contiguous()?.detach();
+        let v = v.contiguous()?.detach();
+
         self.k = Some(match &self.k {
-            None => k.clone(),
-            Some(k_cache) => {
-                // Concatenate along the sequence dimension
-                // GPU kernel for cat is highly optimized:
-                // - Fused allocation + copy
-                // - Coalesced memory access
-                // - Single kernel launch
-                Tensor::cat(&[k_cache, &k], self.dim)?
-            }
+            None => k,
+            Some(k_cache) => Tensor::cat(&[k_cache, &k], self.dim)?.detach(),
         });
 
-        // Update V cache using concatenation
         self.v = Some(match &self.v {
-            None => v.clone(),
-            Some(v_cache) => Tensor::cat(&[v_cache, &v], self.dim)?,
+            None => v,
+            Some(v_cache) => Tensor::cat(&[v_cache, &v], self.dim)?.detach(),
         });
 
         Ok((
@@ -982,5 +974,169 @@ mod tests {
         assert_eq!(cache.current_seq_len(), 5);
 
         Ok(())
+    }
+}
+
+/// Stores a single tensor with shape `(S, H_kv, 2*D)` where the first D
+/// elements are K and the next D are V. This sequence-first layout means:
+/// - The kernel reads `kv[pos * H_kv * 2D + head * 2D .. + 2D]` directly
+/// - No transpose needed before the flash kernel
+/// - K and V for the same position share cache lines
+///
+/// Input K and V have shape `(B, H_kv, S, D)` (standard attention format)
+/// and are transposed+interleaved on append.
+#[derive(Debug, Clone)]
+pub struct InterleavedKvCache {
+    kv: Option<Tensor>,
+    head_dim: usize,
+}
+
+impl InterleavedKvCache {
+    pub fn new(head_dim: usize) -> Self {
+        Self { kv: None, head_dim }
+    }
+
+    pub fn current_seq_len(&self) -> usize {
+        self.kv
+            .as_ref()
+            .and_then(|kv| kv.dims().first().copied())
+            .unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.kv.is_none()
+    }
+
+    /// Append K, V of shape `(1, H_kv, S_new, D)`. Batch must be 1.
+    /// Returns the full cache `(S_total, H_kv, 2*D)`.
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+        // Detach to break BackpropOp chain - KV caches are inference-only.
+        let k_seq = k.squeeze(0)?.transpose(0, 1)?.contiguous()?.detach();
+        let v_seq = v.squeeze(0)?.transpose(0, 1)?.contiguous()?.detach();
+        let kv_new = Tensor::cat(&[&k_seq, &v_seq], 2)?.detach();
+
+        self.kv = Some(match &self.kv {
+            None => kv_new,
+            Some(kv_cache) => Tensor::cat(&[kv_cache, &kv_new], 0)?.detach(),
+        });
+
+        Ok(self.kv.as_ref().unwrap().clone())
+    }
+
+    /// Get the raw interleaved KV tensor `(S, H_kv, 2*D)`.
+    pub fn kv(&self) -> Option<&Tensor> {
+        self.kv.as_ref()
+    }
+
+    pub fn head_dim(&self) -> usize {
+        self.head_dim
+    }
+
+    pub fn reset(&mut self) {
+        self.kv = None;
+    }
+}
+
+// Work with KV cache directly in interleaved space.
+#[derive(Debug, Clone)]
+pub struct RawInterleavedKvCache {
+    buf: Vec<f32>,
+    h_kv: usize,
+    d: usize,
+    pos_stride: usize,
+    len: usize,
+}
+
+impl RawInterleavedKvCache {
+    /// Create a new cache with space for `max_seq` positions.
+    pub fn new(h_kv: usize, d: usize, max_seq: usize) -> Self {
+        let pos_stride = h_kv * 2 * d;
+        Self {
+            buf: vec![0f32; max_seq * pos_stride],
+            h_kv,
+            d,
+            pos_stride,
+            len: 0,
+        }
+    }
+
+    /// Number of positions currently cached.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Write one position of K and V into the cache.
+    ///
+    /// `k_flat` and `v_flat` are flat `(H_kv * D)` slices from the projection output.
+    /// They are interleaved per-head into the buffer: `[H0_K, H0_V, H1_K, H1_V, ...]`.
+    pub fn write_kv(&mut self, k_flat: &[f32], v_flat: &[f32]) {
+        let pos = self.len;
+        let base = pos * self.pos_stride;
+        let d = self.d;
+
+        // Grow buffer if needed
+        if base + self.pos_stride > self.buf.len() {
+            self.buf.resize(self.buf.len() * 2, 0.0);
+        }
+
+        for h in 0..self.h_kv {
+            let k_src = h * d;
+            let v_src = h * d;
+            let dst = base + h * 2 * d;
+            self.buf[dst..dst + d].copy_from_slice(&k_flat[k_src..k_src + d]);
+            self.buf[dst + d..dst + 2 * d].copy_from_slice(&v_flat[v_src..v_src + d]);
+        }
+
+        self.len += 1;
+    }
+
+    /// Write multiple positions of K and V (for prefill).
+    ///
+    /// `k_flat` is `(S, H_kv * D)` row-major, `v_flat` same.
+    pub fn write_kv_batch(&mut self, k_flat: &[f32], v_flat: &[f32], seq_len: usize) {
+        let hd = self.h_kv * self.d;
+        for s in 0..seq_len {
+            let k_row = &k_flat[s * hd..(s + 1) * hd];
+            let v_row = &v_flat[s * hd..(s + 1) * hd];
+            self.write_kv(k_row, v_row);
+        }
+    }
+
+    /// Get the active portion of the cache as a slice: `(len * H_kv * 2 * D)` elements.
+    pub fn data(&self) -> &[f32] {
+        &self.buf[..self.len * self.pos_stride]
+    }
+
+    pub fn reset(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn h_kv(&self) -> usize {
+        self.h_kv
+    }
+
+    pub fn d(&self) -> usize {
+        self.d
+    }
+}
+
+/// Apply interleaved RoPE in-place on a flat `(H, D)` slice.
+///
+/// Pairs adjacent elements `(2i, 2i+1)` with frequency `cos[i], sin[i]`.
+/// `cos` and `sin` are `(D/2,)` for the current position.
+pub fn rope_i_inplace(data: &mut [f32], cos: &[f32], sin: &[f32], num_heads: usize, d: usize) {
+    let half_d = d / 2;
+    for h in 0..num_heads {
+        let base = h * d;
+        for i in 0..half_d {
+            let a = data[base + 2 * i];
+            let b = data[base + 2 * i + 1];
+            data[base + 2 * i] = a * cos[i] - b * sin[i];
+            data[base + 2 * i + 1] = b * cos[i] + a * sin[i];
+        }
     }
 }
