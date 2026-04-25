@@ -40,7 +40,14 @@ use half::{bf16, f16};
 
 pub use k_quants::GgmlType;
 
-fn as_t_slice<T>(data: Cow<'_, [u8]>) -> &[T] {
+// `data` is taken as `&[u8]` rather than `Cow<'_, [u8]>` so that callers
+// retain ownership across the call. Taking `Cow<'_, [u8]>` by value
+// would move (and drop at function exit) the inner `Vec` of any
+// `Cow::Owned` argument, leaving the returned slice dangling — see
+// the regression test
+// `from_data_dequant_matches_canonical_when_caller_passes_cow_owned`
+// in candle-core/tests/quantized_tests.rs.
+fn as_t_slice<T>(data: &[u8]) -> &[T] {
     let size = std::mem::size_of::<T>();
     assert_eq!(
         data.len() % size,
@@ -88,8 +95,17 @@ pub enum QStorage {
 
 impl QStorage {
     pub fn from_data(data: Cow<'_, [u8]>, device: &Device, dtype: GgmlDType) -> Result<Self> {
+        // Borrow `data` rather than move it into the per-branch helpers
+        // so that `Cow::Owned` callers' `Vec` is kept alive in this
+        // function's frame across the entire call. Moving `data` into
+        // `as_t_slice` (its previous behaviour) would drop the inner
+        // `Vec` at `as_t_slice`'s exit and leave the returned slice
+        // dangling — see the regression test
+        // `from_data_dequant_matches_canonical_when_caller_passes_cow_owned`
+        // in candle-core/tests/quantized_tests.rs.
+        let data: &[u8] = &data;
         match device {
-            Device::Cpu => Ok(Self::Cpu(dtype.from_data(data))),
+            Device::Cpu => Ok(Self::Cpu(dtype.from_data(Cow::Borrowed(data)))),
             Device::Metal(d) => match dtype {
                 GgmlDType::F32 => metal::load_quantized(d, as_t_slice::<f32>(data)),
                 GgmlDType::F16 => metal::load_quantized(d, as_t_slice::<f16>(data)),
@@ -342,6 +358,12 @@ impl GgmlDType {
     }
 
     pub fn from_data(&self, data: Cow<'_, [u8]>) -> Box<dyn QuantizedType> {
+        // Keep `data` as the function's local; `&data` deref-coerces to
+        // `&[u8]` for the helper. This keeps the inner Vec of any
+        // `Cow::Owned` argument alive until the function returns; the
+        // helper used to take `Cow<'_, [u8]>` by value, which dropped
+        // that Vec at the helper's exit and dangled the returned slice.
+        let data: &[u8] = &data;
         match self {
             Self::F32 => Box::new(as_t_slice::<f32>(data).to_vec()),
             Self::F16 => Box::new(as_t_slice::<f16>(data).to_vec()),
