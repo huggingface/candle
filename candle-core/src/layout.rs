@@ -54,6 +54,46 @@ impl Layout {
         self.start_offset
     }
 
+    /// Returns outer stride along `dim` if valid.
+    ///
+    /// Two conditions must hold:
+    ///  1. Inner dims `[dim..]` has standard contiguous strides.
+    ///  2. Outer dims `[..dim]` are contiguous among themselves, i.e.
+    ///     `stride[k] == dims[k+1] * stride[k+1]` for `k` in `0..dim-1`.
+    ///
+    /// When the tensor is fully contiguous this returns `Some(dims[dim..].product())`.
+    pub(crate) fn outer_stride_for_dim(&self, dim: usize) -> Option<usize> {
+        let dims = self.dims();
+        let strides = self.stride();
+
+        // 1. Inner `dims[dim..]` must have contiguous strides.
+        let mut expected = 1usize;
+        for i in (dim..dims.len()).rev() {
+            if strides[i] != expected {
+                return None;
+            }
+            expected *= dims[i];
+        }
+
+        if dim == 0 {
+            // No outer dims.
+            // `expected = dims[dim..].product()`
+            return Some(expected);
+        }
+
+        // 2. Outer `dims[0..dim]` must be internally contiguous.
+        let outer_stride = strides[dim - 1];
+        let mut expected_outer = outer_stride;
+        for k in (0..dim - 1).rev() {
+            expected_outer *= dims[k + 1];
+            if strides[k] != expected_outer {
+                return None;
+            }
+        }
+
+        Some(outer_stride)
+    }
+
     /// Returns the appropriate start and stop offset if the data is stored in a C
     /// contiguous (aka row major) way.
     pub fn contiguous_offsets(&self) -> Option<(usize, usize)> {
@@ -192,9 +232,14 @@ impl Layout {
     }
 
     pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
-        let mut block_len = 1;
-        let mut contiguous_dims = 0; // These are counted from the right.
+        let mut block_len = 1usize;
+        let mut contiguous_dims = 0usize; // Counted from the right.
         for (&stride, &dim) in self.stride().iter().zip(self.dims().iter()).rev() {
+            // Size-1 dimensions are trivially contiguous regardless of their stride.
+            if dim == 1 {
+                contiguous_dims += 1;
+                continue;
+            }
             if stride != block_len {
                 break;
             }
@@ -202,20 +247,27 @@ impl Layout {
             contiguous_dims += 1;
         }
         let index_dims = self.dims().len() - contiguous_dims;
-        if index_dims == 0 {
-            crate::StridedBlocks::SingleBlock {
+        match index_dims {
+            0 => crate::StridedBlocks::SingleBlock {
                 start_offset: self.start_offset,
                 len: block_len,
-            }
-        } else {
-            let block_start_index = crate::StridedIndex::new(
-                &self.dims()[..index_dims],
-                &self.stride[..index_dims],
-                self.start_offset,
-            );
-            crate::StridedBlocks::MultipleBlocks {
-                block_start_index,
+            },
+            1 => crate::StridedBlocks::UniformBlocks {
+                start_offset: self.start_offset,
                 block_len,
+                count: self.dims()[0],
+                src_stride: self.stride[0],
+            },
+            _ => {
+                let block_start_index = crate::StridedIndex::new(
+                    &self.dims()[..index_dims],
+                    &self.stride[..index_dims],
+                    self.start_offset,
+                );
+                crate::StridedBlocks::MultipleBlocks {
+                    block_start_index,
+                    block_len,
+                }
             }
         }
     }

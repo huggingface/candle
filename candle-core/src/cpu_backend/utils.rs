@@ -165,11 +165,32 @@ pub fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
                         })
                         .collect()
                 }
-                None => lhs_l
-                    .strided_index()
-                    .zip(rhs_l.strided_index())
-                    .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                    .collect(),
+                None => match rhs_l.strided_blocks() {
+                    crate::StridedBlocks::UniformBlocks {
+                        start_offset,
+                        block_len,
+                        count,
+                        src_stride,
+                    } => {
+                        let mut result = Vec::with_capacity(count * block_len);
+                        for i in 0..count {
+                            let lhs_start = o_l1 + i * block_len;
+                            let rhs_start = start_offset + i * src_stride;
+                            for j in 0..block_len {
+                                result.push(f(
+                                    unsafe { *lhs.get_unchecked(lhs_start + j) },
+                                    unsafe { *rhs.get_unchecked(rhs_start + j) },
+                                ));
+                            }
+                        }
+                        result
+                    }
+                    _ => lhs_l
+                        .strided_index()
+                        .zip(rhs_l.strided_index())
+                        .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+                        .collect(),
+                },
             }
         }
         (None, Some((o_r1, o_r2))) => {
@@ -194,11 +215,32 @@ pub fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
                         })
                         .collect()
                 }
-                None => lhs_l
-                    .strided_index()
-                    .zip(rhs_l.strided_index())
-                    .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                    .collect(),
+                None => match lhs_l.strided_blocks() {
+                    crate::StridedBlocks::UniformBlocks {
+                        start_offset,
+                        block_len,
+                        count,
+                        src_stride,
+                    } => {
+                        let mut result = Vec::with_capacity(count * block_len);
+                        for i in 0..count {
+                            let lhs_start = start_offset + i * src_stride;
+                            let rhs_start = o_r1 + i * block_len;
+                            for j in 0..block_len {
+                                result.push(f(
+                                    unsafe { *lhs.get_unchecked(lhs_start + j) },
+                                    unsafe { *rhs.get_unchecked(rhs_start + j) },
+                                ));
+                            }
+                        }
+                        result
+                    }
+                    _ => lhs_l
+                        .strided_index()
+                        .zip(rhs_l.strided_index())
+                        .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+                        .collect(),
+                },
             }
         }
         _ => lhs_l
@@ -266,11 +308,39 @@ pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [
                 }
                 ys
             }
-            None => lhs_l
-                .strided_index()
-                .zip(rhs_l.strided_index())
-                .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                .collect(),
+            None => match rhs_l.strided_blocks() {
+                crate::StridedBlocks::UniformBlocks {
+                    start_offset,
+                    block_len,
+                    count,
+                    src_stride,
+                } => {
+                    let mut ys: Vec<T> = Vec::with_capacity(el_count);
+                    let ys_to_set = ys.spare_capacity_mut();
+                    let ys_to_set = unsafe {
+                        std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(ys_to_set)
+                    };
+                    let mut dst_i = 0;
+                    for i in 0..count {
+                        let lhs_start = o_l1 + i * block_len;
+                        let rhs_start = start_offset + i * src_stride;
+                        f_vec(
+                            &lhs[lhs_start..lhs_start + block_len],
+                            &rhs[rhs_start..rhs_start + block_len],
+                            &mut ys_to_set[dst_i..dst_i + block_len],
+                        );
+                        dst_i += block_len;
+                    }
+                    // SAFETY: values are all set by f_vec.
+                    unsafe { ys.set_len(el_count) };
+                    ys
+                }
+                _ => lhs_l
+                    .strided_index()
+                    .zip(rhs_l.strided_index())
+                    .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+                    .collect(),
+            },
         },
         (None, Some((o_r1, o_r2))) => match lhs_l.offsets_b() {
             Some(ob) if ob.right_broadcast == 1 => {
@@ -307,11 +377,39 @@ pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [
                 }
                 ys
             }
-            None => lhs_l
-                .strided_index()
-                .zip(rhs_l.strided_index())
-                .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                .collect(),
+            None => match lhs_l.strided_blocks() {
+                crate::StridedBlocks::UniformBlocks {
+                    start_offset,
+                    block_len,
+                    count,
+                    src_stride,
+                } => {
+                    let mut ys: Vec<T> = Vec::with_capacity(el_count);
+                    let ys_to_set = ys.spare_capacity_mut();
+                    let ys_to_set = unsafe {
+                        std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(ys_to_set)
+                    };
+                    let mut dst_i = 0;
+                    for i in 0..count {
+                        let lhs_start = start_offset + i * src_stride;
+                        let rhs_start = o_r1 + i * block_len;
+                        f_vec(
+                            &lhs[lhs_start..lhs_start + block_len],
+                            &rhs[rhs_start..rhs_start + block_len],
+                            &mut ys_to_set[dst_i..dst_i + block_len],
+                        );
+                        dst_i += block_len;
+                    }
+                    // SAFETY: values are all set by f_vec.
+                    unsafe { ys.set_len(el_count) };
+                    ys
+                }
+                _ => lhs_l
+                    .strided_index()
+                    .zip(rhs_l.strided_index())
+                    .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+                    .collect(),
+            },
         },
         _ => lhs_l
             .strided_index()
@@ -332,6 +430,29 @@ pub fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(
             .iter()
             .map(|&v| f(v))
             .collect(),
+        crate::StridedBlocks::UniformBlocks {
+            start_offset,
+            block_len,
+            count,
+            src_stride,
+        } => {
+            let mut result = Vec::with_capacity(count * block_len);
+            if block_len == 1 {
+                for i in 0..count {
+                    let v = unsafe { vs.get_unchecked(start_offset + i * src_stride) };
+                    result.push(f(*v))
+                }
+            } else {
+                for i in 0..count {
+                    let src_start = start_offset + i * src_stride;
+                    for offset in 0..block_len {
+                        let v = unsafe { vs.get_unchecked(src_start + offset) };
+                        result.push(f(*v))
+                    }
+                }
+            }
+            result
+        }
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
             block_len,
@@ -373,6 +494,40 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
             // SAFETY: values are all set by f_vec.
             unsafe { ys.set_len(len) };
             ys
+        }
+        crate::StridedBlocks::UniformBlocks {
+            start_offset,
+            block_len,
+            count,
+            src_stride,
+        } => {
+            let el_count = count * block_len;
+            if block_len == 1 {
+                let mut result = Vec::with_capacity(count);
+                for i in 0..count {
+                    let v = unsafe { vs.get_unchecked(start_offset + i * src_stride) };
+                    result.push(f(*v))
+                }
+                result
+            } else {
+                let mut ys: Vec<U> = Vec::with_capacity(el_count);
+                let ys_to_set = ys.spare_capacity_mut();
+                let ys_to_set = unsafe {
+                    std::mem::transmute::<&mut [std::mem::MaybeUninit<U>], &mut [U]>(ys_to_set)
+                };
+                let mut dst_index = 0;
+                for i in 0..count {
+                    let src_start = start_offset + i * src_stride;
+                    f_vec(
+                        &vs[src_start..src_start + block_len],
+                        &mut ys_to_set[dst_index..dst_index + block_len],
+                    );
+                    dst_index += block_len;
+                }
+                // SAFETY: values are all set by f_vec.
+                unsafe { ys.set_len(el_count) };
+                ys
+            }
         }
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
