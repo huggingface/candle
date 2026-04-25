@@ -1400,3 +1400,99 @@ fn quantized_matmul_q8k() -> Result<()> {
     ggml_matmul_error_test::<BlockQ8K>()?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------
+// Contract: `QStorage::from_data` must produce a storage whose
+// dequantized values match the canonical CPU dequant of the same
+// packed bytes, regardless of which `Cow` variant the caller uses
+// (`Borrowed(&buf)` or `Owned(vec)`) and regardless of which device
+// the storage is being loaded onto. Decode is deterministic from the
+// canonical GGUF block representation, so the round-trip
+// `quantize → packed bytes → from_data → dequantize` must be a no-op
+// in both `Cow` variants on every backend.
+//
+// Currently this contract is violated for `Cow::Owned`: the helper
+// `as_t_slice` (in candle-core/src/quantized/mod.rs:43) takes
+// `Cow<'_, [u8]>` by value and returns `&[T]` whose lifetime the
+// compiler ties to the input parameter. The `Owned` variant's
+// `Vec<u8>` is dropped at `as_t_slice`'s exit and the subsequent read
+// — the GPU upload in the Metal/CUDA branch, or `.to_vec()` in the
+// CPU branch — reads freed memory. This test pins the contract on
+// every backend; both `_cpu` and `_metal` variants fail today.
+//
+// Caveats:
+//   - Behavioral observation only. Whether the freed page contains
+//     zeros, residual original bytes, or unrelated allocator content
+//     varies by allocator and timing. On macOS Apple Silicon this
+//     fails 100% of runs in my testing on both CPU and Metal.
+//   - A deterministic soundness guarantee requires a Miri test on top.
+//   - Other tests in this file deliberately use `Cow::Borrowed(&bytes)`
+//     to avoid the bug; only this test triggers it.
+fn from_data_dequant_matches_canonical_when_caller_passes_cow_owned(device: &Device) -> Result<()> {
+    use std::borrow::Cow;
+
+    let cpu = Device::Cpu;
+    let n = 1024usize;
+    let src_data: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.013).sin()).collect();
+    let src = Tensor::from_vec(src_data, (n,), &cpu)?;
+    let qt_canonical = quantized::QTensor::quantize(&src, GgmlDType::Q4_0)?;
+
+    // Reference: dequant the canonical QTensor on CPU.
+    let canonical_dequant = qt_canonical.dequantize(&cpu)?.to_vec1::<f32>()?;
+
+    // Round-trip through `QStorage::from_data(Cow::Owned(...), device, dtype)`
+    // and dequant on the target device. Must match `canonical_dequant`.
+    let bytes_owned: Vec<u8> = qt_canonical.data()?.to_vec();
+    let storage = quantized::QStorage::from_data(Cow::Owned(bytes_owned), device, GgmlDType::Q4_0)?;
+    let qt_via_from_data = quantized::QTensor::new(storage, (n,))?;
+    let observed_dequant = qt_via_from_data.dequantize(device)?.to_vec1::<f32>()?;
+
+    let max_diff = canonical_dequant
+        .iter()
+        .zip(observed_dequant.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0f32, f32::max);
+    assert!(
+        max_diff < 1e-5,
+        "QStorage::from_data with Cow::Owned must yield a storage whose dequant matches \
+         the canonical CPU dequant of the same packed bytes; got max |Δ| = {max_diff} on \
+         device {device:?}. Root cause: `as_t_slice` in candle-core/src/quantized/mod.rs \
+         is unsound when its `Cow<'_, [u8]>` argument is the `Owned` variant — the moved \
+         Vec is dropped at as_t_slice's exit and the subsequent read (GPU upload on \
+         Metal/CUDA, `.to_vec()` on CPU) reads freed memory. Fix: change the public API \
+         (or the helper) so the caller's bytes outlive the call."
+    );
+    Ok(())
+}
+
+test_device!(
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cpu,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
+);
+
+// Deterministic soundness guard for the same contract pinned by the
+// behavioral test above. Miri tracks allocation liveness, so a
+// `Cow::Owned`-induced use-after-free in `as_t_slice` (or any future
+// regression of the same shape) is reported as UB rather than as
+// observed-garbage-output. Runs only under Miri:
+//
+//   cargo +nightly miri test -p candle-core --test quantized_tests \
+//       -- from_data_with_cow_owned_must_not_read_freed_memory_under_miri
+//
+// On unpatched candle this fails with:
+//   error: Undefined Behavior: out-of-bounds pointer use:
+//   alloc<N> has been freed, so this pointer is dangling
+#[cfg(miri)]
+#[test]
+fn from_data_with_cow_owned_must_not_read_freed_memory_under_miri() -> Result<()> {
+    use std::borrow::Cow;
+    // One Q4_0 block (2-byte fp16 scale + 16 packed nibbles = 18 bytes).
+    // Contents are arbitrary; Miri only needs to observe a read from
+    // inside `as_t_slice` after the owned Vec would have been dropped.
+    let bytes = vec![0u8; 18];
+    let _storage =
+        quantized::QStorage::from_data(Cow::Owned(bytes), &Device::Cpu, GgmlDType::Q4_0)?;
+    Ok(())
+}
