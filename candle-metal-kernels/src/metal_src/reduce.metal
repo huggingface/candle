@@ -983,10 +983,13 @@ METAL_FUNC void rmsnorm(
     }
 }
 
+// Accumulator for RMSNorm: tracks a running sum of squares (Σx²), not a mean.
+// Unlike LayerNormValue, no `m2` field is needed because RMSNorm only requires
+// the second raw moment, so partials combine by plain addition (see RMSReduceOp).
 template<typename T>
 struct RMS {
     uint count;
-    T mean;
+    T sum_sq;
 
     constexpr RMS<T>() = default;
     constexpr RMS<T>() threadgroup = default;
@@ -998,8 +1001,10 @@ struct RMSLoadOp {
         return { 0, 0 };
     }
 
+    // `b` arrives as RMS<T>{0, x_i} — see operation<OP, RMS<T>>::operator() below.
+    // Each call folds one input element x_i into the running Σx².
     METAL_FUNC RMS<T> operator()(RMS<T> a, RMS<T> b) {
-        a.mean += (b.mean * b.mean);
+        a.sum_sq += (b.sum_sq * b.sum_sq);
         a.count += 1;
         return a;
     }
@@ -1011,14 +1016,15 @@ struct RMSReduceOp {
         return { 0, 0 };
     }
 
-    // RMSLoadOp accumulates a running sum of squares into `mean` (the field name
-    // is inherited from the Welford-style merge used for LayerNorm). Merging two
-    // partial sums-of-squares in a tree reduction is therefore plain addition.
-    // Keeping it a pure sum also avoids intermediate `delta*delta` products that
-    // can overflow F32 when the input has magnitudes around 1e9 or larger, which
-    // would poison the reduction with Inf*0 = NaN.
+    // Merging two partial Σx² values in the tree reduction is plain addition.
+    // No Welford-style correction term applies here: Welford merges running
+    // *means* (and tracks an `m2` companion field), whereas RMS<T> only carries
+    // a raw sum of squares. The previous implementation had a `delta*delta`
+    // correction that was mathematically zero by uint integer division but
+    // overflowed F32 to Inf for inputs around 1e9+, poisoning the reduction
+    // with Inf * 0 = NaN.
     METAL_FUNC RMS<T> operator()(RMS<T> a, RMS<T> b) {
-        a.mean += b.mean;
+        a.sum_sq += b.sum_sq;
         a.count += b.count;
         return a;
     }
@@ -1042,7 +1048,7 @@ template <typename T>
 METAL_FUNC RMS<T> simd_shuffle_down(RMS<T> rms, ushort delta) {
     return RMS<T> {
         simd_shuffle_down(rms.count, delta),
-        simd_shuffle_down(rms.mean, delta)
+        simd_shuffle_down(rms.sum_sq, delta)
     };
 }
 
@@ -1090,12 +1096,12 @@ METAL_FUNC void rms_norm(
         offset,
         tid
     );
-    RMS<float> result = RMS<float> { value.count, static_cast<float>(value.mean) };
+    RMS<float> result = RMS<float> { value.count, static_cast<float>(value.sum_sq) };
 
     // Complete reduction
     result = reduce(result, tid);
     if (tid == 0) {
-        total = rsqrt(fast_divide(result.mean, float(el_per_block)) + eps);
+        total = rsqrt(fast_divide(result.sum_sq, float(el_per_block)) + eps);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
