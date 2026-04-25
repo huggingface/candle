@@ -25,6 +25,8 @@ use serde::Deserialize;
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub use_flash_attn: bool,
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
@@ -122,7 +124,7 @@ struct Attention {
     k_proj: Linear,
     v_proj: Linear,
     dense: Linear,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: candle_nn::kv_cache::KvCache,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
     rotary_emb: RotaryEmbedding,
@@ -131,13 +133,6 @@ struct Attention {
     num_kv_heads: usize,
     head_dim: usize,
     span: tracing::Span,
-}
-
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
-        .collect();
-    Tensor::from_slice(&mask, (size, size), device)
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -171,7 +166,7 @@ impl Attention {
             k_proj,
             v_proj,
             dense,
-            kv_cache: None,
+            kv_cache: candle_nn::kv_cache::KvCache::new(2, cfg.max_position_embeddings),
             q_layernorm,
             k_layernorm,
             rotary_emb,
@@ -214,10 +209,7 @@ impl Attention {
             .transpose(1, 2)?;
 
         // Rotary embeddings.
-        let seqlen_offset = match &self.kv_cache {
-            None => 0,
-            Some((prev_k, _)) => prev_k.dim(2)?,
-        };
+        let seqlen_offset = self.kv_cache.current_seq_len();
         let query_states = self
             .rotary_emb
             .apply_rotary_emb(&query_states, seqlen_offset)?;
@@ -226,15 +218,7 @@ impl Attention {
             .apply_rotary_emb(&key_states, seqlen_offset)?;
 
         // KV cache.
-        let (key_states, value_states) = match &self.kv_cache {
-            None => (key_states, value_states),
-            Some((prev_k, prev_v)) => {
-                let k = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let v = Tensor::cat(&[prev_v, &value_states], 2)?;
-                (k, v)
-            }
-        };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        let (key_states, value_states) = self.kv_cache.append(&key_states, &value_states)?;
 
         // Repeat kv.
         let key_states = self.repeat_kv(key_states)?.contiguous()?;
@@ -263,7 +247,7 @@ impl Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.kv_cache = None
+        self.kv_cache.reset()
     }
 }
 
@@ -341,14 +325,18 @@ impl Model {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embed_tokens)?;
         let mask = if seq_len <= 1 {
-            None
+            None // single-token: no causal mask, KV cache + RoPE handle position
         } else {
-            Some(get_mask(seq_len, xs.device())?)
+            Some(crate::utils::build_causal_mask(
+                seq_len,
+                seqlen_offset,
+                xs.device(),
+            )?)
         };
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, mask.as_ref())?;
