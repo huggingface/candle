@@ -344,6 +344,26 @@ fn binary_op(device: &Device) -> Result<()> {
         max.to_vec2::<f32>()?,
         [[3.0, 2.5, 4.0, 2.5, 5.0], [2.0, 1.0, 7.0, 8.0, 2.0]]
     );
+
+    let (b, s, h, pad) = (3usize, 4usize, 5usize, 2usize);
+    let base =
+        Tensor::arange(1f32, (b * (s + pad) * h + 1) as f32, device)?.reshape((b, s + pad, h))?;
+    let ub = base.narrow(1, 0, s)?; // uniform blocks: strides [h * (s + pad), h, 1]
+    let cont = ub.contiguous()?;
+    let scale = Tensor::arange(1f32, (b * s * h + 1) as f32, device)?.reshape((b, s, h))?;
+    assert_eq!(
+        (&ub + &scale)?.to_vec3::<f32>()?,
+        (&cont + &scale)?.to_vec3::<f32>()?,
+    );
+    assert_eq!(
+        (&ub * &scale)?.to_vec3::<f32>()?,
+        (&cont * &scale)?.to_vec3::<f32>()?,
+    );
+    // contiguous lhs, uniform blocks rhs.
+    assert_eq!(
+        (&scale + &ub)?.to_vec3::<f32>()?,
+        (&scale + &cont)?.to_vec3::<f32>()?,
+    );
     Ok(())
 }
 
@@ -905,6 +925,20 @@ fn cat(device: &Device) -> Result<()> {
     assert_eq!(t_cat.i((0, 7, 1))?.to_vec0::<i64>()?, 105);
     assert_eq!(t_cat.i((0, 12, 1))?.to_vec0::<i64>()?, 10013);
     assert_eq!(t_cat.i((1, 12, 3))?.to_vec0::<i64>()?, 10031);
+
+    // compare contiguous to uniform blocks
+    let (b, s, h, pad) = (3usize, 4, 5, 2);
+    let base =
+        Tensor::arange(0f32, (b * (s + pad) * h) as f32, device)?.reshape((b, s + pad, h))?;
+    let tp1 = base.narrow(1, 0, s)?;
+    let tp2 = base.narrow(1, pad, s)?;
+    let cat_padded = Tensor::cat(&[&tp1, &tp2], 1)?;
+    let cat_cont = Tensor::cat(&[&tp1.contiguous()?, &tp2.contiguous()?], 1)?;
+    assert_eq!(
+        cat_padded.to_vec3::<f32>()?,
+        cat_cont.to_vec3::<f32>()?,
+        "cat along dim=1 with padded outer stride should match contiguous result"
+    );
     Ok(())
 }
 
