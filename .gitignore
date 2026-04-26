@@ -47,5 +47,4 @@ out.wav
 bria.mp3
 bria.safetensors
 bria.wav
-verify_nb.py
-write_nb.py
+bench_results/
