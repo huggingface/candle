@@ -9,6 +9,7 @@ pub const MLX_SORT: &str = include_str!("metal_src/mlx_sort.metal");
 pub const QUANTIZED: &str = include_str!("metal_src/quantized.metal");
 pub const RANDOM: &str = include_str!("metal_src/random.metal");
 pub const REDUCE: &str = include_str!("metal_src/reduce.metal");
+pub const SAMPLING: &str = include_str!("metal_src/sampling.metal");
 pub const SORT: &str = include_str!("metal_src/sort.metal");
 pub const TERNARY: &str = include_str!("metal_src/ternary.metal");
 pub const UNARY: &str = include_str!("metal_src/unary.metal");
@@ -27,6 +28,7 @@ pub enum Source {
     Quantized,
     Random,
     Reduce,
+    Sampling,
     Sort,
     Ternary,
     Unary,
