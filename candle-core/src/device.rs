@@ -260,6 +260,11 @@ impl Device {
     }
 
     pub fn set_seed(&self, seed: u64) -> Result<()> {
+        if let Ok(current) = self.get_current_seed() {
+            if current == seed {
+                return Ok(());
+            }
+        }
         match self {
             Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),

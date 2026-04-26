@@ -5,6 +5,18 @@ use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
 use rayon::prelude::*;
+use std::cell::RefCell;
+
+// TODO: When Device::Cpu becomes Device::Cpu(CpuDevice) and CpuDevice is made stateful,
+// replace these thread-locals with Arc<Mutex<StdRng>> / Arc<AtomicU64> fields on CpuDevice
+// to match the Metal/CUDA pattern and support cross-thread seed propagation.
+thread_local! {
+    static CPU_SEED: RefCell<u64> = const { RefCell::new(299792458u64) };
+    static CPU_RNG: RefCell<rand::rngs::StdRng> = {
+        use rand::SeedableRng;
+        RefCell::new(rand::rngs::StdRng::from_os_rng())
+    };
+}
 
 mod utils;
 pub use utils::{
@@ -3050,137 +3062,146 @@ impl BackendDevice for CpuDevice {
         Ok(Self)
     }
 
-    fn set_seed(&self, _seed: u64) -> Result<()> {
-        crate::bail!("cannot seed the CPU rng with set_seed")
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        use rand::SeedableRng;
+        CPU_SEED.with(|s| *s.borrow_mut() = seed);
+        CPU_RNG.with(|rng| *rng.borrow_mut() = rand::rngs::StdRng::seed_from_u64(seed));
+        Ok(())
     }
 
     fn get_current_seed(&self) -> Result<u64> {
-        crate::bail!("cannot get the CPU rng seed with get_current_seed")
+        CPU_SEED.with(|s| Ok(*s.borrow()))
     }
 
     fn rand_uniform(&self, shape: &Shape, dtype: DType, min: f64, max: f64) -> Result<CpuStorage> {
         use rand::prelude::*;
 
         let elem_count = shape.elem_count();
-        let mut rng = rand::rng();
-        match dtype {
-            DType::U8
-            | DType::U32
-            | DType::I16
-            | DType::I32
-            | DType::I64
-            | DType::F6E2M3
-            | DType::F6E3M2
-            | DType::F4
-            | DType::F8E8M0 => Err(Error::UnsupportedDTypeForOp(dtype, "rand_uniform").bt()),
-            DType::BF16 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distr::Uniform::new(bf16::from_f64(min), bf16::from_f64(max))
-                    .map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(rng.sample::<bf16, _>(uniform))
+        CPU_RNG.with(|rng| {
+            let mut rng = rng.borrow_mut();
+            match dtype {
+                DType::U8
+                | DType::U32
+                | DType::I16
+                | DType::I32
+                | DType::I64
+                | DType::F6E2M3
+                | DType::F6E3M2
+                | DType::F4
+                | DType::F8E8M0 => Err(Error::UnsupportedDTypeForOp(dtype, "rand_uniform").bt()),
+                DType::BF16 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let uniform =
+                        rand::distr::Uniform::new(bf16::from_f64(min), bf16::from_f64(max))
+                            .map_err(Error::wrap)?;
+                    for _i in 0..elem_count {
+                        data.push(rng.sample::<bf16, _>(uniform))
+                    }
+                    Ok(CpuStorage::BF16(data))
                 }
-                Ok(CpuStorage::BF16(data))
-            }
-            DType::F16 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distr::Uniform::new(f16::from_f64(min), f16::from_f64(max))
-                    .map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(rng.sample::<f16, _>(uniform))
-                }
-                Ok(CpuStorage::F16(data))
-            }
-            DType::F8E4M3 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let uniform =
-                    rand::distr::Uniform::new(F8E4M3::from_f64(min), F8E4M3::from_f64(max))
+                DType::F16 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let uniform = rand::distr::Uniform::new(f16::from_f64(min), f16::from_f64(max))
                         .map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(rng.sample::<F8E4M3, _>(uniform))
+                    for _i in 0..elem_count {
+                        data.push(rng.sample::<f16, _>(uniform))
+                    }
+                    Ok(CpuStorage::F16(data))
                 }
-                Ok(CpuStorage::F8E4M3(data))
-            }
-            DType::F32 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let uniform =
-                    rand::distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(rng.sample::<f32, _>(uniform))
+                DType::F8E4M3 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let uniform =
+                        rand::distr::Uniform::new(F8E4M3::from_f64(min), F8E4M3::from_f64(max))
+                            .map_err(Error::wrap)?;
+                    for _i in 0..elem_count {
+                        data.push(rng.sample::<F8E4M3, _>(uniform))
+                    }
+                    Ok(CpuStorage::F8E4M3(data))
                 }
-                Ok(CpuStorage::F32(data))
-            }
-            DType::F64 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distr::Uniform::new(min, max).map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(rng.sample::<f64, _>(uniform))
+                DType::F32 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let uniform =
+                        rand::distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
+                    for _i in 0..elem_count {
+                        data.push(rng.sample::<f32, _>(uniform))
+                    }
+                    Ok(CpuStorage::F32(data))
                 }
-                Ok(CpuStorage::F64(data))
+                DType::F64 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let uniform = rand::distr::Uniform::new(min, max).map_err(Error::wrap)?;
+                    for _i in 0..elem_count {
+                        data.push(rng.sample::<f64, _>(uniform))
+                    }
+                    Ok(CpuStorage::F64(data))
+                }
             }
-        }
+        })
     }
 
     fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<CpuStorage> {
         use rand::prelude::*;
 
         let elem_count = shape.elem_count();
-        let mut rng = rand::rng();
-        match dtype {
-            DType::U8
-            | DType::U32
-            | DType::I16
-            | DType::I32
-            | DType::I64
-            | DType::F6E2M3
-            | DType::F6E3M2
-            | DType::F4
-            | DType::F8E8M0 => Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt()),
-            DType::BF16 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(bf16::from_f64(mean), bf16::from_f64(std))
-                    .map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(normal.sample(&mut rng))
+        CPU_RNG.with(|rng| {
+            let mut rng = rng.borrow_mut();
+            match dtype {
+                DType::U8
+                | DType::U32
+                | DType::I16
+                | DType::I32
+                | DType::I64
+                | DType::F6E2M3
+                | DType::F6E3M2
+                | DType::F4
+                | DType::F8E8M0 => Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt()),
+                DType::BF16 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let normal = rand_distr::Normal::new(bf16::from_f64(mean), bf16::from_f64(std))
+                        .map_err(Error::wrap)?;
+                    for _i in 0..elem_count {
+                        data.push(normal.sample(&mut rng))
+                    }
+                    Ok(CpuStorage::BF16(data))
                 }
-                Ok(CpuStorage::BF16(data))
-            }
-            DType::F16 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(f16::from_f64(mean), f16::from_f64(std))
-                    .map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(normal.sample(&mut rng))
+                DType::F16 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let normal = rand_distr::Normal::new(f16::from_f64(mean), f16::from_f64(std))
+                        .map_err(Error::wrap)?;
+                    for _i in 0..elem_count {
+                        data.push(normal.sample(&mut rng))
+                    }
+                    Ok(CpuStorage::F16(data))
                 }
-                Ok(CpuStorage::F16(data))
-            }
-            DType::F8E4M3 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(F8E4M3::from_f64(mean), F8E4M3::from_f64(std))
-                    .map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(normal.sample(&mut rng))
+                DType::F8E4M3 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let normal =
+                        rand_distr::Normal::new(F8E4M3::from_f64(mean), F8E4M3::from_f64(std))
+                            .map_err(Error::wrap)?;
+                    for _i in 0..elem_count {
+                        data.push(normal.sample(&mut rng))
+                    }
+                    Ok(CpuStorage::F8E4M3(data))
                 }
-                Ok(CpuStorage::F8E4M3(data))
-            }
-            DType::F32 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let normal =
-                    rand_distr::Normal::new(mean as f32, std as f32).map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(normal.sample(&mut rng))
+                DType::F32 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let normal =
+                        rand_distr::Normal::new(mean as f32, std as f32).map_err(Error::wrap)?;
+                    for _i in 0..elem_count {
+                        data.push(normal.sample(&mut rng))
+                    }
+                    Ok(CpuStorage::F32(data))
                 }
-                Ok(CpuStorage::F32(data))
-            }
-            DType::F64 => {
-                let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(mean, std).map_err(Error::wrap)?;
-                for _i in 0..elem_count {
-                    data.push(normal.sample(&mut rng))
+                DType::F64 => {
+                    let mut data = Vec::with_capacity(elem_count);
+                    let normal = rand_distr::Normal::new(mean, std).map_err(Error::wrap)?;
+                    for _i in 0..elem_count {
+                        data.push(normal.sample(&mut rng))
+                    }
+                    Ok(CpuStorage::F64(data))
                 }
-                Ok(CpuStorage::F64(data))
             }
-        }
+        })
     }
 
     #[allow(clippy::uninit_vec)]

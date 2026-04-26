@@ -3,7 +3,7 @@
 //! Functionality for modeling sampling strategies and logits processing in text generation
 //! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
 //! and combinations thereof.
-use candle::{DType, Error, Result, Tensor};
+use candle::{DType, Device, Error, Result, Tensor, D};
 use rand::{distr::Distribution, SeedableRng};
 
 #[derive(Clone, PartialEq, Debug)]
@@ -18,6 +18,8 @@ pub enum Sampling {
 }
 
 pub struct LogitsProcessor {
+    seed: u64,
+    seed_set: bool,
     rng: rand::rngs::StdRng,
     sampling: Sampling,
 }
@@ -25,7 +27,12 @@ pub struct LogitsProcessor {
 impl LogitsProcessor {
     pub fn from_sampling(seed: u64, sampling: Sampling) -> Self {
         let rng = rand::rngs::StdRng::seed_from_u64(seed);
-        Self { rng, sampling }
+        Self {
+            seed,
+            seed_set: false,
+            rng,
+            sampling,
+        }
     }
 
     pub fn new(seed: u64, temperature: Option<f64>, top_p: Option<f64>) -> Self {
@@ -40,81 +47,78 @@ impl LogitsProcessor {
         Self::from_sampling(seed, sampling)
     }
 
+    fn set_device_seed(&mut self, device: &Device) -> Result<()> {
+        if !self.seed_set {
+            device.set_seed(self.seed)?;
+            self.seed_set = true;
+        }
+        Ok(())
+    }
+
     fn sample_argmax(&mut self, logits: Tensor) -> Result<u32> {
-        logits.argmax(candle::D::Minus1)?.to_scalar::<u32>()
+        logits.argmax(D::Minus1)?.to_scalar::<u32>()
     }
 
     fn sample_gumbel_softmax(&mut self, logits: &Tensor, temperature: f64) -> Result<u32> {
-        let sampled = candle_nn::sampling::gumbel_softmax(logits, temperature, candle::D::Minus1)?;
-        sampled.to_scalar::<u32>()
+        candle_nn::sampling::gumbel_softmax(logits, temperature, D::Minus1)?.to_scalar::<u32>()
     }
 
-    fn sample_multinomial(&mut self, prs: &Vec<f32>) -> Result<u32> {
+    fn sample_multinomial(&mut self, prs: &[f32]) -> Result<u32> {
         let distr = rand::distr::weighted::WeightedIndex::new(prs).map_err(Error::wrap)?;
         let next_token = distr.sample(&mut self.rng) as u32;
         Ok(next_token)
     }
 
-    /// top-p sampling (or "nucleus sampling") samples from the smallest set of tokens that exceed
-    /// probability top_p. This way we never sample tokens that have very low probabilities and are
-    /// less likely to go "off the rails".
-    fn sample_topp(&mut self, prs: &mut Vec<f32>, top_p: f32) -> Result<u32> {
-        let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
-
-        // Sort by descending probability.
-        argsort_indices.sort_by(|&i, &j| prs[j].total_cmp(&prs[i]));
-
-        // Clamp smaller probabilities to zero.
-        let mut cumsum = 0.;
-        for index in &argsort_indices {
-            if cumsum >= top_p {
-                prs[*index] = 0.0;
-            } else {
-                cumsum += prs[*index];
-            }
+    fn sample_with_scaled_logits(&mut self, logits: &Tensor) -> Result<u32> {
+        if let candle::Device::Cpu = logits.device() {
+            let prs = candle_nn::ops::softmax_last_dim(logits)?.to_vec1::<f32>()?;
+            return self.sample_multinomial(&prs);
         }
-        // Sample with clamped probabilities.
-        self.sample_multinomial(prs)
-    }
-
-    // top-k sampling samples from the k tokens with the largest probabilities.
-    fn sample_topk(&mut self, prs: &mut Vec<f32>, top_k: usize) -> Result<u32> {
-        if top_k >= prs.len() {
-            self.sample_multinomial(prs)
-        } else {
-            let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
-            let (indices, _, _) =
-                argsort_indices.select_nth_unstable_by(top_k, |&i, &j| prs[j].total_cmp(&prs[i]));
-            let prs = indices.iter().map(|&i| prs[i]).collect::<Vec<_>>();
-            let index = self.sample_multinomial(&prs)?;
-            Ok(indices[index as usize] as u32)
-        }
-    }
-
-    // top-k sampling samples from the k tokens with the largest probabilities.
-    // then top-p sampling.
-    fn sample_topk_topp(&mut self, prs: &mut Vec<f32>, top_k: usize, top_p: f32) -> Result<u32> {
-        if top_k >= prs.len() {
-            self.sample_topp(prs, top_p)
-        } else {
-            let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
-            let (indices, _, _) =
-                argsort_indices.select_nth_unstable_by(top_k, |&i, &j| prs[j].total_cmp(&prs[i]));
-            let mut prs = indices.iter().map(|&i| prs[i]).collect::<Vec<_>>();
-            let sum_p = prs.iter().sum::<f32>();
-            let index = if top_p <= 0.0 || top_p >= sum_p {
-                self.sample_multinomial(&prs)?
-            } else {
-                self.sample_topp(&mut prs, top_p)?
-            };
-            Ok(indices[index as usize] as u32)
-        }
+        candle_nn::sampling::gumbel_softmax(logits, 1.0, D::Minus1)?.to_scalar::<u32>()
     }
 
     pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
-        self.sample_f(logits, |_| {})
+        self.set_device_seed(logits.device())?;
+        let logits = logits.to_dtype(DType::F32)?;
+        match self.sampling.clone() {
+            Sampling::ArgMax => self.sample_argmax(logits),
+            Sampling::GumbelSoftmax { temperature } => {
+                self.sample_gumbel_softmax(&logits, temperature)
+            }
+            Sampling::All { temperature } => {
+                let logits = (&logits / temperature)?;
+                self.sample_with_scaled_logits(&logits)
+            }
+            Sampling::TopK { k, temperature } => {
+                let logits = (&logits / temperature)?.apply_topk_mask(k)?;
+                self.sample_with_scaled_logits(&logits)
+            }
+            Sampling::TopP { p, temperature } => {
+                let logits = (&logits / temperature)?;
+                let logits = if p <= 0.0 || p >= 1.0 {
+                    logits
+                } else {
+                    logits.apply_topp_mask(p)?
+                };
+                self.sample_with_scaled_logits(&logits)
+            }
+            Sampling::TopKThenTopP { k, p, temperature } => {
+                let logits = (&logits / temperature)?.apply_topk_mask(k)?;
+                let logits = if p <= 0.0 || p >= 1.0 {
+                    logits
+                } else {
+                    logits.apply_topp_mask(p)?
+                };
+                self.sample_with_scaled_logits(&logits)
+            }
+        }
     }
 
+    /// Sample with a custom logit post-processor.
+    ///
+    /// `f` receives the raw probability vector (already softmax-normalised and
+    /// temperature-scaled) and may modify it in place before the final
+    /// multinomial draw.
     pub fn sample_f(&mut self, logits: &Tensor, f: impl FnOnce(&mut [f32])) -> Result<u32> {
         let logits = logits.to_dtype(DType::F32)?;
         let prs = |temperature: f64| -> Result<Vec<f32>> {
@@ -154,5 +158,50 @@ impl LogitsProcessor {
             }
         };
         Ok(next_token)
+    }
+
+    fn sample_topp(&mut self, prs: &mut [f32], top_p: f32) -> Result<u32> {
+        let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
+        argsort_indices.sort_by(|&i, &j| prs[j].total_cmp(&prs[i]));
+        let mut cumsum = 0.;
+        for index in &argsort_indices {
+            if cumsum >= top_p {
+                prs[*index] = 0.0;
+            } else {
+                cumsum += prs[*index];
+            }
+        }
+        self.sample_multinomial(prs)
+    }
+
+    fn sample_topk(&mut self, prs: &mut [f32], top_k: usize) -> Result<u32> {
+        if top_k >= prs.len() {
+            self.sample_multinomial(prs)
+        } else {
+            let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
+            let (indices, _, _) =
+                argsort_indices.select_nth_unstable_by(top_k, |&i, &j| prs[j].total_cmp(&prs[i]));
+            let prs = indices.iter().map(|&i| prs[i]).collect::<Vec<_>>();
+            let index = self.sample_multinomial(&prs)?;
+            Ok(indices[index as usize] as u32)
+        }
+    }
+
+    fn sample_topk_topp(&mut self, prs: &mut [f32], top_k: usize, top_p: f32) -> Result<u32> {
+        if top_k >= prs.len() {
+            self.sample_topp(prs, top_p)
+        } else {
+            let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
+            let (indices, _, _) =
+                argsort_indices.select_nth_unstable_by(top_k, |&i, &j| prs[j].total_cmp(&prs[i]));
+            let mut prs = indices.iter().map(|&i| prs[i]).collect::<Vec<_>>();
+            let sum_p = prs.iter().sum::<f32>();
+            let index = if top_p <= 0.0 || top_p >= sum_p {
+                self.sample_multinomial(&prs)?
+            } else {
+                self.sample_topp(&mut prs, top_p)?
+            };
+            Ok(indices[index as usize] as u32)
+        }
     }
 }

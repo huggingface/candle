@@ -1,6 +1,6 @@
 //! Shared utilities: repeat_kv, repeat_penalty, causal mask.
-
-use candle::{Device, Result, Tensor};
+use candle::{DType, Device, Result, Tensor};
+use std::collections::HashSet;
 
 /// Build a causal attention mask of shape `(seq_len, kv_len)` where
 /// `kv_len = index_pos + seq_len`.
@@ -22,25 +22,26 @@ pub fn build_causal_mask(seq_len: usize, index_pos: usize, device: &Device) -> R
     Tensor::from_slice(&mask, (seq_len, kv_len), device)
 }
 
+/// Apply repetition penalty to `logits` for tokens in `context`.
+///
+/// Tokens that appeared previously have their logits divided by `penalty`
+/// when positive, or multiplied by `penalty` when negative.
 pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Result<Tensor> {
-    let device = logits.device();
-    let mut logits = logits.to_dtype(candle::DType::F32)?.to_vec1::<f32>()?;
-    let mut already_seen = std::collections::HashSet::new();
-    for token_id in context {
-        if already_seen.contains(token_id) {
-            continue;
-        }
-        already_seen.insert(token_id);
-        if let Some(logit) = logits.get_mut(*token_id as usize) {
-            if *logit >= 0. {
-                *logit /= penalty
-            } else {
-                *logit *= penalty
-            }
-        }
+    if context.is_empty() {
+        return Ok(logits.clone());
     }
-    let logits_len = logits.len();
-    Tensor::from_vec(logits, logits_len, device)
+    // f32 only for now
+    let logits = logits.to_dtype(DType::F32)?;
+    let device = logits.device().clone();
+    // Dedup so each GPU thread writes to a unique output position.
+    let mut seen = HashSet::new();
+    let unique: Vec<u32> = context
+        .iter()
+        .filter(|&&t| seen.insert(t))
+        .copied()
+        .collect();
+    let ctx = Tensor::from_slice(&unique, unique.len(), &device)?;
+    logits.apply_repeat_penalty(&ctx, penalty)
 }
 
 /// Repeats a key or value tensor for grouped query attention
