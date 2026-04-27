@@ -50,9 +50,6 @@ fn matmul(device: &Device) -> Result<()> {
 }
 
 fn matmul_bf16(device: &Device) -> Result<()> {
-    if !device.supports_bf16() {
-        return Ok(());
-    }
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
     let a = Tensor::from_slice(&data, (2, 2), device)?.to_dtype(DType::BF16)?;
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
@@ -60,6 +57,27 @@ fn matmul_bf16(device: &Device) -> Result<()> {
 
     let c = a.matmul(&b)?.to_dtype(DType::F32)?;
     assert_eq!(c.to_vec2::<f32>()?, &[[7.0f32, 10.0], [15.0, 22.0]]);
+
+    // Larger matrix: verify BF16 result is close to F32 reference
+    let a = Tensor::randn(0f32, 1., (8, 16), device)?.to_dtype(DType::BF16)?;
+    let b = Tensor::randn(0f32, 1., (16, 4), device)?.to_dtype(DType::BF16)?;
+    let c = a.matmul(&b)?;
+    assert_eq!(c.dtype(), DType::BF16);
+    assert_eq!(c.dims(), &[8, 4]);
+    let a_f32 = a.to_dtype(DType::F32)?;
+    let b_f32 = b.to_dtype(DType::F32)?;
+    let c_ref = a_f32.matmul(&b_f32)?;
+    let c_f32 = c.to_dtype(DType::F32)?;
+    let diff = (c_f32 - c_ref)?.abs()?.max_all()?.to_scalar::<f32>()?;
+    assert!(diff < 0.1, "BF16 matmul differs from F32 reference by {diff}");
+
+    // Batched matmul
+    let a = Tensor::randn(0f32, 1., (2, 4, 3), device)?.to_dtype(DType::BF16)?;
+    let b = Tensor::randn(0f32, 1., (2, 3, 5), device)?.to_dtype(DType::BF16)?;
+    let c = a.matmul(&b)?;
+    assert_eq!(c.dtype(), DType::BF16);
+    assert_eq!(c.dims(), &[2, 4, 5]);
+
     Ok(())
 }
 
