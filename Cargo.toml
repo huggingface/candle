@@ -100,7 +100,7 @@ ug = "0.5.0"
 ug-cuda = "0.5.0"
 ug-metal = "0.5.0"
 yoke = { version = "0.8.1", features = ["derive"] }
-zip = { version = "7.2.0", default-features = false }
+zip = { version = "8.6.0", default-features = false }
 objc2-metal = { version = "0.3.1" }
 objc2-foundation = { version = "0.3.1" }
 
