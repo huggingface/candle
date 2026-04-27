@@ -1365,6 +1365,89 @@ impl Map2 for MatMul {
         use gemm::{gemm, Parallelism};
 
         match T::DTYPE {
+            DType::BF16 => {
+                let (b, m, n, k) = self.0;
+                // Safety: T::DTYPE is BF16, so T and bf16 have identical layout.
+                let lhs_bf16: &[bf16] = unsafe {
+                    std::slice::from_raw_parts(lhs.as_ptr() as *const bf16, lhs.len())
+                };
+                let rhs_bf16: &[bf16] = unsafe {
+                    std::slice::from_raw_parts(rhs.as_ptr() as *const bf16, rhs.len())
+                };
+                let lhs_f32: Vec<f32> = lhs_bf16[lhs_l.start_offset()..]
+                    .iter()
+                    .map(|v| v.to_f32())
+                    .collect();
+                let rhs_f32: Vec<f32> = rhs_bf16[rhs_l.start_offset()..]
+                    .iter()
+                    .map(|v| v.to_f32())
+                    .collect();
+
+                let lhs_stride = lhs_l.stride();
+                let rhs_stride = rhs_l.stride();
+                let rank = lhs_stride.len();
+                let lhs_cs = lhs_stride[rank - 1];
+                let lhs_rs = lhs_stride[rank - 2];
+                let rhs_cs = rhs_stride[rank - 1];
+                let rhs_rs = rhs_stride[rank - 2];
+
+                let (a_skip, b_skip) = self.ab_skip(lhs_l, rhs_l)?;
+                let c_skip: usize = m * n;
+
+                let dst_shape: Shape = (m, n).into();
+                let dst_strides = dst_shape.stride_contiguous();
+                let dst_rs = dst_strides[0];
+                let dst_cs = dst_strides[1];
+
+                let mut dst_f32 = vec![0f32; b * m * n];
+                let num_threads = crate::utils::get_num_threads();
+                let parallelism = if num_threads > 1 {
+                    Parallelism::Rayon(num_threads)
+                } else {
+                    Parallelism::None
+                };
+                let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
+                    (1, b * m, n, k)
+                } else if a_skip == 0 && b_skip == n * k {
+                    (1, m, b * n, k)
+                } else {
+                    (b, m, n, k)
+                };
+                for step in 0..b {
+                    let lhs_p = &lhs_f32[step * a_skip..];
+                    let rhs_p = &rhs_f32[step * b_skip..];
+                    let dst_p = &mut dst_f32[step * c_skip..];
+                    unsafe {
+                        gemm(
+                            m, n, k,
+                            dst_p.as_mut_ptr(),
+                            dst_cs as isize,
+                            dst_rs as isize,
+                            false,
+                            lhs_p.as_ptr(),
+                            lhs_cs as isize,
+                            lhs_rs as isize,
+                            rhs_p.as_ptr(),
+                            rhs_cs as isize,
+                            rhs_rs as isize,
+                            0f32,
+                            1f32,
+                            false,
+                            false,
+                            false,
+                            parallelism,
+                        )
+                    }
+                }
+                let mut dst = vec![T::zero(); dst_f32.len()];
+                let dst_bf16: &mut [bf16] = unsafe {
+                    std::slice::from_raw_parts_mut(dst.as_mut_ptr() as *mut bf16, dst.len())
+                };
+                for (d, &s) in dst_bf16.iter_mut().zip(dst_f32.iter()) {
+                    *d = bf16::from_f32(s);
+                }
+                return Ok(dst);
+            }
             DType::F16 | DType::F32 | DType::F64 => {}
             _ => Err(Error::UnsupportedDTypeForOp(T::DTYPE, "matmul").bt())?,
         }
@@ -1478,6 +1561,38 @@ impl Map2 for MatMul {
 
         let mut dst = vec![T::zero(); b * m * n];
         match T::DTYPE {
+            DType::BF16 => {
+                let lhs_bf16: &[bf16] = unsafe {
+                    std::slice::from_raw_parts(lhs.as_ptr() as *const bf16, lhs.len())
+                };
+                let rhs_bf16: &[bf16] = unsafe {
+                    std::slice::from_raw_parts(rhs.as_ptr() as *const bf16, rhs.len())
+                };
+                let lhs_f32: Vec<f32> =
+                    lhs_bf16.iter().map(|v| v.to_f32()).collect();
+                let rhs_f32: Vec<f32> =
+                    rhs_bf16.iter().map(|v| v.to_f32()).collect();
+                let mut dst_f32 = vec![0f32; b * m * n];
+                for step in 0..b {
+                    let a = &rhs_f32[step * b_skip..];
+                    let b_sl = &lhs_f32[step * a_skip..];
+                    let c = &mut dst_f32[step * c_skip..step * c_skip + c_skip];
+                    unsafe {
+                        crate::accelerate::sgemm(
+                            transa, transb, /* m= */ n as i32, /* n= */ m as i32,
+                            /* k= */ k as i32, /* alpha= */ 1., /* a= */ a,
+                            /* lda= */ lda, /* b= */ b_sl, /* ldb= */ ldb,
+                            /* beta= */ 0., /* c= */ c, /* ldc= */ n as i32,
+                        )
+                    }
+                }
+                let dst_bf16: &mut [bf16] = unsafe {
+                    std::slice::from_raw_parts_mut(dst.as_mut_ptr() as *mut bf16, dst.len())
+                };
+                for (d, &s) in dst_bf16.iter_mut().zip(dst_f32.iter()) {
+                    *d = bf16::from_f32(s);
+                }
+            }
             DType::F16 => {
                 crate::bail!("the accelerate backend does not support f16 matmul")
             }
@@ -1569,6 +1684,38 @@ impl Map2 for MatMul {
 
         let mut dst = vec![T::zero(); b * m * n];
         match T::DTYPE {
+            DType::BF16 => {
+                let lhs_bf16: &[bf16] = unsafe {
+                    std::slice::from_raw_parts(lhs.as_ptr() as *const bf16, lhs.len())
+                };
+                let rhs_bf16: &[bf16] = unsafe {
+                    std::slice::from_raw_parts(rhs.as_ptr() as *const bf16, rhs.len())
+                };
+                let lhs_f32: Vec<f32> =
+                    lhs_bf16.iter().map(|v| v.to_f32()).collect();
+                let rhs_f32: Vec<f32> =
+                    rhs_bf16.iter().map(|v| v.to_f32()).collect();
+                let mut dst_f32 = vec![0f32; b * m * n];
+                for step in 0..b {
+                    let a = &rhs_f32[step * b_skip..];
+                    let b_sl = &lhs_f32[step * a_skip..];
+                    let c = &mut dst_f32[step * c_skip..step * c_skip + c_skip];
+                    unsafe {
+                        crate::mkl::sgemm(
+                            transa, transb, /* m= */ n as i32, /* n= */ m as i32,
+                            /* k= */ k as i32, /* alpha= */ 1., /* a= */ a,
+                            /* lda= */ lda, /* b= */ b_sl, /* ldb= */ ldb,
+                            /* beta= */ 0., /* c= */ c, /* ldc= */ n as i32,
+                        )
+                    }
+                }
+                let dst_bf16: &mut [bf16] = unsafe {
+                    std::slice::from_raw_parts_mut(dst.as_mut_ptr() as *mut bf16, dst.len())
+                };
+                for (d, &s) in dst_bf16.iter_mut().zip(dst_f32.iter()) {
+                    *d = bf16::from_f32(s);
+                }
+            }
             DType::F16 => {
                 for step in 0..b {
                     let lhs_p = &lhs[step * a_skip..];
