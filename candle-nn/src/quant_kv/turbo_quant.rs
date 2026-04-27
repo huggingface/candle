@@ -2,8 +2,8 @@
 //!
 //! ## Paper Reference
 //!
-//! "TurboQuant: 4-Bit KV Cache Quantization with Polar MSE and QJL Residuals"
-//! (2024) — arxiv:2407.13246
+//! "TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate"
+//! (2025) — arxiv:2504.19874
 
 use candle::{Result, Tensor};
 

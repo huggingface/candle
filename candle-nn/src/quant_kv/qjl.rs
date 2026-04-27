@@ -1,8 +1,8 @@
-//! QJL: Asymmetric 1-Bit Quantized Johnson-Lindenstrauss Transform for KV Cache.
+//! QJL: 1-Bit Quantized JL Transform for KV Cache Quantization with Zero Overhead.
 //!
 //! ## Paper Reference
 //!
-//! "Asymmetric 1-Bit Quantized Johnson-Lindenstrauss Transformations for KV Cache"
+//! "QJL: 1-Bit Quantized JL Transform for KV Cache Quantization with Zero Overhead"
 //! Zandieh et al. (2024) — arxiv:2406.03482
 
 use super::prng::Prng;

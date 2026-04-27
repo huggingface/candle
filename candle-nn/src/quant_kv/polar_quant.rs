@@ -2,8 +2,8 @@
 //!
 //! ## Paper Reference
 //!
-//! "PolarQuant: Quantizing Large Language Models' KV Cache in Polar Coordinates"
-//! (2024) — arxiv:2407.13246
+//! "PolarQuant: Leveraging Polar Transformation for Efficient Key Cache Quantization and Decoding Acceleration"
+//! (2025) — arxiv:2502.00527
 
 use super::codebook::{get_polar_codebook, Codebook};
 use candle::{Result, Tensor};
