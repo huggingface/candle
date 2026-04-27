@@ -83,7 +83,7 @@ log = "0.4"
 memmap2 = { version = "0.9.3", features = ["stable_deref_trait"] }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
-parquet = "57"
+parquet = "58"
 rand = "0.9.0"
 rand_distr = "0.5.1"
 rayon = "1.7.0"
