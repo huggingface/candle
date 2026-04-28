@@ -2568,7 +2568,7 @@ fn simple_eval_(
                     | DType::F4
                     | DType::F8E8M0
                     | DType::F8E4M3 => {}
-                    dt => bail!("unsupported dtype {} for NonZero", dt.as_str()),
+                    dt => bail!("unsupported dtype {dt:?} for NonZero"),
                 };
 
                 let out_shape = vec![rank, 0];
