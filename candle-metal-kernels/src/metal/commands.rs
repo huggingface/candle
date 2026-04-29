@@ -260,6 +260,14 @@ impl Commands {
     }
 }
 
+impl Commands {
+    /// Returns a reference to the underlying command queue.
+    /// Useful for MPSGraph operations that need direct queue access.
+    pub fn command_queue(&self) -> &CommandQueue {
+        &self.command_queue
+    }
+}
+
 impl Drop for Commands {
     fn drop(&mut self) {
         // TODO: Avoid redundant allocation before drop

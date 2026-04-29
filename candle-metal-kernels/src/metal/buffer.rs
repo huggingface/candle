@@ -35,6 +35,12 @@ impl Buffer {
     pub fn did_modify_range(&self, range: NSRange) {
         self.as_ref().didModifyRange(range);
     }
+
+    /// Get the raw MTLBuffer pointer for FFI
+    /// This returns the Objective-C object pointer that can be passed to C/Swift APIs
+    pub fn as_raw_ptr(&self) -> *const std::ffi::c_void {
+        Retained::as_ptr(&self.raw) as *const std::ffi::c_void
+    }
 }
 
 impl AsRef<ProtocolObject<dyn MTLBuffer>> for Buffer {
