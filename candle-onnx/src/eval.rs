@@ -2557,17 +2557,9 @@ fn simple_eval_(
                     DType::U8
                     | DType::U32
                     | DType::I64
-                    | DType::I32
-                    | DType::I16
-                    | DType::BF16
                     | DType::F16
                     | DType::F32
-                    | DType::F64 
-                    | DType::F6E2M3
-                    | DType::F6E3M2
-                    | DType::F4
-                    | DType::F8E8M0
-                    | DType::F8E4M3 => {}
+                    | DType::F64 => {}
                     dt => bail!("unsupported dtype {dt:?} for NonZero"),
                 };
 
