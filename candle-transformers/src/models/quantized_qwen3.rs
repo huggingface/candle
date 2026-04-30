@@ -389,6 +389,16 @@ impl AttentionWeights {
             c.reset();
         }
     }
+
+    /// Save current KV state as the prefix (call after prefilling system prompt).
+    fn save_prefix_kv(&self) -> (Option<Tensor>, Option<Tensor>) {
+        (self.kv_cache.k().cloned(), self.kv_cache.v().cloned())
+    }
+
+    /// Restore KV cache to a saved prefix state (call before each new request).
+    fn restore_prefix_kv(&mut self, saved: (Option<Tensor>, Option<Tensor>)) {
+        self.kv_cache.restore_from(saved.0, saved.1);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -585,6 +595,24 @@ impl ModelWeights {
     pub fn clear_kv_cache(&mut self) {
         for layer in &mut self.layers {
             layer.clear_kv_cache();
+        }
+    }
+
+    /// Save the current KV cache state as the prefix.
+    /// Call once after prefilling the static system prompt to enable prefix caching.
+    /// Returns one (k_saved, v_saved) pair per layer.
+    pub fn save_prefix_kv_cache(&self) -> Vec<(Option<Tensor>, Option<Tensor>)> {
+        self.layers
+            .iter()
+            .map(|l| l.self_attn.save_prefix_kv())
+            .collect()
+    }
+
+    /// Restore all layer KV caches to a previously saved prefix state.
+    /// Call at the start of each new request instead of clear_kv_cache().
+    pub fn restore_prefix_kv_cache(&mut self, saved: Vec<(Option<Tensor>, Option<Tensor>)>) {
+        for (layer, kv) in self.layers.iter_mut().zip(saved.into_iter()) {
+            layer.self_attn.restore_prefix_kv(kv);
         }
     }
 }
