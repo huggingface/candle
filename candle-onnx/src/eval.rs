@@ -2550,31 +2550,70 @@ fn simple_eval_(
             // https://onnx.ai/onnx/operators/onnx__DequantizeLinear.html
             "DequantizeLinear" => {
                 let x = get(&node.input[0])?;
-                let scale = get(&node.input[1])?;
                 let x_dt = x.dtype();
+                match x_dt {
+                    DType::U8 => {}
+                    x_dt => bail!("unsupported dtype {x_dt:?} for DequantizeLinear"),
+                }
+                let scale = get(&node.input[1])?;
                 let scale_dt = scale.dtype();
-                match (x_dt, scale_dt) {
-                    (DType::U8
-                    | DType::I16
-                    | DType::I32
-                    | DType::F4
-                    | DType::F8E4M3) => {}
-                    (x_dt, scale_dt) => bail!(
-                        "unsupported dtype combination {:?} / {:?} for DequantizeLinear",
-                        x_dt,
-                        scale_dt
-                    ),
-                };
+                match scale_dt {
+                    DType::F16 | DType::F32 => {}
+                    scale_dt => bail!("unsupported dtype {scale_dt:?} for DequantizeLinear"),
+                }
                 let zero_point = if node.input.len() > 2 && !node.input[2].is_empty() {
-                    get(&node.input[2])
+                    to_vec0_flexible::<i64>(get(&node.input[2])?)?
                 } else {
                     0
                 };
-                let zero_point_dt = zero_point.dtype();
-                match zero_point_dt {
-                    DType::F16 | DType::F32 | DType::BF16 | DType::F8E8M0 => {}
-                    zero_point_dt => bail!("unsupported dtype {:?} for DequantizeLinear", zero_point_dt),
-                };
+
+                let r = x.rank() as i64;
+
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1);
+                if axis < -r || axis > r - 1 {
+                    bail!(
+                        "axis ({}) out of accepted range [-rank, rank-1] which was [{}, {}]",
+                        axis,
+                        -r,
+                        r - 1
+                    );
+                } // onnx docs: accepted range is [-r, r-1] where r = rank(input)
+
+                let block_size = get_attr_opt::<i64>(node, "block_size")?
+                    .copied()
+                    .unwrap_or(0);
+                if block_size < 0 {
+                    bail!("the block size {} must be a positive integer.", block_size)
+                } // onnx docs: block size is a positive integer
+
+                let dt = get_attr_opt::<i64>(node, "output_dtype")?
+                    .copied()
+                    .unwrap_or(0);
+                let out_dtype = if dt != 0 {
+                    match DataType::try_from(dt as i32) {
+                        Ok(dt) => match dtype(dt) {
+                            Some(DType::U8 | DType::U32 | DType::I64 | DType::F64) => {
+                                // onnx docs: tensor(bfloat16), tensor(float), tensor(float16) - type of the output ‘y’
+                                bail!(
+                                    "unsupported 'dtype' value {dt:?}, only floats-like are allowed, for {}",
+                                    node.name
+                                )
+                            }
+                            Some(dt) => dt,
+                            None => bail!(
+                                "unsupported by candle output_dtype {:?} for DequantizeLinear", // cast from Dtype to candle DType is not possible
+                                dt
+                            ),
+                        },
+                        Err(_) => bail!("invalid output_dtype attribute integer: {}", dt),
+                    }
+                } else {
+                    scale_dt
+                }; // onnx docs: output type is specified by the output_dtype attribute or, in its absence, the type of x_scale
+
+                // placeholder output
+                let output = Tensor::zeros(x.shape(), out_dtype, x.device())?;
+                values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
