@@ -1041,9 +1041,17 @@ impl candle::CustomOp3 for Sdpa {
         let supports_sdpa_full_mask = self.mask.is_none() || q_seq <= k_seq;
         // F32 full attention at head_dim=512 exceeds 32KB Metal threadgroup memory
         let supports_sdpa_full_dtype = !(q_head == 512 && q.dtype() == DType::F32);
+        // The vector kernel (`sdpa_vector` / `sdpa_vector_2pass_*` in
+        // `scaled_dot_product_attention.metal`) dispatches one threadgroup per
+        // `(batch, qhead)` pair and writes a single output position per head —
+        // the kernel source has no q-axis loop. For `q_seq > 1` it leaves the
+        // extra output positions uninitialised (pooled Metal buffer → garbage).
+        // Restrict it to the decode case and route everything else to the full
+        // kernel. Regression guard: `candle-nn/tests/sdpa.rs`
+        // `sdpa_vector_q_seq_2_to_8_matches_reference`.
         let supports_sdpa_full =
-            q_seq > 8 && supported_head_dim && supports_sdpa_full_mask && supports_sdpa_full_dtype;
-        let supports_sdpa_vector = q_seq <= 8 && supported_head_dim && q_seq <= k_seq;
+            q_seq > 1 && supported_head_dim && supports_sdpa_full_mask && supports_sdpa_full_dtype;
+        let supports_sdpa_vector = q_seq == 1 && supported_head_dim && q_seq <= k_seq;
 
         implementation_supports_use_case &= supports_sdpa_full || supports_sdpa_vector;
 
