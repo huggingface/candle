@@ -154,6 +154,11 @@ struct LayerWeights {
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
+    /// RoPE convention: true = NEOX (non-interleaved, pairs i with i+d/2),
+    /// false = NORM (interleaved, pairs 2i with 2i+1).
+    /// Must match the model architecture — using the wrong convention corrupts
+    /// attention patterns and causes severe output degradation.
+    rope_is_neox: bool,
     cos: Tensor,
     sin: Tensor,
     neg_inf: Tensor,
@@ -175,9 +180,12 @@ impl LayerWeights {
         let (_b_sz, _n_head, seq_len, _n_embd) = x.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.sin.narrow(0, index_pos, seq_len)?;
-        // The call to contiguous below is only necessary when processing the prompt.
-        // When the seq_len is 1 in the inference loop, this is a no-op.
-        candle_nn::rotary_emb::rope_i(&x.contiguous()?, &cos, &sin)
+        let x = x.contiguous()?;
+        if self.rope_is_neox {
+            candle_nn::rotary_emb::rope(&x, &cos, &sin)
+        } else {
+            candle_nn::rotary_emb::rope_i(&x, &cos, &sin)
+        }
     }
 
     fn forward_attn(
@@ -333,6 +341,7 @@ impl ModelWeights {
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
+                rope_is_neox: false, // GGML format = standard Llama = interleaved
                 cos: cos.clone(),
                 sin: sin.clone(),
                 neg_inf: neg_inf.clone(),
@@ -383,6 +392,41 @@ impl ModelWeights {
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
+
+        // Determine RoPE convention from model architecture (matching llama.cpp).
+        // NEOX (non-interleaved): pairs (i, i+d/2) — Qwen, Qwen2, Falcon, Phi, etc.
+        // NORM (interleaved): pairs (2i, 2i+1) — Llama, Mistral, DeepSeek, etc.
+        // See llama_model_rope_type() in llama.cpp for the authoritative mapping.
+        let arch = ct
+            .metadata
+            .get("general.architecture")
+            .and_then(|v| v.to_string().ok())
+            .cloned()
+            .unwrap_or_default();
+        let rope_is_neox = matches!(
+            arch.as_str(),
+            "qwen"
+                | "qwen2"
+                | "qwen2moe"
+                | "qwen3"
+                | "qwen3moe"
+                | "falcon"
+                | "grok"
+                | "dbrx"
+                | "phi2"
+                | "phi3"
+                | "phimoe"
+                | "stablelm"
+                | "starcoder2"
+                | "bert"
+                | "nomic-bert"
+                | "jina-bert-v2"
+                | "olmo2"
+                | "olmoe"
+                | "codeshell"
+                | "plamo"
+        );
+
         let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
@@ -456,6 +500,7 @@ impl ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
+                rope_is_neox,
                 cos: cos.clone(),
                 sin: sin.clone(),
                 neg_inf: neg_inf.clone(),

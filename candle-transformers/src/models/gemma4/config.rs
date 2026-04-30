@@ -96,7 +96,10 @@ pub struct Gemma4TextConfig {
     pub max_position_embeddings: usize,
     #[serde(default = "default_tie_word_embeddings")]
     pub tie_word_embeddings: bool,
-    #[serde(default = "default_sliding_window_pattern", alias = "_sliding_window_pattern")]
+    #[serde(
+        default = "default_sliding_window_pattern",
+        alias = "_sliding_window_pattern"
+    )]
     pub sliding_window_pattern: usize,
     pub layer_types: Vec<String>,
     #[serde(default = "default_global_head_dim")]
@@ -306,7 +309,10 @@ pub struct Gemma4AudioConfig {
     pub hidden_size: usize,
     #[serde(default = "default_output_proj_dims")]
     pub output_proj_dims: Option<usize>,
-    #[serde(default = "default_conf_attention_chunk_size", alias = "attention_chunk_size")]
+    #[serde(
+        default = "default_conf_attention_chunk_size",
+        alias = "attention_chunk_size"
+    )]
     pub conf_attention_chunk_size: usize,
     #[serde(
         default = "default_conf_attention_context_left",
@@ -323,11 +329,20 @@ pub struct Gemma4AudioConfig {
         alias = "attention_invalid_logits_value"
     )]
     pub conf_attention_invalid_logits_value: f64,
-    #[serde(default = "default_conf_attention_logit_cap", alias = "attention_logit_cap")]
+    #[serde(
+        default = "default_conf_attention_logit_cap",
+        alias = "attention_logit_cap"
+    )]
     pub conf_attention_logit_cap: f64,
-    #[serde(default = "default_conf_num_attention_heads", alias = "num_attention_heads")]
+    #[serde(
+        default = "default_conf_num_attention_heads",
+        alias = "num_attention_heads"
+    )]
     pub conf_num_attention_heads: usize,
-    #[serde(default = "default_conf_num_hidden_layers", alias = "num_hidden_layers")]
+    #[serde(
+        default = "default_conf_num_hidden_layers",
+        alias = "num_hidden_layers"
+    )]
     pub conf_num_hidden_layers: usize,
     #[serde(default = "default_conf_conv_kernel_size", alias = "conv_kernel_size")]
     pub conf_conv_kernel_size: usize,
