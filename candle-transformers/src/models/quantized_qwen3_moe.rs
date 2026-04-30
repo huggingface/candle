@@ -332,11 +332,20 @@ impl GGUFQWenMoE {
                 let gate_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_gate_exps.weight"))?);
                 let up_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_up_exps.weight"))?);
                 let down_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_down_exps.weight"))?);
+                let gate_up_experts = crate::fused_moe::try_fuse_gate_up(
+                    &gate_experts, &up_experts, device,
+                );
+                let (gate_experts_opt, up_experts_opt) = if gate_up_experts.is_some() {
+                    (None, None)
+                } else {
+                    (Some(gate_experts), Some(up_experts))
+                };
                 let moe = FusedMoeGGUF {
                     gate,
-                    gate_experts,
-                    up_experts,
+                    gate_experts: gate_experts_opt,
+                    up_experts: up_experts_opt,
                     down_experts,
+                    gate_up_experts,
                     act: candle_nn::Activation::Silu,
                     norm_topk_prob: moe_cfg.norm_topk_prob,
                     num_experts_per_tok: moe_cfg.num_experts_per_tok,

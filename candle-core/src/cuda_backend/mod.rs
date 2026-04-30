@@ -1369,11 +1369,22 @@ impl CudaStorage {
         // the raw device pointer, fire `cuMemcpyPeerAsync`, and sync.
         //
         // IMPORTANT: dtod/peer copies don't implicitly wait on whatever
-        // produced `self`, so synchronise the *source* stream first.
-        // Otherwise we race with pending writes on the source GPU and
-        // copy uninitialised / stale bytes — reproduces as NaN/garbage
-        // tokens downstream.
-        src_stream.synchronize().w()?;
+        // produced `self`. Use an event to make dst_stream wait for
+        // src_stream's pending work without a host sync. Set
+        // LLMSERVER_PEER_SYNC=1 to restore the host-sync path (debugging).
+        if std::env::var("LLMSERVER_PEER_SYNC").map_or(false, |v| v == "1") {
+            src_stream.synchronize().w()?;
+        } else {
+            use cudarc::driver::sys;
+            // Record an event on src_stream, make dst_stream wait for it.
+            let mut evt: sys::CUevent = std::ptr::null_mut();
+            unsafe {
+                sys::cuEventCreate(&mut evt, 0).result().w()?;
+                sys::cuEventRecord(evt, src_stream.cu_stream()).result().w()?;
+                sys::cuStreamWaitEvent(dst_stream.cu_stream(), evt, 0).result().w()?;
+                sys::cuEventDestroy_v2(evt).result().w()?;
+            }
+        }
         // Bind the destination context for the alloc + copy. cudarc
         // allocations are context-sensitive; without an explicit bind,
         // an alloc following ops on a different device can land in the
@@ -1440,12 +1451,13 @@ impl CudaStorage {
                 self.as_cuda_slice::<u8>()?, dst, src_ctx, dst_ctx, stream_handle)?),
         };
 
-        // Sync the dst stream so downstream kernels see a fully-written
-        // destination. The copy is async on dst_stream, but subsequent
-        // candle ops may be issued from different code paths that don't
-        // re-sync themselves — easier to block once here than audit every
-        // caller.
-        dst_stream.synchronize().w()?;
+        // Stream-ordered semantics: cuMemcpyPeerAsync was queued on
+        // dst_stream above. Any subsequent op on dst_stream waits for
+        // it automatically. Skip the host sync. Set NO_PEER_SYNC=0 to
+        // restore the old sync behaviour (debugging only).
+        if std::env::var("LLMSERVER_PEER_SYNC").map_or(false, |v| v == "1") {
+            dst_stream.synchronize().w()?;
+        }
 
         Ok(Self {
             slice: storage_slice,

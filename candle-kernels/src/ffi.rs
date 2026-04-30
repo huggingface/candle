@@ -38,6 +38,174 @@ extern "C" {
         stream: i64,
     );
 
+    /// Fused gate+up MoE GEMM with SiLU activation and elementwise
+    /// multiply. Shares the input quantize and the per-block input load
+    /// across both gate and up dot products, then writes a single
+    /// `silu(gate) * up` value per output position. Replaces the
+    /// two-call `moe_gemm_gguf(gate)` + `moe_gemm_gguf(up)` +
+    /// elementwise-silu-and-mul sequence with a single launch.
+    pub fn moe_gemm_gguf_gate_up_silu_mul(
+        input: *const f32,
+        gate_weights: *const c_void,
+        up_weights: *const c_void,
+        sorted_token_ids: *const i32,
+        expert_ids: *const i32,
+        output: *mut c_void, // float output [size_m, size_n]
+        num_experts: i32,
+        topk: i32,
+        size_m: i32,
+        size_n: i32,
+        size_k: i32,
+        gguf_dtype: i32,
+        stream: i64,
+    );
+
+    /// Fused MoE down-projection + topk reduction. Each (token, expert)
+    /// row's weighted partial result is added into the [num_real_tokens,
+    /// hidden] output via atomicAdd. Caller must pre-zero the output.
+    /// Saves the explicit reshape+sum that the unfused down + topk
+    /// reduction sequence requires.
+    pub fn moe_gemm_gguf_down_reduce(
+        input: *const f32,
+        weights: *const c_void,
+        sorted_token_ids: *const i32,
+        expert_ids: *const i32,
+        topk_weights: *const f32,
+        output: *mut f32,         // [num_real_tokens, size_n] pre-zeroed
+        num_experts: i32,
+        topk: i32,
+        size_m: i32,
+        size_n: i32,
+        size_k: i32,
+        gguf_dtype: i32,
+        stream: i64,
+    );
+
+    /// Fused quantized matmul + residual add. `dst` must be PRE-INITIALIZED
+    /// with the residual (e.g. via cuMemcpyDtoDAsync of an F32 tensor).
+    /// Kernel atomicAdds matmul partial sums into `dst`. Output =
+    /// matmul(W, x) + residual. Saves the post-matmul broadcast_add.
+    pub fn qmatmul_add(
+        x: *const f32,              // [hidden]
+        w_q: *const c_void,         // [out_rows, hidden] quantized
+        y_q8_1_scratch: *mut c_void, // q8_1 scratch (caller-allocated)
+        dst: *mut f32,              // [out_rows] pre-init with residual
+        hidden: i32,
+        out_rows: i32,
+        quant_type: i32,
+        stream: i64,
+    );
+
+    /// Fused RMS norm + Q*_K matmul for single-token decode. Replaces
+    /// the rms_norm + quantize_q8_1 + mul_mat_vec sequence with one
+    /// launch — saves both the explicit norm launch and the q8_1
+    /// quantize launch (the latter is internal to candle's QMatMul,
+    /// invisible at the API level but real overhead).
+    pub fn rms_qmatmul(
+        x: *const f32,              // [hidden]
+        w_norm: *const f32,         // [hidden]
+        w_mm: *const c_void,        // [out_rows, hidden] quantized
+        out: *mut f32,              // [out_rows]
+        hidden: i32,
+        out_rows: i32,
+        rms_eps: f32,
+        quant_type: i32,
+        stream: i64,
+    );
+
+    /// Cast and copy: dst[i] = (f32) src[i] for n elements. Used to
+    /// initialize the moe_gemm_gguf_down_reduce output buffer with the
+    /// residual values so the post-MLP residual add is folded into the
+    /// final atomicAdd accumulation.
+    pub fn cast_init_f32_from_dtype(
+        dst: *mut f32,
+        src: *const c_void,
+        n: i32,
+        dtype: i32,                 // 0=f16, 1=bf16
+        stream: i64,
+    );
+
+    /// Fused MoE routing: softmax → top-k → optional renorm in a single
+    /// CUDA launch. Replaces ~6 candle ops (softmax_last_dim,
+    /// arg_sort_last_dim, narrow, contiguous, gather, sum_keepdim,
+    /// broadcast_div) per MoE layer.
+    pub fn topk_softmax(
+        logits: *const f32,           // [n_rows, n_experts]
+        weights: *mut f32,            // [n_rows, n_expert_used]
+        ids: *mut u32,                // [n_rows, n_expert_used]
+        n_rows: i32,
+        n_experts: i32,
+        n_expert_used: i32,
+        with_norm: i32,
+        stream: i64,
+    );
+
+    /// Fused post-QKV attention prep for single-token decode.
+    /// Replaces q_norm + k_norm + 3× to_dtype + RoPE (cos/sin cast,
+    /// q.contiguous, k.contiguous, rope_q, rope_k) — typically 5–9
+    /// candle launches per layer — with a single CUDA launch.
+    pub fn attn_post_qkv_decode(
+        qkv: *const f32,            // [n_q*hd + 2*n_kv*hd]
+        q_norm_w: *const f32,       // [hd]
+        k_norm_w: *const f32,       // [hd]
+        rope_cos: *const c_void,    // [max_seq, hd/2] — FULL table
+        rope_sin: *const c_void,    // [max_seq, hd/2]
+        q_out: *mut c_void,         // [n_q, hd]
+        k_out: *mut c_void,         // [n_kv, hd]
+        v_out: *mut c_void,         // [n_kv, hd]
+        n_q: i32,
+        n_kv: i32,
+        hd: i32,
+        rope_pos: i32,
+        rms_eps: f32,
+        q_scale: f32,               // multiply Q by this — folds 1/sqrt(d)
+        dtype: i32,
+        rope_style: i32,
+        stream: i64,
+    );
+
+    /// Same as `attn_post_qkv_decode` but Q is written in F32 (K/V stay
+    /// in `dtype`). Used by the Q4 KV decode path to skip the
+    /// to_dtype(F32) cast on Q before the downstream score kernel.
+    pub fn attn_post_qkv_decode_qf32(
+        qkv: *const f32,
+        q_norm_w: *const f32,
+        k_norm_w: *const f32,
+        rope_cos: *const c_void,
+        rope_sin: *const c_void,
+        q_out: *mut f32,
+        k_out: *mut c_void,
+        v_out: *mut f32,
+        n_q: i32,
+        n_kv: i32,
+        hd: i32,
+        rope_pos: i32,
+        rms_eps: f32,
+        q_scale: f32,
+        dtype: i32,
+        rope_style: i32,
+        stream: i64,
+    );
+
+    /// No-norm variant of `attn_post_qkv_decode_qf32` for qwen2/llama/
+    /// mistral (no q_norm/k_norm). RoPE + scale + cast only.
+    pub fn attn_post_qkv_decode_qf32_no_norm(
+        qkv: *const f32,
+        rope_cos: *const c_void,
+        rope_sin: *const c_void,
+        q_out: *mut f32,
+        k_out: *mut c_void,
+        v_out: *mut f32,
+        n_q: i32,
+        n_kv: i32,
+        hd: i32,
+        rope_pos: i32,
+        q_scale: f32,
+        dtype: i32,
+        rope_style: i32,
+        stream: i64,
+    );
+
     pub fn moe_gemm_gguf_prefill(
         input: *const c_void, // input [size_m, size_k]
         weights: *const u8,   // weights [num_experts, size_n, size_k]
@@ -627,5 +795,119 @@ extern "C" {
         smpbo: i64,
         warp_size: i32,
         stream: *mut c_void,
+    );
+
+    /// One-warp test kernel: 16x32 s8 × 32x8 s8 → 16x8 s32 via
+    /// mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 (Ampere+).
+    /// For development of the full IMMA-based MMVQ; not used in the
+    /// model forward path.
+    pub fn mma_test_m16n8k32(
+        a: *const c_void,
+        b: *const c_void,
+        d: *mut c_void,
+        stream: i64,
+    );
+
+    /// Tensor-core Q4_K × Q8_1 MMVQ for batch=1 decode. One warp per
+    /// 16-row group, processes all super-blocks of those rows. Replaces
+    /// the dp4a inner loop with mma.sync.aligned.m16n8k32 IMMA — 16
+    /// weight rows in parallel per 32-K chunk.
+    /// `ncols_x` must be a multiple of 256 (one Q4_K super-block).
+    pub fn q4k_mmvq_imma(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stream: i64,
+    );
+
+    /// Fused MoE gate matmul + softmax + top-k. Combines the per-layer
+    /// `logits = gate.forward(x)` (cublas SGEMV) and `topk_softmax(logits)`
+    /// launches into one kernel. Loads `x` into shared memory once per
+    /// token, then each warp lane computes a slice of the n_experts logits
+    /// and the existing softmax+topk reduction proceeds in-place.
+    /// `n_experts` ∈ {32, 64, 128, 256}; `hidden` ≤ 8192.
+    pub fn gate_topk_softmax(
+        x_in: *const c_void,
+        gate_w: *const c_void,
+        weights_out: *mut c_void,
+        ids_out: *mut c_void,
+        hidden: i32,
+        n_rows: i32,
+        n_experts: i32,
+        n_expert_used: i32,
+        with_norm: i32,
+        stream: i64,
+    );
+
+    /// Multi-block F32 GEMV for the MoE router gate matmul. Replaces a
+    /// cublas SGEMV (overhead-bound at ~16us/call on 2048×128) with a
+    /// hand-rolled kernel that splits experts across many blocks for
+    /// full SM saturation. `hidden` must be a multiple of 32.
+    pub fn gate_gemv_f32(
+        xs: *const c_void,
+        gate_w: *const c_void,
+        logits: *mut c_void,
+        hidden: i32,
+        n_rows: i32,
+        n_experts: i32,
+        stream: i64,
+    );
+
+    /// Scatter one (k or v) F16 vector into the Q4 KV residual buffer
+    /// at slot `slot` ∈ [0, 32). Replaces a 3-launch dance
+    /// (clone_dtod + slice_set + memcpy_dtod) with one scatter kernel.
+    pub fn kv_residual_scatter_f16(
+        src: *const c_void,
+        dst: *mut c_void,
+        n_kv: i32,
+        head_dim: i32,
+        slot: i32,
+        stream: i64,
+    );
+
+    /// Dense (non-MoE) gate+up+silu*mul fused kernel.
+    /// `gate_w` and `up_w` are quantized [N, K]; `input` is F32 [K];
+    /// `output` is F32 [N] pre-allocated.
+    /// Replaces 3 launches (ffn_up matmul + narrow + fused_silu_mul) with
+    /// 1 quantize + 1 fused matmul.
+    pub fn dense_gate_up_silu_mul_v2(
+        input: *const f32,
+        gate_w: *const c_void,
+        up_w: *const c_void,
+        output: *mut f32,
+        size_n: i32,
+        size_k: i32,
+        gguf_dtype: i32,
+        stream: i64,
+    );
+
+    /// Fused RMS norm + Q8_1 quantize for single-token decode.
+    /// Replaces rms_norm + quantize_q8_1 (2 launches) with one. Caller
+    /// then dispatches the matmul-vec kernel against the q8_1 output.
+    /// `hidden` must be a multiple of 32. Single-block; hidden ≤ 16384.
+    pub fn rms_quantize_q8_1(
+        x: *const f32,          // [hidden]
+        w_norm: *const f32,     // [hidden]
+        y_q8_1: *mut c_void,    // [hidden/32 * sizeof(block_q8_1)]
+        hidden: i32,
+        rms_eps: f32,
+        stream: i64,
+    );
+
+    /// Fused (a + b) + rms_norm for single-token decode.
+    /// Writes both `xs_out = a + b` and `normed_out = gamma * xs / rms(xs)`
+    /// in a single launch. Saves one launch vs separate broadcast_add +
+    /// rms_norm. Single-block kernel; hidden ≤ 8192.
+    pub fn add_rms_norm(
+        a: *const f32,          // [hidden]
+        b: *const f32,          // [hidden]
+        gamma: *const f32,      // [hidden]
+        xs_out: *mut f32,       // [hidden]
+        normed_out: *mut f32,   // [hidden]
+        hidden: i32,
+        eps: f32,
+        stream: i64,
     );
 }

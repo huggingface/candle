@@ -44,6 +44,16 @@ fn main() -> Result<()> {
             "src/mmq_gguf/mmq_instance_q4_k.cu",
             "src/mmq_gguf/mmq_instance_q5_k.cu",
             "src/mmq_gguf/mmq_instance_q6_k.cu",
+            "src/moe/topk_softmax.cu",
+            "src/moe/attn_post_qkv.cu",
+            "src/moe/rms_qmatmul.cu",
+            "src/moe/qmatmul_add.cu",
+            "src/moe/add_rms_norm.cu",
+            "src/moe/mma_test.cu",
+            "src/moe/q4k_mmvq_imma.cu",
+            "src/moe/gate_topk.cu",
+            "src/moe/gate_gemv.cu",
+            "src/moe/kv_residual_scatter.cu",
         ])
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")

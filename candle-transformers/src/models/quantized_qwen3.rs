@@ -94,6 +94,14 @@ pub struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
+    /// Borrow the precomputed sin table — used by fused attention
+    /// kernels that apply RoPE inline.
+    pub fn sin_table(&self) -> &Tensor { &self.sin }
+    /// Borrow the precomputed cos table.
+    pub fn cos_table(&self) -> &Tensor { &self.cos }
+}
+
+impl RotaryEmbedding {
     pub fn new(
         dtype: DType,
         head_dim: usize,

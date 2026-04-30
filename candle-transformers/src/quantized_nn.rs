@@ -129,6 +129,12 @@ impl RmsNorm {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         Self { weight, eps, span }
     }
+
+    /// Borrow the weight tensor — for fused kernels that perform the
+    /// RMS norm inline rather than calling `forward()`.
+    pub fn weight(&self) -> &Tensor { &self.weight }
+    /// Get the epsilon used in the RMS norm.
+    pub fn eps(&self) -> f64 { self.eps }
 }
 
 impl Module for RmsNorm {

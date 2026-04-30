@@ -6,9 +6,19 @@ use cudarc::driver::CudaFunction;
 use float8::F8E4M3;
 use half::{bf16, f16};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::{CudaError, CudaStorage, CudaStorageSlice, WrapErr};
+
+/// Global device cache keyed by ordinal. `BackendDevice::new(ordinal)` returns
+/// the SAME CudaDevice instance (clone of) for repeated calls with the same
+/// ordinal, so engine and model code can never accidentally end up with two
+/// CudaDevice handles pointing at distinct streams/contexts. This is required
+/// for CUDA Graph capture — you can't capture across different streams.
+fn device_cache() -> &'static Mutex<HashMap<usize, CudaDevice>> {
+    static CACHE: OnceLock<Mutex<HashMap<usize, CudaDevice>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Unique identifier for cuda devices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -345,14 +355,39 @@ impl BackendDevice for CudaDevice {
     type Storage = CudaStorage;
 
     fn new(ordinal: usize) -> Result<Self> {
+        // Cache hit: return a clone (shares all Arc-backed state — same
+        // context, stream, modules — so capture across "two" Devices for
+        // the same GPU is now actually capture across the same stream).
+        {
+            let cache = device_cache().lock().unwrap();
+            if let Some(d) = cache.get(&ordinal) {
+                return Ok(d.clone());
+            }
+        }
         let context = cudarc::driver::CudaContext::new(ordinal).w()?;
-        let stream = context.default_stream();
+        // For CUDA Graph capture: default streams cannot be captured. When
+        // LLMSERVER_CUDA_GRAPH=1, create a NON-default stream so begin_capture
+        // works AND disable event tracking on the context (capture is
+        // incompatible with cross-stream event sync). Default-off keeps the
+        // well-tested default-stream path.
+        let use_non_default_stream = std::env::var("LLMSERVER_CUDA_GRAPH")
+            .map_or(false, |v| v == "1");
+        let stream = if use_non_default_stream {
+            // Per-thread stream (CU_STREAM_PER_THREAD = 0x2) is captureable.
+            // Keep event tracking ON: compute-sanitizer found that
+            // disable_event_tracking causes use-before-alloc races during
+            // weight loading (cross-thread async-alloc → main-thread dtoh
+            // race). Event tracking enforces the ordering.
+            context.per_thread_stream()
+        } else {
+            context.default_stream()
+        };
         let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
         let module_store = ModuleStore {
             mdls: [const { None }; kernels::ALL_IDS.len()],
         };
-        Ok(Self {
+        let device = Self {
             id: DeviceId::new(),
             context,
             stream,
@@ -361,7 +396,16 @@ impl BackendDevice for CudaDevice {
             modules: Arc::new(std::sync::RwLock::new(module_store)),
             custom_modules: Arc::new(std::sync::RwLock::new(HashMap::new())),
             seed_value: Arc::new(RwLock::new(299792458)),
-        })
+        };
+        let mut cache = device_cache().lock().unwrap();
+        // Race-protect: if another thread populated the slot between our
+        // initial check and the alloc, prefer the cached one (so we don't
+        // hand out two distinct contexts for the same ordinal).
+        if let Some(d) = cache.get(&ordinal) {
+            return Ok(d.clone());
+        }
+        cache.insert(ordinal, device.clone());
+        Ok(device)
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {
