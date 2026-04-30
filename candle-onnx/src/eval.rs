@@ -2562,22 +2562,25 @@ fn simple_eval_(
                     scale_dt => bail!("unsupported dtype {scale_dt:?} for DequantizeLinear"),
                 }
                 let zero_point = if node.input.len() > 2 && !node.input[2].is_empty() {
-                    to_vec0_flexible::<i64>(get(&node.input[2])?)?
+                    Some(get(&node.input[2])?)
                 } else {
-                    0
+                    None
                 };
 
                 let r = x.rank() as i64;
 
                 let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1);
-                if axis < -r || axis > r - 1 {
-                    bail!(
-                        "axis ({}) out of accepted range [-rank, rank-1] which was [{}, {}]",
-                        axis,
-                        -r,
-                        r - 1
-                    );
-                } // onnx docs: accepted range is [-r, r-1] where r = rank(input)
+                if scale.rank() > 0 {
+                    // onnx docs: axis is used only for per-axis and blocked quantization, for which scale is non-scalar
+                    if axis < -r || axis > r - 1 {
+                        bail!(
+                            "axis ({}) out of accepted range [-rank, rank-1] which was [{}, {}]",
+                            axis,
+                            -r,
+                            r - 1
+                        );
+                    } // onnx docs: accepted range is [-r, r-1] where r = rank(input)
+                }
 
                 let block_size = get_attr_opt::<i64>(node, "block_size")?
                     .copied()
