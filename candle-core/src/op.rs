@@ -152,6 +152,12 @@ pub enum Op {
         target_w: usize,
         align_corners: bool,
     },
+    UpsampleBicubic2D {
+        arg: Tensor,
+        target_h: usize,
+        target_w: usize,
+        align_corners: bool,
+    },
 
     Cat(Vec<Tensor>, usize),
 
