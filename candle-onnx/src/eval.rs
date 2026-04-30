@@ -2547,6 +2547,35 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
+            // https://onnx.ai/onnx/operators/onnx__DequantizeLinear.html
+            "DequantizeLinear" => {
+                let x = get(&node.input[0])?;
+                let scale = get(&node.input[1])?;
+                let x_dt = x.dtype();
+                let scale_dt = scale.dtype();
+                match (x_dt, scale_dt) {
+                    (DType::U8
+                    | DType::I16
+                    | DType::I32
+                    | DType::F4
+                    | DType::F8E4M3) => {}
+                    (x_dt, scale_dt) => bail!(
+                        "unsupported dtype combination {:?} / {:?} for DequantizeLinear",
+                        x_dt,
+                        scale_dt
+                    ),
+                };
+                let zero_point = if node.input.len() > 2 && !node.input[2].is_empty() {
+                    get(&node.input[2])
+                } else {
+                    0
+                };
+                let zero_point_dt = zero_point.dtype();
+                match zero_point_dt {
+                    DType::F16 | DType::F32 | DType::BF16 | DType::F8E8M0 => {}
+                    zero_point_dt => bail!("unsupported dtype {:?} for DequantizeLinear", zero_point_dt),
+                };
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
