@@ -124,36 +124,79 @@ impl<T> EncoderParam for &[T] {
 
 impl EncoderParam for &Buffer {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data), 0);
+        encoder.set_input_buffer(position, Some(data), 0);
     }
 }
 
 impl EncoderParam for (&Buffer, usize) {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data.0), data.1);
+        encoder.set_input_buffer(position, Some(data.0), data.1);
     }
 }
 
 impl EncoderParam for &BufferOffset<'_> {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data.buffer), data.offset_in_bytes);
+        encoder.set_input_buffer(position, Some(data.buffer), data.offset_in_bytes);
     }
 }
 
 impl EncoderParam for &mut Buffer {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data), 0);
+        encoder.set_output_buffer(position, Some(data), 0);
     }
 }
 
 impl EncoderParam for (&mut Buffer, usize) {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data.0), data.1);
+        encoder.set_output_buffer(position, Some(data.0), data.1);
     }
 }
 
 impl EncoderParam for () {
     fn set_param(_: &ComputeCommandEncoder, _: usize, _: Self) {}
+}
+
+/// Marks a buffer as a write output in `set_params!` calls, enabling hazard tracking.
+///
+/// Use this wrapper wherever a kernel writes to a buffer so the encoder can detect
+/// read-after-write (RAW) hazards and insert barriers before concurrent dispatches.
+///
+/// # Examples
+/// ```ignore
+/// set_params!(encoder, (length, &input, Output::new(output)));
+/// set_params!(encoder, (k, m, n, Output::from_buffer_offset(dst_bo)));
+/// set_params!(encoder, (n, Output::with_offset(dst, dst_offset)));
+/// ```
+#[derive(Copy, Clone)]
+pub struct Output<'a> {
+    buffer: &'a Buffer,
+    offset: usize,
+}
+
+impl<'a> Output<'a> {
+    #[inline]
+    pub fn new(buffer: &'a Buffer) -> Self {
+        Self { buffer, offset: 0 }
+    }
+
+    #[inline]
+    pub fn with_offset(buffer: &'a Buffer, offset: usize) -> Self {
+        Self { buffer, offset }
+    }
+
+    #[inline]
+    pub fn from_buffer_offset(bo: &'a BufferOffset<'a>) -> Self {
+        Self {
+            buffer: bo.buffer,
+            offset: bo.offset_in_bytes,
+        }
+    }
+}
+
+impl<'a> EncoderParam for Output<'a> {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_output_buffer(position, Some(data.buffer), data.offset);
+    }
 }
 
 #[macro_export]

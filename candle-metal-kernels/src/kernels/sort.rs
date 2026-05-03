@@ -1,7 +1,6 @@
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{set_params, DType, Kernels, MetalKernelError, Source};
+use crate::{set_params, DType, Kernels, MetalKernelError, Output, Source};
 use crate::{Buffer, ComputeCommandEncoder, Device, MTLSize, RESOURCE_OPTIONS};
-use objc2_metal::MTLResourceUsage;
 
 #[allow(clippy::too_many_arguments)]
 pub fn call_arg_sort(
@@ -20,7 +19,10 @@ pub fn call_arg_sort(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (&src, dst, ncols as i64, ncols_pad as i64));
+    set_params!(
+        encoder,
+        (&src, Output::new(dst), ncols as i64, ncols_pad as i64)
+    );
 
     let thread_group_count = MTLSize {
         width: 1,
@@ -33,8 +35,6 @@ pub fn call_arg_sort(
         depth: 1,
     };
 
-    encoder.use_resource(src.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(dst, MTLResourceUsage::Write);
     encoder.set_threadgroup_memory_length(0, (ncols_pad * 4).max(16));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
@@ -134,8 +134,8 @@ fn multi_block_sort(
                 encoder,
                 (
                     &mut block_partitions,
-                    &mut *dev_vals_in,
-                    &mut *dev_idxs_in,
+                    &*dev_vals_in,
+                    &*dev_idxs_in,
                     /* size_sorted_axis */ ncols as i32,
                     /* merge_tiles */ merge_tiles as i32,
                     /* n_blocks */ nblocks as i32
@@ -163,8 +163,8 @@ fn multi_block_sort(
                     &block_partitions,
                     &*dev_vals_in,
                     &*dev_idxs_in,
-                    &*dev_vals_out,
-                    &*dev_idxs_out,
+                    Output::new(&*dev_vals_out),
+                    Output::new(&*dev_idxs_out),
                     /* size_sorted_axis */ ncols as i32,
                     /* merge_tiles */ merge_tiles as i32,
                     /* n_blocks */ nblocks as i32
@@ -238,7 +238,7 @@ fn block_sort(
         encoder,
         (
             &src,
-            dst,
+            Output::new(dst),
             ncols as i32,
             1i32,
             1i32,
@@ -256,8 +256,6 @@ fn block_sort(
         height: 1,
         depth: 1,
     };
-    encoder.use_resource(src.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(dst, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

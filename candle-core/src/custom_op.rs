@@ -450,9 +450,7 @@ impl InplaceOp1 for UgIOp1 {
             depth: 1,
         };
         let group_dims = candle_metal_kernels::utils::get_block_dims(b, 1, 1);
-        candle_metal_kernels::utils::set_param(&encoder, 0, (sto.buffer(), 0usize));
-
-        encoder.use_resource(sto.buffer(), objc2_metal::MTLResourceUsage::Write);
+        encoder.set_output_buffer(0, Some(sto.buffer()), 0);
         encoder.dispatch_threads(grid_dims, group_dims);
 
         Ok(())

@@ -1,6 +1,8 @@
 use crate::utils::EncoderProvider;
-use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
-use objc2_metal::{MTLResourceUsage, MTLSize};
+use crate::{
+    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+};
+use objc2_metal::MTLSize;
 
 #[derive(Debug, Clone, Copy)]
 pub enum GgmlDType {
@@ -148,7 +150,7 @@ pub fn call_quantized_matmul_mv_t(
         (
             rhs,
             (lhs, lhs_offset),
-            (dst, dst_offset),
+            Output::with_offset(dst, dst_offset),
             ne00,
             ne01,
             ne02,
@@ -167,9 +169,6 @@ pub fn call_quantized_matmul_mv_t(
             r3
         )
     );
-    encoder.use_resource(lhs, MTLResourceUsage::Read);
-    encoder.use_resource(rhs, MTLResourceUsage::Read);
-    encoder.use_resource(dst, MTLResourceUsage::Write);
 
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
@@ -256,7 +255,7 @@ pub fn call_quantized_matmul_mm_t(
         (
             src0,
             (src1, src1_offset),
-            (dst, dst_offset),
+            Output::with_offset(dst, dst_offset),
             ne00,
             ne02,
             nb01,
@@ -273,9 +272,6 @@ pub fn call_quantized_matmul_mm_t(
             r3
         )
     );
-    encoder.use_resource(src0, MTLResourceUsage::Read);
-    encoder.use_resource(src1, MTLResourceUsage::Read);
-    encoder.use_resource(dst, MTLResourceUsage::Write);
 
     encoder.set_threadgroup_memory_length(0, 8192);
 

@@ -1,7 +1,9 @@
 use crate::metal::{Buffer, ComputeCommandEncoder, Device, MetalDeviceType};
 use crate::utils::EncoderProvider;
-use crate::{set_params, ConstantValues, EncoderParam, Kernels, MetalKernelError, Source, Value};
-use objc2_metal::{MTLResourceUsage, MTLSize};
+use crate::{
+    set_params, ConstantValues, EncoderParam, Kernels, MetalKernelError, Output, Source, Value,
+};
+use objc2_metal::MTLSize;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum GemmDType {
@@ -429,7 +431,7 @@ pub fn call_mlx_gemm(
             (lhs_buffer, lhs_offset),
             (rhs_buffer, rhs_offset),
             (),
-            output,
+            Output::new(output),
             gemm_params,
             (),
             b as i32,
@@ -447,9 +449,6 @@ pub fn call_mlx_gemm(
         height: wn,
         depth: wm,
     };
-    encoder.use_resource(lhs_buffer, MTLResourceUsage::Read);
-    encoder.use_resource(rhs_buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_size, group_size);
     Ok(())
 }

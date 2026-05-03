@@ -1,7 +1,7 @@
 use crate::{BlitCommandEncoder, ComputeCommandEncoder};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
-use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
+use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus, MTLDispatchType};
 use std::borrow::Cow;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
@@ -75,8 +75,10 @@ impl CommandBuffer {
     }
 
     pub fn compute_command_encoder(&self) -> ComputeCommandEncoder {
+        // Concurrent dispatching allows the GPU to reorder independent dispatches.
+        // We prevent read after write using dependency aware barriers in [`ComputeCommandEncoder`].
         self.as_ref()
-            .computeCommandEncoder()
+            .computeCommandEncoderWithDispatchType(MTLDispatchType::Concurrent)
             .map(|raw| ComputeCommandEncoder::new(raw, Arc::clone(&self.semaphore)))
             .unwrap()
     }

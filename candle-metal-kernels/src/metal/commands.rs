@@ -30,6 +30,7 @@ pub fn create_command_buffer(
 struct EntryState {
     current: CommandBuffer,
     in_flight: Vec<CommandBuffer>,
+    current_encoder: Option<ComputeCommandEncoder>,
 }
 
 /// A pool entry containing a command buffer, its usage count, and synchronization primitives.
@@ -92,6 +93,7 @@ impl Commands {
             state: Mutex::new(EntryState {
                 current: cb,
                 in_flight: Vec::new(),
+                current_encoder: None,
             }),
             compute_count: AtomicUsize::new(0),
             semaphore,
@@ -100,12 +102,12 @@ impl Commands {
 
     pub fn command_encoder(&self) -> Result<(bool, ComputeCommandEncoder), MetalKernelError> {
         let entry = self.select_entry()?;
-        self.finalize_entry(entry, |cb| cb.compute_command_encoder())
+        self.finalize_entry(entry)
     }
 
     pub fn blit_command_encoder(&self) -> Result<(bool, BlitCommandEncoder), MetalKernelError> {
         let entry = self.select_entry()?;
-        self.finalize_entry(entry, |cb| cb.blit_command_encoder())
+        self.finalize_blit_entry(entry)
     }
 
     pub fn wait_until_completed(&self) -> Result<(), MetalKernelError> {
@@ -146,16 +148,11 @@ impl Commands {
         Ok(entry)
     }
 
-    /// Creates an encoder from the selected entry, recycling the buffer if needed.
-    /// When recycling, the old committed buffer is moved to `in_flight` so we can later wait on it.
-    fn finalize_entry<F, E>(
+    /// Get or create the long lived encoder for this entry, returning a cloned reference.
+    fn finalize_entry(
         &self,
         entry: Arc<CommandBufferEntry>,
-        create_encoder: F,
-    ) -> Result<(bool, E), MetalKernelError>
-    where
-        F: FnOnce(&mut CommandBuffer) -> E,
-    {
+    ) -> Result<(bool, ComputeCommandEncoder), MetalKernelError> {
         let mut state = entry.state.lock()?;
 
         let count = entry.compute_count.fetch_add(1, Ordering::Relaxed);
@@ -165,8 +162,39 @@ impl Commands {
             self.commit_swap_locked(&entry, &mut state, 1)?;
         }
 
-        let encoder = create_encoder(&mut state.current);
+        // Lazily create the canonical encoder for this command buffer.
+        // Mark it long-lived so Drop won't call endEncoding. Only commit_swap_locked ends this encoder.
+        if state.current_encoder.is_none() {
+            let mut enc = state.current.compute_command_encoder();
+            enc.make_long_lived();
+            state.current_encoder = Some(enc);
+        }
 
+        let encoder_ref = state.current_encoder.as_ref().unwrap().clone_ref();
+        Ok((flush, encoder_ref))
+    }
+
+    fn finalize_blit_entry(
+        &self,
+        entry: Arc<CommandBufferEntry>,
+    ) -> Result<(bool, BlitCommandEncoder), MetalKernelError> {
+        let mut state = entry.state.lock()?;
+
+        let count = entry.compute_count.fetch_add(1, Ordering::Relaxed);
+        let flush = count >= self.compute_per_buffer;
+
+        if flush {
+            self.commit_swap_locked(&entry, &mut state, 1)?;
+        }
+
+        // Blit encoder requires ending the current compute encoder first.
+        // Use end_encoding_silent so the semaphore stays `Encoding` — the blit
+        // encoder is now the active encoder and its end_encoding() will signal `Available`.
+        if let Some(enc) = state.current_encoder.take() {
+            enc.end_encoding_silent();
+        }
+
+        let encoder = state.current.blit_command_encoder();
         Ok((flush, encoder))
     }
 
@@ -175,14 +203,21 @@ impl Commands {
     /// then waits on all in-flight buffers including those from prior recycles.
     pub fn flush_and_wait(&self) -> Result<(), MetalKernelError> {
         for entry in &self.pool {
-            // Under state lock, commit current if it has pending work and swap to a fresh one.
-            let to_wait: Vec<CommandBuffer> = {
-                // Ensure no active encoder is still encoding on this entry.
-                let _guard = entry
-                    .semaphore
-                    .wait_until(|s| matches!(s, CommandStatus::Available));
+            // Wait for any active encoding to finish, then drop the guard immediately.
+            // We must NOT hold the semaphore guard while calling commit_swap_locked, because
+            // commit_swap_locked -> end_encoding -> signal_encoding_ended tries to re-lock it.
 
-                let mut state = entry.state.lock()?;
+            let to_wait: Vec<CommandBuffer> = {
+                let mut state = {
+                    let _guard = entry
+                        .semaphore
+                        .wait_until(|s| matches!(s, CommandStatus::Available));
+
+                    entry.state.lock()?
+
+                    // semiphore guard is dropped when state guard is acquired.
+                    // must drop before `commit_swap_locked` as `end_encoding` requires locking the same guard.
+                };
 
                 if entry.compute_count.load(Ordering::Acquire) > 0 {
                     self.commit_swap_locked(&entry, &mut state, 0)?;
@@ -205,11 +240,12 @@ impl Commands {
     /// Commits any pending work and moves current buffers to in-flight.
     pub fn flush(&self) -> Result<(), MetalKernelError> {
         for entry in &self.pool {
-            let _guard = entry
+            let guard = entry
                 .semaphore
                 .wait_until(|s| matches!(s, CommandStatus::Available));
 
             let mut state = entry.state.lock()?;
+            drop(guard);
 
             if entry.compute_count.load(Ordering::Acquire) > 0 {
                 self.commit_swap_locked(&entry, &mut state, 0)?;
@@ -227,6 +263,11 @@ impl Commands {
         state: &mut EntryState,
         reset_to: usize,
     ) -> Result<(), MetalKernelError> {
+        // End the open encoder before committing the command buffer
+        if let Some(enc) = state.current_encoder.take() {
+            enc.end_encoding();
+        }
+
         state.current.commit();
         let new_cb = create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
         let old_cb = std::mem::replace(&mut state.current, new_cb);
