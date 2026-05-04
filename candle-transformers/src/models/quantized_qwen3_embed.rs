@@ -1,19 +1,5 @@
 //! Qwen3 embedding model with quantization support.
-//!
-//! Adapted from the Qwen3 causal LM implementation for embedding tasks.
-//! Key differences from `quantized_qwen3`:
-//! - **No KV cache** — single forward pass per input, no autoregressive generation
-//! - **No lm_head** — returns hidden states, not vocabulary logits
-//! - **Last-token pooling** — extracts the final token's hidden state (the only
-//!   position that has attended to the entire input under causal masking)
-//! - **L2 normalization** to unit vectors
-//!
-//! The model architecture is `Qwen3ForCausalLM` — causal attention is preserved
-//! to match the fine-tuning regime.
-//!
-//! References:
-//! - [Qwen3-Embedding-8B](https://huggingface.co/Qwen/Qwen3-Embedding-8B)
-//!
+
 use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
@@ -119,7 +105,6 @@ impl RotaryEmbedding {
         })
     }
 
-    /// Apply RoPE (q, k shape: B x H x L x D)
     pub fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
@@ -184,7 +169,6 @@ impl AttentionWeights {
         })
     }
 
-    /// Causal attention — no KV cache (single pass, full sequence at once).
     fn forward(&self, x: &Tensor, attn_mask: Option<&Tensor>) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b, l, _) = x.dims3()?;
@@ -203,7 +187,6 @@ impl AttentionWeights {
             .reshape((b, l, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        // Per-head RMSNorm
         let q_flat = q.flatten(0, 2)?;
         let k_flat = k.flatten(0, 2)?;
         let q_flat = self.q_norm.forward(&q_flat)?;
@@ -211,14 +194,11 @@ impl AttentionWeights {
         let q = q_flat.reshape((b, self.num_heads, l, self.head_dim))?;
         let k = k_flat.reshape((b, self.num_kv_heads, l, self.head_dim))?;
 
-        // RoPE at offset 0 (full sequence, no autoregressive stepping)
         let (q, k) = self.rotary_emb.apply(&q, &k, 0)?;
 
-        // GQA repeat
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        // Scaled dot-product attention with causal + optional padding mask
         let scale = 1.0 / (self.head_dim as f64).sqrt();
         let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
         if let Some(m) = attn_mask {
@@ -356,7 +336,6 @@ impl EmbeddingModel {
         }
 
         let norm = gg.rms_norm("output_norm.weight", rms_norm_eps)?;
-        // No lm_head — we extract hidden states for embedding, not vocabulary logits.
 
         let span = tracing::span!(tracing::Level::TRACE, "embedding-model");
         Ok(Self {
@@ -370,8 +349,6 @@ impl EmbeddingModel {
         })
     }
 
-    /// Build a causal attention mask, optionally combined with a padding mask.
-    /// Returns shape (B, 1, L, L) with 0.0 for allowed positions and -inf for masked.
     fn causal_mask(&self, b: usize, seq_len: usize) -> Result<Tensor> {
         let minf = f32::NEG_INFINITY;
         let mask: Vec<_> = (0..seq_len)
@@ -382,13 +359,11 @@ impl EmbeddingModel {
             .to_dtype(self.dtype)
     }
 
-    /// Forward pass returning all hidden states: (B, L, hidden_size).
     pub fn forward_hidden(&self, input: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
 
-        // Always apply causal mask (matches Qwen3ForCausalLM training)
         let causal = if l == 1 {
             None
         } else {
@@ -401,22 +376,14 @@ impl EmbeddingModel {
         self.norm.forward(&h)
     }
 
-    /// Embed input tokens: forward → last-token pooling → L2-normalize.
-    ///
-    /// Under causal attention, only the last token has attended to the entire
-    /// input sequence, making it the natural summary vector.
-    /// Returns (B, hidden_size) unit vectors.
     pub fn forward(&self, input: &Tensor) -> Result<Tensor> {
         let (_, l) = input.dims2()?;
         let hidden = self.forward_hidden(input)?;
-        // Last-token pooling: take the hidden state at position L-1
         let last = hidden.narrow(1, l - 1, 1)?.squeeze(1)?;
         self.l2_normalize(&last)
     }
 
-    /// L2-normalize vectors to unit length.
     fn l2_normalize(&self, x: &Tensor) -> Result<Tensor> {
-        // x: (B, D)
         let norm = x.sqr()?.sum_keepdim(1)?.sqrt()?;
         let norm = norm.clamp(1e-12f64, f64::MAX)?;
         x.broadcast_div(&norm)

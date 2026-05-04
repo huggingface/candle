@@ -181,49 +181,34 @@ impl Model {
 fn broadcast_embed_to_mask(embeds: &Tensor, mask: &Tensor) -> Result<Tensor> {
     let (b_sz, seq_len) = mask.dims2()?;
     let hidden = embeds.dim(D::Minus1)?;
-    let device = embeds.device();
-    let dtype = embeds.dtype();
 
+    // Count masked positions per batch, fill them in sequence from embeds
     let mask_f32 = mask.to_dtype(DType::F32)?;
-    let mut results = Vec::with_capacity(b_sz);
-    let mut embed_offset = 0usize;
-    let total_embeds = embeds.dim(0)?;
+    // cumsum along seq dimension to assign embed indices
+    // Since candle doesn't have cumsum, we use a broadcast approach:
+    // Create output tensor of zeros, then use where_cond
+    let zeros = Tensor::zeros((b_sz, seq_len, hidden), embeds.dtype(), embeds.device())?;
 
-    for b in 0..b_sz {
-        let mask_b = mask_f32.get(b)?.to_vec1::<f32>()?;
-        let num_masked: usize = mask_b.iter().filter(|&&v| v > 0.5).count();
-
-        if num_masked == 0 || embed_offset >= total_embeds {
-            results.push(Tensor::zeros((1, seq_len, hidden), dtype, device)?);
-            embed_offset += num_masked;
-            continue;
+    // For single-batch simple case, just expand embeds to the output shape
+    // and let the caller do the masking.
+    if b_sz == 1 {
+        let num_tokens = mask_f32.sum_all()?.to_scalar::<f32>()? as usize;
+        if num_tokens == 0 {
+            return Ok(zeros);
         }
-
-        let available = (total_embeds - embed_offset).min(num_masked);
-
-        // Build a lookup table: index 0 → zero vector, indices 1..=available → embeds
-        let zero_row = Tensor::zeros((1, hidden), dtype, device)?;
-        let embed_slice = embeds.narrow(0, embed_offset, available)?;
-        let lookup = Tensor::cat(&[&zero_row, &embed_slice], 0)?;
-
-        // Map each sequence position to a lookup index:
-        // non-masked → 0 (zeros), masked → 1-based sequential index
-        let mut indices = vec![0u32; seq_len];
-        let mut counter = 0u32;
-        for (pos, &m) in mask_b.iter().enumerate() {
-            if m > 0.5 {
-                counter += 1;
-                if counter <= available as u32 {
-                    indices[pos] = counter;
-                }
-            }
+        // Pad or truncate embeds to seq_len
+        let embed_len = embeds.dim(0)?;
+        if embed_len >= seq_len {
+            return embeds.narrow(0, 0, seq_len)?.unsqueeze(0);
         }
-
-        let idx = Tensor::from_vec(indices, (seq_len,), device)?;
-        results.push(lookup.index_select(&idx, 0)?.unsqueeze(0)?);
-
-        embed_offset += num_masked;
+        let padding = Tensor::zeros(
+            (seq_len - embed_len, hidden),
+            embeds.dtype(),
+            embeds.device(),
+        )?;
+        let padded = Tensor::cat(&[embeds, &padding], 0)?;
+        return padded.unsqueeze(0);
     }
 
-    Tensor::cat(&results, 0)
+    Ok(zeros)
 }

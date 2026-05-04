@@ -122,7 +122,7 @@ impl ProportionalRotaryEmbedding {
             inv_freq_vec.push(1f32 / (rope_theta as f32).powf((2 * i) as f32 / head_dim as f32));
         }
         // Pad with zeros for non-rotated dimensions -> cos=1, sin=0 -> identity
-        inv_freq_vec.resize(half_dim, 0f32);
+        inv_freq_vec.extend(std::iter::repeat_n(0f32, half_dim - rope_angles));
 
         let inv_freq = Tensor::from_vec(inv_freq_vec, (1, half_dim), dev)?;
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
@@ -207,37 +207,6 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
     unimplemented!("compile with '--features flash-attn'")
 }
 
-#[cfg(feature = "flash-attn")]
-fn flash_attn_windowed(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    window_size_left: Option<usize>,
-    window_size_right: Option<usize>,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn_windowed(
-        q,
-        k,
-        v,
-        softmax_scale,
-        window_size_left,
-        window_size_right,
-    )
-}
-
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn_windowed(
-    _: &Tensor,
-    _: &Tensor,
-    _: &Tensor,
-    _: f32,
-    _: Option<usize>,
-    _: Option<usize>,
-) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
-}
-
 // ── KvCache ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -262,7 +231,6 @@ struct Attention {
     head_dim: usize,
     rms_norm_eps: f64,
     is_sliding: bool,
-    sliding_window: usize,
     rotary_emb_global: Arc<ProportionalRotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
     kv_cache: KvCache,
@@ -325,7 +293,6 @@ impl Attention {
             head_dim,
             rms_norm_eps: cfg.rms_norm_eps,
             is_sliding,
-            sliding_window: cfg.effective_sliding_window(),
             rotary_emb_global,
             rotary_emb_local,
             kv_cache,
@@ -390,12 +357,7 @@ impl Attention {
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
             let scale = 1f32 / (self.head_dim as f32).sqrt();
-            if self.is_sliding {
-                flash_attn_windowed(&q, &k, &v, scale, Some(self.sliding_window), Some(0))?
-                    .transpose(1, 2)?
-            } else {
-                flash_attn(&q, &k, &v, scale, mask.is_some())?.transpose(1, 2)?
-            }
+            flash_attn(&q, &k, &v, scale, mask.is_some())?.transpose(1, 2)?
         } else {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;

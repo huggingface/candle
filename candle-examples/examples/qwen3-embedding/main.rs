@@ -1,16 +1,4 @@
-//! Qwen3-Embedding: embed procedure descriptions into 4096-dim vectors using GGUF.
-//!
-//! Reads `enriched_descriptions.jsonl` (one JSON object per line with an
-//! `english_description` field), runs each description through Qwen3-Embedding-8B
-//! (quantized GGUF), mean-pools + L2-normalizes the hidden states, and writes
-//! the result as a numpy-compatible `.npy` file of shape `(N, 4096)`.
-//!
-//! Usage:
-//! ```bash
-//! cargo run --example qwen3-embedding --release --features cuda -- \
-//!     --input enriched_descriptions.jsonl \
-//!     --output enriched_embeddings.npy
-//! ```
+//! Qwen3-Embedding example: embed JSONL text fields into vectors using a GGUF model.
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -34,72 +22,56 @@ const DEFAULT_GGUF_FILE: &str = "Qwen3-Embedding-8B-Q4_K_M.gguf";
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Embed text using Qwen3-Embedding (GGUF)")]
 struct Args {
-    /// Input JSONL file with an `english_description` field per line.
     #[arg(long)]
     input: String,
 
-    /// Output path for the .npy embedding matrix (float32, shape N×4096).
     #[arg(long, default_value = "enriched_embeddings.npy")]
     output: String,
 
-    /// GGUF model file path (downloads from HuggingFace if not provided).
     #[arg(long)]
     model: Option<String>,
 
-    /// Tokenizer file path (downloads from HuggingFace if not provided).
     #[arg(long)]
     tokenizer: Option<String>,
 
-    /// HuggingFace model ID for downloading the tokenizer.
     #[arg(long, default_value = DEFAULT_MODEL_ID)]
     model_id: String,
 
-    /// HuggingFace GGUF repo for downloading the model weights.
     #[arg(long, default_value = DEFAULT_GGUF_REPO)]
     gguf_repo: String,
 
-    /// GGUF filename within the repo.
     #[arg(long, default_value = DEFAULT_GGUF_FILE)]
     gguf_file: String,
 
-    /// Run on CPU rather than GPU.
     #[arg(long)]
     cpu: bool,
 
-    /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
 
-    /// Maximum sequence length for tokenization (longer inputs are truncated).
     #[arg(long, default_value_t = 8192)]
     max_seq_len: usize,
 
-    /// JSON field to embed (defaults to english_description).
     #[arg(long, default_value = "english_description")]
     field: String,
 
-    /// Instruction prefix for embedding (Qwen3-Embedding uses task instructions).
     #[arg(long)]
     instruct: Option<String>,
 
-    /// Log progress every N descriptions.
     #[arg(long, default_value_t = 100)]
     log_every: usize,
 }
 
-/// Extract the target text field from a JSONL line.
-/// Uses string search rather than full JSON parsing to handle non-standard
-/// values like NaN that appear in numeric fields we don't need.
+// String-based field extraction tolerates non-standard JSON values (e.g. NaN)
+// that may appear in unrelated numeric fields on the same line.
 fn extract_field(line: &str, field: &str) -> Option<String> {
-    // Look for "field": "value" pattern
     let key = format!("\"{}\":", field);
     let start = line.find(&key)? + key.len();
     let rest = &line[start..].trim_start();
     if !rest.starts_with('"') {
         return None;
     }
-    let rest = &rest[1..]; // skip opening quote
-                           // Find closing quote (handle escaped quotes)
+    let rest = &rest[1..];
     let mut chars = rest.chars();
     let mut value = String::new();
     loop {
@@ -113,7 +85,6 @@ fn extract_field(line: &str, field: &str) -> Option<String> {
                     't' => value.push('\t'),
                     'r' => value.push('\r'),
                     'u' => {
-                        // Unicode escape: \uXXXX
                         let hex: String = chars.by_ref().take(4).collect();
                         if let Ok(cp) = u32::from_str_radix(&hex, 16) {
                             if let Some(c) = char::from_u32(cp) {
@@ -162,39 +133,29 @@ fn get_model_path(args: &Args) -> Result<std::path::PathBuf> {
     }
 }
 
-/// Write a 2D f32 array as a NumPy .npy file (version 1.0).
 fn write_npy(path: &str, data: &[f32], rows: usize, cols: usize) -> Result<()> {
     let mut f = std::fs::File::create(path)?;
 
-    // NumPy .npy format header
     let header = format!(
         "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {}), }}",
         rows, cols
     );
 
-    // Pad header to align data to 64 bytes
-    // Magic (6) + version (2) + header_len (2) + header + \n = multiple of 64
-    let prefix_len = 10; // magic(6) + version(2) + header_len(2)
-    let total = prefix_len + header.len() + 1; // +1 for trailing \n
+    let prefix_len = 10;
+    let total = prefix_len + header.len() + 1;
     let padding = (64 - (total % 64)) % 64;
-    let header_len = (header.len() + padding + 1) as u16; // +1 for \n
+    let header_len = (header.len() + padding + 1) as u16;
 
-    // Magic number
     f.write_all(&[0x93])?;
     f.write_all(b"NUMPY")?;
-    // Version 1.0
     f.write_all(&[1, 0])?;
-    // Header length (little-endian u16)
     f.write_all(&header_len.to_le_bytes())?;
-    // Header string
     f.write_all(header.as_bytes())?;
-    // Padding spaces
     for _ in 0..padding {
         f.write_all(b" ")?;
     }
     f.write_all(b"\n")?;
 
-    // Data: raw little-endian f32
     let bytes: &[u8] =
         unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4) };
     f.write_all(bytes)?;
@@ -225,7 +186,6 @@ fn main() -> Result<()> {
         None
     };
 
-    // ── Load model ──────────────────────────────────────────────────────
     let model_path = get_model_path(&args)?;
     eprintln!("Loading model from {}", model_path.display());
     let start = std::time::Instant::now();
@@ -254,10 +214,8 @@ fn main() -> Result<()> {
         start.elapsed().as_secs_f64(),
     );
 
-    // ── Load tokenizer ──────────────────────────────────────────────────
     let tokenizer = get_tokenizer(&args)?;
 
-    // ── Read input descriptions ─────────────────────────────────────────
     let input_file =
         std::fs::File::open(&args.input).with_context(|| format!("Cannot open {}", args.input))?;
     let reader = std::io::BufReader::new(input_file);
@@ -287,7 +245,6 @@ fn main() -> Result<()> {
         anyhow::bail!("No descriptions found in input file");
     }
 
-    // ── Embed descriptions one at a time ────────────────────────────────
     let hidden_size = model.hidden_size();
     let n = descriptions.len();
     let mut all_embeddings: Vec<f32> = Vec::with_capacity(n * hidden_size);
@@ -295,13 +252,11 @@ fn main() -> Result<()> {
     let embed_start = std::time::Instant::now();
 
     for (i, desc) in descriptions.iter().enumerate() {
-        // Optionally prepend instruction
         let text = match &args.instruct {
             Some(inst) => format!("Instruct: {inst}\nQuery: {desc}"),
             None => desc.clone(),
         };
 
-        // Tokenize
         let encoding = tokenizer
             .encode(text.as_str(), true)
             .map_err(|e| anyhow::anyhow!("Tokenization error: {e}"))?;
@@ -314,7 +269,6 @@ fn main() -> Result<()> {
         let input = Tensor::new(&token_ids[..], &device)?.unsqueeze(0)?;
         let embedding = model.forward(&input)?;
 
-        // Extract the embedding vector (1, hidden_size) → flat f32 vec
         let emb_vec = embedding
             .squeeze(0)?
             .to_dtype(candle::DType::F32)?
@@ -329,12 +283,11 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── Write output ────────────────────────────────────────────────────
     write_npy(&args.output, &all_embeddings, n, hidden_size)?;
 
     let total_elapsed = embed_start.elapsed().as_secs_f64();
     eprintln!(
-        "Done: {} embeddings ({}×{}) written to {} in {:.1}s ({:.1} desc/s)",
+        "Done: {} embeddings ({}x{}) written to {} in {:.1}s ({:.1} desc/s)",
         n,
         n,
         hidden_size,
