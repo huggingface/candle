@@ -1,45 +1,7 @@
-//! Shuffling helpers for training loops.
-//!
-//! Two entry points:
-//!
-//! - [`shuffled_indices`] returns a freshly-shuffled `Vec<usize>` for a given
-//!   length and seed. Useful for building per-epoch shuffled orderings of a
-//!   fixed dataset without copying the underlying rows.
-//! - [`Shuffled`] is an iterator adaptor that collects the inner iterator,
-//!   shuffles it once, and yields items in shuffled order. Use this when
-//!   you want a one-shot shuffled pass over an iterator.
-//!
-//! Both are seeded deterministically so reruns of the same training script
-//! produce identical orderings.
-//!
-//! # Example
-//!
-//! ```
-//! use candle_datasets::shuffle::{shuffled_indices, Shuffled};
-//!
-//! // Per-epoch index shuffle: same seed → same order.
-//! let a = shuffled_indices(10, 42);
-//! let b = shuffled_indices(10, 42);
-//! assert_eq!(a, b);
-//! assert_eq!(a.len(), 10);
-//!
-//! // Iterator adaptor: one-shot shuffled pass.
-//! let items = vec![1u32, 2, 3, 4, 5];
-//! let shuffled: Vec<u32> = Shuffled::new(items.into_iter(), 7).collect();
-//! assert_eq!(shuffled.len(), 5);
-//! ```
-
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 
-/// Return a shuffled `Vec<usize>` containing every index in `0..len`.
-///
-/// Uses [`rand::rngs::StdRng`] seeded from `seed`, so the same `(len, seed)`
-/// pair always produces the same ordering. This is the standard building
-/// block for per-epoch shuffling of a fixed training set: pass `seed =
-/// base_seed + epoch` to get a fresh ordering each epoch while keeping runs
-/// reproducible.
 pub fn shuffled_indices(len: usize, seed: u64) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..len).collect();
     let mut rng = StdRng::seed_from_u64(seed);
@@ -47,30 +9,11 @@ pub fn shuffled_indices(len: usize, seed: u64) -> Vec<usize> {
     indices
 }
 
-/// Iterator adaptor that drains the inner iterator into a `Vec`, shuffles it
-/// once using a seeded PRNG, and yields items in shuffled order.
-///
-/// The inner iterator is consumed entirely on construction, so `Shuffled` is
-/// not suitable for unbounded or very large iterators — use
-/// [`shuffled_indices`] plus indexed access in that case.
-///
-/// # Example
-///
-/// ```
-/// use candle_datasets::shuffle::Shuffled;
-///
-/// let v: Vec<i32> = (0..100).collect();
-/// let s1: Vec<i32> = Shuffled::new(v.iter().copied(), 123).collect();
-/// let s2: Vec<i32> = Shuffled::new((0..100), 123).collect();
-/// assert_eq!(s1, s2); // same seed, same order
-/// ```
 pub struct Shuffled<T> {
     items: std::vec::IntoIter<T>,
 }
 
 impl<T> Shuffled<T> {
-    /// Collect `inner` into a `Vec`, shuffle it with a seeded PRNG, and
-    /// return an iterator over the shuffled items.
     pub fn new<I: IntoIterator<Item = T>>(inner: I, seed: u64) -> Self {
         let mut items: Vec<T> = inner.into_iter().collect();
         let mut rng = StdRng::seed_from_u64(seed);
@@ -80,12 +23,10 @@ impl<T> Shuffled<T> {
         }
     }
 
-    /// Number of items remaining in the shuffled iterator.
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    /// `true` when the iterator has been fully consumed.
     pub fn is_empty(&self) -> bool {
         self.items.len() == 0
     }
@@ -124,8 +65,6 @@ mod tests {
 
     #[test]
     fn shuffled_indices_differs_by_seed() {
-        // Probabilistically this could fail with equal orderings, but with
-        // 20! possible permutations it effectively cannot.
         assert_ne!(shuffled_indices(20, 1), shuffled_indices(20, 2));
     }
 

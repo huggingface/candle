@@ -1,81 +1,9 @@
-//! Variable-length sequence padding and batch collation.
-//!
-//! Training with variable-length inputs (text sequences, speech frames,
-//! ragged node features) normally requires two operations that candle does
-//! not ship out of the box:
-//!
-//! 1. Pad each sequence in a batch to the same length along the sequence
-//!    axis, using a fill value for the padded positions.
-//! 2. Produce a matching attention mask (1 for real tokens, 0 for padding)
-//!    so downstream layers can ignore the fill.
-//!
-//! This module provides the two operations for the common shapes:
-//!
-//! | Helper                   | Input shape per item | Output shape         | Mask shape |
-//! |--------------------------|----------------------|----------------------|------------|
-//! | [`pad_and_stack_1d`]     | `(T_i,)`             | `(B, T_max)`         | `(B, T_max)` |
-//! | [`pad_and_stack_2d`]     | `(T_i, D)`           | `(B, T_max, D)`      | `(B, T_max)` |
-//!
-//! Both helpers allocate the padded tensor on the same device as the input
-//! tensors and require all inputs to share the same dtype, device, and
-//! trailing shape. The mask is always `U8` (0 or 1) on the same device.
-//!
-//! # Example
-//!
-//! ```no_run
-//! use candle::{Device, Tensor};
-//! use candle_datasets::pad::pad_and_stack_1d;
-//!
-//! let dev = Device::Cpu;
-//! let a = Tensor::new(&[1.0f32, 2.0, 3.0], &dev).unwrap();
-//! let b = Tensor::new(&[4.0f32, 5.0], &dev).unwrap();
-//! let c = Tensor::new(&[6.0f32], &dev).unwrap();
-//! let (padded, mask) = pad_and_stack_1d(&[a, b, c], 0.0).unwrap();
-//! assert_eq!(padded.dims(), &[3, 3]);
-//! assert_eq!(mask.dims(), &[3, 3]);
-//! ```
-
 use candle::{Result, Tensor};
 
-/// Pad a batch of 1D tensors to the same length and stack them along a new
-/// batch axis, returning `(padded, mask)`.
-///
-/// - `items`: non-empty slice of 1D tensors. Each tensor may have a
-///   different length along its single axis, but all must share the same
-///   dtype and device.
-/// - `pad_value`: scalar value used to fill padded positions.
-///
-/// Returns:
-/// - `padded`: `(B, T_max)` tensor where `B = items.len()` and
-///   `T_max = max(item.dims()[0])`. Real data sits in `[i, 0..T_i]`,
-///   `pad_value` sits in `[i, T_i..T_max]`.
-/// - `mask`: `(B, T_max)` `U8` tensor with `1` at real positions and `0` at
-///   padded positions.
-///
-/// # Errors
-///
-/// Returns an error if `items` is empty, if any item is not 1D, or if the
-/// dtypes/devices are not uniform across the batch.
 pub fn pad_and_stack_1d(items: &[Tensor], pad_value: f64) -> Result<(Tensor, Tensor)> {
     pad_and_stack_impl(items, pad_value, 1, "pad_and_stack_1d")
 }
 
-/// Pad a batch of 2D tensors to the same first-axis length and stack them
-/// along a new batch axis, returning `(padded, mask)`.
-///
-/// - `items`: non-empty slice of 2D tensors of shape `(T_i, D)`. The second
-///   dimension `D` and dtype/device must match across the batch.
-/// - `pad_value`: scalar value used to fill padded positions.
-///
-/// Returns:
-/// - `padded`: `(B, T_max, D)` tensor.
-/// - `mask`: `(B, T_max)` `U8` tensor — one entry per position along the
-///   sequence axis, shared across all `D` features.
-///
-/// # Errors
-///
-/// Returns an error if `items` is empty, if any item is not 2D, if
-/// trailing-dim `D` disagrees, or if dtypes/devices disagree.
 pub fn pad_and_stack_2d(items: &[Tensor], pad_value: f64) -> Result<(Tensor, Tensor)> {
     pad_and_stack_impl(items, pad_value, 2, "pad_and_stack_2d")
 }
@@ -240,7 +168,6 @@ mod tests {
         assert_eq!(m_vec[0], vec![1, 1, 1]);
         assert_eq!(m_vec[1], vec![1, 1, 0]);
 
-        // Last row of b was padded with zeros.
         let padded_b: Vec<Vec<f32>> = p.get(1).unwrap().to_vec2().unwrap();
         assert_eq!(padded_b[2], vec![0.0, 0.0]);
     }

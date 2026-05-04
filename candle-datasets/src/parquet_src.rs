@@ -1,55 +1,3 @@
-//! Generic parquet row reader for training datasets.
-//!
-//! [`ParquetSource`] wraps a parquet file and yields one strongly-typed row
-//! at a time. Users plug in their own row struct via the [`FromParquetRow`]
-//! trait, which converts a `parquet::record::Row` into the target type.
-//!
-//! This is deliberately unopinionated about what rows look like — it stays
-//! out of the business of DataFrame manipulation. For heavy-duty dataframe
-//! work on the parquet contents, use `polars` or `arrow-rs` directly; for a
-//! lean "iterate rows and build tensors" path, use this module.
-//!
-//! # Example
-//!
-//! ```no_run
-//! use candle::Result;
-//! use candle_datasets::parquet_src::{FromParquetRow, ParquetSource};
-//! use parquet::record::Row;
-//!
-//! struct Example {
-//!     id: i64,
-//!     label: i32,
-//! }
-//!
-//! impl FromParquetRow for Example {
-//!     fn from_row(row: &Row) -> Result<Self> {
-//!         let mut id = None;
-//!         let mut label = None;
-//!         for (name, field) in row.get_column_iter() {
-//!             match (name.as_str(), field) {
-//!                 ("id", parquet::record::Field::Long(v)) => id = Some(*v),
-//!                 ("label", parquet::record::Field::Int(v)) => label = Some(*v),
-//!                 _ => {}
-//!             }
-//!         }
-//!         Ok(Self {
-//!             id: id.ok_or_else(|| candle::Error::Msg("missing id".into()))?,
-//!             label: label.ok_or_else(|| candle::Error::Msg("missing label".into()))?,
-//!         })
-//!     }
-//! }
-//!
-//! fn run() -> Result<()> {
-//!     let src: ParquetSource<Example> = ParquetSource::open("data.parquet")?;
-//!     for row in src.iter()? {
-//!         let example = row?;
-//!         let _ = (example.id, example.label);
-//!         // ... build tensors, append to batch, etc.
-//!     }
-//!     Ok(())
-//! }
-//! ```
-
 use std::fs::File;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -59,23 +7,10 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::record::reader::RowIter as ParquetRowIter;
 use parquet::record::Row;
 
-/// Trait implemented by user row types so [`ParquetSource`] knows how to
-/// decode one parquet record into that type.
-///
-/// Implementations typically walk `row.get_column_iter()` and match on
-/// `parquet::record::Field` variants. Return a [`candle::Error::Msg`] for
-/// missing or mis-typed columns; the error surfaces through the iterator as
-/// a `Result::Err`.
 pub trait FromParquetRow: Sized {
     fn from_row(row: &Row) -> Result<Self>;
 }
 
-/// A parquet file opened for row-by-row reading, parameterized by the target
-/// row type `T`.
-///
-/// Opens and parses the file footer on construction. Reading itself is lazy
-/// — call [`ParquetSource::iter`] to get an iterator that decodes rows on
-/// demand.
 pub struct ParquetSource<T> {
     path: PathBuf,
     num_rows: usize,
@@ -83,11 +18,6 @@ pub struct ParquetSource<T> {
 }
 
 impl<T: FromParquetRow> ParquetSource<T> {
-    /// Open a parquet file and read its footer to determine the row count.
-    ///
-    /// The file is re-opened for each call to [`ParquetSource::iter`] so a
-    /// single `ParquetSource` can be iterated multiple times (useful for
-    /// multiple training epochs).
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path)?;
@@ -105,23 +35,14 @@ impl<T: FromParquetRow> ParquetSource<T> {
         })
     }
 
-    /// Total number of rows in the parquet file.
     pub fn num_rows(&self) -> usize {
         self.num_rows
     }
 
-    /// Return a fresh iterator over all rows in the file.
-    ///
-    /// The file is re-opened each time this method is called, so iterating
-    /// twice is safe (e.g. for two training epochs) at the cost of one
-    /// syscall and a new parquet metadata parse per epoch.
     pub fn iter(&self) -> Result<RowIter<T>> {
         let file = File::open(&self.path)?;
         let reader = SerializedFileReader::new(file)
             .map_err(|e| Error::Msg(format!("parquet open error: {e}")))?;
-        // `from_file_into` takes ownership of the reader via `Box<dyn FileReader>`
-        // so the resulting `RowIter` is self-contained and has no borrow of
-        // the `ParquetSource`.
         let inner = ParquetRowIter::from_file_into(Box::new(reader));
         Ok(RowIter {
             inner,
@@ -130,8 +51,6 @@ impl<T: FromParquetRow> ParquetSource<T> {
     }
 }
 
-/// Iterator yielded by [`ParquetSource::iter`]. Decodes one row at a time
-/// into `T` via [`FromParquetRow::from_row`].
 pub struct RowIter<T> {
     inner: ParquetRowIter<'static>,
     _marker: PhantomData<T>,
@@ -160,9 +79,6 @@ mod tests {
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// Unique temp path scoped to this test run; parent dir is created and
-    /// the file is removed on `Drop`. Avoids adding a dev-dependency on the
-    /// `tempfile` crate.
     struct TempPath(PathBuf);
 
     impl TempPath {

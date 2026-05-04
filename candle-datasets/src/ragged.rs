@@ -1,46 +1,3 @@
-//! Flat-ragged tensor cache backed by safetensors.
-//!
-//! [`RaggedCache`] stores a list of variable-length 2D tensors (shape
-//! `(T_i, D)`) as a single concatenated tensor plus an offsets array. This
-//! is the standard layout for caching per-sample token embeddings, audio
-//! frames, graph-node features, or any other ragged-sequence data that is
-//! expensive to compute but cheap to store.
-//!
-//! Layout on disk (safetensors, two tensors):
-//!
-//! | Key       | Shape          | DType              | Meaning                |
-//! |-----------|----------------|--------------------|------------------------|
-//! | `flat`    | `(total_T, D)` | user-chosen        | concatenated features  |
-//! | `offsets` | `(n_items+1,)` | `I64`              | cumulative row counts  |
-//!
-//! Item `i` is recovered by slicing `flat[offsets[i]..offsets[i+1], :]`.
-//!
-//! All items in a cache must share the same trailing dimension `D`, dtype,
-//! and device. Zero-length items (`T_i == 0`) are supported — their slice is
-//! an empty tensor.
-//!
-//! # Example
-//!
-//! ```no_run
-//! use candle::{Device, Tensor};
-//! use candle_datasets::ragged::RaggedCache;
-//!
-//! let dev = Device::Cpu;
-//! let items = vec![
-//!     Tensor::zeros((7, 64), candle::DType::F32, &dev).unwrap(),
-//!     Tensor::zeros((12, 64), candle::DType::F32, &dev).unwrap(),
-//!     Tensor::zeros((3, 64), candle::DType::F32, &dev).unwrap(),
-//! ];
-//! let cache = RaggedCache::from_items(&items).unwrap();
-//! cache.save("embeddings.safetensors").unwrap();
-//!
-//! // Later, in another process:
-//! let cache = RaggedCache::load("embeddings.safetensors", &dev).unwrap();
-//! assert_eq!(cache.len(), 3);
-//! let item1 = cache.get(1).unwrap();
-//! assert_eq!(item1.dims(), &[12, 64]);
-//! ```
-
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -49,11 +6,6 @@ use candle::{safetensors, Device, Result, Tensor};
 const KEY_FLAT: &str = "flat";
 const KEY_OFFSETS: &str = "offsets";
 
-/// A concatenated store of variable-length 2D tensors indexable by item
-/// position.
-///
-/// Build from a slice of tensors via [`RaggedCache::from_items`], persist via
-/// [`RaggedCache::save`], and later rehydrate with [`RaggedCache::load`].
 pub struct RaggedCache {
     flat: Tensor,
     offsets: Vec<i64>,
@@ -74,12 +26,6 @@ impl std::fmt::Debug for RaggedCache {
 }
 
 impl RaggedCache {
-    /// Build a cache by concatenating `items` along axis 0.
-    ///
-    /// All items must:
-    /// - be 2D (shape `(T_i, D)`)
-    /// - share the same trailing dim `D`
-    /// - share the same dtype and device
     pub fn from_items(items: &[Tensor]) -> Result<Self> {
         if items.is_empty() {
             let device = Device::Cpu;
@@ -133,8 +79,6 @@ impl RaggedCache {
             offsets.push(cumulative);
         }
 
-        // Concatenating zero-length tensors with Tensor::cat is a no-op the
-        // candle backend doesn't always love; skip empties.
         let non_empty: Vec<&Tensor> = items.iter().filter(|t| t.dims()[0] > 0).collect();
         let flat = if non_empty.is_empty() {
             Tensor::zeros((0, feature_dim), dtype, &device)?
@@ -145,17 +89,14 @@ impl RaggedCache {
         Ok(Self { flat, offsets })
     }
 
-    /// Number of items stored.
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
     }
 
-    /// `true` when the cache holds no items.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Feature dimension `D`, or 0 if the cache is empty.
     pub fn feature_dim(&self) -> usize {
         let dims = self.flat.dims();
         if dims.len() < 2 {
@@ -165,10 +106,6 @@ impl RaggedCache {
         }
     }
 
-    /// Retrieve item `idx` as a view into the flat storage.
-    ///
-    /// The returned tensor shares storage with the underlying `flat` tensor
-    /// when possible (it is produced via [`Tensor::narrow`]).
     pub fn get(&self, idx: usize) -> Result<Tensor> {
         if idx >= self.len() {
             candle::bail!(
@@ -181,16 +118,10 @@ impl RaggedCache {
         self.flat.narrow(0, start, end - start)
     }
 
-    /// Retrieve a batch of items by index. Empty `indices` yields an empty
-    /// `Vec`; out-of-range indices surface as an error.
     pub fn gather(&self, indices: &[usize]) -> Result<Vec<Tensor>> {
         indices.iter().map(|&i| self.get(i)).collect()
     }
 
-    /// Save the cache to a safetensors file.
-    ///
-    /// Writes two named tensors: `flat` (the concatenated storage) and
-    /// `offsets` (an `(n+1,)` `I64` tensor).
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let offsets_tensor =
             Tensor::from_slice(&self.offsets[..], (self.offsets.len(),), self.flat.device())?;
@@ -200,7 +131,6 @@ impl RaggedCache {
         safetensors::save(&map, path.as_ref())
     }
 
-    /// Load a cache from a safetensors file onto the given device.
     pub fn load<P: AsRef<Path>>(path: P, device: &Device) -> Result<Self> {
         let map = safetensors::load(path.as_ref(), device)?;
         let flat = map
