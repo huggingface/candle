@@ -1,6 +1,6 @@
 [book]
 authors = ["Nicolas Patry"]
 language = "en"
-multilingual = false
+# multilingual = false
 src = "src"
 title = "Candle Documentation"
