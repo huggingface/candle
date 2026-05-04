@@ -530,9 +530,7 @@ impl GraniteMoeHybrid {
         Ok(scaled_logits)
     }
 
-    /// Load with weight paths relative to `vb` (no "model." prefix added).
-    /// Use this when the VarBuilder already points to the model namespace,
-    /// e.g. `vb.pp("model.language_model")` for Granite4Vision.
+    /// Load assuming `vb` already points at the model namespace (no `model.` prefix added).
     pub fn load_inner(vb: VarBuilder, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?;

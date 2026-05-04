@@ -26,61 +26,47 @@ const END_OF_TEXT: u32 = 100257;
 #[derive(Parser, Debug)]
 #[command(about = "Granite 4.0 3B Vision: document data extraction")]
 struct Args {
-    /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,
 
-    /// Use bf16 precision (default: f32).
     #[arg(long)]
     bf16: bool,
 
-    /// The image file to process (PNG/JPG).
+    /// Image file (PNG/JPG).
     #[cfg_attr(not(feature = "pdf2image"), arg(long))]
     #[cfg_attr(feature = "pdf2image", arg(long, required_unless_present = "pdf"))]
     image: Option<String>,
 
-    /// PDF file to process (requires pdf2image feature and poppler).
+    /// PDF file (requires the `pdf2image` feature and system poppler).
     #[cfg(feature = "pdf2image")]
     #[arg(long, required_unless_present = "image")]
     pdf: Option<String>,
 
-    /// Page range for PDF (e.g. "7-8" or "7"). Defaults to all pages.
+    /// PDF page range (e.g. "7-8" or "7"). Defaults to all pages.
     #[cfg(feature = "pdf2image")]
     #[arg(long)]
     pages: Option<String>,
 
-    /// Path to merged model directory (base + LoRA merged).
-    /// Use merge_lora.py to prepare: python merge_lora.py --output merged/
     #[arg(long)]
     model_id: Option<String>,
 
-    /// Maximum number of tokens to generate.
     #[arg(long, default_value_t = 4096)]
     max_tokens: usize,
 
-    /// Sampling temperature (0.0 = greedy).
     #[arg(long, default_value_t = 0.0)]
     temperature: f64,
 
-    /// Task tag to use. One of: tables_json, tables_html, tables_otsl,
-    /// chart2csv, chart2code, chart2summary
+    /// Task tag: tables_json, tables_html, tables_otsl, chart2csv, chart2code, chart2summary.
     #[arg(long, default_value = "tables_json")]
     task: String,
 
-    /// Custom prompt (overrides --task).
     #[arg(long)]
     prompt: Option<String>,
 
-    /// Disable image tiling (process as single 384x384 tile).
     #[arg(long)]
     no_split: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Image preprocessing (LlavaNext-style AnyRes)
-// ---------------------------------------------------------------------------
-
-/// Resize image to fit within target dims (preserve aspect ratio), then pad to exact dims.
 fn resize_and_pad(img: &image::RgbImage, target_w: u32, target_h: u32) -> image::RgbImage {
     let (orig_w, orig_h) = (img.width(), img.height());
     let scale = f64::min(
@@ -92,7 +78,6 @@ fn resize_and_pad(img: &image::RgbImage, target_w: u32, target_h: u32) -> image:
 
     let resized = image::imageops::resize(img, new_w, new_h, image::imageops::FilterType::Lanczos3);
 
-    // Center-pad to target dimensions
     let mut padded = image::RgbImage::new(target_w, target_h);
     let offset_x = (target_w - new_w) / 2;
     let offset_y = (target_h - new_h) / 2;
@@ -100,7 +85,6 @@ fn resize_and_pad(img: &image::RgbImage, target_w: u32, target_h: u32) -> image:
     padded
 }
 
-/// Normalize an RGB image to tensor data: (3, H, W) with mean=0.5, std=0.5 → [-1, 1].
 fn normalize_to_chw(img: &image::RgbImage) -> Vec<f32> {
     let (w, h) = (img.width() as usize, img.height() as usize);
     let mut data = vec![0.0f32; 3 * h * w];
@@ -116,11 +100,8 @@ fn normalize_to_chw(img: &image::RgbImage) -> Vec<f32> {
 }
 
 struct PreprocessedImage {
-    /// (num_tiles, 3, tile_size, tile_size) - global thumbnail is tile[0] for multi-tile
     tiles: Vec<Vec<f32>>,
-    /// Number of image tokens needed for this image
     num_image_tokens: usize,
-    /// Original image dimensions (height, width)
     image_size: (usize, usize),
 }
 
@@ -134,11 +115,9 @@ fn preprocess_image(
     let image_size = (img.height() as usize, img.width() as usize);
 
     if no_split {
-        // Single tile: resize to tile_size x tile_size
         let resized = image::imageops::resize(img, ts, ts, image::imageops::FilterType::Lanczos3);
         let tile_data = normalize_to_chw(&resized);
         let ds_per_side = cfg.downsampled_patches_per_side();
-        // Single tile: features + newline
         let num_image_tokens = ds_per_side * ds_per_side + 1;
         return Ok(PreprocessedImage {
             tiles: vec![tile_data],
@@ -147,27 +126,23 @@ fn preprocess_image(
         });
     }
 
-    // AnyRes: find best resolution and tile
     let (best_h, best_w) = select_best_resolution(image_size, &cfg.image_grid_pinpoints);
     let grid_h = best_h / tile_size;
     let grid_w = best_w / tile_size;
 
     println!(
-        "Image: {}x{} → best resolution {}x{} ({grid_h}x{grid_w} tiles + global)",
+        "Image: {}x{} -> best resolution {}x{} ({grid_h}x{grid_w} tiles + global)",
         img.width(),
         img.height(),
         best_w,
         best_h,
     );
 
-    // Resize and pad to best resolution
     let padded = resize_and_pad(img, best_w as u32, best_h as u32);
 
-    // Global thumbnail (first tile)
     let global = image::imageops::resize(img, ts, ts, image::imageops::FilterType::Lanczos3);
     let mut tiles = vec![normalize_to_chw(&global)];
 
-    // Extract tiles (row-major order)
     for row in 0..grid_h {
         for col in 0..grid_w {
             let x0 = (col as u32) * ts;
@@ -177,7 +152,6 @@ fn preprocess_image(
         }
     }
 
-    // Calculate number of image tokens
     let ds = cfg.downsampled_patches_per_side();
     let base_features = ds * ds;
 
@@ -192,7 +166,6 @@ fn preprocess_image(
     })
 }
 
-/// Compute the number of unpadded features and newline features for a multi-tile image.
 fn compute_unpadded_features(
     orig_h: usize,
     orig_w: usize,
@@ -239,14 +212,9 @@ fn tiles_to_tensor(
     Ok(tensor.to_dtype(dtype)?)
 }
 
-// ---------------------------------------------------------------------------
-// Prompt construction (matches HuggingFace chat_template)
-// ---------------------------------------------------------------------------
-
 const SYSTEM_MESSAGE: &str =
     "You are a helpful assistant. Please ensure responses are professional, accurate, and safe.";
 
-/// Expand task tags into their full prompt text (matching the HF chat template).
 fn expand_task_tag(task: &str) -> &'static str {
     match task {
         "tables_json" => "Identify and extract the tabls schema\n Extruct the schema of all the tables in the image sorted according to the reading order.\nThe output must be a valid JSON object containing a list of dictionaries with the following structure:\n\n                {\n                    \"dimensions\": {\n                        \"rows\": <number of data rows (excluding header rows)>,\n                        \"columns\": <number of columns>,\n                        \"header_rows\": <number of header rows>,\n                        \"total_rows\": <total number of rows including headers>\n                    },\n                    \"cells\": [\n                        {\n                        \"row\": <row index starting at 1>,\n                        \"col\": <column index starting at 1>,\n                        \"colspan\": <number of columns spanned>,\n                        \"rowspan\": <number of rows spanned>,\n                        \"type\": \"<'header' or 'data'>\",\n                        \"header_level\": <header nesting level if type=header, else omit or null>,\n                        \"content\": \"<string content of the cell>\"\n                        },\n                        ...\n                    ]\n                }",
@@ -273,32 +241,25 @@ fn build_input_ids(
 
     let mut ids: Vec<u32> = Vec::new();
 
-    // <|start_of_role|>system<|end_of_role|>{system_message}<|end_of_text|>\n
     ids.push(START_OF_ROLE);
     ids.extend_from_slice(system_text.get_ids());
     ids.push(END_OF_ROLE);
     ids.extend_from_slice(system_msg.get_ids());
     ids.push(END_OF_TEXT);
-    // \n is token 198 for this tokenizer
     let newline = tokenizer.encode("\n", false).map_err(E::msg)?;
     ids.extend_from_slice(newline.get_ids());
 
-    // <|start_of_role|>user<|end_of_role|>
     ids.push(START_OF_ROLE);
     ids.extend_from_slice(user_text.get_ids());
     ids.push(END_OF_ROLE);
 
-    // <image>\n tokens
     ids.extend(std::iter::repeat_n(image_token_id, num_image_tokens));
 
-    // prompt text
     ids.extend_from_slice(prompt_enc.get_ids());
 
-    // <|end_of_text|>\n
     ids.push(END_OF_TEXT);
     ids.extend_from_slice(newline.get_ids());
 
-    // <|start_of_role|>assistant<|end_of_role|>
     ids.push(START_OF_ROLE);
     ids.extend_from_slice(assistant_text.get_ids());
     ids.push(END_OF_ROLE);
@@ -306,31 +267,21 @@ fn build_input_ids(
     Ok(ids)
 }
 
-// ---------------------------------------------------------------------------
-// LoRA merging
-// ---------------------------------------------------------------------------
-
-/// Load base model weights via mmap, merge LoRA adapter deltas, return a VarBuilder.
-///
-/// LoRA merge: merged_weight = base_weight + lora_B @ lora_A * (alpha / rank).
-/// For this model, alpha = rank = 256, so scale = 1.0.
+/// Merge LoRA adapter into base weights: merged = base + lora_B @ lora_A * (alpha / rank).
 fn merge_lora_and_load(
     base_paths: &[std::path::PathBuf],
     adapter_path: &std::path::Path,
     dtype: DType,
     device: &Device,
 ) -> Result<VarBuilder<'static>> {
-    // Load base tensors via mmap (minimal memory footprint)
     let base = unsafe { candle::safetensors::MmapedSafetensors::multi(base_paths)? };
 
-    // Load adapter tensors into memory (~900MB)
     let adapter = st::load(adapter_path, device)?;
 
-    // Read LoRA config: alpha/rank. For this model both are 256, scale = 1.0.
-    // We hardcode for now; a full implementation would parse adapter_config.json.
+    // Hardcoded for this model: alpha == rank == 256, so scale == 1.0. A full implementation
+    // would parse adapter_config.json.
     let scale = 1.0f64;
 
-    // Build mapping: base_weight_name → (lora_A_name, lora_B_name)
     let mut lora_map: HashMap<String, (String, String)> = HashMap::new();
     for name in adapter.keys() {
         if name.ends_with(".lora_A.weight") {
@@ -348,7 +299,6 @@ fn merge_lora_and_load(
         lora_map.len()
     );
 
-    // Load each base tensor, merge if LoRA exists, store in HashMap
     let tensor_names: Vec<String> = base.tensors().into_iter().map(|(n, _)| n).collect();
     let mut merged: HashMap<String, Tensor> = HashMap::with_capacity(tensor_names.len());
     let mut merge_count = 0;
@@ -359,7 +309,6 @@ fn merge_lora_and_load(
             if let (Some(lora_a), Some(lora_b)) =
                 (adapter.get(lora_a_name), adapter.get(lora_b_name))
             {
-                // Compute delta = lora_B @ lora_A in F32 for precision
                 let delta = lora_b
                     .to_dtype(DType::F32)?
                     .matmul(&lora_a.to_dtype(DType::F32)?)?;
@@ -383,10 +332,6 @@ fn merge_lora_and_load(
     println!("  Merged {merge_count} weight matrices with LoRA deltas.");
     Ok(VarBuilder::from_tensors(merged, dtype, device))
 }
-
-// ---------------------------------------------------------------------------
-// Page image loading (image file or PDF)
-// ---------------------------------------------------------------------------
 
 fn load_page_images(args: &Args) -> Result<Vec<DynamicImage>> {
     #[cfg(feature = "pdf2image")]
@@ -438,10 +383,6 @@ fn parse_page_range(s: &str, page_count: u32) -> Result<pdf2image::Pages> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
@@ -451,7 +392,6 @@ fn main() -> Result<()> {
     let model_id = args.model_id.as_deref().unwrap_or(MODEL_ID);
     let repo = api.model(model_id.to_string());
 
-    // Load config
     let config_path = repo.get("config.json")?;
     let config: Config = serde_json::from_reader(std::fs::File::open(&config_path)?)?;
 
@@ -467,11 +407,9 @@ fn main() -> Result<()> {
     println!("  Deepstack: {:?}", config.deepstack_layer_map);
     println!("  Spatial layers: {:?}", config.spatial_target_layers);
 
-    // Load tokenizer
     let tokenizer_path = repo.get("tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(E::msg)?;
 
-    // Load model weights (with automatic LoRA merging if adapter present)
     let weight_files = {
         let index_path = repo.get("model.safetensors.index.json")?;
         let index: serde_json::Value = serde_json::from_reader(std::fs::File::open(&index_path)?)?;
@@ -490,7 +428,6 @@ fn main() -> Result<()> {
             .collect::<std::result::Result<Vec<_>, _>>()?
     };
 
-    // Check for LoRA adapter
     let adapter_path = repo.get("adapter_model.safetensors").ok();
 
     let vb = if let Some(ref adapter_path) = adapter_path {
@@ -510,11 +447,9 @@ fn main() -> Result<()> {
     let model = Model::new(&config, vb)?;
     println!("Model loaded.");
 
-    // Load page images — either from a single image file or from PDF pages
     let page_images = load_page_images(&args)?;
 
-    // Build prompt: expand task tag to full instruction (matching HF chat_template).
-    // The \n prefix separates image tokens from instruction (matches Python template).
+    // Leading newline separates image tokens from instruction (matches HF chat template).
     let full_prompt = if let Some(ref custom) = args.prompt {
         format!("\n{custom}")
     } else {
@@ -534,7 +469,6 @@ fn main() -> Result<()> {
 
     let text_config = config.text_config.clone().into_config(false);
 
-    // Process each page
     for (page_idx, page_img) in page_images.iter().enumerate() {
         if page_images.len() > 1 {
             println!(
@@ -573,10 +507,8 @@ fn main() -> Result<()> {
 
         let input_ids_tensor = Tensor::new(&input_ids[..], &device)?.unsqueeze(0)?;
 
-        // Fresh KV cache per page
         let mut cache = GraniteMoeHybridCache::new(true, dtype, &text_config, &device)?;
 
-        // Initial forward with vision
         let logits = model.setup(
             &input_ids_tensor,
             &pixel_values,
@@ -592,7 +524,6 @@ fn main() -> Result<()> {
         let mut generated = vec![token];
         print_token(&tokenizer, token);
 
-        // Autoregressive generation
         let index_pos = input_ids.len();
         for step in 1..args.max_tokens {
             let input = Tensor::new(&[token], &device)?.unsqueeze(0)?;

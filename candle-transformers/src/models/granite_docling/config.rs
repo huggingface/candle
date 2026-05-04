@@ -1,9 +1,4 @@
-//! Configuration for Granite-Docling (Idefics3) model.
-//!
-//! Architecture: SigLIP vision encoder → pixel shuffle connector → Llama-style causal decoder.
-//!
-//! References:
-//! - [Model Card](https://huggingface.co/ibm-granite/granite-docling-258M)
+//! Granite-Docling (Idefics3) model config. https://huggingface.co/ibm-granite/granite-docling-258M
 
 use crate::models::siglip;
 
@@ -84,7 +79,6 @@ pub struct Config {
 }
 
 impl TextConfig {
-    /// Build TextConfig from GGUF metadata keys (llama.* namespace).
     pub fn from_gguf(
         metadata: &std::collections::HashMap<String, candle::quantized::gguf_file::Value>,
     ) -> candle::Result<Self> {
@@ -112,7 +106,6 @@ impl TextConfig {
     }
 }
 
-/// Vision-related config extracted from mmproj GGUF metadata.
 #[derive(Clone, Debug)]
 pub struct QuantizedVisionConfig {
     pub hidden_size: usize,
@@ -127,7 +120,6 @@ pub struct QuantizedVisionConfig {
 }
 
 impl QuantizedVisionConfig {
-    /// Build from mmproj GGUF metadata keys (clip.vision.* namespace).
     pub fn from_gguf(
         metadata: &std::collections::HashMap<String, candle::quantized::gguf_file::Value>,
     ) -> candle::Result<Self> {
@@ -167,15 +159,11 @@ impl QuantizedVisionConfig {
 }
 
 impl Config {
-    /// Number of image tokens after pixel shuffle downsampling.
-    /// = num_patches / scale_factor^2
     pub fn image_seq_len(&self) -> usize {
         let num_patches = self.vision_config.num_patches();
         num_patches / (self.scale_factor * self.scale_factor)
     }
 
-    /// Dimension of vision features after pixel shuffle (before linear projection).
-    /// = vision_hidden_size * scale_factor^2
     pub fn connector_input_dim(&self) -> usize {
         self.vision_config.hidden_size * self.scale_factor * self.scale_factor
     }

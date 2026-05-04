@@ -1,15 +1,8 @@
-//! Quantized SigLIP vision encoder for GGUF weights.
-//!
-//! Loads from llama.cpp GGUF mmproj files using the standard `v.blk.*` tensor naming.
-//! Reusable by any Idefics3/SigLIP-based multimodal model (Granite-Docling, SmolVLM, etc.).
+//! Quantized SigLIP vision encoder for GGUF mmproj files (`v.blk.*` tensor naming).
 
 use crate::quantized_nn::{self, Linear};
 use crate::quantized_var_builder::VarBuilder;
 use candle::{Module, Result, Tensor};
-
-// ---------------------------------------------------------------------------
-// Attention
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct Attention {
@@ -60,10 +53,6 @@ impl Attention {
     }
 }
 
-// ---------------------------------------------------------------------------
-// MLP
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone)]
 struct Mlp {
     fc1: Linear,
@@ -85,10 +74,6 @@ impl Module for Mlp {
             .apply(&self.fc2)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Encoder Layer
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct EncoderLayer {
@@ -129,10 +114,6 @@ impl EncoderLayer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Vision Embeddings
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone)]
 struct VisionEmbeddings {
     patch_embedding_weight: Tensor,
@@ -150,32 +131,26 @@ impl VisionEmbeddings {
         vb: VarBuilder,
     ) -> Result<Self> {
         let _num_patches_per_side = image_size / patch_size;
-        // Patch embedding stored as (patch_size, patch_size, 3, hidden_size) in GGUF
         let patch_embedding_weight = vb
             .get_no_shape("patch_embd.weight")?
             .dequantize(vb.device())?;
         let patch_embedding_bias = vb
             .get_no_shape("patch_embd.bias")?
             .dequantize(vb.device())?;
-        // Position embedding stored as (hidden_size, num_patches) in GGUF
         let position_embedding = vb
             .get_no_shape("position_embd.weight")?
             .dequantize(vb.device())?;
-        // Reshape position embedding: (hidden_size, num_patches) -> (1, num_patches, hidden_size)
         let position_embedding = if position_embedding.dim(0)? == hidden_size {
             position_embedding.t()?.unsqueeze(0)?
         } else {
             position_embedding.unsqueeze(0)?
         };
 
-        // GGUF stores patch_embd.weight with dims [16, 16, 3, 768] in GGUF order.
-        // Candle loads this as shape (768, 3, 16, 16) which is already Conv2d layout
-        // (out_channels, in_channels, kH, kW). No reshape needed.
+        // Candle loads patch_embd.weight in Conv2d layout already; only reshape if not.
         let patch_embedding_weight =
             if patch_embedding_weight.dims() == [hidden_size, 3, patch_size, patch_size] {
                 patch_embedding_weight
             } else {
-                // Fallback: reshape from GGUF (patch_size, patch_size, 3, hidden_size) -> Conv2d
                 patch_embedding_weight
                     .reshape((patch_size, patch_size, 3, hidden_size))?
                     .permute((3, 2, 0, 1))?
@@ -193,30 +168,17 @@ impl VisionEmbeddings {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (_b, _c, _h, _w) = xs.dims4()?;
-        // Manual Conv2d with stride = patch_size
-        let embeddings = xs.conv2d(
-            &self.patch_embedding_weight,
-            0,               // padding
-            self.patch_size, // stride
-            1,               // dilation
-            1,               // groups
-        )?;
+        let embeddings = xs.conv2d(&self.patch_embedding_weight, 0, self.patch_size, 1, 1)?;
         let embeddings = embeddings.broadcast_add(&self.patch_embedding_bias.reshape((
             1,
             self.hidden_size,
             1,
             1,
         ))?)?;
-        // (B, hidden, H/p, W/p) -> (B, num_patches, hidden)
         let embeddings = embeddings.flatten_from(2)?.transpose(1, 2)?;
-        // Add position embeddings
         embeddings.broadcast_add(&self.position_embedding)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Vision Model (public)
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct VisionModel {

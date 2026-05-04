@@ -1,8 +1,4 @@
-//! Quantized Granite-Docling model loading from GGUF weights.
-//!
-//! Loads two GGUF files:
-//! - Text decoder GGUF (llama architecture, `blk.*` tensor names)
-//! - Vision mmproj GGUF (`v.blk.*` + `mm.model.fc.*` tensor names)
+//! Quantized Granite-Docling loader for GGUF text decoder + vision mmproj files.
 
 use super::config::{QuantizedVisionConfig, TextConfig};
 use super::{merge_image_tokens, pixel_shuffle};
@@ -10,10 +6,6 @@ use crate::models::quantized_siglip;
 use crate::quantized_nn::{self, Embedding, Linear, RmsNorm};
 use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor};
-
-// ---------------------------------------------------------------------------
-// Pixel Shuffle Connector
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct Connector {
@@ -40,10 +32,6 @@ impl Module for Connector {
         xs.apply(&self.modality_projection)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Rotary Position Embeddings
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct RotaryEmbedding {
@@ -73,16 +61,12 @@ impl RotaryEmbedding {
         let seq_len = q.dim(2)?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
         let sin = self.sin.narrow(0, offset, seq_len)?;
-        // GGUF weights are permuted for llama.cpp's interleaved RoPE convention
+        // GGUF weights use llama.cpp's interleaved RoPE convention.
         let q_embed = candle_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?;
         let k_embed = candle_nn::rotary_emb::rope_i(&k.contiguous()?, &cos, &sin)?;
         Ok((q_embed, k_embed))
     }
 }
-
-// ---------------------------------------------------------------------------
-// KV Cache
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct KvCache {
@@ -118,10 +102,6 @@ impl KvCache {
         self.v = None;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Quantized Attention (GQA)
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct Attention {
@@ -187,7 +167,6 @@ impl Attention {
         let (q, k) = rotary.apply(&q, &k, offset)?;
         let (k, v) = self.kv_cache.append(&k, &v)?;
 
-        // GQA: repeat KV heads
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
@@ -216,10 +195,6 @@ impl Attention {
             .reshape((b, num_kv_heads * n_rep, seq_len, head_dim))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Quantized MLP (SiLU-gated)
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct Mlp {
@@ -253,10 +228,6 @@ impl Module for Mlp {
         (gate * up)?.apply(&self.down_proj)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Decoder Layer
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct DecoderLayer {
@@ -298,10 +269,6 @@ impl DecoderLayer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Quantized Text Model
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone)]
 struct TextModel {
     embed_tokens: Embedding,
@@ -313,7 +280,7 @@ struct TextModel {
 
 impl TextModel {
     fn new(cfg: &TextConfig, vb: VarBuilder) -> Result<Self> {
-        let dtype = DType::F32; // quantized models compute in f32
+        let dtype = DType::F32;
         let embed_tokens = Embedding::new(cfg.vocab_size, cfg.hidden_size, vb.pp("token_embd"))?;
 
         let vb_layers = vb.pp("blk");
@@ -376,7 +343,6 @@ impl TextModel {
 
         let hidden = self.norm.forward(&hidden)?;
 
-        // Tied embeddings
         let w = self.embed_tokens.embeddings();
         hidden.broadcast_matmul(&w.t()?)
     }
@@ -388,10 +354,6 @@ impl TextModel {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Top-level Quantized Model
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone)]
 pub struct Model {
     vision_model: quantized_siglip::VisionModel,
@@ -401,7 +363,6 @@ pub struct Model {
 }
 
 impl Model {
-    /// Load from two GGUF files: vision mmproj + text decoder.
     pub fn new(
         vision_vb: VarBuilder,
         vision_cfg: &QuantizedVisionConfig,

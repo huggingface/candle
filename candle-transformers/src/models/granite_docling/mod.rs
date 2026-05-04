@@ -1,11 +1,4 @@
-//! Granite-Docling (Idefics3) model for document understanding.
-//!
-//! Converts document page images into structured DocTags markup.
-//! Architecture: SigLIP vision encoder → pixel shuffle connector → Llama-style causal decoder.
-//!
-//! References:
-//! - [Model Card](https://huggingface.co/ibm-granite/granite-docling-258M)
-//! - [Idefics3 (HuggingFace)](https://huggingface.co/docs/transformers/model_doc/idefics3)
+//! Granite-Docling (Idefics3) image-to-DocTags model. https://huggingface.co/ibm-granite/granite-docling-258M
 
 pub mod config;
 pub mod quantized;
@@ -17,9 +10,6 @@ use candle_nn::{linear_no_bias, VarBuilder};
 use config::Config;
 use text::TextModel;
 
-/// Idefics3 pixel shuffle: spatially downsample vision tokens.
-///   (B, H*W, D) → (B, H/s * W/s, D * s²)
-/// Shared by both f32 and quantized paths.
 pub fn pixel_shuffle(xs: &Tensor, scale_factor: usize) -> Result<Tensor> {
     let (b, seq_len, dim) = xs.dims3()?;
     let s = scale_factor;
@@ -39,10 +29,6 @@ pub fn pixel_shuffle(xs: &Tensor, scale_factor: usize) -> Result<Tensor> {
     xs.reshape((b, (h / s) * (w / s), dim * s * s))
 }
 
-/// Replace `<image>` placeholder token embeddings with projected vision features.
-/// Identifies contiguous runs of image/text tokens and uses sliced Tensor::cat
-/// instead of per-token allocation.
-/// Shared by both f32 and quantized paths.
 pub fn merge_image_tokens(
     text_embeds: &Tensor,
     image_features: &Tensor,
@@ -62,7 +48,6 @@ pub fn merge_image_tokens(
 
         while pos < seq_len {
             if ids[pos] == image_token_id {
-                // Count contiguous image tokens
                 let start = pos;
                 while pos < seq_len && ids[pos] == image_token_id {
                     pos += 1;
@@ -74,7 +59,6 @@ pub fn merge_image_tokens(
                     img_idx += available;
                 }
             } else {
-                // Count contiguous text tokens
                 let start = pos;
                 while pos < seq_len && ids[pos] != image_token_id {
                     pos += 1;
@@ -88,10 +72,6 @@ pub fn merge_image_tokens(
     }
     Tensor::cat(&batch_results, 0)
 }
-
-// ---------------------------------------------------------------------------
-// Connector (f32 path)
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct Connector {
@@ -118,10 +98,6 @@ impl Module for Connector {
         xs.apply(&self.modality_projection)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Idefics3ForConditionalGeneration (f32 path)
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 pub struct Model {

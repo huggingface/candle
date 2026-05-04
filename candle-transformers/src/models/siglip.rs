@@ -530,7 +530,6 @@ impl Encoder {
         Ok(xs)
     }
 
-    /// Returns hidden states from all layers: [embedding_output, layer_0_output, ..., layer_N_output].
     fn forward_with_hidden_states(
         &self,
         xs: &Tensor,
@@ -644,7 +643,6 @@ impl VisionTransformer {
         })
     }
 
-    /// Returns raw hidden states from all encoder layers (before post_layernorm).
     fn forward_with_hidden_states(&self, xs: &Tensor) -> Result<Vec<Tensor>> {
         let xs = xs.apply(&self.embeddings)?;
         self.encoder.forward_with_hidden_states(&xs, None)
@@ -674,8 +672,7 @@ impl VisionModel {
         Ok(Self { vision_model })
     }
 
-    /// Returns raw hidden states from all encoder layers (before post_layernorm).
-    /// Index 0 = embedding output, index i = output of encoder layer i-1.
+    /// Per-layer hidden states; index 0 is the embedding output.
     pub fn forward_with_hidden_states(&self, xs: &Tensor) -> Result<Vec<Tensor>> {
         self.vision_model.forward_with_hidden_states(xs)
     }

@@ -1,16 +1,8 @@
-//! Standalone Llama-style causal decoder for Granite-Docling.
-//!
-//! Self-contained implementation (GQA, RoPE, SiLU-gated MLP, RMSNorm, KV cache)
-//! to allow future CPU flash attention and interlaced weight optimizations
-//! without coupling to the general-purpose Llama model.
+//! Standalone Llama-style decoder for Granite-Docling.
 
 use super::config::TextConfig;
 use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::{embedding, linear_no_bias as linear, Linear, VarBuilder};
-
-// ---------------------------------------------------------------------------
-// RMS Norm
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct RmsNorm {
@@ -31,10 +23,6 @@ impl Module for RmsNorm {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Rotary Position Embeddings
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug)]
 struct RotaryEmbedding {
     cos: Tensor,
@@ -53,7 +41,6 @@ impl RotaryEmbedding {
             .collect();
         let inv_freq = Tensor::new(inv_freq.as_slice(), dev)?;
         let positions = Tensor::arange(0u32, max_seq as u32, dev)?.to_dtype(DType::F32)?;
-        // (max_seq, head_dim/2)
         let freqs = positions.unsqueeze(1)?.matmul(&inv_freq.unsqueeze(0)?)?;
         let cos = freqs.cos()?.to_dtype(dtype)?;
         let sin = freqs.sin()?.to_dtype(dtype)?;
@@ -69,10 +56,6 @@ impl RotaryEmbedding {
         Ok((q_embed, k_embed))
     }
 }
-
-// ---------------------------------------------------------------------------
-// KV Cache
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct KvCache {
@@ -108,10 +91,6 @@ impl KvCache {
         self.v = None;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Attention (Grouped Query Attention)
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct Attention {
@@ -162,7 +141,6 @@ impl Attention {
         let k = self.k_proj.forward(xs)?;
         let v = self.v_proj.forward(xs)?;
 
-        // (B, seq, heads, head_dim) -> (B, heads, seq, head_dim)
         let q = q
             .reshape((b, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -178,7 +156,6 @@ impl Attention {
         let (q, k) = rotary.apply(&q, &k, offset)?;
         let (k, v) = self.kv_cache.append(&k, &v)?;
 
-        // GQA: repeat KV heads to match Q heads
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
@@ -191,7 +168,6 @@ impl Attention {
         let attn = candle_nn::ops::softmax_last_dim(&attn)?;
         let out = attn.matmul(&v)?;
 
-        // (B, heads, seq, head_dim) -> (B, seq, hidden)
         out.transpose(1, 2)?
             .reshape((b, seq_len, ()))?
             .apply(&self.o_proj)
@@ -208,10 +184,6 @@ impl Attention {
             .reshape((b, num_kv_heads * n_rep, seq_len, head_dim))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Feed-forward (SiLU-gated MLP)
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct Mlp {
@@ -245,10 +217,6 @@ impl Module for Mlp {
         (gate * up)?.apply(&self.down_proj)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Decoder Layer
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct DecoderLayer {
@@ -293,10 +261,6 @@ impl DecoderLayer {
         residual + xs
     }
 }
-
-// ---------------------------------------------------------------------------
-// Text Model (full decoder)
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 pub struct TextModel {
@@ -359,13 +323,11 @@ impl TextModel {
         Tensor::from_vec(mask, (1, 1, seq_len, total_len), device)?.to_dtype(self.dtype)
     }
 
-    /// Forward pass from token IDs. Returns logits (B, seq, vocab).
     pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         let xs = self.embed_tokens.forward(input_ids)?;
         self.forward_embeds(&xs)
     }
 
-    /// Forward pass from already-embedded inputs. Returns logits (B, seq, vocab).
     pub fn forward_embeds(&mut self, xs: &Tensor) -> Result<Tensor> {
         let (_, seq_len, _) = xs.dims3()?;
         let past_kv_len = self.layers[0].self_attn.kv_cache.current_len();
@@ -386,7 +348,6 @@ impl TextModel {
         match &self.lm_head {
             Some(lm_head) => hidden.apply(lm_head),
             None => {
-                // Tied embeddings: use embed_tokens weight as lm_head
                 let w = self.embed_tokens.embeddings();
                 hidden.broadcast_matmul(&w.t()?)
             }

@@ -1,18 +1,9 @@
-//! Window Q-Former downsampler for Granite 4.0 Vision.
-//!
-//! Processes vision features through windowed cross-attention to compress spatial tokens.
-//! Supports two downsampling strategies:
-//! - InterpolateDownsampler: area interpolation (for deepstack projectors)
-//! - SpatialOffsetDownsampler: 2x2 block offset sampling (for spatial projectors)
+//! Window Q-Former downsampler for Granite 4.0 Vision projectors.
 
 use candle::{Result, Tensor};
 use candle_nn::{layer_norm, Linear, Module, VarBuilder};
 
 use super::config::Config;
-
-// ---------------------------------------------------------------------------
-// BERT-style attention block (used for both self-attention and cross-attention)
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct BertAttention {
@@ -46,8 +37,6 @@ impl BertAttention {
         })
     }
 
-    /// Forward pass. For self-attention, pass encoder_hidden_states = None.
-    /// For cross-attention, pass the encoder states (key/value source).
     fn forward(
         &self,
         hidden_states: &Tensor,
@@ -84,10 +73,6 @@ impl BertAttention {
         self.layer_norm.forward(&(out + hidden_states)?)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Q-Former layer: self-attention → cross-attention → FFN
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct QFormerLayer {
@@ -133,10 +118,6 @@ impl QFormerLayer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Q-Former model (single layer + layernorm)
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug)]
 struct QFormer {
     layer_norm: candle_nn::LayerNorm,
@@ -156,11 +137,6 @@ impl QFormer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Downsamplers
-// ---------------------------------------------------------------------------
-
-/// Area interpolation downsampler. Requires integer scaling factor.
 fn area_downsample(features: &Tensor, orig_side: usize, new_side: usize) -> Result<Tensor> {
     let (b, _hw, c) = features.dims3()?;
     let factor = orig_side / new_side;
@@ -169,38 +145,27 @@ fn area_downsample(features: &Tensor, orig_side: usize, new_side: usize) -> Resu
             "area_downsample: orig_side {orig_side} not evenly divisible to new_side {new_side}"
         );
     }
-    // (B, orig, orig, C) → (B, new, factor, new, factor, C)
     let x = features
         .reshape((b, orig_side, orig_side, c))?
         .reshape((b, new_side, factor, new_side, factor, c))?;
-    // Average over factor dimensions (sum + divide)
     let x = x.sum_keepdim(4)?.squeeze(4)?;
     let x = x.sum_keepdim(2)?.squeeze(2)?;
     let scale = (factor * factor) as f64;
     (x / scale)?.reshape((b, new_side * new_side, c))
 }
 
-/// Spatial offset downsampler: samples one position from each 2x2 block.
 fn spatial_offset_downsample(features: &Tensor, orig_side: usize, offset: usize) -> Result<Tensor> {
     let (b, _hw, c) = features.dims3()?;
     let new_side = orig_side / 2;
     let offsets = [(0usize, 0usize), (0, 1), (1, 0), (1, 1)];
     let (oh, ow) = offsets[offset];
-    // (B, orig, orig, C) → (B, new, 2, new, 2, C)
     let x = features
         .reshape((b, orig_side, orig_side, c))?
         .reshape((b, new_side, 2, new_side, 2, c))?;
-    // Select offset position from each 2x2 block
-    // After first narrow+squeeze, dims shift: (B, new, new, 2, C)
     let x = x.narrow(2, oh, 1)?.squeeze(2)?;
     let x = x.narrow(3, ow, 1)?.squeeze(3)?;
-    // (B, new, new, C) → (B, new*new, C)
     x.reshape((b, new_side * new_side, c))
 }
-
-// ---------------------------------------------------------------------------
-// Window Q-Former Downsampler
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 pub struct WindowQFormerDownsampler {
@@ -248,7 +213,6 @@ impl WindowQFormerDownsampler {
         })
     }
 
-    /// Window: (B, side*side, C) raster → (B*n*n, win*win, C)
     fn win(&self, x: &Tensor, side: usize, win: usize) -> Result<Tensor> {
         let (b, _, c) = x.dims3()?;
         let n = side / win;
@@ -259,7 +223,6 @@ impl WindowQFormerDownsampler {
             .reshape((b * n * n, win * win, c))
     }
 
-    /// Unwindow: (B*n*n, win*win, C) → (B, (n*win)^2, C)
     fn unwin(&self, xw: &Tensor, batch_size: usize, n: usize, win: usize) -> Result<Tensor> {
         let (_, _, c) = xw.dims3()?;
         let side = n * win;
@@ -279,13 +242,10 @@ impl WindowQFormerDownsampler {
         }
         let n = self.image_side / self.window_side;
 
-        // Normalize
         let normed = self.norm.forward(image_features)?;
 
-        // Window the encoder features for cross-attention
         let enc = self.win(&normed, self.image_side, self.window_side)?;
 
-        // Downsample to create query seeds
         let downsampled = match self.spatial_offset {
             Some(offset) => spatial_offset_downsample(&normed, self.image_side, offset)?,
             None => area_downsample(
@@ -298,17 +258,13 @@ impl WindowQFormerDownsampler {
         let new_side = n * self.query_side;
         let downsampled_w = self.win(&downsampled, new_side, self.query_side)?;
 
-        // Combine learned query with downsampled features
         let query_embeds = self.query.broadcast_add(&downsampled_w)?;
         let encoder_embeds = enc.broadcast_add(&self.image_positions)?;
 
-        // Run Q-Former cross-attention
         let out_w = self.qformer.forward(&query_embeds, &encoder_embeds)?;
 
-        // Unwindow back to spatial layout
         let out = self.unwin(&out_w, b, n, self.query_side)?;
 
-        // Project to LLM hidden size
         out.apply(&self.out_linear)
     }
 }

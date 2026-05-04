@@ -28,71 +28,57 @@ const START_OF_ROLE: u32 = 100264;
 const END_OF_ROLE: u32 = 100265;
 const END_OF_TEXT: u32 = 100257;
 
-// Row/col marker token IDs (non-contiguous in vocabulary)
+// row,col grid token ids; vocab positions are non-contiguous.
 const ROW_COL_TOKENS: [[u32; 4]; 4] = [
-    [100258, 100259, 100261, 100262], // row 1: col 1-4
-    [100263, 100267, 100268, 100341], // row 2: col 1-4
-    [100342, 100343, 100344, 100345], // row 3: col 1-4
-    [100346, 100347, 100348, 100349], // row 4: col 1-4
+    [100258, 100259, 100261, 100262],
+    [100263, 100267, 100268, 100341],
+    [100342, 100343, 100344, 100345],
+    [100346, 100347, 100348, 100349],
 ];
 
 #[derive(Parser, Debug)]
 #[command(about = "Granite-Docling: document image to structured markup")]
 struct Args {
-    /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,
 
-    /// Use bf16 precision (default: f32).
     #[arg(long)]
     bf16: bool,
 
-    /// The image file to process (PNG/JPG).
+    /// Image file (PNG/JPG).
     #[cfg_attr(not(feature = "pdf2image"), arg(long))]
     #[cfg_attr(feature = "pdf2image", arg(long, required_unless_present = "pdf"))]
     image: Option<String>,
 
-    /// PDF file to process (requires pdf2image feature and poppler).
+    /// PDF file (requires the `pdf2image` feature and system poppler).
     #[cfg(feature = "pdf2image")]
     #[arg(long, required_unless_present = "image")]
     pdf: Option<String>,
 
-    /// Page range for PDF (e.g. "7-8" or "7"). Defaults to all pages.
+    /// PDF page range (e.g. "7-8" or "7"). Defaults to all pages.
     #[cfg(feature = "pdf2image")]
     #[arg(long)]
     pages: Option<String>,
 
-    /// Optional: path to a local model directory or HF model id.
     #[arg(long)]
     model_id: Option<String>,
 
-    /// Maximum number of tokens to generate.
     #[arg(long, default_value_t = 4096)]
     max_tokens: usize,
 
-    /// Sampling temperature (0.0 = greedy).
     #[arg(long, default_value_t = 0.0)]
     temperature: f64,
 
-    /// The prompt to use. Defaults to a generic document conversion prompt.
     #[arg(long)]
     prompt: Option<String>,
 
-    /// Disable image splitting (single 512x512 view of entire page).
     #[arg(long)]
     no_split: bool,
 
-    /// Use quantized GGUF weights (Q8_0).
     #[arg(long)]
     quantized: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Image preprocessing
-// ---------------------------------------------------------------------------
-
-/// Resize an RGB image to exactly (w, h) and normalize to [-1, 1].
-/// Returns tensor of shape (3, h, w).
 fn resize_and_normalize(img: &image::RgbImage, w: u32, h: u32) -> Vec<f32> {
     let resized = image::imageops::resize(img, w, h, image::imageops::FilterType::Lanczos3);
     let (w, h) = (w as usize, h as usize);
@@ -108,14 +94,6 @@ fn resize_and_normalize(img: &image::RgbImage, w: u32, h: u32) -> Vec<f32> {
     data
 }
 
-/// Split an image into tiles following HF Idefics3ImageProcessor:
-///   1. Resize so longest edge = max_long_edge (2048 default)
-///   2. Compute grid dimensions that fit in tile_size (512) tiles
-///   3. Resize to exact grid dimensions
-///   4. Extract tiles + one global view resized to tile_size x tile_size
-///
-/// Returns (num_tiles + 1 global, grid_rows, grid_cols, Vec<tile_data>)
-/// where each tile_data is (3, tile_size, tile_size) flattened.
 fn split_image(
     img: &image::RgbImage,
     tile_size: usize,
@@ -124,17 +102,14 @@ fn split_image(
     let (orig_w, orig_h) = (img.width() as f64, img.height() as f64);
     let tile = tile_size as f64;
 
-    // Step 1: compute target size (longest edge = max_long_edge)
     let longest = orig_w.max(orig_h);
     let scale = (max_long_edge as f64) / longest;
     let scaled_w = (orig_w * scale).round();
     let scaled_h = (orig_h * scale).round();
 
-    // Step 2: compute grid dimensions
     let n_cols = (scaled_w / tile).ceil() as usize;
     let n_rows = (scaled_h / tile).ceil() as usize;
 
-    // Step 3: resize to exact grid dimensions
     let grid_w = (n_cols * tile_size) as u32;
     let grid_h = (n_rows * tile_size) as u32;
     let resized =
@@ -151,7 +126,6 @@ fn split_image(
         n_rows * n_cols,
     );
 
-    // Step 4: extract tiles
     let ts = tile_size as u32;
     let mut tiles: Vec<Vec<f32>> = Vec::new();
     for row in 0..n_rows {
@@ -163,14 +137,12 @@ fn split_image(
         }
     }
 
-    // Step 5: global view (entire image resized to tile_size x tile_size)
     let global = resize_and_normalize(img, ts, ts);
     tiles.push(global);
 
     (n_rows, n_cols, tiles)
 }
 
-/// Load image without splitting — single 512x512 view.
 fn load_single(img: &image::RgbImage, tile_size: usize) -> Vec<Vec<f32>> {
     println!(
         "No splitting: {}x{} -> {}x{}",
@@ -186,7 +158,6 @@ fn load_single(img: &image::RgbImage, tile_size: usize) -> Vec<Vec<f32>> {
     )]
 }
 
-/// Stack tile data into a single tensor of shape (num_tiles, 3, H, W).
 fn tiles_to_tensor(
     tiles: &[Vec<f32>],
     tile_size: usize,
@@ -203,18 +174,6 @@ fn tiles_to_tensor(
     Ok(tensor.to_dtype(dtype)?)
 }
 
-// ---------------------------------------------------------------------------
-// Prompt construction
-// ---------------------------------------------------------------------------
-
-/// Build input_ids for split images following the Granite-Docling chat template:
-///   <|start_of_role|>user<|end_of_role|>
-///   <fake><row_1_col_1><image>*64 <fake><row_1_col_2><image>*64 ... \n
-///   <fake><row_2_col_1><image>*64 ... \n
-///   ...
-///   \n<fake><global-img><image>*64<fake>
-///   prompt text<|end_of_text|>\n
-///   <|start_of_role|>assistant<|end_of_role|>
 fn build_input_ids_split(
     tokenizer: &Tokenizer,
     prompt_text: &str,
@@ -255,14 +214,11 @@ fn build_input_ids_split(
     ids.extend(std::iter::repeat_n(IMAGE_TOKEN_ID, image_seq_len));
     ids.push(FAKE_TOKEN_AROUND_IMAGE);
 
-    // prompt text
     ids.extend_from_slice(prompt_enc.get_ids());
 
-    // <|end_of_text|>\n
     ids.push(END_OF_TEXT);
     ids.extend_from_slice(newline_enc.get_ids());
 
-    // <|start_of_role|>assistant<|end_of_role|>
     ids.push(START_OF_ROLE);
     ids.extend_from_slice(assistant_text.get_ids());
     ids.push(END_OF_ROLE);
@@ -270,7 +226,6 @@ fn build_input_ids_split(
     Ok(ids)
 }
 
-/// Build input_ids for single image (no splitting).
 fn build_input_ids_single(
     tokenizer: &Tokenizer,
     prompt_text: &str,
@@ -297,10 +252,6 @@ fn build_input_ids_single(
     ids.push(END_OF_ROLE);
     Ok(ids)
 }
-
-// ---------------------------------------------------------------------------
-// Model wrapper (dispatches between f32 and quantized)
-// ---------------------------------------------------------------------------
 
 enum ModelWrapper {
     F32(Model),
@@ -330,10 +281,6 @@ impl ModelWrapper {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Page image loading (image file or PDF)
-// ---------------------------------------------------------------------------
-
 fn load_page_images(args: &Args) -> Result<Vec<DynamicImage>> {
     #[cfg(feature = "pdf2image")]
     if let Some(ref pdf_path) = args.pdf {
@@ -356,7 +303,6 @@ fn load_page_images(args: &Args) -> Result<Vec<DynamicImage>> {
         return Ok(images);
     }
 
-    // Fall back to single image file
     let image_path = args
         .image
         .as_deref()
@@ -385,21 +331,15 @@ fn parse_page_range(s: &str, page_count: u32) -> Result<pdf2image::Pages> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
     let api = hf_hub::api::sync::Api::new()?;
 
-    // Load tokenizer (from base model repo, always needed)
     let base_repo = api.model(MODEL_ID.to_string());
     let tokenizer_path = base_repo.get("tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(E::msg)?;
 
-    // Load model — either f32/bf16 safetensors or quantized GGUF
     let (mut model, tile_size, image_seq_len) = if args.quantized {
         let model_id = args.model_id.as_deref().unwrap_or(QUANTIZED_MODEL_ID);
         let repo = api.model(model_id.to_string());
@@ -411,7 +351,6 @@ fn main() -> Result<()> {
         println!("  Text:   {text_path:?}");
         println!("  Vision: {vision_path:?}");
 
-        // Read each GGUF once: extract metadata for config + load tensors for VarBuilder
         use candle::quantized::gguf_file;
         use candle_transformers::quantized_var_builder::VarBuilder as QVarBuilder;
 
@@ -477,7 +416,6 @@ fn main() -> Result<()> {
         (ModelWrapper::F32(model), tile_size, image_seq_len)
     };
 
-    // Load page images — either from a single image file or from PDF pages
     let page_images: Vec<DynamicImage> = load_page_images(&args)?;
 
     let prompt_text = args
@@ -498,7 +436,6 @@ fn main() -> Result<()> {
         None
     };
 
-    // Process each page
     for (page_idx, page_img) in page_images.iter().enumerate() {
         if page_idx > 0 {
             model.clear_kv_cache();
@@ -536,7 +473,6 @@ fn main() -> Result<()> {
 
         let input_ids_tensor = Tensor::new(&input_ids[..], &device)?.unsqueeze(0)?;
 
-        // Initial forward pass with image
         let logits = model.setup(&pixel_values, &input_ids_tensor)?;
         let mut logits_processor =
             candle_transformers::generation::LogitsProcessor::new(42, temperature, None);
@@ -547,7 +483,6 @@ fn main() -> Result<()> {
         let mut generated = vec![token];
         print_token(&tokenizer, token);
 
-        // Autoregressive generation loop
         for _ in 1..args.max_tokens {
             let input = Tensor::new(&[token], &device)?.unsqueeze(0)?;
             let logits = model.forward(&input)?;
