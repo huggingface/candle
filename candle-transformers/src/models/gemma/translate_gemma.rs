@@ -1,38 +1,5 @@
-//! TranslateGemma - Translation models based on Gemma 3 architecture.
-//!
-//! TranslateGemma is a family of open translation models from Google, fine-tuned from
-//! Gemma 3 checkpoints. Available in 4B, 12B, and 27B parameter sizes, supporting
-//! translation across 55 languages.
-//!
-//! The architecture is identical to Gemma 3, with a specialized prompt format
-//! for translation tasks.
-//!
-//! # Model Variants
-//! - `google/translategemma-4b-it` - Optimized for mobile/edge deployment
-//! - `google/translategemma-12b-it` - Consumer laptop deployment  
-//! - `google/translategemma-27b-it` - Maximum fidelity, single H100/TPU
-//!
-//! # Prompt Format
-//! TranslateGemma uses a specific format with ISO 639-1 language codes:
-//! ```text
-//! <bos><start_of_turn>user
-//! <translate type=text source_lang_code={src} target_lang_code={tgt}>
-//! {text}
-//! </translate><end_of_turn>
-//! <start_of_turn>model
-//! ```
-//!
-//! # Example
-//! ```ignore
-//! use candle_transformers::models::gemma::translate_gemma::{LanguageCode, format_translate_prompt};
-//!
-//! let prompt = format_translate_prompt("Hello!", "en", "fr");
-//! // Use with gemma3::Model for inference
-//! ```
+//! TranslateGemma: prompt formatting and language codes for Google's translation models.
 
-/// ISO 639-1 language codes supported by TranslateGemma.
-///
-/// TranslateGemma supports 55 core languages with additional experimental pairs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LanguageCode {
     Arabic,
@@ -90,7 +57,6 @@ pub enum LanguageCode {
 }
 
 impl LanguageCode {
-    /// Returns the ISO 639-1 language code string.
     pub fn as_str(&self) -> &'static str {
         match self {
             LanguageCode::Arabic => "ar",
@@ -148,7 +114,6 @@ impl LanguageCode {
         }
     }
 
-    /// Parse a language code from string.
     pub fn parse(s: &str) -> Option<Self> {
         let base = s.split(&['-', '_'][..]).next().unwrap_or(s).to_lowercase();
         match base.as_str() {
@@ -208,7 +173,6 @@ impl LanguageCode {
         }
     }
 
-    /// Get full language name for display.
     pub fn name(&self) -> &'static str {
         match self {
             LanguageCode::Arabic => "Arabic",
@@ -266,7 +230,6 @@ impl LanguageCode {
         }
     }
 
-    /// Returns all supported language codes.
     pub fn all() -> &'static [LanguageCode] {
         &[
             LanguageCode::Arabic,
@@ -325,16 +288,6 @@ impl LanguageCode {
     }
 }
 
-/// Format the user message content for TranslateGemma.
-///
-/// This creates the inner content that should be used as the user message
-/// in a Gemma chat template:
-///
-/// ```ignore
-/// let content = format_translate_content("Hello!", "en", "fr");
-/// // Returns: "<translate source_lang=en target_lang=fr>\nHello!\n</translate>"
-/// // Use with ChatTemplate::gemma() as the user message content
-/// ```
 pub fn format_translate_content(text: &str, source_lang: &str, target_lang: &str) -> String {
     format!(
         "<translate source_lang={} target_lang={}>\n{}\n</translate>",
@@ -342,10 +295,6 @@ pub fn format_translate_content(text: &str, source_lang: &str, target_lang: &str
     )
 }
 
-/// Format the translation prompt for TranslateGemma.
-///
-/// This creates the prompt that matches HuggingFace's apply_chat_template output.
-/// Note: BOS token is added separately by the tokenizer.
 pub fn format_translate_prompt(text: &str, source_lang: &str, target_lang: &str) -> String {
     let source_name = LanguageCode::parse(source_lang)
         .map(|l| l.name())
@@ -366,19 +315,14 @@ pub fn format_translate_prompt(text: &str, source_lang: &str, target_lang: &str)
     )
 }
 
-/// Model variant enumeration for TranslateGemma.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranslateGemmaVariant {
-    /// 4B parameter model - optimized for edge/mobile
     T4B,
-    /// 12B parameter model - consumer laptop deployment
     T12B,
-    /// 27B parameter model - maximum quality
     T27B,
 }
 
 impl TranslateGemmaVariant {
-    /// HuggingFace model ID.
     pub fn model_id(&self) -> &'static str {
         match self {
             TranslateGemmaVariant::T4B => "google/translategemma-4b-it",
@@ -387,7 +331,6 @@ impl TranslateGemmaVariant {
         }
     }
 
-    /// Approximate parameter count in billions.
     pub fn params_billions(&self) -> f32 {
         match self {
             TranslateGemmaVariant::T4B => 4.0,
@@ -423,16 +366,11 @@ mod tests {
     #[test]
     fn test_format_translate_prompt() {
         let prompt = format_translate_prompt("Hello", "en", "fr");
-        // Check turn structure
         assert!(prompt.starts_with("<start_of_turn>user\n"));
         assert!(prompt.ends_with("<start_of_turn>model\n"));
         assert!(prompt.contains("<end_of_turn>"));
-
-        // Check language expansion
         assert!(prompt.contains("English (en)"));
         assert!(prompt.contains("French (fr)"));
-
-        // Check input text is included
         assert!(prompt.contains("Hello"));
     }
 

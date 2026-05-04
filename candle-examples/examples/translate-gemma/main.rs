@@ -1,24 +1,3 @@
-//! TranslateGemma CLI Example
-//!
-//! Translation using Google's TranslateGemma models (4B, 12B, 27B).
-//!
-//! # Usage
-//! ```bash
-//! # Basic translation
-//! cargo run --example translate_gemma --release -- \
-//!     --text "Hello, how are you today?" \
-//!     --source en --target fr
-//!
-//! # Interactive mode
-//! cargo run --example translate_gemma --release -- \
-//!     --interactive --source en --target de
-//!
-//! # Batch translation from file
-//! cargo run --example translate_gemma --release -- \
-//!     --input-file texts.txt --output-file translations.txt \
-//!     --source en --target es
-//! ```
-
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
@@ -39,16 +18,12 @@ use candle_transformers::models::gemma::translate_gemma::format_translate_prompt
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-/// TranslateGemma model variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum ModelVariant {
-    /// 4B parameters - mobile/edge optimized
     #[value(name = "4b")]
     T4B,
-    /// 12B parameters - laptop deployment
     #[value(name = "12b")]
     T12B,
-    /// 27B parameters - maximum quality
     #[value(name = "27b")]
     T27B,
 }
@@ -63,18 +38,14 @@ impl ModelVariant {
     }
 }
 
-/// Model type: full precision or quantized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum ModelType {
-    /// Full precision safetensors model
     #[value(name = "full")]
     Full,
-    /// Quantized GGUF model
     #[value(name = "quantized")]
     Quantized,
 }
 
-/// Wrapper enum for both model types.
 enum TranslateGemmaModel {
     Full(Model),
     Quantized(ModelWeights),
@@ -96,7 +67,6 @@ impl TranslateGemmaModel {
     }
 }
 
-/// ISO 639-1 language codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum Lang {
     #[value(name = "ar")]
@@ -321,7 +291,6 @@ impl Lang {
     }
 }
 
-/// Translator wrapping the model with inference logic.
 struct Translator {
     model: TranslateGemmaModel,
     tokenizer: Tokenizer,
@@ -423,7 +392,6 @@ impl Translator {
             .decode(&output_tokens, true)
             .map_err(E::msg)?;
 
-        // Clean up output
         let result = result
             .trim()
             .trim_end_matches("<end_of_turn>")
@@ -551,14 +519,13 @@ fn main() -> Result<()> {
 
     println!("Model: {}", model_id);
     println!(
-        "Translation: {} ({}) → {} ({})",
+        "Translation: {} ({}) -> {} ({})",
         args.source.name(),
         args.source.code(),
         args.target.name(),
         args.target.code()
     );
 
-    // Load model
     println!("\nLoading model...");
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
@@ -570,12 +537,10 @@ fn main() -> Result<()> {
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("--model-path is required for quantized models"))?;
 
-            // Load GGUF model
             let mut file = std::fs::File::open(model_path)?;
             let content = gguf_file::Content::read(&mut file)?;
             let model = ModelWeights::from_gguf(content, &mut file, &device)?;
 
-            // Get tokenizer from HuggingFace
             let api = Api::new()?;
             let repo = api.repo(Repo::with_revision(
                 model_id.clone(),
@@ -598,7 +563,6 @@ fn main() -> Result<()> {
             let tokenizer_path = repo.get("tokenizer.json")?;
             let config_path = repo.get("config.json")?;
 
-            // TranslateGemma uses sharded weights
             let weight_files =
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
 
@@ -610,18 +574,15 @@ fn main() -> Result<()> {
                 DType::F32
             };
 
-            // Load config - TranslateGemma uses Gemma 3 architecture
             let config_content = std::fs::read_to_string(&config_path)?;
             let mut config_json: serde_json::Value = serde_json::from_str(&config_content)?;
 
-            // Extract text_config if present (for multimodal config), otherwise use root
             let text_config_value = if let Some(tc) = config_json.get_mut("text_config") {
                 tc
             } else {
                 &mut config_json
             };
 
-            // Add missing sliding_window_pattern field if not present
             if let serde_json::Value::Object(ref mut map) = text_config_value {
                 map.entry("sliding_window_pattern")
                     .or_insert(serde_json::Value::Number(6.into()));
@@ -657,9 +618,7 @@ fn main() -> Result<()> {
         device,
     );
 
-    // Handle different input modes
     if let Some(input_file) = args.input_file {
-        // Batch mode
         let file = std::fs::File::open(&input_file)?;
         let reader = io::BufReader::new(file);
         let mut output: Box<dyn Write> = match args.output_file {
@@ -679,10 +638,9 @@ fn main() -> Result<()> {
             writeln!(output, "{}", translation)?;
         }
     } else if args.interactive {
-        // Interactive mode
         println!("\nInteractive mode. Type 'quit' to exit.");
         println!(
-            "Translating {} → {}\n",
+            "Translating {} -> {}\n",
             args.source.name(),
             args.target.name()
         );
@@ -710,11 +668,9 @@ fn main() -> Result<()> {
             }
         }
     } else if let Some(text) = args.text {
-        // Single text
         let translation = translator.translate(&text, args.source, args.target)?;
         println!("\n{}", translation);
     } else {
-        // Read from stdin
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         let input = input.trim();
