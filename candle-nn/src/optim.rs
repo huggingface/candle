@@ -201,36 +201,6 @@ impl AdamW {
 }
 
 /// Wraps any [`Optimizer`] with gradient-accumulation semantics.
-///
-/// Call [`accumulate`](Self::accumulate) once per micro-batch to compute
-/// and merge that batch's gradients into an internal
-/// [`GradStore`](candle::backprop::GradStore), then call
-/// [`step`](Self::step) once to average the K accumulated gradients and
-/// apply a single optimizer update. This yields an effective batch size
-/// of `K × micro_batch` without holding K computation graphs alive
-/// simultaneously.
-///
-/// The accumulated gradients are divided by K at flush time, so the
-/// resulting parameter update equals what a single backward pass on the
-/// mean of the K per-micro-batch losses would produce. If each
-/// micro-batch loss is already a mean over its samples, this matches the
-/// gradient of a K× larger mean-reduced batch. If your losses are sums,
-/// divide by the total sample count yourself.
-///
-/// Composition-based by design: works with [`SGD`], [`AdamW`], and any
-/// future optimizer implementing [`Optimizer`] — no per-optimizer code.
-///
-/// ```no_run
-/// use candle_nn::optim::{AdamW, GradAccumulator, Optimizer, ParamsAdamW};
-/// # use candle::{Result, Tensor, Var};
-/// # fn example(params: ParamsAdamW, vars: Vec<Var>, micro_batches: Vec<Tensor>) -> Result<()> {
-/// let mut opt = GradAccumulator::new(AdamW::new(vars, params)?);
-/// for loss in &micro_batches {
-///     opt.accumulate(loss)?;
-/// }
-/// opt.step()?; // one update using the mean of all micro-batch gradients
-/// # Ok(()) }
-/// ```
 pub struct GradAccumulator<O: Optimizer> {
     opt: O,
     accum: Option<candle::backprop::GradStore>,
@@ -246,7 +216,6 @@ impl<O: Optimizer> GradAccumulator<O> {
         }
     }
 
-    /// Number of micro-batches currently accumulated but not yet stepped.
     pub fn pending(&self) -> usize {
         self.count
     }
@@ -263,16 +232,9 @@ impl<O: Optimizer> GradAccumulator<O> {
         self.opt
     }
 
-    /// Compute the gradient of `loss` and merge it into the accumulator.
     pub fn accumulate(&mut self, loss: &Tensor) -> Result<()> {
         let fresh = loss.backward()?;
         match &mut self.accum {
-            // First micro-batch: adopt the fresh store as the persistent
-            // accumulator. Detach each tensor defensively — GradStore
-            // entries don't currently carry op history, but guarding here
-            // keeps the invariant stable against future candle-core
-            // changes that might introduce it, so the accumulator can
-            // never chain graphs across K iterations.
             None => {
                 let ids: Vec<_> = fresh.get_ids().copied().collect();
                 let mut store = fresh;
@@ -298,21 +260,7 @@ impl<O: Optimizer> GradAccumulator<O> {
         Ok(())
     }
 
-    /// Scale the accumulated gradients by 1/K and apply a single
-    /// optimizer step. Resets the accumulator on success. No-op if
-    /// nothing is pending.
-    ///
-    /// On error the accumulator state is preserved so the caller may
-    /// retry `step()`. Scaling is atomic — a mid-scale failure leaves
-    /// the buffer untouched, and once scaling has committed the count
-    /// collapses to 1 so a subsequent retry scales by `1/1` rather than
-    /// re-applying `1/K` to already-averaged gradients.
-    ///
-    /// After a failed `step()`, prefer retrying `step()` over calling
-    /// [`accumulate`](Self::accumulate) — adding new micro-batches on
-    /// top of an already-averaged buffer mixes scales. Call
-    /// [`reset`](Self::reset) if you want to discard the pending state
-    /// and start over.
+    /// Average the accumulated gradients and apply a single optimizer step.
     pub fn step(&mut self) -> Result<()> {
         if self.count == 0 {
             return Ok(());
@@ -321,18 +269,13 @@ impl<O: Optimizer> GradAccumulator<O> {
             return Ok(());
         };
         let scale = 1.0 / self.count as f64;
-        // Compute all scaled tensors up-front. If any scaling op errors
-        // the buffer is untouched, so retry is safe.
         let ids: Vec<_> = store.get_ids().copied().collect();
         let mut scaled: Vec<(_, Tensor)> = Vec::with_capacity(ids.len());
         for id in &ids {
             let g = store.get_id(*id).unwrap();
             scaled.push((*id, (g * scale)?));
         }
-        // All scaling succeeded — commit. The buffer now holds one
-        // averaged gradient; collapsing count to 1 means that if
-        // opt.step errors below and the caller retries, scaling will be
-        // a no-op (1/1) rather than wrongly re-applying 1/K.
+        // Collapse count to 1 so a retry after opt.step failure does not re-scale.
         for (id, g) in scaled {
             store.insert_id(id, g);
         }
@@ -343,7 +286,6 @@ impl<O: Optimizer> GradAccumulator<O> {
         Ok(())
     }
 
-    /// Discard pending gradients without applying them.
     pub fn reset(&mut self) {
         self.accum = None;
         self.count = 0;
@@ -355,9 +297,6 @@ mod tests {
     use super::*;
     use candle::{Device, Tensor};
 
-    /// Accumulating K micro-batches through GradAccumulator<AdamW> then
-    /// stepping once must match a single backward_step on the mean of
-    /// those K losses.
     #[test]
     fn adamw_accumulate_matches_single_step() {
         let dev = Device::Cpu;
@@ -373,7 +312,6 @@ mod tests {
         let x1 = Tensor::new(&[0.5f32, -0.5, 1.0], &dev).unwrap();
         let x2 = Tensor::new(&[-1.0f32, 0.3, 0.7], &dev).unwrap();
 
-        // Path A: accumulate 2 micro-batches, step once.
         let mut acc = GradAccumulator::new(AdamW::new(vec![w1.clone()], params.clone()).unwrap());
         let l1a = (w1.as_tensor() * &x1).unwrap().sum_all().unwrap();
         let l2a = (w1.as_tensor() * &x2).unwrap().sum_all().unwrap();
@@ -382,7 +320,6 @@ mod tests {
         acc.step().unwrap();
         let result_a: Vec<f32> = w1.as_tensor().to_vec1().unwrap();
 
-        // Path B: single backward_step on the mean of both losses.
         let mut opt_b = AdamW::new(vec![w2.clone()], params).unwrap();
         let l1b = (w2.as_tensor() * &x1).unwrap().sum_all().unwrap();
         let l2b = (w2.as_tensor() * &x2).unwrap().sum_all().unwrap();
@@ -398,7 +335,6 @@ mod tests {
         }
     }
 
-    /// The whole selling point: GradAccumulator works unchanged over SGD.
     #[test]
     fn sgd_accumulate_matches_single_step() {
         let dev = Device::Cpu;
@@ -461,8 +397,6 @@ mod tests {
         assert!(acc.accum.is_none());
     }
 
-    /// Multi-variable parity with weight_decay != 0, exercising the
-    /// decoupled-decay path.
     #[test]
     fn accumulate_multi_var_with_weight_decay() {
         let dev = Device::Cpu;
@@ -517,7 +451,6 @@ mod tests {
         }
     }
 
-    /// A var that never appears in the loss graph must be left untouched.
     #[test]
     fn accumulate_skips_var_without_grad() {
         let dev = Device::Cpu;
