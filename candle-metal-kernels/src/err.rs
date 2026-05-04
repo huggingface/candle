@@ -14,6 +14,8 @@ pub enum MetalKernelError {
     UnsupportedDTypeForOp(&'static str, &'static str),
     #[error("Failed to create compute function")]
     FailedToCreateComputeFunction,
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
     #[error("Failed to create metal resource: {0}")]
     FailedToCreateResource(String),
     #[error("Failed to create pipeline")]
