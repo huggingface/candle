@@ -8,9 +8,9 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use tokenizers::Tokenizer as HfTokenizer;
 
-/// Build a Qwen2/Qwen3 BPE tokenizer from vocab.json + merges.txt +
+/// Build a Qwen BPE tokenizer from vocab.json + merges.txt +
 /// tokenizer_config.json.
-pub fn build_qwen2_bpe_tokenizer(
+pub fn build_qwen_bpe_tokenizer(
     vocab_path: &Path,
     merges_path: &Path,
     config_path: Option<&Path>,

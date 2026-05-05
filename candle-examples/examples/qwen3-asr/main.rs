@@ -372,7 +372,7 @@ fn main() -> anyhow::Result<()> {
         let vocab_path = repo.get("vocab.json")?;
         let merges_path = repo.get("merges.txt")?;
         let config_path = repo.get("tokenizer_config.json").ok();
-        tokenizer::build_qwen2_bpe_tokenizer(&vocab_path, &merges_path, config_path.as_deref())?
+        tokenizer::build_qwen_bpe_tokenizer(&vocab_path, &merges_path, config_path.as_deref())?
     };
 
     println!("Loading safetensors...");

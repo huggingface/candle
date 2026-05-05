@@ -11,6 +11,9 @@ pub struct MultimodalRotaryEmbedding {
 
 impl MultimodalRotaryEmbedding {
     pub fn new(head_dim: usize, rope_theta: f64, device: &Device) -> Result<Self> {
+        if !head_dim.is_multiple_of(2) {
+            candle::bail!("head_dim must be even, got {head_dim}");
+        }
         let half_dim = head_dim / 2;
         let inv_freq: Vec<f32> = (0..half_dim)
             .map(|i| 1.0 / (rope_theta.powf(i as f64 * 2.0 / head_dim as f64) as f32))
@@ -41,9 +44,10 @@ pub fn apply_multimodal_rotary_pos_emb(
     sin: &Tensor,
     mrope_section: &[usize],
     interleaved: bool,
+    interleave_masks: Option<&[Tensor; 3]>,
 ) -> Result<(Tensor, Tensor)> {
     if interleaved {
-        apply_mrope_interleaved(q, k, cos, sin, mrope_section)
+        apply_mrope_interleaved(q, k, cos, sin, mrope_section, interleave_masks)
     } else {
         apply_mrope_concat(q, k, cos, sin, mrope_section)
     }
@@ -56,6 +60,11 @@ fn apply_mrope_concat(
     sin: &Tensor,
     mrope_section: &[usize],
 ) -> Result<(Tensor, Tensor)> {
+    let (_modalities, _batch, _seq_len, half_dim) = cos.dims4()?;
+    let section_sum: usize = mrope_section.iter().sum();
+    if section_sum != half_dim {
+        candle::bail!("mrope_section sum ({section_sum}) must equal cos half_dim ({half_dim})");
+    }
     let mut cos_parts: Vec<Tensor> = Vec::new();
     let mut sin_parts: Vec<Tensor> = Vec::new();
     let mut offset = 0usize;
@@ -85,6 +94,7 @@ fn apply_mrope_interleaved(
     cos: &Tensor,
     sin: &Tensor,
     mrope_section: &[usize],
+    interleave_masks: Option<&[Tensor; 3]>,
 ) -> Result<(Tensor, Tensor)> {
     let (modalities, _batch, _seq_len, half_dim) = cos.dims4()?;
     let modality_num = mrope_section.len();
@@ -93,20 +103,14 @@ fn apply_mrope_interleaved(
             "interleaved mRoPE requires at least 3 modalities, got {modalities} (mrope_section has {modality_num} entries)"
         );
     }
+    if modality_num != 3 {
+        candle::bail!(
+            "interleaved mRoPE requires exactly 3 mrope_section entries, got {modality_num}"
+        );
+    }
     let original_dtype = cos.dtype();
     let cos_half = cos.contiguous()?.to_dtype(DType::F32)?;
     let sin_half = sin.contiguous()?.to_dtype(DType::F32)?;
-
-    let m1_end = if mrope_section.len() > 1 {
-        (mrope_section[1] * modality_num).min(half_dim)
-    } else {
-        0
-    };
-    let m2_end = if mrope_section.len() > 2 {
-        (mrope_section[2] * modality_num).min(half_dim)
-    } else {
-        0
-    };
 
     let cos_m0 = cos_half.i(0)?.contiguous()?;
     let sin_m0 = sin_half.i(0)?.contiguous()?;
@@ -115,26 +119,33 @@ fn apply_mrope_interleaved(
     let cos_m2 = cos_half.i(2)?.contiguous()?;
     let sin_m2 = sin_half.i(2)?.contiguous()?;
 
-    let mut mask_m0 = vec![1.0f32; half_dim];
-    let mut mask_m1 = vec![0.0f32; half_dim];
-    let mut mask_m2 = vec![0.0f32; half_dim];
+    let (mask_m0, mask_m1, mask_m2) = match interleave_masks {
+        Some([m0, m1, m2]) => (m0.clone(), m1.clone(), m2.clone()),
+        None => {
+            let m1_end = (mrope_section[1] * modality_num).min(half_dim);
+            let m2_end = (mrope_section[2] * modality_num).min(half_dim);
 
-    if modality_num >= 3 && mrope_section.len() >= 3 {
-        for pos in 0..half_dim {
-            if pos >= 1 && pos < m1_end && (pos - 1) % modality_num == 0 {
-                mask_m0[pos] = 0.0;
-                mask_m1[pos] = 1.0;
-            } else if pos >= 2 && pos < m2_end && (pos - 2) % modality_num == 0 {
-                mask_m0[pos] = 0.0;
-                mask_m2[pos] = 1.0;
+            let mut mask_m0 = vec![1.0f32; half_dim];
+            let mut mask_m1 = vec![0.0f32; half_dim];
+            let mut mask_m2 = vec![0.0f32; half_dim];
+
+            for pos in 0..half_dim {
+                if pos >= 1 && pos < m1_end && (pos - 1) % modality_num == 0 {
+                    mask_m0[pos] = 0.0;
+                    mask_m1[pos] = 1.0;
+                } else if pos >= 2 && pos < m2_end && (pos - 2) % modality_num == 0 {
+                    mask_m0[pos] = 0.0;
+                    mask_m2[pos] = 1.0;
+                }
             }
-        }
-    }
 
-    let device = cos.device();
-    let mask_m0 = Tensor::from_vec(mask_m0, (1, 1, half_dim), device)?;
-    let mask_m1 = Tensor::from_vec(mask_m1, (1, 1, half_dim), device)?;
-    let mask_m2 = Tensor::from_vec(mask_m2, (1, 1, half_dim), device)?;
+            let device = cos.device();
+            let mask_m0 = Tensor::from_vec(mask_m0, (1, 1, half_dim), device)?;
+            let mask_m1 = Tensor::from_vec(mask_m1, (1, 1, half_dim), device)?;
+            let mask_m2 = Tensor::from_vec(mask_m2, (1, 1, half_dim), device)?;
+            (mask_m0, mask_m1, mask_m2)
+        }
+    };
 
     let cos_m0_masked = cos_m0.broadcast_mul(&mask_m0)?;
     let cos_m1_masked = cos_m1.broadcast_mul(&mask_m1)?;

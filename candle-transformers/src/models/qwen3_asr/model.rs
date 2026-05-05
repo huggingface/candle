@@ -157,6 +157,7 @@ struct TextRotaryEmbedding {
     rope: MultimodalRotaryEmbedding,
     mrope_section: Vec<usize>,
     interleaved: bool,
+    interleave_masks: Option<[Tensor; 3]>,
 }
 
 impl TextRotaryEmbedding {
@@ -173,10 +174,35 @@ impl TextRotaryEmbedding {
                 s.mrope_interleaved || s.interleaved,
             ),
         };
+        let interleave_masks = if interleaved && mrope_section.len() == 3 {
+            let half_dim = cfg.head_dim / 2;
+            let modality_num = mrope_section.len();
+            let m1_end = (mrope_section[1] * modality_num).min(half_dim);
+            let m2_end = (mrope_section[2] * modality_num).min(half_dim);
+            let mut mask_m0 = vec![1.0f32; half_dim];
+            let mut mask_m1 = vec![0.0f32; half_dim];
+            let mut mask_m2 = vec![0.0f32; half_dim];
+            for pos in 0..half_dim {
+                if pos >= 1 && pos < m1_end && (pos - 1) % modality_num == 0 {
+                    mask_m0[pos] = 0.0;
+                    mask_m1[pos] = 1.0;
+                } else if pos >= 2 && pos < m2_end && (pos - 2) % modality_num == 0 {
+                    mask_m0[pos] = 0.0;
+                    mask_m2[pos] = 1.0;
+                }
+            }
+            let mask_m0 = Tensor::from_vec(mask_m0, (1, 1, half_dim), device)?;
+            let mask_m1 = Tensor::from_vec(mask_m1, (1, 1, half_dim), device)?;
+            let mask_m2 = Tensor::from_vec(mask_m2, (1, 1, half_dim), device)?;
+            Some([mask_m0, mask_m1, mask_m2])
+        } else {
+            None
+        };
         Ok(Self {
             rope,
             mrope_section,
             interleaved,
+            interleave_masks,
         })
     }
 
@@ -235,6 +261,14 @@ impl TextAttention {
         let head_dim = cfg.head_dim;
         let num_attention_heads = cfg.num_attention_heads;
         let num_key_value_heads = cfg.num_key_value_heads;
+        if num_key_value_heads == 0 {
+            candle::bail!("num_key_value_heads must be > 0");
+        }
+        if !num_attention_heads.is_multiple_of(num_key_value_heads) {
+            candle::bail!(
+                "num_attention_heads ({num_attention_heads}) must be divisible by num_key_value_heads ({num_key_value_heads})"
+            );
+        }
         let num_key_value_groups = num_attention_heads / num_key_value_heads;
         let q_out = num_attention_heads * head_dim;
         let kv_out = num_key_value_heads * head_dim;
@@ -284,6 +318,7 @@ impl TextAttention {
             sin,
             rope.mrope_section.as_slice(),
             rope.interleaved,
+            rope.interleave_masks.as_ref(),
         )?;
 
         let (k, v) = kv_cache.update(layer_idx, &k, &v)?;

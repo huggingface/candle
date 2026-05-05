@@ -1,10 +1,11 @@
 //! KV cache for autoregressive generation.
 
 use candle::{Result, Tensor};
+use candle_nn::kv_cache::ConcatKvCache;
 
 #[derive(Debug, Clone, Default)]
 pub struct KVCache {
-    entries: Vec<Option<(Tensor, Tensor)>>,
+    entries: Vec<Option<ConcatKvCache>>,
     seq_len: usize,
 }
 
@@ -28,20 +29,21 @@ impl KVCache {
         }
         let new_len = key.dim(2)?;
         match &mut self.entries[layer_idx] {
-            Some((k, v)) => {
-                *k = Tensor::cat(&[&*k, key], 2)?;
-                *v = Tensor::cat(&[&*v, value], 2)?;
+            Some(cache) => {
+                let result = cache.append(key, value)?;
                 if layer_idx == 0 {
                     self.seq_len = self.seq_len.saturating_add(new_len);
                 }
-                Ok((k.clone(), v.clone()))
+                Ok(result)
             }
             None => {
-                self.entries[layer_idx] = Some((key.clone(), value.clone()));
+                let mut cache = ConcatKvCache::new(2);
+                let result = cache.append(key, value)?;
+                self.entries[layer_idx] = Some(cache);
                 if layer_idx == 0 {
                     self.seq_len = new_len;
                 }
-                Ok((key.clone(), value.clone()))
+                Ok(result)
             }
         }
     }
