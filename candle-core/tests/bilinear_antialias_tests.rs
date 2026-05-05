@@ -1,3 +1,9 @@
+// PyTorch reference values are pasted with the precision PyTorch printed;
+// clippy::excessive_precision would flag a long tail of f32 literals that
+// exceed f32's ~7-digit mantissa. We accept the fixture as-is because the
+// extra digits round to the same f32 and document the source of truth.
+#![allow(clippy::excessive_precision)]
+
 use candle_core::{Device, Result, Tensor};
 
 // ============================================================================
@@ -32,11 +38,8 @@ fn aa_2x_downscale_4_to_2() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
     let output = input.upsample_bilinear2d_antialias(2, 2, false)?;
-    let expected = Tensor::new(
-        &[3.571429f32, 5.142858, 9.857143, 11.428572],
-        dev,
-    )?
-    .reshape((1, 1, 2, 2))?;
+    let expected =
+        Tensor::new(&[3.571429f32, 5.142858, 9.857143, 11.428572], dev)?.reshape((1, 1, 2, 2))?;
     assert_close(&output, &expected)
 }
 
@@ -220,7 +223,7 @@ fn aa_non_square_4x6_to_3x4() -> Result<()> {
 }
 
 /* arange(16).reshape(1,1,4,4) -> (8, 8). Upscaling: antialias is a no-op,
-   so output should equal the non-antialiased bilinear reference. */
+so output should equal the non-antialiased bilinear reference. */
 #[test]
 fn aa_upscale_4x4_to_8x8() -> Result<()> {
     let dev = &Device::Cpu;
@@ -349,7 +352,7 @@ fn aa_multichannel_2x3x4x4_to_2x2() -> Result<()> {
 }
 
 /* Antialias must change the output for downsampling: regression guard
-   against silently routing to the non-antialiased path. */
+against silently routing to the non-antialiased path. */
 #[test]
 fn aa_differs_from_non_antialiased_on_downscale() -> Result<()> {
     let dev = &Device::Cpu;

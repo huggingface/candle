@@ -658,13 +658,11 @@ impl Map1 for UpsampleBilinear2DAntialias {
                     for w_out in 0..width_out {
                         let w_row = &w_w[w_out * width_in..(w_out + 1) * width_in];
                         let mut value = 0f64;
-                        for h_in in 0..height_in {
-                            let h_w = h_row[h_in];
+                        for (h_in, &h_w) in h_row.iter().enumerate() {
                             if h_w == 0.0 {
                                 continue;
                             }
-                            for w_in in 0..width_in {
-                                let w_w_val = w_row[w_in];
+                            for (w_in, &w_w_val) in w_row.iter().enumerate() {
                                 if w_w_val == 0.0 {
                                     continue;
                                 }
