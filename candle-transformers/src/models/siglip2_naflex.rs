@@ -262,7 +262,9 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.fc1)?.apply(&self.activation)?.apply(&self.fc2)
+        xs.apply(&self.fc1)?
+            .apply(&self.activation)?
+            .apply(&self.fc2)
     }
 }
 
@@ -311,14 +313,18 @@ impl Attention {
             .permute((0, 2, 1, 3))?
             .contiguous()?;
         // attn_weights: (b, num_heads, n, n)
-        let attn_weights = (q.matmul(&k.transpose(D::Minus1, D::Minus2)?.contiguous()?)? * self.scale)?;
+        let attn_weights =
+            (q.matmul(&k.transpose(D::Minus1, D::Minus2)?.contiguous()?)? * self.scale)?;
         let attn_weights = match attn_mask {
             Some(m) => attn_weights.broadcast_add(m)?,
             None => attn_weights,
         };
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let out = attn_weights.matmul(&v)?;
-        let out = out.permute((0, 2, 1, 3))?.contiguous()?.reshape((b, n, ()))?;
+        let out = out
+            .permute((0, 2, 1, 3))?
+            .contiguous()?
+            .reshape((b, n, ()))?;
         out.apply(&self.out_proj)
     }
 }
@@ -333,9 +339,17 @@ struct EncoderLayer {
 
 impl EncoderLayer {
     fn new<C: TransformerConfig>(cfg: &C, vb: VarBuilder) -> Result<Self> {
-        let layer_norm1 = layer_norm(cfg.hidden_size(), cfg.layer_norm_eps(), vb.pp("layer_norm1"))?;
+        let layer_norm1 = layer_norm(
+            cfg.hidden_size(),
+            cfg.layer_norm_eps(),
+            vb.pp("layer_norm1"),
+        )?;
         let self_attn = Attention::new(cfg, vb.pp("self_attn"))?;
-        let layer_norm2 = layer_norm(cfg.hidden_size(), cfg.layer_norm_eps(), vb.pp("layer_norm2"))?;
+        let layer_norm2 = layer_norm(
+            cfg.hidden_size(),
+            cfg.layer_norm_eps(),
+            vb.pp("layer_norm2"),
+        )?;
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         Ok(Self {
             layer_norm1,
@@ -396,8 +410,11 @@ impl VisionEmbeddings {
     fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
         let in_features = cfg.num_channels * cfg.patch_size * cfg.patch_size;
         let patch_embedding = linear(in_features, cfg.hidden_size, vb.pp("patch_embedding"))?;
-        let position_embedding =
-            candle_nn::embedding(cfg.num_patches, cfg.hidden_size, vb.pp("position_embedding"))?;
+        let position_embedding = candle_nn::embedding(
+            cfg.num_patches,
+            cfg.hidden_size,
+            vb.pp("position_embedding"),
+        )?;
         // base_grid_size = sqrt(num_patches); we expect num_patches to be a perfect square
         let base_grid_size = (cfg.num_patches as f64).sqrt().round() as usize;
         if base_grid_size * base_grid_size != cfg.num_patches {
@@ -425,7 +442,7 @@ impl VisionEmbeddings {
     ) -> Result<Tensor> {
         // base_pos: [num_patches, hidden] = [base*base, hidden]
         let base_pos = self.position_embedding.embeddings(); // [num_patches, hidden]
-        // reshape to (1, hidden, base, base) for interpolate2d (NCHW)
+                                                             // reshape to (1, hidden, base, base) for interpolate2d (NCHW)
         let base = self.base_grid_size;
         let base_pos = base_pos
             .reshape((base, base, self.hidden_size))?
@@ -441,7 +458,7 @@ impl VisionEmbeddings {
             .squeeze(0)? // (hidden, target_h, target_w)
             .permute((1, 2, 0))? // (target_h, target_w, hidden)
             .reshape((target_h * target_w, self.hidden_size))?;
-        Ok(resized.to_device(device)?)
+        resized.to_device(device)
     }
 
     /// Forward for the simple "batch-uniform shape" case: every input in the
@@ -474,11 +491,7 @@ impl VisionEmbeddings {
     /// real patches with 1 and padding with 0; `spatial_shapes` (B, 2) gives
     /// `[h_patches, w_patches]` per input. The position embedding is resized
     /// per-input and zero-padded to `max_num_patches`.
-    fn forward_variable(
-        &self,
-        pixel_values: &Tensor,
-        spatial_shapes: &Tensor,
-    ) -> Result<Tensor> {
+    fn forward_variable(&self, pixel_values: &Tensor, spatial_shapes: &Tensor) -> Result<Tensor> {
         let (b, max_n, _patch_dim) = pixel_values.dims3()?;
         let device = pixel_values.device();
         // patch_embeds: (B, max_n, hidden)
@@ -587,7 +600,8 @@ impl MultiheadAttentionPoolingHead {
             .reshape((b, n, self.num_heads, self.head_dim))?
             .permute((0, 2, 1, 3))?
             .contiguous()?;
-        let attn_weights = (q.matmul(&k.transpose(D::Minus1, D::Minus2)?.contiguous()?)? * self.scale)?;
+        let attn_weights =
+            (q.matmul(&k.transpose(D::Minus1, D::Minus2)?.contiguous()?)? * self.scale)?;
         // attn_mask shape expected: (B, 1, 1, n) or (B, num_heads, 1, n) — broadcast-compatible
         let attn_weights = match attn_mask {
             Some(m) => attn_weights.broadcast_add(m)?,
@@ -622,7 +636,8 @@ impl VisionTransformer {
     fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
         let embeddings = VisionEmbeddings::new(cfg, vb.pp("embeddings"))?;
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
-        let post_layernorm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("post_layernorm"))?;
+        let post_layernorm =
+            layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("post_layernorm"))?;
         let head = MultiheadAttentionPoolingHead::new(cfg, vb.pp("head"))?;
         Ok(Self {
             embeddings,
@@ -698,7 +713,12 @@ impl VisionModel {
         spatial_shapes: Option<&Tensor>,
         target_uniform: Option<(usize, usize)>,
     ) -> Result<Tensor> {
-        self.transformer.forward(pixel_values, pixel_attention_mask, spatial_shapes, target_uniform)
+        self.transformer.forward(
+            pixel_values,
+            pixel_attention_mask,
+            spatial_shapes,
+            target_uniform,
+        )
     }
 }
 
@@ -752,7 +772,11 @@ impl TextTransformer {
     pub fn new(cfg: &TextConfig, vb: VarBuilder) -> Result<Self> {
         let embeddings = TextEmbeddings::new(cfg, vb.pp("embeddings"))?;
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
-        let final_layer_norm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("final_layer_norm"))?;
+        let final_layer_norm = layer_norm(
+            cfg.hidden_size,
+            cfg.layer_norm_eps,
+            vb.pp("final_layer_norm"),
+        )?;
         let head = linear(cfg.hidden_size, cfg.projection_size, vb.pp("head"))?;
         Ok(Self {
             embeddings,

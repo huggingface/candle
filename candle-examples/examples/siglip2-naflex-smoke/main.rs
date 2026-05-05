@@ -35,7 +35,12 @@ fn load_image_as_patches(path: &str, device: &Device) -> Result<Tensor> {
     Ok(img_tensor.unsqueeze(0)?)
 }
 
-fn tokenize_pad(tokenizer: &Tokenizer, text: &str, pad_id: u32, max_len: usize) -> Result<Vec<u32>> {
+fn tokenize_pad(
+    tokenizer: &Tokenizer,
+    text: &str,
+    pad_id: u32,
+    max_len: usize,
+) -> Result<Vec<u32>> {
     let encoding = tokenizer
         .encode(text, true)
         .map_err(|e| anyhow::anyhow!("tokenize: {e}"))?;
@@ -58,7 +63,8 @@ fn main() -> Result<()> {
     let tokenizer_file = repo.get("tokenizer.json")?;
 
     let config: siglip2_naflex::Config = serde_json::from_slice(&std::fs::read(config_file)?)?;
-    let tokenizer = Tokenizer::from_file(tokenizer_file).map_err(|e| anyhow::anyhow!("tok: {e}"))?;
+    let tokenizer =
+        Tokenizer::from_file(tokenizer_file).map_err(|e| anyhow::anyhow!("tok: {e}"))?;
 
     let device = Device::Cpu;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
@@ -81,8 +87,8 @@ fn main() -> Result<()> {
     for t in &texts {
         all_ids.extend(tokenize_pad(&tokenizer, t, pad_id, max_len)?);
     }
-    let input_ids = Tensor::from_vec(all_ids, (texts.len(), max_len), &device)?
-        .to_dtype(DType::I64)?;
+    let input_ids =
+        Tensor::from_vec(all_ids, (texts.len(), max_len), &device)?.to_dtype(DType::I64)?;
     println!("Input IDs shape: {:?}", input_ids.shape());
 
     let (logits_per_text, _logits_per_image) = model.forward(
@@ -97,7 +103,10 @@ fn main() -> Result<()> {
     println!("Sigmoid scores (text x image):");
     let scores: Vec<Vec<f32>> = sig.to_vec2()?;
     for (i, t) in texts.iter().enumerate() {
-        println!("  '{}' -> bear={:.4}, teddy={:.4}", t, scores[i][0], scores[i][1]);
+        println!(
+            "  '{}' -> bear={:.4}, teddy={:.4}",
+            t, scores[i][0], scores[i][1]
+        );
     }
     println!("\nPer-image best match:");
     let logits_per_image = logits_per_text.t()?.contiguous()?;
@@ -106,7 +115,11 @@ fn main() -> Result<()> {
     let img_names = ["bear.jpg", "teddy.jpg"];
     for (i, name) in img_names.iter().enumerate() {
         let row = &probs_v[i];
-        let best = row.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap();
+        let best = row
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap();
         println!("  {}: best='{}' prob={:.4}", name, texts[best.0], best.1);
     }
 
