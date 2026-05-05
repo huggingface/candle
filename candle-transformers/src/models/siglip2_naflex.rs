@@ -609,7 +609,7 @@ impl MultiheadAttentionPoolingHead {
         let h = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let head_dim = h / num_heads;
-        // probe: (1, 1, hidden) — single tensor at `<head>.probe`
+        // probe: (1, 1, hidden) - single tensor at `<head>.probe`
         let probe = vb.get((1, 1, h), "probe")?;
         // The HF checkpoint stores `attention.in_proj_weight` (3H x H) and
         // `attention.in_proj_bias` (3H), corresponding to
@@ -668,7 +668,7 @@ impl MultiheadAttentionPoolingHead {
             .contiguous()?;
         let attn_weights =
             (q.matmul(&k.transpose(D::Minus1, D::Minus2)?.contiguous()?)? * self.scale)?;
-        // attn_mask shape expected: (B, 1, 1, n) or (B, num_heads, 1, n) — broadcast-compatible
+        // attn_mask shape expected: (B, 1, 1, n) or (B, num_heads, 1, n) - broadcast-compatible
         let attn_weights = match attn_mask {
             Some(m) => attn_weights.broadcast_add(m)?,
             None => attn_weights,
@@ -857,7 +857,7 @@ impl TextTransformer {
         // SigLIP text encoder uses no attention mask (full attention over fixed-length input)
         let xs = self.encoder.forward(&xs, None)?;
         let xs = xs.apply(&self.final_layer_norm)?;
-        // Pool last token: xs[:, -1, :] — call contiguous() since slicing
+        // Pool last token: xs[:, -1, :] - call contiguous() since slicing
         // produces a non-contiguous view that breaks matmul in the head.
         let last = xs.i((.., xs.dim(1)? - 1, ..))?.contiguous()?;
         last.apply(&self.head)

@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     let mask1 = Tensor::cat(&[&mask1_real, &mask1_pad], 0)?;
     let pixel_attention_mask = Tensor::stack(&[&mask0, &mask1], 0)?; // (2, 256)
 
-    // spatial_shapes: (2, 2) — [[16,16],[12,12]]
+    // spatial_shapes: (2, 2) - [[16,16],[12,12]]
     let spatial_shapes = Tensor::from_vec(vec![16i64, 16, 12, 12], (2, 2), &device)?;
 
     let input_ids = Tensor::zeros((1, 64), DType::I64, &device)?;
