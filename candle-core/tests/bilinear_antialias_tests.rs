@@ -387,37 +387,36 @@ fn aa_differs_from_non_antialiased_on_downscale() -> Result<()> {
     Ok(())
 }
 
-/* Non-contiguous input must be handled correctly via stride math, not
-reinterpreted as contiguous. We construct a contiguous (1,1,8,8) tensor,
-permute the spatial dims to make it non-contiguous, run the kernel, and
-compare against running the kernel on the equivalent contiguous tensor.
-The two outputs must match: same logical input, same output regardless of
-memory layout. */
+/* Non-contiguous input via permute + AA output should equal the AA-of-
+original output then permuted the same way. This is stronger than the
+weaker "matches contiguous" check because if the kernel had a bug where
+stride[2] and stride[3] were swapped, both permuted and permuted.contiguous()
+would return wrong (but matching) results. By comparing against the
+independently-computed AA on the original tensor (transposed afterwards),
+we catch stride swaps. */
 #[test]
-fn aa_non_contiguous_input_matches_contiguous() -> Result<()> {
+fn aa_non_contiguous_via_permute() -> Result<()> {
     let dev = &Device::Cpu;
-    // Build a non-symmetric (1,1,8,8) tensor whose transpose is not the same.
     let raw = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
-    // Make a logically-equivalent input by transposing twice (round-trip).
-    // The intermediate `permute` produces a non-contiguous tensor; we keep
-    // it that way deliberately to exercise the stride path.
-    let permuted = raw.permute((0, 1, 3, 2))?; // shape (1,1,8,8) but H<->W swapped + non-contiguous
-    assert!(
-        !permuted.is_contiguous(),
-        "permuted should be non-contiguous"
-    );
-
-    // Reference: what we get if we manually copy permuted to a contiguous
-    // tensor and run AA on that.
-    let permuted_contig = permuted.contiguous()?;
-    let ref_out = permuted_contig.upsample_bilinear2d_antialias(4, 4)?;
-    let test_out = permuted.upsample_bilinear2d_antialias(4, 4)?;
-    assert_close(&test_out, &ref_out)
+    // AA on the original H,W layout: produces (1,1,4,4) output with axes
+    // matching raw's axis order.
+    let raw_aa = raw.upsample_bilinear2d_antialias(4, 4)?;
+    // Now permute raw to swap H<->W (non-contiguous) and run AA on that.
+    // The output should equal raw_aa with the same H<->W swap applied,
+    // because AA is axis-symmetric in this respect.
+    let permuted = raw.permute((0, 1, 3, 2))?;
+    assert!(!permuted.is_contiguous(), "permuted must be non-contiguous");
+    let permuted_aa = permuted.upsample_bilinear2d_antialias(4, 4)?;
+    let expected = raw_aa.permute((0, 1, 3, 2))?.contiguous()?;
+    assert_close(&permuted_aa, &expected)
 }
 
-/* Identity short-circuit must not silently return the wrong bytes for a
-non-contiguous input. With target == input shape, the kernel must still
-produce values matching the contiguous-equivalent result. */
+/* Regression guard against re-introducing a stride-unaware identity
+short-circuit (a previous revision had one that called src.to_vec()
+ignoring layout, silently reinterpreting permuted bytes as contiguous).
+With target == input shape and a non-contiguous input, the output must
+reflect the logical (permuted) values, not the underlying contiguous
+storage. */
 #[test]
 fn aa_identity_with_non_contiguous_input() -> Result<()> {
     let dev = &Device::Cpu;
@@ -427,6 +426,52 @@ fn aa_identity_with_non_contiguous_input() -> Result<()> {
     let out = permuted.upsample_bilinear2d_antialias(8, 8)?;
     let expected = permuted.contiguous()?;
     assert_close(&out, &expected)
+}
+
+/* Sliced input via narrow produces a non-zero src_offset; the kernel must
+honor layout.start_offset() and not assume the data starts at index 0
+of the underlying buffer. */
+#[test]
+fn aa_narrowed_input_honors_offset() -> Result<()> {
+    let dev = &Device::Cpu;
+    // Build a wider buffer, take a (1,1,8,8) slice that starts in the middle.
+    let big = Tensor::arange(0f32, 256f32, dev)?.reshape((1, 1, 16, 16))?;
+    let slice = big.narrow(2, 4, 8)?.narrow(3, 4, 8)?; // 8x8 from rows 4..12, cols 4..12
+    let slice_aa = slice.upsample_bilinear2d_antialias(4, 4)?;
+    // Reference: copy the same slice contiguously and run AA on that.
+    let slice_contig_aa = slice.contiguous()?.upsample_bilinear2d_antialias(4, 4)?;
+    assert_close(&slice_aa, &slice_contig_aa)
+}
+
+/* Broadcast batch (stride[0] == 0) means every batch reads the same source.
+The kernel computes base_idx = src_offset + b * stride[0] + c * stride[1];
+with stride[0] = 0, all batches share the same row 0 of the underlying
+data, so all batch-slices of the output should be identical. */
+#[test]
+fn aa_broadcast_batch_produces_identical_outputs() -> Result<()> {
+    let dev = &Device::Cpu;
+    let single = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
+    let expanded = single.broadcast_as((4, 1, 8, 8))?; // stride[0] = 0
+    let out = expanded.upsample_bilinear2d_antialias(4, 4)?;
+    // Reference: AA on the single-batch input.
+    let ref_out = single.upsample_bilinear2d_antialias(4, 4)?;
+    let ref_v = ref_out.flatten_all()?.to_vec1::<f32>()?;
+    let out_v = out.flatten_all()?.to_vec1::<f32>()?;
+    let per_batch = ref_v.len();
+    assert_eq!(out_v.len(), 4 * per_batch);
+    for b in 0..4 {
+        for i in 0..per_batch {
+            let diff = (out_v[b * per_batch + i] - ref_v[i]).abs();
+            assert!(
+                diff < 1e-4,
+                "batch {b} index {i} broadcast mismatch: {} vs {} (diff {})",
+                out_v[b * per_batch + i],
+                ref_v[i],
+                diff
+            );
+        }
+    }
+    Ok(())
 }
 
 /* The kernel is generic over WithDType. f32 is exercised above; this test
@@ -476,11 +521,14 @@ fn aa_f16_round_trip_within_noise_floor() -> Result<()> {
     let out_f16_as_f32 = out_f16.to_dtype(DType::F32)?;
     let diff = (&out_f32 - &out_f16_as_f32)?.abs()?.flatten_all()?.max(0)?;
     let max_diff = diff.to_vec0::<f32>()?;
-    // f16 has ~3.3 decimal digits of precision; values up to ~64 leave room
-    // for ~5e-2 absolute error. Pick 1e-1 to leave headroom for accumulation.
+    // f16 ULP at output magnitude ~57 is ~57 * 2^-10 ≈ 0.056. The kernel
+    // accumulates in f64 regardless of T, so the only loss is input-cast
+    // + output-cast: bounded by ~1 ULP at output magnitude. Threshold 5e-2
+    // is ~1 ULP at this test's value range, tight enough to catch
+    // regressions that would cross into 2-ULP territory.
     assert!(
-        max_diff < 1e-1,
-        "f32 vs f16 round-trip should match within f16 noise floor; got {}",
+        max_diff < 5e-2,
+        "f32 vs f16 round-trip should match within ~1 f16 ULP; got {}",
         max_diff
     );
     Ok(())
@@ -500,11 +548,13 @@ fn aa_bf16_round_trip_within_noise_floor() -> Result<()> {
         .flatten_all()?
         .max(0)?;
     let max_diff = diff.to_vec0::<f32>()?;
-    // bf16 has ~7 bits of mantissa; values up to ~64 leave room for
-    // ~5e-1 absolute error on a single op. Pick 1.0 to be safe.
+    // bf16 ULP at output magnitude ~57 is ~57 * 2^-7 ≈ 0.45. Same f64
+    // accumulator argument as the f16 test: the only loss is dtype cast at
+    // boundaries. Threshold 5e-1 is ~1 ULP at this test's value range,
+    // tight enough to catch regressions that would cross 2-ULP.
     assert!(
-        max_diff < 1.0,
-        "f32 vs bf16 round-trip should match within bf16 noise floor; got {}",
+        max_diff < 5e-1,
+        "f32 vs bf16 round-trip should match within ~1 bf16 ULP; got {}",
         max_diff
     );
     Ok(())

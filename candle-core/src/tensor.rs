@@ -1355,13 +1355,9 @@ impl Tensor {
     /// * `target_h` - Output height (must be > 0)
     /// * `target_w` - Output width (must be > 0)
     pub fn upsample_bilinear2d_antialias(&self, target_h: usize, target_w: usize) -> Result<Self> {
-        if target_h == 0 || target_w == 0 {
-            bail!(
-                "upsample_bilinear2d_antialias requires positive target dims, \
-                 got ({target_h}, {target_w})"
-            )
-        }
-        let (n, c, _h, _w) = self.dims4()?;
+        // Rank check via dims4()?; positive-dim validation lives in the
+        // backend impl so all backends share one authoritative error.
+        let (n, c, _, _) = self.dims4()?;
         let op = BackpropOp::new1(self, |arg| Op::UpsampleBilinear2DAntialias {
             arg,
             target_h,
