@@ -86,8 +86,13 @@ fn apply_mrope_interleaved(
     sin: &Tensor,
     mrope_section: &[usize],
 ) -> Result<(Tensor, Tensor)> {
-    let (_modalities, _batch, _seq_len, half_dim) = cos.dims4()?;
+    let (modalities, _batch, _seq_len, half_dim) = cos.dims4()?;
     let modality_num = mrope_section.len();
+    if modalities < 3 {
+        candle::bail!(
+            "interleaved mRoPE requires at least 3 modalities, got {modalities} (mrope_section has {modality_num} entries)"
+        );
+    }
     let original_dtype = cos.dtype();
     let cos_half = cos.contiguous()?.to_dtype(DType::F32)?;
     let sin_half = sin.contiguous()?.to_dtype(DType::F32)?;
