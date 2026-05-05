@@ -60,7 +60,13 @@ fn apply_mrope_concat(
     sin: &Tensor,
     mrope_section: &[usize],
 ) -> Result<(Tensor, Tensor)> {
-    let (_modalities, _batch, _seq_len, half_dim) = cos.dims4()?;
+    let (modalities, _batch, _seq_len, half_dim) = cos.dims4()?;
+    if mrope_section.len() > modalities {
+        candle::bail!(
+            "mrope_section length ({}) exceeds modalities in cos ({modalities})",
+            mrope_section.len()
+        );
+    }
     let section_sum: usize = mrope_section.iter().sum();
     if section_sum != half_dim {
         candle::bail!("mrope_section sum ({section_sum}) must equal cos half_dim ({half_dim})");
@@ -98,15 +104,19 @@ fn apply_mrope_interleaved(
 ) -> Result<(Tensor, Tensor)> {
     let (modalities, _batch, _seq_len, half_dim) = cos.dims4()?;
     let modality_num = mrope_section.len();
-    if modalities < 3 {
+    if modalities != 3 {
         candle::bail!(
-            "interleaved mRoPE requires at least 3 modalities, got {modalities} (mrope_section has {modality_num} entries)"
+            "interleaved mRoPE requires exactly 3 modalities, got {modalities} (mrope_section has {modality_num} entries)"
         );
     }
     if modality_num != 3 {
         candle::bail!(
             "interleaved mRoPE requires exactly 3 mrope_section entries, got {modality_num}"
         );
+    }
+    let section_sum: usize = mrope_section.iter().sum();
+    if section_sum != half_dim {
+        candle::bail!("mrope_section sum ({section_sum}) must equal cos half_dim ({half_dim})");
     }
     let original_dtype = cos.dtype();
     let cos_half = cos.contiguous()?.to_dtype(DType::F32)?;

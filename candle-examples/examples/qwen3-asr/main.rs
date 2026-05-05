@@ -360,7 +360,9 @@ fn main() -> anyhow::Result<()> {
     let config_path = repo.get("config.json")?;
     let cfg: qwen3_asr::Config = serde_json::from_str(&std::fs::read_to_string(&config_path)?)?;
 
-    let audio_token_id = cfg.thinker_config.audio_token_id.unwrap_or(151_676);
+    let audio_token_id = cfg.thinker_config.audio_token_id.ok_or_else(|| {
+        anyhow::anyhow!("thinker_config.audio_token_id is required in config.json")
+    })?;
     let audio_start_id = cfg.thinker_config.audio_start_token_id.unwrap_or(151_669);
     let audio_end_id = cfg.thinker_config.audio_end_token_id.unwrap_or(151_670);
 

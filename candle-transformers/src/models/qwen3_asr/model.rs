@@ -107,7 +107,36 @@ fn seqlens_from_left_padded_attention_mask(mask: &Tensor, seq_len: usize) -> Res
         let len = v.round() as usize;
         out.push(len);
     }
+    validate_left_padded(mask, seq_len, &out).map_err(|msg| candle::Error::Msg(msg.to_string()))?;
     Ok(out)
+}
+
+#[cfg(feature = "flash-attn")]
+fn validate_left_padded(
+    mask: &Tensor,
+    seq_len: usize,
+    lengths: &[usize],
+) -> std::result::Result<(), String> {
+    let mask_data = mask.to_vec2::<u32>().map_err(|e| format!("{e:?}"))?;
+    for (b, (&len, row)) in lengths.iter().zip(mask_data.iter()).enumerate() {
+        let pad = seq_len - len;
+        for j in 0..pad {
+            if row[j] != 0 {
+                return Err(format!(
+                    "attention_mask at batch {b} position {j}: expected 0 for left-padding, got {}; \
+                     this helper requires a left-padded mask (valid tokens at the right)",
+                    row[j]
+                ));
+            }
+        }
+        if len > 0 && row[pad] == 0 {
+            return Err(format!(
+                "attention_mask at batch {b} position {pad}: expected non-zero first valid token \
+                 for left-padding; this helper requires a left-padded mask"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "flash-attn")]
