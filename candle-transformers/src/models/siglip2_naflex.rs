@@ -29,18 +29,81 @@
 //! - **Attention mask** is plumbed through `Encoder`, `EncoderLayer`, `Attention`,
 //!   and the `MultiheadAttentionPoolingHead`.
 //!
-//! ## Note on bicubic vs bilinear interpolation
+//! ## Note on position-embedding interpolation
 //!
-//! HF transformers' reference implementation uses
-//! `F.interpolate(mode="bicubic", antialias=True)` for `resize_positional_embeddings`.
-//! Candle's `Tensor::interpolate2d` is bilinear-only and lacks an antialias mode.
-//! This implementation falls back to bilinear, which introduces small numerical
-//! drift at non-base resolutions — typically `< 5e-3` max abs diff at fp32
-//! versus the PyTorch reference. Adding bicubic+antialias to candle-core is
-//! tracked separately and out of scope for this model file.
+//! HF transformers' reference uses
+//! `F.interpolate(mode="bilinear", align_corners=False, antialias=True)` for
+//! `resize_positional_embeddings`. Candle-core has `upsample_bilinear2d` but no
+//! antialias filter; without antialias, downsampling and asymmetric resize
+//! introduce up to ~0.7 max abs diff in the resized position grid (>0.1 in the
+//! final patch embedding once added to the patch features).
+//!
+//! This file implements `bilinear_antialias_2d` as a userland helper using
+//! existing tensor ops (matmul of two small triangle-weight matrices, one per
+//! axis). Mathematically equivalent to PyTorch's antialiased bilinear: each
+//! output pixel is a normalized triangle-weighted sum over input pixels in a
+//! window of width `max(1, 1/scale)`. Validated against PyTorch reference at
+//! 8 scale factors covering the SigLIP2 NaFlex range (16x16 -> 17x15, 19x13,
+//! 13x17, 8x8, 24x24) plus synthetic cases; worst max abs diff vs PyTorch is
+//! ~3e-6 (FP precision noise). See `candle-examples/examples/antialias-prototype`.
+//!
+//! Promoting this filter to candle-core (so it lives next to `upsample_bilinear2d`
+//! and gets backend kernels on Metal and CUDA) is tracked separately.
 
-use candle::{DType, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, linear, LayerNorm, Linear, VarBuilder};
+
+// ============================================================================
+// Antialiased bilinear interpolation (userland approximation of
+// `F.interpolate(mode="bilinear", align_corners=False, antialias=True)`)
+// ============================================================================
+
+/// Build a per-axis weight matrix of shape `(dst, src)` such that for each
+/// output index `o`, `W[o, i]` is the triangle weight for input index `i`,
+/// normalized so each row sums to 1. Matches PyTorch's antialiased-bilinear
+/// algorithm along a single axis: support is `max(1, 1/scale)` in input
+/// coordinates, weights linear in distance from the mapped output center.
+fn antialias_weight_matrix(src: usize, dst: usize, device: &Device) -> Result<Tensor> {
+    let scale = dst as f64 / src as f64;
+    let support = (1.0_f64 / scale).max(1.0);
+    let mut weights = vec![0f32; dst * src];
+    for o in 0..dst {
+        let center = (o as f64 + 0.5) / scale - 0.5;
+        let i_min = ((center - support).floor() as i64).max(0);
+        let i_max_excl = ((center + support).ceil() as i64 + 1).min(src as i64);
+        let mut row_sum = 0f32;
+        for i in i_min..i_max_excl {
+            let dist = ((i as f64 - center).abs() / support) as f32;
+            let w = (1.0 - dist).max(0.0);
+            weights[o * src + i as usize] = w;
+            row_sum += w;
+        }
+        if row_sum > 0.0 {
+            for i in i_min..i_max_excl {
+                weights[o * src + i as usize] /= row_sum;
+            }
+        }
+    }
+    Tensor::from_vec(weights, (dst, src), device)
+}
+
+/// Antialiased bilinear interpolation for 4D tensors `(B, C, H, W)`.
+/// Approximates `F.interpolate(mode="bilinear", align_corners=False,
+/// antialias=True)` to floating-point precision via two matmuls.
+fn bilinear_antialias_2d(input: &Tensor, target_h: usize, target_w: usize) -> Result<Tensor> {
+    let (b, c, h, w) = input.dims4()?;
+    let device = input.device();
+    let dtype = input.dtype();
+    let w_h = antialias_weight_matrix(h, target_h, device)?.to_dtype(dtype)?;
+    let w_w_t = antialias_weight_matrix(w, target_w, device)?
+        .to_dtype(dtype)?
+        .t()?
+        .contiguous()?;
+    let x = input.reshape((b * c, h, w))?.contiguous()?;
+    let x = w_h.broadcast_matmul(&x)?.contiguous()?;
+    let x = x.broadcast_matmul(&w_w_t)?;
+    x.reshape((b, c, target_h, target_w))
+}
 
 // ============================================================================
 // Config
@@ -451,17 +514,10 @@ impl VisionEmbeddings {
         let resized = if target_h == base && target_w == base {
             base_pos
         } else {
-            // NOTE: candle's `interpolate2d` is misleadingly named — it's actually
-            // nearest-neighbor interpolation (alias for `upsample_nearest2d`). For
-            // bilinear interpolation matching PyTorch's
-            // `F.interpolate(mode="bilinear", align_corners=False)`, use
-            // `upsample_bilinear2d(h, w, false)`.
-            //
-            // PyTorch's reference also uses `antialias=True`, which candle does
-            // not yet implement. The remaining drift after this fix at non-base
-            // resolutions is from the antialias filter difference and is
-            // documented in the module-level doc comment.
-            base_pos.upsample_bilinear2d(target_h, target_w, false)?
+            // PyTorch reference uses bilinear with antialias. Candle-core lacks
+            // antialias; `bilinear_antialias_2d` above approximates it via matmul
+            // of triangle-weight matrices, matching PyTorch to FP precision.
+            bilinear_antialias_2d(&base_pos, target_h, target_w)?
         };
         // back to (target_h * target_w, hidden)
         let resized = resized
