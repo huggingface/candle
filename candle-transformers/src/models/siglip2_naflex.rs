@@ -767,8 +767,9 @@ impl TextTransformer {
         // SigLIP text encoder uses no attention mask (full attention over fixed-length input)
         let xs = self.encoder.forward(&xs, None)?;
         let xs = xs.apply(&self.final_layer_norm)?;
-        // Pool last token: xs[:, -1, :]
-        let last = xs.i((.., xs.dim(1)? - 1, ..))?;
+        // Pool last token: xs[:, -1, :] — call contiguous() since slicing
+        // produces a non-contiguous view that breaks matmul in the head.
+        let last = xs.i((.., xs.dim(1)? - 1, ..))?.contiguous()?;
         last.apply(&self.head)
     }
 }
