@@ -1407,7 +1407,6 @@ impl BackendStorage for MetalStorage {
         _inp_l: &Layout,
         _out_h: usize,
         _out_w: usize,
-        _align_corners: bool,
     ) -> Result<Self> {
         crate::bail!(
             "upsample_bilinear2d_antialias is not yet implemented on the Metal backend; \

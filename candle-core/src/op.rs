@@ -156,7 +156,6 @@ pub enum Op {
         arg: Tensor,
         target_h: usize,
         target_w: usize,
-        align_corners: bool,
     },
 
     Cat(Vec<Tensor>, usize),

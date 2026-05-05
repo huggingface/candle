@@ -603,19 +603,18 @@ impl Storage {
         layout: &Layout,
         h: usize,
         w: usize,
-        align_corners: bool,
     ) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
-                let storage = storage.upsample_bilinear2d_antialias(layout, h, w, align_corners)?;
+                let storage = storage.upsample_bilinear2d_antialias(layout, h, w)?;
                 Ok(Self::Cpu(storage))
             }
             Self::Cuda(storage) => {
-                let storage = storage.upsample_bilinear2d_antialias(layout, h, w, align_corners)?;
+                let storage = storage.upsample_bilinear2d_antialias(layout, h, w)?;
                 Ok(Self::Cuda(storage))
             }
             Self::Metal(storage) => {
-                let storage = storage.upsample_bilinear2d_antialias(layout, h, w, align_corners)?;
+                let storage = storage.upsample_bilinear2d_antialias(layout, h, w)?;
                 Ok(Self::Metal(storage))
             }
         }

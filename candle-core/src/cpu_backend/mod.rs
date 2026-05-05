@@ -588,7 +588,6 @@ impl Map1 for UpsampleBilinear2D {
 struct UpsampleBilinear2DAntialias {
     target_h: usize,
     target_w: usize,
-    align_corners: bool,
 }
 
 impl UpsampleBilinear2DAntialias {
@@ -624,15 +623,17 @@ impl UpsampleBilinear2DAntialias {
 
 impl Map1 for UpsampleBilinear2DAntialias {
     fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
-        if self.align_corners {
-            crate::bail!("upsample_bilinear2d_antialias with align_corners=true is not supported");
-        }
         let (batch, channels, height_in, width_in) = layout.shape().dims4()?;
         let height_out = self.target_h;
         let width_out = self.target_w;
 
-        if height_in == height_out && width_in == width_out {
-            return Ok(src.to_vec());
+        // Identity short-circuit: only valid when the input is contiguous,
+        // because we return a flat Vec that the caller wraps in a fresh
+        // contiguous layout. Returning src.to_vec() for a permuted input
+        // would silently reinterpret the bytes as contiguous.
+        if height_in == height_out && width_in == width_out && layout.is_contiguous() {
+            let total = batch * channels * height_in * width_in;
+            return Ok(src[layout.start_offset()..layout.start_offset() + total].to_vec());
         }
 
         let stride = layout.stride();
@@ -2470,17 +2471,10 @@ impl BackendStorage for CpuStorage {
         .map(self, layout)
     }
 
-    fn upsample_bilinear2d_antialias(
-        &self,
-        layout: &Layout,
-        h: usize,
-        w: usize,
-        align_corners: bool,
-    ) -> Result<Self> {
+    fn upsample_bilinear2d_antialias(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
         UpsampleBilinear2DAntialias {
             target_h: h,
             target_w: w,
-            align_corners,
         }
         .map(self, layout)
     }

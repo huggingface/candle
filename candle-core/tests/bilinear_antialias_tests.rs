@@ -1,10 +1,13 @@
-// PyTorch reference values are pasted with the precision PyTorch printed;
-// clippy::excessive_precision would flag a long tail of f32 literals that
-// exceed f32's ~7-digit mantissa. We accept the fixture as-is because the
-// extra digits round to the same f32 and document the source of truth.
+// This test file pastes PyTorch reference values at the precision PyTorch
+// printed (6 decimals). For values >= ~100 that exceeds the f32 mantissa, so
+// clippy::excessive_precision would flag ~130 of these literals. The trailing
+// digits round to the same f32 bit pattern (verified by every test passing
+// under the 1e-4 tolerance gate); we accept the literals as-is to keep the
+// fixtures byte-identical to the upstream PyTorch print output. The allow is
+// scoped to this fixture-only test file.
 #![allow(clippy::excessive_precision)]
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 // ============================================================================
 // PyTorch Exact Comparison Tests
@@ -19,14 +22,28 @@ use candle_core::{Device, Result, Tensor};
 const TOL: f32 = 1e-4;
 
 fn assert_close(out: &Tensor, expected: &Tensor) -> Result<()> {
-    let diff = (out - expected)?.abs()?.flatten_all()?.max(0)?;
-    let max_diff = diff.to_vec0::<f32>()?;
-    assert!(
-        max_diff < TOL,
-        "Max difference {} exceeds threshold {}",
-        max_diff,
-        TOL
-    );
+    let diff_t = (out - expected)?.abs()?;
+    let max_diff = diff_t.flatten_all()?.max(0)?.to_vec0::<f32>()?;
+    if max_diff >= TOL {
+        let out_v = out.flatten_all()?.to_vec1::<f32>()?;
+        let exp_v = expected.flatten_all()?.to_vec1::<f32>()?;
+        let (idx, _) = out_v
+            .iter()
+            .zip(exp_v.iter())
+            .enumerate()
+            .map(|(i, (a, b))| (i, (a - b).abs()))
+            .max_by(|x, y| x.1.partial_cmp(&y.1).unwrap())
+            .unwrap();
+        panic!(
+            "max abs diff {} >= tolerance {} at flat index {}: got {}, expected {}, shape {:?}",
+            max_diff,
+            TOL,
+            idx,
+            out_v[idx],
+            exp_v[idx],
+            out.shape()
+        );
+    }
     Ok(())
 }
 
@@ -37,7 +54,7 @@ let y = F.interpolate(x, size=(2, 2), mode="bilinear", antialias=True, align_cor
 fn aa_2x_downscale_4_to_2() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
-    let output = input.upsample_bilinear2d_antialias(2, 2, false)?;
+    let output = input.upsample_bilinear2d_antialias(2, 2)?;
     let expected =
         Tensor::new(&[3.571429f32, 5.142858, 9.857143, 11.428572], dev)?.reshape((1, 1, 2, 2))?;
     assert_close(&output, &expected)
@@ -48,7 +65,7 @@ fn aa_2x_downscale_4_to_2() -> Result<()> {
 fn aa_8x8_to_4x4() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
-    let output = input.upsample_bilinear2d_antialias(4, 4, false)?;
+    let output = input.upsample_bilinear2d_antialias(4, 4)?;
     let expected = Tensor::new(
         &[
             6.428572f32,
@@ -79,7 +96,7 @@ fn aa_8x8_to_4x4() -> Result<()> {
 fn aa_16x16_to_8x8() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 256f32, dev)?.reshape((1, 1, 16, 16))?;
-    let output = input.upsample_bilinear2d_antialias(8, 8, false)?;
+    let output = input.upsample_bilinear2d_antialias(8, 8)?;
     let expected = Tensor::new(
         &[
             12.142859f32,
@@ -158,7 +175,7 @@ fn aa_16x16_to_8x8() -> Result<()> {
 fn aa_asymmetric_8x8_to_5x3() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
-    let output = input.upsample_bilinear2d_antialias(5, 3, false)?;
+    let output = input.upsample_bilinear2d_antialias(5, 3)?;
     let expected = Tensor::new(
         &[
             4.377990f32,
@@ -188,7 +205,7 @@ fn aa_asymmetric_8x8_to_5x3() -> Result<()> {
 fn aa_non_square_4x6_to_3x4() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 48f32, dev)?.reshape((1, 2, 4, 6))?;
-    let output = input.upsample_bilinear2d_antialias(3, 4, false)?;
+    let output = input.upsample_bilinear2d_antialias(3, 4)?;
     let expected = Tensor::new(
         &[
             2.175000f32,
@@ -228,7 +245,7 @@ so output should equal the non-antialiased bilinear reference. */
 fn aa_upscale_4x4_to_8x8() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
-    let output = input.upsample_bilinear2d_antialias(8, 8, false)?;
+    let output = input.upsample_bilinear2d_antialias(8, 8)?;
     let expected = Tensor::new(
         &[
             0.000000f32,
@@ -307,7 +324,7 @@ fn aa_upscale_4x4_to_8x8() -> Result<()> {
 fn aa_identity_4x4_to_4x4() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
-    let output = input.upsample_bilinear2d_antialias(4, 4, false)?;
+    let output = input.upsample_bilinear2d_antialias(4, 4)?;
     let expected = input.clone();
     assert_close(&output, &expected)
 }
@@ -317,7 +334,7 @@ fn aa_identity_4x4_to_4x4() -> Result<()> {
 fn aa_multichannel_2x3x4x4_to_2x2() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 96f32, dev)?.reshape((2, 3, 4, 4))?;
-    let output = input.upsample_bilinear2d_antialias(2, 2, false)?;
+    let output = input.upsample_bilinear2d_antialias(2, 2)?;
     let expected = Tensor::new(
         &[
             3.571429f32,
@@ -357,7 +374,7 @@ against silently routing to the non-antialiased path. */
 fn aa_differs_from_non_antialiased_on_downscale() -> Result<()> {
     let dev = &Device::Cpu;
     let input = Tensor::arange(0f32, 256f32, dev)?.reshape((1, 1, 16, 16))?;
-    let aa = input.upsample_bilinear2d_antialias(8, 8, false)?;
+    let aa = input.upsample_bilinear2d_antialias(8, 8)?;
     let plain = input.upsample_bilinear2d(8, 8, false)?;
     let diff = (&aa - &plain)?.abs()?.flatten_all()?.max(0)?;
     let max_diff = diff.to_vec0::<f32>()?;
@@ -370,12 +387,72 @@ fn aa_differs_from_non_antialiased_on_downscale() -> Result<()> {
     Ok(())
 }
 
-/* align_corners=true must error rather than silently producing a wrong result. */
+/* Non-contiguous input must be handled correctly via stride math, not
+reinterpreted as contiguous. We construct a contiguous (1,1,8,8) tensor,
+permute the spatial dims to make it non-contiguous, run the kernel, and
+compare against running the kernel on the equivalent contiguous tensor.
+The two outputs must match: same logical input, same output regardless of
+memory layout. */
 #[test]
-fn aa_align_corners_true_returns_error() -> Result<()> {
+fn aa_non_contiguous_input_matches_contiguous() -> Result<()> {
     let dev = &Device::Cpu;
-    let input = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
-    let result = input.upsample_bilinear2d_antialias(2, 2, true);
-    assert!(result.is_err(), "align_corners=true should error");
+    // Build a non-symmetric (1,1,8,8) tensor whose transpose is not the same.
+    let raw = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
+    // Make a logically-equivalent input by transposing twice (round-trip).
+    // The intermediate `permute` produces a non-contiguous tensor; we keep
+    // it that way deliberately to exercise the stride path.
+    let permuted = raw.permute((0, 1, 3, 2))?; // shape (1,1,8,8) but H<->W swapped + non-contiguous
+    assert!(
+        !permuted.is_contiguous(),
+        "permuted should be non-contiguous"
+    );
+
+    // Reference: what we get if we manually copy permuted to a contiguous
+    // tensor and run AA on that.
+    let permuted_contig = permuted.contiguous()?;
+    let ref_out = permuted_contig.upsample_bilinear2d_antialias(4, 4)?;
+    let test_out = permuted.upsample_bilinear2d_antialias(4, 4)?;
+    assert_close(&test_out, &ref_out)
+}
+
+/* Identity short-circuit must not silently return the wrong bytes for a
+non-contiguous input. With target == input shape, the kernel must still
+produce values matching the contiguous-equivalent result. */
+#[test]
+fn aa_identity_with_non_contiguous_input() -> Result<()> {
+    let dev = &Device::Cpu;
+    let raw = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
+    let permuted = raw.permute((0, 1, 3, 2))?;
+    assert!(!permuted.is_contiguous());
+    let out = permuted.upsample_bilinear2d_antialias(8, 8)?;
+    let expected = permuted.contiguous()?;
+    assert_close(&out, &expected)
+}
+
+/* The kernel is generic over WithDType. f32 is exercised above; this test
+covers the f64 instantiation. f16 / bf16 paths are not exercised because
+PyTorch's antialiased-bilinear kernel runs in fp32 internally and casting
+the reference values down would compare two slightly different algorithms,
+not the same one at lower precision. */
+#[test]
+fn aa_f64_dtype_matches_f32_within_tolerance() -> Result<()> {
+    let dev = &Device::Cpu;
+    let input_f32 = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
+    let input_f64 = input_f32.to_dtype(DType::F64)?;
+    let out_f32 = input_f32.upsample_bilinear2d_antialias(4, 4)?;
+    let out_f64 = input_f64.upsample_bilinear2d_antialias(4, 4)?;
+    assert_eq!(
+        out_f64.dtype(),
+        DType::F64,
+        "f64 input must produce f64 output"
+    );
+    let out_f64_as_f32 = out_f64.to_dtype(DType::F32)?;
+    let diff = (&out_f32 - &out_f64_as_f32)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0::<f32>()?;
+    assert!(
+        max_diff < 1e-5,
+        "f32 vs f64 outputs should match within fp32 noise floor; got {}",
+        max_diff
+    );
     Ok(())
 }

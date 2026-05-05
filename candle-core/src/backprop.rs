@@ -412,9 +412,9 @@ impl Tensor {
                     Op::UpsampleBilinear2D { .. } => {
                         crate::bail!("backward not supported for upsample_bilinear2d")
                     }
-                    Op::UpsampleBilinear2DAntialias { .. } => {
-                        crate::bail!("backward not supported for upsample_bilinear2d_antialias")
-                    }
+                    Op::UpsampleBilinear2DAntialias { .. } => crate::bail!(
+                        "backward not yet implemented for upsample_bilinear2d_antialias"
+                    ),
                     Op::SliceScatter0(lhs, rhs, start_rhs) => {
                         let rhs_sum_grad = grads.or_insert(rhs)?;
                         let rhs_grad = grad.narrow(0, *start_rhs, rhs.dim(0)?)?;

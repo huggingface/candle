@@ -230,13 +230,7 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn upsample_bilinear2d_antialias(
-        &self,
-        _: &Layout,
-        _: usize,
-        _: usize,
-        _: bool,
-    ) -> Result<Self> {
+    fn upsample_bilinear2d_antialias(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }
