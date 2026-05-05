@@ -36,7 +36,7 @@ fn cu_seqlens_from_aftercnn_len(
     let ratio = window_infer / window;
     if ratio == 0 {
         candle::bail!(
-            "audio_config.n_window_infer must be >= audio_config.n_window*2: window_infer={window_infer} window={window}"
+            "audio_config.n_window_infer must be >= audio_config.n_window: window_infer={window_infer} window={window}"
         );
     }
 
