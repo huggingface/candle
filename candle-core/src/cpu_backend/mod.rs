@@ -603,7 +603,10 @@ impl UpsampleBilinear2DAntialias {
         for o in 0..dst {
             let center = (o as f64 + 0.5) / scale - 0.5;
             let i_min = ((center - support).floor() as i64).max(0) as usize;
-            let i_max_excl = (((center + support).ceil() as i64 + 1).max(0) as usize).min(src);
+            // (center + support).ceil() is the exclusive upper bound: weights
+            // at or beyond it are zero by the (1 - dist).max(0) clamp below.
+            let i_max_excl = ((center + support).ceil() as i64).max(0) as usize;
+            let i_max_excl = i_max_excl.min(src);
             let mut row_sum = 0f64;
             for i in i_min..i_max_excl {
                 let dist = (i as f64 - center).abs() / support;
@@ -627,48 +630,50 @@ impl Map1 for UpsampleBilinear2DAntialias {
         let height_out = self.target_h;
         let width_out = self.target_w;
 
-        // Identity short-circuit: only valid when the input is contiguous,
-        // because we return a flat Vec that the caller wraps in a fresh
-        // contiguous layout. Returning src.to_vec() for a permuted input
-        // would silently reinterpret the bytes as contiguous.
-        if height_in == height_out && width_in == width_out && layout.is_contiguous() {
-            let total = batch * channels * height_in * width_in;
-            return Ok(src[layout.start_offset()..layout.start_offset() + total].to_vec());
+        // Reject zero-sized dims explicitly: dims4()? validates rank but not
+        // that each dim is positive. A zero input dim divides by zero in the
+        // weight-matrix scale calculation; a zero target dim returns an empty
+        // tensor that callers usually didn't intend.
+        if height_in == 0 || width_in == 0 || height_out == 0 || width_out == 0 {
+            crate::bail!(
+                "upsample_bilinear2d_antialias requires positive dims; \
+                 input ({batch}, {channels}, {height_in}, {width_in}), \
+                 target ({height_out}, {width_out})"
+            );
         }
 
         let stride = layout.stride();
         let src_offset = layout.start_offset();
 
-        let w_h = Self::weight_matrix(height_in, height_out);
-        let w_w = Self::weight_matrix(width_in, width_out);
+        let weights_h = Self::weight_matrix(height_in, height_out);
+        let weights_w = Self::weight_matrix(width_in, width_out);
 
         let mut dst = vec![T::zero(); batch * channels * height_out * width_out];
 
-        // Per-output-pixel triangle-weighted sum.
-        // Equivalent to the matmul `output = W_h @ input @ W_w^T` with
-        // W_h shape (height_out, height_in) and W_w shape (width_out, width_in).
-        // We accumulate in f64 and cast once at the end to preserve precision
-        // across small differences in weight ordering versus the matmul form.
+        // Per-output-pixel triangle-weighted sum, equivalent in exact
+        // arithmetic to `output = W_h @ input @ W_w^T` with W_h of shape
+        // (height_out, height_in) and W_w of shape (width_out, width_in).
+        // Accumulate in f64 and cast once at the end to preserve precision.
         for b in 0..batch {
             for c in 0..channels {
                 let base_idx = src_offset + b * stride[0] + c * stride[1];
                 let dst_base = (b * channels + c) * height_out * width_out;
 
                 for h_out in 0..height_out {
-                    let h_row = &w_h[h_out * height_in..(h_out + 1) * height_in];
+                    let row_h = &weights_h[h_out * height_in..(h_out + 1) * height_in];
                     for w_out in 0..width_out {
-                        let w_row = &w_w[w_out * width_in..(w_out + 1) * width_in];
+                        let row_w = &weights_w[w_out * width_in..(w_out + 1) * width_in];
                         let mut value = 0f64;
-                        for (h_in, &h_w) in h_row.iter().enumerate() {
-                            if h_w == 0.0 {
+                        for (h_in, &weight_h) in row_h.iter().enumerate() {
+                            if weight_h == 0.0 {
                                 continue;
                             }
-                            for (w_in, &w_w_val) in w_row.iter().enumerate() {
-                                if w_w_val == 0.0 {
+                            for (w_in, &weight_w) in row_w.iter().enumerate() {
+                                if weight_w == 0.0 {
                                     continue;
                                 }
                                 let idx = base_idx + h_in * stride[2] + w_in * stride[3];
-                                value += src[idx].to_f64() * h_w * w_w_val;
+                                value += src[idx].to_f64() * weight_h * weight_w;
                             }
                         }
                         dst[dst_base + h_out * width_out + w_out] = T::from_f64(value);
@@ -3385,4 +3390,28 @@ macro_rules! map_dtype {
             s => Err(Error::UnsupportedDTypeForOp(s.dtype(), $name).bt())?,
         }
     };
+}
+
+#[cfg(test)]
+mod upsample_bilinear2d_antialias_tests {
+    use super::UpsampleBilinear2DAntialias;
+
+    #[test]
+    fn weight_matrix_rows_sum_to_one() {
+        for &(src, dst) in &[(8, 4), (16, 8), (8, 5), (4, 4), (4, 8), (1, 1)] {
+            let m = UpsampleBilinear2DAntialias::weight_matrix(src, dst);
+            assert_eq!(m.len(), dst * src, "shape mismatch for ({src}, {dst})");
+            for row in 0..dst {
+                let sum: f64 = m[row * src..(row + 1) * src].iter().sum();
+                assert!(
+                    (sum - 1.0).abs() < 1e-12,
+                    "weight_matrix({src}, {dst}) row {row} sum = {sum}, expected 1.0"
+                );
+            }
+            assert!(
+                m.iter().all(|&w| w >= 0.0),
+                "weight_matrix({src}, {dst}) has a negative weight"
+            );
+        }
+    }
 }

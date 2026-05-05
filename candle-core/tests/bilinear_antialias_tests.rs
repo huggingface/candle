@@ -456,3 +456,72 @@ fn aa_f64_dtype_matches_f32_within_tolerance() -> Result<()> {
     );
     Ok(())
 }
+
+/* Round-trip dtype coverage for f16 and bf16. We do NOT compare to PyTorch
+here because PyTorch's antialiased-bilinear path runs in fp32 internally,
+so a direct comparison would conflate "Rust kernel correctness" with
+"Rust dtype handling matches PyTorch dtype handling." Instead: cast f32
+input to the lower-precision dtype, run the kernel, cast output back,
+and assert it matches the f32 result within the lower precision's noise
+floor. This validates the WithDType generic instantiation produces
+sensible output, which is the correctness claim a maintainer cares about. */
+#[test]
+fn aa_f16_round_trip_within_noise_floor() -> Result<()> {
+    let dev = &Device::Cpu;
+    let input_f32 = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
+    let input_f16 = input_f32.to_dtype(DType::F16)?;
+    let out_f32 = input_f32.upsample_bilinear2d_antialias(4, 4)?;
+    let out_f16 = input_f16.upsample_bilinear2d_antialias(4, 4)?;
+    assert_eq!(out_f16.dtype(), DType::F16);
+    let out_f16_as_f32 = out_f16.to_dtype(DType::F32)?;
+    let diff = (&out_f32 - &out_f16_as_f32)?.abs()?.flatten_all()?.max(0)?;
+    let max_diff = diff.to_vec0::<f32>()?;
+    // f16 has ~3.3 decimal digits of precision; values up to ~64 leave room
+    // for ~5e-2 absolute error. Pick 1e-1 to leave headroom for accumulation.
+    assert!(
+        max_diff < 1e-1,
+        "f32 vs f16 round-trip should match within f16 noise floor; got {}",
+        max_diff
+    );
+    Ok(())
+}
+
+#[test]
+fn aa_bf16_round_trip_within_noise_floor() -> Result<()> {
+    let dev = &Device::Cpu;
+    let input_f32 = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
+    let input_bf16 = input_f32.to_dtype(DType::BF16)?;
+    let out_f32 = input_f32.upsample_bilinear2d_antialias(4, 4)?;
+    let out_bf16 = input_bf16.upsample_bilinear2d_antialias(4, 4)?;
+    assert_eq!(out_bf16.dtype(), DType::BF16);
+    let out_bf16_as_f32 = out_bf16.to_dtype(DType::F32)?;
+    let diff = (&out_f32 - &out_bf16_as_f32)?
+        .abs()?
+        .flatten_all()?
+        .max(0)?;
+    let max_diff = diff.to_vec0::<f32>()?;
+    // bf16 has ~7 bits of mantissa; values up to ~64 leave room for
+    // ~5e-1 absolute error on a single op. Pick 1.0 to be safe.
+    assert!(
+        max_diff < 1.0,
+        "f32 vs bf16 round-trip should match within bf16 noise floor; got {}",
+        max_diff
+    );
+    Ok(())
+}
+
+/* Zero-target-dim must error rather than producing an empty tensor silently. */
+#[test]
+fn aa_zero_target_dim_errors() -> Result<()> {
+    let dev = &Device::Cpu;
+    let input = Tensor::arange(0f32, 16f32, dev)?.reshape((1, 1, 4, 4))?;
+    assert!(
+        input.upsample_bilinear2d_antialias(0, 4).is_err(),
+        "target_h=0 should error"
+    );
+    assert!(
+        input.upsample_bilinear2d_antialias(4, 0).is_err(),
+        "target_w=0 should error"
+    );
+    Ok(())
+}

@@ -1346,11 +1346,21 @@ impl Tensor {
     /// behavior is implemented. The parameter will be added when
     /// `align_corners=true` lands.
     ///
+    /// Backward is not yet implemented; calling `.backward()` on a graph that
+    /// contains this op will error, matching the existing
+    /// [`Tensor::upsample_bilinear2d`] precedent.
+    ///
     /// # Arguments
     ///
-    /// * `target_h` - Output height
-    /// * `target_w` - Output width
+    /// * `target_h` - Output height (must be > 0)
+    /// * `target_w` - Output width (must be > 0)
     pub fn upsample_bilinear2d_antialias(&self, target_h: usize, target_w: usize) -> Result<Self> {
+        if target_h == 0 || target_w == 0 {
+            bail!(
+                "upsample_bilinear2d_antialias requires positive target dims, \
+                 got ({target_h}, {target_w})"
+            )
+        }
         let (n, c, _h, _w) = self.dims4()?;
         let op = BackpropOp::new1(self, |arg| Op::UpsampleBilinear2DAntialias {
             arg,
