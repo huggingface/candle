@@ -124,24 +124,31 @@ fn hann_window(n: usize) -> Vec<f32> {
         .collect()
 }
 
+fn reflect_index(i: usize, n: usize) -> usize {
+    if n <= 1 {
+        return 0;
+    }
+    let period = 2 * n - 2;
+    let r = i % period;
+    if r < n {
+        r
+    } else {
+        period - r
+    }
+}
+
 fn reflection_pad(samples: &[f32], pad_left: usize, pad_right: usize) -> Vec<f32> {
     let n = samples.len();
-    if n < 2 {
-        let fill = samples.first().copied().unwrap_or(0.0);
-        let mut padded = Vec::with_capacity(n + pad_left + pad_right);
-        padded.resize(pad_left, fill);
-        padded.extend_from_slice(samples);
-        padded.resize(padded.len() + pad_right, fill);
-        return padded;
+    if n == 0 {
+        return vec![0.0; pad_left + pad_right];
     }
     let mut padded = Vec::with_capacity(n + pad_left + pad_right);
-    for i in (1..=pad_left.min(n - 1)).rev() {
-        padded.push(samples[i]);
+    for i in (1..=pad_left).rev() {
+        padded.push(samples[reflect_index(i, n)]);
     }
     padded.extend_from_slice(samples);
-    let right_start = if n > pad_right { n - pad_right - 1 } else { 0 };
-    for i in (right_start..n - 1).rev() {
-        padded.push(samples[i]);
+    for i in 0..pad_right {
+        padded.push(samples[n - 1 - reflect_index(i + 1, n)]);
     }
     padded
 }

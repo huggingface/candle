@@ -107,11 +107,12 @@ fn seqlens_from_left_padded_attention_mask(mask: &Tensor, seq_len: usize) -> Res
         let len = v.round() as usize;
         out.push(len);
     }
+    #[cfg(debug_assertions)]
     validate_left_padded(mask, seq_len, &out).map_err(|msg| candle::Error::Msg(msg.to_string()))?;
     Ok(out)
 }
 
-#[cfg(feature = "flash-attn")]
+#[cfg(all(feature = "flash-attn", debug_assertions))]
 fn validate_left_padded(
     mask: &Tensor,
     seq_len: usize,
@@ -665,15 +666,24 @@ pub fn merge_audio_features(
     if audio_hidden != hidden {
         candle::bail!("audio_features hidden mismatch");
     }
-    if audio_placeholder_count == 0 || num_audio == 0 {
+    if num_audio == 0 {
         return Ok(inputs_embeds.clone());
-    }
-    if audio_placeholder_count != num_audio {
-        candle::bail!("audio placeholder count mismatch: {audio_placeholder_count} vs {num_audio}");
     }
 
     let mask_u8 = input_ids.eq(audio_token_id)?;
     let mask_f32 = mask_u8.to_dtype(DType::F32)?;
+    let actual_count = mask_f32.sum_all()?.to_scalar::<f32>()?.round() as usize;
+    if actual_count == 0 {
+        return Ok(inputs_embeds.clone());
+    }
+    if actual_count != audio_placeholder_count {
+        candle::bail!(
+            "audio_placeholder_count mismatch with input_ids: caller passed {audio_placeholder_count}, input_ids has {actual_count}"
+        );
+    }
+    if actual_count != num_audio {
+        candle::bail!("audio placeholder count mismatch with audio_features: input_ids has {actual_count}, audio_features has {num_audio}");
+    }
     let in_row = ((mask_f32.cumsum(1)? - 1f64)? * &mask_f32)?;
     let row_counts = mask_f32.sum(1)?;
     let offsets = (row_counts.cumsum(0)? - &row_counts)?;
@@ -887,6 +897,102 @@ mod tests {
 
         let output2 = encoder.forward_with_lens(&input_features, &[frames])?;
         assert_eq!(output.dims(), output2.dims());
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_audio_features_basic() -> anyhow::Result<()> {
+        // input_ids: [100, 99, 100, 98] where 99 is the audio token
+        // audio_features: [[1.0, 2.0], [3.0, 4.0]]  (2 audio tokens, hidden=2)
+        // Expected: embed at positions of 99 replaced with audio features row 0 and 1
+        let device = candle::Device::Cpu;
+        let dtype = candle::DType::F32;
+        let audio_token_id = 99u32;
+        let input_ids = candle::Tensor::from_vec(vec![100u32, 99, 100, 99], (1, 4), &device)?;
+        let inputs_embeds = candle::Tensor::zeros((1, 4, 2), dtype, &device)?; // embeds initially all zero
+        let audio_features = candle::Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0], (2, 2), &device)?;
+        let result = super::merge_audio_features(
+            &input_ids,
+            &inputs_embeds,
+            audio_token_id,
+            &audio_features,
+            2,
+        )?;
+        let data = result.to_vec3::<f32>()?;
+        // Position 1 (index 99): should be audio_features row 0 = [1.0, 2.0]
+        assert!((data[0][1][0] - 1.0).abs() < 1e-6);
+        assert!((data[0][1][1] - 2.0).abs() < 1e-6);
+        // Position 3 (index 99): should be audio_features row 1 = [3.0, 4.0]
+        assert!((data[0][3][0] - 3.0).abs() < 1e-6);
+        assert!((data[0][3][1] - 4.0).abs() < 1e-6);
+        // Position 0 and 2 (not 99): should still be zero
+        assert!((data[0][0][0] - 0.0).abs() < 1e-6);
+        assert!((data[0][2][0] - 0.0).abs() < 1e-6);
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_audio_features_mismatch_caller_count() {
+        let device = candle::Device::Cpu;
+        let dtype = candle::DType::F32;
+        let audio_token_id = 99u32;
+        let input_ids =
+            candle::Tensor::from_vec(vec![100u32, 99, 100, 99], (1, 4), &device).unwrap();
+        let inputs_embeds = candle::Tensor::zeros((1, 4, 2), dtype, &device).unwrap();
+        let audio_features =
+            candle::Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0], (2, 2), &device).unwrap();
+        // input_ids has 2 audio tokens, but caller says 1 — should error
+        let result = super::merge_audio_features(
+            &input_ids,
+            &inputs_embeds,
+            audio_token_id,
+            &audio_features,
+            1,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_merge_audio_features_mismatch_features_count() {
+        let device = candle::Device::Cpu;
+        let dtype = candle::DType::F32;
+        let audio_token_id = 99u32;
+        let input_ids = candle::Tensor::from_vec(vec![100u32, 99], (1, 2), &device).unwrap();
+        let inputs_embeds = candle::Tensor::zeros((1, 2, 2), dtype, &device).unwrap();
+        // audio_features has 3 rows, but input_ids has only 1 audio token
+        let audio_features =
+            candle::Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0], (3, 2), &device)
+                .unwrap();
+        let result = super::merge_audio_features(
+            &input_ids,
+            &inputs_embeds,
+            audio_token_id,
+            &audio_features,
+            1,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_merge_audio_features_empty() -> anyhow::Result<()> {
+        let device = candle::Device::Cpu;
+        let dtype = candle::DType::F32;
+        let audio_token_id = 99u32;
+        let input_ids = candle::Tensor::from_vec(vec![100u32, 98, 97], (1, 3), &device)?;
+        let inputs_embeds = candle::Tensor::from_slice(&[5.0f32; 6], (1, 3, 2), &device)?;
+        // No audio tokens at all — should return inputs_embeds unchanged
+        let audio_features = candle::Tensor::zeros((0, 2), dtype, &device)?;
+        let result = super::merge_audio_features(
+            &input_ids,
+            &inputs_embeds,
+            audio_token_id,
+            &audio_features,
+            0,
+        )?;
+        let data = result.to_vec3::<f32>()?;
+        for i in 0..3 {
+            assert!((data[0][i][0] - 5.0).abs() < 1e-6);
+        }
         Ok(())
     }
 
