@@ -115,35 +115,41 @@ fn apply_mrope_interleaved(
     let cos_m2 = cos_half.i(2)?.contiguous()?;
     let sin_m2 = sin_half.i(2)?.contiguous()?;
 
-    let mut cos_parts: Vec<Tensor> = Vec::with_capacity(half_dim);
-    let mut sin_parts: Vec<Tensor> = Vec::with_capacity(half_dim);
+    let mut mask_m0 = vec![1.0f32; half_dim];
+    let mut mask_m1 = vec![0.0f32; half_dim];
+    let mut mask_m2 = vec![0.0f32; half_dim];
 
-    for pos in 0..half_dim {
-        let modality = if modality_num >= 3 && mrope_section.len() >= 3 {
+    if modality_num >= 3 && mrope_section.len() >= 3 {
+        for pos in 0..half_dim {
             if pos >= 1 && pos < m1_end && (pos - 1) % modality_num == 0 {
-                1
+                mask_m0[pos] = 0.0;
+                mask_m1[pos] = 1.0;
             } else if pos >= 2 && pos < m2_end && (pos - 2) % modality_num == 0 {
-                2
-            } else {
-                0
+                mask_m0[pos] = 0.0;
+                mask_m2[pos] = 1.0;
             }
-        } else {
-            0
-        };
-        let (cos_src, sin_src) = match modality {
-            0 => (&cos_m0, &sin_m0),
-            1 => (&cos_m1, &sin_m1),
-            2 => (&cos_m2, &sin_m2),
-            _ => candle::bail!("invalid modality={modality} for interleaved mRoPE"),
-        };
-        let cos_col = cos_src.narrow(2, pos, 1)?;
-        let sin_col = sin_src.narrow(2, pos, 1)?;
-        cos_parts.push(cos_col);
-        sin_parts.push(sin_col);
+        }
     }
 
-    let cos_half = Tensor::cat(&cos_parts.iter().collect::<Vec<_>>(), 2)?;
-    let sin_half = Tensor::cat(&sin_parts.iter().collect::<Vec<_>>(), 2)?;
+    let device = cos.device();
+    let mask_m0 = Tensor::from_vec(mask_m0, (1, 1, half_dim), device)?;
+    let mask_m1 = Tensor::from_vec(mask_m1, (1, 1, half_dim), device)?;
+    let mask_m2 = Tensor::from_vec(mask_m2, (1, 1, half_dim), device)?;
+
+    let cos_m0_masked = cos_m0.broadcast_mul(&mask_m0)?;
+    let cos_m1_masked = cos_m1.broadcast_mul(&mask_m1)?;
+    let cos_m2_masked = cos_m2.broadcast_mul(&mask_m2)?;
+    let cos_half = cos_m0_masked
+        .broadcast_add(&cos_m1_masked)?
+        .broadcast_add(&cos_m2_masked)?;
+
+    let sin_m0_masked = sin_m0.broadcast_mul(&mask_m0)?;
+    let sin_m1_masked = sin_m1.broadcast_mul(&mask_m1)?;
+    let sin_m2_masked = sin_m2.broadcast_mul(&mask_m2)?;
+    let sin_half = sin_m0_masked
+        .broadcast_add(&sin_m1_masked)?
+        .broadcast_add(&sin_m2_masked)?;
+
     let cos_half = cos_half.to_dtype(original_dtype)?.contiguous()?;
     let sin_half = sin_half.to_dtype(original_dtype)?.contiguous()?;
 
