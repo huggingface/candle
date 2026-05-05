@@ -66,13 +66,34 @@ fn main() -> Result<()> {
     let tokenizer =
         Tokenizer::from_file(tokenizer_file).map_err(|e| anyhow::anyhow!("tok: {e}"))?;
 
-    let device = Device::Cpu;
+    // Device: prefer CUDA (--features cuda) > Metal (Apple Silicon) > CPU.
+    // Force CPU with `--cpu` arg or CANDLE_CPU=1.
+    let argv: Vec<String> = std::env::args().collect();
+    let force_cpu = argv.iter().any(|a| a == "--cpu") || std::env::var("CANDLE_CPU").is_ok();
+    let device = candle_examples::device(force_cpu)?;
+    println!("Device: {:?}", device);
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
     let model = siglip2_naflex::Model::new(&config, vb)?;
     println!("Model loaded.");
 
-    let bear = load_image_as_patches("/tmp/siglip2-practice-run/test_images/bear.jpg", &device)?;
-    let teddy = load_image_as_patches("/tmp/siglip2-practice-run/test_images/teddy.jpg", &device)?;
+    // Test images: pick from CLI args, then env vars, then dev-machine defaults.
+    // The dev-machine defaults won't exist on a fresh checkout; the smoke test
+    // can still demonstrate model load + tokenization without them, but real
+    // classification needs valid image paths.
+    let bear_path = argv
+        .iter()
+        .find(|a| a.starts_with("--bear="))
+        .map(|a| a.trim_start_matches("--bear=").to_string())
+        .or_else(|| std::env::var("SIGLIP2_BEAR_IMAGE").ok())
+        .unwrap_or_else(|| "/tmp/siglip2-practice-run/test_images/bear.jpg".to_string());
+    let teddy_path = argv
+        .iter()
+        .find(|a| a.starts_with("--teddy="))
+        .map(|a| a.trim_start_matches("--teddy=").to_string())
+        .or_else(|| std::env::var("SIGLIP2_TEDDY_IMAGE").ok())
+        .unwrap_or_else(|| "/tmp/siglip2-practice-run/test_images/teddy.jpg".to_string());
+    let bear = load_image_as_patches(&bear_path, &device)?;
+    let teddy = load_image_as_patches(&teddy_path, &device)?;
     let images = Tensor::cat(&[&bear, &teddy], 0)?;
     println!("Images shape: {:?}", images.shape());
 

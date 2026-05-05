@@ -100,7 +100,12 @@ fn main() -> Result<()> {
         .unwrap_or("/tmp/antialias-reference/antialias_reference.safetensors");
 
     println!("Loading reference fixtures from: {}", ref_path);
-    let device = Device::Cpu;
+    // Use CUDA when available (build with --features cuda), Metal on Apple
+    // Silicon, otherwise CPU. Pass `--cpu` as a third arg or set CANDLE_CPU=1
+    // to force CPU regardless.
+    let force_cpu = args.iter().any(|a| a == "--cpu") || std::env::var("CANDLE_CPU").is_ok();
+    let device = candle_examples::device(force_cpu)?;
+    println!("Device: {:?}", device);
     let buf = std::fs::read(ref_path)?;
     let tensors = candle::safetensors::load_buffer(&buf, &device)?;
     println!("Loaded {} tensors\n", tensors.len());
