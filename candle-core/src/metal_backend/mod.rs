@@ -1402,6 +1402,20 @@ impl BackendStorage for MetalStorage {
         Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
+    fn upsample_bilinear2d_antialias(
+        &self,
+        _inp_l: &Layout,
+        _out_h: usize,
+        _out_w: usize,
+        _align_corners: bool,
+    ) -> Result<Self> {
+        crate::bail!(
+            "upsample_bilinear2d_antialias is not yet implemented on the Metal backend; \
+             a CPU-only path is available via Tensor::upsample_bilinear2d_antialias on \
+             a CPU tensor. GPU kernels are tracked as a follow-up."
+        )
+    }
+
     fn gather(&self, src_l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
         if !ids_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "gather" }.bt());

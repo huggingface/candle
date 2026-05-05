@@ -1331,6 +1331,47 @@ impl Tensor {
         ))
     }
 
+    /// Bilinear interpolation with PyTorch-compatible antialiasing.
+    ///
+    /// Approximates `torch.nn.functional.interpolate(mode="bilinear", antialias=True)`.
+    /// For downsampling (target smaller than input on an axis), this applies a
+    /// triangle low-pass filter before resampling. For upsampling, antialiasing
+    /// has no effect and this matches the non-antialiased path.
+    ///
+    /// Currently CPU-only; calling on Metal or CUDA storage returns an error
+    /// (kernel implementations are tracked as a follow-up).
+    ///
+    /// # Arguments
+    ///
+    /// * `target_h` - Output height
+    /// * `target_w` - Output width
+    /// * `align_corners` - Must be `false` (antialias with `align_corners=true`
+    ///   is not yet supported)
+    pub fn upsample_bilinear2d_antialias(
+        &self,
+        target_h: usize,
+        target_w: usize,
+        align_corners: bool,
+    ) -> Result<Self> {
+        let (n, c, _h, _w) = self.dims4()?;
+        if align_corners {
+            bail!("upsample_bilinear2d_antialias with align_corners=true is not yet supported")
+        }
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleBilinear2DAntialias {
+            arg,
+            target_h,
+            target_w,
+            align_corners,
+        });
+        let storage = self.storage().upsample_bilinear2d_antialias(
+            self.layout(),
+            target_h,
+            target_w,
+            align_corners,
+        )?;
+        Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
+    }
+
     /// 2D average pooling over an input tensor with multiple channels.
     ///
     /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned

@@ -585,6 +585,103 @@ impl Map1 for UpsampleBilinear2D {
     }
 }
 
+struct UpsampleBilinear2DAntialias {
+    target_h: usize,
+    target_w: usize,
+    align_corners: bool,
+}
+
+impl UpsampleBilinear2DAntialias {
+    /// Build a per-axis weight matrix of shape `(dst, src)` where row `o`
+    /// contains normalized triangle weights for the input pixels contributing
+    /// to output `o`. Matches PyTorch's antialiased bilinear: support is
+    /// `max(1, 1/scale)` in input coordinates, weights linear in distance from
+    /// the mapped output center, normalized so each row sums to 1.
+    fn weight_matrix(src: usize, dst: usize) -> Vec<f64> {
+        let scale = dst as f64 / src as f64;
+        let support = (1.0_f64 / scale).max(1.0);
+        let mut weights = vec![0f64; dst * src];
+        for o in 0..dst {
+            let center = (o as f64 + 0.5) / scale - 0.5;
+            let i_min = ((center - support).floor() as i64).max(0) as usize;
+            let i_max_excl = (((center + support).ceil() as i64 + 1).max(0) as usize).min(src);
+            let mut row_sum = 0f64;
+            for i in i_min..i_max_excl {
+                let dist = (i as f64 - center).abs() / support;
+                let w = (1.0 - dist).max(0.0);
+                weights[o * src + i] = w;
+                row_sum += w;
+            }
+            if row_sum > 0.0 {
+                for i in i_min..i_max_excl {
+                    weights[o * src + i] /= row_sum;
+                }
+            }
+        }
+        weights
+    }
+}
+
+impl Map1 for UpsampleBilinear2DAntialias {
+    fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
+        if self.align_corners {
+            crate::bail!("upsample_bilinear2d_antialias with align_corners=true is not supported");
+        }
+        let (batch, channels, height_in, width_in) = layout.shape().dims4()?;
+        let height_out = self.target_h;
+        let width_out = self.target_w;
+
+        if height_in == height_out && width_in == width_out {
+            return Ok(src.to_vec());
+        }
+
+        let stride = layout.stride();
+        let src_offset = layout.start_offset();
+
+        let w_h = Self::weight_matrix(height_in, height_out);
+        let w_w = Self::weight_matrix(width_in, width_out);
+
+        let mut dst = vec![T::zero(); batch * channels * height_out * width_out];
+
+        // Per-output-pixel triangle-weighted sum.
+        // Equivalent to the matmul `output = W_h @ input @ W_w^T` with
+        // W_h shape (height_out, height_in) and W_w shape (width_out, width_in).
+        // We accumulate in f64 and cast once at the end to preserve precision
+        // across small differences in weight ordering versus the matmul form.
+        for b in 0..batch {
+            for c in 0..channels {
+                let base_idx = src_offset + b * stride[0] + c * stride[1];
+                let dst_base = (b * channels + c) * height_out * width_out;
+
+                for h_out in 0..height_out {
+                    let h_row = &w_h[h_out * height_in..(h_out + 1) * height_in];
+                    for w_out in 0..width_out {
+                        let w_row = &w_w[w_out * width_in..(w_out + 1) * width_in];
+                        let mut value = 0f64;
+                        for h_in in 0..height_in {
+                            let h_w = h_row[h_in];
+                            if h_w == 0.0 {
+                                continue;
+                            }
+                            for w_in in 0..width_in {
+                                let w_w_val = w_row[w_in];
+                                if w_w_val == 0.0 {
+                                    continue;
+                                }
+                                let idx = base_idx + h_in * stride[2] + w_in * stride[3];
+                                value += src[idx].to_f64() * h_w * w_w_val;
+                            }
+                        }
+                        dst[dst_base + h_out * width_out + w_out] = T::from_f64(value);
+                    }
+                }
+            }
+        }
+
+        Ok(dst)
+    }
+}
+
 struct Gather<'a, I: IntDType> {
     ids: &'a [I],
     ids_l: &'a Layout,
@@ -2371,6 +2468,21 @@ impl BackendStorage for CpuStorage {
             align_corners,
             scale_h_factor: scale_h,
             scale_w_factor: scale_w,
+        }
+        .map(self, layout)
+    }
+
+    fn upsample_bilinear2d_antialias(
+        &self,
+        layout: &Layout,
+        h: usize,
+        w: usize,
+        align_corners: bool,
+    ) -> Result<Self> {
+        UpsampleBilinear2DAntialias {
+            target_h: h,
+            target_w: w,
+            align_corners,
         }
         .map(self, layout)
     }
