@@ -2,12 +2,14 @@
 // PyTorch model's vision pooler_output, run candle's siglip2_naflex
 // VisionModel directly on the same inputs, compare pooler outputs.
 //
-// Tests with the actual HF preprocessor's variable-shape outputs first (failed
-// at max_diff ~0.5), then with manually-constructed square inputs to isolate
-// whether the drift is in the position-embedding interpolation or elsewhere.
+// Reference fixtures (pixel_values, pixel_attention_mask, spatial_shapes,
+// vision_pooler_output) are generated separately from PyTorch + the HF NaFlex
+// preprocessor. Pass the path to the .safetensors file as the first CLI arg,
+// or set the SIGLIP2_NAFLEX_REFERENCE env var. Default is a local path used
+// during development that won't exist on a fresh checkout.
 
 use anyhow::Result;
-use candle::{DType, Device, IndexOp, Tensor, D};
+use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::siglip2_naflex;
 
@@ -54,9 +56,26 @@ fn main() -> Result<()> {
         siglip2_naflex::VisionModel::new(&config.vision_config, vb.pp("vision_model"))?;
     println!("VisionModel loaded.");
 
-    // Load reference outputs (variable-shape: [[17,15],[19,13]])
-    let ref_file = "/tmp/siglip2-practice-run/test_data_naflex/naflex_vision_reference.safetensors";
-    let ref_buf = std::fs::read(ref_file)?;
+    // Load reference outputs (variable-shape: [[17,15],[19,13]]). Path comes
+    // from CLI arg or SIGLIP2_NAFLEX_REFERENCE env var; the default is a
+    // dev-machine path that won't exist on a fresh checkout.
+    let args: Vec<String> = std::env::args().collect();
+    let ref_file = args
+        .get(1)
+        .cloned()
+        .or_else(|| std::env::var("SIGLIP2_NAFLEX_REFERENCE").ok())
+        .unwrap_or_else(|| {
+            "/tmp/siglip2-practice-run/test_data_naflex/naflex_vision_reference.safetensors"
+                .to_string()
+        });
+    let ref_buf = std::fs::read(&ref_file).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to read reference fixtures at {}: {}. \
+             Pass the path as arg 1 or set SIGLIP2_NAFLEX_REFERENCE.",
+            ref_file,
+            e,
+        )
+    })?;
     let ref_tensors = candle::safetensors::load_buffer(&ref_buf, &device)?;
 
     let pixel_values = ref_tensors.get("pixel_values").unwrap();
