@@ -40,7 +40,7 @@ pub fn build_qwen2_bpe_tokenizer(
         .skip(1)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .filter_map(|line| {
-            let mut parts = line.split(' ');
+            let mut parts = line.split_whitespace();
             let a = parts.next()?;
             let b = parts.next()?;
             if parts.next().is_some() {
