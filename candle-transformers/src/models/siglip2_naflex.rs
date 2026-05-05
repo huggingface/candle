@@ -451,7 +451,17 @@ impl VisionEmbeddings {
         let resized = if target_h == base && target_w == base {
             base_pos
         } else {
-            base_pos.interpolate2d(target_h, target_w)?
+            // NOTE: candle's `interpolate2d` is misleadingly named — it's actually
+            // nearest-neighbor interpolation (alias for `upsample_nearest2d`). For
+            // bilinear interpolation matching PyTorch's
+            // `F.interpolate(mode="bilinear", align_corners=False)`, use
+            // `upsample_bilinear2d(h, w, false)`.
+            //
+            // PyTorch's reference also uses `antialias=True`, which candle does
+            // not yet implement. The remaining drift after this fix at non-base
+            // resolutions is from the antialias filter difference and is
+            // documented in the module-level doc comment.
+            base_pos.upsample_bilinear2d(target_h, target_w, false)?
         };
         // back to (target_h * target_w, hidden)
         let resized = resized
