@@ -43,17 +43,20 @@ fn compute_power_stft(
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(n_fft);
     let mut power = vec![0.0f32; n_freqs * n_frames];
+    let mut fft_buf = vec![Complex::new(0.0, 0.0); n_fft];
     for i in 0..n_frames {
         let offset = i * hop_length;
-        let mut fft_in: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); n_fft];
-        for j in 0..n_fft.min(signal.len().saturating_sub(offset)) {
-            fft_in[j] = Complex::new(signal[offset + j] * window[j], 0.0);
+        let available = n_fft.min(signal.len().saturating_sub(offset));
+        for j in 0..available {
+            fft_buf[j] = Complex::new(signal[offset + j] * window[j], 0.0);
         }
-        let mut fft_out = fft_in.clone();
-        fft.process(&mut fft_out);
+        for item in fft_buf.iter_mut().take(n_fft).skip(available) {
+            *item = Complex::new(0.0, 0.0);
+        }
+        fft.process(&mut fft_buf);
         let base = i * n_freqs;
         for j in 0..n_freqs {
-            power[base + j] = fft_out[j].norm_sqr();
+            power[base + j] = fft_buf[j].norm_sqr();
         }
     }
     (power, n_freqs, n_frames)
@@ -211,11 +214,11 @@ fn linear_resample(samples: &[f32], from_hz: u32, to_hz: u32) -> Vec<f32> {
 
 // ─── Prompt building ─────────────────────────────────────────────
 
-fn encode(tokenizer: &Tokenizer, s: &str) -> Vec<u32> {
+fn encode(tokenizer: &Tokenizer, s: &str) -> anyhow::Result<Vec<u32>> {
     tokenizer
         .encode(s, false)
         .map(|e| e.get_ids().to_vec())
-        .unwrap_or_default()
+        .map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))
 }
 
 fn capital_first(s: &str) -> String {
@@ -262,12 +265,12 @@ fn build_prompt(
 
     // <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>
     tokens.push(IM_START);
-    tokens.extend_from_slice(&encode(tokenizer, "system"));
+    tokens.extend_from_slice(&encode(tokenizer, "system")?);
     tokens.push(NEWLINE);
     tokens.push(IM_END);
     tokens.push(NEWLINE);
     tokens.push(IM_START);
-    tokens.extend_from_slice(&encode(tokenizer, "user"));
+    tokens.extend_from_slice(&encode(tokenizer, "user")?);
     tokens.push(NEWLINE);
     tokens.push(audio_start_id);
 
@@ -279,14 +282,14 @@ fn build_prompt(
     tokens.push(IM_END);
     tokens.push(NEWLINE);
     tokens.push(IM_START);
-    tokens.extend_from_slice(&encode(tokenizer, "assistant"));
+    tokens.extend_from_slice(&encode(tokenizer, "assistant")?);
     tokens.push(NEWLINE);
 
     if let Some(lang) = language {
         tokens.extend_from_slice(&encode(
             tokenizer,
             &format!("language {}", normalize_language(lang)),
-        ));
+        )?);
     }
 
     Ok(tokens)
