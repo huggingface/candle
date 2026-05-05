@@ -76,7 +76,7 @@ pub fn make_causal_mask_cached(
     let allowed = allowed.unsqueeze(1)?;
     let shape = (batch_size, 1usize, new_len, total_len);
     let zeros = Tensor::zeros(shape, DType::F32, device)?;
-    let neg = Tensor::full(f32::MIN, shape, device)?;
+    let neg = Tensor::full(f32::NEG_INFINITY, shape, device)?;
     let mask = allowed.where_cond(&zeros, &neg)?;
     if dtype == DType::F32 {
         Ok(mask)
@@ -631,18 +631,12 @@ pub fn get_rope_index(attention_mask: &Tensor) -> Result<Tensor> {
         candle::bail!("attention_mask seq_len must be > 0");
     }
     let device = attention_mask.device();
-    let seq_len_u32 = u32::try_from(seq_len)
-        .map_err(|_| candle::Error::Msg("seq_len overflows u32".to_string()))?;
     let mask_u8 = attention_mask.ne(0u32)?;
     let mask_f32 = mask_u8.to_dtype(DType::F32)?;
-    let sum_mask = mask_f32.sum(1)?;
-    let pad = ((seq_len as f64) - &sum_mask)?;
-    let pos = Tensor::arange(0u32, seq_len_u32, device)?.to_dtype(DType::F32)?;
-    let pos = pos.unsqueeze(0)?.broadcast_as((batch, seq_len))?;
-    let pad = pad.unsqueeze(1)?.broadcast_as((batch, seq_len))?;
-    let shifted = (&pos - &pad)?;
+    let cumsum = mask_f32.cumsum(1)?;
+    let pos = (&cumsum - 1.0f64)?;
     let ones = Tensor::ones((batch, seq_len), DType::F32, device)?;
-    let base_pos = mask_u8.where_cond(&shifted, &ones)?;
+    let base_pos = mask_u8.where_cond(&pos, &ones)?;
     base_pos
         .round()?
         .to_dtype(DType::I64)?
@@ -902,7 +896,7 @@ mod tests {
 
     #[test]
     fn test_merge_audio_features_basic() -> anyhow::Result<()> {
-        // input_ids: [100, 99, 100, 98] where 99 is the audio token
+        // input_ids: [100, 99, 100, 99] where 99 is the audio token
         // audio_features: [[1.0, 2.0], [3.0, 4.0]]  (2 audio tokens, hidden=2)
         // Expected: embed at positions of 99 replaced with audio features row 0 and 1
         let device = candle::Device::Cpu;
