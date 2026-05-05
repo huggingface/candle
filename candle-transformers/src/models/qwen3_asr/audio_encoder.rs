@@ -12,13 +12,15 @@ use candle_flash_attn::flash_attn_varlen;
 
 const LAYER_NORM_EPS: f64 = 1e-5;
 
-fn feat_extract_output_length(input_len: usize) -> usize {
-    let leave = input_len % 100;
-    let feat_len = leave.div_ceil(2);
-    let tmp = feat_len.div_ceil(2);
-    let base = tmp.div_ceil(2);
-    let extra = (input_len / 100) * 13;
-    base + extra
+fn feat_extract_output_length(input_len: usize, window: usize) -> usize {
+    if window == 0 {
+        return 0;
+    }
+    let full_chunks = input_len / window;
+    let remainder = input_len % window;
+    let per_chunk = window.div_ceil(2).div_ceil(2).div_ceil(2);
+    let rem_out = remainder.div_ceil(2).div_ceil(2).div_ceil(2);
+    full_chunks * per_chunk + rem_out
 }
 
 fn cu_seqlens_from_aftercnn_len(
@@ -511,7 +513,7 @@ impl AudioEncoder {
             let chunk = input_t.narrow(0, offset, len)?; // (len, mel)
             let pad = max_chunk_len.saturating_sub(len);
             padded_chunks.push(chunk.pad_with_zeros(0, 0, pad)?);
-            aftercnn_lens.push(feat_extract_output_length(len));
+            aftercnn_lens.push(feat_extract_output_length(len, window));
         }
 
         if padded_chunks.is_empty() {
@@ -584,7 +586,7 @@ impl AudioEncoder {
 
         // Encoder transformer layers.
         let cu_seqlens = cu_seqlens_from_aftercnn_len(
-            feat_extract_output_length(frames),
+            feat_extract_output_length(frames, window),
             max_t,
             window,
             self.config.n_window_infer,
