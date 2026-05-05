@@ -51,6 +51,9 @@ fn main() -> Result<()> {
         &input_ids,
     )?;
     println!("logits shape: {:?}", logits.shape());
-    println!("logits values: {:?}", logits.flatten_all()?.to_vec1::<f32>()?);
+    println!(
+        "logits values: {:?}",
+        logits.flatten_all()?.to_vec1::<f32>()?
+    );
     Ok(())
 }
