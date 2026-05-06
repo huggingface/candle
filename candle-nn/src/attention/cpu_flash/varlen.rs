@@ -11,6 +11,7 @@ use candle::{DType, Device, Result, Storage, Tensor};
 use half::f16;
 use rayon::prelude::*;
 
+use super::dot::DotF32;
 use super::standard::FLASH_ATTN_POOL;
 
 /// Fused variable-length flash attention on CPU.
@@ -201,24 +202,6 @@ pub fn flash_attn_varlen_cpu(
 
             let mut out = vec![0f32; total_q * hq * d];
 
-            #[inline(always)]
-            fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
-                let mut s = 0.0f32;
-                let mut i = 0;
-                while i + 4 <= a.len() {
-                    s += a[i] * b[i]
-                        + a[i + 1] * b[i + 1]
-                        + a[i + 2] * b[i + 2]
-                        + a[i + 3] * b[i + 3];
-                    i += 4;
-                }
-                while i < a.len() {
-                    s += a[i] * b[i];
-                    i += 1;
-                }
-                s
-            }
-
             FLASH_ATTN_POOL.install(|| {
                 out.par_chunks_mut(d).enumerate().for_each_init(
                     || vec![0f32; d],
@@ -267,7 +250,7 @@ pub fn flash_attn_varlen_cpu(
                             let k_base = ((start_k + j) * hk + k_head) * d;
                             let k_row = &k_data[k_base..k_base + d];
 
-                            let mut score = dot_f32(q_row, k_row) * softmax_scale;
+                            let mut score = f32::dot_f32(q_row, k_row) * softmax_scale;
                             if slopes.is_some() {
                                 score += alibi_bias(slope, i_k, j as isize, causal);
                             }
@@ -328,28 +311,6 @@ pub fn flash_attn_varlen_cpu(
                 _ => candle::bail!("v not cpu"),
             };
 
-            #[inline(always)]
-            fn dot_qf32_kf16(q: &[f32], k: &[f16]) -> f32 {
-                let mut s = 0.0f32;
-                let mut i = 0usize;
-                while i + 8 <= q.len() {
-                    s += q[i] * k[i].to_f32()
-                        + q[i + 1] * k[i + 1].to_f32()
-                        + q[i + 2] * k[i + 2].to_f32()
-                        + q[i + 3] * k[i + 3].to_f32()
-                        + q[i + 4] * k[i + 4].to_f32()
-                        + q[i + 5] * k[i + 5].to_f32()
-                        + q[i + 6] * k[i + 6].to_f32()
-                        + q[i + 7] * k[i + 7].to_f32();
-                    i += 8;
-                }
-                while i < q.len() {
-                    s += q[i] * k[i].to_f32();
-                    i += 1;
-                }
-                s
-            }
-
             let mut out = vec![f16::from_f32(0.0); total_q * hq * d];
 
             FLASH_ATTN_POOL.install(|| {
@@ -402,7 +363,7 @@ pub fn flash_attn_varlen_cpu(
                             let k_base = ((start_k + j) * hk + k_head) * d;
                             let k_row = &k_data[k_base..k_base + d];
 
-                            let mut score = dot_qf32_kf16(q_row_f32, k_row) * softmax_scale;
+                            let mut score = f16::dot_f32(q_row_f32, k_row) * softmax_scale;
                             if slopes.is_some() {
                                 score += alibi_bias(slope, i_k, j as isize, causal);
                             }

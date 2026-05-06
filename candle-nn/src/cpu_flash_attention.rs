@@ -22,7 +22,11 @@ pub fn run_flash_attn_cpu<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real + 'static,
+    T: WithDType
+        + Sum
+        + num_traits::real::Real
+        + 'static
+        + crate::attention::cpu_flash::dot::DotF32,
 {
     use crate::attention::{flash_attn, AttnMask};
 
