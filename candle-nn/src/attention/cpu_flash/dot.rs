@@ -82,19 +82,19 @@ impl DotF32 for f64 {
     #[inline(always)]
     fn dot_f32(q: &[f32], k: &[f64]) -> f32 {
         let n = q.len();
-        let mut s = 0.0f32;
+        let mut s = 0.0f64;
         let mut i = 0;
         while i + 4 <= n {
-            s += q[i] * k[i] as f32
-                + q[i + 1] * k[i + 1] as f32
-                + q[i + 2] * k[i + 2] as f32
-                + q[i + 3] * k[i + 3] as f32;
+            s += (q[i] as f64) * k[i]
+                + (q[i + 1] as f64) * k[i + 1]
+                + (q[i + 2] as f64) * k[i + 2]
+                + (q[i + 3] as f64) * k[i + 3];
             i += 4;
         }
         while i < n {
-            s += q[i] * k[i] as f32;
+            s += (q[i] as f64) * k[i];
             i += 1;
         }
-        s
+        s as f32
     }
 }

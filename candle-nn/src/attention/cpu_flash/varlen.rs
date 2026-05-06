@@ -12,6 +12,7 @@ use half::f16;
 use rayon::prelude::*;
 
 use super::dot::DotF32;
+use super::online_softmax::online_softmax_step;
 use super::standard::FLASH_ATTN_POOL;
 
 /// Fused variable-length flash attention on CPU.
@@ -255,30 +256,13 @@ pub fn flash_attn_varlen_cpu(
                                 score += alibi_bias(slope, i_k, j as isize, causal);
                             }
 
-                            if score > m {
-                                let scale_old = (m - score).exp();
-                                #[allow(clippy::needless_range_loop)]
-                                for t in 0..d {
-                                    acc[t] *= scale_old;
-                                }
-                                ssum *= scale_old;
-                                m = score;
-
-                                let v_base = ((start_k + j) * hv + v_head) * d;
-                                let v_row = &v_data[v_base..v_base + d];
-                                for t in 0..d {
-                                    acc[t] += v_row[t];
-                                }
-                                ssum += 1.0;
-                            } else {
-                                let w = (score - m).exp();
-                                let v_base = ((start_k + j) * hv + v_head) * d;
-                                let v_row = &v_data[v_base..v_base + d];
+                            let v_base = ((start_k + j) * hv + v_head) * d;
+                            let v_row = &v_data[v_base..v_base + d];
+                            online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                                 for t in 0..d {
                                     acc[t] += v_row[t] * w;
                                 }
-                                ssum += w;
-                            }
+                            });
                         }
 
                         let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -368,28 +352,12 @@ pub fn flash_attn_varlen_cpu(
                                 score += alibi_bias(slope, i_k, j as isize, causal);
                             }
 
-                            if score > m {
-                                let scale_old = (m - score).exp();
-                                #[allow(clippy::needless_range_loop)]
-                                for t in 0..d {
-                                    acc[t] *= scale_old;
-                                }
-                                ssum *= scale_old;
-                                m = score;
-
-                                let v_base = ((start_k + j) * hv + v_head) * d;
-                                for t in 0..d {
-                                    acc[t] += v_data[v_base + t].to_f32();
-                                }
-                                ssum += 1.0;
-                            } else {
-                                let w = (score - m).exp();
-                                let v_base = ((start_k + j) * hv + v_head) * d;
+                            let v_base = ((start_k + j) * hv + v_head) * d;
+                            online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                                 for t in 0..d {
                                     acc[t] += v_data[v_base + t].to_f32() * w;
                                 }
-                                ssum += w;
-                            }
+                            });
                         }
 
                         let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };

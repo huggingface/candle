@@ -10,6 +10,7 @@ use rayon::prelude::*;
 use rayon::ThreadPool;
 
 use super::dot::DotF32;
+use super::online_softmax::online_softmax_step;
 
 #[cfg(target_os = "macos")]
 unsafe fn set_thread_affinity() {
@@ -208,28 +209,7 @@ fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 
                     let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
-                    if score > m {
-                        let scale_old = (m - score).exp();
-                        for t in 0..dv {
-                            acc[t] *= scale_old;
-                        }
-                        ssum *= scale_old;
-                        m = score;
-                        if v_contiguous {
-                            let v_row = &v_data[v_base..v_base + dv];
-                            for d_i in 0..dv {
-                                acc[d_i] += v_row[d_i].to_f32().unwrap_or(0.0);
-                            }
-                        } else {
-                            for d_i in 0..dv {
-                                acc[d_i] += v_data[v_base + d_i * vstride[3]]
-                                    .to_f32()
-                                    .unwrap_or(0.0);
-                            }
-                        }
-                        ssum += 1.0;
-                    } else {
-                        let w = (score - m).exp();
+                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                         if v_contiguous {
                             let v_row = &v_data[v_base..v_base + dv];
                             for d_i in 0..dv {
@@ -241,8 +221,7 @@ fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                                     v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0) * w;
                             }
                         }
-                        ssum += w;
-                    }
+                    });
                 }
 
                 let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -337,28 +316,7 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 
                     let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
-                    if score > m {
-                        let scale_old = (m - score).exp();
-                        for t in 0..dv {
-                            acc[t] *= scale_old;
-                        }
-                        ssum *= scale_old;
-                        m = score;
-                        if v_contiguous {
-                            let v_row = &v_data[v_base..v_base + dv];
-                            for d_i in 0..dv {
-                                acc[d_i] += v_row[d_i].to_f32().unwrap_or(0.0);
-                            }
-                        } else {
-                            for d_i in 0..dv {
-                                acc[d_i] += v_data[v_base + d_i * vstride[3]]
-                                    .to_f32()
-                                    .unwrap_or(0.0);
-                            }
-                        }
-                        ssum += 1.0;
-                    } else {
-                        let w = (score - m).exp();
+                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                         if v_contiguous {
                             let v_row = &v_data[v_base..v_base + dv];
                             for d_i in 0..dv {
@@ -370,8 +328,7 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                                     v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0) * w;
                             }
                         }
-                        ssum += w;
-                    }
+                    });
                 }
 
                 let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -440,28 +397,7 @@ fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>
 
                         let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
-                        if score > m {
-                            let scale_old = (m - score).exp();
-                            for t in 0..dv {
-                                acc[t] *= scale_old;
-                            }
-                            ssum *= scale_old;
-                            m = score;
-                            if v_contiguous {
-                                let v_row = &v_data[v_base..v_base + dv];
-                                for d_i in 0..dv {
-                                    acc[d_i] += v_row[d_i].to_f32().unwrap_or(0.0);
-                                }
-                            } else {
-                                for d_i in 0..dv {
-                                    acc[d_i] += v_data[v_base + d_i * vstride[3]]
-                                        .to_f32()
-                                        .unwrap_or(0.0);
-                                }
-                            }
-                            ssum += 1.0;
-                        } else {
-                            let w = (score - m).exp();
+                        online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                             if v_contiguous {
                                 let v_row = &v_data[v_base..v_base + dv];
                                 for d_i in 0..dv {
@@ -475,8 +411,7 @@ fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>
                                         * w;
                                 }
                             }
-                            ssum += w;
-                        }
+                        });
                     }
 
                     let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -577,28 +512,7 @@ fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 
                         let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
-                        if score > m {
-                            let scale_old = (m - score).exp();
-                            for t in 0..dv {
-                                acc[t] *= scale_old;
-                            }
-                            ssum *= scale_old;
-                            m = score;
-                            if v_contiguous {
-                                let v_row = &v_data[v_base..v_base + dv];
-                                for d_i in 0..dv {
-                                    acc[d_i] += v_row[d_i].to_f32().unwrap_or(0.0);
-                                }
-                            } else {
-                                for d_i in 0..dv {
-                                    acc[d_i] += v_data[v_base + d_i * vstride[3]]
-                                        .to_f32()
-                                        .unwrap_or(0.0);
-                                }
-                            }
-                            ssum += 1.0;
-                        } else {
-                            let w = (score - m).exp();
+                        online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                             if v_contiguous {
                                 let v_row = &v_data[v_base..v_base + dv];
                                 for d_i in 0..dv {
@@ -612,8 +526,7 @@ fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                                         * w;
                                 }
                             }
-                            ssum += w;
-                        }
+                        });
                     }
 
                     let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };

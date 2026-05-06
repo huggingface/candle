@@ -11,6 +11,7 @@
 
 pub mod causal;
 pub mod dot;
+pub(crate) mod online_softmax;
 pub mod standard;
 pub mod varlen;
 
