@@ -95,7 +95,6 @@ where
     let logit_softcap = softcap.unwrap_or(0.0);
     let lean = mask_data.is_none() && max_bias == 0.0 && logit_softcap == 0.0;
 
-    // Decode fast path: q_len == 1
     if q.shape().dims()[1] == 1 {
         if lean {
             return flash_attn_decode_lean::<T>(
@@ -128,7 +127,6 @@ where
         );
     }
 
-    // Prefill path (q_len > 1)
     if lean {
         return flash_attn_prefill_lean::<T>(
             q_data,
