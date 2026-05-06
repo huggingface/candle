@@ -7,6 +7,7 @@ criterion_main!(
     benchmarks::binary::benches,
     benchmarks::broadcast::benches,
     benchmarks::copy::benches,
+    benchmarks::conv2d::benches,
     benchmarks::conv_transpose2d::benches,
     benchmarks::matmul::benches,
     benchmarks::qmatmul::benches,

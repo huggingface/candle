@@ -80,47 +80,24 @@ pub mod neon;
 #[cfg(target_feature = "neon")]
 pub use neon::CurrentCpu;
 
-#[cfg(any(
-    target_feature = "neon",
-    target_feature = "avx2",
-    target_feature = "simd128"
-))]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f32, k: usize) {
-    let np = k & !(CurrentCpu::STEP - 1);
-
-    let mut sum = CurrentCpu::zero_array();
-    let mut ax = CurrentCpu::zero_array();
-    let mut ay = CurrentCpu::zero_array();
-
-    for i in (0..np).step_by(CurrentCpu::STEP) {
-        for j in 0..CurrentCpu::n() {
-            ax[j] = CurrentCpu::load(a_row.add(i + j * CurrentCpu::EPR));
-            ay[j] = CurrentCpu::load(b_row.add(i + j * CurrentCpu::EPR));
-
-            sum[j] = CurrentCpu::vec_fma(sum[j], ax[j], ay[j]);
-        }
+    let a = std::slice::from_raw_parts(a_row, k);
+    let b = std::slice::from_raw_parts(b_row, k);
+    let mut sum = 0.0f32;
+    let mut i = 0;
+    while i + 4 <= k {
+        sum += a[i] * b[i]
+            + a[i + 1] * b[i + 1]
+            + a[i + 2] * b[i + 2]
+            + a[i + 3] * b[i + 3];
+        i += 4;
     }
-
-    CurrentCpu::vec_reduce(sum, c);
-
-    // leftovers
-    for i in np..k {
-        *c += *a_row.add(i) * (*b_row.add(i));
+    while i < k {
+        sum += a[i] * b[i];
+        i += 1;
     }
-}
-
-#[cfg(not(any(
-    target_feature = "neon",
-    target_feature = "avx2",
-    target_feature = "simd128"
-)))]
-#[inline(always)]
-pub(crate) unsafe fn vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f32, k: usize) {
-    // leftovers
-    for i in 0..k {
-        *c += *a_row.add(i) * (*b_row.add(i));
-    }
+    *c = sum;
 }
 
 #[cfg(any(
