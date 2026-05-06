@@ -9,7 +9,7 @@ fn run(x: &Tensor, k: &Tensor, padding: usize, stride: usize, dilation: usize, g
 }
 
 fn run_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
-    let t = Tensor::arange(0.0f32, (1 * 128 * 28 * 28) as f32, device)
+    let t = Tensor::arange(0.0f32, (128 * 28 * 28) as f32, device)
         .unwrap()
         .reshape((1, 128, 28, 28))
         .unwrap()

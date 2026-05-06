@@ -87,10 +87,7 @@ pub(crate) unsafe fn vec_dot_f32(a_row: *const f32, b_row: *const f32, c: *mut f
     let mut sum = 0.0f32;
     let mut i = 0;
     while i + 4 <= k {
-        sum += a[i] * b[i]
-            + a[i + 1] * b[i + 1]
-            + a[i + 2] * b[i + 2]
-            + a[i + 3] * b[i + 3];
+        sum += a[i] * b[i] + a[i + 1] * b[i + 1] + a[i + 2] * b[i + 2] + a[i + 3] * b[i + 3];
         i += 4;
     }
     while i < k {
