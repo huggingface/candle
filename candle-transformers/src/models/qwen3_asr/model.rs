@@ -362,6 +362,19 @@ impl TextAttention {
             }
             #[cfg(feature = "flash-attn")]
             {
+                if !hidden_states.device().is_cuda() {
+                    candle::bail!(
+                        "flash-attn requires a CUDA device, got {:?}",
+                        hidden_states.device().location()
+                    );
+                }
+                match hidden_states.dtype() {
+                    DType::F16 | DType::BF16 => {}
+                    other => {
+                        candle::bail!("flash-attn requires dtype f16/bf16, got {other:?}")
+                    }
+                }
+
                 let softmax_scale = self.scaling as f32;
                 let (_b2, total_len) = token_attention_mask.dims2()?;
                 let cache_len = total_len - seq_len;
