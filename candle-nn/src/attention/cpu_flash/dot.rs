@@ -14,10 +14,7 @@ impl DotF32 for f32 {
         let mut s = 0.0f32;
         let mut i = 0;
         while i + 4 <= n {
-            s += q[i] * k[i]
-                + q[i + 1] * k[i + 1]
-                + q[i + 2] * k[i + 2]
-                + q[i + 3] * k[i + 3];
+            s += q[i] * k[i] + q[i + 1] * k[i + 1] + q[i + 2] * k[i + 2] + q[i + 3] * k[i + 3];
             i += 4;
         }
         while i < n {
@@ -77,4 +74,3 @@ impl DotF32 for bf16 {
         s
     }
 }
-

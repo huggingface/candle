@@ -403,10 +403,9 @@ fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>
                                 }
                             } else {
                                 for d_i in 0..dv {
-                                    acc[d_i] += v_data[v_base + d_i * vstride[3]]
-                                        .to_f32()
-                                        .unwrap_or(0.0)
-                                        * w;
+                                    acc[d_i] +=
+                                        v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0)
+                                            * w;
                                 }
                             }
                         });
@@ -518,10 +517,9 @@ fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                                 }
                             } else {
                                 for d_i in 0..dv {
-                                    acc[d_i] += v_data[v_base + d_i * vstride[3]]
-                                        .to_f32()
-                                        .unwrap_or(0.0)
-                                        * w;
+                                    acc[d_i] +=
+                                        v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0)
+                                            * w;
                                 }
                             }
                         });
