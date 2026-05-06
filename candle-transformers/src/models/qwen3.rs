@@ -296,15 +296,6 @@ impl Qwen3Attention {
                 None,
                 None,
             )?,
-            DType::F64 => flash_attn::<f64>(
-                &q,
-                &k,
-                &v,
-                scale,
-                AttnMask::causal_with_offset(offset),
-                None,
-                None,
-            )?,
             DType::BF16 => {
                 let q_f32 = q.to_dtype(DType::F32)?;
                 let k_f32 = k.to_dtype(DType::F32)?;
