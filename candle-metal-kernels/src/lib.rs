@@ -18,8 +18,8 @@ use metal::{
 };
 use objc2_metal::{MTLCompileOptions, MTLMathFloatingPointFunctions, MTLMathMode, MTLSize};
 use source::Source;
-pub use utils::{BufferOffset, Output};
 use utils::{get_block_dims, get_tile_size, linear_split, EncoderParam, EncoderProvider};
+pub use utils::{BufferOffset, Output};
 
 pub const RESOURCE_OPTIONS: MTLResourceOptions =
     objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
