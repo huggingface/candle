@@ -67,7 +67,15 @@ impl Qwen3VLModel {
         seqlen_offsets: &[usize],
     ) -> Result<Tensor> {
         let (bs, seqlen) = input_ids.dims2()?;
+        // The causal mask is only needed when processing more than one token at once
+        // (prefill / multi-token prompt). For single-token autoregressive decode steps
+        // we can rely on the KV cache and skip building the mask. The previous logic
+        // had this condition inverted (issue #3505), which built the mask only for
+        // single-token steps and skipped it during prefill — leaving the model with
+        // no attention mask when it actually needed one.
         let attention_mask = if seqlen <= 1 {
+            None
+        } else {
             Some(self.prepare_decoder_attention_mask(
                 bs,
                 seqlen,
@@ -75,8 +83,6 @@ impl Qwen3VLModel {
                 self.text.dtype,
                 input_ids.device(),
             )?)
-        } else {
-            None
         };
 
         let mut input_embeds = self.text.embed_tokens(input_ids)?;
