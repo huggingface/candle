@@ -311,7 +311,8 @@ fn main() -> Result<()> {
             format!("Qwen/Qwen{version}-{size}")
         }
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let revision = args.revision.clone();
 
     let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer_file.as_ref()) {

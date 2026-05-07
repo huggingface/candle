@@ -110,7 +110,7 @@ fn main() -> Result<()> {
     );
     let device = candle_examples::device(args.cpu)?;
     let api = HFClientSync::new()?;
-    let repo = api.model("", "lmz/candle-metavoice");
+    let repo = api.model("lmz", "candle-metavoice");
     let first_stage_meta = match &args.first_stage_meta {
         Some(w) => std::path::PathBuf::from(w),
         None => repo.download_file().filename("first_stage.meta.json").send()?,
@@ -133,7 +133,7 @@ fn main() -> Result<()> {
     let encodec_weights = match args.encodec_weights {
         Some(w) => std::path::PathBuf::from(w),
         None => HFClientSync::new()?
-            .model("", "facebook/encodec_24khz")
+            .model("facebook", "encodec_24khz")
             .download_file().filename("model.safetensors").send()?,
     };
     let dtype = match args.dtype {

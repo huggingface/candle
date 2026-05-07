@@ -75,7 +75,7 @@ pub fn main() -> anyhow::Result<()> {
         Some(model) => std::path::PathBuf::from(model),
         None => {
             let api = hf_hub::HFClientSync::new()?;
-            let api = api.model("", "lmz/candle-sam");
+            let api = api.model("lmz", "candle-sam");
             let filename = if args.use_tiny {
                 "mobile_sam-tiny-vitt.safetensors"
             } else {

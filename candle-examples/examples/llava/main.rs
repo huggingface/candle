@@ -151,7 +151,8 @@ fn main() -> Result<()> {
     let device = candle_examples::device(args.cpu)?;
     println!("Start loading model");
     let api = HFClientSync::new()?;
-    let api = api.model("", &args.model_path);
+    let (owner, name) = args.model_path.split_once('/').unwrap_or(("", args.model_path.as_str()));
+    let api = api.model(owner, name);
     let (llava_config, tokenizer, clip_vision_config, image_processor) = if args.hf {
         let config_filename = api.download_file().filename("config.json").send()?;
         let hf_llava_config: HFLLaVAConfig =

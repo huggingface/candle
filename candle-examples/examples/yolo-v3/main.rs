@@ -122,7 +122,7 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let api = hf_hub::HFClientSync::new()?;
-                let api = api.model("", "lmz/candle-yolo-v3");
+                let api = api.model("lmz", "candle-yolo-v3");
                 api.download_file().filename("yolo-v3.cfg").send()?
             }
         };
@@ -134,7 +134,7 @@ impl Args {
             Some(model) => std::path::PathBuf::from(model),
             None => {
                 let api = hf_hub::HFClientSync::new()?;
-                let api = api.model("", "lmz/candle-yolo-v3");
+                let api = api.model("lmz", "candle-yolo-v3");
                 api.download_file().filename("yolo-v3.safetensors").send()?
             }
         };

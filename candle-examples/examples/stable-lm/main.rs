@@ -233,7 +233,8 @@ fn main() -> Result<()> {
     };
 
     let revision = args.revision.clone();
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,
@@ -247,7 +248,7 @@ fn main() -> Result<()> {
             (Which::V1Orig | Which::V1, true) => vec![repo.download_file().filename("model-q4k.gguf").revision(&revision).send()?],
             (Which::V2, true) => {
                 let gguf = api
-                    .model("", "lmz/candle-stablelm")
+                    .model("lmz", "candle-stablelm")
                     .download_file()
                     .filename("stablelm-2-1_6b-q4k.gguf")
                     .send()?;
@@ -255,7 +256,7 @@ fn main() -> Result<()> {
             }
             (Which::V2Zephyr, true) => {
                 let gguf = api
-                    .model("", "lmz/candle-stablelm")
+                    .model("lmz", "candle-stablelm")
                     .download_file()
                     .filename("stablelm-2-zephyr-1_6b-q4k.gguf")
                     .send()?;

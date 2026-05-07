@@ -93,7 +93,8 @@ pub(crate) fn load_mnist_like(
     train_filename: &str,
 ) -> Result<crate::vision::Dataset> {
     let client = HFClientSync::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
-    let repo = client.dataset("", dataset_id);
+    let (owner, name) = dataset_id.split_once('/').unwrap_or(("", dataset_id));
+    let repo = client.dataset(owner, name);
     let test_parquet_filename = repo
         .download_file()
         .filename(test_filename)

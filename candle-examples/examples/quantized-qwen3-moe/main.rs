@@ -109,7 +109,8 @@ impl Args {
             None => {
                 let api = hf_hub::HFClientSync::new()?;
                 let repo = "Qwen/Qwen3-30B-A3B-Instruct-2507";
-                let api = api.model("", repo);
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                let api = api.model(owner, name);
                 api.download_file().filename("tokenizer.json").send()?
             }
         };
@@ -164,7 +165,8 @@ impl Args {
                     ),
                 };
                 let api = hf_hub::HFClientSync::new()?;
-                api.model("", repo)
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                api.model(owner, name)
                     .download_file()
                     .filename(filename)
                     .revision(revision)

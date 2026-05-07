@@ -108,7 +108,8 @@ impl Args {
                     Which::Phi3 | Which::Phi3b => "microsoft/Phi-3-mini-4k-instruct",
                     Which::Phi4 => "microsoft/phi-4",
                 };
-                let api = api.model("", repo);
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                let api = api.model(owner, name);
                 api.download_file().filename("tokenizer.json").send()?
             }
         };
@@ -134,7 +135,8 @@ impl Args {
                     Which::Phi4 => ("microsoft/phi-4-gguf", "phi-4-q4.gguf", "main"),
                 };
                 let api = hf_hub::HFClientSync::new()?;
-                api.model("", repo)
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                api.model(owner, name)
                     .download_file()
                     .filename(filename)
                     .revision(revision)

@@ -62,7 +62,8 @@ fn get_vb_and_config(
 ) -> anyhow::Result<(VarBuilder<'_>, Config)> {
     println!("loading model {model_name} via huggingface hub");
     let api = hf_hub::HFClientSync::new()?;
-    let api = api.model("", &model_name);
+    let (owner, repo_name) = model_name.split_once('/').unwrap_or(("", model_name.as_str()));
+    let api = api.model(owner, repo_name);
     let model_file = api.download_file().filename("model.safetensors").send()?;
     println!("model {model_name} downloaded and loaded");
     let vb =

@@ -47,7 +47,7 @@ pub fn main() -> anyhow::Result<()> {
         None => {
             let api = hf_hub::HFClientSync::new()?;
             let api =
-                api.model("", "vincent-espitalier/dino-v2-reg4-with-plantclef2024-weights");
+                api.model("vincent-espitalier", "dino-v2-reg4-with-plantclef2024-weights");
             api.download_file()
                 .filename(
                     "vit_base_patch14_reg4_dinov2_lvd142m_pc24_onlyclassifier_then_all.safetensors",

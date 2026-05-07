@@ -134,7 +134,8 @@ fn main() -> Result<()> {
             name.to_string()
         }
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let revision = args.revision;
     let filenames = match args.weights {
         Some(files) => files
@@ -150,7 +151,7 @@ fn main() -> Result<()> {
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("", "meta-llama/Llama-3.2-1B")
+            .model("meta-llama", "Llama-3.2-1B")
             .download_file()
             .filename("tokenizer.json")
             .send()?,
@@ -158,7 +159,7 @@ fn main() -> Result<()> {
     let mimi_filename = match args.mimi_weights {
         Some(model) => std::path::PathBuf::from(model),
         None => HFClientSync::new()?
-            .model("", "kyutai/mimi")
+            .model("kyutai", "mimi")
             .download_file()
             .filename("model.safetensors")
             .send()?,

@@ -47,7 +47,7 @@ fn main() -> Result<()> {
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => HFClientSync::new()?
-            .model("", "facebook/encodec_24khz")
+            .model("facebook", "encodec_24khz")
             .download_file()
             .filename("model.safetensors")
             .send()?,

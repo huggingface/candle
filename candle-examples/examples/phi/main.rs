@@ -291,7 +291,8 @@ fn main() -> Result<()> {
             }
         }
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => match args.model {

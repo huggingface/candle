@@ -251,7 +251,8 @@ fn main() -> Result<()> {
         None => "mistral-community/pixtral-12b".to_string(),
     };
     let revision = args.revision;
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,

@@ -125,7 +125,7 @@ fn main() -> Result<()> {
         Some(model_id) => std::path::PathBuf::from(model_id),
         None => match args.which {
             Which::Silero => hf_hub::HFClientSync::new()?
-                .model("", "onnx-community/silero-vad")
+                .model("onnx-community", "silero-vad")
                 .download_file()
                 .filename("onnx/model.onnx")
                 .send()?,

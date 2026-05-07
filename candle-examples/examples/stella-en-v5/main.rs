@@ -330,7 +330,8 @@ fn main() -> Result<()> {
         ),
     };
 
-    let repo = api.model("", repo);
+    let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.download_file().filename("tokenizer.json").send()?,

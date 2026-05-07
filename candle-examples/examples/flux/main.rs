@@ -88,11 +88,12 @@ fn run(args: Args) -> Result<()> {
 
     let api = hf_hub::HFClientSync::new()?;
     let bf_repo = {
-        let name = match model {
+        let id = match model {
             Model::Dev => "black-forest-labs/FLUX.1-dev",
             Model::Schnell => "black-forest-labs/FLUX.1-schnell",
         };
-        api.model("", name)
+        let (owner, name) = id.split_once('/').unwrap_or(("", id));
+        api.model(owner, name)
     };
     let device = candle_examples::device(cpu)?;
     if let Some(seed) = args.seed {
@@ -102,7 +103,7 @@ fn run(args: Args) -> Result<()> {
     let img = match decode_only {
         None => {
             let t5_emb = {
-                let repo = api.model("", "google/t5-v1_1-xxl");
+                let repo = api.model("google", "t5-v1_1-xxl");
                 let model_file = repo
                     .download_file()
                     .filename("model.safetensors")
@@ -119,7 +120,7 @@ fn run(args: Args) -> Result<()> {
                 let config: t5::Config = serde_json::from_str(&config)?;
                 let mut model = t5::T5EncoderModel::load(vb, &config)?;
                 let tokenizer_filename = api
-                    .model("", "lmz/mt5-tokenizers")
+                    .model("lmz", "mt5-tokenizers")
                     .download_file()
                     .filename("t5-v1_1-xxl.tokenizer.json")
                     .send()?;
@@ -136,7 +137,7 @@ fn run(args: Args) -> Result<()> {
             };
             println!("T5\n{t5_emb}");
             let clip_emb = {
-                let repo = api.model("", "openai/clip-vit-large-patch14");
+                let repo = api.model("openai", "clip-vit-large-patch14");
                 let model_file = repo
                     .download_file()
                     .filename("model.safetensors")
@@ -198,7 +199,7 @@ fn run(args: Args) -> Result<()> {
                 if quantized {
                     let model_file = match model {
                         Model::Schnell => api
-                            .model("", "lmz/candle-flux")
+                            .model("lmz", "candle-flux")
                             .download_file()
                             .filename("flux1-schnell.gguf")
                             .send()?,

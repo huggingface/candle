@@ -43,7 +43,8 @@ pub fn main() -> anyhow::Result<()> {
         Which::Vgg16 => "timm/vgg16.tv_in1k",
         Which::Vgg19 => "timm/vgg19.tv_in1k",
     };
-    let api = api.model("", repo);
+    let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+    let api = api.model(owner, name);
     let filename = "model.safetensors";
     let model_file = api.download_file().filename(filename).send()?;
 

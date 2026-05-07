@@ -61,7 +61,8 @@ fn main() -> Result<()> {
     let revision = args.revision;
     let (config_filename, tokenizer_filename, weights_filename) = {
         let api = HFClientSync::new()?;
-        let api = api.model("", &args.model_id);
+        let (owner, name) = args.model_id.split_once('/').unwrap_or(("", args.model_id.as_str()));
+        let api = api.model(owner, name);
         let config = api.download_file().filename("config.json").revision(&revision).send()?;
         let tokenizer = api.download_file().filename("tokenizer.json").revision(&revision).send()?;
         let weights = api.download_file().filename("model.safetensors").revision(&revision).send()?;

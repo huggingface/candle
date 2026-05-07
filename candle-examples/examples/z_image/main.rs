@@ -155,7 +155,9 @@ fn run(args: Args) -> Result<()> {
 
     // Resolve model: use provided path or download from HuggingFace
     let api = HFClientSync::new()?;
-    let repo = api.model("", args.model.repo());
+    let repo_id = args.model.repo();
+    let (owner, name) = repo_id.split_once('/').unwrap_or(("", repo_id));
+    let repo = api.model(owner, name);
     let use_local = args.model_path.is_some();
     let model_path = args.model_path.map(std::path::PathBuf::from);
 

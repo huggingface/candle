@@ -122,7 +122,8 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = HFClientSync::new()?;
-    let repo = api.model("", &args.model_id);
+    let (owner, name) = args.model_id.split_once('/').unwrap_or(("", args.model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = repo
         .download_file()
         .filename("tokenizer.json")

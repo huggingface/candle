@@ -153,7 +153,8 @@ fn main() -> Result<()> {
         } else {
             let api = HFClientSync::new()?;
             let revision = args.revision.clone().unwrap_or_else(|| "main".to_string());
-            let repo = api.model("", &model_id);
+            let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+            let repo = api.model(owner, name);
 
             let tokenizer_filename = repo
                 .download_file()

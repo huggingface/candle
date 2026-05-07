@@ -115,7 +115,8 @@ impl ModelFile {
                     Self::VqGan => (repo_main, "vqgan/diffusion_pytorch_model.safetensors"),
                     Self::Prior => (repo_prior, "prior/diffusion_pytorch_model.safetensors"),
                 };
-                let filename = HFClientSync::new()?.model("", repo).download_file().filename(path).send()?;
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                let filename = HFClientSync::new()?.model(owner, name).download_file().filename(path).send()?;
                 Ok(filename)
             }
         }

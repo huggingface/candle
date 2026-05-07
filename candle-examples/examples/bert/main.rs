@@ -69,7 +69,8 @@ impl Args {
 
         let (config_filename, tokenizer_filename, weights_filename) = {
             let api = HFClientSync::new()?;
-            let api = api.model("", &model_id);
+            let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+            let api = api.model(owner, name);
             let config = api
                 .download_file()
                 .filename("config.json")

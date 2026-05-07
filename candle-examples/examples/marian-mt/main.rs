@@ -91,6 +91,9 @@ pub fn main() -> anyhow::Result<()> {
         | LanguagePair::EnFr
         | LanguagePair::EnRu => "KeighBee/candle-marian",
     };
+    let (tokenizer_default_owner, tokenizer_default_name) = tokenizer_default_repo
+        .split_once('/')
+        .unwrap_or(("", tokenizer_default_repo));
     let tokenizer = {
         let tokenizer = match args.tokenizer {
             Some(tokenizer) => std::path::PathBuf::from(tokenizer),
@@ -108,7 +111,7 @@ pub fn main() -> anyhow::Result<()> {
                     }
                 };
                 HFClientSync::new()?
-                    .model("", tokenizer_default_repo)
+                    .model(tokenizer_default_owner, tokenizer_default_name)
                     .download_file().filename(filename).send()?
             }
         };
@@ -132,7 +135,7 @@ pub fn main() -> anyhow::Result<()> {
                     }
                 };
                 HFClientSync::new()?
-                    .model("", tokenizer_default_repo)
+                    .model(tokenizer_default_owner, tokenizer_default_name)
                     .download_file().filename(filename).send()?
             }
         };
@@ -179,7 +182,8 @@ pub fn main() -> anyhow::Result<()> {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
                 };
-                let repo = api.model("", model_name);
+                let (owner, name) = model_name.split_once('/').unwrap_or(("", model_name));
+                let repo = api.model(owner, name);
                 repo.download_file()
                     .filename("model.safetensors")
                     .maybe_revision(revision)

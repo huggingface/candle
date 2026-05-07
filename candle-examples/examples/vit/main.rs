@@ -34,7 +34,7 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let api = hf_hub::HFClientSync::new()?;
-            let api = api.model("", "google/vit-base-patch16-224");
+            let api = api.model("google", "vit-base-patch16-224");
             api.download_file().filename("model.safetensors").send()?
         }
         Some(model) => model.into(),

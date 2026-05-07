@@ -91,17 +91,21 @@ fn main() -> Result<()> {
     let model_sample_rate = args.which.sample_rate();
     let config = match args.config {
         Some(c) => std::path::PathBuf::from(c),
-        None => HFClientSync::new()?
-            .model("", args.which.config_repo())
-            .download_file()
-            .filename("config.json")
-            .send()?,
+        None => {
+            let config_repo = args.which.config_repo();
+            let (owner, name) = config_repo.split_once('/').unwrap_or(("", config_repo));
+            HFClientSync::new()?
+                .model(owner, name)
+                .download_file()
+                .filename("config.json")
+                .send()?
+        }
     };
     let config: Config = serde_json::from_slice(&std::fs::read(config)?)?;
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => HFClientSync::new()?
-            .model("", "lmz/candle-snac")
+            .model("lmz", "candle-snac")
             .download_file()
             .filename(args.which.model_file())
             .send()?,

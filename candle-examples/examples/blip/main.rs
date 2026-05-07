@@ -78,12 +78,12 @@ pub fn main() -> anyhow::Result<()> {
         None => {
             let api = hf_hub::HFClientSync::new()?;
             if args.quantized {
-                let api = api.model("", "lmz/candle-blip");
+                let api = api.model("lmz", "candle-blip");
                 api.download_file()
                     .filename("blip-image-captioning-large-q4k.gguf")
                     .send()?
             } else {
-                let api = api.model("", "Salesforce/blip-image-captioning-large");
+                let api = api.model("Salesforce", "blip-image-captioning-large");
                 api.download_file()
                     .filename("model.safetensors")
                     .revision("refs/pr/18")
@@ -95,7 +95,7 @@ pub fn main() -> anyhow::Result<()> {
     let tokenizer = match args.tokenizer {
         None => {
             let api = hf_hub::HFClientSync::new()?;
-            let api = api.model("", "Salesforce/blip-image-captioning-large");
+            let api = api.model("Salesforce", "blip-image-captioning-large");
             api.download_file().filename("tokenizer.json").send()?
         }
         Some(file) => file.into(),

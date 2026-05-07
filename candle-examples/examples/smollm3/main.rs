@@ -228,7 +228,7 @@ impl Args {
             Some(path) => std::path::PathBuf::from(path),
             None => {
                 let api = HFClientSync::new()?;
-                let api = api.model("", "HuggingFaceTB/SmolLM3-3B");
+                let api = api.model("HuggingFaceTB", "SmolLM3-3B");
                 api.download_file().filename("tokenizer.json").send()?
             }
         };
@@ -255,7 +255,8 @@ fn load_quantized_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
                 repo_id,
                 args.quantization.size_gb()
             );
-            api.model("", repo_id)
+            let (owner, name) = repo_id.split_once('/').unwrap_or(("", repo_id));
+            api.model(owner, name)
                 .download_file()
                 .filename(filename)
                 .send()?
@@ -275,7 +276,8 @@ fn load_full_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
     };
 
     println!("Loading full model from: {}", model_id);
-    let repo = api.model("", model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id));
+    let repo = api.model(owner, name);
 
     let filenames = match &args.model_path {
         Some(path) => vec![std::path::PathBuf::from(path)],

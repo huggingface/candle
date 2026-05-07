@@ -52,7 +52,7 @@ fn main() -> Result<()> {
     let tokenizer = match args.tokenizer {
         Some(tokenizer) => std::path::PathBuf::from(tokenizer),
         None => HFClientSync::new()?
-            .model("", "facebook/musicgen-small")
+            .model("facebook", "musicgen-small")
             .download_file().filename("tokenizer.json").send()?,
     };
     let mut tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => HFClientSync::new()?
-            .model("", "facebook/musicgen-small")
+            .model("facebook", "musicgen-small")
             .download_file().filename("model.safetensors").revision("refs/pr/13").send()?,
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DTYPE, &device)? };

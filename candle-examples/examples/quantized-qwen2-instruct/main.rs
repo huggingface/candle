@@ -106,7 +106,8 @@ impl Args {
                     Which::W2_72b => "Qwen/Qwen2-72B-Instruct",
                     Which::DeepseekR1Qwen7B => "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
                 };
-                let api = api.model("", repo);
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                let api = api.model(owner, name);
                 api.download_file().filename("tokenizer.json").send()?
             }
         };
@@ -145,7 +146,8 @@ impl Args {
                     ),
                 };
                 let api = hf_hub::HFClientSync::new()?;
-                api.model("", repo)
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                api.model(owner, name)
                     .download_file()
                     .filename(filename)
                     .revision(revision)

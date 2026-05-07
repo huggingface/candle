@@ -111,7 +111,8 @@ impl Args {
             Which::Lfm2_2_6BQ8_0 => ("LiquidAI/LFM2-2.6B-GGUF", "LFM2-2.6B-Q8_0.gguf"),
         };
         let api = hf_hub::HFClientSync::new()?;
-        api.model("", repo)
+        let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+        api.model(owner, name)
             .download_file()
             .filename(filename)
             .revision(self.revision.clone())
@@ -136,8 +137,9 @@ impl Args {
             Which::Lfm2_2_6BQ4KM | Which::Lfm2_2_6BQ8_0 => "LiquidAI/LFM2-2.6B",
         };
         let api = hf_hub::HFClientSync::new()?;
+        let (owner, name) = tokenizer_repo.split_once('/').unwrap_or(("", tokenizer_repo));
         let tokenizer_path = api
-            .model("", tokenizer_repo)
+            .model(owner, name)
             .download_file()
             .filename("tokenizer.json")
             .revision(self.revision.clone())

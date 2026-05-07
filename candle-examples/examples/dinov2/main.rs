@@ -37,7 +37,7 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let api = hf_hub::HFClientSync::new()?;
-            let api = api.model("", "lmz/candle-dino-v2");
+            let api = api.model("lmz", "candle-dino-v2");
             api.download_file()
                 .filename("dinov2_vits14.safetensors")
                 .send()?

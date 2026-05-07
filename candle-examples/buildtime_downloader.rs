@@ -8,7 +8,8 @@ pub fn download_model(model_and_revision: &str) -> Result<()> {
     };
     let (config_filename, tokenizer_filename, weights_filename) = {
         let client = HFClientSync::new()?;
-        let repo = client.model("", model_id);
+        let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id));
+        let repo = client.model(owner, name);
         let dl = |file: &str| -> Result<String> {
             Ok(repo
                 .download_file()

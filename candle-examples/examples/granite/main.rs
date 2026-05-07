@@ -121,7 +121,8 @@ fn main() -> Result<()> {
         });
         println!("loading the model weights from {model_id}");
         let revision = args.revision.unwrap_or("main".to_string());
-        let api = api.model("", &model_id);
+        let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+        let api = api.model(owner, name);
 
         let tokenizer_filename = api
             .download_file()

@@ -203,7 +203,8 @@ fn main() -> Result<()> {
         None => "bigcode/starcoder2-3b".to_string(),
     };
     let revision = args.revision.clone();
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let config_file = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.download_file().filename("config.json").revision(&revision).send()?,

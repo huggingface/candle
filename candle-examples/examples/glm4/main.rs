@@ -233,7 +233,8 @@ fn main() -> anyhow::Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer.as_ref()) {
         (Some(_), Some(file)) => std::path::PathBuf::from(file),
         (None, Some(file)) => std::path::PathBuf::from(file),

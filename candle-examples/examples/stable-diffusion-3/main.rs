@@ -156,7 +156,8 @@ fn main() -> Result<()> {
                 Which::V3_5Medium => "stabilityai/stable-diffusion-3.5-large",
                 Which::V3Medium => unreachable!(),
             };
-            api.model("", name)
+            let (owner, repo_name) = name.split_once('/').unwrap_or(("", name));
+            api.model(owner, repo_name)
         };
         let sai_repo_for_mmdit = {
             let name = match which {
@@ -165,7 +166,8 @@ fn main() -> Result<()> {
                 Which::V3_5Medium => "stabilityai/stable-diffusion-3.5-medium",
                 Which::V3Medium => unreachable!(),
             };
-            api.model("", name)
+            let (owner, repo_name) = name.split_once('/').unwrap_or(("", name));
+            api.model(owner, repo_name)
         };
         let clip_g_file = sai_repo_for_text_encoders.download_file().filename("text_encoders/clip_g.safetensors").send()?;
         let clip_l_file = sai_repo_for_text_encoders.download_file().filename("text_encoders/clip_l.safetensors").send()?;
@@ -197,7 +199,8 @@ fn main() -> Result<()> {
     } else {
         let sai_repo = {
             let name = "stabilityai/stable-diffusion-3-medium";
-            api.model("", name)
+            let (owner, repo_name) = name.split_once('/').unwrap_or(("", name));
+            api.model(owner, repo_name)
         };
         let model_file = sai_repo.download_file().filename("sd3_medium_incl_clips_t5xxlfp16.safetensors").send()?;
         let vb = unsafe {

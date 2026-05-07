@@ -256,11 +256,12 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| args.which.model_id().to_string());
     let revision = args.revision
         .unwrap_or_else(|| args.which.revision().to_string());
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("", "EleutherAI/gpt-neox-20b")
+            .model("EleutherAI", "gpt-neox-20b")
             .download_file().filename("tokenizer.json").send()?,
     };
     let config_filename = match args.config_file {

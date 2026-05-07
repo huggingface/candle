@@ -288,7 +288,8 @@ fn main() -> Result<()> {
             Which::InstructV3_1B => "google/gemma-3-1b-it".to_string(),
         },
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let revision = args.revision;
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),

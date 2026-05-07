@@ -204,11 +204,12 @@ fn main() -> anyhow::Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("", "THUDM/codegeex4-all-9b")
+            .model("THUDM", "codegeex4-all-9b")
             .download_file()
             .filename("tokenizer.json")
             .send()

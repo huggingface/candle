@@ -70,8 +70,10 @@ pub fn main() -> Result<()> {
     };
 
     let api = HFClientSync::new()?;
-    let model_repo = api.model("", model_id);
-    let tokenizer_repo = api.model("", tokenizer_id);
+    let (model_owner, model_name) = model_id.split_once('/').unwrap_or(("", model_id));
+    let model_repo = api.model(model_owner, model_name);
+    let (tokenizer_owner, tokenizer_name) = tokenizer_id.split_once('/').unwrap_or(("", tokenizer_id));
+    let tokenizer_repo = api.model(tokenizer_owner, tokenizer_name);
 
     let model_path = model_repo.download_file().filename("onnx/model.onnx").send()?;
     let config_file = model_repo.download_file().filename("config.json").send()?;

@@ -125,7 +125,7 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let api = hf_hub::HFClientSync::new()?;
-                let api = api.model("", "hf-internal-testing/llama-tokenizer");
+                let api = api.model("hf-internal-testing", "llama-tokenizer");
                 api.download_file().filename("tokenizer.json").send()?
             }
         };
@@ -176,7 +176,8 @@ fn run_eval(args: &EvaluationCmd, common_args: &Args) -> Result<()> {
         None => {
             let api = hf_hub::HFClientSync::new()?;
             println!("loading the model weights from {}", args.model_id);
-            let api = api.model("", &args.model_id);
+            let (owner, name) = args.model_id.split_once('/').unwrap_or(("", args.model_id.as_str()));
+            let api = api.model(owner, name);
             api.download_file().filename(&args.which_model).send()?
         }
     };
@@ -196,7 +197,8 @@ fn run_eval(args: &EvaluationCmd, common_args: &Args) -> Result<()> {
             let api = hf_hub::HFClientSync::new()?;
             let model_id = "roneneldan/TinyStories"; // TODO: Make this configurable.
             println!("loading the evaluation dataset from {}", model_id);
-            let api = api.dataset("", model_id);
+            let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id));
+            let api = api.dataset(owner, name);
             let dataset_path = api.download_file().filename("TinyStories-valid.txt").send()?;
             let file = std::fs::File::open(dataset_path)?;
             let file = std::io::BufReader::new(file);
@@ -248,7 +250,8 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
         None => {
             let api = hf_hub::HFClientSync::new()?;
             println!("loading the model weights from {}", args.model_id);
-            let api = api.model("", &args.model_id);
+            let (owner, name) = args.model_id.split_once('/').unwrap_or(("", args.model_id.as_str()));
+            let api = api.model(owner, name);
             api.download_file().filename(&args.which_model).send()?
         }
     };

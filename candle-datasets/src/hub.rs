@@ -63,7 +63,8 @@ pub fn from_hub(
     client: &HFClientSync,
     dataset_id: String,
 ) -> Result<Vec<SerializedFileReader<File>>, Error> {
-    let repo = client.dataset("", dataset_id);
+    let (owner, name) = dataset_id.split_once('/').unwrap_or(("", dataset_id.as_str()));
+    let repo = client.dataset(owner, name);
     let info = repo
         .info()
         .revision("refs/convert/parquet".to_string())

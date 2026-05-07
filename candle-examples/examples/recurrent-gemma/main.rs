@@ -251,7 +251,8 @@ fn main() -> Result<()> {
         },
     };
     let revision = args.revision.clone();
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,
@@ -271,7 +272,7 @@ fn main() -> Result<()> {
                     Which::Base2B => "recurrent-gemma-2b-q4k.gguf",
                     Which::Instruct2B => "recurrent-gemma-7b-q4k.gguf",
                 };
-                let filename = api.model("", "lmz/candle-gemma").download_file().filename(filename).send()?;
+                let filename = api.model("lmz", "candle-gemma").download_file().filename(filename).send()?;
                 vec![filename]
             } else {
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?

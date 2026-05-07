@@ -52,7 +52,8 @@ struct ConfigFiles {
 // Loading the model from the HuggingFace Hub. Network access is required.
 fn load_from_hub(model_id: &str, revision: &str) -> Result<ConfigFiles> {
     let api = HFClientSync::new()?;
-    let repo = api.model("", model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id));
+    let repo = api.model(owner, name);
     Ok(ConfigFiles {
         config: repo
             .download_file()

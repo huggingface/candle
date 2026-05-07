@@ -159,7 +159,8 @@ fn main() -> Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let start = std::time::Instant::now();
     let api = HFClientSync::new()?;
-    let repo = api.model("", &args.model_id);
+    let (owner, name) = args.model_id.split_once('/').unwrap_or(("", args.model_id.as_str()));
+    let repo = api.model(owner, name);
     let revision = args.revision;
     let tokenizer_filename = repo
         .download_file()

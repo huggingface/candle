@@ -627,11 +627,12 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| args.which.model_id().to_string());
     let revision = args.revision
         .unwrap_or_else(|| args.which.revision().to_string());
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("", "lmz/candle-rwkv")
+            .model("lmz", "candle-rwkv")
             .download_file()
             .filename("rwkv_vocab_v20230424.json")
             .send()?,
@@ -653,17 +654,17 @@ fn main() -> Result<()> {
                 }
                 vec![match args.which {
                     Which::World1b5 => api
-                        .model("", "lmz/candle-rwkv")
+                        .model("lmz", "candle-rwkv")
                         .download_file()
                         .filename("world1b5-q4k.gguf")
                         .send()?,
                     Which::World3b => api
-                        .model("", "lmz/candle-rwkv")
+                        .model("lmz", "candle-rwkv")
                         .download_file()
                         .filename("world3b-q4k.gguf")
                         .send()?,
                     Which::Eagle7b => api
-                        .model("", "lmz/candle-rwkv")
+                        .model("lmz", "candle-rwkv")
                         .download_file()
                         .filename("eagle7b-q4k.gguf")
                         .send()?,

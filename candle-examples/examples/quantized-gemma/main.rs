@@ -93,7 +93,8 @@ impl Args {
                 let api = hf_hub::HFClientSync::new()?;
                 let repo = "google/gemma-3-4b-it";
                 println!("DEBUG: Downloading tokenizer from {repo}");
-                let api = api.model("", repo);
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                let api = api.model(owner, name);
                 api.download_file().filename("tokenizer.json").send()?
             }
         };
@@ -114,7 +115,8 @@ impl Args {
                     ),
                 };
                 let api = hf_hub::HFClientSync::new()?;
-                api.model("", repo)
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                api.model(owner, name)
                     .download_file()
                     .filename(filename)
                     .revision("main")

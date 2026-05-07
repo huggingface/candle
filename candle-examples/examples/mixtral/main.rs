@@ -196,7 +196,8 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let api = HFClientSync::new()?;
     let revision = args.revision;
-    let repo = api.model("", &args.model_id);
+    let (owner, name) = args.model_id.split_once('/').unwrap_or(("", args.model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,

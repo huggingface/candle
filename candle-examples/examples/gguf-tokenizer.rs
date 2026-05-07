@@ -87,8 +87,9 @@ fn resolve_model_path(model: &str, revision: Option<String>) -> Result<PathBuf> 
     let filename = parts[2..].join("/");
 
     let api = HFClientSync::new()?;
+    let (owner, name) = repo_id.split_once('/').unwrap_or(("", repo_id.as_str()));
     let path = api
-        .model("", &repo_id)
+        .model(owner, name)
         .download_file()
         .filename(filename)
         .revision(revision.unwrap_or_else(|| "main".to_string()))

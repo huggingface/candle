@@ -66,7 +66,7 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let api = hf_hub::HFClientSync::new()?;
-            let api = api.model("", "openai/clip-vit-base-patch32");
+            let api = api.model("openai", "clip-vit-base-patch32");
             api.download_file()
                 .filename("model.safetensors")
                 .revision("refs/pr/15")
@@ -115,7 +115,7 @@ pub fn get_tokenizer(tokenizer: Option<String>) -> anyhow::Result<Tokenizer> {
     let tokenizer = match tokenizer {
         None => {
             let api = hf_hub::HFClientSync::new()?;
-            let api = api.model("", "openai/clip-vit-base-patch32");
+            let api = api.model("openai", "clip-vit-base-patch32");
             api.download_file()
                 .filename("tokenizer.json")
                 .revision("refs/pr/15")

@@ -71,7 +71,7 @@ pub fn main() -> anyhow::Result<()> {
     let mut tokenizer_dec = {
         let tokenizer_file = match args.tokenizer {
             None => api
-                .model("", "ToluClassics/candle-trocr-tokenizer")
+                .model("ToluClassics", "candle-trocr-tokenizer")
                 .download_file()
                 .filename("tokenizer.json")
                 .send()?,
@@ -87,7 +87,8 @@ pub fn main() -> anyhow::Result<()> {
             Some(model) => std::path::PathBuf::from(model),
             None => {
                 let (repo, branch) = args.which.repo_and_branch_name();
-                api.model("", repo)
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                api.model(owner, name)
                     .download_file()
                     .filename("model.safetensors")
                     .revision(branch)
@@ -100,8 +101,9 @@ pub fn main() -> anyhow::Result<()> {
 
     let (encoder_config, decoder_config) = {
         let (repo, branch) = args.which.repo_and_branch_name();
+        let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
         let config_filename = api
-            .model("", repo)
+            .model(owner, name)
             .download_file()
             .filename("config.json")
             .revision(branch)

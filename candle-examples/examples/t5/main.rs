@@ -125,7 +125,8 @@ impl T5ModelBuilder {
         };
 
         let api = HFClientSync::new()?;
-        let repo = api.model("", &model_id);
+        let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+        let repo = api.model(owner, name);
         let config_filename = match &args.config_file {
             None => repo.download_file().filename("config.json").revision(&revision).send()?,
             Some(f) => f.into(),
@@ -133,17 +134,17 @@ impl T5ModelBuilder {
         let tokenizer_filename = match &args.tokenizer_file {
             None => match args.which {
                 Which::Mt5Base => api
-                    .model("", "lmz/mt5-tokenizers")
+                    .model("lmz", "mt5-tokenizers")
                     .download_file()
                     .filename("mt5-base.tokenizer.json")
                     .send()?,
                 Which::Mt5Small => api
-                    .model("", "lmz/mt5-tokenizers")
+                    .model("lmz", "mt5-tokenizers")
                     .download_file()
                     .filename("mt5-small.tokenizer.json")
                     .send()?,
                 Which::Mt5Large => api
-                    .model("", "lmz/mt5-tokenizers")
+                    .model("lmz", "mt5-tokenizers")
                     .download_file()
                     .filename("mt5-large.tokenizer.json")
                     .send()?,

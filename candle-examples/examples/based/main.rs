@@ -216,7 +216,8 @@ fn main() -> Result<()> {
             Which::W1b50b => "hazyresearch/based-1b-50b".to_string(),
         },
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let config_file = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo
@@ -237,7 +238,7 @@ fn main() -> Result<()> {
             .send()?],
     };
 
-    let repo = api.model("", "openai-community/gpt2");
+    let repo = api.model("openai-community", "gpt2");
     let tokenizer_file = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.download_file().filename("tokenizer.json").send()?,

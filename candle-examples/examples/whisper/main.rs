@@ -676,8 +676,9 @@ fn main() -> Result<()> {
 
     let (config_filename, tokenizer_filename, weights_filename, input) = {
         let api = HFClientSync::new()?;
-        let dataset = api.dataset("", "Narsil/candle-examples");
-        let repo = api.model("", &model_id);
+        let dataset = api.dataset("Narsil", "candle-examples");
+        let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+        let repo = api.model(owner, name);
         let sample = if let Some(input) = args.input {
             if let Some(sample) = input.strip_prefix("sample:") {
                 dataset.download_file().filename(format!("samples_{sample}.wav")).send()?

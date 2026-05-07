@@ -52,7 +52,7 @@ fn main() -> Result<()> {
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => HFClientSync::new()?
-            .model("", "kyutai/mimi")
+            .model("kyutai", "mimi")
             .download_file().filename("model.safetensors").send()?,
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };

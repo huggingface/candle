@@ -51,7 +51,7 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let api = hf_hub::HFClientSync::new()?;
-            let api = api.model("", "lmz/candle-resnet");
+            let api = api.model("lmz", "candle-resnet");
             let filename = match args.which {
                 Which::Resnet18 => "resnet18.safetensors",
                 Which::Resnet34 => "resnet34.safetensors",

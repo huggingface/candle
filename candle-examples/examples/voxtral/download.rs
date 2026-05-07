@@ -14,7 +14,8 @@ pub fn model_files(model_id: &str) -> Result<((PathBuf, Vec<PathBuf>), PathBuf)>
     let revision = "main";
 
     let api = HFClientSync::new().unwrap();
-    let repo = api.model("", model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id));
+    let repo = api.model(owner, name);
 
     let config = repo.download_file().filename("config.json").revision(revision).send()?;
 

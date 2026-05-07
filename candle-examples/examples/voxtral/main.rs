@@ -47,7 +47,7 @@ fn main() -> Result<()> {
     println!("Model loaded successfully on device: {:?}", model.device());
 
     let api = HFClientSync::new()?;
-    let dataset = api.dataset("", "Narsil/candle-examples");
+    let dataset = api.dataset("Narsil", "candle-examples");
 
     let audio_file = if let Some(input) = args.input {
         if let Some(sample) = input.strip_prefix("sample:") {

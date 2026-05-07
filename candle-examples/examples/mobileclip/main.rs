@@ -78,7 +78,8 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_name = args.which.model_name();
     let api = hf_hub::HFClientSync::new()?;
-    let api = api.model("", &model_name);
+    let (owner, name) = model_name.split_once('/').unwrap_or(("", model_name.as_str()));
+    let api = api.model(owner, name);
     let model_file = if args.use_pth {
         api.download_file().filename("open_clip_pytorch_model.bin").send()?
     } else {

@@ -270,7 +270,8 @@ async fn main() -> anyhow::Result<()> {
         (None, Some(r)) => r.to_string(),
         (None, None) => "main".to_string(),
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let model_file = match args.model_file {
         Some(m) => m.into(),
         None => {

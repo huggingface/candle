@@ -74,7 +74,8 @@ fn default_image_std() -> Vec<f32> {
 impl ImageProcessor {
     pub fn from_pretrained(clip_id: &str) -> Result<Self> {
         let api = HFClientSync::new().map_err(|e| candle::Error::Msg(e.to_string()))?;
-        let api = api.model("", clip_id);
+        let (owner, name) = clip_id.split_once('/').unwrap_or(("", clip_id));
+        let api = api.model(owner, name);
         let config_filename = api
             .download_file()
             .filename("preprocessor_config.json")

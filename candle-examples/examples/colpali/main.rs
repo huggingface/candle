@@ -200,13 +200,14 @@ fn main() -> Result<()> {
         Some(model_id) => model_id.to_string(),
         None => "vidore/colpali-v1.2-merged".to_string(),
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let _revision = args.revision;
 
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("", "vidore/colpali")
+            .model("vidore", "colpali")
             .download_file()
             .filename("tokenizer.json")
             .send()?,

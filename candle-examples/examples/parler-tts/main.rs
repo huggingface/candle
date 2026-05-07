@@ -137,7 +137,8 @@ fn main() -> anyhow::Result<()> {
         Some(r) => r,
         None => "main".to_string(),
     };
-    let repo = api.model("", &model_id);
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let model_files = match args.model_file {
         Some(m) => vec![m.into()],
         None => match args.which {

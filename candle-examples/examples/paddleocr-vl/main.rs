@@ -598,7 +598,8 @@ fn main() -> Result<()> {
     println!("Loading model from {}...", args.model_id);
     let api = hf_hub::HFClientSync::new()?;
     let revision = args.revision.clone();
-    let repo = api.model("", &args.model_id);
+    let (owner, name) = args.model_id.split_once('/').unwrap_or(("", args.model_id.as_str()));
+    let repo = api.model(owner, name);
 
     // Load config
     let config_file = repo.download_file().filename("config.json").revision(&revision).send()?;

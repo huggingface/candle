@@ -159,10 +159,10 @@ struct Model {
 
 fn load_snac(device: &Device) -> Result<SnacModel> {
     let api = hf_hub::HFClientSync::new()?;
-    let m = api.model("", "hubertsiuzdak/snac_24khz");
+    let m = api.model("hubertsiuzdak", "snac_24khz");
     let config = m.download_file().filename("config.json").send()?;
     let config: SnacConfig = serde_json::from_reader(std::fs::File::open(config)?)?;
-    let m = api.model("", "lmz/candle-snac");
+    let m = api.model("lmz", "candle-snac");
     let model = m.download_file().filename("snac_24khz.safetensors").send()?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, device)? };
     let model = SnacModel::new(&config, vb)?;
@@ -183,7 +183,8 @@ impl Model {
             Some(r) => r,
             None => "main".to_string(),
         };
-        let repo = api.model("", &model_id);
+        let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+        let repo = api.model(owner, name);
         let model_files = match args.model_file {
             Some(m) => vec![m.into()],
             None => match args.which {

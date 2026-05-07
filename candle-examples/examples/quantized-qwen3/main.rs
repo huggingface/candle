@@ -112,7 +112,8 @@ impl Args {
                     Which::W3_14b => "Qwen/Qwen3-14B",
                     Which::W3_32b => "Qwen/Qwen3-32B",
                 };
-                let api = api.model("", repo);
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                let api = api.model(owner, name);
                 api.download_file().filename("tokenizer.json").send()?
             }
         };
@@ -135,7 +136,8 @@ impl Args {
                     Which::W3_32b => ("unsloth/Qwen3-32B-GGUF", "Qwen3-32B-Q4_K_M.gguf", "main"),
                 };
                 let api = hf_hub::HFClientSync::new()?;
-                api.model("", repo)
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                api.model(owner, name)
                     .download_file()
                     .filename(filename)
                     .revision(revision)

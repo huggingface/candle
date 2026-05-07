@@ -515,7 +515,8 @@ pub fn main() -> Result<()> {
 
     let (config_filename, tokenizer_filename, weights_filename) = {
         let api = HFClientSync::new()?;
-        let repo = api.model("", &model_id);
+        let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+        let repo = api.model(owner, name);
         let (config, tokenizer, model) = if args.quantized {
             let ext = match args.model {
                 WhichModel::TinyEn => "tiny-en",

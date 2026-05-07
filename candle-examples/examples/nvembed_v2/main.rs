@@ -50,7 +50,8 @@ impl Args {
         };
 
         let api = HFClientSync::new()?;
-        let repo = api.model("", &model_name);
+        let (owner, name) = model_name.split_once('/').unwrap_or(("", model_name.as_str()));
+        let repo = api.model(owner, name);
 
         let model_files = match &self.model_files {
             Some(files) => files

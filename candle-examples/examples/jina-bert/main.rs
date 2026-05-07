@@ -51,11 +51,12 @@ impl Args {
             Some(model) => model.to_string(),
             None => "jinaai/jina-embeddings-v2-base-en".to_string(),
         };
+        let (owner, name) = model_name.split_once('/').unwrap_or(("", model_name.as_str()));
 
         let model = match &self.model_file {
             Some(model_file) => std::path::PathBuf::from(model_file),
             None => HFClientSync::new()?
-                .model("", &model_name)
+                .model(owner, name)
                 .download_file()
                 .filename("model.safetensors")
                 .send()?,
@@ -63,7 +64,7 @@ impl Args {
         let tokenizer = match &self.tokenizer {
             Some(file) => std::path::PathBuf::from(file),
             None => HFClientSync::new()?
-                .model("", &model_name)
+                .model(owner, name)
                 .download_file()
                 .filename("tokenizer.json")
                 .send()?,
