@@ -8,7 +8,7 @@ use anyhow::Result;
 use candle::{DType, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use clap::{Parser, ValueEnum};
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 use serde::Deserialize;
 use std::io::Write;
 use tokenizers::Tokenizer;
@@ -69,15 +69,15 @@ pub fn main() -> Result<()> {
         Which::SmolLM135M => ("HuggingFaceTB/SmolLM-135M", "HuggingFaceTB/SmolLM-135M"),
     };
 
-    let api = Api::new()?;
-    let model_repo = api.model(model_id.to_string());
-    let tokenizer_repo = api.model(tokenizer_id.to_string());
+    let api = HFClientSync::new()?;
+    let model_repo = api.model("", model_id);
+    let tokenizer_repo = api.model("", tokenizer_id);
 
-    let model_path = model_repo.get("onnx/model.onnx")?;
-    let config_file = model_repo.get("config.json")?;
+    let model_path = model_repo.download_file().filename("onnx/model.onnx").send()?;
+    let config_file = model_repo.download_file().filename("config.json").send()?;
     let config: Config = serde_json::from_reader(std::fs::File::open(config_file)?)?;
 
-    let tokenizer_path = tokenizer_repo.get("tokenizer.json")?;
+    let tokenizer_path = tokenizer_repo.download_file().filename("tokenizer.json").send()?;
     let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
 
     let tokens_u32 = tokenizer

@@ -11,7 +11,7 @@ use anyhow::{Context, Error as E, Result};
 use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
@@ -119,16 +119,29 @@ impl Args {
         model_id: &str,
         revision: &str,
     ) -> Result<(PathBuf, PathBuf, PathBuf)> {
-        let repo = Repo::with_revision(model_id.to_string(), RepoType::Model, revision.to_string());
-        let api = Api::new()?;
-        let api = api.repo(repo);
+        let api = HFClientSync::new()?;
+        let api = api.model("", model_id);
 
-        let config = api.get("config.json")?;
-        let tokenizer = api.get("tokenizer.json")?;
+        let config = api
+            .download_file()
+            .filename("config.json")
+            .revision(revision.to_string())
+            .send()?;
+        let tokenizer = api
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.to_string())
+            .send()?;
         let weights = if self.use_pth {
-            api.get("pytorch_model.bin")?
+            api.download_file()
+                .filename("pytorch_model.bin")
+                .revision(revision.to_string())
+                .send()?
         } else {
-            api.get("model.safetensors")?
+            api.download_file()
+                .filename("model.safetensors")
+                .revision(revision.to_string())
+                .send()?
         };
 
         Ok((config, tokenizer, weights))

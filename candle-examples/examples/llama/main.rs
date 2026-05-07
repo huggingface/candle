@@ -18,7 +18,7 @@ use clap::{Parser, ValueEnum};
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use std::io::Write;
 
 use candle_transformers::models::llama as model;
@@ -145,7 +145,7 @@ fn main() -> Result<()> {
         None => DType::F16,
     };
     let (llama, tokenizer_filename, mut cache, config) = {
-        let api = Api::new()?;
+        let api = HFClientSync::new()?;
         let model_id = args.model_id.unwrap_or_else(|| {
             let str = match args.which {
                 Which::V1 => "Narsil/amall-7b",
@@ -171,10 +171,10 @@ fn main() -> Result<()> {
         });
         println!("loading the model weights from {model_id}");
         let revision = args.revision.unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+        let api = api.model("", &model_id);
 
-        let tokenizer_filename = api.get("tokenizer.json")?;
-        let config_filename = api.get("config.json")?;
+        let tokenizer_filename = api.download_file().filename("tokenizer.json").revision(&revision).send()?;
+        let config_filename = api.download_file().filename("config.json").revision(&revision).send()?;
         let config: LlamaConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
         let config = config.into_config(args.use_flash_attn);
 
@@ -199,7 +199,7 @@ fn main() -> Result<()> {
             | Which::V32_1b
             | Which::V32_1bInstruct
             | Which::TinyLlama1_1BChat => {
-                vec![api.get("model.safetensors")?]
+                vec![api.download_file().filename("model.safetensors").revision(&revision).send()?]
             }
         };
         let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;

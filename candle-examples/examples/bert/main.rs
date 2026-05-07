@@ -9,7 +9,7 @@ use anyhow::{Error as E, Result};
 use candle::Tensor;
 use candle_nn::VarBuilder;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::{PaddingParams, Tokenizer};
 
 #[derive(Parser, Debug)]
@@ -67,16 +67,29 @@ impl Args {
             (None, None) => (default_model, default_revision),
         };
 
-        let repo = Repo::with_revision(model_id, RepoType::Model, revision);
         let (config_filename, tokenizer_filename, weights_filename) = {
-            let api = Api::new()?;
-            let api = api.repo(repo);
-            let config = api.get("config.json")?;
-            let tokenizer = api.get("tokenizer.json")?;
+            let api = HFClientSync::new()?;
+            let api = api.model("", &model_id);
+            let config = api
+                .download_file()
+                .filename("config.json")
+                .revision(revision.clone())
+                .send()?;
+            let tokenizer = api
+                .download_file()
+                .filename("tokenizer.json")
+                .revision(revision.clone())
+                .send()?;
             let weights = if self.use_pth {
-                api.get("pytorch_model.bin")?
+                api.download_file()
+                    .filename("pytorch_model.bin")
+                    .revision(revision.clone())
+                    .send()?
             } else {
-                api.get("model.safetensors")?
+                api.download_file()
+                    .filename("model.safetensors")
+                    .revision(revision.clone())
+                    .send()?
             };
             (config, tokenizer, weights)
         };

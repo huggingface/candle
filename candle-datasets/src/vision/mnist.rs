@@ -3,7 +3,7 @@
 //! The files can be obtained from the following link:
 //! <http://yann.lecun.com/exdb/mnist/>
 use candle::{DType, Device, Error, Result, Tensor};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::io::{self, BufReader, Read};
@@ -92,18 +92,19 @@ pub(crate) fn load_mnist_like(
     test_filename: &str,
     train_filename: &str,
 ) -> Result<crate::vision::Dataset> {
-    let api = Api::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
-    let repo = Repo::with_revision(
-        dataset_id.to_string(),
-        RepoType::Dataset,
-        revision.to_string(),
-    );
-    let repo = api.repo(repo);
+    let client = HFClientSync::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
+    let repo = client.dataset("", dataset_id);
     let test_parquet_filename = repo
-        .get(test_filename)
+        .download_file()
+        .filename(test_filename)
+        .revision(revision)
+        .send()
         .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
     let train_parquet_filename = repo
-        .get(train_filename)
+        .download_file()
+        .filename(train_filename)
+        .revision(revision)
+        .send()
         .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
     let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)
         .map_err(|e| Error::Msg(format!("Parquet error: {e}")))?;

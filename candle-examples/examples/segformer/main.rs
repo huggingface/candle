@@ -61,13 +61,13 @@ fn get_vb_and_config(
     device: &Device,
 ) -> anyhow::Result<(VarBuilder<'_>, Config)> {
     println!("loading model {model_name} via huggingface hub");
-    let api = hf_hub::api::sync::Api::new()?;
-    let api = api.model(model_name.clone());
-    let model_file = api.get("model.safetensors")?;
+    let api = hf_hub::HFClientSync::new()?;
+    let api = api.model("", &model_name);
+    let model_file = api.download_file().filename("model.safetensors").send()?;
     println!("model {model_name} downloaded and loaded");
     let vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], candle::DType::F32, device)? };
-    let config = std::fs::read_to_string(api.get("config.json")?)?;
+    let config = std::fs::read_to_string(api.download_file().filename("config.json").send()?)?;
     let config: Config = serde_json::from_str(&config)?;
     println!("{config:?}");
     Ok((vb, config))

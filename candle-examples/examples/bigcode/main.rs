@@ -12,7 +12,7 @@ use candle_transformers::models::bigcode::{Config, GPTBigCode};
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -121,18 +121,23 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id,
-        RepoType::Model,
-        args.revision,
-    ));
-    let tokenizer_filename = repo.get("tokenizer.json")?;
+    let api = HFClientSync::new()?;
+    let repo = api.model("", &args.model_id);
+    let tokenizer_filename = repo
+        .download_file()
+        .filename("tokenizer.json")
+        .revision(args.revision.clone())
+        .send()?;
     let filenames = match args.weight_file {
         Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
         None => ["model.safetensors"]
             .iter()
-            .map(|f| repo.get(f))
+            .map(|f| {
+                repo.download_file()
+                    .filename(*f)
+                    .revision(args.revision.clone())
+                    .send()
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?,
     };
     println!("retrieved the files in {:?}", start.elapsed());

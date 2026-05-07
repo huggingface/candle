@@ -3,7 +3,6 @@ use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::codegeex4_9b::*;
 use clap::Parser;
-use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -189,32 +188,35 @@ fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     let api = match args.cache_path.as_ref() {
-        None => hf_hub::api::sync::Api::new()?,
-        Some(path) => {
-            hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(path.to_string().into()))
+        None => hf_hub::HFClientSync::new()?,
+        Some(path) => hf_hub::HFClientSync::from_inner(
+            hf_hub::HFClient::builder()
+                .cache_dir(std::path::PathBuf::from(path.to_string()))
                 .build()
-                .map_err(anyhow::Error::msg)?
-        }
+                .map_err(anyhow::Error::msg)?,
+        )?,
     };
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => "THUDM/codegeex4-all-9b".to_string(),
     };
-    let revision = match args.revision {
+    let _revision = match args.revision {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let repo = api.model("", &model_id);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("THUDM/codegeex4-all-9b".to_string())
-            .get("tokenizer.json")
+            .model("", "THUDM/codegeex4-all-9b")
+            .download_file()
+            .filename("tokenizer.json")
+            .send()
             .map_err(anyhow::Error::msg)?,
     };
     let config_filename = match &args.weight_path {
         Some(path) => std::path::Path::new(path).join("config.json"),
-        None => repo.get("config.json")?,
+        None => repo.download_file().filename("config.json").send()?,
     };
 
     let filenames = match &args.weight_path {

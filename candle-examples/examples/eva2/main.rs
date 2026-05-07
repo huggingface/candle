@@ -55,9 +55,11 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("vincent-espitalier/candle-eva2".into());
-            api.get("eva02_base_patch14_448.mim_in22k_ft_in22k_in1k_adapted.safetensors")?
+            let api = hf_hub::HFClientSync::new()?;
+            let api = api.model("", "vincent-espitalier/candle-eva2");
+            api.download_file()
+                .filename("eva02_base_patch14_448.mim_in22k_ft_in22k_in1k_adapted.safetensors")
+                .send()?
         }
         Some(model) => model.into(),
     };

@@ -52,15 +52,15 @@ pub fn main() -> anyhow::Result<()> {
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => match args.which {
-            Which::SqueezeNet => hf_hub::api::sync::Api::new()?
-                .model("lmz/candle-onnx".into())
-                .get("squeezenet1.1-7.onnx")?,
-            Which::EfficientNet => hf_hub::api::sync::Api::new()?
-                .model("onnx/EfficientNet-Lite4".into())
-                .get("efficientnet-lite4-11.onnx")?,
-            Which::EsrGan => hf_hub::api::sync::Api::new()?
-                .model("qualcomm/Real-ESRGAN-x4plus".into())
-                .get("Real-ESRGAN-x4plus.onnx")?,
+            Which::SqueezeNet => hf_hub::HFClientSync::new()?
+                .model("", "lmz/candle-onnx")
+                .download_file().filename("squeezenet1.1-7.onnx").send()?,
+            Which::EfficientNet => hf_hub::HFClientSync::new()?
+                .model("", "onnx/EfficientNet-Lite4")
+                .download_file().filename("efficientnet-lite4-11.onnx").send()?,
+            Which::EsrGan => hf_hub::HFClientSync::new()?
+                .model("", "qualcomm/Real-ESRGAN-x4plus")
+                .download_file().filename("Real-ESRGAN-x4plus.onnx").send()?,
         },
     };
 

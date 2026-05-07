@@ -16,7 +16,7 @@ use candle_transformers::models::debertav2::{Config as DebertaV2Config, DebertaV
 use candle_transformers::models::debertav2::{DebertaV2SeqClassificationModel, Id2Label};
 use candle_transformers::models::debertav2::{NERItem, TextClassificationItem};
 use clap::{ArgGroup, Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::{Encoding, PaddingParams, Tokenizer};
 
 enum TaskType {
@@ -114,19 +114,30 @@ impl Args {
                     (config, tokenizer, weights)
                 }
                 None => {
-                    let repo = Repo::with_revision(
-                        self.model_id.as_ref().unwrap().clone(),
-                        RepoType::Model,
-                        self.revision.clone(),
-                    );
-                    let api = Api::new()?;
-                    let api = api.repo(repo);
-                    let config = api.get("config.json")?;
-                    let tokenizer = api.get("tokenizer.json")?;
+                    let model_id = self.model_id.as_ref().unwrap().clone();
+                    let revision = self.revision.clone();
+                    let api = HFClientSync::new()?;
+                    let api = api.model("", &model_id);
+                    let config = api
+                        .download_file()
+                        .filename("config.json")
+                        .revision(revision.clone())
+                        .send()?;
+                    let tokenizer = api
+                        .download_file()
+                        .filename("tokenizer.json")
+                        .revision(revision.clone())
+                        .send()?;
                     let weights = if self.use_pth {
-                        api.get("pytorch_model.bin")?
+                        api.download_file()
+                            .filename("pytorch_model.bin")
+                            .revision(revision.clone())
+                            .send()?
                     } else {
-                        api.get("model.safetensors")?
+                        api.download_file()
+                            .filename("model.safetensors")
+                            .revision(revision.clone())
+                            .send()?
                     };
                     (config, tokenizer, weights)
                 }

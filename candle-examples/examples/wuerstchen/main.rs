@@ -100,7 +100,7 @@ enum ModelFile {
 
 impl ModelFile {
     fn get(&self, filename: Option<String>) -> Result<std::path::PathBuf> {
-        use hf_hub::api::sync::Api;
+        use hf_hub::HFClientSync;
         match filename {
             Some(filename) => Ok(std::path::PathBuf::from(filename)),
             None => {
@@ -115,7 +115,7 @@ impl ModelFile {
                     Self::VqGan => (repo_main, "vqgan/diffusion_pytorch_model.safetensors"),
                     Self::Prior => (repo_prior, "prior/diffusion_pytorch_model.safetensors"),
                 };
-                let filename = Api::new()?.model(repo.to_string()).get(path)?;
+                let filename = HFClientSync::new()?.model("", repo).download_file().filename(path).send()?;
                 Ok(filename)
             }
         }

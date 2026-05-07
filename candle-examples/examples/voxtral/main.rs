@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 use model::VoxtralModel;
 
 mod download;
@@ -46,18 +46,18 @@ fn main() -> Result<()> {
 
     println!("Model loaded successfully on device: {:?}", model.device());
 
-    let api = Api::new()?;
-    let dataset = api.dataset("Narsil/candle-examples".to_string());
+    let api = HFClientSync::new()?;
+    let dataset = api.dataset("", "Narsil/candle-examples");
 
     let audio_file = if let Some(input) = args.input {
         if let Some(sample) = input.strip_prefix("sample:") {
-            dataset.get(&format!("samples_{sample}.wav"))?
+            dataset.download_file().filename(format!("samples_{sample}.wav")).send()?
         } else {
             std::path::PathBuf::from(input)
         }
     } else {
         println!("No audio file submitted: Downloading https://huggingface.co/datasets/Narsil/candle_demo/blob/main/samples_jfk.wav");
-        dataset.get("samples_jfk.wav")?
+        dataset.download_file().filename("samples_jfk.wav").send()?
     };
 
     let (audio_data, sample_rate) =

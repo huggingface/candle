@@ -16,7 +16,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 #[derive(Debug, Clone)]
@@ -272,7 +272,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
         None => {
@@ -283,21 +283,26 @@ fn main() -> Result<()> {
             name.to_string()
         }
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let repo = api.model("", &model_id);
+    let revision = args.revision;
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.clone())
+            .send()?,
     };
     let filenames = match args.weights {
         Some(files) => files
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => vec![repo.get("model.safetensors")?],
+        None => vec![repo
+            .download_file()
+            .filename("model.safetensors")
+            .revision(revision.clone())
+            .send()?],
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
@@ -305,7 +310,11 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let config_file = match args.config {
         Some(config_file) => std::path::PathBuf::from(config_file),
-        None => repo.get("config.json")?,
+        None => repo
+            .download_file()
+            .filename("config.json")
+            .revision(revision.clone())
+            .send()?,
     };
     let config = match args.which {
         Which::V1Preview => Config::Preview(serde_json::from_slice(&std::fs::read(config_file)?)?),

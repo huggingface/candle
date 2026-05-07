@@ -5,7 +5,7 @@ use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::modernbert;
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::{PaddingParams, Tokenizer};
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -53,7 +53,7 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
         None => match args.model {
@@ -61,27 +61,24 @@ fn main() -> Result<()> {
             Model::ModernBertLarge => "answerdotai/ModernBERT-large".to_string(),
         },
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let revision = args.revision;
+    let repo = api.model("", &model_id);
 
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,
     };
 
     let config_filename = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("config.json")?,
+        None => repo.download_file().filename("config.json").revision(&revision).send()?,
     };
 
     let weights_filename = match args.weight_files {
         Some(files) => PathBuf::from(files),
-        None => match repo.get("model.safetensors") {
+        None => match repo.download_file().filename("model.safetensors").revision(&revision).send() {
             Ok(safetensors) => safetensors,
-            Err(_) => match repo.get("pytorch_model.bin") {
+            Err(_) => match repo.download_file().filename("pytorch_model.bin").revision(&revision).send() {
                 Ok(pytorch_model) => pytorch_model,
                 Err(e) => {
                     anyhow::bail!("Model weights not found. The weights should either be a `model.safetensors` or `pytorch_model.bin` file.  Error: {e}")

@@ -14,7 +14,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -257,7 +257,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
         None => {
@@ -280,14 +280,11 @@ fn main() -> Result<()> {
             }
         }
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let revision = args.revision;
+    let repo = api.model("", &model_id);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
@@ -296,7 +293,7 @@ fn main() -> Result<()> {
             .collect::<Vec<_>>(),
         None => {
             if args.quantized {
-                vec![repo.get("model-q4k.gguf")?]
+                vec![repo.download_file().filename("model-q4k.gguf").revision(&revision).send()?]
             } else {
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
@@ -312,7 +309,7 @@ fn main() -> Result<()> {
             if args.quantized {
                 Config::config_7b_v0_1(args.use_flash_attn)
             } else {
-                let config_file = repo.get("config.json")?;
+                let config_file = repo.download_file().filename("config.json").revision(&revision).send()?;
                 serde_json::from_slice(&std::fs::read(config_file)?)?
             }
         }

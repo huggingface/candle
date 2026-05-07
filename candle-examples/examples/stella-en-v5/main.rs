@@ -15,7 +15,7 @@ use candle_transformers::models::stella_en_v5::{
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::{api::sync::Api, Repo};
+use hf_hub::HFClientSync;
 use tokenizers::{PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
 
 struct Embedding {
@@ -313,7 +313,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let embed_dim = match args.embed_dim {
         Some(d) => d,
         None => EmbedDim::Dim1024,
@@ -330,10 +330,10 @@ fn main() -> Result<()> {
         ),
     };
 
-    let repo = api.repo(Repo::model(repo.to_string()));
+    let repo = api.model("", repo);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo.download_file().filename("tokenizer.json").send()?,
     };
 
     // Note, if you are providing `weight_files`, ensure that the `--embed_dim` dimensions provided matches the weights
@@ -344,7 +344,7 @@ fn main() -> Result<()> {
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
         None => {
-            vec![repo.get("model.safetensors")?]
+            vec![repo.download_file().filename("model.safetensors").send()?]
         }
     };
 
@@ -355,7 +355,7 @@ fn main() -> Result<()> {
             .collect::<Vec<_>>(),
         None => {
             let head_w_path = format!("{}/model.safetensors", embed_dim.embed_dim_default_dir());
-            vec![repo.get(&head_w_path)?]
+            vec![repo.download_file().filename(head_w_path).send()?]
         }
     };
 

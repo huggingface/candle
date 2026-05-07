@@ -74,14 +74,14 @@ pub fn main() -> anyhow::Result<()> {
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("lmz/candle-sam".to_string());
+            let api = hf_hub::HFClientSync::new()?;
+            let api = api.model("", "lmz/candle-sam");
             let filename = if args.use_tiny {
                 "mobile_sam-tiny-vitt.safetensors"
             } else {
                 "sam_vit_b_01ec64.safetensors"
             };
-            api.get(filename)?
+            api.download_file().filename(filename).send()?
         }
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };

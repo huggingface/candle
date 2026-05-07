@@ -124,9 +124,9 @@ impl Args {
         let tokenizer_path = match &self.tokenizer {
             Some(config) => std::path::PathBuf::from(config),
             None => {
-                let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model("hf-internal-testing/llama-tokenizer".to_string());
-                api.get("tokenizer.json")?
+                let api = hf_hub::HFClientSync::new()?;
+                let api = api.model("", "hf-internal-testing/llama-tokenizer");
+                api.download_file().filename("tokenizer.json").send()?
             }
         };
         Tokenizer::from_file(tokenizer_path).map_err(E::msg)
@@ -174,10 +174,10 @@ fn run_eval(args: &EvaluationCmd, common_args: &Args) -> Result<()> {
     let config_path = match &args.config {
         Some(config) => std::path::PathBuf::from(config),
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = hf_hub::HFClientSync::new()?;
             println!("loading the model weights from {}", args.model_id);
-            let api = api.model(args.model_id.clone());
-            api.get(&args.which_model)?
+            let api = api.model("", &args.model_id);
+            api.download_file().filename(&args.which_model).send()?
         }
     };
 
@@ -193,11 +193,11 @@ fn run_eval(args: &EvaluationCmd, common_args: &Args) -> Result<()> {
 
     let tokens = match &args.pretokenized_dir {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = hf_hub::HFClientSync::new()?;
             let model_id = "roneneldan/TinyStories"; // TODO: Make this configurable.
             println!("loading the evaluation dataset from {}", model_id);
-            let api = api.dataset(model_id.to_string());
-            let dataset_path = api.get("TinyStories-valid.txt")?;
+            let api = api.dataset("", model_id);
+            let dataset_path = api.download_file().filename("TinyStories-valid.txt").send()?;
             let file = std::fs::File::open(dataset_path)?;
             let file = std::io::BufReader::new(file);
             let mut tokens = vec![];
@@ -246,10 +246,10 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
     let config_path = match &args.config {
         Some(config) => std::path::PathBuf::from(config),
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = hf_hub::HFClientSync::new()?;
             println!("loading the model weights from {}", args.model_id);
-            let api = api.model(args.model_id.clone());
-            api.get(&args.which_model)?
+            let api = api.model("", &args.model_id);
+            api.download_file().filename(&args.which_model).send()?
         }
     };
 

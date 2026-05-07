@@ -53,9 +53,11 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("vincent-espitalier/candle-beit".into());
-            api.get("beit_base_patch16_384.in22k_ft_in22k_in1k.safetensors")?
+            let api = hf_hub::HFClientSync::new()?;
+            let api = api.model("", "vincent-espitalier/candle-beit");
+            api.download_file()
+                .filename("beit_base_patch16_384.in22k_ft_in22k_in1k.safetensors")
+                .send()?
         }
         Some(model) => model.into(),
     };

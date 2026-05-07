@@ -19,9 +19,11 @@ impl ClipWithTokenizer {
         max_position_embeddings: usize,
     ) -> Result<Self> {
         let clip = stable_diffusion::clip::ClipTextTransformer::new(vb, &config)?;
-        let path_buf = hf_hub::api::sync::Api::new()?
-            .model(tokenizer_path.to_string())
-            .get("tokenizer.json")?;
+        let path_buf = hf_hub::HFClientSync::new()?
+            .model("", tokenizer_path)
+            .download_file()
+            .filename("tokenizer.json")
+            .send()?;
         let tokenizer = Tokenizer::from_file(path_buf.to_str().ok_or(E::msg(
             "Failed to serialize huggingface PathBuf of CLIP tokenizer",
         ))?)
@@ -82,20 +84,18 @@ struct T5WithTokenizer {
 
 impl T5WithTokenizer {
     fn new(vb: candle_nn::VarBuilder, max_position_embeddings: usize) -> Result<Self> {
-        let api = hf_hub::api::sync::Api::new()?;
-        let repo = api.repo(hf_hub::Repo::with_revision(
-            "google/t5-v1_1-xxl".to_string(),
-            hf_hub::RepoType::Model,
-            "refs/pr/2".to_string(),
-        ));
-        let config_filename = repo.get("config.json")?;
+        let api = hf_hub::HFClientSync::new()?;
+        let repo = api.model("", "google/t5-v1_1-xxl");
+        let config_filename = repo.download_file().filename("config.json").revision("refs/pr/2").send()?;
         let config = std::fs::read_to_string(config_filename)?;
         let config: t5::Config = serde_json::from_str(&config)?;
         let model = t5::T5EncoderModel::load(vb, &config)?;
 
         let tokenizer_filename = api
-            .model("lmz/mt5-tokenizers".to_string())
-            .get("t5-v1_1-xxl.tokenizer.json")?;
+            .model("", "lmz/mt5-tokenizers")
+            .download_file()
+            .filename("t5-v1_1-xxl.tokenizer.json")
+            .send()?;
 
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
         Ok(Self {

@@ -123,10 +123,14 @@ pub fn save_image_resize<P: AsRef<std::path::Path>>(
 
 /// Loads the safetensors files for a model from the hub based on a json index file.
 pub fn hub_load_safetensors(
-    repo: &hf_hub::api::sync::ApiRepo,
+    repo: &hf_hub::HFRepositorySync<hf_hub::RepoTypeModel>,
     json_file: &str,
 ) -> Result<Vec<std::path::PathBuf>> {
-    let json_file = repo.get(json_file).map_err(candle::Error::wrap)?;
+    let json_file = repo
+        .download_file()
+        .filename(json_file)
+        .send()
+        .map_err(candle::Error::wrap)?;
     let json_file = std::fs::File::open(json_file)?;
     let json: serde_json::Value =
         serde_json::from_reader(&json_file).map_err(candle::Error::wrap)?;
@@ -143,7 +147,12 @@ pub fn hub_load_safetensors(
     }
     let safetensors_files = safetensors_files
         .iter()
-        .map(|v| repo.get(v).map_err(candle::Error::wrap))
+        .map(|v| {
+            repo.download_file()
+                .filename(v)
+                .send()
+                .map_err(candle::Error::wrap)
+        })
         .collect::<Result<Vec<_>>>()?;
     Ok(safetensors_files)
 }

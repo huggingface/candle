@@ -33,9 +33,11 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("lmz/candle-convmixer".into());
-            api.get("convmixer_1024_20_ks9_p14.safetensors")?
+            let api = hf_hub::HFClientSync::new()?;
+            let api = api.model("", "lmz/candle-convmixer");
+            api.download_file()
+                .filename("convmixer_1024_20_ks9_p14.safetensors")
+                .send()?
         }
         Some(model) => model.into(),
     };

@@ -13,7 +13,7 @@ use candle::{DType, Device, Module, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -245,19 +245,16 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
         None => "mistral-community/pixtral-12b".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let revision = args.revision;
+    let repo = api.model("", &model_id);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
@@ -277,7 +274,7 @@ fn main() -> Result<()> {
     let config: Config = match args.config_file {
         Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
         None => {
-            let config_file = repo.get("config.json")?;
+            let config_file = repo.download_file().filename("config.json").revision(&revision).send()?;
             serde_json::from_slice(&std::fs::read(config_file)?)?
         }
     };

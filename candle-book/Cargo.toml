@@ -29,7 +29,7 @@ tokio = "1.48.0"
 
 [dev-dependencies]
 byteorder = { workspace = true }
-hf-hub = { workspace = true, features=["tokio"]}
+hf-hub = { workspace = true, features = ["blocking"] }
 clap = { workspace = true }
 memmap2 = { workspace = true }
 rand = { workspace = true }
