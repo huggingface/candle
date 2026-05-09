@@ -106,6 +106,30 @@ impl Config {
         }
     }
 
+    pub fn opus_mt_zh_en() -> Self {
+        Self {
+            activation_function: candle_nn::Activation::Swish,
+            d_model: 512,
+            decoder_attention_heads: 8,
+            decoder_ffn_dim: 2048,
+            decoder_layers: 6,
+            decoder_start_token_id: 65000,
+            decoder_vocab_size: Some(65001),
+            encoder_attention_heads: 8,
+            encoder_ffn_dim: 2048,
+            encoder_layers: 6,
+            eos_token_id: 0,
+            forced_eos_token_id: 0,
+            is_encoder_decoder: true,
+            max_position_embeddings: 512,
+            pad_token_id: 65000,
+            scale_embedding: true,
+            share_encoder_decoder_embeddings: true,
+            use_cache: true,
+            vocab_size: 65001,
+        }
+    }
+
     pub fn opus_mt_en_hi() -> Self {
         Self {
             activation_function: candle_nn::Activation::Swish,
