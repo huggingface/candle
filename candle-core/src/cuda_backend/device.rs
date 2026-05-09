@@ -20,6 +20,24 @@ fn device_cache() -> &'static Mutex<HashMap<usize, CudaDevice>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Drop every cached CudaDevice. Each cached entry holds an
+/// `Arc<CudaContext>` (and Arc<CudaStream>, Arc<CudaBlas>, ...); as long
+/// as the cache keeps those Arcs alive the primary context cannot be
+/// released, so `cuMemPoolTrimTo` has nothing to give back to the OS.
+/// Call this on model unload AFTER all tensors and workspaces have been
+/// dropped, and BEFORE trimming the mempool.
+///
+/// If a CudaDevice clone is still held elsewhere (e.g., another engine's
+/// loaded model), the underlying context remains alive and only the
+/// cache's reference goes away. The cache will repopulate on the next
+/// `Device::new_cuda(ordinal)` call.
+pub fn clear_device_cache() {
+    let mtx = device_cache();
+    if let Ok(mut guard) = mtx.lock() {
+        guard.clear();
+    }
+}
+
 /// Unique identifier for cuda devices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DeviceId(usize);

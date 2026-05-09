@@ -48,6 +48,17 @@ struct WorkspaceSlot {
 
 static WORKSPACE: OnceLock<Mutex<HashMap<DeviceId, WorkspaceSlot>>> = OnceLock::new();
 
+/// Drop the per-device Q8_1 scratch workspace and return the reserved
+/// VRAM to the cudaMallocAsync mempool. Call this on model unload so
+/// VRAM accounting matches reality. Allocations get re-created on next
+/// matmul.
+pub fn release_workspaces() {
+    if let Some(map) = WORKSPACE.get() {
+        let mut guard = map.lock().unwrap();
+        guard.clear();
+    }
+}
+
 /// Returns a device pointer to the scratch workspace, growing it if needed.
 /// The returned `MutexGuard` must be held alive until the kernels using
 /// this pointer have been launched (all launches are on the device's

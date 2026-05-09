@@ -362,8 +362,9 @@ pub fn attn_score_q8_0_q8_1_raw(
         64 => "attn_score_q8_0_q8_1_hd64",
         128 => "attn_score_q8_0_q8_1_hd128",
         256 => "attn_score_q8_0_q8_1_hd256",
+        512 => "attn_score_q8_0_q8_1_hd512",
         _ => crate::bail!(
-            "attn_score_q8_0_q8_1: unsupported head_dim {head_dim} (have 64/128/256)",
+            "attn_score_q8_0_q8_1: unsupported head_dim {head_dim} (have 64/128/256/512)",
         ),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
@@ -444,8 +445,9 @@ pub fn attn_score_q8_0_q8_1_gqa(
         64 => "attn_score_q8_0_q8_1_gqa_hd64",
         128 => "attn_score_q8_0_q8_1_gqa_hd128",
         256 => "attn_score_q8_0_q8_1_gqa_hd256",
+        512 => "attn_score_q8_0_q8_1_gqa_hd512",
         _ => crate::bail!(
-            "attn_score_q8_0_q8_1_gqa: unsupported head_dim {head_dim} (have 64/128/256)",
+            "attn_score_q8_0_q8_1_gqa: unsupported head_dim {head_dim} (have 64/128/256/512)",
         ),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
@@ -537,8 +539,13 @@ pub fn attn_output_q8_0_f32_gqa(
         (256, 4) => "attn_output_q8_0_f32_hd256_nq4",
         (256, 5) => "attn_output_q8_0_f32_hd256_nq5",
         (256, 8) => "attn_output_q8_0_f32_hd256_nq8",
+        (512, 1) => "attn_output_q8_0_f32_hd512_nq1",
+        (512, 2) => "attn_output_q8_0_f32_hd512_nq2",
+        (512, 4) => "attn_output_q8_0_f32_hd512_nq4",
+        (512, 5) => "attn_output_q8_0_f32_hd512_nq5",
+        (512, 8) => "attn_output_q8_0_f32_hd512_nq8",
         _ => crate::bail!(
-            "attn_output_q8_0_f32_gqa: unsupported combo head_dim={head_dim} n_q_per_kv={n_q_per_kv} (want {{64,128,256}} × {{1,2,4,5,8}})",
+            "attn_output_q8_0_f32_gqa: unsupported combo head_dim={head_dim} n_q_per_kv={n_q_per_kv} (want {{64,128,256,512}} × {{1,2,4,5,8}})",
         ),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;

@@ -3697,6 +3697,9 @@ extern "C" __global__ void NAME(                                             \
 ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd64,  64)
 ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd128, 128)
 ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd256, 256)
+// Gemma4 Global layers use HD=512. The generic fallback at the end of
+// the macro handles arbitrary HD that's a multiple of 32.
+ATTN_SCORE_KERNEL(attn_score_q8_0_q8_1_hd512, 512)
 
 // GQA variant: processes all kv-heads in a single launch (gridDim.y =
 // n_kv_heads). Each block picks its kv-head from blockIdx.y and computes
@@ -3800,6 +3803,9 @@ extern "C" __global__ void NAME(                                             \
 ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd64,  64)
 ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd128, 128)
 ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd256, 256)
+// Gemma4 Global layers use HD=512 → falls into the generic loop at the
+// end of the macro.
+ATTN_SCORE_GQA_KERNEL(attn_score_q8_0_q8_1_gqa_hd512, 512)
 
 // ─── Q4_0 K-path attention score (KIVI layout) ────────────────────────────
 //
@@ -4088,6 +4094,12 @@ ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd256_nq2, 256, 2)
 ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd256_nq4, 256, 4)
 ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd256_nq5, 256, 5)
 ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd256_nq8, 256, 8)
+// Gemma4 Global layers (HD=512). Same kernel template; HD/32=16 blocks.
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd512_nq1, 512, 1)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd512_nq2, 512, 2)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd512_nq4, 512, 4)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd512_nq5, 512, 5)
+ATTN_OUTPUT_KERNEL(attn_output_q8_0_f32_hd512_nq8, 512, 8)
 
 // ─── Q4_0 V-path attention output ────────────────────────────────────────
 //

@@ -133,7 +133,9 @@ fn mmq_launcher(dtype: GgmlDType) -> Option<MmqLauncher> {
 // ---------------------------------------------------------------------------
 
 struct WorkspaceSlot {
-    slice: CudaSlice<u8>,
+    /// `None` after `release_workspaces` has dropped the buffer.
+    /// `workspace_ensure` re-allocates on demand.
+    slice: Option<CudaSlice<u8>>,
     cap: usize,
 }
 
@@ -141,6 +143,32 @@ type WsMap = Mutex<HashMap<DeviceId, &'static Mutex<WorkspaceSlot>>>;
 
 static MMQ_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 static FIXUP_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
+
+/// Drop the CudaSlice held by every per-device MMQ + fixup workspace,
+/// returning the reserved VRAM to the cudaMallocAsync mempool. The
+/// leaked outer Mutex<WorkspaceSlot> wrappers stay (they can't be
+/// freed once Box::leak'd), but their inner big CudaSlice gets dropped.
+/// Call this on model unload so VRAM accounting matches reality.
+pub fn release_workspaces() {
+    fn release_one(ws: &OnceLock<WsMap>) {
+        if let Some(map) = ws.get() {
+            let guard = match map.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            for (_dev_id, slot_mtx) in guard.iter() {
+                let mut slot = match slot_mtx.lock() {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                slot.slice = None;
+                slot.cap = 0;
+            }
+        }
+    }
+    release_one(&MMQ_WORKSPACE);
+    release_one(&FIXUP_WORKSPACE);
+}
 
 fn workspace_ensure(
     ws: &'static OnceLock<WsMap>,
@@ -156,7 +184,7 @@ fn workspace_ensure(
             None => {
                 let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
                 let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot {
-                    slice,
+                    slice: Some(slice),
                     cap: bytes.max(1),
                 })));
                 guard.insert(device_key, leaked);
@@ -165,11 +193,12 @@ fn workspace_ensure(
         }
     };
     let mut slot = device_mtx.lock().unwrap();
-    if slot.cap < bytes {
-        slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
-        slot.cap = bytes;
+    if slot.slice.is_none() || slot.cap < bytes {
+        slot.slice = Some(unsafe { dev.alloc::<u8>(bytes.max(1))? });
+        slot.cap = bytes.max(1);
     }
-    let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
+    let slice_ref = slot.slice.as_ref().unwrap();
+    let ptr = slice_ref.device_ptr(slice_ref.stream()).0;
     Ok((ptr, slot))
 }
 
