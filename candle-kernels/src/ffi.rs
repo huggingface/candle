@@ -60,6 +60,26 @@ extern "C" {
         stream: i64,
     );
 
+    /// Same as moe_gemm_gguf_gate_up_silu_mul but with GELU(tanh-approx)
+    /// activation and a CONCATENATED gate||up weight tensor of shape
+    /// `[num_experts, 2*size_n, size_k]` (gate = first N rows, up =
+    /// next N rows). Used by the gemma4-MoE FFN where the GGUF stores
+    /// gate and up fused as `ffn_gate_up_exps.weight`.
+    pub fn moe_gemm_gguf_gate_up_gelu_mul_concat(
+        input: *const f32,
+        gate_up_weights: *const c_void,
+        sorted_token_ids: *const i32,
+        expert_ids: *const i32,
+        output: *mut c_void, // float output [size_m, size_n]
+        num_experts: i32,
+        topk: i32,
+        size_m: i32,
+        size_n: i32,        // expert ffn dim (half of stored 2N)
+        size_k: i32,
+        gguf_dtype: i32,
+        stream: i64,
+    );
+
     /// Fused MoE down-projection + topk reduction. Each (token, expert)
     /// row's weighted partial result is added into the [num_real_tokens,
     /// hidden] output via atomicAdd. Caller must pre-zero the output.

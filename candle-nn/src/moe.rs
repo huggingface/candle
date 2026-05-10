@@ -499,6 +499,125 @@ pub fn moe_gemm_gguf_gate_up_silu_mul(
     candle::bail!("moe_gemm_gguf_gate_up_silu_mul is only implemented for the cuda backend")
 }
 
+/// Fused gate||up MoE GEMM with GELU(tanh-approx) + elementwise multiply
+/// for the **concatenated** weight layout: `gate_up_weights` has shape
+/// `[num_experts, 2*N, K]` where `gate = rows [0..N]` and
+/// `up = rows [N..2N]`. Used by the gemma4-MoE FFN where the GGUF
+/// stores both as `ffn_gate_up_exps.weight`.
+///
+/// Replaces the unfused gemma4 sequence
+///   `gu = moe_gemm_gguf(input, gate_up_exps)` (output [M*topk, 2N])
+///   followed by `split + gelu_tanh + mul` elementwise
+/// with one matmul that emits `[M*topk, N]` activated output directly,
+/// saving the [M*topk, 2N] intermediate write and 2-3 elementwise
+/// launches per layer per token.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn moe_gemm_gguf_gate_up_gelu_mul_concat(
+    input: &Tensor,
+    gate_up_weights: &QTensor,   // [num_experts, 2*N, K]
+    sorted_token_ids: &Tensor,
+    experts_ids: &Tensor,
+    topk: usize,
+) -> Result<Tensor> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::quantized::GgmlDType;
+    use candle::DType;
+
+    let (size_m_in, size_k) = input.dims2()?;
+    // Each input row is replicated topk times via sorted_token_ids.
+    let size_m = size_m_in * topk;
+    let (num_experts, two_n, size_k_g) = match gate_up_weights.shape().dims() {
+        [e, n, k] => (*e, *n, *k),
+        s => candle::bail!("gate_up_weights must be 3D [num_experts, 2N, K], got {:?}", s),
+    };
+    if two_n % 2 != 0 {
+        candle::bail!(
+            "moe_gemm_gguf_gate_up_gelu_mul_concat: 2*N dim must be even, got {}",
+            two_n
+        );
+    }
+    let size_n = two_n / 2;
+    if size_k != size_k_g {
+        candle::bail!(
+            "moe_gemm_gguf_gate_up_gelu_mul_concat: input K={} != weight K={}",
+            size_k, size_k_g
+        );
+    }
+    let gguf_dtype = match gate_up_weights.dtype() {
+        GgmlDType::Q8_0 => 0,
+        GgmlDType::Q4K  => 1,
+        GgmlDType::Q2K  => 2,
+        GgmlDType::Q3K  => 3,
+        GgmlDType::Q5K  => 4,
+        GgmlDType::Q6K  => 5,
+        d => candle::bail!(
+            "moe_gemm_gguf_gate_up_gelu_mul_concat: unsupported weight dtype {:?}", d
+        ),
+    };
+    if input.dtype() != DType::F32 {
+        candle::bail!("moe_gemm_gguf_gate_up_gelu_mul_concat: input must be F32");
+    }
+    let dev = input.device().as_cuda_device()?;
+    let weight_ptr = gate_up_weights.device_ptr()?;
+
+    let (sorted_token_ids, _) = sorted_token_ids.storage_and_layout();
+    let sorted_token_ids = match &*sorted_token_ids {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("sorted_token_ids must be cuda"),
+    };
+    let (experts_ids, _) = experts_ids.storage_and_layout();
+    let experts_ids = match &*experts_ids {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("experts_ids must be cuda"),
+    };
+    let (input_storage, _) = input.storage_and_layout();
+    let input_slice = match &*input_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("input must be cuda"),
+    };
+
+    let output = unsafe { dev.alloc::<f32>(size_m * size_n) }?;
+    let stream = dev.cuda_stream().cu_stream() as i64;
+    use candle::op::BackpropOp;
+    use core::ffi::c_void;
+    if size_k % 8 != 0 {
+        candle::bail!("size_k must be divisible by 8");
+    }
+    unsafe {
+        ffi::moe_gemm_gguf_gate_up_gelu_mul_concat(
+            input_slice.device_ptr(input_slice.stream()).0 as *const f32,
+            weight_ptr as *const c_void,
+            sorted_token_ids.device_ptr(sorted_token_ids.stream()).0 as *const i32,
+            experts_ids.device_ptr(experts_ids.stream()).0 as *const i32,
+            output.device_ptr(output.stream()).0 as *mut c_void,
+            num_experts as i32,
+            topk as i32,
+            size_m as i32,
+            size_n as i32,
+            size_k as i32,
+            gguf_dtype as i32,
+            stream,
+        );
+    }
+    let output = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
+    let output = Tensor::from_storage(
+        candle::Storage::Cuda(output),
+        (size_m, size_n),
+        BackpropOp::none(),
+        false,
+    );
+    Ok(output)
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(clippy::too_many_arguments)]
+pub fn moe_gemm_gguf_gate_up_gelu_mul_concat(
+    _: &Tensor, _: &QTensor, _: &Tensor, _: &Tensor, _: usize,
+) -> Result<Tensor> {
+    candle::bail!("moe_gemm_gguf_gate_up_gelu_mul_concat is only implemented for the cuda backend")
+}
+
 /// Dense (non-MoE) variant of gate+up+silu+mul fusion. Expects 2D
 /// `gate_w` and `up_w` of shape `[N, K]`. Replaces the standard
 /// 3-launch `silu(gate.forward(x)) * up.forward(x)` with one fused

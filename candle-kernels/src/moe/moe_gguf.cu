@@ -606,6 +606,165 @@ extern "C" void moe_gemm_gguf_gate_up_silu_mul(
 }
 
 // ───────────────────────────────────────────────────────────────────────
+// MoE gate||up GEMM with GELU(tanh) activation and elementwise multiply,
+// for the gemma4-MoE concat weight layout where gate and up share one
+// [num_experts, 2*N, K] tensor (gate = rows 0..N, up = rows N..2N).
+//
+// Replaces the gemma4 MoE FFN sequence:
+//   gu = moe_gemm_gguf(input, gate_up_exps)         // [M*topk, 2N]
+//   gate_act = gelu_tanh(gu[:, :N]); down_in = gate_act * gu[:, N:]
+// with a single fused matmul that emits the activated [M*topk, N] output
+// directly, saving the [2N] intermediate write + the activation+mul
+// elementwise launches.
+// ───────────────────────────────────────────────────────────────────────
+namespace vllm_rs {
+
+template <int qk, int qi, typename block_q_t, int vdr,
+          vec_dot_q_cuda_t vec_dot_q_cuda, int ROWS_PER_WARP>
+__global__ void moe_gemm_gguf_gate_up_gelu_mul_concat_kernel(
+    const void * __restrict__ gate_up_weights,   // [num_experts, 2*N, K] (quantized, gate||up)
+    const void * __restrict__ all_inputs,        // [M_total, K] (quantized)
+    const int32_t* __restrict__ sorted_token_ids,// [M]
+    const int32_t* __restrict__ expert_ids,      // [M]
+    float * __restrict__ all_outputs,            // [M_total, N] (gelu(gate) * up)
+    int num_experts,
+    int topk,
+    int size_m, int size_n, int size_k,
+    int k_padded
+) {
+    const int laneId = threadIdx.x;
+    const int wrapId = threadIdx.y;
+    const int nWraps = blockDim.y;
+    const int row0 = blockIdx.x * nWraps * ROWS_PER_WARP + wrapId * ROWS_PER_WARP;
+    const int m_idx = blockIdx.y;
+
+    if (row0 >= size_n || m_idx >= size_m) {
+        return;
+    }
+
+    // 2*N rows per expert in the concat layout.
+    const int two_n = size_n << 1;
+    const size_t weight_expert_stride_bytes = (size_t)(two_n * size_k) / qk * sizeof(block_q_t);
+    const size_t input_task_stride_bytes    = (size_t)k_padded / QK8_1 * sizeof(block_q8_1);
+    const size_t output_task_stride_elems   = (size_t)size_n;
+
+    const int token_id = sorted_token_ids[m_idx];
+    const int expert   = expert_ids[m_idx];
+    if (expert < 0 || expert >= num_experts) return;
+
+    // Gate weights = rows [0..N), up weights = rows [N..2N) within this
+    // expert slab. Both share the same expert-stride base pointer.
+    const block_q_t * __restrict__ w_expert =
+        (const block_q_t *)((const char *)gate_up_weights + (size_t)expert * weight_expert_stride_bytes);
+    // Up half starts N rows in (= N * blocks_per_row blocks).
+    const int blocks_per_row_x = size_k / qk;
+    const block_q_t * __restrict__ wu_expert = w_expert + (size_t)size_n * blocks_per_row_x;
+
+    const int input_index = token_id / topk;
+    const block_q8_1 * __restrict__ y_ptr =
+        (const block_q8_1 *)((const char *)all_inputs + (size_t)input_index * input_task_stride_bytes);
+
+    const int blocks_per_iter = vdr * WARP_SIZE / qi;
+
+    float acc_g[ROWS_PER_WARP];
+    float acc_u[ROWS_PER_WARP];
+    #pragma unroll
+    for (int r = 0; r < ROWS_PER_WARP; r++) { acc_g[r] = 0.0f; acc_u[r] = 0.0f; }
+
+    #pragma unroll
+    for (int kbx = laneId / (qi / vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
+        const int kby = kbx * (qk / QK8_1);
+        const int kqs = vdr * (laneId % (qi / vdr));
+        const block_q8_1 * y_blk = &y_ptr[kby];
+        #pragma unroll
+        for (int r = 0; r < ROWS_PER_WARP; r++) {
+            const int row = row0 + r;
+            if (row < size_n) {
+                acc_g[r] += vec_dot_q_cuda(&w_expert[row * blocks_per_row_x + kbx],   y_blk, kqs);
+                acc_u[r] += vec_dot_q_cuda(&wu_expert[row * blocks_per_row_x + kbx], y_blk, kqs);
+            }
+        }
+    }
+
+    float * __restrict__ out_ptr =
+        all_outputs + ((size_t)token_id) * output_task_stride_elems;
+    #pragma unroll
+    for (int r = 0; r < ROWS_PER_WARP; r++) {
+        const int row = row0 + r;
+        if (row < size_n) {
+            const float g = warp_reduce_sum(acc_g[r]);
+            const float u = warp_reduce_sum(acc_u[r]);
+            if (laneId == 0) {
+                // GELU(tanh-approx) — matches gemma4's gelu_pytorch_tanh:
+                //   0.5*g*(1 + tanh(sqrt(2/pi)*(g + 0.044715*g^3)))
+                const float g2 = g * g;
+                const float g3 = g2 * g;
+                const float k0 = 0.7978845608028654f;
+                const float k1 = 0.044715f;
+                const float gelu_g = 0.5f * g * (1.0f + tanhf(k0 * (g + k1 * g3)));
+                out_ptr[row] = gelu_g * u;
+            }
+        }
+    }
+}
+
+} // namespace vllm_rs
+
+#define LAUNCH_MOE_GGUF_GATE_UP_GELU_CONCAT(qk, qi, block_q_t, vdr, vec_dot_q_cuda) \
+    const int shared_bytes_gug = 0; \
+    vllm_rs::moe_gemm_gguf_gate_up_gelu_mul_concat_kernel<qk, qi, block_q_t, vdr, vec_dot_q_cuda, ROWS_PER_WARP> \
+        <<<grid_dim, block_dim, shared_bytes_gug, stream>>>( \
+        gate_up_weights, y_q8_1, \
+        sorted_token_ids, expert_ids, \
+        outputs, \
+        num_experts, topk, \
+        size_m, size_n, size_k, \
+        kx_padded \
+    );
+
+extern "C" void moe_gemm_gguf_gate_up_gelu_mul_concat(
+    const float* inputs,
+    const void* gate_up_weights,                 // [num_experts, 2*size_n, size_k]
+    const int32_t* sorted_token_ids,
+    const int32_t* expert_ids,
+    float* outputs,                              // [size_m, size_n] = gelu(gate) * up
+    int num_experts,
+    int topk,
+    int size_m,                                  // M*topk (sorted pairs count)
+    int size_n,                                  // expert ffn dim (= half of stored 2N)
+    int size_k,
+    int quant_type,
+    cudaStream_t stream
+) {
+    const int QUANTIZE_BLOCK_SIZE = CUDA_QUANTIZE_BLOCK_SIZE;
+    const int kx_padded = pad(size_k, MATRIX_ROW_PADDING);
+    const int num_blocks = ceil_div(kx_padded, QUANTIZE_BLOCK_SIZE);
+    int m_in = size_m / topk;
+    dim3 grid_dim_quant(num_blocks, m_in, 1);
+    dim3 block_dim_quant(QUANTIZE_BLOCK_SIZE, 1, 1);
+    int y_size_in_bytes = m_in * (kx_padded / QK8_1 * sizeof(block_q8_1));
+    void* y_q8_1 = nullptr;
+    cudaMallocAsync(&y_q8_1, y_size_in_bytes, stream);
+    quantize_q8_1<<<grid_dim_quant, block_dim_quant, 0, stream>>>(inputs, y_q8_1, size_k, kx_padded);
+
+    const int nWraps = 2;
+    constexpr int ROWS_PER_WARP = 1;
+    dim3 grid_dim(ceil_div(size_n, nWraps * ROWS_PER_WARP), size_m, 1);
+    dim3 block_dim(WARP_SIZE, nWraps, 1);
+
+    switch (quant_type) {
+        case 0: { LAUNCH_MOE_GGUF_GATE_UP_GELU_CONCAT(QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1); break; }
+        case 1: { LAUNCH_MOE_GGUF_GATE_UP_GELU_CONCAT(QK_K,  QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ, vec_dot_q4_K_q8_1); break; }
+        case 2: { LAUNCH_MOE_GGUF_GATE_UP_GELU_CONCAT(QK_K,  QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ, vec_dot_q2_K_q8_1); break; }
+        case 3: { LAUNCH_MOE_GGUF_GATE_UP_GELU_CONCAT(QK_K,  QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ, vec_dot_q3_K_q8_1); break; }
+        case 4: { LAUNCH_MOE_GGUF_GATE_UP_GELU_CONCAT(QK_K,  QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1); break; }
+        case 5: { LAUNCH_MOE_GGUF_GATE_UP_GELU_CONCAT(QK_K,  QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vec_dot_q6_K_q8_1); break; }
+        default: break;
+    }
+    cudaFreeAsync(y_q8_1, stream);
+}
+
+// ───────────────────────────────────────────────────────────────────────
 // Dense (non-MoE) gate+up+silu*mul kernel. Same fusion pattern as the
 // MoE variant above but stripped of expert routing for batch=1 dense
 // FFN (qwen3 base, qwen2, etc.).
