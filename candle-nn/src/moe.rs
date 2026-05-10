@@ -527,9 +527,12 @@ pub fn moe_gemm_gguf_gate_up_gelu_mul_concat(
     let (size_m_in, size_k) = input.dims2()?;
     // Each input row is replicated topk times via sorted_token_ids.
     let size_m = size_m_in * topk;
+    // Accept both 3D [num_experts, 2N, K] and 2D [2N, K] (dense, treated
+    // as num_experts=1) — same trick as moe_gemm_gguf_gate_up_silu_mul.
     let (num_experts, two_n, size_k_g) = match gate_up_weights.shape().dims() {
+        [n, k]    => (1, *n, *k),
         [e, n, k] => (*e, *n, *k),
-        s => candle::bail!("gate_up_weights must be 3D [num_experts, 2N, K], got {:?}", s),
+        s => candle::bail!("gate_up_weights must be 2D or 3D, got {:?}", s),
     };
     if two_n % 2 != 0 {
         candle::bail!(
@@ -616,6 +619,40 @@ pub fn moe_gemm_gguf_gate_up_gelu_mul_concat(
     _: &Tensor, _: &QTensor, _: &Tensor, _: &Tensor, _: usize,
 ) -> Result<Tensor> {
     candle::bail!("moe_gemm_gguf_gate_up_gelu_mul_concat is only implemented for the cuda backend")
+}
+
+/// Dense (non-MoE) variant of gate||up + GELU(tanh) + mul fusion for
+/// the **concatenated** weight layout `[2*N, K]`. Uses the MoE
+/// concat kernel with num_experts=1 + dummy expert/token IDs (same
+/// trick as `dense_gate_up_silu_mul`) — reads gate from rows [0..N]
+/// and up from rows [N..2N] of the single-expert slab and writes
+/// `gelu_tanh(gate) * up` to a fresh [M, N] output.
+///
+/// Replaces the standard 3-launch dense FFN GELU sequence
+///   `up_states = ffn_up.forward(x)` (output [M, 2N], internal quantize)
+///   `out = gate.gelu() * up` (split + activation + mul)
+/// with one quantize + one fused matmul. Single-token decode (M=1) only.
+#[cfg(feature = "cuda")]
+pub fn dense_gate_up_gelu_mul_concat(
+    input: &Tensor,             // [M, K] F32
+    gate_up_w: &QTensor,        // [2*N, K] quantized concat
+) -> Result<Tensor> {
+    let dev = input.device();
+    let m = input.dim(0)?;
+    if m != 1 {
+        candle::bail!("dense_gate_up_gelu_mul_concat: only M=1 supported, got M={}", m);
+    }
+    // Use the MoE kernel with topk=1 + dummy [0] indices. The 2D
+    // [2N, K] weight is interpreted as num_experts=1 by the wrapper.
+    let zeros = Tensor::from_slice(&[0u32], (m,), dev)?;
+    moe_gemm_gguf_gate_up_gelu_mul_concat(input, gate_up_w, &zeros, &zeros, 1)
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn dense_gate_up_gelu_mul_concat(
+    _: &Tensor, _: &QTensor,
+) -> Result<Tensor> {
+    candle::bail!("dense_gate_up_gelu_mul_concat is only implemented for the cuda backend")
 }
 
 /// Dense (non-MoE) variant of gate+up+silu+mul fusion. Expects 2D
