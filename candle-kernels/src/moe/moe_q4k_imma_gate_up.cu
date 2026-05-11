@@ -16,6 +16,8 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 namespace ll_moe_q4k_imma {
 
@@ -63,7 +65,11 @@ __global__ void moe_q4k_imma_gate_up_gelu_mul_concat_kernel(
     int num_super
 ) {
     constexpr int ROW_GROUP = 16;
-    const int row0 = blockIdx.x * ROW_GROUP;
+    const int nWraps = blockDim.y;
+    const int wrapId = threadIdx.y;
+    // Each warp processes its own 16-row stripe. Block writes
+    // nWraps * ROW_GROUP gate rows + same number of up rows.
+    const int row0 = blockIdx.x * nWraps * ROW_GROUP + wrapId * ROW_GROUP;
     const int m_idx = blockIdx.y;
     if (row0 >= N || m_idx >= size_m) return;
 
@@ -253,6 +259,23 @@ extern "C" void moe_q4k_imma_gate_up_gelu_mul_concat(
     long long stream_handle            // matches Rust i64 FFI
 ) {
     cudaStream_t stream = (cudaStream_t)stream_handle;
+    // Diagnostic kernel timing — LLMSERVER_IMMA_TIMING=1 to enable.
+    // Used to measure the actual mma.sync cost. Found that for
+    // size_m=8 (gemma4 4-expert-per-token with topk=8), the mma path
+    // takes ~0.1 ms per call vs the dp4a equivalent's ~0.05 ms. The
+    // m16n8k32 mma writes 16×8 outputs but we only use col 0 (12.5%
+    // utilisation); for single-batch decode the dp4a 1-row-per-warp
+    // wins despite per-op throughput being lower.
+    static int s_dbg = -1;
+    if (s_dbg < 0) {
+        const char * p = getenv("LLMSERVER_IMMA_TIMING");
+        s_dbg = (p && p[0] == '1') ? 1 : 0;
+    }
+    cudaEvent_t e0 = nullptr, e1 = nullptr, e2 = nullptr;
+    if (s_dbg) {
+        cudaEventCreate(&e0); cudaEventCreate(&e1); cudaEventCreate(&e2);
+        cudaEventRecord(e0, stream);
+    }
 
     // Pre-quantize input rows to Q8_1 in a scratch buffer.
     const int num_real_tokens = size_m / topk;
@@ -264,11 +287,13 @@ extern "C" void moe_q4k_imma_gate_up_gelu_mul_concat(
     launch_mmvq_gguf_quantize_q8_1_f32(
         inputs, y_q8_1, K, K, num_real_tokens, (void *)stream
     );
+    if (s_dbg) cudaEventRecord(e1, stream);
     constexpr int ROW_GROUP = 16;
     const int num_super = K / 256;
-    const int row_groups = (N + ROW_GROUP - 1) / ROW_GROUP;
+    const int nWraps = 1;
+    const int row_groups = (N + nWraps * ROW_GROUP - 1) / (nWraps * ROW_GROUP);
     dim3 grid(row_groups, size_m, 1);
-    dim3 block(32, 1, 1);
+    dim3 block(32, nWraps, 1);
     ll_moe_q4k_imma::moe_q4k_imma_gate_up_gelu_mul_concat_kernel
         <<<grid, block, 0, stream>>>(
             (const ll_moe_q4k_imma::block_q4_K *)gate_up_w,
@@ -282,5 +307,19 @@ extern "C" void moe_q4k_imma_gate_up_gelu_mul_concat(
             N,
             num_super
         );
+    if (s_dbg) {
+        cudaEventRecord(e2, stream);
+        cudaStreamSynchronize(stream);
+        float t_quant = 0.f, t_mma = 0.f;
+        cudaEventElapsedTime(&t_quant, e0, e1);
+        cudaEventElapsedTime(&t_mma,   e1, e2);
+        static int s_call = 0;
+        if ((++s_call) % 50 == 0) {
+            fprintf(stderr, "IMMA call=%d N=%d K=%d size_m=%d: quant=%.3fms mma=%.3fms\n",
+                    s_call, N, K, size_m, t_quant, t_mma);
+            fflush(stderr);
+        }
+        cudaEventDestroy(e0); cudaEventDestroy(e1); cudaEventDestroy(e2);
+    }
     cudaFreeAsync(y_q8_1, stream);
 }
