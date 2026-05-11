@@ -894,6 +894,12 @@ pub fn moe_gemm_gguf_down_reduce(
                 // built-in copy.
                 use candle::cuda_backend::cudarc::driver::sys::cuMemcpyDtoDAsync_v2;
                 use candle::cuda_backend::cudarc::driver::DevicePtr;
+                // Bind context before raw CUDA driver call (mirrors
+                // llama.cpp's `cudaSetDevice`). Without this, when
+                // per-thread streams are in use, the calling thread
+                // may not have the right context bound and the memcpy
+                // lands on the wrong stream — silent corruption.
+                dev.cuda_stream().context().bind_to_thread()?;
                 let dst_dev = alloc.device_ptr(alloc.stream()).0;
                 let src_dev = src.device_ptr(src.stream()).0;
                 let stream_ptr = dev.cuda_stream().cu_stream();
@@ -1631,6 +1637,10 @@ pub fn qmatmul_add(
     // so we'd otherwise read the wrong bytes when residual is a view.
     let out_alloc = unsafe { dev.alloc::<f32>(out_rows) }?;
     use candle::cuda_backend::cudarc::driver::sys::cuMemcpyDtoDAsync_v2;
+    // Bind context before raw CUDA driver calls (mirrors
+    // llama.cpp's `cudaSetDevice` discipline). Required when
+    // per-thread streams are the candle default.
+    dev.cuda_stream().context().bind_to_thread()?;
     let stream_ptr = dev.cuda_stream().cu_stream();
     let res_offset = {
         let (_storage, layout) = res_c.storage_and_layout();
