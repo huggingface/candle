@@ -1472,6 +1472,109 @@ pub unsafe fn q4k_mmvq_imma(
     ffi::q4k_mmvq_imma(vx, vy, dst, ncols_x, nrows_x, stream)
 }
 
+/// Tensor-core MoE Q4_K gate||up matmul + GELU(tanh) + mul. Drop-in
+/// IMMA replacement for the dp4a `moe_gemm_gguf_gate_up_gelu_mul_concat`
+/// (for Q4_K weights with K%256=0). Falls back at the dispatch site if
+/// the weight dtype is not Q4_K or K isn't aligned.
+#[cfg(feature = "cuda")]
+pub fn moe_q4k_imma_gate_up_gelu_mul_concat(
+    input: &Tensor,                   // F32 [M, K]
+    gate_up_weights: &QTensor,        // Q4K [num_experts, 2*N, K]
+    sorted_token_ids: &Tensor,        // U32 [size_m]
+    experts_ids: &Tensor,             // U32 [size_m]
+    topk: usize,
+) -> Result<Tensor> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::quantized::GgmlDType;
+    use candle::DType;
+    use candle::op::BackpropOp;
+    use core::ffi::c_void;
+
+    if gate_up_weights.dtype() != GgmlDType::Q4K {
+        candle::bail!("moe_q4k_imma_gate_up_gelu_mul_concat: requires Q4_K weights");
+    }
+    if input.dtype() != DType::F32 {
+        candle::bail!("moe_q4k_imma_gate_up_gelu_mul_concat: input must be F32");
+    }
+    let (size_m_in, size_k) = input.dims2()?;
+    if size_k % 256 != 0 {
+        candle::bail!(
+            "moe_q4k_imma_gate_up_gelu_mul_concat: K={} not a multiple of 256", size_k
+        );
+    }
+    let size_m = size_m_in * topk;
+    let (num_experts, two_n, size_k_g) = match gate_up_weights.shape().dims() {
+        [n, k]    => (1usize, *n, *k),
+        [e, n, k] => (*e, *n, *k),
+        s => candle::bail!("gate_up_weights must be 2D or 3D, got {:?}", s),
+    };
+    if two_n % 2 != 0 {
+        candle::bail!(
+            "moe_q4k_imma_gate_up_gelu_mul_concat: 2*N must be even, got {}", two_n
+        );
+    }
+    let size_n = two_n / 2;
+    if size_k != size_k_g {
+        candle::bail!(
+            "moe_q4k_imma_gate_up_gelu_mul_concat: input K={} != weight K={}",
+            size_k, size_k_g
+        );
+    }
+
+    let dev = input.device().as_cuda_device()?;
+    let weight_ptr = gate_up_weights.device_ptr()?;
+
+    let (input_storage, _) = input.storage_and_layout();
+    let input_slice = match &*input_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("input must be cuda"),
+    };
+    let (sorted_storage, _) = sorted_token_ids.storage_and_layout();
+    let sorted_slice = match &*sorted_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("sorted_token_ids must be cuda"),
+    };
+    let (experts_storage, _) = experts_ids.storage_and_layout();
+    let experts_slice = match &*experts_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("experts_ids must be cuda"),
+    };
+
+    let output = unsafe { dev.alloc::<f32>(size_m * size_n) }?;
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    unsafe {
+        ffi::moe_q4k_imma_gate_up_gelu_mul_concat(
+            input_slice.device_ptr(input_slice.stream()).0 as *const c_void,
+            weight_ptr as *const c_void,
+            sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
+            experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
+            output.device_ptr(output.stream()).0 as *mut c_void,
+            num_experts as i32,
+            topk as i32,
+            size_m as i32,
+            size_n as i32,
+            size_k as i32,
+            stream,
+        );
+    }
+
+    let storage = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
+    Ok(Tensor::from_storage(
+        candle::Storage::Cuda(storage),
+        (size_m, size_n),
+        BackpropOp::none(),
+        false,
+    ))
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn moe_q4k_imma_gate_up_gelu_mul_concat(
+    _: &Tensor, _: &QTensor, _: &Tensor, _: &Tensor, _: usize,
+) -> Result<Tensor> {
+    candle::bail!("moe_q4k_imma_gate_up_gelu_mul_concat is cuda-only")
+}
+
 /// Fused quantized matmul + residual add (single-token decode).
 /// Returns `(W_q @ x) + residual` in one launch.
 /// `x`: F32 [..., hidden] (only [1, 1, hidden] / [hidden] supported)

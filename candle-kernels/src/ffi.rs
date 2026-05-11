@@ -842,6 +842,23 @@ extern "C" {
         stream: i64,
     );
 
+    /// Tensor-core MoE Q4_K gate||up matmul + GELU(tanh) + mul. Drop-in
+    /// replacement for the dp4a `moe_gemm_gguf_gate_up_gelu_mul_concat`
+    /// (for Q4_K weights with K%256=0). Quantizes the F32 input internally.
+    pub fn moe_q4k_imma_gate_up_gelu_mul_concat(
+        inputs: *const c_void,
+        gate_up_w: *const c_void,
+        sorted_token_ids: *const i32,
+        expert_ids:       *const i32,
+        dst: *mut c_void,
+        num_experts: i32,
+        topk: i32,
+        size_m: i32,
+        n: i32,
+        k: i32,
+        stream: i64,
+    );
+
     /// Fused MoE gate matmul + softmax + top-k. Combines the per-layer
     /// `logits = gate.forward(x)` (cublas SGEMV) and `topk_softmax(logits)`
     /// launches into one kernel. Loads `x` into shared memory once per
