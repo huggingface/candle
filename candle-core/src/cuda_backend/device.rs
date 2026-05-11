@@ -383,13 +383,20 @@ impl BackendDevice for CudaDevice {
             }
         }
         let context = cudarc::driver::CudaContext::new(ordinal).w()?;
-        // Per-thread stream unconditionally: it is captureable (required for
-        // CUDA graph capture/replay on graph-enabled models like gemma4 26B)
-        // AND fully equivalent to the default stream for non-capture inference
-        // workloads. Event tracking stays ON — compute-sanitizer found that
-        // disable_event_tracking causes use-before-alloc races during weight
-        // loading (cross-thread async-alloc → main-thread dtoh race).
-        let stream = context.per_thread_stream();
+        // For CUDA Graph capture: default streams cannot be captured. When
+        // LLMSERVER_CUDA_GRAPH=1, create a NON-default stream so begin_capture
+        // works AND disable event tracking on the context (capture is
+        // incompatible with cross-stream event sync). Default-off keeps the
+        // well-tested default-stream path — required for models that
+        // submit CUDA work from worker threads (e.g. MultiDeviceQwen3MoE)
+        // since non-default streams don't auto-synchronize across threads.
+        let use_non_default_stream = std::env::var("LLMSERVER_CUDA_GRAPH")
+            .map_or(false, |v| v == "1");
+        let stream = if use_non_default_stream {
+            context.per_thread_stream()
+        } else {
+            context.default_stream()
+        };
         let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
         let module_store = ModuleStore {
