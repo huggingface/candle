@@ -1372,16 +1372,35 @@ impl CudaStorage {
         // produced `self`. Use an event to make dst_stream wait for
         // src_stream's pending work without a host sync. Set
         // LLMSERVER_PEER_SYNC=1 to restore the host-sync path (debugging).
+        // Detect non-default streams (graph-mode path). Default streams
+        // (cu_stream == null) get the per-context "current" stream
+        // automatically and don't need explicit context binding before
+        // raw driver-API ops. Non-default (per-thread or new_stream)
+        // streams must have the matching context bound BEFORE the op,
+        // otherwise the stream handle resolves to the wrong physical
+        // stream and cross-thread submissions race → garbled outputs.
+        // This is the exact bug that broke MultiDeviceQwen3MoE under
+        // `LLMSERVER_CUDA_GRAPH=1` until this fix. Mirrors llama.cpp's
+        // `ggml_cuda_set_device` discipline.
+        let need_explicit_bind = !src_stream.cu_stream().is_null()
+            || !dst_stream.cu_stream().is_null();
+
         if std::env::var("LLMSERVER_PEER_SYNC").map_or(false, |v| v == "1") {
             src_stream.synchronize().w()?;
         } else {
             use cudarc::driver::sys;
-            // Record an event on src_stream, make dst_stream wait for it.
             let mut evt: sys::CUevent = std::ptr::null_mut();
+            if need_explicit_bind { src_stream.context().bind_to_thread().w()?; }
             unsafe {
                 sys::cuEventCreate(&mut evt, 0).result().w()?;
                 sys::cuEventRecord(evt, src_stream.cu_stream()).result().w()?;
+            }
+            if need_explicit_bind { dst_stream.context().bind_to_thread().w()?; }
+            unsafe {
                 sys::cuStreamWaitEvent(dst_stream.cu_stream(), evt, 0).result().w()?;
+            }
+            if need_explicit_bind { src_stream.context().bind_to_thread().w()?; }
+            unsafe {
                 sys::cuEventDestroy_v2(evt).result().w()?;
             }
         }
