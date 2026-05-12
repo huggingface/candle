@@ -597,6 +597,105 @@ pub fn attn_output_q8_0_f32_gqa(
 /// matmul + concat is needed. Grid dimension 0 covers `ceil(seq_kv/32)`
 /// blocks; the last block is the partial one when `seq_kv % 32 != 0`.
 #[allow(clippy::too_many_arguments)]
+/// Device-position variant — reads `seq_kv` from `seq_kv_dev[0]` instead
+/// of taking it as a host int, and writes scores into a fresh F32 buffer
+/// of constant `[n_q_heads, max_seq_padded]` layout. Positions ≥ seq_kv
+/// get -INFINITY so the downstream softmax masks them.
+///
+/// Required for CUDA graph capture of Q4-KV decode — host updates
+/// `seq_kv_dev` outside the captured region each token; the captured
+/// kernel launch sees the same i32 pointer and constant-sized output
+/// allocation on every replay. The output allocation reuses the
+/// cudaMallocAsync pool address under `enable_graph_capture_mode`,
+/// so the captured pointer stays valid across replays.
+///
+/// Returns scores `[n_q_heads, max_seq_padded]` F32. Callers MUST keep
+/// `max_seq_padded` constant across all calls in one captured graph.
+#[allow(clippy::too_many_arguments)]
+pub fn attn_score_q4_0_f32_kivi_dev_pos(
+    k_blocks: &CudaSlice<u8>,
+    k_residual: &CudaSlice<f16>,
+    q_f32: &CudaView<f32>,
+    seq_kv_dev: &CudaSlice<i32>,
+    head_dim: usize,
+    max_seq_padded: usize,
+    n_kv_heads: usize,
+    n_q_per_kv: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    if !head_dim.is_multiple_of(32) {
+        crate::bail!("attn_score_q4_0_f32_kivi_dev_pos: head_dim {head_dim} not a multiple of 32");
+    }
+    if !max_seq_padded.is_multiple_of(32) {
+        crate::bail!(
+            "attn_score_q4_0_f32_kivi_dev_pos: max_seq_padded {max_seq_padded} not a multiple of 32"
+        );
+    }
+    let n_q_heads = n_kv_heads * n_q_per_kv;
+    if q_f32.len() != n_q_heads * head_dim {
+        crate::bail!(
+            "attn_score_q4_0_f32_kivi_dev_pos: Q has {} elems, expected {}",
+            q_f32.len(),
+            n_q_heads * head_dim
+        );
+    }
+    // Grid covers max_seq_padded blocks. Kernel writes -INFINITY at
+    // positions ≥ seq_kv_dev[0] so softmax_last_dim masks them out.
+    let max_blocks = max_seq_padded / 32;
+    let kernel_name = match (head_dim, n_q_per_kv) {
+        (64,  1) => "attn_score_q4_0_f32_kivi_dev_pos_hd64_nq1",
+        (64,  2) => "attn_score_q4_0_f32_kivi_dev_pos_hd64_nq2",
+        (64,  4) => "attn_score_q4_0_f32_kivi_dev_pos_hd64_nq4",
+        (64,  5) => "attn_score_q4_0_f32_kivi_dev_pos_hd64_nq5",
+        (64,  8) => "attn_score_q4_0_f32_kivi_dev_pos_hd64_nq8",
+        (128, 1) => "attn_score_q4_0_f32_kivi_dev_pos_hd128_nq1",
+        (128, 2) => "attn_score_q4_0_f32_kivi_dev_pos_hd128_nq2",
+        (128, 4) => "attn_score_q4_0_f32_kivi_dev_pos_hd128_nq4",
+        (128, 5) => "attn_score_q4_0_f32_kivi_dev_pos_hd128_nq5",
+        (128, 8) => "attn_score_q4_0_f32_kivi_dev_pos_hd128_nq8",
+        (256, 1) => "attn_score_q4_0_f32_kivi_dev_pos_hd256_nq1",
+        (256, 2) => "attn_score_q4_0_f32_kivi_dev_pos_hd256_nq2",
+        (256, 4) => "attn_score_q4_0_f32_kivi_dev_pos_hd256_nq4",
+        (256, 5) => "attn_score_q4_0_f32_kivi_dev_pos_hd256_nq5",
+        (256, 8) => "attn_score_q4_0_f32_kivi_dev_pos_hd256_nq8",
+        _ => crate::bail!(
+            "attn_score_q4_0_f32_kivi_dev_pos: unsupported (head_dim={head_dim}, n_q_per_kv={n_q_per_kv})",
+        ),
+    };
+    let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
+    let n_warps_env: u32 = std::env::var("LLMSERVER_ATTN_SCORE_NWARPS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16);
+    let n_warps: u32 = match n_warps_env {
+        4 | 8 | 16 => n_warps_env,
+        _ => 16,
+    };
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (max_blocks as u32, n_kv_heads as u32, 1),
+        block_dim: (WARP_SIZE as u32, n_warps, 1),
+        shared_mem_bytes: (n_warps * WARP_SIZE as u32 * 4) as u32,
+    };
+    // Fresh allocation each call — under CUDA graph capture mode the
+    // async pool returns the same address for identically-sized allocs,
+    // so the captured kernel argument stays valid across replays.
+    let dst = unsafe { dev.alloc::<f32>(n_q_heads * max_seq_padded)? };
+    let mut builder = func.builder();
+    builder.arg(k_blocks);
+    builder.arg(k_residual);
+    builder.arg(q_f32);
+    builder.arg(&dst);
+    builder.arg(seq_kv_dev);
+    barg!(
+        builder,
+        max_seq_padded as i32,
+        n_kv_heads as i32,
+        n_q_per_kv as i32
+    );
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
 pub fn attn_score_q4_0_f32_kivi(
     k_blocks: &CudaSlice<u8>,
     k_residual: &CudaSlice<f16>,
@@ -672,6 +771,95 @@ pub fn attn_score_q4_0_f32_kivi(
         seq_kv as i32,
         full_blocks as i32,
         n_kv_heads as i32,
+        n_q_per_kv as i32
+    );
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
+/// Device-position variant of `attn_output_q4_0_f32_gqa`.
+///
+/// Reads `seq_kv` from `seq_kv_dev[0]` instead of taking it as a host
+/// int and reads `probs` from a fixed `[n_q_heads, max_seq_padded]`
+/// layout (matching the score kernel's output buffer). Writes a fresh
+/// `n_q_heads * head_dim` F32 buffer; under graph capture mode the
+/// cudaMallocAsync pool returns the same address each call.
+///
+/// Required for CUDA graph capture of Q4-KV decode: every pointer +
+/// stride captured by the launch is stable across replays; the only
+/// thing that changes between tokens is the i32 stored in `seq_kv_dev`,
+/// which the host writes outside the captured region.
+#[allow(clippy::too_many_arguments)]
+pub fn attn_output_q4_0_f32_dev_pos(
+    v_blob: &CudaSlice<u8>,
+    probs_f32: &CudaView<f32>,
+    seq_kv_dev: &CudaSlice<i32>,
+    head_dim: usize,
+    max_seq_padded: usize,
+    n_kv_heads: usize,
+    n_q_per_kv: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    if !head_dim.is_multiple_of(32) {
+        crate::bail!("attn_output_q4_0_f32_dev_pos: head_dim {head_dim} not a multiple of 32");
+    }
+    if !max_seq_padded.is_multiple_of(32) {
+        crate::bail!(
+            "attn_output_q4_0_f32_dev_pos: max_seq_padded {max_seq_padded} not a multiple of 32"
+        );
+    }
+    let n_q_heads = n_kv_heads * n_q_per_kv;
+    if probs_f32.len() != n_q_heads * max_seq_padded {
+        crate::bail!(
+            "attn_output_q4_0_f32_dev_pos: probs has {} elements, expected {} (n_q_heads * max_seq_padded)",
+            probs_f32.len(),
+            n_q_heads * max_seq_padded
+        );
+    }
+
+    let hd_blocks = head_dim / 32;
+    let n_kv_stride_blocks = n_kv_heads * hd_blocks;
+    let kv_head_stride_blocks = hd_blocks;
+
+    let kernel_name = match (head_dim, n_q_per_kv) {
+        (64,  1) => "attn_output_q4_0_f32_dev_pos_hd64_nq1",
+        (64,  2) => "attn_output_q4_0_f32_dev_pos_hd64_nq2",
+        (64,  4) => "attn_output_q4_0_f32_dev_pos_hd64_nq4",
+        (64,  5) => "attn_output_q4_0_f32_dev_pos_hd64_nq5",
+        (64,  8) => "attn_output_q4_0_f32_dev_pos_hd64_nq8",
+        (128, 1) => "attn_output_q4_0_f32_dev_pos_hd128_nq1",
+        (128, 2) => "attn_output_q4_0_f32_dev_pos_hd128_nq2",
+        (128, 4) => "attn_output_q4_0_f32_dev_pos_hd128_nq4",
+        (128, 5) => "attn_output_q4_0_f32_dev_pos_hd128_nq5",
+        (128, 8) => "attn_output_q4_0_f32_dev_pos_hd128_nq8",
+        (256, 1) => "attn_output_q4_0_f32_dev_pos_hd256_nq1",
+        (256, 2) => "attn_output_q4_0_f32_dev_pos_hd256_nq2",
+        (256, 4) => "attn_output_q4_0_f32_dev_pos_hd256_nq4",
+        (256, 5) => "attn_output_q4_0_f32_dev_pos_hd256_nq5",
+        (256, 8) => "attn_output_q4_0_f32_dev_pos_hd256_nq8",
+        _ => crate::bail!(
+            "attn_output_q4_0_f32_dev_pos: unsupported combo head_dim={head_dim} n_q_per_kv={n_q_per_kv}",
+        ),
+    };
+    let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
+
+    const WARPS_PER_BLOCK: u32 = 32;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (hd_blocks as u32, n_kv_heads as u32, 1),
+        block_dim: (WARP_SIZE as u32, WARPS_PER_BLOCK, 1),
+        shared_mem_bytes: 0,
+    };
+    let dst = unsafe { dev.alloc::<f32>(n_q_heads * head_dim)? };
+    let mut builder = func.builder();
+    builder.arg(v_blob);
+    builder.arg(probs_f32);
+    builder.arg(&dst);
+    builder.arg(seq_kv_dev);
+    barg!(
+        builder,
+        max_seq_padded as i32,
+        n_kv_stride_blocks as i32,
+        kv_head_stride_blocks as i32,
         n_q_per_kv as i32
     );
     unsafe { builder.launch(cfg) }.w()?;
