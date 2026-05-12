@@ -97,3 +97,52 @@ extern "C" void kv_residual_scatter_f16_dev_slot(
         head_dim
     );
 }
+
+namespace ll_kv_scatter {
+
+// Byte-copy scatter for the Q4_0 V append path. Copies `token_bytes`
+// bytes from `src` into `dst[pos_dev[0] * token_bytes ..]`.
+// One thread per output byte; grid is sized to cover token_bytes.
+//
+// Used to replace the host-side `memcpy_dtod` with a compile-time
+// `dst_byte_offset = current_seq_len * token_bytes` — under CUDA graph
+// capture the host offset freezes, so replay always overwrites the
+// same slot. With this kernel the offset is computed from the device
+// pointer each replay, after the host updates `pos_dev` outside the
+// captured region.
+__global__ void q4_v_scatter_bytes_kernel(
+    const uchar4 * __restrict__ src,
+    uchar4       * __restrict__ dst,        // base of v_q4 buffer
+    const int32_t * __restrict__ pos_dev,   // device ptr to current token index
+    int token_words                          // token_bytes / 4
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= token_words) return;
+    const int pos = pos_dev[0];
+    const int dst_off_words = pos * token_words + idx;
+    dst[dst_off_words] = src[idx];
+}
+
+} // namespace ll_kv_scatter
+
+// Device-position byte scatter for Q4_0 V append.
+//   `token_bytes` MUST be a multiple of 4 (Q4_0 block size is 18, n_kv *
+//   blocks_per_head * 18: for any n_kv that's even, this is a multiple
+//   of 4 in practice; assert it).
+extern "C" void q4_v_scatter_bytes_dev_pos(
+    const void  * src,         // [token_bytes] u8
+    void        * dst,         // [max_seq * token_bytes] u8
+    const void  * pos_dev,     // device ptr to i32 (1 element)
+    int token_bytes,
+    cudaStream_t stream
+) {
+    const int token_words = token_bytes / 4;
+    const int block = 128;
+    const int grid  = (token_words + block - 1) / block;
+    ll_kv_scatter::q4_v_scatter_bytes_kernel<<<grid, block, 0, stream>>>(
+        (const uchar4 *)src,
+        (uchar4 *)dst,
+        (const int32_t *)pos_dev,
+        token_words
+    );
+}

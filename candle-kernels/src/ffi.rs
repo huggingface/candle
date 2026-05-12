@@ -918,6 +918,18 @@ extern "C" {
         stream: i64,
     );
 
+    /// Byte-copy scatter for the Q4_0 V append path. Copies `token_bytes`
+    /// bytes from `src` into `dst[pos_dev[0] * token_bytes ..]`. Replaces
+    /// host-side `memcpy_dtod` whose offset would freeze under CUDA graph
+    /// capture. `token_bytes` must be a multiple of 4.
+    pub fn q4_v_scatter_bytes_dev_pos(
+        src: *const c_void,
+        dst: *mut c_void,
+        pos_dev: *const c_void,
+        token_bytes: i32,
+        stream: i64,
+    );
+
     /// Dense (non-MoE) gate+up+silu*mul fused kernel.
     /// `gate_w` and `up_w` are quantized [N, K]; `input` is F32 [K];
     /// `output` is F32 [N] pre-allocated.

@@ -1280,6 +1280,21 @@ pub unsafe fn kv_residual_scatter_f16_dev_slot_raw(
     ffi::kv_residual_scatter_f16_dev_slot(src, dst, slot_dev, n_kv, head_dim, stream)
 }
 
+/// Byte-copy scatter for the Q4_0 V append path, with device-side
+/// position. Replaces `memcpy_dtod(dst[pos*token_bytes ..])` whose host
+/// offset would freeze under CUDA graph capture.
+#[cfg(feature = "cuda")]
+pub unsafe fn q4_v_scatter_bytes_dev_pos_raw(
+    src: *const core::ffi::c_void,
+    dst: *mut core::ffi::c_void,
+    pos_dev: *const core::ffi::c_void,
+    token_bytes: i32,
+    stream: i64,
+) {
+    debug_assert!(token_bytes % 4 == 0, "token_bytes must be multiple of 4");
+    ffi::q4_v_scatter_bytes_dev_pos(src, dst, pos_dev, token_bytes, stream)
+}
+
 /// Fused RMS norm + quantized matmul (single-token decode).
 /// Returns the F32 matmul output [out_rows] = (rms_norm(x, w_norm)) @ w_mm^T.
 /// `w_mm` is the QTensor for the matmul weight; supported quant types
