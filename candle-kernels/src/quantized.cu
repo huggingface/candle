@@ -4572,6 +4572,112 @@ ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd256_nq4, 256, 4)
 ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd256_nq5, 256, 5)
 ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd256_nq8, 256, 8)
 
+// ─────────────────────────────────────────────────────────────────────────
+// Device-position variant of attn_output_q4_*. Reads `seq_kv` from a
+// device tensor instead of taking it as a host int, and reads `probs`
+// at a fixed `max_seq_padded` stride (matches the
+// `attn_score_q4_0_f32_kivi_dev_pos_*` scores output, which writes
+// -INFINITY at positions ≥ seq_kv so softmax produces 0 there). Output
+// `out` shape is [n_q_heads, HD] regardless of seq_kv.
+// ─────────────────────────────────────────────────────────────────────────
+template<int HD, int MAX_NQ_PER_KV>
+static __device__ __forceinline__ void attn_output_q4_inner_dev_pos(
+    const void  * __restrict__ V_blob,
+    const float * __restrict__ probs,
+    float       * __restrict__ out,
+    const int32_t * __restrict__ seq_kv_dev,
+    int max_seq_padded,
+    int n_kv_stride_blocks,
+    int kv_head_stride_blocks,
+    int n_q_per_kv,
+    int block_idx, int kv, int lane, int warp_id
+) {
+    const int seq_kv = seq_kv_dev[0];
+    float acc[MAX_NQ_PER_KV];
+    #pragma unroll
+    for (int q = 0; q < MAX_NQ_PER_KV; ++q) acc[q] = 0.0f;
+    const int nib_byte = lane & 15;
+    const bool is_high = lane >= 16;
+
+    for (int s = warp_id; s < seq_kv; s += ATTN_OUTPUT_WARPS) {
+        const block_q4_0 * v_block =
+            reinterpret_cast<const block_q4_0 *>(V_blob)
+            + (size_t)s * n_kv_stride_blocks
+            + kv * kv_head_stride_blocks
+            + block_idx;
+        const uint8_t byte = v_block->qs[nib_byte];
+        const int nib = is_high ? (byte >> 4) : (byte & 0xF);
+        const float v_f = (nib - 8) * __half2float(v_block->d);
+
+        #pragma unroll
+        for (int q = 0; q < MAX_NQ_PER_KV; ++q) {
+            if (q < n_q_per_kv) {
+                const int h = kv * n_q_per_kv + q;
+                // probs uses max_seq_padded stride, not seq_kv
+                const float p = probs[(size_t)h * (size_t)max_seq_padded + (size_t)s];
+                acc[q] = fmaf(p, v_f, acc[q]);
+            }
+        }
+    }
+
+    __shared__ float shmem[ATTN_OUTPUT_WARPS][32];
+    #pragma unroll
+    for (int q = 0; q < MAX_NQ_PER_KV; ++q) {
+        if (q < n_q_per_kv) {
+            shmem[warp_id][lane] = acc[q];
+            __syncthreads();
+            if (warp_id == 0) {
+                float total = 0.0f;
+                #pragma unroll
+                for (int w = 0; w < ATTN_OUTPUT_WARPS; ++w) total += shmem[w][lane];
+                const int h = kv * n_q_per_kv + q;
+                const int d = block_idx * 32 + lane;
+                out[(size_t)h * HD + d] = total;
+            }
+            __syncthreads();
+        }
+    }
+}
+
+#define ATTN_OUTPUT_Q4_DEV_POS_KERNEL(NAME, HD, NQ)                            \
+extern "C" __global__ void NAME(                                               \
+    const void  * __restrict__ V_blob,                                         \
+    const float * __restrict__ probs,                                          \
+    float       * __restrict__ out,                                            \
+    const int32_t * __restrict__ seq_kv_dev,                                   \
+    int max_seq_padded,                                                        \
+    int n_kv_stride_blocks,                                                    \
+    int kv_head_stride_blocks,                                                 \
+    int /* n_q_per_kv */                                                       \
+) {                                                                            \
+    const int block_idx = blockIdx.x;                                          \
+    const int kv        = blockIdx.y;                                          \
+    const int lane      = threadIdx.x;                                         \
+    const int warp_id   = threadIdx.y;                                         \
+    if (block_idx >= (HD / 32)) return;                                        \
+    attn_output_q4_inner_dev_pos<HD, NQ>(                                      \
+        V_blob, probs, out, seq_kv_dev, max_seq_padded,                        \
+        n_kv_stride_blocks, kv_head_stride_blocks, NQ,                         \
+        block_idx, kv, lane, warp_id                                           \
+    );                                                                         \
+}
+
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd64_nq1,    64, 1)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd64_nq2,    64, 2)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd64_nq4,    64, 4)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd64_nq5,    64, 5)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd64_nq8,    64, 8)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd128_nq1, 128, 1)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd128_nq2, 128, 2)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd128_nq4, 128, 4)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd128_nq5, 128, 5)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd128_nq8, 128, 8)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd256_nq1, 256, 1)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd256_nq2, 256, 2)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd256_nq4, 256, 4)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd256_nq5, 256, 5)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd256_nq8, 256, 8)
+
 // Half-precision input variant. Saves a promote+copy when the source is
 // already in f16 (common for K/V after attention projection in f16 models).
 extern "C" __global__ void quantize_q8_0_f16(const half * __restrict__ x, void * __restrict__ vy, const int kx, const int kx_padded) {
