@@ -3968,6 +3968,15 @@ ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd256_nq2, 256, 2)
 ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd256_nq4, 256, 4)
 ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd256_nq5, 256, 5)
 ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd256_nq8, 256, 8)
+// HD=512 specializations — added to unblock gemma4:latest Global
+// attention layers from the F-dtype graph-mode crash path. The
+// templated kernel scales cleanly with HD (just more channels-per-warp
+// iterations), so this is a pure template instantiation.
+ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd512_nq1, 512, 1)
+ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd512_nq2, 512, 2)
+ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd512_nq4, 512, 4)
+ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd512_nq5, 512, 5)
+ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd512_nq8, 512, 8)
 
 // ─────────────────────────────────────────────────────────────────────────
 // Device-position variant of attn_score_q4_*. Reads `seq_kv` from a device
@@ -4124,6 +4133,12 @@ ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd256_nq2, 256, 2)
 ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd256_nq4, 256, 4)
 ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd256_nq5, 256, 5)
 ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd256_nq8, 256, 8)
+// HD=512 dev-pos variants — required for graph mode on gemma4:latest.
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd512_nq1, 512, 1)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd512_nq2, 512, 2)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd512_nq4, 512, 4)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd512_nq5, 512, 5)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd512_nq8, 512, 8)
 
 // V-path attention output: `out = probs @ V` where:
 //   probs : [n_q_heads, seq_kv]   (f32, softmax output)
@@ -4599,6 +4614,12 @@ ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd256_nq2, 256, 2)
 ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd256_nq4, 256, 4)
 ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd256_nq5, 256, 5)
 ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd256_nq8, 256, 8)
+// HD=512 — matching the attn_score_q4 HD=512 set added above.
+ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd512_nq1, 512, 1)
+ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd512_nq2, 512, 2)
+ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd512_nq4, 512, 4)
+ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd512_nq5, 512, 5)
+ATTN_OUTPUT_Q4_KERNEL(attn_output_q4_0_f32_hd512_nq8, 512, 8)
 
 // ─────────────────────────────────────────────────────────────────────────
 // Device-position variant of attn_output_q4_*. Reads `seq_kv` from a
@@ -4707,6 +4728,12 @@ ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd256_nq2, 256, 2)
 ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd256_nq4, 256, 4)
 ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd256_nq5, 256, 5)
 ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd256_nq8, 256, 8)
+// HD=512 dev-pos output variants — graph-mode partner for the score kernel set.
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd512_nq1, 512, 1)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd512_nq2, 512, 2)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd512_nq4, 512, 4)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd512_nq5, 512, 5)
+ATTN_OUTPUT_Q4_DEV_POS_KERNEL(attn_output_q4_0_f32_dev_pos_hd512_nq8, 512, 8)
 
 // Half-precision input variant. Saves a promote+copy when the source is
 // already in f16 (common for K/V after attention projection in f16 models).
