@@ -2758,6 +2758,13 @@ impl Tensor {
         std::ptr::eq(lhs, rhs)
     }
 
+    /// Public alias of `same_storage`: true iff `self` and `other` view the
+    /// same underlying storage allocation (Arc-shared). Used by callers
+    /// outside candle-core to dedupe identical per-layer tensors.
+    pub fn shares_storage(&self, other: &Self) -> bool {
+        self.same_storage(other)
+    }
+
     /// Normalize a 'relative' axis value: positive values are kept, negative
     /// values means counting the dimensions from the back.
     pub fn normalize_axis(&self, axis: i64) -> Result<usize> {
