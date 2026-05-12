@@ -3969,6 +3969,134 @@ ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd256_nq4, 256, 4)
 ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd256_nq5, 256, 5)
 ATTN_SCORE_Q4_KERNEL(attn_score_q4_0_f32_kivi_hd256_nq8, 256, 8)
 
+// ─────────────────────────────────────────────────────────────────────────
+// Device-position variant of attn_score_q4_*. Reads `seq_kv` from a device
+// tensor instead of a host int, and writes scores into a pre-allocated
+// `[n_q_heads, max_seq_padded]` buffer at the SAME stride every launch.
+// Positions [seq_kv, max_seq_padded) are written as -INFINITY so the
+// downstream softmax masks them out (matches the F-dtype graph-capture
+// path which uses `padded_mask` for the same purpose).
+//
+// Required for CUDA graph capture of Q4-KV decode — the host updates
+// `seq_kv_dev` outside the captured region each token, while the captured
+// kernel uses the same dst pointer + max_seq_padded stride on every replay.
+// ─────────────────────────────────────────────────────────────────────────
+template<int HD, int MAX_NQ_PER_KV>
+static __device__ __forceinline__ void attn_score_q4_inner_dev_pos(
+    const void  * __restrict__ K_blocks,
+    const half  * __restrict__ K_residual,
+    const float * __restrict__ Q,
+    float       * __restrict__ scores,        // [n_q_heads * max_seq_padded] f32
+    const int32_t * __restrict__ seq_kv_dev,  // device ptr to current seq len (i32)
+    int max_seq_padded,                       // stride of the scores buffer
+    int n_kv,
+    int n_q_per_kv,
+    int sb, int h_kv, int lane, int warp_id, int n_warps
+) {
+    const int seq_kv = seq_kv_dev[0];
+    const int full_blocks = seq_kv / 32;
+    const int nib_byte = lane & 15;
+    const bool is_high = lane >= 16;
+    const int out_token = sb * 32 + lane;
+    const bool is_partial = (sb == full_blocks);
+    const bool is_in_range = (out_token < seq_kv);
+
+    float acc[MAX_NQ_PER_KV];
+    #pragma unroll
+    for (int q = 0; q < MAX_NQ_PER_KV; ++q) acc[q] = 0.0f;
+
+    for (int c = warp_id; c < HD; c += n_warps) {
+        float k_val;
+        if (is_partial) {
+            const size_t r_idx =
+                (size_t)h_kv * (size_t)HD * 32 + (size_t)c * 32 + (size_t)lane;
+            k_val = is_in_range ? __half2float(K_residual[r_idx]) : 0.0f;
+        } else {
+            const size_t block_idx =
+                (size_t)sb * ((size_t)n_kv * (size_t)HD)
+                + (size_t)h_kv * (size_t)HD
+                + (size_t)c;
+            const block_q4_0 * k_block =
+                reinterpret_cast<const block_q4_0 *>(K_blocks) + block_idx;
+            const uint8_t byte = k_block->qs[nib_byte];
+            const int nib = is_high ? (byte >> 4) : (byte & 0xF);
+            k_val = (nib - 8) * __half2float(k_block->d);
+        }
+        #pragma unroll
+        for (int q = 0; q < MAX_NQ_PER_KV; ++q) {
+            if (q < n_q_per_kv) {
+                const int h_q = h_kv * n_q_per_kv + q;
+                const float q_val = Q[(size_t)h_q * HD + c];
+                acc[q] = fmaf(q_val, k_val, acc[q]);
+            }
+        }
+    }
+
+    extern __shared__ float shmem_buf[];
+    #pragma unroll
+    for (int q = 0; q < MAX_NQ_PER_KV; ++q) {
+        if (q < n_q_per_kv) {
+            shmem_buf[warp_id * 32 + lane] = acc[q];
+            __syncthreads();
+            if (warp_id == 0) {
+                float total = 0.0f;
+                #pragma unroll
+                for (int w = 0; w < 32; ++w) {
+                    if (w < n_warps) total += shmem_buf[w * 32 + lane];
+                }
+                const int h_q = h_kv * n_q_per_kv + q;
+                // Always write to a STABLE offset using max_seq_padded as
+                // the stride. Positions ≥ seq_kv get -INFINITY so softmax
+                // ignores them. Valid positions get the real score.
+                const size_t dst_off = (size_t)h_q * (size_t)max_seq_padded + (size_t)out_token;
+                if (out_token < max_seq_padded) {
+                    scores[dst_off] = is_in_range ? total : -INFINITY;
+                }
+            }
+            __syncthreads();
+        }
+    }
+}
+
+#define ATTN_SCORE_Q4_DEV_POS_KERNEL(NAME, HD, NQ)                            \
+extern "C" __global__ void NAME(                                              \
+    const void  * __restrict__ K_blocks,                                      \
+    const half  * __restrict__ K_residual,                                    \
+    const float * __restrict__ Q,                                             \
+    float       * __restrict__ scores,                                        \
+    const int32_t * __restrict__ seq_kv_dev,                                  \
+    int max_seq_padded,                                                       \
+    int n_kv,                                                                 \
+    int /* n_q_per_kv */                                                      \
+) {                                                                           \
+    const int sb   = blockIdx.x;                                              \
+    const int h_kv = blockIdx.y;                                              \
+    const int lane = threadIdx.x;                                             \
+    const int warp = threadIdx.y;                                             \
+    const int n_warps = blockDim.y;                                           \
+    attn_score_q4_inner_dev_pos<HD, NQ>(                                      \
+        K_blocks, K_residual, Q, scores, seq_kv_dev,                          \
+        max_seq_padded, n_kv, NQ,                                             \
+        sb, h_kv, lane, warp, n_warps                                         \
+    );                                                                        \
+}
+
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd64_nq1,    64, 1)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd64_nq2,    64, 2)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd64_nq4,    64, 4)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd64_nq5,    64, 5)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd64_nq8,    64, 8)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd128_nq1, 128, 1)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd128_nq2, 128, 2)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd128_nq4, 128, 4)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd128_nq5, 128, 5)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd128_nq8, 128, 8)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd256_nq1, 256, 1)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd256_nq2, 256, 2)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd256_nq4, 256, 4)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd256_nq5, 256, 5)
+ATTN_SCORE_Q4_DEV_POS_KERNEL(attn_score_q4_0_f32_kivi_dev_pos_hd256_nq8, 256, 8)
+
 // V-path attention output: `out = probs @ V` where:
 //   probs : [n_q_heads, seq_kv]   (f32, softmax output)
 //   V     : [seq_kv, n_kv_heads, head_dim] Q8_0 blocks along head_dim
