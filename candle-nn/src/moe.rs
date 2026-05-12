@@ -1295,6 +1295,23 @@ pub unsafe fn q4_v_scatter_bytes_dev_pos_raw(
     ffi::q4_v_scatter_bytes_dev_pos(src, dst, pos_dev, token_bytes, stream)
 }
 
+/// Conditional Q4_0 quantize+flush of the K residual under graph capture.
+/// See `ffi::flush_k_residual_q4_dev_pos` for semantics.
+#[cfg(feature = "cuda")]
+pub unsafe fn flush_k_residual_q4_dev_pos_raw(
+    residual: *const core::ffi::c_void,
+    k_blocks: *mut core::ffi::c_void,
+    pos_dev: *const core::ffi::c_void,
+    n_kv: i32,
+    head_dim: i32,
+    max_seq_blocks: i32,
+    stream: i64,
+) {
+    ffi::flush_k_residual_q4_dev_pos(
+        residual, k_blocks, pos_dev, n_kv, head_dim, max_seq_blocks, stream,
+    )
+}
+
 /// Fused RMS norm + quantized matmul (single-token decode).
 /// Returns the F32 matmul output [out_rows] = (rms_norm(x, w_norm)) @ w_mm^T.
 /// `w_mm` is the QTensor for the matmul weight; supported quant types

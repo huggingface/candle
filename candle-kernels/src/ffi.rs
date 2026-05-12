@@ -930,6 +930,22 @@ extern "C" {
         stream: i64,
     );
 
+    /// Conditional Q4_0 quantize-and-flush of the K residual to k_q4_blocks.
+    /// Fires every token under graph capture; the kernel itself decides
+    /// at run-time whether to write (only when `pos_dev[0] & 31 == 31`,
+    /// i.e. this append closes a 32-token window). The host-int path's
+    /// quantize-from-F16 + memcpy_dtod chain (which would freeze the
+    /// block_idx at capture time) collapses into one launch.
+    pub fn flush_k_residual_q4_dev_pos(
+        residual: *const c_void,
+        k_blocks: *mut c_void,
+        pos_dev: *const c_void,
+        n_kv: i32,
+        head_dim: i32,
+        max_seq_blocks: i32,
+        stream: i64,
+    );
+
     /// Dense (non-MoE) gate+up+silu*mul fused kernel.
     /// `gate_w` and `up_w` are quantized [N, K]; `input` is F32 [K];
     /// `output` is F32 [N] pre-allocated.
