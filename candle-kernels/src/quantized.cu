@@ -3993,8 +3993,36 @@ static __device__ __forceinline__ void attn_score_q4_inner_dev_pos(
     int n_q_per_kv,
     int sb, int h_kv, int lane, int warp_id, int n_warps
 ) {
-    const int seq_kv = seq_kv_dev[0];
+    // Host stores `current_seq_len BEFORE the append` in seq_kv_dev (so
+    // the append/flush kernels can derive slot/block from `pos & 31` and
+    // `pos >> 5`). Attention sees the cache AFTER the append, so we
+    // bump by 1 here.
+    const int seq_kv = seq_kv_dev[0] + 1;
     const int full_blocks = seq_kv / 32;
+
+    // Fast no-op for blocks entirely beyond `seq_kv`. Under graph capture
+    // the grid is sized to `max_seq_padded / 32` blocks, which is the
+    // model's full context. At small seq_kv the vast majority of those
+    // blocks have no valid positions — skip the warp shuffles + global
+    // reads and just write -INF directly. ATTN_SCORE_WARPS=16 normally;
+    // we only need warp 0 + lane < max_seq_padded for the write.
+    if (sb > full_blocks) {
+        if (warp_id == 0) {
+            const int out_token = sb * 32 + lane;
+            if (out_token < max_seq_padded) {
+                #pragma unroll
+                for (int q = 0; q < MAX_NQ_PER_KV; ++q) {
+                    if (q < n_q_per_kv) {
+                        const int h_q = h_kv * n_q_per_kv + q;
+                        scores[(size_t)h_q * (size_t)max_seq_padded + (size_t)out_token]
+                            = -INFINITY;
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     const int nib_byte = lane & 15;
     const bool is_high = lane >= 16;
     const int out_token = sb * 32 + lane;
@@ -4592,7 +4620,9 @@ static __device__ __forceinline__ void attn_output_q4_inner_dev_pos(
     int n_q_per_kv,
     int block_idx, int kv, int lane, int warp_id
 ) {
-    const int seq_kv = seq_kv_dev[0];
+    // See attn_score_q4_inner_dev_pos: host stores `current_seq_len BEFORE
+    // the append`; attention sees the cache AFTER the append.
+    const int seq_kv = seq_kv_dev[0] + 1;
     float acc[MAX_NQ_PER_KV];
     #pragma unroll
     for (int q = 0; q < MAX_NQ_PER_KV; ++q) acc[q] = 0.0f;
