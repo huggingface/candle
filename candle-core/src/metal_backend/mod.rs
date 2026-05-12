@@ -1408,11 +1408,7 @@ impl BackendStorage for MetalStorage {
         _out_h: usize,
         _out_w: usize,
     ) -> Result<Self> {
-        crate::bail!(
-            "upsample_bilinear2d_antialias is not yet implemented on the Metal backend; \
-             a CPU-only path is available via Tensor::upsample_bilinear2d_antialias on \
-             a CPU tensor. GPU kernels are tracked as a follow-up."
-        )
+        crate::bail!("upsample_bilinear2d_antialias is not supported on metal")
     }
 
     fn gather(&self, src_l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {

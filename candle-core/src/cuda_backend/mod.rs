@@ -2141,11 +2141,7 @@ impl BackendStorage for CudaStorage {
         _out_h: usize,
         _out_w: usize,
     ) -> Result<Self> {
-        crate::bail!(
-            "upsample_bilinear2d_antialias is not yet implemented on the CUDA backend; \
-             a CPU-only path is available via Tensor::upsample_bilinear2d_antialias on \
-             a CPU tensor. GPU kernels are tracked as a follow-up."
-        )
+        crate::bail!("upsample_bilinear2d_antialias is not supported on cuda")
     }
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {

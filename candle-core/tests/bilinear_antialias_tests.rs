@@ -239,6 +239,104 @@ fn aa_non_square_4x6_to_3x4() -> Result<()> {
     assert_close(&output, &expected)
 }
 
+/* arange(64).reshape(1,1,8,8) -> (8, 4). W-only downscale (H unchanged).
+Catches axis-swap bugs in weight_matrix construction where the H and W
+weight matrices get the wrong (src, dst) pair: a symmetric downscale
+(both axes) would still match if the matrices were swapped. */
+#[test]
+fn aa_single_axis_w_downscale_8x8_to_8x4() -> Result<()> {
+    let dev = &Device::Cpu;
+    let input = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
+    let output = input.upsample_bilinear2d_antialias(8, 4)?;
+    let expected = Tensor::new(
+        &[
+            0.714286f32,
+            2.500000,
+            4.500000,
+            6.285715,
+            8.714286,
+            10.500000,
+            12.500000,
+            14.285714,
+            16.714287,
+            18.500000,
+            20.500000,
+            22.285715,
+            24.714287,
+            26.500000,
+            28.500000,
+            30.285715,
+            32.714287,
+            34.500000,
+            36.500000,
+            38.285713,
+            40.714287,
+            42.500000,
+            44.500000,
+            46.285717,
+            48.714287,
+            50.500000,
+            52.500000,
+            54.285717,
+            56.714283,
+            58.500000,
+            60.500000,
+            62.285713,
+        ],
+        dev,
+    )?
+    .reshape((1, 1, 8, 4))?;
+    assert_close(&output, &expected)
+}
+
+/* arange(64).reshape(1,1,8,8) -> (4, 8). H-only downscale (W unchanged).
+Complement to the W-only case above. */
+#[test]
+fn aa_single_axis_h_downscale_8x8_to_4x8() -> Result<()> {
+    let dev = &Device::Cpu;
+    let input = Tensor::arange(0f32, 64f32, dev)?.reshape((1, 1, 8, 8))?;
+    let output = input.upsample_bilinear2d_antialias(4, 8)?;
+    let expected = Tensor::new(
+        &[
+            5.714286f32,
+            6.714286,
+            7.714286,
+            8.714286,
+            9.714286,
+            10.714286,
+            11.714286,
+            12.714286,
+            20.000000,
+            21.000000,
+            22.000000,
+            23.000000,
+            24.000000,
+            25.000000,
+            26.000000,
+            27.000000,
+            36.000000,
+            37.000000,
+            38.000000,
+            39.000000,
+            40.000000,
+            41.000000,
+            42.000000,
+            43.000000,
+            50.285717,
+            51.285713,
+            52.285713,
+            53.285713,
+            54.285713,
+            55.285717,
+            56.285717,
+            57.285717,
+        ],
+        dev,
+    )?
+    .reshape((1, 1, 4, 8))?;
+    assert_close(&output, &expected)
+}
+
 /* arange(16).reshape(1,1,4,4) -> (8, 8). Upscaling: antialias is a no-op,
 so output should equal the non-antialiased bilinear reference. */
 #[test]
