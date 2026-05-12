@@ -1264,6 +1264,22 @@ pub unsafe fn kv_residual_scatter_f16_raw(
     ffi::kv_residual_scatter_f16(src, dst, n_kv, head_dim, slot, stream)
 }
 
+/// Device-slot variant of `kv_residual_scatter_f16_raw`. Reads `slot`
+/// from `slot_dev[0] % 32` on the GPU instead of taking a host int.
+/// Required for CUDA graph capture of Q4 KV append — the host updates
+/// `slot_dev` outside the captured region each token.
+#[cfg(feature = "cuda")]
+pub unsafe fn kv_residual_scatter_f16_dev_slot_raw(
+    src: *const core::ffi::c_void,
+    dst: *mut core::ffi::c_void,
+    slot_dev: *const core::ffi::c_void,
+    n_kv: i32,
+    head_dim: i32,
+    stream: i64,
+) {
+    ffi::kv_residual_scatter_f16_dev_slot(src, dst, slot_dev, n_kv, head_dim, stream)
+}
+
 /// Fused RMS norm + quantized matmul (single-token decode).
 /// Returns the F32 matmul output [out_rows] = (rms_norm(x, w_norm)) @ w_mm^T.
 /// `w_mm` is the QTensor for the matmul weight; supported quant types

@@ -33,6 +33,28 @@ __global__ void kv_residual_scatter_kernel(
     dst[dst_off] = src[idx];
 }
 
+// Device-side `slot` variant — reads the slot index from a device tensor
+// instead of taking it as a host int. Required for CUDA graph capture:
+// the slot value can be updated from the host (via slice_set into the
+// `cur_pos_dev` tensor) OUTSIDE the captured graph each token, while
+// the captured kernel always reads from the same pointer.
+__global__ void kv_residual_scatter_kernel_dev_slot(
+    const __half  * __restrict__ src,
+    __half        * __restrict__ dst,
+    const int32_t * __restrict__ slot_dev,   // device ptr to current pos
+    int n_kv,
+    int head_dim
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = n_kv * head_dim;
+    if (idx >= total) return;
+    const int slot = slot_dev[0] & 31;       // pos % 32 — written by host
+    const int h = idx / head_dim;
+    const int c = idx - h * head_dim;
+    const int dst_off = h * head_dim * 32 + c * 32 + slot;
+    dst[dst_off] = src[idx];
+}
+
 } // namespace ll_kv_scatter
 
 extern "C" void kv_residual_scatter_f16(
@@ -52,5 +74,26 @@ extern "C" void kv_residual_scatter_f16(
         n_kv,
         head_dim,
         slot
+    );
+}
+
+// Device-slot variant — slot read from `slot_dev[0] % 32` on the GPU.
+extern "C" void kv_residual_scatter_f16_dev_slot(
+    const void  * src,
+    void        * dst,
+    const void  * slot_dev,    // device ptr to i32 (1 element)
+    int n_kv,
+    int head_dim,
+    cudaStream_t stream
+) {
+    const int total = n_kv * head_dim;
+    const int block = 128;
+    const int grid  = (total + block - 1) / block;
+    ll_kv_scatter::kv_residual_scatter_kernel_dev_slot<<<grid, block, 0, stream>>>(
+        (const __half *)src,
+        (__half *)dst,
+        (const int32_t *)slot_dev,
+        n_kv,
+        head_dim
     );
 }

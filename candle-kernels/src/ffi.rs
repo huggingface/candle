@@ -904,6 +904,20 @@ extern "C" {
         stream: i64,
     );
 
+    /// Same as `kv_residual_scatter_f16`, but reads `slot` from a device
+    /// tensor (`slot_dev[0] & 31`) instead of taking it as a host int.
+    /// Required for CUDA graph capture of Q4 KV append — the host updates
+    /// `slot_dev` outside the captured region each token, while the
+    /// captured kernel always reads from the same device pointer.
+    pub fn kv_residual_scatter_f16_dev_slot(
+        src: *const c_void,
+        dst: *mut c_void,
+        slot_dev: *const c_void,
+        n_kv: i32,
+        head_dim: i32,
+        stream: i64,
+    );
+
     /// Dense (non-MoE) gate+up+silu*mul fused kernel.
     /// `gate_w` and `up_w` are quantized [N, K]; `input` is F32 [K];
     /// `output` is F32 [N] pre-allocated.
