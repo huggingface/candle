@@ -1390,6 +1390,87 @@ pub fn dequantize_q8_0_blob_f16(
 /// for the Q4 KV cache: each 18-byte block becomes 32 F16 elements. Used by
 /// the "dequant then standard attention" fallback path until the fused Q4
 /// attention kernels land.
+/// Phase 1 step-2: per-expert Q4_K → F16 dequantize for the MoE expert
+/// weight tensor `[num_experts, rows, cols]`. Offsets into the underlying
+/// quantized byte blob by `expert_idx × (rows × cols / 256) × 144`
+/// (sizeof(block_q4_K) = 144) and launches the existing
+/// `dequantize_block_q4_K_f16` kernel on just that slab. Returns the
+/// dequantized F16 storage of shape `[rows × cols]`.
+///
+/// `cols` must be a multiple of `QK_K = 256`. Used by the per-expert
+/// dispatch in moe_gemm_gguf_* (Task #71): caller dequantizes the
+/// experts that have at least one token assigned, then launches a
+/// cuBLAS GEMM per expert. The dequantize workspace is per-call;
+/// re-use across experts within a layer requires the caller to
+/// allocate one buffer of size `rows × cols × 2 bytes`.
+pub fn dequantize_q4k_expert_f16(
+    data: &CudaSlice<u8>,
+    expert_idx: usize,
+    rows_per_expert: usize,
+    cols: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    use cudarc::driver::sys::cuMemcpyDtoDAsync_v2;
+    use cudarc::driver::DevicePtr;
+
+    const QK_K_LOCAL: usize = 256;
+    const BLOCK_Q4K_BYTES: usize = 144; // sizeof(block_q4_K)
+    if !cols.is_multiple_of(QK_K_LOCAL) {
+        crate::bail!(
+            "dequantize_q4k_expert_f16: cols {cols} must be a multiple of {QK_K_LOCAL}"
+        );
+    }
+    let elem_count = rows_per_expert * cols;
+    let blocks_per_expert = elem_count / QK_K_LOCAL;
+    let expert_bytes = blocks_per_expert * BLOCK_Q4K_BYTES;
+    let expert_off_bytes = expert_idx * expert_bytes;
+    if expert_off_bytes + expert_bytes > data.len() {
+        crate::bail!(
+            "dequantize_q4k_expert_f16: expert {expert_idx} offset+len {} > data {}",
+            expert_off_bytes + expert_bytes, data.len()
+        );
+    }
+
+    // The kernel `dequantize_block_q4_K_f16` reads `nb` Q4_K blocks from
+    // the input pointer; we shift the pointer by the per-expert offset
+    // and launch with `nb = blocks_per_expert`.
+    let nb = blocks_per_expert;
+    let func = dev.get_or_load_func("dequantize_block_q4_K_f16", &candle_kernels::QUANTIZED)?;
+    let dst = unsafe { dev.alloc::<f16>(elem_count)? };
+
+    // Get a fresh device pointer offset; we use a small scratch CudaSlice
+    // pointing at the offset, allocated by binding via the same stream.
+    // Allocate a copy of just this expert's bytes; saves us a kernel
+    // template change. ~9 MB copy per expert at gemma4:26b dims.
+    dev.cuda_stream().context().bind_to_thread()?;
+    let scratch_alloc = unsafe { dev.alloc::<u8>(expert_bytes) }?;
+    let src_ptr = data.device_ptr(data.stream()).0 + expert_off_bytes as u64;
+    let dst_scratch_ptr = scratch_alloc.device_ptr(scratch_alloc.stream()).0;
+    let stream_ptr = dev.cuda_stream().cu_stream();
+    unsafe {
+        let st = cuMemcpyDtoDAsync_v2(
+            dst_scratch_ptr,
+            src_ptr,
+            expert_bytes,
+            stream_ptr,
+        );
+        if st != cudarc::driver::sys::CUresult::CUDA_SUCCESS {
+            crate::bail!("dequantize_q4k_expert_f16: cuMemcpyDtoDAsync {:?}", st);
+        }
+    }
+
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (nb as u32, 1, 1),
+        block_dim: (32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let mut builder = func.builder();
+    builder.arg(&scratch_alloc);
+    builder.arg(&dst);
+    unsafe { builder.launch(cfg) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
 pub fn dequantize_q4_0_blob_f16(
     data: &CudaSlice<u8>,
     elem_count: usize,
