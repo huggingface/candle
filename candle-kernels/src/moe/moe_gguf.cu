@@ -262,8 +262,10 @@ extern "C" __global__ void moe_batched_gather_input_rows_f32_to_q81_kernel(
     const int K,
     const int topk
 ) {
-    // 36-byte Q8_1 block: __half2 ds + 32 int8 qs
-    struct __align__(8) block_q8_1_local {
+    // 36-byte Q8_1 block: __half2 ds + 32 int8 qs.
+    // NOTE: must NOT be __align__(8) — that would pad to 40 bytes and
+    // break the MMA kernel's struct stride (block_q8_1_mma is 36 bytes).
+    struct block_q8_1_local {
         __half2 ds;
         int8_t  qs[32];
     };

@@ -275,6 +275,7 @@ extern "C" __global__ void moe_q4k_mma_batched_gate_up_kernel(
             const float dot_out_a = (float)__shfl_sync(0xffffffff, dot2, src_lane_a);
             const float dot_out_b = (float)__shfl_sync(0xffffffff, dot2, src_lane_b);
 
+
             uint8_t sc_a, m_a, sc_b, m_b;
             if (wa_sb) get_scale_min_k4_dev(s, wa_sb->scales, sc_a, m_a); else { sc_a = m_a = 0; }
             if (wb_sb) get_scale_min_k4_dev(s, wb_sb->scales, sc_b, m_b); else { sc_b = m_b = 0; }
@@ -307,7 +308,7 @@ extern "C" __global__ void moe_q4k_mma_batched_gate_up_kernel(
     const int in_row_1 = n_base + 2 * tj + 1;
     __half * dst_base = (__half *) dst + (size_t)act_idx * max_n_e * two_n;
 
-    if (va && in_row_0 < n_e) {
+if (va && in_row_0 < n_e) {
         dst_base[(size_t)in_row_0 * two_n + row_a] = __float2half(acc_d_0);
     }
     if (va && in_row_1 < n_e) {
