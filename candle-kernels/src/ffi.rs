@@ -101,6 +101,24 @@ extern "C" {
         stream: i64,
     );
 
+    /// Phase 1 building block: device-side expert offsets from a sorted
+    /// `expert_ids` array. Emits `expert_offsets[num_experts + 1]` such
+    /// that `expert_offsets[e] = first index where expert_ids[i] >= e`
+    /// (and `expert_offsets[num_experts] = M`). Per-expert pair counts
+    /// are `expert_offsets[e+1] - expert_offsets[e]`.
+    ///
+    /// O(num_experts × log M) work; one block per expert, single-thread
+    /// binary search. Used to unblock per-expert dispatch in
+    /// `moe_gemm_gguf_*` for prefill batches where the current
+    /// per-(token,expert) kernel emits an O(num_tokens × topk) grid.
+    pub fn moe_expert_offsets(
+        sorted_expert_ids: *const i32,
+        expert_offsets: *mut i32,        // [num_experts + 1]
+        m: i32,
+        num_experts: i32,
+        stream: i64,
+    );
+
     /// Fused quantized matmul + residual add. `dst` must be PRE-INITIALIZED
     /// with the residual (e.g. via cuMemcpyDtoDAsync of an F32 tensor).
     /// Kernel atomicAdds matmul partial sums into `dst`. Output =

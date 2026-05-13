@@ -27,6 +27,60 @@ constexpr int ceil_div(int a, int b) {
     return (a + b - 1) / b;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 1 (Task #71) building block: device-side expert offsets.
+//
+// Given `sorted_expert_ids` (length M, sorted ascending so all pairs for
+// expert E are contiguous), emits `expert_offsets[num_experts + 1]` where
+// expert_offsets[e]   = index of first pair with expert_id == e
+// expert_offsets[e+1] = index of first pair with expert_id > e
+// (so expert_counts[e] = expert_offsets[e+1] - expert_offsets[e]).
+//
+// One block per expert slot; each block does an O(log M) lower-bound
+// binary search to find its starting index. Block `num_experts` writes
+// the sentinel M. Used by the per-expert dispatch alternative to the
+// `moe_gemm_gguf_*` kernels for prefill batches where the current
+// per-(token,expert) kernel emits an O(num_tokens × topk) grid.
+// ─────────────────────────────────────────────────────────────────────────
+extern "C" __global__ void moe_expert_offsets_kernel(
+    const int32_t* __restrict__ sorted_expert_ids,
+    int32_t* __restrict__ expert_offsets,
+    const int M,
+    const int num_experts
+) {
+    const int e = blockIdx.x;
+    if (e > num_experts) return;
+    if (threadIdx.x != 0) return;
+
+    if (e == num_experts) {
+        expert_offsets[num_experts] = M;
+        return;
+    }
+
+    // Lower bound: first i with sorted_expert_ids[i] >= e.
+    int lo = 0, hi = M;
+    while (lo < hi) {
+        const int mid = (lo + hi) >> 1;
+        if (sorted_expert_ids[mid] < e) lo = mid + 1;
+        else hi = mid;
+    }
+    expert_offsets[e] = lo;
+}
+
+extern "C" void moe_expert_offsets(
+    const int32_t* sorted_expert_ids,
+    int32_t* expert_offsets,
+    int M,
+    int num_experts,
+    cudaStream_t stream
+) {
+    dim3 grid(num_experts + 1, 1, 1);
+    dim3 block(1, 1, 1);
+    moe_expert_offsets_kernel<<<grid, block, 0, stream>>>(
+        sorted_expert_ids, expert_offsets, M, num_experts
+    );
+}
+
 namespace vllm_rs {
 
 /*
