@@ -1125,7 +1125,6 @@ pub fn mvq_via_pre_quantized_q8_1(
     if b_size == 1
         && qstor.dtype == GgmlDType::Q4K
         && ncols.is_multiple_of(256)
-        && std::env::var("LLMSERVER_Q4K_IMMA").map_or(false, |v| v == "1")
     {
         extern "C" {
             fn q4k_mmvq_imma(
@@ -1552,7 +1551,6 @@ fn mul_mat_vec_via_q8_1(
     if b_size == 1
         && dtype == GgmlDType::Q4K
         && ncols.is_multiple_of(256)
-        && std::env::var("LLMSERVER_Q4K_IMMA").map_or(false, |v| v == "1")
     {
         extern "C" {
             fn q4k_mmvq_imma(
