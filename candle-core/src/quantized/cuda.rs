@@ -1404,7 +1404,8 @@ pub fn dequantize_q8_0_blob_f16(
 /// re-use across experts within a layer requires the caller to
 /// allocate one buffer of size `rows × cols × 2 bytes`.
 pub fn dequantize_q4k_expert_f16(
-    data: &CudaSlice<u8>,
+    data_ptr: u64,
+    data_len_bytes: usize,
     expert_idx: usize,
     rows_per_expert: usize,
     cols: usize,
@@ -1424,27 +1425,20 @@ pub fn dequantize_q4k_expert_f16(
     let blocks_per_expert = elem_count / QK_K_LOCAL;
     let expert_bytes = blocks_per_expert * BLOCK_Q4K_BYTES;
     let expert_off_bytes = expert_idx * expert_bytes;
-    if expert_off_bytes + expert_bytes > data.len() {
+    if expert_off_bytes + expert_bytes > data_len_bytes {
         crate::bail!(
             "dequantize_q4k_expert_f16: expert {expert_idx} offset+len {} > data {}",
-            expert_off_bytes + expert_bytes, data.len()
+            expert_off_bytes + expert_bytes, data_len_bytes
         );
     }
 
-    // The kernel `dequantize_block_q4_K_f16` reads `nb` Q4_K blocks from
-    // the input pointer; we shift the pointer by the per-expert offset
-    // and launch with `nb = blocks_per_expert`.
     let nb = blocks_per_expert;
     let func = dev.get_or_load_func("dequantize_block_q4_K_f16", &candle_kernels::QUANTIZED)?;
     let dst = unsafe { dev.alloc::<f16>(elem_count)? };
 
-    // Get a fresh device pointer offset; we use a small scratch CudaSlice
-    // pointing at the offset, allocated by binding via the same stream.
-    // Allocate a copy of just this expert's bytes; saves us a kernel
-    // template change. ~9 MB copy per expert at gemma4:26b dims.
     dev.cuda_stream().context().bind_to_thread()?;
     let scratch_alloc = unsafe { dev.alloc::<u8>(expert_bytes) }?;
-    let src_ptr = data.device_ptr(data.stream()).0 + expert_off_bytes as u64;
+    let src_ptr = data_ptr + expert_off_bytes as u64;
     let dst_scratch_ptr = scratch_alloc.device_ptr(scratch_alloc.stream()).0;
     let stream_ptr = dev.cuda_stream().cu_stream();
     unsafe {
@@ -1467,7 +1461,8 @@ pub fn dequantize_q4k_expert_f16(
     let mut builder = func.builder();
     builder.arg(&scratch_alloc);
     builder.arg(&dst);
-    unsafe { builder.launch(cfg) }.w()?;
+    unsafe { builder.launch(cfg) }
+        .map_err(|e| crate::Error::Msg(format!("dequantize_q4k_expert_f16 launch: {e}")))?;
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 

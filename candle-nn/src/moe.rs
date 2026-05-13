@@ -257,7 +257,7 @@ pub fn moe_expert_offsets(_: &Tensor, _: usize) -> Result<Tensor> {
 ///     `fused_split_gelu_mul_f32` in `crates/server/.../fused_kernels.rs`.
 ///   - Scatter via atomicAdd or `index_add`.
 #[cfg(feature = "cuda")]
-#[allow(unused_variables, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
     inputs: &Tensor,
     gate_up_weights: &QTensor,
@@ -266,13 +266,160 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
     num_experts: usize,
     topk: usize,
 ) -> Result<Tensor> {
-    candle::bail!(
-        "moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat: step 3 of \
-         Phase 1 is not yet implemented. Use the existing \
-         moe_gemm_gguf_gate_up_gelu_mul_concat in the meantime. \
-         See docs/phase1_moe_implementation_plan.md for the dispatch \
-         contract this stub represents."
-    )
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::quantized::GgmlDType;
+    use candle::DType;
+    use half::f16;
+
+    // ── Validate inputs ─────────────────────────────────────────────
+    let (_num_real_tokens, k_in) = inputs.dims2()?;
+    let (gate_up_num_experts, two_n, k_w) = match gate_up_weights.shape().dims() {
+        [e, n, k] => (*e, *n, *k),
+        s => candle::bail!(
+            "moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat: weight must be 3D [num_experts, 2N, K], got {:?}",
+            s
+        ),
+    };
+    if gate_up_num_experts != num_experts {
+        candle::bail!(
+            "weight num_experts {gate_up_num_experts} != arg num_experts {num_experts}"
+        );
+    }
+    if k_in != k_w {
+        candle::bail!("input K {k_in} != weight K {k_w}");
+    }
+    if two_n % 2 != 0 {
+        candle::bail!("weight 2N dim {two_n} must be even");
+    }
+    if gate_up_weights.dtype() != GgmlDType::Q4K {
+        candle::bail!(
+            "moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat: Phase 1 step 3 \
+             currently only implements Q4_K weights, got {:?}",
+            gate_up_weights.dtype()
+        );
+    }
+    if inputs.dtype() != DType::F32 {
+        candle::bail!("input must be F32");
+    }
+    let n_out = two_n / 2;
+    let size_m = sorted_token_ids.elem_count();
+    let dev = inputs.device().as_cuda_device()?;
+    let stream_i64 = dev.cuda_stream().cu_stream() as i64;
+
+    // ── Resolve raw device pointers ─────────────────────────────────
+    let (inp_storage, inp_layout) = inputs.storage_and_layout();
+    let inputs_slice = match &*inp_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("inputs must be on CUDA"),
+    };
+
+    let (st_storage, _st_layout) = sorted_token_ids.storage_and_layout();
+    let st_slice = match &*st_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<i32>()?,
+        _ => candle::bail!("sorted_token_ids must be CUDA i32"),
+    };
+
+    let (off_storage, _off_layout) = expert_offsets.storage_and_layout();
+    let off_slice = match &*off_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<i32>()?,
+        _ => candle::bail!("expert_offsets must be CUDA i32"),
+    };
+    // Read offsets to host once — small (~num_experts+1 i32). The host-
+    // side loop below dispatches one cuBLAS GEMM per active expert.
+    let offsets_cpu: Vec<i32> = dev.cuda_stream()
+        .memcpy_dtov(off_slice)
+        .map_err(|e| candle::Error::Msg(format!("expert_offsets D2H: {e}")))?;
+    if offsets_cpu.len() < num_experts + 1 {
+        candle::bail!(
+            "expert_offsets length {} < num_experts+1 {}",
+            offsets_cpu.len(), num_experts + 1
+        );
+    }
+
+    // Resolve the raw u8 device pointer + length for the gate_up_weights
+    // blob; the per-expert dequant helper offsets into it.
+    let weight_data_ptr = gate_up_weights.device_ptr()? as u64;
+    // sizeof(block_q4_K) = 144, blocks per expert = 2N * K / QK_K
+    let weight_data_len_bytes = num_experts * (two_n * k_w / 256) * 144;
+
+    // ── Output: [size_m, N] F32 zero-init ───────────────────────────
+    let out_alloc = unsafe { dev.alloc_zeros::<f32>(size_m * n_out) }?;
+
+    // ── Per-active-expert loop ──────────────────────────────────────
+    for e in 0..num_experts {
+        let start = offsets_cpu[e] as usize;
+        let end = offsets_cpu[e + 1] as usize;
+        let n_e = end - start;
+        if n_e == 0 {
+            continue;
+        }
+
+        // (a) Gather: write F16 [n_e, K] from inputs by token_id/topk.
+        let gather_alloc = unsafe { dev.alloc::<f16>(n_e * k_in) }?;
+        let inp_ptr  = inputs_slice.device_ptr(inputs_slice.stream()).0 as *const f32;
+        let st_ptr   = st_slice.device_ptr(st_slice.stream()).0 as *const i32;
+        let gath_ptr = gather_alloc.device_ptr(gather_alloc.stream()).0
+            as *mut core::ffi::c_void;
+        unsafe {
+            ffi::moe_gather_input_rows_f32_to_f16(
+                inp_ptr, st_ptr, gath_ptr,
+                n_e as i32, start as i32, k_in as i32, topk as i32,
+                stream_i64,
+            );
+        }
+
+        // (b) Dequantize expert e's gate_up weights: F16 [2N, K].
+        let weight_storage = candle::quantized::cuda::dequantize_q4k_expert_f16(
+            weight_data_ptr, weight_data_len_bytes, e, two_n, k_w, dev,
+        )?;
+        let weight_tensor = Tensor::from_storage(
+            candle::Storage::Cuda(weight_storage),
+            (two_n, k_w),
+            candle::op::BackpropOp::none(),
+            false,
+        );
+
+        // (c) cuBLAS GEMM: [n_e, 2N] = gathered @ weight^T.
+        //     Wrap the gathered F16 alloc into a Tensor, matmul against
+        //     weight_tensor.t(). candle's Tensor::matmul routes F16
+        //     through gemm_strided_batched_f16 which uses tensor cores.
+        let gather_storage = candle::CudaStorage::wrap_cuda_slice(gather_alloc, dev.clone());
+        let gather_tensor = Tensor::from_storage(
+            candle::Storage::Cuda(gather_storage),
+            (n_e, k_in),
+            candle::op::BackpropOp::none(),
+            false,
+        );
+        let gemm_out = gather_tensor.matmul(&weight_tensor.t()?)?;
+        // gemm_out shape: [n_e, 2N] F16.
+
+        // (d) GELU·mul + scatter into out[sorted_token_ids[range], :].
+        let (gemm_storage, _gemm_layout) = gemm_out.storage_and_layout();
+        let gemm_slice = match &*gemm_storage {
+            candle::Storage::Cuda(c) => c.as_cuda_slice::<f16>()?,
+            _ => candle::bail!("gemm_out must be on CUDA F16"),
+        };
+        let gemm_ptr = gemm_slice.device_ptr(gemm_slice.stream()).0
+            as *const core::ffi::c_void;
+        let out_ptr  = out_alloc.device_ptr(out_alloc.stream()).0 as *mut f32;
+        unsafe {
+            ffi::moe_gelu_mul_scatter_f16_to_f32(
+                gemm_ptr, st_ptr, out_ptr,
+                n_e as i32, start as i32, n_out as i32, stream_i64,
+            );
+        }
+        drop(gemm_storage);
+    }
+
+    // ── Wrap output ────────────────────────────────────────────────
+    drop(inp_storage); drop(st_storage); drop(off_storage);
+    let storage = candle::CudaStorage::wrap_cuda_slice(out_alloc, dev.clone());
+    Ok(Tensor::from_storage(
+        candle::Storage::Cuda(storage),
+        (size_m, n_out),
+        candle::op::BackpropOp::none(),
+        false,
+    ))
 }
 
 #[cfg(feature = "cuda")]
