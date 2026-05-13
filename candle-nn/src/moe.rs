@@ -164,6 +164,65 @@ pub fn moe_gemm(
     candle::bail!("moe_gemm is only implemented for the cuda backend")
 }
 
+/// Phase 1 step-1: device-side expert offsets from a sorted expert_ids
+/// array. Returns a `Tensor` of shape `[num_experts + 1]` i32 where
+/// `offsets[e] = first index i with expert_ids[i] >= e` and
+/// `offsets[num_experts] = m`. Used to unblock per-expert dispatch
+/// in the MoE GEMM forward path — for prefill batches where the
+/// existing per-(token,expert) kernel emits a huge grid.
+///
+/// `sorted_expert_ids` must be a 1-D contiguous CUDA tensor of i32
+/// (u32 also accepted at the call site if cast first) sorted ascending.
+#[cfg(feature = "cuda")]
+pub fn moe_expert_offsets(
+    sorted_expert_ids: &Tensor,
+    num_experts: usize,
+) -> Result<Tensor> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    if sorted_expert_ids.dims().len() != 1 {
+        candle::bail!(
+            "moe_expert_offsets: expert_ids must be 1-D, got {:?}",
+            sorted_expert_ids.shape()
+        );
+    }
+    let m = sorted_expert_ids.elem_count();
+    let dev = sorted_expert_ids.device().as_cuda_device()?;
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    let (e_storage, _) = sorted_expert_ids.storage_and_layout();
+    let e_slice = match &*e_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<i32>()?,
+        _ => candle::bail!("moe_expert_offsets: sorted_expert_ids must be on CUDA"),
+    };
+
+    let offsets_alloc = unsafe { dev.alloc::<i32>(num_experts + 1) }?;
+    let e_ptr = e_slice.device_ptr(e_slice.stream()).0 as *const i32;
+    let off_ptr = offsets_alloc.device_ptr(offsets_alloc.stream()).0 as *mut i32;
+    unsafe {
+        ffi::moe_expert_offsets(
+            e_ptr,
+            off_ptr,
+            m as i32,
+            num_experts as i32,
+            stream,
+        );
+    }
+
+    use candle::op::BackpropOp;
+    let storage = candle::CudaStorage::wrap_cuda_slice(offsets_alloc, dev.clone());
+    Ok(Tensor::from_storage(
+        candle::Storage::Cuda(storage),
+        (num_experts + 1,),
+        BackpropOp::none(),
+        false,
+    ))
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn moe_expert_offsets(_: &Tensor, _: usize) -> Result<Tensor> {
+    candle::bail!("moe_expert_offsets is cuda-only")
+}
+
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn moe_gemm_gguf(
