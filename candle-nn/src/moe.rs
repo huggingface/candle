@@ -508,6 +508,209 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
     ))
 }
 
+/// Phase 1 step-5 (Q4_K MMA direct path): per-expert batched
+/// `mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32` GEMM. Same
+/// signature and output contract as
+/// `moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat` but skips the
+/// F16 dequant intermediate (~3 GB on gemma4:26b prefill) by consuming
+/// Q4_K weights directly with tensor cores and Q8_1-quantized inputs.
+///
+/// Pipeline:
+///   1. F32 inputs → Q8_1 `[N_active, max_n_e, K/32]` (one batched
+///      gather+quantize launch).
+///   2. Q4_K weights × Q8_1 inputs → F16 logits `[N_active, max_n_e, 2N]`
+///      (one batched MMA launch, one m16n8k32 INT8 mma.sync per K-tile).
+///   3. F16 logits → F32 `[size_m, N]` via GELU·mul + scatter (one
+///      batched launch — same kernel as the F16-dequant path).
+///
+/// Memory: Q8_1 input slab is ~1.06 bytes/elem (vs F16 gather's 2
+/// bytes/elem), so workspace is ~half the F16 path. No F16 weight
+/// materialization — saves the ~3 GB intermediate.
+///
+/// Status: kernel + FFI shipped (commit 9b081239). This wrapper wires
+/// the orchestrator but has NOT been validated against the dp4a
+/// reference yet. Numerical correctness needs a side-by-side check
+/// before swapping into the dispatch path.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat_mma(
+    inputs: &Tensor,
+    gate_up_weights: &QTensor,
+    sorted_token_ids: &Tensor,
+    expert_offsets: &Tensor,
+    num_experts: usize,
+    topk: usize,
+) -> Result<Tensor> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::quantized::GgmlDType;
+    use candle::DType;
+
+    let (_num_real_tokens, k_in) = inputs.dims2()?;
+    let (gate_up_num_experts, two_n, k_w) = match gate_up_weights.shape().dims() {
+        [e, n, k] => (*e, *n, *k),
+        s => candle::bail!(
+            "moe_gemm_gguf_per_expert_mma: weight must be 3D [num_experts, 2N, K], got {:?}",
+            s
+        ),
+    };
+    if gate_up_num_experts != num_experts {
+        candle::bail!(
+            "weight num_experts {gate_up_num_experts} != arg num_experts {num_experts}"
+        );
+    }
+    if k_in != k_w {
+        candle::bail!("input K {k_in} != weight K {k_w}");
+    }
+    if k_in % 256 != 0 {
+        candle::bail!("Q4_K MMA path requires K % 256 == 0, got K={k_in}");
+    }
+    if gate_up_weights.dtype() != GgmlDType::Q4K {
+        candle::bail!(
+            "moe_gemm_gguf_per_expert_mma: only Q4_K weights supported, got {:?}",
+            gate_up_weights.dtype()
+        );
+    }
+    if inputs.dtype() != DType::F32 {
+        candle::bail!("input must be F32");
+    }
+    let n_out = two_n / 2;
+    let size_m = sorted_token_ids.elem_count();
+    let dev = inputs.device().as_cuda_device()?;
+    let stream_i64 = dev.cuda_stream().cu_stream() as i64;
+
+    let (inp_storage, _) = inputs.storage_and_layout();
+    let inputs_slice = match &*inp_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("inputs must be on CUDA"),
+    };
+    let (st_storage, _) = sorted_token_ids.storage_and_layout();
+    let st_slice = match &*st_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("sorted_token_ids must be CUDA u32"),
+    };
+    let (off_storage, _) = expert_offsets.storage_and_layout();
+    let off_slice = match &*off_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<i32>()?,
+        _ => candle::bail!("expert_offsets must be CUDA i32"),
+    };
+    let offsets_cpu: Vec<i32> = dev.cuda_stream()
+        .memcpy_dtov(off_slice)
+        .map_err(|e| candle::Error::Msg(format!("expert_offsets D2H: {e}")))?;
+
+    let weight_data_ptr = gate_up_weights.device_ptr()? as u64;
+
+    let out_alloc = unsafe { dev.alloc_zeros::<f32>(size_m * n_out) }?;
+
+    let mut max_n_e: usize = 0;
+    for e in 0..num_experts {
+        let n_e = (offsets_cpu[e + 1] - offsets_cpu[e]) as usize;
+        if n_e > max_n_e { max_n_e = n_e; }
+    }
+    if max_n_e == 0 {
+        drop(inp_storage); drop(st_storage); drop(off_storage);
+        let storage = candle::CudaStorage::wrap_cuda_slice(out_alloc, dev.clone());
+        return Ok(Tensor::from_storage(
+            candle::Storage::Cuda(storage),
+            (size_m, n_out),
+            candle::op::BackpropOp::none(),
+            false,
+        ));
+    }
+
+    let mut active_expert_ids: Vec<i32> = Vec::with_capacity(num_experts);
+    for e in 0..num_experts {
+        if offsets_cpu[e + 1] > offsets_cpu[e] {
+            active_expert_ids.push(e as i32);
+        }
+    }
+    let n_active = active_expert_ids.len();
+
+    // Workspaces:
+    //   q81_alloc:   [N_active × max_n_e × K/32] block_q8_1 = 36 bytes/block
+    //   gemm_alloc:  [N_active × max_n_e × 2N] F16 (output of MMA kernel,
+    //                input to scatter+gelu)
+    let num_super_blocks = k_in / 32;
+    let q81_total_bytes  = n_active * max_n_e * num_super_blocks * 36;
+    let gemm_total_elems = n_active * max_n_e * two_n;
+    const MAX_WORKSPACE_BYTES: usize = 4 * 1024 * 1024 * 1024;
+    if q81_total_bytes > MAX_WORKSPACE_BYTES || gemm_total_elems * 2 > MAX_WORKSPACE_BYTES {
+        candle::bail!(
+            "moe_gemm_gguf_per_expert_mma: workspace > 4 GB — caller should use dp4a path"
+        );
+    }
+    let q81_alloc  = dev.alloc_zeros::<u8>(q81_total_bytes)?;
+    let gemm_alloc = dev.alloc_zeros::<half::f16>(gemm_total_elems)?;
+
+    let active_ids_alloc = dev.cuda_stream()
+        .memcpy_stod(&active_expert_ids)
+        .map_err(|e| candle::Error::Msg(format!("active_expert_ids H2D: {e}")))?;
+
+    // Step 1: F32 → Q8_1 batched gather+quantize.
+    {
+        let inp_ptr  = inputs_slice.device_ptr(inputs_slice.stream()).0 as *const f32;
+        let st_ptr   = st_slice.device_ptr(st_slice.stream()).0 as *const i32;
+        let act_ptr  = active_ids_alloc.device_ptr(active_ids_alloc.stream()).0 as *const i32;
+        let off_ptr  = off_slice.device_ptr(off_slice.stream()).0 as *const i32;
+        let q81_ptr  = q81_alloc.device_ptr(q81_alloc.stream()).0 as *mut core::ffi::c_void;
+        unsafe {
+            ffi::moe_batched_gather_input_rows_f32_to_q81(
+                inp_ptr, st_ptr, act_ptr, off_ptr, q81_ptr,
+                n_active as i32, max_n_e as i32, k_in as i32, topk as i32,
+                stream_i64,
+            );
+        }
+    }
+
+    // Step 2: Q4_K × Q8_1 batched MMA.
+    {
+        let act_ptr   = active_ids_alloc.device_ptr(active_ids_alloc.stream()).0 as *const i32;
+        let off_ptr   = off_slice.device_ptr(off_slice.stream()).0 as *const i32;
+        let w_ptr     = weight_data_ptr as *const core::ffi::c_void;
+        let q81_ptr   = q81_alloc.device_ptr(q81_alloc.stream()).0 as *const core::ffi::c_void;
+        let gemm_ptr  = gemm_alloc.device_ptr(gemm_alloc.stream()).0 as *mut core::ffi::c_void;
+        unsafe {
+            ffi::moe_q4k_mma_batched_gate_up(
+                w_ptr, q81_ptr, act_ptr, off_ptr, gemm_ptr,
+                num_experts as i32, n_active as i32, max_n_e as i32,
+                two_n as i32, k_in as i32,
+                stream_i64,
+            );
+        }
+    }
+
+    // Step 3: F16 logits → F32 output via GELU·mul + scatter.
+    {
+        let st_ptr   = st_slice.device_ptr(st_slice.stream()).0 as *const i32;
+        let act_ptr  = active_ids_alloc.device_ptr(active_ids_alloc.stream()).0 as *const i32;
+        let off_ptr  = off_slice.device_ptr(off_slice.stream()).0 as *const i32;
+        let gemm_ptr = gemm_alloc.device_ptr(gemm_alloc.stream()).0 as *const core::ffi::c_void;
+        let out_ptr  = out_alloc.device_ptr(out_alloc.stream()).0 as *mut f32;
+        unsafe {
+            ffi::moe_batched_gelu_mul_scatter_f16_to_f32(
+                gemm_ptr, st_ptr, act_ptr, off_ptr, out_ptr,
+                n_active as i32, max_n_e as i32, n_out as i32,
+                stream_i64,
+            );
+        }
+    }
+
+    drop(inp_storage); drop(st_storage); drop(off_storage);
+    let storage = candle::CudaStorage::wrap_cuda_slice(out_alloc, dev.clone());
+    Ok(Tensor::from_storage(
+        candle::Storage::Cuda(storage),
+        (size_m, n_out),
+        candle::op::BackpropOp::none(),
+        false,
+    ))
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat_mma(
+    _: &Tensor, _: &QTensor, _: &Tensor, _: &Tensor, _: usize, _: usize,
+) -> Result<Tensor> {
+    candle::bail!("moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat_mma is cuda-only")
+}
+
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn moe_gemm_gguf(
