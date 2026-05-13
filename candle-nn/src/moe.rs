@@ -372,14 +372,44 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
         ));
     }
 
-    // Persistent workspaces sized for the largest expert's batch. Each
-    // iteration writes into the prefix [0..n_e × ...], the rest is
-    // unused but consumes no extra bandwidth.
-    let gather_max = unsafe { dev.alloc::<f16>(max_n_e * k_in) }?;
-    let weight_max = unsafe { dev.alloc::<f16>(two_n * k_w) }?;
-
-    // ── Per-active-expert loop ──────────────────────────────────────
+    // ── Build active-expert list on host ────────────────────────────
+    let mut active_expert_ids: Vec<i32> = Vec::with_capacity(num_experts);
     for e in 0..num_experts {
+        if offsets_cpu[e + 1] > offsets_cpu[e] {
+            active_expert_ids.push(e as i32);
+        }
+    }
+    let n_active = active_expert_ids.len();
+
+    // Persistent workspaces:
+    //   gather_max: [max_n_e × K] F16 — reused across iters
+    //   weights_all: [n_active × 2N × K] F16 — ONE batched dequant fill
+    let gather_max = unsafe { dev.alloc::<f16>(max_n_e * k_in) }?;
+    let weights_all = unsafe { dev.alloc::<f16>(n_active * two_n * k_w) }?;
+
+    // ── Step (b'): batched dequant of all active experts in ONE launch.
+    // Replaces the per-iter dequant kernel + cuMemcpyDtoDAsync from the
+    // hoisted-workspace form. Active expert ids must live on device.
+    let active_ids_alloc = dev.cuda_stream()
+        .memcpy_stod(&active_expert_ids)
+        .map_err(|e| candle::Error::Msg(format!("active_expert_ids H2D: {e}")))?;
+    {
+        let act_ptr = active_ids_alloc.device_ptr(active_ids_alloc.stream()).0 as *const i32;
+        let wts_ptr = weights_all.device_ptr(weights_all.stream()).0 as *mut core::ffi::c_void;
+        let wts_data_ptr = weight_data_ptr as *const core::ffi::c_void;
+        unsafe {
+            ffi::moe_batched_dequant_q4k_f16(
+                wts_data_ptr, act_ptr, wts_ptr,
+                n_active as i32, two_n as i32, k_w as i32,
+                stream_i64,
+            );
+        }
+        let _ = weight_data_len_bytes; // kept for the dequant_q4k_expert_f16 helper variant
+    }
+
+    // ── Per-active-expert loop (host-side; GEMM still per-expert) ──
+    for (act_idx, &expert_i32) in active_expert_ids.iter().enumerate() {
+        let e = expert_i32 as usize;
         let start = offsets_cpu[e] as usize;
         let end = offsets_cpu[e + 1] as usize;
         let n_e = end - start;
@@ -401,23 +431,19 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
             );
         }
 
-        // (b) Dequantize expert e's gate_up weights into the persistent
-        //     weight_max workspace.
-        let weight_ptr = weight_max.device_ptr(weight_max.stream()).0 as u64;
-        candle::quantized::cuda::dequantize_q4k_expert_into_f16(
-            weight_data_ptr, weight_data_len_bytes, e, two_n, k_w,
-            weight_ptr, dev,
-        )?;
+        // (b) Weights for this expert: slice into the pre-dequantized
+        //     batched workspace at offset `act_idx × 2N × K`.
+        let weight_offset_elems = act_idx * two_n * k_w;
+        let _ = weight_offset_elems;
 
-        // (c) cuBLAS GEMM: [n_e, 2N] = gather_max[..n_e × k_in] @ weight_max^T.
-        //     Wrap workspaces as tensors for the duration of the matmul.
-        //     SAFETY: cloning a CudaSlice bumps the underlying refcount;
-        //     no aliased mutability since both views are read-only into
-        //     the matmul.
+        // (c) cuBLAS GEMM: [n_e, 2N] = gather_max[..n_e × k_in] @ weights_all[act_idx]^T.
+        //     The weight slab for this expert is a contiguous slice of
+        //     the batched-dequant workspace at offset (act_idx * two_n * k_w)
+        //     F16 elements.
         let gather_clone = gather_max.try_clone()
             .map_err(|e| candle::Error::Msg(format!("gather workspace clone: {e}")))?;
-        let weight_clone = weight_max.try_clone()
-            .map_err(|e| candle::Error::Msg(format!("weight workspace clone: {e}")))?;
+        let weights_clone = weights_all.try_clone()
+            .map_err(|e| candle::Error::Msg(format!("weights workspace clone: {e}")))?;
         let gather_storage = candle::CudaStorage::wrap_cuda_slice(gather_clone, dev.clone());
         let gather_tensor = Tensor::from_storage(
             candle::Storage::Cuda(gather_storage),
@@ -426,13 +452,14 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
             false,
         );
         let gather_tensor = gather_tensor.narrow(0, 0, n_e)?;
-        let weight_storage = candle::CudaStorage::wrap_cuda_slice(weight_clone, dev.clone());
-        let weight_tensor = Tensor::from_storage(
-            candle::Storage::Cuda(weight_storage),
-            (two_n, k_w),
+        let weights_storage = candle::CudaStorage::wrap_cuda_slice(weights_clone, dev.clone());
+        let weights_tensor = Tensor::from_storage(
+            candle::Storage::Cuda(weights_storage),
+            (n_active, two_n, k_w),
             candle::op::BackpropOp::none(),
             false,
         );
+        let weight_tensor = weights_tensor.narrow(0, act_idx, 1)?.squeeze(0)?;  // [2N, K]
         let gemm_out = gather_tensor.matmul(&weight_tensor.t()?)?;
         // gemm_out shape: [n_e, 2N] F16.
 
