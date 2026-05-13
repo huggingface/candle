@@ -149,6 +149,41 @@ extern "C" {
         stream: i64,
     );
 
+    /// Phase 1 step-4 batched gather: writes a padded
+    /// `[N_active, max_n_e, K]` F16 workspace from F32 inputs across
+    /// ALL active experts in ONE launch. Each (act_idx, row) reads
+    /// `sorted_token_ids[expert_offsets[active_expert_ids[act_idx]] + row]`,
+    /// divides by topk, and copies the input row in. Padding rows
+    /// (row ≥ n_e[act_idx]) are skipped — caller must pre-zero out.
+    pub fn moe_batched_gather_input_rows_f32_to_f16(
+        inputs: *const f32,
+        sorted_token_ids: *const i32,
+        active_expert_ids: *const i32,
+        expert_offsets: *const i32,
+        out_f16: *mut core::ffi::c_void,
+        n_active: i32,
+        max_n_e: i32,
+        k: i32,
+        topk: i32,
+        stream: i64,
+    );
+
+    /// Phase 1 step-4 batched scatter: reads the padded GEMM output
+    /// `[N_active, max_n_e, 2N]` F16, applies `gelu_tanh(gate)·up` per
+    /// valid row, and scatters into `out[sorted_token_ids[...], :]`
+    /// F32 — all active experts in ONE launch.
+    pub fn moe_batched_gelu_mul_scatter_f16_to_f32(
+        in_f16: *const core::ffi::c_void,
+        sorted_token_ids: *const i32,
+        active_expert_ids: *const i32,
+        expert_offsets: *const i32,
+        out_f32: *mut f32,
+        n_active: i32,
+        max_n_e: i32,
+        n: i32,
+        stream: i64,
+    );
+
     /// Phase 1 step-4 batched dequant: dequantizes N_active experts'
     /// `[rows_per_expert, cols]` Q4_K weight slabs into a contiguous
     /// `[n_active, rows_per_expert, cols]` F16 workspace in ONE launch.

@@ -181,6 +181,134 @@ extern "C" void moe_gelu_mul_scatter_f16_to_f32(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Phase 1 step-4: batched gather across all active experts.
+//
+// Writes a padded `[N_active, max_n_e, K]` F16 workspace where row
+// `(act_idx, m)` is `inputs[sorted_token_ids[expert_offsets[expert_ids[act_idx]] + m] / topk]`
+// for m < n_e[act_idx], or zero for m ≥ n_e[act_idx] (caller pre-zeroes).
+//
+// One launch processes ALL active experts:
+//   gridDim.x = max_n_e × K (block per output row; could be tightened)
+//   gridDim.y = N_active
+// Each block reads its expert's pair index, divides by topk, gathers.
+// ─────────────────────────────────────────────────────────────────────────
+extern "C" __global__ void moe_batched_gather_input_rows_f32_to_f16_kernel(
+    const float* __restrict__ inputs,            // [num_real_tokens, K]
+    const int32_t* __restrict__ sorted_token_ids, // [size_m]
+    const int32_t* __restrict__ active_expert_ids,// [N_active]
+    const int32_t* __restrict__ expert_offsets,   // [num_experts + 1]
+    __half* __restrict__ out,                    // [N_active, max_n_e, K]
+    const int max_n_e,
+    const int K,
+    const int topk
+) {
+    const int act_idx = blockIdx.y;
+    const int row     = blockIdx.x;
+    const int expert  = active_expert_ids[act_idx];
+    const int start   = expert_offsets[expert];
+    const int end     = expert_offsets[expert + 1];
+    const int n_e     = end - start;
+
+    if (row >= n_e) return;  // Padding rows stay at the caller-zeroed value.
+
+    const int pair_idx    = sorted_token_ids[start + row];
+    const int real_token  = pair_idx / topk;
+    const float* __restrict__ src = inputs + (size_t)real_token * K;
+    __half*       __restrict__ dst = out
+        + ((size_t)act_idx * max_n_e + row) * K;
+    for (int i = threadIdx.x; i < K; i += blockDim.x) {
+        dst[i] = __float2half(src[i]);
+    }
+}
+
+extern "C" void moe_batched_gather_input_rows_f32_to_f16(
+    const float* inputs,
+    const int32_t* sorted_token_ids,
+    const int32_t* active_expert_ids,
+    const int32_t* expert_offsets,
+    void* out_f16,
+    int n_active,
+    int max_n_e,
+    int K,
+    int topk,
+    cudaStream_t stream
+) {
+    if (n_active <= 0 || max_n_e <= 0) return;
+    const int block = (K < 256) ? K : 256;
+    dim3 grid(max_n_e, n_active, 1);
+    dim3 blk(block, 1, 1);
+    moe_batched_gather_input_rows_f32_to_f16_kernel<<<grid, blk, 0, stream>>>(
+        inputs, sorted_token_ids, active_expert_ids, expert_offsets,
+        (__half*)out_f16, max_n_e, K, topk
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 1 step-4: batched GELU·mul + scatter across all active experts.
+//
+// Reads the padded GEMM output `[N_active, max_n_e, 2N]` F16 and for each
+// valid `(act_idx, m)` row (m < n_e[act_idx]) computes
+//   gelu(in[..N]) * in[N..2N]
+// then scatters into `out[sorted_token_ids[start + m], :]` F32.
+//
+// One launch processes ALL active experts. Padding rows (m ≥ n_e[act_idx])
+// produce no output; the caller has pre-zeroed the F32 output buffer.
+// ─────────────────────────────────────────────────────────────────────────
+extern "C" __global__ void moe_batched_gelu_mul_scatter_f16_to_f32_kernel(
+    const __half* __restrict__ in,                // [N_active, max_n_e, 2N]
+    const int32_t* __restrict__ sorted_token_ids,  // [size_m]
+    const int32_t* __restrict__ active_expert_ids, // [N_active]
+    const int32_t* __restrict__ expert_offsets,    // [num_experts + 1]
+    float* __restrict__ out,                       // [size_m, N]
+    const int max_n_e,
+    const int N
+) {
+    const int act_idx = blockIdx.y;
+    const int row     = blockIdx.x;
+    const int expert  = active_expert_ids[act_idx];
+    const int start   = expert_offsets[expert];
+    const int end     = expert_offsets[expert + 1];
+    const int n_e     = end - start;
+    if (row >= n_e) return;
+
+    const int two_n = N << 1;
+    const __half* __restrict__ row_in = in
+        + ((size_t)act_idx * max_n_e + row) * two_n;
+    const int pair_idx = sorted_token_ids[start + row];
+    float* __restrict__ row_out = out + (size_t)pair_idx * N;
+
+    const float k0 = 0.7978845608028654f;       // sqrt(2/pi)
+    const float k1 = 0.044715f;
+    for (int n = threadIdx.x; n < N; n += blockDim.x) {
+        const float g = __half2float(row_in[n]);
+        const float u = __half2float(row_in[N + n]);
+        const float gelu = 0.5f * g * (1.0f + tanhf(k0 * (g + k1 * g * g * g)));
+        row_out[n] = gelu * u;
+    }
+}
+
+extern "C" void moe_batched_gelu_mul_scatter_f16_to_f32(
+    const void* in_f16,
+    const int32_t* sorted_token_ids,
+    const int32_t* active_expert_ids,
+    const int32_t* expert_offsets,
+    float* out_f32,
+    int n_active,
+    int max_n_e,
+    int N,
+    cudaStream_t stream
+) {
+    if (n_active <= 0 || max_n_e <= 0) return;
+    const int block = (N < 256) ? N : 256;
+    dim3 grid(max_n_e, n_active, 1);
+    dim3 blk(block, 1, 1);
+    moe_batched_gelu_mul_scatter_f16_to_f32_kernel<<<grid, blk, 0, stream>>>(
+        (const __half*)in_f16, sorted_token_ids, active_expert_ids,
+        expert_offsets, out_f32, max_n_e, N
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Phase 1 step-4 proper: batched per-expert Q4_K → F16 dequantize.
 //
 // Replaces the per-expert dequant loop with a SINGLE kernel launch that
