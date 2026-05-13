@@ -240,7 +240,11 @@ extern "C" __global__ void moe_q4k_mma_batched_gate_up_kernel(
             }
 
             // B fragment: this lane loads input row (n_base + g)'s K-tile s.
-            // Each input row is num_super super-blocks × 8 Q8_1 blocks.
+            // The K-permutation matches IMMA's A-fragment loading (K =
+            // 8tj..8tj+3 in slot b0, K = 8tj+4..8tj+7 in slot b1). What
+            // matters for the mma op is that A and B's fragment slots
+            // hold MATCHING K positions per lane — both at K=8tj..8tj+7
+            // here.
             const block_q8_1_mma * yb_my = v_in
                 ? y_expert + (size_t)g * num_super * 8 + isb * 8 + s
                 : nullptr;
