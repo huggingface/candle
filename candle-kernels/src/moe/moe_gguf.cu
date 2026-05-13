@@ -180,6 +180,113 @@ extern "C" void moe_gelu_mul_scatter_f16_to_f32(
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 1 step-4 proper: batched per-expert Q4_K → F16 dequantize.
+//
+// Replaces the per-expert dequant loop with a SINGLE kernel launch that
+// dequantizes ALL active experts' [2N, K] slabs into a contiguous
+// [N_active, 2N, K] F16 workspace. Block layout:
+//   gridDim.x = blocks_per_expert = 2N × K / 256
+//   gridDim.y = N_active
+//   blockDim.x = 32 (one thread per Q4_K nibble pair)
+//
+// Each block dequantizes one Q4_K super-block (256 elements) for one
+// active expert. The expert is looked up via active_expert_ids[blockIdx.y]
+// so callers can pass a sparse list of which experts to materialise.
+//
+// The inner dequant math is the standard Q4_K layout:
+//   dall = low(dm), dmin = high(dm); per-half scale/min via 6-bit packed
+//   scales[12]; 256 elements produced by interleaved nibble lanes.
+//
+// One launch replaces N_active separate dequant launches — eliminates
+// the per-expert kernel-launch overhead that the hoisted-workspace form
+// still had.
+// ─────────────────────────────────────────────────────────────────────────
+namespace moe_batched_q4k {
+
+#define QK_K_BATCH 256
+
+typedef struct {
+    __half2 dm;
+    uint8_t scales[12];
+    uint8_t qs[128];
+} block_q4_K_b;
+
+static_assert(sizeof(block_q4_K_b) == 4 + 12 + 128, "block_q4_K_b size");
+
+__device__ __forceinline__ void get_scale_min_k4_b(
+    int j, const uint8_t * q, uint8_t & d, uint8_t & m
+) {
+    if (j < 4) {
+        d = q[j] & 63;
+        m = q[j + 4] & 63;
+    } else {
+        d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4);
+        m = (q[j+4] >>  4) | ((q[j-0] >> 6) << 4);
+    }
+}
+
+}
+
+extern "C" __global__ void moe_batched_dequant_q4k_f16_kernel(
+    const void * __restrict__ all_weights,
+    const int32_t * __restrict__ active_expert_ids,
+    __half * __restrict__ out,
+    int blocks_per_expert
+) {
+    using namespace moe_batched_q4k;
+    const int block_idx = blockIdx.x;
+    const int act_idx   = blockIdx.y;
+    const int tid       = threadIdx.x;
+
+    const int expert = active_expert_ids[act_idx];
+    const block_q4_K_b * x = (const block_q4_K_b *) all_weights
+                            + (size_t)expert * blocks_per_expert
+                            + block_idx;
+    __half * y = out + ((size_t)act_idx * blocks_per_expert + block_idx) * QK_K_BATCH;
+
+    const int il = tid / 8;
+    const int ir = tid % 8;
+    const int is = 2 * il;
+    const int n  = 4;
+
+    const float dall = __low2half(x->dm);
+    const float dmin = __high2half(x->dm);
+    const uint8_t * q = x->qs + 32 * il + n * ir;
+
+    uint8_t sc, m;
+    get_scale_min_k4_b(is + 0, x->scales, sc, m);
+    const float d1 = dall * sc;
+    const float m1 = dmin * m;
+    get_scale_min_k4_b(is + 1, x->scales, sc, m);
+    const float d2 = dall * sc;
+    const float m2 = dmin * m;
+
+    __half * y_row = y + 64 * il + n * ir;
+    for (int l = 0; l < n; ++l) {
+        y_row[l + 0 ] = __float2half(d1 * (float)(q[l] & 0xF) - m1);
+        y_row[l + 32] = __float2half(d2 * (float)(q[l] >>  4) - m2);
+    }
+}
+
+extern "C" void moe_batched_dequant_q4k_f16(
+    const void* all_weights,
+    const int32_t* active_expert_ids,
+    void* out_f16,
+    int n_active,
+    int rows_per_expert,
+    int cols,
+    cudaStream_t stream
+) {
+    if (n_active <= 0) return;
+    const int blocks_per_expert = (rows_per_expert * cols) / QK_K_BATCH;
+    dim3 grid(blocks_per_expert, n_active, 1);
+    dim3 blk(32, 1, 1);
+    moe_batched_dequant_q4k_f16_kernel<<<grid, blk, 0, stream>>>(
+        all_weights, active_expert_ids, (__half*)out_f16, blocks_per_expert
+    );
+}
+
 namespace vllm_rs {
 
 /*

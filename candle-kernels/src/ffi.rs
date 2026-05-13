@@ -149,6 +149,24 @@ extern "C" {
         stream: i64,
     );
 
+    /// Phase 1 step-4 batched dequant: dequantizes N_active experts'
+    /// `[rows_per_expert, cols]` Q4_K weight slabs into a contiguous
+    /// `[n_active, rows_per_expert, cols]` F16 workspace in ONE launch.
+    /// Replaces N_active separate dequant launches and the per-call
+    /// scratch-buffer copies the host-loop variant required.
+    /// `active_expert_ids` is a host-supplied i32 array indicating which
+    /// experts to materialise (e.g. the sparse list of experts with at
+    /// least one token assigned).
+    pub fn moe_batched_dequant_q4k_f16(
+        all_weights: *const core::ffi::c_void,
+        active_expert_ids: *const i32,
+        out_f16: *mut core::ffi::c_void,
+        n_active: i32,
+        rows_per_expert: i32,
+        cols: i32,
+        stream: i64,
+    );
+
     /// Fused quantized matmul + residual add. `dst` must be PRE-INITIALIZED
     /// with the residual (e.g. via cuMemcpyDtoDAsync of an F32 tensor).
     /// Kernel atomicAdds matmul partial sums into `dst`. Output =
