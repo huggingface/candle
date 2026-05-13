@@ -324,6 +324,262 @@ extern "C" __global__ void moe_q4k_mma_batched_gate_up_kernel(
     (void)num_experts;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// FUSED kernel: gate||up MMA + GELU·mul + scatter, all in one launch.
+// Eliminates the F32 [N_active, max_n_e, 2N] intermediate buffer that
+// the non-fused variant materialised. Each block:
+//   1. Computes the gate output [16, 8] for weight rows [m_tile*16..+15]
+//   2. Computes the up   output [16, 8] for weight rows [N + m_tile*16..]
+//   3. For each output position: y = gelu(gate) * up
+//   4. Scatters to F32 [size_m, N] at row sorted_token_ids[start + in_row]
+//
+// Grid:
+//   gridDim.x = ceil(N/16)            (16 OUTPUT-N rows per block — half of 2N)
+//   gridDim.y = ceil(max_n_e/8)
+//   gridDim.z = N_active
+// blockDim.x = 32 (one warp)
+// ─────────────────────────────────────────────────────────────────────────
+extern "C" __global__ void moe_q4k_mma_batched_gate_up_gelu_mul_scatter_kernel(
+    const void * __restrict__ gate_up_w,           // [num_experts, 2N, K/256] Q4_K
+    const void * __restrict__ inputs_y,            // [N_active, max_n_e, K/32] Q8_1
+    const int32_t * __restrict__ sorted_token_ids, // [size_m]
+    const int32_t * __restrict__ active_expert_ids,
+    const int32_t * __restrict__ expert_offsets,
+    float * __restrict__ dst,                      // [size_m, N] F32
+    int num_experts,
+    int max_n_e,
+    int N,                                         // gate half rows
+    int K
+) {
+    const int act_idx = blockIdx.z;
+    const int n_tile  = blockIdx.y;
+    const int m_tile  = blockIdx.x;
+
+    const int expert  = active_expert_ids[act_idx];
+    if (expert < 0 || expert >= num_experts) return;
+    const int start   = expert_offsets[expert];
+    const int end     = expert_offsets[expert + 1];
+    const int n_e     = end - start;
+
+    const int m_base = m_tile * MMA_BATCHED_M;       // GATE weight row base
+    const int n_base = n_tile * MMA_BATCHED_N;
+    if (m_base >= N || n_base >= max_n_e) return;
+
+    using moe_q4k_mma_batched_ns::block_q4_K_mma;
+    using moe_q4k_mma_batched_ns::block_q8_1_mma;
+    using moe_q4k_mma_batched_ns::get_scale_min_k4_dev;
+
+    const int lane = threadIdx.x;
+    const int g    = lane >> 2;
+    const int tj   = lane & 3;
+    const int num_super = K / MMA_BATCHED_QK_K;
+    const int two_n = N << 1;
+
+    // GATE weight rows are [m_base + g, m_base + g + 8]; UP rows are
+    // those + N.
+    const int row_a    = m_base + g;          // gate lower
+    const int row_b    = m_base + g + 8;      // gate upper
+    const int row_a_up = N + row_a;           // up lower
+    const int row_b_up = N + row_b;           // up upper
+    const bool va = row_a < N;
+    const bool vb = row_b < N;
+
+    const int my_in_row = n_base + g;
+    const bool v_in = my_in_row < n_e;
+
+    const block_q4_K_mma * w_expert =
+        (const block_q4_K_mma *) gate_up_w
+        + (size_t)expert * (size_t)two_n * num_super;
+    const block_q8_1_mma * y_expert =
+        (const block_q8_1_mma *) inputs_y
+        + ((size_t)act_idx * max_n_e + n_base) * num_super * 8;
+
+    // 4 output positions per thread (m_w in {g, g+8}, n_in in {2tj+0, 2tj+1}).
+    // Each needs both gate and up F32 accumulators.
+    float gate_0 = 0.f, gate_1 = 0.f, gate_2 = 0.f, gate_3 = 0.f;
+    float up_0   = 0.f, up_1   = 0.f, up_2   = 0.f, up_3   = 0.f;
+
+    for (int isb = 0; isb < num_super; ++isb) {
+        // Gate / up weight pointers for the 4 weight rows this lane covers.
+        const block_q4_K_mma * gwa = va ? w_expert + (size_t)row_a    * num_super + isb : nullptr;
+        const block_q4_K_mma * gwb = vb ? w_expert + (size_t)row_b    * num_super + isb : nullptr;
+        const block_q4_K_mma * uwa = va ? w_expert + (size_t)row_a_up * num_super + isb : nullptr;
+        const block_q4_K_mma * uwb = vb ? w_expert + (size_t)row_b_up * num_super + isb : nullptr;
+
+        const float g_dall_a = gwa ? __low2float (gwa->dm) : 0.f;
+        const float g_dmin_a = gwa ? __high2float(gwa->dm) : 0.f;
+        const float g_dall_b = gwb ? __low2float (gwb->dm) : 0.f;
+        const float g_dmin_b = gwb ? __high2float(gwb->dm) : 0.f;
+        const float u_dall_a = uwa ? __low2float (uwa->dm) : 0.f;
+        const float u_dmin_a = uwa ? __high2float(uwa->dm) : 0.f;
+        const float u_dall_b = uwb ? __low2float (uwb->dm) : 0.f;
+        const float u_dmin_b = uwb ? __high2float(uwb->dm) : 0.f;
+
+        float g_sub_d_0 = 0.f, g_sub_d_1 = 0.f, g_sub_d_2 = 0.f, g_sub_d_3 = 0.f;
+        float g_sub_m_0 = 0.f, g_sub_m_1 = 0.f, g_sub_m_2 = 0.f, g_sub_m_3 = 0.f;
+        float u_sub_d_0 = 0.f, u_sub_d_1 = 0.f, u_sub_d_2 = 0.f, u_sub_d_3 = 0.f;
+        float u_sub_m_0 = 0.f, u_sub_m_1 = 0.f, u_sub_m_2 = 0.f, u_sub_m_3 = 0.f;
+
+        #pragma unroll
+        for (int s = 0; s < 8; ++s) {
+            const int il = s >> 1;
+            const int ip = s & 1;
+            const int qs_off = 32 * il + 8 * tj;
+
+            // ── GATE A fragments ─────────────────────────────────────
+            uint32_t gqa_lo = gwa ? *(const uint32_t *)(gwa->qs + qs_off + 0) : 0;
+            uint32_t gqa_hi = gwa ? *(const uint32_t *)(gwa->qs + qs_off + 4) : 0;
+            uint32_t gqb_lo = gwb ? *(const uint32_t *)(gwb->qs + qs_off + 0) : 0;
+            uint32_t gqb_hi = gwb ? *(const uint32_t *)(gwb->qs + qs_off + 4) : 0;
+            int GA0, GA1, GA2, GA3;
+            if (ip == 0) {
+                GA0 = (int)(gqa_lo & 0x0F0F0F0F);
+                GA2 = (int)(gqa_hi & 0x0F0F0F0F);
+                GA1 = (int)(gqb_lo & 0x0F0F0F0F);
+                GA3 = (int)(gqb_hi & 0x0F0F0F0F);
+            } else {
+                GA0 = (int)((gqa_lo >> 4) & 0x0F0F0F0F);
+                GA2 = (int)((gqa_hi >> 4) & 0x0F0F0F0F);
+                GA1 = (int)((gqb_lo >> 4) & 0x0F0F0F0F);
+                GA3 = (int)((gqb_hi >> 4) & 0x0F0F0F0F);
+            }
+
+            // ── UP A fragments ───────────────────────────────────────
+            uint32_t uqa_lo = uwa ? *(const uint32_t *)(uwa->qs + qs_off + 0) : 0;
+            uint32_t uqa_hi = uwa ? *(const uint32_t *)(uwa->qs + qs_off + 4) : 0;
+            uint32_t uqb_lo = uwb ? *(const uint32_t *)(uwb->qs + qs_off + 0) : 0;
+            uint32_t uqb_hi = uwb ? *(const uint32_t *)(uwb->qs + qs_off + 4) : 0;
+            int UA0, UA1, UA2, UA3;
+            if (ip == 0) {
+                UA0 = (int)(uqa_lo & 0x0F0F0F0F);
+                UA2 = (int)(uqa_hi & 0x0F0F0F0F);
+                UA1 = (int)(uqb_lo & 0x0F0F0F0F);
+                UA3 = (int)(uqb_hi & 0x0F0F0F0F);
+            } else {
+                UA0 = (int)((uqa_lo >> 4) & 0x0F0F0F0F);
+                UA2 = (int)((uqa_hi >> 4) & 0x0F0F0F0F);
+                UA1 = (int)((uqb_lo >> 4) & 0x0F0F0F0F);
+                UA3 = (int)((uqb_hi >> 4) & 0x0F0F0F0F);
+            }
+
+            // ── B fragment shared between gate and up ────────────────
+            const block_q8_1_mma * yb_my = v_in
+                ? y_expert + (size_t)g * num_super * 8 + isb * 8 + s
+                : nullptr;
+            int B0 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 0] : 0;
+            int B1 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 1] : 0;
+            const float d8_my = yb_my ? __low2float(yb_my->ds) : 0.f;
+
+            int GD0 = 0, GD1 = 0, GD2 = 0, GD3 = 0;
+            asm("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
+                "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};"
+                : "+r"(GD0), "+r"(GD1), "+r"(GD2), "+r"(GD3)
+                : "r"(GA0), "r"(GA1), "r"(GA2), "r"(GA3), "r"(B0), "r"(B1));
+            int UD0 = 0, UD1 = 0, UD2 = 0, UD3 = 0;
+            asm("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
+                "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};"
+                : "+r"(UD0), "+r"(UD1), "+r"(UD2), "+r"(UD3)
+                : "r"(UA0), "r"(UA1), "r"(UA2), "r"(UA3), "r"(B0), "r"(B1));
+
+            int dot2 = __dp4a(0x01010101, B1, __dp4a(0x01010101, B0, 0));
+            dot2 += __shfl_xor_sync(0xffffffff, dot2, 1);
+            dot2 += __shfl_xor_sync(0xffffffff, dot2, 2);
+
+            const int src_lane_a = (2 * tj + 0) * 4;
+            const int src_lane_b = (2 * tj + 1) * 4;
+            const float d8_out_a  = __shfl_sync(0xffffffff, d8_my, src_lane_a);
+            const float d8_out_b  = __shfl_sync(0xffffffff, d8_my, src_lane_b);
+            const float dot_out_a = (float)__shfl_sync(0xffffffff, dot2, src_lane_a);
+            const float dot_out_b = (float)__shfl_sync(0xffffffff, dot2, src_lane_b);
+
+            uint8_t g_sc_a, g_m_a, g_sc_b, g_m_b;
+            uint8_t u_sc_a, u_m_a, u_sc_b, u_m_b;
+            if (gwa) get_scale_min_k4_dev(s, gwa->scales, g_sc_a, g_m_a); else { g_sc_a = g_m_a = 0; }
+            if (gwb) get_scale_min_k4_dev(s, gwb->scales, g_sc_b, g_m_b); else { g_sc_b = g_m_b = 0; }
+            if (uwa) get_scale_min_k4_dev(s, uwa->scales, u_sc_a, u_m_a); else { u_sc_a = u_m_a = 0; }
+            if (uwb) get_scale_min_k4_dev(s, uwb->scales, u_sc_b, u_m_b); else { u_sc_b = u_m_b = 0; }
+
+            g_sub_d_0 += d8_out_a * (float)GD0 * (float)g_sc_a;
+            g_sub_d_1 += d8_out_b * (float)GD1 * (float)g_sc_a;
+            g_sub_d_2 += d8_out_a * (float)GD2 * (float)g_sc_b;
+            g_sub_d_3 += d8_out_b * (float)GD3 * (float)g_sc_b;
+            g_sub_m_0 += d8_out_a * dot_out_a * (float)g_m_a;
+            g_sub_m_1 += d8_out_b * dot_out_b * (float)g_m_a;
+            g_sub_m_2 += d8_out_a * dot_out_a * (float)g_m_b;
+            g_sub_m_3 += d8_out_b * dot_out_b * (float)g_m_b;
+
+            u_sub_d_0 += d8_out_a * (float)UD0 * (float)u_sc_a;
+            u_sub_d_1 += d8_out_b * (float)UD1 * (float)u_sc_a;
+            u_sub_d_2 += d8_out_a * (float)UD2 * (float)u_sc_b;
+            u_sub_d_3 += d8_out_b * (float)UD3 * (float)u_sc_b;
+            u_sub_m_0 += d8_out_a * dot_out_a * (float)u_m_a;
+            u_sub_m_1 += d8_out_b * dot_out_b * (float)u_m_a;
+            u_sub_m_2 += d8_out_a * dot_out_a * (float)u_m_b;
+            u_sub_m_3 += d8_out_b * dot_out_b * (float)u_m_b;
+        }
+
+        gate_0 += g_dall_a * g_sub_d_0 - g_dmin_a * g_sub_m_0;
+        gate_1 += g_dall_a * g_sub_d_1 - g_dmin_a * g_sub_m_1;
+        gate_2 += g_dall_b * g_sub_d_2 - g_dmin_b * g_sub_m_2;
+        gate_3 += g_dall_b * g_sub_d_3 - g_dmin_b * g_sub_m_3;
+        up_0   += u_dall_a * u_sub_d_0 - u_dmin_a * u_sub_m_0;
+        up_1   += u_dall_a * u_sub_d_1 - u_dmin_a * u_sub_m_1;
+        up_2   += u_dall_b * u_sub_d_2 - u_dmin_b * u_sub_m_2;
+        up_3   += u_dall_b * u_sub_d_3 - u_dmin_b * u_sub_m_3;
+    }
+
+    // GELU·mul + scatter directly to F32 [size_m, N].
+    const float k0 = 0.7978845608028654f;
+    const float k1 = 0.044715f;
+    const int in_row_0 = n_base + 2 * tj + 0;
+    const int in_row_1 = n_base + 2 * tj + 1;
+
+    auto write_one = [&](int in_row, int m_w, float gv, float uv) {
+        if (in_row < n_e && m_w < N) {
+            const float gelu = 0.5f * gv * (1.f + tanhf(k0 * (gv + k1 * gv * gv * gv)));
+            const int pair_idx = sorted_token_ids[start + in_row];
+            dst[(size_t)pair_idx * N + m_w] = gelu * uv;
+        }
+    };
+
+    if (va) {
+        write_one(in_row_0, row_a, gate_0, up_0);
+        write_one(in_row_1, row_a, gate_1, up_1);
+    }
+    if (vb) {
+        write_one(in_row_0, row_b, gate_2, up_2);
+        write_one(in_row_1, row_b, gate_3, up_3);
+    }
+
+    (void)num_experts;
+}
+
+extern "C" void moe_q4k_mma_batched_gate_up_gelu_mul_scatter(
+    const void * gate_up_w,
+    const void * inputs_q81,
+    const int32_t * sorted_token_ids,
+    const int32_t * active_expert_ids,
+    const int32_t * expert_offsets,
+    float * dst_f32,
+    int num_experts,
+    int n_active,
+    int max_n_e,
+    int n_gate,
+    int K,
+    cudaStream_t stream
+) {
+    if (n_active <= 0 || max_n_e <= 0 || n_gate <= 0 || K <= 0) return;
+    using namespace moe_q4k_mma_batched_ns;
+    dim3 grid((n_gate  + MMA_BATCHED_M - 1) / MMA_BATCHED_M,
+              (max_n_e + MMA_BATCHED_N - 1) / MMA_BATCHED_N,
+              n_active);
+    dim3 blk(32, 1, 1);
+    moe_q4k_mma_batched_gate_up_gelu_mul_scatter_kernel<<<grid, blk, 0, stream>>>(
+        gate_up_w, inputs_q81, sorted_token_ids, active_expert_ids,
+        expert_offsets, dst_f32, num_experts, max_n_e, n_gate, K
+    );
+}
+
 // Host launcher.
 extern "C" void moe_q4k_mma_batched_gate_up(
     const void * gate_up_w,

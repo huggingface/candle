@@ -193,6 +193,27 @@ extern "C" {
         stream: i64,
     );
 
+    /// Phase 1 step-5 FUSED variant: gate||up MMA + GELU·mul + scatter
+    /// in a single launch. Eliminates the F32 `[N_active, max_n_e, 2N]`
+    /// intermediate buffer that the unfused variant materialises in HBM,
+    /// removing the round-trip cost that dominates prefill latency.
+    /// Output is F32 `[size_m, N]` (final MoE branch output before the
+    /// down projection).
+    pub fn moe_q4k_mma_batched_gate_up_gelu_mul_scatter(
+        gate_up_w: *const core::ffi::c_void,
+        inputs_q81: *const core::ffi::c_void,
+        sorted_token_ids: *const i32,
+        active_expert_ids: *const i32,
+        expert_offsets: *const i32,
+        dst_f32: *mut f32,
+        num_experts: i32,
+        n_active: i32,
+        max_n_e: i32,
+        n_gate: i32,
+        k: i32,
+        stream: i64,
+    );
+
     /// Phase 1 step-5 (Q4_K MMA path): batched F32 → Q8_1 gather+quantize.
     /// Same dispatch contract as the F32→F16 gather, but writes Q8_1 blocks
     /// (`[N_active, max_n_e, K/32]` block_q8_1). Q8_1 is the input format

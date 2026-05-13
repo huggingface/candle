@@ -627,11 +627,11 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat_mma(
 
     // Workspaces:
     //   q81_alloc:   [N_active × max_n_e × K/32] block_q8_1 = 36 bytes/block
-    //   gemm_alloc:  [N_active × max_n_e × 2N] F32 (output of MMA kernel,
-    //                input to scatter+gelu). F32 (not F16) to avoid the
-    //                rounding step that compounds drift over the 30+
-    //                cascading layers of a real model — see gemma4:26b
-    //                NaN-logits regression with F16 intermediate.
+    // Non-fused path: split into MMA (writes F32 [N_active, max_n_e, 2N])
+    // + GELU·mul scatter. Measured faster than the all-in-one fused kernel
+    // because the fused kernel does 2 MMA ops per K-tile (gate + up) and
+    // 2× the Q4_K nibble unpack per warp, which outweighs the savings of
+    // eliminating the F32 intermediate buffer.
     let num_super_blocks = k_in / 32;
     let q81_total_bytes  = n_active * max_n_e * num_super_blocks * 36;
     let gemm_total_elems = n_active * max_n_e * two_n;
@@ -664,7 +664,7 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat_mma(
         }
     }
 
-    // Step 2: Q4_K × Q8_1 batched MMA.
+    // Step 2: Q4_K × Q8_1 batched MMA (gate||up packed, F32 output).
     {
         let act_ptr   = active_ids_alloc.device_ptr(active_ids_alloc.stream()).0 as *const i32;
         let off_ptr   = off_slice.device_ptr(off_slice.stream()).0 as *const i32;
