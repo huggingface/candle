@@ -404,6 +404,62 @@ extern "C" void moe_batched_gelu_mul_scatter_f16_to_f32(
     );
 }
 
+// F32 input variant — used when the MMA path writes F32 directly to avoid
+// the F16 intermediate rounding step that compounds through layers.
+extern "C" __global__ void moe_batched_gelu_mul_scatter_f32_to_f32_kernel(
+    const float* __restrict__ in,                 // [N_active, max_n_e, 2N]
+    const int32_t* __restrict__ sorted_token_ids,
+    const int32_t* __restrict__ active_expert_ids,
+    const int32_t* __restrict__ expert_offsets,
+    float* __restrict__ out,                      // [size_m, N]
+    const int max_n_e,
+    const int N
+) {
+    const int act_idx = blockIdx.y;
+    const int row     = blockIdx.x;
+    const int expert  = active_expert_ids[act_idx];
+    const int start   = expert_offsets[expert];
+    const int end     = expert_offsets[expert + 1];
+    const int n_e     = end - start;
+    if (row >= n_e) return;
+
+    const int two_n = N << 1;
+    const float* __restrict__ row_in = in
+        + ((size_t)act_idx * max_n_e + row) * two_n;
+    const int pair_idx = sorted_token_ids[start + row];
+    float* __restrict__ row_out = out + (size_t)pair_idx * N;
+
+    const float k0 = 0.7978845608028654f;
+    const float k1 = 0.044715f;
+    for (int n = threadIdx.x; n < N; n += blockDim.x) {
+        const float g = row_in[n];
+        const float u = row_in[N + n];
+        const float gelu = 0.5f * g * (1.0f + tanhf(k0 * (g + k1 * g * g * g)));
+        row_out[n] = gelu * u;
+    }
+}
+
+extern "C" void moe_batched_gelu_mul_scatter_f32_to_f32(
+    const float* in_f32,
+    const int32_t* sorted_token_ids,
+    const int32_t* active_expert_ids,
+    const int32_t* expert_offsets,
+    float* out_f32,
+    int n_active,
+    int max_n_e,
+    int N,
+    cudaStream_t stream
+) {
+    if (n_active <= 0 || max_n_e <= 0) return;
+    const int block = (N < 256) ? N : 256;
+    dim3 grid(max_n_e, n_active, 1);
+    dim3 blk(block, 1, 1);
+    moe_batched_gelu_mul_scatter_f32_to_f32_kernel<<<grid, blk, 0, stream>>>(
+        in_f32, sorted_token_ids, active_expert_ids,
+        expert_offsets, out_f32, max_n_e, N
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Phase 1 step-4 proper: batched per-expert Q4_K → F16 dequantize.
 //

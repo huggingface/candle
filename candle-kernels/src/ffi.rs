@@ -226,6 +226,21 @@ extern "C" {
         stream: i64,
     );
 
+    /// F32 input variant of the GELU·mul + scatter — pairs with the
+    /// Q4_K MMA kernel that writes F32 directly (no F16 rounding step,
+    /// which compounds drift over 30+ cascading layers in real models).
+    pub fn moe_batched_gelu_mul_scatter_f32_to_f32(
+        in_f32: *const f32,
+        sorted_token_ids: *const i32,
+        active_expert_ids: *const i32,
+        expert_offsets: *const i32,
+        out_f32: *mut f32,
+        n_active: i32,
+        max_n_e: i32,
+        n: i32,
+        stream: i64,
+    );
+
     /// Phase 1 step-4 batched dequant: dequantizes N_active experts'
     /// `[rows_per_expert, cols]` Q4_K weight slabs into a contiguous
     /// `[n_active, rows_per_expert, cols]` F16 workspace in ONE launch.

@@ -151,7 +151,7 @@ extern "C" __global__ void moe_q4k_mma_batched_gate_up_kernel(
     const void * __restrict__ inputs_y,          // [N_active, max_n_e, K/32] Q8_1
     const int32_t * __restrict__ active_expert_ids,
     const int32_t * __restrict__ expert_offsets,
-    void * __restrict__ dst,                     // [N_active, max_n_e, 2N] F16
+    void * __restrict__ dst,                     // [N_active, max_n_e, 2N] F32
     int num_experts,
     int max_n_e,
     int two_n,
@@ -306,19 +306,19 @@ extern "C" __global__ void moe_q4k_mma_batched_gate_up_kernel(
     //   D3 → dst[act_idx, n_base+2tj+1, row_b]
     const int in_row_0 = n_base + 2 * tj + 0;
     const int in_row_1 = n_base + 2 * tj + 1;
-    __half * dst_base = (__half *) dst + (size_t)act_idx * max_n_e * two_n;
+    float * dst_base = (float *) dst + (size_t)act_idx * max_n_e * two_n;
 
-if (va && in_row_0 < n_e) {
-        dst_base[(size_t)in_row_0 * two_n + row_a] = __float2half(acc_d_0);
+    if (va && in_row_0 < n_e) {
+        dst_base[(size_t)in_row_0 * two_n + row_a] = acc_d_0;
     }
     if (va && in_row_1 < n_e) {
-        dst_base[(size_t)in_row_1 * two_n + row_a] = __float2half(acc_d_1);
+        dst_base[(size_t)in_row_1 * two_n + row_a] = acc_d_1;
     }
     if (vb && in_row_0 < n_e) {
-        dst_base[(size_t)in_row_0 * two_n + row_b] = __float2half(acc_d_2);
+        dst_base[(size_t)in_row_0 * two_n + row_b] = acc_d_2;
     }
     if (vb && in_row_1 < n_e) {
-        dst_base[(size_t)in_row_1 * two_n + row_b] = __float2half(acc_d_3);
+        dst_base[(size_t)in_row_1 * two_n + row_b] = acc_d_3;
     }
 
     (void)num_experts;

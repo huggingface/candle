@@ -627,19 +627,22 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat_mma(
 
     // Workspaces:
     //   q81_alloc:   [N_active × max_n_e × K/32] block_q8_1 = 36 bytes/block
-    //   gemm_alloc:  [N_active × max_n_e × 2N] F16 (output of MMA kernel,
-    //                input to scatter+gelu)
+    //   gemm_alloc:  [N_active × max_n_e × 2N] F32 (output of MMA kernel,
+    //                input to scatter+gelu). F32 (not F16) to avoid the
+    //                rounding step that compounds drift over the 30+
+    //                cascading layers of a real model — see gemma4:26b
+    //                NaN-logits regression with F16 intermediate.
     let num_super_blocks = k_in / 32;
     let q81_total_bytes  = n_active * max_n_e * num_super_blocks * 36;
     let gemm_total_elems = n_active * max_n_e * two_n;
     const MAX_WORKSPACE_BYTES: usize = 4 * 1024 * 1024 * 1024;
-    if q81_total_bytes > MAX_WORKSPACE_BYTES || gemm_total_elems * 2 > MAX_WORKSPACE_BYTES {
+    if q81_total_bytes > MAX_WORKSPACE_BYTES || gemm_total_elems * 4 > MAX_WORKSPACE_BYTES {
         candle::bail!(
             "moe_gemm_gguf_per_expert_mma: workspace > 4 GB — caller should use dp4a path"
         );
     }
     let q81_alloc  = dev.alloc_zeros::<u8>(q81_total_bytes)?;
-    let gemm_alloc = dev.alloc_zeros::<half::f16>(gemm_total_elems)?;
+    let gemm_alloc = dev.alloc_zeros::<f32>(gemm_total_elems)?;
 
     let active_ids_alloc = dev.cuda_stream()
         .memcpy_stod(&active_expert_ids)
@@ -678,15 +681,15 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat_mma(
         }
     }
 
-    // Step 3: F16 logits → F32 output via GELU·mul + scatter.
+    // Step 3: F32 logits → F32 output via GELU·mul + scatter.
     {
         let st_ptr   = st_slice.device_ptr(st_slice.stream()).0 as *const i32;
         let act_ptr  = active_ids_alloc.device_ptr(active_ids_alloc.stream()).0 as *const i32;
         let off_ptr  = off_slice.device_ptr(off_slice.stream()).0 as *const i32;
-        let gemm_ptr = gemm_alloc.device_ptr(gemm_alloc.stream()).0 as *const core::ffi::c_void;
+        let gemm_ptr = gemm_alloc.device_ptr(gemm_alloc.stream()).0 as *const f32;
         let out_ptr  = out_alloc.device_ptr(out_alloc.stream()).0 as *mut f32;
         unsafe {
-            ffi::moe_batched_gelu_mul_scatter_f16_to_f32(
+            ffi::moe_batched_gelu_mul_scatter_f32_to_f32(
                 gemm_ptr, st_ptr, act_ptr, off_ptr, out_ptr,
                 n_active as i32, max_n_e as i32, n_out as i32,
                 stream_i64,
