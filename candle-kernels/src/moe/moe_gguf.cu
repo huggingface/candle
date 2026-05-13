@@ -244,6 +244,100 @@ extern "C" void moe_batched_gather_input_rows_f32_to_f16(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Phase 1 step-5 (Q4_K MMA path): batched F32 → Q8_1 gather quantize.
+//
+// Same dispatch shape as moe_batched_gather_input_rows_f32_to_f16, but the
+// per-row writes are Q8_1 blocks (one block per 32 K elements). Q8_1 is
+// the input format consumed by the m16n8k32 INT8 mma.sync path.
+//
+// Output layout: [N_active, max_n_e, K/32] block_q8_1.
+// ─────────────────────────────────────────────────────────────────────────
+extern "C" __global__ void moe_batched_gather_input_rows_f32_to_q81_kernel(
+    const float* __restrict__ inputs,            // [num_real_tokens, K]
+    const int32_t* __restrict__ sorted_token_ids, // [size_m]
+    const int32_t* __restrict__ active_expert_ids,// [N_active]
+    const int32_t* __restrict__ expert_offsets,   // [num_experts + 1]
+    void* __restrict__ out,                      // [N_active, max_n_e, K/32] block_q8_1
+    const int max_n_e,
+    const int K,
+    const int topk
+) {
+    // 36-byte Q8_1 block: __half2 ds + 32 int8 qs
+    struct __align__(8) block_q8_1_local {
+        __half2 ds;
+        int8_t  qs[32];
+    };
+
+    const int act_idx  = blockIdx.y;
+    const int row      = blockIdx.x;
+    const int kb       = blockIdx.z;                // K-block index (0..K/32-1)
+    const int num_blks = K / 32;
+
+    const int expert  = active_expert_ids[act_idx];
+    const int start   = expert_offsets[expert];
+    const int end     = expert_offsets[expert + 1];
+    const int n_e     = end - start;
+
+    if (row >= n_e || kb >= num_blks) return;
+
+    const int pair_idx   = sorted_token_ids[start + row];
+    const int real_token = pair_idx / topk;
+    const float* __restrict__ src = inputs + (size_t)real_token * K + kb * 32;
+    block_q8_1_local* __restrict__ dst = (block_q8_1_local*) out
+        + ((size_t)act_idx * max_n_e + row) * num_blks + kb;
+
+    // 32 threads cooperate on this 32-element block. Each loads one float.
+    const int t = threadIdx.x;
+    float x = src[t];
+
+    // Warp-reduce max(|x|) across the 32 lanes for the absmax scale.
+    float ax = fabsf(x);
+    #pragma unroll
+    for (int off = 16; off > 0; off >>= 1) {
+        ax = fmaxf(ax, __shfl_xor_sync(0xffffffff, ax, off));
+    }
+    const float d = ax / 127.f;
+    const float inv_d = (d != 0.f) ? (1.f / d) : 0.f;
+
+    // Quantize and warp-reduce sum for Q8_1's `s` (sum scaled by d).
+    int q = __float2int_rn(x * inv_d);
+    q = max(-127, min(127, q));
+    int s_int = q;
+    #pragma unroll
+    for (int off = 16; off > 0; off >>= 1) {
+        s_int += __shfl_xor_sync(0xffffffff, s_int, off);
+    }
+    const float sum_scaled = (float)s_int * d;
+
+    dst->qs[t] = (int8_t)q;
+    if (t == 0) {
+        dst->ds = __floats2half2_rn(d, sum_scaled);
+    }
+}
+
+extern "C" void moe_batched_gather_input_rows_f32_to_q81(
+    const float* inputs,
+    const int32_t* sorted_token_ids,
+    const int32_t* active_expert_ids,
+    const int32_t* expert_offsets,
+    void* out_q81,
+    int n_active,
+    int max_n_e,
+    int K,
+    int topk,
+    cudaStream_t stream
+) {
+    if (n_active <= 0 || max_n_e <= 0 || K <= 0) return;
+    const int num_blks = K / 32;
+    dim3 grid(max_n_e, n_active, num_blks);
+    dim3 blk(32, 1, 1);
+    moe_batched_gather_input_rows_f32_to_q81_kernel<<<grid, blk, 0, stream>>>(
+        inputs, sorted_token_ids, active_expert_ids, expert_offsets,
+        out_q81, max_n_e, K, topk
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Phase 1 step-4: batched GELU·mul + scatter across all active experts.
 //
 // Reads the padded GEMM output `[N_active, max_n_e, 2N]` F16 and for each

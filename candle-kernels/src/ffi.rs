@@ -168,6 +168,48 @@ extern "C" {
         stream: i64,
     );
 
+    /// Phase 1 step-5 (Q4_K MMA path): per-expert batched
+    /// `mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32` GEMM for
+    /// gate||up. Consumes Q4_K weights (no F16 dequant intermediate) and
+    /// pre-quantized Q8_1 inputs. Output is the gate||up logits F16 slab
+    /// `[N_active, max_n_e, 2N]`, ready for the existing batched
+    /// `moe_batched_gelu_mul_scatter_f16_to_f32` kernel.
+    ///
+    /// Per block (one warp): computes a [16 weight rows × 8 input rows]
+    /// output tile using one m16n8k32 INT8 MMA per K-tile (32 elems).
+    /// Total compute per block is 16 × 8 × K = 128K dot products done
+    /// via tensor cores instead of dp4a.
+    pub fn moe_q4k_mma_batched_gate_up(
+        gate_up_w: *const core::ffi::c_void,
+        inputs_q81: *const core::ffi::c_void,
+        active_expert_ids: *const i32,
+        expert_offsets: *const i32,
+        dst_f16: *mut core::ffi::c_void,
+        num_experts: i32,
+        n_active: i32,
+        max_n_e: i32,
+        two_n: i32,
+        k: i32,
+        stream: i64,
+    );
+
+    /// Phase 1 step-5 (Q4_K MMA path): batched F32 → Q8_1 gather+quantize.
+    /// Same dispatch contract as the F32→F16 gather, but writes Q8_1 blocks
+    /// (`[N_active, max_n_e, K/32]` block_q8_1). Q8_1 is the input format
+    /// consumed by the `mma.sync.m16n8k32.s8.s8.s32` Q4_K MMA kernel.
+    pub fn moe_batched_gather_input_rows_f32_to_q81(
+        inputs: *const f32,
+        sorted_token_ids: *const i32,
+        active_expert_ids: *const i32,
+        expert_offsets: *const i32,
+        out_q81: *mut core::ffi::c_void,
+        n_active: i32,
+        max_n_e: i32,
+        k: i32,
+        topk: i32,
+        stream: i64,
+    );
+
     /// Phase 1 step-4 batched scatter: reads the padded GEMM output
     /// `[N_active, max_n_e, 2N]` F16, applies `gelu_tanh(gate)·up` per
     /// valid row, and scatters into `out[sorted_token_ids[...], :]`
