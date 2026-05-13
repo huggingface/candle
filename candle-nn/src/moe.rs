@@ -223,6 +223,58 @@ pub fn moe_expert_offsets(_: &Tensor, _: usize) -> Result<Tensor> {
     candle::bail!("moe_expert_offsets is cuda-only")
 }
 
+/// Phase 1 step-3 scaffolding: per-expert dispatch for the MoE gate||up
+/// matmul, targeted at the prefill regime where the current
+/// per-(token,expert) kernel emits an O(num_tokens × topk) grid that
+/// cripples large batches (gemma4:26b prefill = -91.8% vs Ollama).
+///
+/// For each expert `e` with assigned tokens
+/// `(expert_offsets[e+1] - expert_offsets[e]) > 0`:
+///   1. Gather input rows: `gathered = inputs[sorted_token_ids[range] / topk]`
+///      → contiguous `[tokens_for_e, K]` F32 or F16 buffer.
+///   2. Dequantize `gate_up_weights[e]` Q4_K → F16
+///      via `candle::quantized::cuda::dequantize_q4k_expert_f16`.
+///   3. cuBLAS GEMM (CUDA_R_16F input × weight, CUDA_R_16F output,
+///      CUDA_R_32F compute) — tensor cores fire when tokens_for_e ≥ 16.
+///   4. Split + GELU(tanh) * up → `[tokens_for_e, N]` F32.
+///   5. Scatter rows back into the global `[size_m, N]` output via
+///      `sorted_token_ids[expert_offsets[e]..expert_offsets[e+1]]`.
+///
+/// This signature is the contract for the new dispatch path. Caller
+/// (e.g. `forward_cuda` in `generic_transformer.rs`) decides whether
+/// to take the per-expert path based on `size_m`:
+///   `if size_m < N_PER_EXPERT_THRESHOLD { /* existing kernel */ }
+///    else { moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(...) }`
+///
+/// **NOT YET IMPLEMENTED** — landing this is step 3 of
+/// `docs/phase1_moe_implementation_plan.md`. Implementation requires:
+///   - A gather kernel (or use `Tensor::index_select` if the
+///     index dtype maps cleanly — `sorted_token_ids[range] / topk` is
+///     per-element division, not a single index_select).
+///   - cuBLAS GEMM via `cudarc::cublas::Gemm` (already used elsewhere
+///     in candle for batched matmul).
+///   - GELU·mul on `[tokens_for_e, 2N]` — re-use the pattern from
+///     `fused_split_gelu_mul_f32` in `crates/server/.../fused_kernels.rs`.
+///   - Scatter via atomicAdd or `index_add`.
+#[cfg(feature = "cuda")]
+#[allow(unused_variables, clippy::too_many_arguments)]
+pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
+    inputs: &Tensor,
+    gate_up_weights: &QTensor,
+    sorted_token_ids: &Tensor,
+    expert_offsets: &Tensor,
+    num_experts: usize,
+    topk: usize,
+) -> Result<Tensor> {
+    candle::bail!(
+        "moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat: step 3 of \
+         Phase 1 is not yet implemented. Use the existing \
+         moe_gemm_gguf_gate_up_gelu_mul_concat in the meantime. \
+         See docs/phase1_moe_implementation_plan.md for the dispatch \
+         contract this stub represents."
+    )
+}
+
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn moe_gemm_gguf(
