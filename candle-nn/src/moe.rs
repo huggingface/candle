@@ -189,9 +189,11 @@ pub fn moe_expert_offsets(
     let dev = sorted_expert_ids.device().as_cuda_device()?;
     let stream = dev.cuda_stream().cu_stream() as i64;
 
+    // Candle stores index tensors as U32 by convention but their values
+    // fit in i32; the kernel reads via *const i32 which is bit-equal.
     let (e_storage, _) = sorted_expert_ids.storage_and_layout();
     let e_slice = match &*e_storage {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<i32>()?,
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
         _ => candle::bail!("moe_expert_offsets: sorted_expert_ids must be on CUDA"),
     };
 
@@ -313,19 +315,23 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
         _ => candle::bail!("inputs must be on CUDA"),
     };
 
+    // sorted_token_ids comes from the caller's topk + sort_last_dim;
+    // candle stores indices as U32 by convention. We pass the same
+    // device pointer to the kernel cast to *const i32 — values are
+    // small token indices that fit in i32 either way.
     let (st_storage, _st_layout) = sorted_token_ids.storage_and_layout();
     let st_slice = match &*st_storage {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<i32>()?,
-        _ => candle::bail!("sorted_token_ids must be CUDA i32"),
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("sorted_token_ids must be CUDA u32"),
     };
 
+    // expert_offsets is built by moe_expert_offsets which allocates an
+    // i32 buffer — read it as I32 here.
     let (off_storage, _off_layout) = expert_offsets.storage_and_layout();
     let off_slice = match &*off_storage {
         candle::Storage::Cuda(c) => c.as_cuda_slice::<i32>()?,
         _ => candle::bail!("expert_offsets must be CUDA i32"),
     };
-    // Read offsets to host once — small (~num_experts+1 i32). The host-
-    // side loop below dispatches one cuBLAS GEMM per active expert.
     let offsets_cpu: Vec<i32> = dev.cuda_stream()
         .memcpy_dtov(off_slice)
         .map_err(|e| candle::Error::Msg(format!("expert_offsets D2H: {e}")))?;
@@ -345,6 +351,33 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
     // ── Output: [size_m, N] F32 zero-init ───────────────────────────
     let out_alloc = unsafe { dev.alloc_zeros::<f32>(size_m * n_out) }?;
 
+    // ── Compute max active-expert size from offsets to size persistent
+    // workspaces. Hoisting allocations out of the per-expert loop saves
+    // ~5 cudaMallocAsync calls per expert × ~60 experts × 30 layers =
+    // ~9000 alloc calls per prefill (~50ms total at 5µs each).
+    let mut max_n_e: usize = 0;
+    for e in 0..num_experts {
+        let n_e = (offsets_cpu[e + 1] - offsets_cpu[e]) as usize;
+        if n_e > max_n_e { max_n_e = n_e; }
+    }
+    if max_n_e == 0 {
+        // No active experts — nothing to do. Return zero-init output.
+        drop(inp_storage); drop(st_storage); drop(off_storage);
+        let storage = candle::CudaStorage::wrap_cuda_slice(out_alloc, dev.clone());
+        return Ok(Tensor::from_storage(
+            candle::Storage::Cuda(storage),
+            (size_m, n_out),
+            candle::op::BackpropOp::none(),
+            false,
+        ));
+    }
+
+    // Persistent workspaces sized for the largest expert's batch. Each
+    // iteration writes into the prefix [0..n_e × ...], the rest is
+    // unused but consumes no extra bandwidth.
+    let gather_max = unsafe { dev.alloc::<f16>(max_n_e * k_in) }?;
+    let weight_max = unsafe { dev.alloc::<f16>(two_n * k_w) }?;
+
     // ── Per-active-expert loop ──────────────────────────────────────
     for e in 0..num_experts {
         let start = offsets_cpu[e] as usize;
@@ -354,11 +387,11 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
             continue;
         }
 
-        // (a) Gather: write F16 [n_e, K] from inputs by token_id/topk.
-        let gather_alloc = unsafe { dev.alloc::<f16>(n_e * k_in) }?;
+        // (a) Gather: write F16 [n_e, K] from inputs by token_id/topk
+        //     into the persistent gather_max workspace (prefix slice).
         let inp_ptr  = inputs_slice.device_ptr(inputs_slice.stream()).0 as *const f32;
         let st_ptr   = st_slice.device_ptr(st_slice.stream()).0 as *const i32;
-        let gath_ptr = gather_alloc.device_ptr(gather_alloc.stream()).0
+        let gath_ptr = gather_max.device_ptr(gather_max.stream()).0
             as *mut core::ffi::c_void;
         unsafe {
             ffi::moe_gather_input_rows_f32_to_f16(
@@ -368,25 +401,35 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
             );
         }
 
-        // (b) Dequantize expert e's gate_up weights: F16 [2N, K].
-        let weight_storage = candle::quantized::cuda::dequantize_q4k_expert_f16(
-            weight_data_ptr, weight_data_len_bytes, e, two_n, k_w, dev,
+        // (b) Dequantize expert e's gate_up weights into the persistent
+        //     weight_max workspace.
+        let weight_ptr = weight_max.device_ptr(weight_max.stream()).0 as u64;
+        candle::quantized::cuda::dequantize_q4k_expert_into_f16(
+            weight_data_ptr, weight_data_len_bytes, e, two_n, k_w,
+            weight_ptr, dev,
         )?;
-        let weight_tensor = Tensor::from_storage(
-            candle::Storage::Cuda(weight_storage),
-            (two_n, k_w),
+
+        // (c) cuBLAS GEMM: [n_e, 2N] = gather_max[..n_e × k_in] @ weight_max^T.
+        //     Wrap workspaces as tensors for the duration of the matmul.
+        //     SAFETY: cloning a CudaSlice bumps the underlying refcount;
+        //     no aliased mutability since both views are read-only into
+        //     the matmul.
+        let gather_clone = gather_max.try_clone()
+            .map_err(|e| candle::Error::Msg(format!("gather workspace clone: {e}")))?;
+        let weight_clone = weight_max.try_clone()
+            .map_err(|e| candle::Error::Msg(format!("weight workspace clone: {e}")))?;
+        let gather_storage = candle::CudaStorage::wrap_cuda_slice(gather_clone, dev.clone());
+        let gather_tensor = Tensor::from_storage(
+            candle::Storage::Cuda(gather_storage),
+            (max_n_e, k_in),
             candle::op::BackpropOp::none(),
             false,
         );
-
-        // (c) cuBLAS GEMM: [n_e, 2N] = gathered @ weight^T.
-        //     Wrap the gathered F16 alloc into a Tensor, matmul against
-        //     weight_tensor.t(). candle's Tensor::matmul routes F16
-        //     through gemm_strided_batched_f16 which uses tensor cores.
-        let gather_storage = candle::CudaStorage::wrap_cuda_slice(gather_alloc, dev.clone());
-        let gather_tensor = Tensor::from_storage(
-            candle::Storage::Cuda(gather_storage),
-            (n_e, k_in),
+        let gather_tensor = gather_tensor.narrow(0, 0, n_e)?;
+        let weight_storage = candle::CudaStorage::wrap_cuda_slice(weight_clone, dev.clone());
+        let weight_tensor = Tensor::from_storage(
+            candle::Storage::Cuda(weight_storage),
+            (two_n, k_w),
             candle::op::BackpropOp::none(),
             false,
         );
