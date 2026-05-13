@@ -119,6 +119,36 @@ extern "C" {
         stream: i64,
     );
 
+    /// Phase 1 step-3: gather input rows for per-expert dispatch.
+    /// Writes a contiguous [n_e, K] F16 buffer where row i is
+    /// `inputs[sorted_token_ids[start+i] / topk]`. One CUDA block per
+    /// output row, one thread per K element (strided).
+    pub fn moe_gather_input_rows_f32_to_f16(
+        inputs: *const f32,
+        sorted_token_ids: *const i32,
+        out_f16: *mut core::ffi::c_void,
+        n_e: i32,
+        start: i32,
+        k: i32,
+        topk: i32,
+        stream: i64,
+    );
+
+    /// Phase 1 step-3: GELU·mul + scatter for per-expert dispatch.
+    /// Input is the cuBLAS GEMM output `[n_e, 2N]` F16; for each row,
+    /// applies `gelu_tanh(gate) * up` and scatters the resulting
+    /// `[N]` row into the final F32 output at index
+    /// `sorted_token_ids[start+i]`.
+    pub fn moe_gelu_mul_scatter_f16_to_f32(
+        in_f16: *const core::ffi::c_void,
+        sorted_token_ids: *const i32,
+        out_f32: *mut f32,
+        n_e: i32,
+        start: i32,
+        n: i32,
+        stream: i64,
+    );
+
     /// Fused quantized matmul + residual add. `dst` must be PRE-INITIALIZED
     /// with the residual (e.g. via cuMemcpyDtoDAsync of an F32 tensor).
     /// Kernel atomicAdds matmul partial sums into `dst`. Output =

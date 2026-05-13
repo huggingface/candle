@@ -81,6 +81,105 @@ extern "C" void moe_expert_offsets(
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 1 step-3: input gather for per-expert dispatch.
+//
+// Given a sub-range `sorted_token_ids[start..end]` of pair indices (each
+// `pair_idx = real_token_idx × topk + k`), produces a contiguous F16
+// buffer `[N_e, K]` whose row `i` is `inputs[sorted_token_ids[start+i] / topk]`.
+//
+// One block per output row, one thread per K element (with strided loop
+// for K > block_dim). Output is contiguous, ready for cuBLAS GEMM with
+// the dequantized expert weights.
+// ─────────────────────────────────────────────────────────────────────────
+extern "C" __global__ void moe_gather_input_rows_f32_to_f16_kernel(
+    const float* __restrict__ inputs,           // [num_real_tokens, K]
+    const int32_t* __restrict__ sorted_token_ids, // [size_m]
+    __half* __restrict__ out,                   // [n_e, K]
+    const int start,
+    const int K,
+    const int topk
+) {
+    const int row = blockIdx.x;
+    const int pair_idx = sorted_token_ids[start + row];
+    const int real_token = pair_idx / topk;
+    const float* __restrict__ src = inputs + (size_t)real_token * K;
+    __half*       __restrict__ dst = out    + (size_t)row        * K;
+    for (int i = threadIdx.x; i < K; i += blockDim.x) {
+        dst[i] = __float2half(src[i]);
+    }
+}
+
+extern "C" void moe_gather_input_rows_f32_to_f16(
+    const float* inputs,
+    const int32_t* sorted_token_ids,
+    void* out_f16,
+    int n_e,
+    int start,
+    int K,
+    int topk,
+    cudaStream_t stream
+) {
+    if (n_e <= 0) return;
+    const int block = (K < 256) ? K : 256;
+    dim3 grid(n_e, 1, 1);
+    dim3 blk(block, 1, 1);
+    moe_gather_input_rows_f32_to_f16_kernel<<<grid, blk, 0, stream>>>(
+        inputs, sorted_token_ids, (__half*)out_f16, start, K, topk
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 1 step-3: GELU(gate) * up + scatter to final output.
+//
+// Per-expert post-GEMM step. Input is `[n_e, 2N]` F16 from the cuBLAS
+// GEMM (concatenated gate||up). For each row i in [0, n_e):
+//   gate_act = gelu_tanh(in[i, 0..N])
+//   out[sorted_token_ids[start+i], n] = gate_act[n] * in[i, N+n]
+// where `out` is the final `[size_m, N]` F32 buffer.
+// Atomic not needed — sorted_token_ids[start..start+n_e] are unique within
+// an expert's range so each output row is written exactly once.
+// ─────────────────────────────────────────────────────────────────────────
+extern "C" __global__ void moe_gelu_mul_scatter_f16_to_f32_kernel(
+    const __half* __restrict__ in,              // [n_e, 2N]
+    const int32_t* __restrict__ sorted_token_ids, // [size_m]
+    float* __restrict__ out,                    // [size_m, N]
+    const int start,
+    const int N
+) {
+    const int row = blockIdx.x;
+    const int two_n = N << 1;
+    const __half* __restrict__ row_in = in + (size_t)row * two_n;
+    const int pair_idx = sorted_token_ids[start + row];
+    float* __restrict__ row_out = out + (size_t)pair_idx * N;
+    const float k0 = 0.7978845608028654f;       // sqrt(2/pi)
+    const float k1 = 0.044715f;
+    for (int n = threadIdx.x; n < N; n += blockDim.x) {
+        const float g = __half2float(row_in[n]);
+        const float u = __half2float(row_in[N + n]);
+        const float gelu = 0.5f * g * (1.0f + tanhf(k0 * (g + k1 * g * g * g)));
+        row_out[n] = gelu * u;
+    }
+}
+
+extern "C" void moe_gelu_mul_scatter_f16_to_f32(
+    const void* in_f16,
+    const int32_t* sorted_token_ids,
+    float* out_f32,
+    int n_e,
+    int start,
+    int N,
+    cudaStream_t stream
+) {
+    if (n_e <= 0) return;
+    const int block = (N < 256) ? N : 256;
+    dim3 grid(n_e, 1, 1);
+    dim3 blk(block, 1, 1);
+    moe_gelu_mul_scatter_f16_to_f32_kernel<<<grid, blk, 0, stream>>>(
+        (const __half*)in_f16, sorted_token_ids, out_f32, start, N
+    );
+}
+
 namespace vllm_rs {
 
 /*
