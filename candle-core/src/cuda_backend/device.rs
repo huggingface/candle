@@ -183,6 +183,26 @@ impl CudaDevice {
         self.stream.clone()
     }
 
+    /// Number of streaming multiprocessors on this CUDA device. Cached
+    /// after first query so the driver call cost amortises to zero.
+    /// Used for adaptive grid-sizing heuristics in tiny-batch GEMV /
+    /// quantize launches (saturate SMs without over-subscribing).
+    pub fn multiprocessor_count(&self) -> usize {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static CACHED: AtomicUsize = AtomicUsize::new(0);
+        let cached = CACHED.load(Ordering::Relaxed);
+        if cached != 0 {
+            return cached;
+        }
+        use cudarc::driver::sys;
+        let count: usize = self.context
+            .attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+            .map(|v| v as usize)
+            .unwrap_or(64); // safe default — most modern GPUs ≥ 60 SMs
+        CACHED.store(count, Ordering::Relaxed);
+        count
+    }
+
     /// Configure the CUDA memory pool for graph capture compatibility.
     ///
     /// Sets `CU_MEMPOOL_ATTR_RELEASE_THRESHOLD` to `u64::MAX` so the pool never

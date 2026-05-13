@@ -44,6 +44,40 @@ fn pad(p: usize, q: usize) -> usize {
     ceil_div(p, q) * q
 }
 
+/// Adaptive grid sizing for tiny-batch GEMV/quantize launches.
+///
+/// When the natural grid (num_blocks_x × grid_y) is smaller than the
+/// device's SM count, halve `block_dim_x` and double `grid_dim_x` until
+/// the SMs would be saturated. Caps at 64 threads/block (min two warps)
+/// and a 4x grid expansion. Source: SGLang Blackwell NVFP4 MoE blog +
+/// ggml-cuda mmvq launch helper.
+///
+/// `block_dim_x` must be a multiple of 32 (warp size) for kernels that
+/// use warp reductions. Returns the adjusted (block_x, grid_x) pair.
+fn adaptive_block_grid_x(
+    block_x: u32,
+    grid_x: u32,
+    grid_y: u32,
+    sm_count: u32,
+) -> (u32, u32) {
+    // Lower bound: 64 threads/block (2 warps; still safe for warp_reduce).
+    // Upper bound on expansion: 4x (avoid pathological tiny blocks).
+    const MIN_BLOCK_X: u32 = 64;
+    const MAX_EXPANSION: u32 = 4;
+    let mut block_x = block_x;
+    let mut grid_x = grid_x;
+    let mut expanded = 1u32;
+    while grid_x * grid_y < sm_count
+        && block_x > MIN_BLOCK_X
+        && expanded < MAX_EXPANSION
+    {
+        block_x /= 2;
+        grid_x *= 2;
+        expanded *= 2;
+    }
+    (block_x, grid_x)
+}
+
 fn quantize_q8_1(
     src: &CudaView<f32>,
     dst: &mut CudaSlice<u8>,
@@ -83,9 +117,17 @@ fn quantize_q8_1(
         let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
         let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
 
+        // Adaptive grid sizing: when natural grid is < SM count,
+        // halve block / double grid to saturate SMs.
+        let (block_x, grid_x) = adaptive_block_grid_x(
+            CUDA_QUANTIZE_BLOCK_SIZE as u32,
+            num_blocks as u32,
+            rows_in_chunk as u32,
+            dev.multiprocessor_count() as u32,
+        );
         let cfg = cudarc::driver::LaunchConfig {
-            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
-            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            grid_dim: (grid_x, rows_in_chunk as u32, 1),
+            block_dim: (block_x, 1, 1),
             shared_mem_bytes: 0,
         };
 
@@ -141,9 +183,17 @@ fn quantize_q8_0_f32(
         let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
         let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
 
+        // Adaptive grid sizing: when natural grid is < SM count,
+        // halve block / double grid to saturate SMs.
+        let (block_x, grid_x) = adaptive_block_grid_x(
+            CUDA_QUANTIZE_BLOCK_SIZE as u32,
+            num_blocks as u32,
+            rows_in_chunk as u32,
+            dev.multiprocessor_count() as u32,
+        );
         let cfg = cudarc::driver::LaunchConfig {
-            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
-            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            grid_dim: (grid_x, rows_in_chunk as u32, 1),
+            block_dim: (block_x, 1, 1),
             shared_mem_bytes: 0,
         };
 
@@ -193,9 +243,17 @@ fn quantize_q8_0_f16(
         let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
         let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
 
+        // Adaptive grid sizing: when natural grid is < SM count,
+        // halve block / double grid to saturate SMs.
+        let (block_x, grid_x) = adaptive_block_grid_x(
+            CUDA_QUANTIZE_BLOCK_SIZE as u32,
+            num_blocks as u32,
+            rows_in_chunk as u32,
+            dev.multiprocessor_count() as u32,
+        );
         let cfg = cudarc::driver::LaunchConfig {
-            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
-            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            grid_dim: (grid_x, rows_in_chunk as u32, 1),
+            block_dim: (block_x, 1, 1),
             shared_mem_bytes: 0,
         };
 
@@ -247,9 +305,17 @@ fn quantize_q4_0_f32(
         let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
         let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
 
+        // Adaptive grid sizing: when natural grid is < SM count,
+        // halve block / double grid to saturate SMs.
+        let (block_x, grid_x) = adaptive_block_grid_x(
+            CUDA_QUANTIZE_BLOCK_SIZE as u32,
+            num_blocks as u32,
+            rows_in_chunk as u32,
+            dev.multiprocessor_count() as u32,
+        );
         let cfg = cudarc::driver::LaunchConfig {
-            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
-            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            grid_dim: (grid_x, rows_in_chunk as u32, 1),
+            block_dim: (block_x, 1, 1),
             shared_mem_bytes: 0,
         };
 
@@ -297,9 +363,17 @@ fn quantize_q4_0_f16(
         let dst_num_bytes = rows_in_chunk * dst_row_size_bytes;
         let dst_chunk = dst.slice(dst_start_byte..(dst_start_byte + dst_num_bytes));
 
+        // Adaptive grid sizing: when natural grid is < SM count,
+        // halve block / double grid to saturate SMs.
+        let (block_x, grid_x) = adaptive_block_grid_x(
+            CUDA_QUANTIZE_BLOCK_SIZE as u32,
+            num_blocks as u32,
+            rows_in_chunk as u32,
+            dev.multiprocessor_count() as u32,
+        );
         let cfg = cudarc::driver::LaunchConfig {
-            grid_dim: (num_blocks as u32, rows_in_chunk as u32, 1),
-            block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+            grid_dim: (grid_x, rows_in_chunk as u32, 1),
+            block_dim: (block_x, 1, 1),
             shared_mem_bytes: 0,
         };
 
