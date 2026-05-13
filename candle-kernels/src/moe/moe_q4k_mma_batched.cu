@@ -126,16 +126,64 @@ extern "C" __global__ void moe_q4k_mma_batched_gate_up_kernel(
 
     if (m_base >= max_n_e || n_base >= two_n) return;
 
-    // TODO: implement mma.sync inner loop here. The structure:
-    //   for k_tile in 0..K / MMA_K:
-    //     unpack Q4_K nibbles for this (n_tile, k_tile) into INT8 frag
-    //     load Q8_1-quantized inputs for this (m_tile, k_tile) into INT8 frag
-    //     mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 acc, weights, inputs, acc
-    //   apply Q4_K (dall, dmin) scale to accumulator
-    //   if m < n_e: write F16 dst[act_idx, m, n]
-    //   else (padded): write 0
+    using moe_q4k_mma_batched_ns::block_q4_K_mma;
+    using moe_q4k_mma_batched_ns::QK_K_MMA;
+    using moe_q4k_mma_batched_ns::MMA_M;
+    using moe_q4k_mma_batched_ns::MMA_N;
+    using moe_q4k_mma_batched_ns::MMA_K;
 
-    // Stub: silence unused-warning while the body is wired.
-    (void)gate_up_w; (void)inputs_y; (void)dst;
-    (void)num_experts; (void)K; (void)n_e;
+    const int lane = threadIdx.x;
+    const int blocks_per_row = K / QK_K_MMA;    // Q4_K super-blocks per weight row
+    const int two_n_loc      = two_n;            // gate||up packed: 2N rows total
+
+    // Weight base pointer for this expert. Each expert has [2N, K/QK_K_MMA]
+    // Q4_K super-blocks stored contiguously.
+    const block_q4_K_mma * w_expert =
+        (const block_q4_K_mma *) gate_up_w
+        + (size_t)expert * two_n_loc * blocks_per_row;
+
+    // Inputs are F16 [N_active, max_n_e, K]; this block's slab is the
+    // expert's [max_n_e, K] slice at offset act_idx * max_n_e * K elems.
+    const __half * y_slab = (const __half *) inputs_y
+        + ((size_t)act_idx * max_n_e + m_base) * K;
+
+    // MMA accumulator fragment: 4 i32 lanes per thread = [16, 8] tile.
+    int acc[4] = {0, 0, 0, 0};
+
+    // Loop K in MMA_K-sized chunks. For Q4_K (256 elems per block) and
+    // MMA_K=32, each super-block covers 8 mma K-tiles. The Q4_K
+    // (dall, dmin) scale is per-super-block, so we accumulate the
+    // raw INT32 dot then scale at the end.
+    //
+    // NOTE: this loop body is the WORK-IN-PROGRESS half. The
+    // INT8 lane assembly from Q4_K nibbles + the Q8_1 input lane
+    // load + the inline mma.sync need to be wired exactly like
+    // moe_q4k_imma_gate_up_gelu_mul_concat_kernel does it (lines
+    // 130-185 of moe_q4k_imma_gate_up.cu) — adapted to read the
+    // INPUT side from y_slab (gather workspace) instead of vy
+    // (per-token Q8_1 cache).
+    //
+    // The dispatch + accumulator layout above is correct; the
+    // remaining work is plumbing the INT8 fragments through the
+    // existing mma.sync asm block.
+    for (int kb = 0; kb < blocks_per_row; ++kb) {
+        const block_q4_K_mma * wb = w_expert
+            + (size_t)(n_base + lane / 4) * blocks_per_row + kb;
+        (void)wb;
+        // ...inner mma.sync.aligned.m16n8k32 calls per K-tile...
+    }
+
+    // Write F16 output. Each thread writes one element of the
+    // [16, 8] tile based on its lane mapping.
+    const int m_out = m_base + (lane >> 2);
+    const int n_out = n_base + (lane & 3);
+    if (m_out < n_e && m_out < max_n_e && n_out < two_n) {
+        __half * dst_h = (__half *) dst
+            + ((size_t)act_idx * max_n_e + m_out) * two_n_loc
+            + n_out;
+        // Once the mma asm fills acc[], this should be a scaled cast.
+        *dst_h = __float2half((float)acc[0]);
+    }
+
+    (void)num_experts;
 }
