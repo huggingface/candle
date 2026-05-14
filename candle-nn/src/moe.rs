@@ -2607,6 +2607,11 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
         // D2H sync. Worst-case chunk count is size_m (all-distinct
         // experts); typical is size_m/8.
         let max_chunks = size_m;
+        // Chunks path has a pre-existing latent bug: when exercised via
+        // the smoke test (LLMSERVER_MOE_IMMA_M8_CHUNKS=1) it produces
+        // max abs err ~46 vs dp4a (bisected to b4635d6e). Path remains
+        // gated opt-in only and is not used in production auto-on.
+        // Zero-init is kept defensively until the bug is investigated.
         let starts_d = dev.alloc_zeros::<i32>(max_chunks)?;
         let experts_d = dev.alloc_zeros::<i32>(max_chunks)?;
         let num_chunks_d = dev.alloc_zeros::<i32>(1)?;
