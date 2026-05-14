@@ -12,6 +12,10 @@ pub struct Attention {
     heads: usize,
     scale: f64,
     use_flash_attn: bool,
+    // (k, v) projections of encoder_hidden_states. Constant across all
+    // denoise steps for a single generation — keyed by the input
+    // Tensor's stable id().
+    context_kv_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor, Tensor)>>,
 }
 
 #[cfg(feature = "flash-attn")]
@@ -52,6 +56,7 @@ impl Attention {
             scale,
             heads,
             use_flash_attn,
+            context_kv_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -79,12 +84,22 @@ impl Attention {
         let xs = xs.reshape((b_size, channel, h * w))?.t()?;
 
         let query = self.to_q.forward(&xs)?;
-        let key = self.to_k.forward(encoder_hidden_states)?;
-        let value = self.to_v.forward(encoder_hidden_states)?;
-
         let query = self.head_to_batch_dim(&query)?;
-        let key = self.head_to_batch_dim(&key)?;
-        let value = self.head_to_batch_dim(&value)?;
+        // Cache encoder_hidden_states' K/V projection across denoise
+        // steps — context content is constant for a given image gen.
+        let (key, value) = {
+            let ctx_id = encoder_hidden_states.id();
+            let mut g = self.context_kv_cache.lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                Some((id, ref k, ref v)) if id == ctx_id => (k.clone(), v.clone()),
+                _ => {
+                    let k = self.head_to_batch_dim(&self.to_k.forward(encoder_hidden_states)?)?;
+                    let v = self.head_to_batch_dim(&self.to_v.forward(encoder_hidden_states)?)?;
+                    *g = Some((ctx_id, k.clone(), v.clone()));
+                    (k, v)
+                }
+            }
+        };
 
         let xs = if self.use_flash_attn {
             let init_dtype = query.dtype();
