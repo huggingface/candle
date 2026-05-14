@@ -38,6 +38,28 @@ pub const FREQUENCY_EMBEDDING_SIZE: usize = 256;
 /// Max period for sinusoidal encoding
 pub const MAX_PERIOD: f64 = 10000.0;
 
+/// Cache the `freqs` (= exp(arange * -ln(MAX_PERIOD)/half)) tensor across
+/// denoise steps. Depends only on (device_location, half) and is reused as
+/// a broadcast operand once per call — saves 4 kernel launches per step.
+fn timestep_freqs_cached(dev: &Device, half: usize) -> Result<Tensor> {
+    use std::sync::{Mutex, OnceLock};
+    use std::collections::HashMap;
+    static CACHE: OnceLock<Mutex<HashMap<(candle::DeviceLocation, usize), Tensor>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (dev.location(), half);
+    if let Ok(g) = cache.lock() {
+        if let Some(t) = g.get(&key) {
+            return Ok(t.clone());
+        }
+    }
+    let arange = Tensor::arange(0u32, half as u32, dev)?.to_dtype(DType::F32)?;
+    let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?.unsqueeze(0)?;
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, freqs.clone());
+    }
+    Ok(freqs)
+}
+
 // ==================== Config ====================
 
 /// Z-Image Transformer configuration
@@ -192,12 +214,12 @@ impl TimestepEmbedder {
 
     fn timestep_embedding(&self, t: &Tensor, device: &Device, dtype: DType) -> Result<Tensor> {
         let half = self.frequency_embedding_size / 2;
-        let freqs = Tensor::arange(0u32, half as u32, device)?.to_dtype(DType::F32)?;
-        let freqs = (freqs * (-MAX_PERIOD.ln() / half as f64))?.exp()?;
+        // Cache freqs across denoise steps — depends only on (device, half).
+        let freqs = timestep_freqs_cached(device, half)?;
         let args = t
             .unsqueeze(1)?
             .to_dtype(DType::F32)?
-            .broadcast_mul(&freqs.unsqueeze(0)?)?;
+            .broadcast_mul(&freqs)?;
         let embedding = Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?;
         embedding.to_dtype(dtype)
     }

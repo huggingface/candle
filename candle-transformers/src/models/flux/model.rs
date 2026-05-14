@@ -136,21 +136,43 @@ pub(crate) fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Resu
 
 pub(crate) fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
     const TIME_FACTOR: f64 = 1000.;
-    const MAX_PERIOD: f64 = 10000.;
     if dim % 2 == 1 {
         candle::bail!("{dim} is odd")
     }
     let dev = t.device();
     let half = dim / 2;
     let t = (t * TIME_FACTOR)?;
-    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(candle::DType::F32)?;
-    let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?;
+    // `freqs` depends only on (device, dim) — cache it across denoise steps
+    // so a 4-9 step Flux/Z-Image run skips 4 kernel launches per step
+    // (arange + to_dtype + mul + exp). The cached tensor is a slim
+    // F32 [1, half] row used once per call as a broadcast operand.
+    let freqs = timestep_freqs_cached(dev, half)?;
     let args = t
         .unsqueeze(1)?
         .to_dtype(candle::DType::F32)?
-        .broadcast_mul(&freqs.unsqueeze(0)?)?;
+        .broadcast_mul(&freqs)?;
     let emb = Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)?;
     Ok(emb)
+}
+
+fn timestep_freqs_cached(dev: &candle::Device, half: usize) -> Result<Tensor> {
+    use std::sync::{Mutex, OnceLock};
+    use std::collections::HashMap;
+    static CACHE: OnceLock<Mutex<HashMap<(candle::DeviceLocation, usize), Tensor>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (dev.location(), half);
+    if let Ok(g) = cache.lock() {
+        if let Some(t) = g.get(&key) {
+            return Ok(t.clone());
+        }
+    }
+    const MAX_PERIOD: f64 = 10000.;
+    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(candle::DType::F32)?;
+    let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?.unsqueeze(0)?;
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, freqs.clone());
+    }
+    Ok(freqs)
 }
 
 #[derive(Debug, Clone)]
