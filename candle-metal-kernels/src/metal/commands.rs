@@ -110,6 +110,8 @@ pub struct Commands {
     state: Mutex<EntryState>,
     compute_count: AtomicUsize,
     command_queue: CommandQueue,
+    /// The maximum amount of [compute command encoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc)
+    /// per [command buffer](https://developer.apple.com/documentation/metal/mtlcommandbuffer?language=objc)
     compute_per_buffer: usize,
     device: Device,
     /// Global cross-encoder output map. Maps buffer pointer to the fence of the last encoder

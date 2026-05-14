@@ -172,8 +172,6 @@ impl MetalDevice {
             .wait_until_completed()
             .map_err(MetalError::from)?;
 
-        // Drop unused buffers only after all in-flight CBs are confirmed complete.
-        // With commandBufferWithUnretainedReferences, buffers must stay alive until GPU is done.
         self.drop_unused_buffers()?;
         Ok(())
     }
