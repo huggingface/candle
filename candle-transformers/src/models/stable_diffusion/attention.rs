@@ -90,6 +90,14 @@ pub struct CrossAttention {
     span_attn: tracing::Span,
     span_softmax: tracing::Span,
     use_flash_attn: bool,
+    // When `context` is passed (i.e. cross-attention against the
+    // constant encoder_hidden_states), key/value projections are pure
+    // functions of context and don't change across denoise steps. Cache
+    // the reshaped (k, v) pair by context's TensorId so subsequent
+    // calls in the same generation skip 2 linear projections + 2
+    // reshapes per cross-attention block per step. Cleared automatically
+    // on cross-image gens because the new context has a fresh id().
+    context_kv_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor, Tensor)>>,
 }
 
 impl CrossAttention {
@@ -125,6 +133,7 @@ impl CrossAttention {
             span_attn,
             span_softmax,
             use_flash_attn,
+            context_kv_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -208,12 +217,32 @@ impl CrossAttention {
     pub fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
         let query = self.to_q.forward(xs)?;
-        let context = context.unwrap_or(xs).contiguous()?;
-        let key = self.to_k.forward(&context)?;
-        let value = self.to_v.forward(&context)?;
         let query = self.reshape_heads_to_batch_dim(&query)?;
-        let key = self.reshape_heads_to_batch_dim(&key)?;
-        let value = self.reshape_heads_to_batch_dim(&value)?;
+        // Cross-attention (context provided) → (k,v) cache by context id;
+        // self-attention (context = None) → no cache, recompute every call
+        // since xs varies per step.
+        let (key, value) = match context {
+            Some(ctx) => {
+                let ctx_id = ctx.id();
+                let mut g = self.context_kv_cache.lock().unwrap_or_else(|e| e.into_inner());
+                match *g {
+                    Some((id, ref k, ref v)) if id == ctx_id => (k.clone(), v.clone()),
+                    _ => {
+                        let ctx_c = ctx.contiguous()?;
+                        let k = self.reshape_heads_to_batch_dim(&self.to_k.forward(&ctx_c)?)?;
+                        let v = self.reshape_heads_to_batch_dim(&self.to_v.forward(&ctx_c)?)?;
+                        *g = Some((ctx_id, k.clone(), v.clone()));
+                        (k, v)
+                    }
+                }
+            }
+            None => {
+                let xs_c = xs.contiguous()?;
+                let k = self.reshape_heads_to_batch_dim(&self.to_k.forward(&xs_c)?)?;
+                let v = self.reshape_heads_to_batch_dim(&self.to_v.forward(&xs_c)?)?;
+                (k, v)
+            }
+        };
         let dim0 = query.dim(0)?;
         let slice_size = self.slice_size.and_then(|slice_size| {
             if dim0 < slice_size {
