@@ -2230,7 +2230,9 @@ pub fn dense_q4k_imma_m8_matmul(
         }
     }
 
-    let output = dev.alloc_zeros::<f32>(size_m * size_n)?;
+    // Uninit alloc: dense_q4k_imma_m8_matmul writes every valid (tok,
+    // row) via bounds-checked stores; output is fully covered.
+    let output = unsafe { dev.alloc::<f32>(size_m * size_n)? };
     unsafe {
         ffi::dense_q4k_imma_m8_matmul(
             w_ptr as *const c_void,
