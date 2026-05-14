@@ -333,7 +333,7 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
         _ => candle::bail!("expert_offsets must be CUDA i32"),
     };
     let offsets_cpu: Vec<i32> = dev.cuda_stream()
-        .memcpy_dtov(off_slice)
+        .clone_dtoh(off_slice)
         .map_err(|e| candle::Error::Msg(format!("expert_offsets D2H: {e}")))?;
     if offsets_cpu.len() < num_experts + 1 {
         candle::bail!(
@@ -414,7 +414,7 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
 
     // ── Step (b'): batched dequant of all active experts in ONE launch.
     let active_ids_alloc = dev.cuda_stream()
-        .memcpy_stod(&active_expert_ids)
+        .clone_htod(&active_expert_ids)
         .map_err(|e| candle::Error::Msg(format!("active_expert_ids H2D: {e}")))?;
     {
         let act_ptr = active_ids_alloc.device_ptr(active_ids_alloc.stream()).0 as *const i32;
