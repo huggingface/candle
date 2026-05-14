@@ -2214,9 +2214,12 @@ pub fn dense_q4k_imma_m8_matmul(
     };
     let w_ptr = weights.device_ptr()?;
 
-    // Pre-quantize F32 → Q8_1 per row.
+    // Pre-quantize F32 → Q8_1 per row. Uninit alloc: the quantize
+    // kernel writes every byte of every block_q8_1 (size_m rows ×
+    // num_super super-blocks × 36 bytes), so zero-init would be a
+    // wasted memset.
     let q81_bytes = size_m * (size_k / 32) * 36;
-    let q81_alloc = dev.alloc_zeros::<u8>(q81_bytes)?;
+    let q81_alloc = unsafe { dev.alloc::<u8>(q81_bytes)? };
     {
         let inp = input_slice.device_ptr(input_slice.stream()).0 as *const c_void;
         let q81 = q81_alloc.device_ptr(q81_alloc.stream()).0 as *mut c_void;
@@ -2302,9 +2305,10 @@ pub fn dense_q4k_imma_m8_silu_mul(
     let gate_ptr = gate_weights.device_ptr()?;
     let up_ptr   = up_weights.device_ptr()?;
 
-    // Pre-quantize F32 → Q8_1 per token.
+    // Pre-quantize F32 → Q8_1 per token. Uninit alloc — quantize kernel
+    // writes every byte (size_m × num_super × 36 bytes).
     let q81_bytes = size_m * (size_k / 32) * 36;
-    let q81_alloc = dev.alloc_zeros::<u8>(q81_bytes)?;
+    let q81_alloc = unsafe { dev.alloc::<u8>(q81_bytes)? };
     {
         let inp = input_slice.device_ptr(input_slice.stream()).0 as *const c_void;
         let q81 = q81_alloc.device_ptr(q81_alloc.stream()).0 as *mut c_void;
@@ -2407,9 +2411,10 @@ pub fn moe_q4k_imma_m8_down_reduce(
     };
     let weight_ptr = weights.device_ptr()?;
 
-    // Pre-quantize input → Q8_1 (per pair).
+    // Pre-quantize input → Q8_1 (per pair). Uninit alloc — quantize
+    // kernel writes every byte (size_m × num_super × 36 bytes).
     let q81_bytes = size_m * (size_k / 32) * 36;
-    let q81_alloc = dev.alloc_zeros::<u8>(q81_bytes)?;
+    let q81_alloc = unsafe { dev.alloc::<u8>(q81_bytes)? };
     {
         let inp_ptr = input_slice.device_ptr(input_slice.stream()).0 as *const c_void;
         let q81_ptr = q81_alloc.device_ptr(q81_alloc.stream()).0 as *mut c_void;
@@ -2562,9 +2567,10 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
     };
     let weight_ptr = gate_up_weights.device_ptr()?;
 
-    // Pre-quantize F32 → Q8_1 (per real token).
+    // Pre-quantize F32 → Q8_1 (per real token). Uninit alloc — quantize
+    // kernel writes every byte (size_m_in × num_super × 36 bytes).
     let q81_bytes = size_m_in * (size_k / 32) * 36;
-    let q81_alloc = dev.alloc_zeros::<u8>(q81_bytes)?;
+    let q81_alloc = unsafe { dev.alloc::<u8>(q81_bytes)? };
     {
         let inp_ptr = input_slice.device_ptr(input_slice.stream()).0 as *const c_void;
         let q81_ptr = q81_alloc.device_ptr(q81_alloc.stream()).0 as *mut c_void;
