@@ -1,92 +1,50 @@
-use crate::{BlitCommandEncoder, ComputeCommandEncoder};
+use super::{BlitCommandEncoder, ComputeCommandEncoder, Device, Fence, PrevCeOutputs};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
 use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus, MTLDispatchType};
 use std::borrow::Cow;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum CommandStatus {
-    Available,
-    Encoding,
-    Done,
-}
-
-#[derive(Debug)]
-pub struct CommandSemaphore {
-    pub cond: Condvar,
-    pub status: Mutex<CommandStatus>,
-}
-
-impl CommandSemaphore {
-    pub fn new() -> CommandSemaphore {
-        CommandSemaphore {
-            cond: Condvar::new(),
-            status: Mutex::new(CommandStatus::Available),
-        }
-    }
-
-    pub fn wait_until<F: FnMut(&mut CommandStatus) -> bool>(
-        &self,
-        mut f: F,
-    ) -> MutexGuard<'_, CommandStatus> {
-        self.cond
-            .wait_while(self.status.lock().unwrap(), |s| !f(s))
-            .unwrap()
-    }
-
-    pub fn set_status(&self, status: CommandStatus) {
-        *self.status.lock().unwrap() = status;
-        // We notify the condvar that the value has changed.
-        self.cond.notify_one();
-    }
-
-    pub fn when<T, B: FnMut(&mut CommandStatus) -> bool, F: FnMut() -> T>(
-        &self,
-        b: B,
-        mut f: F,
-        next: Option<CommandStatus>,
-    ) -> T {
-        let mut guard = self.wait_until(b);
-        let v = f();
-        if let Some(status) = next {
-            *guard = status;
-            self.cond.notify_one();
-        }
-        v
-    }
-}
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct CommandBuffer {
     raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
-    semaphore: Arc<CommandSemaphore>,
 }
 
 unsafe impl Send for CommandBuffer {}
 unsafe impl Sync for CommandBuffer {}
 
 impl CommandBuffer {
-    pub fn new(
-        raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
-        semaphore: Arc<CommandSemaphore>,
-    ) -> Self {
-        Self { raw, semaphore }
+    pub fn new(raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>) -> Self {
+        Self { raw }
     }
 
-    pub fn compute_command_encoder(&self) -> ComputeCommandEncoder {
-        // Concurrent dispatching allows the GPU to reorder independent dispatches.
-        // We prevent read after write using dependency aware barriers in [`ComputeCommandEncoder`].
+    /// Create a compute command encoder with the provided per-encoder fence and global output map.
+    pub fn compute_command_encoder(&self, fence: &Arc<Fence>) -> ComputeCommandEncoder {
         self.as_ref()
             .computeCommandEncoderWithDispatchType(MTLDispatchType::Concurrent)
-            .map(|raw| ComputeCommandEncoder::new(raw, Arc::clone(&self.semaphore)))
+            .map(|raw| ComputeCommandEncoder::new(raw, self.raw.clone(), Arc::clone(fence)))
             .unwrap()
     }
 
-    pub fn blit_command_encoder(&self) -> BlitCommandEncoder {
+    /// Create a compute command encoder with freshly allocated fence and a standalone output map.
+    /// Used by tests and `EncoderProvider` implementations that don't share a global fence map.
+    pub fn compute_command_encoder_no_fence(&self) -> ComputeCommandEncoder {
+        let device = Device::new(self.raw.device());
+        let fence = Arc::new(Fence::new(&device));
+        self.as_ref()
+            .computeCommandEncoderWithDispatchType(MTLDispatchType::Concurrent)
+            .map(|raw| ComputeCommandEncoder::new(raw, self.raw.clone(), fence))
+            .unwrap()
+    }
+
+    pub fn blit_command_encoder(
+        &self,
+        fence: &Arc<Fence>,
+        prev_ce_outputs: &PrevCeOutputs,
+    ) -> BlitCommandEncoder {
         self.as_ref()
             .blitCommandEncoder()
-            .map(|raw| BlitCommandEncoder::new(raw, Arc::clone(&self.semaphore)))
+            .map(|raw| BlitCommandEncoder::new(raw, Arc::clone(fence), Arc::clone(prev_ce_outputs)))
             .unwrap()
     }
 

@@ -1,8 +1,27 @@
-use crate::metal::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
+use crate::metal::{Buffer, CommandsGuard, ComputeCommandEncoder, ComputePipeline};
 use crate::MTLSize;
 use std::ffi::OsStr;
 use std::ops::Deref;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
+
+pub struct WrappedEncoder<'a> {
+    inner: &'a ComputeCommandEncoder,
+    end_encoding_on_drop: bool,
+}
+
+impl Drop for WrappedEncoder<'_> {
+    fn drop(&mut self) {
+        if self.end_encoding_on_drop {
+            self.inner.end_encoding()
+        }
+    }
+}
+
+impl AsRef<ComputeCommandEncoder> for WrappedEncoder<'_> {
+    fn as_ref(&self) -> &ComputeCommandEncoder {
+        self.inner
+    }
+}
 
 /// Most kernels apply similarly across the tensors
 /// This creates a strategy that uses the maximum amount of threads per threadgroup (capped at the
@@ -156,6 +175,44 @@ impl EncoderParam for () {
     fn set_param(_: &ComputeCommandEncoder, _: usize, _: Self) {}
 }
 
+/// Marks a buffer as a read input in `set_params!` calls, enabling hazard tracking.
+///
+/// # Examples
+/// ```ignore
+/// set_params!(encoder, (length, Input::new(input), output));
+/// ```
+#[derive(Copy, Clone)]
+pub struct Input<'a> {
+    buffer: &'a Buffer,
+    offset: usize,
+}
+
+impl<'a> Input<'a> {
+    #[inline]
+    pub fn new(buffer: &'a Buffer) -> Self {
+        Self { buffer, offset: 0 }
+    }
+
+    #[inline]
+    pub fn with_offset(buffer: &'a Buffer, offset: usize) -> Self {
+        Self { buffer, offset }
+    }
+
+    #[inline]
+    pub fn from_buffer_offset(bo: &'a BufferOffset<'a>) -> Self {
+        Self {
+            buffer: bo.buffer,
+            offset: bo.offset_in_bytes,
+        }
+    }
+}
+
+impl<'a> EncoderParam for Input<'a> {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_input_buffer(position, Some(data.buffer), data.offset);
+    }
+}
+
 /// Marks a buffer as a write output in `set_params!` calls, enabling hazard tracking.
 ///
 /// Use this wrapper wherever a kernel writes to a buffer so the encoder can detect
@@ -218,35 +275,6 @@ pub trait EncoderProvider {
     fn encoder(&self) -> Self::Encoder<'_>;
 }
 
-pub struct WrappedEncoder<'a> {
-    inner: &'a ComputeCommandEncoder,
-    end_encoding_on_drop: bool,
-}
-
-impl Drop for WrappedEncoder<'_> {
-    fn drop(&mut self) {
-        if self.end_encoding_on_drop {
-            self.inner.end_encoding()
-        }
-    }
-}
-
-impl AsRef<ComputeCommandEncoder> for WrappedEncoder<'_> {
-    fn as_ref(&self) -> &ComputeCommandEncoder {
-        self.inner
-    }
-}
-
-impl EncoderProvider for &CommandBuffer {
-    type Encoder<'a>
-        = ComputeCommandEncoder
-    where
-        Self: 'a;
-    fn encoder(&self) -> Self::Encoder<'_> {
-        self.compute_command_encoder()
-    }
-}
-
 impl EncoderProvider for &ComputeCommandEncoder {
     type Encoder<'a>
         = WrappedEncoder<'a>
@@ -257,6 +285,16 @@ impl EncoderProvider for &ComputeCommandEncoder {
             inner: self,
             end_encoding_on_drop: false,
         }
+    }
+}
+
+impl EncoderProvider for &CommandsGuard<'_> {
+    type Encoder<'a>
+        = &'a CommandsGuard<'a>
+    where
+        Self: 'a;
+    fn encoder(&self) -> Self::Encoder<'_> {
+        self
     }
 }
 

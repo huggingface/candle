@@ -1,51 +1,62 @@
-use crate::metal::{Buffer, CommandSemaphore, CommandStatus, ComputePipeline};
+use crate::metal::{Buffer, ComputePipeline, Fence};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
-    MTLBarrierScope, MTLBlitCommandEncoder, MTLCommandEncoder, MTLComputeCommandEncoder, MTLSize,
+    MTLBarrierScope, MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder,
+    MTLComputeCommandEncoder, MTLSize,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::c_void,
     ptr,
     sync::{Arc, Mutex},
 };
 
-struct EncoderState {
-    /// Buffer ptr values written since the last barrier (RAW/WAW detection).
-    prev_outputs: HashSet<usize>,
-    /// Buffer ptr values written by the current op, promoted to prev_outputs after dispatch.
-    next_outputs: HashSet<usize>,
-    /// Buffer ptr values read since the last barrier (WAR detection).
-    prev_inputs: HashSet<usize>,
-    /// Buffer ptr values read by the current op, promoted to prev_inputs after dispatch.
-    next_inputs: HashSet<usize>,
-    /// Whether a barrier is needed before the next dispatch.
-    needs_barrier: bool,
+/// Shared cross-encoder output map: maps buffer pointer -> fence of the last encoder that wrote it.
+/// Used by subsequent encoders to call waitForFence before reading those buffers.
+pub type PrevCeOutputs = Arc<Mutex<HashMap<usize, Arc<Fence>>>>;
+
+/// Barrier tracking state for one encoder session.
+/// Owned by ComputeCommandEncoder via Arc<Mutex<>> so clones share state.
+pub struct EncoderState {
+    /// Buffer ptrs written since last barrier (RAW/WAW detection).
+    pub prev_outputs: HashSet<usize>,
+    pub next_outputs: HashSet<usize>,
+    /// Buffer ptrs read since last barrier (WAR detection).
+    pub prev_inputs: HashSet<usize>,
+    pub next_inputs: HashSet<usize>,
+    pub needs_barrier: bool,
+    /// All inputs seen this encoder session (cross-encoder fence coordination).
+    pub all_inputs: HashSet<usize>,
+    /// All outputs seen this encoder session (registered in global map at end_encoding).
+    pub all_outputs: HashSet<usize>,
 }
 
 impl EncoderState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         EncoderState {
             prev_outputs: HashSet::new(),
             next_outputs: HashSet::new(),
             prev_inputs: HashSet::new(),
             next_inputs: HashSet::new(),
             needs_barrier: false,
+            all_inputs: HashSet::new(),
+            all_outputs: HashSet::new(),
         }
     }
 }
 
+#[derive(Clone)]
 pub struct ComputeCommandEncoder {
-    raw: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
-    semaphore: Arc<CommandSemaphore>,
-    /// Barrier tracking state, shared between the original encoder and any clone_refs.
-    state: Arc<Mutex<EncoderState>>,
-    /// If true, Drop calls `end_encoding`.
-    end_on_drop: bool,
-    /// Only meaningful when `end_on_drop` is false.
-    /// If true, Drop signals the semaphore `Available` (clone_ref).
-    signal_on_drop: bool,
+    pub(crate) raw: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
+    /// Retained so we can register completion handlers on this CB.
+    pub(crate) command_buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    /// Per-encoder-session fence. Updated at end_encoding.
+    pub(crate) fence: Arc<Fence>,
+    /// Hazard tracking state. Arc shared between the canonical encoder in EntryState
+    /// and the clone held by CommandsGuard. Uncontended in practice (CommandsGuard
+    /// holds the outer Commands mutex for the entire kernel dispatch).
+    pub(crate) state: Arc<Mutex<EncoderState>>,
 }
 
 impl AsRef<ComputeCommandEncoder> for ComputeCommandEncoder {
@@ -57,65 +68,19 @@ impl AsRef<ComputeCommandEncoder> for ComputeCommandEncoder {
 impl ComputeCommandEncoder {
     pub fn new(
         raw: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
-        semaphore: Arc<CommandSemaphore>,
+        command_buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+        fence: Arc<Fence>,
     ) -> ComputeCommandEncoder {
         ComputeCommandEncoder {
             raw,
-            semaphore,
+            command_buffer,
+            fence,
             state: Arc::new(Mutex::new(EncoderState::new())),
-            end_on_drop: true,
-            signal_on_drop: true,
         }
-    }
-
-    /// Convert this encoder into a long lived original encoder.
-    /// Drop becomes a noop. Only explicit end_encoding() calls will signal the semaphore.
-    pub(crate) fn make_long_lived(&mut self) {
-        self.end_on_drop = false;
-        self.signal_on_drop = false;
-    }
-
-    /// Return a non-owning clone that shares barrier tracking state with this encoder.
-    /// Dropping the clone signals the semaphore (`Available`) but does not call metal `endEncoding`.
-    /// Only the original encoder ends the encoding.
-    pub(crate) fn clone_ref(&self) -> ComputeCommandEncoder {
-        ComputeCommandEncoder {
-            raw: self.raw.clone(),
-            semaphore: Arc::clone(&self.semaphore),
-            state: Arc::clone(&self.state),
-            end_on_drop: false,
-            signal_on_drop: true,
-        }
-    }
-
-    pub(crate) fn signal_encoding_ended(&self) {
-        self.semaphore.set_status(CommandStatus::Available);
     }
 
     pub fn set_threadgroup_memory_length(&self, index: usize, length: usize) {
         unsafe { self.raw.setThreadgroupMemoryLength_atIndex(length, index) }
-    }
-
-    /// Insert a memory barrier only when a RAW, WAW, or WAR hazard is detected.
-    ///
-    /// RAW/WAW: input or output buffer ptr was in prev_outputs (written since last barrier).
-    /// WAR: output buffer ptr was in prev_inputs (read since last barrier, now being recycled).
-    ///
-    /// On barrier: replace both prev sets with the current op's sets.
-    /// On no barrier: accumulate both prev sets with the current op's sets.
-    fn auto_barrier(&self) {
-        let mut s = self.state.lock().unwrap();
-        if s.needs_barrier {
-            self.raw.memoryBarrierWithScope(MTLBarrierScope::Buffers);
-            s.needs_barrier = false;
-            s.prev_outputs = std::mem::take(&mut s.next_outputs);
-            s.prev_inputs = std::mem::take(&mut s.next_inputs);
-        } else {
-            let next_out = std::mem::take(&mut s.next_outputs);
-            s.prev_outputs.extend(next_out);
-            let next_in = std::mem::take(&mut s.next_inputs);
-            s.prev_inputs.extend(next_in);
-        }
     }
 
     pub fn dispatch_threads(&self, threads_per_grid: MTLSize, threads_per_threadgroup: MTLSize) {
@@ -136,7 +101,21 @@ impl ComputeCommandEncoder {
         )
     }
 
-    /// Set a buffer as an input. Checks for RAW hazard and tracks the read.
+    fn auto_barrier(&self) {
+        let mut s = self.state.lock().unwrap();
+        if s.needs_barrier {
+            self.raw.memoryBarrierWithScope(MTLBarrierScope::Buffers);
+            s.needs_barrier = false;
+            s.prev_outputs = std::mem::take(&mut s.next_outputs);
+            s.prev_inputs = std::mem::take(&mut s.next_inputs);
+        } else {
+            let next_out = std::mem::take(&mut s.next_outputs);
+            s.prev_outputs.extend(next_out);
+            let next_in = std::mem::take(&mut s.next_inputs);
+            s.prev_inputs.extend(next_in);
+        }
+    }
+
     pub fn set_input_buffer(&self, index: usize, buffer: Option<&Buffer>, offset: usize) {
         if let Some(buf) = buffer {
             let ptr = buf.raw_ptr() as usize;
@@ -145,6 +124,7 @@ impl ComputeCommandEncoder {
                 s.needs_barrier = true;
             }
             s.next_inputs.insert(ptr);
+            s.all_inputs.insert(ptr);
         }
         unsafe {
             self.raw
@@ -152,7 +132,6 @@ impl ComputeCommandEncoder {
         }
     }
 
-    /// Set a buffer as an output. Checks for WAW and WAR hazards, tracks the write.
     pub fn set_output_buffer(&self, index: usize, buffer: Option<&Buffer>, offset: usize) {
         if let Some(buf) = buffer {
             let ptr = buf.raw_ptr() as usize;
@@ -161,6 +140,7 @@ impl ComputeCommandEncoder {
                 s.needs_barrier = true;
             }
             s.next_outputs.insert(ptr);
+            s.all_outputs.insert(ptr);
         }
         unsafe {
             self.raw
@@ -183,22 +163,25 @@ impl ComputeCommandEncoder {
         self.raw.setComputePipelineState(pipeline.as_ref());
     }
 
-    /// Ends the Metal encoding session and resets intra encoder state.
-    /// Signals the semaphore as `Available`.
-    pub fn end_encoding(&self) {
-        use objc2_metal::MTLCommandEncoder as _;
-        self.raw.endEncoding();
-        *self.state.lock().unwrap() = EncoderState::new();
-        self.signal_encoding_ended();
+    /// Insert a memory barrier at buffers scope.
+    pub fn insert_memory_barrier(&self) {
+        self.raw.memoryBarrierWithScope(MTLBarrierScope::Buffers);
     }
 
-    /// End the Metal encoding session without signaling the semaphore.
-    /// Used when the caller will immediately create a new encoder on the same
-    /// command buffer (e.g. blit encoder) and needs the semaphore to stay `Encoding`.
-    pub(crate) fn end_encoding_silent(&self) {
+    /// Wait for a fence before continuing execution.
+    pub fn wait_for_fence(&self, fence: &Fence) {
+        self.raw.waitForFence(fence.raw());
+    }
+
+    /// Update a fence after commands complete.
+    pub fn update_fence(&self, fence: &Fence) {
+        self.raw.updateFence(fence.raw());
+    }
+
+    pub fn end_encoding(&self) {
         use objc2_metal::MTLCommandEncoder as _;
+        self.raw.updateFence(self.fence.raw());
         self.raw.endEncoding();
-        *self.state.lock().unwrap() = EncoderState::new();
     }
 
     pub fn encode_pipeline(&mut self, pipeline: &ComputePipeline) {
@@ -211,21 +194,14 @@ impl ComputeCommandEncoder {
     }
 }
 
-impl Drop for ComputeCommandEncoder {
-    fn drop(&mut self) {
-        if self.end_on_drop {
-            self.end_encoding();
-        } else if self.signal_on_drop {
-            // Clone ref. Release semaphore slot. Encoding continues on original.
-            self.signal_encoding_ended();
-        }
-        // Original encoder means noop. `end_encoding` must be called explicitly.
-    }
-}
-
 pub struct BlitCommandEncoder {
-    raw: Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>,
-    semaphore: Arc<CommandSemaphore>,
+    pub(crate) raw: Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>,
+    /// Per-encoder fence, updated at end_encoding.
+    fence: Arc<Fence>,
+    /// Shared global cross-encoder output map.
+    prev_ce_outputs: PrevCeOutputs,
+    /// Buffer pointers written by this blit encoder (registered in global map at end_encoding).
+    tracked_outputs: Vec<usize>,
 }
 
 impl AsRef<BlitCommandEncoder> for BlitCommandEncoder {
@@ -237,19 +213,41 @@ impl AsRef<BlitCommandEncoder> for BlitCommandEncoder {
 impl BlitCommandEncoder {
     pub fn new(
         raw: Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>,
-        semaphore: Arc<CommandSemaphore>,
+        fence: Arc<Fence>,
+        prev_ce_outputs: PrevCeOutputs,
     ) -> BlitCommandEncoder {
-        BlitCommandEncoder { raw, semaphore }
+        BlitCommandEncoder {
+            raw,
+            fence,
+            prev_ce_outputs,
+            tracked_outputs: Vec::new(),
+        }
     }
 
-    pub(crate) fn signal_encoding_ended(&self) {
-        self.semaphore.set_status(CommandStatus::Available);
+    /// Wait for a fence before continuing execution.
+    pub fn wait_for_fence(&self, fence: &Fence) {
+        self.raw.waitForFence(fence.raw());
+    }
+
+    /// Update a fence after commands complete.
+    pub fn update_fence(&self, fence: &Fence) {
+        self.raw.updateFence(fence.raw());
     }
 
     pub fn end_encoding(&self) {
         use objc2_metal::MTLCommandEncoder as _;
+
+        // Signal this blit encoder's fence after all blit commands complete
+        self.update_fence(&self.fence);
         self.raw.endEncoding();
-        self.signal_encoding_ended();
+
+        // Register outputs so subsequent encoders can wait.
+        {
+            let mut map = self.prev_ce_outputs.lock().unwrap();
+            for &out in &self.tracked_outputs {
+                map.insert(out, Arc::clone(&self.fence));
+            }
+        }
     }
 
     pub fn set_label(&self, label: &str) {
@@ -257,14 +255,28 @@ impl BlitCommandEncoder {
         self.raw.setLabel(Some(&NSString::from_str(label)))
     }
 
+    /// Copy bytes from src to dst. Waits on any fence that wrote to src_buffer to ensure
+    /// correct ordering for HazardTrackingModeUntracked buffers.
     pub fn copy_from_buffer(
-        &self,
+        &mut self,
         src_buffer: &Buffer,
         src_offset: usize,
         dst_buffer: &Buffer,
         dst_offset: usize,
         size: usize,
     ) {
+        let src_ptr = src_buffer.raw_ptr() as usize;
+        let fence_to_wait = {
+            let map = self.prev_ce_outputs.lock().unwrap();
+            map.get(&src_ptr).cloned()
+        };
+        if let Some(fence) = fence_to_wait {
+            use objc2_metal::MTLBlitCommandEncoder as _;
+            self.raw.waitForFence(fence.raw());
+        }
+
+        self.tracked_outputs.push(dst_buffer.raw_ptr() as usize);
+
         unsafe {
             self.raw
                 .copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
@@ -277,7 +289,18 @@ impl BlitCommandEncoder {
         }
     }
 
-    pub fn fill_buffer(&self, buffer: &Buffer, range: (usize, usize), value: u8) {
+    pub fn fill_buffer(&mut self, buffer: &Buffer, range: (usize, usize), value: u8) {
+        let ptr = buffer.raw_ptr() as usize;
+        let fence_to_wait = {
+            let map = self.prev_ce_outputs.lock().unwrap();
+            map.get(&ptr).cloned()
+        };
+        if let Some(fence) = fence_to_wait {
+            use objc2_metal::MTLBlitCommandEncoder as _;
+            self.raw.waitForFence(fence.raw());
+        }
+        self.tracked_outputs.push(ptr);
+
         self.raw.fillBuffer_range_value(
             buffer.as_ref(),
             NSRange {

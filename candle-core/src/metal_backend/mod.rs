@@ -5,7 +5,7 @@ use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvT
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
 use candle_metal_kernels::{
-    metal::{Buffer, Commands, Device},
+    metal::{Buffer, Commands, Device, ResidencySet},
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
@@ -1734,13 +1734,12 @@ impl BackendStorage for MetalStorage {
             )
         }
         if src_s == d2 && dst_s == d2 {
-            let blit = self.device.blit_command_encoder()?;
+            let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("copy2d_contiguous");
             let src_offset = src_o * self.dtype.size_in_bytes();
             let length = d1 * d2 * self.dtype.size_in_bytes();
             let dst_offset = dst_o * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
-            blit.end_encoding();
         } else {
             let el_count = d1 * d2;
             if el_count == 0 {
@@ -1778,13 +1777,12 @@ impl BackendStorage for MetalStorage {
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         if src_l.is_contiguous() && self.dtype == dst.dtype() {
-            let blit = self.device.blit_command_encoder()?;
+            let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("copy_contiguous");
             let src_offset = src_l.start_offset() * self.dtype.size_in_bytes();
             let length = src_l.shape().elem_count() * self.dtype.size_in_bytes();
             let dst_offset = dst_offset * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
-            blit.end_encoding();
         } else {
             let src_shape = src_l.shape();
             let el_count = src_shape.elem_count();
@@ -1911,10 +1909,9 @@ impl MetalStorage {
         let size = self.count * self.dtype.size_in_bytes();
         let buffer = self.device.allocate_buffer(size)?;
         {
-            let blit = self.device.blit_command_encoder()?;
+            let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
-            blit.end_encoding();
         }
         self.device.wait_until_completed()?;
         Ok(read_to_vec(&buffer, self.count))
@@ -1928,25 +1925,27 @@ impl BackendDevice for MetalDevice {
         let device = Device::all().swap_remove(ordinal);
         let command_queue = device.new_command_queue().map_err(MetalError::from)?;
         let kernels = Arc::new(Kernels::new());
-        let seed = Arc::new(Mutex::new(
-            device
-                .new_buffer_with_data(
-                    [299792458u64].as_ptr() as *const c_void,
-                    std::mem::size_of::<u64>(),
-                    RESOURCE_OPTIONS,
-                )
-                .map_err(MetalError::from)?,
-        ));
-        let commands = Commands::new(command_queue).map_err(MetalError::from)?;
+        let residency_set = Arc::new(ResidencySet::new(&device));
+        let seed_buf = device
+            .new_buffer_with_data(
+                [299792458u64].as_ptr() as *const c_void,
+                std::mem::size_of::<u64>(),
+                RESOURCE_OPTIONS,
+            )
+            .map_err(MetalError::from)?;
+        residency_set.insert(&seed_buf);
+        let seed = Arc::new(Mutex::new(seed_buf));
+        let commands = Commands::new(command_queue, &residency_set).map_err(MetalError::from)?;
         Ok(Self {
             id: DeviceId::new(),
             device,
-            commands: Arc::new(RwLock::new(commands)),
+            commands: Arc::new(commands),
             buffers: Arc::new(RwLock::new(HashMap::new())),
             private_buffers: Arc::new(RwLock::new(HashMap::new())),
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
+            residency_set,
         })
     }
 

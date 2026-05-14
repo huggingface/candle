@@ -75,8 +75,8 @@ fn multi_block_sort(
     let mut dev_idxs_1 = device.new_buffer(el_count * 4, RESOURCE_OPTIONS)?;
     let mut block_partitions = device.new_buffer((nrows * (nblocks + 1)) * 4, RESOURCE_OPTIONS)?;
     // Prepare command encoder
-    let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    let encoder_guard = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder_guard.as_ref();
     // Do blockwise sort
     {
         let name = format!("sort_mbsort_{dtype_str}_uint32_bn{bn}_tn{tn}");
@@ -92,7 +92,7 @@ fn multi_block_sort(
                 /* stride_sorted_axis */ 1i32,
                 /* nc_dim */ 1i32,
                 /* nc_shape */ nrows as i32,
-                /* nc_str */ ncols as i32
+                /* nc_str */ ncols as i64
             )
         );
         let thread_group_count = MTLSize {

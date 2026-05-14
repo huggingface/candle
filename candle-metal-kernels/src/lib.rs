@@ -13,8 +13,8 @@ pub use kernels::{
     unary::*, GemmDType, GgmlDType,
 };
 use metal::{
-    BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline,
-    ConstantValues, Device, Function, Library, MTLResourceOptions, Value,
+    Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function,
+    Library, MTLResourceOptions, Value,
 };
 use objc2_metal::{MTLCompileOptions, MTLMathFloatingPointFunctions, MTLMathMode, MTLSize};
 use source::Source;

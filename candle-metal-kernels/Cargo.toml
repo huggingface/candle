@@ -19,7 +19,8 @@ half = { version = "2.5.0", features = [
 once_cell = "1.21"
 thiserror = "2"
 tracing = "0.1.41"
-objc2-metal = "0.3.2"
+objc2-metal = { version = "0.3.2", features = ["block2"] }
+block2 = { version = ">=0.6.1, <0.8.0", features = ["alloc"], default-features = false }
 objc2 = "0.6.3"
 objc2-foundation = "0.3.2"
 
