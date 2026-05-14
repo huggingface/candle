@@ -1,5 +1,5 @@
 use crate::metal::{Buffer, ComputeCommandEncoder, Device, MetalDeviceType};
-use crate::utils::EncoderProvider;
+use crate::utils::{EncoderProvider, Input};
 use crate::{
     set_params, ConstantValues, EncoderParam, Kernels, MetalKernelError, Output, Source, Value,
 };
@@ -254,6 +254,200 @@ fn should_use_split_k(b: usize, m: usize, n: usize, k: usize) -> bool {
     (tm * tn) <= 32 && tk >= 8
 }
 
+/// M=1 -> gemv_t (vec[K] x mat[K,N] -> vec[N])
+/// N=1 -> gemv   (mat[M,K] x vec[K] -> vec[M])
+#[allow(clippy::too_many_arguments)]
+pub fn call_mlx_gemv(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GemmDType,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs_stride: &[usize],
+    lhs_offset: usize,
+    lhs_buffer: &Buffer,
+    rhs_stride: &[usize],
+    rhs_offset: usize,
+    rhs_buffer: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    debug_assert!(m == 1 || n == 1, "call_mlx_gemv requires M=1 or N=1");
+
+    assert!(rhs_stride.len() >= 2);
+    assert!(lhs_stride.len() >= 2);
+
+    // Determine transpose flags from strides (same logic as call_mlx_gemm)
+    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+
+    let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
+        (k as i32, false)
+    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
+        (m as i32, true)
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        }
+        .bt())?;
+    };
+
+    let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
+        (n as i32, false)
+    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        (k as i32, true)
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        }
+        .bt())?;
+    };
+
+    // Figure out if transpose is needed.
+    let is_b_matrix = n != 1;
+    let transpose_mat = if is_b_matrix { !b_trans } else { a_trans };
+    let mat_ld = if is_b_matrix {
+        ldb as usize
+    } else {
+        lda as usize
+    };
+    let in_vec_size = k;
+    let out_vec_size = if is_b_matrix { n } else { m };
+
+    let (mat_buffer, mat_offset, vec_buffer, vec_offset) = if is_b_matrix {
+        (rhs_buffer, rhs_offset, lhs_buffer, lhs_offset)
+    } else {
+        (lhs_buffer, lhs_offset, rhs_buffer, rhs_offset)
+    };
+
+    // Batch strides (elements per batch item)
+    let vec_batch_stride: i64 = if is_b_matrix {
+        if lhs_stride.len() > 2 {
+            lhs_stride[lhs_stride.len() - 3] as i64
+        } else {
+            k as i64
+        }
+    } else {
+        if rhs_stride.len() > 2 {
+            rhs_stride[rhs_stride.len() - 3] as i64
+        } else {
+            k as i64
+        }
+    };
+    // Weight matrix is often 2D (shared across batch) -> stride = 0
+    let mat_batch_stride: i64 = if is_b_matrix {
+        if rhs_stride.len() > 2 {
+            rhs_stride[rhs_stride.len() - 3] as i64
+        } else {
+            0
+        }
+    } else {
+        if lhs_stride.len() > 2 {
+            lhs_stride[lhs_stride.len() - 3] as i64
+        } else {
+            0
+        }
+    };
+
+    // Tile selection
+    let (bm, bn, sm, sn, tm, tn) = if transpose_mat {
+        // gemv_t: vec[K] x mat[K,N_out] -> out[N_out]
+        let (sm, sn) = if in_vec_size >= 8192 && out_vec_size >= 2048 {
+            (4usize, 8usize)
+        } else {
+            (8, 4)
+        };
+        let bn = if out_vec_size >= 2048 {
+            16usize
+        } else if out_vec_size >= 512 {
+            4
+        } else {
+            2
+        };
+        let tn: usize = if out_vec_size < 4 { 1 } else { 4 };
+        (1usize, bn, sm, sn, 4usize, tn)
+    } else {
+        // gemv: mat[M_out,K] x vec[K] -> out[M_out]
+        let (bm, bn, sm, sn): (usize, usize, usize, usize) = if in_vec_size <= 64 {
+            (1, 1, 8, 4)
+        } else if in_vec_size >= 16 * out_vec_size {
+            (1, 8, 1, 32)
+        } else if out_vec_size >= 4096 {
+            (8, 1, 1, 32)
+        } else {
+            (4, 1, 1, 32)
+        };
+        let tm: usize = if out_vec_size < 4 { 1 } else { 4 };
+        (bm, bn, sm, sn, tm, 4usize)
+    };
+
+    let dtype_str = match dtype {
+        GemmDType::F32 => "float32",
+        GemmDType::F16 => "float16",
+        GemmDType::BF16 => "bfloat16",
+    };
+    let kernel_prefix = if transpose_mat { "gemv_t" } else { "gemv" };
+    let name = format!(
+        "{}_{}_bm{}_bn{}_sm{}_sn{}_tm{}_tn{}_nc0_axpby0",
+        kernel_prefix, dtype_str, bm, bn, sm, sn, tm, tn
+    );
+
+    let pipeline = kernels.load_pipeline(device, Source::Gemv, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let batch_shape = [b as i32];
+    let vec_batch_strides = [vec_batch_stride];
+    let mat_batch_strides = [mat_batch_stride];
+    let bias_batch_strides = [0i64];
+
+    set_params!(
+        encoder,
+        (
+            Input::with_offset(mat_buffer, mat_offset),
+            Input::with_offset(vec_buffer, vec_offset),
+            (), // bias
+            Output::new(output),
+            in_vec_size as i32,
+            out_vec_size as i32,
+            mat_ld as i32,
+            1.0f32, // alpha
+            0.0f32, // beta
+            1i32,   // batch_ndim
+            &batch_shape[..],
+            &vec_batch_strides[..],
+            &mat_batch_strides[..],
+            &bias_batch_strides[..],
+            1i32 // bias_stride
+        )
+    );
+
+    let n_out_per_tgp = if transpose_mat {
+        bn * sn * tn
+    } else {
+        bm * sm * tm
+    };
+    let n_tgp = out_vec_size.div_ceil(n_out_per_tgp);
+    let grid_size = MTLSize {
+        width: n_tgp,
+        height: 1,
+        depth: b,
+    };
+    let group_size = MTLSize {
+        width: 32,
+        height: bn,
+        depth: bm,
+    };
+    encoder.dispatch_thread_groups(grid_size, group_size);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_mlx_gemm(
     device: &Device,
@@ -321,6 +515,23 @@ pub fn call_mlx_gemm(
         }
         .bt())?;
     };
+
+    if m == 1 || n == 1 {
+        return call_mlx_gemv(
+            device,
+            ep,
+            kernels,
+            dtype,
+            (b, m, n, k),
+            lhs_stride,
+            lhs_offset,
+            lhs_buffer,
+            rhs_stride,
+            rhs_offset,
+            rhs_buffer,
+            output,
+        );
+    }
 
     // Check for batch collapse optimization (MLX matmul.cpp lines 700-740)
     // When B is broadcasted (2D), collapse batch into M dimension
