@@ -106,6 +106,11 @@ pub struct WDiffNeXt {
     clf_conv: candle_nn::Conv2d,
     c_r: usize,
     patch_size: usize,
+    // gen_c_embeddings(clip) is a 2-op chain on the constant CLIP text
+    // embedding. Caching by clip.id() keeps the result stable so
+    // downstream AttnBlock + Attention caches hit too (per-image gen the
+    // SAME tensor flows through unchanged).
+    c_emb_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
 }
 
 impl WDiffNeXt {
@@ -300,6 +305,7 @@ impl WDiffNeXt {
             clf_conv,
             c_r,
             patch_size,
+            c_emb_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -320,7 +326,16 @@ impl WDiffNeXt {
     }
 
     fn gen_c_embeddings(&self, clip: &Tensor) -> Result<Tensor> {
-        clip.apply(&self.clip_mapper)?.apply(&self.seq_norm)
+        let id = clip.id();
+        let mut g = self.c_emb_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cid, ref t)) = *g {
+            if cid == id {
+                return Ok(t.clone());
+            }
+        }
+        let emb = clip.apply(&self.clip_mapper)?.apply(&self.seq_norm)?;
+        *g = Some((id, emb.clone()));
+        Ok(emb)
     }
 
     pub fn forward(

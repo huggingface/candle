@@ -39,6 +39,10 @@ pub struct WPrior {
     out_ln: super::common::WLayerNorm,
     out_conv: candle_nn::Conv2d,
     c_r: usize,
+    // c_embed = c.apply(lin1).leaky_relu().apply(lin2) on constant CLIP
+    // text embedding — cache by c.id() so the per-image gen invocations
+    // share the result and downstream Attention caches also stay hot.
+    c_emb_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
 }
 
 impl WPrior {
@@ -84,6 +88,7 @@ impl WPrior {
             out_ln,
             out_conv,
             c_r,
+            c_emb_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -106,10 +111,29 @@ impl WPrior {
     pub fn forward(&self, xs: &Tensor, r: &Tensor, c: &Tensor) -> Result<Tensor> {
         let x_in = xs;
         let mut xs = xs.apply(&self.projection)?;
-        let c_embed = c
-            .apply(&self.cond_mapper_lin1)?
-            .apply(&|xs: &_| candle_nn::ops::leaky_relu(xs, 0.2))?
-            .apply(&self.cond_mapper_lin2)?;
+        let c_embed = {
+            let id = c.id();
+            let mut g = self.c_emb_cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((cid, ref t)) = *g {
+                if cid == id {
+                    t.clone()
+                } else {
+                    let emb = c
+                        .apply(&self.cond_mapper_lin1)?
+                        .apply(&|xs: &_| candle_nn::ops::leaky_relu(xs, 0.2))?
+                        .apply(&self.cond_mapper_lin2)?;
+                    *g = Some((id, emb.clone()));
+                    emb
+                }
+            } else {
+                let emb = c
+                    .apply(&self.cond_mapper_lin1)?
+                    .apply(&|xs: &_| candle_nn::ops::leaky_relu(xs, 0.2))?
+                    .apply(&self.cond_mapper_lin2)?;
+                *g = Some((id, emb.clone()));
+                emb
+            }
+        };
         let r_embed = self.gen_r_embedding(r)?;
         for block in self.blocks.iter() {
             xs = block.res_block.forward(&xs, None)?;
