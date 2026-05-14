@@ -2509,40 +2509,23 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
     // experiments (e.g., device-side chunk-building kernel).
     let use_chunks = std::env::var_os("LLMSERVER_MOE_IMMA_M8_CHUNKS").is_some();
     if use_chunks {
-        // D2H experts to find expert boundaries.
-        let experts_cpu: Vec<u32> = dev.cuda_stream()
-            .memcpy_dtov(experts_slice)
-            .map_err(|e| candle::Error::Msg(format!("experts D2H: {e}")))?;
-        // Build chunks: walk sorted experts, emit (pair_start, expert)
-        // for each 8-pair stride within each expert run.
-        let mut chunks: Vec<(i32, i32)> = Vec::with_capacity((size_m + 7) / 8);
-        let mut i = 0usize;
-        while i < size_m {
-            let e = experts_cpu[i] as i32;
-            // Find end of this expert's run.
-            let mut j = i + 1;
-            while j < size_m && experts_cpu[j] as i32 == e {
-                j += 1;
-            }
-            // Emit chunks of up to 8 within [i, j).
-            let mut k = i;
-            while k < j {
-                chunks.push((k as i32, e));
-                k += 8;
-            }
-            i = j;
+        // Device-side chunk builder: emits per-chunk metadata without a
+        // D2H sync. Worst-case chunk count is size_m (all-distinct
+        // experts); typical is size_m/8.
+        let max_chunks = size_m;
+        let starts_d = dev.alloc_zeros::<i32>(max_chunks)?;
+        let experts_d = dev.alloc_zeros::<i32>(max_chunks)?;
+        let num_chunks_d = dev.alloc_zeros::<i32>(1)?;
+        unsafe {
+            ffi::moe_q4k_imma_m8_build_chunks(
+                experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
+                starts_d.device_ptr(starts_d.stream()).0 as *mut i32,
+                experts_d.device_ptr(experts_d.stream()).0 as *mut i32,
+                num_chunks_d.device_ptr(num_chunks_d.stream()).0 as *mut i32,
+                size_m as i32,
+                stream,
+            );
         }
-        let num_chunks = chunks.len();
-        let mut starts: Vec<i32> = Vec::with_capacity(num_chunks);
-        let mut chunk_es: Vec<i32> = Vec::with_capacity(num_chunks);
-        for (s, e) in &chunks {
-            starts.push(*s);
-            chunk_es.push(*e);
-        }
-        let starts_d = dev.cuda_stream().memcpy_stod(&starts)
-            .map_err(|e| candle::Error::Msg(format!("chunks starts H2D: {e}")))?;
-        let experts_d = dev.cuda_stream().memcpy_stod(&chunk_es)
-            .map_err(|e| candle::Error::Msg(format!("chunks experts H2D: {e}")))?;
 
         unsafe {
             ffi::moe_q4k_imma_m8_chunks_gate_up(
@@ -2551,8 +2534,9 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
                 sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
                 starts_d.device_ptr(starts_d.stream()).0 as *const i32,
                 experts_d.device_ptr(experts_d.stream()).0 as *const i32,
+                num_chunks_d.device_ptr(num_chunks_d.stream()).0 as *const i32,
                 output.device_ptr(output.stream()).0 as *mut f32,
-                num_experts as i32, topk as i32, num_chunks as i32,
+                num_experts as i32, topk as i32, max_chunks as i32,
                 size_m as i32, size_n as i32, size_k as i32,
                 stream,
             );

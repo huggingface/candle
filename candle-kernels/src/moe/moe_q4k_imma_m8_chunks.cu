@@ -64,6 +64,7 @@ extern "C" __global__ void moe_q4k_imma_m8_chunks_kernel(
     const int32_t * __restrict__ sorted_token_ids,
     const int32_t * __restrict__ chunk_pair_start,   // [num_chunks] pair_base per chunk
     const int32_t * __restrict__ chunk_expert,       // [num_chunks] expert per chunk
+    const int32_t * __restrict__ num_chunks_dev,     // [1] num actually-valid chunks
     float * __restrict__ dst,
     int num_experts,
     int topk,
@@ -74,6 +75,10 @@ extern "C" __global__ void moe_q4k_imma_m8_chunks_kernel(
     using namespace moe_q4k_imma_m8_chunks_ns;
 
     const int chunk_idx = blockIdx.y;
+    // Skip inactive blocks (we launch with a worst-case gridDim.y so we
+    // can avoid a D2H sync to learn the actual chunk count).
+    if (chunk_idx >= *num_chunks_dev) return;
+
     const int pair_base = chunk_pair_start[chunk_idx];
     const int block_expert = chunk_expert[chunk_idx];
     if (pair_base >= size_m || block_expert < 0 || block_expert >= num_experts) return;
@@ -260,22 +265,23 @@ extern "C" void moe_q4k_imma_m8_chunks_gate_up(
     const int32_t * sorted_token_ids,
     const int32_t * chunk_pair_start,
     const int32_t * chunk_expert,
+    const int32_t * num_chunks_dev,
     float * dst_f32,
     int num_experts,
     int topk,
-    int num_chunks,
+    int max_num_chunks,
     int size_m,
     int N,
     int K,
     cudaStream_t stream
 ) {
-    if (num_chunks <= 0 || N <= 0 || K <= 0) return;
+    if (max_num_chunks <= 0 || N <= 0 || K <= 0) return;
     using namespace moe_q4k_imma_m8_chunks_ns;
-    dim3 grid((N + IMC_M - 1) / IMC_M, num_chunks, 1);
+    dim3 grid((N + IMC_M - 1) / IMC_M, max_num_chunks, 1);
     dim3 blk(32, 1, 1);
     moe_q4k_imma_m8_chunks_kernel<<<grid, blk, 0, stream>>>(
         gate_up_w, inputs_q81, sorted_token_ids,
-        chunk_pair_start, chunk_expert, dst_f32,
+        chunk_pair_start, chunk_expert, num_chunks_dev, dst_f32,
         num_experts, topk, size_m, N, K
     );
 }

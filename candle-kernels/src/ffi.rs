@@ -193,23 +193,37 @@ extern "C" {
         stream: i64,
     );
 
-    /// Chunked IMMA M=8: host pre-computes per-block (pair_start, expert)
-    /// metadata so each chunk has a SINGLE expert — no kernel-side
-    /// boundary-block multi-pass. Reclaims the ~4% perf cost the
-    /// boundary handling incurred.
+    /// Chunked IMMA M=8: per-block (pair_start, expert) metadata pre-
+    /// computed (host or device) so each chunk has a SINGLE expert.
+    /// Reads num_chunks_dev[0] from device — caller can launch with
+    /// max_num_chunks (worst case) and inactive blocks will skip.
     pub fn moe_q4k_imma_m8_chunks_gate_up(
         gate_up_w: *const core::ffi::c_void,
         inputs_q81: *const core::ffi::c_void,
         sorted_token_ids: *const i32,
         chunk_pair_start: *const i32,
         chunk_expert: *const i32,
+        num_chunks_dev: *const i32,
         dst_f32: *mut f32,
         num_experts: i32,
         topk: i32,
-        num_chunks: i32,
+        max_num_chunks: i32,
         size_m: i32,
         n: i32,
         k: i32,
+        stream: i64,
+    );
+
+    /// Device-side chunk builder for the chunked IMMA M=8 path. Walks
+    /// expert_ids and emits per-chunk metadata WITHOUT a D2H sync.
+    /// Single-thread kernel — chunk count is small, linear scan beats
+    /// parallel-prefix overhead.
+    pub fn moe_q4k_imma_m8_build_chunks(
+        expert_ids: *const i32,
+        chunk_pair_start: *mut i32,
+        chunk_expert: *mut i32,
+        num_chunks_out: *mut i32,
+        size_m: i32,
         stream: i64,
     );
 
