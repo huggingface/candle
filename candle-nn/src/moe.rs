@@ -2319,7 +2319,10 @@ pub fn dense_q4k_imma_m8_silu_mul(
         }
     }
 
-    let output = dev.alloc_zeros::<f32>(size_m * size_n)?;
+    // Uninit alloc: the dense silu kernel bounds-checks each write via
+    // silu_mul_write and the grid (ceil(N/16) × ceil(size_m/8)) covers
+    // every valid (tok, row) in [0, size_m) × [0, N) exactly once.
+    let output = unsafe { dev.alloc::<f32>(size_m * size_n)? };
     unsafe {
         ffi::dense_q4k_imma_m8_silu(
             gate_ptr as *const c_void,
