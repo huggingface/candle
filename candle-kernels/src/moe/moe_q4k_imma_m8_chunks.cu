@@ -62,6 +62,7 @@ extern "C" __global__ void moe_q4k_imma_m8_chunks_kernel(
     const void * __restrict__ gate_up_w,
     const void * __restrict__ inputs_q81,
     const int32_t * __restrict__ sorted_token_ids,
+    const int32_t * __restrict__ expert_ids,         // [size_m] per-pair expert
     const int32_t * __restrict__ chunk_pair_start,   // [num_chunks] pair_base per chunk
     const int32_t * __restrict__ chunk_expert,       // [num_chunks] expert per chunk
     const int32_t * __restrict__ num_chunks_dev,     // [1] num actually-valid chunks
@@ -103,12 +104,16 @@ extern "C" __global__ void moe_q4k_imma_m8_chunks_kernel(
     const int my_pair = pair_base + g;
     const bool v_pair = my_pair < size_m;
     int my_pair_tok = 0;
+    int my_expert = -1;
     if (v_pair) {
         my_pair_tok = sorted_token_ids[my_pair];
+        my_expert   = expert_ids[my_pair];
     }
-    // Single expert per chunk by construction. All lanes' pairs (those
-    // that exist) share block_expert.
-    const bool v_pair_e = v_pair;
+    // The builder's `k += 8` can spill pairs from the next expert into
+    // a chunk (e.g. expert run of 5 pairs → chunk processes 8 lanes,
+    // last 3 are next expert's pairs). Filter lanes by expert membership
+    // to avoid wrong-expert writes racing the correct chunk's writes.
+    const bool v_pair_e = v_pair && (my_expert == block_expert);
 
     const block_q4_K_imc * w_expert =
         (const block_q4_K_imc *) gate_up_w
@@ -241,7 +246,12 @@ extern "C" __global__ void moe_q4k_imma_m8_chunks_kernel(
     auto do_write = [&](int pair_local, int weight_row, float gv, float uv) {
         const int pair_idx = pair_base + pair_local;
         if (pair_idx >= size_m || weight_row >= N) return;
-        // No expert check needed — chunks are pre-sorted by expert on host.
+        // Per-pair expert filter: chunks may include trailing pairs from
+        // the next expert when the previous expert's run is not a
+        // multiple of 8 (see v_pair_e comment above). Skip writes for
+        // pairs that belong to a different expert — the correct chunk
+        // for those pairs will write the right value.
+        if (expert_ids[pair_idx] != block_expert) return;
         const float gelu = 0.5f * gv * (1.f + tanhf(k0 * (gv + k1 * gv * gv * gv)));
         const int tok = sorted_token_ids[pair_idx];
         dst[(size_t)tok * N + weight_row] = gelu * uv;
@@ -263,6 +273,7 @@ extern "C" void moe_q4k_imma_m8_chunks_gate_up(
     const void * gate_up_w,
     const void * inputs_q81,
     const int32_t * sorted_token_ids,
+    const int32_t * expert_ids,
     const int32_t * chunk_pair_start,
     const int32_t * chunk_expert,
     const int32_t * num_chunks_dev,
@@ -280,7 +291,7 @@ extern "C" void moe_q4k_imma_m8_chunks_gate_up(
     dim3 grid((N + IMC_M - 1) / IMC_M, max_num_chunks, 1);
     dim3 blk(32, 1, 1);
     moe_q4k_imma_m8_chunks_kernel<<<grid, blk, 0, stream>>>(
-        gate_up_w, inputs_q81, sorted_token_ids,
+        gate_up_w, inputs_q81, sorted_token_ids, expert_ids,
         chunk_pair_start, chunk_expert, num_chunks_dev, dst_f32,
         num_experts, topk, size_m, N, K
     );

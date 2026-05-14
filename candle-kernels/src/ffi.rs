@@ -201,6 +201,7 @@ extern "C" {
         gate_up_w: *const core::ffi::c_void,
         inputs_q81: *const core::ffi::c_void,
         sorted_token_ids: *const i32,
+        expert_ids: *const i32,
         chunk_pair_start: *const i32,
         chunk_expert: *const i32,
         num_chunks_dev: *const i32,

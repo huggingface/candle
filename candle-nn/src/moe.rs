@@ -2631,6 +2631,7 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
                 weight_ptr as *const c_void,
                 q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
                 sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
+                experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
                 starts_d.device_ptr(starts_d.stream()).0 as *const i32,
                 experts_d.device_ptr(experts_d.stream()).0 as *const i32,
                 num_chunks_d.device_ptr(num_chunks_d.stream()).0 as *const i32,
