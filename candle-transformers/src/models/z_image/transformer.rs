@@ -947,6 +947,15 @@ fn build_forward_cache(
     let x_attn_mask = Tensor::ones((b, img_seq_len), DType::U8, device)?;
     let cap_attn_mask = cap_mask.to_dtype(DType::U8)?;
 
+    // 8 (hoisted). Context refiner. Every layer here runs without
+    // adaln_input, so its output is a pure function of (cap_embedded,
+    // cap_attn_mask, cap_cos, cap_sin) — all constant per image. Run
+    // once here and store the fully-refined cap.
+    let mut cap_refined = cap_embedded;
+    for layer in &model.context_refiner {
+        cap_refined = layer.forward(&cap_refined, Some(&cap_attn_mask), &cap_cos, &cap_sin, None)?;
+    }
+
     // 10. Unified position IDs + RoPE + mask
     let unified_pos_ids = Tensor::cat(&[&x_pos_ids, &cap_pos_ids], 0)?;
     let (unified_cos, unified_sin) = model.rope_embedder.forward(&unified_pos_ids)?;
@@ -956,7 +965,7 @@ fn build_forward_cache(
         key: (b, f_tokens, h_tokens, w_tokens, text_len),
         x_cos,
         x_sin,
-        cap_embedded,
+        cap_refined,
         cap_cos,
         cap_sin,
         x_attn_mask,
@@ -975,7 +984,11 @@ struct PerImageCache {
     key: (usize, usize, usize, usize, usize),
     x_cos: Tensor,
     x_sin: Tensor,
-    cap_embedded: Tensor,
+    // The fully-refined caption — context_refiner is deterministic when
+    // adaln_input=None and all inputs (cap_embedded, cap_attn_mask,
+    // cap_cos, cap_sin) are constant per image, so its output is too.
+    // Skips n_refiner_layers attention+FFN blocks per denoise step.
+    cap_refined: Tensor,
     cap_cos: Tensor,
     cap_sin: Tensor,
     x_attn_mask: Tensor,
@@ -1169,7 +1182,7 @@ impl ZImageTransformer2DModel {
                         key: c.key,
                         x_cos: c.x_cos.clone(),
                         x_sin: c.x_sin.clone(),
-                        cap_embedded: c.cap_embedded.clone(),
+                        cap_refined: c.cap_refined.clone(),
                         cap_cos: c.cap_cos.clone(),
                         cap_sin: c.cap_sin.clone(),
                         x_attn_mask: c.x_attn_mask.clone(),
@@ -1184,7 +1197,7 @@ impl ZImageTransformer2DModel {
                         key: cache_key,
                         x_cos: built.x_cos.clone(),
                         x_sin: built.x_sin.clone(),
-                        cap_embedded: built.cap_embedded.clone(),
+                        cap_refined: built.cap_refined.clone(),
                         cap_cos: built.cap_cos.clone(),
                         cap_sin: built.cap_sin.clone(),
                         x_attn_mask: built.x_attn_mask.clone(),
@@ -1201,7 +1214,7 @@ impl ZImageTransformer2DModel {
                     key: cache_key,
                     x_cos: built.x_cos.clone(),
                     x_sin: built.x_sin.clone(),
-                    cap_embedded: built.cap_embedded.clone(),
+                    cap_refined: built.cap_refined.clone(),
                     cap_cos: built.cap_cos.clone(),
                     cap_sin: built.cap_sin.clone(),
                     x_attn_mask: built.x_attn_mask.clone(),
@@ -1215,11 +1228,10 @@ impl ZImageTransformer2DModel {
         };
         let x_cos = cache_entry.x_cos;
         let x_sin = cache_entry.x_sin;
-        let mut cap = cache_entry.cap_embedded;
-        let cap_cos = cache_entry.cap_cos;
-        let cap_sin = cache_entry.cap_sin;
+        // Context refiner already ran inside build_forward_cache because
+        // it's deterministic per image; just use its output here.
+        let cap = cache_entry.cap_refined;
         let x_attn_mask = cache_entry.x_attn_mask;
-        let cap_attn_mask = cache_entry.cap_attn_mask;
         let unified_cos = cache_entry.unified_cos;
         let unified_sin = cache_entry.unified_sin;
         let unified_attn_mask = cache_entry.unified_attn_mask;
@@ -1229,10 +1241,7 @@ impl ZImageTransformer2DModel {
             x = layer.forward(&x, Some(&x_attn_mask), &x_cos, &x_sin, Some(&adaln_input))?;
         }
 
-        // 8. Context refiner (process text without modulation)
-        for layer in &self.context_refiner {
-            cap = layer.forward(&cap, Some(&cap_attn_mask), &cap_cos, &cap_sin, None)?;
-        }
+        // 8. (cached) Context refiner already applied above.
 
         // 9. Concatenate image and text: [image_tokens, text_tokens]
         let unified = Tensor::cat(&[&x, &cap], 1)?; // (B, img_seq + text_len, dim)
