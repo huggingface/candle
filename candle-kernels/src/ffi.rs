@@ -179,84 +179,6 @@ extern "C" {
     /// output tile using one m16n8k32 INT8 MMA per K-tile (32 elems).
     /// Total compute per block is 16 × 8 × K = 128K dot products done
     /// via tensor cores instead of dp4a.
-    pub fn moe_q4k_mma_batched_gate_up(
-        gate_up_w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        active_expert_ids: *const i32,
-        expert_offsets: *const i32,
-        dst_f16: *mut core::ffi::c_void,
-        num_experts: i32,
-        n_active: i32,
-        max_n_e: i32,
-        two_n: i32,
-        k: i32,
-        stream: i64,
-    );
-
-    /// Chunked IMMA M=8: per-block (pair_start, expert) metadata pre-
-    /// computed (host or device) so each chunk has a SINGLE expert.
-    /// Reads num_chunks_dev[0] from device — caller can launch with
-    /// max_num_chunks (worst case) and inactive blocks will skip.
-    pub fn moe_q4k_imma_m8_chunks_gate_up(
-        gate_up_w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        sorted_token_ids: *const i32,
-        expert_ids: *const i32,
-        chunk_pair_start: *const i32,
-        chunk_expert: *const i32,
-        num_chunks_dev: *const i32,
-        dst_f32: *mut f32,
-        num_experts: i32,
-        topk: i32,
-        max_num_chunks: i32,
-        size_m: i32,
-        n: i32,
-        k: i32,
-        stream: i64,
-    );
-
-    /// Device-side chunk builder for the chunked IMMA M=8 path. Walks
-    /// expert_ids and emits per-chunk metadata WITHOUT a D2H sync.
-    /// Single-thread kernel — chunk count is small, linear scan beats
-    /// parallel-prefix overhead.
-    pub fn moe_q4k_imma_m8_build_chunks(
-        expert_ids: *const i32,
-        chunk_pair_start: *mut i32,
-        chunk_expert: *mut i32,
-        num_chunks_out: *mut i32,
-        size_m: i32,
-        stream: i64,
-    );
-
-    /// 4-warp IMMA M=8 (independent warps, different m_tile each).
-    /// Block produces 64 weight rows × 8 pairs = 512 outputs.
-    pub fn moe_q4k_imma_m8_m64_gate_up(
-        gate_up_w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        sorted_token_ids: *const i32,
-        expert_ids: *const i32,
-        dst_f32: *mut f32,
-        num_experts: i32,
-        topk: i32,
-        size_m: i32,
-        n: i32,
-        k: i32,
-        stream: i64,
-    );
-
-    /// DENSE Q4_K IMMA M=8 plain matmul (no activation, no fusion).
-    /// Use case: attention QKV proj, out_proj, embedding output proj,
-    /// or any Q4_K matmul on multi-row F32 input.
-    pub fn dense_q4k_imma_m8_matmul(
-        w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        dst_f32: *mut f32,
-        size_m: i32,
-        n: i32,
-        k: i32,
-        stream: i64,
-    );
-
     /// DENSE Q4_K IMMA M=8 silu*mul. Separate gate and up Q4_K weights;
     /// each block does 16 rows × 8 tokens via mma m16n8k32. SiLU(gate)
     /// * up activation, F32 output [size_m, N].
@@ -265,40 +187,6 @@ extern "C" {
         up_w: *const core::ffi::c_void,
         inputs_q81: *const core::ffi::c_void,
         dst_f32: *mut f32,
-        size_m: i32,
-        n: i32,
-        k: i32,
-        stream: i64,
-    );
-
-    /// IMMA M=8 with 2 warps per block, each warp handling a different
-    /// m_tile (16 weight rows). Block produces 32 weight rows × 8 pairs.
-    /// Independent warps — no sync, no shared mem. Reduces grid-X by 2×.
-    pub fn moe_q4k_imma_m8_2w_gate_up(
-        gate_up_w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        sorted_token_ids: *const i32,
-        expert_ids: *const i32,
-        dst_f32: *mut f32,
-        num_experts: i32,
-        topk: i32,
-        size_m: i32,
-        n: i32,
-        k: i32,
-        stream: i64,
-    );
-
-    /// IMMA M=8 with M_TILE=32: 2 mma ops per K-tile per warp, producing
-    /// 32 weight rows × 8 pairs per block (256 outputs vs 128 in the
-    /// base M=16 variant).
-    pub fn moe_q4k_imma_m8_m32_gate_up(
-        gate_up_w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        sorted_token_ids: *const i32,
-        expert_ids: *const i32,
-        dst_f32: *mut f32,
-        num_experts: i32,
-        topk: i32,
         size_m: i32,
         n: i32,
         k: i32,
@@ -323,23 +211,6 @@ extern "C" {
         stream: i64,
     );
 
-    /// Multi-warp IMMA M=8: 4 warps per block, each warp handles a
-    /// different 16-row weight slice but they share the SAME 8 sorted
-    /// pairs. Block produces 64 weight rows × 8 pairs = 512 outputs.
-    pub fn moe_q4k_imma_m8_mw_gate_up(
-        gate_up_w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        sorted_token_ids: *const i32,
-        expert_ids: *const i32,
-        dst_f32: *mut f32,
-        num_experts: i32,
-        topk: i32,
-        size_m: i32,
-        n: i32,
-        k: i32,
-        stream: i64,
-    );
-
     /// Per-pair-tile IMMA M=8: extends the M=1 broadcast IMMA to M=8 by
     /// packing 8 consecutive sorted pairs into one block. When all 8
     /// pairs share an expert (typical, since pairs are sorted by expert),
@@ -356,65 +227,6 @@ extern "C" {
         topk: i32,
         size_m: i32,
         n: i32,
-        k: i32,
-        stream: i64,
-    );
-
-    /// K-split MMQ: 4 warps share the SAME 16×8 output tile but split
-    /// the K-loop work 4 ways. Reduces per-warp sequential work 4× →
-    /// more concurrent warps for the SM scheduler.
-    pub fn moe_q4k_mmq_splitk_gate_up(
-        gate_up_w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        active_expert_ids: *const i32,
-        expert_offsets: *const i32,
-        dst_f32: *mut core::ffi::c_void,
-        num_experts: i32,
-        n_active: i32,
-        max_n_e: i32,
-        two_n: i32,
-        k: i32,
-        stream: i64,
-    );
-
-    /// Multi-warp Q4_K MMQ kernel modeled on llama.cpp mmq.cu. 4 warps
-    /// per block (128 threads) share the same 16 weight rows via
-    /// shared-memory cooperative load. Each warp owns 8 input rows;
-    /// block produces 16 × 32 output tile. Q4_K HBM weight reads are
-    /// shared 4× vs the single-warp moe_q4k_mma_batched_gate_up.
-    /// Output: F32 `[N_active, max_n_e, 2N]` (same as MMA non-fused),
-    /// reuses the existing GELU·mul scatter.
-    pub fn moe_q4k_mmq_gate_up(
-        gate_up_w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        active_expert_ids: *const i32,
-        expert_offsets: *const i32,
-        dst_f32: *mut core::ffi::c_void,
-        num_experts: i32,
-        n_active: i32,
-        max_n_e: i32,
-        two_n: i32,
-        k: i32,
-        stream: i64,
-    );
-
-    /// Phase 1 step-5 FUSED variant: gate||up MMA + GELU·mul + scatter
-    /// in a single launch. Eliminates the F32 `[N_active, max_n_e, 2N]`
-    /// intermediate buffer that the unfused variant materialises in HBM,
-    /// removing the round-trip cost that dominates prefill latency.
-    /// Output is F32 `[size_m, N]` (final MoE branch output before the
-    /// down projection).
-    pub fn moe_q4k_mma_batched_gate_up_gelu_mul_scatter(
-        gate_up_w: *const core::ffi::c_void,
-        inputs_q81: *const core::ffi::c_void,
-        sorted_token_ids: *const i32,
-        active_expert_ids: *const i32,
-        expert_offsets: *const i32,
-        dst_f32: *mut f32,
-        num_experts: i32,
-        n_active: i32,
-        max_n_e: i32,
-        n_gate: i32,
         k: i32,
         stream: i64,
     );
@@ -1209,37 +1021,6 @@ extern "C" {
         a: *const c_void,
         b: *const c_void,
         d: *mut c_void,
-        stream: i64,
-    );
-
-    /// Tensor-core Q4_K × Q8_1 MMVQ for batch=1 decode. One warp per
-    /// 16-row group, processes all super-blocks of those rows. Replaces
-    /// the dp4a inner loop with mma.sync.aligned.m16n8k32 IMMA — 16
-    /// weight rows in parallel per 32-K chunk.
-    /// `ncols_x` must be a multiple of 256 (one Q4_K super-block).
-    pub fn q4k_mmvq_imma(
-        vx: *const c_void,
-        vy: *const c_void,
-        dst: *mut c_void,
-        ncols_x: i32,
-        nrows_x: i32,
-        stream: i64,
-    );
-
-    /// Tensor-core MoE Q4_K gate||up matmul + GELU(tanh) + mul. Drop-in
-    /// replacement for the dp4a `moe_gemm_gguf_gate_up_gelu_mul_concat`
-    /// (for Q4_K weights with K%256=0). Quantizes the F32 input internally.
-    pub fn moe_q4k_imma_gate_up_gelu_mul_concat(
-        inputs: *const c_void,
-        gate_up_w: *const c_void,
-        sorted_token_ids: *const i32,
-        expert_ids:       *const i32,
-        dst: *mut c_void,
-        num_experts: i32,
-        topk: i32,
-        size_m: i32,
-        n: i32,
-        k: i32,
         stream: i64,
     );
 
