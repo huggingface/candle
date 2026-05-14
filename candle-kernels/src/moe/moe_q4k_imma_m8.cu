@@ -163,24 +163,24 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
         const float u_dall_b = uwb ? __low2float (uwb->dm) : 0.f;
         const float u_dmin_b = uwb ? __high2float(uwb->dm) : 0.f;
 
-        // Hoist per-K-tile (sc, m) scales out of the inner s-loop.
-        // get_scale_min_k4 is ~6 ops × 8 K-tiles × 4 weight rows = 192 ops
-        // per super-block inner loop; computing them ONCE per super-block
-        // saves the repeat work.
-        uint8_t g_sc_a8[8], g_m_a8[8], g_sc_b8[8], g_m_b8[8];
-        uint8_t u_sc_a8[8], u_m_a8[8], u_sc_b8[8], u_m_b8[8];
+        // Hoist per-K-tile (sc, m) scales out of the inner s-loop AND
+        // fold them with (dall, dmin) into F32 products. Saves both the
+        // get_scale_min_k4 work and the per-K-tile uint8→float casts +
+        // dall/dmin multiplies in the inner loop.
+        float g_dall_sc_a[8], g_dmin_m_a[8], g_dall_sc_b[8], g_dmin_m_b[8];
+        float u_dall_sc_a[8], u_dmin_m_a[8], u_dall_sc_b[8], u_dmin_m_b[8];
         #pragma unroll
         for (int s = 0; s < 8; ++s) {
-            if (gwa) im8_get_scale_min_k4(s, gwa->scales, g_sc_a8[s], g_m_a8[s]); else { g_sc_a8[s] = g_m_a8[s] = 0; }
-            if (gwb) im8_get_scale_min_k4(s, gwb->scales, g_sc_b8[s], g_m_b8[s]); else { g_sc_b8[s] = g_m_b8[s] = 0; }
-            if (uwa) im8_get_scale_min_k4(s, uwa->scales, u_sc_a8[s], u_m_a8[s]); else { u_sc_a8[s] = u_m_a8[s] = 0; }
-            if (uwb) im8_get_scale_min_k4(s, uwb->scales, u_sc_b8[s], u_m_b8[s]); else { u_sc_b8[s] = u_m_b8[s] = 0; }
+            uint8_t sc, m;
+            if (gwa) { im8_get_scale_min_k4(s, gwa->scales, sc, m); g_dall_sc_a[s] = g_dall_a * (float)sc; g_dmin_m_a[s]  = g_dmin_a * (float)m; }
+            else     { g_dall_sc_a[s] = 0.f; g_dmin_m_a[s] = 0.f; }
+            if (gwb) { im8_get_scale_min_k4(s, gwb->scales, sc, m); g_dall_sc_b[s] = g_dall_b * (float)sc; g_dmin_m_b[s]  = g_dmin_b * (float)m; }
+            else     { g_dall_sc_b[s] = 0.f; g_dmin_m_b[s] = 0.f; }
+            if (uwa) { im8_get_scale_min_k4(s, uwa->scales, sc, m); u_dall_sc_a[s] = u_dall_a * (float)sc; u_dmin_m_a[s]  = u_dmin_a * (float)m; }
+            else     { u_dall_sc_a[s] = 0.f; u_dmin_m_a[s] = 0.f; }
+            if (uwb) { im8_get_scale_min_k4(s, uwb->scales, sc, m); u_dall_sc_b[s] = u_dall_b * (float)sc; u_dmin_m_b[s]  = u_dmin_b * (float)m; }
+            else     { u_dall_sc_b[s] = 0.f; u_dmin_m_b[s] = 0.f; }
         }
-
-        float g_sub_d_0 = 0.f, g_sub_d_1 = 0.f, g_sub_d_2 = 0.f, g_sub_d_3 = 0.f;
-        float g_sub_m_0 = 0.f, g_sub_m_1 = 0.f, g_sub_m_2 = 0.f, g_sub_m_3 = 0.f;
-        float u_sub_d_0 = 0.f, u_sub_d_1 = 0.f, u_sub_d_2 = 0.f, u_sub_d_3 = 0.f;
-        float u_sub_m_0 = 0.f, u_sub_m_1 = 0.f, u_sub_m_2 = 0.f, u_sub_m_3 = 0.f;
 
         #pragma unroll
         for (int s = 0; s < 8; ++s) {
@@ -254,38 +254,21 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
             const float dot_out_a = (float)__shfl_sync(0xffffffff, dot2, src_lane_a);
             const float dot_out_b = (float)__shfl_sync(0xffffffff, dot2, src_lane_b);
 
-            const uint8_t g_sc_a = g_sc_a8[s], g_m_a = g_m_a8[s];
-            const uint8_t g_sc_b = g_sc_b8[s], g_m_b = g_m_b8[s];
-            const uint8_t u_sc_a = u_sc_a8[s], u_m_a = u_m_a8[s];
-            const uint8_t u_sc_b = u_sc_b8[s], u_m_b = u_m_b8[s];
+            const float g_da = g_dall_sc_a[s], g_dm = g_dmin_m_a[s];
+            const float g_db = g_dall_sc_b[s], g_dn = g_dmin_m_b[s];
+            const float u_da = u_dall_sc_a[s], u_dm = u_dmin_m_a[s];
+            const float u_db = u_dall_sc_b[s], u_dn = u_dmin_m_b[s];
 
-            g_sub_d_0 += d8_out_a * (float)GD0 * (float)g_sc_a;
-            g_sub_d_1 += d8_out_b * (float)GD1 * (float)g_sc_a;
-            g_sub_d_2 += d8_out_a * (float)GD2 * (float)g_sc_b;
-            g_sub_d_3 += d8_out_b * (float)GD3 * (float)g_sc_b;
-            g_sub_m_0 += d8_out_a * dot_out_a * (float)g_m_a;
-            g_sub_m_1 += d8_out_b * dot_out_b * (float)g_m_a;
-            g_sub_m_2 += d8_out_a * dot_out_a * (float)g_m_b;
-            g_sub_m_3 += d8_out_b * dot_out_b * (float)g_m_b;
-
-            u_sub_d_0 += d8_out_a * (float)UD0 * (float)u_sc_a;
-            u_sub_d_1 += d8_out_b * (float)UD1 * (float)u_sc_a;
-            u_sub_d_2 += d8_out_a * (float)UD2 * (float)u_sc_b;
-            u_sub_d_3 += d8_out_b * (float)UD3 * (float)u_sc_b;
-            u_sub_m_0 += d8_out_a * dot_out_a * (float)u_m_a;
-            u_sub_m_1 += d8_out_b * dot_out_b * (float)u_m_a;
-            u_sub_m_2 += d8_out_a * dot_out_a * (float)u_m_b;
-            u_sub_m_3 += d8_out_b * dot_out_b * (float)u_m_b;
+            // Folded: gate_*  += (dall_a*sc_s) * d8 * D - (dmin_a*m_s) * d8 * dot
+            gate_0 += g_da * d8_out_a * (float)GD0  - g_dm * d8_out_a * dot_out_a;
+            gate_1 += g_da * d8_out_b * (float)GD1  - g_dm * d8_out_b * dot_out_b;
+            gate_2 += g_db * d8_out_a * (float)GD2  - g_dn * d8_out_a * dot_out_a;
+            gate_3 += g_db * d8_out_b * (float)GD3  - g_dn * d8_out_b * dot_out_b;
+            up_0   += u_da * d8_out_a * (float)UD0  - u_dm * d8_out_a * dot_out_a;
+            up_1   += u_da * d8_out_b * (float)UD1  - u_dm * d8_out_b * dot_out_b;
+            up_2   += u_db * d8_out_a * (float)UD2  - u_dn * d8_out_a * dot_out_a;
+            up_3   += u_db * d8_out_b * (float)UD3  - u_dn * d8_out_b * dot_out_b;
         }
-
-        gate_0 += g_dall_a * g_sub_d_0 - g_dmin_a * g_sub_m_0;
-        gate_1 += g_dall_a * g_sub_d_1 - g_dmin_a * g_sub_m_1;
-        gate_2 += g_dall_b * g_sub_d_2 - g_dmin_b * g_sub_m_2;
-        gate_3 += g_dall_b * g_sub_d_3 - g_dmin_b * g_sub_m_3;
-        up_0   += u_dall_a * u_sub_d_0 - u_dmin_a * u_sub_m_0;
-        up_1   += u_dall_a * u_sub_d_1 - u_dmin_a * u_sub_m_1;
-        up_2   += u_dall_b * u_sub_d_2 - u_dmin_b * u_sub_m_2;
-        up_3   += u_dall_b * u_sub_d_3 - u_dmin_b * u_sub_m_3;
     }
 
     // GELU·mul + scatter to [size_m, N] F32.

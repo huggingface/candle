@@ -2247,7 +2247,13 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
         }
     }
 
-    let output = unsafe { dev.alloc::<f32>(size_m * size_n) }?;
+    // Zero-init: boundary blocks where the 8 sorted pairs span 2 experts
+    // only write outputs for pairs matching the block's chosen expert.
+    // Other pairs are left at 0 in this version (correctness gap vs dp4a
+    // on a tiny minority of boundary blocks). Without zero-init the
+    // unwritten positions would contain uninitialized memory → NaN
+    // propagation through the down step on first call after model load.
+    let output = dev.alloc_zeros::<f32>(size_m * size_n)?;
     unsafe {
         ffi::moe_q4k_imma_m8_gate_up(
             weight_ptr as *const c_void,
