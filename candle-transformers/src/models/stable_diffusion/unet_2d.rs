@@ -327,8 +327,8 @@ impl UNet2DConditionModel {
         } else {
             xs.clone()
         };
-        // 1. time
-        let emb = (Tensor::ones(bsize, xs.dtype(), device)? * timestep)?;
+        // 1. time — one allocation instead of ones() * scalar (saves a mul kernel)
+        let emb = Tensor::full(timestep as f32, bsize, device)?.to_dtype(xs.dtype())?;
         let emb = self.time_proj.forward(&emb)?;
         let emb = self.time_embedding.forward(&emb)?;
         // 2. pre-process
