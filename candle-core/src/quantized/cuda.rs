@@ -2334,10 +2334,10 @@ impl QCudaStorage {
     /// Device-side view of the unpadded Q8 bytes. Used by callers that
     /// want to memcpy the freshly-quantized data into a larger persistent
     /// buffer (e.g., a Q8 KV cache) without round-tripping through host.
-    pub fn data_slice_for_copy(
-        &self,
+    pub fn data_slice_for_copy<'a>(
+        &'a self,
         byte_len: usize,
-    ) -> Result<cudarc::driver::CudaView<u8>> {
+    ) -> Result<cudarc::driver::CudaView<'a, u8>> {
         if byte_len > self.data.len {
             crate::bail!(
                 "data_slice_for_copy: byte_len {byte_len} exceeds unpadded length {}",
