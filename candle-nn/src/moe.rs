@@ -2601,7 +2601,13 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
     // layers, which exceeds the 4% gain from eliminating boundary
     // multi-pass. Net -47% in prefill bench. Kept gated for future
     // experiments (e.g., device-side chunk-building kernel).
-    let use_chunks = std::env::var_os("LLMSERVER_MOE_IMMA_M8_CHUNKS").is_some();
+    use std::sync::OnceLock;
+    #[inline]
+    fn env_present(slot: &OnceLock<bool>, name: &str) -> bool {
+        *slot.get_or_init(|| std::env::var_os(name).is_some())
+    }
+    static CHUNKS: OnceLock<bool> = OnceLock::new();
+    let use_chunks = env_present(&CHUNKS, "LLMSERVER_MOE_IMMA_M8_CHUNKS");
     if use_chunks {
         // Device-side chunk builder: emits per-chunk metadata without a
         // D2H sync. Worst-case chunk count is size_m (all-distinct
@@ -2650,9 +2656,12 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
             false,
         ));
     }
-    let use_m32 = std::env::var_os("LLMSERVER_MOE_IMMA_M8_M32").is_some();
-    let use_2w  = std::env::var_os("LLMSERVER_MOE_IMMA_M8_2W").is_some();
-    let use_m64 = std::env::var_os("LLMSERVER_MOE_IMMA_M8_M64").is_some();
+    static M32: OnceLock<bool> = OnceLock::new();
+    static W2:  OnceLock<bool> = OnceLock::new();
+    static M64: OnceLock<bool> = OnceLock::new();
+    let use_m32 = env_present(&M32, "LLMSERVER_MOE_IMMA_M8_M32");
+    let use_2w  = env_present(&W2,  "LLMSERVER_MOE_IMMA_M8_2W");
+    let use_m64 = env_present(&M64, "LLMSERVER_MOE_IMMA_M8_M64");
     if use_m64 {
         unsafe {
             ffi::moe_q4k_imma_m8_m64_gate_up(
