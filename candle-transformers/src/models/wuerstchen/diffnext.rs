@@ -2,6 +2,27 @@ use super::common::{AttnBlock, GlobalResponseNorm, LayerNormNoWeights, TimestepB
 use candle::{DType, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
+fn wuerstchen_diffnext_freqs_cached(device: &candle::Device, half_dim: usize, neg_emb_scale: f64) -> Result<Tensor> {
+    use std::sync::{Mutex, OnceLock};
+    use std::collections::HashMap;
+    type Key = (candle::DeviceLocation, usize, u64);
+    static CACHE: OnceLock<Mutex<HashMap<Key, Tensor>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (device.location(), half_dim, neg_emb_scale.to_bits());
+    if let Ok(g) = cache.lock() {
+        if let Some(t) = g.get(&key) {
+            return Ok(t.clone());
+        }
+    }
+    let t = (Tensor::arange(0u32, half_dim as u32, device)?.to_dtype(DType::F32)? * -neg_emb_scale)?
+        .exp()?
+        .unsqueeze(0)?;
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, t.clone());
+    }
+    Ok(t)
+}
+
 #[derive(Debug)]
 pub struct ResBlockStageB {
     depthwise: candle_nn::Conv2d,
@@ -286,11 +307,9 @@ impl WDiffNeXt {
         const MAX_POSITIONS: usize = 10000;
         let r = (r * MAX_POSITIONS as f64)?;
         let half_dim = self.c_r / 2;
-        let emb = (MAX_POSITIONS as f64).ln() / (half_dim - 1) as f64;
-        let emb = (Tensor::arange(0u32, half_dim as u32, r.device())?.to_dtype(DType::F32)?
-            * -emb)?
-            .exp()?;
-        let emb = r.unsqueeze(1)?.broadcast_mul(&emb.unsqueeze(0)?)?;
+        let emb_const = (MAX_POSITIONS as f64).ln() / (half_dim - 1) as f64;
+        let emb = wuerstchen_diffnext_freqs_cached(r.device(), half_dim, emb_const)?;
+        let emb = r.unsqueeze(1)?.broadcast_mul(&emb)?;
         let emb = Tensor::cat(&[emb.sin()?, emb.cos()?], 1)?;
         let emb = if self.c_r % 2 == 1 {
             emb.pad_with_zeros(D::Minus1, 0, 1)?

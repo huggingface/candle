@@ -150,22 +150,42 @@ impl TimestepEmbedder {
         }
 
         let half = dim / 2;
-        let freqs = Tensor::arange(0f32, half as f32, t.device())?
-            .to_dtype(candle::DType::F32)?
-            .mul(&Tensor::full(
-                (-f64::ln(max_period) / half as f64) as f32,
-                half,
-                t.device(),
-            )?)?
-            .exp()?;
+        let freqs = mmdit_freqs_cached(t.device(), half, max_period)?;
 
         let args = t
             .unsqueeze(1)?
             .to_dtype(candle::DType::F32)?
-            .matmul(&freqs.unsqueeze(0)?)?;
+            .matmul(&freqs)?;
         let embedding = Tensor::cat(&[args.cos()?, args.sin()?], 1)?;
         embedding.to_dtype(candle::DType::F16)
     }
+}
+
+fn mmdit_freqs_cached(device: &candle::Device, half: usize, max_period: f64) -> Result<Tensor> {
+    use std::sync::{Mutex, OnceLock};
+    use std::collections::HashMap;
+    type Key = (candle::DeviceLocation, usize, u64);
+    static CACHE: OnceLock<Mutex<HashMap<Key, Tensor>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (device.location(), half, max_period.to_bits());
+    if let Ok(g) = cache.lock() {
+        if let Some(t) = g.get(&key) {
+            return Ok(t.clone());
+        }
+    }
+    let freqs = Tensor::arange(0f32, half as f32, device)?
+        .to_dtype(candle::DType::F32)?
+        .mul(&Tensor::full(
+            (-f64::ln(max_period) / half as f64) as f32,
+            half,
+            device,
+        )?)?
+        .exp()?
+        .unsqueeze(0)?;
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, freqs.clone());
+    }
+    Ok(freqs)
 }
 
 impl Module for TimestepEmbedder {
