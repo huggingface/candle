@@ -597,6 +597,12 @@ pub struct Flux {
     // steps. Within `flux::sampling::denoise` both ids are constant for
     // the whole loop, so the per-step rope/concat work runs once.
     pe_cache: std::sync::Mutex<Option<(Vec<usize>, Vec<usize>, Tensor)>>,
+    // The `denoise` loop calls forward(...) with the same `txt`, `y`, and
+    // (optionally) `guidance` tensors every step. Cache projections by
+    // the input Tensor's stable id() — clone-cheap, content-correct.
+    txt_in_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
+    y_in_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
+    guidance_in_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
 }
 
 impl Clone for Flux {
@@ -612,6 +618,9 @@ impl Clone for Flux {
             single_blocks: self.single_blocks.clone(),
             final_layer: self.final_layer.clone(),
             pe_cache: std::sync::Mutex::new(None),
+            txt_in_cache: std::sync::Mutex::new(None),
+            y_in_cache: std::sync::Mutex::new(None),
+            guidance_in_cache: std::sync::Mutex::new(None),
         }
     }
 }
@@ -655,6 +664,9 @@ impl Flux {
             single_blocks,
             final_layer,
             pe_cache: std::sync::Mutex::new(None),
+            txt_in_cache: std::sync::Mutex::new(None),
+            y_in_cache: std::sync::Mutex::new(None),
+            guidance_in_cache: std::sync::Mutex::new(None),
         })
     }
 }
@@ -698,16 +710,52 @@ impl super::WithForward for Flux {
                 pe
             }
         };
-        let mut txt = txt.apply(&self.txt_in)?;
+        // txt_in projection — constant within a denoise loop. Cache
+        // by txt's TensorId (stable across Arc-clones of the same tensor).
+        let mut txt = {
+            let mut g = self.txt_in_cache.lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                Some((id, ref t)) if id == txt.id() => t.clone(),
+                _ => {
+                    let projected = txt.apply(&self.txt_in)?;
+                    *g = Some((txt.id(), projected.clone()));
+                    projected
+                }
+            }
+        };
         let mut img = img.apply(&self.img_in)?;
         let vec_ = timestep_embedding(timesteps, 256, dtype)?.apply(&self.time_in)?;
         let vec_ = match (self.guidance_in.as_ref(), guidance) {
             (Some(g_in), Some(guidance)) => {
-                (vec_ + timestep_embedding(guidance, 256, dtype)?.apply(g_in))?
+                // guidance_in: constant within a denoise loop (guidance scalar fixed).
+                let g_emb = {
+                    let mut g = self.guidance_in_cache.lock().unwrap_or_else(|e| e.into_inner());
+                    match *g {
+                        Some((id, ref t)) if id == guidance.id() => t.clone(),
+                        _ => {
+                            let emb = timestep_embedding(guidance, 256, dtype)?.apply(g_in)?;
+                            *g = Some((guidance.id(), emb.clone()));
+                            emb
+                        }
+                    }
+                };
+                (vec_ + g_emb)?
             }
             _ => vec_,
         };
-        let vec_ = (vec_ + y.apply(&self.vector_in))?;
+        // vector_in projection on y: constant within a denoise loop.
+        let y_emb = {
+            let mut g = self.y_in_cache.lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                Some((id, ref t)) if id == y.id() => t.clone(),
+                _ => {
+                    let emb = y.apply(&self.vector_in)?;
+                    *g = Some((y.id(), emb.clone()));
+                    emb
+                }
+            }
+        };
+        let vec_ = (vec_ + y_emb)?;
 
         // Double blocks
         for block in self.double_blocks.iter() {
