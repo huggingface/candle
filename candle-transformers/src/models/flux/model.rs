@@ -582,7 +582,7 @@ impl LastLayer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Flux {
     img_in: Linear,
     txt_in: Linear,
@@ -593,6 +593,27 @@ pub struct Flux {
     double_blocks: Vec<DoubleStreamBlock>,
     single_blocks: Vec<SingleStreamBlock>,
     final_layer: LastLayer,
+    // Cache `pe` (= EmbedNd(concat(txt_ids, img_ids))) across denoise
+    // steps. Within `flux::sampling::denoise` both ids are constant for
+    // the whole loop, so the per-step rope/concat work runs once.
+    pe_cache: std::sync::Mutex<Option<(Vec<usize>, Vec<usize>, Tensor)>>,
+}
+
+impl Clone for Flux {
+    fn clone(&self) -> Self {
+        Self {
+            img_in: self.img_in.clone(),
+            txt_in: self.txt_in.clone(),
+            time_in: self.time_in.clone(),
+            vector_in: self.vector_in.clone(),
+            guidance_in: self.guidance_in.clone(),
+            pe_embedder: self.pe_embedder.clone(),
+            double_blocks: self.double_blocks.clone(),
+            single_blocks: self.single_blocks.clone(),
+            final_layer: self.final_layer.clone(),
+            pe_cache: std::sync::Mutex::new(None),
+        }
+    }
 }
 
 impl Flux {
@@ -633,6 +654,7 @@ impl Flux {
             double_blocks,
             single_blocks,
             final_layer,
+            pe_cache: std::sync::Mutex::new(None),
         })
     }
 }
@@ -656,9 +678,25 @@ impl super::WithForward for Flux {
             candle::bail!("unexpected shape for img {:?}", img.shape())
         }
         let dtype = img.dtype();
+        let txt_dims = txt_ids.dims().to_vec();
+        let img_dims = img_ids.dims().to_vec();
         let pe = {
-            let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
-            ids.apply(&self.pe_embedder)?
+            let mut guard = self.pe_cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((ref c_txt, ref c_img, ref c_pe)) = *guard {
+                if *c_txt == txt_dims && *c_img == img_dims {
+                    c_pe.clone()
+                } else {
+                    let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
+                    let pe = ids.apply(&self.pe_embedder)?;
+                    *guard = Some((txt_dims, img_dims, pe.clone()));
+                    pe
+                }
+            } else {
+                let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
+                let pe = ids.apply(&self.pe_embedder)?;
+                *guard = Some((txt_dims, img_dims, pe.clone()));
+                pe
+            }
         };
         let mut txt = txt.apply(&self.txt_in)?;
         let mut img = img.apply(&self.img_in)?;
