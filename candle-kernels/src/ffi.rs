@@ -193,6 +193,24 @@ extern "C" {
         stream: i64,
     );
 
+    /// Per-pair-tile IMMA M=8 for the MoE down step. Same pattern as
+    /// the gate||up IMMA M=8 but with atomicAdd output scaled by
+    /// topk_weights[pair].
+    pub fn moe_q4k_imma_m8_down(
+        down_w: *const core::ffi::c_void,
+        inputs_q81: *const core::ffi::c_void,
+        sorted_token_ids: *const i32,
+        expert_ids: *const i32,
+        topk_weights: *const f32,
+        dst_f32: *mut f32,
+        num_experts: i32,
+        topk: i32,
+        size_m: i32,
+        hidden: i32,
+        k: i32,
+        stream: i64,
+    );
+
     /// Multi-warp IMMA M=8: 4 warps per block, each warp handles a
     /// different 16-row weight slice but they share the SAME 8 sorted
     /// pairs. Block produces 64 weight rows × 8 pairs = 512 outputs.

@@ -2172,6 +2172,165 @@ pub fn moe_q4k_imma_gate_up_gelu_mul_concat(
     ))
 }
 
+/// Per-pair-tile IMMA M=8 for the DOWN step.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn moe_q4k_imma_m8_down_reduce(
+    input: &Tensor,
+    weights: &QTensor,
+    sorted_token_ids: &Tensor,
+    expert_ids: &Tensor,
+    topk_weights: &Tensor,
+    topk: usize,
+    n_real_tokens: usize,
+    residual: Option<&Tensor>,
+) -> Result<Tensor> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::quantized::GgmlDType;
+    use candle::DType;
+    use candle::op::BackpropOp;
+    use core::ffi::c_void;
+    use half::{f16, bf16};
+
+    if weights.dtype() != GgmlDType::Q4K {
+        candle::bail!("moe_q4k_imma_m8_down_reduce: requires Q4_K");
+    }
+    if input.dtype() != DType::F32 {
+        candle::bail!("moe_q4k_imma_m8_down_reduce: input must be F32");
+    }
+    let (size_m, size_k) = input.dims2()?;
+    if size_k % 256 != 0 {
+        candle::bail!("K={} not a multiple of 256", size_k);
+    }
+    if size_m != n_real_tokens * topk {
+        candle::bail!("input M={} != n_real_tokens*topk={}",
+                      size_m, n_real_tokens * topk);
+    }
+    let (num_experts, hidden, size_k1) = weights.shape().dims3()?;
+    if size_k != size_k1 {
+        candle::bail!("input K={} != weight K={}", size_k, size_k1);
+    }
+    let dev = input.device().as_cuda_device()?;
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    let (input_storage, _) = input.storage_and_layout();
+    let input_slice = match &*input_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("input must be cuda"),
+    };
+    let (sorted_storage, _) = sorted_token_ids.storage_and_layout();
+    let sorted_slice = match &*sorted_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("sorted_token_ids must be cuda"),
+    };
+    let (experts_storage, _) = expert_ids.storage_and_layout();
+    let experts_slice = match &*experts_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("expert_ids must be cuda"),
+    };
+    let (tw_storage, _) = topk_weights.storage_and_layout();
+    let tw_slice = match &*tw_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("topk_weights must be cuda"),
+    };
+    let weight_ptr = weights.device_ptr()?;
+
+    // Pre-quantize input → Q8_1 (per pair).
+    let q81_bytes = size_m * (size_k / 32) * 36;
+    let q81_alloc = dev.alloc_zeros::<u8>(q81_bytes)?;
+    {
+        let inp_ptr = input_slice.device_ptr(input_slice.stream()).0 as *const c_void;
+        let q81_ptr = q81_alloc.device_ptr(q81_alloc.stream()).0 as *mut c_void;
+        let stream_raw = dev.cuda_stream().cu_stream() as *mut c_void;
+        unsafe {
+            ffi::launch_mmvq_gguf_quantize_q8_1_f32(
+                inp_ptr, q81_ptr,
+                size_k as i32, size_k as i32, size_m as i32,
+                stream_raw,
+            );
+        }
+    }
+
+    // Output buffer: residual-initialized or zero-init for atomicAdd.
+    let out_count = n_real_tokens * hidden;
+    let out_alloc = if let Some(res) = residual {
+        let res_c = res.contiguous()?;
+        let elems: usize = res_c.shape().elem_count();
+        if elems != out_count {
+            candle::bail!("residual elems {} != out_count {}", elems, out_count);
+        }
+        let mut out = dev.alloc_zeros::<f32>(out_count)?;
+        let (res_storage, _) = res_c.storage_and_layout();
+        match res.dtype() {
+            DType::F32 => {
+                let res_slice = match &*res_storage {
+                    candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+                    _ => candle::bail!("residual F32 must be cuda"),
+                };
+                dev.cuda_stream().memcpy_dtod(res_slice, &mut out)
+                    .map_err(|e| candle::Error::Msg(format!("residual memcpy: {e}")))?;
+            }
+            DType::F16 => {
+                let res_slice = match &*res_storage {
+                    candle::Storage::Cuda(c) => c.as_cuda_slice::<f16>()?,
+                    _ => candle::bail!("residual F16 must be cuda"),
+                };
+                let out_ptr = out.device_ptr(out.stream()).0 as *mut f32;
+                let src_ptr = res_slice.device_ptr(res_slice.stream()).0 as *const c_void;
+                unsafe {
+                    ffi::cast_init_f32_from_dtype(out_ptr, src_ptr, out_count as i32, 0, stream);
+                }
+            }
+            DType::BF16 => {
+                let res_slice = match &*res_storage {
+                    candle::Storage::Cuda(c) => c.as_cuda_slice::<bf16>()?,
+                    _ => candle::bail!("residual BF16 must be cuda"),
+                };
+                let out_ptr = out.device_ptr(out.stream()).0 as *mut f32;
+                let src_ptr = res_slice.device_ptr(res_slice.stream()).0 as *const c_void;
+                unsafe {
+                    ffi::cast_init_f32_from_dtype(out_ptr, src_ptr, out_count as i32, 1, stream);
+                }
+            }
+            d => candle::bail!("residual dtype {:?} unsupported", d),
+        }
+        out
+    } else {
+        dev.alloc_zeros::<f32>(out_count)?
+    };
+
+    unsafe {
+        ffi::moe_q4k_imma_m8_down(
+            weight_ptr as *const c_void,
+            q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
+            sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
+            experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
+            tw_slice.device_ptr(tw_slice.stream()).0 as *const f32,
+            out_alloc.device_ptr(out_alloc.stream()).0 as *mut f32,
+            num_experts as i32, topk as i32,
+            size_m as i32, hidden as i32, size_k as i32,
+            stream,
+        );
+    }
+
+    drop(input_storage); drop(sorted_storage); drop(experts_storage); drop(tw_storage);
+    let storage = candle::CudaStorage::wrap_cuda_slice(out_alloc, dev.clone());
+    Ok(Tensor::from_storage(
+        candle::Storage::Cuda(storage),
+        (n_real_tokens, hidden),
+        BackpropOp::none(),
+        false,
+    ))
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn moe_q4k_imma_m8_down_reduce(
+    _: &Tensor, _: &QTensor, _: &Tensor, _: &Tensor, _: &Tensor,
+    _: usize, _: usize, _: Option<&Tensor>,
+) -> Result<Tensor> {
+    candle::bail!("moe_q4k_imma_m8_down_reduce is cuda-only")
+}
+
 /// Per-pair-tile IMMA M=8 variant: same contract as
 /// moe_q4k_imma_gate_up_gelu_mul_concat but each block handles 8
 /// consecutive sorted pairs (true M=8 batching of the mma op vs the
