@@ -1,3 +1,6 @@
+#[allow(dead_code)] // Generated ptx.rs declares one const per kernel; not
+                    // all are looked up by name at runtime (FFI-linked
+                    // kernels reference the symbol directly).
 mod ptx {
     include!(concat!(env!("OUT_DIR"), "/ptx.rs"));
 }
