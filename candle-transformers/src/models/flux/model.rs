@@ -118,9 +118,37 @@ fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
     let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
     let x0 = x.narrow(D::Minus1, 0, 1)?;
     let x1 = x.narrow(D::Minus1, 1, 1)?;
+    let (fr0, fr1) = rope_split_cached(freq_cis)?;
+    (fr0.broadcast_mul(&x0)? + fr1.broadcast_mul(&x1)?)?.reshape(dims.to_vec())
+}
+
+/// Cache freq_cis.get_on_dim(D::Minus1, 0/1) by freq_cis.id().
+/// pe is itself cached across denoise steps (pe_cache), so within one
+/// image gen the same `freq_cis` tensor flows through every attention()
+/// call across every block. With ~57 blocks × ~4 slice ops on pe per
+/// step in Flux schnell, this saves ~228 per-step Tensor_ allocations.
+fn rope_split_cached(freq_cis: &Tensor) -> Result<(Tensor, Tensor)> {
+    use std::sync::{Mutex, OnceLock};
+    use std::collections::HashMap;
+    static CACHE: OnceLock<Mutex<HashMap<candle::TensorId, (Tensor, Tensor)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let id = freq_cis.id();
+    if let Ok(g) = cache.lock() {
+        if let Some((fr0, fr1)) = g.get(&id) {
+            return Ok((fr0.clone(), fr1.clone()));
+        }
+    }
     let fr0 = freq_cis.get_on_dim(D::Minus1, 0)?;
     let fr1 = freq_cis.get_on_dim(D::Minus1, 1)?;
-    (fr0.broadcast_mul(&x0)? + fr1.broadcast_mul(&x1)?)?.reshape(dims.to_vec())
+    if let Ok(mut g) = cache.lock() {
+        // Bound size — if cache grows past 32 entries, drop everything.
+        // pe is re-cached per image-gen so unique ids are infrequent.
+        if g.len() >= 32 {
+            g.clear();
+        }
+        g.insert(id, (fr0.clone(), fr1.clone()));
+    }
+    Ok((fr0, fr1))
 }
 
 pub(crate) fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
