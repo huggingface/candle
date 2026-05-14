@@ -190,7 +190,8 @@ extern "C" __global__ void moe_q4k_imma_m8_down_kernel(
             const block_q8_1_idn * yb_my = y_pair ? y_pair + isb * 8 + s : nullptr;
             int B0 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 0] : 0;
             int B1 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 1] : 0;
-            const float d8_my = yb_my ? __low2float(yb_my->ds) : 0.f;
+            const float d8_my    = yb_my ? __low2float (yb_my->ds) : 0.f;
+            const float sumxd_my = yb_my ? __high2float(yb_my->ds) : 0.f;
 
             int D0 = 0, D1 = 0, D2 = 0, D3 = 0;
             asm("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
@@ -198,24 +199,20 @@ extern "C" __global__ void moe_q4k_imma_m8_down_kernel(
                 : "+r"(D0), "+r"(D1), "+r"(D2), "+r"(D3)
                 : "r"(A0), "r"(A1), "r"(A2), "r"(A3), "r"(B0), "r"(B1));
 
-            int dot2 = __dp4a(0x01010101, B1, __dp4a(0x01010101, B0, 0));
-            dot2 += __shfl_xor_sync(0xffffffff, dot2, 1);
-            dot2 += __shfl_xor_sync(0xffffffff, dot2, 2);
-
             const int src_lane_a = (2 * tj + 0) * 4;
             const int src_lane_b = (2 * tj + 1) * 4;
-            const float d8_out_a  = __shfl_sync(0xffffffff, d8_my, src_lane_a);
-            const float d8_out_b  = __shfl_sync(0xffffffff, d8_my, src_lane_b);
-            const float dot_out_a = (float)__shfl_sync(0xffffffff, dot2, src_lane_a);
-            const float dot_out_b = (float)__shfl_sync(0xffffffff, dot2, src_lane_b);
+            const float d8_out_a    = __shfl_sync(0xffffffff, d8_my,    src_lane_a);
+            const float d8_out_b    = __shfl_sync(0xffffffff, d8_my,    src_lane_b);
+            const float sumxd_out_a = __shfl_sync(0xffffffff, sumxd_my, src_lane_a);
+            const float sumxd_out_b = __shfl_sync(0xffffffff, sumxd_my, src_lane_b);
 
             const float da_a = dall_sc_a[s], dm_a = dmin_m_a[s];
             const float da_b = dall_sc_b[s], dm_b = dmin_m_b[s];
 
-            out_0 += da_a * d8_out_a * (float)D0 - dm_a * d8_out_a * dot_out_a;
-            out_1 += da_a * d8_out_b * (float)D1 - dm_a * d8_out_b * dot_out_b;
-            out_2 += da_b * d8_out_a * (float)D2 - dm_b * d8_out_a * dot_out_a;
-            out_3 += da_b * d8_out_b * (float)D3 - dm_b * d8_out_b * dot_out_b;
+            out_0 += da_a * d8_out_a * (float)D0 - dm_a * sumxd_out_a;
+            out_1 += da_a * d8_out_b * (float)D1 - dm_a * sumxd_out_b;
+            out_2 += da_b * d8_out_a * (float)D2 - dm_b * sumxd_out_a;
+            out_3 += da_b * d8_out_b * (float)D3 - dm_b * sumxd_out_b;
         }
     }
 
