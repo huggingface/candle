@@ -2589,131 +2589,21 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
         }
     }
 
-    // Zero-init: defensively zero-init for the variants that may leave
-    // some outputs unwritten (boundary blocks). For the chunks variant
-    // every block writes exactly its 8 pairs, so zero-init is mostly
-    // belt-and-suspenders.
+    // Zero-init: defensive against boundary blocks where some output
+    // positions might not be written (rare with valid expert routing).
     let output = dev.alloc_zeros::<f32>(size_m * size_n)?;
 
-    // Chunks variant: pre-compute per-block (pair_start, expert) on host
-    // so each block sees only ONE expert. Eliminates boundary multi-pass.
-    // OPT-IN only: D2H sync of experts per call costs ~5ms across 30
-    // layers, which exceeds the 4% gain from eliminating boundary
-    // multi-pass. Net -47% in prefill bench. Kept gated for future
-    // experiments (e.g., device-side chunk-building kernel).
-    use std::sync::OnceLock;
-    #[inline]
-    fn env_present(slot: &OnceLock<bool>, name: &str) -> bool {
-        *slot.get_or_init(|| std::env::var_os(name).is_some())
-    }
-    static CHUNKS: OnceLock<bool> = OnceLock::new();
-    let use_chunks = env_present(&CHUNKS, "LLMSERVER_MOE_IMMA_M8_CHUNKS");
-    if use_chunks {
-        // Device-side chunk builder: emits per-chunk metadata without a
-        // D2H sync. Worst-case chunk count is size_m (all-distinct
-        // experts); typical is size_m/8.
-        let max_chunks = size_m;
-        // Chunks path has a pre-existing latent bug: when exercised via
-        // the smoke test (LLMSERVER_MOE_IMMA_M8_CHUNKS=1) it produces
-        // max abs err ~46 vs dp4a (bisected to b4635d6e). Path remains
-        // gated opt-in only and is not used in production auto-on.
-        // Zero-init is kept defensively until the bug is investigated.
-        let starts_d = dev.alloc_zeros::<i32>(max_chunks)?;
-        let experts_d = dev.alloc_zeros::<i32>(max_chunks)?;
-        let num_chunks_d = dev.alloc_zeros::<i32>(1)?;
-        unsafe {
-            ffi::moe_q4k_imma_m8_build_chunks(
-                experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
-                starts_d.device_ptr(starts_d.stream()).0 as *mut i32,
-                experts_d.device_ptr(experts_d.stream()).0 as *mut i32,
-                num_chunks_d.device_ptr(num_chunks_d.stream()).0 as *mut i32,
-                size_m as i32,
-                stream,
-            );
-        }
-
-        unsafe {
-            ffi::moe_q4k_imma_m8_chunks_gate_up(
-                weight_ptr as *const c_void,
-                q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
-                sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
-                experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
-                starts_d.device_ptr(starts_d.stream()).0 as *const i32,
-                experts_d.device_ptr(experts_d.stream()).0 as *const i32,
-                num_chunks_d.device_ptr(num_chunks_d.stream()).0 as *const i32,
-                output.device_ptr(output.stream()).0 as *mut f32,
-                num_experts as i32, topk as i32, max_chunks as i32,
-                size_m as i32, size_n as i32, size_k as i32,
-                stream,
-            );
-        }
-        drop(input_storage); drop(sorted_storage); drop(experts_storage);
-        let storage = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
-        return Ok(Tensor::from_storage(
-            candle::Storage::Cuda(storage),
-            (size_m, size_n),
-            BackpropOp::none(),
-            false,
-        ));
-    }
-    static M32: OnceLock<bool> = OnceLock::new();
-    static W2:  OnceLock<bool> = OnceLock::new();
-    static M64: OnceLock<bool> = OnceLock::new();
-    let use_m32 = env_present(&M32, "LLMSERVER_MOE_IMMA_M8_M32");
-    let use_2w  = env_present(&W2,  "LLMSERVER_MOE_IMMA_M8_2W");
-    let use_m64 = env_present(&M64, "LLMSERVER_MOE_IMMA_M8_M64");
-    if use_m64 {
-        unsafe {
-            ffi::moe_q4k_imma_m8_m64_gate_up(
-                weight_ptr as *const c_void,
-                q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
-                sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
-                experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
-                output.device_ptr(output.stream()).0 as *mut f32,
-                num_experts as i32, topk as i32,
-                size_m as i32, size_n as i32, size_k as i32,
-                stream,
-            );
-        }
-    } else if use_2w {
-        unsafe {
-            ffi::moe_q4k_imma_m8_2w_gate_up(
-                weight_ptr as *const c_void,
-                q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
-                sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
-                experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
-                output.device_ptr(output.stream()).0 as *mut f32,
-                num_experts as i32, topk as i32,
-                size_m as i32, size_n as i32, size_k as i32,
-                stream,
-            );
-        }
-    } else if use_m32 {
-        unsafe {
-            ffi::moe_q4k_imma_m8_m32_gate_up(
-                weight_ptr as *const c_void,
-                q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
-                sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
-                experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
-                output.device_ptr(output.stream()).0 as *mut f32,
-                num_experts as i32, topk as i32,
-                size_m as i32, size_n as i32, size_k as i32,
-                stream,
-            );
-        }
-    } else {
-        unsafe {
-            ffi::moe_q4k_imma_m8_gate_up(
-                weight_ptr as *const c_void,
-                q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
-                sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
-                experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
-                output.device_ptr(output.stream()).0 as *mut f32,
-                num_experts as i32, topk as i32,
-                size_m as i32, size_n as i32, size_k as i32,
-                stream,
-            );
-        }
+    unsafe {
+        ffi::moe_q4k_imma_m8_gate_up(
+            weight_ptr as *const c_void,
+            q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
+            sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
+            experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
+            output.device_ptr(output.stream()).0 as *mut f32,
+            num_experts as i32, topk as i32,
+            size_m as i32, size_n as i32, size_k as i32,
+            stream,
+        );
     }
 
     drop(input_storage); drop(sorted_storage); drop(experts_storage);
