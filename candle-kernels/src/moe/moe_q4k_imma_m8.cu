@@ -201,10 +201,10 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
             const int qs_off = 32 * il + 8 * tj;
 
             // GATE A fragments.
-            uint32_t gqa_lo = gwa ? *(const uint32_t *)(gwa->qs + qs_off + 0) : 0;
-            uint32_t gqa_hi = gwa ? *(const uint32_t *)(gwa->qs + qs_off + 4) : 0;
-            uint32_t gqb_lo = gwb ? *(const uint32_t *)(gwb->qs + qs_off + 0) : 0;
-            uint32_t gqb_hi = gwb ? *(const uint32_t *)(gwb->qs + qs_off + 4) : 0;
+            uint32_t gqa_lo = gwa ? __ldg((const uint32_t *)(gwa->qs + qs_off + 0)) : 0;
+            uint32_t gqa_hi = gwa ? __ldg((const uint32_t *)(gwa->qs + qs_off + 4)) : 0;
+            uint32_t gqb_lo = gwb ? __ldg((const uint32_t *)(gwb->qs + qs_off + 0)) : 0;
+            uint32_t gqb_hi = gwb ? __ldg((const uint32_t *)(gwb->qs + qs_off + 4)) : 0;
             int GA0, GA1, GA2, GA3;
             if (ip == 0) {
                 GA0 = (int)(gqa_lo & 0x0F0F0F0F);
@@ -219,10 +219,10 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
             }
 
             // UP A fragments.
-            uint32_t uqa_lo = uwa ? *(const uint32_t *)(uwa->qs + qs_off + 0) : 0;
-            uint32_t uqa_hi = uwa ? *(const uint32_t *)(uwa->qs + qs_off + 4) : 0;
-            uint32_t uqb_lo = uwb ? *(const uint32_t *)(uwb->qs + qs_off + 0) : 0;
-            uint32_t uqb_hi = uwb ? *(const uint32_t *)(uwb->qs + qs_off + 4) : 0;
+            uint32_t uqa_lo = uwa ? __ldg((const uint32_t *)(uwa->qs + qs_off + 0)) : 0;
+            uint32_t uqa_hi = uwa ? __ldg((const uint32_t *)(uwa->qs + qs_off + 4)) : 0;
+            uint32_t uqb_lo = uwb ? __ldg((const uint32_t *)(uwb->qs + qs_off + 0)) : 0;
+            uint32_t uqb_hi = uwb ? __ldg((const uint32_t *)(uwb->qs + qs_off + 4)) : 0;
             int UA0, UA1, UA2, UA3;
             if (ip == 0) {
                 UA0 = (int)(uqa_lo & 0x0F0F0F0F);
