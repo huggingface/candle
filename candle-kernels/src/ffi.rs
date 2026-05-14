@@ -193,6 +193,20 @@ extern "C" {
         stream: i64,
     );
 
+    /// DENSE Q4_K IMMA M=8 silu*mul. Separate gate and up Q4_K weights;
+    /// each block does 16 rows × 8 tokens via mma m16n8k32. SiLU(gate)
+    /// * up activation, F32 output [size_m, N].
+    pub fn dense_q4k_imma_m8_silu(
+        gate_w: *const core::ffi::c_void,
+        up_w: *const core::ffi::c_void,
+        inputs_q81: *const core::ffi::c_void,
+        dst_f32: *mut f32,
+        size_m: i32,
+        n: i32,
+        k: i32,
+        stream: i64,
+    );
+
     /// IMMA M=8 with 2 warps per block, each warp handling a different
     /// m_tile (16 weight rows). Block produces 32 weight rows × 8 pairs.
     /// Independent warps — no sync, no shared mem. Reduces grid-X by 2×.

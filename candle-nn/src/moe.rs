@@ -2172,6 +2172,95 @@ pub fn moe_q4k_imma_gate_up_gelu_mul_concat(
     ))
 }
 
+/// DENSE Q4_K IMMA M=8 silu*mul replacement for moe_gemm_gguf_gate_up_silu_mul
+/// when weights are 2D Q4_K. Same output contract as the dp4a variant.
+#[cfg(feature = "cuda")]
+pub fn dense_q4k_imma_m8_silu_mul(
+    input: &Tensor,
+    gate_weights: &QTensor,
+    up_weights: &QTensor,
+) -> Result<Tensor> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::quantized::GgmlDType;
+    use candle::DType;
+    use candle::op::BackpropOp;
+    use core::ffi::c_void;
+
+    if gate_weights.dtype() != GgmlDType::Q4K || up_weights.dtype() != GgmlDType::Q4K {
+        candle::bail!("dense_q4k_imma_m8_silu_mul: requires Q4_K weights");
+    }
+    if input.dtype() != DType::F32 {
+        candle::bail!("dense_q4k_imma_m8_silu_mul: input must be F32");
+    }
+    let (size_m, size_k) = input.dims2()?;
+    if size_k % 256 != 0 {
+        candle::bail!("K={} not a multiple of 256", size_k);
+    }
+    let (size_n, size_k_g) = match gate_weights.shape().dims() {
+        [n, k] => (*n, *k),
+        s => candle::bail!("dense_q4k_imma_m8_silu_mul: gate must be 2D, got {:?}", s),
+    };
+    let (size_n_u, size_k_u) = match up_weights.shape().dims() {
+        [n, k] => (*n, *k),
+        s => candle::bail!("up must be 2D, got {:?}", s),
+    };
+    if size_n != size_n_u || size_k != size_k_g || size_k != size_k_u {
+        candle::bail!("gate/up/input shape mismatch");
+    }
+    let dev = input.device().as_cuda_device()?;
+    let stream = dev.cuda_stream().cu_stream() as i64;
+    let stream_raw = dev.cuda_stream().cu_stream() as *mut c_void;
+
+    let (input_storage, _) = input.storage_and_layout();
+    let input_slice = match &*input_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("input must be cuda"),
+    };
+    let gate_ptr = gate_weights.device_ptr()?;
+    let up_ptr   = up_weights.device_ptr()?;
+
+    // Pre-quantize F32 → Q8_1 per token.
+    let q81_bytes = size_m * (size_k / 32) * 36;
+    let q81_alloc = dev.alloc_zeros::<u8>(q81_bytes)?;
+    {
+        let inp = input_slice.device_ptr(input_slice.stream()).0 as *const c_void;
+        let q81 = q81_alloc.device_ptr(q81_alloc.stream()).0 as *mut c_void;
+        unsafe {
+            ffi::launch_mmvq_gguf_quantize_q8_1_f32(
+                inp, q81, size_k as i32, size_k as i32, size_m as i32, stream_raw,
+            );
+        }
+    }
+
+    let output = dev.alloc_zeros::<f32>(size_m * size_n)?;
+    unsafe {
+        ffi::dense_q4k_imma_m8_silu(
+            gate_ptr as *const c_void,
+            up_ptr as *const c_void,
+            q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
+            output.device_ptr(output.stream()).0 as *mut f32,
+            size_m as i32, size_n as i32, size_k as i32,
+            stream,
+        );
+    }
+
+    drop(input_storage);
+    let storage = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
+    Ok(Tensor::from_storage(
+        candle::Storage::Cuda(storage),
+        (size_m, size_n),
+        BackpropOp::none(),
+        false,
+    ))
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn dense_q4k_imma_m8_silu_mul(
+    _: &Tensor, _: &QTensor, _: &QTensor,
+) -> Result<Tensor> {
+    candle::bail!("dense_q4k_imma_m8_silu_mul is cuda-only")
+}
+
 /// Per-pair-tile IMMA M=8 for the DOWN step.
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
