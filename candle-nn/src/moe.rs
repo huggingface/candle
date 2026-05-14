@@ -664,7 +664,8 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat_mma(
         }
     }
 
-    // Step 2: Q4_K × Q8_1 batched MMA (gate||up packed, F32 output).
+    // Step 2: Q4_K × Q8_1 multi-warp MMQ kernel (gate||up packed, F32 out).
+    // 4 warps per block share weight tile loads via shared memory.
     {
         let act_ptr   = active_ids_alloc.device_ptr(active_ids_alloc.stream()).0 as *const i32;
         let off_ptr   = off_slice.device_ptr(off_slice.stream()).0 as *const i32;
@@ -672,7 +673,7 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat_mma(
         let q81_ptr   = q81_alloc.device_ptr(q81_alloc.stream()).0 as *const core::ffi::c_void;
         let gemm_ptr  = gemm_alloc.device_ptr(gemm_alloc.stream()).0 as *mut core::ffi::c_void;
         unsafe {
-            ffi::moe_q4k_mma_batched_gate_up(
+            ffi::moe_q4k_mmq_gate_up(
                 w_ptr, q81_ptr, act_ptr, off_ptr, gemm_ptr,
                 num_experts as i32, n_active as i32, max_n_e as i32,
                 two_n as i32, k_in as i32,

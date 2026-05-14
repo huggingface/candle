@@ -193,6 +193,27 @@ extern "C" {
         stream: i64,
     );
 
+    /// Multi-warp Q4_K MMQ kernel modeled on llama.cpp mmq.cu. 4 warps
+    /// per block (128 threads) share the same 16 weight rows via
+    /// shared-memory cooperative load. Each warp owns 8 input rows;
+    /// block produces 16 × 32 output tile. Q4_K HBM weight reads are
+    /// shared 4× vs the single-warp moe_q4k_mma_batched_gate_up.
+    /// Output: F32 `[N_active, max_n_e, 2N]` (same as MMA non-fused),
+    /// reuses the existing GELU·mul scatter.
+    pub fn moe_q4k_mmq_gate_up(
+        gate_up_w: *const core::ffi::c_void,
+        inputs_q81: *const core::ffi::c_void,
+        active_expert_ids: *const i32,
+        expert_offsets: *const i32,
+        dst_f32: *mut core::ffi::c_void,
+        num_experts: i32,
+        n_active: i32,
+        max_n_e: i32,
+        two_n: i32,
+        k: i32,
+        stream: i64,
+    );
+
     /// Phase 1 step-5 FUSED variant: gate||up MMA + GELU·mul + scatter
     /// in a single launch. Eliminates the F32 `[N_active, max_n_e, 2N]`
     /// intermediate buffer that the unfused variant materialises in HBM,
