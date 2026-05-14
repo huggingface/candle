@@ -55,6 +55,7 @@ fn main() -> Result<()> {
             "src/moe/moe_q4k_mma_batched.cu",
             "src/moe/moe_q4k_mmq.cu",
             "src/moe/moe_q4k_mmq_splitk.cu",
+            "src/moe/moe_q4k_imma_m8.cu",
             "src/moe/gate_topk.cu",
             "src/moe/gate_gemv.cu",
             "src/moe/kv_residual_scatter.cu",

@@ -2172,6 +2172,112 @@ pub fn moe_q4k_imma_gate_up_gelu_mul_concat(
     ))
 }
 
+/// Per-pair-tile IMMA M=8 variant: same contract as
+/// moe_q4k_imma_gate_up_gelu_mul_concat but each block handles 8
+/// consecutive sorted pairs (true M=8 batching of the mma op vs the
+/// M=1 broadcast). Pre-quantizes Q8_1 inputs and dispatches the
+/// moe_q4k_imma_m8 kernel.
+#[cfg(feature = "cuda")]
+pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
+    input: &Tensor,
+    gate_up_weights: &QTensor,
+    sorted_token_ids: &Tensor,
+    experts_ids: &Tensor,
+    topk: usize,
+) -> Result<Tensor> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::quantized::GgmlDType;
+    use candle::DType;
+    use candle::op::BackpropOp;
+    use core::ffi::c_void;
+
+    if gate_up_weights.dtype() != GgmlDType::Q4K {
+        candle::bail!("moe_q4k_imma_m8_gate_up_gelu_mul_concat: requires Q4_K");
+    }
+    if input.dtype() != DType::F32 {
+        candle::bail!("moe_q4k_imma_m8_gate_up_gelu_mul_concat: input must be F32");
+    }
+    let (size_m_in, size_k) = input.dims2()?;
+    if size_k % 256 != 0 {
+        candle::bail!("K={} not a multiple of 256", size_k);
+    }
+    let size_m = size_m_in * topk;
+    let (num_experts, two_n, size_k_g) = match gate_up_weights.shape().dims() {
+        [n, k]    => (1usize, *n, *k),
+        [e, n, k] => (*e, *n, *k),
+        s => candle::bail!("gate_up_weights must be 2D or 3D, got {:?}", s),
+    };
+    if two_n % 2 != 0 || size_k != size_k_g {
+        candle::bail!("bad shape: 2N={} K_in={} K_w={}", two_n, size_k, size_k_g);
+    }
+    let size_n = two_n / 2;
+    let dev = input.device().as_cuda_device()?;
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    let (input_storage, _) = input.storage_and_layout();
+    let input_slice = match &*input_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+        _ => candle::bail!("input must be cuda"),
+    };
+    let (sorted_storage, _) = sorted_token_ids.storage_and_layout();
+    let sorted_slice = match &*sorted_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("sorted_token_ids must be cuda"),
+    };
+    let (experts_storage, _) = experts_ids.storage_and_layout();
+    let experts_slice = match &*experts_storage {
+        candle::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+        _ => candle::bail!("experts_ids must be cuda"),
+    };
+    let weight_ptr = gate_up_weights.device_ptr()?;
+
+    // Pre-quantize F32 → Q8_1 (per real token).
+    let q81_bytes = size_m_in * (size_k / 32) * 36;
+    let q81_alloc = dev.alloc_zeros::<u8>(q81_bytes)?;
+    {
+        let inp_ptr = input_slice.device_ptr(input_slice.stream()).0 as *const c_void;
+        let q81_ptr = q81_alloc.device_ptr(q81_alloc.stream()).0 as *mut c_void;
+        let stream_raw = dev.cuda_stream().cu_stream() as *mut c_void;
+        unsafe {
+            ffi::launch_mmvq_gguf_quantize_q8_1_f32(
+                inp_ptr, q81_ptr,
+                size_k as i32, size_k as i32, size_m_in as i32,
+                stream_raw,
+            );
+        }
+    }
+
+    let output = unsafe { dev.alloc::<f32>(size_m * size_n) }?;
+    unsafe {
+        ffi::moe_q4k_imma_m8_gate_up(
+            weight_ptr as *const c_void,
+            q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
+            sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
+            experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
+            output.device_ptr(output.stream()).0 as *mut f32,
+            num_experts as i32, topk as i32,
+            size_m as i32, size_n as i32, size_k as i32,
+            stream,
+        );
+    }
+
+    drop(input_storage); drop(sorted_storage); drop(experts_storage);
+    let storage = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
+    Ok(Tensor::from_storage(
+        candle::Storage::Cuda(storage),
+        (size_m, size_n),
+        BackpropOp::none(),
+        false,
+    ))
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
+    _: &Tensor, _: &QTensor, _: &Tensor, _: &Tensor, _: usize,
+) -> Result<Tensor> {
+    candle::bail!("moe_q4k_imma_m8_gate_up_gelu_mul_concat is cuda-only")
+}
+
 #[cfg(not(feature = "cuda"))]
 pub fn moe_q4k_imma_gate_up_gelu_mul_concat(
     _: &Tensor, _: &QTensor, _: &Tensor, _: &Tensor, _: usize,

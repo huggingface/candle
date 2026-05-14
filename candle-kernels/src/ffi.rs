@@ -193,6 +193,26 @@ extern "C" {
         stream: i64,
     );
 
+    /// Per-pair-tile IMMA M=8: extends the M=1 broadcast IMMA to M=8 by
+    /// packing 8 consecutive sorted pairs into one block. When all 8
+    /// pairs share an expert (typical, since pairs are sorted by expert),
+    /// one mma.sync m16n8k32 covers all 8 output columns vs 8 separate
+    /// mma ops in the broadcast variant. Boundary blocks where pairs
+    /// span experts mask out the wrong-expert lanes per-output.
+    pub fn moe_q4k_imma_m8_gate_up(
+        gate_up_w: *const core::ffi::c_void,
+        inputs_q81: *const core::ffi::c_void,
+        sorted_token_ids: *const i32,
+        expert_ids: *const i32,
+        dst_f32: *mut f32,
+        num_experts: i32,
+        topk: i32,
+        size_m: i32,
+        n: i32,
+        k: i32,
+        stream: i64,
+    );
+
     /// K-split MMQ: 4 warps share the SAME 16×8 output tile but split
     /// the K-loop work 4 ways. Reduces per-warp sequential work 4× →
     /// more concurrent warps for the SM scheduler.
