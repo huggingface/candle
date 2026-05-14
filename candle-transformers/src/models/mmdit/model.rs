@@ -79,6 +79,10 @@ pub struct MMDiT {
     vector_embedder: VectorEmbedder,
     context_embedder: nn::Linear,
     unpatchifier: Unpatchifier,
+    // Projection caches: y and context are constant across denoise steps.
+    // Keyed by the input Tensor's stable id() — Arc-shared across clones.
+    y_proj_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
+    context_proj_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
 }
 
 impl MMDiT {
@@ -127,6 +131,8 @@ impl MMDiT {
             vector_embedder,
             context_embedder,
             unpatchifier,
+            y_proj_cache: std::sync::Mutex::new(None),
+            context_proj_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -153,9 +159,33 @@ impl MMDiT {
             .forward(x)?
             .broadcast_add(&cropped_pos_embed)?;
         let c = self.timestep_embedder.forward(t)?;
-        let y = self.vector_embedder.forward(y)?;
-        let c = (c + y)?;
-        let context = self.context_embedder.forward(context)?;
+        // y and context are constant across denoise steps; cache their
+        // projections by input TensorId.
+        let y_proj = {
+            let id = y.id();
+            let mut g = self.y_proj_cache.lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                Some((cid, ref t_)) if cid == id => t_.clone(),
+                _ => {
+                    let p = self.vector_embedder.forward(y)?;
+                    *g = Some((id, p.clone()));
+                    p
+                }
+            }
+        };
+        let c = (c + y_proj)?;
+        let context = {
+            let id = context.id();
+            let mut g = self.context_proj_cache.lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                Some((cid, ref t_)) if cid == id => t_.clone(),
+                _ => {
+                    let p = self.context_embedder.forward(context)?;
+                    *g = Some((id, p.clone()));
+                    p
+                }
+            }
+        };
 
         let x = self.core.forward(&context, &x, &c, skip_layers)?;
         let x = self.unpatchifier.unpatchify(&x, h, w)?;
