@@ -163,6 +163,20 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
         const float u_dall_b = uwb ? __low2float (uwb->dm) : 0.f;
         const float u_dmin_b = uwb ? __high2float(uwb->dm) : 0.f;
 
+        // Hoist per-K-tile (sc, m) scales out of the inner s-loop.
+        // get_scale_min_k4 is ~6 ops × 8 K-tiles × 4 weight rows = 192 ops
+        // per super-block inner loop; computing them ONCE per super-block
+        // saves the repeat work.
+        uint8_t g_sc_a8[8], g_m_a8[8], g_sc_b8[8], g_m_b8[8];
+        uint8_t u_sc_a8[8], u_m_a8[8], u_sc_b8[8], u_m_b8[8];
+        #pragma unroll
+        for (int s = 0; s < 8; ++s) {
+            if (gwa) im8_get_scale_min_k4(s, gwa->scales, g_sc_a8[s], g_m_a8[s]); else { g_sc_a8[s] = g_m_a8[s] = 0; }
+            if (gwb) im8_get_scale_min_k4(s, gwb->scales, g_sc_b8[s], g_m_b8[s]); else { g_sc_b8[s] = g_m_b8[s] = 0; }
+            if (uwa) im8_get_scale_min_k4(s, uwa->scales, u_sc_a8[s], u_m_a8[s]); else { u_sc_a8[s] = u_m_a8[s] = 0; }
+            if (uwb) im8_get_scale_min_k4(s, uwb->scales, u_sc_b8[s], u_m_b8[s]); else { u_sc_b8[s] = u_m_b8[s] = 0; }
+        }
+
         float g_sub_d_0 = 0.f, g_sub_d_1 = 0.f, g_sub_d_2 = 0.f, g_sub_d_3 = 0.f;
         float g_sub_m_0 = 0.f, g_sub_m_1 = 0.f, g_sub_m_2 = 0.f, g_sub_m_3 = 0.f;
         float u_sub_d_0 = 0.f, u_sub_d_1 = 0.f, u_sub_d_2 = 0.f, u_sub_d_3 = 0.f;
@@ -240,12 +254,10 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
             const float dot_out_a = (float)__shfl_sync(0xffffffff, dot2, src_lane_a);
             const float dot_out_b = (float)__shfl_sync(0xffffffff, dot2, src_lane_b);
 
-            uint8_t g_sc_a, g_m_a, g_sc_b, g_m_b;
-            uint8_t u_sc_a, u_m_a, u_sc_b, u_m_b;
-            if (gwa) im8_get_scale_min_k4(s, gwa->scales, g_sc_a, g_m_a); else { g_sc_a = g_m_a = 0; }
-            if (gwb) im8_get_scale_min_k4(s, gwb->scales, g_sc_b, g_m_b); else { g_sc_b = g_m_b = 0; }
-            if (uwa) im8_get_scale_min_k4(s, uwa->scales, u_sc_a, u_m_a); else { u_sc_a = u_m_a = 0; }
-            if (uwb) im8_get_scale_min_k4(s, uwb->scales, u_sc_b, u_m_b); else { u_sc_b = u_m_b = 0; }
+            const uint8_t g_sc_a = g_sc_a8[s], g_m_a = g_m_a8[s];
+            const uint8_t g_sc_b = g_sc_b8[s], g_m_b = g_m_b8[s];
+            const uint8_t u_sc_a = u_sc_a8[s], u_m_a = u_m_a8[s];
+            const uint8_t u_sc_b = u_sc_b8[s], u_m_b = u_m_b8[s];
 
             g_sub_d_0 += d8_out_a * (float)GD0 * (float)g_sc_a;
             g_sub_d_1 += d8_out_b * (float)GD1 * (float)g_sc_a;
