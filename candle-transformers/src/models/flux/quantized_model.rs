@@ -1,4 +1,23 @@
 use super::model::{attention, timestep_embedding, Config, EmbedNd};
+
+/// Module-local single-entry cache for silu(vec_) across all block modulations
+/// within one Flux::forward step. Key: vec_.id(). When vec_ changes (next
+/// denoise step), the cache replaces with the new value on first call.
+fn vec_silu_cached(vec_: &Tensor) -> Result<Tensor> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<Option<(candle::TensorId, Tensor)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let id = vec_.id();
+    let mut g = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cid, ref t)) = *g {
+        if cid == id {
+            return Ok(t.clone());
+        }
+    }
+    let s = vec_.silu()?;
+    *g = Some((id, s.clone()));
+    Ok(s)
+}
 use crate::quantized_nn::{linear, linear_b, Linear};
 use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, IndexOp, Result, Tensor, D};
@@ -80,8 +99,7 @@ impl Modulation1 {
     }
 
     fn forward(&self, vec_: &Tensor) -> Result<ModulationOut> {
-        let ys = vec_
-            .silu()?
+        let ys = vec_silu_cached(vec_)?
             .apply(&self.lin)?
             .unsqueeze(1)?
             .chunk(3, D::Minus1)?;
@@ -108,8 +126,7 @@ impl Modulation2 {
     }
 
     fn forward(&self, vec_: &Tensor) -> Result<(ModulationOut, ModulationOut)> {
-        let ys = vec_
-            .silu()?
+        let ys = vec_silu_cached(vec_)?
             .apply(&self.lin)?
             .unsqueeze(1)?
             .chunk(6, D::Minus1)?;
@@ -351,7 +368,7 @@ impl LastLayer {
     }
 
     fn forward(&self, xs: &Tensor, vec: &Tensor) -> Result<Tensor> {
-        let chunks = vec.silu()?.apply(&self.ada_ln_modulation)?.chunk(2, 1)?;
+        let chunks = vec_silu_cached(vec)?.apply(&self.ada_ln_modulation)?.chunk(2, 1)?;
         let (shift, scale) = (&chunks[0], &chunks[1]);
         let xs = xs
             .apply(&self.norm_final)?

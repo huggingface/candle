@@ -127,6 +127,26 @@ fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
 /// image gen the same `freq_cis` tensor flows through every attention()
 /// call across every block. With ~57 blocks × ~4 slice ops on pe per
 /// step in Flux schnell, this saves ~228 per-step Tensor_ allocations.
+/// Cache silu(vec_) by vec_.id(). Within one Flux::forward step,
+/// vec_ is constant across all 19+38 = 57 block modulation calls.
+/// Saves ~56 silu kernel launches per step. Single-entry cache —
+/// per-step vec_ has a new TensorId, immediately replaces.
+fn vec_silu_cached(vec_: &Tensor) -> Result<Tensor> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<Option<(candle::TensorId, Tensor)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let id = vec_.id();
+    let mut g = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cid, ref t)) = *g {
+        if cid == id {
+            return Ok(t.clone());
+        }
+    }
+    let s = vec_.silu()?;
+    *g = Some((id, s.clone()));
+    Ok(s)
+}
+
 fn rope_split_cached(freq_cis: &Tensor) -> Result<(Tensor, Tensor)> {
     use std::sync::{Mutex, OnceLock};
     use std::collections::HashMap;
@@ -329,8 +349,7 @@ impl Modulation1 {
     }
 
     fn forward(&self, vec_: &Tensor) -> Result<ModulationOut> {
-        let ys = vec_
-            .silu()?
+        let ys = vec_silu_cached(vec_)?
             .apply(&self.lin)?
             .unsqueeze(1)?
             .chunk(3, D::Minus1)?;
@@ -357,8 +376,7 @@ impl Modulation2 {
     }
 
     fn forward(&self, vec_: &Tensor) -> Result<(ModulationOut, ModulationOut)> {
-        let ys = vec_
-            .silu()?
+        let ys = vec_silu_cached(vec_)?
             .apply(&self.lin)?
             .unsqueeze(1)?
             .chunk(6, D::Minus1)?;
@@ -600,7 +618,7 @@ impl LastLayer {
     }
 
     fn forward(&self, xs: &Tensor, vec: &Tensor) -> Result<Tensor> {
-        let chunks = vec.silu()?.apply(&self.ada_ln_modulation)?.chunk(2, 1)?;
+        let chunks = vec_silu_cached(vec)?.apply(&self.ada_ln_modulation)?.chunk(2, 1)?;
         let (shift, scale) = (&chunks[0], &chunks[1]);
         let xs = xs
             .apply(&self.norm_final)?
