@@ -166,6 +166,11 @@ pub struct AttnBlock {
     norm: WLayerNorm,
     attention: Attention,
     kv_mapper_lin: candle_nn::Linear,
+    // The non-self-attn path runs silu+linear on the constant
+    // conditioning every step. Cache the mapped output so the
+    // downstream Attention's K/V cache also stays hot (it keys on
+    // the same Tensor id we hand back).
+    kv_mapped_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
 }
 
 impl AttnBlock {
@@ -185,18 +190,34 @@ impl AttnBlock {
             norm,
             attention,
             kv_mapper_lin,
+            kv_mapped_cache: std::sync::Mutex::new(None),
         })
     }
 
     pub fn forward(&self, xs: &Tensor, kv: &Tensor) -> Result<Tensor> {
-        let kv = candle_nn::ops::silu(kv)?.apply(&self.kv_mapper_lin)?;
+        // Cache silu(kv).apply(kv_mapper_lin): kv is the constant
+        // conditioning. By returning the SAME Tensor (Arc-clone) on every
+        // hit, downstream Attention::forward also sees a stable id and
+        // hits its own K/V cache.
+        let kv_mapped = {
+            let id = kv.id();
+            let mut g = self.kv_mapped_cache.lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                Some((cid, ref t_)) if cid == id => t_.clone(),
+                _ => {
+                    let m = candle_nn::ops::silu(kv)?.apply(&self.kv_mapper_lin)?;
+                    *g = Some((id, m.clone()));
+                    m
+                }
+            }
+        };
         let norm_xs = self.norm.forward(xs)?;
         let kv = if self.self_attn {
             let (b_size, channel, _, _) = xs.dims4()?;
             let norm_xs = norm_xs.reshape((b_size, channel, ()))?.transpose(1, 2)?;
-            Tensor::cat(&[&norm_xs, &kv], 1)?.contiguous()?
+            Tensor::cat(&[&norm_xs, &kv_mapped], 1)?.contiguous()?
         } else {
-            kv
+            kv_mapped
         };
         xs + self.attention.forward(&norm_xs, &kv)
     }
