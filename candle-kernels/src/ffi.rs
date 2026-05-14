@@ -297,21 +297,6 @@ extern "C" {
         stream: i64,
     );
 
-    /// Fused quantized matmul + residual add. `dst` must be PRE-INITIALIZED
-    /// with the residual (e.g. via cuMemcpyDtoDAsync of an F32 tensor).
-    /// Kernel atomicAdds matmul partial sums into `dst`. Output =
-    /// matmul(W, x) + residual. Saves the post-matmul broadcast_add.
-    pub fn qmatmul_add(
-        x: *const f32,              // [hidden]
-        w_q: *const c_void,         // [out_rows, hidden] quantized
-        y_q8_1_scratch: *mut c_void, // q8_1 scratch (caller-allocated)
-        dst: *mut f32,              // [out_rows] pre-init with residual
-        hidden: i32,
-        out_rows: i32,
-        quant_type: i32,
-        stream: i64,
-    );
-
     /// Fused RMS norm + Q*_K matmul for single-token decode. Replaces
     /// the rms_norm + quantize_q8_1 + mul_mat_vec sequence with one
     /// launch — saves both the explicit norm launch and the q8_1

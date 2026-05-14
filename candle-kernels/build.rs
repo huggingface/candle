@@ -47,7 +47,6 @@ fn main() -> Result<()> {
             "src/moe/topk_softmax.cu",
             "src/moe/attn_post_qkv.cu",
             "src/moe/rms_qmatmul.cu",
-            "src/moe/qmatmul_add.cu",
             "src/moe/add_rms_norm.cu",
             "src/moe/mma_test.cu",
             "src/moe/moe_q4k_imma_m8.cu",
