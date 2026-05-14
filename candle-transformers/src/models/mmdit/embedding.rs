@@ -76,6 +76,9 @@ pub struct PositionEmbedder {
     pos_embed: Tensor,
     patch_size: usize,
     pos_embed_max_size: usize,
+    // Cache cropped pos_embed by (h, w) so per-step calls within a denoise
+    // loop don't redo reshape+narrow+narrow+reshape every time.
+    cropped_cache: std::sync::Mutex<std::collections::HashMap<(usize, usize), Tensor>>,
 }
 
 impl PositionEmbedder {
@@ -93,9 +96,23 @@ impl PositionEmbedder {
             pos_embed,
             patch_size,
             pos_embed_max_size,
+            cropped_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
     pub fn get_cropped_pos_embed(&self, h: usize, w: usize) -> Result<Tensor> {
+        if let Ok(g) = self.cropped_cache.lock() {
+            if let Some(t) = g.get(&(h, w)) {
+                return Ok(t.clone());
+            }
+        }
+        let cropped = self.compute_cropped_pos_embed(h, w)?;
+        if let Ok(mut g) = self.cropped_cache.lock() {
+            g.insert((h, w), cropped.clone());
+        }
+        Ok(cropped)
+    }
+
+    fn compute_cropped_pos_embed(&self, h: usize, w: usize) -> Result<Tensor> {
         let h = (h + 1) / self.patch_size;
         let w = (w + 1) / self.patch_size;
 
