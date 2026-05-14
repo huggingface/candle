@@ -309,7 +309,7 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
     let stream_i64 = dev.cuda_stream().cu_stream() as i64;
 
     // ── Resolve raw device pointers ─────────────────────────────────
-    let (inp_storage, inp_layout) = inputs.storage_and_layout();
+    let (inp_storage, _inp_layout) = inputs.storage_and_layout();
     let inputs_slice = match &*inp_storage {
         candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
         _ => candle::bail!("inputs must be on CUDA"),
