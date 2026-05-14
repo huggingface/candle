@@ -193,6 +193,23 @@ extern "C" {
         stream: i64,
     );
 
+    /// K-split MMQ: 4 warps share the SAME 16×8 output tile but split
+    /// the K-loop work 4 ways. Reduces per-warp sequential work 4× →
+    /// more concurrent warps for the SM scheduler.
+    pub fn moe_q4k_mmq_splitk_gate_up(
+        gate_up_w: *const core::ffi::c_void,
+        inputs_q81: *const core::ffi::c_void,
+        active_expert_ids: *const i32,
+        expert_offsets: *const i32,
+        dst_f32: *mut core::ffi::c_void,
+        num_experts: i32,
+        n_active: i32,
+        max_n_e: i32,
+        two_n: i32,
+        k: i32,
+        stream: i64,
+    );
+
     /// Multi-warp Q4_K MMQ kernel modeled on llama.cpp mmq.cu. 4 warps
     /// per block (128 threads) share the same 16 weight rows via
     /// shared-memory cooperative load. Each warp owns 8 input rows;
