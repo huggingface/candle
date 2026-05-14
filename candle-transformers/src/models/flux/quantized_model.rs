@@ -361,7 +361,7 @@ impl LastLayer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Flux {
     img_in: Linear,
     txt_in: Linear,
@@ -372,6 +372,34 @@ pub struct Flux {
     double_blocks: Vec<DoubleStreamBlock>,
     single_blocks: Vec<SingleStreamBlock>,
     final_layer: LastLayer,
+    // Same per-denoise-step caches as the non-quantized Flux:
+    //  - pe is shape-deterministic given (txt_ids.dims, img_ids.dims)
+    //  - txt/y/guidance projections are content-stable across the loop
+    //    via the caller's tensor identity.
+    pe_cache: std::sync::Mutex<Option<(Vec<usize>, Vec<usize>, Tensor)>>,
+    txt_in_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
+    y_in_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
+    guidance_in_cache: std::sync::Mutex<Option<(candle::TensorId, Tensor)>>,
+}
+
+impl Clone for Flux {
+    fn clone(&self) -> Self {
+        Self {
+            img_in: self.img_in.clone(),
+            txt_in: self.txt_in.clone(),
+            time_in: self.time_in.clone(),
+            vector_in: self.vector_in.clone(),
+            guidance_in: self.guidance_in.clone(),
+            pe_embedder: self.pe_embedder.clone(),
+            double_blocks: self.double_blocks.clone(),
+            single_blocks: self.single_blocks.clone(),
+            final_layer: self.final_layer.clone(),
+            pe_cache: std::sync::Mutex::new(None),
+            txt_in_cache: std::sync::Mutex::new(None),
+            y_in_cache: std::sync::Mutex::new(None),
+            guidance_in_cache: std::sync::Mutex::new(None),
+        }
+    }
 }
 
 impl Flux {
@@ -412,6 +440,10 @@ impl Flux {
             double_blocks,
             single_blocks,
             final_layer,
+            pe_cache: std::sync::Mutex::new(None),
+            txt_in_cache: std::sync::Mutex::new(None),
+            y_in_cache: std::sync::Mutex::new(None),
+            guidance_in_cache: std::sync::Mutex::new(None),
         })
     }
 }
@@ -435,20 +467,68 @@ impl super::WithForward for Flux {
             candle::bail!("unexpected shape for img {:?}", img.shape())
         }
         let dtype = img.dtype();
+        let txt_dims = txt_ids.dims().to_vec();
+        let img_dims = img_ids.dims().to_vec();
         let pe = {
-            let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
-            ids.apply(&self.pe_embedder)?
+            let mut guard = self.pe_cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((ref c_txt, ref c_img, ref c_pe)) = *guard {
+                if *c_txt == txt_dims && *c_img == img_dims {
+                    c_pe.clone()
+                } else {
+                    let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
+                    let pe = ids.apply(&self.pe_embedder)?;
+                    *guard = Some((txt_dims, img_dims, pe.clone()));
+                    pe
+                }
+            } else {
+                let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
+                let pe = ids.apply(&self.pe_embedder)?;
+                *guard = Some((txt_dims, img_dims, pe.clone()));
+                pe
+            }
         };
-        let mut txt = txt.apply(&self.txt_in)?;
+        let mut txt = {
+            let mut g = self.txt_in_cache.lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                Some((id, ref t)) if id == txt.id() => t.clone(),
+                _ => {
+                    let projected = txt.apply(&self.txt_in)?;
+                    *g = Some((txt.id(), projected.clone()));
+                    projected
+                }
+            }
+        };
         let mut img = img.apply(&self.img_in)?;
         let vec_ = timestep_embedding(timesteps, 256, dtype)?.apply(&self.time_in)?;
         let vec_ = match (self.guidance_in.as_ref(), guidance) {
             (Some(g_in), Some(guidance)) => {
-                (vec_ + timestep_embedding(guidance, 256, dtype)?.apply(g_in))?
+                let g_emb = {
+                    let mut g = self.guidance_in_cache.lock().unwrap_or_else(|e| e.into_inner());
+                    match *g {
+                        Some((id, ref t)) if id == guidance.id() => t.clone(),
+                        _ => {
+                            let emb = timestep_embedding(guidance, 256, dtype)?.apply(g_in)?;
+                            *g = Some((guidance.id(), emb.clone()));
+                            emb
+                        }
+                    }
+                };
+                (vec_ + g_emb)?
             }
             _ => vec_,
         };
-        let vec_ = (vec_ + y.apply(&self.vector_in))?;
+        let y_emb = {
+            let mut g = self.y_in_cache.lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                Some((id, ref t)) if id == y.id() => t.clone(),
+                _ => {
+                    let emb = y.apply(&self.vector_in)?;
+                    *g = Some((y.id(), emb.clone()));
+                    emb
+                }
+            }
+        };
+        let vec_ = (vec_ + y_emb)?;
 
         // Double blocks
         for block in self.double_blocks.iter() {
