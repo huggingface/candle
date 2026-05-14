@@ -349,7 +349,7 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
     let weight_data_len_bytes = num_experts * (two_n * k_w / 256) * 144;
 
     // ── Output: [size_m, N] F32 zero-init ───────────────────────────
-    let out_alloc = unsafe { dev.alloc_zeros::<f32>(size_m * n_out) }?;
+    let out_alloc = dev.alloc_zeros::<f32>(size_m * n_out)?;
 
     // ── Compute max active-expert size from offsets to size persistent
     // workspaces. Hoisting allocations out of the per-expert loop saves
@@ -409,7 +409,7 @@ pub fn moe_gemm_gguf_per_expert_gate_up_gelu_mul_concat(
             (gather_total_elems.max(weights_total_elems) * 2) / (1024 * 1024 * 1024)
         );
     }
-    let gather_alloc = unsafe { dev.alloc_zeros::<f16>(gather_total_elems) }?;
+    let gather_alloc = dev.alloc_zeros::<f16>(gather_total_elems)?;
     let weights_alloc = unsafe { dev.alloc::<f16>(weights_total_elems) }?;
 
     // ── Step (b'): batched dequant of all active experts in ONE launch.
@@ -1291,7 +1291,7 @@ pub fn moe_gemm_gguf_down_reduce(
             ),
         }
     } else {
-        unsafe { dev.alloc_zeros::<f32>(out_count) }?
+        dev.alloc_zeros::<f32>(out_count)?
     };
     let out_ptr = out_alloc.device_ptr(out_alloc.stream()).0 as *mut f32;
 

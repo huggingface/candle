@@ -1032,7 +1032,7 @@ pub fn attn_output_q4_0_f32_gqa(
         };
 
         // CRITICAL: split-K kernel atomicAdd's its partial; output must be zeroed.
-        let dst = unsafe { dev.alloc_zeros::<f32>(n_q_heads * head_dim)? };
+        let dst = dev.alloc_zeros::<f32>(n_q_heads * head_dim)?;
         let mut builder = func.builder();
         builder.arg(v_blob);
         builder.arg(probs_f32);
