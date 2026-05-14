@@ -201,10 +201,14 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
             const int qs_off = 32 * il + 8 * tj;
 
             // GATE A fragments.
-            uint32_t gqa_lo = gwa ? __ldg((const uint32_t *)(gwa->qs + qs_off + 0)) : 0;
-            uint32_t gqa_hi = gwa ? __ldg((const uint32_t *)(gwa->qs + qs_off + 4)) : 0;
-            uint32_t gqb_lo = gwb ? __ldg((const uint32_t *)(gwb->qs + qs_off + 0)) : 0;
-            uint32_t gqb_hi = gwb ? __ldg((const uint32_t *)(gwb->qs + qs_off + 4)) : 0;
+            // Vectorize the 4 weight nibble reads into uint2 (8 bytes each).
+            // Each pair {qs_off+0, qs_off+4} fits in one uint2 load.
+            uint2 gqa_pair = gwa ? __ldg((const uint2 *)(gwa->qs + qs_off)) : make_uint2(0, 0);
+            uint2 gqb_pair = gwb ? __ldg((const uint2 *)(gwb->qs + qs_off)) : make_uint2(0, 0);
+            uint32_t gqa_lo = gqa_pair.x;
+            uint32_t gqa_hi = gqa_pair.y;
+            uint32_t gqb_lo = gqb_pair.x;
+            uint32_t gqb_hi = gqb_pair.y;
             int GA0, GA1, GA2, GA3;
             if (ip == 0) {
                 GA0 = (int)(gqa_lo & 0x0F0F0F0F);
@@ -219,10 +223,12 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
             }
 
             // UP A fragments.
-            uint32_t uqa_lo = uwa ? __ldg((const uint32_t *)(uwa->qs + qs_off + 0)) : 0;
-            uint32_t uqa_hi = uwa ? __ldg((const uint32_t *)(uwa->qs + qs_off + 4)) : 0;
-            uint32_t uqb_lo = uwb ? __ldg((const uint32_t *)(uwb->qs + qs_off + 0)) : 0;
-            uint32_t uqb_hi = uwb ? __ldg((const uint32_t *)(uwb->qs + qs_off + 4)) : 0;
+            uint2 uqa_pair = uwa ? __ldg((const uint2 *)(uwa->qs + qs_off)) : make_uint2(0, 0);
+            uint2 uqb_pair = uwb ? __ldg((const uint2 *)(uwb->qs + qs_off)) : make_uint2(0, 0);
+            uint32_t uqa_lo = uqa_pair.x;
+            uint32_t uqa_hi = uqa_pair.y;
+            uint32_t uqb_lo = uqb_pair.x;
+            uint32_t uqb_hi = uqb_pair.y;
             int UA0, UA1, UA2, UA3;
             if (ip == 0) {
                 UA0 = (int)(uqa_lo & 0x0F0F0F0F);
@@ -240,6 +246,9 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
             const block_q8_1_im8 * yb_my = y_expert
                 ? y_expert + isb * 8 + s
                 : nullptr;
+            // Q8_1 qs is at byte offset 4 within the struct (after __half2
+            // ds), so uint2 (8-byte aligned) loads on qs+8*tj are
+            // misaligned. Keep the 2 separate uint reads.
             int B0 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 0] : 0;
             int B1 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 1] : 0;
             const float d8_my = yb_my ? __low2float(yb_my->ds) : 0.f;
