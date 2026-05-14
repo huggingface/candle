@@ -227,6 +227,19 @@ extern "C" {
         stream: i64,
     );
 
+    /// DENSE Q4_K IMMA M=8 plain matmul (no activation, no fusion).
+    /// Use case: attention QKV proj, out_proj, embedding output proj,
+    /// or any Q4_K matmul on multi-row F32 input.
+    pub fn dense_q4k_imma_m8_matmul(
+        w: *const core::ffi::c_void,
+        inputs_q81: *const core::ffi::c_void,
+        dst_f32: *mut f32,
+        size_m: i32,
+        n: i32,
+        k: i32,
+        stream: i64,
+    );
+
     /// DENSE Q4_K IMMA M=8 silu*mul. Separate gate and up Q4_K weights;
     /// each block does 16 rows × 8 tokens via mma m16n8k32. SiLU(gate)
     /// * up activation, F32 output [size_m, N].
