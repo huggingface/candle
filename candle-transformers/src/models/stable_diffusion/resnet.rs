@@ -127,7 +127,7 @@ impl ResnetBlock2D {
         let xs = self.conv1.forward(&nn::ops::silu(&xs)?)?;
         let xs = match (temb, &self.time_emb_proj) {
             (Some(temb), Some(time_emb_proj)) => time_emb_proj
-                .forward(&nn::ops::silu(temb)?)?
+                .forward(&temb_silu_cached(temb)?)?
                 .unsqueeze(D::Minus1)?
                 .unsqueeze(D::Minus1)?
                 .broadcast_add(&xs)?,
@@ -138,4 +138,24 @@ impl ResnetBlock2D {
             .forward(&nn::ops::silu(&self.norm2.forward(&xs)?)?)?;
         (shortcut_xs + xs)? / self.config.output_scale_factor
     }
+}
+
+/// Cache silu(temb) by temb.id() across all resnet blocks within one
+/// SD UNet forward step. temb (timestep embedding) is the same Tensor
+/// for every resnet block in one step. Saves 1 silu kernel per block
+/// (typically 12–20 resnet blocks per SD UNet step).
+fn temb_silu_cached(temb: &Tensor) -> candle::Result<Tensor> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<Option<(candle::TensorId, Tensor)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let id = temb.id();
+    let mut g = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cid, ref t)) = *g {
+        if cid == id {
+            return Ok(t.clone());
+        }
+    }
+    let s = nn::ops::silu(temb)?;
+    *g = Some((id, s.clone()));
+    Ok(s)
 }
