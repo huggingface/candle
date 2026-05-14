@@ -962,7 +962,7 @@ fn build_forward_cache(
     let unified_attn_mask = Tensor::cat(&[&x_attn_mask, &cap_attn_mask], 1)?;
 
     Ok(PerImageCache {
-        key: (b, f_tokens, h_tokens, w_tokens, text_len),
+        key: (b, f_tokens, h_tokens, w_tokens, text_len, cap_feats.id(), cap_mask.id()),
         x_cos,
         x_sin,
         cap_refined,
@@ -981,7 +981,12 @@ fn build_forward_cache(
 /// the value we'd compute fresh.
 #[derive(Debug)]
 struct PerImageCache {
-    key: (usize, usize, usize, usize, usize),
+    // Key: (b, f, h, w, text_len, cap_feats.id, cap_mask.id). The TensorId
+    // components are essential — cap_embedded, cap_refined, cap_attn_mask,
+    // and unified_attn_mask all depend on cap_feats/cap_mask content. Two
+    // prompts with the same text_len but different content would otherwise
+    // share cache entries incorrectly.
+    key: (usize, usize, usize, usize, usize, candle::TensorId, candle::TensorId),
     x_cos: Tensor,
     x_sin: Tensor,
     // The fully-refined caption — context_refiner is deterministic when
@@ -1172,7 +1177,7 @@ impl ZImageTransformer2DModel {
         let h_tokens = h / patch_size;
         let w_tokens = w / patch_size;
         let text_len = cap_feats.dim(1)?;
-        let cache_key = (b, f_tokens, h_tokens, w_tokens, text_len);
+        let cache_key = (b, f_tokens, h_tokens, w_tokens, text_len, cap_feats.id(), cap_mask.id());
 
         let cache_entry: PerImageCache = {
             let mut guard = self.forward_cache.lock().unwrap_or_else(|e| e.into_inner());
