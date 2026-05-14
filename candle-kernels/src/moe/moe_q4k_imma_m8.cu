@@ -243,6 +243,9 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
             int B0 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 0] : 0;
             int B1 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 1] : 0;
             const float d8_my = yb_my ? __low2float(yb_my->ds) : 0.f;
+            // ds.y = d_x * sum(q_x_int8) per K-tile of 32 — exactly the
+            // dmin*m sub-term factor. Saves the per-K-tile dp4a+2 shfls.
+            const float sumxd_my = yb_my ? __high2float(yb_my->ds) : 0.f;
 
             int GD0 = 0, GD1 = 0, GD2 = 0, GD3 = 0;
             asm("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
@@ -255,31 +258,30 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
                 : "+r"(UD0), "+r"(UD1), "+r"(UD2), "+r"(UD3)
                 : "r"(UA0), "r"(UA1), "r"(UA2), "r"(UA3), "r"(B0), "r"(B1));
 
-            int dot2 = __dp4a(0x01010101, B1, __dp4a(0x01010101, B0, 0));
-            dot2 += __shfl_xor_sync(0xffffffff, dot2, 1);
-            dot2 += __shfl_xor_sync(0xffffffff, dot2, 2);
-
+            // No more per-K-tile dp4a/shfl — sumxd_my (= d_x * sum(q_x))
+            // already encodes what `dot * d_x` did.
             const int src_lane_a = (2 * tj + 0) * 4;
             const int src_lane_b = (2 * tj + 1) * 4;
-            const float d8_out_a  = __shfl_sync(0xffffffff, d8_my, src_lane_a);
-            const float d8_out_b  = __shfl_sync(0xffffffff, d8_my, src_lane_b);
-            const float dot_out_a = (float)__shfl_sync(0xffffffff, dot2, src_lane_a);
-            const float dot_out_b = (float)__shfl_sync(0xffffffff, dot2, src_lane_b);
+            const float d8_out_a    = __shfl_sync(0xffffffff, d8_my,    src_lane_a);
+            const float d8_out_b    = __shfl_sync(0xffffffff, d8_my,    src_lane_b);
+            const float sumxd_out_a = __shfl_sync(0xffffffff, sumxd_my, src_lane_a);
+            const float sumxd_out_b = __shfl_sync(0xffffffff, sumxd_my, src_lane_b);
 
             const float g_da = g_dall_sc_a[s], g_dm = g_dmin_m_a[s];
             const float g_db = g_dall_sc_b[s], g_dn = g_dmin_m_b[s];
             const float u_da = u_dall_sc_a[s], u_dm = u_dmin_m_a[s];
             const float u_db = u_dall_sc_b[s], u_dn = u_dmin_m_b[s];
 
-            // Folded: gate_*  += (dall_a*sc_s) * d8 * D - (dmin_a*m_s) * d8 * dot
-            gate_0 += g_da * d8_out_a * (float)GD0  - g_dm * d8_out_a * dot_out_a;
-            gate_1 += g_da * d8_out_b * (float)GD1  - g_dm * d8_out_b * dot_out_b;
-            gate_2 += g_db * d8_out_a * (float)GD2  - g_dn * d8_out_a * dot_out_a;
-            gate_3 += g_db * d8_out_b * (float)GD3  - g_dn * d8_out_b * dot_out_b;
-            up_0   += u_da * d8_out_a * (float)UD0  - u_dm * d8_out_a * dot_out_a;
-            up_1   += u_da * d8_out_b * (float)UD1  - u_dm * d8_out_b * dot_out_b;
-            up_2   += u_db * d8_out_a * (float)UD2  - u_dn * d8_out_a * dot_out_a;
-            up_3   += u_db * d8_out_b * (float)UD3  - u_dn * d8_out_b * dot_out_b;
+            // Folded: gate_* += dall*sc * d_x * D_mma - dmin*m * (d_x * sum_qx)
+            // sumxd_out_* = d_x * sum_qx already.
+            gate_0 += g_da * d8_out_a * (float)GD0  - g_dm * sumxd_out_a;
+            gate_1 += g_da * d8_out_b * (float)GD1  - g_dm * sumxd_out_b;
+            gate_2 += g_db * d8_out_a * (float)GD2  - g_dn * sumxd_out_a;
+            gate_3 += g_db * d8_out_b * (float)GD3  - g_dn * sumxd_out_b;
+            up_0   += u_da * d8_out_a * (float)UD0  - u_dm * sumxd_out_a;
+            up_1   += u_da * d8_out_b * (float)UD1  - u_dm * sumxd_out_b;
+            up_2   += u_db * d8_out_a * (float)UD2  - u_dn * sumxd_out_a;
+            up_3   += u_db * d8_out_b * (float)UD3  - u_dn * sumxd_out_b;
         }
     }
 
