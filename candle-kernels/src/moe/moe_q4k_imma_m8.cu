@@ -113,18 +113,35 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
         my_expert   = expert_ids[my_pair];
     }
 
-    // Determine which expert this block uses for all 8 lanes' weights.
-    // Sorted pairs typically share an expert across 8 consecutive entries.
-    // For boundary blocks (mixed experts), use the FIRST expert in the
-    // block and mask out lanes belonging to a different expert.
-    int block_expert = -1;
-    {
-        const int e0 = (pair_base + 0 < size_m) ? expert_ids[pair_base + 0] : -1;
-        block_expert = e0;
+    // Boundary handling: sorted pairs are typically all-same-expert
+    // across 8 consecutive entries, but occasionally span 2 (rarely
+    // more) experts. Gather distinct experts present in the 8-pair tile
+    // and loop the mma pass over each — single-expert blocks do 1 pass
+    // (common case), boundary blocks do 2.
+    int experts_in_block[4] = {-1, -1, -1, -1};
+    int num_block_experts = 0;
+    #pragma unroll
+    for (int p = 0; p < 8; ++p) {
+        const int idx = pair_base + p;
+        if (idx >= size_m) break;
+        const int e = expert_ids[idx];
+        if (e < 0 || e >= num_experts) continue;
+        bool seen = false;
+        #pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            if (i < num_block_experts && experts_in_block[i] == e) seen = true;
+        }
+        if (!seen && num_block_experts < 4) {
+            experts_in_block[num_block_experts++] = e;
+        }
     }
-    const bool v_pair_e = v_pair && (my_expert == block_expert);
+    if (num_block_experts == 0) return;
 
-    if (block_expert < 0 || block_expert >= num_experts) return;
+    // Outer loop: iterate over distinct experts in this 8-pair tile.
+    for (int e_idx = 0; e_idx < num_block_experts; ++e_idx) {
+    const int block_expert = experts_in_block[e_idx];
+
+    const bool v_pair_e = v_pair && (my_expert == block_expert);
 
     // Q4_K weight pointers (gate + up halves) for the chosen block_expert.
     const block_q4_K_im8 * w_expert =
@@ -139,12 +156,7 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
                  + (size_t)real_token * num_super * 8;
     }
 
-    // Gate / up F32 accumulators per thread. For thread (g, tj):
-    //   gate_out[2tj+0] at weight row row_a
-    //   gate_out[2tj+1] at weight row row_a (same row, different in_pair)
-    //   gate_out[2tj+0] at weight row row_b
-    //   gate_out[2tj+1] at weight row row_b
-    // Same layout for up.
+    // Per-expert-pass accumulators (reset each outer iteration).
     float gate_0 = 0.f, gate_1 = 0.f, gate_2 = 0.f, gate_3 = 0.f;
     float up_0   = 0.f, up_1   = 0.f, up_2   = 0.f, up_3   = 0.f;
 
@@ -293,6 +305,8 @@ extern "C" __global__ void moe_q4k_imma_m8_kernel(
         do_write(2 * tj + 0, row_b, gate_2, up_2);
         do_write(2 * tj + 1, row_b, gate_3, up_3);
     }
+
+    } // end outer expert loop
 
     (void)num_experts;
 }
