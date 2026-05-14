@@ -269,31 +269,39 @@ extern "C" __global__ void moe_q4k_imma_m8_m32_kernel(
     // GELU·mul + scatter — 8 outputs per thread (4 rows × 2 in_pairs).
     const float k0 = 0.7978845608028654f;
     const float k1 = 0.044715f;
-    auto do_write = [&](int pair_local, int weight_row, float gv, float uv) {
+    // Pre-shuffle source-lane expert + pair_tok so do_write doesn't
+    // re-read expert_ids / sorted_token_ids 8× per lane.
+    const int src_lane_a_e = (2 * tj + 0) * 4;
+    const int src_lane_b_e = (2 * tj + 1) * 4;
+    const int exp_a = __shfl_sync(0xffffffff, my_expert,   src_lane_a_e);
+    const int exp_b = __shfl_sync(0xffffffff, my_expert,   src_lane_b_e);
+    const int tok_a = __shfl_sync(0xffffffff, my_pair_tok, src_lane_a_e);
+    const int tok_b = __shfl_sync(0xffffffff, my_pair_tok, src_lane_b_e);
+
+    auto do_write = [&](int pair_local, int weight_row, float gv, float uv,
+                         int e_cached, int tok_cached) {
         const int pair_idx = pair_base + pair_local;
         if (pair_idx >= size_m || weight_row >= N) return;
-        const int e = expert_ids[pair_idx];
-        if (e != block_expert) return;
+        if (e_cached != block_expert) return;
         const float gelu = 0.5f * gv * (1.f + tanhf(k0 * (gv + k1 * gv * gv * gv)));
-        const int tok = sorted_token_ids[pair_idx];
-        dst[(size_t)tok * N + weight_row] = gelu * uv;
+        dst[(size_t)tok_cached * N + weight_row] = gelu * uv;
     };
 
     if (vr[0]) {
-        do_write(2 * tj + 0, rows[0], g_acc[0], u_acc[0]);
-        do_write(2 * tj + 1, rows[0], g_acc[1], u_acc[1]);
+        do_write(2 * tj + 0, rows[0], g_acc[0], u_acc[0], exp_a, tok_a);
+        do_write(2 * tj + 1, rows[0], g_acc[1], u_acc[1], exp_b, tok_b);
     }
     if (vr[1]) {
-        do_write(2 * tj + 0, rows[1], g_acc[2], u_acc[2]);
-        do_write(2 * tj + 1, rows[1], g_acc[3], u_acc[3]);
+        do_write(2 * tj + 0, rows[1], g_acc[2], u_acc[2], exp_a, tok_a);
+        do_write(2 * tj + 1, rows[1], g_acc[3], u_acc[3], exp_b, tok_b);
     }
     if (vr[2]) {
-        do_write(2 * tj + 0, rows[2], g_acc[4], u_acc[4]);
-        do_write(2 * tj + 1, rows[2], g_acc[5], u_acc[5]);
+        do_write(2 * tj + 0, rows[2], g_acc[4], u_acc[4], exp_a, tok_a);
+        do_write(2 * tj + 1, rows[2], g_acc[5], u_acc[5], exp_b, tok_b);
     }
     if (vr[3]) {
-        do_write(2 * tj + 0, rows[3], g_acc[6], u_acc[6]);
-        do_write(2 * tj + 1, rows[3], g_acc[7], u_acc[7]);
+        do_write(2 * tj + 0, rows[3], g_acc[6], u_acc[6], exp_a, tok_a);
+        do_write(2 * tj + 1, rows[3], g_acc[7], u_acc[7], exp_b, tok_b);
     }
 
     } // end outer expert loop
