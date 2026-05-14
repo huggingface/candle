@@ -3,6 +3,25 @@ use candle_nn as nn;
 
 use super::projections::{AttnProjections, Mlp, Qkv, QkvOnlyAttnProjections};
 
+/// Cache silu(c) across every ada_ln_modulation invocation within one
+/// MMDiT::forward step. `c` is the timestep+y conditioning, identical
+/// across all 38+ blocks in SD3 medium. Saves 37+ silu kernels per step.
+fn c_silu_cached(c: &Tensor) -> Result<Tensor> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<Option<(candle::TensorId, Tensor)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let id = c.id();
+    let mut g = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cid, ref t)) = *g {
+        if cid == id {
+            return Ok(t.clone());
+        }
+    }
+    let s = c.silu()?;
+    *g = Some((id, s.clone()));
+    Ok(s)
+}
+
 pub struct ModulateIntermediates {
     gate_msa: Tensor,
     shift_mlp: Tensor,
@@ -15,7 +34,7 @@ pub struct DiTBlock {
     attn: AttnProjections,
     norm2: LayerNormNoAffine,
     mlp: Mlp,
-    ada_ln_modulation: nn::Sequential,
+    ada_ln_modulation: nn::Linear,
 }
 
 pub struct LayerNormNoAffine {
@@ -42,11 +61,11 @@ impl DiTBlock {
         let mlp_ratio = 4;
         let mlp = Mlp::new(hidden_size, hidden_size * mlp_ratio, vb.pp("mlp"))?;
         let n_mods = 6;
-        let ada_ln_modulation = nn::seq().add(nn::Activation::Silu).add(nn::linear(
+        let ada_ln_modulation = nn::linear(
             hidden_size,
             n_mods * hidden_size,
             vb.pp("adaLN_modulation.1"),
-        )?);
+        )?;
 
         Ok(Self {
             norm1,
@@ -58,7 +77,7 @@ impl DiTBlock {
     }
 
     pub fn pre_attention(&self, x: &Tensor, c: &Tensor) -> Result<(Qkv, ModulateIntermediates)> {
-        let modulation = self.ada_ln_modulation.forward(c)?;
+        let modulation = c_silu_cached(c)?.apply(&self.ada_ln_modulation)?;
         let chunks = modulation.chunk(6, D::Minus1)?;
         let (shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp) = (
             chunks[0].clone(),
@@ -116,7 +135,7 @@ pub struct SelfAttnDiTBlock {
     attn2: AttnProjections,
     norm2: LayerNormNoAffine,
     mlp: Mlp,
-    ada_ln_modulation: nn::Sequential,
+    ada_ln_modulation: nn::Linear,
 }
 
 impl SelfAttnDiTBlock {
@@ -128,11 +147,11 @@ impl SelfAttnDiTBlock {
         let mlp_ratio = 4;
         let mlp = Mlp::new(hidden_size, hidden_size * mlp_ratio, vb.pp("mlp"))?;
         let n_mods = 9;
-        let ada_ln_modulation = nn::seq().add(nn::Activation::Silu).add(nn::linear(
+        let ada_ln_modulation = nn::linear(
             hidden_size,
             n_mods * hidden_size,
             vb.pp("adaLN_modulation.1"),
-        )?);
+        )?;
 
         Ok(Self {
             norm1,
@@ -149,7 +168,7 @@ impl SelfAttnDiTBlock {
         x: &Tensor,
         c: &Tensor,
     ) -> Result<(Qkv, Qkv, SelfAttnModulateIntermediates)> {
-        let modulation = self.ada_ln_modulation.forward(c)?;
+        let modulation = c_silu_cached(c)?.apply(&self.ada_ln_modulation)?;
         let chunks = modulation.chunk(9, D::Minus1)?;
         let (
             shift_msa,
@@ -216,7 +235,7 @@ impl SelfAttnDiTBlock {
 pub struct QkvOnlyDiTBlock {
     norm1: LayerNormNoAffine,
     attn: QkvOnlyAttnProjections,
-    ada_ln_modulation: nn::Sequential,
+    ada_ln_modulation: nn::Linear,
 }
 
 impl QkvOnlyDiTBlock {
@@ -224,11 +243,11 @@ impl QkvOnlyDiTBlock {
         let norm1 = LayerNormNoAffine::new(1e-6);
         let attn = QkvOnlyAttnProjections::new(hidden_size, num_heads, vb.pp("attn"))?;
         let n_mods = 2;
-        let ada_ln_modulation = nn::seq().add(nn::Activation::Silu).add(nn::linear(
+        let ada_ln_modulation = nn::linear(
             hidden_size,
             n_mods * hidden_size,
             vb.pp("adaLN_modulation.1"),
-        )?);
+        )?;
 
         Ok(Self {
             norm1,
@@ -238,7 +257,7 @@ impl QkvOnlyDiTBlock {
     }
 
     pub fn pre_attention(&self, x: &Tensor, c: &Tensor) -> Result<Qkv> {
-        let modulation = self.ada_ln_modulation.forward(c)?;
+        let modulation = c_silu_cached(c)?.apply(&self.ada_ln_modulation)?;
         let chunks = modulation.chunk(2, D::Minus1)?;
         let (shift_msa, scale_msa) = (chunks[0].clone(), chunks[1].clone());
 
@@ -251,7 +270,7 @@ impl QkvOnlyDiTBlock {
 pub struct FinalLayer {
     norm_final: LayerNormNoAffine,
     linear: nn::Linear,
-    ada_ln_modulation: nn::Sequential,
+    ada_ln_modulation: nn::Linear,
 }
 
 impl FinalLayer {
@@ -267,11 +286,11 @@ impl FinalLayer {
             patch_size * patch_size * out_channels,
             vb.pp("linear"),
         )?;
-        let ada_ln_modulation = nn::seq().add(nn::Activation::Silu).add(nn::linear(
+        let ada_ln_modulation = nn::linear(
             hidden_size,
             2 * hidden_size,
             vb.pp("adaLN_modulation.1"),
-        )?);
+        )?;
 
         Ok(Self {
             norm_final,
@@ -281,7 +300,7 @@ impl FinalLayer {
     }
 
     pub fn forward(&self, x: &Tensor, c: &Tensor) -> Result<Tensor> {
-        let modulation = self.ada_ln_modulation.forward(c)?;
+        let modulation = c_silu_cached(c)?.apply(&self.ada_ln_modulation)?;
         let chunks = modulation.chunk(2, D::Minus1)?;
         let (shift, scale) = (chunks[0].clone(), chunks[1].clone());
 
