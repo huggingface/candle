@@ -173,7 +173,8 @@ extern "C" __global__ void dense_q4k_imma_m8_silu_kernel(
             const block_q8_1_dsl * yb_my = y_base ? y_base + isb * 8 + s : nullptr;
             int B0 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 0] : 0;
             int B1 = yb_my ? ((const int *)yb_my->qs)[2 * tj + 1] : 0;
-            const float d8_my = yb_my ? __low2float(yb_my->ds) : 0.f;
+            const float d8_my    = yb_my ? __low2float (yb_my->ds) : 0.f;
+            const float sumxd_my = yb_my ? __high2float(yb_my->ds) : 0.f;
 
             int GD0=0, GD1=0, GD2=0, GD3=0, UD0=0, UD1=0, UD2=0, UD3=0;
             asm("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
@@ -185,30 +186,26 @@ extern "C" __global__ void dense_q4k_imma_m8_silu_kernel(
                 : "+r"(UD0), "+r"(UD1), "+r"(UD2), "+r"(UD3)
                 : "r"(UA0), "r"(UA1), "r"(UA2), "r"(UA3), "r"(B0), "r"(B1));
 
-            int dot2 = __dp4a(0x01010101, B1, __dp4a(0x01010101, B0, 0));
-            dot2 += __shfl_xor_sync(0xffffffff, dot2, 1);
-            dot2 += __shfl_xor_sync(0xffffffff, dot2, 2);
-
             const int src_lane_a = (2 * tj + 0) * 4;
             const int src_lane_b = (2 * tj + 1) * 4;
-            const float d8_a  = __shfl_sync(0xffffffff, d8_my, src_lane_a);
-            const float d8_b  = __shfl_sync(0xffffffff, d8_my, src_lane_b);
-            const float dot_a = (float)__shfl_sync(0xffffffff, dot2, src_lane_a);
-            const float dot_b = (float)__shfl_sync(0xffffffff, dot2, src_lane_b);
+            const float d8_a    = __shfl_sync(0xffffffff, d8_my,    src_lane_a);
+            const float d8_b    = __shfl_sync(0xffffffff, d8_my,    src_lane_b);
+            const float sumxd_a = __shfl_sync(0xffffffff, sumxd_my, src_lane_a);
+            const float sumxd_b = __shfl_sync(0xffffffff, sumxd_my, src_lane_b);
 
             const float gda_a = g_da_a[s], gdm_a = g_dm_a[s];
             const float gda_b = g_da_b[s], gdm_b = g_dm_b[s];
             const float uda_a = u_da_a[s], udm_a = u_dm_a[s];
             const float uda_b = u_da_b[s], udm_b = u_dm_b[s];
 
-            gate_0 += gda_a * d8_a * (float)GD0 - gdm_a * d8_a * dot_a;
-            gate_1 += gda_a * d8_b * (float)GD1 - gdm_a * d8_b * dot_b;
-            gate_2 += gda_b * d8_a * (float)GD2 - gdm_b * d8_a * dot_a;
-            gate_3 += gda_b * d8_b * (float)GD3 - gdm_b * d8_b * dot_b;
-            up_0   += uda_a * d8_a * (float)UD0 - udm_a * d8_a * dot_a;
-            up_1   += uda_a * d8_b * (float)UD1 - udm_a * d8_b * dot_b;
-            up_2   += uda_b * d8_a * (float)UD2 - udm_b * d8_a * dot_a;
-            up_3   += uda_b * d8_b * (float)UD3 - udm_b * d8_b * dot_b;
+            gate_0 += gda_a * d8_a * (float)GD0 - gdm_a * sumxd_a;
+            gate_1 += gda_a * d8_b * (float)GD1 - gdm_a * sumxd_b;
+            gate_2 += gda_b * d8_a * (float)GD2 - gdm_b * sumxd_a;
+            gate_3 += gda_b * d8_b * (float)GD3 - gdm_b * sumxd_b;
+            up_0   += uda_a * d8_a * (float)UD0 - udm_a * sumxd_a;
+            up_1   += uda_a * d8_b * (float)UD1 - udm_a * sumxd_b;
+            up_2   += uda_b * d8_a * (float)UD2 - udm_b * sumxd_a;
+            up_3   += uda_b * d8_b * (float)UD3 - udm_b * sumxd_b;
         }
     }
 
