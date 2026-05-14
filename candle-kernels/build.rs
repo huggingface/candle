@@ -64,6 +64,7 @@ fn main() -> Result<()> {
             "src/moe/moe_q4k_imma_m8_chunks.cu",
             "src/moe/moe_q4k_imma_m8_build_chunks.cu",
             "src/moe/dense_q4k_imma_m8_matmul.cu",
+            "src/moe/moe_q4k_imma_m8_m64.cu",
             "src/moe/gate_topk.cu",
             "src/moe/gate_gemv.cu",
             "src/moe/kv_residual_scatter.cu",

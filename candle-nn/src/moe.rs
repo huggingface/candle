@@ -2635,7 +2635,21 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
     }
     let use_m32 = std::env::var_os("LLMSERVER_MOE_IMMA_M8_M32").is_some();
     let use_2w  = std::env::var_os("LLMSERVER_MOE_IMMA_M8_2W").is_some();
-    if use_2w {
+    let use_m64 = std::env::var_os("LLMSERVER_MOE_IMMA_M8_M64").is_some();
+    if use_m64 {
+        unsafe {
+            ffi::moe_q4k_imma_m8_m64_gate_up(
+                weight_ptr as *const c_void,
+                q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
+                sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
+                experts_slice.device_ptr(experts_slice.stream()).0 as *const i32,
+                output.device_ptr(output.stream()).0 as *mut f32,
+                num_experts as i32, topk as i32,
+                size_m as i32, size_n as i32, size_k as i32,
+                stream,
+            );
+        }
+    } else if use_2w {
         unsafe {
             ffi::moe_q4k_imma_m8_2w_gate_up(
                 weight_ptr as *const c_void,
