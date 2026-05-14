@@ -118,10 +118,12 @@ extern "C" __global__ void dense_q4k_imma_m8_matmul_kernel(
             const int ip = s & 1;
             const int qs_off = 32 * il + 8 * tj;
 
-            uint32_t qa_lo = wa_sb ? __ldg((const uint32_t *)(wa_sb->qs + qs_off + 0)) : 0;
-            uint32_t qa_hi = wa_sb ? __ldg((const uint32_t *)(wa_sb->qs + qs_off + 4)) : 0;
-            uint32_t qb_lo = wb_sb ? __ldg((const uint32_t *)(wb_sb->qs + qs_off + 0)) : 0;
-            uint32_t qb_hi = wb_sb ? __ldg((const uint32_t *)(wb_sb->qs + qs_off + 4)) : 0;
+            uint2 qa_pair = wa_sb ? __ldg((const uint2 *)(wa_sb->qs + qs_off)) : make_uint2(0, 0);
+            uint2 qb_pair = wb_sb ? __ldg((const uint2 *)(wb_sb->qs + qs_off)) : make_uint2(0, 0);
+            uint32_t qa_lo = qa_pair.x;
+            uint32_t qa_hi = qa_pair.y;
+            uint32_t qb_lo = qb_pair.x;
+            uint32_t qb_hi = qb_pair.y;
 
             int A0, A1, A2, A3;
             if (ip == 0) {
