@@ -915,8 +915,78 @@ pub fn create_coordinate_grid(
 
 // ==================== ZImageTransformer2DModel ====================
 
+fn build_forward_cache(
+    model: &ZImageTransformer2DModel,
+    b: usize,
+    f_tokens: usize,
+    h_tokens: usize,
+    w_tokens: usize,
+    text_len: usize,
+    cap_feats: &Tensor,
+    cap_mask: &Tensor,
+    device: &Device,
+) -> Result<PerImageCache> {
+    // 3. Image position IDs + RoPE
+    let x_pos_ids = create_coordinate_grid(
+        (f_tokens, h_tokens, w_tokens),
+        (text_len + 1, 0, 0),
+        device,
+    )?;
+    let (x_cos, x_sin) = model.rope_embedder.forward(&x_pos_ids)?;
+
+    // 4. Caption embedding
+    let cap_normed = model.cap_embedder_norm.forward(cap_feats)?;
+    let cap_embedded = cap_normed.apply(&model.cap_embedder_linear)?;
+
+    // 5. Caption position IDs + RoPE
+    let cap_pos_ids = create_coordinate_grid((text_len, 1, 1), (1, 0, 0), device)?;
+    let (cap_cos, cap_sin) = model.rope_embedder.forward(&cap_pos_ids)?;
+
+    // 6. Attention masks
+    let img_seq_len = f_tokens * h_tokens * w_tokens;
+    let x_attn_mask = Tensor::ones((b, img_seq_len), DType::U8, device)?;
+    let cap_attn_mask = cap_mask.to_dtype(DType::U8)?;
+
+    // 10. Unified position IDs + RoPE + mask
+    let unified_pos_ids = Tensor::cat(&[&x_pos_ids, &cap_pos_ids], 0)?;
+    let (unified_cos, unified_sin) = model.rope_embedder.forward(&unified_pos_ids)?;
+    let unified_attn_mask = Tensor::cat(&[&x_attn_mask, &cap_attn_mask], 1)?;
+
+    Ok(PerImageCache {
+        key: (b, f_tokens, h_tokens, w_tokens, text_len),
+        x_cos,
+        x_sin,
+        cap_embedded,
+        cap_cos,
+        cap_sin,
+        x_attn_mask,
+        cap_attn_mask,
+        unified_cos,
+        unified_sin,
+        unified_attn_mask,
+    })
+}
+
+/// Per-image cache for tensors that don't change across denoise steps.
+/// Keyed by (b, f, h, w, text_len) — when those match, every entry holds
+/// the value we'd compute fresh.
+#[derive(Debug)]
+struct PerImageCache {
+    key: (usize, usize, usize, usize, usize),
+    x_cos: Tensor,
+    x_sin: Tensor,
+    cap_embedded: Tensor,
+    cap_cos: Tensor,
+    cap_sin: Tensor,
+    x_attn_mask: Tensor,
+    cap_attn_mask: Tensor,
+    unified_cos: Tensor,
+    unified_sin: Tensor,
+    unified_attn_mask: Tensor,
+}
+
 /// Z-Image Transformer 2D Model
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ZImageTransformer2DModel {
     t_embedder: TimestepEmbedder,
     cap_embedder_norm: RmsNorm,
@@ -932,6 +1002,30 @@ pub struct ZImageTransformer2DModel {
     layers: Vec<ZImageTransformerBlock>,
     rope_embedder: RopeEmbedder,
     cfg: Config,
+    // All the per-step-constant work (RoPE outputs, caption embedding,
+    // attention masks, unified pos cat) gets cached here. Keyed by
+    // (b, f, h, w, text_len) — same key → identical contents.
+    forward_cache: std::sync::Mutex<Option<PerImageCache>>,
+}
+
+impl Clone for ZImageTransformer2DModel {
+    fn clone(&self) -> Self {
+        Self {
+            t_embedder: self.t_embedder.clone(),
+            cap_embedder_norm: self.cap_embedder_norm.clone(),
+            cap_embedder_linear: self.cap_embedder_linear.clone(),
+            x_embedder: self.x_embedder.clone(),
+            final_layer: self.final_layer.clone(),
+            x_pad_token: self.x_pad_token.clone(),
+            cap_pad_token: self.cap_pad_token.clone(),
+            noise_refiner: self.noise_refiner.clone(),
+            context_refiner: self.context_refiner.clone(),
+            layers: self.layers.clone(),
+            rope_embedder: self.rope_embedder.clone(),
+            cfg: self.cfg.clone(),
+            forward_cache: std::sync::Mutex::new(None),
+        }
+    }
 }
 
 impl ZImageTransformer2DModel {
@@ -1022,6 +1116,7 @@ impl ZImageTransformer2DModel {
             layers,
             rope_embedder,
             cfg: cfg.clone(),
+            forward_cache: std::sync::Mutex::new(None),
         })
     }
 
@@ -1053,30 +1148,81 @@ impl ZImageTransformer2DModel {
         let mut x = x_patches.apply(&self.x_embedder)?; // (B, img_seq, dim)
         let img_seq_len = x.dim(1)?;
 
-        // 3. Create image position IDs
+        // 3-6. Position IDs + RoPE outputs + caption embedding + attention
+        // masks. Every one of these is constant across the entire
+        // \`flux::sampling::denoise\` loop (depends on b/f/h/w/text_len/cap_feats,
+        // none of which change per step), so cache the bundle under a key
+        // derived from input shapes. First step computes & inserts;
+        // subsequent steps Arc-clone the cached tensors and skip
+        // ~10 kernel launches plus the caption MLP + mask alloc per step.
         let f_tokens = f / f_patch_size;
         let h_tokens = h / patch_size;
         let w_tokens = w / patch_size;
         let text_len = cap_feats.dim(1)?;
+        let cache_key = (b, f_tokens, h_tokens, w_tokens, text_len);
 
-        let x_pos_ids = create_coordinate_grid(
-            (f_tokens, h_tokens, w_tokens),
-            (text_len + 1, 0, 0), // offset for text
-            device,
-        )?;
-        let (x_cos, x_sin) = self.rope_embedder.forward(&x_pos_ids)?;
-
-        // 4. Caption embedding
-        let cap_normed = self.cap_embedder_norm.forward(cap_feats)?;
-        let mut cap = cap_normed.apply(&self.cap_embedder_linear)?; // (B, text_len, dim)
-
-        // 5. Create caption position IDs
-        let cap_pos_ids = create_coordinate_grid((text_len, 1, 1), (1, 0, 0), device)?;
-        let (cap_cos, cap_sin) = self.rope_embedder.forward(&cap_pos_ids)?;
-
-        // 6. Create attention masks
-        let x_attn_mask = Tensor::ones((b, img_seq_len), DType::U8, device)?;
-        let cap_attn_mask = cap_mask.to_dtype(DType::U8)?;
+        let cache_entry: PerImageCache = {
+            let mut guard = self.forward_cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref c) = *guard {
+                if c.key == cache_key {
+                    PerImageCache {
+                        key: c.key,
+                        x_cos: c.x_cos.clone(),
+                        x_sin: c.x_sin.clone(),
+                        cap_embedded: c.cap_embedded.clone(),
+                        cap_cos: c.cap_cos.clone(),
+                        cap_sin: c.cap_sin.clone(),
+                        x_attn_mask: c.x_attn_mask.clone(),
+                        cap_attn_mask: c.cap_attn_mask.clone(),
+                        unified_cos: c.unified_cos.clone(),
+                        unified_sin: c.unified_sin.clone(),
+                        unified_attn_mask: c.unified_attn_mask.clone(),
+                    }
+                } else {
+                    let built = build_forward_cache(self, b, f_tokens, h_tokens, w_tokens, text_len, cap_feats, cap_mask, device)?;
+                    *guard = Some(PerImageCache {
+                        key: cache_key,
+                        x_cos: built.x_cos.clone(),
+                        x_sin: built.x_sin.clone(),
+                        cap_embedded: built.cap_embedded.clone(),
+                        cap_cos: built.cap_cos.clone(),
+                        cap_sin: built.cap_sin.clone(),
+                        x_attn_mask: built.x_attn_mask.clone(),
+                        cap_attn_mask: built.cap_attn_mask.clone(),
+                        unified_cos: built.unified_cos.clone(),
+                        unified_sin: built.unified_sin.clone(),
+                        unified_attn_mask: built.unified_attn_mask.clone(),
+                    });
+                    built
+                }
+            } else {
+                let built = build_forward_cache(self, b, f_tokens, h_tokens, w_tokens, text_len, cap_feats, cap_mask, device)?;
+                *guard = Some(PerImageCache {
+                    key: cache_key,
+                    x_cos: built.x_cos.clone(),
+                    x_sin: built.x_sin.clone(),
+                    cap_embedded: built.cap_embedded.clone(),
+                    cap_cos: built.cap_cos.clone(),
+                    cap_sin: built.cap_sin.clone(),
+                    x_attn_mask: built.x_attn_mask.clone(),
+                    cap_attn_mask: built.cap_attn_mask.clone(),
+                    unified_cos: built.unified_cos.clone(),
+                    unified_sin: built.unified_sin.clone(),
+                    unified_attn_mask: built.unified_attn_mask.clone(),
+                });
+                built
+            }
+        };
+        let x_cos = cache_entry.x_cos;
+        let x_sin = cache_entry.x_sin;
+        let mut cap = cache_entry.cap_embedded;
+        let cap_cos = cache_entry.cap_cos;
+        let cap_sin = cache_entry.cap_sin;
+        let x_attn_mask = cache_entry.x_attn_mask;
+        let cap_attn_mask = cache_entry.cap_attn_mask;
+        let unified_cos = cache_entry.unified_cos;
+        let unified_sin = cache_entry.unified_sin;
+        let unified_attn_mask = cache_entry.unified_attn_mask;
 
         // 7. Noise refiner (process image with modulation)
         for layer in &self.noise_refiner {
@@ -1091,12 +1237,7 @@ impl ZImageTransformer2DModel {
         // 9. Concatenate image and text: [image_tokens, text_tokens]
         let unified = Tensor::cat(&[&x, &cap], 1)?; // (B, img_seq + text_len, dim)
 
-        // 10. Create unified position IDs and attention mask
-        let unified_pos_ids = Tensor::cat(&[&x_pos_ids, &cap_pos_ids], 0)?;
-        let (unified_cos, unified_sin) = self.rope_embedder.forward(&unified_pos_ids)?;
-        let unified_attn_mask = Tensor::cat(&[&x_attn_mask, &cap_attn_mask], 1)?;
-
-        // 11. Main transformer layers
+        // 10-11. (cached above) Main transformer layers
         let mut unified = unified;
         for layer in &self.layers {
             unified = layer.forward(
