@@ -193,6 +193,26 @@ extern "C" {
         stream: i64,
     );
 
+    /// Chunked IMMA M=8: host pre-computes per-block (pair_start, expert)
+    /// metadata so each chunk has a SINGLE expert — no kernel-side
+    /// boundary-block multi-pass. Reclaims the ~4% perf cost the
+    /// boundary handling incurred.
+    pub fn moe_q4k_imma_m8_chunks_gate_up(
+        gate_up_w: *const core::ffi::c_void,
+        inputs_q81: *const core::ffi::c_void,
+        sorted_token_ids: *const i32,
+        chunk_pair_start: *const i32,
+        chunk_expert: *const i32,
+        dst_f32: *mut f32,
+        num_experts: i32,
+        topk: i32,
+        num_chunks: i32,
+        size_m: i32,
+        n: i32,
+        k: i32,
+        stream: i64,
+    );
+
     /// DENSE Q4_K IMMA M=8 silu*mul. Separate gate and up Q4_K weights;
     /// each block does 16 rows × 8 tokens via mma m16n8k32. SiLU(gate)
     /// * up activation, F32 output [size_m, N].

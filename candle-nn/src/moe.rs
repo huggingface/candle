@@ -2495,13 +2495,77 @@ pub fn moe_q4k_imma_m8_gate_up_gelu_mul_concat(
         }
     }
 
-    // Zero-init: boundary blocks where the 8 sorted pairs span 2 experts
-    // only write outputs for pairs matching the block's chosen expert.
-    // Other pairs are left at 0 in this version (correctness gap vs dp4a
-    // on a tiny minority of boundary blocks). Without zero-init the
-    // unwritten positions would contain uninitialized memory → NaN
-    // propagation through the down step on first call after model load.
+    // Zero-init: defensively zero-init for the variants that may leave
+    // some outputs unwritten (boundary blocks). For the chunks variant
+    // every block writes exactly its 8 pairs, so zero-init is mostly
+    // belt-and-suspenders.
     let output = dev.alloc_zeros::<f32>(size_m * size_n)?;
+
+    // Chunks variant: pre-compute per-block (pair_start, expert) on host
+    // so each block sees only ONE expert. Eliminates boundary multi-pass.
+    // OPT-IN only: D2H sync of experts per call costs ~5ms across 30
+    // layers, which exceeds the 4% gain from eliminating boundary
+    // multi-pass. Net -47% in prefill bench. Kept gated for future
+    // experiments (e.g., device-side chunk-building kernel).
+    let use_chunks = std::env::var_os("LLMSERVER_MOE_IMMA_M8_CHUNKS").is_some();
+    if use_chunks {
+        // D2H experts to find expert boundaries.
+        let experts_cpu: Vec<u32> = dev.cuda_stream()
+            .memcpy_dtov(experts_slice)
+            .map_err(|e| candle::Error::Msg(format!("experts D2H: {e}")))?;
+        // Build chunks: walk sorted experts, emit (pair_start, expert)
+        // for each 8-pair stride within each expert run.
+        let mut chunks: Vec<(i32, i32)> = Vec::with_capacity((size_m + 7) / 8);
+        let mut i = 0usize;
+        while i < size_m {
+            let e = experts_cpu[i] as i32;
+            // Find end of this expert's run.
+            let mut j = i + 1;
+            while j < size_m && experts_cpu[j] as i32 == e {
+                j += 1;
+            }
+            // Emit chunks of up to 8 within [i, j).
+            let mut k = i;
+            while k < j {
+                chunks.push((k as i32, e));
+                k += 8;
+            }
+            i = j;
+        }
+        let num_chunks = chunks.len();
+        let mut starts: Vec<i32> = Vec::with_capacity(num_chunks);
+        let mut chunk_es: Vec<i32> = Vec::with_capacity(num_chunks);
+        for (s, e) in &chunks {
+            starts.push(*s);
+            chunk_es.push(*e);
+        }
+        let starts_d = dev.cuda_stream().memcpy_stod(&starts)
+            .map_err(|e| candle::Error::Msg(format!("chunks starts H2D: {e}")))?;
+        let experts_d = dev.cuda_stream().memcpy_stod(&chunk_es)
+            .map_err(|e| candle::Error::Msg(format!("chunks experts H2D: {e}")))?;
+
+        unsafe {
+            ffi::moe_q4k_imma_m8_chunks_gate_up(
+                weight_ptr as *const c_void,
+                q81_alloc.device_ptr(q81_alloc.stream()).0 as *const c_void,
+                sorted_slice.device_ptr(sorted_slice.stream()).0 as *const i32,
+                starts_d.device_ptr(starts_d.stream()).0 as *const i32,
+                experts_d.device_ptr(experts_d.stream()).0 as *const i32,
+                output.device_ptr(output.stream()).0 as *mut f32,
+                num_experts as i32, topk as i32, num_chunks as i32,
+                size_m as i32, size_n as i32, size_k as i32,
+                stream,
+            );
+        }
+        drop(input_storage); drop(sorted_storage); drop(experts_storage);
+        let storage = candle::CudaStorage::wrap_cuda_slice(output, dev.clone());
+        return Ok(Tensor::from_storage(
+            candle::Storage::Cuda(storage),
+            (size_m, size_n),
+            BackpropOp::none(),
+            false,
+        ));
+    }
     let use_m32 = std::env::var_os("LLMSERVER_MOE_IMMA_M8_M32").is_some();
     let use_2w  = std::env::var_os("LLMSERVER_MOE_IMMA_M8_2W").is_some();
     if use_2w {
