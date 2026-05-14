@@ -216,25 +216,34 @@ extern "C" __global__ void moe_q4k_imma_m8_down_kernel(
         }
     }
 
+    // Pre-shuffle my_expert / my_pair_tok from the source lanes so the
+    // do_atomic writes don't re-read expert_ids / sorted_token_ids from
+    // global memory four times per lane (already in register on source).
+    const int src_lane_a_e = (2 * tj + 0) * 4;
+    const int src_lane_b_e = (2 * tj + 1) * 4;
+    const int exp_a = __shfl_sync(0xffffffff, my_expert,   src_lane_a_e);
+    const int exp_b = __shfl_sync(0xffffffff, my_expert,   src_lane_b_e);
+    const int tok_a = __shfl_sync(0xffffffff, my_pair_tok, src_lane_a_e);
+    const int tok_b = __shfl_sync(0xffffffff, my_pair_tok, src_lane_b_e);
+
     // Atomic scatter with topk_weights scaling.
-    auto do_atomic = [&](int pair_local, int weight_row, float v) {
+    auto do_atomic = [&](int pair_local, int weight_row, float v,
+                          int e_cached, int pair_tok_cached) {
         const int pair_idx = pair_base + pair_local;
         if (pair_idx >= size_m || weight_row >= hidden) return;
-        const int e = expert_ids[pair_idx];
-        if (e != block_expert) return;
-        const int pair_tok = sorted_token_ids[pair_idx];
-        const float scale = topk_weights[pair_tok];
-        const int real_token = pair_tok / topk;
+        if (e_cached != block_expert) return;
+        const float scale = topk_weights[pair_tok_cached];
+        const int real_token = pair_tok_cached / topk;
         atomicAdd(&dst[(size_t)real_token * hidden + weight_row], v * scale);
     };
 
     if (va) {
-        do_atomic(2 * tj + 0, row_a, out_0);
-        do_atomic(2 * tj + 1, row_a, out_1);
+        do_atomic(2 * tj + 0, row_a, out_0, exp_a, tok_a);
+        do_atomic(2 * tj + 1, row_a, out_1, exp_b, tok_b);
     }
     if (vb) {
-        do_atomic(2 * tj + 0, row_b, out_2);
-        do_atomic(2 * tj + 1, row_b, out_3);
+        do_atomic(2 * tj + 0, row_b, out_2, exp_a, tok_a);
+        do_atomic(2 * tj + 1, row_b, out_3, exp_b, tok_b);
     }
 
     } // end outer expert loop
