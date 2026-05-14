@@ -876,6 +876,22 @@ pub fn create_coordinate_grid(
     start: (usize, usize, usize),
     device: &Device,
 ) -> Result<Tensor> {
+    // (size, start, device) → Tensor of [f*h*w, 3] u32 position IDs. Pure
+    // function of inputs, so cache it: the diffusion denoise loop calls this
+    // with the same arguments every step (one call per `forward`), and the
+    // CPU vec construction + htod copy is ~800 KB for 512×512 images.
+    use std::sync::{Mutex, OnceLock};
+    use std::collections::HashMap;
+    type Key = (candle::DeviceLocation, (usize, usize, usize), (usize, usize, usize));
+    static CACHE: OnceLock<Mutex<HashMap<Key, Tensor>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (device.location(), size, start);
+    if let Ok(g) = cache.lock() {
+        if let Some(t) = g.get(&key) {
+            return Ok(t.clone());
+        }
+    }
+
     let (f, h, w) = size;
     let (f0, h0, w0) = start;
 
@@ -890,7 +906,11 @@ pub fn create_coordinate_grid(
         }
     }
 
-    Tensor::from_vec(coords, (f * h * w, 3), device)
+    let t = Tensor::from_vec(coords, (f * h * w, 3), device)?;
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, t.clone());
+    }
+    Ok(t)
 }
 
 // ==================== ZImageTransformer2DModel ====================
