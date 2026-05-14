@@ -100,14 +100,10 @@ fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
         candle::bail!("dim {dim} is odd")
     }
     let dev = pos.device();
-    let theta = theta as f64;
-    let inv_freq: Vec<_> = (0..dim)
-        .step_by(2)
-        .map(|i| 1f32 / theta.powf(i as f64 / dim as f64) as f32)
-        .collect();
-    let inv_freq_len = inv_freq.len();
-    let inv_freq = Tensor::from_vec(inv_freq, (1, 1, inv_freq_len), dev)?;
-    let inv_freq = inv_freq.to_dtype(pos.dtype())?;
+    // `inv_freq` depends only on (device, dim, theta, dtype). Reused
+    // every denoise step across 2-3 axes per call — caching saves the
+    // from_vec + to_dtype + alloc per call.
+    let inv_freq = rope_inv_freq_cached(dev, dim, theta, pos.dtype())?;
     let freqs = pos.unsqueeze(2)?.broadcast_mul(&inv_freq)?;
     let cos = freqs.cos()?;
     let sin = freqs.sin()?;
@@ -153,6 +149,30 @@ pub(crate) fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result
         .broadcast_mul(&freqs)?;
     let emb = Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)?;
     Ok(emb)
+}
+
+fn rope_inv_freq_cached(dev: &candle::Device, dim: usize, theta: usize, dtype: DType) -> Result<Tensor> {
+    use std::sync::{Mutex, OnceLock};
+    use std::collections::HashMap;
+    static CACHE: OnceLock<Mutex<HashMap<(candle::DeviceLocation, usize, usize, DType), Tensor>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (dev.location(), dim, theta, dtype);
+    if let Ok(g) = cache.lock() {
+        if let Some(t) = g.get(&key) {
+            return Ok(t.clone());
+        }
+    }
+    let theta_f = theta as f64;
+    let inv_freq: Vec<_> = (0..dim)
+        .step_by(2)
+        .map(|i| 1f32 / theta_f.powf(i as f64 / dim as f64) as f32)
+        .collect();
+    let inv_freq_len = inv_freq.len();
+    let inv_freq = Tensor::from_vec(inv_freq, (1, 1, inv_freq_len), dev)?.to_dtype(dtype)?;
+    if let Ok(mut g) = cache.lock() {
+        g.insert(key, inv_freq.clone());
+    }
+    Ok(inv_freq)
 }
 
 fn timestep_freqs_cached(dev: &candle::Device, half: usize) -> Result<Tensor> {
