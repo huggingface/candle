@@ -315,42 +315,29 @@ impl Commands {
         use objc2_metal::MTLCommandEncoder as _;
         use objc2_metal::MTLComputeCommandEncoder as _;
 
-        let (all_inputs, all_outputs) = {
+        let all_outputs = {
             let s = encoder.state.lock().unwrap();
-            (s.all_inputs.clone(), s.all_outputs.clone())
+            s.all_outputs.clone()
         };
 
-        let mut prev_ce_outputs = self.prev_ce_outputs.lock().unwrap();
-
-        // Wait for any prior encoder that wrote to buffers we're reading (RAW protection).
-        let mut waiting_on = HashMap::new();
-        for input in all_inputs.iter() {
-            if let Some(fence) = prev_ce_outputs.get(input) {
-                if !waiting_on.contains_key(input) {
-                    encoder.wait_for_fence(fence);
-                    waiting_on.insert(input, fence.clone());
-                }
+        {
+            let mut prev_ce_outputs = self.prev_ce_outputs.lock().unwrap();
+            // Register our outputs so subsequent encoders can wait for us.
+            for output in all_outputs.iter() {
+                let _ = prev_ce_outputs.insert(*output, encoder.fence.clone());
             }
         }
-
-        // Register our outputs so subsequent encoders can wait for us.
-        for output in all_outputs.iter() {
-            let _ = prev_ce_outputs.insert(*output, encoder.fence.clone());
-        }
-
-        drop(prev_ce_outputs);
 
         // Signal this encoder's completion fence and end encoding.
         encoder.raw.updateFence(encoder.fence.raw());
 
         // Schedule cleanup of our output entries once the GPU completes.
-        let all_buffers: Vec<usize> = all_outputs.iter().copied().collect();
-        if !all_buffers.is_empty() {
+        if !all_outputs.is_empty() {
             let fence_for_cleanup = Arc::clone(&encoder.fence);
             let map_for_cleanup = Arc::clone(&self.prev_ce_outputs);
             let block = RcBlock::new(move |_cb: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
                 let mut map = map_for_cleanup.lock().unwrap();
-                for &buf in &all_buffers {
+                for &buf in &all_outputs {
                     if let Some(f) = map.get(&buf) {
                         if Arc::ptr_eq(f, &fence_for_cleanup) {
                             map.remove(&buf);
