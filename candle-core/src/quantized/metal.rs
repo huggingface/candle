@@ -344,7 +344,6 @@ impl QMetalStorage {
             let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-            blit.as_ref().end_encoding();
         }
         self.device.wait_until_completed()?;
         Ok(read_to_vec::<u8>(&buffer, self.storage_size_in_bytes()))
