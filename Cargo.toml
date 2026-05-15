@@ -104,6 +104,9 @@ zip = { version = "7.2.0", default-features = false }
 objc2-metal = { version = "0.3.1" }
 objc2-foundation = { version = "0.3.1" }
 
+[patch.crates-io]
+gemm = { path = "/home/josh/soft/gemm/gemm" }
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true
