@@ -21,10 +21,9 @@ use source::Source;
 use utils::{get_block_dims, get_tile_size, linear_split, EncoderParam, EncoderProvider};
 pub use utils::{BufferOffset, Output};
 
-pub const RESOURCE_OPTIONS: MTLResourceOptions =
-    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
-//| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
-//);
+pub const RESOURCE_OPTIONS: MTLResourceOptions = objc2_metal::MTLResourceOptions(
+    MTLResourceOptions::StorageModeShared.0 | MTLResourceOptions::HazardTrackingModeUntracked.0,
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
