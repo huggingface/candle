@@ -236,6 +236,74 @@ impl crate::Module for Conv2d {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Conv3dConfig {
+    pub padding: [usize; 3],
+    pub stride: [usize; 3],
+    pub dilation: [usize; 3],
+    pub groups: usize,
+}
+
+impl Default for Conv3dConfig {
+    fn default() -> Self {
+        Self {
+            padding: [0; 3],
+            stride: [1; 3],
+            dilation: [1; 3],
+            groups: 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Conv3d {
+    weight: Tensor,
+    bias: Option<Tensor>,
+    config: Conv3dConfig,
+}
+
+impl Conv3d {
+    pub fn new(weight: Tensor, bias: Option<Tensor>, config: Conv3dConfig) -> Self {
+        Self {
+            weight,
+            bias,
+            config,
+        }
+    }
+
+    pub fn config(&self) -> &Conv3dConfig {
+        &self.config
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+}
+
+impl crate::Module for Conv3d {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x = x.conv3d(
+            &self.weight,
+            self.config.padding,
+            self.config.stride,
+            self.config.dilation,
+            self.config.groups,
+        )?;
+        match &self.bias {
+            None => Ok(x),
+            Some(bias) => {
+                let b = bias.dims1()?;
+                let bias = bias.reshape((1, b, 1, 1, 1))?;
+                Ok(x.broadcast_add(&bias)?)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConvTranspose2dConfig {
     pub padding: usize,
     pub output_padding: usize,
@@ -429,6 +497,62 @@ pub fn conv2d_no_bias(
         init_ws,
     )?;
     Ok(Conv2d::new(ws, None, cfg))
+}
+
+pub fn conv3d(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: [usize; 3],
+    cfg: Conv3dConfig,
+    vb: crate::VarBuilder,
+) -> Result<Conv3d> {
+    if cfg.groups == 0 {
+        candle::bail!("conv3d groups must be non-zero")
+    }
+    let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
+    let ws = vb.get_with_hints(
+        (
+            out_channels,
+            in_channels / cfg.groups,
+            kernel_size[0],
+            kernel_size[1],
+            kernel_size[2],
+        ),
+        "weight",
+        init_ws,
+    )?;
+    let bound = 1. / (in_channels as f64).sqrt();
+    let init_bs = crate::Init::Uniform {
+        lo: -bound,
+        up: bound,
+    };
+    let bs = vb.get_with_hints(out_channels, "bias", init_bs)?;
+    Ok(Conv3d::new(ws, Some(bs), cfg))
+}
+
+pub fn conv3d_no_bias(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: [usize; 3],
+    cfg: Conv3dConfig,
+    vb: crate::VarBuilder,
+) -> Result<Conv3d> {
+    if cfg.groups == 0 {
+        candle::bail!("conv3d groups must be non-zero")
+    }
+    let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
+    let ws = vb.get_with_hints(
+        (
+            out_channels,
+            in_channels / cfg.groups,
+            kernel_size[0],
+            kernel_size[1],
+            kernel_size[2],
+        ),
+        "weight",
+        init_ws,
+    )?;
+    Ok(Conv3d::new(ws, None, cfg))
 }
 
 pub fn conv_transpose2d(

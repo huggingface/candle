@@ -80,6 +80,11 @@ impl Tensor {
                         kernel: rhs,
                         ..
                     }
+                    | Op::Conv3D {
+                        arg: lhs,
+                        kernel: rhs,
+                        ..
+                    }
                     | Op::ConvTranspose2D {
                         arg: lhs,
                         kernel: rhs,
@@ -309,6 +314,43 @@ impl Tensor {
                         } else {
                             grad_kernel
                         };
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                    }
+                    Op::Conv3D {
+                        arg,
+                        kernel,
+                        padding,
+                        stride,
+                        dilation,
+                    } => {
+                        let (b_size, c_in, i_d, i_h, i_w) = arg.dims5()?;
+                        let (c_out, c_in_k, k_d, k_h, k_w) = kernel.dims5()?;
+                        if c_in != c_in_k {
+                            crate::bail!(
+                                "conv3d backward in_channel mismatch between input ({c_in}) and kernel ({c_in_k})"
+                            )
+                        }
+                        let params = crate::conv::ParamsConv3D {
+                            b_size,
+                            i_d,
+                            i_h,
+                            i_w,
+                            k_d,
+                            k_h,
+                            k_w,
+                            c_out,
+                            c_in,
+                            padding: *padding,
+                            stride: *stride,
+                            dilation: *dilation,
+                        };
+
+                        let grad_arg = grad.conv3d_backward_input(kernel, &params)?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad_arg)?;
+
+                        let grad_kernel = arg.conv3d_backward_weight(&grad, &params)?;
+                        let sum_grad = grads.or_insert(kernel)?;
                         *sum_grad = sum_grad.add(&grad_kernel)?;
                     }
                     Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
