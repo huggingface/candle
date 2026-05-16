@@ -44,6 +44,115 @@ impl crate::CustomOp2 for RepeatPenalty {
         Ok((storage, logits_l.shape().clone()))
     }
 
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        logits_s: &crate::CudaStorage,
+        logits_l: &Layout,
+        ctx_s: &crate::CudaStorage,
+        ctx_l: &Layout,
+    ) -> Result<(crate::CudaStorage, Shape)> {
+        use crate::cuda_backend::cudarc::driver::{LaunchConfig, PushKernelArg};
+        use crate::cuda_backend::{kernels, CudaStorageSlice as S, WrapErr};
+
+        if !logits_l.is_contiguous() {
+            crate::bail!("repeat-penalty: logits must be contiguous");
+        }
+        if !ctx_l.is_contiguous() {
+            crate::bail!("repeat-penalty: context must be contiguous");
+        }
+
+        let dev = logits_s.device.clone();
+        let vocab_size = logits_l.shape().elem_count();
+        let ctx_size = ctx_l.shape().elem_count();
+
+        let ctx_slice = match &ctx_s.slice {
+            S::U32(s) => s.slice(ctx_l.start_offset()..ctx_l.start_offset() + ctx_size),
+            _ => crate::bail!("repeat-penalty: expected u32 context"),
+        };
+
+        let cfg = LaunchConfig::for_num_elems(vocab_size as u32);
+        let stream = dev.cuda_stream();
+        let vocab_size_u32 = vocab_size as u32;
+        let ctx_size_u32 = ctx_size as u32;
+        let penalty = self.penalty;
+
+        let out_slice: S = match &logits_s.slice {
+            S::F32(s) => {
+                let inp = s.slice(logits_l.start_offset()..logits_l.start_offset() + vocab_size);
+                let out = unsafe { dev.alloc::<f32>(vocab_size)? };
+                let func = dev.get_or_load_func("repeat_penalty_f32", &kernels::SAMPLING)?;
+                let mut builder = stream.launch_builder(&func);
+                builder
+                    .arg(&inp)
+                    .arg(&out)
+                    .arg(&ctx_slice)
+                    .arg(&vocab_size_u32)
+                    .arg(&ctx_size_u32)
+                    .arg(&penalty);
+                unsafe { builder.launch(cfg) }.w()?;
+                S::F32(out)
+            }
+            S::F16(s) => {
+                let inp = s.slice(logits_l.start_offset()..logits_l.start_offset() + vocab_size);
+                let out = unsafe { dev.alloc::<half::f16>(vocab_size)? };
+                let func = dev.get_or_load_func("repeat_penalty_f16", &kernels::SAMPLING)?;
+                let mut builder = stream.launch_builder(&func);
+                builder
+                    .arg(&inp)
+                    .arg(&out)
+                    .arg(&ctx_slice)
+                    .arg(&vocab_size_u32)
+                    .arg(&ctx_size_u32)
+                    .arg(&penalty);
+                unsafe { builder.launch(cfg) }.w()?;
+                S::F16(out)
+            }
+            S::BF16(s) => {
+                let inp = s.slice(logits_l.start_offset()..logits_l.start_offset() + vocab_size);
+                let out = unsafe { dev.alloc::<half::bf16>(vocab_size)? };
+                let func = dev.get_or_load_func("repeat_penalty_bf16", &kernels::SAMPLING)?;
+                let mut builder = stream.launch_builder(&func);
+                builder
+                    .arg(&inp)
+                    .arg(&out)
+                    .arg(&ctx_slice)
+                    .arg(&vocab_size_u32)
+                    .arg(&ctx_size_u32)
+                    .arg(&penalty);
+                unsafe { builder.launch(cfg) }.w()?;
+                S::BF16(out)
+            }
+            S::F64(s) => {
+                let inp = s.slice(logits_l.start_offset()..logits_l.start_offset() + vocab_size);
+                let out = unsafe { dev.alloc::<f64>(vocab_size)? };
+                let func = dev.get_or_load_func("repeat_penalty_f64", &kernels::SAMPLING)?;
+                let mut builder = stream.launch_builder(&func);
+                builder
+                    .arg(&inp)
+                    .arg(&out)
+                    .arg(&ctx_slice)
+                    .arg(&vocab_size_u32)
+                    .arg(&ctx_size_u32)
+                    .arg(&penalty);
+                unsafe { builder.launch(cfg) }.w()?;
+                S::F64(out)
+            }
+            _ => {
+                use crate::backend::BackendStorage;
+                crate::bail!(
+                    "repeat-penalty: unsupported logits dtype {:?}",
+                    logits_s.dtype()
+                )
+            }
+        };
+        let out = crate::CudaStorage {
+            slice: out_slice,
+            device: dev,
+        };
+        Ok((out, logits_l.shape().clone()))
+    }
+
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
