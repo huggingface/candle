@@ -4,7 +4,9 @@ pub mod commands;
 pub mod compute_pipeline;
 pub mod device;
 pub mod encoder;
+pub mod fence;
 pub mod library;
+pub mod residency_set;
 
 pub use buffer::*;
 pub use command_buffer::*;
@@ -12,4 +14,6 @@ pub use commands::*;
 pub use compute_pipeline::*;
 pub use device::*;
 pub use encoder::*;
+pub use fence::*;
 pub use library::*;
+pub use residency_set::*;

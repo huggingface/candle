@@ -28,6 +28,12 @@ impl Buffer {
         self.as_ref().contents().as_ptr() as *mut u8
     }
 
+    /// Get the raw pointer to the underlying Metal buffer object.
+    /// Used for dependency tracking in the compute encoder.
+    pub(crate) fn raw_ptr(&self) -> *const ProtocolObject<dyn MTLBuffer> {
+        Retained::as_ptr(&self.raw)
+    }
+
     pub fn length(&self) -> usize {
         self.as_ref().length()
     }
