@@ -1321,10 +1321,12 @@ unsafe fn slice_as_bf16<T>(data: &[T]) -> &[bf16] {
 }
 
 fn bf16_to_f32<T: WithDType>(data: &[T]) -> Vec<f32> {
+    debug_assert_eq!(T::DTYPE, DType::BF16);
     unsafe { slice_as_bf16(data) }.to_f32_vec()
 }
 
 fn f32_as_bf16_dst<T: WithDType + Copy>(src: &[f32], dst: &mut [T]) {
+    debug_assert_eq!(T::DTYPE, DType::BF16);
     let dst_bf16: &mut [bf16] =
         unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr() as *mut bf16, dst.len()) };
     dst_bf16.convert_from_f32_slice(src);

@@ -78,6 +78,25 @@ fn matmul_bf16(device: &Device) -> Result<()> {
     assert_eq!(c.dtype(), DType::BF16);
     assert_eq!(c.dims(), &[2, 4, 5]);
 
+    // Narrowed view (nonzero start_offset, backed by larger storage)
+    let a_full = Tensor::randn(0f32, 1., (6, 4), device)?.to_dtype(DType::BF16)?;
+    let b_full = Tensor::randn(0f32, 1., (4, 3), device)?.to_dtype(DType::BF16)?;
+    let a_view = a_full.narrow(0, 2, 3)?;
+    let c = a_view.matmul(&b_full)?;
+    assert_eq!(c.dims(), &[3, 3]);
+    let a_ref = a_view.to_dtype(DType::F32)?;
+    let b_ref = b_full.to_dtype(DType::F32)?;
+    let c_ref = a_ref.matmul(&b_ref)?;
+    let c_f32 = c.to_dtype(DType::F32)?;
+    let diff = (c_f32 - c_ref)?.abs()?.max_all()?.to_scalar::<f32>()?;
+    assert!(diff < 0.1, "BF16 narrowed matmul differs from F32 reference by {diff}");
+
+    // Transposed (non-contiguous) input
+    let a = Tensor::randn(0f32, 1., (4, 6), device)?.to_dtype(DType::BF16)?.t()?;
+    let b = Tensor::randn(0f32, 1., (4, 3), device)?.to_dtype(DType::BF16)?;
+    let c = a.matmul(&b)?;
+    assert_eq!(c.dims(), &[6, 3]);
+
     Ok(())
 }
 
