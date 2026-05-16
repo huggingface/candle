@@ -1381,72 +1381,16 @@ impl Map2 for MatMul {
     ) -> Result<Vec<T>> {
         use gemm::{gemm, Parallelism};
 
+        if T::DTYPE == DType::BF16 {
+            let lhs_f32 = bf16_to_f32(lhs);
+            let rhs_f32 = bf16_to_f32(rhs);
+            let dst_f32 = self.f(&lhs_f32, lhs_l, &rhs_f32, rhs_l)?;
+            let mut dst = vec![T::zero(); dst_f32.len()];
+            f32_as_bf16_dst(&dst_f32, &mut dst);
+            return Ok(dst);
+        }
+
         match T::DTYPE {
-            DType::BF16 => {
-                let (b, m, n, k) = self.0;
-                let lhs_f32 = bf16_to_f32(&lhs[lhs_l.start_offset()..]);
-                let rhs_f32 = bf16_to_f32(&rhs[rhs_l.start_offset()..]);
-
-                let lhs_stride = lhs_l.stride();
-                let rhs_stride = rhs_l.stride();
-                let rank = lhs_stride.len();
-                let lhs_cs = lhs_stride[rank - 1];
-                let lhs_rs = lhs_stride[rank - 2];
-                let rhs_cs = rhs_stride[rank - 1];
-                let rhs_rs = rhs_stride[rank - 2];
-
-                let (a_skip, b_skip) = self.ab_skip(lhs_l, rhs_l)?;
-                let c_skip: usize = m * n;
-
-                let dst_shape: Shape = (m, n).into();
-                let dst_strides = dst_shape.stride_contiguous();
-                let dst_rs = dst_strides[0];
-                let dst_cs = dst_strides[1];
-
-                let mut dst_f32 = vec![0f32; b * m * n];
-                let num_threads = crate::utils::get_num_threads();
-                let parallelism = if num_threads > 1 {
-                    Parallelism::Rayon(num_threads)
-                } else {
-                    Parallelism::None
-                };
-                let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
-                    (1, b * m, n, k)
-                } else if a_skip == 0 && b_skip == n * k {
-                    (1, m, b * n, k)
-                } else {
-                    (b, m, n, k)
-                };
-                for step in 0..b {
-                    let lhs_p = &lhs_f32[step * a_skip..];
-                    let rhs_p = &rhs_f32[step * b_skip..];
-                    let dst_p = &mut dst_f32[step * c_skip..];
-                    unsafe {
-                        gemm(
-                            m, n, k,
-                            dst_p.as_mut_ptr(),
-                            dst_cs as isize,
-                            dst_rs as isize,
-                            false,
-                            lhs_p.as_ptr(),
-                            lhs_cs as isize,
-                            lhs_rs as isize,
-                            rhs_p.as_ptr(),
-                            rhs_cs as isize,
-                            rhs_rs as isize,
-                            0f32,
-                            1f32,
-                            false,
-                            false,
-                            false,
-                            parallelism,
-                        )
-                    }
-                }
-                let mut dst = vec![T::zero(); dst_f32.len()];
-                f32_as_bf16_dst(&dst_f32, &mut dst);
-                return Ok(dst);
-            }
             DType::F16 | DType::F32 | DType::F64 => {}
             _ => Err(Error::UnsupportedDTypeForOp(T::DTYPE, "matmul").bt())?,
         }
@@ -1527,6 +1471,15 @@ impl Map2 for MatMul {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
+        if T::DTYPE == DType::BF16 {
+            let lhs_f32 = bf16_to_f32(lhs);
+            let rhs_f32 = bf16_to_f32(rhs);
+            let dst_f32 = self.f(&lhs_f32, lhs_l, &rhs_f32, rhs_l)?;
+            let mut dst = vec![T::zero(); dst_f32.len()];
+            f32_as_bf16_dst(&dst_f32, &mut dst);
+            return Ok(dst);
+        }
+
         let (b, m, n, k) = self.0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
@@ -1560,25 +1513,6 @@ impl Map2 for MatMul {
 
         let mut dst = vec![T::zero(); b * m * n];
         match T::DTYPE {
-            DType::BF16 => {
-                let lhs_f32 = bf16_to_f32(lhs);
-                let rhs_f32 = bf16_to_f32(rhs);
-                let mut dst_f32 = vec![0f32; b * m * n];
-                for step in 0..b {
-                    let a = &rhs_f32[step * b_skip..];
-                    let b_sl = &lhs_f32[step * a_skip..];
-                    let c = &mut dst_f32[step * c_skip..step * c_skip + c_skip];
-                    unsafe {
-                        crate::accelerate::sgemm(
-                            transa, transb, /* m= */ n as i32, /* n= */ m as i32,
-                            /* k= */ k as i32, /* alpha= */ 1., /* a= */ a,
-                            /* lda= */ lda, /* b= */ b_sl, /* ldb= */ ldb,
-                            /* beta= */ 0., /* c= */ c, /* ldc= */ n as i32,
-                        )
-                    }
-                }
-                f32_as_bf16_dst(&dst_f32, &mut dst);
-            }
             DType::F16 => {
                 crate::bail!("the accelerate backend does not support f16 matmul")
             }
@@ -1637,6 +1571,15 @@ impl Map2 for MatMul {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
+        if T::DTYPE == DType::BF16 {
+            let lhs_f32 = bf16_to_f32(lhs);
+            let rhs_f32 = bf16_to_f32(rhs);
+            let dst_f32 = self.f(&lhs_f32, lhs_l, &rhs_f32, rhs_l)?;
+            let mut dst = vec![T::zero(); dst_f32.len()];
+            f32_as_bf16_dst(&dst_f32, &mut dst);
+            return Ok(dst);
+        }
+
         let (b, m, n, k) = self.0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
@@ -1670,25 +1613,6 @@ impl Map2 for MatMul {
 
         let mut dst = vec![T::zero(); b * m * n];
         match T::DTYPE {
-            DType::BF16 => {
-                let lhs_f32 = bf16_to_f32(lhs);
-                let rhs_f32 = bf16_to_f32(rhs);
-                let mut dst_f32 = vec![0f32; b * m * n];
-                for step in 0..b {
-                    let a = &rhs_f32[step * b_skip..];
-                    let b_sl = &lhs_f32[step * a_skip..];
-                    let c = &mut dst_f32[step * c_skip..step * c_skip + c_skip];
-                    unsafe {
-                        crate::mkl::sgemm(
-                            transa, transb, /* m= */ n as i32, /* n= */ m as i32,
-                            /* k= */ k as i32, /* alpha= */ 1., /* a= */ a,
-                            /* lda= */ lda, /* b= */ b_sl, /* ldb= */ ldb,
-                            /* beta= */ 0., /* c= */ c, /* ldc= */ n as i32,
-                        )
-                    }
-                }
-                f32_as_bf16_dst(&dst_f32, &mut dst);
-            }
             DType::F16 => {
                 for step in 0..b {
                     let lhs_p = &lhs[step * a_skip..];
