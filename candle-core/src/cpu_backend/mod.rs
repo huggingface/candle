@@ -3,7 +3,7 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use float8::F8E4M3;
-use half::{bf16, f16};
+use half::{bf16, f16, slice::HalfFloatSliceExt};
 use rayon::prelude::*;
 
 mod utils;
@@ -1330,6 +1330,23 @@ impl Map2 for ConvTranspose2D<'_> {
 
 struct MatMul((usize, usize, usize, usize));
 
+/// Safety: T must actually be bf16 (checked via T::DTYPE == DType::BF16 at call sites).
+unsafe fn slice_as_bf16<T>(data: &[T]) -> &[bf16] {
+    std::slice::from_raw_parts(data.as_ptr() as *const bf16, data.len())
+}
+
+fn bf16_to_f32<T: WithDType>(data: &[T]) -> Vec<f32> {
+    debug_assert_eq!(T::DTYPE, DType::BF16);
+    unsafe { slice_as_bf16(data) }.to_f32_vec()
+}
+
+fn f32_as_bf16_dst<T: WithDType + Copy>(src: &[f32], dst: &mut [T]) {
+    debug_assert_eq!(T::DTYPE, DType::BF16);
+    let dst_bf16: &mut [bf16] =
+        unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr() as *mut bf16, dst.len()) };
+    dst_bf16.convert_from_f32_slice(src);
+}
+
 impl MatMul {
     fn striding_error(&self, lhs_l: &Layout, rhs_l: &Layout, msg: &'static str) -> Error {
         Error::MatMulUnexpectedStriding(Box::new(crate::error::MatMulUnexpectedStriding {
@@ -1378,6 +1395,15 @@ impl Map2 for MatMul {
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
         use gemm::{gemm, Parallelism};
+
+        if T::DTYPE == DType::BF16 {
+            let lhs_f32 = bf16_to_f32(lhs);
+            let rhs_f32 = bf16_to_f32(rhs);
+            let dst_f32 = self.f(&lhs_f32, lhs_l, &rhs_f32, rhs_l)?;
+            let mut dst = vec![T::zero(); dst_f32.len()];
+            f32_as_bf16_dst(&dst_f32, &mut dst);
+            return Ok(dst);
+        }
 
         match T::DTYPE {
             DType::F16 | DType::F32 | DType::F64 => {}
@@ -1460,6 +1486,15 @@ impl Map2 for MatMul {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
+        if T::DTYPE == DType::BF16 {
+            let lhs_f32 = bf16_to_f32(lhs);
+            let rhs_f32 = bf16_to_f32(rhs);
+            let dst_f32 = self.f(&lhs_f32, lhs_l, &rhs_f32, rhs_l)?;
+            let mut dst = vec![T::zero(); dst_f32.len()];
+            f32_as_bf16_dst(&dst_f32, &mut dst);
+            return Ok(dst);
+        }
+
         let (b, m, n, k) = self.0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
@@ -1551,6 +1586,15 @@ impl Map2 for MatMul {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
+        if T::DTYPE == DType::BF16 {
+            let lhs_f32 = bf16_to_f32(lhs);
+            let rhs_f32 = bf16_to_f32(rhs);
+            let dst_f32 = self.f(&lhs_f32, lhs_l, &rhs_f32, rhs_l)?;
+            let mut dst = vec![T::zero(); dst_f32.len()];
+            f32_as_bf16_dst(&dst_f32, &mut dst);
+            return Ok(dst);
+        }
+
         let (b, m, n, k) = self.0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
