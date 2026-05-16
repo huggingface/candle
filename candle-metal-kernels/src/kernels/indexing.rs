@@ -1,7 +1,8 @@
 use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
-use objc2_metal::MTLResourceUsage;
+use crate::{
+    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub fn call_index_select(
@@ -44,15 +45,12 @@ pub fn call_index_select(
             src_strides,
             &input,
             &ids,
-            output
+            Output::new(output)
         )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(ids.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -92,15 +90,12 @@ pub fn call_gather(
             ids_size,
             &input,
             &ids,
-            output
+            Output::new(output)
         )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(ids.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -141,15 +136,12 @@ pub fn call_scatter(
             dst_dim_size,
             &input,
             &ids,
-            &output
+            Output::from_buffer_offset(&output)
         )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(ids.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output.buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -192,15 +184,12 @@ pub fn call_index_add(
             ids_dim_size,
             &input,
             &ids,
-            output
+            Output::new(output)
         )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(ids.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
