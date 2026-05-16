@@ -1,8 +1,9 @@
 use crate::kernels::macros::ops;
 use crate::utils::{BufferOffset, EncoderProvider};
 use crate::{get_tile_size, linear_split};
-use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
-use objc2_metal::MTLResourceUsage;
+use crate::{
+    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+};
 
 ops!(badd, bsub, bmul, bdiv, bminimum, bmaximum, eq, ne, le, lt, ge, gt);
 
@@ -24,15 +25,12 @@ pub fn call_binary_contiguous<S: ToString>(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (length, &left, &right, output));
+    set_params!(encoder, (length, &left, &right, Output::new(output)));
 
     let tile_size = get_tile_size(dtype_size);
     let tiles = length.div_ceil(tile_size);
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
 
-    encoder.use_resource(left.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(right.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -72,12 +70,9 @@ pub fn call_binary_strided<S: ToString>(
             right_strides,
             &left_input,
             &right_input,
-            output
+            Output::new(output)
         )
     );
-    encoder.use_resource(left_input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(right_input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

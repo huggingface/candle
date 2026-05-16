@@ -43,6 +43,10 @@ impl AsRef<ProtocolObject<dyn MTLDevice>> for Device {
 }
 
 impl Device {
+    pub fn new(raw: Retained<ProtocolObject<dyn MTLDevice>>) -> Self {
+        Device { raw }
+    }
+
     pub fn registry_id(&self) -> u64 {
         self.as_ref().registryID()
     }
