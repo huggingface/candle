@@ -13,7 +13,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -207,7 +207,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
         None => match args.which {
@@ -216,27 +216,32 @@ fn main() -> Result<()> {
             Which::W1b50b => "hazyresearch/based-1b-50b".to_string(),
         },
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let config_file = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("config.json")?,
+        None => repo
+            .download_file()
+            .filename("config.json")
+            .revision(args.revision.clone())
+            .send()?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => vec![repo.get("model.safetensors")?],
+        None => vec![repo
+            .download_file()
+            .filename("model.safetensors")
+            .revision(args.revision.clone())
+            .send()?],
     };
 
-    let repo = api.model("openai-community/gpt2".to_string());
+    let repo = api.model("openai-community", "gpt2");
     let tokenizer_file = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo.download_file().filename("tokenizer.json").send()?,
     };
 
     println!("retrieved the files in {:?}", start.elapsed());

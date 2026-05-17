@@ -12,7 +12,7 @@ use clap::{Parser, ValueEnum};
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use std::io::Write;
 
 use candle_transformers::models::granite as model;
@@ -115,16 +115,25 @@ fn main() -> Result<()> {
         None => DType::F16,
     };
     let (granite, tokenizer_filename, mut cache, config) = {
-        let api = Api::new()?;
+        let api = HFClientSync::new()?;
         let model_id = args.model_id.unwrap_or_else(|| match args.model_type {
             GraniteModel::Granite7bInstruct => "ibm-granite/granite-7b-instruct".to_string(),
         });
         println!("loading the model weights from {model_id}");
         let revision = args.revision.unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+        let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+        let api = api.model(owner, name);
 
-        let tokenizer_filename = api.get("tokenizer.json")?;
-        let config_filename = api.get("config.json")?;
+        let tokenizer_filename = api
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.clone())
+            .send()?;
+        let config_filename = api
+            .download_file()
+            .filename("config.json")
+            .revision(revision.clone())
+            .send()?;
         let config: GraniteConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
         let config = config.into_config(args.use_flash_attn);
 

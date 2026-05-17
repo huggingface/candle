@@ -15,7 +15,7 @@ use candle_transformers::models::quantized_metavoice::transformer as qtransforme
 
 use candle::{DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 use rand::{distr::Distribution, SeedableRng};
 
 pub const ENCODEC_NTOKENS: u32 = 1024;
@@ -109,11 +109,11 @@ fn main() -> Result<()> {
         candle::utils::with_f16c()
     );
     let device = candle_examples::device(args.cpu)?;
-    let api = Api::new()?;
-    let repo = api.model("lmz/candle-metavoice".to_string());
+    let api = HFClientSync::new()?;
+    let repo = api.model("lmz", "candle-metavoice");
     let first_stage_meta = match &args.first_stage_meta {
         Some(w) => std::path::PathBuf::from(w),
-        None => repo.get("first_stage.meta.json")?,
+        None => repo.download_file().filename("first_stage.meta.json").send()?,
     };
     let first_stage_meta: serde_json::Value =
         serde_json::from_reader(&std::fs::File::open(first_stage_meta)?)?;
@@ -128,13 +128,13 @@ fn main() -> Result<()> {
 
     let second_stage_weights = match &args.second_stage_weights {
         Some(w) => std::path::PathBuf::from(w),
-        None => repo.get("second_stage.safetensors")?,
+        None => repo.download_file().filename("second_stage.safetensors").send()?,
     };
     let encodec_weights = match args.encodec_weights {
         Some(w) => std::path::PathBuf::from(w),
-        None => Api::new()?
-            .model("facebook/encodec_24khz".to_string())
-            .get("model.safetensors")?,
+        None => HFClientSync::new()?
+            .model("facebook", "encodec_24khz")
+            .download_file().filename("model.safetensors").send()?,
     };
     let dtype = match args.dtype {
         ArgDType::F32 => DType::F32,
@@ -146,7 +146,7 @@ fn main() -> Result<()> {
     let mut first_stage_model = if args.quantized {
         let filename = match &args.first_stage_weights {
             Some(w) => std::path::PathBuf::from(w),
-            None => repo.get("first_stage_q4k.gguf")?,
+            None => repo.download_file().filename("first_stage_q4k.gguf").send()?,
         };
         let vb =
             candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
@@ -155,7 +155,7 @@ fn main() -> Result<()> {
     } else {
         let first_stage_weights = match &args.first_stage_weights {
             Some(w) => std::path::PathBuf::from(w),
-            None => repo.get("first_stage.safetensors")?,
+            None => repo.download_file().filename("first_stage.safetensors").send()?,
         };
         let first_stage_vb =
             unsafe { VarBuilder::from_mmaped_safetensors(&[first_stage_weights], dtype, &device)? };
@@ -184,7 +184,7 @@ fn main() -> Result<()> {
     println!("{tokens:?}");
     let spk_emb_file = match &args.spk_emb {
         Some(w) => std::path::PathBuf::from(w),
-        None => repo.get("spk_emb.safetensors")?,
+        None => repo.download_file().filename("spk_emb.safetensors").send()?,
     };
     let spk_emb = candle::safetensors::load(&spk_emb_file, &candle::Device::Cpu)?;
     let spk_emb = match spk_emb.get("spk_emb") {

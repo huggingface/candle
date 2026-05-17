@@ -9,7 +9,7 @@ use candle::{DType, IndexOp, Shape, Tensor, D};
 use candle_nn::VarBuilder;
 use candle_transformers::models::nvembed_v2::model::Model;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::{PaddingDirection, PaddingParams, Tokenizer, TruncationParams};
 
 #[derive(Parser, Debug)]
@@ -49,8 +49,9 @@ impl Args {
             None => "nvidia/NV-Embed-v2".to_string(),
         };
 
-        let api = Api::new()?;
-        let repo = api.repo(Repo::new(model_name.to_string(), RepoType::Model));
+        let api = HFClientSync::new()?;
+        let (owner, name) = model_name.split_once('/').unwrap_or(("", model_name.as_str()));
+        let repo = api.model(owner, name);
 
         let model_files = match &self.model_files {
             Some(files) => files
@@ -62,7 +63,7 @@ impl Args {
 
         let tokenizer_file = match &self.tokenizer {
             Some(file) => std::path::PathBuf::from(file),
-            None => repo.get("tokenizer.json")?,
+            None => repo.download_file().filename("tokenizer.json").send()?,
         };
 
         let device = candle_examples::device(self.cpu)?;

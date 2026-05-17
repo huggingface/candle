@@ -17,7 +17,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 #[allow(clippy::large_enum_variant)]
@@ -240,19 +240,21 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = args
         .model_id
         .clone()
         .unwrap_or_else(|| "google/gemma-4-E4B-it".to_string());
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
+    let revision = args.revision;
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.clone())
+            .send()?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
@@ -262,7 +264,11 @@ fn main() -> Result<()> {
         None => {
             match candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json") {
                 Ok(files) => files,
-                Err(_) => vec![repo.get("model.safetensors")?],
+                Err(_) => vec![repo
+                    .download_file()
+                    .filename("model.safetensors")
+                    .revision(revision.clone())
+                    .send()?],
             }
         }
     };
@@ -282,7 +288,11 @@ fn main() -> Result<()> {
         let config: Gemma4Config = match args.config_file {
             Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
             None => {
-                let config_file = repo.get("config.json")?;
+                let config_file = repo
+                    .download_file()
+                    .filename("config.json")
+                    .revision(revision.clone())
+                    .send()?;
                 serde_json::from_slice(&std::fs::read(config_file)?)?
             }
         };
@@ -292,7 +302,11 @@ fn main() -> Result<()> {
         let mut config: Gemma4TextConfig = match args.config_file {
             Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
             None => {
-                let config_file = repo.get("config.json")?;
+                let config_file = repo
+                    .download_file()
+                    .filename("config.json")
+                    .revision(revision.clone())
+                    .send()?;
                 // For text-only, try to parse the text_config sub-object
                 let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(config_file)?)?;
                 if let Some(text_cfg) = raw.get("text_config") {

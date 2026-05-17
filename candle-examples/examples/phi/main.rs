@@ -16,7 +16,7 @@ use candle_transformers::models::quantized_mixformer::MixFormerSequentialForCaus
 use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -250,7 +250,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => {
@@ -291,7 +291,8 @@ fn main() -> Result<()> {
             }
         }
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => match args.model {
@@ -301,9 +302,9 @@ fn main() -> Result<()> {
             | WhichModel::V2Old
             | WhichModel::V3
             | WhichModel::V3Medium
-            | WhichModel::V4Mini => repo.get("tokenizer.json")?,
+            | WhichModel::V4Mini => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,
             WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => {
-                repo.get("tokenizer-puffin-phi-v2.json")?
+                repo.download_file().filename("tokenizer-puffin-phi-v2.json").revision(&revision).send()?
             }
         },
     };
@@ -312,18 +313,18 @@ fn main() -> Result<()> {
         None => {
             if args.quantized {
                 match args.model {
-                    WhichModel::V1 => vec![repo.get("model-v1-q4k.gguf")?],
-                    WhichModel::V1_5 => vec![repo.get("model-q4k.gguf")?],
-                    WhichModel::V2 | WhichModel::V2Old => vec![repo.get("model-v2-q4k.gguf")?],
-                    WhichModel::PuffinPhiV2 => vec![repo.get("model-puffin-phi-v2-q4k.gguf")?],
-                    WhichModel::PhiHermes => vec![repo.get("model-phi-hermes-1_3B-q4k.gguf")?],
+                    WhichModel::V1 => vec![repo.download_file().filename("model-v1-q4k.gguf").revision(&revision).send()?],
+                    WhichModel::V1_5 => vec![repo.download_file().filename("model-q4k.gguf").revision(&revision).send()?],
+                    WhichModel::V2 | WhichModel::V2Old => vec![repo.download_file().filename("model-v2-q4k.gguf").revision(&revision).send()?],
+                    WhichModel::PuffinPhiV2 => vec![repo.download_file().filename("model-puffin-phi-v2-q4k.gguf").revision(&revision).send()?],
+                    WhichModel::PhiHermes => vec![repo.download_file().filename("model-phi-hermes-1_3B-q4k.gguf").revision(&revision).send()?],
                     WhichModel::V3 | WhichModel::V3Medium | WhichModel::V4Mini => anyhow::bail!(
                         "use the quantized or quantized-phi examples for quantized phi-v3"
                     ),
                 }
             } else {
                 match args.model {
-                    WhichModel::V1 | WhichModel::V1_5 => vec![repo.get("model.safetensors")?],
+                    WhichModel::V1 | WhichModel::V1_5 => vec![repo.download_file().filename("model.safetensors").revision(&revision).send()?],
                     WhichModel::V2
                     | WhichModel::V2Old
                     | WhichModel::V3
@@ -332,8 +333,8 @@ fn main() -> Result<()> {
                         &repo,
                         "model.safetensors.index.json",
                     )?,
-                    WhichModel::PuffinPhiV2 => vec![repo.get("model-puffin-phi-v2.safetensors")?],
-                    WhichModel::PhiHermes => vec![repo.get("model-phi-hermes-1_3B.safetensors")?],
+                    WhichModel::PuffinPhiV2 => vec![repo.download_file().filename("model-puffin-phi-v2.safetensors").revision(&revision).send()?],
+                    WhichModel::PhiHermes => vec![repo.download_file().filename("model-phi-hermes-1_3B.safetensors").revision(&revision).send()?],
                 }
             }
         }
@@ -381,14 +382,14 @@ fn main() -> Result<()> {
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         match args.model {
             WhichModel::V1 | WhichModel::V1_5 | WhichModel::V2 => {
-                let config_filename = repo.get("config.json")?;
+                let config_filename = repo.download_file().filename("config.json").revision(&revision).send()?;
                 let config = std::fs::read_to_string(config_filename)?;
                 let config: PhiConfig = serde_json::from_str(&config)?;
                 let phi = Phi::new(&config, vb)?;
                 Model::Phi(phi)
             }
             WhichModel::V3 | WhichModel::V3Medium | WhichModel::V4Mini => {
-                let config_filename = repo.get("config.json")?;
+                let config_filename = repo.download_file().filename("config.json").revision(&revision).send()?;
                 let config = std::fs::read_to_string(config_filename)?;
                 let config: Phi3Config = serde_json::from_str(&config)?;
                 let phi3 = Phi3::new(&config, vb)?;

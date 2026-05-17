@@ -76,26 +76,27 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = hf_hub::HFClientSync::new()?;
             if args.quantized {
-                let api = api.model("lmz/candle-blip".to_string());
-                api.get("blip-image-captioning-large-q4k.gguf")?
+                let api = api.model("lmz", "candle-blip");
+                api.download_file()
+                    .filename("blip-image-captioning-large-q4k.gguf")
+                    .send()?
             } else {
-                let api = api.repo(hf_hub::Repo::with_revision(
-                    "Salesforce/blip-image-captioning-large".to_string(),
-                    hf_hub::RepoType::Model,
-                    "refs/pr/18".to_string(),
-                ));
-                api.get("model.safetensors")?
+                let api = api.model("Salesforce", "blip-image-captioning-large");
+                api.download_file()
+                    .filename("model.safetensors")
+                    .revision("refs/pr/18")
+                    .send()?
             }
         }
         Some(model) => model.into(),
     };
     let tokenizer = match args.tokenizer {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("Salesforce/blip-image-captioning-large".to_string());
-            api.get("tokenizer.json")?
+            let api = hf_hub::HFClientSync::new()?;
+            let api = api.model("Salesforce", "blip-image-captioning-large");
+            api.download_file().filename("tokenizer.json").send()?
         }
         Some(file) => file.into(),
     };

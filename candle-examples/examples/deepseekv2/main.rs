@@ -13,7 +13,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -226,7 +226,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
         None => match args.which {
@@ -237,19 +237,25 @@ fn main() -> Result<()> {
             Which::V2Chat => "deepseek-ai/DeepSeek-V2-Chat".to_string(),
         },
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
-    let tokenizer_filename = repo.get("tokenizer.json")?;
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
+    let revision = args.revision;
+    let tokenizer_filename = repo
+        .download_file()
+        .filename("tokenizer.json")
+        .revision(revision.clone())
+        .send()?;
     let filenames = candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
     let config: DeepSeekV2Config = {
-        let config_file = repo.get("config.json")?;
+        let config_file = repo
+            .download_file()
+            .filename("config.json")
+            .revision(revision.clone())
+            .send()?;
         serde_json::from_slice(&std::fs::read(config_file)?)?
     };
     let device = candle_examples::device(args.cpu)?;

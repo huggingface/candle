@@ -16,7 +16,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -284,7 +284,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let use_chat_template = args.should_use_chat_template();
     let thinking = args.thinking;
     let model_id = match args.model_id {
@@ -311,21 +311,19 @@ fn main() -> Result<()> {
             format!("Qwen/Qwen{version}-{size}")
         }
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
+    let revision = args.revision.clone();
 
     let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer_file.as_ref()) {
         (Some(_), Some(file)) => std::path::PathBuf::from(file),
         (None, Some(file)) => std::path::PathBuf::from(file),
         (Some(path), None) => std::path::Path::new(path).join("tokenizer.json"),
-        (None, None) => repo.get("tokenizer.json")?,
+        (None, None) => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,
     };
     let config_file = match &args.weight_path {
         Some(path) => std::path::Path::new(path).join("config.json"),
-        _ => repo.get("config.json")?,
+        _ => repo.download_file().filename("config.json").revision(&revision).send()?,
     };
 
     let filenames = match args.weight_path {
@@ -345,7 +343,7 @@ fn main() -> Result<()> {
             | WhichModel::W2_1_5b
             | WhichModel::W1_8b
             | WhichModel::W3_0_6b => {
-                vec![repo.get("model.safetensors")?]
+                vec![repo.download_file().filename("model.safetensors").revision(&revision).send()?]
             }
             WhichModel::W4b
             | WhichModel::W7b

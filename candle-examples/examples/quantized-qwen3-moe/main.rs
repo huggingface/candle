@@ -107,10 +107,11 @@ impl Args {
         let tokenizer_path = match &self.tokenizer {
             Some(config) => std::path::PathBuf::from(config),
             None => {
-                let api = hf_hub::api::sync::Api::new()?;
+                let api = hf_hub::HFClientSync::new()?;
                 let repo = "Qwen/Qwen3-30B-A3B-Instruct-2507";
-                let api = api.model(repo.to_string());
-                api.get("tokenizer.json")?
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                let api = api.model(owner, name);
+                api.download_file().filename("tokenizer.json").send()?
             }
         };
         Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)
@@ -163,13 +164,13 @@ impl Args {
                         "main",
                     ),
                 };
-                let api = hf_hub::api::sync::Api::new()?;
-                api.repo(hf_hub::Repo::with_revision(
-                    repo.to_string(),
-                    hf_hub::RepoType::Model,
-                    revision.to_string(),
-                ))
-                .get(filename)?
+                let api = hf_hub::HFClientSync::new()?;
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                api.model(owner, name)
+                    .download_file()
+                    .filename(filename)
+                    .revision(revision)
+                    .send()?
             }
         };
         Ok(model_path)

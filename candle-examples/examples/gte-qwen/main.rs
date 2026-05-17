@@ -11,7 +11,7 @@ use candle_transformers::models::qwen2::{Config, Model};
 
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::{
     utils::padding::{PaddingDirection, PaddingParams, PaddingStrategy},
     Tokenizer,
@@ -51,15 +51,20 @@ struct ConfigFiles {
 
 // Loading the model from the HuggingFace Hub. Network access is required.
 fn load_from_hub(model_id: &str, revision: &str) -> Result<ConfigFiles> {
-    let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        model_id.to_string(),
-        RepoType::Model,
-        revision.to_string(),
-    ));
+    let api = HFClientSync::new()?;
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id));
+    let repo = api.model(owner, name);
     Ok(ConfigFiles {
-        config: repo.get("config.json")?,
-        tokenizer: repo.get("tokenizer.json")?,
+        config: repo
+            .download_file()
+            .filename("config.json")
+            .revision(revision.to_string())
+            .send()?,
+        tokenizer: repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.to_string())
+            .send()?,
         weights: candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
     })
 }

@@ -37,15 +37,16 @@ pub fn main() -> anyhow::Result<()> {
 
     println!("loaded image {image:?}");
 
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = hf_hub::HFClientSync::new()?;
     let repo = match args.which {
         Which::Vgg13 => "timm/vgg13.tv_in1k",
         Which::Vgg16 => "timm/vgg16.tv_in1k",
         Which::Vgg19 => "timm/vgg19.tv_in1k",
     };
-    let api = api.model(repo.into());
+    let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+    let api = api.model(owner, name);
     let filename = "model.safetensors";
-    let model_file = api.get(filename)?;
+    let model_file = api.download_file().filename(filename).send()?;
 
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
     let model = match args.which {

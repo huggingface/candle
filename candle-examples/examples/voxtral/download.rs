@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 
 /// # Errors
 ///
@@ -13,14 +13,11 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 pub fn model_files(model_id: &str) -> Result<((PathBuf, Vec<PathBuf>), PathBuf)> {
     let revision = "main";
 
-    let api = Api::new().unwrap();
-    let repo = api.repo(Repo::with_revision(
-        model_id.to_string(),
-        RepoType::Model,
-        revision.to_string(),
-    ));
+    let api = HFClientSync::new().unwrap();
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id));
+    let repo = api.model(owner, name);
 
-    let config = repo.get("config.json")?;
+    let config = repo.download_file().filename("config.json").revision(revision).send()?;
 
     // Download model files - look for safetensors
     let mut model_files = Vec::new();
@@ -56,7 +53,7 @@ pub fn model_files(model_id: &str) -> Result<((PathBuf, Vec<PathBuf>), PathBuf)>
 
     println!("Downloading safetensors files...");
     for filename in &safetensors_files {
-        if let Ok(file) = repo.get(filename) {
+        if let Ok(file) = repo.download_file().filename(*filename).revision(revision).send() {
             println!("{} downloaded", filename);
             model_files.push(file);
         }
@@ -68,8 +65,8 @@ pub fn model_files(model_id: &str) -> Result<((PathBuf, Vec<PathBuf>), PathBuf)>
 
     // Download tokenizer
     let tokenizer_file = repo
-        .get("tekken.json")
-        .or_else(|_| repo.get("tokenizer/tokenizer.json"))?;
+        .download_file().filename("tekken.json").revision(revision).send()
+        .or_else(|_| repo.download_file().filename("tokenizer/tokenizer.json").revision(revision).send())?;
 
     Ok(((config, model_files), tokenizer_file))
 }

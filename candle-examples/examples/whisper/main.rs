@@ -16,7 +16,7 @@ use candle_nn::{
     VarBuilder,
 };
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
 use rand::SeedableRng;
@@ -675,18 +675,19 @@ fn main() -> Result<()> {
     };
 
     let (config_filename, tokenizer_filename, weights_filename, input) = {
-        let api = Api::new()?;
-        let dataset = api.dataset("Narsil/candle-examples".to_string());
-        let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+        let api = HFClientSync::new()?;
+        let dataset = api.dataset("Narsil", "candle-examples");
+        let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+        let repo = api.model(owner, name);
         let sample = if let Some(input) = args.input {
             if let Some(sample) = input.strip_prefix("sample:") {
-                dataset.get(&format!("samples_{sample}.wav"))?
+                dataset.download_file().filename(format!("samples_{sample}.wav")).send()?
             } else {
                 std::path::PathBuf::from(input)
             }
         } else {
             println!("No audio file submitted: Downloading https://huggingface.co/datasets/Narsil/candle_demo/blob/main/samples_jfk.wav");
-            dataset.get("samples_jfk.wav")?
+            dataset.download_file().filename("samples_jfk.wav").send()?
         };
         let (config, tokenizer, model) = if args.quantized {
             let ext = match args.model {
@@ -695,14 +696,14 @@ fn main() -> Result<()> {
                 _ => unimplemented!("no quantized support for {:?}", args.model),
             };
             (
-                repo.get(&format!("config-{ext}.json"))?,
-                repo.get(&format!("tokenizer-{ext}.json"))?,
-                repo.get(&format!("model-{ext}-q80.gguf"))?,
+                repo.download_file().filename(format!("config-{ext}.json")).revision(&revision).send()?,
+                repo.download_file().filename(format!("tokenizer-{ext}.json")).revision(&revision).send()?,
+                repo.download_file().filename(format!("model-{ext}-q80.gguf")).revision(&revision).send()?,
             )
         } else {
-            let config = repo.get("config.json")?;
-            let tokenizer = repo.get("tokenizer.json")?;
-            let model = repo.get("model.safetensors")?;
+            let config = repo.download_file().filename("config.json").revision(&revision).send()?;
+            let tokenizer = repo.download_file().filename("tokenizer.json").revision(&revision).send()?;
+            let model = repo.download_file().filename("model.safetensors").revision(&revision).send()?;
             (config, tokenizer, model)
         };
         (config, tokenizer, model, sample)

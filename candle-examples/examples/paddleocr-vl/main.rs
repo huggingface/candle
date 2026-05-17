@@ -596,15 +596,13 @@ fn main() -> Result<()> {
 
     // Load model from HuggingFace
     println!("Loading model from {}...", args.model_id);
-    let api = hf_hub::api::sync::Api::new()?;
-    let repo = api.repo(hf_hub::Repo::with_revision(
-        args.model_id.clone(),
-        hf_hub::RepoType::Model,
-        args.revision.clone(),
-    ));
+    let api = hf_hub::HFClientSync::new()?;
+    let revision = args.revision.clone();
+    let (owner, name) = args.model_id.split_once('/').unwrap_or(("", args.model_id.as_str()));
+    let repo = api.model(owner, name);
 
     // Load config
-    let config_file = repo.get("config.json")?;
+    let config_file = repo.download_file().filename("config.json").revision(&revision).send()?;
     let config: Config = serde_json::from_str(&std::fs::read_to_string(&config_file)?)?;
     println!(
         "Vision: {}L {}H, Text: {}L {}H (GQA: {}KV)",
@@ -616,13 +614,13 @@ fn main() -> Result<()> {
     );
 
     // Load tokenizer
-    let tokenizer_file = repo.get("tokenizer.json")?;
+    let tokenizer_file = repo.download_file().filename("tokenizer.json").revision(&revision).send()?;
     let tokenizer = Tokenizer::from_file(&tokenizer_file).map_err(E::msg)?;
 
     // Load model weights
-    let model_file = match repo.get("model.safetensors") {
+    let model_file = match repo.download_file().filename("model.safetensors").revision(&revision).send() {
         Ok(f) => f,
-        Err(_) => repo.get("pytorch_model.bin")?,
+        Err(_) => repo.download_file().filename("pytorch_model.bin").revision(&revision).send()?,
     };
 
     println!("Loading weights from {:?}...", model_file);

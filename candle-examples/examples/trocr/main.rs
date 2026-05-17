@@ -66,13 +66,15 @@ struct Args {
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = hf_hub::HFClientSync::new()?;
 
     let mut tokenizer_dec = {
         let tokenizer_file = match args.tokenizer {
             None => api
-                .model(String::from("ToluClassics/candle-trocr-tokenizer"))
-                .get("tokenizer.json")?,
+                .model("ToluClassics", "candle-trocr-tokenizer")
+                .download_file()
+                .filename("tokenizer.json")
+                .send()?,
             Some(tokenizer) => std::path::PathBuf::from(tokenizer),
         };
         let tokenizer = Tokenizer::from_file(&tokenizer_file).map_err(E::msg)?;
@@ -85,12 +87,12 @@ pub fn main() -> anyhow::Result<()> {
             Some(model) => std::path::PathBuf::from(model),
             None => {
                 let (repo, branch) = args.which.repo_and_branch_name();
-                api.repo(hf_hub::Repo::with_revision(
-                    repo.to_string(),
-                    hf_hub::RepoType::Model,
-                    branch.to_string(),
-                ))
-                .get("model.safetensors")?
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+                api.model(owner, name)
+                    .download_file()
+                    .filename("model.safetensors")
+                    .revision(branch)
+                    .send()?
             }
         };
         println!("model: {model:?}");
@@ -99,13 +101,13 @@ pub fn main() -> anyhow::Result<()> {
 
     let (encoder_config, decoder_config) = {
         let (repo, branch) = args.which.repo_and_branch_name();
+        let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
         let config_filename = api
-            .repo(hf_hub::Repo::with_revision(
-                repo.to_string(),
-                hf_hub::RepoType::Model,
-                branch.to_string(),
-            ))
-            .get("config.json")?;
+            .model(owner, name)
+            .download_file()
+            .filename("config.json")
+            .revision(branch)
+            .send()?;
         let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
         (config.encoder, config.decoder)
     };

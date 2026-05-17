@@ -13,7 +13,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
@@ -204,15 +204,13 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let api = HFClientSync::new()?;
+    let revision = args.revision.clone();
+    let (owner, name) = args.model_id.split_once('/').unwrap_or(("", args.model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo.download_file().filename("tokenizer.json").revision(&revision).send()?,
     };
     let filenames = match args.weight_files {
         Some(files) => files

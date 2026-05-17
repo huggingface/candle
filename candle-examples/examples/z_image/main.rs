@@ -41,7 +41,7 @@ use candle_transformers::models::z_image::{
     ZImageTextEncoder, ZImageTransformer2DModel,
 };
 use clap::Parser;
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 /// Z-Image scheduler constants
@@ -154,8 +154,10 @@ fn run(args: Args) -> Result<()> {
     let dtype = device.bf16_default_to_f32();
 
     // Resolve model: use provided path or download from HuggingFace
-    let api = Api::new()?;
-    let repo = api.model(args.model.repo().to_string());
+    let api = HFClientSync::new()?;
+    let repo_id = args.model.repo();
+    let (owner, name) = repo_id.split_once('/').unwrap_or(("", repo_id));
+    let repo = api.model(owner, name);
     let use_local = args.model_path.is_some();
     let model_path = args.model_path.map(std::path::PathBuf::from);
 
@@ -180,7 +182,7 @@ fn run(args: Args) -> Result<()> {
             .join("tokenizer")
             .join("tokenizer.json")
     } else {
-        repo.get("tokenizer/tokenizer.json")?
+        repo.download_file().filename("tokenizer/tokenizer.json").send()?
     };
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(E::msg)?;
 
@@ -193,7 +195,7 @@ fn run(args: Args) -> Result<()> {
             .join("text_encoder")
             .join("config.json")
     } else {
-        repo.get("text_encoder/config.json")?
+        repo.download_file().filename("text_encoder/config.json").send()?
     };
     let text_encoder_cfg: TextEncoderConfig = if text_encoder_config_path.exists() {
         serde_json::from_reader(std::fs::File::open(&text_encoder_config_path)?)?
@@ -215,7 +217,7 @@ fn run(args: Args) -> Result<()> {
                 .collect()
         } else {
             (1..=3)
-                .map(|i| repo.get(&format!("text_encoder/model-{:05}-of-00003.safetensors", i)))
+                .map(|i| repo.download_file().filename(format!("text_encoder/model-{:05}-of-00003.safetensors", i)).send())
                 .filter_map(|r| r.ok())
                 .collect()
         };
@@ -239,7 +241,7 @@ fn run(args: Args) -> Result<()> {
             .join("transformer")
             .join("config.json")
     } else {
-        repo.get("transformer/config.json")?
+        repo.download_file().filename("transformer/config.json").send()?
     };
     let transformer_cfg: Config = if transformer_config_path.exists() {
         serde_json::from_reader(std::fs::File::open(&transformer_config_path)?)?
@@ -265,10 +267,10 @@ fn run(args: Args) -> Result<()> {
         } else {
             (1..=3)
                 .map(|i| {
-                    repo.get(&format!(
+                    repo.download_file().filename(format!(
                         "transformer/diffusion_pytorch_model-{:05}-of-00003.safetensors",
                         i
-                    ))
+                    )).send()
                 })
                 .filter_map(|r| r.ok())
                 .collect()
@@ -289,7 +291,7 @@ fn run(args: Args) -> Result<()> {
     let vae_config_path = if use_local {
         model_path.as_ref().unwrap().join("vae").join("config.json")
     } else {
-        repo.get("vae/config.json")?
+        repo.download_file().filename("vae/config.json").send()?
     };
     let vae_cfg: VaeConfig = if vae_config_path.exists() {
         serde_json::from_reader(std::fs::File::open(&vae_config_path)?)?
@@ -308,7 +310,7 @@ fn run(args: Args) -> Result<()> {
         }
         path
     } else {
-        repo.get("vae/diffusion_pytorch_model.safetensors")?
+        repo.download_file().filename("vae/diffusion_pytorch_model.safetensors").send()?
     };
 
     let vae_weights = unsafe {

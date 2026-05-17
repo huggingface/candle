@@ -84,9 +84,10 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let model_name = args.which.model_filename();
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model(model_name);
-            api.get("model.safetensors")?
+            let api = hf_hub::HFClientSync::new()?;
+            let (owner, repo_name) = model_name.split_once('/').unwrap_or(("", model_name.as_str()));
+            let api = api.model(owner, repo_name);
+            api.download_file().filename("model.safetensors").send()?
         }
         Some(model) => model.into(),
     };

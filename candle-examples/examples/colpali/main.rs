@@ -4,7 +4,7 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::colpali::Model;
 use candle_transformers::models::{colpali, paligemma};
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use image::DynamicImage;
 use pdf2image::{RenderOptionsBuilder, PDF};
 use tokenizers::Tokenizer;
@@ -195,26 +195,22 @@ fn main() -> Result<()> {
         candle::utils::with_f16c()
     );
 
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
         None => "vidore/colpali-v1.2-merged".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
+    let _revision = args.revision;
 
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .repo(Repo::with_revision(
-                "vidore/colpali".to_string(),
-                RepoType::Model,
-                "main".to_string(),
-            ))
-            .get("tokenizer.json")?,
+            .model("vidore", "colpali")
+            .download_file()
+            .filename("tokenizer.json")
+            .send()?,
     };
 
     let filenames = match args.weight_files {

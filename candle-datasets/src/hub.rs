@@ -1,7 +1,4 @@
-use hf_hub::{
-    api::sync::{Api, ApiRepo},
-    Repo, RepoType,
-};
+use hf_hub::{HFClientSync, HFRepositorySync, RepoTypeDataset};
 use parquet::file::reader::SerializedFileReader;
 use std::fs::File;
 
@@ -19,8 +16,8 @@ use std::fs::File;
 /// # Example
 /// ```
 /// use candle_datasets::hub::{from_hub, FileReader};  // Re-exported trait
-/// let api = hf_hub::api::sync::Api::new().unwrap();
-/// let files = from_hub(&api, "hf-internal-testing/dummy_image_text_data".to_string()).unwrap();
+/// let client = hf_hub::HFClientSync::new().unwrap();
+/// let files = from_hub(&client, "hf-internal-testing/dummy_image_text_data".to_string()).unwrap();
 /// let num_rows = files[0].metadata().file_metadata().num_rows();
 /// ```
 pub use parquet::file::reader::FileReader;
@@ -28,7 +25,7 @@ pub use parquet::file::reader::FileReader;
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("ApiError : {0}")]
-    ApiError(#[from] hf_hub::api::sync::ApiError),
+    ApiError(#[from] hf_hub::HFError),
 
     #[error("IoError : {0}")]
     IoError(#[from] std::io::Error),
@@ -39,9 +36,13 @@ pub enum Error {
 
 fn sibling_to_parquet(
     rfilename: &str,
-    repo: &ApiRepo,
+    repo: &HFRepositorySync<RepoTypeDataset>,
 ) -> Result<SerializedFileReader<File>, Error> {
-    let local = repo.get(rfilename)?;
+    let local = repo
+        .download_file()
+        .filename(rfilename)
+        .revision("refs/convert/parquet")
+        .send()?;
     let file = File::open(local)?;
     Ok(SerializedFileReader::new(file)?)
 }
@@ -53,21 +54,24 @@ fn sibling_to_parquet(
 /// # Example
 /// ```
 /// use candle_datasets::hub::{from_hub, FileReader};
-/// let api = hf_hub::api::sync::Api::new().unwrap();
-/// let readers = from_hub(&api, "hf-internal-testing/dummy_image_text_data".to_string()).unwrap();
+/// let client = hf_hub::HFClientSync::new().unwrap();
+/// let readers = from_hub(&client, "hf-internal-testing/dummy_image_text_data".to_string()).unwrap();
 /// let metadata = readers[0].metadata();
 /// assert_eq!(metadata.file_metadata().num_rows(), 20);
 /// ```
-pub fn from_hub(api: &Api, dataset_id: String) -> Result<Vec<SerializedFileReader<File>>, Error> {
-    let repo = Repo::with_revision(
-        dataset_id,
-        RepoType::Dataset,
-        "refs/convert/parquet".to_string(),
-    );
-    let repo = api.repo(repo);
-    let info = repo.info()?;
+pub fn from_hub(
+    client: &HFClientSync,
+    dataset_id: String,
+) -> Result<Vec<SerializedFileReader<File>>, Error> {
+    let (owner, name) = dataset_id.split_once('/').unwrap_or(("", dataset_id.as_str()));
+    let repo = client.dataset(owner, name);
+    let info = repo
+        .info()
+        .revision("refs/convert/parquet".to_string())
+        .send()?;
 
     info.siblings
+        .unwrap_or_default()
         .into_iter()
         .filter(|s| s.rfilename.ends_with(".parquet"))
         .map(|s| sibling_to_parquet(&s.rfilename, &repo))
@@ -80,9 +84,9 @@ mod tests {
 
     #[test]
     fn test_dataset() {
-        let api = Api::new().unwrap();
+        let client = HFClientSync::new().unwrap();
         let files = from_hub(
-            &api,
+            &client,
             "hf-internal-testing/dummy_image_text_data".to_string(),
         )
         .unwrap();

@@ -86,13 +86,14 @@ fn run(args: Args) -> Result<()> {
         None
     };
 
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = hf_hub::HFClientSync::new()?;
     let bf_repo = {
-        let name = match model {
+        let id = match model {
             Model::Dev => "black-forest-labs/FLUX.1-dev",
             Model::Schnell => "black-forest-labs/FLUX.1-schnell",
         };
-        api.repo(hf_hub::Repo::model(name.to_string()))
+        let (owner, name) = id.split_once('/').unwrap_or(("", id));
+        api.model(owner, name)
     };
     let device = candle_examples::device(cpu)?;
     if let Some(seed) = args.seed {
@@ -102,21 +103,27 @@ fn run(args: Args) -> Result<()> {
     let img = match decode_only {
         None => {
             let t5_emb = {
-                let repo = api.repo(hf_hub::Repo::with_revision(
-                    "google/t5-v1_1-xxl".to_string(),
-                    hf_hub::RepoType::Model,
-                    "refs/pr/2".to_string(),
-                ));
-                let model_file = repo.get("model.safetensors")?;
+                let repo = api.model("google", "t5-v1_1-xxl");
+                let model_file = repo
+                    .download_file()
+                    .filename("model.safetensors")
+                    .revision("refs/pr/2")
+                    .send()?;
                 let vb =
                     unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
-                let config_filename = repo.get("config.json")?;
+                let config_filename = repo
+                    .download_file()
+                    .filename("config.json")
+                    .revision("refs/pr/2")
+                    .send()?;
                 let config = std::fs::read_to_string(config_filename)?;
                 let config: t5::Config = serde_json::from_str(&config)?;
                 let mut model = t5::T5EncoderModel::load(vb, &config)?;
                 let tokenizer_filename = api
-                    .model("lmz/mt5-tokenizers".to_string())
-                    .get("t5-v1_1-xxl.tokenizer.json")?;
+                    .model("lmz", "mt5-tokenizers")
+                    .download_file()
+                    .filename("t5-v1_1-xxl.tokenizer.json")
+                    .send()?;
                 let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
                 let mut tokens = tokenizer
                     .encode(prompt.as_str(), true)
@@ -130,10 +137,11 @@ fn run(args: Args) -> Result<()> {
             };
             println!("T5\n{t5_emb}");
             let clip_emb = {
-                let repo = api.repo(hf_hub::Repo::model(
-                    "openai/clip-vit-large-patch14".to_string(),
-                ));
-                let model_file = repo.get("model.safetensors")?;
+                let repo = api.model("openai", "clip-vit-large-patch14");
+                let model_file = repo
+                    .download_file()
+                    .filename("model.safetensors")
+                    .send()?;
                 let vb =
                     unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
                 // https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
@@ -150,7 +158,10 @@ fn run(args: Args) -> Result<()> {
                 };
                 let model =
                     clip::text_model::ClipTextTransformer::new(vb.pp("text_model"), &config)?;
-                let tokenizer_filename = repo.get("tokenizer.json")?;
+                let tokenizer_filename = repo
+                    .download_file()
+                    .filename("tokenizer.json")
+                    .send()?;
                 let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
                 let tokens = tokenizer
                     .encode(prompt.as_str(), true)
@@ -188,8 +199,10 @@ fn run(args: Args) -> Result<()> {
                 if quantized {
                     let model_file = match model {
                         Model::Schnell => api
-                            .repo(hf_hub::Repo::model("lmz/candle-flux".to_string()))
-                            .get("flux1-schnell.gguf")?,
+                            .model("lmz", "candle-flux")
+                            .download_file()
+                            .filename("flux1-schnell.gguf")
+                            .send()?,
                         Model::Dev => todo!(),
                     };
                     let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
@@ -210,8 +223,14 @@ fn run(args: Args) -> Result<()> {
                     .to_dtype(dtype)?
                 } else {
                     let model_file = match model {
-                        Model::Schnell => bf_repo.get("flux1-schnell.safetensors")?,
-                        Model::Dev => bf_repo.get("flux1-dev.safetensors")?,
+                        Model::Schnell => bf_repo
+                            .download_file()
+                            .filename("flux1-schnell.safetensors")
+                            .send()?,
+                        Model::Dev => bf_repo
+                            .download_file()
+                            .filename("flux1-dev.safetensors")
+                            .send()?,
                     };
                     let vb = unsafe {
                         VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)?
@@ -239,7 +258,10 @@ fn run(args: Args) -> Result<()> {
     println!("latent img\n{img}");
 
     let img = {
-        let model_file = bf_repo.get("ae.safetensors")?;
+        let model_file = bf_repo
+            .download_file()
+            .filename("ae.safetensors")
+            .send()?;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
         let cfg = match model {
             Model::Dev => flux::autoencoder::Config::dev(),

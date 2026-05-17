@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use candle::quantized::gguf_file;
 use candle::quantized::tokenizer::TokenizerFromGguf;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
@@ -86,12 +86,13 @@ fn resolve_model_path(model: &str, revision: Option<String>) -> Result<PathBuf> 
     let repo_id = format!("{}/{}", parts[0], parts[1]);
     let filename = parts[2..].join("/");
 
-    let api = Api::new()?;
-    let repo = Repo::with_revision(
-        repo_id,
-        RepoType::Model,
-        revision.unwrap_or_else(|| "main".to_string()),
-    );
-    let path = api.repo(repo).get(&filename)?;
+    let api = HFClientSync::new()?;
+    let (owner, name) = repo_id.split_once('/').unwrap_or(("", repo_id.as_str()));
+    let path = api
+        .model(owner, name)
+        .download_file()
+        .filename(filename)
+        .revision(revision.unwrap_or_else(|| "main".to_string()))
+        .send()?;
     Ok(path)
 }

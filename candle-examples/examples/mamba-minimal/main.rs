@@ -14,7 +14,7 @@ use candle::{DType, Device, Module, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -235,23 +235,22 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id
-            .unwrap_or_else(|| args.which.model_id().to_string()),
-        RepoType::Model,
-        args.revision
-            .unwrap_or_else(|| args.which.revision().to_string()),
-    ));
+    let api = HFClientSync::new()?;
+    let model_id = args.model_id
+        .unwrap_or_else(|| args.which.model_id().to_string());
+    let revision = args.revision
+        .unwrap_or_else(|| args.which.revision().to_string());
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("EleutherAI/gpt-neox-20b".to_string())
-            .get("tokenizer.json")?,
+            .model("EleutherAI", "gpt-neox-20b")
+            .download_file().filename("tokenizer.json").send()?,
     };
     let config_filename = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("config.json")?,
+        None => repo.download_file().filename("config.json").revision(&revision).send()?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
@@ -259,7 +258,7 @@ fn main() -> Result<()> {
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
         None => {
-            vec![repo.get("model.safetensors")?]
+            vec![repo.download_file().filename("model.safetensors").revision(&revision).send()?]
         }
     };
     println!("retrieved the files in {:?}", start.elapsed());

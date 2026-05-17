@@ -5,7 +5,7 @@ use candle_transformers::models::llava::{
     config::{HFPreProcessorConfig, LLaVAConfig},
     utils::select_best_resolution,
 };
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 use image::{imageops::overlay, DynamicImage, GenericImageView, Rgb, RgbImage};
 use serde::{Deserialize, Serialize};
 
@@ -73,10 +73,13 @@ fn default_image_std() -> Vec<f32> {
 
 impl ImageProcessor {
     pub fn from_pretrained(clip_id: &str) -> Result<Self> {
-        let api = Api::new().map_err(|e| candle::Error::Msg(e.to_string()))?;
-        let api = api.model(clip_id.to_string());
+        let api = HFClientSync::new().map_err(|e| candle::Error::Msg(e.to_string()))?;
+        let (owner, name) = clip_id.split_once('/').unwrap_or(("", clip_id));
+        let api = api.model(owner, name);
         let config_filename = api
-            .get("preprocessor_config.json")
+            .download_file()
+            .filename("preprocessor_config.json")
+            .send()
             .map_err(|e| candle::Error::Msg(e.to_string()))?;
         let image_processor =
             serde_json::from_slice(&std::fs::read(config_filename).map_err(candle::Error::Io)?)

@@ -13,7 +13,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 struct TextGeneration {
@@ -272,18 +272,19 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let api = HFClientSync::new()?;
     let model_id = args
         .model_id
         .unwrap_or_else(|| args.which.model_id().to_string());
-    let repo = api.repo(Repo::new(model_id.clone(), RepoType::Model));
+    let (owner, name) = model_id.split_once('/').unwrap_or(("", model_id.as_str()));
+    let repo = api.model(owner, name);
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo.download_file().filename("tokenizer.json").send()?,
     };
     let config_filename = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("config.json")?,
+        None => repo.download_file().filename("config.json").send()?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
@@ -291,7 +292,7 @@ fn main() -> Result<()> {
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
         None => {
-            vec![repo.get("model.safetensors")?]
+            vec![repo.download_file().filename("model.safetensors").send()?]
         }
     };
     println!("retrieved the files in {:?}", start.elapsed());

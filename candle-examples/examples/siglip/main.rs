@@ -108,19 +108,20 @@ pub fn main() -> anyhow::Result<()> {
             Which::V2LargePatch16_512 => "google/siglip2-large-patch16-512",
         },
     };
+    let (hf_owner, hf_name) = hf_repo.split_once('/').unwrap_or(("", hf_repo));
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model(hf_repo.to_string());
-            api.get("model.safetensors")?
+            let api = hf_hub::HFClientSync::new()?;
+            let api = api.model(hf_owner, hf_name);
+            api.download_file().filename("model.safetensors").send()?
         }
         Some(model) => model.into(),
     };
     let config_file = match args.config {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model(hf_repo.to_string());
-            api.get("config.json")?
+            let api = hf_hub::HFClientSync::new()?;
+            let api = api.model(hf_owner, hf_name);
+            api.download_file().filename("config.json").send()?
         }
         Some(config) => config.into(),
     };
@@ -168,9 +169,10 @@ pub fn main() -> anyhow::Result<()> {
 pub fn get_tokenizer(hf_repo: &str, tokenizer: Option<String>) -> anyhow::Result<Tokenizer> {
     let tokenizer = match tokenizer {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model(hf_repo.to_string());
-            api.get("tokenizer.json")?
+            let api = hf_hub::HFClientSync::new()?;
+            let (owner, name) = hf_repo.split_once('/').unwrap_or(("", hf_repo));
+            let api = api.model(owner, name);
+            api.download_file().filename("tokenizer.json").send()?
         }
         Some(file) => file.into(),
     };

@@ -70,7 +70,7 @@ struct Args {
 }
 
 pub fn main() -> anyhow::Result<()> {
-    use hf_hub::api::sync::Api;
+    use hf_hub::HFClientSync;
     let args = Args::parse();
 
     let config = match (args.which, args.language_pair) {
@@ -91,6 +91,9 @@ pub fn main() -> anyhow::Result<()> {
         | LanguagePair::EnFr
         | LanguagePair::EnRu => "KeighBee/candle-marian",
     };
+    let (tokenizer_default_owner, tokenizer_default_name) = tokenizer_default_repo
+        .split_once('/')
+        .unwrap_or(("", tokenizer_default_repo));
     let tokenizer = {
         let tokenizer = match args.tokenizer {
             Some(tokenizer) => std::path::PathBuf::from(tokenizer),
@@ -107,9 +110,9 @@ pub fn main() -> anyhow::Result<()> {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
                 };
-                Api::new()?
-                    .model(tokenizer_default_repo.to_string())
-                    .get(filename)?
+                HFClientSync::new()?
+                    .model(tokenizer_default_owner, tokenizer_default_name)
+                    .download_file().filename(filename).send()?
             }
         };
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
@@ -131,9 +134,9 @@ pub fn main() -> anyhow::Result<()> {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
                 };
-                Api::new()?
-                    .model(tokenizer_default_repo.to_string())
-                    .get(filename)?
+                HFClientSync::new()?
+                    .model(tokenizer_default_owner, tokenizer_default_name)
+                    .download_file().filename(filename).send()?
             }
         };
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
@@ -145,46 +148,46 @@ pub fn main() -> anyhow::Result<()> {
         let model = match args.model {
             Some(model) => std::path::PathBuf::from(model),
             None => {
-                let api = Api::new()?;
-                let api = match (args.which, args.language_pair) {
-                    (Which::Base, LanguagePair::FrEn) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-fr-en".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/4".to_string(),
-                    )),
-                    (Which::Big, LanguagePair::FrEn) => {
-                        api.model("Helsinki-NLP/opus-mt-tc-big-fr-en".to_string())
-                    }
-                    (Which::Base, LanguagePair::EnZh) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-zh".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/13".to_string(),
-                    )),
-                    (Which::Base, LanguagePair::EnHi) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-hi".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/3".to_string(),
-                    )),
-                    (Which::Base, LanguagePair::EnEs) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-es".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/4".to_string(),
-                    )),
-                    (Which::Base, LanguagePair::EnFr) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-fr".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/9".to_string(),
-                    )),
-                    (Which::Base, LanguagePair::EnRu) => api.repo(hf_hub::Repo::with_revision(
-                        "Helsinki-NLP/opus-mt-en-ru".to_string(),
-                        hf_hub::RepoType::Model,
-                        "refs/pr/7".to_string(),
-                    )),
+                let api = HFClientSync::new()?;
+                let (model_name, revision): (&str, Option<String>) = match (args.which, args.language_pair) {
+                    (Which::Base, LanguagePair::FrEn) => (
+                        "Helsinki-NLP/opus-mt-fr-en",
+                        Some("refs/pr/4".to_string()),
+                    ),
+                    (Which::Big, LanguagePair::FrEn) => (
+                        "Helsinki-NLP/opus-mt-tc-big-fr-en",
+                        None,
+                    ),
+                    (Which::Base, LanguagePair::EnZh) => (
+                        "Helsinki-NLP/opus-mt-en-zh",
+                        Some("refs/pr/13".to_string()),
+                    ),
+                    (Which::Base, LanguagePair::EnHi) => (
+                        "Helsinki-NLP/opus-mt-en-hi",
+                        Some("refs/pr/3".to_string()),
+                    ),
+                    (Which::Base, LanguagePair::EnEs) => (
+                        "Helsinki-NLP/opus-mt-en-es",
+                        Some("refs/pr/4".to_string()),
+                    ),
+                    (Which::Base, LanguagePair::EnFr) => (
+                        "Helsinki-NLP/opus-mt-en-fr",
+                        Some("refs/pr/9".to_string()),
+                    ),
+                    (Which::Base, LanguagePair::EnRu) => (
+                        "Helsinki-NLP/opus-mt-en-ru",
+                        Some("refs/pr/7".to_string()),
+                    ),
                     (Which::Big, lp) => {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
                 };
-                api.get("model.safetensors")?
+                let (owner, name) = model_name.split_once('/').unwrap_or(("", model_name));
+                let repo = api.model(owner, name);
+                repo.download_file()
+                    .filename("model.safetensors")
+                    .maybe_revision(revision)
+                    .send()?
             }
         };
         unsafe { VarBuilder::from_mmaped_safetensors(&[&model], DType::F32, &device)? }
