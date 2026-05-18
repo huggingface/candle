@@ -29,7 +29,7 @@ num-traits = { workspace = true }
 minijinja = { version = "2", features = ["loader"] }
 palette = { version = "0.7.6", optional = true }
 enterpolation = { version = "0.2.1", optional = true }
-pyo3 = { version = "0.27", features = [
+pyo3 = { version = "0.28", features = [
     "auto-initialize",
     "abi3-py311",
 ], optional = true }
