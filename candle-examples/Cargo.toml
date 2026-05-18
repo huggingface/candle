@@ -38,7 +38,7 @@ rubato = { version = "1", optional = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-symphonia = { version = "0.5.3", features = ["all"], optional = true }
+symphonia = { version = "0.6.0", features = ["all"], optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.17.3", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
