@@ -1,7 +1,8 @@
 use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
+    Output, Source,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -24,6 +25,7 @@ pub fn call_im2col1d_strided(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "im2col1d {name} dst_el={dst_el}");
     set_params!(
         encoder,
         (
@@ -65,6 +67,7 @@ pub fn call_col2im1d(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "col2im1d {name} dst_el={dst_el}");
     set_params!(
         encoder,
         (
@@ -107,6 +110,7 @@ pub fn call_im2col_strided(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "im2col {name} dst_el={dst_el}");
     set_params!(
         encoder,
         (
@@ -149,6 +153,7 @@ pub fn call_upsample_nearest_2d(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "upsample_nearest2d {name} {out_w}x{out_h}");
     set_params!(
         encoder,
         (
@@ -189,6 +194,7 @@ pub fn call_upsample_bilinear_2d(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "upsample_bilinear2d {name} {out_w}x{out_h}");
 
     set_params!(
         encoder,
@@ -234,6 +240,7 @@ pub fn call_pool2d(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "pool2d {name} {out_w}x{out_h} k={w_k}x{h_k}");
     set_params!(
         encoder,
         (
@@ -280,6 +287,10 @@ pub fn call_conv_transpose1d(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "conv_transpose1d {name} c_out={c_out} l_out={l_out} b={b_size}"
+    );
     set_params!(
         encoder,
         (
@@ -335,6 +346,14 @@ pub fn call_conv_transpose2d(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "conv_transpose2d {name} c_out={} {}x{} b={}",
+        cfg.c_out,
+        cfg.out_w,
+        cfg.out_h,
+        cfg.b_size
+    );
     set_params!(
         encoder,
         (
