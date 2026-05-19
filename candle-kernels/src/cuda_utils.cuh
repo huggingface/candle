@@ -191,9 +191,28 @@ __device__ __forceinline__ __nv_bfloat16 roundg(__nv_bfloat16 a) { return __floa
 __device__ __forceinline__ __nv_bfloat16 normcdfg(__nv_bfloat16 a) { return __float2bfloat16(normcdff(__bfloat162float(a))); }
 __device__ __forceinline__ __nv_bfloat16 copysigng(__nv_bfloat16 a, __nv_bfloat16 b) { return __float2bfloat16(copysignf(__bfloat162float(a), __bfloat162float(b))); }
 
-// Use __hmax_nan and __hmin_nan for all paths to ensure consistent NaN propagation
+// Native BF16 min/max helpers are only available on Ampere and newer.
+// Legacy BF16 kernels on older cards keep the BF16 storage type but perform
+// comparisons through float to avoid relying on unavailable CUDA intrinsics.
+#if __CUDA_ARCH__ >= 800
 __device__ __forceinline__ __nv_bfloat16 maxg(__nv_bfloat16 a, __nv_bfloat16 b) { return __hmax_nan(a, b); }
 __device__ __forceinline__ __nv_bfloat16 ming(__nv_bfloat16 a, __nv_bfloat16 b) { return __hmin_nan(a, b); }
+#else
+__device__ __forceinline__ __nv_bfloat16 maxg(__nv_bfloat16 a, __nv_bfloat16 b) {
+  const float af = __bfloat162float(a);
+  const float bf = __bfloat162float(b);
+  if (isnan(af)) return a;
+  if (isnan(bf)) return b;
+  return __float2bfloat16(fmaxf(af, bf));
+}
+__device__ __forceinline__ __nv_bfloat16 ming(__nv_bfloat16 a, __nv_bfloat16 b) {
+  const float af = __bfloat162float(a);
+  const float bf = __bfloat162float(b);
+  if (isnan(af)) return a;
+  if (isnan(bf)) return b;
+  return __float2bfloat16(fminf(af, bf));
+}
+#endif
 
 #if __CUDA_ARCH__ >= 800
 __device__ __forceinline__ bool isnang(__nv_bfloat16 a) { return __hisnan(a); }

@@ -289,7 +289,7 @@ extern "C" void moe_gemm_hfma2(
             num_experts, topk, size_m, size_n, size_k
         );
     } else {
-#if __CUDA_ARCH__ >= 800 || defined(ALLOW_LEGACY_BF16)
+#if __CUDA_ARCH__ >= 800 || ALLOW_LEGACY_BF16
         vllm_rs::moe_gemm_hfma2_kernel<nv_bfloat16, nv_bfloat162><<<grid, block, smem_bytes, stream>>>(
             reinterpret_cast<const nv_bfloat16*>(input),
             reinterpret_cast<const nv_bfloat16*>(weights),

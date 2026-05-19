@@ -145,6 +145,7 @@ fn main() -> Result<()> {
     emit_check_cfgs();
 
     // ── Main PTX builder ────────────────────────────────────────────────────
+<<<<<<< HEAD
     let mut builder = maybe_enable_cuda_device_debug(
         KernelBuilder::new()
             .compute_cap(compute_cap)
@@ -159,6 +160,21 @@ fn main() -> Result<()> {
             .arg("-std=c++17")
             .arg("-O3"),
     );
+=======
+    let mut builder = maybe_enable_cuda_device_debug(KernelBuilder::new()
+        .compute_cap(compute_cap)
+        .source_dir("src")
+        .watch([
+            "src/compatibility.cuh",
+            "src/cuda_utils.cuh",
+            "src/binary_op_macros.cuh",
+        ])
+        .exclude(&["moe_*.cu"])
+        .arg("--expt-relaxed-constexpr")
+        .arg("-std=c++17")
+        .arg("-O3"));
+
+>>>>>>> 35de1095 (fix: add fallback bf16 min/max for pre-Ampere GPUs, allow legacy bf16 builds, and add debug symbols configuration)
 
     // Apply hardware capabilities
     for cap in HW_CAPABILITIES {
@@ -175,6 +191,7 @@ fn main() -> Result<()> {
     }
 
     // ── MOE static library builder ──────────────────────────────────────────
+<<<<<<< HEAD
     let mut moe_builder = maybe_enable_cuda_device_debug(
         KernelBuilder::new()
             .compute_cap(compute_cap)
@@ -200,6 +217,19 @@ fn main() -> Result<()> {
                 "src/mmq_gguf/mmq_instance_q6_k.cu",
             ]),
     );
+=======
+    let mut moe_builder = maybe_enable_cuda_device_debug(KernelBuilder::new()
+        .compute_cap(compute_cap)
+        .arg("--expt-relaxed-constexpr")
+        .arg("-std=c++17")
+        .arg("-O3")
+        .source_files(vec![
+            "src/moe/moe_gguf.cu",
+            "src/moe/moe_wmma.cu",
+            "src/moe/moe_wmma_gguf.cu",
+            "src/moe/moe_hfma2.cu",
+        ]));
+>>>>>>> 35de1095 (fix: add fallback bf16 min/max for pre-Ampere GPUs, allow legacy bf16 builds, and add debug symbols configuration)
 
     let target = env::var("TARGET").unwrap_or_default();
     let is_target_msvc = target.contains("msvc");
