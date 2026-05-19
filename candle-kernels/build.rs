@@ -89,20 +89,6 @@ const HW_CAPABILITIES: &[HwCapability] = &[
     },
 ];
 
-const PTX_WATCH_FILES: &[&str] = &[
-    "src/compatibility.cuh",
-    "src/cuda_utils.cuh",
-    "src/binary_op_macros.cuh",
-];
-
-const MOE_WATCH_FILES: &[&str] = &[
-    "src/compatibility.cuh",
-    "src/cuda_utils.cuh",
-    "src/binary_op_macros.cuh",
-    "src/moe/gguf.cuh",
-    "src/moe/moe_utils.cuh",
-];
-
 /// Emit `cargo::rustc-check-cfg` declarations so that Cargo doesn't warn
 /// about unknown cfgs.
 fn emit_check_cfgs() {
@@ -125,9 +111,27 @@ fn apply_flag(builder: &mut KernelBuilder, name: &str, enabled: bool) -> KernelB
     b
 }
 
+fn cuda_device_debug_enabled() -> bool {
+    env::var("CANDLE_KERNELS_CUDA_DEVICE_DEBUG")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+fn maybe_enable_cuda_device_debug(builder: KernelBuilder) -> KernelBuilder {
+    if cuda_device_debug_enabled() {
+        builder
+            .arg("--generate-line-info")
+            .arg("-g")
+            .arg("--device-debug")
+    } else {
+        builder.arg("--generate-line-info")
+    }
+}
+
 fn main() -> Result<()> {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed=ALLOW_LEGACY");
+    println!("cargo::rerun-if-env-changed=CANDLE_KERNELS_CUDA_DEVICE_DEBUG");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let arch = detect_compute_cap().unwrap_or_else(|_| cudaforge::GpuArch::new(0));
@@ -141,14 +145,19 @@ fn main() -> Result<()> {
     emit_check_cfgs();
 
     // ── Main PTX builder ────────────────────────────────────────────────────
-    let mut builder = KernelBuilder::new()
+    let mut builder = maybe_enable_cuda_device_debug(KernelBuilder::new()
         .compute_cap(compute_cap)
         .source_dir("src")
-        .watch(PTX_WATCH_FILES.iter().copied())
+        .watch([
+            "src/compatibility.cuh",
+            "src/cuda_utils.cuh",
+            "src/binary_op_macros.cuh",
+        ])
         .exclude(&["moe_*.cu"])
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
-        .arg("-O3");
+        .arg("-O3"));
+
 
     // Apply hardware capabilities
     for cap in HW_CAPABILITIES {
@@ -165,9 +174,8 @@ fn main() -> Result<()> {
     }
 
     // ── MOE static library builder ──────────────────────────────────────────
-    let mut moe_builder = KernelBuilder::new()
+    let mut moe_builder = maybe_enable_cuda_device_debug(KernelBuilder::new()
         .compute_cap(compute_cap)
-        .watch(MOE_WATCH_FILES.iter().copied())
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
         .arg("-O3")
@@ -176,7 +184,7 @@ fn main() -> Result<()> {
             "src/moe/moe_wmma.cu",
             "src/moe/moe_wmma_gguf.cu",
             "src/moe/moe_hfma2.cu",
-        ]);
+        ]));
 
     let target = env::var("TARGET").unwrap_or_default();
     let is_target_msvc = target.contains("msvc");
