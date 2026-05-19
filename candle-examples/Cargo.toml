@@ -40,7 +40,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 symphonia = { version = "0.5.3", features = ["all"], optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
-cpal = { version = "0.15.2", optional = true }
+cpal = { version = "0.17.3", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
 tekken-rs = { version = "0.1.1", optional = true }
 
