@@ -35,6 +35,7 @@ pyo3 = { version = "0.27", features = [
 ], optional = true }
 rayon = { workspace = true }
 rubato = { version = "1", optional = true }
+hound = { workspace = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -115,6 +116,9 @@ required-features = ["onnx"]
 [[example]]
 name = "onnx_basics"
 required-features = ["onnx"]
+
+[[example]]
+name = "wav2vec2"
 
 [[example]]
 name = "whisper"
