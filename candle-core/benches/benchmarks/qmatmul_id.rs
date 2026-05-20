@@ -1,16 +1,30 @@
 //! Microbench for the per-expert quantized matmul kernel
 //! (`kernel_mul_mm_id`, exposed in candle-metal-kernels as
-//! `call_quantized_matmul_mm_id`).
+//! `call_quantized_matmul_mm_id`), plus a baseline that drives the existing
+//! `QMatMul::forward` path at the equivalent per-expert work shape.
 //!
-//! This bench drives the kernel directly: there is no `QMatMul` integration
-//! yet (the wrapper is meant to be invoked from a `CustomOp` by callers that
-//! own their own MoE routing logic). The benchmark stages a quantized
-//! per-expert weight stack `[E, N, K]`, an `f32` input `[M, K]`, an `i32`
-//! routing table `[M, T]`, and dispatches the kernel in a tight loop.
+//! The fused bench (`qmatmul_id_q4k_*`) stages a quantized per-expert weight
+//! stack `[E, N, K]`, an `f32` input `[M, K]`, an `i32` routing table
+//! `[M, T]`, and dispatches `kernel_mul_mm_id` in a tight loop. Shapes match
+//! Qwen3-MoE's FFN dims (N=2048, K=4096); M sweeps decode (1), small
+//! prefill (32), and chunked prefill (256). Dtype is Q4_K (the common MoE
+//! quantization).
 //!
-//! Shapes are picked to match Qwen3-MoE's FFN dims (N=2048, K=4096), with
-//! M sweeping the decode (M=1) / small prefill (M=32) / chunked-prefill
-//! (M=256) regimes. Dtype is fixed to Q4_K (the common MoE quantization).
+//! The baseline bench (`qmatmul_mm_t_baseline_q4k_*`) measures a single
+//! expert's worth of work through `QMatMul::forward` at M equal to the
+//! average tokens-per-expert in the fused case (T=8, E=128 -> 0, 2, 16 for
+//! the three M values). The naive 128-dispatch alternative would pay this
+//! cost once per expert; comparing `fused_time` to `baseline_time * E`
+//! shows when the fused kernel actually wins.
+//!
+//! The vendored `kernel_mul_mm_id` at `quantized.metal:7301` has an
+//! unparallelized rowids fan-out (TODO in the upstream source): every
+//! thread of every threadgroup independently scans the full `M*T` ids
+//! buffer. This is visible as the M=256 regression in the fused bench.
+//!
+//! Units: the throughput field carries FLOPs (`2*M*N*K` per matmul, times
+//! T for the fused case). Criterion prints it as "Gelem/s" but the value
+//! is GFLOPs/s.
 
 use crate::benchmarks::BenchDeviceHandler;
 use candle_core::Device;
@@ -19,7 +33,10 @@ use criterion::{criterion_group, Criterion};
 #[cfg(feature = "metal")]
 use crate::benchmarks::BenchDevice;
 #[cfg(feature = "metal")]
-use candle_core::{quantized, Tensor};
+use candle_core::{
+    quantized::{self, QMatMul},
+    Module, Tensor,
+};
 #[cfg(feature = "metal")]
 use criterion::Throughput;
 #[cfg(feature = "metal")]
@@ -107,7 +124,9 @@ fn run_bench_metal(c: &mut Criterion, device: &Device, m: usize) {
     let bench_name = format!("qmatmul_id_q4k_n{}_k{}_m{}", n, k, m);
     let mut group = c.benchmark_group(device.bench_name(bench_name));
     group.sample_size(50);
-    group.throughput(Throughput::Bytes(flops));
+    // Pass FLOPs as `Elements`; Criterion will print "Gelem/s" but the value
+    // is GFLOPs/s.
+    group.throughput(Throughput::Elements(flops));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();
@@ -146,12 +165,62 @@ fn run_bench_metal(c: &mut Criterion, device: &Device, m: usize) {
 #[cfg(not(feature = "metal"))]
 fn run_bench_metal(_c: &mut Criterion, _device: &Device, _m: usize) {}
 
+#[cfg(feature = "metal")]
+fn run_bench_mm_t_baseline(c: &mut Criterion, device: &Device, m_per_expert: usize) {
+    use candle_core::quantized::GgmlDType;
+
+    let dtype = GgmlDType::Q4K;
+    let n = 2048usize;
+    let k = 4096usize;
+
+    let lhs_data: Vec<f32> = (0..(m_per_expert * k))
+        .map(|v| (v as f32) / ((m_per_expert * k) as f32))
+        .collect();
+    let rhs_data: Vec<f32> = (0..(n * k)).map(|v| (v as f32) / ((n * k) as f32)).collect();
+
+    let lhs = Tensor::from_slice(&lhs_data, (m_per_expert, k), device).unwrap();
+    let rhs = Tensor::from_slice(&rhs_data, (k, n), device).unwrap();
+    let qtensor = quantized::QTensor::quantize(&rhs.t().unwrap(), dtype).unwrap();
+    let matmul = QMatMul::from_qtensor(qtensor).unwrap();
+
+    let flops = (m_per_expert as u64) * 2 * (n as u64) * (k as u64);
+
+    let bench_name = format!("qmatmul_mm_t_baseline_q4k_n{}_k{}_m{}", n, k, m_per_expert);
+    let mut group = c.benchmark_group(device.bench_name(bench_name));
+    group.sample_size(50);
+    group.throughput(Throughput::Elements(flops));
+    let lhs = black_box(lhs);
+    let matmul = black_box(matmul);
+    group.bench_function("iter", move |b| {
+        b.iter_custom(|iters| {
+            let start = Instant::now();
+            for _ in 0..iters {
+                matmul.forward(&lhs).unwrap();
+            }
+            device.sync().unwrap();
+            start.elapsed()
+        })
+    });
+    group.finish();
+}
+
+#[cfg(not(feature = "metal"))]
+fn run_bench_mm_t_baseline(_c: &mut Criterion, _device: &Device, _m_per_expert: usize) {}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
         if matches!(device, Device::Metal(_)) {
             for m in [1usize, 32, 256] {
                 run_bench_metal(c, &device, m);
+            }
+            // Baseline through the existing `QMatMul::forward` path, one
+            // dispatch per expert. The pairings are: M=1 / decode -> only
+            // T=8 experts hit (M_per_expert=1); M=32 -> 256/128 = 2 average;
+            // M=256 -> 2048/128 = 16 average. The naive 128-dispatch cost
+            // is roughly `baseline_time(m_per_expert) * num_experts_hit`.
+            for m_per_expert in [1usize, 2, 16] {
+                run_bench_mm_t_baseline(c, &device, m_per_expert);
             }
         }
     }
