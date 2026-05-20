@@ -37,10 +37,11 @@ impl QMetalStorage {
         use crate::quantized::k_quants::GgmlType;
 
         let buffer = self.device.allocate_buffer(self.buffer.length())?;
-        let blit = self.device.blit_command_encoder()?;
-        blit.set_label("blit_to_cpu");
-        blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-        blit.end_encoding();
+        {
+            let mut blit = self.device.blit_command_encoder()?;
+            blit.set_label("blit_to_cpu");
+            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+        }
         self.device.wait_until_completed()?;
         let mut out = vec![0.0; elem_count];
         let block_len = elem_count / self.dtype.block_size();
@@ -239,7 +240,8 @@ impl QMetalStorage {
             )
             .map_err(MetalError::from)?;
         }
-        let dst_storage = crate::MetalStorage::new(dst, device, dst_shape.elem_count(), DType::F32);
+        let dst_storage =
+            crate::MetalStorage::new(dst, device.clone(), dst_shape.elem_count(), DType::F32);
         Ok((dst_storage, dst_shape))
     }
 
@@ -331,17 +333,17 @@ impl QMetalStorage {
         )
         .map_err(MetalError::from)?;
 
-        let dst_storage = crate::MetalStorage::new(dst, device, dst_shape.elem_count(), DType::F32);
+        let dst_storage =
+            crate::MetalStorage::new(dst, device.clone(), dst_shape.elem_count(), DType::F32);
         Ok((dst_storage, dst_shape))
     }
 
     pub fn data(&self) -> Result<Vec<u8>> {
         let buffer = self.device.allocate_buffer(self.buffer.length())?;
         {
-            let blit = self.device.blit_command_encoder()?;
+            let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-            blit.end_encoding();
         }
         self.device.wait_until_completed()?;
         Ok(read_to_vec::<u8>(&buffer, self.storage_size_in_bytes()))
