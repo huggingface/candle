@@ -2457,28 +2457,19 @@ fn commands_concurrent_acquisition() {
 // Validates that the per-expert MoE dispatcher routes each `(token, slot)`
 // pair to the expert selected by `ids` and that the resulting matmul matches
 // a naive CPU reference. F32 is used as the dtype because it carries no
-// quantization rounding, so the kernel output should match the CPU reference
-// to within a tight FP tolerance (here: per-element abs diff < 1e-3).
+// quantization rounding; tolerance is per-element abs diff < 1e-3.
 //
 // The kernel (templated on `<float4x4, 1, dequantize_f32>`) requires `K` to
-// be a multiple of `BLOCK_SIZE_K = 32` (the inner loop in
-// `kernel_mul_mm_id_impl` walks `ne00` in stride-32 tiles). `M`, `T`, and
-// `N` may be smaller than the output tile (`64 x 32`); the kernel clamps
-// `n_rows` / `n_cols` for partial tiles.
+// be a multiple of `BLOCK_SIZE_K = 32`. `M`, `T`, and `N` may be smaller
+// than the output tile (`64 x 32`); the kernel clamps `n_rows` / `n_cols`.
 //
-// Kernel I/O recap (see `metal_src/quantized.metal:7143-7264`):
-//   - `src1` is indexed by the slot dimension (rowids stores
-//     `ushort2(ii0=slot, ii1=token)`; the matmul reads
-//     `nb12 * id[1] + nb11 * (id[0] % ne11)`; for the wrapper convention
-//     `src1_shape = [num_tokens, k]` we get `nb12 = 0`, so the input row is
-//     selected by `slot % num_tokens`).
-//   - dst writes are at flat offset `j + slot * ne0 + token * (ne0 * ne1)`
-//     where `ne0 = n` and `ne1 = nei0 * nei1 = experts_per_token *
-//     num_tokens`. The per-token stride is therefore
-//     `n * experts_per_token * num_tokens`, not the contiguous
-//     `n * experts_per_token`. Buffers passed by callers must be sized for
-//     this stride.
-// The CPU reference below mirrors this exactly.
+// Output layout (post fix): dst is a contiguous `[num_tokens, experts_per_tok, n]`
+// f32 tensor. dst[t, s, j] sits at flat index `t * (experts_per_tok * n) +
+// s * n + j`. The wrapper sets the kernel's host `ne1 = nei0` so the
+// `jid[1] * (ne0 * ne1)` write offset lands at the right per-token stride.
+// src1 is `[num_tokens, k]` and the wrapper sets `ne11 = 1`, `nb11 = 0`,
+// `ne12 = num_tokens`, `nb12 = k * 4`, so the kernel reads `src1[token, k]`
+// for any slot of that token.
 #[test]
 fn qmatmul_mm_id_f32_correctness() {
     use crate::kernels::quantized::call_quantized_matmul_mm_id;
@@ -2507,24 +2498,21 @@ fn qmatmul_mm_id_f32_correctness() {
         .map(|v| ((v % 13) as f32) * 0.02 - 0.12)
         .collect();
 
-    // Per-token output stride in the dst buffer, in f32 elements. See the
-    // kernel write address derivation in the comment block above.
-    let token_stride = n * experts_per_tok * num_tokens;
-    let out_elems = (num_tokens - 1) * token_stride + experts_per_tok * n;
+    // Contiguous `[num_tokens, experts_per_tok, n]` output layout.
+    let token_stride = experts_per_tok * n;
+    let out_elems = num_tokens * token_stride;
 
     // CPU reference: out[t * token_stride + s * n + j]
-    //   = sum_k weights[ids[t, s], j, k] * src1[s % M, k].
-    // (`src1[s % M]` not `src1[t]`: see comment block above.)
+    //   = sum_k weights[ids[t, s], j, k] * input[t, k].
     let mut expected = vec![0.0f32; out_elems];
     for t in 0..num_tokens {
         for s in 0..experts_per_tok {
             let e = ids_i32[t * experts_per_tok + s] as usize;
-            let src1_row = s % num_tokens;
             for j in 0..n {
                 let mut acc = 0.0f32;
                 for kk in 0..k {
                     let w = weights_f32[e * n * k + j * k + kk];
-                    let x = input_f32[src1_row * k + kk];
+                    let x = input_f32[t * k + kk];
                     acc += w * x;
                 }
                 expected[t * token_stride + s * n + j] = acc;

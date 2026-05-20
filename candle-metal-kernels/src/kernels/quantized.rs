@@ -349,56 +349,52 @@ pub fn call_quantized_matmul_mm_id(
     let nb01 = src0_stride[sr - 2] as i64;
     let nb02 = src0_stride[sr - 3] as i64;
 
-    // src1 shape: [..., num_tokens, k]. The kernel reads it as 4D
-    // [ne13, ne12, ne11, ne10] with byte strides nb1x. For the common
-    // single-batch case ne13 = ne12 = 1, ne11 = num_tokens, ne10 = k.
+    // src1 is `[num_tokens, k]`. The kernel addresses it as 3D
+    // `[ne12, ne11, ne10]` and reads
+    //   src1 + nb12 * id[1] + nb11 * (id[0] % ne11) + nb10 * k_chunk
+    // where id = (slot, token). We want the same per-token input row read
+    // for every slot, so the slot dim must be singleton: set ne11 = 1,
+    // nb11 = 0, and route num_tokens into ne12 (with nb12 as the
+    // token-to-token byte stride).
     let r1 = src1_shape.len();
-    let ne11 = if r1 >= 2 {
-        src1_shape[r1 - 2] as i64
-    } else {
-        1
-    };
-    let ne12 = if r1 >= 3 {
-        src1_shape[r1 - 3] as i64
-    } else {
-        1
-    };
-    let ne13 = if r1 >= 4 {
-        src1_shape[r1 - 4] as i64
-    } else {
-        1
-    };
+    if r1 != 2 {
+        return Err(MetalKernelError::InvalidInput(format!(
+            "qmatmul_id: src1 must be 2D [num_tokens, k] (got rank {})",
+            r1
+        )));
+    }
+    let ne11 = 1i64;
+    let ne12 = src1_shape[r1 - 2] as i64;
+    let ne13 = 1i64;
 
     let s1 = src1_stride.len();
     let nb10 = src1_stride[s1 - 1] as i64;
-    let nb11 = if s1 >= 2 {
-        src1_stride[s1 - 2] as i64
-    } else {
-        0
-    };
-    let nb12 = if s1 >= 3 {
-        src1_stride[s1 - 3] as i64
-    } else {
-        0
-    };
+    let nb11 = 0i64;
+    let nb12 = src1_stride[s1 - 2] as i64;
 
     // ids shape: [nei1, nei0] = [num_tokens, experts_per_token].
     let nei0 = ids_shape[1] as i64;
     let nei1 = ids_shape[0] as i64;
     let nbi1 = ids_stride[0] as i64;
 
-    // dst shape: trailing dims are [..., ne1, ne0]. ne0 is n (cols per
-    // expert output); ne1 is the total slot count (num_tokens *
-    // experts_per_token) when laid out flat. The MSL only reads ne0, ne1,
-    // and nb1; the kernel itself addresses rows through `rowids` and
-    // strides through `ne0` / `ne0*ne1`.
+    // dst layout: [num_tokens, experts_per_token, ne0] contiguous, i.e.
+    // dst[token, slot, j] = dst[token * (T * ne0) + slot * ne0 + j].
+    // The kernel writes at `jid[0] * ne0 + jid[1] * (ne0 * ne1)` where
+    // jid[0] = slot and jid[1] = token, so the per-token byte multiplier
+    // must equal T * ne0; that means the host `ne1` parameter must equal
+    // T (= nei0), not nei0 * nei1.
     let dr = dst_shape.len();
     let ne0 = dst_shape[dr - 1] as i64;
-    let ne1 = (nei0 * nei1) as i64;
+    let ne1 = nei0;
     let nb1 = (ne0 as usize * core::mem::size_of::<f32>()) as i64;
 
+    // The grid X dim must be wide enough for the worst-case per-expert
+    // routing count (= nei0 * nei1 if all routings concentrate on a
+    // single expert). The kernel's per-expert early-exit
+    // `if (r1 * BLOCK_SIZE_N >= _ne1) return;` clamps unused tiles.
+    let max_routings_per_expert = (nei0 * nei1) as usize;
     let thread_groups_count = MTLSize {
-        width: divide(ne1 as usize, 32),
+        width: divide(max_routings_per_expert, 32),
         height: divide(ne0 as usize, 64),
         depth: ne02 as usize,
     };
