@@ -57,7 +57,7 @@ pub use init::Init;
 pub use layer_norm::{
     layer_norm, layer_norm_no_bias, rms_norm, LayerNorm, LayerNormConfig, RmsNorm,
 };
-pub use linear::{linear, linear_b, linear_no_bias, Linear};
+pub use linear::{linear, linear_b, linear_no_bias, Linear, LinearTernary};
 pub use ops::Dropout;
 pub use optim::{AdamW, Optimizer, ParamsAdamW, SGD};
 pub use rnn::{gru, lstm, GRUConfig, LSTMConfig, GRU, LSTM, RNN};
