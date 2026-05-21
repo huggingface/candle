@@ -83,8 +83,9 @@ impl super::Module for Linear {
 /// Weights are quantized at construction: values whose absolute value exceeds
 /// `threshold` become ±1; the rest become 0. This matches the BitNet b1.58
 /// scheme (arxiv.org/abs/2402.17764, §3.1). The quantized weights are stored
-/// as `f32` and the forward pass is identical to [`Linear`] — no special
-/// backend required.
+/// as `i8` — 4× smaller than f32 with no precision loss for {-1, 0, +1} values.
+/// The forward pass casts to f32 before the matmul; future backends can fuse
+/// the cast and matmul for additional throughput.
 ///
 /// ```rust
 /// use candle::{Tensor, Device::Cpu, DType};
@@ -108,7 +109,8 @@ impl LinearTernary {
     /// Quantize `weight` to {-1, 0, +1} using `threshold`.
     ///
     /// If `threshold` is `None`, the mean absolute value of the weights is used
-    /// (the BitNet b1.58 prescription). The quantized weights are stored as `f32`.
+    /// (the BitNet b1.58 prescription). Weights are stored as `i8` — 4× smaller
+    /// than f32 with no precision loss for ternary values.
     pub fn from_tensor(
         weight: Tensor,
         bias: Option<Tensor>,
@@ -122,9 +124,9 @@ impl LinearTernary {
         let abs_w = weight.abs()?;
         // mask: 1 where |w| > threshold, 0 elsewhere
         let mask = abs_w.gt(&t_tensor)?.to_dtype(candle::DType::F32)?;
-        // ternary = sign(w) * mask  →  values in {-1, 0, +1}
+        // ternary = sign(w) * mask  →  values in {-1, 0, +1} stored as i8
         let sign_w = weight.sign()?;
-        let ternary = sign_w.mul(&mask)?;
+        let ternary = sign_w.mul(&mask)?.to_dtype(candle::DType::I8)?;
         Ok(Self { weight: ternary, bias })
     }
 
@@ -139,35 +141,37 @@ impl LinearTernary {
     /// Fraction of weights that are exactly zero (0.0–1.0).
     pub fn sparsity(&self) -> Result<f32> {
         let numel = self.weight.elem_count();
-        let zeros = self.weight.eq(0f32)?.to_dtype(candle::DType::F32)?.sum_all()?.to_scalar::<f32>()?;
+        let zeros = self.weight.eq(0i8)?.to_dtype(candle::DType::F32)?.sum_all()?.to_scalar::<f32>()?;
         Ok(zeros / numel as f32)
     }
 }
 
 impl super::Module for LinearTernary {
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+        // Cast i8 weights to f32 for the matmul; the i8 storage is the memory saving.
+        let w = self.weight.to_dtype(candle::DType::F32)?;
         let x = match *x.dims() {
             [b1, b2, m, k] => {
                 if x.is_contiguous() {
-                    let w = self.weight.t()?;
-                    x.reshape((b1 * b2 * m, k))?.matmul(&w)?.reshape((b1, b2, m, ()))?
+                    let wt = w.t()?;
+                    x.reshape((b1 * b2 * m, k))?.matmul(&wt)?.reshape((b1, b2, m, ()))?
                 } else {
-                    let w = self.weight.broadcast_left((b1, b2))?.t()?;
-                    x.matmul(&w)?
+                    let wt = w.broadcast_left((b1, b2))?.t()?;
+                    x.matmul(&wt)?
                 }
             }
             [bsize, m, k] => {
                 if x.is_contiguous() {
-                    let w = self.weight.t()?;
-                    x.reshape((bsize * m, k))?.matmul(&w)?.reshape((bsize, m, ()))?
+                    let wt = w.t()?;
+                    x.reshape((bsize * m, k))?.matmul(&wt)?.reshape((bsize, m, ()))?
                 } else {
-                    let w = self.weight.broadcast_left(bsize)?.t()?;
-                    x.matmul(&w)?
+                    let wt = w.broadcast_left(bsize)?.t()?;
+                    x.matmul(&wt)?
                 }
             }
             _ => {
-                let w = self.weight.t()?;
-                x.matmul(&w)?
+                let wt = w.t()?;
+                x.matmul(&wt)?
             }
         };
         match &self.bias {

@@ -10,10 +10,11 @@ fn weights_are_ternary_after_quantization() -> Result<()> {
     // 2-out, 3-in weight matrix; quantize with explicit threshold
     let w = Tensor::new(&[[2.0f32, -3.0, 0.1], [0.0, 1.5, -0.5]], cpu())?;
     let layer = LinearTernary::from_tensor(w, None, Some(1.0))?;
-    let vals = layer.weight().to_vec2::<f32>()?;
+    // weights stored as i8
+    let vals = layer.weight().to_vec2::<i8>()?;
     for row in &vals {
         for &v in row {
-            assert!(v == -1.0 || v == 0.0 || v == 1.0, "non-ternary weight: {v}");
+            assert!(v == -1 || v == 0 || v == 1, "non-ternary weight: {v}");
         }
     }
     Ok(())
@@ -23,10 +24,10 @@ fn weights_are_ternary_after_quantization() -> Result<()> {
 fn threshold_zero_yields_no_zeros() -> Result<()> {
     let w = Tensor::new(&[[2.0f32, -3.0], [1.5, -0.5]], cpu())?;
     let layer = LinearTernary::from_tensor(w, None, Some(0.0))?;
-    let vals = layer.weight().flatten_all()?.to_vec1::<f32>()?;
-    assert!(!vals.contains(&0.0), "threshold=0 should produce no zero weights");
+    let vals = layer.weight().flatten_all()?.to_vec1::<i8>()?;
+    assert!(!vals.contains(&0i8), "threshold=0 should produce no zero weights");
     for v in vals {
-        assert!(v == -1.0 || v == 1.0);
+        assert!(v == -1 || v == 1);
     }
     Ok(())
 }
@@ -35,17 +36,14 @@ fn threshold_zero_yields_no_zeros() -> Result<()> {
 fn threshold_large_yields_all_zeros() -> Result<()> {
     let w = Tensor::new(&[[2.0f32, -3.0], [1.5, -0.5]], cpu())?;
     let layer = LinearTernary::from_tensor(w, None, Some(1e9))?;
-    let vals = layer.weight().flatten_all()?.to_vec1::<f32>()?;
-    assert!(vals.iter().all(|&v| v == 0.0), "threshold=1e9 should zero all weights");
+    let vals = layer.weight().flatten_all()?.to_vec1::<i8>()?;
+    assert!(vals.iter().all(|&v| v == 0), "threshold=1e9 should zero all weights");
     Ok(())
 }
 
 #[test]
 fn forward_matches_manual() -> Result<()> {
-    // Inject known ternary weights directly
-    let w = Tensor::new(&[[1.0f32, 0.0, -1.0, 0.0], [0.0, 1.0, 0.0, 1.0]], cpu())?;
-    let layer = LinearTernary::from_tensor(w, None, Some(1e9))?; // threshold kills all; then override
-    // Override weight with exact ternary values (threshold=1e9 → zeros, so inject manually)
+    // weights [[+1, 0, -1, 0], [0, +1, 0, +1]] — threshold=0.5 on unit-scale weights
     let w_known = Tensor::new(&[[1.0f32, 0.0, -1.0, 0.0], [0.0, 1.0, 0.0, 1.0]], cpu())?;
     let layer = LinearTernary::from_tensor(w_known, None, Some(0.5))?;
     let xs = Tensor::new(&[[2.0f32, 3.0, 4.0, 5.0]], cpu())?;
@@ -75,9 +73,9 @@ fn default_threshold_uses_mean_abs() -> Result<()> {
     // |1.0| > 0.55 → +1; |0.1| < 0.55 → 0
     let w = Tensor::new(&[[1.0f32, 0.1]], cpu())?;
     let layer = LinearTernary::from_tensor(w, None, None)?;
-    let vals = layer.weight().to_vec2::<f32>()?;
-    assert!((vals[0][0] - 1.0).abs() < 1e-5);
-    assert!((vals[0][1] - 0.0).abs() < 1e-5);
+    let vals = layer.weight().to_vec2::<i8>()?;
+    assert_eq!(vals[0][0], 1i8);
+    assert_eq!(vals[0][1], 0i8);
     Ok(())
 }
 
@@ -88,5 +86,13 @@ fn output_shape_with_batch() -> Result<()> {
     let xs = Tensor::zeros((2, 8), candle::DType::F32, cpu())?;
     let ys = layer.forward(&xs)?;
     assert_eq!(ys.dims(), &[2, 4]);
+    Ok(())
+}
+
+#[test]
+fn weight_dtype_is_i8() -> Result<()> {
+    let w = Tensor::new(&[[1.0f32, -1.0, 0.5]], cpu())?;
+    let layer = LinearTernary::from_tensor(w, None, None)?;
+    assert_eq!(layer.weight().dtype(), candle::DType::I8, "weights must be stored as i8");
     Ok(())
 }
