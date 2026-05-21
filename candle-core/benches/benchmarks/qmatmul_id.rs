@@ -45,10 +45,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 #[cfg(feature = "metal")]
-fn run_bench_metal(c: &mut Criterion, device: &Device, m: usize) {
-    use candle_core::quantized::GgmlDType;
-
-    let dtype = GgmlDType::Q4K;
+fn run_bench_metal(c: &mut Criterion, device: &Device, dtype: candle_core::quantized::GgmlDType, m: usize) {
     let num_experts = 128usize;
     let experts_per_tok = 8usize;
     let n = 2048usize;
@@ -121,7 +118,14 @@ fn run_bench_metal(c: &mut Criterion, device: &Device, m: usize) {
     // FLOPs per dispatch: M tokens * T slots * 2 * N * K.
     let flops = (m as u64) * (experts_per_tok as u64) * 2 * (n as u64) * (k as u64);
 
-    let bench_name = format!("qmatmul_id_q4k_n{}_k{}_m{}", n, k, m);
+    let dtype_label = match dtype {
+        candle_core::quantized::GgmlDType::Q4K => "q4k",
+        candle_core::quantized::GgmlDType::F16 => "f16",
+        candle_core::quantized::GgmlDType::F32 => "f32",
+        candle_core::quantized::GgmlDType::Q8_0 => "q8_0",
+        _ => "other",
+    };
+    let bench_name = format!("qmatmul_id_{}_n{}_k{}_m{}", dtype_label, n, k, m);
     let mut group = c.benchmark_group(device.bench_name(bench_name));
     group.sample_size(50);
     // Pass FLOPs as `Elements`; Criterion will print "Gelem/s" but the value
@@ -163,7 +167,7 @@ fn run_bench_metal(c: &mut Criterion, device: &Device, m: usize) {
 }
 
 #[cfg(not(feature = "metal"))]
-fn run_bench_metal(_c: &mut Criterion, _device: &Device, _m: usize) {}
+fn run_bench_metal(_c: &mut Criterion, _device: &Device, _dtype: candle_core::quantized::GgmlDType, _m: usize) {}
 
 #[cfg(feature = "metal")]
 fn run_bench_mm_t_baseline(c: &mut Criterion, device: &Device, m_per_expert: usize) {
@@ -211,8 +215,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
         if matches!(device, Device::Metal(_)) {
+            #[cfg(feature = "metal")]
+            use candle_core::quantized::GgmlDType;
+            #[cfg(feature = "metal")]
             for m in [1usize, 32, 256] {
-                run_bench_metal(c, &device, m);
+                run_bench_metal(c, &device, GgmlDType::Q4K, m);
+            }
+            // F16 weight tensor is `num_experts * N * K * 2` bytes (~2.1 GB
+            // for the Qwen3-MoE shapes here); skip the M=256 case to keep
+            // memory comfortable on a 16 GB Mac.
+            #[cfg(feature = "metal")]
+            for m in [1usize, 32] {
+                run_bench_metal(c, &device, GgmlDType::F16, m);
             }
             // Baseline through the existing `QMatMul::forward` path, one
             // dispatch per expert. The pairings are: M=1 / decode -> only
