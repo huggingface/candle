@@ -20,6 +20,7 @@ pub struct FlashAttn {
     pub rescale_threshold: f32,
     pub deterministic: bool,
     pub use_2cta_mode: bool,
+    pub num_sm: i32,
 }
 
 impl FlashAttn {
@@ -175,8 +176,6 @@ impl FlashAttn {
             window_size_right = seqlen_k as i32;
         }
 
-        let num_sm = 0;
-
         unsafe {
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
@@ -226,7 +225,7 @@ impl FlashAttn {
                 self.rescale_threshold,
                 self.deterministic as i32,
                 self.use_2cta_mode as i32,
-                num_sm,
+                self.num_sm,
             )
         }
 
@@ -282,6 +281,7 @@ struct FlashAttnVarLen {
     pub rescale_threshold: f32,
     pub deterministic: bool,
     pub use_2cta_mode: bool,
+    pub num_sm: i32,
 }
 
 impl FlashAttnVarLen {
@@ -470,8 +470,6 @@ impl FlashAttnVarLen {
             window_size_right = self.max_seqlen_k as i32;
         }
 
-        let num_sm = 0;
-
         unsafe {
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
@@ -523,7 +521,7 @@ impl FlashAttnVarLen {
                 self.rescale_threshold,
                 self.deterministic as i32,
                 self.use_2cta_mode as i32,
-                num_sm,
+                self.num_sm,
             )
         }
 
@@ -584,6 +582,7 @@ pub fn flash_attn(
         rescale_threshold,
         false,
         false,
+        0,
     )
 }
 
@@ -595,6 +594,8 @@ pub fn flash_attn_deterministic(
     causal: bool,
     rescale_threshold: f32,
 ) -> Result<Tensor> {
+    // Determinism (semaphore-locked reductions) is independent of 2-CTA mode.
+    // Users who also want 2-CTA can call flash_attn_with_options directly.
     flash_attn_with_options(
         q,
         k,
@@ -604,7 +605,8 @@ pub fn flash_attn_deterministic(
         false,
         rescale_threshold,
         true,
-        true,
+        false,
+        0,
     )
 }
 
@@ -619,6 +621,7 @@ pub fn flash_attn_with_options(
     rescale_threshold: f32,
     deterministic: bool,
     use_2cta_mode: bool,
+    num_sm: i32,
 ) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
@@ -632,6 +635,7 @@ pub fn flash_attn_with_options(
         rescale_threshold,
         deterministic,
         use_2cta_mode,
+        num_sm,
     };
     q.apply_op3(k, v, op)
 }
@@ -648,6 +652,7 @@ pub fn flash_attn_windowed(
     rescale_threshold: f32,
     deterministic: bool,
     use_2cta_mode: bool,
+    num_sm: i32,
 ) -> Result<Tensor> {
     let op = FlashAttn {
         softmax_scale,
@@ -658,6 +663,7 @@ pub fn flash_attn_windowed(
         rescale_threshold,
         deterministic,
         use_2cta_mode,
+        num_sm,
     };
     q.apply_op3(k, v, op)
 }
@@ -685,6 +691,7 @@ pub fn flash_attn_alibi(
         rescale_threshold,
         deterministic: false,
         use_2cta_mode: false,
+        num_sm: 0,
     };
     q.apply_op3(k, v, op)
 }
@@ -702,6 +709,7 @@ pub fn flash_attn_alibi_windowed(
     rescale_threshold: f32,
     deterministic: bool,
     use_2cta_mode: bool,
+    num_sm: i32,
 ) -> Result<Tensor> {
     let op = FlashAttn {
         softmax_scale,
@@ -712,6 +720,7 @@ pub fn flash_attn_alibi_windowed(
         rescale_threshold,
         deterministic,
         use_2cta_mode,
+        num_sm,
     };
     q.apply_op3(k, v, op)
 }
@@ -746,6 +755,7 @@ pub fn flash_attn_varlen(
         rescale_threshold,
         deterministic: false,
         use_2cta_mode: false,
+        num_sm: 0,
     };
     q.apply_op3(k, v, op)
 }
@@ -780,6 +790,7 @@ pub fn flash_attn_varlen_windowed(
         rescale_threshold,
         deterministic,
         use_2cta_mode,
+        num_sm: 0,
     };
     q.apply_op3(k, v, op)
 }
@@ -815,6 +826,7 @@ pub fn flash_attn_varlen_alibi(
         rescale_threshold,
         deterministic: false,
         use_2cta_mode: false,
+        num_sm: 0,
     };
     q.apply_op3(k, v, op)
 }
@@ -850,10 +862,38 @@ pub fn flash_attn_varlen_alibi_windowed(
         rescale_threshold,
         deterministic,
         use_2cta_mode,
+        num_sm: 0,
     };
     q.apply_op3(k, v, op)
 }
 
 pub fn default_rescale_threshold() -> f32 {
     DEFAULT_RESCALE_THRESHOLD
+}
+
+/// Placeholder for FlashAttention-4 backward.
+/// Real implementation will call the CuTe-DSL generated backward kernel
+/// (5 MMA operations + DSMEM for 2-CTA + optional semaphore for determinism).
+#[allow(clippy::too_many_arguments)]
+pub fn flash_attn_backward(
+    _dout: &Tensor,
+    _q: &Tensor,
+    _k: &Tensor,
+    _v: &Tensor,
+    _out: &Tensor,
+    _softmax_lse: &Tensor,
+    _dq: &Tensor,
+    _dk: &Tensor,
+    _dv: &Tensor,
+    _softmax_scale: f32,
+    _causal: bool,
+    _rescale_threshold: f32,
+    _deterministic: bool,
+    _use_2cta_mode: bool,
+) -> Result<()> {
+    candle::bail!(
+        "FlashAttention-4 backward is not yet implemented. \
+         The kernel will be provided by the CuTe-DSL sources from \
+         https://github.com/Dao-AILab/flash-attention/tree/main/flash_attn/cute"
+    )
 }
