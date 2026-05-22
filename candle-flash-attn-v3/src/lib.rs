@@ -102,7 +102,7 @@ impl FlashAttn {
         if num_heads % num_heads_k != 0 {
             candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
         }
-        let use_gqa_packing = match num_heads_k / num_heads {
+        let use_gqa_packing = match num_heads / num_heads_k {
             2 | 4 | 8 | 16 | 32 => self.use_gqa_packing as i32,
             _ => 0,
         };
@@ -186,7 +186,7 @@ impl FlashAttn {
             let (v_ptr, _guard) = v.device_ptr(&stream);
             let (dst_ptr, _guard) = dst.device_ptr(&stream);
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
-            ffi::run_mha(
+            ffi::run_mha_v3(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
                 v_ptr as *const core::ffi::c_void,
@@ -530,7 +530,7 @@ impl FlashAttnVarLen {
         if num_heads % num_heads_k != 0 {
             candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
         }
-        let use_gqa_packing = match num_heads_k / num_heads {
+        let use_gqa_packing = match num_heads / num_heads_k {
             2 | 4 | 8 | 16 | 32 => self.use_gqa_packing as i32,
             _ => 0,
         };
@@ -632,7 +632,7 @@ impl FlashAttnVarLen {
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
             let (seqlens_q_ptr, _guard) = seqlens_q.device_ptr(&stream);
             let (seqlens_k_ptr, _guard) = seqlens_k.device_ptr(&stream);
-            ffi::run_mha(
+            ffi::run_mha_v3(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
                 v_ptr as *const core::ffi::c_void,
