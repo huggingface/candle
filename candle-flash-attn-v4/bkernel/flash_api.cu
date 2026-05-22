@@ -122,7 +122,9 @@ extern "C" void run_mha_fwd(
     float rescale_threshold,
     int deterministic,
     int use_2cta_mode,
-    int num_sm
+    int num_sm,
+
+    void *stream_ptr
 ) {
     Flash_fwd_params params;
     memset(&params, 0, sizeof(params));
@@ -181,6 +183,7 @@ extern "C" void run_mha_fwd(
     params.seqused_k = nullptr;
 
     params.is_causal = is_causal;
+    params.is_local = (window_size_left >= 0 || window_size_right >= 0) && !is_causal;
     params.window_size_left = window_size_left;
     params.window_size_right = window_size_right;
 
@@ -198,7 +201,7 @@ extern "C" void run_mha_fwd(
     params.use_2cta_mode = use_2cta_mode;
     params.num_sm = num_sm;
 
-    cudaStream_t stream = 0;
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
     run_mha_fwd(params, stream);
 }
 
@@ -273,7 +276,9 @@ extern "C" void run_mha_bwd(
     float rescale_threshold,
     int deterministic,
     int use_2cta_mode,
-    int num_sm
+    int num_sm,
+
+    void *stream_ptr
 ) {
     Flash_bwd_params params;
     memset(&params, 0, sizeof(params));
@@ -350,6 +355,7 @@ extern "C" void run_mha_bwd(
     params.seqused_k = nullptr;
 
     params.is_causal = is_causal;
+    params.is_local = (window_size_left >= 0 || window_size_right >= 0) && !is_causal;
     params.window_size_left = window_size_left;
     params.window_size_right = window_size_right;
 
@@ -367,6 +373,6 @@ extern "C" void run_mha_bwd(
     params.use_2cta_mode = use_2cta_mode;
     params.num_sm = num_sm;
 
-    cudaStream_t stream = 0;
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_ptr);
     run_mha_bwd(params, stream);
 }

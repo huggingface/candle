@@ -160,7 +160,7 @@ impl FlashAttn {
 
         let elem_count = out_shape.elem_count();
         let dst = unsafe { dev.alloc::<T>(elem_count) }?;
-        let softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
+        let softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -182,6 +182,7 @@ impl FlashAttn {
             let (v_ptr, _guard) = v.device_ptr(&stream);
             let (dst_ptr, _guard) = dst.device_ptr(&stream);
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
+            let stream_ptr = stream.cu_stream() as *mut core::ffi::c_void;
             ffi::run_mha_fwd(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -226,6 +227,7 @@ impl FlashAttn {
                 self.deterministic as i32,
                 self.use_2cta_mode as i32,
                 self.num_sm,
+                stream_ptr,
             )
         }
 
@@ -478,6 +480,7 @@ impl FlashAttnVarLen {
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
             let (seqlens_q_ptr, _guard) = seqlens_q.device_ptr(&stream);
             let (seqlens_k_ptr, _guard) = seqlens_k.device_ptr(&stream);
+            let stream_ptr = stream.cu_stream() as *mut core::ffi::c_void;
             ffi::run_mha_fwd(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -522,6 +525,7 @@ impl FlashAttnVarLen {
                 self.deterministic as i32,
                 self.use_2cta_mode as i32,
                 self.num_sm,
+                stream_ptr,
             )
         }
 
@@ -586,6 +590,12 @@ pub fn flash_attn(
     )
 }
 
+/// Forward pass with deterministic execution (semaphore-locked reductions).
+///
+/// This convenience function enables deterministic mode only. It does **not**
+/// enable 2-CTA MMA mode or set a custom SM count. If you need 2-CTA mode
+/// combined with determinism (e.g. for the backward pass or advanced scheduling),
+/// call [`flash_attn_with_options`] directly.
 pub fn flash_attn_deterministic(
     q: &Tensor,
     k: &Tensor,
@@ -594,8 +604,6 @@ pub fn flash_attn_deterministic(
     causal: bool,
     rescale_threshold: f32,
 ) -> Result<Tensor> {
-    // Determinism (semaphore-locked reductions) is independent of 2-CTA mode.
-    // Users who also want 2-CTA can call flash_attn_with_options directly.
     flash_attn_with_options(
         q,
         k,
@@ -776,6 +784,7 @@ pub fn flash_attn_varlen_windowed(
     rescale_threshold: f32,
     deterministic: bool,
     use_2cta_mode: bool,
+    num_sm: i32,
 ) -> Result<Tensor> {
     let op = FlashAttnVarLen {
         softmax_scale,
@@ -790,7 +799,7 @@ pub fn flash_attn_varlen_windowed(
         rescale_threshold,
         deterministic,
         use_2cta_mode,
-        num_sm: 0,
+        num_sm,
     };
     q.apply_op3(k, v, op)
 }
@@ -809,6 +818,7 @@ pub fn flash_attn_varlen_alibi(
     causal: bool,
     use_gqa_packing: bool,
     rescale_threshold: f32,
+    num_sm: i32,
 ) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
@@ -826,7 +836,7 @@ pub fn flash_attn_varlen_alibi(
         rescale_threshold,
         deterministic: false,
         use_2cta_mode: false,
-        num_sm: 0,
+        num_sm,
     };
     q.apply_op3(k, v, op)
 }
@@ -848,6 +858,7 @@ pub fn flash_attn_varlen_alibi_windowed(
     rescale_threshold: f32,
     deterministic: bool,
     use_2cta_mode: bool,
+    num_sm: i32,
 ) -> Result<Tensor> {
     let op = FlashAttnVarLen {
         softmax_scale,
@@ -862,7 +873,7 @@ pub fn flash_attn_varlen_alibi_windowed(
         rescale_threshold,
         deterministic,
         use_2cta_mode,
-        num_sm: 0,
+        num_sm,
     };
     q.apply_op3(k, v, op)
 }

@@ -55,6 +55,8 @@ extern "C" {
         deterministic: c_int,
         use_2cta_mode: c_int,
         num_sm: c_int,
+
+        stream: *mut c_void,
     );
 
     pub(crate) fn run_mha_bwd(
@@ -128,5 +130,7 @@ extern "C" {
         deterministic: c_int,
         use_2cta_mode: c_int,
         num_sm: c_int,
+
+        stream: *mut c_void,
     );
 }

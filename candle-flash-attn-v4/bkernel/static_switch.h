@@ -10,6 +10,10 @@
         } else if (prec_type == 2) {                      \
             using ELEMENT = cutlass::bfloat16_t;          \
             __VA_ARGS__();                                \
+        } else {                                          \
+            throw std::runtime_error(                     \
+                "Unsupported precision type for FlashAttention-4: " \
+                + std::to_string(prec_type));             \
         }                                                 \
     } while (0)
 
@@ -27,6 +31,10 @@
         } else if (d == 512) {                            \
             constexpr int KHEADSIZE = 512;                \
             __VA_ARGS__();                                \
+        } else {                                          \
+            throw std::runtime_error(                     \
+                "Unsupported head dimension for FlashAttention-4: " \
+                + std::to_string(d));                     \
         }                                                 \
     } while (0)
 
@@ -47,6 +55,10 @@
         } else if (ratio == 32) {                         \
             constexpr int KBLOCKH = 32;                   \
             __VA_ARGS__();                                \
+        } else {                                          \
+            throw std::runtime_error(                     \
+                "Unsupported GQA ratio for FlashAttention-4: " \
+                + std::to_string(ratio));                 \
         }                                                 \
     } while (0)
 
