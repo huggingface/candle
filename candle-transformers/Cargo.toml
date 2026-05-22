@@ -8,6 +8,10 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 readme = "README.md"
+build = "build.rs"
+
+[build-dependencies]
+cudaforge = "0.1.2"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
