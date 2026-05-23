@@ -117,6 +117,60 @@ impl QMetalStorage {
         ))
     }
 
+    pub fn dequantize_rows(
+        &self,
+        indices: &[u32],
+        row_dim: usize,
+        num_rows: usize,
+    ) -> Result<MetalStorage> {
+        for &idx in indices {
+            if idx as usize >= num_rows {
+                crate::bail!("row index {idx} out of bounds (num_rows={num_rows})");
+            }
+        }
+
+        let output_elem_count = indices.len() * row_dim;
+        let indices_buffer = self.device.new_buffer_with_data(indices)?;
+        let output_buffer =
+            self.device
+                .new_buffer(output_elem_count, DType::F32, "dequantize_rows")?;
+
+        let kernel_dtype = match self.dtype {
+            GgmlDType::Q4_0 => candle_metal_kernels::GgmlDType::Q4_0,
+            GgmlDType::Q4_1 => candle_metal_kernels::GgmlDType::Q4_1,
+            GgmlDType::Q5_0 => candle_metal_kernels::GgmlDType::Q5_0,
+            GgmlDType::Q5_1 => candle_metal_kernels::GgmlDType::Q5_1,
+            GgmlDType::Q8_0 => candle_metal_kernels::GgmlDType::Q8_0,
+            GgmlDType::Q2K => candle_metal_kernels::GgmlDType::Q2K,
+            GgmlDType::Q3K => candle_metal_kernels::GgmlDType::Q3K,
+            GgmlDType::Q4K => candle_metal_kernels::GgmlDType::Q4K,
+            GgmlDType::Q5K => candle_metal_kernels::GgmlDType::Q5K,
+            GgmlDType::Q6K => candle_metal_kernels::GgmlDType::Q6K,
+            dtype => crate::bail!("dequantize_rows not supported for {dtype:?}"),
+        };
+
+        let encoder = self.device.command_encoder()?;
+        candle_metal_kernels::call_quantized_get_rows(
+            self.device.device(),
+            &encoder,
+            self.device.kernels(),
+            kernel_dtype,
+            row_dim,
+            indices.len(),
+            &self.buffer,
+            &indices_buffer,
+            &output_buffer,
+        )
+        .map_err(crate::Error::wrap)?;
+
+        Ok(MetalStorage::new(
+            output_buffer,
+            self.device.clone(),
+            output_elem_count,
+            DType::F32,
+        ))
+    }
+
     pub fn quantize(&mut self, src: &MetalStorage) -> Result<()> {
         // Quantization only happens on CPU for now.
         let src = src.to_cpu::<f32>()?;

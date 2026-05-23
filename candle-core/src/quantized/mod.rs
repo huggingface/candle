@@ -633,6 +633,84 @@ impl QTensor {
         crate::tensor::from_storage(storage, self.shape.clone(), none, false).to_device(device)
     }
 
+    pub fn dequantize_rows(&self, indices: &[u32], device: &Device) -> Result<Tensor> {
+        let dims = self.shape.dims();
+        if dims.len() != 2 {
+            crate::bail!("dequantize_rows requires a 2D tensor, got {:?}", self.shape);
+        }
+
+        let n_rows = dims[0];
+        let row_dim = dims[1];
+        let dtype = self.dtype();
+        let block_size = dtype.block_size();
+        if !row_dim.is_multiple_of(block_size) {
+            crate::bail!(
+                "row_dim {row_dim} is not a multiple of block_size {block_size} for {dtype:?}"
+            );
+        }
+
+        #[cfg(feature = "metal")]
+        if let QStorage::Metal(metal_storage) = &self.storage {
+            let metal_out = metal_storage.dequantize_rows(indices, row_dim, n_rows)?;
+            let none = crate::op::BackpropOp::none();
+            return crate::tensor::from_storage(
+                Storage::Metal(metal_out),
+                (indices.len(), row_dim),
+                none,
+                false,
+            )
+            .to_device(device);
+        }
+
+        let blocks_per_row = row_dim / block_size;
+        let type_size = dtype.type_size();
+        let bytes_per_row = blocks_per_row * type_size;
+        let data = self.data()?;
+        let mut output = vec![0f32; indices.len() * row_dim];
+
+        macro_rules! dequant_rows {
+            ($block_ty:ty) => {{
+                for (out_row, &idx) in indices.iter().enumerate() {
+                    let idx = idx as usize;
+                    if idx >= n_rows {
+                        crate::bail!("row index {idx} out of bounds (n_rows={n_rows})");
+                    }
+
+                    let byte_offset = idx * bytes_per_row;
+                    let row_bytes = &data[byte_offset..byte_offset + bytes_per_row];
+                    let blocks = unsafe {
+                        std::slice::from_raw_parts(
+                            row_bytes.as_ptr().cast::<$block_ty>(),
+                            blocks_per_row,
+                        )
+                    };
+                    let out_slice = &mut output[out_row * row_dim..(out_row + 1) * row_dim];
+                    <$block_ty as k_quants::GgmlType>::to_float(blocks, out_slice);
+                }
+            }};
+        }
+
+        match dtype {
+            GgmlDType::Q4_0 => dequant_rows!(BlockQ4_0),
+            GgmlDType::Q4_1 => dequant_rows!(BlockQ4_1),
+            GgmlDType::Q5_0 => dequant_rows!(BlockQ5_0),
+            GgmlDType::Q5_1 => dequant_rows!(BlockQ5_1),
+            GgmlDType::Q8_0 => dequant_rows!(BlockQ8_0),
+            GgmlDType::Q8_1 => dequant_rows!(BlockQ8_1),
+            GgmlDType::Q2K => dequant_rows!(BlockQ2K),
+            GgmlDType::Q3K => dequant_rows!(BlockQ3K),
+            GgmlDType::Q4K => dequant_rows!(BlockQ4K),
+            GgmlDType::Q5K => dequant_rows!(BlockQ5K),
+            GgmlDType::Q6K => dequant_rows!(BlockQ6K),
+            GgmlDType::Q8K => dequant_rows!(BlockQ8K),
+            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => {
+                crate::bail!("dequantize_rows not needed for {dtype:?}, use index_select");
+            }
+        }
+
+        Tensor::from_vec(output, (indices.len(), row_dim), &Device::Cpu)?.to_device(device)
+    }
+
     pub fn dequantize_f16(&self, device: &Device) -> Result<Tensor> {
         // In the CUDA case, we have a specialized kernel as this can be useful for volta
         // architectures. https://github.com/huggingface/candle/issues/2136
