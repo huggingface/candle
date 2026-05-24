@@ -5,6 +5,8 @@ pub use cudarc;
 use cudarc::driver::CudaFunction;
 use float8::F8E4M3;
 use half::{bf16, f16};
+use std::any::TypeId;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -25,6 +27,13 @@ impl DeviceId {
 
 struct CudaRng(cudarc::curand::CudaRng);
 unsafe impl Send for CudaRng {}
+
+const CUDA_GRAPH_HTOD_CACHE_MAX_BYTES: usize = 4096;
+
+thread_local! {
+    static CUDA_GRAPH_HTOD_CACHE: RefCell<HashMap<(DeviceId, TypeId, Vec<u8>), Box<dyn std::any::Any>>> =
+        RefCell::new(HashMap::new());
+}
 
 pub struct ModuleStore {
     mdls: [Option<Arc<cudarc::driver::CudaModule>>; kernels::ALL_IDS.len()],
@@ -65,7 +74,7 @@ impl CudaDevice {
     }
 
     pub fn memcpy_htod<
-        T: cudarc::driver::DeviceRepr,
+        T: cudarc::driver::DeviceRepr + 'static,
         Src: cudarc::driver::HostSlice<T> + ?Sized,
         Dst: cudarc::driver::DevicePtrMut<T>,
     >(
@@ -73,6 +82,9 @@ impl CudaDevice {
         src: &Src,
         dst: &mut Dst,
     ) -> Result<()> {
+        if cuda_graph_pinned_htod_enabled() && !src.is_empty() {
+            return self.memcpy_htod_capture_cached(src, dst);
+        }
         self.stream.memcpy_htod(src, dst).w()
     }
 
@@ -107,12 +119,100 @@ impl CudaDevice {
         self.stream.memcpy_dtoh(src, dst).w()
     }
 
-    pub fn clone_htod<T: cudarc::driver::DeviceRepr, Src: cudarc::driver::HostSlice<T> + ?Sized>(
+    pub fn clone_htod<
+        T: cudarc::driver::DeviceRepr + 'static,
+        Src: cudarc::driver::HostSlice<T> + ?Sized,
+    >(
         &self,
         src: &Src,
     ) -> Result<cudarc::driver::CudaSlice<T>> {
+        if cuda_graph_pinned_htod_enabled() && !src.is_empty() {
+            return self.clone_htod_capture_cached(src);
+        }
         self.stream.clone_htod(src).w()
     }
+
+    fn memcpy_htod_capture_cached<
+        T: cudarc::driver::DeviceRepr + 'static,
+        Src: cudarc::driver::HostSlice<T> + ?Sized,
+        Dst: cudarc::driver::DevicePtrMut<T>,
+    >(
+        &self,
+        src: &Src,
+        dst: &mut Dst,
+    ) -> Result<()> {
+        assert!(dst.len() >= src.len());
+        if let Some(cached) = self.cached_htod_slice(src)? {
+            return self.stream.memcpy_dtod(&cached, dst).w();
+        }
+        self.stream.memcpy_htod(src, dst).w()
+    }
+
+    fn clone_htod_capture_cached<
+        T: cudarc::driver::DeviceRepr + 'static,
+        Src: cudarc::driver::HostSlice<T> + ?Sized,
+    >(
+        &self,
+        src: &Src,
+    ) -> Result<cudarc::driver::CudaSlice<T>> {
+        if let Some(cached) = self.cached_htod_slice(src)? {
+            return Ok(cached);
+        }
+        self.stream.clone_htod(src).w()
+    }
+
+    fn cached_htod_slice<
+        T: cudarc::driver::DeviceRepr + 'static,
+        Src: cudarc::driver::HostSlice<T> + ?Sized,
+    >(
+        &self,
+        src: &Src,
+    ) -> Result<Option<cudarc::driver::CudaSlice<T>>> {
+        let (src_slice, _sync) = unsafe { src.stream_synced_slice(&self.stream) };
+        let byte_len = std::mem::size_of_val(src_slice);
+        if byte_len > CUDA_GRAPH_HTOD_CACHE_MAX_BYTES {
+            if self.cuda_graph_capture_active() {
+                crate::bail!("CUDA graph capture cannot upload uncached host data");
+            }
+            return Ok(None);
+        }
+
+        let bytes =
+            unsafe { std::slice::from_raw_parts(src_slice.as_ptr().cast::<u8>(), byte_len) }
+                .to_vec();
+        let key = (self.id, TypeId::of::<T>(), bytes);
+        if let Some(cached) = CUDA_GRAPH_HTOD_CACHE.with(|cache| {
+            cache.borrow().get(&key).and_then(|cached| {
+                cached
+                    .downcast_ref::<cudarc::driver::CudaSlice<T>>()
+                    .cloned()
+            })
+        }) {
+            return Ok(Some(cached));
+        }
+        if self.cuda_graph_capture_active() {
+            crate::bail!("CUDA graph capture missing cached host data");
+        }
+
+        let cached = self.stream.clone_htod(src).w()?;
+        CUDA_GRAPH_HTOD_CACHE.with(|cache| {
+            cache.borrow_mut().insert(key, Box::new(cached.clone()));
+        });
+        Ok(Some(cached))
+    }
+
+    fn cuda_graph_capture_active(&self) -> bool {
+        matches!(
+            self.stream.capture_status(),
+            Ok(status) if status != cudarc::driver::sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE
+        )
+    }
+}
+
+fn cuda_graph_pinned_htod_enabled() -> bool {
+    std::env::var("CANDLE_CUDA_GRAPH_PINNED_HTOD")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 pub struct CudaFunc {
