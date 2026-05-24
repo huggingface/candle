@@ -5,8 +5,8 @@ pub use cudarc;
 use cudarc::driver::CudaFunction;
 use float8::F8E4M3;
 use half::{bf16, f16};
-use std::any::TypeId;
-use std::cell::RefCell;
+use std::any::{Any, TypeId};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -31,8 +31,21 @@ unsafe impl Send for CudaRng {}
 const CUDA_GRAPH_HTOD_CACHE_MAX_BYTES: usize = 4096;
 
 thread_local! {
-    static CUDA_GRAPH_HTOD_CACHE: RefCell<HashMap<(DeviceId, TypeId, Vec<u8>), Box<dyn std::any::Any>>> =
+    static CUDA_GRAPH_HTOD_CACHE: RefCell<HashMap<(DeviceId, TypeId, Vec<u8>), Box<dyn Any>>> =
         RefCell::new(HashMap::new());
+    static CUDA_GRAPH_HTOD_CACHE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+#[must_use]
+pub struct CudaGraphHtodCacheGuard;
+
+impl Drop for CudaGraphHtodCacheGuard {
+    fn drop(&mut self) {
+        CUDA_GRAPH_HTOD_CACHE_DEPTH.with(|depth| {
+            debug_assert!(depth.get() > 0);
+            depth.set(depth.get().saturating_sub(1));
+        });
+    }
 }
 
 pub struct ModuleStore {
@@ -73,6 +86,11 @@ impl CudaDevice {
         self.stream.alloc_zeros::<T>(len).w()
     }
 
+    pub fn enable_cuda_graph_htod_cache(&self) -> CudaGraphHtodCacheGuard {
+        CUDA_GRAPH_HTOD_CACHE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        CudaGraphHtodCacheGuard
+    }
+
     pub fn memcpy_htod<
         T: cudarc::driver::DeviceRepr + 'static,
         Src: cudarc::driver::HostSlice<T> + ?Sized,
@@ -82,7 +100,7 @@ impl CudaDevice {
         src: &Src,
         dst: &mut Dst,
     ) -> Result<()> {
-        if cuda_graph_pinned_htod_enabled() && !src.is_empty() {
+        if cuda_graph_htod_cache_enabled() && !src.is_empty() {
             return self.memcpy_htod_capture_cached(src, dst);
         }
         self.stream.memcpy_htod(src, dst).w()
@@ -126,7 +144,7 @@ impl CudaDevice {
         &self,
         src: &Src,
     ) -> Result<cudarc::driver::CudaSlice<T>> {
-        if cuda_graph_pinned_htod_enabled() && !src.is_empty() {
+        if cuda_graph_htod_cache_enabled() && !src.is_empty() {
             return self.clone_htod_capture_cached(src);
         }
         self.stream.clone_htod(src).w()
@@ -209,10 +227,8 @@ impl CudaDevice {
     }
 }
 
-fn cuda_graph_pinned_htod_enabled() -> bool {
-    std::env::var("CANDLE_CUDA_GRAPH_PINNED_HTOD")
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(false)
+fn cuda_graph_htod_cache_enabled() -> bool {
+    CUDA_GRAPH_HTOD_CACHE_DEPTH.with(|depth| depth.get() > 0)
 }
 
 pub struct CudaFunc {
