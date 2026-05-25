@@ -351,6 +351,54 @@ pub trait InplaceOp3 {
     }
 }
 
+pub trait InplaceOp4 {
+    fn name(&self) -> &'static str;
+
+    fn cpu_fwd(
+        &self,
+        s1: &mut CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+        s3: &CpuStorage,
+        l3: &Layout,
+        s4: &CpuStorage,
+        l4: &Layout,
+    ) -> Result<()>;
+
+    fn cuda_fwd(
+        &self,
+        _: &mut CudaStorage,
+        _: &Layout,
+        _: &CudaStorage,
+        _: &Layout,
+        _: &CudaStorage,
+        _: &Layout,
+        _: &CudaStorage,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(crate::Error::Cuda(
+            format!("no cuda implementation for {}", self.name()).into(),
+        ))
+    }
+
+    fn metal_fwd(
+        &self,
+        _: &mut MetalStorage,
+        _: &Layout,
+        _: &MetalStorage,
+        _: &Layout,
+        _: &MetalStorage,
+        _: &Layout,
+        _: &MetalStorage,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(crate::Error::Metal(
+            format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+}
+
 impl Tensor {
     /// Applies a unary custom op in place.
     pub fn inplace_op1<C: InplaceOp1>(&self, c: &C) -> Result<()> {
@@ -371,6 +419,19 @@ impl Tensor {
             t2.layout(),
             &t3.storage(),
             t3.layout(),
+            c,
+        )
+    }
+
+    pub fn inplace_op4<C: InplaceOp4>(&self, t2: &Self, t3: &Self, t4: &Self, c: &C) -> Result<()> {
+        self.storage_mut().inplace_op4(
+            self.layout(),
+            &t2.storage(),
+            t2.layout(),
+            &t3.storage(),
+            t3.layout(),
+            &t4.storage(),
+            t4.layout(),
             c,
         )
     }

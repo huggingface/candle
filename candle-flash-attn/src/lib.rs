@@ -1,9 +1,13 @@
 mod ffi;
 
 use candle::backend::BackendStorage;
-use candle::cuda_backend::cudarc::driver::DevicePtr;
+use candle::cuda_backend::{
+    cudarc::driver::{CudaStream, DevicePtr, DevicePtrMut, DeviceSlice},
+    WrapErr,
+};
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
+use std::sync::Arc;
 
 pub struct FlashAttn {
     pub softmax_scale: f32,
@@ -15,6 +19,10 @@ pub struct FlashAttn {
 
 fn round_multiple(x: usize, m: usize) -> usize {
     (x + m - 1) / m * m
+}
+
+fn join_stream(stream: &Arc<CudaStream>, dependency: &Arc<CudaStream>) -> Result<()> {
+    stream.join(dependency).w()
 }
 
 impl FlashAttn {
@@ -141,8 +149,8 @@ impl FlashAttn {
         let seqlen_k_rounded = round_multiple(seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<T>(elem_count)? };
-        let softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
+        let mut dst = unsafe { dev.alloc::<T>(elem_count)? };
+        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -164,8 +172,8 @@ impl FlashAttn {
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
             let (v_ptr, _guard) = v.device_ptr(&stream);
-            let (dst_ptr, _guard) = dst.device_ptr(&stream);
-            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
+            let (dst_ptr, _guard) = dst.device_ptr_mut(&stream);
+            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
             ffi::run_mha(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -604,8 +612,8 @@ impl FlashAttnVarLen {
         let seqlen_k_rounded = round_multiple(self.max_seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<T>(elem_count)? };
-        let softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
+        let mut dst = unsafe { dev.alloc::<T>(elem_count)? };
+        let mut softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -623,12 +631,15 @@ impl FlashAttnVarLen {
             window_size_right = self.max_seqlen_k as i32;
         }
 
+        join_stream(&stream, seqlens_q.stream())?;
+        join_stream(&stream, seqlens_k.stream())?;
+
         unsafe {
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
             let (v_ptr, _guard) = v.device_ptr(&stream);
-            let (dst_ptr, _guard) = dst.device_ptr(&stream);
-            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
+            let (dst_ptr, _guard) = dst.device_ptr_mut(&stream);
+            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
             let (seqlens_q_ptr, _guard) = seqlens_q.device_ptr(&stream);
             let (seqlens_k_ptr, _guard) = seqlens_k.device_ptr(&stream);
             ffi::run_mha(

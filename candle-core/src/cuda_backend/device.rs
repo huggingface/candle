@@ -369,6 +369,19 @@ impl CudaDevice {
     pub fn new_with_stream(ordinal: usize) -> Result<Self> {
         let context = cudarc::driver::CudaContext::new(ordinal).w()?;
         let stream = context.new_stream().w()?;
+        Self::from_context_and_stream(context, stream)
+    }
+
+    pub fn new_with_per_thread_stream(ordinal: usize) -> Result<Self> {
+        let context = cudarc::driver::CudaContext::new(ordinal).w()?;
+        let stream = context.per_thread_stream();
+        Self::from_context_and_stream(context, stream)
+    }
+
+    fn from_context_and_stream(
+        context: Arc<cudarc::driver::CudaContext>,
+        stream: Arc<cudarc::driver::CudaStream>,
+    ) -> Result<Self> {
         let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
         let module_store = ModuleStore {
