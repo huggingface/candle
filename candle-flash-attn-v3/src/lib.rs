@@ -11,19 +11,13 @@ mod ffi;
 
 use candle::backend::BackendStorage;
 use candle::cuda_backend::{
-    cudarc::driver::{CudaStream, DevicePtr, DevicePtrMut, DeviceSlice},
-    WrapErr,
+    cudarc::driver::{DevicePtr, DevicePtrMut},
 };
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
-use std::sync::Arc;
 
 fn round_multiple(x: usize, m: usize) -> usize {
     (x + m - 1) / m * m
-}
-
-fn join_stream(stream: &Arc<CudaStream>, dependency: &Arc<CudaStream>) -> Result<()> {
-    stream.join(dependency).w()
 }
 
 pub struct FlashAttn {
@@ -632,8 +626,6 @@ impl FlashAttnVarLen {
         if window_size_left >= 0 && window_size_right < 0 {
             window_size_right = self.max_seqlen_k as i32;
         }
-        join_stream(&stream, seqlens_q.stream())?;
-        join_stream(&stream, seqlens_k.stream())?;
         unsafe {
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
