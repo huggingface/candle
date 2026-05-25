@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use candle::{IndexOp, Tensor};
 use candle_nn::{Activation, Module, VarBuilder};
 use serde::{Deserialize, Serialize};
+use crate::models::lightonocr_2_1b::language_model;
 use crate::models::lightonocr_2_1b::preprocessor::Preprocessor;
 use crate::models::lightonocr_2_1b::projector::Projector;
 use crate::models::pixtral::vision_model;
@@ -23,35 +26,31 @@ pub struct Model{
     pub vision_encoder: vision_model::Model,
     pub vision_config: vision_model::Config,
     pub projector: Projector,
-    pub preprocessor: Preprocessor,
-    pub language_model: qwen3::ModelForCausalLM,
+    pub language_model: language_model::ModelForCausalLM,
     pub image_token_id: usize,
     pub model_config: Config
 }
 
 impl Model {
-    pub fn new(cfg: Config, preprocessor: Preprocessor, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: Config, vb: VarBuilder) -> Result<Self> {
         let model_vb = vb.pp("model");
 
         let vision_encoder = vision_model::Model::new(
             &cfg.vision_config, 
             model_vb.pp("vision_encoder"))?;
 
+        
         let projector = Projector::new(
             cfg.vision_config.hidden_size , 
             model_vb.pp("vision_projection")
         )?;
 
-        let language_model = qwen3::ModelForCausalLM::new(
-            &cfg.text_config, 
-            model_vb.pp("language_model")
-        )?;
+        let language_model = language_model::ModelForCausalLM::new(&cfg.text_config, model_vb.pp("language_model"))?;
 
         Ok(Self { 
             vision_encoder, 
             vision_config: cfg.vision_config.clone(), 
             projector,
-            preprocessor, 
             language_model, 
             image_token_id: cfg.image_token_id,
             model_config: cfg
@@ -97,10 +96,4 @@ impl Model {
         Ok(Tensor::cat(&rows, 0)?
             .unsqueeze(0)?)  
     }
-
-    pub fn clear_kv_cache(&mut self) {
-        self.language_model.clear_kv_cache();
-    }
-
-    
 }
