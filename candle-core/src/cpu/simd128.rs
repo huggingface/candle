@@ -13,10 +13,7 @@ impl Cpu<ARR> for CurrentCpu {
 
     const STEP: usize = STEP;
     const EPR: usize = EPR;
-
-    fn n() -> usize {
-        ARR
-    }
+    const ARR: usize = ARR;
 
     unsafe fn zero() -> Self::Unit {
         f32x4_splat(0.0)

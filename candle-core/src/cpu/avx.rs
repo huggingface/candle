@@ -18,10 +18,7 @@ impl Cpu<ARR> for CurrentCpu {
 
     const STEP: usize = STEP;
     const EPR: usize = EPR;
-
-    fn n() -> usize {
-        ARR
-    }
+    const ARR: usize = ARR;
 
     unsafe fn zero() -> Self::Unit {
         _mm256_setzero_ps()
@@ -75,10 +72,7 @@ impl CpuF16<ARR> for CurrentCpuF16 {
 
     const STEP: usize = STEP;
     const EPR: usize = EPR;
-
-    fn n() -> usize {
-        ARR
-    }
+    const ARR: usize = ARR;
 
     unsafe fn zero() -> Self::Unit {
         _mm256_setzero_ps()
@@ -154,10 +148,7 @@ impl CpuBF16<ARR> for CurrentCpuBF16 {
 
     const STEP: usize = STEP;
     const EPR: usize = EPR;
-
-    fn n() -> usize {
-        ARR
-    }
+    const ARR: usize = ARR;
 
     unsafe fn zero() -> Self::Unit {
         _mm256_setzero_ps()
