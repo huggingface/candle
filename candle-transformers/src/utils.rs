@@ -41,7 +41,7 @@ pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> R
         .copied()
         .collect();
     let ctx = Tensor::from_slice(&unique, unique.len(), &device)?;
-    logits.apply_repeat_penalty(&ctx, penalty)
+    crate::generation::sampling::apply_repeat_penalty(&logits, &ctx, penalty)
 }
 
 /// Repeats a key or value tensor for grouped query attention

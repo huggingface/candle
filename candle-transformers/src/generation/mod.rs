@@ -3,6 +3,8 @@
 //! Functionality for modeling sampling strategies and logits processing in text generation
 //! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
 //! and combinations thereof.
+pub mod sampling;
+
 use candle::{DType, Device, Error, Result, Tensor, D};
 use rand::{distr::Distribution, SeedableRng};
 
@@ -90,7 +92,7 @@ impl LogitsProcessor {
                 self.sample_with_scaled_logits(&logits)
             }
             Sampling::TopK { k, temperature } => {
-                let logits = (&logits / temperature)?.apply_topk_mask(k)?;
+                let logits = sampling::apply_topk_mask(&(&logits / temperature)?, k)?;
                 self.sample_with_scaled_logits(&logits)
             }
             Sampling::TopP { p, temperature } => {
@@ -98,16 +100,16 @@ impl LogitsProcessor {
                 let logits = if p <= 0.0 || p >= 1.0 {
                     logits
                 } else {
-                    logits.apply_topp_mask(p)?
+                    sampling::apply_topp_mask(&logits, p)?
                 };
                 self.sample_with_scaled_logits(&logits)
             }
             Sampling::TopKThenTopP { k, p, temperature } => {
-                let logits = (&logits / temperature)?.apply_topk_mask(k)?;
+                let logits = sampling::apply_topk_mask(&(&logits / temperature)?, k)?;
                 let logits = if p <= 0.0 || p >= 1.0 {
                     logits
                 } else {
-                    logits.apply_topp_mask(p)?
+                    sampling::apply_topp_mask(&logits, p)?
                 };
                 self.sample_with_scaled_logits(&logits)
             }

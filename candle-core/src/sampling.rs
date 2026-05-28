@@ -1,4 +1,6 @@
-use crate::{CpuStorage, DType, Layout, Result, Shape, Tensor, D};
+#[cfg(feature = "metal")]
+use crate::DType;
+use crate::{CpuStorage, Layout, Result, Shape, Tensor};
 
 struct RepeatPenalty {
     penalty: f32,
@@ -194,60 +196,13 @@ impl crate::CustomOp2 for RepeatPenalty {
     }
 }
 
-impl Tensor {
-    /// Apply repetition penalty to logits.
-    ///
-    /// `context` must be a 1D U32 tensor of deduped previously seen token ids.
-    pub fn apply_repeat_penalty(&self, context: &Tensor, penalty: f32) -> Result<Tensor> {
-        debug_assert_eq!(context.dims().len(), 1);
-        self.apply_op2_no_bwd(context, &RepeatPenalty { penalty })
+/// Apply repetition penalty to logits.
+///
+/// `context` must be a 1D U32 tensor of deduped previously seen token ids.
+pub fn apply_repeat_penalty(logits: &Tensor, context: &Tensor, penalty: f32) -> Result<Tensor> {
+    debug_assert_eq!(context.dims().len(), 1);
+    if context.elem_count() == 0 {
+        return Ok(logits.clone());
     }
-
-    /// Zero out logits for all but the top `k` tokens (set to -inf).
-    /// Returns the tensor unchanged when `k >= vocab_size`.
-    pub fn apply_topk_mask(&self, k: usize) -> Result<Tensor> {
-        let vocab_size = self.elem_count();
-        if k >= vocab_size {
-            return Ok(self.clone());
-        }
-        let (sorted, _) = self.sort_last_dim(false)?;
-        // kth-largest value is at index k-1 in the desc sorted tensor.
-        let threshold = sorted.narrow(0, k - 1, 1)?.broadcast_as(self.shape())?;
-        let neg_inf =
-            Tensor::full(f32::NEG_INFINITY, self.shape(), self.device())?.to_dtype(self.dtype())?;
-        self.ge(&threshold)?.where_cond(self, &neg_inf)
-    }
-
-    /// Zero out logits for tokens outside the top-p nucleus (set to -inf).
-    ///
-    /// Computes softmax probabilities, sort desc, masks all tokens whose
-    /// exclusive prefix-sum of probabilities is >= `p`.
-    /// Ensures at least one token is always kept.
-    pub fn apply_topp_mask(&self, p: f64) -> Result<Tensor> {
-        let vocab_size = self.elem_count();
-        // TODO: candle-nn is not available in candle-core. Should move to candle-transformers as fns.
-        let max = self.max_keepdim(D::Minus1)?;
-        let exp = self.broadcast_sub(&max)?.exp()?;
-        let probs = exp.broadcast_div(&exp.sum_keepdim(D::Minus1)?)?;
-        let (sorted_probs, sorted_idx) = probs.sort_last_dim(false)?;
-
-        // Exclusive prefix-sum
-        let cumsum = sorted_probs.cumsum(D::Minus1)?;
-        let zero = Tensor::zeros(&[1], probs.dtype(), self.device())?;
-        let shifted = Tensor::cat(&[&zero, &cumsum.narrow(0, 0, vocab_size - 1)?], 0)?;
-
-        // Keep a token if the probability mass before it is still < p.
-        let keep_sorted = shifted.lt(p as f32)?;
-
-        // Scatter the sorted keep-mask back to the original vocabulary positions.
-        let keep_orig = Tensor::zeros(&[vocab_size], DType::U8, self.device())?.scatter(
-            &sorted_idx,
-            &keep_sorted,
-            D::Minus1,
-        )?;
-
-        let neg_inf =
-            Tensor::full(f32::NEG_INFINITY, self.shape(), self.device())?.to_dtype(self.dtype())?;
-        keep_orig.where_cond(self, &neg_inf)
-    }
+    logits.apply_op2_no_bwd(context, &RepeatPenalty { penalty })
 }

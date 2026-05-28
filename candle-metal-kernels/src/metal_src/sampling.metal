@@ -32,22 +32,13 @@ template <typename T, uint W = work_per_thread<T>()>
     uint tid [[thread_position_in_grid]]
 ) {
     const uint step = div_ceil<W>(vocab_size);
-    #pragma clang loop unroll(full)
     for (uint i = tid; i < vocab_size; i += step) {
         float logit = float(input[i]);
-
-        // Attempt to base `context` read starting point on `tid` and reduce conflicts. Probably unsuccessfully.
-        uint c = i + 1;
-        uint j = 0;
-        while (c != i) {
-            if (c >= context_size) {
-                c = 0;
-            }
+        for (uint j = 0; j < context_size; j++) {
             if (context[j] == i) {
                 logit = (logit > 0.0f) ? (logit / penalty) : (logit * penalty);
                 break;
             }
-            c++;
         }
         output[i] = T(logit);
     }
