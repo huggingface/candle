@@ -1,7 +1,7 @@
 mod ffi;
 
 use candle::backend::BackendStorage;
-use candle::cuda_backend::cudarc::driver::DevicePtr;
+use candle::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 
@@ -141,8 +141,8 @@ impl FlashAttn {
         let seqlen_k_rounded = round_multiple(seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<T>(elem_count)? };
-        let softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
+        let mut dst = unsafe { dev.alloc::<T>(elem_count)? };
+        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -164,8 +164,8 @@ impl FlashAttn {
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
             let (v_ptr, _guard) = v.device_ptr(&stream);
-            let (dst_ptr, _guard) = dst.device_ptr(&stream);
-            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
+            let (dst_ptr, _guard) = dst.device_ptr_mut(&stream);
+            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
             ffi::run_mha(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -604,8 +604,8 @@ impl FlashAttnVarLen {
         let seqlen_k_rounded = round_multiple(self.max_seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<T>(elem_count)? };
-        let softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
+        let mut dst = unsafe { dev.alloc::<T>(elem_count)? };
+        let mut softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -627,8 +627,8 @@ impl FlashAttnVarLen {
             let (q_ptr, _guard) = q.device_ptr(&stream);
             let (k_ptr, _guard) = k.device_ptr(&stream);
             let (v_ptr, _guard) = v.device_ptr(&stream);
-            let (dst_ptr, _guard) = dst.device_ptr(&stream);
-            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
+            let (dst_ptr, _guard) = dst.device_ptr_mut(&stream);
+            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
             let (seqlens_q_ptr, _guard) = seqlens_q.device_ptr(&stream);
             let (seqlens_k_ptr, _guard) = seqlens_k.device_ptr(&stream);
             ffi::run_mha(
