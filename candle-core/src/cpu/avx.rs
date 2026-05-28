@@ -162,12 +162,12 @@ impl CpuBF16 for CurrentCpuBF16 {
         _mm256_set1_ps(v)
     }
 
-    #[cfg(target_feature = "f16c")]
+    #[cfg(all(target_feature = "avx512bf16", target_feature = "avx512vl"))]
     unsafe fn load(mem_addr: *const bf16) -> Self::Unit {
-        _mm256_cvtph_ps(_mm_loadu_si128(mem_addr as *const __m128i))
+        _mm256_cvtpbh_ps(_mm_loadu_si128(mem_addr as *const __m128i))
     }
 
-    #[cfg(not(target_feature = "f16c"))]
+    #[cfg(not(all(target_feature = "avx512bf16", target_feature = "avx512vl")))]
     unsafe fn load(mem_addr: *const bf16) -> Self::Unit {
         let mut tmp = [0.0f32; 8];
         for i in 0..8 {
@@ -184,12 +184,12 @@ impl CpuBF16 for CurrentCpuBF16 {
         _mm256_add_ps(_mm256_mul_ps(b, c), a)
     }
 
-    #[cfg(target_feature = "f16c")]
+    #[cfg(all(target_feature = "avx512bf16", target_feature = "avx512vl"))]
     unsafe fn vec_store(mem_addr: *mut bf16, a: Self::Unit) {
-        _mm_storeu_si128(mem_addr as *mut __m128i, _mm256_cvtps_ph(a, 0))
+        _mm_storeu_si128(mem_addr as *mut __m128i, _mm256_cvtneps_pbh(a))
     }
 
-    #[cfg(not(target_feature = "f16c"))]
+    #[cfg(not(all(target_feature = "avx512bf16", target_feature = "avx512vl")))]
     unsafe fn vec_store(mem_addr: *mut bf16, a: Self::Unit) {
         let mut tmp = [0.0f32; 8];
         _mm256_storeu_ps(tmp.as_mut_ptr(), a);
