@@ -1111,6 +1111,13 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 
 #[test]
 fn quantized_mm() -> Result<()> {
+    println!(
+        "avx: {}, neon: {}, simd128: {}, f16c: {}",
+        candle_core::utils::with_avx(),
+        candle_core::utils::with_neon(),
+        candle_core::utils::with_simd128(),
+        candle_core::utils::with_f16c()
+    );
     ggml_matmul_error_test::<f32>()?;
     ggml_matmul_error_test::<half::f16>()?;
     ggml_matmul_error_test::<half::bf16>()?;
