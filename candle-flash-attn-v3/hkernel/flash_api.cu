@@ -172,7 +172,7 @@ void print_params(const Flash_fwd_params &p) {
 }
 
 
-void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+void run_mha_fwd_v3(Flash_fwd_params &params, cudaStream_t stream) {
     // Select a numeric code for precision:
     //   3 = cutlass::float_e4m3_t  (fp8)
     //   2 = cutlass::bfloat16_t    (bf16)
@@ -199,7 +199,7 @@ void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     });
 }
 
-extern "C" void run_mha(
+extern "C" void run_mha_v3(
     void *q_ptr,
     void *k_ptr,
     void *v_ptr,
@@ -325,5 +325,5 @@ extern "C" void run_mha(
     // print_params(params);
     
     cudaStream_t stream = 0; // Use the default stream.
-    run_mha_fwd(params, stream);
+    run_mha_fwd_v3(params, stream);
 }

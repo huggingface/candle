@@ -1,9 +1,8 @@
 use crate::utils::{get_tile_size, BufferOffset, EncoderProvider};
 use crate::{
     linear_split, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
-    Source,
+    Output, Source,
 };
-use objc2_metal::MTLResourceUsage;
 
 pub fn call_repeat_penalty(
     device: &Device,
@@ -25,7 +24,7 @@ pub fn call_repeat_penalty(
         encoder,
         (
             &input,
-            output,
+            Output::new(output),
             context,
             vocab_size as u32,
             context_size as u32,
@@ -36,9 +35,6 @@ pub fn call_repeat_penalty(
     let tile_size = get_tile_size(size_of::<f32>());
     let tiles = vocab_size.div_ceil(tile_size);
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.use_resource(context, MTLResourceUsage::Read);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
