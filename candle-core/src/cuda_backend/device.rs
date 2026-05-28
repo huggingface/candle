@@ -30,8 +30,11 @@ unsafe impl Send for CudaRng {}
 
 const CUDA_GRAPH_HTOD_CACHE_MAX_BYTES: usize = 4096;
 
+type CudaGraphHtodCacheKey = (DeviceId, TypeId, Vec<u8>);
+type CudaGraphHtodCache = HashMap<CudaGraphHtodCacheKey, Box<dyn Any>>;
+
 thread_local! {
-    static CUDA_GRAPH_HTOD_CACHE: RefCell<HashMap<(DeviceId, TypeId, Vec<u8>), Box<dyn Any>>> =
+    static CUDA_GRAPH_HTOD_CACHE: RefCell<CudaGraphHtodCache> =
         RefCell::new(HashMap::new());
     static CUDA_GRAPH_HTOD_CACHE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
@@ -369,6 +372,13 @@ impl CudaDevice {
     pub fn new_with_stream(ordinal: usize) -> Result<Self> {
         let context = cudarc::driver::CudaContext::new(ordinal).w()?;
         let stream = context.new_stream().w()?;
+        Self::from_context_and_stream(context, stream)
+    }
+
+    fn from_context_and_stream(
+        context: Arc<cudarc::driver::CudaContext>,
+        stream: Arc<cudarc::driver::CudaStream>,
+    ) -> Result<Self> {
         let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
         let module_store = ModuleStore {
@@ -392,22 +402,8 @@ impl BackendDevice for CudaDevice {
 
     fn new(ordinal: usize) -> Result<Self> {
         let context = cudarc::driver::CudaContext::new(ordinal).w()?;
-        let stream = context.default_stream();
-        let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
-        let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
-        let module_store = ModuleStore {
-            mdls: [const { None }; kernels::ALL_IDS.len()],
-        };
-        Ok(Self {
-            id: DeviceId::new(),
-            context,
-            stream,
-            blas: Arc::new(blas),
-            curand: Arc::new(Mutex::new(CudaRng(curand))),
-            modules: Arc::new(std::sync::RwLock::new(module_store)),
-            custom_modules: Arc::new(std::sync::RwLock::new(HashMap::new())),
-            seed_value: Arc::new(RwLock::new(299792458)),
-        })
+        let stream = context.per_thread_stream();
+        Self::from_context_and_stream(context, stream)
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {
