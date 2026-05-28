@@ -2582,9 +2582,9 @@ fn simple_eval_(
                         strides[i] = strides[i + 1] * dims[i + 1];
                     }
 
-                    for d in 0..rank {
+                    for dim in 0..rank {
                         for &i in &indices {
-                            out.push(((i / strides[d]) % dims[d]) as i64);
+                            out.push(((i / strides[dim]) % dims[dim]) as i64);
                         }
                     }
                 }
