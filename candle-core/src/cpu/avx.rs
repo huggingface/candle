@@ -12,7 +12,7 @@ const STEP: usize = 32;
 const EPR: usize = 8;
 const ARR: usize = STEP / EPR;
 
-impl Cpu<ARR> for CurrentCpu {
+impl Cpu for CurrentCpu {
     type Unit = __m256;
     type Array = [__m256; ARR];
 
@@ -66,7 +66,7 @@ impl Cpu<ARR> for CurrentCpu {
 }
 
 pub struct CurrentCpuF16 {}
-impl CpuF16<ARR> for CurrentCpuF16 {
+impl CpuF16 for CurrentCpuF16 {
     type Unit = __m256;
     type Array = [__m256; ARR];
 
@@ -142,7 +142,7 @@ impl CpuF16<ARR> for CurrentCpuF16 {
 }
 
 pub struct CurrentCpuBF16 {}
-impl CpuBF16<ARR> for CurrentCpuBF16 {
+impl CpuBF16 for CurrentCpuBF16 {
     type Unit = __m256;
     type Array = [__m256; ARR];
 

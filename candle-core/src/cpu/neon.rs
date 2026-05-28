@@ -7,10 +7,6 @@ use core::arch::aarch64::*;
 
 pub struct CurrentCpu {}
 
-const STEP: usize = 32;
-const EPR: usize = 4;
-const ARR: usize = STEP / EPR;
-
 impl CurrentCpu {
     #[cfg(target_arch = "aarch64")]
     unsafe fn reduce_one(x: float32x4_t) -> f32 {
@@ -23,13 +19,12 @@ impl CurrentCpu {
     }
 }
 
-impl Cpu<ARR> for CurrentCpu {
+impl Cpu for CurrentCpu {
     type Unit = float32x4_t;
-    type Array = [float32x4_t; ARR];
+    type Array = [float32x4_t; Self::ARR];
 
-    const STEP: usize = STEP;
-    const EPR: usize = EPR;
-    const ARR: usize = ARR;
+    const STEP: usize = 32;
+    const EPR: usize = 4;
 
     unsafe fn zero() -> Self::Unit {
         vdupq_n_f32(0.0)
@@ -40,7 +35,7 @@ impl Cpu<ARR> for CurrentCpu {
     }
 
     unsafe fn zero_array() -> Self::Array {
-        [Self::zero(); ARR]
+        [Self::zero(); Self::ARR]
     }
 
     unsafe fn load(mem_addr: *const f32) -> Self::Unit {
@@ -60,13 +55,13 @@ impl Cpu<ARR> for CurrentCpu {
     }
 
     unsafe fn vec_reduce(mut x: Self::Array, y: *mut f32) {
-        for i in 0..ARR / 2 {
+        for i in 0..Self::ARR / 2 {
             x[2 * i] = vaddq_f32(x[2 * i], x[2 * i + 1]);
         }
-        for i in 0..ARR / 4 {
+        for i in 0..Self::ARR / 4 {
             x[4 * i] = vaddq_f32(x[4 * i], x[4 * i + 2]);
         }
-        for i in 0..ARR / 8 {
+        for i in 0..Self::ARR / 8 {
             x[8 * i] = vaddq_f32(x[8 * i], x[8 * i + 4]);
         }
         *y = Self::reduce_one(x[0]);
@@ -89,24 +84,19 @@ mod fp16 {
 
         pub struct CurrentCpuF16 {}
 
-        const STEP_F16: usize = 32;
-        const EPR_F16: usize = 4;
-        const ARR_F16: usize = STEP_F16 / EPR_F16;
-
-        impl CpuF16<ARR_F16> for CurrentCpuF16 {
+        impl CpuF16 for CurrentCpuF16 {
             type Unit = float32x4_t;
-            type Array = [float32x4_t; ARR_F16];
+            type Array = [float32x4_t; Self::ARR];
 
-            const STEP: usize = STEP_F16;
-            const EPR: usize = EPR_F16;
-            const ARR: usize = ARR_F16;
+            const STEP: usize = 32;
+            const EPR: usize = 4;
 
             unsafe fn zero() -> Self::Unit {
                 vdupq_n_f32(0.0)
             }
 
             unsafe fn zero_array() -> Self::Array {
-                [Self::zero(); ARR_F16]
+                [Self::zero(); Self::ARR]
             }
 
             unsafe fn load(mem_addr: *const f16) -> Self::Unit {
@@ -130,13 +120,13 @@ mod fp16 {
             }
 
             unsafe fn vec_reduce(mut x: Self::Array, y: *mut f32) {
-                for i in 0..ARR_F16 / 2 {
+                for i in 0..Self::ARR / 2 {
                     x[2 * i] = vaddq_f32(x[2 * i], x[2 * i + 1]);
                 }
-                for i in 0..ARR_F16 / 4 {
+                for i in 0..Self::ARR / 4 {
                     x[4 * i] = vaddq_f32(x[4 * i], x[4 * i + 2]);
                 }
-                for i in 0..ARR_F16 / 8 {
+                for i in 0..Self::ARR / 8 {
                     x[8 * i] = vaddq_f32(x[8 * i], x[8 * i + 4]);
                 }
                 *y = vaddvq_f32(x[0]);
@@ -194,17 +184,12 @@ mod fp16 {
             }
         }
 
-        const STEP_F16: usize = 32;
-        const EPR_F16: usize = 8;
-        const ARR_F16: usize = STEP_F16 / EPR_F16;
-
-        impl CpuF16<ARR_F16> for CurrentCpuF16 {
+        impl CpuF16 for CurrentCpuF16 {
             type Unit = float16x8_t;
-            type Array = [float16x8_t; ARR_F16];
+            type Array = [float16x8_t; Self::ARR];
 
-            const STEP: usize = STEP_F16;
-            const EPR: usize = EPR_F16;
-            const ARR: usize = ARR_F16;
+            const STEP: usize = 32;
+            const EPR: usize = 8;
             // Flush f16 accumulators to f32 every `FLUSH_INTERVAL` steps to bound rounding error.
             const FLUSH_INTERVAL: usize = 16;
 
@@ -219,7 +204,7 @@ mod fp16 {
             }
 
             unsafe fn zero_array() -> Self::Array {
-                [Self::zero(); ARR_F16]
+                [Self::zero(); Self::ARR]
             }
 
             unsafe fn load(mem_addr: *const f16) -> Self::Unit {
@@ -252,8 +237,8 @@ mod fp16 {
 
             unsafe fn vec_reduce(x: Self::Array, y: *mut f32) {
                 let mut sum = 0.0f32;
-                for i in 0..ARR_F16 {
-                    sum += Self::reduce_one(x[i]);
+                for item in x {
+                    sum += Self::reduce_one(item);
                 }
                 *y = sum;
             }
@@ -301,24 +286,19 @@ mod bf16 {
 
         pub struct CurrentCpuBF16 {}
 
-        const STEP_BF16: usize = 32;
-        const EPR_BF16: usize = 4;
-        const ARR_BF16: usize = STEP_BF16 / EPR_BF16;
-
-        impl CpuBF16<ARR_BF16> for CurrentCpuBF16 {
+        impl CpuBF16 for CurrentCpuBF16 {
             type Unit = float32x4_t;
-            type Array = [float32x4_t; ARR_BF16];
+            type Array = [float32x4_t; Self::ARR];
 
-            const STEP: usize = STEP_BF16;
-            const EPR: usize = EPR_BF16;
-            const ARR: usize = ARR_BF16;
+            const STEP: usize = 32;
+            const EPR: usize = 4;
 
             unsafe fn zero() -> Self::Unit {
                 vdupq_n_f32(0.0)
             }
 
             unsafe fn zero_array() -> Self::Array {
-                [Self::zero(); ARR_BF16]
+                [Self::zero(); Self::ARR]
             }
 
             unsafe fn load(mem_addr: *const bf16) -> Self::Unit {
@@ -337,13 +317,13 @@ mod bf16 {
             }
 
             unsafe fn vec_reduce(mut x: Self::Array, y: *mut f32) {
-                for i in 0..ARR_BF16 / 2 {
+                for i in 0..Self::ARR / 2 {
                     x[2 * i] = vaddq_f32(x[2 * i], x[2 * i + 1]);
                 }
-                for i in 0..ARR_BF16 / 4 {
+                for i in 0..Self::ARR / 4 {
                     x[4 * i] = vaddq_f32(x[4 * i], x[4 * i + 2]);
                 }
-                for i in 0..ARR_BF16 / 8 {
+                for i in 0..Self::ARR / 8 {
                     x[8 * i] = vaddq_f32(x[8 * i], x[8 * i + 4]);
                 }
                 *y = vaddvq_f32(x[0]);
@@ -370,24 +350,19 @@ mod bf16 {
 
         pub struct CurrentCpuBF16 {}
 
-        const STEP_BF16: usize = 32;
-        const EPR_BF16: usize = 8;
-        const ARR_BF16: usize = STEP_BF16 / EPR_BF16;
-
-        impl CpuBF16<ARR_BF16> for CurrentCpuBF16 {
+        impl CpuBF16 for CurrentCpuBF16 {
             type Unit = uint16x8_t;
-            type Array = [uint16x8_t; ARR_BF16];
+            type Array = [uint16x8_t; Self::ARR];
 
-            const STEP: usize = STEP_BF16;
-            const EPR: usize = EPR_BF16;
-            const ARR: usize = ARR_BF16;
+            const STEP: usize = 32;
+            const EPR: usize = 8;
 
             unsafe fn zero() -> Self::Unit {
                 vreinterpretq_u16_f32(vdupq_n_f32(0.0))
             }
 
             unsafe fn zero_array() -> Self::Array {
-                [Self::zero(); ARR_BF16]
+                [Self::zero(); Self::ARR]
             }
 
             unsafe fn load(mem_addr: *const bf16) -> Self::Unit {
@@ -425,11 +400,11 @@ mod bf16 {
                 // IMPORTANT: `x` is not bf16x8 here. It is 128 bits used as f32x4.
                 // This means that if you use `vec_reduce` where `x` is actually bf16x8 you will get
                 // entirely wrong results.
-                let mut xf: [float32x4_t; ARR_BF16] = std::mem::transmute(x);
-                for i in 0..ARR_BF16 / 2 {
+                let mut xf: [float32x4_t; Self::ARR] = std::mem::transmute(x);
+                for i in 0..Self::ARR / 2 {
                     xf[2 * i] = vaddq_f32(xf[2 * i], xf[2 * i + 1]);
                 }
-                for i in 0..ARR_BF16 / 4 {
+                for i in 0..Self::ARR / 4 {
                     xf[4 * i] = vaddq_f32(xf[4 * i], xf[4 * i + 2]);
                 }
                 *y = vaddvq_f32(xf[0]);

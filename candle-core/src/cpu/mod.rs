@@ -1,15 +1,15 @@
 //! Traits and methods for CPU-backed Tensors
-
+#![allow(clippy::needless_range_loop)]
 pub mod erf;
 pub mod kernels;
 
 #[allow(unused)]
-trait Cpu<const ARR: usize> {
+trait Cpu {
     type Unit;
     type Array;
     const STEP: usize;
     const EPR: usize;
-    const ARR: usize;
+    const ARR: usize = Self::STEP / Self::EPR;
 
     unsafe fn zero() -> Self::Unit;
     unsafe fn zero_array() -> Self::Array;
@@ -22,12 +22,12 @@ trait Cpu<const ARR: usize> {
 }
 
 #[allow(unused)]
-trait CpuF16<const ARR: usize> {
+trait CpuF16 {
     type Unit;
     type Array;
     const STEP: usize;
     const EPR: usize;
-    const ARR: usize;
+    const ARR: usize = Self::STEP / Self::EPR;
     // How many outer loop steps to accumulate in Self::Unit before flushing to f32.
     // Set to a finite value to bound rounding error (16 for example).
     const FLUSH_INTERVAL: usize = usize::MAX;
@@ -43,12 +43,12 @@ trait CpuF16<const ARR: usize> {
 }
 
 #[allow(unused)]
-trait CpuBF16<const ARR: usize> {
+trait CpuBF16 {
     type Unit;
     type Array;
     const STEP: usize;
     const EPR: usize;
-    const ARR: usize;
+    const ARR: usize = Self::STEP / Self::EPR;
 
     unsafe fn zero() -> Self::Unit;
     unsafe fn zero_array() -> Self::Array;
