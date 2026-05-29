@@ -169,11 +169,7 @@ impl CpuBF16 for CurrentCpuBF16 {
 
     #[cfg(not(all(target_feature = "avx512bf16", target_feature = "avx512vl")))]
     unsafe fn load(mem_addr: *const bf16) -> Self::Unit {
-        let mut tmp = [0.0f32; 8];
-        for i in 0..8 {
-            tmp[i] = (*mem_addr.add(i)).to_f32();
-        }
-        _mm256_loadu_ps(tmp.as_ptr())
+        _mm256_cvtpbh_ps(_mm_loadu_si128(mem_addr as *const __m128i))
     }
 
     unsafe fn vec_add(a: Self::Unit, b: Self::Unit) -> Self::Unit {
@@ -191,11 +187,7 @@ impl CpuBF16 for CurrentCpuBF16 {
 
     #[cfg(not(all(target_feature = "avx512bf16", target_feature = "avx512vl")))]
     unsafe fn vec_store(mem_addr: *mut bf16, a: Self::Unit) {
-        let mut tmp = [0.0f32; 8];
-        _mm256_storeu_ps(tmp.as_mut_ptr(), a);
-        for i in 0..8 {
-            *mem_addr.add(i) = bf16::from_f32(tmp[i]);
-        }
+        _mm_storeu_si128(mem_addr as *mut __m128i, _mm256_cvtneps_pbh(a))
     }
 
     unsafe fn vec_reduce(mut x: Self::Array, y: *mut f32) {
