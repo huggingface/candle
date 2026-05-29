@@ -170,7 +170,7 @@ pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     let mut sum = CurrentCpuF16::zero_array();
     let mut steps_since_flush = 0usize;
     let mut i = 0;
-    while i + CurrentCpu::STEP <= k {
+    while i + CurrentCpuF16::STEP <= k {
         for j in 0..CurrentCpuF16::ARR {
             sum[j] = CurrentCpuF16::vec_fma(
                 sum[j],
@@ -207,7 +207,7 @@ pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
     let mut sum = CurrentCpuBF16::zero_array();
 
     let mut i = 0;
-    while i + CurrentCpu::STEP <= k {
+    while i + CurrentCpuBF16::STEP <= k {
         for j in 0..CurrentCpuBF16::ARR {
             sum[j] = CurrentCpuBF16::vec_fma(
                 sum[j],
@@ -215,7 +215,7 @@ pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
                 CurrentCpuBF16::load(b_row.add(i + j * CurrentCpuBF16::EPR)),
             );
         }
-        i += CurrentCpu::STEP;
+        i += CurrentCpuBF16::STEP;
     }
 
     CurrentCpuBF16::vec_reduce(sum, c);
