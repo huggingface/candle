@@ -3,7 +3,7 @@ use super::{Cpu, CpuBF16, CpuF16};
 use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
-
+use core::mem::transmute;
 use half::{bf16, f16};
 
 pub struct CurrentCpu {}
@@ -164,12 +164,12 @@ impl CpuBF16 for CurrentCpuBF16 {
 
     #[cfg(all(target_feature = "avx512bf16", target_feature = "avx512vl"))]
     unsafe fn load(mem_addr: *const bf16) -> Self::Unit {
-        _mm256_cvtpbh_ps(_mm_loadu_si128(mem_addr as *const __m128i))
+        _mm256_cvtpbh_ps(transmute(_mm_loadu_si128(mem_addr as *const __m128i)))
     }
 
     #[cfg(not(all(target_feature = "avx512bf16", target_feature = "avx512vl")))]
     unsafe fn load(mem_addr: *const bf16) -> Self::Unit {
-        _mm256_cvtpbh_ps(_mm_loadu_si128(mem_addr as *const __m128i))
+        _mm256_cvtpbh_ps(transmute(_mm_loadu_si128(mem_addr as *const __m128i)))
     }
 
     unsafe fn vec_add(a: Self::Unit, b: Self::Unit) -> Self::Unit {
@@ -182,12 +182,12 @@ impl CpuBF16 for CurrentCpuBF16 {
 
     #[cfg(all(target_feature = "avx512bf16", target_feature = "avx512vl"))]
     unsafe fn vec_store(mem_addr: *mut bf16, a: Self::Unit) {
-        _mm_storeu_si128(mem_addr as *mut __m128i, _mm256_cvtneps_pbh(a))
+        _mm_storeu_si128(mem_addr as *mut __m128i, transmute(_mm256_cvtneps_pbh(a)))
     }
 
     #[cfg(not(all(target_feature = "avx512bf16", target_feature = "avx512vl")))]
     unsafe fn vec_store(mem_addr: *mut bf16, a: Self::Unit) {
-        _mm_storeu_si128(mem_addr as *mut __m128i, _mm256_cvtneps_pbh(a))
+        _mm_storeu_si128(mem_addr as *mut __m128i, transmute(_mm256_cvtneps_pbh(a)))
     }
 
     unsafe fn vec_reduce(mut x: Self::Array, y: *mut f32) {
