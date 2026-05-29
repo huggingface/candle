@@ -117,6 +117,20 @@ impl Layout {
         self.shape.is_fortran_contiguous(&self.stride)
     }
 
+    pub fn is_scalar(&self) -> bool {
+        let dims = self.dims();
+        dims.is_empty() || dims.iter().all(|d| *d == 1)
+    }
+
+    /// Returns true if the data is actually a scalar during broadcast
+    pub fn is_scalar_broadcast(&self) -> bool {
+        self.stride().iter().all(|s| *s == 0)
+    }
+
+    pub fn is_scalar_like(&self) -> bool {
+        self.is_scalar() || self.is_scalar_broadcast()
+    }
+
     pub fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self> {
         let dims = self.shape().dims();
         if dim >= dims.len() {
