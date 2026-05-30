@@ -472,8 +472,15 @@ pub trait ShapeWithOneHole {
 }
 
 impl<S: Into<Shape>> ShapeWithOneHole for S {
-    fn into_shape(self, _el_count: usize) -> Result<Shape> {
-        Ok(self.into())
+    fn into_shape(self, el_count: usize) -> Result<Shape> {
+        let shape: Shape = self.into();
+        if shape.elem_count() != el_count {
+            crate::bail!(
+                "shape {shape:?} declares {} elements but storage has {el_count}",
+                shape.elem_count()
+            );
+        }
+        Ok(shape)
     }
 }
 
