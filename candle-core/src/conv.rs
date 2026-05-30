@@ -193,17 +193,9 @@ impl Tensor {
         if groups == 1 {
             self.conv1d_single_group(kernel, &params)
         } else if c_in_k == 1 && c_out == c_in && groups == c_in && stride == 1 && dilation == 1 {
-            // Depthwise conv1d (groups == in_channels, unit stride/dilation, no channel
-            // multiplier). The per-group decomposition below launches O(groups) tiny kernels
-            // (plus a `cat`), dominated by launch overhead on CUDA — see issue #3389, where
-            // depthwise conv layers were 54% of total inference time on an RTX 5090 because of
-            // ~6000 kernel launches for `groups=2048, k=3`. Depthwise conv is just a per-channel
-            // weighted sum over the kernel window, expressible as `k_size` slices each scaled by a
-            // per-channel scalar and accumulated: a fixed number of elementwise kernels (~2*k_size)
-            // regardless of the channel count, numerically equivalent to the existing kernels (up
-            // to floating-point summation order, just like the CPU/CUDA backends already differ).
-            // The stride/dilation==1 guard is only because candle has no strided-narrow primitive
-            // yet; other strides keep the old per-group path.
+            // Depthwise fast path: the per-group decomposition below launches O(groups) tiny
+            // kernels, which dominates runtime on CUDA (issue #3389). Restricted to unit
+            // stride/dilation as there is no strided-narrow primitive yet.
             self.conv1d_depthwise(kernel, &params)
         } else {
             let blocks = self.chunk(groups, 1)?;
@@ -217,22 +209,21 @@ impl Tensor {
         }
     }
 
-    // Depthwise 1D convolution (stride == dilation == 1) with elementwise ops only, no per-group
-    // loop. `self`: (b_size, c, l_in); `kernel`: (c, 1, k_size); out: (b_size, c, l_out).
+    // Depthwise 1D conv as a per-channel weighted sum of k_size shifted slices, elementwise only.
+    // `self`: (b_size, c, l_in); `kernel`: (c, 1, k_size); out: (b_size, c, l_out).
     fn conv1d_depthwise(&self, kernel: &Self, params: &ParamsConv1D) -> Result<Self> {
         let (b_size, c, _l_in) = self.dims3()?;
         let l_out = params.l_out();
-        // (b_size, c, l_in + 2*padding)
         let padded = if params.padding == 0 {
             self.clone()
         } else {
             self.pad_with_zeros(2, params.padding, params.padding)?
         };
-        // (c, 1, k_size) -> (1, c, k_size) so it broadcasts over the batch dimension.
+        // (c, 1, k_size) -> (1, c, k_size) to broadcast over the batch dimension.
         let kernel = kernel.reshape((c, params.k_size))?.unsqueeze(0)?;
         let mut out: Option<Tensor> = None;
         for k in 0..params.k_size {
-            // out[b, c, t] += padded[b, c, t + k] * kernel[c, k]   (stride == dilation == 1)
+            // out[b, c, t] += padded[b, c, t + k] * kernel[c, k]
             let slice = padded.narrow(2, k, l_out)?; // (b_size, c, l_out)
             let w_k = kernel.narrow(2, k, 1)?; // (1, c, 1)
             let term = slice.broadcast_mul(&w_k)?;
@@ -243,7 +234,7 @@ impl Tensor {
         }
         match out {
             Some(out) => Ok(out),
-            // k_size == 0 is rejected upstream by the kernel-shape checks; be defensive anyway.
+            // k_size == 0 is rejected upstream; handled defensively.
             None => Tensor::zeros((b_size, c, l_out), self.dtype(), self.device()),
         }
     }
@@ -373,9 +364,7 @@ impl Tensor {
         if groups == 1 {
             self.conv2d_single_group(kernel, &params)
         } else if c_in_k == 1 && c_out == c_in && groups == c_in && stride == 1 && dilation == 1 {
-            // Depthwise conv2d — see `conv1d_with_algo` for the rationale (issue #3389).
-            // `k_h * k_w` slices, each scaled by a per-channel scalar and accumulated: a fixed
-            // number of elementwise kernels independent of the channel count.
+            // Depthwise fast path, see `conv1d_with_algo` (issue #3389).
             self.conv2d_depthwise(kernel, &params)
         } else {
             let blocks = self.chunk(groups, 1)?;
@@ -389,7 +378,7 @@ impl Tensor {
         }
     }
 
-    // Depthwise 2D convolution (stride == dilation == 1) implemented with elementwise ops only.
+    // Depthwise 2D conv, the 2D analogue of `conv1d_depthwise`.
     // `self`: (b, c, h, w); `kernel`: (c, 1, k_h, k_w); out: (b, c, out_h, out_w).
     fn conv2d_depthwise(&self, kernel: &Self, params: &ParamsConv2D) -> Result<Self> {
         let (b_size, c, _i_h, _i_w) = self.dims4()?;

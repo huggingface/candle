@@ -971,19 +971,14 @@ test_device!(
     conv2d_c_eq_h_eq_w_metal
 );
 
-// Depthwise convolutions (groups == in_channels). The fast depthwise path
-// (groups == c_in, c_in_k == 1, stride == dilation == 1) is exercised here and
-// cross-checked against an *independent* code path: building the equivalent
-// block-diagonal dense weight (c_out, c_in, k...) and running a plain
-// `groups == 1` convolution (the im2col / cuDNN path). They must agree up to
+// Cross-checks the depthwise fast path against an independent reference: the equivalent
+// block-diagonal dense weight run through the `groups == 1` path. They must agree up to
 // floating-point summation order.
 fn conv1d_depthwise(dev: &Device) -> Result<()> {
     let (b, c, l, k) = (2usize, 6usize, 13usize, 3usize);
     let t = Tensor::randn(0f32, 1f32, (b, c, l), dev)?;
-    // Depthwise weight: (c_out=c, c_in_k=1, k).
     let w = Tensor::randn(0f32, 1f32, (c, 1, k), dev)?;
-    // Equivalent block-diagonal dense weight (c_out=c, c_in=c, k), zero off the diagonal:
-    // w (c,1,k) -> (c,k,1); eye (c,c) -> (c,1,c); product -> (c,k,c) -> transpose -> (c,c,k).
+    // Block-diagonal dense weight (c, c, k), zero off the diagonal.
     let dense = {
         let eye = Tensor::eye(c, t.dtype(), dev)?.unsqueeze(1)?; // (c, 1, c)
         let wk = w.reshape((c, k))?.unsqueeze(2)?; // (c, k, 1)
@@ -1007,9 +1002,8 @@ fn conv1d_depthwise(dev: &Device) -> Result<()> {
 fn conv2d_depthwise(dev: &Device) -> Result<()> {
     let (b, c, h, w_, k) = (2usize, 5usize, 5usize, 7usize, 3usize);
     let t = Tensor::randn(0f32, 1f32, (b, c, h, w_), dev)?;
-    // Depthwise weight: (c_out=c, c_in_k=1, k, k).
     let weight = Tensor::randn(0f32, 1f32, (c, 1, k, k), dev)?;
-    // Equivalent block-diagonal dense weight (c_out=c, c_in=c, k, k), zero off the diagonal.
+    // Block-diagonal dense weight (c, c, k, k), zero off the diagonal.
     let dense = {
         let eye = Tensor::eye(c, t.dtype(), dev)?.reshape((c, c, 1, 1))?;
         let wk = weight.reshape((c, 1, k, k))?;
