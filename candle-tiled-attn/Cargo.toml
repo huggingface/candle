@@ -1,0 +1,20 @@
+[package]
+name = "candle-tiled-attn"
+version = "0.10.2"
+edition = "2021"
+
+description = "Simple tiled CUDA attention kernels for Candle"
+repository = "https://github.com/huggingface/candle"
+keywords = ["machine-learning", "cuda", "attention"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+candle = { workspace = true }
+half = { workspace = true }
+
+[build-dependencies]
+cudaforge = { git = "https://github.com/guoqingbao/cudaforge", rev = "64a7f7a7926cc0c1a9b896ab853dedbcb74617a6", optional = true }
+
+[features]
+cuda = ["candle/cuda", "dep:cudaforge"]
