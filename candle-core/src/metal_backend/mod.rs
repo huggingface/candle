@@ -1751,6 +1751,8 @@ impl BackendStorage for MetalStorage {
                 DType::F16 => candle_metal_kernels::copy2d::HALF,
                 DType::BF16 => candle_metal_kernels::copy2d::BFLOAT,
                 DType::I64 => candle_metal_kernels::copy2d::I64,
+                DType::I32 => candle_metal_kernels::copy2d::I32,
+                DType::I16 => candle_metal_kernels::copy2d::I16,
                 DType::U32 => candle_metal_kernels::copy2d::U32,
                 DType::U8 => candle_metal_kernels::copy2d::U8,
                 dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
