@@ -983,9 +983,6 @@ METAL_FUNC void rmsnorm(
     }
 }
 
-// Accumulator for RMSNorm: tracks a running sum of squares (Σx²), not a mean.
-// Unlike LayerNormValue, no `m2` field is needed because RMSNorm only requires
-// the second raw moment, so partials combine by plain addition (see RMSReduceOp).
 template<typename T>
 struct RMS {
     uint count;
@@ -1001,8 +998,6 @@ struct RMSLoadOp {
         return { 0, 0 };
     }
 
-    // `b` arrives as RMS<T>{0, x_i} — see operation<OP, RMS<T>>::operator() below.
-    // Each call folds one input element x_i into the running Σx².
     METAL_FUNC RMS<T> operator()(RMS<T> a, RMS<T> b) {
         a.sum_sq += (b.sum_sq * b.sum_sq);
         a.count += 1;
@@ -1016,13 +1011,6 @@ struct RMSReduceOp {
         return { 0, 0 };
     }
 
-    // Merging two partial Σx² values in the tree reduction is plain addition.
-    // No Welford-style correction term applies here: Welford merges running
-    // *means* (and tracks an `m2` companion field), whereas RMS<T> only carries
-    // a raw sum of squares. The previous implementation had a `delta*delta`
-    // correction that was mathematically zero by uint integer division but
-    // overflowed F32 to Inf for inputs around 1e9+, poisoning the reduction
-    // with Inf * 0 = NaN.
     METAL_FUNC RMS<T> operator()(RMS<T> a, RMS<T> b) {
         a.sum_sq += b.sum_sq;
         a.count += b.count;

@@ -99,12 +99,6 @@ fn rms_norml(device: &Device) -> Result<()> {
     Ok(())
 }
 
-// Regression: the sum-of-squares tree reduction must stay numerically stable
-// when the input has F32 magnitudes close to the edge of the representable
-// range. With values around 1e9 per element, per-thread sum-of-squares partials
-// can reach ~1e20 and any `delta*delta`-style intermediate in the merge step
-// would overflow F32 (max ~3.4e38) and turn the final normalisation into NaN.
-// Both `rms_norm` and `rms_norm_slow` must return finite outputs that agree.
 fn rms_norm_large_magnitude(device: &Device) -> Result<()> {
     let (rows, hidden) = (4usize, 6912usize);
     let data: Vec<f32> = (0..rows * hidden)
