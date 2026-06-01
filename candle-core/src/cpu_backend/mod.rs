@@ -883,48 +883,63 @@ fn copy2d_<T: Copy>(
     src_offset: usize,
     dst_offset: usize,
 ) {
-    for i1 in 0..d1 {
-        let dst_idx = i1 * dst_stride1 + dst_offset;
-        let src_idx = i1 * src_stride1 + src_offset;
-        let dst = &mut dst[dst_idx..dst_idx + d2];
-        let src = &src[src_idx..src_idx + d2];
-        dst.copy_from_slice(src)
+    // Both are contiguous - one memcpy covers everything.
+    if src_stride1 == d2 && dst_stride1 == d2 {
+        let src_start = src_offset;
+        let dst_start = dst_offset;
+        dst[dst_start..dst_start + d1 * d2].copy_from_slice(&src[src_start..src_start + d1 * d2]);
+        return;
+    }
+    let mut src_idx = src_offset;
+    let mut dst_idx = dst_offset;
+    for _ in 0..d1 {
+        dst[dst_idx..dst_idx + d2].copy_from_slice(&src[src_idx..src_idx + d2]);
+        src_idx += src_stride1;
+        dst_idx += dst_stride1;
     }
 }
 
 fn copy_strided_src_<T: Copy>(src: &[T], dst: &mut [T], dst_offset: usize, src_l: &Layout) {
     match src_l.strided_blocks() {
-        crate::StridedBlocks::SingleBlock { start_offset, len } => {
-            let to_copy = (dst.len() - dst_offset).min(len);
-            dst[dst_offset..dst_offset + to_copy]
-                .copy_from_slice(&src[start_offset..start_offset + to_copy])
-        }
+        crate::StridedBlocks::SingleBlock { start_offset, len } => dst
+            [dst_offset..dst_offset + len]
+            .copy_from_slice(&src[start_offset..start_offset + len]),
+        crate::StridedBlocks::UniformBlocks {
+            start_offset,
+            block_len,
+            count,
+            src_stride,
+        } => copy2d_(
+            src,
+            dst,
+            count,
+            block_len,
+            src_stride,
+            block_len,
+            start_offset,
+            dst_offset,
+        ),
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
             block_len: 1,
         } => {
-            for (dst_index, src_index) in block_start_index.enumerate() {
-                let dst_index = dst_index + dst_offset;
-                if dst_index >= dst.len() {
-                    break;
-                }
-                dst[dst_index] = src[src_index]
+            let n = block_start_index.len();
+            let dst = &mut dst[dst_offset..dst_offset + n];
+            for (dst_elem, src_index) in dst.iter_mut().zip(block_start_index) {
+                *dst_elem = src[src_index]
             }
         }
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
             block_len,
         } => {
-            let mut dst_index = dst_offset;
+            let n_blocks = block_start_index.len();
+            let dst = &mut dst[dst_offset..dst_offset + n_blocks * block_len];
+            let mut dst_index = 0;
             for src_index in block_start_index {
-                let next_dst_index = dst_index + block_len;
-                if dst_index >= dst.len() {
-                    break;
-                }
-                let to_copy = usize::min(block_len, dst.len() - dst_index);
-                dst[dst_index..dst_index + to_copy]
-                    .copy_from_slice(&src[src_index..src_index + to_copy]);
-                dst_index = next_dst_index
+                dst[dst_index..dst_index + block_len]
+                    .copy_from_slice(&src[src_index..src_index + block_len]);
+                dst_index += block_len;
             }
         }
     }
@@ -2970,6 +2985,17 @@ impl BackendStorage for CpuStorage {
             match l.strided_blocks() {
                 crate::StridedBlocks::SingleBlock { start_offset, len } => {
                     src[start_offset..start_offset + len].fill(s)
+                }
+                crate::StridedBlocks::UniformBlocks {
+                    start_offset,
+                    block_len,
+                    count,
+                    src_stride,
+                } => {
+                    for i in 0..count {
+                        let start = start_offset + i * src_stride;
+                        src[start..start + block_len].fill(s)
+                    }
                 }
                 crate::StridedBlocks::MultipleBlocks {
                     block_start_index,

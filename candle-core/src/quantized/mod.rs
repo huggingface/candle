@@ -255,6 +255,22 @@ impl QStorage {
             }
         }
     }
+
+    #[cfg(feature = "cuda")]
+    pub fn device_ptr_with_guard<'a>(
+        &'a self,
+        stream: &'a crate::cuda_backend::cudarc::driver::CudaStream,
+    ) -> Result<(
+        *const u8,
+        crate::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    )> {
+        match self {
+            QStorage::Cuda(storage) => storage.device_ptr_with_guard(stream),
+            QStorage::Metal(_) | QStorage::Cpu(_) => {
+                crate::bail!("not implemented");
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -695,6 +711,17 @@ impl QTensor {
                 crate::bail!("not implemented");
             }
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn device_ptr_with_guard<'a>(
+        &'a self,
+        stream: &'a crate::cuda_backend::cudarc::driver::CudaStream,
+    ) -> Result<(
+        *const u8,
+        crate::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    )> {
+        self.storage.device_ptr_with_guard(stream)
     }
 }
 
