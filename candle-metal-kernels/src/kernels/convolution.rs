@@ -1,7 +1,8 @@
 use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
-use objc2_metal::MTLResourceUsage;
+use crate::{
+    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub fn call_im2col1d_strided(
@@ -25,10 +26,19 @@ pub fn call_im2col1d_strided(
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
-        (dst_el, l_out, k_size, stride, padding, dilation, shape, strides, &input, output)
+        (
+            dst_el,
+            l_out,
+            k_size,
+            stride,
+            padding,
+            dilation,
+            shape,
+            strides,
+            &input,
+            Output::new(output)
+        )
     );
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -57,10 +67,17 @@ pub fn call_col2im1d(
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
-        (dst_el, l_out, l_in, c_out, k_size, stride, &input, output)
+        (
+            dst_el,
+            l_out,
+            l_in,
+            c_out,
+            k_size,
+            stride,
+            &input,
+            Output::new(output)
+        )
     );
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -93,12 +110,20 @@ pub fn call_im2col_strided(
     set_params!(
         encoder,
         (
-            dst_el, h_out, w_out, h_k, w_k, stride, padding, dilation, shape, strides, &input,
-            output
+            dst_el,
+            h_out,
+            w_out,
+            h_k,
+            w_k,
+            stride,
+            padding,
+            dilation,
+            shape,
+            strides,
+            &input,
+            Output::new(output)
         )
     );
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -126,10 +151,17 @@ pub fn call_upsample_nearest_2d(
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
-        (out_w, out_h, scale_w, scale_h, shape, strides, &input, output)
+        (
+            out_w,
+            out_h,
+            scale_w,
+            scale_h,
+            shape,
+            strides,
+            &input,
+            Output::new(output)
+        )
     );
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -171,12 +203,10 @@ pub fn call_upsample_bilinear_2d(
             shape,
             strides,
             &input,
-            output
+            Output::new(output)
         )
     );
 
-    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -206,10 +236,17 @@ pub fn call_pool2d(
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
-        (w_k, h_k, w_stride, h_stride, shape, strides, input, output)
+        (
+            w_k,
+            h_k,
+            w_stride,
+            h_stride,
+            shape,
+            strides,
+            input,
+            Output::new(output)
+        )
     );
-    encoder.use_resource(input, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -257,12 +294,9 @@ pub fn call_conv_transpose1d(
             kernel_strides,
             (input, input_offset),
             (kernel, kernel_offset),
-            output
+            Output::new(output)
         )
     );
-    encoder.use_resource(input, MTLResourceUsage::Read);
-    encoder.use_resource(kernel, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -316,12 +350,9 @@ pub fn call_conv_transpose2d(
             cfg.kernel_stride,
             (input, cfg.input_offset),
             (kernel, cfg.kernel_offset),
-            output
+            Output::new(output)
         )
     );
-    encoder.use_resource(input, MTLResourceUsage::Read);
-    encoder.use_resource(kernel, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

@@ -4,7 +4,7 @@ use crate::{backend::BackendDevice, cuda_backend::WrapErr};
 use crate::{builder_arg as barg, CudaDevice, CudaStorage, Result};
 use half::f16;
 
-use cudarc::driver::{CudaSlice, CudaView, PushKernelArg};
+use cudarc::driver::{CudaSlice, CudaStream, CudaView, DevicePtr, PushKernelArg, SyncOnDrop};
 
 #[derive(Clone, Debug)]
 struct PaddedCudaSlice {
@@ -757,8 +757,15 @@ impl QCudaStorage {
     }
 
     pub fn device_ptr(&self) -> Result<*const u8> {
-        use cudarc::driver::DevicePtr;
         Ok(self.data.inner.device_ptr(self.data.inner.stream()).0 as *const u8)
+    }
+
+    pub fn device_ptr_with_guard<'a>(
+        &'a self,
+        stream: &'a CudaStream,
+    ) -> Result<(*const u8, SyncOnDrop<'a>)> {
+        let (ptr, guard) = self.data.inner.device_ptr(stream);
+        Ok((ptr as *const u8, guard))
     }
 }
 
