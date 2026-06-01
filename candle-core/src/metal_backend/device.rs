@@ -327,8 +327,7 @@ fn buf_size(size: usize) -> usize {
     size.next_power_of_two()
 }
 
-/// Applies the [`BufferBuilder`] label. An absent label is set to "unlabeled"
-/// so a reused pooled buffer does not keep the previous op's label.
+/// Applies the [`BufferBuilder`] label, clearing any stale label on a reused pooled buffer.
 #[cfg(feature = "metal-debug-labels")]
 #[inline]
 fn buffer_label(buffer: &Buffer, label: Option<&str>) {
@@ -338,32 +337,22 @@ fn buffer_label(buffer: &Buffer, label: Option<&str>) {
 #[inline]
 fn buffer_label(_buffer: &Buffer, _label: Option<&str>) {}
 
-/// Deferred upload for [`BufferInit::Data`]. See [`BufferBuilder::with_data`].
 type DataUpload<'a> = Box<dyn FnOnce(&MetalDevice) -> Result<Arc<Buffer>> + 'a>;
 
-/// Buffer init kind for [`BufferBuilder`], resolved at `build()`.
 enum BufferInit<'a> {
-    /// elem_count * dtype size bytes, uninitialized, private storage.
     Typed { elem_count: usize, dtype: DType },
-    /// size bytes, uninitialized, shared storage.
     Size(usize),
-    /// size bytes, zero-filled, shared storage.
     Zeros(usize),
-    /// Deferred upload. See [`BufferBuilder::with_data`].
     Data(DataUpload<'a>),
 }
 
-/// Builder for `MTLBuffer` allocations. Each init method delegates to the
-/// matching [`MetalDevice`] allocator (pool reuse and residency tracking live
-/// there). Init methods are mutually exclusive; `build()` is available once
-/// one is set.
+/// Builder for `MTLBuffer` allocations; pool reuse handled by [`MetalDevice`].
 pub struct BufferBuilder<'a> {
     device: &'a MetalDevice,
     label: Option<&'a str>,
 }
 
-/// A [`BufferBuilder`] with an init kind set. `build()` exists only here, so a
-/// missing init kind is a compile error.
+/// [`BufferBuilder`] with an init kind set; `build()` lives here.
 pub struct ReadyBufferBuilder<'a> {
     device: &'a MetalDevice,
     init: BufferInit<'a>,
@@ -397,14 +386,11 @@ impl<'a> BufferBuilder<'a> {
     /// Allocate a shared buffer initialized from data. Always allocates; does not
     /// reuse the pool.
     pub fn with_data<T>(self, data: &'a [T]) -> ReadyBufferBuilder<'a> {
-        // Capturing the typed slice defers new_buffer_with_data to build() with T
-        // still generic, so candle-core needs no &[T] -> &[u8] cast or unsafe.
         self.ready(BufferInit::Data(Box::new(move |device| {
             device.new_buffer_with_data(data)
         })))
     }
 
-    /// Set a debug label. May be called before or after an init method.
     pub fn with_label(mut self, label: &'a str) -> Self {
         self.label = Some(label);
         self
@@ -421,14 +407,11 @@ impl<'a> BufferBuilder<'a> {
 }
 
 impl<'a> ReadyBufferBuilder<'a> {
-    /// Set a debug label.
     pub fn with_label(mut self, label: &'a str) -> Self {
         self.label = Some(label);
         self
     }
 
-    /// Allocate via the [`MetalDevice`] allocator for the chosen init kind,
-    /// then apply the label.
     pub fn build(self) -> Result<Arc<Buffer>> {
         let buffer = match self.init {
             BufferInit::Typed { elem_count, dtype } => {
