@@ -4,8 +4,9 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
+use candle_metal_kernels::kernels::binary::contiguous;
 use candle_metal_kernels::{
-    metal::{Buffer, Commands, Device},
+    metal::{Buffer, Commands, Device, ResidencySet},
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
@@ -1734,13 +1735,12 @@ impl BackendStorage for MetalStorage {
             )
         }
         if src_s == d2 && dst_s == d2 {
-            let blit = self.device.blit_command_encoder()?;
+            let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("copy2d_contiguous");
             let src_offset = src_o * self.dtype.size_in_bytes();
             let length = d1 * d2 * self.dtype.size_in_bytes();
             let dst_offset = dst_o * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
-            blit.end_encoding();
         } else {
             let el_count = d1 * d2;
             if el_count == 0 {
@@ -1751,6 +1751,8 @@ impl BackendStorage for MetalStorage {
                 DType::F16 => candle_metal_kernels::copy2d::HALF,
                 DType::BF16 => candle_metal_kernels::copy2d::BFLOAT,
                 DType::I64 => candle_metal_kernels::copy2d::I64,
+                DType::I32 => candle_metal_kernels::copy2d::I32,
+                DType::I16 => candle_metal_kernels::copy2d::I16,
                 DType::U32 => candle_metal_kernels::copy2d::U32,
                 DType::U8 => candle_metal_kernels::copy2d::U8,
                 dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
@@ -1778,18 +1780,41 @@ impl BackendStorage for MetalStorage {
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         if src_l.is_contiguous() && self.dtype == dst.dtype() {
-            let blit = self.device.blit_command_encoder()?;
+            let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("copy_contiguous");
             let src_offset = src_l.start_offset() * self.dtype.size_in_bytes();
             let length = src_l.shape().elem_count() * self.dtype.size_in_bytes();
             let dst_offset = dst_offset * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
-            blit.end_encoding();
         } else {
             let src_shape = src_l.shape();
             let el_count = src_shape.elem_count();
             if el_count == 0 {
                 return Ok(());
+            }
+            if self.dtype == dst.dtype() {
+                let strides = src_l.stride();
+                let ndim = strides.len();
+                // Inner blocks are contiguous - eligible for copy2d
+                if ndim == 1 || strides[ndim - 1] == 1 {
+                    if let crate::StridedBlocks::UniformBlocks {
+                        start_offset,
+                        block_len,
+                        count,
+                        src_stride,
+                    } = src_l.strided_blocks()
+                    {
+                        return self.copy2d(
+                            dst,
+                            count,
+                            block_len,
+                            src_stride,
+                            block_len,
+                            start_offset,
+                            dst_offset,
+                        );
+                    }
+                }
             }
             let kernel_name = match self.dtype {
                 DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
@@ -1858,11 +1883,25 @@ impl MetalStorage {
             "eq" | "ne" | "le" | "lt" | "ge" | "gt" => DType::U8,
             _ => self.dtype,
         };
+        let lhs_is_scalar = lhs_l.is_scalar_like();
+        let rhs_is_scalar = rhs_l.is_scalar_like();
         let lhs_contiguous = lhs_l.is_contiguous();
         let rhs_contiguous = rhs_l.is_contiguous();
 
-        let buffer = if lhs_contiguous && rhs_contiguous {
-            let kernel = kernel_name(op, &self.dtype, "");
+        let contiguous_kernel = kernel_name(op, &self.dtype, "");
+        let kernel = match (lhs_is_scalar, rhs_is_scalar, lhs_contiguous, rhs_contiguous) {
+            (true, true, _, _) => kernel_name(op, &self.dtype, "_scalar"),
+            (true, false, _, true) => kernel_name(op, &self.dtype, "_sc"),
+            (true, false, _, false) => kernel_name(op, &self.dtype, "_rss"),
+            (false, true, true, _) => kernel_name(op, &self.dtype, "_cs"),
+            (false, true, false, _) => kernel_name(op, &self.dtype, "_lss"),
+            (false, false, true, true) => contiguous_kernel.clone(),
+            (false, false, true, false) => kernel_name(op, &self.dtype, "_rstrided"),
+            (false, false, false, true) => kernel_name(op, &self.dtype, "_lstrided"),
+            (false, false, false, false) => kernel_name(op, &self.dtype, "_strided"),
+        };
+
+        let buffer = if kernel == contiguous_kernel {
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_contiguous(
                 &device.device,
@@ -1878,14 +1917,6 @@ impl MetalStorage {
             .map_err(MetalError::from)?;
             buffer
         } else {
-            let strided_suffix = if lhs_contiguous {
-                "_rstrided"
-            } else if rhs_contiguous {
-                "_lstrided"
-            } else {
-                "_strided"
-            };
-            let kernel = kernel_name(op, &self.dtype, strided_suffix);
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_strided(
                 &device.device,
@@ -1911,10 +1942,9 @@ impl MetalStorage {
         let size = self.count * self.dtype.size_in_bytes();
         let buffer = self.device.allocate_buffer(size)?;
         {
-            let blit = self.device.blit_command_encoder()?;
+            let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
-            blit.end_encoding();
         }
         self.device.wait_until_completed()?;
         Ok(read_to_vec(&buffer, self.count))
@@ -1928,25 +1958,27 @@ impl BackendDevice for MetalDevice {
         let device = Device::all().swap_remove(ordinal);
         let command_queue = device.new_command_queue().map_err(MetalError::from)?;
         let kernels = Arc::new(Kernels::new());
-        let seed = Arc::new(Mutex::new(
-            device
-                .new_buffer_with_data(
-                    [299792458u64].as_ptr() as *const c_void,
-                    std::mem::size_of::<u64>(),
-                    RESOURCE_OPTIONS,
-                )
-                .map_err(MetalError::from)?,
-        ));
-        let commands = Commands::new(command_queue).map_err(MetalError::from)?;
+        let residency_set = Arc::new(ResidencySet::new(&device));
+        let seed_buf = device
+            .new_buffer_with_data(
+                [299792458u64].as_ptr() as *const c_void,
+                std::mem::size_of::<u64>(),
+                RESOURCE_OPTIONS,
+            )
+            .map_err(MetalError::from)?;
+        residency_set.insert(&seed_buf);
+        let seed = Arc::new(Mutex::new(seed_buf));
+        let commands = Commands::new(command_queue, &residency_set).map_err(MetalError::from)?;
         Ok(Self {
             id: DeviceId::new(),
             device,
-            commands: Arc::new(RwLock::new(commands)),
+            commands: Arc::new(commands),
             buffers: Arc::new(RwLock::new(HashMap::new())),
             private_buffers: Arc::new(RwLock::new(HashMap::new())),
             kernels,
             seed,
             seed_value: Arc::new(RwLock::new(299792458)),
+            residency_set,
         })
     }
 
