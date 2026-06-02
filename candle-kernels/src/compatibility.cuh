@@ -68,23 +68,6 @@ static_assert(vec_layout_matches_v<__nv_bfloat16>);
 static_assert(vec_layout_matches_v<__nv_fp8_e4m3>);
 #endif
 
-#if __CUDA_ARCH__ < 800
-__device__ __forceinline__ __half __hmax_nan(__half a, __half b) {
-    return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
-}
-__device__ __forceinline__ __half __hmin_nan(__half a, __half b) {
-    return __hisnan(a) ? a : (__hisnan(b) ? b : __hmin(a, b));
-}
-#endif
-#if (__CUDACC_VER_MAJOR__ < 12 || __CUDACC_VER_MINOR__ < 2) && __CUDA_ARCH__ < 800
-__device__ __forceinline__ __nv_bfloat16 __hmax_nan(__nv_bfloat16 a, __nv_bfloat16 b) {
-    return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
-}
-__device__ __forceinline__ __nv_bfloat16 __hmin_nan(__nv_bfloat16 a, __nv_bfloat16 b) {
-    return __hisnan(a) ? a : (__hisnan(b) ? b : __hmin(a, b));
-}
-#endif
-
 #if __CUDA_ARCH__ < 600
 // Copied from https://docs.nvidia.com/cuda/cuda-c-programming-guide/#atomic-functions
 __device__ double atomicAdd(double* address, double val) {
