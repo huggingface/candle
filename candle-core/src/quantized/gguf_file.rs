@@ -18,11 +18,11 @@ const GGUF_MAX_ARRAY_ELEMENTS: u64 = 1 << 30;
 const GGUF_MAX_TENSOR_DIMS: u32 = 4;
 const GGUF_MAX_VALUE_DEPTH: usize = 64;
 
-fn remaining_bytes<R: std::io::Read + std::io::Seek>(reader: &mut R) -> Result<u64> {
+// `file_size` is the byte length captured once up front, so this avoids
+// seeking to the end and back on every length-prefixed read.
+fn remaining_bytes<R: std::io::Seek>(reader: &mut R, file_size: u64) -> Result<u64> {
     let cur = reader.stream_position()?;
-    let end = reader.seek(std::io::SeekFrom::End(0))?;
-    reader.seek(std::io::SeekFrom::Start(cur))?;
-    Ok(end.saturating_sub(cur))
+    Ok(file_size.saturating_sub(cur))
 }
 
 fn read_length<R: std::io::Read>(reader: &mut R, magic: &VersionedMagic) -> Result<u64> {
@@ -122,12 +122,13 @@ pub struct Content {
 fn read_string<R: std::io::Read + std::io::Seek>(
     reader: &mut R,
     magic: &VersionedMagic,
+    file_size: u64,
 ) -> Result<String> {
     let len = read_length(reader, magic)?;
     if len > GGUF_MAX_STRING_LENGTH {
         crate::bail!("gguf: string length {len} exceeds max {GGUF_MAX_STRING_LENGTH}")
     }
-    let remaining = remaining_bytes(reader)?;
+    let remaining = remaining_bytes(reader, file_size)?;
     if len > remaining {
         crate::bail!("gguf: string length {len} exceeds remaining file bytes {remaining}")
     }
@@ -312,6 +313,7 @@ impl Value {
         value_type: ValueType,
         magic: &VersionedMagic,
         depth: usize,
+        file_size: u64,
     ) -> Result<Self> {
         if depth > GGUF_MAX_VALUE_DEPTH {
             crate::bail!("gguf: value nesting depth exceeds max {GGUF_MAX_VALUE_DEPTH}")
@@ -332,7 +334,7 @@ impl Value {
                 1 => Self::Bool(true),
                 b => crate::bail!("unexpected bool value {b}"),
             },
-            ValueType::String => Self::String(read_string(reader, magic)?),
+            ValueType::String => Self::String(read_string(reader, magic, file_size)?),
             ValueType::Array => {
                 let value_type = reader.read_u32::<LittleEndian>()?;
                 let value_type = ValueType::from_u32(value_type)?;
@@ -341,7 +343,7 @@ impl Value {
                     crate::bail!("gguf: array length {len} exceeds max {GGUF_MAX_ARRAY_ELEMENTS}")
                 }
                 let needed = len.saturating_mul(value_type.min_disk_size(magic));
-                let remaining = remaining_bytes(reader)?;
+                let remaining = remaining_bytes(reader, file_size)?;
                 if needed > remaining {
                     crate::bail!(
                         "gguf: array of {len} elements needs at least {needed} bytes, only {remaining} remaining"
@@ -349,7 +351,13 @@ impl Value {
                 }
                 let mut vs = Vec::new();
                 for _ in 0..len {
-                    vs.push(Value::read(reader, value_type, magic, depth + 1)?)
+                    vs.push(Value::read(
+                        reader,
+                        value_type,
+                        magic,
+                        depth + 1,
+                        file_size,
+                    )?)
                 }
                 Self::Array(vs)
             }
@@ -451,6 +459,12 @@ impl ValueType {
 
 impl Content {
     pub fn read<R: std::io::Seek + std::io::Read>(reader: &mut R) -> Result<Self> {
+        // Capture the file size once so the bounds checks below don't have to
+        // seek to the end and back on every length-prefixed read.
+        let start = reader.stream_position()?;
+        let file_size = reader.seek(std::io::SeekFrom::End(0))?;
+        reader.seek(std::io::SeekFrom::Start(start))?;
+
         let magic = VersionedMagic::read(reader)?;
         let tensor_count = read_length(reader, &magic)?;
         let metadata_kv_count = read_length(reader, &magic)?;
@@ -474,7 +488,7 @@ impl Content {
         let needed = metadata_kv_count
             .saturating_mul(min_per_kv)
             .saturating_add(tensor_count.saturating_mul(min_per_tensor));
-        let remaining = remaining_bytes(reader)?;
+        let remaining = remaining_bytes(reader, file_size)?;
         if needed > remaining {
             crate::bail!(
                 "gguf: header declares {tensor_count} tensors and {metadata_kv_count} metadata entries, needs at least {needed} bytes, only {remaining} remaining"
@@ -483,15 +497,15 @@ impl Content {
 
         let mut metadata = HashMap::new();
         for _idx in 0..metadata_kv_count {
-            let key = read_string(reader, &magic)?;
+            let key = read_string(reader, &magic, file_size)?;
             let value_type = reader.read_u32::<LittleEndian>()?;
             let value_type = ValueType::from_u32(value_type)?;
-            let value = Value::read(reader, value_type, &magic, 0)?;
+            let value = Value::read(reader, value_type, &magic, 0, file_size)?;
             metadata.insert(key, value);
         }
         let mut tensor_infos = HashMap::new();
         for _idx in 0..tensor_count {
-            let tensor_name = read_string(reader, &magic)?;
+            let tensor_name = read_string(reader, &magic, file_size)?;
             let n_dimensions = reader.read_u32::<LittleEndian>()?;
             if n_dimensions > GGUF_MAX_TENSOR_DIMS {
                 crate::bail!(
