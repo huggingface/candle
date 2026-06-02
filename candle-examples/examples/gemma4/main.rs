@@ -20,6 +20,7 @@ use candle_transformers::generation::{LogitsProcessor, Sampling};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
+#[allow(clippy::large_enum_variant)]
 enum ModelKind {
     TextOnly(TextModel),
     Multimodal(Model),
@@ -258,7 +259,12 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => {
+            match candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json") {
+                Ok(files) => files,
+                Err(_) => vec![repo.get("model.safetensors")?],
+            }
+        }
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
@@ -288,8 +294,7 @@ fn main() -> Result<()> {
             None => {
                 let config_file = repo.get("config.json")?;
                 // For text-only, try to parse the text_config sub-object
-                let raw: serde_json::Value =
-                    serde_json::from_slice(&std::fs::read(config_file)?)?;
+                let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(config_file)?)?;
                 if let Some(text_cfg) = raw.get("text_config") {
                     serde_json::from_value(text_cfg.clone())?
                 } else {

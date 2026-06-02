@@ -4,7 +4,7 @@ use crate::{backend::BackendDevice, cuda_backend::WrapErr};
 use crate::{builder_arg as barg, CudaDevice, CudaStorage, Result};
 use half::f16;
 
-use cudarc::driver::{CudaSlice, CudaView, PushKernelArg};
+use cudarc::driver::{CudaSlice, CudaStream, CudaView, DevicePtr, PushKernelArg, SyncOnDrop};
 
 #[derive(Clone, Debug)]
 struct PaddedCudaSlice {
@@ -19,7 +19,8 @@ pub struct QCudaStorage {
     device: CudaDevice,
 }
 
-static FORCE_DMMV: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) static FORCE_DMMV: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_force_dmmv(f: bool) {
     FORCE_DMMV.store(f, std::sync::atomic::Ordering::Relaxed)
@@ -737,6 +738,17 @@ impl QCudaStorage {
         storage: &CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
+        // Optimized MMVQ and MMQ paths (support most paths: BF16/F16/F32, batch 1-8, all quant types, reuses per-device workspace).
+        if !FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(result) = super::fast_mmvq::try_fwd(self, self_shape, storage, layout)? {
+                return Ok(result);
+            }
+            if let Some(result) = super::fast_mmq::try_fwd(self, self_shape, storage, layout)? {
+                return Ok(result);
+            }
+        }
+
+        // Fallback
         let max_bm = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
             1
         } else {
@@ -762,8 +774,15 @@ impl QCudaStorage {
     }
 
     pub fn device_ptr(&self) -> Result<*const u8> {
-        use cudarc::driver::DevicePtr;
         Ok(self.data.inner.device_ptr(self.data.inner.stream()).0 as *const u8)
+    }
+
+    pub fn device_ptr_with_guard<'a>(
+        &'a self,
+        stream: &'a CudaStream,
+    ) -> Result<(*const u8, SyncOnDrop<'a>)> {
+        let (ptr, guard) = self.data.inner.device_ptr(stream);
+        Ok((ptr as *const u8, guard))
     }
 }
 

@@ -145,19 +145,20 @@ fn main() -> Result<()> {
     emit_check_cfgs();
 
     // ── Main PTX builder ────────────────────────────────────────────────────
-    let mut builder = maybe_enable_cuda_device_debug(KernelBuilder::new()
-        .compute_cap(compute_cap)
-        .source_dir("src")
-        .watch([
-            "src/compatibility.cuh",
-            "src/cuda_utils.cuh",
-            "src/binary_op_macros.cuh",
-        ])
-        .exclude(&["moe_*.cu"])
-        .arg("--expt-relaxed-constexpr")
-        .arg("-std=c++17")
-        .arg("-O3"));
-
+    let mut builder = maybe_enable_cuda_device_debug(
+        KernelBuilder::new()
+            .compute_cap(compute_cap)
+            .source_dir("src")
+            .watch([
+                "src/compatibility.cuh",
+                "src/cuda_utils.cuh",
+                "src/binary_op_macros.cuh",
+            ])
+            .exclude(&["moe_*.cu", "mmvq_gguf.cu", "mmq_*.cu"])
+            .arg("--expt-relaxed-constexpr")
+            .arg("-std=c++17")
+            .arg("-O3"),
+    );
 
     // Apply hardware capabilities
     for cap in HW_CAPABILITIES {
@@ -174,17 +175,31 @@ fn main() -> Result<()> {
     }
 
     // ── MOE static library builder ──────────────────────────────────────────
-    let mut moe_builder = maybe_enable_cuda_device_debug(KernelBuilder::new()
-        .compute_cap(compute_cap)
-        .arg("--expt-relaxed-constexpr")
-        .arg("-std=c++17")
-        .arg("-O3")
-        .source_files(vec![
-            "src/moe/moe_gguf.cu",
-            "src/moe/moe_wmma.cu",
-            "src/moe/moe_wmma_gguf.cu",
-            "src/moe/moe_hfma2.cu",
-        ]));
+    let mut moe_builder = maybe_enable_cuda_device_debug(
+        KernelBuilder::new()
+            .compute_cap(compute_cap)
+            .arg("--expt-relaxed-constexpr")
+            .arg("-std=c++17")
+            .arg("-O3")
+            .source_files(vec![
+                "src/moe/moe_gguf.cu",
+                "src/moe/moe_wmma.cu",
+                "src/moe/moe_wmma_gguf.cu",
+                "src/moe/moe_hfma2.cu",
+                "src/mmvq_gguf.cu",
+                "src/mmq_gguf/mmq_quantize.cu",
+                "src/mmq_gguf/mmq_instance_q4_0.cu",
+                "src/mmq_gguf/mmq_instance_q4_1.cu",
+                "src/mmq_gguf/mmq_instance_q5_0.cu",
+                "src/mmq_gguf/mmq_instance_q5_1.cu",
+                "src/mmq_gguf/mmq_instance_q8_0.cu",
+                "src/mmq_gguf/mmq_instance_q2_k.cu",
+                "src/mmq_gguf/mmq_instance_q3_k.cu",
+                "src/mmq_gguf/mmq_instance_q4_k.cu",
+                "src/mmq_gguf/mmq_instance_q5_k.cu",
+                "src/mmq_gguf/mmq_instance_q6_k.cu",
+            ]),
+    );
 
     let target = env::var("TARGET").unwrap_or_default();
     let is_target_msvc = target.contains("msvc");
