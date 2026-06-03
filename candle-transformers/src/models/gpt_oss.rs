@@ -9,12 +9,25 @@
 //! model dtype at load (see `dequant_mxfp4`). gate/up are interleaved on the
 //! output dim. Everything else is bf16 (config `modules_to_not_convert`).
 //!
-//! Open items before numerical parity vs HF `modeling_gpt_oss`:
-//!  - YaRN rope scaling (currently plain RoPE).
+//! YaRN RoPE scaling is applied per `rope_scaling` (mscale folded into cos/sin).
+//!
+//! Numerical parity vs HF `modeling_gpt_oss` is not yet verified (see the
+//! sliding-window and YaRN `truncate` notes).
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::kv_cache::KvCache;
 use candle_nn::{rms_norm, RmsNorm, VarBuilder};
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RopeScaling {
+    pub rope_type: String,
+    pub factor: f64,
+    pub beta_fast: f64,
+    pub beta_slow: f64,
+    pub original_max_position_embeddings: usize,
+    #[serde(default)]
+    pub truncate: bool,
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
@@ -38,6 +51,8 @@ pub struct Config {
     pub attention_bias: bool,
     #[serde(default = "default_swiglu_limit")]
     pub swiglu_limit: f64,
+    #[serde(default)]
+    pub rope_scaling: Option<RopeScaling>,
 }
 
 fn default_rope_theta() -> f64 {
@@ -75,6 +90,14 @@ impl Config {
             max_position_embeddings: 131072,
             attention_bias: true,
             swiglu_limit: 7.0,
+            rope_scaling: Some(RopeScaling {
+                rope_type: "yarn".to_string(),
+                factor: 32.0,
+                beta_fast: 32.0,
+                beta_slow: 1.0,
+                original_max_position_embeddings: 4096,
+                truncate: false,
+            }),
         }
     }
 
@@ -85,29 +108,63 @@ impl Config {
 }
 
 // --- RoPE -------------------------------------------------------------------
-// TODO: YaRN scaling for the 131k context window. Plain RoPE for now.
 #[derive(Debug, Clone)]
 struct RotaryEmbedding {
     cos: Tensor,
     sin: Tensor,
 }
 
+// YaRN inverse frequencies + attention scaling (mscale), matching HF
+// _compute_yarn_parameters: high-frequency dims keep the original frequency
+// (extrapolate), low-frequency dims are interpolated by 1/factor, with a linear
+// ramp between correction dims derived from beta_fast/beta_slow.
+// NOTE: `truncate` is not handled yet; verify exact parity at the parity gate.
+fn yarn_inv_freq(cfg: &Config, s: &RopeScaling) -> (Vec<f32>, f32) {
+    let dim = cfg.head_dim as f64;
+    let base = cfg.rope_theta;
+    let half = cfg.head_dim / 2;
+    let orig_max = s.original_max_position_embeddings as f64;
+    let correction_dim = |num_rot: f64| {
+        (dim * (orig_max / (num_rot * 2.0 * std::f64::consts::PI)).ln()) / (2.0 * base.ln())
+    };
+    let low = correction_dim(s.beta_fast).floor().max(0.0);
+    let high = correction_dim(s.beta_slow).ceil().min(dim - 1.0);
+    let denom = if (high - low).abs() < 1e-3 { 1e-3 } else { high - low };
+    let inv_freq = (0..half)
+        .map(|i| {
+            let pos_freq = base.powf(2.0 * i as f64 / dim);
+            let extrap = 1.0 / pos_freq;
+            let interp = 1.0 / (s.factor * pos_freq);
+            let ramp = ((i as f64 - low) / denom).clamp(0.0, 1.0);
+            (interp * ramp + extrap * (1.0 - ramp)) as f32
+        })
+        .collect();
+    let attn_scale = (0.1 * s.factor.ln() + 1.0) as f32;
+    (inv_freq, attn_scale)
+}
+
 impl RotaryEmbedding {
     fn new(cfg: &Config, dev: &Device, dtype: DType) -> Result<Self> {
         let dim = cfg.head_dim;
         let max_pos = cfg.max_position_embeddings;
-        let inv_freq: Vec<f32> = (0..dim / 2)
-            .map(|i| 1f32 / (cfg.rope_theta as f32).powf(2.0 * i as f32 / dim as f32))
-            .collect();
+        let (inv_freq, attn_scale) = match &cfg.rope_scaling {
+            Some(s) if s.rope_type == "yarn" => yarn_inv_freq(cfg, s),
+            _ => (
+                (0..dim / 2)
+                    .map(|i| 1f32 / (cfg.rope_theta as f32).powf(2.0 * i as f32 / dim as f32))
+                    .collect::<Vec<f32>>(),
+                1f32,
+            ),
+        };
         let inv_freq = Tensor::new(inv_freq, dev)?;
         let t = Tensor::arange(0u32, max_pos as u32, dev)?
             .to_dtype(DType::F32)?
             .reshape((max_pos, 1))?;
         let freqs = t.matmul(&inv_freq.reshape((1, dim / 2))?)?;
-        Ok(Self {
-            cos: freqs.cos()?.to_dtype(dtype)?,
-            sin: freqs.sin()?.to_dtype(dtype)?,
-        })
+        // Fold the YaRN attention scaling (mscale) into the cos/sin tables.
+        let cos = (freqs.cos()? * attn_scale as f64)?.to_dtype(dtype)?;
+        let sin = (freqs.sin()? * attn_scale as f64)?.to_dtype(dtype)?;
+        Ok(Self { cos, sin })
     }
 
     fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
@@ -585,5 +642,21 @@ mod tests {
         let scales = Tensor::zeros((e, out, nb), DType::U8, &dev).unwrap();
         let t = dequant_mxfp4(&blocks, &scales, DType::F32).unwrap();
         assert_eq!(t.dims(), &[e, out, nb * 32]);
+    }
+
+    #[test]
+    fn yarn_freqs_and_scale() {
+        let cfg = Config::gpt_oss_20b();
+        let s = cfg.rope_scaling.clone().unwrap();
+        let (inv_freq, scale) = yarn_inv_freq(&cfg, &s);
+        assert_eq!(inv_freq.len(), cfg.head_dim / 2);
+        // mscale = 0.1*ln(factor) + 1
+        assert!((scale - (0.1f32 * 32f32.ln() + 1.0)).abs() < 1e-5);
+        // dim 0 is high-frequency -> pure extrapolation (original freq 1.0).
+        assert!((inv_freq[0] - 1.0).abs() < 1e-6);
+        // last dim is low-frequency -> interpolated by 1/factor.
+        let last = inv_freq[cfg.head_dim / 2 - 1];
+        let expect = 1.0 / ((cfg.rope_theta as f32).powf(62.0 / 64.0) * 32.0);
+        assert!((last / expect - 1.0).abs() < 1e-3, "last={last} expect={expect}");
     }
 }
