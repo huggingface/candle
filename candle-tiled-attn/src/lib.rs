@@ -38,6 +38,19 @@ pub fn tiled_attn_decode(q: &Tensor, k: &Tensor, v: &Tensor, softmax_scale: f32)
         return Tensor::zeros((b, h, q_len, d), q.dtype(), q.device());
     }
 
+    if std::env::var("CANDLE_TILED_ATTN_TRACE")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
+        eprintln!(
+            "[candle_tiled_attn_decode_f16] q={:?} k={:?} v={:?} scale={}",
+            q.shape(),
+            k.shape(),
+            v.shape(),
+            softmax_scale
+        );
+    }
+
     let q = q.contiguous()?;
     let k = k.contiguous()?;
     let v = v.contiguous()?;
