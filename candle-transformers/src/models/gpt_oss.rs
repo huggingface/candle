@@ -11,9 +11,9 @@
 //!
 //! Open items before numerical parity vs HF `modeling_gpt_oss`:
 //!  - YaRN rope scaling (currently plain RoPE).
-//!  - offset-aware KV cache for generation.
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::kv_cache::KvCache;
 use candle_nn::{rms_norm, RmsNorm, VarBuilder};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -121,6 +121,9 @@ impl RotaryEmbedding {
 }
 
 // --- Attention (GQA + sinks + sliding window) -------------------------------
+// KV cache grows in chunks of this many positions (pre-allocated on first use).
+const KV_CACHE_GROW: usize = 512;
+
 #[derive(Debug, Clone)]
 struct Attention {
     q_proj: Linear,
@@ -131,6 +134,7 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
+    kv_cache: KvCache,
 }
 
 impl Attention {
@@ -156,11 +160,12 @@ impl Attention {
             num_heads: nh,
             num_kv_heads: nkv,
             head_dim: hd,
+            kv_cache: KvCache::new(2, KV_CACHE_GROW),
         })
     }
 
     fn forward(
-        &self,
+        &mut self,
         xs: &Tensor,
         rotary: &RotaryEmbedding,
         mask: Option<&Tensor>,
@@ -182,7 +187,9 @@ impl Attention {
             .transpose(1, 2)?;
 
         let (q, k) = rotary.apply(&q, &k, offset)?;
-        // TODO: KV cache append goes here (offset-aware) once wired.
+        // Append current k/v (pre-repeat, kv-head layout) and read back the full
+        // cached sequence [b, num_kv_heads, offset+seq_len, head_dim].
+        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
         let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?;
         let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?;
 
@@ -416,7 +423,7 @@ impl DecoderLayer {
     }
 
     fn forward(
-        &self,
+        &mut self,
         xs: &Tensor,
         rotary: &RotaryEmbedding,
         mask: Option<&Tensor>,
@@ -485,28 +492,27 @@ impl Model {
         Tensor::from_slice(&data, (1, 1, seq_len, kv), &self.device)?.to_dtype(self.dtype)
     }
 
-    pub fn forward(&self, input_ids: &Tensor, offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, offset: usize) -> Result<Tensor> {
         let (_b, seq_len) = input_ids.dims2()?;
         let mut xs = self.embed_tokens.forward(input_ids)?;
         // Full-causal mask for full-attention layers, sliding-window mask for the
-        // alternating sliding layers; selected per layer below.
-        let (full, sliding) = if seq_len <= 1 {
-            (None, None)
-        } else {
-            (
-                Some(self.causal_mask(seq_len, offset, None)?),
-                Some(self.causal_mask(seq_len, offset, Some(self.sliding_window))?),
-            )
-        };
-        for layer in self.layers.iter() {
-            let mask = if layer.is_sliding {
-                sliding.as_ref()
-            } else {
-                full.as_ref()
-            };
-            xs = layer.forward(&xs, &self.rotary, mask, offset)?;
+        // alternating sliding layers; selected per layer. Built every step (incl.
+        // single-token decode) since a sliding layer must mask keys beyond the
+        // window even at seq_len == 1.
+        let full = self.causal_mask(seq_len, offset, None)?;
+        let sliding = self.causal_mask(seq_len, offset, Some(self.sliding_window))?;
+        let rotary = self.rotary.clone();
+        for layer in self.layers.iter_mut() {
+            let mask = if layer.is_sliding { &sliding } else { &full };
+            xs = layer.forward(&xs, &rotary, Some(mask), offset)?;
         }
         self.norm.forward(&xs)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.self_attn.kv_cache.reset();
+        }
     }
 }
 
@@ -523,10 +529,14 @@ impl ModelForCausalLM {
         Ok(Self { model, lm_head })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, offset: usize) -> Result<Tensor> {
         let xs = self.model.forward(input_ids, offset)?;
         let (_b, seq_len, _) = xs.dims3()?;
         xs.i((.., seq_len - 1, ..))?.apply(&self.lm_head)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.model.clear_kv_cache();
     }
 }
 
