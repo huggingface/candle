@@ -68,7 +68,7 @@ impl TextGeneration {
         }
         std::io::stdout().flush()?;
 
-        // Harmony stop tokens; keep whichever the tokenizer defines.
+        // gpt-oss stop tokens (per the model card); keep whichever the tokenizer defines.
         let eos: Vec<u32> = ["<|return|>", "<|endoftext|>", "<|call|>"]
             .iter()
             .filter_map(|t| self.tokenizer.get_token(t))
@@ -77,6 +77,8 @@ impl TextGeneration {
         let mut generated = 0usize;
         let start = std::time::Instant::now();
         for index in 0..sample_len {
+            // start_pos is the absolute position of the first input token (the KV
+            // cache already holds everything before it), not the total cache length.
             let context_size = if index > 0 { 1 } else { tokens.len() };
             let start_pos = tokens.len().saturating_sub(context_size);
             let ctxt = &tokens[start_pos..];

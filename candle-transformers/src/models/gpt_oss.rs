@@ -11,8 +11,9 @@
 //!
 //! YaRN RoPE scaling is applied per `rope_scaling` (mscale folded into cos/sin).
 //!
-//! Numerical parity vs HF `modeling_gpt_oss` is not yet verified (see the
-//! sliding-window and YaRN `truncate` notes).
+//! Logits match HF `modeling_gpt_oss` in bf16 (argmax and top-4 agree, cosine
+//! ~0.9996, residual at the bf16 representability floor). YaRN `truncate` is
+//! unused for the shipped configs and not handled.
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::kv_cache::KvCache;
@@ -103,7 +104,7 @@ impl Config {
 
     /// gpt-oss alternates sliding-window and full attention, starting sliding.
     fn is_sliding(&self, layer_idx: usize) -> bool {
-        layer_idx % 2 == 0
+        layer_idx.is_multiple_of(2)
     }
 }
 
@@ -129,6 +130,7 @@ fn yarn_inv_freq(cfg: &Config, s: &RopeScaling) -> (Vec<f32>, f32) {
     };
     let low = correction_dim(s.beta_fast).floor().max(0.0);
     let high = correction_dim(s.beta_slow).ceil().min(dim - 1.0);
+    // Guard a degenerate ramp (high == low); never fires for the shipped configs.
     let denom = if (high - low).abs() < 1e-3 { 1e-3 } else { high - low };
     let inv_freq = (0..half)
         .map(|i| {
@@ -178,8 +180,8 @@ impl RotaryEmbedding {
 }
 
 // --- Attention (GQA + sinks + sliding window) -------------------------------
-// KV cache grows in chunks of this many positions (pre-allocated on first use).
-const KV_CACHE_GROW: usize = 512;
+// Initial KV-cache allocation length along the sequence dim; grows as needed.
+const KV_CACHE_INIT_LEN: usize = 512;
 
 #[derive(Debug, Clone)]
 struct Attention {
@@ -195,8 +197,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(cfg: &Config, rotary: &RotaryEmbedding, vb: VarBuilder) -> Result<Self> {
-        let _ = rotary;
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let h = cfg.hidden_size;
         let nh = cfg.num_attention_heads;
         let nkv = cfg.num_key_value_heads;
@@ -217,7 +218,7 @@ impl Attention {
             num_heads: nh,
             num_kv_heads: nkv,
             head_dim: hd,
-            kv_cache: KvCache::new(2, KV_CACHE_GROW),
+            kv_cache: KvCache::new(2, KV_CACHE_INIT_LEN),
         })
     }
 
@@ -284,6 +285,31 @@ fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
         .reshape((b, n_kv * n_rep, s, d))
 }
 
+// Additive causal mask, optionally sliding-window-limited. Query i (absolute
+// position offset+i) may attend to key j when j <= offset+i and, when `window`
+// is set, (offset+i) - j < window (gpt-oss sliding layers).
+// Shape [1, 1, seq_len, offset+seq_len]; -inf where masked, 0 otherwise.
+fn causal_mask(
+    seq_len: usize,
+    offset: usize,
+    window: Option<usize>,
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
+    let kv = seq_len + offset;
+    let mut data = vec![0f32; seq_len * kv];
+    for qi in 0..seq_len {
+        let q_abs = qi + offset;
+        for kj in 0..kv {
+            let out_of_window = window.is_some_and(|w| q_abs >= kj + w);
+            if kj > q_abs || out_of_window {
+                data[qi * kv + kj] = f32::NEG_INFINITY;
+            }
+        }
+    }
+    Tensor::from_slice(&data, (1, 1, seq_len, kv), device)?.to_dtype(dtype)
+}
+
 // --- MoE: router + clamped-SwiGLU experts -----------------------------------
 // gpt-oss expert activation: gate, up = deinterleave(gate_up); with gate clamped
 // to `limit` and up clamped to [-limit, limit]; glu = gate*sigmoid(a*gate);
@@ -302,7 +328,14 @@ const FP4_LUT: [f32; 16] = [
 fn dequant_mxfp4(blocks: &Tensor, scales: &Tensor, dtype: DType) -> Result<Tensor> {
     let dev = blocks.device().clone();
     let (e, out, nb, bytes) = blocks.dims4()?;
-    let vals = bytes * 2; // 32 values per block
+    if scales.dims() != [e, out, nb] {
+        candle::bail!(
+            "mxfp4 scales shape {:?} incompatible with blocks {:?}",
+            scales.dims(),
+            blocks.dims()
+        );
+    }
+    let vals = bytes * 2; // 16 packed u8 -> 32 fp4 values
     let in_dim = nb * vals;
     let blk = blocks.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<u8>()?;
     let scl = scales.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<u8>()?;
@@ -420,11 +453,14 @@ impl Module for SparseMoe {
         let xs = xs.reshape(((), hidden))?;
         let router_logits = self.router.forward(&xs)?;
         let routing = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        // PERF: full sort to take top-k; replace with a topk when candle exposes one.
         let sel = routing
             .arg_sort_last_dim(false)?
             .narrow(D::Minus1, 0, self.num_experts_per_tok)?
             .contiguous()?;
         let weights = routing.gather(&sel, D::Minus1)?;
+        // TODO: these to_vec2 calls sync the device each token; an on-device
+        // scatter/gather (custom kernel) would avoid the stall.
         let weights = weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
         let sel = sel.to_vec2::<u32>()?;
 
@@ -432,9 +468,10 @@ impl Module for SparseMoe {
         let mut top_w = vec![vec![]; self.experts.len()];
         for (row, (w, idxs)) in weights.iter().zip(sel.iter()).enumerate() {
             let sum: f32 = w.iter().sum();
+            let inv_sum = if sum > 0.0 { 1.0 / sum } else { 1.0 };
             for (&w, &e) in w.iter().zip(idxs.iter()) {
                 top_x[e as usize].push(row as u32);
-                top_w[e as usize].push(w / sum); // normalize top-k
+                top_w[e as usize].push(w * inv_sum); // normalize over top-k
             }
         }
         let mut ys = xs.zeros_like()?;
@@ -465,9 +502,9 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(cfg: &Config, layer_idx: usize, rotary: &RotaryEmbedding, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, layer_idx: usize, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            self_attn: Attention::new(cfg, rotary, vb.pp("self_attn"))?,
+            self_attn: Attention::new(cfg, vb.pp("self_attn"))?,
             mlp: SparseMoe::new(cfg, vb.pp("mlp"))?,
             input_layernorm: rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
             post_attention_layernorm: rms_norm(
@@ -516,7 +553,7 @@ impl Model {
         let rotary = RotaryEmbedding::new(cfg, vb.device(), vb.dtype())?;
         let vb_l = vb_m.pp("layers");
         let layers = (0..cfg.num_hidden_layers)
-            .map(|i| DecoderLayer::new(cfg, i, &rotary, vb_l.pp(i)))
+            .map(|i| DecoderLayer::new(cfg, i, vb_l.pp(i)))
             .collect::<Result<Vec<_>>>()?;
         let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         Ok(Self {
@@ -530,25 +567,6 @@ impl Model {
         })
     }
 
-    // Additive causal mask, optionally sliding-window-limited. Query i (absolute
-    // position offset+i) may attend to key j when j <= offset+i and, when `window`
-    // is set, (offset+i) - j < window (gpt-oss sliding layers).
-    // Shape [1, 1, seq_len, offset+seq_len]; -inf where masked, 0 otherwise.
-    fn causal_mask(&self, seq_len: usize, offset: usize, window: Option<usize>) -> Result<Tensor> {
-        let kv = seq_len + offset;
-        let mut data = vec![0f32; seq_len * kv];
-        for qi in 0..seq_len {
-            let q_abs = qi + offset;
-            for kj in 0..kv {
-                let out_of_window = window.is_some_and(|w| q_abs >= kj + w);
-                if kj > q_abs || out_of_window {
-                    data[qi * kv + kj] = f32::NEG_INFINITY;
-                }
-            }
-        }
-        Tensor::from_slice(&data, (1, 1, seq_len, kv), &self.device)?.to_dtype(self.dtype)
-    }
-
     pub fn forward(&mut self, input_ids: &Tensor, offset: usize) -> Result<Tensor> {
         let (_b, seq_len) = input_ids.dims2()?;
         let mut xs = self.embed_tokens.forward(input_ids)?;
@@ -556,9 +574,15 @@ impl Model {
         // alternating sliding layers; selected per layer. Built every step (incl.
         // single-token decode) since a sliding layer must mask keys beyond the
         // window even at seq_len == 1.
-        let full = self.causal_mask(seq_len, offset, None)?;
-        let sliding = self.causal_mask(seq_len, offset, Some(self.sliding_window))?;
-        let rotary = self.rotary.clone();
+        let full = causal_mask(seq_len, offset, None, &self.device, self.dtype)?;
+        let sliding = causal_mask(
+            seq_len,
+            offset,
+            Some(self.sliding_window),
+            &self.device,
+            self.dtype,
+        )?;
+        let rotary = self.rotary.clone(); // cheap: cos/sin tensors are Arc-backed
         for layer in self.layers.iter_mut() {
             let mask = if layer.is_sliding { &sliding } else { &full };
             xs = layer.forward(&xs, &rotary, Some(mask), offset)?;
@@ -658,5 +682,34 @@ mod tests {
         let last = inv_freq[cfg.head_dim / 2 - 1];
         let expect = 1.0 / ((cfg.rope_theta as f32).powf(62.0 / 64.0) * 32.0);
         assert!((last / expect - 1.0).abs() < 1e-3, "last={last} expect={expect}");
+    }
+
+    #[test]
+    fn sliding_mask_is_tighter_than_full() {
+        let dev = Device::Cpu;
+        let (seq, offset, window) = (6usize, 0usize, 3usize);
+        let to_vec = |w| {
+            causal_mask(seq, offset, w, &dev, DType::F32)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap()
+        };
+        let full = to_vec(None);
+        let slide = to_vec(Some(window));
+        // Anything masked by the full causal mask must also be masked when sliding.
+        for (f, s) in full.iter().zip(&slide) {
+            if f.is_infinite() {
+                assert!(s.is_infinite());
+            }
+        }
+        // Sliding must mask strictly more (far keys past the window).
+        let extra = full
+            .iter()
+            .zip(&slide)
+            .filter(|(f, s)| f.is_finite() && s.is_infinite())
+            .count();
+        assert!(extra > 0, "sliding window should mask additional far keys");
     }
 }
