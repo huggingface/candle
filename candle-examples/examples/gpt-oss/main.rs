@@ -2,10 +2,10 @@
 //!
 //! cargo run --release --example gpt-oss -- --prompt "The capital of France is"
 //! (add --features cuda for GPU; bf16 is used on CUDA, f32 on CPU)
-#[cfg(feature = "mkl")]
-extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
 use clap::Parser;

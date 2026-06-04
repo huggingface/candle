@@ -133,7 +133,11 @@ fn yarn_inv_freq(cfg: &Config, s: &RopeScaling) -> (Vec<f32>, f32) {
     // Guard a degenerate correction range (high == low); only hits for unusual
     // rope_scaling. Trace it so misconfigured values are visible.
     let denom = if (high - low).abs() < 1e-3 {
-        tracing::debug!(low, high, "yarn: degenerate correction range, fallback ramp denom 1e-3");
+        tracing::debug!(
+            low,
+            high,
+            "yarn: degenerate correction range, fallback ramp denom 1e-3"
+        );
         1e-3
     } else {
         high - low
@@ -343,8 +347,14 @@ fn dequant_mxfp4(blocks: &Tensor, scales: &Tensor, dtype: DType) -> Result<Tenso
     }
     let vals = bytes * 2; // 16 packed u8 -> 32 fp4 values
     let in_dim = nb * vals;
-    let blk = blocks.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<u8>()?;
-    let scl = scales.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<u8>()?;
+    let blk = blocks
+        .to_device(&Device::Cpu)?
+        .flatten_all()?
+        .to_vec1::<u8>()?;
+    let scl = scales
+        .to_device(&Device::Cpu)?
+        .flatten_all()?
+        .to_vec1::<u8>()?;
     let rows = e * out;
     let mut data = vec![0f32; rows * in_dim];
     for row in 0..rows {
@@ -687,7 +697,10 @@ mod tests {
         // last dim is low-frequency -> interpolated by 1/factor.
         let last = inv_freq[cfg.head_dim / 2 - 1];
         let expect = 1.0 / ((cfg.rope_theta as f32).powf(62.0 / 64.0) * 32.0);
-        assert!((last / expect - 1.0).abs() < 1e-3, "last={last} expect={expect}");
+        assert!(
+            (last / expect - 1.0).abs() < 1e-3,
+            "last={last} expect={expect}"
+        );
     }
 
     #[test]
