@@ -130,8 +130,14 @@ fn yarn_inv_freq(cfg: &Config, s: &RopeScaling) -> (Vec<f32>, f32) {
     };
     let low = correction_dim(s.beta_fast).floor().max(0.0);
     let high = correction_dim(s.beta_slow).ceil().min(dim - 1.0);
-    // Guard a degenerate ramp (high == low); never fires for the shipped configs.
-    let denom = if (high - low).abs() < 1e-3 { 1e-3 } else { high - low };
+    // Guard a degenerate correction range (high == low); only hits for unusual
+    // rope_scaling. Trace it so misconfigured values are visible.
+    let denom = if (high - low).abs() < 1e-3 {
+        tracing::debug!(low, high, "yarn: degenerate correction range, fallback ramp denom 1e-3");
+        1e-3
+    } else {
+        high - low
+    };
     let inv_freq = (0..half)
         .map(|i| {
             let pos_freq = base.powf(2.0 * i as f64 / dim);
