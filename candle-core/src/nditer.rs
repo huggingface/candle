@@ -70,14 +70,13 @@ impl<const N: usize> NdIter<N> {
             }
             out_len = 1;
 
-            for i in 1..rank {
-                let d = dims[i];
+            for (i, d) in dims.iter().enumerate().take(rank).skip(1) {
                 let top = out_len - 1;
                 let last_d = out_dims[top];
 
                 let (can_merge, use_inner) = if last_d == 1 {
                     (true, true)
-                } else if d == 1 {
+                } else if *d == 1 {
                     (true, false)
                 } else {
                     let can_merge =
@@ -92,7 +91,7 @@ impl<const N: usize> NdIter<N> {
                         }
                     }
                 } else {
-                    out_dims[out_len] = d;
+                    out_dims[out_len] = *d;
                     for n in 0..N {
                         out_strides[n][out_len] = layouts[n].stride()[i];
                     }
