@@ -406,6 +406,8 @@ struct DecoderLayer {
     post_feedforward_layernorm: RmsNorm,
     #[allow(dead_code)]
     is_sliding: bool,
+
+    layer_scalar: Tensor,
 }
 
 impl DecoderLayer {
@@ -456,6 +458,8 @@ impl DecoderLayer {
             pre_feedforward_layernorm,
             post_feedforward_layernorm,
             is_sliding,
+
+            layer_scalar: vb.get(1, "layer_scalar")?,
         })
     }
 
@@ -477,7 +481,9 @@ impl DecoderLayer {
         let xs = xs.apply(&self.pre_feedforward_layernorm)?;
         let xs = xs.apply(&self.mlp)?;
         let xs = xs.apply(&self.post_feedforward_layernorm)?;
-        residual + xs
+        let xs = (residual + xs)?;
+
+        xs.broadcast_mul(&self.layer_scalar)
     }
 
     fn clear_kv_cache(&mut self) {
