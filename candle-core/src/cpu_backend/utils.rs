@@ -1,6 +1,6 @@
 /// Helper functions to write CPU kernels.
 use crate::backend::BackendStorage;
-use crate::layout::NdIter;
+use crate::nditer::NdIter;
 use crate::{Error, Layout, Result, WithDType};
 
 type C = super::CpuStorage;
