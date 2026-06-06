@@ -17,7 +17,7 @@ use std::fs::File;
 /// methods without needing to explicitly add `parquet` as a dependency.
 ///
 /// # Example
-/// ```
+/// ```no_run
 /// use candle_datasets::hub::{from_hub, FileReader};  // Re-exported trait
 /// let api = hf_hub::api::sync::Api::new().unwrap();
 /// let files = from_hub(&api, "hf-internal-testing/dummy_image_text_data".to_string()).unwrap();
@@ -51,7 +51,7 @@ fn sibling_to_parquet(
 /// This returns a list of `SerializedFileReader<File>` that can be used to read Parquet content.
 ///
 /// # Example
-/// ```
+/// ```no_run
 /// use candle_datasets::hub::{from_hub, FileReader};
 /// let api = hf_hub::api::sync::Api::new().unwrap();
 /// let readers = from_hub(&api, "hf-internal-testing/dummy_image_text_data".to_string()).unwrap();
