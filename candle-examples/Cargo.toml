@@ -14,7 +14,7 @@ accelerate-src = { workspace = true, optional = true }
 candle = { workspace = true }
 candle-datasets = { workspace = true, optional = true }
 candle-nn = { workspace = true }
-candle-transformers = { workspace = true }
+candle-transformers = { workspace = true, features = ["hf-hub"] }
 candle-flash-attn = { workspace = true, optional = true }
 candle-onnx = { workspace = true, optional = true }
 
