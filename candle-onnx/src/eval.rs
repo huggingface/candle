@@ -2562,25 +2562,20 @@ fn simple_eval_(
                     scale_dt => bail!("unsupported dtype {scale_dt:?} for DequantizeLinear"),
                 }
                 let zero_point = if node.input.len() > 2 && !node.input[2].is_empty() {
-                    Some(get(&node.input[2])?)
+                    get(&node.input[2])?
                 } else {
-                    None
+                    // onnx docs: optional - default: 0, must match 'scale' shape, dtype as 'x'
+                    &Tensor::zeros(scale.shape(), x.dtype(), scale.device())?
                 };
 
                 let r = x.rank() as i64;
 
                 let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1);
-                if scale.rank() > 0 {
-                    // onnx docs: axis is used only for per-axis and blocked quantization, for which scale is non-scalar
-                    if axis < -r || axis > r - 1 {
-                        bail!(
-                            "axis ({}) out of accepted range [-rank, rank-1] which was [{}, {}]",
-                            axis,
-                            -r,
-                            r - 1
-                        );
-                    } // onnx docs: accepted range is [-r, r-1] where r = rank(input)
-                }
+                let axis = if scale.rank() == 0 {
+                    0
+                } else {
+                    x.normalize_axis(axis)?
+                };
 
                 let block_size = get_attr_opt::<i64>(node, "block_size")?
                     .copied()
@@ -2604,7 +2599,8 @@ fn simple_eval_(
                             }
                             Some(dt) => dt,
                             None => bail!(
-                                "unsupported by candle output_dtype {:?} for DequantizeLinear", // cast from Dtype to candle DType is not possible
+                                // cast from Dtype to candle DType is not possible
+                                "unsupported by candle output_dtype {:?} for DequantizeLinear",
                                 dt
                             ),
                         },
@@ -2614,8 +2610,62 @@ fn simple_eval_(
                     scale_dt
                 }; // onnx docs: output type is specified by the output_dtype attribute or, in its absence, the type of x_scale
 
-                // placeholder output
-                let output = Tensor::zeros(x.shape(), out_dtype, x.device())?;
+                let x = x.to_dtype(out_dtype)?;
+                let mut zero_point = zero_point.to_dtype(out_dtype)?;
+                let mut scale = scale.to_dtype(out_dtype)?;
+
+                (zero_point, scale) = match scale.rank() {
+                    // linear dequantization
+                    0 => (zero_point, scale),
+                    // axis dequantization
+                    1 => {
+                        let x_shape = x.dims();
+                        let mut broadcast_shape = vec![1usize; r as usize];
+                        broadcast_shape[axis] = x_shape[axis]; // onnx docs: all values apart from 'axis' ax are masked with 1
+
+                        scale = scale.reshape(broadcast_shape.clone())?;
+                        zero_point = zero_point.reshape(broadcast_shape)?;
+                        (zero_point, scale)
+                    }
+                    _ => {
+                        if block_size == 0 {
+                            bail!(
+                                "block_size must be > 0 for blocked DequantizeLinear in {}",
+                                node.name
+                            );
+                        }
+
+                        let repeats = block_size as usize; // how many scale repeats to perform
+                        let slices: Vec<Tensor> = (0..scale.dim(axis)?)
+                            .map(|i| {
+                                let slice = scale.narrow(axis, i, 1)?;
+                                slice.repeat(
+                                    //defines along which axis perform scaling 'repeats' times, rest is scaled '1' time
+                                    (0..scale.rank())
+                                        .map(|d| if d == axis { repeats } else { 1 })
+                                        .collect::<Vec<_>>(),
+                                )
+                            })
+                            .collect::<Result<_>>()?;
+                        scale = Tensor::cat(&slices, axis)?;
+
+                        let slices: Vec<Tensor> = (0..zero_point.dim(axis)?)
+                            .map(|i| {
+                                let slice = zero_point.narrow(axis, i, 1)?;
+                                slice.repeat(
+                                    (0..zero_point.rank())
+                                        .map(|d| if d == axis { repeats } else { 1 })
+                                        .collect::<Vec<_>>(),
+                                )
+                            })
+                            .collect::<Result<_>>()?;
+                        zero_point = Tensor::cat(&slices, axis)?;
+
+                        (zero_point, scale)
+                    }
+                };
+
+                let output = x.broadcast_sub(&zero_point)?.broadcast_mul(&scale)?;
                 values.insert(node.output[0].clone(), output);
             }
             // https://onnx.ai/onnx/operators/onnx__NonZero.html
@@ -2625,12 +2675,7 @@ fn simple_eval_(
 
                 let dt = input.dtype();
                 match dt {
-                    DType::U8
-                    | DType::U32
-                    | DType::I64
-                    | DType::F16
-                    | DType::F32
-                    | DType::F64 => {}
+                    DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::F32 | DType::F64 => {}
                     dt => bail!("unsupported dtype {dt:?} for NonZero"),
                 };
 
