@@ -303,7 +303,12 @@ fn main() -> Result<()> {
             }
         };
         config.use_flash_attn = args.use_flash_attn;
-        let model = TextModel::new(&config, vb)?;
+        let text_vb = if vb.contains_tensor("model.language_model.embed_tokens.weight") {
+            vb.pp("model").pp("language_model")
+        } else {
+            vb.pp("model")
+        };
+        let model = TextModel::new(&config, text_vb)?;
         ModelKind::TextOnly(model)
     };
 
