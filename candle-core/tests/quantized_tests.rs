@@ -261,6 +261,75 @@ test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
 
+fn qtensor_cat_dim0(device: &Device) -> Result<()> {
+    let lhs = Tensor::from_vec(
+        (0..2 * 256).map(|i| (i as f32 - 200.) / 50.).collect(),
+        (2, 256),
+        device,
+    )?;
+    let rhs = Tensor::from_vec(
+        (0..3 * 256).map(|i| (i as f32 - 300.) / 75.).collect(),
+        (3, 256),
+        device,
+    )?;
+
+    let lhs_q = quantized::QTensor::quantize(&lhs, GgmlDType::Q4K)?;
+    let rhs_q = quantized::QTensor::quantize(&rhs, GgmlDType::Q4K)?;
+    let cat_q = quantized::QTensor::cat(&[&lhs_q, &rhs_q], 0)?;
+    assert_eq!(cat_q.shape().dims(), [5, 256]);
+
+    let mut expected_bytes = lhs_q.data()?.into_owned();
+    expected_bytes.extend_from_slice(rhs_q.data()?.as_ref());
+    assert_eq!(cat_q.data()?.as_ref(), expected_bytes.as_slice());
+
+    let expected = Tensor::cat(&[&lhs_q.dequantize(device)?, &rhs_q.dequantize(device)?], 0)?;
+    let got = cat_q.dequantize(device)?;
+    let diff = (&got - &expected)?.abs()?.sum_all()?.to_scalar::<f32>()?;
+    assert_eq!(diff, 0.0);
+    Ok(())
+}
+
+fn qtensor_cat_dim1(device: &Device) -> Result<()> {
+    let lhs = Tensor::from_vec(
+        (0..2 * 2 * 256)
+            .map(|i| ((i % 137) as f32 - 68.) / 29.)
+            .collect(),
+        (2, 2, 256),
+        device,
+    )?;
+    let rhs = Tensor::from_vec(
+        (0..2 * 256)
+            .map(|i| ((i % 113) as f32 - 56.) / 23.)
+            .collect(),
+        (2, 1, 256),
+        device,
+    )?;
+
+    let lhs_q = quantized::QTensor::quantize(&lhs, GgmlDType::Q4K)?;
+    let rhs_q = quantized::QTensor::quantize(&rhs, GgmlDType::Q4K)?;
+    let cat_q = quantized::QTensor::cat(&[&lhs_q, &rhs_q], 1)?;
+    assert_eq!(cat_q.shape().dims(), [2, 3, 256]);
+
+    let expected = Tensor::cat(&[&lhs_q.dequantize(device)?, &rhs_q.dequantize(device)?], 1)?;
+    let got = cat_q.dequantize(device)?;
+    let diff = (&got - &expected)?.abs()?.sum_all()?.to_scalar::<f32>()?;
+    assert_eq!(diff, 0.0);
+    Ok(())
+}
+
+test_device!(
+    qtensor_cat_dim0,
+    qtensor_cat_dim0_cpu,
+    qtensor_cat_dim0_cuda,
+    qtensor_cat_dim0_metal
+);
+test_device!(
+    qtensor_cat_dim1,
+    qtensor_cat_dim1_cpu,
+    qtensor_cat_dim1_cuda,
+    qtensor_cat_dim1_metal
+);
+
 fn quantize_q4_0(device: &Device) -> Result<()> {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
 
