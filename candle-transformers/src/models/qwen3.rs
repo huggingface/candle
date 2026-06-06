@@ -423,8 +423,11 @@ fn build_causal_mask(
         .flat_map(|i| {
             (0..(tgt + offset)).map(move |j| {
                 let past_ok = j <= i + offset;
+                // Within the window iff `(i + offset) - j <= w`, rearranged to
+                // `j + w >= i + offset` to stay in `usize` (no signed casts, no
+                // subtraction underflow when `j > i + offset`).
                 let sw_ok = match sw {
-                    Some(w) => (i + offset) as i64 - j as i64 <= w as i64,
+                    Some(w) => j + w >= i + offset,
                     None => true,
                 };
                 if past_ok && sw_ok {
@@ -569,5 +572,28 @@ mod tests {
         assert_eq!(masked[0][0], vec![0.0, neg, neg]);
         assert_eq!(masked[0][1], vec![0.0, 0.0, neg]);
         assert_eq!(masked[0][2], vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn causal_mask_respects_sliding_window() {
+        // With a sliding window of `w`, query i may attend to key j only when it is
+        // both causal (j <= i + offset) and within the window (i + offset - j <= w).
+        let device = Device::Cpu;
+        let neg = f32::NEG_INFINITY;
+
+        let mask = build_causal_mask(4, 0, Some(1), &device, DType::F32)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        // window = 1: each query sees itself and the single preceding position.
+        assert_eq!(mask[0], vec![0.0, neg, neg, neg]);
+        assert_eq!(mask[1], vec![0.0, 0.0, neg, neg]);
+        assert_eq!(mask[2], vec![neg, 0.0, 0.0, neg]);
+        assert_eq!(mask[3], vec![neg, neg, 0.0, 0.0]);
     }
 }
