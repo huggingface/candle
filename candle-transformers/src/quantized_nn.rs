@@ -116,11 +116,26 @@ impl RmsNorm {
         let weight = weight.dequantize(&weight.device())?;
         Ok(Self { weight, eps, span })
     }
+
+    pub fn from_tensor(weight: Tensor, eps: f64) -> Self {
+        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
+        Self { weight, eps, span }
+    }
 }
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        candle_nn::ops::rms_norm(x, &self.weight, self.eps as f32)
+        let weight = if self.weight.device().same_device(x.device()) {
+            self.weight.clone()
+        } else {
+            self.weight.to_device(x.device())?
+        };
+        let weight = if weight.dtype() == x.dtype() {
+            weight
+        } else {
+            weight.to_dtype(x.dtype())?
+        };
+        candle_nn::ops::rms_norm(x, &weight, self.eps as f32)
     }
 }
