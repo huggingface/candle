@@ -1,6 +1,7 @@
 //! Regression tests for the allocation caps added in huggingface/candle#3533.
 
 use candle_core::quantized::gguf_file::Content;
+use candle_core::Device;
 use std::io::Cursor;
 
 const GGUF_MAGIC: [u8; 4] = *b"GGUF";
@@ -106,6 +107,24 @@ fn empty_v1_header_loads() {
     buf.extend_from_slice(&0u32.to_le_bytes()); // metadata_kv_count
     let mut cursor = Cursor::new(buf);
     Content::read(&mut cursor).expect("empty v1 header should parse");
+}
+
+#[test]
+fn rejects_tensor_size_exceeding_file() {
+    // Create a gguf tensor that claims shape [1_073_741_824] F32 (4 GiB), but has no actual tensor data.
+    let mut buf = header(1, 0);
+    buf.extend(length_prefixed(b"t"));
+    buf.extend_from_slice(&1u32.to_le_bytes()); // n dims
+    buf.extend_from_slice(&1_073_741_824u64.to_le_bytes()); // 1 GiB elements
+    buf.extend_from_slice(&0u32.to_le_bytes()); // F32
+    buf.extend_from_slice(&0u64.to_le_bytes()); // no offset
+    let mut cursor = Cursor::new(buf);
+    let content = Content::read(&mut cursor).expect("header should parse");
+    let err = content
+        .tensor(&mut cursor, "t", &Device::Cpu)
+        .expect_err("expected Err from oversized tensor load");
+    let msg = format!("{err}");
+    assert!(msg.contains("remaining"), "unexpected error: {msg}");
 }
 
 #[test]
