@@ -2135,6 +2135,18 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn upsample_bicubic2d(
+        &self,
+        _l: &Layout,
+        _out_h: usize,
+        _out_w: usize,
+        _align_corners: bool,
+        _scale_h: Option<f64>,
+        _scale_w: Option<f64>,
+    ) -> Result<Self> {
+        crate::bail!("cuda upsample_bicubic2d is not supported yet")
+    }
+
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
         let device = self.device().clone();
         let slice = IndexSelect(ids, ids_l, dim).map(&self.slice, &device, l)?;
