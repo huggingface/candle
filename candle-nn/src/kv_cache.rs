@@ -55,6 +55,26 @@ impl Cache {
         self.all_data = None;
     }
 
+    /// Move the write pointer back to `seq_len` without deallocating the
+    /// underlying buffer.
+    ///
+    /// This is the key primitive for zero-copy prefix-cache forking: after
+    /// prefilling a shared prefix you snapshot `current_seq_len`, generate
+    /// tokens for one request, then call `truncate(prefix_len)` to reset the
+    /// pointer before serving the next request.  The buffer is never
+    /// reallocated and the prefix data is never re-copied.
+    ///
+    /// # Panics
+    /// Panics if `seq_len > current_seq_len`.
+    pub fn truncate(&mut self, seq_len: usize) {
+        assert!(
+            seq_len <= self.current_seq_len,
+            "truncate({seq_len}) > current_seq_len({})",
+            self.current_seq_len
+        );
+        self.current_seq_len = seq_len;
+    }
+
     pub fn append(&mut self, src: &Tensor) -> Result<()> {
         let seq_len = src.dim(self.dim)?;
         // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
@@ -147,6 +167,15 @@ impl KvCache {
     pub fn reset(&mut self) {
         self.k.reset();
         self.v.reset();
+    }
+
+    /// Move the write pointer back to `seq_len` on both K and V caches
+    /// without deallocating the underlying buffers.
+    ///
+    /// See [`Cache::truncate`] for the full semantics and use-case.
+    pub fn truncate(&mut self, seq_len: usize) {
+        self.k.truncate(seq_len);
+        self.v.truncate(seq_len);
     }
 }
 
