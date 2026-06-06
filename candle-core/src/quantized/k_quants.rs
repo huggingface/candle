@@ -1311,8 +1311,11 @@ impl GgmlType for BlockQ3K {
             aux[1] = (aux[1] & KMASK2) | (((tmp >> 2) & KMASK1) << 4);
 
             //Transfer the scales into an i8 array
-            let scales: &mut [i8] =
-                unsafe { std::slice::from_raw_parts_mut(aux.as_mut_ptr() as *mut i8, 16) };
+            let mut scales_bytes = [0u8; 16];
+            LittleEndian::write_u32_into(&aux, &mut scales_bytes);
+            let scales: &[i8] = unsafe {
+                std::slice::from_raw_parts(scales_bytes.as_ptr() as *const i8, 16)
+            };
 
             let d_all = block.d.to_f32();
             let mut m = 1;
