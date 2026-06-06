@@ -1,0 +1,66 @@
+name: ⚠️ Incorrect Numerical Output
+description: Report wrong results or numerical inconsistencies
+labels: ["correctness"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Correctness bugs are high priority. Please provide expected vs actual outputs.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Issue Description
+      description: What operation produces incorrect results?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Code
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Output
+      description: What should the result be? (Include PyTorch comparison if available)
+      placeholder: |
+        PyTorch output: tensor([1.0, 2.0, 3.0])
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Output
+      description: What Candle produced
+      placeholder: |
+        Candle output: Tensor [[1.0, 2.1, 3.0]]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - CPU
+        - CUDA
+        - Metal
+      multiple: true
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: conditions
+    attributes:
+      label: Conditions
+      options:
+        - label: Issue occurs with contiguous tensors
+        - label: Issue occurs after transpose/reshape
+        - label: Issue is backend-specific
+        - label: Issue involves quantized operations
