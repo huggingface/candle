@@ -2556,16 +2556,28 @@ fn simple_eval_(
                     x_dt => bail!("unsupported dtype {x_dt:?} for DequantizeLinear"),
                 }
                 let scale = get(&node.input[1])?;
+                // local reimplementation of 'to_scalar_flexible()' function - as function would cast scale to one fixed dtype, this allows scale to have original dtype
+                let scale = if scale.rank() == 1 && scale.elem_count() == 1 {
+                    scale.reshape(())?
+                } else {
+                    scale.clone()
+                };
                 let scale_dt = scale.dtype();
                 match scale_dt {
                     DType::F16 | DType::F32 => {}
                     scale_dt => bail!("unsupported dtype {scale_dt:?} for DequantizeLinear"),
                 }
+
                 let zero_point = if node.input.len() > 2 && !node.input[2].is_empty() {
                     get(&node.input[2])?
                 } else {
                     // onnx docs: optional - default: 0, must match 'scale' shape, dtype as 'x'
                     &Tensor::zeros(scale.shape(), x.dtype(), scale.device())?
+                };
+                let zero_point = if zero_point.rank() == 1 && zero_point.elem_count() == 1 {
+                    zero_point.reshape(())?
+                } else {
+                    zero_point.clone()
                 };
 
                 let r = x.rank() as i64;
