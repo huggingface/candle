@@ -522,6 +522,13 @@ impl Tensor {
         is_variable: bool,
     ) -> Result<Self> {
         let shape = shape.into_shape(data.len())?;
+        if shape.elem_count() != data.len() {
+            crate::bail!(
+                "shape {shape:?} ({} elements) does not match the {} elements in the data",
+                shape.elem_count(),
+                data.len()
+            )
+        }
         let storage = device.storage_owned(data)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, is_variable))
@@ -567,6 +574,13 @@ impl Tensor {
         device: &Device,
     ) -> Result<Self> {
         let shape = shape.into_shape(array.len())?;
+        if shape.elem_count() != array.len() {
+            crate::bail!(
+                "shape {shape:?} ({} elements) does not match the {} elements in the data",
+                shape.elem_count(),
+                array.len()
+            )
+        }
         let storage = device.storage_from_slice(array)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, false))
