@@ -176,6 +176,19 @@ pub(crate) fn from_storage<S: Into<Shape>>(
     Tensor(Arc::new(tensor_))
 }
 
+// Used by the `from_vec`/`from_slice` constructors to enforce that a declared
+// shape matches the amount of data backing it, so a caller cannot build a
+// tensor that reads past its storage (see huggingface/candle#3534).
+fn check_shape_matches_len(shape: &Shape, len: usize) -> Result<()> {
+    let elem_count = shape.elem_count();
+    if elem_count != len {
+        bail!(
+            "shape {shape:?} ({elem_count} elements) does not match the {len} elements in the data"
+        )
+    }
+    Ok(())
+}
+
 impl Tensor {
     pub(crate) fn ones_impl<S: Into<Shape>>(
         shape: S,
@@ -522,13 +535,7 @@ impl Tensor {
         is_variable: bool,
     ) -> Result<Self> {
         let shape = shape.into_shape(data.len())?;
-        if shape.elem_count() != data.len() {
-            crate::bail!(
-                "shape {shape:?} ({} elements) does not match the {} elements in the data",
-                shape.elem_count(),
-                data.len()
-            )
-        }
+        check_shape_matches_len(&shape, data.len())?;
         let storage = device.storage_owned(data)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, is_variable))
@@ -574,13 +581,7 @@ impl Tensor {
         device: &Device,
     ) -> Result<Self> {
         let shape = shape.into_shape(array.len())?;
-        if shape.elem_count() != array.len() {
-            crate::bail!(
-                "shape {shape:?} ({} elements) does not match the {} elements in the data",
-                shape.elem_count(),
-                array.len()
-            )
-        }
+        check_shape_matches_len(&shape, array.len())?;
         let storage = device.storage_from_slice(array)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, false))
