@@ -134,3 +134,44 @@ fn rejects_string_length_above_remaining_file_bytes() {
     pad(&mut buf, 64);
     assert_rejects(buf, "string length");
 }
+
+/// Build a valid single-tensor GGUF V3 whose tensor info declares the given
+/// dimensions and dtype, with no actual tensor data appended. The header parses
+/// cleanly; the dimensions only bite when the tensor data is read.
+fn single_tensor_file(dims: &[u64], dtype: u32) -> Vec<u8> {
+    let mut buf = header(1, 0);
+    buf.extend(length_prefixed(b"t")); // tensor name
+    buf.extend_from_slice(&(dims.len() as u32).to_le_bytes()); // n_dimensions
+    for &d in dims {
+        buf.extend_from_slice(&d.to_le_bytes()); // V3 dims are u64
+    }
+    buf.extend_from_slice(&dtype.to_le_bytes()); // ggml_dtype
+    buf.extend_from_slice(&0u64.to_le_bytes()); // offset
+    buf
+}
+
+fn assert_tensor_read_rejects(dims: &[u64], dtype: u32, msg_contains: &str) {
+    let mut cursor = Cursor::new(single_tensor_file(dims, dtype));
+    let content = Content::read(&mut cursor).expect("header should parse");
+    let err = content
+        .tensor(&mut cursor, "t", &Device::Cpu)
+        .expect_err("expected Err");
+    let msg = format!("{err}");
+    assert!(msg.contains(msg_contains), "unexpected error: {msg}");
+}
+
+#[test]
+fn rejects_tensor_with_elem_count_overflow() {
+    // Two dims within GGUF_MAX_TENSOR_DIMS whose product overflows usize/u64.
+    // Computing the element/byte count must report an error instead of wrapping
+    // (release) or panicking (debug). F32 = dtype 0, block_size 1, type_size 4.
+    assert_tensor_read_rejects(&[1u64 << 33, 1u64 << 33], 0, "overflow");
+}
+
+#[test]
+fn rejects_tensor_size_above_remaining_file_bytes() {
+    // A single modest dim: no overflow, but the declared tensor (256 KB) is far
+    // larger than what is physically left in the file. The size must be rejected
+    // before allocating, mirroring the string/array length checks.
+    assert_tensor_read_rejects(&[1u64 << 16], 0, "remaining file bytes");
+}

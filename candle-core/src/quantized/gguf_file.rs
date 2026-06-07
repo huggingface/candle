@@ -91,24 +91,40 @@ impl TensorInfo {
         tensor_data_offset: u64,
         device: &Device,
     ) -> Result<QTensor> {
-        let tensor_elems = self.shape.elem_count();
-        let block_size = self.ggml_dtype.block_size();
+        // The dimensions come straight from the (untrusted) file and are only
+        // bounded in count, not in value, so compute the element and byte counts
+        // with checked arithmetic. `Shape::elem_count` multiplies with wrapping
+        // semantics, which a crafted GGUF can drive past `usize` to wrap (release)
+        // or panic (debug); reject the overflow with a clean error instead.
+        let block_size = self.ggml_dtype.block_size() as u64;
+        let type_size = self.ggml_dtype.type_size() as u64;
+        let mut tensor_elems: u64 = 1;
+        for &dim in self.shape.dims() {
+            tensor_elems = tensor_elems
+                .checked_mul(dim as u64)
+                .context("gguf: tensor element count overflows u64")?;
+        }
         if !tensor_elems.is_multiple_of(block_size) {
             crate::bail!(
             "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )
         }
-        let size_in_bytes = tensor_elems / block_size * self.ggml_dtype.type_size();
-        let tensor_start = tensor_data_offset.saturating_add(self.offset);
+        let size_in_bytes = (tensor_elems / block_size)
+            .checked_mul(type_size)
+            .context("gguf: tensor byte size overflows u64")?;
+        // Gate the declared size against what is physically left in the file
+        // before allocating, mirroring the length checks in `read_string` and
+        // `Value::read` so a crafted size can't drive a huge allocation.
+        let data_start = tensor_data_offset.saturating_add(self.offset);
         let file_size = reader.seek(std::io::SeekFrom::End(0))?;
-        let remaining = file_size.saturating_sub(tensor_start);
-        if size_in_bytes as u64 > remaining {
+        let remaining = file_size.saturating_sub(data_start);
+        if size_in_bytes > remaining {
             crate::bail!(
-                "tensor needs {size_in_bytes} bytes at offset {tensor_start}, only {remaining} remaining in file"
+                "gguf: tensor data size {size_in_bytes} exceeds remaining file bytes {remaining}"
             )
         }
-        let mut raw_data = vec![0u8; size_in_bytes];
-        reader.seek(std::io::SeekFrom::Start(tensor_start))?;
+        let mut raw_data = vec![0u8; size_in_bytes as usize];
+        reader.seek(std::io::SeekFrom::Start(data_start))?;
         reader.read_exact(&mut raw_data)?;
         super::ggml_file::qtensor_from_ggml(
             self.ggml_dtype,
