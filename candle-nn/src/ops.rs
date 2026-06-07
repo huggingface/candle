@@ -424,10 +424,16 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
+
+    fn bwd(&self, _arg: &Tensor, res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
+        let grad_sum = (grad_res * res)?.sum_keepdim(D::Minus1)?;
+        let grad = (res * grad_res.broadcast_sub(&grad_sum)?)?;
+        Ok(Some(grad))
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
-    xs.apply_op1_no_bwd(&SoftmaxLastDim)
+    xs.apply_op1(SoftmaxLastDim)
 }
 
 #[derive(Debug, Clone)]
