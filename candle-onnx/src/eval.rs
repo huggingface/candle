@@ -2680,22 +2680,6 @@ fn simple_eval_(
                 let output = x.broadcast_sub(&zero_point)?.broadcast_mul(&scale)?;
                 values.insert(node.output[0].clone(), output);
             }
-            // https://onnx.ai/onnx/operators/onnx__NonZero.html
-            "NonZero" => {
-                let input = get(&node.input[0])?;
-                let rank = input.rank();
-
-                let dt = input.dtype();
-                match dt {
-                    DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::F32 | DType::F64 => {}
-                    dt => bail!("unsupported dtype {dt:?} for NonZero"),
-                };
-
-                let out_shape = vec![rank, 0];
-
-                let output = Tensor::zeros(out_shape, DType::I64, input.device())?;
-                values.insert(node.output[0].clone(), output);
-            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
