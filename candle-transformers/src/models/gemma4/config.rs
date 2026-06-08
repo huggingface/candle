@@ -114,6 +114,9 @@ pub struct Gemma4TextConfig {
     pub use_bidirectional_attention: Option<String>,
     #[serde(default = "default_use_flash_attn")]
     pub use_flash_attn: bool,
+
+    pub vocab_size_per_layer_input: usize,
+    pub hidden_size_per_layer_input: usize,
 }
 
 impl Gemma4TextConfig {

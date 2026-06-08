@@ -408,6 +408,17 @@ struct DecoderLayer {
     is_sliding: bool,
 
     layer_scalar: Tensor,
+
+    pli_mixer: Option<PerLayerInputMixer>,
+}
+
+// FIXME(eddyb) where should this be placed? should fields have `per_layer`?
+#[derive(Debug, Clone)]
+struct PerLayerInputMixer {
+    per_layer_input_gate: Linear,
+    act_fn: Activation,
+    per_layer_projection: Linear,
+    post_per_layer_input_norm: RmsNorm,
 }
 
 impl DecoderLayer {
@@ -450,6 +461,30 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             vb.pp("post_feedforward_layernorm"),
         )?;
+
+        let pli_mixer = if cfg.hidden_size_per_layer_input > 0 {
+            Some(PerLayerInputMixer {
+                per_layer_input_gate: candle_nn::linear_no_bias(
+                    cfg.hidden_size,
+                    cfg.hidden_size_per_layer_input,
+                    vb.pp("per_layer_input_gate"),
+                )?,
+                act_fn: cfg.hidden_activation,
+                per_layer_projection: candle_nn::linear_no_bias(
+                    cfg.hidden_size_per_layer_input,
+                    cfg.hidden_size,
+                    vb.pp("per_layer_projection"),
+                )?,
+                post_per_layer_input_norm: RmsNorm::new(
+                    cfg.hidden_size,
+                    cfg.rms_norm_eps,
+                    vb.pp("post_per_layer_input_norm"),
+                )?,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             self_attn,
             mlp,
@@ -460,6 +495,8 @@ impl DecoderLayer {
             is_sliding,
 
             layer_scalar: vb.get(1, "layer_scalar")?,
+
+            pli_mixer,
         })
     }
 
@@ -469,6 +506,8 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         sliding_attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
+
+        per_layer_input: Option<&Tensor>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -482,6 +521,20 @@ impl DecoderLayer {
         let xs = xs.apply(&self.mlp)?;
         let xs = xs.apply(&self.post_feedforward_layernorm)?;
         let xs = (residual + xs)?;
+
+        let xs = match (&self.pli_mixer, per_layer_input) {
+            (Some(pli_mixer), Some(per_layer_input)) => {
+                let residual = &xs;
+                let xs = xs.apply(&pli_mixer.per_layer_input_gate)?;
+                let xs = xs.apply(&pli_mixer.act_fn)?;
+                let xs = (xs * per_layer_input)?;
+                let xs = xs.apply(&pli_mixer.per_layer_projection)?;
+                let xs = xs.apply(&pli_mixer.post_per_layer_input_norm)?;
+                (residual + xs)?
+            }
+            (None, None) => xs,
+            _ => unreachable!(),
+        };
 
         xs.broadcast_mul(&self.layer_scalar)
     }
@@ -542,6 +595,17 @@ pub struct TextModel {
     dtype: DType,
     hidden_size: usize,
     sliding_window: usize,
+
+    ple: Option<PerLayerEmbeddings>,
+}
+
+// FIXME(eddyb) where should this be placed? should fields have `per_layer`?
+#[derive(Debug, Clone)]
+struct PerLayerEmbeddings {
+    hidden_size_per_layer_input: usize,
+    embed_tokens_per_layer: candle_nn::Embedding,
+    per_layer_model_projection: Linear,
+    per_layer_projection_norm: RmsNorm,
 }
 
 impl TextModel {
@@ -584,6 +648,30 @@ impl TextModel {
         } else {
             candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
         };
+
+        let ple = if cfg.hidden_size_per_layer_input > 0 {
+            Some(PerLayerEmbeddings {
+                hidden_size_per_layer_input: cfg.hidden_size_per_layer_input,
+                embed_tokens_per_layer: candle_nn::embedding(
+                    cfg.vocab_size_per_layer_input,
+                    cfg.num_hidden_layers * cfg.hidden_size_per_layer_input,
+                    vb.pp("embed_tokens_per_layer"),
+                )?,
+                per_layer_model_projection: candle_nn::linear_no_bias(
+                    cfg.hidden_size,
+                    cfg.num_hidden_layers * cfg.hidden_size_per_layer_input,
+                    vb_m.pp("per_layer_model_projection"),
+                )?,
+                per_layer_projection_norm: RmsNorm::new(
+                    cfg.hidden_size_per_layer_input,
+                    cfg.rms_norm_eps,
+                    vb_m.pp("per_layer_projection_norm"),
+                )?,
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             embed_tokens,
             layers,
@@ -594,6 +682,8 @@ impl TextModel {
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
             sliding_window: cfg.sliding_window,
+
+            ple,
         })
     }
 
@@ -633,11 +723,12 @@ impl TextModel {
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let xs = self.embed_tokens(input_ids)?;
-        self.forward_embeds(&xs, seqlen_offset, b_size, seq_len)
+        self.forward_embeds(input_ids, &xs, seqlen_offset, b_size, seq_len)
     }
 
     pub fn forward_embeds(
         &mut self,
+        input_ids: &Tensor,
         xs: &Tensor,
         seqlen_offset: usize,
         batch_size: usize,
@@ -646,13 +737,47 @@ impl TextModel {
         let (attention_mask, sliding_attention_mask) =
             self.create_attention_masks(batch_size, seq_len, seqlen_offset)?;
 
+        let per_layer_inputs = self
+            .ple
+            .as_ref()
+            .map(|ple| {
+                let inputs_embeds = xs;
+
+                let per_layer_projection = (xs.apply(&ple.per_layer_model_projection)?
+                    * (1.0 / (self.hidden_size as f64).sqrt()))?;
+
+                let mut shape = inputs_embeds.dims().to_vec();
+                shape.pop().unwrap();
+                shape.extend([self.layers.len(), ple.hidden_size_per_layer_input]);
+                let per_layer_projection = per_layer_projection.reshape(shape)?;
+                let per_layer_projection =
+                    per_layer_projection.apply(&ple.per_layer_projection_norm)?;
+
+                let per_layer_inputs = (input_ids.apply(&ple.embed_tokens_per_layer)?
+                    * (ple.hidden_size_per_layer_input as f64).sqrt())?
+                .reshape(
+                    input_ids
+                        .shape()
+                        .clone()
+                        .extend(&[self.layers.len(), ple.hidden_size_per_layer_input]),
+                )?;
+
+                (per_layer_projection + per_layer_inputs)? * (1.0 / 2.0f64.sqrt())
+            })
+            .transpose()?;
+
         let mut xs = xs.clone();
-        for layer in self.layers.iter_mut() {
+        for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = layer.forward(
                 &xs,
                 attention_mask.as_ref(),
                 sliding_attention_mask.as_ref(),
                 seqlen_offset,
+                per_layer_inputs
+                    .as_ref()
+                    .map(|per_layer_inputs| per_layer_inputs.get_on_dim(2, i))
+                    .transpose()?
+                    .as_ref(),
             )?
         }
         let logits = xs
