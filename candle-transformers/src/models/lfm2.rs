@@ -86,7 +86,7 @@ impl Lfm2Config {
     fn compute_intermediate_size(&self) -> usize {
         let base_size = (self.hidden_size as f32 * 4.0 * self.block_ffn_dim_multiplier) as usize;
         let multiple = self.block_multiple_of;
-        ((base_size + multiple - 1) / multiple) * multiple
+        base_size.div_ceil(multiple) * multiple
     }
 
     pub fn into_config(self, use_flash_attn: bool) -> Config {
@@ -525,7 +525,7 @@ impl ShortConv {
 /// Unified decoder layer supporting both attention and convolution.
 #[derive(Debug, Clone)]
 enum LayerKind {
-    Attention(Attention),
+    Attention(Box<Attention>),
     ShortConv(ShortConv),
 }
 
@@ -554,7 +554,7 @@ impl DecoderLayer {
             .unwrap_or(LayerType::FullAttention);
         let kind = match layer_type {
             LayerType::FullAttention => {
-                LayerKind::Attention(Attention::new(cfg, vb.pp("self_attn"))?)
+                LayerKind::Attention(Box::new(Attention::new(cfg, vb.pp("self_attn"))?))
             }
             LayerType::Conv => LayerKind::ShortConv(ShortConv::new(cfg, vb.pp("conv"))?),
         };
