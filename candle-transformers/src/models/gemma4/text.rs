@@ -9,7 +9,7 @@ use candle_nn::{linear_b as linear_bias, Activation, Linear, VarBuilder};
 
 use super::config::Gemma4TextConfig;
 
-// ── RmsNorm (Gemma-style with +1 offset) ────────────────────────────────────
+// ── RmsNorm (Gemma-style, but without any offset) ───────────────────────────
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
@@ -35,9 +35,7 @@ impl Module for RmsNorm {
         let x = x.to_dtype(internal_dtype)?;
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        x_normed
-            .to_dtype(x_dtype)?
-            .broadcast_mul(&(&self.weight + 1.0)?)
+        x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)
     }
 }
 
