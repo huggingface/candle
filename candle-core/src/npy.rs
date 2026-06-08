@@ -117,11 +117,9 @@ impl Header {
             match c {
                 '(' => cnt_parenthesis += 1,
                 ')' => cnt_parenthesis -= 1,
-                ',' => {
-                    if cnt_parenthesis == 0 {
-                        parts.push(header[start_index..index].to_owned());
-                        start_index = index + 1;
-                    }
+                ',' if cnt_parenthesis == 0 => {
+                    parts.push(header[start_index..index].to_owned());
+                    start_index = index + 1;
                 }
                 _ => {}
             }

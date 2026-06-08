@@ -1,6 +1,26 @@
-//! Apply penalty and repeat_kv
+//! Shared utilities: repeat_kv, repeat_penalty, causal mask.
 
-use candle::{Result, Tensor};
+use candle::{Device, Result, Tensor};
+
+/// Build a causal attention mask of shape `(seq_len, kv_len)` where
+/// `kv_len = index_pos + seq_len`.
+///
+/// `mask[i][j] = 1` means query `i` must **not** attend to key `j`.
+///
+/// - `index_pos == 0`: classic square `(seq_len, seq_len)` mask.
+/// - `index_pos > 0`: rectangular mask for prefix KV caching — the first
+///   `index_pos` columns are all-zero (every query attends to all cached prefix
+///   keys) and the last `seq_len` columns form the standard causal triangle.
+///
+/// All models that maintain a KV cache should use this function so that
+/// batched user-turn prefill works correctly after prefix restoration.
+pub fn build_causal_mask(seq_len: usize, index_pos: usize, device: &Device) -> Result<Tensor> {
+    let kv_len = index_pos + seq_len;
+    let mask: Vec<u8> = (0..seq_len)
+        .flat_map(|i| (0..kv_len).map(move |j| u8::from(j > index_pos + i)))
+        .collect();
+    Tensor::from_slice(&mask, (seq_len, kv_len), device)
+}
 
 pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Result<Tensor> {
     let device = logits.device();
