@@ -369,11 +369,9 @@ impl Attention {
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
-            let scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, scale, mask.is_some())?.transpose(1, 2)?
+            flash_attn(&q, &k, &v, 1.0, mask.is_some())?.transpose(1, 2)?
         } else {
-            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            let attn_weights = q.matmul(&k.transpose(2, 3)?)?;
 
             let attn_weights = match mask {
                 None => attn_weights,
