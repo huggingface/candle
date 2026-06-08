@@ -26,5 +26,5 @@ cargo run --example lfm2 --features cuda,flash-attn --release -- \
 
 ## Supported Models
 
-1. [LFM2.5-1.2B](https://huggingface.co/LiquidAI/LFM2.5-1.2B)
+1. [LFM2.5-1.2B-Instruct](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct)
 2. [LFM2.5-1.2B-Thinking](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking)

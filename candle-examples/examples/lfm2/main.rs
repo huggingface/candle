@@ -164,7 +164,7 @@ enum Which {
 impl Which {
     fn model_id(&self) -> &'static str {
         match self {
-            Which::Lfm2_5_1_2B => "LiquidAI/LFM2.5-1.2B",
+            Which::Lfm2_5_1_2B => "LiquidAI/LFM2.5-1.2B-Instruct",
             Which::Lfm2_5_1_2BThinking => "LiquidAI/LFM2.5-1.2B-Thinking",
         }
     }
