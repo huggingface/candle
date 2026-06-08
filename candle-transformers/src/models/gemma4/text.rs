@@ -221,7 +221,7 @@ enum KvCache {
 struct Attention {
     q_proj: Linear,
     k_proj: Linear,
-    v_proj: Linear,
+    v_proj: Option<Linear>,
     o_proj: Linear,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
@@ -251,19 +251,31 @@ impl Attention {
         let bias = cfg.attention_bias;
         let is_sliding = cfg.is_sliding(layer_idx);
 
-        let (head_dim, num_kv_heads) = if is_sliding {
-            (cfg.head_dim, cfg.num_key_value_heads)
+        let head_dim = if is_sliding {
+            cfg.head_dim
         } else {
-            let global_kv = cfg
-                .num_global_key_value_heads
-                .unwrap_or(cfg.num_key_value_heads);
-            (cfg.global_head_dim, global_kv)
+            cfg.global_head_dim
+        };
+
+        let use_alternative_attention = cfg.attention_k_eq_v && !is_sliding;
+        let num_kv_heads = if use_alternative_attention {
+            cfg.num_global_key_value_heads.ok_or_else(|| {
+                candle::Error::Msg(
+                    "missing `num_global_key_value_heads` \
+                     (required by `attention_k_eq_v` for full layers)"
+                        .to_string(),
+                )
+            })?
+        } else {
+            cfg.num_key_value_heads
         };
 
         let num_kv_groups = num_heads / num_kv_heads;
         let q_proj = linear_bias(hidden_sz, num_heads * head_dim, bias, vb.pp("q_proj"))?;
         let k_proj = linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("k_proj"))?;
-        let v_proj = linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj"))?;
+        let v_proj = (!use_alternative_attention)
+            .then(|| linear_bias(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj")))
+            .transpose()?;
         let o_proj = linear_bias(num_heads * head_dim, hidden_sz, bias, vb.pp("o_proj"))?;
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
@@ -311,7 +323,10 @@ impl Attention {
 
         let mut q = self.q_proj.forward(xs)?;
         let mut k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
+        let v = match &self.v_proj {
+            Some(v_proj) => v_proj.forward(xs)?,
+            _ => k.clone(),
+        };
 
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
