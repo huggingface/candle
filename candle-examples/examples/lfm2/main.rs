@@ -272,7 +272,9 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let model_id = args.model_id.unwrap_or_else(|| args.which.model_id().to_string());
+    let model_id = args
+        .model_id
+        .unwrap_or_else(|| args.which.model_id().to_string());
     let repo = api.repo(Repo::with_revision(
         model_id.clone(),
         RepoType::Model,
@@ -324,8 +326,16 @@ fn main() -> Result<()> {
 
     println!("loaded the model in {:?}", start.elapsed());
     println!("model: {model_id}");
-    let n_attn = config.layer_types.iter().filter(|t| **t == LayerType::FullAttention).count();
-    let n_conv = config.layer_types.iter().filter(|t| **t == LayerType::Conv).count();
+    let n_attn = config
+        .layer_types
+        .iter()
+        .filter(|t| **t == LayerType::FullAttention)
+        .count();
+    let n_conv = config
+        .layer_types
+        .iter()
+        .filter(|t| **t == LayerType::Conv)
+        .count();
     println!(
         "layers: {} ({n_attn} attention, {n_conv} conv)",
         config.num_hidden_layers,

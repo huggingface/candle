@@ -285,7 +285,11 @@ impl Attention {
         let q_proj = linear(hidden_size, num_attention_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj = linear(hidden_size, num_key_value_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear(hidden_size, num_key_value_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj = linear(num_attention_heads * head_dim, hidden_size, vb.pp("out_proj"))?;
+        let o_proj = linear(
+            num_attention_heads * head_dim,
+            hidden_size,
+            vb.pp("out_proj"),
+        )?;
 
         let q_norm = RmsNorm::new(head_dim, cfg.norm_eps, vb.pp("q_layernorm"))?;
         let k_norm = RmsNorm::new(head_dim, cfg.norm_eps, vb.pp("k_layernorm"))?;
@@ -392,9 +396,11 @@ impl Attention {
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
 
-        let y = y
-            .transpose(1, 2)?
-            .reshape((b_sz, seq_len, self.num_attention_heads * self.head_dim))?;
+        let y = y.transpose(1, 2)?.reshape((
+            b_sz,
+            seq_len,
+            self.num_attention_heads * self.head_dim,
+        ))?;
         self.o_proj.forward(&y)
     }
 }
@@ -452,7 +458,11 @@ impl ShortConv {
             // Token-by-token generation: use cached state
             let mut state = match &cache.conv_states[block_idx] {
                 Some(s) => s.clone(),
-                None => Tensor::zeros((b_sz, self.hidden_size, self.l_cache), bx.dtype(), bx.device())?,
+                None => Tensor::zeros(
+                    (b_sz, self.hidden_size, self.l_cache),
+                    bx.dtype(),
+                    bx.device(),
+                )?,
             };
 
             // Shift cache and add new token
@@ -546,9 +556,7 @@ impl DecoderLayer {
             LayerType::FullAttention => {
                 LayerKind::Attention(Attention::new(cfg, vb.pp("self_attn"))?)
             }
-            LayerType::Conv => {
-                LayerKind::ShortConv(ShortConv::new(cfg, vb.pp("conv"))?)
-            }
+            LayerType::Conv => LayerKind::ShortConv(ShortConv::new(cfg, vb.pp("conv"))?),
         };
 
         Ok(Self {
@@ -598,7 +606,8 @@ impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_m = vb.pp("model");
 
-        let embed_tokens = Embedding::new(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let embed_tokens =
+            Embedding::new(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -607,7 +616,8 @@ impl Model {
             layers.push(layer);
         }
 
-        let embedding_norm = RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb_m.pp("embedding_norm"))?;
+        let embedding_norm =
+            RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb_m.pp("embedding_norm"))?;
 
         let lm_head = if cfg.tie_embedding {
             Linear::from_weights(embed_tokens.embeddings().clone(), None)
@@ -624,7 +634,12 @@ impl Model {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        index_pos: usize,
+        cache: &mut Cache,
+    ) -> Result<Tensor> {
         let (_, seq_len) = input_ids.dims2()?;
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
