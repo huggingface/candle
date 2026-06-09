@@ -55,6 +55,10 @@ pub enum UnaryOp {
     Log,
     Sin,
     Cos,
+    Tanh,
+    Asin,
+    Acos,
+    Atan,
     Abs,
     Neg,
     Recip,
@@ -65,7 +69,6 @@ pub enum UnaryOp {
     Erf,
     Relu,
     Silu,
-    Tanh,
     Floor,
     Ceil,
     Round,
@@ -257,6 +260,10 @@ pub struct Exp;
 pub struct Log;
 pub struct Sin;
 pub struct Cos;
+pub struct Tanh;
+pub struct Asin;
+pub struct Acos;
+pub struct Atan;
 pub struct Abs;
 pub struct Neg;
 pub struct Recip;
@@ -267,7 +274,6 @@ pub struct GeluErf;
 pub struct Erf;
 pub struct Relu;
 pub struct Silu;
-pub struct Tanh;
 pub struct Floor;
 pub struct Ceil;
 pub struct Round;
@@ -506,6 +512,9 @@ unary_op!(Log, "log", v, v.ln(), vs_ln, vd_ln);
 unary_op!(Sin, "sin", v, v.sin(), vs_sin, vd_sin);
 unary_op!(Cos, "cos", v, v.cos(), vs_cos, vd_cos);
 unary_op!(Tanh, "tanh", v, v.tanh(), vs_tanh, vd_tanh);
+unary_op!(Asin, "asin", v, v.asin(), vs_asin, vd_asin);
+unary_op!(Acos, "acos", v, v.acos(), vs_acos, vd_acos);
+unary_op!(Atan, "atan", v, v.atan(), vs_atan, vd_atan);
 unary_op!(Neg, "neg", v, -v);
 unary_op!(Recip, "recip", v, v.recip());
 unary_op!(Sqr, "sqr", v, v * v, vs_sqr, vd_sqr);
