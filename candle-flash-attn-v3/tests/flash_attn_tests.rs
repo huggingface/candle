@@ -29,6 +29,34 @@ fn fa_acausal(q: &Tensor, k: &Tensor, v: &Tensor, softmax_scale: f32) -> Result<
     Ok(output)
 }
 
+fn fa_causal(q: &Tensor, k: &Tensor, v: &Tensor, softmax_scale: f32) -> Result<Tensor> {
+    let in_dtype = q.dtype();
+    let seq_q = q.dim(D::Minus2)?;
+    let seq_k = k.dim(D::Minus2)?;
+    let q = q.to_dtype(DType::F32)?;
+    let k = k.to_dtype(DType::F32)?;
+    let v = v.to_dtype(DType::F32)?;
+    let att = (q.matmul(&k.t()?)? * softmax_scale as f64)?;
+    // Causal mask aligned to the bottom-right corner, matching flash attention's
+    // behavior: query i attends to keys 0..=(i + seq_k - seq_q).
+    let mask: Vec<f32> = (0..seq_q)
+        .flat_map(|i| {
+            (0..seq_k).map(move |j| {
+                if j + seq_q > seq_k + i {
+                    f32::NEG_INFINITY
+                } else {
+                    0.0
+                }
+            })
+        })
+        .collect();
+    let mask = Tensor::from_vec(mask, (seq_q, seq_k), q.device())?;
+    let att = att.broadcast_add(&mask)?;
+    let att = candle_nn::ops::softmax(&att, D::Minus1)?;
+    let output = att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?;
+    Ok(output)
+}
+
 #[test]
 fn flash_attn_acausal() -> Result<()> {
     let device = Device::new_cuda(0)?;
@@ -239,6 +267,38 @@ fn flash_attn_acausal_gqa() -> Result<()> {
             ]
         ]
     );
+    Ok(())
+}
+
+#[rstest(
+    head_dim => [64, 128, 256],
+    seq_len => [2, 4, 9],
+)]
+fn flash_attn_causal(head_dim: usize, seq_len: usize) -> Result<()> {
+    // Regression test for the NULL tile_count_semaphore: the causal (non-varlen) path
+    // selects the DynamicPersistentTileScheduler, which atomicAdds on
+    // params.tile_count_semaphore. The binding used to leave it unallocated (NULL),
+    // so any flash_attn(..., causal=true) call failed with an illegal global atomic.
+    let device = Device::new_cuda(0)?;
+    let q = Tensor::arange(0u32, (3 * seq_len * head_dim) as u32, &device)?
+        .to_dtype(DType::F16)?
+        .reshape((1, 3, seq_len, head_dim))?;
+    let k = (&q / ((head_dim * seq_len) as f64 * 4.))?;
+    let v = (&q / ((head_dim * seq_len) as f64 * 2.))?;
+    let q = (&q / ((head_dim * seq_len) as f64 * 3.))?;
+
+    let ys = {
+        let q = q.transpose(1, 2)?;
+        let k = k.transpose(1, 2)?;
+        let v = v.transpose(1, 2)?;
+        candle_flash_attn_v3::flash_attn(&q, &k, &v, 0.5, true, false)?.transpose(1, 2)?
+    };
+    let ys = ys.i(0)?.to_dtype(DType::F32)?;
+    assert_eq!(ys.dims(), &[3, seq_len, head_dim]);
+
+    let ys2 = fa_causal(&q, &k, &v, 0.5)?.i(0)?.to_dtype(DType::F32)?;
+    let diff = ys.sub(&ys2)?.abs()?.flatten_all()?.max(0)?;
+    assert!(diff.to_vec0::<f32>()?.abs() < 5e-3);
     Ok(())
 }
 
