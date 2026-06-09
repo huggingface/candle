@@ -7,7 +7,7 @@ use candle::{DType, Device, Result, Storage, Tensor, WithDType};
 use rayon::prelude::*;
 use std::iter::Sum;
 
-use super::dot::DotF32;
+use super::dot_f32;
 use super::online_softmax::online_softmax_step;
 use super::standard::FLASH_ATTN_POOL;
 
@@ -43,7 +43,7 @@ pub fn run_causal_attn_cpu<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real + DotF32,
+    T: WithDType + Sum + num_traits::real::Real,
 {
     let b = q.dims()[0];
     if b != 1 {
@@ -227,7 +227,7 @@ fn causal_decode_f32(
                         prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                     }
 
-                    let mut score = f32::dot_f32(q_row, k_row) * scale_pre;
+                    let mut score = dot_f32(q_row, k_row) * scale_pre;
                     if do_softcap {
                         score = logit_softcap * score.tanh();
                     }
@@ -299,7 +299,7 @@ fn causal_decode_f32_lean(
                         prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                     }
 
-                    let score = f32::dot_f32(q_row, k_row) * scale;
+                    let score = dot_f32(q_row, k_row) * scale;
 
                     let v_base = kv_pos * v_seq_stride + v_head_off;
                     let v_row = &v_data[v_base..v_base + d];
@@ -370,7 +370,7 @@ pub fn causal_decode_f32_interleaved(
                         prefetch_read(kv_data[kv_base + kv_seq_stride..].as_ptr());
                     }
 
-                    let score = f32::dot_f32(q_row, k_row) * scale;
+                    let score = dot_f32(q_row, k_row) * scale;
 
                     online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                         for t in 0..d {
@@ -473,7 +473,7 @@ fn causal_prefill_f32(
                             prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                         }
 
-                        let mut score = f32::dot_f32(q_row, k_row) * scale_pre;
+                        let mut score = dot_f32(q_row, k_row) * scale_pre;
                         if do_softcap {
                             score = logit_softcap * score.tanh();
                         }
@@ -557,7 +557,7 @@ fn causal_prefill_f32_lean(
                             prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                         }
 
-                        let score = f32::dot_f32(q_row, k_row) * scale;
+                        let score = dot_f32(q_row, k_row) * scale;
 
                         let v_base = kv_pos * v_seq_stride + v_head_off;
                         let v_row = &v_data[v_base..v_base + d];
@@ -587,7 +587,7 @@ fn causal_prefill_f32_lean(
 // Generic fallback (non-f32)
 
 #[allow(clippy::too_many_arguments)]
-fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real + DotF32>(
+fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -616,8 +616,8 @@ fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(d).enumerate().for_each_init(
-            || (vec![0f32; d], vec![0f32; d]),
-            |(acc, q_f32), (h_i, out_chunk)| {
+            || vec![0f32; d],
+            |acc, (h_i, out_chunk)| {
                 let slope = if max_bias > 0.0 {
                     2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
                 } else {
@@ -626,9 +626,6 @@ fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                 let k_head_off = (h_i / rk) * d;
                 let v_head_off = (h_i / rv) * d;
                 let q_row = &q_data[h_i * d..(h_i + 1) * d];
-                for t in 0..d {
-                    q_f32[t] = q_row[t].to_f32().unwrap_or(0.0);
-                }
 
                 acc.fill(0.0);
                 let mut m = f32::NEG_INFINITY;
@@ -642,7 +639,7 @@ fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                     };
                     let k_base = kv_pos * k_seq_stride + k_head_off;
                     let k_row = &k_data[k_base..k_base + d];
-                    let mut s_val = T::dot_f32(q_f32, k_row);
+                    let mut s_val = dot_f32(q_row, k_row);
                     s_val *= scale_pre;
                     if do_softcap {
                         s_val = logit_softcap * s_val.tanh();
@@ -669,7 +666,7 @@ fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real + DotF32>(
+fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -704,8 +701,8 @@ fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real + DotF32>(
             .with_min_len(64)
             .enumerate()
             .for_each_init(
-                || (vec![0f32; d], vec![0f32; d]),
-                |(acc, q_f32), (row_idx, out_chunk)| {
+                || vec![0f32; d],
+                |acc, (row_idx, out_chunk)| {
                     let h_i = row_idx / s_q;
                     let q_pos = row_idx % s_q;
                     let slope = if max_bias > 0.0 {
@@ -717,9 +714,6 @@ fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                     let v_head_off = (h_i / rv) * d;
                     let q_base = q_pos * q_seq_stride + h_i * d;
                     let q_row = &q_data[q_base..q_base + d];
-                    for t in 0..d {
-                        q_f32[t] = q_row[t].to_f32().unwrap_or(0.0);
-                    }
 
                     acc.fill(0.0);
                     let mut m = f32::NEG_INFINITY;
@@ -734,7 +728,7 @@ fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                         };
                         let k_base = kv_pos * k_seq_stride + k_head_off;
                         let k_row = &k_data[k_base..k_base + d];
-                        let mut s_val = T::dot_f32(q_f32, k_row);
+                        let mut s_val = dot_f32(q_row, k_row);
                         s_val *= scale_pre;
                         if do_softcap {
                             s_val = logit_softcap * s_val.tanh();

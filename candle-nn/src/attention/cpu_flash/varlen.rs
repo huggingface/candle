@@ -11,7 +11,7 @@ use candle::{DType, Device, Result, Storage, Tensor};
 use half::f16;
 use rayon::prelude::*;
 
-use super::dot::DotF32;
+use super::dot_f32;
 use super::online_softmax::online_softmax_step;
 use super::standard::FLASH_ATTN_POOL;
 
@@ -251,7 +251,7 @@ pub fn flash_attn_varlen_cpu(
                             let k_base = ((start_k + j) * hk + k_head) * d;
                             let k_row = &k_data[k_base..k_base + d];
 
-                            let mut score = f32::dot_f32(q_row, k_row) * softmax_scale;
+                            let mut score = dot_f32(q_row, k_row) * softmax_scale;
                             if slopes.is_some() {
                                 score += alibi_bias(slope, i_k, j as isize, causal);
                             }
@@ -299,8 +299,8 @@ pub fn flash_attn_varlen_cpu(
 
             FLASH_ATTN_POOL.install(|| {
                 out.par_chunks_mut(d).enumerate().for_each_init(
-                    || (vec![0f32; d], vec![0f32; d]),
-                    |(q_row_f32, acc), (row, out_row)| {
+                    || vec![0f32; d],
+                    |acc, (row, out_row)| {
                         let q_idx = row / hq;
                         let h = row % hq;
 
@@ -335,9 +335,7 @@ pub fn flash_attn_varlen_cpu(
                         let i_k = q_pos as isize + offset;
 
                         let q_base = (q_idx * hq + h) * d;
-                        for t in 0..d {
-                            q_row_f32[t] = q_data[q_base + t].to_f32();
-                        }
+                        let q_row = &q_data[q_base..q_base + d];
 
                         acc.fill(0.0);
                         let mut m = f32::NEG_INFINITY;
@@ -347,7 +345,7 @@ pub fn flash_attn_varlen_cpu(
                             let k_base = ((start_k + j) * hk + k_head) * d;
                             let k_row = &k_data[k_base..k_base + d];
 
-                            let mut score = f16::dot_f32(q_row_f32, k_row) * softmax_scale;
+                            let mut score = dot_f32(q_row, k_row) * softmax_scale;
                             if slopes.is_some() {
                                 score += alibi_bias(slope, i_k, j as isize, causal);
                             }

@@ -9,7 +9,7 @@ use std::{f32, iter::Sum};
 use rayon::prelude::*;
 use rayon::ThreadPool;
 
-use super::dot::DotF32;
+use super::dot_f32;
 use super::online_softmax::online_softmax_step;
 
 #[cfg(target_os = "macos")]
@@ -42,7 +42,7 @@ pub fn run_flash_attn_cpu<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real + DotF32,
+    T: WithDType + Sum + num_traits::real::Real,
 {
     let b = q.shape().dims()[0];
     if b != 1 {
@@ -159,7 +159,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>(
+fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -184,16 +184,13 @@ fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv).enumerate().for_each_init(
-            || (vec![0f32; dv], vec![0f32; d]),
-            |(acc, q_f32), (h_i, out_chunk)| {
+            || vec![0f32; dv],
+            |acc, (h_i, out_chunk)| {
                 let k_head = h_i / rk2;
                 let v_head = h_i / rv2;
 
                 let q_base = h_i * qstride[2];
                 let q_row = &q_data[q_base..q_base + d];
-                for t in 0..d {
-                    q_f32[t] = q_row[t].to_f32().unwrap_or(0.0);
-                }
 
                 acc.fill(0.0);
                 let mut m = f32::NEG_INFINITY;
@@ -203,7 +200,7 @@ fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                     let k_base = kv_pos * kstride[1] + k_head * kstride[2];
                     let k_row = &k_data[k_base..k_base + d];
 
-                    let score = T::dot_f32(q_f32, k_row) * scale;
+                    let score = dot_f32(q_row, k_row) * scale;
 
                     let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
@@ -234,7 +231,7 @@ fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real + DotF32>(
+fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -271,8 +268,8 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 
     FLASH_ATTN_POOL.install(|| {
         out.par_chunks_mut(dv).enumerate().for_each_init(
-            || (vec![0f32; dv], vec![0f32; d]),
-            |(acc, q_f32), (h_i, out_chunk)| {
+            || vec![0f32; dv],
+            |acc, (h_i, out_chunk)| {
                 let slope = if max_bias > 0.0 {
                     2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
                 } else {
@@ -284,9 +281,6 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 
                 let q_base = h_i * qstride[2];
                 let q_row = &q_data[q_base..q_base + d];
-                for t in 0..d {
-                    q_f32[t] = q_row[t].to_f32().unwrap_or(0.0);
-                }
 
                 acc.fill(0.0);
                 let mut m = f32::NEG_INFINITY;
@@ -306,7 +300,7 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                     let k_base = kv_pos * kstride[1] + k_head * kstride[2];
                     let k_row = &k_data[k_base..k_base + d];
 
-                    let mut score = T::dot_f32(q_f32, k_row) * scale_pre;
+                    let mut score = dot_f32(q_row, k_row) * scale_pre;
                     if do_softcap {
                         score = logit_softcap * score.tanh();
                     }
@@ -341,7 +335,7 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>(
+fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -369,8 +363,8 @@ fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>
             .with_min_len(64)
             .enumerate()
             .for_each_init(
-                || (vec![0f32; dv], vec![0f32; d]),
-                |(acc, q_f32), (row_idx, out_chunk)| {
+                || vec![0f32; dv],
+                |acc, (row_idx, out_chunk)| {
                     let h_i = row_idx / q_len;
                     let q_pos = row_idx % q_len;
 
@@ -379,9 +373,6 @@ fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>
 
                     let q_base = q_pos * qstride[1] + h_i * qstride[2];
                     let q_row = &q_data[q_base..q_base + d];
-                    for t in 0..d {
-                        q_f32[t] = q_row[t].to_f32().unwrap_or(0.0);
-                    }
 
                     acc.fill(0.0);
                     let mut m = f32::NEG_INFINITY;
@@ -391,7 +382,7 @@ fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>
                         let k_base = kv_pos * kstride[1] + k_head * kstride[2];
                         let k_row = &k_data[k_base..k_base + d];
 
-                        let score = T::dot_f32(q_f32, k_row) * scale;
+                        let score = dot_f32(q_row, k_row) * scale;
 
                         let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
@@ -423,7 +414,7 @@ fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real + DotF32>
 }
 
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real + DotF32>(
+fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -463,8 +454,8 @@ fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real + DotF32>(
             .with_min_len(64)
             .enumerate()
             .for_each_init(
-                || (vec![0f32; dv], vec![0f32; d]),
-                |(acc, q_f32), (row_idx, out_chunk)| {
+                || vec![0f32; dv],
+                |acc, (row_idx, out_chunk)| {
                     let h_i = row_idx / q_len;
                     let q_pos = row_idx % q_len;
 
@@ -479,9 +470,6 @@ fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real + DotF32>(
 
                     let q_base = q_pos * qstride[1] + h_i * qstride[2];
                     let q_row = &q_data[q_base..q_base + d];
-                    for t in 0..d {
-                        q_f32[t] = q_row[t].to_f32().unwrap_or(0.0);
-                    }
 
                     acc.fill(0.0);
                     let mut m = f32::NEG_INFINITY;
@@ -501,7 +489,7 @@ fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real + DotF32>(
                         let k_base = kv_pos * kstride[1] + k_head * kstride[2];
                         let k_row = &k_data[k_base..k_base + d];
 
-                        let mut score = T::dot_f32(q_f32, k_row) * scale_pre;
+                        let mut score = dot_f32(q_row, k_row) * scale_pre;
                         if do_softcap {
                             score = logit_softcap * score.tanh();
                         }

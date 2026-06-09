@@ -59,9 +59,9 @@ cudarc = { version = "0.19.4", features = [
     "cuda-version-from-build-system",
     "dynamic-linking",
 ], default-features = false }
-fancy-regex = "0.17.0"
+fancy-regex = "0.18.0"
 gemm = { version = "0.19.0", features = ["wasm-simd128-enable"] }
-hf-hub = "0.4.1"
+hf-hub = "0.5.0"
 half = { version = "2.5.0", features = [
     "num-traits",
     "use-intrinsics",
@@ -83,7 +83,7 @@ log = "0.4"
 memmap2 = { version = "0.9.3", features = ["stable_deref_trait"] }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
-parquet = "57"
+parquet = "58"
 rand = "0.9.0"
 rand_distr = "0.5.1"
 rayon = "1.7.0"
@@ -100,7 +100,7 @@ ug = "0.5.0"
 ug-cuda = "0.5.0"
 ug-metal = "0.5.0"
 yoke = { version = "0.8.1", features = ["derive"] }
-zip = { version = "7.2.0", default-features = false }
+zip = { version = "8.6.0", default-features = false }
 objc2-metal = { version = "0.3.1" }
 objc2-foundation = { version = "0.3.1" }
 
