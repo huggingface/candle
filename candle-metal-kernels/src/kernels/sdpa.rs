@@ -1,7 +1,7 @@
 use crate::utils::EncoderProvider;
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, EncoderParam, Kernels,
-    MetalKernelError, Output, Source, Value,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, EncoderParam,
+    Kernels, MetalKernelError, Output, Source, Value,
 };
 use objc2_metal::MTLSize;
 
@@ -130,10 +130,16 @@ pub fn call_sdpa_full(
         (301, Value::Bool(/* do_causal */ do_causal)),
     ]));
 
+    #[cfg(feature = "debug-labels")]
+    let name_for_label = name.clone();
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "sdpa_full {name_for_label} B={b} H={h} D={d} QL={ql} KL={kl}"
+    );
 
     let nq = (ql + bq - 1) / bq;
     let nk = (kl + bk - 1) / bk;
@@ -316,6 +322,7 @@ pub fn call_sdpa_vector(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "sdpa_vector bk={bk} B={b} N={n}");
 
     // q = (bs, qhead, seq, hidden)
     // k/v = (bs, kv_head, kv_seq, hidden)
@@ -433,6 +440,7 @@ pub fn call_sdpa_vector_2pass(
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoder = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
+        debug_group!(encoder, "sdpa_vector_2pass pass1 bk={bk} B={b} N={n}");
 
         // q = (bs, qhead, seq, hidden)
         // k/v = (bs, kv_head, kv_seq, hidden)
@@ -505,6 +513,7 @@ pub fn call_sdpa_vector_2pass(
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoder = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
+        debug_group!(encoder, "sdpa_vector_2pass pass2 bk={bk} B={b}");
 
         // q = (bs, qhead, seq, hidden)
         // k/v = (bs, kv_head, kv_seq, hidden)
