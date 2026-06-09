@@ -596,14 +596,16 @@ impl FlashAttnVarLen {
         };
 
         // if window_size_left > self.max_seqlen_k or None => -1
+        // Keep the raw window sizes here (like the dense path): is_causal is derived
+        // below from window_size_right == 0, and only the unset (-1) side is extended
+        // to max_seqlen_k after that. The previous unconditional clamp to max_seqlen_k
+        // clobbered the causal signal (window_size_right 0 -> max_seqlen_k), so
+        // flash_attn_varlen(..., causal=true) silently ran full non-causal attention.
         let mut window_size_left = self
             .window_size_left
             .filter(|v| v <= &self.max_seqlen_k)
             .map(|v| v as i32)
             .unwrap_or(-1);
-        if window_size_left < self.max_seqlen_k as i32 {
-            window_size_left = self.max_seqlen_k.clone() as i32;
-        }
 
         // if window_size_right > self.max_seqlen_k or None => -1
         let mut window_size_right = self
@@ -611,9 +613,6 @@ impl FlashAttnVarLen {
             .filter(|v| v <= &self.max_seqlen_k)
             .map(|v| v as i32)
             .unwrap_or(-1);
-        if window_size_right < self.max_seqlen_k as i32 {
-            window_size_right = self.max_seqlen_k.clone() as i32;
-        }
 
         let head_size = round_multiple(head_size_og, 8);
         let head_size_rounded = round_multiple(head_size, 32);

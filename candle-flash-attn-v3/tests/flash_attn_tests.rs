@@ -452,3 +452,49 @@ fn flash_attn_varlen_param(head_dim: usize, seq_len: usize, use_gqa_packing: boo
     assert!(diff.to_vec0::<f32>()?.abs() < 5e-3);
     Ok(())
 }
+
+#[rstest(
+    head_dim => [64, 128, 256],
+    seq_len => [2, 4, 9],
+)]
+fn flash_attn_varlen_causal(head_dim: usize, seq_len: usize) -> Result<()> {
+    // Regression test for the window-size clamp that silently disabled causal masking
+    // on the varlen path: flash_attn_varlen(..., causal=true) used to run full
+    // (non-causal) attention because window_size_right=0 was clobbered to max_seqlen_k
+    // before is_causal was derived from it.
+    let device = Device::new_cuda(0)?;
+    let q = Tensor::arange(0u32, (3 * seq_len * head_dim) as u32, &device)?
+        .to_dtype(DType::F16)?
+        .reshape((3, seq_len, head_dim))?;
+    let k = (&q / ((head_dim * seq_len) as f64 * 4.))?;
+    let v = (&q / ((head_dim * seq_len) as f64 * 2.))?;
+    let q = (&q / ((head_dim * seq_len) as f64 * 3.))?;
+
+    let seqlens_q = Tensor::new(&[0u32, seq_len as u32], &device)?;
+    let seqlens_k = Tensor::new(&[0u32, seq_len as u32], &device)?;
+
+    let ys = {
+        let q = q.transpose(0, 1)?;
+        let k = k.transpose(0, 1)?;
+        let v = v.transpose(0, 1)?;
+        candle_flash_attn_v3::flash_attn_varlen(
+            &q, &k, &v, &seqlens_q, &seqlens_k, seq_len, seq_len, 0.5, true, false,
+        )?
+        .transpose(0, 1)?
+    };
+    let ys = ys.to_dtype(DType::F32)?;
+    assert_eq!(ys.dims(), &[3, seq_len, head_dim]);
+
+    let ys2 = {
+        // reference implementation
+        let q = q.unsqueeze(0)?;
+        let k = k.unsqueeze(0)?;
+        let v = v.unsqueeze(0)?;
+        let y = fa_causal(&q, &k, &v, 0.5)?;
+        y.i(0)?.to_dtype(DType::F32)?
+    };
+
+    let diff = ys.sub(&ys2)?.abs()?.flatten_all()?.max(0)?;
+    assert!(diff.to_vec0::<f32>()?.abs() < 5e-3);
+    Ok(())
+}
