@@ -164,7 +164,12 @@ impl FlashAttn {
 
         let elem_count = out_shape.elem_count();
         let mut dst = unsafe { dev.alloc::<T>(elem_count) }?;
-        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
+        // The dense-path LSE layout is [b, nheads, seqlen_q] (padded, see flash.h), so
+        // b*nheads*seqlen_q_rounded is sufficient; seqlen_q_rounded guards partial-tile
+        // epilogue writes. The previous b*128*nheads*seqlen_q allocation was 128x too
+        // large, turning every forward into a multi-GB cudaMalloc+memset (e.g. 4.3GB at
+        // batch=128, seqlen=2048, 32 heads) that dominated the per-call host overhead.
+        let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q_rounded)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
