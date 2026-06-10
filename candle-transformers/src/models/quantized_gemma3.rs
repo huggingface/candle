@@ -436,6 +436,12 @@ impl ModelWeights {
         })
     }
 
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.kv_cache = None;
+        }
+    }
+
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (b_sz, seq_len) = x.dims2()?;
         let _enter = self.span.enter();
@@ -478,3 +484,5 @@ impl ModelWeights {
         Ok(output)
     }
 }
+
+crate::impl_causal_lm!(ModelWeights, "gemma3");

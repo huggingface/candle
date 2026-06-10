@@ -588,3 +588,4 @@ impl ModelWeights {
         }
     }
 }
+crate::impl_causal_lm!(ModelWeights, "qwen3");
