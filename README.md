@@ -183,6 +183,7 @@ And then head over to
   out-of-the-box LoRA support for many models from Candle, which can be found
   [here](https://github.com/EricLBuehler/candle-lora/tree/master/candle-lora-transformers/examples).
 - [`candle-video`](https://github.com/FerrisMind/candle-video): Rust library for text-to-video generation (LTX-Video and related models) built on Candle, focused on fast, Python-free inference.
+- [`candle-3d`](https://github.com/FerrisMind/candle-3d): Clean-room Rust 3D inference toolkit for Pi3, Pi3X, and TripoSR with contract inspection and canonical weight tooling.
 - [`optimisers`](https://github.com/KGrewal1/optimisers): A collection of optimisers
   including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
 - [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficient platform for inference and
