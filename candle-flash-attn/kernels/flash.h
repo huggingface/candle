@@ -4,11 +4,15 @@
 
 #pragma once
 
+#include "namespace_config.h"
+
 #include <cuda.h>
 #include <vector>
 
 // #include <ATen/cuda/CUDAGeneratorImpl.h> // For at::Generator and at::PhiloxCudaState
+// candle uses a standalone (non-PyTorch) build; philox_args is not used.
 
+namespace FLASH_NAMESPACE {
 constexpr int TOTAL_DIM = 0;
 constexpr int H_DIM = 1;
 constexpr int D_DIM = 2;
@@ -116,7 +120,7 @@ struct Flash_fwd_params : public Qkv_params {
     float softcap;
 
     // Random state.
-    // at::PhiloxCudaState philox_args;
+    // at::PhiloxCudaState philox_args;  // PyTorch-only; not used in candle's standalone build.
 
     // Pointer to the RNG seed (idx 0) and offset (idx 1).
     uint64_t * rng_state;
@@ -184,6 +188,8 @@ struct Flash_bwd_params : public Flash_fwd_params {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T, int Headdim, bool Is_causal> void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream);
-// template<typename T, int Headdim, bool Is_causal> void run_mha_fwd_splitkv_dispatch(Flash_fwd_params &params, cudaStream_t stream);
+template<typename T, int Headdim, bool Is_causal> void run_mha_fwd_splitkv_dispatch(Flash_fwd_params &params, cudaStream_t stream);
 
-// template<typename T, int Headdim, bool Is_causal> void run_mha_bwd_(Flash_bwd_params &params, cudaStream_t stream);
+template<typename T, int Headdim, bool Is_causal> void run_mha_bwd_(Flash_bwd_params &params, cudaStream_t stream);
+
+}  // namespace FLASH_NAMESPACE
