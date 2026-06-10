@@ -34,6 +34,8 @@ enum LanguagePair {
     EnFr,
     #[value(name = "en-ru")]
     EnRu,
+    #[value(name = "zh-en")]
+    ZhEn,
 }
 
 // TODO: Maybe add support for the conditional prompt.
@@ -81,6 +83,7 @@ pub fn main() -> anyhow::Result<()> {
         (Which::Base, LanguagePair::EnEs) => marian::Config::opus_mt_en_es(),
         (Which::Base, LanguagePair::EnFr) => marian::Config::opus_mt_fr_en(),
         (Which::Base, LanguagePair::EnRu) => marian::Config::opus_mt_en_ru(),
+        (Which::Base, LanguagePair::ZhEn) => marian::Config::opus_mt_zh_en(),
         (Which::Big, lp) => anyhow::bail!("big is not supported for language pair {lp:?}"),
     };
     let tokenizer_default_repo = match args.language_pair {
@@ -90,6 +93,7 @@ pub fn main() -> anyhow::Result<()> {
         | LanguagePair::EnEs
         | LanguagePair::EnFr
         | LanguagePair::EnRu => "KeighBee/candle-marian",
+        LanguagePair::ZhEn => "crlf0710/candle-marian",
     };
     let tokenizer = {
         let tokenizer = match args.tokenizer {
@@ -103,6 +107,7 @@ pub fn main() -> anyhow::Result<()> {
                     (Which::Base, LanguagePair::EnEs) => "tokenizer-marian-base-en-es-en.json",
                     (Which::Base, LanguagePair::EnFr) => "tokenizer-marian-base-en-fr-en.json",
                     (Which::Base, LanguagePair::EnRu) => "tokenizer-marian-base-en-ru-en.json",
+                    (Which::Base, LanguagePair::ZhEn) => "tokenizer-marian-base-zh-en-zh.json",
                     (Which::Big, lp) => {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
@@ -127,6 +132,7 @@ pub fn main() -> anyhow::Result<()> {
                     (Which::Base, LanguagePair::EnEs) => "tokenizer-marian-base-en-es-es.json",
                     (Which::Base, LanguagePair::EnFr) => "tokenizer-marian-base-en-fr-fr.json",
                     (Which::Base, LanguagePair::EnRu) => "tokenizer-marian-base-en-ru-ru.json",
+                    (Which::Base, LanguagePair::ZhEn) => "tokenizer-marian-base-zh-en-en.json",
                     (Which::Big, lp) => {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
@@ -179,6 +185,11 @@ pub fn main() -> anyhow::Result<()> {
                         "Helsinki-NLP/opus-mt-en-ru".to_string(),
                         hf_hub::RepoType::Model,
                         "refs/pr/7".to_string(),
+                    )),
+                    (Which::Base, LanguagePair::ZhEn) => api.repo(hf_hub::Repo::with_revision(
+                        "Helsinki-NLP/opus-mt-zh-en".to_string(),
+                        hf_hub::RepoType::Model,
+                        "refs/pr/12".to_string(),
                     )),
                     (Which::Big, lp) => {
                         anyhow::bail!("big is not supported for language pair {lp:?}")
