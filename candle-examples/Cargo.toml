@@ -43,6 +43,7 @@ tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.17.3", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
 tekken-rs = { version = "0.1.1", optional = true }
+rustfft = { version = "6", optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -95,6 +96,7 @@ snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
 buildtime-download = []
+qwen3-asr = ["symphonia", "rustfft"]
 
 [[example]]
 name = "llama_multiprocess"
@@ -159,6 +161,10 @@ required-features = ["pdf2image"]
 [[example]]
 name = "voxtral"
 required-features = ["symphonia"]
+
+[[example]]
+name = "qwen3-asr"
+required-features = ["qwen3-asr"]
 
 [[example]]
 name = "bert_single_file_binary"
