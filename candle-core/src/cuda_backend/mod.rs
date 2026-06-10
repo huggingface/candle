@@ -2135,6 +2135,15 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn upsample_bilinear2d_antialias(
+        &self,
+        _l: &Layout,
+        _out_h: usize,
+        _out_w: usize,
+    ) -> Result<Self> {
+        crate::bail!("upsample_bilinear2d_antialias is not supported on cuda")
+    }
+
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
         let device = self.device().clone();
         let slice = IndexSelect(ids, ids_l, dim).map(&self.slice, &device, l)?;
