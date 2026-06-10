@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <tuple>
 #include <cstdio>
+#include <cstdlib>
+#include <tuple>
 
 #if !defined(__CUDACC_RTC__)
 #include "cuda_runtime.h"

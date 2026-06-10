@@ -5,6 +5,150 @@ use candle::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 
+/// Splitkv tile size along the K dimension.
+///
+/// This MUST match the `kBlockN` baked into `run_mha_fwd_splitkv_dispatch<>`
+/// in `kernels/flash_fwd_launch_template.h:168`. If upstream changes the
+/// per-hdim block size, this table needs the same change or `num_splits`
+/// will be miscomputed.
+///
+/// `#[doc(hidden)] pub` so integration tests can predict which split count
+/// the dispatcher will pick for a given shape; not part of the supported API.
+#[doc(hidden)]
+pub fn splitkv_block_n(head_size: usize) -> usize {
+    if head_size <= 64 {
+        256
+    } else if head_size <= 128 {
+        128
+    } else {
+        64
+    }
+}
+
+/// Port of upstream `flash_api.cpp::num_splits_heuristic` (Tri Dao FA v2.8.3,
+/// commit 060c918). Picks the smallest split count whose efficiency reaches
+/// ≥85% of the peak, capped at `max_splits`.
+///
+/// Inputs `batch_nheads_mblocks` and `num_sms` should already be doubled if
+/// the splitkv kernel uses 128 threads/block (as upstream does). See the
+/// `num_sm * 2` factor in `set_params_splitkv`.
+///
+/// `#[doc(hidden)] pub` so integration tests can verify the dispatcher
+/// actually entered the splitkv path for a given shape (i.e. catch silent
+/// fallback to dense if the heuristic regresses); not part of the supported
+/// API and may change without notice.
+#[doc(hidden)]
+pub fn num_splits_heuristic(
+    batch_nheads_mblocks: usize,
+    num_sms: usize,
+    num_n_blocks: usize,
+    max_splits: usize,
+) -> usize {
+    // If we already nearly fill the SMs, splitkv adds overhead without help.
+    // Equivalent to upstream's `>= 0.8 * num_SMs` but in integer arithmetic.
+    if batch_nheads_mblocks.saturating_mul(5) >= num_sms.saturating_mul(4) {
+        return 1;
+    }
+    let max_splits = max_splits.min(num_sms).min(num_n_blocks);
+    if max_splits == 0 {
+        return 1;
+    }
+    let ceildiv = |a: usize, b: usize| (a + b - 1) / b;
+    // Eligibility check: skip split counts that produce the same per-split
+    // block layout as a smaller count (e.g. 12 splits across 64 blocks
+    // collapses to 11). Upstream lambda from flash_api.cpp:275-277.
+    let is_eligible = |n: usize| -> bool {
+        n == 1 || ceildiv(num_n_blocks, n) != ceildiv(num_n_blocks, n - 1)
+    };
+    let mut max_eff = 0.0f32;
+    let mut effs = Vec::with_capacity(max_splits);
+    for n in 1..=max_splits {
+        if !is_eligible(n) {
+            effs.push(0.0);
+            continue;
+        }
+        let n_waves = (batch_nheads_mblocks * n) as f32 / num_sms as f32;
+        let eff = n_waves / n_waves.ceil();
+        if eff > max_eff {
+            max_eff = eff;
+        }
+        effs.push(eff);
+    }
+    for n in 1..=max_splits {
+        if !is_eligible(n) {
+            continue;
+        }
+        if effs[n - 1] >= 0.85 * max_eff {
+            return n;
+        }
+    }
+    1
+}
+
+/// Rust port of upstream `flash_api.cpp::set_params_splitkv` (Tri Dao FA
+/// v2.8.3). Decides whether to enter the splitkv dispatch path and, if so,
+/// allocates the two fp32 accumulator buffers the kernel writes into.
+///
+/// Returns `(num_splits, accumulators)`. When `num_splits == 1` the dense
+/// path is taken and `accumulators` is `None`. The returned `CudaSlice`s
+/// must outlive the `ffi::run_mha` call (their `device_ptr` guards are
+/// taken at the FFI call site).
+///
+/// Accumulator layouts match `flash_fwd_splitkv_combine_kernel`:
+///   `softmax_lse_accum`: (num_splits, batch_size, num_heads, max_seqlen_q)
+///   `out_accum`: (num_splits, batch_size, num_heads, max_seqlen_q, head_size_rounded)
+fn set_params_splitkv(
+    dev: &candle::CudaDevice,
+    batch_size: usize,
+    num_heads: usize,
+    head_size: usize,
+    head_size_rounded: usize,
+    max_seqlen_q: usize,
+    max_seqlen_k: usize,
+) -> Result<(
+    i32,
+    Option<(
+        candle::cuda_backend::cudarc::driver::CudaSlice<f32>,
+        candle::cuda_backend::cudarc::driver::CudaSlice<f32>,
+    )>,
+)> {
+    let block_n = splitkv_block_n(head_size);
+    let num_n_blocks = (max_seqlen_k + block_n - 1) / block_n;
+    // Splitkv dispatcher fixes kBlockM = 64 (flash_fwd_launch_template.h:165).
+    let num_m_blocks = (max_seqlen_q + 64 - 1) / 64;
+
+    // Upstream multiplies num_SMs by 2 because the splitkv kernel uses 128
+    // threads per block (so each SM can in principle host two CTAs).
+    let num_sm = dev
+        .cuda_stream()
+        .context()
+        .attribute(
+            candle::cuda_backend::cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+        )
+        .map_err(|e| {
+            candle::Error::Msg(format!("cuDeviceGetAttribute(MULTIPROCESSOR_COUNT): {e}"))
+        })? as usize;
+
+    let num_splits = num_splits_heuristic(
+        batch_size * num_heads * num_m_blocks,
+        num_sm * 2,
+        num_n_blocks,
+        128,
+    );
+    if num_splits > 128 {
+        candle::bail!("flash-attn splitkv: num_splits > 128 not supported (got {num_splits})");
+    }
+    if num_splits <= 1 {
+        return Ok((num_splits as i32, None));
+    }
+
+    let lse_n = num_splits * batch_size * num_heads * max_seqlen_q;
+    let out_n = lse_n * head_size_rounded;
+    let lse_accum = unsafe { dev.alloc::<f32>(lse_n)? };
+    let out_accum = unsafe { dev.alloc::<f32>(out_n)? };
+    Ok((num_splits as i32, Some((lse_accum, out_accum))))
+}
+
 pub struct FlashAttn {
     pub softmax_scale: f32,
     pub alibi_slopes: Option<Tensor>,
@@ -30,7 +174,7 @@ impl FlashAttn {
         v_l: &Layout,
         is_bf16: bool,
     ) -> Result<(candle::CudaStorage, Shape)> {
-        // https://github.com/Dao-AILab/flash-attention/blob/b252072409e69c25f2b9d473cc534e49b24decd2/csrc/flash_attn/flash_api.cpp#L187
+        // https://github.com/Dao-AILab/flash-attention/blob/060c9188beec3a8b62b33a3bfa6d5d2d44975fab/csrc/flash_attn/flash_api.cpp (v2.8.3, vendored 2026-05-06 per HF#3515)
         let dev = q.device();
         let out_shape = q_l.shape().clone();
         let out_l = Layout::contiguous(&out_shape);
@@ -144,6 +288,21 @@ impl FlashAttn {
         let mut dst = unsafe { dev.alloc::<T>(elem_count)? };
         let mut softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
 
+        // PR-FA-3: decide between dense (`num_splits == 1`) and splitkv
+        // (`num_splits > 1`) dispatch, allocating accumulator buffers when
+        // splitkv is selected. For shapes that nearly fill the SMs (large
+        // batch × heads × m_blocks vs num_SMs) the heuristic returns 1 and
+        // behavior matches PR-FA-2.
+        let (num_splits, mut splitkv_buffers) = set_params_splitkv(
+            dev,
+            b_sz,
+            num_heads,
+            head_size,
+            head_size_rounded,
+            seqlen_q,
+            seqlen_k,
+        )?;
+
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
         // Causal is the special case where window_size_right == 0 and window_size_left < 0.
@@ -166,6 +325,28 @@ impl FlashAttn {
             let (v_ptr, _guard) = v.device_ptr(&stream);
             let (dst_ptr, _guard) = dst.device_ptr_mut(&stream);
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
+            // Splitkv accumulator pointers + guards. Bound here so the guards
+            // live for the FFI call; null when num_splits == 1.
+            let lseaccum_ptr;
+            let oaccum_ptr;
+            let _splitkv_lse_guard;
+            let _splitkv_out_guard;
+            match &mut splitkv_buffers {
+                Some((lse_acc, out_acc)) => {
+                    let (l, lg) = lse_acc.device_ptr_mut(&stream);
+                    let (o, og) = out_acc.device_ptr_mut(&stream);
+                    lseaccum_ptr = l as *const core::ffi::c_void;
+                    oaccum_ptr = o as *const core::ffi::c_void;
+                    _splitkv_lse_guard = Some(lg);
+                    _splitkv_out_guard = Some(og);
+                }
+                None => {
+                    lseaccum_ptr = std::ptr::null();
+                    oaccum_ptr = std::ptr::null();
+                    _splitkv_lse_guard = None;
+                    _splitkv_out_guard = None;
+                }
+            }
             ffi::run_mha(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -204,6 +385,15 @@ impl FlashAttn {
                 /* window_size_left */ window_size_left,
                 /* window_size_right */ window_size_right,
                 /* softcap */ self.softcap.unwrap_or(0f32),
+                // PR-FA-3 splitkv params. The accumulator pointers and their
+                // device_ptr guards are bound at the top of this unsafe block
+                // (see _splitkv_*_guard). When splitkv_buffers is None,
+                // num_splits == 1 and the kernel never reads through these
+                // null pointers (dense path).
+                /* num_splits */ num_splits,
+                /* softmax_lseaccum_ptr */ lseaccum_ptr,
+                /* oaccum_ptr */ oaccum_ptr,
+                /* force_split_kernel */ 0,
             )
         }
 
@@ -462,7 +652,7 @@ impl FlashAttnVarLen {
         v_l: &Layout,
         is_bf16: bool,
     ) -> Result<(candle::CudaStorage, Shape)> {
-        // https://github.com/Dao-AILab/flash-attention/blob/184b992dcb2a0890adaa19eb9b541c3e4f9d2a08/csrc/flash_attn/flash_api.cpp#L327
+        // https://github.com/Dao-AILab/flash-attention/blob/060c9188beec3a8b62b33a3bfa6d5d2d44975fab/csrc/flash_attn/flash_api.cpp (v2.8.3, vendored 2026-05-06 per HF#3515)
         let dev = q.device();
         let out_shape = q_l.shape().clone();
         let out_l = Layout::contiguous(&out_shape);
@@ -607,6 +797,20 @@ impl FlashAttnVarLen {
         let mut dst = unsafe { dev.alloc::<T>(elem_count)? };
         let mut softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
 
+        // PR-FA-3: splitkv decision + accumulator allocation. Mirrors the
+        // dense path; uses `max_seqlen_q` / `max_seqlen_k` for the heuristic
+        // input since varlen kernels still tile based on the per-batch
+        // maximum.
+        let (num_splits, mut splitkv_buffers) = set_params_splitkv(
+            dev,
+            batch_size,
+            num_heads,
+            head_size,
+            head_size_rounded,
+            self.max_seqlen_q,
+            self.max_seqlen_k,
+        )?;
+
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
         // Causal is the special case where window_size_right == 0 and window_size_left < 0.
@@ -631,6 +835,26 @@ impl FlashAttnVarLen {
             let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr_mut(&stream);
             let (seqlens_q_ptr, _guard) = seqlens_q.device_ptr(&stream);
             let (seqlens_k_ptr, _guard) = seqlens_k.device_ptr(&stream);
+            let lseaccum_ptr;
+            let oaccum_ptr;
+            let _splitkv_lse_guard;
+            let _splitkv_out_guard;
+            match &mut splitkv_buffers {
+                Some((lse_acc, out_acc)) => {
+                    let (l, lg) = lse_acc.device_ptr_mut(&stream);
+                    let (o, og) = out_acc.device_ptr_mut(&stream);
+                    lseaccum_ptr = l as *const core::ffi::c_void;
+                    oaccum_ptr = o as *const core::ffi::c_void;
+                    _splitkv_lse_guard = Some(lg);
+                    _splitkv_out_guard = Some(og);
+                }
+                None => {
+                    lseaccum_ptr = std::ptr::null();
+                    oaccum_ptr = std::ptr::null();
+                    _splitkv_lse_guard = None;
+                    _splitkv_out_guard = None;
+                }
+            }
             ffi::run_mha(
                 q_ptr as *const core::ffi::c_void,
                 k_ptr as *const core::ffi::c_void,
@@ -669,6 +893,11 @@ impl FlashAttnVarLen {
                 /* window_size_left */ window_size_left,
                 /* window_size_right */ window_size_right,
                 /* softcap */ self.softcap.unwrap_or(0.0),
+                // PR-FA-3 splitkv params (see splitkv_buffers above).
+                /* num_splits */ num_splits,
+                /* softmax_lseaccum_ptr */ lseaccum_ptr,
+                /* oaccum_ptr */ oaccum_ptr,
+                /* force_split_kernel */ 0,
             )
         }
 
