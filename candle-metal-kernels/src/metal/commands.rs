@@ -268,7 +268,7 @@ impl Commands {
         };
         if let Some(cb) = cb {
             Self::ensure_completed(&cb)?;
-            // queue is FIFO: everything committed before cb is done too; keep errored for reporting
+            // queue is FIFO: everything committed before cb is done too
             let mut state = self.state.lock()?;
             state
                 .in_flight
