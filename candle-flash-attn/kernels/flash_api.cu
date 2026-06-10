@@ -58,7 +58,12 @@ extern "C" void run_mha(
     int window_size_left,
     int window_size_right,
 
-    float softcap
+    float softcap,
+
+    // Stream to launch the kernels on (e.g. the caller's current CUDA
+    // stream). Passing NULL launches on the legacy default stream,
+    // matching the previous behaviour.
+    void *cuda_stream
 ) {
     Flash_fwd_params params;
     // Reset the parameters
@@ -131,6 +136,6 @@ extern "C" void run_mha(
     params.num_splits = 1;
     params.unpadded_lse = unpadded_lse;
 
-    cudaStream_t stream = 0; // Use the default stream.
+    cudaStream_t stream = static_cast<cudaStream_t>(cuda_stream);
     run_mha_fwd(params, stream);
 }
