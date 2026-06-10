@@ -1,4 +1,4 @@
-use super::k_quants::{BlockQ2K, BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K};
+use super::k_quants::{BlockQ1_0_g128, BlockQ2K, BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8K, BlockQ8_0, QK1_0_G128, QK8_0, QK_K};
 use byteorder::{ByteOrder, LittleEndian};
 use half::f16;
 
@@ -414,5 +414,92 @@ pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> f32
             + f32x4_extract_lane::<2>(acc)
             + f32x4_extract_lane::<3>(acc);
         res
+    }
+}
+
+/// SIMD-vectorized dot product for Q1_0_g128 × BlockQ8_0 using WASM SIMD.
+///
+/// Each Q1_0_g128 block contains 128 1-bit weights (packed into 16 bytes) and a
+/// f16 scale. It is paired with 4 BlockQ8_0 blocks (each with 32 int8 values).
+///
+/// WASM SIMD has limited bit manipulation, so we use a shift/OR approach to
+/// extract individual bits and expand to ±1.
+#[inline(always)]
+pub(crate) fn vec_dot_q1_0_g128_q8_0(n: usize, xs: &[BlockQ1_0_g128], ys: &[BlockQ8_0]) -> f32 {
+    debug_assert!(
+        n.is_multiple_of(QK1_0_G128),
+        "vec_dot_q1_0_g128_q8_0: {n} is not divisible by {QK1_0_G128}"
+    );
+    const QK8_LOCAL: usize = 32;
+    const RATIO: usize = QK1_0_G128 / QK8_LOCAL; // 4
+
+    let nb = n / QK1_0_G128;
+
+    unsafe {
+        let mut acc = f32x4_splat(0.0f32);
+
+        for i in 0..nb {
+            let d0 = xs[i].d.to_f32();
+            let mut sumi = i32x4_splat(0i32);
+
+            // Process 4 Q8_0 blocks, each covering 32 consecutive bits
+            for k in 0..RATIO {
+                let y = &ys[i * RATIO + k];
+                let d1 = y.d.to_f32();
+
+                // Load Q8_0 values (32 int8s)
+                let y0 = i16x8_load_extend_i8x8(y.qs.as_ptr());
+                let y1 = i16x8_load_extend_i8x8(y.qs.as_ptr().add(8));
+                let y2 = i16x8_load_extend_i8x8(y.qs.as_ptr().add(16));
+                let y3 = i16x8_load_extend_i8x8(y.qs.as_ptr().add(24));
+
+                // Load 4 bytes containing bits [k*32, k*32+31]
+                let byte_idx = k * 4;
+                let b0 = i8x16_splat(xs[i].qs[byte_idx] as i8);
+                let b1 = i8x16_splat(xs[i].qs[byte_idx + 1] as i8);
+                let b2 = i8x16_splat(xs[i].qs[byte_idx + 2] as i8);
+                let b3 = i8x16_splat(xs[i].qs[byte_idx + 3] as i8);
+
+                // Extract bit 0 from each byte and expand to ±1
+                // bit ? -1 : +1 = 1 - 2*bit (in signed representation)
+                // bit 0 = (byte >> pos) & 1
+                // We use: (byte >> 0) | ((byte >> 0) ^ 1) to get 0xFF or 0x00
+                let m1 = i8x16_splat(1);
+                let bits_pm0 = i8x16_xor(b0, m1);
+                let bits_pm1 = i8x16_xor(b1, m1);
+                let bits_pm2 = i8x16_xor(b2, m1);
+                let bits_pm3 = i8x16_xor(b3, m1);
+
+                // Extend to i16 and compute dot products
+                let p0 = i32x4_dot_i16x8(i16x8_extend_low_i8x16(bits_pm0), y0);
+                let p1 = i32x4_dot_i16x8(i16x8_extend_high_i8x16(bits_pm0), y1);
+                let p2 = i32x4_dot_i16x8(i16x8_extend_low_i8x16(bits_pm1), y0);
+                let p3 = i32x4_dot_i16x8(i16x8_extend_high_i8x16(bits_pm1), y1);
+                let p4 = i32x4_dot_i16x8(i16x8_extend_low_i8x16(bits_pm2), y2);
+                let p5 = i32x4_dot_i16x8(i16x8_extend_high_i8x16(bits_pm2), y3);
+                let p6 = i32x4_dot_i16x8(i16x8_extend_low_i8x16(bits_pm3), y2);
+                let p7 = i32x4_dot_i16x8(i16x8_extend_high_i8x16(bits_pm3), y3);
+
+                sumi = i32x4_add(sumi, p0);
+                sumi = i32x4_add(sumi, p1);
+                sumi = i32x4_add(sumi, p2);
+                sumi = i32x4_add(sumi, p3);
+                sumi = i32x4_add(sumi, p4);
+                sumi = i32x4_add(sumi, p5);
+                sumi = i32x4_add(sumi, p6);
+                sumi = i32x4_add(sumi, p7);
+            }
+
+            let sumf = d0 * f32x4_extract_lane::<0>(f32x4_convert_i32x4(sumi))
+                + f32x4_extract_lane::<1>(f32x4_convert_i32x4(sumi))
+                + f32x4_extract_lane::<2>(f32x4_convert_i32x4(sumi))
+                + f32x4_extract_lane::<3>(f32x4_convert_i32x4(sumi));
+            acc = f32x4_add(acc, f32x4_splat(sumf));
+        }
+
+        f32x4_extract_lane::<0>(acc)
+            + f32x4_extract_lane::<1>(acc)
+            + f32x4_extract_lane::<2>(acc)
+            + f32x4_extract_lane::<3>(acc)
     }
 }
