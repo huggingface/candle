@@ -15,7 +15,6 @@ pub mod standard;
 pub mod varlen;
 
 use candle::{DType, Result, Tensor, WithDType};
-use std::iter::Sum;
 
 use super::AttnMask;
 
@@ -63,7 +62,7 @@ pub fn flash_attn<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real,
+    T: WithDType,
 {
     let b = q.dims()[0];
 

@@ -3,8 +3,8 @@
 //! Single-batch (B=1) CPU flash attention kernels. B>1 routes to varlen via mod.rs.
 
 use candle::{Device, Result, Storage, Tensor, WithDType};
+use std::f32;
 use std::sync::LazyLock;
-use std::{f32, iter::Sum};
 
 use rayon::prelude::*;
 use rayon::ThreadPool;
@@ -42,7 +42,7 @@ pub fn run_flash_attn_cpu<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real,
+    T: WithDType,
 {
     let b = q.shape().dims()[0];
     if b != 1 {
@@ -159,7 +159,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real>(
+fn flash_attn_decode_lean<T: WithDType>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -208,12 +208,11 @@ fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real>(
                         if v_contiguous {
                             let v_row = &v_data[v_base..v_base + dv];
                             for d_i in 0..dv {
-                                acc[d_i] += v_row[d_i].to_f32().unwrap_or(0.0) * w;
+                                acc[d_i] += v_row[d_i].to_f64() as f32 * w;
                             }
                         } else {
                             for d_i in 0..dv {
-                                acc[d_i] +=
-                                    v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0) * w;
+                                acc[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
                             }
                         }
                     });
@@ -231,7 +230,7 @@ fn flash_attn_decode_lean<T: WithDType + Sum + num_traits::real::Real>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
+fn flash_attn_decode<T: WithDType>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -289,7 +288,7 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
                 for kv_pos in 0..kv_len {
                     let mv = if let Some(mv_vec) = mask_vec {
                         let mval = mv_vec[kv_pos];
-                        slope * mval.to_f32().unwrap_or(0.0)
+                        slope * mval.to_f64() as f32
                     } else {
                         0.0
                     };
@@ -312,12 +311,11 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
                         if v_contiguous {
                             let v_row = &v_data[v_base..v_base + dv];
                             for d_i in 0..dv {
-                                acc[d_i] += v_row[d_i].to_f32().unwrap_or(0.0) * w;
+                                acc[d_i] += v_row[d_i].to_f64() as f32 * w;
                             }
                         } else {
                             for d_i in 0..dv {
-                                acc[d_i] +=
-                                    v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0) * w;
+                                acc[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
                             }
                         }
                     });
@@ -335,7 +333,7 @@ fn flash_attn_decode<T: WithDType + Sum + num_traits::real::Real>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real>(
+fn flash_attn_prefill_lean<T: WithDType>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -390,13 +388,12 @@ fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real>(
                             if v_contiguous {
                                 let v_row = &v_data[v_base..v_base + dv];
                                 for d_i in 0..dv {
-                                    acc[d_i] += v_row[d_i].to_f32().unwrap_or(0.0) * w;
+                                    acc[d_i] += v_row[d_i].to_f64() as f32 * w;
                                 }
                             } else {
                                 for d_i in 0..dv {
                                     acc[d_i] +=
-                                        v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0)
-                                            * w;
+                                        v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
                                 }
                             }
                         });
@@ -414,7 +411,7 @@ fn flash_attn_prefill_lean<T: WithDType + Sum + num_traits::real::Real>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real>(
+fn flash_attn_prefill<T: WithDType>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -478,7 +475,7 @@ fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real>(
                     for kv_pos in 0..kv_len {
                         let mv = if let Some(mv_vec) = mask_vec {
                             let mval = mv_vec[q_pos * kv_len + kv_pos];
-                            slope * mval.to_f32().unwrap_or(0.0)
+                            slope * mval.to_f64() as f32
                         } else {
                             0.0
                         };
@@ -501,13 +498,12 @@ fn flash_attn_prefill<T: WithDType + Sum + num_traits::real::Real>(
                             if v_contiguous {
                                 let v_row = &v_data[v_base..v_base + dv];
                                 for d_i in 0..dv {
-                                    acc[d_i] += v_row[d_i].to_f32().unwrap_or(0.0) * w;
+                                    acc[d_i] += v_row[d_i].to_f64() as f32 * w;
                                 }
                             } else {
                                 for d_i in 0..dv {
                                     acc[d_i] +=
-                                        v_data[v_base + d_i * vstride[3]].to_f32().unwrap_or(0.0)
-                                            * w;
+                                        v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
                                 }
                             }
                         });

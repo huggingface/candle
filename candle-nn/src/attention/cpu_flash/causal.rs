@@ -5,7 +5,6 @@
 
 use candle::{DType, Device, Result, Storage, Tensor, WithDType};
 use rayon::prelude::*;
-use std::iter::Sum;
 
 use super::dot_f32;
 use super::online_softmax::online_softmax_step;
@@ -43,7 +42,7 @@ pub fn run_causal_attn_cpu<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real,
+    T: WithDType,
 {
     let b = q.dims()[0];
     if b != 1 {
@@ -587,7 +586,7 @@ fn causal_prefill_f32_lean(
 // Generic fallback (non-f32)
 
 #[allow(clippy::too_many_arguments)]
-fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real>(
+fn causal_decode_generic<T: WithDType>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -650,7 +649,7 @@ fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real>(
                     let v_row = &v_data[v_base..v_base + d];
                     online_softmax_step(s_val, &mut m, &mut ssum, acc, |acc, w| {
                         for t in 0..d {
-                            acc[t] += v_row[t].to_f32().unwrap_or(0.0) * w;
+                            acc[t] += v_row[t].to_f64() as f32 * w;
                         }
                     });
                 }
@@ -666,7 +665,7 @@ fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real>(
+fn causal_prefill_generic<T: WithDType>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -739,7 +738,7 @@ fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real>(
                         let v_row = &v_data[v_base..v_base + d];
                         online_softmax_step(s_val, &mut m, &mut ssum, acc, |acc, w| {
                             for t in 0..d {
-                                acc[t] += v_row[t].to_f32().unwrap_or(0.0) * w;
+                                acc[t] += v_row[t].to_f64() as f32 * w;
                             }
                         });
                     }
