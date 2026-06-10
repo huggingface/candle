@@ -22,7 +22,7 @@ use super::AttnMask;
 ///
 /// Thin glue over candle's architecture-tuned `VecOps::vec_dot` intrinsic
 /// (NEON / AVX2 / SIMD128), which `WithDType` already requires. Q and K stream
-/// in their native dtype — no per-row dequantization. f16/bf16 accumulate in
+/// in their native dtype (no per-row dequantization). f16/bf16 accumulate in
 /// f32 inside the intrinsic; only the returned scalar is narrowed back to `T`.
 #[inline]
 pub(crate) fn dot_f32<T: WithDType>(a: &[T], b: &[T]) -> f32 {
