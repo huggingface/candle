@@ -176,6 +176,16 @@ impl MetalDevice {
         Ok(())
     }
 
+    /// Commit and wait on the buffer holding the caller's work; safe for concurrent CPU readbacks.
+    pub fn flush_and_wait_current(&self) -> Result<()> {
+        self.commands
+            .flush_and_wait_current()
+            .map_err(MetalError::from)?;
+
+        self.drop_unused_buffers()?;
+        Ok(())
+    }
+
     pub fn kernels(&self) -> &Kernels {
         &self.kernels
     }
