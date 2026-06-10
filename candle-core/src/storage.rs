@@ -461,6 +461,99 @@ impl Storage {
         }
     }
 
+    pub(crate) fn conv3d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv3D,
+    ) -> Result<Self> {
+        self.same_device(kernel, "conv3d")?;
+        self.same_dtype(kernel, "conv3d")?;
+        match (self, &kernel) {
+            (Storage::Cpu(inp), Storage::Cpu(kernel)) => {
+                let s = inp.conv3d(l, kernel, kernel_l, params)?;
+                Ok(Self::Cpu(s))
+            }
+            (Storage::Cuda(inp), Storage::Cuda(kernel)) => {
+                let s = inp.conv3d(l, kernel, kernel_l, params)?;
+                Ok(Self::Cuda(s))
+            }
+            (Storage::Metal(inp), Storage::Metal(kernel)) => {
+                let s = inp.conv3d(l, kernel, kernel_l, params)?;
+                Ok(Self::Metal(s))
+            }
+            (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "conv3d",
+            }
+            .bt()),
+        }
+    }
+
+    pub(crate) fn conv3d_backward_input(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv3D,
+    ) -> Result<Self> {
+        self.same_device(kernel, "conv3d-backward-input")?;
+        self.same_dtype(kernel, "conv3d-backward-input")?;
+        match (self, &kernel) {
+            (Storage::Cpu(grad), Storage::Cpu(kernel)) => {
+                let s = grad.conv3d_backward_input(l, kernel, kernel_l, params)?;
+                Ok(Self::Cpu(s))
+            }
+            (Storage::Cuda(grad), Storage::Cuda(kernel)) => {
+                let s = grad.conv3d_backward_input(l, kernel, kernel_l, params)?;
+                Ok(Self::Cuda(s))
+            }
+            (Storage::Metal(grad), Storage::Metal(kernel)) => {
+                let s = grad.conv3d_backward_input(l, kernel, kernel_l, params)?;
+                Ok(Self::Metal(s))
+            }
+            (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "conv3d-backward-input",
+            }
+            .bt()),
+        }
+    }
+
+    pub(crate) fn conv3d_backward_weight(
+        &self,
+        l: &Layout,
+        grad: &Self,
+        grad_l: &Layout,
+        params: &crate::conv::ParamsConv3D,
+    ) -> Result<Self> {
+        self.same_device(grad, "conv3d-backward-weight")?;
+        self.same_dtype(grad, "conv3d-backward-weight")?;
+        match (self, &grad) {
+            (Storage::Cpu(inp), Storage::Cpu(grad)) => {
+                let s = inp.conv3d_backward_weight(l, grad, grad_l, params)?;
+                Ok(Self::Cpu(s))
+            }
+            (Storage::Cuda(inp), Storage::Cuda(grad)) => {
+                let s = inp.conv3d_backward_weight(l, grad, grad_l, params)?;
+                Ok(Self::Cuda(s))
+            }
+            (Storage::Metal(inp), Storage::Metal(grad)) => {
+                let s = inp.conv3d_backward_weight(l, grad, grad_l, params)?;
+                Ok(Self::Metal(s))
+            }
+            (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "conv3d-backward-weight",
+            }
+            .bt()),
+        }
+    }
+
     pub(crate) fn conv_transpose2d(
         &self,
         l: &Layout,
