@@ -1946,7 +1946,7 @@ impl MetalStorage {
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
         }
-        self.device.wait_until_completed()?;
+        self.device.flush_and_wait_current()?;
         Ok(read_to_vec(&buffer, self.count))
     }
 }
