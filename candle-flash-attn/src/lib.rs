@@ -204,6 +204,7 @@ impl FlashAttn {
                 /* window_size_left */ window_size_left,
                 /* window_size_right */ window_size_right,
                 /* softcap */ self.softcap.unwrap_or(0f32),
+                /* cuda_stream */ stream.cu_stream() as *mut core::ffi::c_void,
             )
         }
 
@@ -669,6 +670,7 @@ impl FlashAttnVarLen {
                 /* window_size_left */ window_size_left,
                 /* window_size_right */ window_size_right,
                 /* softcap */ self.softcap.unwrap_or(0.0),
+                /* cuda_stream */ stream.cu_stream() as *mut core::ffi::c_void,
             )
         }
 
