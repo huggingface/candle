@@ -10,13 +10,29 @@
 //! - **B>1 unsupported config**: hard error (explicit mask + B>1, softcap + B>1, etc.)
 
 pub mod causal;
+pub(crate) mod online_softmax;
 pub mod standard;
 pub mod varlen;
 
 use candle::{DType, Result, Tensor, WithDType};
-use std::iter::Sum;
 
 use super::AttnMask;
+
+/// Dot product of two equal-length `T` rows, returned as f32.
+///
+/// Thin glue over candle's architecture-tuned `VecOps::vec_dot` intrinsic
+/// (NEON / AVX2 / SIMD128), which `WithDType` already requires. Q and K stream
+/// in their native dtype (no per-row dequantization). f16/bf16 accumulate in
+/// f32 inside the intrinsic; only the returned scalar is narrowed back to `T`.
+#[inline]
+pub(crate) fn dot_f32<T: WithDType>(a: &[T], b: &[T]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    let mut res = T::zero();
+    // SAFETY: `a` and `b` are both at least `a.len()` long and `res` is a valid
+    // out pointer, pre-zeroed for the scalar fallback that accumulates into it.
+    unsafe { T::vec_dot(a.as_ptr(), b.as_ptr(), &mut res, a.len()) };
+    res.to_f64() as f32
+}
 
 /// Flash attention with automatic dispatch.
 ///
@@ -46,7 +62,7 @@ pub fn flash_attn<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real,
+    T: WithDType,
 {
     let b = q.dims()[0];
 
