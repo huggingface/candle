@@ -117,6 +117,11 @@ pub struct Gemma4TextConfig {
 
     pub vocab_size_per_layer_input: usize,
     pub hidden_size_per_layer_input: usize,
+
+    #[serde(default)]
+    pub num_kv_shared_layers: usize,
+    #[serde(default)]
+    pub use_double_wide_mlp: bool,
 }
 
 impl Gemma4TextConfig {
