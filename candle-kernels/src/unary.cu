@@ -97,8 +97,116 @@ __device__ T sign_(T t) {
 }
 
 
+// ============================================================================
+// Vectorized unary copy for bf16/f16 — 8x throughput via float4 loads
+// ============================================================================
 #if __CUDA_ARCH__ >= 800
-UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
+extern "C" __global__ void ucopy_bf16(
+    const size_t numel,
+    const size_t num_dims,
+    const size_t *info,
+    const __nv_bfloat16 *inp,
+    __nv_bfloat16 *out
+) {
+    const size_t *dims = info;
+    const size_t *strides = info + num_dims;
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
+        const size_t vec_numel = numel / 8;
+        const float4 *inp4 = reinterpret_cast<const float4*>(inp);
+        float4 *out4 = reinterpret_cast<float4*>(out);
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < vec_numel; i += blockDim.x * gridDim.x) {
+            out4[i] = inp4[i];
+        }
+        const size_t tail_start = vec_numel * 8;
+        for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+            out[i] = inp ? inp[i] : out[i];
+        }
+    } else {
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides);
+            out[i] = inp ? inp[strided_i] : out[i];
+        }
+    }
+}
+
+// Vectorized silu for bf16 — process 8 elements per thread
+extern "C" __global__ void usilu_bf16(
+    const size_t numel,
+    const size_t num_dims,
+    const size_t *info,
+    const __nv_bfloat16 *inp,
+    __nv_bfloat16 *out
+) {
+    const size_t *dims = info;
+    const size_t *strides = info + num_dims;
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
+        const size_t vec_numel = numel / 8;
+        const float4 *inp4 = reinterpret_cast<const float4*>(inp);
+        float4 *out4 = reinterpret_cast<float4*>(out);
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < vec_numel; i += blockDim.x * gridDim.x) {
+            float4 v = inp4[i];
+            __nv_bfloat16 *vp = reinterpret_cast<__nv_bfloat16*>(&v);
+            #pragma unroll
+            for (int j = 0; j < 8; j++) {
+                float xf = __bfloat162float(vp[j]);
+                xf = xf / (1.0f + expf(-xf));
+                vp[j] = __float2bfloat16(xf);
+            }
+            out4[i] = v;
+        }
+        const size_t tail_start = vec_numel * 8;
+        for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+            __nv_bfloat16 x = inp ? inp[i] : out[i];
+            out[i] = silu_fwd(x);
+        }
+    } else {
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides);
+            __nv_bfloat16 x = inp ? inp[strided_i] : out[i];
+            out[i] = silu_fwd(x);
+        }
+    }
+}
+
+// Vectorized sigmoid for bf16
+extern "C" __global__ void usigmoid_bf16(
+    const size_t numel,
+    const size_t num_dims,
+    const size_t *info,
+    const __nv_bfloat16 *inp,
+    __nv_bfloat16 *out
+) {
+    const size_t *dims = info;
+    const size_t *strides = info + num_dims;
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
+        const size_t vec_numel = numel / 8;
+        const float4 *inp4 = reinterpret_cast<const float4*>(inp);
+        float4 *out4 = reinterpret_cast<float4*>(out);
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < vec_numel; i += blockDim.x * gridDim.x) {
+            float4 v = inp4[i];
+            __nv_bfloat16 *vp = reinterpret_cast<__nv_bfloat16*>(&v);
+            #pragma unroll
+            for (int j = 0; j < 8; j++) {
+                float xf = __bfloat162float(vp[j]);
+                xf = 1.0f / (1.0f + expf(-xf));
+                vp[j] = __float2bfloat16(xf);
+            }
+            out4[i] = v;
+        }
+        const size_t tail_start = vec_numel * 8;
+        for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+            __nv_bfloat16 x = inp ? inp[i] : out[i];
+            out[i] = sigmoid_fwd(x);
+        }
+    } else {
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides);
+            __nv_bfloat16 x = inp ? inp[strided_i] : out[i];
+            out[i] = sigmoid_fwd(x);
+        }
+    }
+}
+
 UNARY_OP(__nv_bfloat16, uneg_bf16, -x)
 UNARY_OP(__nv_bfloat16, urecip_bf16, recipg(x))
 UNARY_OP(__nv_bfloat16, uexp_bf16, expg(x))
@@ -118,10 +226,8 @@ UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd(x))
 UNARY_OP(__nv_bfloat16, ugelu_erf_bf16, gelu_erf_fwd(x))
 UNARY_OP(__nv_bfloat16, urelu_bf16, relu_fwd(x))
 UNARY_OP1(__nv_bfloat16, uelu_bf16, elu_fwd(x, param))
-UNARY_OP(__nv_bfloat16, usilu_bf16, silu_fwd(x))
 UNARY_OP1(__nv_bfloat16, upowf_bf16, powg(x, param))
 UNARY_OP(__nv_bfloat16, usign_bf16, sign_(x))
-UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
 #endif
 
 #if __CUDA_ARCH__ >= 890

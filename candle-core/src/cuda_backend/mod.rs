@@ -375,10 +375,37 @@ impl Map1Any for FastReduce<'_> {
             ReduceOp::ArgMin => ("fast_argmin", true, true),
             ReduceOp::ArgMax => ("fast_argmax", true, true),
         };
+        // For small reductions (e.g. MoE topk sum with el_to_sum=8), use a one-thread-per-output
+        // kernel to avoid launching millions of blocks each doing almost nothing.
+        let use_small_reduce = el_to_sum_per_block <= 32 && !return_index && name == "fast_sum";
+        let (cfg, kernel_name_str) = if use_small_reduce {
+            let threads = 256usize;
+            let blocks = (dst_el + threads - 1) / threads;
+            (
+                LaunchConfig {
+                    grid_dim: (blocks as u32, 1, 1),
+                    block_dim: (threads as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                "fast_sum_small",
+            )
+        } else {
+            let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
+            (
+                LaunchConfig {
+                    grid_dim: (dst_el as u32, 1, 1),
+                    block_dim: (block_dim as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                },
+                name,
+            )
+        };
+        let ds = dev.clone_htod(&[dims.as_slice(), stride.as_slice()].concat())?;
+        let src = &src.slice(layout.start_offset()..);
         if check_empty && layout.shape().elem_count() == 0 {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
         }
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::REDUCE)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(kernel_name_str), &kernels::REDUCE)?;
         if return_index {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<u32>(dst_el)? };
