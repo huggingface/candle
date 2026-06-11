@@ -131,18 +131,33 @@ fast_sum_bf16_vec(const size_t src_numel, const size_t el_to_sum_per_block,
   float local_sum = 0.0f;
 
   if (is_contiguous(num_dims, dims, strides)) {
-    const size_t vec_start = start_idx / 8;
+    // Round start up and stop down to float4-aligned boundaries
+    const size_t vec_start = (start_idx + 7) / 8;
     const size_t vec_stop = stop_idx / 8;
-    const float4 *src4 = reinterpret_cast<const float4*>(src);
 
-    for (size_t vi = vec_start + tid; vi < vec_stop; vi += blockDim.x) {
-      float4 v = src4[vi];
-      const __nv_bfloat16 *bp = reinterpret_cast<const __nv_bfloat16*>(&v);
-      #pragma unroll
-      for (int j = 0; j < 8; j++) {
-        local_sum += __bfloat162float(bp[j]);
+    // Scalar head: elements before the first aligned float4
+    size_t head_end = min(vec_start * 8, stop_idx);
+    for (size_t i = start_idx + tid; i < head_end; i += blockDim.x) {
+      local_sum += __bfloat162float(src[i]);
+    }
+
+    if (vec_start < vec_stop && is_aligned_16(src)) {
+      const float4 *src4 = reinterpret_cast<const float4*>(src);
+      for (size_t vi = vec_start + tid; vi < vec_stop; vi += blockDim.x) {
+        float4 v = src4[vi];
+        const __nv_bfloat16 *bp = reinterpret_cast<const __nv_bfloat16*>(&v);
+        #pragma unroll
+        for (int j = 0; j < 8; j++) {
+          local_sum += __bfloat162float(bp[j]);
+        }
+      }
+    } else {
+      for (size_t i = head_end + tid; i < vec_stop * 8; i += blockDim.x) {
+        local_sum += __bfloat162float(src[i]);
       }
     }
+
+    // Scalar tail: elements after the last aligned float4
     size_t tail_start = vec_stop * 8;
     for (size_t i = tail_start + tid; i < stop_idx; i += blockDim.x) {
       local_sum += __bfloat162float(src[i]);
@@ -889,13 +904,26 @@ extern "C" __global__ void fast_sum_f32(
   size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);
   float local_sum = 0.0f;
   if (is_contiguous(num_dims, dims, strides)) {
-    const size_t vec_start = start_idx / 4;
+    const size_t vec_start = (start_idx + 3) / 4;
     const size_t vec_stop = stop_idx / 4;
-    const float4 *src4 = reinterpret_cast<const float4*>(src);
-    for (size_t vi = vec_start + tid; vi < vec_stop; vi += blockDim.x) {
-      float4 v = src4[vi];
-      local_sum += v.x + v.y + v.z + v.w;
+
+    // Scalar head
+    size_t head_end = min(vec_start * 4, stop_idx);
+    for (size_t i = start_idx + tid; i < head_end; i += blockDim.x)
+      local_sum += src[i];
+
+    if (vec_start < vec_stop && is_aligned_16(src)) {
+      const float4 *src4 = reinterpret_cast<const float4*>(src);
+      for (size_t vi = vec_start + tid; vi < vec_stop; vi += blockDim.x) {
+        float4 v = src4[vi];
+        local_sum += v.x + v.y + v.z + v.w;
+      }
+    } else {
+      for (size_t i = head_end + tid; i < vec_stop * 4; i += blockDim.x)
+        local_sum += src[i];
     }
+
+    // Scalar tail
     size_t tail_start = vec_stop * 4;
     for (size_t i = tail_start + tid; i < stop_idx; i += blockDim.x)
       local_sum += src[i];
