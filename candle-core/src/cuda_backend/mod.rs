@@ -33,7 +33,6 @@ fn is_cudnn_conv_fallback_error(err: &crate::Error) -> bool {
                 err.0,
                 cudnnStatus_t::CUDNN_STATUS_NOT_SUPPORTED_ARCH_MISMATCH
                     | cudnnStatus_t::CUDNN_STATUS_NOT_SUPPORTED
-                    | cudnnStatus_t::CUDNN_STATUS_EXECUTION_FAILED
             )
         }),
         _ => false,
@@ -114,8 +113,15 @@ impl Map1 for Clone {
     }
 }
 
+fn cuda_kernel_dtype_name(dtype: DType) -> &'static str {
+    match dtype {
+        DType::F8E4M3 => "f8_e4m3",
+        dtype => dtype.as_str(),
+    }
+}
+
 pub fn kernel_name<T: WithDType>(root: &str) -> String {
-    let dtype = T::DTYPE.as_str();
+    let dtype = cuda_kernel_dtype_name(T::DTYPE);
     format!("{root}_{dtype}")
 }
 
@@ -1353,9 +1359,8 @@ impl CudaStorage {
                     .alloc_uninit(kernel_l.shape(), kernel.dtype())?
             };
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
-            let kernel_l =
-                Layout::contiguous_with_offset((n, k), kernel_l.start_offset()).transpose(0, 1)?;
-            col.matmul(kernel, (1, b * m, n, k), &col_l, &kernel_l)?
+            let kernel_l = Layout::contiguous_with_offset((n, k), 0).transpose(0, 1)?;
+            col.matmul(&kernel_c, (1, b * m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, h_out, w_out, n))
             .transpose(1, 2)?
@@ -1565,7 +1570,11 @@ impl BackendStorage for CudaStorage {
         };
         let inp = &inp;
 
-        let kernel_name = format!("cast_{}_{}", self.dtype().as_str(), dtype.as_str());
+        let kernel_name = format!(
+            "cast_{}_{}",
+            cuda_kernel_dtype_name(self.dtype()),
+            cuda_kernel_dtype_name(dtype)
+        );
         let func = dev.get_or_load_func(&kernel_name, &kernels::CAST)?;
         let slice = match dtype {
             DType::U8 => {
@@ -1825,9 +1834,8 @@ impl BackendStorage for CudaStorage {
                     .alloc_uninit(kernel_l.shape(), kernel.dtype())?
             };
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
-            let kernel_l =
-                Layout::contiguous_with_offset((n, k), kernel_l.start_offset()).transpose(0, 1)?;
-            col.matmul(kernel, (1, b * m, n, k), &col_l, &kernel_l)?
+            let kernel_l = Layout::contiguous_with_offset((n, k), 0).transpose(0, 1)?;
+            col.matmul(&kernel_c, (1, b * m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
         let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
@@ -2474,7 +2482,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.memcpy_dtod(&src, &mut dst)?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f8e4m3", &kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_f8_e4m3", &kernels::UNARY)?;
                     let mut builder = func.builder();
                     barg!(builder, el_count);
                     barg!(builder, dims.len());

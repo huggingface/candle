@@ -187,41 +187,47 @@ fn sum_fp8(device: &Device) -> Result<()> {
     println!("FP8 sum: {}", result);
     assert!(!result.is_nan(), "NaN in FP8 sum");
     assert!(!result.is_infinite(), "Inf in FP8 sum");
-    // Just verify the result is a positive, finite number
-    assert!(result > 0.0, "FP8 sum should be positive, got {}", result);
+    let expected = data.iter().sum::<f32>();
+    assert!(
+        (result - expected).abs() < 5.0,
+        "FP8 sum mismatch: got {result}, expected approximately {expected}"
+    );
     Ok(())
 }
 
-/// Test FP8 stability: verify no NaN/Inf in a chain of operations
+/// Test FP8 operation chain against an F32 reference.
 fn fp8_stability(device: &Device) -> Result<()> {
     if device.is_cpu() {
         return Ok(());
     }
-    // Create two small tensors with safe values (avoid overflow for FP8 range [-448, 448])
-    let a = Tensor::randn(0f32, 0.5f32, (16, 16), device)?.to_dtype(DType::F8E4M3)?;
-    let b = Tensor::randn(0f32, 0.5f32, (16, 16), device)?.to_dtype(DType::F8E4M3)?;
+    let a_data = (0..16 * 16)
+        .map(|i| ((i % 17) as f32 - 8.0) * 0.125)
+        .collect::<Vec<_>>();
+    let b_data = (0..16 * 16)
+        .map(|i| ((i % 13) as f32 - 6.0) * 0.0625)
+        .collect::<Vec<_>>();
+    let expected = {
+        let a = Tensor::from_vec(a_data.clone(), (16, 16), &Device::Cpu)?;
+        let b = Tensor::from_vec(b_data.clone(), (16, 16), &Device::Cpu)?;
+        a.broadcast_add(&b)?.broadcast_mul(&b)?
+    };
+    let a = Tensor::from_vec(a_data, (16, 16), device)?.to_dtype(DType::F8E4M3)?;
+    let b = Tensor::from_vec(b_data, (16, 16), device)?.to_dtype(DType::F8E4M3)?;
 
-    // Chain of operations: add -> mul -> cast to F32 -> sum
     let c = a.broadcast_add(&b)?;
-    let d = c.broadcast_mul(&b)?;
-    // FP8 has no native sum kernel, cast to F32 before reducing
-    let s = d.to_dtype(DType::F32)?.sum_all()?;
-    let result = s.to_vec0::<f32>()?;
+    let got = c
+        .broadcast_mul(&b)?
+        .to_device(&Device::Cpu)?
+        .to_dtype(DType::F32)?;
+    let diff = got.sub(&expected)?.abs()?;
+    let max_abs = diff.max_all()?.to_scalar::<f32>()?;
+    let mean_abs = diff.mean_all()?.to_scalar::<f32>()?;
 
-    println!("FP8 stability sum: {}", result);
-    assert!(!result.is_nan(), "NaN in FP8 stability chain");
-    assert!(!result.is_infinite(), "Inf in FP8 stability chain");
-
-    // Also check every element of intermediate result
-    let d_vals = d.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
-    for (i, v) in d_vals.iter().enumerate() {
-        assert!(!v.is_nan(), "NaN at element {} in FP8 stability chain", i);
-        assert!(
-            !v.is_infinite(),
-            "Inf at element {} in FP8 stability chain",
-            i
-        );
-    }
+    let max_tol = if uses_legacy_fp8(device) { 0.5 } else { 0.35 };
+    assert!(
+        max_abs.is_finite() && mean_abs.is_finite() && max_abs < max_tol && mean_abs < 0.15,
+        "FP8 add/mul chain mismatch against f32 reference: max_abs={max_abs}, mean_abs={mean_abs}"
+    );
 
     Ok(())
 }
