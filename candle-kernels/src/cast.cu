@@ -145,27 +145,33 @@ extern "C" __global__ void FN_NAME( \
 CAST_OP(__nv_bfloat16, __nv_bfloat16, cast_bf16_bf16)
 CAST_OP(__nv_fp8_e4m3, __nv_fp8_e4m3, cast_f8_e4m3_f8_e4m3)
 
-// Vectorized bf16<->f32 cast: 8 bf16 elements per float4 load
+// Vectorized bf16->f32 cast: 8 bf16 elements per float4 load
 extern "C" __global__ void cast_bf16_f32(
     const size_t numel, const size_t num_dims, const size_t *info,
     const __nv_bfloat16 *inp, float *out) {
     const size_t *dims = info;
     const size_t *strides = info + num_dims;
     if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
-        const size_t vec_numel = numel / 8;
-        const float4 *inp4 = reinterpret_cast<const float4*>(inp);
-        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < vec_numel; i += blockDim.x * gridDim.x) {
-            float4 v = inp4[i];
-            const __nv_bfloat16 *bp = reinterpret_cast<const __nv_bfloat16*>(&v);
-            float *outp = out + i * 8;
-            #pragma unroll
-            for (int j = 0; j < 8; j++) {
-                outp[j] = __bfloat162float(bp[j]);
+        if (numel >= 8 && is_aligned_16(inp)) {
+            const size_t vec_numel = numel / 8;
+            const float4 *inp4 = reinterpret_cast<const float4*>(inp);
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < vec_numel; i += blockDim.x * gridDim.x) {
+                float4 v = inp4[i];
+                const __nv_bfloat16 *bp = reinterpret_cast<const __nv_bfloat16*>(&v);
+                float *outp = out + i * 8;
+                #pragma unroll
+                for (int j = 0; j < 8; j++) {
+                    outp[j] = __bfloat162float(bp[j]);
+                }
             }
-        }
-        const size_t tail_start = vec_numel * 8;
-        for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
-            out[i] = __bfloat162float(inp[i]);
+            const size_t tail_start = vec_numel * 8;
+            for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+                out[i] = __bfloat162float(inp[i]);
+            }
+        } else {
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+                out[i] = __bfloat162float(inp[i]);
+            }
         }
     } else {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
@@ -175,25 +181,32 @@ extern "C" __global__ void cast_bf16_f32(
     }
 }
 
+// Vectorized f32->bf16 cast: 4 f32 elements per float4 load
 extern "C" __global__ void cast_f32_bf16(
     const size_t numel, const size_t num_dims, const size_t *info,
     const float *inp, __nv_bfloat16 *out) {
     const size_t *dims = info;
     const size_t *strides = info + num_dims;
     if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
-        const size_t vec_numel = numel / 4;
-        const float4 *inp4 = reinterpret_cast<const float4*>(inp);
-        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < vec_numel; i += blockDim.x * gridDim.x) {
-            float4 v = inp4[i];
-            __nv_bfloat16 *outp = out + i * 4;
-            outp[0] = __float2bfloat16_rn(v.x);
-            outp[1] = __float2bfloat16_rn(v.y);
-            outp[2] = __float2bfloat16_rn(v.z);
-            outp[3] = __float2bfloat16_rn(v.w);
-        }
-        const size_t tail_start = vec_numel * 4;
-        for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
-            out[i] = __float2bfloat16_rn(inp[i]);
+        if (numel >= 4 && is_aligned_16(inp)) {
+            const size_t vec_numel = numel / 4;
+            const float4 *inp4 = reinterpret_cast<const float4*>(inp);
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < vec_numel; i += blockDim.x * gridDim.x) {
+                float4 v = inp4[i];
+                __nv_bfloat16 *outp = out + i * 4;
+                outp[0] = __float2bfloat16_rn(v.x);
+                outp[1] = __float2bfloat16_rn(v.y);
+                outp[2] = __float2bfloat16_rn(v.z);
+                outp[3] = __float2bfloat16_rn(v.w);
+            }
+            const size_t tail_start = vec_numel * 4;
+            for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+                out[i] = __float2bfloat16_rn(inp[i]);
+            }
+        } else {
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+                out[i] = __float2bfloat16_rn(inp[i]);
+            }
         }
     } else {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
