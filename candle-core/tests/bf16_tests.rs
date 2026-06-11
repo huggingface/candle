@@ -76,28 +76,31 @@ fn bf16_random_stability(device: &Device) -> Result<()> {
     if device.is_cpu() {
         return Ok(());
     }
-    // Large random tensor
-    let a = Tensor::randn(0f32, 1f32, (256, 256), device)?.to_dtype(DType::BF16)?;
-    let b = Tensor::randn(0f32, 1f32, (256, 256), device)?.to_dtype(DType::BF16)?;
+    let a_data = (0..16 * 16)
+        .map(|i| ((i % 23) as f32 - 11.0) * 0.03125)
+        .collect::<Vec<_>>();
+    let b_data = (0..16 * 16)
+        .map(|i| ((i % 19) as f32 - 9.0) * -0.02734375)
+        .collect::<Vec<_>>();
+    let a_ref = Tensor::from_vec(a_data.clone(), (16, 16), &Device::Cpu)?;
+    let b_ref = Tensor::from_vec(b_data.clone(), (16, 16), &Device::Cpu)?;
+    let expected = a_ref.matmul(&b_ref)?;
 
-    // Chain of ops
-    let c = a.matmul(&b)?;
-    let d = c.exp()?;
-    let e = d.log()?; // Should be back to ~c
+    let a = Tensor::from_vec(a_data, (16, 16), device)?.to_dtype(DType::BF16)?;
+    let b = Tensor::from_vec(b_data, (16, 16), device)?.to_dtype(DType::BF16)?;
+    let got = a
+        .matmul(&b)?
+        .to_device(&Device::Cpu)?
+        .to_dtype(DType::F32)?;
 
-    let e_f32 = e.to_dtype(DType::F32)?;
-    let data = e_f32.to_vec2::<f32>()?;
-
-    for row in data {
-        for &val in &row {
-            assert!(!val.is_nan(), "NaN detected in bf16 tensor element");
-            assert!(!val.is_infinite(), "Inf detected in bf16 tensor element");
-        }
-    }
-
-    let f = e.sum_all()?;
-    let val = f.to_dtype(DType::F32)?.to_vec0::<f32>()?;
-    println!("Random stability sum: {}", val);
+    let diff = got.sub(&expected)?.abs()?;
+    let max_abs = diff.max_all()?.to_scalar::<f32>()?;
+    let mean_abs = diff.mean_all()?.to_scalar::<f32>()?;
+    let max_tol = if uses_legacy_bf16(device) { 0.03 } else { 0.02 };
+    assert!(
+        max_abs.is_finite() && mean_abs.is_finite() && max_abs < max_tol && mean_abs < 0.01,
+        "bf16 matmul mismatch against f32 reference: max_abs={max_abs}, mean_abs={mean_abs}"
+    );
     Ok(())
 }
 
@@ -135,6 +138,7 @@ fn bf16_cast_roundtrip(device: &Device) -> Result<()> {
         for &val in &row {
             assert!(!val.is_nan(), "NaN detected in bf16 tensor element");
             assert!(!val.is_infinite(), "Inf detected in bf16 tensor element");
+            assert_eq!(val, 0.0, "BF16 roundtrip should be idempotent");
         }
     }
     Ok(())

@@ -1,11 +1,26 @@
+#[cfg(feature = "cuda")]
 use candle_core::{
     quantized::{GgmlDType, QTensor},
     DType, Device, Result, Tensor,
 };
 
+#[cfg(feature = "cuda")]
+fn cuda_device_or_skip() -> Result<Option<Device>> {
+    match Device::new_cuda(0) {
+        Ok(device) => Ok(Some(device)),
+        Err(err) => {
+            eprintln!("skipping CUDA-only test: {err}");
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
 #[test]
 fn test_moe_gguf() -> Result<()> {
-    let device = Device::new_cuda(0)?;
+    let Some(device) = cuda_device_or_skip()? else {
+        return Ok(());
+    };
 
     // Setup MoE parameters
     let num_experts = 2;
@@ -45,9 +60,12 @@ fn test_moe_gguf() -> Result<()> {
 
 /// Test FP8 (F8E4M3) fallback operations via FP16/FP32 emulation on SM < 8.9
 /// This test verifies that the ALLOW_LEGACY_FP8 build flag works correctly.
+#[cfg(feature = "cuda")]
 #[test]
 fn test_fp8_fallback() -> Result<()> {
-    let device = Device::new_cuda(0)?;
+    let Some(device) = cuda_device_or_skip()? else {
+        return Ok(());
+    };
 
     // Create test data in F32
     let size = 128;

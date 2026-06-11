@@ -452,11 +452,23 @@ pub fn moe_gemm_gguf(
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::moe_gemm;
-    use candle::{DType, Device, Tensor};
+    use candle::{DType, Device, Result, Tensor};
+
+    fn cuda_device_or_skip() -> Result<Option<Device>> {
+        match Device::new_cuda(0) {
+            Ok(device) => Ok(Some(device)),
+            Err(err) => {
+                eprintln!("skipping CUDA-only MoE test: {err}");
+                Ok(None)
+            }
+        }
+    }
 
     #[test]
     fn moe_gemm_accepts_contiguous_offset_views_cuda() -> candle::Result<()> {
-        let device = Device::new_cuda(0)?;
+        let Some(device) = cuda_device_or_skip()? else {
+            return Ok(());
+        };
         let topk = 1usize;
         let size_m = 4usize;
         let size_n = 16usize;
@@ -505,6 +517,159 @@ mod tests {
         )?;
 
         assert_eq!(out.to_vec2::<half::f16>()?, out_ref.to_vec2::<half::f16>()?);
+        Ok(())
+    }
+
+    fn patterned(len: usize, modulus: usize, scale: f32, offset: f32) -> Vec<f32> {
+        (0..len)
+            .map(|i| ((i % modulus) as f32 - offset) * scale)
+            .collect()
+    }
+
+    fn moe_reference(
+        input: &[f32],
+        weights: &[f32],
+        topk_weights: Option<&[f32]>,
+        sorted_token_ids: &[u32],
+        expert_ids: &[u32],
+        topk: usize,
+        num_experts: usize,
+        size_n: usize,
+        size_k: usize,
+    ) -> Vec<f32> {
+        let size_m = sorted_token_ids.len();
+        let mut output = vec![0f32; size_m * size_n];
+        for (idx, &token_id) in sorted_token_ids.iter().enumerate() {
+            let token_id = token_id as usize;
+            let expert_id = expert_ids[idx] as usize;
+            assert!(expert_id < num_experts);
+            let input_id = if topk_weights.is_some() {
+                token_id
+            } else {
+                token_id / topk
+            };
+            let scale = topk_weights.map(|w| w[token_id]).unwrap_or(1.0);
+            for n in 0..size_n {
+                let mut acc = 0f32;
+                for k in 0..size_k {
+                    acc += input[input_id * size_k + k]
+                        * weights[(expert_id * size_n + n) * size_k + k];
+                }
+                output[token_id * size_n + n] = acc * scale;
+            }
+        }
+        output
+    }
+
+    fn assert_close(got: &Tensor, expected: &[f32], dtype: DType, label: &str) -> Result<()> {
+        let got = got
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        assert_eq!(got.len(), expected.len());
+        let mut max_abs = 0f32;
+        let mut sum_abs = 0f32;
+        for (actual, expected) in got.iter().zip(expected.iter()) {
+            let diff = (actual - expected).abs();
+            max_abs = max_abs.max(diff);
+            sum_abs += diff;
+        }
+        let mean_abs = sum_abs / got.len() as f32;
+        let max_tol = match dtype {
+            DType::BF16 => 0.12,
+            _ => 0.04,
+        };
+        let mean_tol = match dtype {
+            DType::BF16 => 0.03,
+            _ => 0.01,
+        };
+        assert!(
+            max_abs < max_tol && mean_abs < mean_tol,
+            "{label}: max_abs={max_abs} mean_abs={mean_abs}"
+        );
+        Ok(())
+    }
+
+    fn run_moe_reference_case(
+        device: &Device,
+        dtype: DType,
+        weighted: bool,
+        is_prefill: bool,
+    ) -> Result<()> {
+        if dtype == DType::BF16 && !candle::cuda_backend::kernels::capabilities::HAS_BF16 {
+            eprintln!("skipping BF16 MoE reference case: BF16 kernels not enabled");
+            return Ok(());
+        }
+
+        let topk = 2usize;
+        let num_tokens = 3usize;
+        let size_m = num_tokens * topk;
+        let size_n = 18usize;
+        let size_k = 24usize;
+        let num_experts = 3usize;
+        let sorted_token_ids = vec![0u32, 4, 2, 5, 1, 3];
+        let expert_ids = vec![0u32, 0, 1, 1, 2, 2];
+        let input_rows = if weighted { size_m } else { num_tokens };
+        let input_data = patterned(input_rows * size_k, 29, 0.03125, 14.0);
+        let weights_data = patterned(num_experts * size_n * size_k, 31, -0.02734375, 15.0);
+        let topk_weights_data = vec![0.25f32, 0.75, 0.60, 0.40, 0.55, 0.45];
+        let expected = moe_reference(
+            &input_data,
+            &weights_data,
+            weighted.then_some(topk_weights_data.as_slice()),
+            &sorted_token_ids,
+            &expert_ids,
+            topk,
+            num_experts,
+            size_n,
+            size_k,
+        );
+
+        let input = Tensor::from_vec(input_data, (input_rows, size_k), device)?.to_dtype(dtype)?;
+        let weights = Tensor::from_vec(weights_data, (num_experts, size_n, size_k), device)?
+            .to_dtype(dtype)?;
+        let sorted_token_ids = Tensor::from_vec(sorted_token_ids, size_m, device)?;
+        let expert_ids = Tensor::from_vec(expert_ids, size_m, device)?;
+        let topk_weights = if weighted {
+            Some(Tensor::from_vec(
+                topk_weights_data,
+                (num_tokens, topk),
+                device,
+            )?)
+        } else {
+            None
+        };
+
+        let got = moe_gemm(
+            &input,
+            &weights,
+            &topk_weights,
+            &sorted_token_ids,
+            &expert_ids,
+            topk,
+            is_prefill,
+        )?;
+        assert_close(
+            &got,
+            &expected,
+            dtype,
+            &format!("dtype={dtype:?} weighted={weighted} is_prefill={is_prefill}"),
+        )
+    }
+
+    #[test]
+    fn moe_gemm_matches_reference_topk2_cuda() -> Result<()> {
+        let Some(device) = cuda_device_or_skip()? else {
+            return Ok(());
+        };
+        for dtype in [DType::F16, DType::BF16] {
+            for weighted in [false, true] {
+                for is_prefill in [false, true] {
+                    run_moe_reference_case(&device, dtype, weighted, is_prefill)?;
+                }
+            }
+        }
         Ok(())
     }
 }
