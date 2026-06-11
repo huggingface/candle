@@ -97,8 +97,93 @@ __device__ T sign_(T t) {
 }
 
 
+// Vectorized bf16 unary op — 8 elements per float4 load, promotes to f32 for computation.
+// FLOAT_FUNC: expression using xf (float) that produces the result float (e.g. xf / (1.0f + expf(-xf)))
+// SCALAR_FUNC: scalar fallback expression using x (__nv_bfloat16) (e.g. silu_fwd(x))
 #if __CUDA_ARCH__ >= 800
-UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
+#define UNARY_OP_BF16_VEC(FN_NAME, FLOAT_FUNC, SCALAR_FUNC) \
+extern "C" __global__ void FN_NAME( \
+    const size_t numel, \
+    const size_t num_dims, \
+    const size_t *info, \
+    const __nv_bfloat16 *inp, \
+    __nv_bfloat16 *out \
+) { \
+    const size_t *dims = info; \
+    const size_t *strides = info + num_dims; \
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) { \
+        if (numel >= 8 && is_aligned_16(inp) && is_aligned_16(out)) { \
+            const size_t vec_numel = numel / 8; \
+            const float4 *inp4 = reinterpret_cast<const float4*>(inp); \
+            float4 *out4 = reinterpret_cast<float4*>(out); \
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < vec_numel; i += blockDim.x * gridDim.x) { \
+                float4 v = inp4[i]; \
+                __nv_bfloat16 *vp = reinterpret_cast<__nv_bfloat16*>(&v); \
+                _Pragma("unroll") \
+                for (int j = 0; j < 8; j++) { \
+                    float xf = __bfloat162float(vp[j]); \
+                    vp[j] = __float2bfloat16(FLOAT_FUNC); \
+                } \
+                out4[i] = v; \
+            } \
+            const size_t tail_start = vec_numel * 8; \
+            for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+                __nv_bfloat16 x = inp ? inp[i] : out[i]; \
+                out[i] = SCALAR_FUNC; \
+            } \
+        } else { \
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+                __nv_bfloat16 x = inp ? inp[i] : out[i]; \
+                out[i] = SCALAR_FUNC; \
+            } \
+        } \
+    } else { \
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
+            __nv_bfloat16 x = inp ? inp[strided_i] : out[i]; \
+            out[i] = SCALAR_FUNC; \
+        } \
+    } \
+}
+
+// Vectorized bf16 copy — raw float4 copy, no per-element transform
+extern "C" __global__ void ucopy_bf16(
+    const size_t numel,
+    const size_t num_dims,
+    const size_t *info,
+    const __nv_bfloat16 *inp,
+    __nv_bfloat16 *out
+) {
+    const size_t *dims = info;
+    const size_t *strides = info + num_dims;
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
+        if (numel >= 8 && is_aligned_16(inp) && is_aligned_16(out)) {
+            const size_t vec_numel = numel / 8;
+            const float4 *inp4 = reinterpret_cast<const float4*>(inp);
+            float4 *out4 = reinterpret_cast<float4*>(out);
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < vec_numel; i += blockDim.x * gridDim.x) {
+                out4[i] = inp4[i];
+            }
+            const size_t tail_start = vec_numel * 8;
+            for (unsigned int i = tail_start + blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+                out[i] = inp ? inp[i] : out[i];
+            }
+        } else {
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+                out[i] = inp ? inp[i] : out[i];
+            }
+        }
+    } else {
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides);
+            out[i] = inp ? inp[strided_i] : out[i];
+        }
+    }
+}
+
+UNARY_OP_BF16_VEC(usilu_bf16, xf / (1.0f + expf(-xf)), silu_fwd(x))
+UNARY_OP_BF16_VEC(usigmoid_bf16, 1.0f / (1.0f + expf(-xf)), sigmoid_fwd(x))
+
 UNARY_OP(__nv_bfloat16, uneg_bf16, -x)
 UNARY_OP(__nv_bfloat16, urecip_bf16, recipg(x))
 UNARY_OP(__nv_bfloat16, uexp_bf16, expg(x))
@@ -118,10 +203,8 @@ UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd(x))
 UNARY_OP(__nv_bfloat16, ugelu_erf_bf16, gelu_erf_fwd(x))
 UNARY_OP(__nv_bfloat16, urelu_bf16, relu_fwd(x))
 UNARY_OP1(__nv_bfloat16, uelu_bf16, elu_fwd(x, param))
-UNARY_OP(__nv_bfloat16, usilu_bf16, silu_fwd(x))
 UNARY_OP1(__nv_bfloat16, upowf_bf16, powg(x, param))
 UNARY_OP(__nv_bfloat16, usign_bf16, sign_(x))
-UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
 #endif
 
 #if __CUDA_ARCH__ >= 890

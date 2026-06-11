@@ -507,6 +507,24 @@ fn sum(device: &Device) -> Result<()> {
             ]]
         );
     }
+
+    let data = &[[1u8, 2, 3], [4, 5, 6]];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(tensor.sum_keepdim(1)?.to_vec2::<u8>()?, &[[6], [15]]);
+    let data = &[[1i64, 2, 3], [4, 5, 6]];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(tensor.sum_keepdim(1)?.to_vec2::<i64>()?, &[[6], [15]]);
+
+    let mut data = vec![16_777_217u32];
+    data.extend([1u32; 32]);
+    let tensor = Tensor::new(data.as_slice(), device)?;
+    assert_eq!(tensor.sum_keepdim(0)?.to_vec1::<u32>()?, &[16_777_249]);
+    if !device.is_metal() {
+        let mut data = vec![16_777_217f64];
+        data.extend([1f64; 32]);
+        let tensor = Tensor::new(data.as_slice(), device)?;
+        assert_eq!(tensor.sum_keepdim(0)?.to_vec1::<f64>()?, &[16_777_249.]);
+    }
     Ok(())
 }
 
