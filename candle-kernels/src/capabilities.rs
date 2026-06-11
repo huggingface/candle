@@ -1,0 +1,15 @@
+#[cfg(any(has_bf16, allow_legacy_bf16))]
+pub const HAS_BF16_SUPPORT: bool = true;
+#[cfg(not(any(has_bf16, allow_legacy_bf16)))]
+pub const HAS_BF16_SUPPORT: bool = false;
+
+pub const HAS_HALF2_NATIVE: bool = cfg!(has_half2_native);
+pub const HAS_BF16: bool = cfg!(any(has_bf16, allow_legacy_bf16));
+pub const HAS_FP8: bool = cfg!(any(has_fp8, allow_legacy_fp8));
+pub const HAS_WMMA: bool = cfg!(has_wmma);
+pub const HAS_WMMA_F16: bool = cfg!(has_wmma_f16);
+pub const HAS_WMMA_BF16: bool = cfg!(has_wmma_bf16);
+pub const HAS_TENSOR_CORES: bool = cfg!(has_tensor_cores);
+pub const HAS_F16_ARITHMETIC: bool = cfg!(has_f16_arithmetic);
+pub const ALLOW_LEGACY_BF16: bool = cfg!(allow_legacy_bf16);
+pub const ALLOW_LEGACY_FP8: bool = cfg!(allow_legacy_fp8);
