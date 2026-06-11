@@ -261,6 +261,49 @@ test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
 
+fn qtensor_dequantize_rows(device: &Device) -> Result<()> {
+    let src = Tensor::from_vec(
+        (0..6 * 256)
+            .map(|i| ((i % 173) as f32 - 86.) / 19.)
+            .collect(),
+        (6, 256),
+        device,
+    )?;
+    let qtensor = quantized::QTensor::quantize(&src, GgmlDType::Q4K)?;
+    let indices = [4u32, 1, 4, 0];
+    let index_tensor = Tensor::new(indices.to_vec(), device)?;
+
+    let got = qtensor.dequantize_rows(&indices, device)?;
+    let expected = qtensor.dequantize(device)?.index_select(&index_tensor, 0)?;
+    let diff = (&got - &expected)?.abs()?.sum_all()?.to_scalar::<f32>()?;
+    assert_eq!(got.shape().dims(), [indices.len(), 256]);
+    assert_eq!(diff, 0.0);
+    Ok(())
+}
+
+#[test]
+fn qtensor_dequantize_rows_out_of_bounds() -> Result<()> {
+    let device = Device::Cpu;
+    let src = Tensor::from_vec(
+        (0..3 * 256).map(|i| i as f32 / 17.).collect(),
+        (3, 256),
+        &device,
+    )?;
+    let qtensor = quantized::QTensor::quantize(&src, GgmlDType::Q4K)?;
+    let err = qtensor
+        .dequantize_rows(&[3], &device)
+        .expect_err("out-of-bounds row access should fail");
+    assert!(err.to_string().contains("out of bounds"));
+    Ok(())
+}
+
+test_device!(
+    qtensor_dequantize_rows,
+    qtensor_dequantize_rows_cpu,
+    qtensor_dequantize_rows_cuda,
+    qtensor_dequantize_rows_metal
+);
+
 fn quantize_q4_0(device: &Device) -> Result<()> {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
 
