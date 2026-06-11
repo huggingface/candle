@@ -62,8 +62,9 @@ __device__ __forceinline__ uint8_t reduce_init_highest<uint8_t>() {
 // but also expect a f32 output so that this can be used for normalization e.g.
 // in softmax.
 
-// Optimized reduce sum: contiguous fast path with vectorized loads + warp shuffle,
-// falls back to strided path for non-contiguous data.
+// Fast reduce sum kernel, this assumes that the dimensions to loop over are at
+// the end, each block is responsible for populating one value in the output
+// array. There are at most 1024 threads per block.
 template <typename T>
 __device__ void
 fast_sum(const size_t src_numel, const size_t el_to_sum_per_block,
@@ -71,47 +72,35 @@ fast_sum(const size_t src_numel, const size_t el_to_sum_per_block,
   const size_t *dims = info;
   const size_t *strides = info + num_dims;
 
-  __shared__ float shr[BLOCK_SIZE];
+  __shared__ T shr[BLOCK_SIZE];
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
+  shr[tid] = 0;
+  // Elements summed in this block range from dst_id * el_to_sum_per_block
+  // to (dst_id + 1) * el_to_sum_per_block.
   size_t start_idx = dst_id * el_to_sum_per_block;
   size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);
+  size_t idx = start_idx + tid;
 
-  float local_sum = 0.0f;
-
-  if (is_contiguous(num_dims, dims, strides)) {
-    size_t idx = start_idx + tid;
-    while (idx < stop_idx) {
-      local_sum += static_cast<float>(src[idx]);
-      idx += blockDim.x;
-    }
-  } else {
-    size_t idx = start_idx + tid;
-    while (idx < stop_idx) {
-      size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
-      local_sum += static_cast<float>(src[strided_i]);
-      idx += blockDim.x;
-    }
+  while (idx < stop_idx) {
+    // TODO: Fast version for the contiguous case.
+    size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
+    shr[tid] += src[strided_i];
+    idx += blockDim.x;
   }
 
-  // Warp-level reduction first
-  for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
-    local_sum += __shfl_xor_sync(0xffffffff, local_sum, offset);
-
-  int warp_id = tid / WARP_SIZE;
-  int lane_id = tid % WARP_SIZE;
-  if (lane_id == 0) shr[warp_id] = local_sum;
-  __syncthreads();
-
-  // Final reduction across warps
-  int num_warps = blockDim.x / WARP_SIZE;
-  if (tid < WARP_SIZE) {
-    local_sum = (tid < num_warps) ? shr[tid] : 0.0f;
-    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
-      local_sum += __shfl_xor_sync(0xffffffff, local_sum, offset);
-    if (tid == 0) dst[dst_id] = static_cast<T>(local_sum);
+  // Parallel reduction, see the slides:
+  // https://www.olcf.ornl.gov/wp-content/uploads/2019/12/05_Atomics_Reductions_Warp_Shuffle.pdf
+  // https://stackoverflow.com/questions/66078814/is-cuda-atomicadd-operation-faster-than-launch-another-kernel-when-we-do-reduce
+  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+    __syncthreads();
+    if (tid < s)
+      shr[tid] += shr[tid + s];
   }
+
+  if (tid == 0)
+    dst[dst_id] = shr[0];
 }
 
 // Specialized vectorized fast_sum for bf16: 8 elements per float4 load
@@ -747,22 +736,20 @@ fast_sum_small_impl(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t gid = blockIdx.x * blockDim.x + threadIdx.x;
   if (gid >= dst_el) return;
 
-  float sum = 0.0f;
+  T sum = 0;
 
   if (is_contiguous(num_dims, dims, strides)) {
     size_t start = gid * el_to_sum_per_block;
     for (size_t i = 0; i < el_to_sum_per_block; ++i) {
-      sum += static_cast<float>(src[start + i]);
+      sum += src[start + i];
     }
   } else {
-    size_t base_linear = gid * el_to_sum_per_block;
-    size_t base_strided = get_strided_index(base_linear, num_dims, dims, strides);
-    size_t sum_stride = strides[num_dims - 1];
     for (size_t i = 0; i < el_to_sum_per_block; ++i) {
-      sum += static_cast<float>(src[base_strided + i * sum_stride]);
+      size_t strided_i = get_strided_index(gid * el_to_sum_per_block + i, num_dims, dims, strides);
+      sum += src[strided_i];
     }
   }
-  dst[gid] = static_cast<T>(sum);
+  dst[gid] = sum;
 }
 
 #if __CUDA_ARCH__ >= 800
@@ -784,15 +771,9 @@ extern "C" __global__ void fast_sum_small_bf16(
       sum += __bfloat162float(src[start + i]);
     }
   } else {
-    // Compute base address once via get_strided_index, then use the stride
-    // of the innermost (sum) dimension for subsequent elements.
-    // This avoids expensive integer division per element.
-    size_t base_linear = gid * el_to_sum_per_block;
-    size_t base_strided = get_strided_index(base_linear, num_dims, dims, strides);
-    size_t sum_stride = strides[num_dims - 1];
-
     for (size_t i = 0; i < el_to_sum_per_block; ++i) {
-      sum += __bfloat162float(src[base_strided + i * sum_stride]);
+      size_t strided_i = get_strided_index(gid * el_to_sum_per_block + i, num_dims, dims, strides);
+      sum += __bfloat162float(src[strided_i]);
     }
   }
 
@@ -811,6 +792,27 @@ extern "C" __global__ void fast_sum_small_f64(
     const size_t src_numel, const size_t el_to_sum_per_block,
     const size_t num_dims, const size_t *info, const double *src,
     double *dst) {
+  fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
+}
+
+extern "C" __global__ void fast_sum_small_u32(
+    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t num_dims, const size_t *info, const uint32_t *src,
+    uint32_t *dst) {
+  fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
+}
+
+extern "C" __global__ void fast_sum_small_i64(
+    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t num_dims, const size_t *info, const int64_t *src,
+    int64_t *dst) {
+  fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
+}
+
+extern "C" __global__ void fast_sum_small_u8(
+    const size_t src_numel, const size_t el_to_sum_per_block,
+    const size_t num_dims, const size_t *info, const uint8_t *src,
+    uint8_t *dst) {
   fast_sum_small_impl(src_numel, el_to_sum_per_block, num_dims, info, src, dst);
 }
 
