@@ -10,4 +10,7 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 [build-dependencies]
-cudaforge = "0.1.2"
+cudaforge = "0.1.5"
+
+[patch.crates-io]
+cudaforge = { git = "https://github.com/guoqingbao/cudaforge", rev = "64a7f7a7926cc0c1a9b896ab853dedbcb74617a6" }

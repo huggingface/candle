@@ -107,3 +107,6 @@ objc2-foundation = { version = "0.3.1" }
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+[patch.crates-io]
+cudaforge = { git = "https://github.com/guoqingbao/cudaforge", rev = "64a7f7a7926cc0c1a9b896ab853dedbcb74617a6" }
