@@ -180,3 +180,70 @@ fn ug_op() -> Result<()> {
     );
     Ok(())
 }
+
+struct InplaceAdd;
+
+impl candle_core::InplaceOp2 for InplaceAdd {
+    fn name(&self) -> &'static str {
+        "inplace-add"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &mut CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+    ) -> Result<()> {
+        let elems = l1.shape().elem_count();
+        let start1 = l1.start_offset();
+        let start2 = l2.start_offset();
+        let (CpuStorage::F32(d1), CpuStorage::F32(d2)) = (s1, s2) else {
+            candle_core::bail!("unsupported dtype for inplace-add")
+        };
+        let rhs: Vec<f32> = d2[start2..start2 + elems].to_vec();
+        for (v, r) in d1[start1..start1 + elems].iter_mut().zip(rhs) {
+            *v += r;
+        }
+        Ok(())
+    }
+}
+
+impl candle_core::InplaceOp3 for InplaceAdd {
+    fn name(&self) -> &'static str {
+        "inplace-add3"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _: &mut CpuStorage,
+        _: &Layout,
+        _: &CpuStorage,
+        _: &Layout,
+        _: &CpuStorage,
+        _: &Layout,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Operands sharing the same storage (e.g. two narrowed views of one tensor)
+/// must yield an error instead of deadlocking on the storage RwLock.
+#[test]
+fn inplace_op_shared_storage_errors_instead_of_deadlocking() -> Result<()> {
+    let cpu = &Device::Cpu;
+    let t = Tensor::from_vec(vec![1f32, 2., 3., 4.], 4, cpu)?;
+    let dst = t.narrow(0, 0, 2)?;
+    let src = t.narrow(0, 2, 2)?;
+    let res = dst.inplace_op2(&src, &InplaceAdd);
+    assert!(res.is_err(), "shared-storage inplace_op2 must error");
+    let res = dst.inplace_op3(&src, &src, &InplaceAdd);
+    let _ = res.expect_err("shared-storage inplace_op3 must error");
+
+    // Distinct storages keep working.
+    let a = Tensor::from_vec(vec![1f32, 2.], 2, cpu)?;
+    let b = Tensor::from_vec(vec![10f32, 20.], 2, cpu)?;
+    a.inplace_op2(&b, &InplaceAdd)?;
+    assert_eq!(a.to_vec1::<f32>()?, [11., 22.]);
+    Ok(())
+}
