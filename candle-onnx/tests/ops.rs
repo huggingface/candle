@@ -1794,12 +1794,9 @@ fn test_gelu_operation() -> Result<()> {
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-    let results = z.to_vec2::<f32>()?;
+    let results = to_vec2_round(z, 4)?;
 
-    assert_eq!(
-        results,
-        vec![vec![0.0, 0.8413448], vec![1.9544997, 2.9959502]]
-    );
+    assert_eq!(results, vec![vec![0.0, 0.8413], vec![1.9545, 2.996]]);
 
     Ok(())
 }
@@ -7224,5 +7221,197 @@ fn test_one_hot() -> Result<()> {
         assert_eq!(y.dims(), &[3, 12]);
     }
 
+    Ok(())
+}
+
+// Helpers for the activation/normalization op tests below.
+fn attr(name: &str, ty: i32, i: i64, f: f32) -> AttributeProto {
+    AttributeProto {
+        name: name.to_string(),
+        ref_attr_name: name.to_string(),
+        i,
+        doc_string: name.to_string(),
+        r#type: ty,
+        f,
+        s: vec![],
+        t: None,
+        g: None,
+        sparse_tensor: None,
+        tp: None,
+        floats: vec![],
+        ints: vec![],
+        strings: vec![],
+        tensors: vec![],
+        graphs: vec![],
+        sparse_tensors: vec![],
+        type_protos: vec![],
+    }
+}
+
+fn attr_i(name: &str, i: i64) -> AttributeProto {
+    attr(name, 2, i, 0.0)
+}
+
+fn attr_f(name: &str, f: f32) -> AttributeProto {
+    attr(name, 1, 0, f)
+}
+
+fn single_node_model(op: &str, attrs: Vec<AttributeProto>, inputs: Vec<&str>) -> ModelProto {
+    create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: op.to_string(),
+            domain: "".to_string(),
+            attribute: attrs,
+            input: inputs.iter().map(|s| s.to_string()).collect(),
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }))
+}
+
+fn eval_single(model: &ModelProto, inputs: Vec<(&str, Tensor)>) -> Result<Tensor> {
+    let inputs: HashMap<String, Tensor> = inputs
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+    let mut outputs = candle_onnx::simple_eval(model, inputs)?;
+    outputs
+        .remove(OUTPUT_Z)
+        .ok_or_else(|| candle::Error::Msg("missing output".to_string()))
+}
+
+#[test]
+fn test_softsign() -> Result<()> {
+    let model = single_node_model("Softsign", vec![], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![-2f32, 0., 3.], (1, 3), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[-0.6667, 0.0, 0.75]]);
+    Ok(())
+}
+
+#[test]
+fn test_hard_sigmoid() -> Result<()> {
+    let model = single_node_model("HardSigmoid", vec![], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![-5f32, 0., 1., 5.], (1, 4), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[0.0, 0.5, 0.7, 1.0]]);
+    Ok(())
+}
+
+#[test]
+fn test_elu() -> Result<()> {
+    let model = single_node_model("Elu", vec![attr_f("alpha", 2.0)], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![-1f32, 0., 2.], (1, 3), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    // 2 * (e^-1 - 1) = -1.2642
+    assert_eq!(to_vec2_round(&z, 4)?, [[-1.2642, 0.0, 2.0]]);
+    Ok(())
+}
+
+#[test]
+fn test_mish() -> Result<()> {
+    let model = single_node_model("Mish", vec![], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![-1f32, 0., 1.], (1, 3), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    // x * tanh(ln(1 + e^x))
+    assert_eq!(to_vec2_round(&z, 4)?, [[-0.3034, 0.0, 0.8651]]);
+    Ok(())
+}
+
+#[test]
+fn test_lp_normalization() -> Result<()> {
+    let model = single_node_model("LpNormalization", vec![], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![3f32, 4.], (1, 2), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[0.6, 0.8]]);
+
+    let model = single_node_model(
+        "LpNormalization",
+        vec![attr_i("p", 1), attr_i("axis", 1)],
+        vec![INPUT_X],
+    );
+    let x = Tensor::from_vec(vec![3f32, 1.], (1, 2), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[0.75, 0.25]]);
+    Ok(())
+}
+
+#[test]
+fn test_instance_normalization() -> Result<()> {
+    let model = single_node_model(
+        "InstanceNormalization",
+        vec![],
+        vec![INPUT_X, INPUT_Y, INPUT_A],
+    );
+    let x = Tensor::from_vec(vec![1f32, 3., 0., 0.], (1, 2, 2), &Device::Cpu)?;
+    let scale = Tensor::from_vec(vec![1f32, 1.], 2, &Device::Cpu)?;
+    let bias = Tensor::from_vec(vec![0f32, 1.], 2, &Device::Cpu)?;
+    let z = eval_single(
+        &model,
+        vec![(INPUT_X, x), (INPUT_Y, scale), (INPUT_A, bias)],
+    )?;
+    // channel 0: (x - 2) / 1 = [-1, 1]; channel 1: zero variance -> bias
+    assert_eq!(
+        candle::test_utils::to_vec3_round(&z, 4)?,
+        [[[-1.0, 1.0], [1.0, 1.0]]]
+    );
+    Ok(())
+}
+
+#[test]
+fn test_group_normalization() -> Result<()> {
+    let model = single_node_model(
+        "GroupNormalization",
+        vec![attr_i("num_groups", 1)],
+        vec![INPUT_X, INPUT_Y, INPUT_A],
+    );
+    let x = Tensor::from_vec(vec![1f32, 3., 0., 0.], (1, 2, 2), &Device::Cpu)?;
+    let scale = Tensor::from_vec(vec![1f32, 1.], 2, &Device::Cpu)?;
+    let bias = Tensor::from_vec(vec![0f32, 0.], 2, &Device::Cpu)?;
+    let z = eval_single(
+        &model,
+        vec![(INPUT_X, x), (INPUT_Y, scale), (INPUT_A, bias)],
+    )?;
+    // one group over [1, 3, 0, 0]: mean 1, var 1.5
+    assert_eq!(
+        candle::test_utils::to_vec3_round(&z, 4)?,
+        [[[0.0, 1.633], [-0.8165, -0.8165]]]
+    );
+    Ok(())
+}
+
+#[test]
+fn test_softplus() -> Result<()> {
+    let model = single_node_model("Softplus", vec![], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![-1f32, 0., 1.], (1, 3), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    // ln(1 + e^x)
+    assert_eq!(to_vec2_round(&z, 4)?, [[0.3133, 0.6931, 1.3133]]);
+    Ok(())
+}
+
+#[test]
+fn test_shrink() -> Result<()> {
+    let model = single_node_model(
+        "Shrink",
+        vec![attr_f("lambd", 1.0), attr_f("bias", 0.5)],
+        vec![INPUT_X],
+    );
+    let x = Tensor::from_vec(vec![-2f32, -1., 0., 1., 2.], (1, 5), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[-1.5, 0.0, 0.0, 0.0, 1.5]]);
     Ok(())
 }

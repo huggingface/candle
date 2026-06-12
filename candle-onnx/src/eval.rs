@@ -1040,6 +1040,134 @@ fn simple_eval_(
                 let output = input.tanh()?;
                 values.insert(node.output[0].clone(), output);
             }
+            "Softplus" => {
+                let xs = get(&node.input[0])?;
+                let zeros = xs.zeros_like()?;
+                // ln(1 + e^x) in a numerically stable form.
+                let output = (xs.maximum(&zeros)? + (xs.abs()?.neg()?.exp()? + 1.0)?.log()?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Shrink" => {
+                let lambd = get_attr_opt::<f32>(node, "lambd")?.copied().unwrap_or(0.5) as f64;
+                let bias = get_attr_opt::<f32>(node, "bias")?.copied().unwrap_or(0.0) as f64;
+                let xs = get(&node.input[0])?;
+                // y = x + bias if x < -lambd, x - bias if x > lambd, else 0.
+                let below = xs.lt(-lambd)?.to_dtype(xs.dtype())?;
+                let above = xs.gt(lambd)?.to_dtype(xs.dtype())?;
+                let output = ((xs + bias)? * &below)?.add(&((xs - bias)? * &above)?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Softsign" => {
+                let xs = get(&node.input[0])?;
+                let output = xs.broadcast_div(&(xs.abs()? + 1.0)?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "HardSigmoid" => {
+                let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(0.2) as f64;
+                let beta = get_attr_opt::<f32>(node, "beta")?.copied().unwrap_or(0.5) as f64;
+                let xs = get(&node.input[0])?;
+                let output = ((xs * alpha)? + beta)?
+                    .maximum(&xs.zeros_like()?)?
+                    .minimum(&xs.ones_like()?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Elu" => {
+                let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0) as f64;
+                let xs = get(&node.input[0])?;
+                let zeros = xs.zeros_like()?;
+                let neg = ((xs.minimum(&zeros)?.exp()? - 1.0)? * alpha)?;
+                let output = (xs.maximum(&zeros)? + neg)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Mish" => {
+                // x * tanh(softplus(x)), softplus computed in a numerically stable form.
+                let xs = get(&node.input[0])?;
+                let zeros = xs.zeros_like()?;
+                let softplus = (xs.maximum(&zeros)? + (xs.abs()?.neg()?.exp()? + 1.0)?.log()?)?;
+                let output = (xs * softplus.tanh()?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "LpNormalization" => {
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(-1);
+                let p = get_attr_opt::<i64>(node, "p")?.copied().unwrap_or(2);
+                let xs = get(&node.input[0])?;
+                let dim = if axis < 0 {
+                    (xs.rank() as i64 + axis) as usize
+                } else {
+                    axis as usize
+                };
+                let norm = match p {
+                    1 => xs.abs()?.sum_keepdim(dim)?,
+                    2 => xs.sqr()?.sum_keepdim(dim)?.sqrt()?,
+                    p => bail!("LpNormalization only supports p = 1 or 2, got {p}"),
+                };
+                let output = xs.broadcast_div(&norm)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "InstanceNormalization" => {
+                let eps = get_attr_opt::<f32>(node, "epsilon")?
+                    .copied()
+                    .unwrap_or(1e-5);
+                let xs = get(&node.input[0])?;
+                let scale = get(&node.input[1])?;
+                let bias = get(&node.input[2])?;
+                let rank = xs.rank();
+                if rank < 3 {
+                    bail!("InstanceNormalization expects an input of rank >= 3, got {rank}")
+                }
+                let spatial: Vec<usize> = (2..rank).collect();
+                let mean = xs.mean_keepdim(spatial.clone())?;
+                let centered = xs.broadcast_sub(&mean)?;
+                let var = centered.sqr()?.mean_keepdim(spatial)?;
+                let normed = centered.broadcast_div(&(var + eps as f64)?.sqrt()?)?;
+                let channel_shape: Vec<usize> = xs
+                    .dims()
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, v)| if idx == 1 { *v } else { 1 })
+                    .collect();
+                let output = normed
+                    .broadcast_mul(&scale.reshape(channel_shape.as_slice())?)?
+                    .broadcast_add(&bias.reshape(channel_shape.as_slice())?)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "GroupNormalization" => {
+                let eps = get_attr_opt::<f32>(node, "epsilon")?
+                    .copied()
+                    .unwrap_or(1e-5);
+                let num_groups = *get_attr::<i64>(node, "num_groups")? as usize;
+                let xs = get(&node.input[0])?;
+                let scale = get(&node.input[1])?;
+                let bias = get(&node.input[2])?;
+                let rank = xs.rank();
+                if rank < 3 {
+                    bail!("GroupNormalization expects an input of rank >= 3, got {rank}")
+                }
+                let dims = xs.dims().to_vec();
+                let (n, c) = (dims[0], dims[1]);
+                if num_groups == 0 || c % num_groups != 0 {
+                    bail!("GroupNormalization: {c} channels not divisible into {num_groups} groups")
+                }
+                let spatial: usize = dims[2..].iter().product();
+                // Normalize over each group of channels together with the spatial dims.
+                let grouped = xs.reshape((n, num_groups, c / num_groups * spatial))?;
+                let mean = grouped.mean_keepdim(2)?;
+                let centered = grouped.broadcast_sub(&mean)?;
+                let var = centered.sqr()?.mean_keepdim(2)?;
+                let normed = centered
+                    .broadcast_div(&(var + eps as f64)?.sqrt()?)?
+                    .reshape(dims.as_slice())?;
+                let channel_shape: Vec<usize> = xs
+                    .dims()
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, v)| if idx == 1 { *v } else { 1 })
+                    .collect();
+                let output = normed
+                    .broadcast_mul(&scale.reshape(channel_shape.as_slice())?)?
+                    .broadcast_add(&bias.reshape(channel_shape.as_slice())?)?;
+                values.insert(node.output[0].clone(), output);
+            }
             "Sigmoid" => {
                 let input = get(&node.input[0])?;
                 let output = candle_nn::ops::sigmoid(input)?;
