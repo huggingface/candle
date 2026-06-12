@@ -2094,3 +2094,51 @@ fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     assert_ne!(id1, id2);
     Ok(())
 }
+
+/// `from_vec`/`from_slice` must reject shapes whose element count does not
+/// match the data length instead of building a tensor whose shape lies about
+/// its storage (#3534). `from_raw_buffer` routes through `from_slice`.
+#[test]
+fn from_data_shape_mismatch_errors() -> Result<()> {
+    let dev = &Device::Cpu;
+    assert!(Tensor::from_slice(&[0f32], 10, dev).is_err());
+    assert!(Tensor::from_vec(vec![0f32; 4], (2, 3), dev).is_err());
+    // Exact matches and one-hole inference keep working.
+    let t = Tensor::from_slice(&[0f32, 1., 2., 3.], (2, 2), dev)?;
+    assert_eq!(t.dims(), [2, 2]);
+    let t = Tensor::from_vec(vec![0f32; 6], ((), 3), dev)?;
+    assert_eq!(t.dims(), [2, 3]);
+    Ok(())
+}
+
+/// Stepped slice assignment matches the equivalent Python `dst[s:e:step] = src` semantics.
+#[test]
+fn slice_assign_with_step() -> Result<()> {
+    let dev = &Device::Cpu;
+    // 1-D: dst[1..8 step 3] = [10, 20, 30]
+    let dst = Tensor::zeros(8, DType::F32, dev)?;
+    let src = Tensor::from_vec(vec![10f32, 20., 30.], 3, dev)?;
+    let out = dst.slice_assign_with_step(&[(1..8, 3)], &src)?;
+    assert_eq!(out.to_vec1::<f32>()?, [0., 10., 0., 0., 20., 0., 0., 30.]);
+
+    // 2-D mixed steps: rows step 2, cols step 1.
+    let dst = Tensor::zeros((4, 3), DType::F32, dev)?;
+    let src = Tensor::from_vec(vec![1f32, 2., 3., 4., 5., 6.], (2, 3), dev)?;
+    let out = dst.slice_assign_with_step(&[(0..4, 2), (0..3, 1)], &src)?;
+    assert_eq!(
+        out.to_vec2::<f32>()?,
+        [[1., 2., 3.], [0., 0., 0.], [4., 5., 6.], [0., 0., 0.]]
+    );
+
+    // step 1 behaves exactly like slice_assign.
+    let dst = Tensor::zeros(4, DType::F32, dev)?;
+    let src = Tensor::from_vec(vec![7f32, 8.], 2, dev)?;
+    let a = dst.slice_assign_with_step(&[(1..3, 1)], &src)?;
+    let b = dst.slice_assign(&[1..3], &src)?;
+    assert_eq!(a.to_vec1::<f32>()?, b.to_vec1::<f32>()?);
+
+    // step 0 and src-length mismatches are errors.
+    assert!(dst.slice_assign_with_step(&[(1..3, 0)], &src).is_err());
+    assert!(dst.slice_assign_with_step(&[(0..4, 4)], &src).is_err());
+    Ok(())
+}
