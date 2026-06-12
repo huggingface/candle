@@ -34,7 +34,7 @@ thiserror = { workspace = true }
 yoke = { workspace = true }
 zip = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokenizers = { workspace = true, features = ["onig"] }
+tokenizers = { workspace = true, features = ["onig"], optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 candle-ug = { workspace = true, optional = true }
@@ -45,7 +45,8 @@ clap = { workspace = true }
 criterion = { workspace = true }
 
 [features]
-default = []
+default = ["tokenizers"]
+tokenizers = ["dep:tokenizers"]
 cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
