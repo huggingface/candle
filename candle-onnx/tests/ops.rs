@@ -7415,3 +7415,192 @@ fn test_shrink() -> Result<()> {
     assert_eq!(to_vec2_round(&z, 4)?, [[-1.5, 0.0, 0.0, 0.0, 1.5]]);
     Ok(())
 }
+
+fn multi_output_model(
+    op: &str,
+    attrs: Vec<AttributeProto>,
+    inputs: Vec<&str>,
+    outputs: Vec<&str>,
+) -> ModelProto {
+    create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: op.to_string(),
+            domain: "".to_string(),
+            attribute: attrs,
+            input: inputs.iter().map(|s| s.to_string()).collect(),
+            output: outputs.iter().map(|s| s.to_string()).collect(),
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![],
+        output: outputs
+            .iter()
+            .map(|o| ValueInfoProto {
+                name: o.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            })
+            .collect(),
+        value_info: vec![],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }))
+}
+
+#[test]
+fn test_global_max_pool() -> Result<()> {
+    let model = single_node_model("GlobalMaxPool", vec![], vec![INPUT_X]);
+    let x = Tensor::from_vec(
+        vec![1f32, 5., 2., 4., -3., -1., -2., -7.],
+        (1, 2, 2, 2),
+        &Device::Cpu,
+    )?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(z.dims(), [1, 2, 1, 1]);
+    assert_eq!(z.flatten_all()?.to_vec1::<f32>()?, [5., -1.]);
+    Ok(())
+}
+
+#[test]
+fn test_thresholded_relu() -> Result<()> {
+    let model = single_node_model("ThresholdedRelu", vec![attr_f("alpha", 2.0)], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![1f32, 2., 3., -5.], (1, 4), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[0.0, 0.0, 3.0, 0.0]]);
+    Ok(())
+}
+
+#[test]
+fn test_round_half_to_even() -> Result<()> {
+    let model = single_node_model("Round", vec![], vec![INPUT_X]);
+    let x = Tensor::from_vec(
+        vec![0.5f32, 1.5, 2.5, -0.5, -1.5, 1.4, -2.6],
+        (1, 7),
+        &Device::Cpu,
+    )?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(
+        to_vec2_round(&z, 4)?,
+        [[0.0, 2.0, 2.0, 0.0, -2.0, 1.0, -3.0]]
+    );
+    Ok(())
+}
+
+#[test]
+fn test_reciprocal() -> Result<()> {
+    let model = single_node_model("Reciprocal", vec![], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![2f32, -4., 0.5], (1, 3), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[0.5, -0.25, 2.0]]);
+    Ok(())
+}
+
+#[test]
+fn test_variadic_max_sum_mean() -> Result<()> {
+    let a = Tensor::from_vec(vec![1f32, 8.], (1, 2), &Device::Cpu)?;
+    let b = Tensor::from_vec(vec![4f32, 2.], (1, 2), &Device::Cpu)?;
+    let c = Tensor::from_vec(vec![1f32, 5.], (1, 2), &Device::Cpu)?;
+    for (op, expected) in [("Max", [4f32, 8.]), ("Sum", [6., 15.]), ("Mean", [2., 5.])] {
+        let model = single_node_model(op, vec![], vec![INPUT_X, INPUT_Y, INPUT_A]);
+        let z = eval_single(
+            &model,
+            vec![
+                (INPUT_X, a.clone()),
+                (INPUT_Y, b.clone()),
+                (INPUT_A, c.clone()),
+            ],
+        )?;
+        assert_eq!(to_vec2_round(&z, 4)?, [expected], "{op}");
+    }
+    Ok(())
+}
+
+#[test]
+fn test_mod_operation() -> Result<()> {
+    // Default: result takes the sign of the divisor (Python %).
+    let model = single_node_model("Mod", vec![], vec![INPUT_X, INPUT_Y]);
+    let x = Tensor::from_vec(vec![5i64, -5, 5, -5], (1, 4), &Device::Cpu)?;
+    let y = Tensor::from_vec(vec![3i64, 3, -3, -3], (1, 4), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x), (INPUT_Y, y)])?;
+    assert_eq!(z.to_vec2::<i64>()?, [[2, 1, -1, -2]]);
+
+    // fmod=1: result takes the sign of the dividend (C fmod).
+    let model = single_node_model("Mod", vec![attr_i("fmod", 1)], vec![INPUT_X, INPUT_Y]);
+    let x = Tensor::from_vec(vec![5.5f32, -5.5], (1, 2), &Device::Cpu)?;
+    let y = Tensor::from_vec(vec![3f32, 3.], (1, 2), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x), (INPUT_Y, y)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[2.5, -2.5]]);
+    Ok(())
+}
+
+#[test]
+fn test_hardmax() -> Result<()> {
+    let model = single_node_model("Hardmax", vec![], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![1f32, 3., 2., 7., 0., -1.], (2, 3), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]);
+    Ok(())
+}
+
+#[test]
+fn test_celu() -> Result<()> {
+    let model = single_node_model("Celu", vec![attr_f("alpha", 2.0)], vec![INPUT_X]);
+    let x = Tensor::from_vec(vec![-2f32, 0., 3.], (1, 3), &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    // 2 * (e^-1 - 1) = -1.2642
+    assert_eq!(to_vec2_round(&z, 4)?, [[-1.2642, 0.0, 3.0]]);
+    Ok(())
+}
+
+#[test]
+fn test_eye_like() -> Result<()> {
+    let model = single_node_model("EyeLike", vec![attr_i("k", 1)], vec![INPUT_X]);
+    let x = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    let z = eval_single(&model, vec![(INPUT_X, x)])?;
+    assert_eq!(to_vec2_round(&z, 4)?, [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+    Ok(())
+}
+
+#[test]
+fn test_topk() -> Result<()> {
+    const OUTPUT_I: &str = "indices";
+    let model = multi_output_model(
+        "TopK",
+        vec![],
+        vec![INPUT_X, INPUT_Y],
+        vec![OUTPUT_Z, OUTPUT_I],
+    );
+    let x = Tensor::from_vec(vec![1f32, 4., 2., 9., 3., 7.], (2, 3), &Device::Cpu)?;
+    let k = Tensor::from_vec(vec![2i64], 1, &Device::Cpu)?;
+    let inputs: HashMap<String, Tensor> = vec![(INPUT_X.to_string(), x), (INPUT_Y.to_string(), k)]
+        .into_iter()
+        .collect();
+    let outputs = candle_onnx::simple_eval(&model, inputs)?;
+    let vals = outputs.get(OUTPUT_Z).unwrap();
+    let idxs = outputs.get(OUTPUT_I).unwrap();
+    assert_eq!(to_vec2_round(vals, 4)?, [[4.0, 2.0], [9.0, 7.0]]);
+    assert_eq!(idxs.to_vec2::<i64>()?, [[1, 2], [0, 2]]);
+
+    // smallest=top with largest=0
+    let model = multi_output_model(
+        "TopK",
+        vec![attr_i("largest", 0)],
+        vec![INPUT_X, INPUT_Y],
+        vec![OUTPUT_Z, OUTPUT_I],
+    );
+    let x = Tensor::from_vec(vec![1f32, 4., 2.], (1, 3), &Device::Cpu)?;
+    let k = Tensor::from_vec(vec![2i64], 1, &Device::Cpu)?;
+    let inputs: HashMap<String, Tensor> = vec![(INPUT_X.to_string(), x), (INPUT_Y.to_string(), k)]
+        .into_iter()
+        .collect();
+    let outputs = candle_onnx::simple_eval(&model, inputs)?;
+    assert_eq!(
+        to_vec2_round(outputs.get(OUTPUT_Z).unwrap(), 4)?,
+        [[1.0, 2.0]]
+    );
+    assert_eq!(outputs.get(OUTPUT_I).unwrap().to_vec2::<i64>()?, [[0, 2]]);
+    Ok(())
+}
