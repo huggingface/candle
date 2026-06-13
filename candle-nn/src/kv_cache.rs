@@ -747,6 +747,24 @@ impl ConcatKvCache {
     ///
     /// After calling this, `is_empty()` will return `true` and
     /// `current_seq_len()` will return 0.
+    pub fn trim_kv_to(&mut self, len: usize) -> Result<()> {
+        if len == 0 {
+            self.reset();
+            return Ok(());
+        }
+        if let Some(k) = self.k.as_ref() {
+            if k.dim(self.dim)? > len {
+                self.k = Some(k.narrow(self.dim, 0, len)?);
+            }
+        }
+        if let Some(v) = self.v.as_ref() {
+            if v.dim(self.dim)? > len {
+                self.v = Some(v.narrow(self.dim, 0, len)?);
+            }
+        }
+        Ok(())
+    }
+
     pub fn reset(&mut self) {
         self.k = None;
         self.v = None;
