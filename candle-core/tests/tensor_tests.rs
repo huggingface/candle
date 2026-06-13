@@ -2094,3 +2094,30 @@ fn allocates_twice_when_transferring_to_same_device() -> Result<()> {
     assert_ne!(id1, id2);
     Ok(())
 }
+
+#[test]
+fn from_slice_validates_shape_element_count() -> Result<()> {
+    // from_slice / from_vec must reject a declared shape whose element count
+    // does not match the data length, instead of building a tensor that lies
+    // about its size and reads past its storage later (candle#3534).
+    assert!(Tensor::from_slice(&[0f32], vec![10usize], &Device::Cpu).is_err());
+    assert!(Tensor::from_slice(&[0f32], vec![1usize << 20], &Device::Cpu).is_err());
+    assert!(Tensor::from_vec(vec![0f32, 1.], vec![3usize], &Device::Cpu).is_err());
+
+    // Matching shapes and one-hole inference still succeed.
+    let t = Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5.], (2, 3), &Device::Cpu)?;
+    assert_eq!(t.dims(), &[2, 3]);
+    let t = Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5.], ((), 3), &Device::Cpu)?;
+    assert_eq!(t.dims(), &[2, 3]);
+    Ok(())
+}
+
+#[test]
+fn from_raw_buffer_validates_shape_element_count() -> Result<()> {
+    // from_raw_buffer routes through from_slice, so the same contract holds.
+    let raw = vec![0u8; 4]; // one f32 worth of bytes
+    assert!(Tensor::from_raw_buffer(&raw, DType::F32, &[1usize << 10], &Device::Cpu).is_err());
+    let ok = Tensor::from_raw_buffer(&raw, DType::F32, &[1], &Device::Cpu)?;
+    assert_eq!(ok.dims(), &[1]);
+    Ok(())
+}
