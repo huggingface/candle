@@ -354,28 +354,43 @@ impl AttentionWeights {
                 ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
             }
         } else {
-            // Standard matmul attention (no flash)
             let (k, v) = self.kv_cache.as_mut().unwrap().append(&k, &v)?;
-
             let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
             let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-            let scale = 1.0 / (self.head_dim as f64).sqrt();
-            let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-            if let Some(m) = attn_mask {
-                let scores_dtype = scores.dtype();
-                let mask = if m.dtype() != scores_dtype {
-                    m.to_dtype(scores_dtype)?
-                } else {
-                    m.clone()
-                };
-                scores = scores.broadcast_add(&mask)?;
-            }
-            let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-            let ctx = probs.matmul(&v)?;
+            let scale = 1.0 / (self.head_dim as f32).sqrt();
+            let q = q.contiguous()?;
+            let attn_mask = normalize_sdpa_mask(attn_mask, &q, &k)?;
+            let ctx = candle_nn::ops::sdpa(
+                &q,
+                &k,
+                &v,
+                attn_mask.as_ref(),
+                attn_mask.is_none() && l > 1,
+                scale,
+                1.0, // no softcapping
+            )?;
+
             let reshaped_ctx = ctx.transpose(1, 2)?.reshape((b, l, self.hidden_size))?;
             self.o_proj.forward(&reshaped_ctx)
         }
+    }
+
+    fn trim_kv_to(&mut self, len: usize) -> Result<()> {
+        if let Some(c) = &mut self.kv_cache {
+            c.trim_kv_to(len)?;
+        }
+        if let Some(c) = &mut self.interleaved_cache {
+            if len == 0 {
+                c.reset();
+            }
+        }
+        if let Some(c) = &mut self.raw_cache {
+            if len == 0 {
+                c.reset();
+            }
+        }
+        Ok(())
     }
 
     fn clear_kv_cache(&mut self) {
@@ -389,6 +404,26 @@ impl AttentionWeights {
             c.reset();
         }
     }
+}
+
+fn normalize_sdpa_mask(
+    attn_mask: Option<&Tensor>,
+    q: &Tensor,
+    k: &Tensor,
+) -> Result<Option<Tensor>> {
+    let Some(mask) = attn_mask else {
+        return Ok(None);
+    };
+    let mask = if mask.dtype() != q.dtype() {
+        mask.to_dtype(q.dtype())?
+    } else {
+        mask.clone()
+    };
+    let (q_b, q_h, q_seq, _) = q.dims4()?;
+    let k_seq = k.dim(2)?;
+    Ok(Some(
+        mask.broadcast_as((q_b, q_h, q_seq, k_seq))?.contiguous()?,
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -441,6 +476,11 @@ impl LayerWeights {
         let h2 = self.ln2.forward(&x)?;
         let h2 = h2.apply(&self.mlp)?;
         x + h2
+    }
+
+    fn trim_kv_to(&mut self, len: usize) -> Result<()> {
+        self.self_attn.trim_kv_to(len)?;
+        Ok(())
     }
 
     fn clear_kv_cache(&mut self) {
@@ -582,9 +622,69 @@ impl ModelWeights {
         self.lm_head.forward(&last_hidden)?.squeeze(1)
     }
 
+    pub fn forward_from_embeddings(
+        &mut self,
+        h: &Tensor,
+        offset: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        let _enter = self.span.enter();
+        let (b, l, _) = h.dims3()?;
+        let mut h = h.clone();
+        let causal_mask = if l == 1 || self.device.is_cpu() {
+            None
+        } else {
+            Some(self.causal_mask(b, l, offset, None)?)
+        };
+        for layer in &mut self.layers {
+            h = layer.forward(&h, causal_mask.as_ref(), offset)?;
+        }
+        let h = self.norm.forward(&h)?;
+        let _enter = self.span_output.enter();
+        let last_hidden = h.narrow(1, l - 1, 1)?;
+        let logits = self.lm_head.forward(&last_hidden)?.squeeze(1)?;
+        Ok((logits, last_hidden.squeeze(1)?))
+    }
+
+    pub fn trim_kv_to(&mut self, len: usize) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.trim_kv_to(len)?;
+        }
+        Ok(())
+    }
+
     pub fn clear_kv_cache(&mut self) {
         for layer in &mut self.layers {
             layer.clear_kv_cache();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_sdpa_mask_matches_query_dtype_and_heads() -> Result<()> {
+        let device = Device::Cpu;
+        let q = Tensor::zeros((1, 4, 3, 2), DType::F32, &device)?;
+        let k = Tensor::zeros((1, 4, 3, 2), DType::F32, &device)?;
+        let mask = Tensor::zeros((1, 1, 3, 3), DType::F16, &device)?;
+
+        let normalized = normalize_sdpa_mask(Some(&mask), &q, &k)?.unwrap();
+
+        assert_eq!(normalized.dims(), &[1, 4, 3, 3]);
+        assert_eq!(normalized.dtype(), DType::F32);
+        assert!(normalized.is_contiguous());
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_sdpa_mask_keeps_none_unmasked() -> Result<()> {
+        let device = Device::Cpu;
+        let q = Tensor::zeros((1, 4, 3, 2), DType::F32, &device)?;
+        let k = Tensor::zeros((1, 4, 3, 2), DType::F32, &device)?;
+
+        assert!(normalize_sdpa_mask(None, &q, &k)?.is_none());
+        Ok(())
     }
 }
