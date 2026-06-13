@@ -354,28 +354,41 @@ impl AttentionWeights {
                 ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
             }
         } else {
-            // Standard matmul attention (no flash)
             let (k, v) = self.kv_cache.as_mut().unwrap().append(&k, &v)?;
-
             let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
             let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-            let scale = 1.0 / (self.head_dim as f64).sqrt();
-            let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-            if let Some(m) = attn_mask {
-                let scores_dtype = scores.dtype();
-                let mask = if m.dtype() != scores_dtype {
-                    m.to_dtype(scores_dtype)?
-                } else {
-                    m.clone()
-                };
-                scores = scores.broadcast_add(&mask)?;
-            }
-            let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-            let ctx = probs.matmul(&v)?;
+            let scale = 1.0 / (self.head_dim as f32).sqrt();
+            let ctx = candle_nn::ops::sdpa(
+                &q.contiguous()?,
+                &k,
+                &v,
+                attn_mask,
+                attn_mask.is_none() && l > 1,
+                scale,
+                0.0, // no softcapping
+            )?;
+
             let reshaped_ctx = ctx.transpose(1, 2)?.reshape((b, l, self.hidden_size))?;
             self.o_proj.forward(&reshaped_ctx)
         }
+    }
+
+    fn trim_kv_to(&mut self, len: usize) -> Result<()> {
+        if let Some(c) = &mut self.kv_cache {
+            c.trim_kv_to(len)?;
+        }
+        if let Some(c) = &mut self.interleaved_cache {
+            if len == 0 {
+                c.reset();
+            }
+        }
+        if let Some(c) = &mut self.raw_cache {
+            if len == 0 {
+                c.reset();
+            }
+        }
+        Ok(())
     }
 
     fn clear_kv_cache(&mut self) {
@@ -441,6 +454,11 @@ impl LayerWeights {
         let h2 = self.ln2.forward(&x)?;
         let h2 = h2.apply(&self.mlp)?;
         x + h2
+    }
+
+    fn trim_kv_to(&mut self, len: usize) -> Result<()> {
+        self.self_attn.trim_kv_to(len)?;
+        Ok(())
     }
 
     fn clear_kv_cache(&mut self) {
@@ -580,6 +598,36 @@ impl ModelWeights {
         let _enter = self.span_output.enter();
         let last_hidden = h.narrow(1, l - 1, 1)?;
         self.lm_head.forward(&last_hidden)?.squeeze(1)
+    }
+
+    pub fn forward_from_embeddings(
+        &mut self,
+        h: &Tensor,
+        offset: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        let _enter = self.span.enter();
+        let (b, l, _) = h.dims3()?;
+        let mut h = h.clone();
+        let causal_mask = if l == 1 || self.device.is_cpu() {
+            None
+        } else {
+            Some(self.causal_mask(b, l, offset, None)?)
+        };
+        for layer in &mut self.layers {
+            h = layer.forward(&h, causal_mask.as_ref(), offset)?;
+        }
+        let h = self.norm.forward(&h)?;
+        let _enter = self.span_output.enter();
+        let last_hidden = h.narrow(1, l - 1, 1)?;
+        let logits = self.lm_head.forward(&last_hidden)?.squeeze(1)?;
+        Ok((logits, last_hidden.squeeze(1)?))
+    }
+
+    pub fn trim_kv_to(&mut self, len: usize) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.trim_kv_to(len)?;
+        }
+        Ok(())
     }
 
     pub fn clear_kv_cache(&mut self) {
