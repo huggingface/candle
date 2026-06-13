@@ -970,3 +970,70 @@ test_device!(
     conv2d_c_eq_h_eq_w_gpu,
     conv2d_c_eq_h_eq_w_metal
 );
+
+// Cross-checks the depthwise fast path against an independent reference: the equivalent
+// block-diagonal dense weight run through the `groups == 1` path. They must agree up to
+// floating-point summation order.
+fn conv1d_depthwise(dev: &Device) -> Result<()> {
+    let (b, c, l, k) = (2usize, 6usize, 13usize, 3usize);
+    let t = Tensor::randn(0f32, 1f32, (b, c, l), dev)?;
+    let w = Tensor::randn(0f32, 1f32, (c, 1, k), dev)?;
+    // Block-diagonal dense weight (c, c, k), zero off the diagonal.
+    let dense = {
+        let eye = Tensor::eye(c, t.dtype(), dev)?.unsqueeze(1)?; // (c, 1, c)
+        let wk = w.reshape((c, k))?.unsqueeze(2)?; // (c, k, 1)
+        wk.broadcast_mul(&eye)?.transpose(1, 2)?.contiguous()? // (c, c, k)
+    };
+    for &padding in &[0usize, 1usize] {
+        let l_out = l + 2 * padding - (k - 1);
+        let fast = t.conv1d(&w, padding, 1, 1, c)?;
+        assert_eq!(fast.dims(), &[b, c, l_out]);
+        let reference = t.conv1d(&dense, padding, 1, 1, 1)?;
+        let diff: f32 = (fast - reference)?
+            .abs()?
+            .flatten_all()?
+            .max(0)?
+            .to_scalar()?;
+        assert!(diff < 1e-4, "depthwise conv1d mismatch: {diff}");
+    }
+    Ok(())
+}
+
+fn conv2d_depthwise(dev: &Device) -> Result<()> {
+    let (b, c, h, w_, k) = (2usize, 5usize, 5usize, 7usize, 3usize);
+    let t = Tensor::randn(0f32, 1f32, (b, c, h, w_), dev)?;
+    let weight = Tensor::randn(0f32, 1f32, (c, 1, k, k), dev)?;
+    // Block-diagonal dense weight (c, c, k, k), zero off the diagonal.
+    let dense = {
+        let eye = Tensor::eye(c, t.dtype(), dev)?.reshape((c, c, 1, 1))?;
+        let wk = weight.reshape((c, 1, k, k))?;
+        wk.broadcast_mul(&eye)?.contiguous()? // (c, c, k, k)
+    };
+    for &padding in &[0usize, 1usize] {
+        let oh = h + 2 * padding - (k - 1);
+        let ow = w_ + 2 * padding - (k - 1);
+        let fast = t.conv2d(&weight, padding, 1, 1, c)?;
+        assert_eq!(fast.dims(), &[b, c, oh, ow]);
+        let reference = t.conv2d(&dense, padding, 1, 1, 1)?;
+        let diff: f32 = (fast - reference)?
+            .abs()?
+            .flatten_all()?
+            .max(0)?
+            .to_scalar()?;
+        assert!(diff < 1e-4, "depthwise conv2d mismatch: {diff}");
+    }
+    Ok(())
+}
+
+test_device!(
+    conv1d_depthwise,
+    conv1d_depthwise_cpu,
+    conv1d_depthwise_gpu,
+    conv1d_depthwise_metal
+);
+test_device!(
+    conv2d_depthwise,
+    conv2d_depthwise_cpu,
+    conv2d_depthwise_gpu,
+    conv2d_depthwise_metal
+);
