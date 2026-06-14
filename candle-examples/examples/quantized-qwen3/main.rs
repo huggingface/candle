@@ -245,68 +245,71 @@ fn main() -> anyhow::Result<()> {
 
     let start_prompt_processing = std::time::Instant::now();
 
-    let mut next_token = if !args.split_prompt {
-        let input = Tensor::new(tokens, &device)?.unsqueeze(0)?;
-        let logits = model.forward(&input, 0)?;
-        let logits = logits.squeeze(0)?;
-        logits_processor.sample(&logits)?
-    } else {
-        let mut next_token = 0;
-        for (pos, token) in tokens.iter().enumerate() {
-            let input = Tensor::new(&[*token], &device)?.unsqueeze(0)?;
-            let logits = model.forward(&input, pos)?;
+    let (prompt_dt, sampled, dt) = device.with_context(|| -> anyhow::Result<_> {
+        let mut next_token = if !args.split_prompt {
+            let input = Tensor::new(tokens, &device)?.unsqueeze(0)?;
+            let logits = model.forward(&input, 0)?;
             let logits = logits.squeeze(0)?;
-            next_token = logits_processor.sample(&logits)?
-        }
-        next_token
-    };
-
-    let prompt_dt = start_prompt_processing.elapsed();
-
-    all_tokens.push(next_token);
-
-    if let Some(t) = tos.next_token(next_token)? {
-        print!("{t}");
-        std::io::stdout().flush()?;
-    }
-
-    let eos_token = *tos.tokenizer().get_vocab(true).get("<|im_end|>").unwrap();
-
-    let start_post_prompt = std::time::Instant::now();
-
-    let mut sampled = 0;
-    for index in 0..to_sample {
-        let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
-        let logits = model.forward(&input, tokens.len() + index)?;
-        let logits = logits.squeeze(0)?;
-        let logits = if args.repeat_penalty == 1. {
-            logits
+            logits_processor.sample(&logits)?
         } else {
-            let start_at = all_tokens.len().saturating_sub(args.repeat_last_n);
-            candle_transformers::utils::apply_repeat_penalty(
-                &logits,
-                args.repeat_penalty,
-                &all_tokens[start_at..],
-            )?
+            let mut next_token = 0;
+            for (pos, token) in tokens.iter().enumerate() {
+                let input = Tensor::new(&[*token], &device)?.unsqueeze(0)?;
+                let logits = model.forward(&input, pos)?;
+                let logits = logits.squeeze(0)?;
+                next_token = logits_processor.sample(&logits)?
+            }
+            next_token
         };
-        next_token = logits_processor.sample(&logits)?;
+
+        let prompt_dt = start_prompt_processing.elapsed();
+
         all_tokens.push(next_token);
+
         if let Some(t) = tos.next_token(next_token)? {
             print!("{t}");
             std::io::stdout().flush()?;
         }
-        sampled += 1;
-        if next_token == eos_token {
-            break;
-        };
-    }
+
+        let eos_token = *tos.tokenizer().get_vocab(true).get("<|im_end|>").unwrap();
+
+        let start_post_prompt = std::time::Instant::now();
+
+        let mut sampled = 0;
+        for index in 0..to_sample {
+            let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
+            let logits = model.forward(&input, tokens.len() + index)?;
+            let logits = logits.squeeze(0)?;
+            let logits = if args.repeat_penalty == 1. {
+                logits
+            } else {
+                let start_at = all_tokens.len().saturating_sub(args.repeat_last_n);
+                candle_transformers::utils::apply_repeat_penalty(
+                    &logits,
+                    args.repeat_penalty,
+                    &all_tokens[start_at..],
+                )?
+            };
+            next_token = logits_processor.sample(&logits)?;
+            all_tokens.push(next_token);
+            if let Some(t) = tos.next_token(next_token)? {
+                print!("{t}");
+                std::io::stdout().flush()?;
+            }
+            sampled += 1;
+            if next_token == eos_token {
+                break;
+            };
+        }
+
+        Ok((prompt_dt, sampled, start_post_prompt.elapsed()))
+    })?;
 
     if let Some(rest) = tos.decode_rest().map_err(candle::Error::msg)? {
         print!("{rest}");
     }
 
     std::io::stdout().flush()?;
-    let dt = start_post_prompt.elapsed();
     println!(
         "\n\n{:4} prompt tokens processed: {:.2} token/s",
         tokens.len(),

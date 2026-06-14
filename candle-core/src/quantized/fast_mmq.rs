@@ -393,7 +393,7 @@ pub fn try_fwd(
         Ok(Some((out_storage, out_shape.into())))
     } else {
         // Cast f32 output back to input dtype
-        let out_layout = crate::Layout::contiguous(&Shape::from(out_shape.clone()));
+        let out_layout = crate::Layout::contiguous(Shape::from(out_shape.clone()));
         let cast_storage = out_storage.to_dtype(&out_layout, input_dtype)?;
         Ok(Some((cast_storage, out_shape.into())))
     }

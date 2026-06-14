@@ -1,4 +1,5 @@
 //! Tensor Layouts including contiguous or sparse strides
+
 use crate::{Error, Result, Shape};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -54,6 +55,46 @@ impl Layout {
         self.start_offset
     }
 
+    /// Returns outer stride along `dim` if valid.
+    ///
+    /// Two conditions must hold:
+    ///  1. Inner dims `[dim..]` has standard contiguous strides.
+    ///  2. Outer dims `[..dim]` are contiguous among themselves, i.e.
+    ///     `stride[k] == dims[k+1] * stride[k+1]` for `k` in `0..dim-1`.
+    ///
+    /// When the tensor is fully contiguous this returns `Some(dims[dim..].product())`.
+    pub(crate) fn outer_stride_for_dim(&self, dim: usize) -> Option<usize> {
+        let dims = self.dims();
+        let strides = self.stride();
+
+        // 1. Inner `dims[dim..]` must have contiguous strides.
+        let mut expected = 1usize;
+        for i in (dim..dims.len()).rev() {
+            if strides[i] != expected {
+                return None;
+            }
+            expected *= dims[i];
+        }
+
+        if dim == 0 {
+            // No outer dims.
+            // `expected = dims[dim..].product()`
+            return Some(expected);
+        }
+
+        // 2. Outer `dims[0..dim]` must be internally contiguous.
+        let outer_stride = strides[dim - 1];
+        let mut expected_outer = outer_stride;
+        for k in (0..dim - 1).rev() {
+            expected_outer *= dims[k + 1];
+            if strides[k] != expected_outer {
+                return None;
+            }
+        }
+
+        Some(outer_stride)
+    }
+
     /// Returns the appropriate start and stop offset if the data is stored in a C
     /// contiguous (aka row major) way.
     pub fn contiguous_offsets(&self) -> Option<(usize, usize)> {
@@ -75,6 +116,20 @@ impl Layout {
     /// Returns true if the data is stored in a Fortran contiguous (aka column major) way.
     pub fn is_fortran_contiguous(&self) -> bool {
         self.shape.is_fortran_contiguous(&self.stride)
+    }
+
+    pub fn is_scalar(&self) -> bool {
+        let dims = self.dims();
+        dims.is_empty() || dims.iter().all(|d| *d == 1)
+    }
+
+    /// Returns true if the data is actually a scalar during broadcast
+    pub fn is_scalar_broadcast(&self) -> bool {
+        self.stride().iter().all(|s| *s == 0)
+    }
+
+    pub fn is_scalar_like(&self) -> bool {
+        self.is_scalar() || self.is_scalar_broadcast()
     }
 
     pub fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self> {
@@ -192,9 +247,14 @@ impl Layout {
     }
 
     pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
-        let mut block_len = 1;
-        let mut contiguous_dims = 0; // These are counted from the right.
+        let mut block_len = 1usize;
+        let mut contiguous_dims = 0usize; // Counted from the right.
         for (&stride, &dim) in self.stride().iter().zip(self.dims().iter()).rev() {
+            // Size-1 dimensions are trivially contiguous regardless of their stride.
+            if dim == 1 {
+                contiguous_dims += 1;
+                continue;
+            }
             if stride != block_len {
                 break;
             }
@@ -202,77 +262,28 @@ impl Layout {
             contiguous_dims += 1;
         }
         let index_dims = self.dims().len() - contiguous_dims;
-        if index_dims == 0 {
-            crate::StridedBlocks::SingleBlock {
+        match index_dims {
+            0 => crate::StridedBlocks::SingleBlock {
                 start_offset: self.start_offset,
                 len: block_len,
-            }
-        } else {
-            let block_start_index = crate::StridedIndex::new(
-                &self.dims()[..index_dims],
-                &self.stride[..index_dims],
-                self.start_offset,
-            );
-            crate::StridedBlocks::MultipleBlocks {
-                block_start_index,
+            },
+            1 => crate::StridedBlocks::UniformBlocks {
+                start_offset: self.start_offset,
                 block_len,
+                count: self.dims()[0],
+                src_stride: self.stride[0],
+            },
+            _ => {
+                let block_start_index = crate::StridedIndex::new(
+                    &self.dims()[..index_dims],
+                    &self.stride[..index_dims],
+                    self.start_offset,
+                );
+                crate::StridedBlocks::MultipleBlocks {
+                    block_start_index,
+                    block_len,
+                }
             }
         }
     }
-
-    // Returns the contiguous offsets with broadcast if applicable.
-    pub(crate) fn offsets_b(&self) -> Option<ContiguousOffsetsWithBroadcast> {
-        let mut left_broadcast = 1;
-        let mut right_broadcast = 1;
-        let strides = self.stride();
-        let dims = self.dims();
-        let mut start_cont = 0;
-        let mut end_cont = dims.len();
-        for (&s, &d) in strides.iter().zip(dims.iter()) {
-            if s != 0 {
-                break;
-            }
-            start_cont += 1;
-            left_broadcast *= d;
-        }
-        if start_cont == dims.len() {
-            return Some(ContiguousOffsetsWithBroadcast {
-                start: self.start_offset,
-                len: 1,
-                left_broadcast,
-                right_broadcast: 1,
-            });
-        }
-        for (&s, &d) in strides.iter().zip(dims.iter()).rev() {
-            if s != 0 {
-                break;
-            }
-            end_cont -= 1;
-            right_broadcast *= d;
-        }
-        // Check that the inner dims are contiguous
-        let strides = &strides[start_cont..end_cont];
-        let dims = &dims[start_cont..end_cont];
-        let mut len = 1;
-        for (&stride, &dim) in strides.iter().zip(dims.iter()).rev() {
-            if stride != len {
-                return None;
-            }
-            len *= dim;
-        }
-        Some(ContiguousOffsetsWithBroadcast {
-            start: self.start_offset,
-            len,
-            left_broadcast,
-            right_broadcast,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContiguousOffsetsWithBroadcast {
-    pub start: usize,
-    pub len: usize,
-    pub left_broadcast: usize,
-    pub right_broadcast: usize,
 }

@@ -4,6 +4,7 @@ pub const CAST: &str = include_str!("metal_src/cast.metal");
 pub const CONV: &str = include_str!("metal_src/conv.metal");
 pub const FILL: &str = include_str!("metal_src/fill.metal");
 pub const INDEXING: &str = include_str!("metal_src/indexing.metal");
+pub const GEMV: &str = include_str!("metal_src/gemv.metal");
 pub const MLX_GEMM: &str = include_str!("metal_src/mlx_gemm.metal");
 pub const MLX_SORT: &str = include_str!("metal_src/mlx_sort.metal");
 pub const QUANTIZED: &str = include_str!("metal_src/quantized.metal");
@@ -22,6 +23,7 @@ pub enum Source {
     Conv,
     Fill,
     Gemm,
+    Gemv,
     Indexing,
     MlxSort,
     Quantized,
