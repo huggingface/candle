@@ -28,7 +28,7 @@ trait Attr {
 
 trait AttrOwned: Sized {
     const TYPE: AttributeType;
-    fn get(attr: &onnx::AttributeProto) -> Result<Self>;
+    fn get(attr: &onnx::AttributeProto, device: &Device) -> Result<Self>;
 }
 
 impl Attr for i64 {
@@ -70,7 +70,7 @@ impl Attr for GraphProto {
 
 impl AttrOwned for Vec<String> {
     const TYPE: AttributeType = AttributeType::Strings;
-    fn get(attr: &onnx::AttributeProto) -> Result<Self> {
+    fn get(attr: &onnx::AttributeProto, _device: &Device) -> Result<Self> {
         let mut ret = vec![];
         for bytes in attr.strings.iter() {
             let s = String::from_utf8(bytes.clone()).map_err(candle::Error::wrap)?;
@@ -82,7 +82,7 @@ impl AttrOwned for Vec<String> {
 
 impl AttrOwned for Tensor {
     const TYPE: AttributeType = AttributeType::Tensor;
-    fn get(attr: &onnx::AttributeProto) -> Result<Self> {
+    fn get(attr: &onnx::AttributeProto, device: &Device) -> Result<Self> {
         let tensor_proto = match &attr.t {
             Some(value) => value,
             None => bail!(
@@ -120,7 +120,7 @@ impl AttrOwned for Tensor {
             dims.push(*dim as usize)
         }
 
-        Tensor::from_raw_buffer(&tensor_proto.raw_data, dtype, &dims, &Device::Cpu)
+        Tensor::from_raw_buffer(&tensor_proto.raw_data, dtype, &dims, device)
     }
 }
 
@@ -171,7 +171,11 @@ fn get_attr_opt<'a, T: Attr + ?Sized>(
     }
 }
 
-fn get_attr_opt_owned<T: AttrOwned>(node: &onnx::NodeProto, name: &str) -> Result<Option<T>> {
+fn get_attr_opt_owned<T: AttrOwned>(
+    node: &onnx::NodeProto,
+    name: &str,
+    device: &Device,
+) -> Result<Option<T>> {
     match node.attribute.iter().find(|attr| attr.name == name) {
         None => Ok(None),
         Some(attr) => {
@@ -183,13 +187,13 @@ fn get_attr_opt_owned<T: AttrOwned>(node: &onnx::NodeProto, name: &str) -> Resul
                     node.name
                 )
             }
-            let val = T::get(attr)?;
+            let val = T::get(attr, device)?;
             Ok(Some(val))
         }
     }
 }
 
-pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
+pub fn get_tensor(t: &onnx::TensorProto, name: &str, device: &Device) -> Result<Tensor> {
     let dims: Vec<usize> = t.dims.iter().map(|&x| x as usize).collect();
     match DataType::try_from(t.data_type) {
         Ok(DataType::Int32) => {
@@ -198,27 +202,22 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
                 let data: &[i32] =
                     unsafe { std::slice::from_raw_parts(t.raw_data.as_ptr() as *const i32, len) };
                 let data = data.iter().map(|v| *v as i64).collect::<Vec<_>>();
-                Tensor::from_vec(data, len, &Device::Cpu)
+                Tensor::from_vec(data, len, device)
             } else {
                 let data = t.int32_data.iter().map(|v| *v as i64).collect::<Vec<_>>();
-                Tensor::from_vec(data, t.int32_data.len(), &Device::Cpu)
+                Tensor::from_vec(data, t.int32_data.len(), device)
             }
         }
         Ok(dt) => match dtype(dt) {
             Some(dt) => {
                 if dt == DType::F32 && !t.float_data.is_empty() {
-                    Tensor::from_slice(&t.float_data, dims.as_slice(), &Device::Cpu)
+                    Tensor::from_slice(&t.float_data, dims.as_slice(), device)
                 } else if dt == DType::F64 && !t.double_data.is_empty() {
-                    Tensor::from_slice(&t.double_data, dims.as_slice(), &Device::Cpu)
+                    Tensor::from_slice(&t.double_data, dims.as_slice(), device)
                 } else if dt == DType::I64 && !t.int64_data.is_empty() {
-                    Tensor::from_slice(&t.int64_data, dims.as_slice(), &Device::Cpu)
+                    Tensor::from_slice(&t.int64_data, dims.as_slice(), device)
                 } else {
-                    Tensor::from_raw_buffer(
-                        t.raw_data.as_slice(),
-                        dt,
-                        dims.as_slice(),
-                        &Device::Cpu,
-                    )
+                    Tensor::from_raw_buffer(t.raw_data.as_slice(), dt, dims.as_slice(), device)
                 }
             }
             None => {
@@ -239,20 +238,22 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
 pub fn simple_eval(
     model: &onnx::ModelProto,
     mut inputs: HashMap<String, Value>,
+    device: &Device,
 ) -> Result<HashMap<String, Value>> {
     let graph = match &model.graph {
         None => bail!("no graph defined in proto"),
         Some(graph) => graph,
     };
-    simple_eval_(graph, &mut inputs)
+    simple_eval_(graph, &mut inputs, device)
 }
 
 fn simple_eval_(
     graph: &onnx::GraphProto,
     values: &mut HashMap<String, Value>,
+    device: &Device,
 ) -> Result<HashMap<String, Value>> {
     for t in graph.initializer.iter() {
-        let tensor = get_tensor(t, t.name.as_str())?;
+        let tensor = get_tensor(t, t.name.as_str(), device)?;
         values.insert(t.name.to_string(), tensor);
     }
     for input in graph.input.iter() {
@@ -577,11 +578,8 @@ fn simple_eval_(
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#ConstantOfShape
             "ConstantOfShape" => {
                 let input = get(&node.input[0])?;
-                let value = get_attr_opt_owned::<Tensor>(node, "value")?.unwrap_or(Tensor::zeros(
-                    (),
-                    DType::F32,
-                    &Device::Cpu,
-                )?);
+                let value = get_attr_opt_owned::<Tensor>(node, "value", device)?
+                    .unwrap_or(Tensor::zeros((), DType::F32, device)?);
 
                 let shape_vec: Vec<usize> = input
                     .to_vec1::<i64>()?
@@ -760,7 +758,7 @@ fn simple_eval_(
                             to_vec0_flexible::<$t>(start)?,
                             to_vec0_flexible::<$t>(limit)?,
                             to_vec0_flexible::<$t>(delta)?,
-                            &Device::Cpu,
+                            start.device(),
                         )?
                     };
                 }
@@ -1085,7 +1083,7 @@ fn simple_eval_(
                 let output = match value.r#type() {
                     AttributeType::Tensor => {
                         let t = value.t.as_ref().unwrap();
-                        get_tensor(t, &node.name)?
+                        get_tensor(t, &node.name, device)?
                     }
                     rtype => bail!("unsupported 'value' type {rtype:?} for {}", node.name),
                 };
@@ -1161,7 +1159,7 @@ fn simple_eval_(
                         node.output.len()
                     );
                 }
-                let branch_out = simple_eval_(sub_graph, values)?;
+                let branch_out = simple_eval_(sub_graph, values, device)?;
                 for (i, out) in node.output.iter().enumerate() {
                     values.insert(
                         out.clone(),
@@ -1695,11 +1693,11 @@ fn simple_eval_(
                 let output = if random_type == "RandomUniform" {
                     let low: f32 = get_attr_opt(node, "low")?.copied().unwrap_or(0.0);
                     let high: f32 = get_attr_opt(node, "high")?.copied().unwrap_or(1.0);
-                    Tensor::rand(low, high, shape, &Device::Cpu)?.to_dtype(dtype)?
+                    Tensor::rand(low, high, shape, device)?.to_dtype(dtype)?
                 } else {
                     let mean: f32 = get_attr_opt(node, "mean")?.copied().unwrap_or(0.0);
                     let scale: f32 = get_attr_opt(node, "scale")?.copied().unwrap_or(1.0);
-                    Tensor::randn(mean, scale, shape, &Device::Cpu)?.to_dtype(dtype)?
+                    Tensor::randn(mean, scale, shape, device)?.to_dtype(dtype)?
                 };
                 values.insert(node.output[0].clone(), output);
             }
@@ -1793,8 +1791,8 @@ fn simple_eval_(
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0);
                 let beta = get_attr_opt::<f32>(node, "beta")?.copied().unwrap_or(1.0);
 
-                let alpha = Tensor::full(alpha, a.shape(), &Device::Cpu)?;
-                let beta = Tensor::full(beta, c.shape(), &Device::Cpu)?;
+                let alpha = Tensor::full(alpha, a.shape(), a.device())?;
+                let beta = Tensor::full(beta, c.shape(), c.device())?;
 
                 let trans_a = get_attr_opt::<i64>(node, "transA")?.copied().unwrap_or(0);
                 let trans_b = get_attr_opt::<i64>(node, "transB")?.copied().unwrap_or(0);
@@ -1824,7 +1822,7 @@ fn simple_eval_(
                     "Tanh".to_string(),
                     "Tanh".to_string(),
                 ];
-                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations")?
+                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations", device)?
                     .unwrap_or(activations_default.clone());
                 if activations != activations_default {
                     bail!("LSTM currently only supports default activations ({activations_default:?})");
@@ -2031,7 +2029,7 @@ fn simple_eval_(
             "RNN" => {
                 // activation_alpha and activation_beta don't apply to (Tanh, Tanh) so ignoring them is okay
                 let activations_default = vec!["Tanh".to_string(), "Tanh".to_string()];
-                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations")?
+                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations", device)?
                     .unwrap_or(activations_default.clone());
                 let clip = get_attr_opt::<f32>(node, "clip")?.copied();
                 if clip.is_some() {
