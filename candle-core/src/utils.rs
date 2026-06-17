@@ -1,19 +1,252 @@
 //! Useful functions for checking features.
+use std::cell::UnsafeCell;
+use std::hint::spin_loop;
+use std::ops::Div;
 use std::str::FromStr;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
-pub fn get_num_threads() -> usize {
-    // Respond to the same environment variable as rayon.
-    match std::env::var("RAYON_NUM_THREADS")
-        .ok()
-        .and_then(|s| usize::from_str(&s).ok())
-    {
-        Some(x) if x > 0 => x,
-        _ => default_num_threads(),
+/// Per-worker control on its own 64-byte cache line to prevent false sharing.
+#[repr(C, align(64))]
+struct Slot {
+    /// `Release`-stored by parent to signal work. `Acquire-loaded by worker.
+    go: AtomicUsize,
+    /// `Release`-stored by worker (and its subtree) when done. `Acquire`-loaded by parent.
+    done: AtomicUsize,
+}
+
+/// Closure pointer written by main before the `Release` on each root slot's `go`.
+struct WorkDesc {
+    trampoline: unsafe fn(*const (), usize),
+    data: *const (),
+}
+
+struct BarrierPoolInner {
+    slots: Box<[Slot]>,
+    work: UnsafeCell<WorkDesc>,
+    stop: AtomicBool,
+}
+
+unsafe impl Sync for BarrierPoolInner {}
+unsafe impl Send for BarrierPoolInner {}
+
+/// Two-level tree barrier pool.
+///
+/// Main signals one leader per CPU cluster (O(n_clusters) stores, not O(n_workers)).
+/// Leaders fan work out to intra-cluster followers while main executes its own
+/// slice. On-completion reduction mirrors the fan-out: followers -> leader -> main.
+/// Main drains only n_cluster slots instead of n_worker slots on completion.
+pub struct BarrierPool {
+    inner: Box<BarrierPoolInner>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+    /// Workers that main signals directly
+    root_workers: Vec<usize>,
+    /// Serializes concurrent callers
+    call_lock: Mutex<()>,
+}
+
+unsafe impl Sync for BarrierPool {}
+unsafe impl Send for BarrierPool {}
+
+unsafe fn call_trampoline<F: Fn(usize)>(data: *const (), tid: usize) {
+    (*(data as *const F))(tid);
+}
+
+/// Build the two-level fan-out tree. First worker in each cluster is leader.
+fn compute_tree(n_workers: usize, cluster_size: usize) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let mut children = vec![vec![]; n_workers];
+    if n_workers == 0 || cluster_size <= 1 || cluster_size == usize::MAX {
+        // Flat: every worker is a root.
+        return (children, (0..n_workers).collect());
+    }
+
+    let mut roots = Vec::new();
+
+    // First cluster: main + (cluster_size - 1) workers.
+    let c0 = (cluster_size - 1).min(n_workers);
+    roots.push(0);
+    for f in 1..c0 {
+        children[0].push(f);
+    }
+
+    // Remaining clusters: cluster_size workers each.
+    let mut next = c0;
+    while next < n_workers {
+        let leader = next;
+        roots.push(leader);
+        let end = n_workers.min(next + cluster_size);
+        for f in (leader + 1)..end {
+            children[leader].push(f);
+        }
+        next = end;
+    }
+
+    (children, roots)
+}
+
+fn get_cluster_size() -> usize {
+    // Later we should use `sysctlbyname("hw.perflevel0.cpusperl2")` and similar for other systems to get precise cluster size.
+    // For now we use these hardcoded numbers.
+    // Using `usize::MAX` simply means that the tree is flat. Every core is it's own leader.
+    #[cfg(target_os = "macos")]
+    return 6;
+    #[cfg(not(target_os = "macos"))]
+    usize::MAX
+}
+
+impl BarrierPool {
+    fn new(n_workers: usize) -> Self {
+        let inner = Box::new(BarrierPoolInner {
+            slots: (0..n_workers)
+                .map(|_| Slot {
+                    go: AtomicUsize::new(0),
+                    done: AtomicUsize::new(0),
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            work: UnsafeCell::new(WorkDesc {
+                trampoline: |_, _| {},
+                data: std::ptr::null(),
+            }),
+            stop: AtomicBool::new(false),
+        });
+
+        let inner_ptr = &*inner as *const BarrierPoolInner as usize;
+        let cluster_size = get_cluster_size();
+        let (children, root_workers) = compute_tree(n_workers, cluster_size);
+
+        let threads = (0..n_workers)
+            .map(|tid| {
+                let children = children[tid].clone();
+                std::thread::Builder::new()
+                    .name(format!("candle-bp-{tid}"))
+                    .spawn(move || {
+                        set_thread_affinity();
+                        let inner = unsafe { &*(inner_ptr as *const BarrierPoolInner) };
+                        let slot = &inner.slots[tid];
+                        let mut gen = 0usize;
+
+                        loop {
+                            // Continuously check `slot.go` for next work item.
+                            loop {
+                                let g = slot.go.load(Ordering::Acquire);
+                                if g != gen {
+                                    // There is new work, so we move out ot the loop
+                                    gen = g;
+                                    break;
+                                }
+                                // Otherwise we spin for a bit
+                                spin_loop();
+                            }
+                            if inner.stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+
+                            // Fan work out to children
+                            for &child in &children {
+                                inner.slots[child].go.store(gen, Ordering::Release);
+                            }
+
+                            // Execute own work concurrently with children
+                            let work = unsafe { &*inner.work.get() };
+                            unsafe { (work.trampoline)(work.data, tid) };
+
+                            // Reduce: wait for all children before signalling parent.
+                            for &child in &children {
+                                while inner.slots[child].done.load(Ordering::Acquire) != gen {
+                                    spin_loop();
+                                }
+                            }
+
+                            slot.done.store(gen, Ordering::Release);
+                        }
+                    })
+                    .expect("failed to spawn candle barrier pool worker")
+            })
+            .collect();
+
+        BarrierPool {
+            inner,
+            threads,
+            root_workers,
+            call_lock: Mutex::new(()),
+        }
+    }
+
+    #[inline]
+    pub fn n_workers(&self) -> usize {
+        self.threads.len()
+    }
+
+    pub fn execute<F: Fn(usize) + Sync>(&self, f: F) {
+        let n = self.threads.len();
+        if n == 0 {
+            f(0);
+            return;
+        }
+
+        let _guard = self.call_lock.lock().unwrap();
+
+        unsafe {
+            let work = &mut *self.inner.work.get();
+            work.trampoline = call_trampoline::<F>;
+            work.data = &f as *const F as *const ();
+        }
+
+        // root_workers[0] == 0 always (compute_tree invariant); slot[0].go
+        // is set only by main so its value equals the last completed generation.
+        let new_gen = self.inner.slots[0]
+            .go
+            .load(Ordering::Relaxed)
+            .wrapping_add(1);
+        for &root in &self.root_workers {
+            self.inner.slots[root].go.store(new_gen, Ordering::Release);
+        }
+
+        f(n);
+
+        for &root in &self.root_workers {
+            while self.inner.slots[root].done.load(Ordering::Acquire) != new_gen {
+                spin_loop();
+            }
+        }
     }
 }
 
+impl Drop for BarrierPool {
+    fn drop(&mut self) {
+        if self.threads.is_empty() {
+            return;
+        }
+        self.inner.stop.store(true, Ordering::Release);
+        let new_gen = self.inner.slots[0]
+            .go
+            .load(Ordering::Relaxed)
+            .wrapping_add(1);
+        // Signal ALL slots directly
+        for slot in self.inner.slots.iter() {
+            slot.go.store(new_gen, Ordering::Release);
+        }
+        for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
+    }
+}
+
+static BARRIER_POOL: OnceLock<BarrierPool> = OnceLock::new();
+
+/// Persistent barrier pool
+pub fn barrier_pool() -> &'static BarrierPool {
+    BARRIER_POOL.get_or_init(|| BarrierPool::new(get_num_threads().saturating_sub(1)))
+}
+
+pub fn with_threadpool<F: FnOnce() -> R + Send, R: Send>(f: F) -> R {
+    candle_pool().install(f)
+}
+
 fn default_num_threads() -> usize {
+    // NOTE: When the CPU backend is optimized further so as not to trash shared
+    // caches etc the amount of threads can be increased.
     let physical = {
         #[cfg(target_os = "macos")]
         {
@@ -30,8 +263,33 @@ fn default_num_threads() -> usize {
     } else {
         // NOTE: When the CPU backend is optimized further so as not to trash shared
         // caches etc the amount of threads can be increased.
-        physical.min(physical / 2)
+        physical.div(2)
     }
+}
+
+fn rayon_num_threads() -> Option<usize> {
+    std::env::var("RAYON_NUM_THREADS")
+        .ok()
+        .and_then(|s| usize::from_str(&s).ok())
+        .filter(|nt| nt > &0)
+}
+
+fn candle_num_threads() -> Option<usize> {
+    std::env::var("CANDLE_NUM_THREADS")
+        .ok()
+        .and_then(|s| usize::from_str(&s).ok())
+        .filter(|nt| nt > &0)
+}
+
+pub fn get_num_threads() -> usize {
+    // Respond to the same environment variable as rayon.
+    if let Some(cnt) = candle_num_threads() {
+        return cnt;
+    }
+    if let Some(rnt) = rayon_num_threads() {
+        return rnt;
+    }
+    default_num_threads()
 }
 
 /// On Apple Silicon: P-core count via `hw.perflevel0.logicalcpu`.
@@ -78,10 +336,6 @@ fn set_thread_affinity() {
 #[inline(always)]
 fn set_thread_affinity() {
     // On non‑macOS platforms we currently leave thread affinity untouched.
-}
-
-pub(crate) fn with_threadpool<F: FnOnce() -> R + Send, R: Send>(f: F) -> R {
-    candle_pool().install(f)
 }
 
 pub fn has_accelerate() -> bool {
