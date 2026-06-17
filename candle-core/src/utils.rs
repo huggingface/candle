@@ -41,8 +41,8 @@ pub struct BarrierPool {
     threads: Vec<std::thread::JoinHandle<()>>,
     /// Workers that main signals directly
     root_workers: Vec<usize>,
-    /// Serializes concurrent callers
-    call_lock: Mutex<()>,
+    /// Serializes concurrent callers. Stores the current generation.
+    call_lock: Mutex<usize>,
 }
 
 unsafe impl Sync for BarrierPool {}
@@ -135,6 +135,10 @@ impl BarrierPool {
                                     gen = g;
                                     break;
                                 }
+                                // Early exit if stop flag is true
+                                if inner.stop.load(Ordering::Relaxed) {
+                                    return;
+                                }
                                 // Otherwise we spin for a bit
                                 spin_loop();
                             }
@@ -169,7 +173,7 @@ impl BarrierPool {
             inner,
             threads,
             root_workers,
-            call_lock: Mutex::new(()),
+            call_lock: Mutex::new(0),
         }
     }
 
@@ -185,7 +189,9 @@ impl BarrierPool {
             return;
         }
 
-        let _guard = self.call_lock.lock().unwrap();
+        let mut guard = self.call_lock.lock().unwrap();
+        let new_gen = guard.wrapping_add(1);
+        *guard = new_gen;
 
         unsafe {
             let work = &mut *self.inner.work.get();
@@ -193,16 +199,11 @@ impl BarrierPool {
             work.data = &f as *const F as *const ();
         }
 
-        // root_workers[0] == 0 always (compute_tree invariant); slot[0].go
-        // is set only by main so its value equals the last completed generation.
-        let new_gen = self.inner.slots[0]
-            .go
-            .load(Ordering::Relaxed)
-            .wrapping_add(1);
         for &root in &self.root_workers {
             self.inner.slots[root].go.store(new_gen, Ordering::Release);
         }
 
+        // Main thread participates as worker n (workers are 0..n-1).
         f(n);
 
         for &root in &self.root_workers {
@@ -218,11 +219,8 @@ impl Drop for BarrierPool {
         if self.threads.is_empty() {
             return;
         }
-        self.inner.stop.store(true, Ordering::Release);
-        let new_gen = self.inner.slots[0]
-            .go
-            .load(Ordering::Relaxed)
-            .wrapping_add(1);
+        self.inner.stop.store(true, Ordering::Relaxed);
+        let new_gen = self.call_lock.lock().unwrap().wrapping_add(1);
         // Signal ALL slots directly
         for slot in self.inner.slots.iter() {
             slot.go.store(new_gen, Ordering::Release);
