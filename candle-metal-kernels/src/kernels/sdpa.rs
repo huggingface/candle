@@ -109,6 +109,12 @@ pub fn call_sdpa_full(
     let align_k = (kl % bk) == 0;
     let has_mask = mask_buffer.is_some();
 
+    // When an explicit additive mask is supplied it already encodes causality.
+    // Also enabling the in-kernel `do_causal` path double-applies causality and,
+    // at periodic sequence lengths, leaves a query row fully masked -> softmax
+    // normalizer sum(exp) == 0 -> final divide computes 0/0 = NaN logits.
+    let do_causal = do_causal && !has_mask;
+
     let itype_repr = match itype {
         SdpaDType::BF16 => "bfloat16",
         SdpaDType::F16 => "float16",
