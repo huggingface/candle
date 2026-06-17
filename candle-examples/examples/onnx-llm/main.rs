@@ -170,7 +170,7 @@ pub fn main() -> Result<()> {
             }
         }
 
-        let outputs = candle_onnx::simple_eval(&model, inputs)?;
+        let outputs = candle_onnx::simple_eval(&model, inputs, &device)?;
 
         let logits = outputs.get("logits").unwrap();
 
