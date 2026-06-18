@@ -236,10 +236,12 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str, device: &Device) -> Result<
 ///
 /// A node's device is resolved as:
 /// 1. the device of the longest matching node-name prefix rule, if any;
-/// 2. otherwise the device of the node's first already-computed input, so a
-///    stage's device flows along the graph and only the first node of each stage
-///    needs an explicit rule;
-/// 3. otherwise the fallback device.
+/// 2. otherwise, when at least one prefix rule is configured, the device of the
+///    node's first already-computed input, so a stage's device flows along the
+///    graph and only the first node of each stage needs an explicit rule;
+/// 3. otherwise the fallback device. In particular, [`Placement::uniform`] has no
+///    rules, so every node unconditionally runs on the fallback device, matching
+///    the documented behavior of [`simple_eval`].
 ///
 /// Initializers (weights/constants) are materialized lazily, directly on the
 /// device of the node that first consumes them, so a model that does not fit on
@@ -292,6 +294,13 @@ impl Placement {
         &self.fallback
     }
 
+    /// Whether at least one prefix rule is configured. [`Placement::uniform`]
+    /// has none, in which case every node must use the fallback device
+    /// unconditionally rather than inheriting an input's device.
+    fn has_rules(&self) -> bool {
+        !self.rules.is_empty()
+    }
+
     /// The device explicitly assigned to `node_name` by the prefix rules, if any.
     fn explicit_device(&self, node_name: &str) -> Option<&Device> {
         self.rules
@@ -326,22 +335,23 @@ pub fn simple_eval_with_placement(
         None => bail!("no graph defined in proto"),
         Some(graph) => graph,
     };
-    simple_eval_(graph, &mut inputs, placement)
+    simple_eval_(graph, &mut inputs, placement, &HashMap::new())
 }
 
-fn simple_eval_(
-    graph: &onnx::GraphProto,
+fn simple_eval_<'a>(
+    graph: &'a onnx::GraphProto,
     values: &mut HashMap<String, Value>,
     placement: &Placement,
+    parent_initializers: &HashMap<&'a str, &'a onnx::TensorProto>,
 ) -> Result<HashMap<String, Value>> {
     // Initializers (weights/constants) are materialized lazily, directly on the
     // device of the node that first consumes them (see the node loop below). This
     // lets a model that does not fit on a single device be split across several.
-    let initializers: HashMap<&str, &onnx::TensorProto> = graph
-        .initializer
-        .iter()
-        .map(|t| (t.name.as_str(), t))
-        .collect();
+    // Subgraphs (e.g. `If` branches) inherit their enclosing graph's initializers,
+    // matching ONNX's lexical scoping rules for control-flow ops; a name declared
+    // locally shadows one of the same name from an outer scope.
+    let mut initializers: HashMap<&'a str, &'a onnx::TensorProto> = parent_initializers.clone();
+    initializers.extend(graph.initializer.iter().map(|t| (t.name.as_str(), t)));
 
     for input in graph.input.iter() {
         let input_type = match &input.r#type {
@@ -421,12 +431,13 @@ fn simple_eval_(
         // previously-computed inputs across stage boundaries when needed.
         let node_device = match placement.explicit_device(&node.name) {
             Some(d) => d.clone(),
-            None => node
+            None if placement.has_rules() => node
                 .input
                 .iter()
                 .filter(|s| !s.is_empty())
                 .find_map(|name| values.get(name).map(|t| t.device().clone()))
                 .unwrap_or_else(|| placement.fallback().clone()),
+            None => placement.fallback().clone(),
         };
         for name in node.input.iter().filter(|s| !s.is_empty()) {
             let name = name.as_str();
@@ -1282,7 +1293,7 @@ fn simple_eval_(
                         node.output.len()
                     );
                 }
-                let branch_out = simple_eval_(sub_graph, values, placement)?;
+                let branch_out = simple_eval_(sub_graph, values, placement, &initializers)?;
                 for (i, out) in node.output.iter().enumerate() {
                     values.insert(
                         out.clone(),

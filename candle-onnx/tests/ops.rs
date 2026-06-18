@@ -7681,3 +7681,132 @@ fn simple_eval_placement_two_cuda_gpus() -> Result<()> {
     assert_eq!(z.to_vec1::<f32>()?, vec![22f32, 42., 62.]);
     Ok(())
 }
+
+// Regression test: under `Placement::uniform` (no prefix rules, used by plain
+// `simple_eval`), a node must always run on the fallback device, even when one
+// of its inputs is already present on a different device (e.g. a caller-supplied
+// input tensor). Inheriting the input's device in that case would silently
+// defeat the device argument that `simple_eval` is documented to honor.
+#[cfg(feature = "cuda")]
+#[test]
+fn simple_eval_placement_uniform_overrides_input_device() -> Result<()> {
+    let cuda = Device::new_cuda(0)?;
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Identity".to_string(),
+            name: "identity".to_string(),
+            input: vec![INPUT_X.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    // `x` lives on the CPU, but the requested fallback device is cuda:0.
+    let mut inputs = HashMap::new();
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::new(&[1f32, 2., 3.], &Device::Cpu)?,
+    );
+    let eval = simple_eval(&graph, inputs, &cuda)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(&cuda));
+    assert_eq!(z.to_vec1::<f32>()?, vec![1f32, 2., 3.]);
+    Ok(())
+}
+
+// Regression test: an `If` branch must be able to reference an initializer
+// declared on an enclosing (parent) graph even when no node of the parent graph
+// consumes that initializer directly. Since initializers are materialized
+// lazily on first use, the parent's initializer map must be inherited by the
+// subgraph rather than rebuilt from scratch, mirroring ONNX's lexical scoping
+// rules for control-flow subgraphs.
+#[test]
+fn placement_if_subgraph_uses_parent_initializer() -> Result<()> {
+    let then_branch = GraphProto {
+        node: vec![NodeProto {
+            op_type: "Identity".to_string(),
+            input: vec!["w".to_string()],
+            output: vec!["then_out".to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: "then_out".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let else_branch = GraphProto {
+        node: vec![NodeProto {
+            op_type: "Constant".to_string(),
+            output: vec!["else_out".to_string()],
+            attribute: vec![AttributeProto {
+                name: "value".to_string(),
+                r#type: AttributeType::Tensor.into(),
+                t: Some(TensorProto {
+                    dims: vec![3],
+                    float_data: vec![0.0, 0.0, 0.0],
+                    data_type: DataType::Float.into(),
+                    ..TensorProto::default()
+                }),
+                ..AttributeProto::default()
+            }],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: "else_out".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    // `w` is declared on the parent graph but is only ever read from inside the
+    // `then_branch` subgraph: no parent-level node consumes it directly, so it
+    // is never eagerly materialized into `values` before the `If` node runs.
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "If".to_string(),
+            input: vec!["cond".to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            attribute: vec![
+                AttributeProto {
+                    name: "then_branch".to_string(),
+                    r#type: AttributeType::Graph.into(),
+                    g: Some(then_branch),
+                    ..AttributeProto::default()
+                },
+                AttributeProto {
+                    name: "else_branch".to_string(),
+                    r#type: AttributeType::Graph.into(),
+                    g: Some(else_branch),
+                    ..AttributeProto::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        initializer: vec![TensorProto {
+            data_type: DataType::Float.into(),
+            dims: vec![3],
+            float_data: vec![1.0, 2.0, 3.0],
+            name: "w".to_string(),
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert("cond".to_string(), Tensor::full(1u8, (1,), &Device::Cpu)?);
+    let eval = simple_eval(&graph, inputs, &Device::Cpu)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.to_vec1::<f32>()?, vec![1f32, 2., 3.]);
+    Ok(())
+}
