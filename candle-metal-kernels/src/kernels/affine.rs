@@ -1,8 +1,9 @@
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{get_tile_size, linear_split};
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
+    Output, Source,
 };
+use crate::{get_tile_size, linear_split};
 
 #[allow(clippy::too_many_arguments)]
 pub fn call_affine(
@@ -22,6 +23,7 @@ pub fn call_affine(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "affine {name} elems={size}");
 
     set_params!(encoder, (size, mul, add, &input, Output::new(output)));
 
@@ -51,6 +53,7 @@ pub fn call_affine_strided(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "affine_strided {name} elems={size}");
 
     set_params!(
         encoder,
@@ -88,6 +91,7 @@ pub fn call_powf(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "powf {name} elems={size}");
 
     set_params!(encoder, (size, mul, &input, Output::new(output)));
 
@@ -116,6 +120,7 @@ pub fn call_powf_strided(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "powf_strided {name} elems={size}");
 
     set_params!(
         encoder,
@@ -152,6 +157,7 @@ pub fn call_elu(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "elu {name} elems={size}");
 
     set_params!(encoder, (size, mul, &input, Output::new(output)));
 
@@ -180,6 +186,7 @@ pub fn call_elu_strided(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "elu_strided {name} elems={size}");
 
     set_params!(
         encoder,
