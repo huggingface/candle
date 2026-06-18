@@ -8,6 +8,25 @@ use std::io::BufRead;
 
 const VERBOSE: bool = false;
 
+// DoS hardening for the `.pth` pickle VM (candle #3617). A crafted pickle can
+// drive the value stack / memo to multi-GiB heap (`N`-floods, or `BINGET`
+// replay of a memoised subtree) or build an arbitrarily deep value whose
+// recursive `Drop` overflows the stack. These bound the VM's cumulative working
+// set and its construction depth, mirroring `GGUF_MAX_VALUE_DEPTH` in
+// `quantized/gguf_file.rs`. Availability-only: `reduce` never invokes callables.
+//
+// These are long-documented input-parsing weakness classes; see the MITRE CWE
+// entries:
+//   CWE-1325 (improperly controlled sequential memory allocation — the value
+//   stack / memo-replay heap amplification): https://cwe.mitre.org/data/definitions/1325.html
+//   CWE-674 (uncontrolled recursion — the deep-value `Drop` overflow):
+//   https://cwe.mitre.org/data/definitions/674.html
+//   CWE-770 (allocation of resources without limits — the per-item payload):
+//   https://cwe.mitre.org/data/definitions/770.html
+const PICKLE_MAX_WORKING_SET: u64 = 512 * 1024 * 1024;
+const PICKLE_MAX_DEPTH: u32 = 64;
+const PICKLE_MAX_PAYLOAD: u64 = 64 * 1024 * 1024;
+
 // https://docs.juliahub.com/Pickle/LAUNc/0.1.0/opcode/
 #[repr(u8)]
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -295,15 +314,114 @@ impl<T: TryFrom<Object, Error = Object>> TryFrom<Object> for Vec<T> {
 #[derive(Debug)]
 pub struct Stack {
     stack: Vec<Object>,
-    memo: HashMap<u32, Object>,
+    // Structural nesting depth of each value in `stack`, kept length-synced so
+    // depth is maintained in O(1) per opcode (a per-push deep walk would be an
+    // O(n^2) CPU-DoS in the guard itself).
+    depths: Vec<u32>,
+    // Each memoised value carries its depth so `BINGET` restores it without
+    // re-walking the cloned subtree.
+    memo: HashMap<u32, (Object, u32)>,
+    // Cumulative heap charged to the VM this parse; bounded by
+    // `PICKLE_MAX_WORKING_SET`. Monotonic over-approximation (peak <= total).
+    working_set: u64,
 }
 
 impl Stack {
     pub fn empty() -> Self {
         Self {
             stack: Vec::with_capacity(512),
+            depths: Vec::with_capacity(512),
             memo: HashMap::new(),
+            working_set: 0,
         }
+    }
+
+    // Charges `bytes` to the VM working set, rejecting once the permanent
+    // `PICKLE_MAX_WORKING_SET` floor is crossed.
+    fn charge(&mut self, bytes: u64) -> Result<()> {
+        self.working_set = self.working_set.saturating_add(bytes);
+        if self.working_set > PICKLE_MAX_WORKING_SET {
+            crate::bail!(
+                "pickle: working set {} exceeds limit {PICKLE_MAX_WORKING_SET}",
+                self.working_set
+            )
+        }
+        Ok(())
+    }
+
+    // Shallow heap of a single node: the enum slot plus its immediately-owned
+    // string payload (children are charged when they are themselves pushed).
+    fn shallow_size(obj: &Object) -> u64 {
+        let base = std::mem::size_of::<Object>() as u64;
+        let payload = match obj {
+            Object::Unicode(s) => s.len() as u64,
+            Object::Class {
+                module_name,
+                class_name,
+            } => (module_name.len() + class_name.len()) as u64,
+            _ => 0,
+        };
+        base.saturating_add(payload)
+    }
+
+    // Deep heap of a value and all its children. Recursive, but bounded to
+    // `PICKLE_MAX_DEPTH` frames because no deeper value is ever constructed.
+    // Used only on memo-clone opcodes, where a whole subtree is freshly cloned.
+    fn deep_size(obj: &Object) -> u64 {
+        let mut total = Self::shallow_size(obj);
+        match obj {
+            Object::Tuple(items) | Object::List(items) => {
+                for it in items {
+                    total = total.saturating_add(Self::deep_size(it));
+                }
+            }
+            Object::Dict(pairs) => {
+                for (k, v) in pairs {
+                    total = total
+                        .saturating_add(Self::deep_size(k))
+                        .saturating_add(Self::deep_size(v));
+                }
+            }
+            Object::PersistentLoad(inner) => {
+                total = total.saturating_add(Self::deep_size(inner));
+            }
+            Object::Reduce { callable, args } | Object::Build { callable, args } => {
+                total = total
+                    .saturating_add(Self::deep_size(callable))
+                    .saturating_add(Self::deep_size(args));
+            }
+            _ => {}
+        }
+        total
+    }
+
+    // Pushes a value at the given nesting depth — the only way `stack` grows.
+    // Charges the value's shallow heap and rejects a depth past
+    // `PICKLE_MAX_DEPTH`, bounding the flat-stack and nesting vectors here.
+    fn push_at(&mut self, obj: Object, depth: u32) -> Result<()> {
+        if depth > PICKLE_MAX_DEPTH {
+            crate::bail!("pickle: value nesting depth {depth} exceeds limit {PICKLE_MAX_DEPTH}")
+        }
+        self.charge(Self::shallow_size(&obj))?;
+        self.stack.push(obj);
+        self.depths.push(depth);
+        Ok(())
+    }
+
+    // Raises the top slot's depth after an in-place container mutation
+    // (`APPEND(S)` / `SETITEM(S)` grow the top List/Dict without a fresh push).
+    fn bump_top_depth(&mut self, child_depth: u32) -> Result<()> {
+        let new = match self.depths.last() {
+            Some(d) => (*d).max(child_depth.saturating_add(1)),
+            None => return Ok(()),
+        };
+        if new > PICKLE_MAX_DEPTH {
+            crate::bail!("pickle: value nesting depth {new} exceeds limit {PICKLE_MAX_DEPTH}")
+        }
+        if let Some(d) = self.depths.last_mut() {
+            *d = new;
+        }
+        Ok(())
     }
 
     pub fn stack(&self) -> &[Object] {
@@ -323,21 +441,38 @@ impl Stack {
         self.pop()
     }
 
-    fn push(&mut self, obj: Object) {
-        self.stack.push(obj)
+    // Pushes a leaf value (depth 1). Convenience over `push_at`.
+    fn push(&mut self, obj: Object) -> Result<()> {
+        self.push_at(obj, 1)
     }
 
     fn pop(&mut self) -> Result<Object> {
         match self.stack.pop() {
             None => crate::bail!("unexpected empty stack"),
-            Some(obj) => Ok(obj),
+            Some(obj) => {
+                self.depths.pop();
+                Ok(obj)
+            }
+        }
+    }
+
+    // Pops the top value together with its nesting depth, for opcodes that wrap
+    // their operand one level deeper.
+    fn pop_at(&mut self) -> Result<(Object, u32)> {
+        match self.stack.pop() {
+            None => crate::bail!("unexpected empty stack"),
+            Some(obj) => {
+                let depth = self.depths.pop().unwrap_or(1);
+                Ok((obj, depth))
+            }
         }
     }
 
     // https://docs.juliahub.com/Pickle/LAUNc/0.1.0/opcode/#Pickle.OpCodes.BUILD
     fn build(&mut self) -> Result<()> {
-        let args = self.pop()?;
-        let obj = self.pop()?;
+        let (args, da) = self.pop_at()?;
+        let (obj, do_) = self.pop_at()?;
+        let depth = da.max(do_).saturating_add(1);
         let obj = match (obj, args) {
             (Object::Dict(mut obj), Object::Dict(mut args)) => {
                 obj.append(&mut args);
@@ -348,13 +483,12 @@ impl Stack {
                 args: Box::new(args),
             },
         };
-        self.push(obj);
-        Ok(())
+        self.push_at(obj, depth)
     }
 
     fn reduce(&mut self) -> Result<()> {
-        let args = self.pop()?;
-        let callable = self.pop()?;
+        let (args, da) = self.pop_at()?;
+        let (callable, dc) = self.pop_at()?;
         #[allow(clippy::single_match)]
         let reduced = match &callable {
             Object::Class {
@@ -372,12 +506,17 @@ impl Stack {
             }
             _ => None,
         };
-        let reduced = reduced.unwrap_or_else(|| Object::Reduce {
-            callable: Box::new(callable),
-            args: Box::new(args),
-        });
-        self.push(reduced);
-        Ok(())
+        match reduced {
+            // A fresh empty dict — depth 1, independent of the operands.
+            Some(empty) => self.push_at(empty, 1),
+            None => self.push_at(
+                Object::Reduce {
+                    callable: Box::new(callable),
+                    args: Box::new(args),
+                },
+                da.max(dc).saturating_add(1),
+            ),
+        }
     }
 
     fn last(&mut self) -> Result<&mut Object> {
@@ -387,19 +526,35 @@ impl Stack {
         }
     }
 
-    fn memo_get(&self, id: u32) -> Result<Object> {
+    // Clones a memoised value for `BINGET` replay, charging its deep heap to the
+    // working set *before* the clone so an over-budget replay is rejected
+    // without allocating the duplicate. Returns the value and its depth.
+    fn memo_get(&mut self, id: u32) -> Result<(Object, u32)> {
+        let (bytes, depth) = match self.memo.get(&id) {
+            None => crate::bail!("missing object in memo {id}"),
+            Some((obj, depth)) => (Self::deep_size(obj), *depth),
+        };
+        self.charge(bytes)?;
         match self.memo.get(&id) {
             None => crate::bail!("missing object in memo {id}"),
-            Some(obj) => {
-                // Maybe we should use refcounting rather than doing potential large clones here.
-                Ok(obj.clone())
-            }
+            Some((obj, _)) => Ok((obj.clone(), depth)),
         }
     }
 
+    // Memoises the top value, charging its deep heap *before* the clone (the
+    // `BINPUT` side of the replay-amplification bound).
     fn memo_put(&mut self, id: u32) -> Result<()> {
-        let obj = self.last()?.clone();
-        self.memo.insert(id, obj);
+        let bytes = match self.stack.last() {
+            Some(obj) => Self::deep_size(obj),
+            None => crate::bail!("unexpected empty stack"),
+        };
+        self.charge(bytes)?;
+        let obj = match self.stack.last() {
+            Some(obj) => obj.clone(),
+            None => crate::bail!("unexpected empty stack"),
+        };
+        let depth = self.depths.last().copied().unwrap_or(1);
+        self.memo.insert(id, (obj, depth));
         Ok(())
     }
 
@@ -414,7 +569,10 @@ impl Stack {
         })
     }
 
-    fn pop_to_marker(&mut self) -> Result<Vec<Object>> {
+    // Pops everything above the latest mark, returning the values and the
+    // maximum nesting depth among them (0 if empty) so the caller can set the
+    // container's depth in O(1).
+    fn pop_to_marker(&mut self) -> Result<(Vec<Object>, u32)> {
         let mut mark_idx = None;
         for (idx, obj) in self.stack.iter().enumerate().rev() {
             if obj == &Object::Mark {
@@ -425,8 +583,11 @@ impl Stack {
         match mark_idx {
             Some(mark_idx) => {
                 let objs = self.stack.split_off(mark_idx + 1);
+                let obj_depths = self.depths.split_off(mark_idx + 1);
                 self.stack.pop();
-                Ok(objs)
+                self.depths.pop();
+                let max_depth = obj_depths.iter().copied().max().unwrap_or(0);
+                Ok((objs, max_depth))
             }
             None => {
                 crate::bail!("marker object not found")
@@ -458,90 +619,104 @@ impl Stack {
                 self.push(Object::Class {
                     module_name,
                     class_name,
-                })
+                })?
             }
             OpCode::BinInt1 => {
                 let arg = r.read_u8()?;
-                self.push(Object::Int(arg as i32))
+                self.push(Object::Int(arg as i32))?
             }
             OpCode::BinInt2 => {
                 let arg = r.read_u16::<LittleEndian>()?;
-                self.push(Object::Int(arg as i32))
+                self.push(Object::Int(arg as i32))?
             }
             OpCode::BinInt => {
                 let arg = r.read_i32::<LittleEndian>()?;
-                self.push(Object::Int(arg))
+                self.push(Object::Int(arg))?
             }
             OpCode::BinFloat => {
                 // Somehow floats are encoded using BigEndian whereas int types use LittleEndian.
                 // https://github.com/python/cpython/blob/0c80da4c14d904a367968955544dd6ae58c8101c/Lib/pickletools.py#L855
                 // https://github.com/pytorch/pytorch/blob/372d078f361e726bb4ac0884ac334b04c58179ef/torch/_weights_only_unpickler.py#L243
                 let arg = r.read_f64::<byteorder::BigEndian>()?;
-                self.push(Object::Float(arg))
+                self.push(Object::Float(arg))?
             }
             OpCode::BinUnicode => {
                 let len = r.read_u32::<LittleEndian>()?;
+                if len as u64 > PICKLE_MAX_PAYLOAD {
+                    crate::bail!(
+                        "pickle: BinUnicode length {len} exceeds limit {PICKLE_MAX_PAYLOAD}"
+                    )
+                }
                 let mut data = vec![0u8; len as usize];
                 r.read_exact(&mut data)?;
                 let data = String::from_utf8(data).map_err(E::wrap)?;
-                self.push(Object::Unicode(data))
+                self.push(Object::Unicode(data))?
             }
             OpCode::BinPersId => {
-                let id = self.pop()?;
+                let (id, d) = self.pop_at()?;
                 let obj = self.persistent_load(id)?;
-                self.push(obj)
+                self.push_at(obj, d.saturating_add(1))?
             }
             OpCode::Tuple => {
-                let objs = self.pop_to_marker()?;
-                self.push(Object::Tuple(objs))
+                let (objs, md) = self.pop_to_marker()?;
+                self.push_at(Object::Tuple(objs), md.saturating_add(1))?
             }
             OpCode::Tuple1 => {
-                let obj = self.pop()?;
-                self.push(Object::Tuple(vec![obj]))
+                let (obj, d) = self.pop_at()?;
+                self.push_at(Object::Tuple(vec![obj]), d.saturating_add(1))?
             }
             OpCode::Tuple2 => {
-                let obj2 = self.pop()?;
-                let obj1 = self.pop()?;
-                self.push(Object::Tuple(vec![obj1, obj2]))
+                let (obj2, d2) = self.pop_at()?;
+                let (obj1, d1) = self.pop_at()?;
+                self.push_at(
+                    Object::Tuple(vec![obj1, obj2]),
+                    d1.max(d2).saturating_add(1),
+                )?
             }
             OpCode::Tuple3 => {
-                let obj3 = self.pop()?;
-                let obj2 = self.pop()?;
-                let obj1 = self.pop()?;
-                self.push(Object::Tuple(vec![obj1, obj2, obj3]))
+                let (obj3, d3) = self.pop_at()?;
+                let (obj2, d2) = self.pop_at()?;
+                let (obj1, d1) = self.pop_at()?;
+                self.push_at(
+                    Object::Tuple(vec![obj1, obj2, obj3]),
+                    d1.max(d2).max(d3).saturating_add(1),
+                )?
             }
-            OpCode::NewTrue => self.push(Object::Bool(true)),
-            OpCode::NewFalse => self.push(Object::Bool(false)),
+            OpCode::NewTrue => self.push(Object::Bool(true))?,
+            OpCode::NewFalse => self.push(Object::Bool(false))?,
             OpCode::Append => {
-                let value = self.pop()?;
+                let (value, dv) = self.pop_at()?;
                 let pylist = self.last()?;
                 if let Object::List(d) = pylist {
                     d.push(value)
                 } else {
                     crate::bail!("expected a list, got {pylist:?}")
                 }
+                self.bump_top_depth(dv)?
             }
             OpCode::Appends => {
-                let objs = self.pop_to_marker()?;
+                let (objs, md) = self.pop_to_marker()?;
                 let pylist = self.last()?;
                 if let Object::List(d) = pylist {
                     d.extend(objs)
                 } else {
                     crate::bail!("expected a list, got {pylist:?}")
                 }
+                self.bump_top_depth(md)?
             }
             OpCode::SetItem => {
-                let value = self.pop()?;
-                let key = self.pop()?;
+                let (value, dv) = self.pop_at()?;
+                let (key, dk) = self.pop_at()?;
                 let pydict = self.last()?;
                 if let Object::Dict(d) = pydict {
                     d.push((key, value))
                 } else {
                     crate::bail!("expected a dict, got {pydict:?}")
                 }
+                self.bump_top_depth(dk.max(dv))?
             }
             OpCode::SetItems => {
-                let mut objs = self.pop_to_marker()?;
+                let (mut objs, md) = self.pop_to_marker()?;
                 let pydict = self.last()?;
                 if let Object::Dict(d) = pydict {
                     if objs.len() % 2 != 0 {
@@ -554,15 +729,16 @@ impl Stack {
                 } else {
                     crate::bail!("expected a dict, got {pydict:?}")
                 }
+                self.bump_top_depth(md)?
             }
-            OpCode::None => self.push(Object::None),
+            OpCode::None => self.push(Object::None)?,
             OpCode::Stop => {
                 return Ok(true);
             }
             OpCode::Build => self.build()?,
-            OpCode::EmptyDict => self.push(Object::Dict(vec![])),
+            OpCode::EmptyDict => self.push(Object::Dict(vec![]))?,
             OpCode::Dict => {
-                let mut objs = self.pop_to_marker()?;
+                let (mut objs, md) = self.pop_to_marker()?;
                 let mut pydict = vec![];
                 if objs.len() % 2 != 0 {
                     crate::bail!("setitems: not an even number of objects")
@@ -571,21 +747,21 @@ impl Stack {
                     let key = objs.pop().context("empty objs")?;
                     pydict.push((key, value))
                 }
-                self.push(Object::Dict(pydict))
+                self.push_at(Object::Dict(pydict), md.saturating_add(1))?
             }
-            OpCode::Mark => self.push(Object::Mark),
+            OpCode::Mark => self.push(Object::Mark)?,
             OpCode::Reduce => self.reduce()?,
-            OpCode::EmptyTuple => self.push(Object::Tuple(vec![])),
-            OpCode::EmptyList => self.push(Object::List(vec![])),
+            OpCode::EmptyTuple => self.push(Object::Tuple(vec![]))?,
+            OpCode::EmptyList => self.push(Object::List(vec![]))?,
             OpCode::BinGet => {
                 let arg = r.read_u8()?;
-                let obj = self.memo_get(arg as u32)?;
-                self.push(obj)
+                let (obj, d) = self.memo_get(arg as u32)?;
+                self.push_at(obj, d)?
             }
             OpCode::LongBinGet => {
                 let arg = r.read_u32::<LittleEndian>()?;
-                let obj = self.memo_get(arg)?;
-                self.push(obj)
+                let (obj, d) = self.memo_get(arg)?;
+                self.push_at(obj, d)?
             }
             OpCode::BinPut => {
                 let arg = r.read_u8()?;
@@ -596,19 +772,27 @@ impl Stack {
                 self.memo_put(arg)?
             }
             OpCode::NewObj => {
-                let args = self.pop()?;
-                let class = self.pop()?;
+                let (args, da) = self.pop_at()?;
+                let (class, dc) = self.pop_at()?;
                 let obj = self.new_obj(class, args)?;
-                self.push(obj)
+                self.push_at(obj, da.max(dc).saturating_add(1))?
             }
             OpCode::Long1 => {
                 let n_bytes = r.read_u8()?;
+                // LONG1 is arbitrary-precision in Python; candle stores it as an
+                // i64, so a value wider than 8 bytes is unrepresentable. Reject
+                // it instead of panicking on the shift overflow a crafted
+                // `n_bytes >= 9` triggered (`<< (i * 8)` with `i * 8 >= 64`).
+                // CWE-190, integer overflow: https://cwe.mitre.org/data/definitions/190.html
+                if n_bytes > 8 {
+                    crate::bail!("pickle: LONG1 value too large ({n_bytes} bytes, max 8 for i64)")
+                }
                 let mut v = 0;
                 // Decode the next n bytes in little endian
                 for i in 0..n_bytes {
                     v |= (r.read_u8()? as i64) << (i * 8);
                 }
-                self.push(Object::Long(v))
+                self.push(Object::Long(v))?
             }
         }
         Ok(false)
@@ -838,4 +1022,80 @@ pub fn read_all_with_key<P: AsRef<std::path::Path>>(
 /// * `path` - Path to the pth file.
 pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
     read_all_with_key(path, None)
+}
+
+#[cfg(test)]
+mod dos_hardening_tests {
+    // Regression tests for the pickle-VM DoS hardening (candle #3617). `Stack`
+    // and `read_loop` are public, so these feed the VM directly.
+    use super::*;
+
+    // CWE-674: an unbounded `BINPERSID` (`Q`) chain wraps one `Box` deeper per
+    // opcode, building an arbitrarily deep value whose recursive `Drop` would
+    // overflow the stack. The depth cap rejects it after PICKLE_MAX_DEPTH levels
+    // — and because *construction* is capped, the partial value left on the
+    // stack is shallow and drops safely (so the test itself cannot overflow).
+    #[test]
+    fn rejects_deep_persid_chain() {
+        let mut b = vec![0x80, 0x02, b'K', 0]; // PROTO 2; BININT1 0
+        b.extend(std::iter::repeat(b'Q').take(1_000_000)); // 1e6 x BINPERSID
+        b.push(b'.'); // STOP
+        let mut s = Stack::empty();
+        assert!(s.read_loop(&mut &b[..]).is_err());
+    }
+
+    // The per-item PICKLE_MAX_PAYLOAD cap rejects an oversized `BINUNICODE`
+    // length *before* the backing buffer is allocated (no large allocation).
+    #[test]
+    fn rejects_oversized_unicode_pre_alloc() {
+        let mut b = vec![0x80, 0x02, b'X']; // PROTO 2; BINUNICODE
+        let too_big = (PICKLE_MAX_PAYLOAD as u32).saturating_add(1);
+        b.extend(too_big.to_le_bytes());
+        b.push(b'.');
+        let mut s = Stack::empty();
+        assert!(s.read_loop(&mut &b[..]).is_err());
+    }
+
+    // A small, well-formed pickle still parses unchanged.
+    #[test]
+    fn valid_pickle_still_parses() {
+        // PROTO 2; BININT1 1/2/3; TUPLE3; STOP
+        let b = vec![0x80, 0x02, b'K', 1, b'K', 2, b'K', 3, 0x87, b'.'];
+        let mut s = Stack::empty();
+        s.read_loop(&mut &b[..]).unwrap();
+        let obj = s.finalize().unwrap();
+        assert_eq!(
+            obj,
+            Object::Tuple(vec![Object::Int(1), Object::Int(2), Object::Int(3)])
+        );
+    }
+
+    // candle #3617 (surfaced by fuzzing): a crafted LONG1 with `n_bytes >= 9`
+    // used to panic with "attempt to shift left with overflow". It must now be
+    // rejected cleanly instead of crashing.
+    #[test]
+    fn rejects_oversized_long1() {
+        let mut b = vec![0x80, 0x02, 0x8a, 12]; // PROTO 2; LONG1; n_bytes = 12
+        b.extend([0xFFu8; 12]);
+        b.push(b'.'); // STOP
+        let mut s = Stack::empty();
+        assert!(s.read_loop(&mut &b[..]).is_err());
+    }
+
+    // CWE-1325: `BINGET` replay of a memoised list amplifies a few KB of opcodes
+    // into multi-GB of heap; the working-set floor rejects it. Ignored by
+    // default because it necessarily allocates up to the ~512 MiB cap before
+    // bailing (run with `--ignored` to exercise it).
+    #[test]
+    #[ignore = "allocates up to the ~512 MiB working-set cap before rejecting"]
+    fn rejects_memo_replay_amplification() {
+        let mut b = vec![0x80, 0x02, b']', b'(']; // PROTO 2; EMPTY_LIST; MARK
+        b.extend(std::iter::repeat([b'K', 1]).take(50_000).flatten()); // 50k x BININT1(1)
+        b.push(b'e'); // APPENDS -> 50k-element list
+        b.extend([b'q', 0]); // BINPUT 0 (memoise the list)
+        b.extend(std::iter::repeat([b'h', 0]).take(20_000).flatten()); // BINGET 0 x20k
+        b.push(b'.'); // STOP
+        let mut s = Stack::empty();
+        assert!(s.read_loop(&mut &b[..]).is_err());
+    }
 }
