@@ -601,6 +601,74 @@ pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> f32
     sumf
 }
 
+/// Quantize a row of f32 activations into Q8K format
+#[inline(always)]
+pub(crate) fn quantize_row_q8k(xs: &[f32], ys: &mut [BlockQ8K]) {
+    debug_assert!(
+        xs.len().is_multiple_of(QK_K),
+        "quantize_row_q8k: {} is not a multiple of {QK_K}",
+        xs.len()
+    );
+    unsafe {
+        for (chunk, y) in xs.chunks_exact(QK_K).zip(ys.iter_mut()) {
+            // find max absolute value
+            let mut vmax0 = vdupq_n_f32(0.0f32);
+            let mut vmax1 = vdupq_n_f32(0.0f32);
+            let mut vmax2 = vdupq_n_f32(0.0f32);
+            let mut vmax3 = vdupq_n_f32(0.0f32);
+            let mut p = chunk.as_ptr();
+            for _ in 0..QK_K / 16 {
+                vmax0 = vmaxq_f32(vmax0, vabsq_f32(vld1q_f32(p)));
+                vmax1 = vmaxq_f32(vmax1, vabsq_f32(vld1q_f32(p.add(4))));
+                vmax2 = vmaxq_f32(vmax2, vabsq_f32(vld1q_f32(p.add(8))));
+                vmax3 = vmaxq_f32(vmax3, vabsq_f32(vld1q_f32(p.add(12))));
+                p = p.add(16);
+            }
+            let amax = vmaxvq_f32(vmaxq_f32(vmaxq_f32(vmax0, vmax1), vmaxq_f32(vmax2, vmax3)));
+
+            if amax == 0.0f32 {
+                y.d = 0.0f32;
+                y.qs.fill(0);
+                y.bsums.fill(0);
+                continue;
+            }
+
+            let iscale = -128.0f32 / amax;
+            let vscale = vdupq_n_f32(iscale);
+
+            // Quantize f32 -> i8. Multiply, round-to-nearest, saturating narrow.
+            let mut out = y.qs.as_mut_ptr();
+            let mut p = chunk.as_ptr();
+            for _ in 0..QK_K / 16 {
+                let f0 = vmulq_f32(vld1q_f32(p), vscale);
+                let f1 = vmulq_f32(vld1q_f32(p.add(4)), vscale);
+                let f2 = vmulq_f32(vld1q_f32(p.add(8)), vscale);
+                let f3 = vmulq_f32(vld1q_f32(p.add(12)), vscale);
+                p = p.add(16);
+                let s01 = vcombine_s16(
+                    vqmovn_s32(vcvtnq_s32_f32(f0)),
+                    vqmovn_s32(vcvtnq_s32_f32(f1)),
+                );
+                let s23 = vcombine_s16(
+                    vqmovn_s32(vcvtnq_s32_f32(f2)),
+                    vqmovn_s32(vcvtnq_s32_f32(f3)),
+                );
+                vst1q_s8(out, vcombine_s8(vqmovn_s16(s01), vqmovn_s16(s23)));
+                out = out.add(16);
+            }
+
+            // Sum of each 16-element group of quantized values
+            let qp = y.qs.as_ptr();
+            for j in 0..QK_K / 16 {
+                let v = vld1q_s8(qp.add(j * 16));
+                y.bsums[j] = vaddvq_s32(vpaddlq_s16(vpaddlq_s8(v))) as i16;
+            }
+
+            y.d = 1.0f32 / iscale;
+        }
+    }
+}
+
 #[inline(always)]
 unsafe fn multiply_accum_with_scale(
     aux: &[u8; 16],
