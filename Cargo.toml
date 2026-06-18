@@ -87,7 +87,7 @@ parquet = "58"
 rand = "0.9.0"
 rand_distr = "0.5.1"
 rayon = "1.7.0"
-safetensors = "0.7.0"
+safetensors = "0.8.0"
 serde = { version = "1.0.171", features = ["derive"] }
 serde_plain = "1.0.2"
 serde_json = "1.0.99"

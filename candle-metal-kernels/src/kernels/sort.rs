@@ -1,5 +1,7 @@
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{set_params, DType, Kernels, MetalKernelError, Output, Source};
+use crate::{
+    debug_group, metal_label, set_params, DType, Kernels, MetalKernelError, Output, Source,
+};
 use crate::{Buffer, ComputeCommandEncoder, Device, MTLSize, RESOURCE_OPTIONS};
 
 #[allow(clippy::too_many_arguments)]
@@ -18,6 +20,7 @@ pub fn call_arg_sort(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "arg_sort {name} nrows={nrows} ncols={ncols}");
 
     set_params!(
         encoder,
@@ -70,10 +73,15 @@ fn multi_block_sort(
     let el_count = nrows * ncols;
     let bytes_len = el_count * dtype.size_in_bytes();
     let mut dev_vals_0 = device.new_buffer(bytes_len, RESOURCE_OPTIONS)?;
+    metal_label!(dev_vals_0, "mlx_arg_sort dev_vals_0");
     let mut dev_vals_1 = device.new_buffer(bytes_len, RESOURCE_OPTIONS)?;
+    metal_label!(dev_vals_1, "mlx_arg_sort dev_vals_1");
     let mut dev_idxs_0 = device.new_buffer(el_count * 4, RESOURCE_OPTIONS)?;
+    metal_label!(dev_idxs_0, "mlx_arg_sort dev_idxs_0");
     let mut dev_idxs_1 = device.new_buffer(el_count * 4, RESOURCE_OPTIONS)?;
+    metal_label!(dev_idxs_1, "mlx_arg_sort dev_idxs_1");
     let mut block_partitions = device.new_buffer((nrows * (nblocks + 1)) * 4, RESOURCE_OPTIONS)?;
+    metal_label!(block_partitions, "mlx_arg_sort block_partitions");
     // Prepare command encoder
     let encoder_guard = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder_guard.as_ref();
@@ -82,6 +90,10 @@ fn multi_block_sort(
         let name = format!("sort_mbsort_{dtype_str}_uint32_bn{bn}_tn{tn}");
         let pipeline = kernels.load_pipeline(device, Source::MlxSort, name)?;
         encoder.set_compute_pipeline_state(&pipeline);
+        debug_group!(
+            encoder,
+            "mlx_arg_sort multi_block block_sort {dtype_str} nrows={nrows} ncols={ncols} blocks={nblocks}"
+        );
         set_params!(
             encoder,
             (
@@ -130,6 +142,10 @@ fn multi_block_sort(
             let pipeline =
                 kernels.load_pipeline(device, Source::MlxSort, partition_name.clone())?;
             encoder.set_compute_pipeline_state(&pipeline);
+            debug_group!(
+                encoder,
+                "mlx_arg_sort multi_block partition {dtype_str} merge_tiles={merge_tiles} blocks={nblocks}"
+            );
             set_params!(
                 encoder,
                 (
@@ -157,6 +173,10 @@ fn multi_block_sort(
         {
             let pipeline = kernels.load_pipeline(device, Source::MlxSort, merge_name.clone())?;
             encoder.set_compute_pipeline_state(&pipeline);
+            debug_group!(
+                encoder,
+                "mlx_arg_sort multi_block merge {dtype_str} merge_tiles={merge_tiles} blocks={nblocks}"
+            );
             set_params!(
                 encoder,
                 (
@@ -230,10 +250,16 @@ fn block_sort(
 ) -> Result<(), MetalKernelError> {
     let dtype_str = mlx_dtype_str(dtype);
     let name = format!("carg_block_sort_{dtype_str}_uint32_bn{bn}_tn{tn}");
+    #[cfg(feature = "debug-labels")]
+    let name_for_label = name.clone();
     let pipeline = kernels.load_pipeline(device, Source::MlxSort, name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "mlx_arg_sort block {name_for_label} nrows={nrows} ncols={ncols}"
+    );
     set_params!(
         encoder,
         (

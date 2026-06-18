@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use candle_core::{
     bail,
     quantized::{self, GgmlDType},
@@ -1400,3 +1402,35 @@ fn quantized_matmul_q8k() -> Result<()> {
     ggml_matmul_error_test::<BlockQ8K>()?;
     Ok(())
 }
+
+fn from_data_dequant_matches_canonical_when_caller_passes_cow_owned(device: &Device) -> Result<()> {
+    let cpu = Device::Cpu;
+    let n = 1024usize;
+    let src_data: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.013).sin()).collect();
+    let src = Tensor::from_vec(src_data, (n,), &cpu)?;
+    let qt_canonical = quantized::QTensor::quantize(&src, GgmlDType::Q4_0)?;
+    let canonical_dequant = qt_canonical.dequantize(&cpu)?.to_vec1::<f32>()?;
+
+    let bytes_owned: Vec<u8> = qt_canonical.data()?.to_vec();
+    let storage = quantized::QStorage::from_data(Cow::Owned(bytes_owned), device, GgmlDType::Q4_0)?;
+    let qt_via_from_data = quantized::QTensor::new(storage, (n,))?;
+    let observed_dequant = qt_via_from_data.dequantize(device)?.to_vec1::<f32>()?;
+
+    let max_diff = canonical_dequant
+        .iter()
+        .zip(observed_dequant.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0f32, f32::max);
+    assert!(
+        max_diff < 1e-5,
+        "QStorage::from_data dequant mismatch on {device:?} (max |Δ| = {max_diff})"
+    );
+    Ok(())
+}
+
+test_device!(
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cpu,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
+);
