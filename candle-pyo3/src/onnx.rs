@@ -207,10 +207,15 @@ impl PyONNXModel {
     fn run(&self, inputs: HashMap<String, PyTensor>) -> PyResult<HashMap<String, PyTensor>> {
         let unwrapped_tensors: HashMap<_, _> =
             inputs.into_iter().map(|(k, v)| (k.clone(), v.0)).collect();
+        // Prefer a non-CPU device if any input lives on one, so that a CPU-only
+        // metadata tensor (e.g. a shape/axis input) can't arbitrarily win over a
+        // GPU data tensor depending on HashMap iteration order.
         let device = unwrapped_tensors
             .values()
-            .next()
-            .map_or(Device::Cpu, |t| t.device().clone());
+            .map(|t| t.device())
+            .find(|d| !d.is_cpu())
+            .cloned()
+            .unwrap_or(Device::Cpu);
 
         let result = simple_eval(&self.0, unwrapped_tensors, &device).map_err(wrap_err)?;
 
