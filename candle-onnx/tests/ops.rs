@@ -5,7 +5,7 @@ use candle_onnx::onnx::tensor_proto::DataType;
 use candle_onnx::onnx::tensor_shape_proto::{dimension, Dimension};
 use candle_onnx::onnx::{type_proto, TensorProto, TensorShapeProto, TypeProto};
 use candle_onnx::onnx::{AttributeProto, GraphProto, ModelProto, NodeProto, ValueInfoProto};
-use candle_onnx::simple_eval;
+use candle_onnx::{simple_eval, simple_eval_with_placement, Placement};
 use std::collections::HashMap;
 
 const INPUT_X: &str = "x";
@@ -7509,3 +7509,175 @@ test_device!(
     simple_eval_gemm_device_gpu,
     simple_eval_gemm_device_metal
 );
+
+// Pipeline-parallelism tests for `simple_eval_with_placement`
+// (follow-up to https://github.com/huggingface/candle/issues/3491).
+//
+// They check that a single ONNX graph can be evaluated with its nodes spread
+// across several devices, with cross-device copies inserted automatically at
+// stage boundaries. The CPU-only tests exercise placement resolution and the
+// lazy-initializer logic; the CUDA tests (feature-gated) exercise the actual
+// cross-device transfers.
+
+// A two-stage graph: z = (x + w0) * w1, with the two compute nodes named so they
+// can be assigned to different stages/devices:
+//   node "stage0/add": t = x + w0
+//   node "stage1/mul": z = t * w1
+fn two_stage_graph() -> ModelProto {
+    create_model_proto_with_graph(Some(GraphProto {
+        node: vec![
+            NodeProto {
+                op_type: "Add".to_string(),
+                name: "stage0/add".to_string(),
+                input: vec![INPUT_X.to_string(), "w0".to_string()],
+                output: vec!["t".to_string()],
+                ..Default::default()
+            },
+            NodeProto {
+                op_type: "Mul".to_string(),
+                name: "stage1/mul".to_string(),
+                input: vec!["t".to_string(), "w1".to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                ..Default::default()
+            },
+        ],
+        initializer: vec![
+            TensorProto {
+                data_type: DataType::Float.into(),
+                dims: vec![3],
+                float_data: vec![1.0, 1.0, 1.0],
+                name: "w0".to_string(),
+                ..Default::default()
+            },
+            TensorProto {
+                data_type: DataType::Float.into(),
+                dims: vec![3],
+                float_data: vec![2.0, 2.0, 2.0],
+                name: "w1".to_string(),
+                ..Default::default()
+            },
+        ],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }))
+}
+
+// `Placement::uniform(device)` must behave exactly like `simple_eval(.., device)`.
+#[test]
+fn placement_uniform_matches_simple_eval() -> Result<()> {
+    let graph = two_stage_graph();
+    let device = Device::Cpu;
+    let x = Tensor::new(&[10f32, 20., 30.], &device)?;
+
+    let mut inputs = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), x.clone());
+    let baseline = simple_eval(&graph, inputs, &device)?;
+
+    let mut inputs = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), x);
+    let placed = simple_eval_with_placement(&graph, inputs, &Placement::uniform(&device))?;
+
+    let baseline_z = baseline.get(OUTPUT_Z).unwrap().to_vec1::<f32>()?;
+    let placed_z = placed.get(OUTPUT_Z).unwrap().to_vec1::<f32>()?;
+    assert_eq!(baseline_z, placed_z);
+    assert_eq!(placed_z, vec![22f32, 42., 62.]);
+    Ok(())
+}
+
+// Prefix rules + data-flow inheritance, exercised on CPU (so the devices compare
+// equal, but the resolution, lazy-init and input pre-staging code paths all run).
+#[test]
+fn placement_prefix_resolution_cpu() -> Result<()> {
+    let graph = two_stage_graph();
+    let cpu = Device::Cpu;
+    // "stage1/mul" is matched explicitly; "stage0/add" inherits cpu from `x`.
+    let placement = Placement::new(&cpu).with_prefix("stage1", &cpu);
+
+    let mut inputs = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[10f32, 20., 30.], &cpu)?);
+    let eval = simple_eval_with_placement(&graph, inputs, &placement)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(&cpu));
+    assert_eq!(z.to_vec1::<f32>()?, vec![22f32, 42., 62.]);
+    Ok(())
+}
+
+// A graph output that is an initializer consumed by no node must still be
+// returned (the lazy-initializer path materializes it on the fallback device).
+#[test]
+fn placement_initializer_only_output_cpu() -> Result<()> {
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![],
+        initializer: vec![TensorProto {
+            data_type: DataType::Float.into(),
+            dims: vec![3],
+            float_data: vec![1.0, 2.0, 3.0],
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let eval =
+        simple_eval_with_placement(&graph, HashMap::new(), &Placement::uniform(&Device::Cpu))?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.to_vec1::<f32>()?, vec![1f32, 2., 3.]);
+    Ok(())
+}
+
+// Real cross-device execution on a single CUDA GPU: stage0 runs on the CPU and
+// stage1 on cuda:0, so the run exercises both cuda->cpu and cpu->cuda boundary
+// copies as well as lazy initializer materialization on each device.
+#[cfg(feature = "cuda")]
+#[test]
+fn simple_eval_placement_cpu_to_cuda() -> Result<()> {
+    let cuda = Device::new_cuda(0)?;
+    let graph = two_stage_graph();
+    let placement = Placement::new(&cuda)
+        .with_prefix("stage0", &Device::Cpu)
+        .with_prefix("stage1", &cuda);
+
+    let mut inputs = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[10f32, 20., 30.], &cuda)?);
+    let eval = simple_eval_with_placement(&graph, inputs, &placement)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(&cuda));
+    assert_eq!(z.to_vec1::<f32>()?, vec![22f32, 42., 62.]);
+    Ok(())
+}
+
+// Pipeline split across two physical GPUs (the homelab use case): the boundary
+// inserts a genuine cuda:0 -> cuda:1 device-to-device copy. Ignored by default
+// since CI machines rarely have two GPUs; run with:
+//   cargo test --features cuda -- --ignored simple_eval_placement_two_cuda_gpus
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires two CUDA GPUs"]
+fn simple_eval_placement_two_cuda_gpus() -> Result<()> {
+    let cuda0 = Device::new_cuda(0)?;
+    let cuda1 = Device::new_cuda(1)?;
+    let graph = two_stage_graph();
+    // stage0 inherits cuda:0 from the input; stage1 is pinned to cuda:1.
+    let placement = Placement::new(&cuda0).with_prefix("stage1", &cuda1);
+
+    let mut inputs = HashMap::new();
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::new(&[10f32, 20., 30.], &cuda0)?,
+    );
+    let eval = simple_eval_with_placement(&graph, inputs, &placement)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(&cuda1));
+    assert_eq!(z.to_vec1::<f32>()?, vec![22f32, 42., 62.]);
+    Ok(())
+}
