@@ -2,6 +2,21 @@ pub trait VecOps: num_traits::NumAssign + Copy {
     fn min(self, rhs: Self) -> Self;
     fn max(self, rhs: Self) -> Self;
 
+    /// Element-wise addition of two slices into a third.
+    #[inline(always)]
+    fn vec_add(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
+        lhs.iter()
+            .zip(rhs)
+            .zip(res)
+            .for_each(|((&a, &b), y)| *y = a + b)
+    }
+
+    /// Add a broadcast scalar to every element of a slice: `ys[i] = xs[i] + scalar`.
+    #[inline(always)]
+    fn scalar_add(scalar: Self, xs: &[Self], ys: &mut [Self]) {
+        xs.iter().zip(ys).for_each(|(&x, y)| *y = x + scalar)
+    }
+
     /// Dot-product of two vectors.
     ///
     /// # Safety
@@ -70,6 +85,18 @@ impl VecOps for f32 {
         Self::max(self, other)
     }
 
+    fn vec_add(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
+        #[cfg(feature = "mkl")]
+        crate::mkl::vs_add(lhs, rhs, res);
+        #[cfg(all(feature = "accelerate", not(feature = "mkl")))]
+        crate::accelerate::vs_add(lhs, rhs, res);
+        #[cfg(not(any(feature = "mkl", feature = "accelerate")))]
+        lhs.iter()
+            .zip(rhs)
+            .zip(res)
+            .for_each(|((&a, &b), y)| *y = a + b)
+    }
+
     #[inline(always)]
     unsafe fn vec_dot(lhs: *const Self, rhs: *const Self, res: *mut Self, len: usize) {
         super::vec_dot_f32(lhs, rhs, res, len)
@@ -92,6 +119,15 @@ impl VecOps for half::f16 {
         Self::max(self, other)
     }
 
+    fn vec_add(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
+        unsafe { super::vec_add_f16(lhs.as_ptr(), rhs.as_ptr(), res.as_mut_ptr(), lhs.len()) }
+    }
+
+    #[inline(always)]
+    fn scalar_add(scalar: Self, xs: &[Self], ys: &mut [Self]) {
+        unsafe { super::vec_scalar_add_f16(scalar, xs.as_ptr(), ys.as_mut_ptr(), xs.len()) }
+    }
+
     #[inline(always)]
     unsafe fn vec_dot(lhs: *const Self, rhs: *const Self, res: *mut Self, len: usize) {
         let mut res_f32 = 0f32;
@@ -110,6 +146,19 @@ impl VecOps for f64 {
     fn max(self, other: Self) -> Self {
         Self::max(self, other)
     }
+
+    #[inline(always)]
+    fn vec_add(lhs: &[f64], rhs: &[f64], res: &mut [f64]) {
+        #[cfg(feature = "mkl")]
+        crate::mkl::vd_add(lhs, rhs, res);
+        #[cfg(all(feature = "accelerate", not(feature = "mkl")))]
+        crate::accelerate::vd_add(lhs, rhs, res);
+        #[cfg(not(any(feature = "mkl", feature = "accelerate")))]
+        lhs.iter()
+            .zip(rhs)
+            .zip(res)
+            .for_each(|((&a, &b), y)| *y = a + b)
+    }
 }
 impl VecOps for half::bf16 {
     #[inline(always)]
@@ -120,6 +169,16 @@ impl VecOps for half::bf16 {
     #[inline(always)]
     fn max(self, other: Self) -> Self {
         Self::max(self, other)
+    }
+
+    #[inline(always)]
+    fn vec_add(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
+        unsafe { super::vec_add_bf16(lhs.as_ptr(), rhs.as_ptr(), res.as_mut_ptr(), lhs.len()) }
+    }
+
+    #[inline(always)]
+    fn scalar_add(scalar: Self, xs: &[Self], ys: &mut [Self]) {
+        unsafe { super::vec_scalar_add_bf16(scalar, xs.as_ptr(), ys.as_mut_ptr(), xs.len()) }
     }
 
     #[inline(always)]
