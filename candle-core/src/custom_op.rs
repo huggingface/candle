@@ -439,6 +439,7 @@ impl InplaceOp1 for UgIOp1 {
         let device = sto.device();
         let encoder = device.command_encoder()?;
         encoder.set_compute_pipeline_state(&self.func);
+        candle_metal_kernels::debug_group!(encoder, "{}", self.name);
         let (g, b) = if elem_count.is_multiple_of(32) {
             (elem_count / 32, 32)
         } else {

@@ -1,7 +1,8 @@
 use crate::linear_split;
 use crate::utils::EncoderProvider;
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
+    Output, Source,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -29,6 +30,7 @@ pub fn call_random_uniform(
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "rand_uniform {name} elems={length}");
 
     set_params!(
         encoder,
@@ -59,6 +61,7 @@ pub fn call_random_normal(
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "rand_normal {name} elems={length}");
 
     set_params!(
         encoder,

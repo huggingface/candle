@@ -1,5 +1,5 @@
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_foundation::NSRange;
+use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{MTLBuffer, MTLResource};
 use std::{collections::HashMap, sync::Arc};
 
@@ -40,6 +40,10 @@ impl Buffer {
 
     pub fn did_modify_range(&self, range: NSRange) {
         self.as_ref().didModifyRange(range);
+    }
+
+    pub fn set_label(&self, label: &str) {
+        self.raw.setLabel(Some(&NSString::from_str(label)))
     }
 }
 
