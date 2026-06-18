@@ -51,7 +51,7 @@ impl QMetalStorage {
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
         }
-        self.device.wait_until_completed()?;
+        self.device.flush_and_wait_current()?;
         let mut out = vec![0.0; elem_count];
         let block_len = elem_count / self.dtype.block_size();
         match self.dtype {
@@ -392,7 +392,7 @@ impl QMetalStorage {
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
         }
-        self.device.wait_until_completed()?;
+        self.device.flush_and_wait_current()?;
         Ok(read_to_vec::<u8>(&buffer, self.storage_size_in_bytes()))
     }
 }

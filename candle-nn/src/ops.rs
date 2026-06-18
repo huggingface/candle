@@ -1062,8 +1062,8 @@ impl candle::CustomOp3 for Sdpa {
         // F32 full attention at head_dim=512 exceeds 32KB Metal threadgroup memory
         let supports_sdpa_full_dtype = !(q_head == 512 && q.dtype() == DType::F32);
         let supports_sdpa_full =
-            q_seq > 8 && supported_head_dim && supports_sdpa_full_mask && supports_sdpa_full_dtype;
-        let supports_sdpa_vector = q_seq <= 8 && supported_head_dim && q_seq <= k_seq;
+            q_seq > 1 && supported_head_dim && supports_sdpa_full_mask && supports_sdpa_full_dtype;
+        let supports_sdpa_vector = q_seq == 1 && supported_head_dim && q_seq <= k_seq;
 
         implementation_supports_use_case &= supports_sdpa_full || supports_sdpa_vector;
 
@@ -1131,14 +1131,14 @@ impl candle::CustomOp3 for Sdpa {
                     q.device().device(),
                     &encoder,
                     q.device().kernels(),
-                    q_l.start_offset(),
+                    q_l.start_offset() * q.dtype().size_in_bytes(),
                     q_l.dims(),
                     q.buffer(),
-                    k_l.start_offset(),
+                    k_l.start_offset() * k.dtype().size_in_bytes(),
                     k_l.dims(),
                     k_l.stride(),
                     k.buffer(),
-                    v_l.start_offset(),
+                    v_l.start_offset() * v.dtype().size_in_bytes(),
                     v_l.stride(),
                     v.buffer(),
                     &output,
@@ -1156,14 +1156,14 @@ impl candle::CustomOp3 for Sdpa {
                     q.device().device(),
                     &encoder,
                     q.device().kernels(),
-                    q_l.start_offset(),
+                    q_l.start_offset() * q.dtype().size_in_bytes(),
                     q_l.dims(),
                     q.buffer(),
-                    k_l.start_offset(),
+                    k_l.start_offset() * k.dtype().size_in_bytes(),
                     k_l.dims(),
                     k_l.stride(),
                     k.buffer(),
-                    v_l.start_offset(),
+                    v_l.start_offset() * v.dtype().size_in_bytes(),
                     v_l.stride(),
                     v.buffer(),
                     &output,
@@ -1220,15 +1220,15 @@ impl candle::CustomOp3 for Sdpa {
                 q.device().device(),
                 &encoder,
                 q.device().kernels(),
-                q_l.start_offset(),
+                q_l.start_offset() * q.dtype().size_in_bytes(),
                 q_l.dims(),
                 q_l.stride(),
                 q.buffer(),
-                k_l.start_offset(),
+                k_l.start_offset() * k.dtype().size_in_bytes(),
                 k_l.dims(),
                 k_l.stride(),
                 k.buffer(),
-                v_l.start_offset(),
+                v_l.start_offset() * v.dtype().size_in_bytes(),
                 v.buffer(),
                 v_l.stride(),
                 mask_type,
