@@ -194,6 +194,31 @@ impl ComputeCommandEncoder {
     }
 }
 
+/// RAII guard that pops a Metal debug group on drop. Debug groups are a stack
+/// scoped to the push/pop range, so each dispatch is attributed correctly on
+/// the shared concurrent encoder where `set_label` cannot.
+#[cfg(feature = "debug-labels")]
+pub struct DebugGroupGuard<'a> {
+    encoder: &'a ComputeCommandEncoder,
+}
+
+#[cfg(feature = "debug-labels")]
+impl Drop for DebugGroupGuard<'_> {
+    fn drop(&mut self) {
+        self.encoder.raw.popDebugGroup();
+    }
+}
+
+#[cfg(feature = "debug-labels")]
+impl ComputeCommandEncoder {
+    /// Push a Metal debug group scoped to the returned guard.
+    #[must_use = "the debug group is popped when the returned guard is dropped"]
+    pub fn debug_group(&self, label: &str) -> DebugGroupGuard<'_> {
+        self.raw.pushDebugGroup(&NSString::from_str(label));
+        DebugGroupGuard { encoder: self }
+    }
+}
+
 pub struct BlitCommandEncoder {
     pub(crate) raw: Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>,
     /// Per-encoder fence, updated at end_encoding.
