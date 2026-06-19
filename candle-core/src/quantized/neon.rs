@@ -13,10 +13,24 @@ use core::arch::aarch64::*;
 
 #[inline(always)]
 unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
-    // TODO: dotprod
-    let p0 = vmull_s8(vget_low_s8(a), vget_low_s8(b));
-    let p1 = vmull_s8(vget_high_s8(a), vget_high_s8(b));
-    vaddq_s32(vpaddlq_s16(p0), vpaddlq_s16(p1))
+    #[cfg(target_feature = "dotprod")]
+    {
+        let mut acc: int32x4_t = vdupq_n_s32(0);
+        core::arch::asm!(
+            "sdot {acc:v}.4s, {a:v}.16b, {b:v}.16b",
+            acc = inout(vreg) acc,
+            a = in(vreg) a,
+            b = in(vreg) b,
+            options(nostack, nomem),
+        );
+        return acc;
+    }
+    #[cfg(not(target_feature = "dotprod"))]
+    {
+        let p0 = vmull_s8(vget_low_s8(a), vget_low_s8(b));
+        let p1 = vmull_s8(vget_high_s8(a), vget_high_s8(b));
+        vaddq_s32(vpaddlq_s16(p0), vpaddlq_s16(p1))
+    }
 }
 
 #[inline(always)]
