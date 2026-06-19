@@ -2211,7 +2211,11 @@ impl GgmlType for BlockQ8K {
         sumf
     }
 
+    #[allow(unreachable_code)]
     fn from_float(xs: &[f32], ys: &mut [Self]) {
+        #[cfg(target_feature = "neon")]
+        return super::neon::quantize_row_q8k(xs, ys);
+
         let k = xs.len();
         debug_assert!(
             k.is_multiple_of(QK_K),
