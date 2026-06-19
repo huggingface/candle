@@ -296,7 +296,10 @@ impl Qwen3Attention {
                 None,
                 None,
             )?,
-            DType::BF16 => {
+            // bf16/f16: the CPU kernels run in f32, so upcast the inputs, run, and
+            // narrow the result back to the model dtype. f64 is rejected in
+            // `Model::new`, so it can never reach this match.
+            other => {
                 let q_f32 = q.to_dtype(DType::F32)?;
                 let k_f32 = k.to_dtype(DType::F32)?;
                 let v_f32 = v.to_dtype(DType::F32)?;
@@ -309,12 +312,8 @@ impl Qwen3Attention {
                     None,
                     None,
                 )?;
-                ctx_f32.to_dtype(DType::BF16)?
+                ctx_f32.to_dtype(other)?
             }
-            // f64 (and other dtypes) are intentionally unsupported on the CPU flash
-            // path: Qwen3 runs in f32/bf16, and f64 CPU inference is not a target.
-            // Cast to f32 before calling if a wider dtype is ever needed.
-            dtype => candle::bail!("Unsupported dtype for CPU flash attention: {:?} (f64 unsupported; use f32 or bf16)", dtype),
         };
 
         // Output from CPU flash attention is (B, H, S, D), transpose to (B, S, H, D)
@@ -408,6 +407,14 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        // f64 is not a target for Qwen3 (CPU flash runs in f32, GPU flash in f16/bf16).
+        // Reject it here, at the single point where the model dtype is set, so no f64
+        // tensor can ever reach the attention kernels and the inner paths never branch on it.
+        if vb.dtype() == DType::F64 {
+            candle::bail!(
+                "Qwen3 does not support f64; load weights as f32 or bf16 (CPU) or f16/bf16 (GPU)"
+            );
+        }
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let rotary = Arc::new(Qwen3RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
