@@ -267,6 +267,40 @@ macro_rules! set_params {
     );
 }
 
+/// Scope a Metal debug group around the current dispatch, e.g.
+/// `debug_group!(encoder, "kernel {a}")`. The guard binds into the caller's
+/// block (like `set_params!`), so the group pops after the dispatch. Gated at
+/// the macro definition: off-feature it expands to nothing.
+#[cfg(feature = "debug-labels")]
+#[macro_export]
+macro_rules! debug_group {
+    ($enc:expr, $($arg:tt)+) => {
+        let _debug_group_guard = $enc.debug_group(&::std::format!($($arg)+));
+    };
+}
+
+#[cfg(not(feature = "debug-labels"))]
+#[macro_export]
+macro_rules! debug_group {
+    ($enc:expr, $($arg:tt)+) => {};
+}
+
+/// Apply a persistent `MTLBuffer`/queue debug label, e.g.
+/// `metal_label!(buffer, "name")`. Gated like [`debug_group!`].
+#[cfg(feature = "debug-labels")]
+#[macro_export]
+macro_rules! metal_label {
+    ($obj:expr, $($arg:tt)+) => {
+        $obj.set_label(&::std::format!($($arg)+));
+    };
+}
+
+#[cfg(not(feature = "debug-labels"))]
+#[macro_export]
+macro_rules! metal_label {
+    ($obj:expr, $($arg:tt)+) => {};
+}
+
 pub trait EncoderProvider {
     type Encoder<'a>: AsRef<ComputeCommandEncoder>
     where

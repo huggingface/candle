@@ -42,6 +42,12 @@ impl CommandsGuard<'_> {
     pub fn set_compute_pipeline_state(&self, pipeline: &ComputePipeline) {
         self.as_ref().set_compute_pipeline_state(pipeline);
     }
+
+    #[cfg(feature = "debug-labels")]
+    #[must_use = "the debug group is popped when the returned guard is dropped"]
+    pub fn debug_group(&self, label: &str) -> crate::metal::DebugGroupGuard<'_> {
+        self.as_ref().debug_group(label)
+    }
 }
 
 /// RAII guard for blit command encoder operations.
