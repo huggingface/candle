@@ -57,6 +57,7 @@ metal = [
     "dep:candle-metal-kernels",
     "candle-ug?/metal",
 ]
+metal-debug-labels = ["metal", "candle-metal-kernels/debug-labels"]
 ug = ["dep:candle-ug"]
 
 [[bench]]

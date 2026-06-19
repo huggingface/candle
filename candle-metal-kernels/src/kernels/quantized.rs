@@ -1,6 +1,7 @@
 use crate::utils::EncoderProvider;
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Output, Source,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
+    Output, Source,
 };
 use objc2_metal::MTLSize;
 
@@ -144,6 +145,7 @@ pub fn call_quantized_matmul_mv_t(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "qmm_mv {name} B={b} M={m} K={k} N={n}");
 
     set_params!(
         encoder,
@@ -249,6 +251,7 @@ pub fn call_quantized_matmul_mm_t(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "qmm_mm {name} M={ne11} K={ne00} N={ne01}");
 
     set_params!(
         encoder,
