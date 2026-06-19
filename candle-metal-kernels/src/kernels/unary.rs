@@ -1,10 +1,10 @@
 use crate::kernels::macros::ops;
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{get_block_dims, get_tile_size, linear_split};
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, Device, EncoderParam, Kernels, MetalKernelError,
-    Output, Source,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, Device, EncoderParam, Kernels,
+    MetalKernelError, Output, Source,
 };
+use crate::{get_block_dims, get_tile_size, linear_split};
 use objc2_metal::MTLSize;
 
 ops!(
@@ -28,6 +28,7 @@ pub fn call_unary_contiguous(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "unary {} elems={length}", kernel_name.0);
 
     set_params!(encoder, (length, &input, Output::new(output)));
 
@@ -58,6 +59,7 @@ pub fn call_unary_strided(
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "unary_strided {} elems={length}", name.0);
     set_params!(
         encoder,
         (
@@ -89,6 +91,7 @@ pub fn call_const_set_contiguous(
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "const_set {} elems={length}", kernel_name.0);
     set_params!(
         encoder,
         (length, input, Output::from_buffer_offset(&output))
@@ -121,6 +124,7 @@ pub fn call_const_set_strided(
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "const_set_strided {} elems={length}", name.0);
     set_params!(
         encoder,
         (
@@ -167,6 +171,7 @@ pub fn call_copy2d(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "copy2d {} d1={d1} d2={d2}", name.0);
     set_params!(
         encoder,
         (

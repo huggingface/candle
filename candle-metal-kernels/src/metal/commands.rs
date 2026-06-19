@@ -42,6 +42,12 @@ impl CommandsGuard<'_> {
     pub fn set_compute_pipeline_state(&self, pipeline: &ComputePipeline) {
         self.as_ref().set_compute_pipeline_state(pipeline);
     }
+
+    #[cfg(feature = "debug-labels")]
+    #[must_use = "the debug group is popped when the returned guard is dropped"]
+    pub fn debug_group(&self, label: &str) -> crate::metal::DebugGroupGuard<'_> {
+        self.as_ref().debug_group(label)
+    }
 }
 
 /// RAII guard for blit command encoder operations.
@@ -254,6 +260,26 @@ impl Commands {
 
         self.prev_ce_outputs.lock()?.clear();
 
+        Ok(())
+    }
+
+    /// Commit the current command buffer and wait on that specific buffer, for CPU readbacks.
+    /// [`Self::wait_until_completed`] waits on the last in-flight buffer, which a concurrent
+    /// `flush_and_wait` on another thread may already have taken, returning before our work ran.
+    pub fn flush_and_wait_current(&self) -> Result<(), MetalKernelError> {
+        let cb = {
+            let mut state = self.state.lock()?;
+            self.commit_swap_locked(&mut state, 0)?;
+            state.in_flight.last().cloned()
+        };
+        if let Some(cb) = cb {
+            Self::ensure_completed(&cb)?;
+            // queue is FIFO: everything committed before cb is done too
+            let mut state = self.state.lock()?;
+            state
+                .in_flight
+                .retain(|c| c.status() != MTLCommandBufferStatus::Completed);
+        }
         Ok(())
     }
 
