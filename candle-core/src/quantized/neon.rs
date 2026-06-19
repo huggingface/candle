@@ -646,12 +646,12 @@ pub(crate) fn quantize_row_q8k(xs: &[f32], ys: &mut [BlockQ8K]) {
                 let f3 = vmulq_f32(vld1q_f32(p.add(12)), vscale);
                 p = p.add(16);
                 let s01 = vcombine_s16(
-                    vqmovn_s32(vcvtnq_s32_f32(f0)),
-                    vqmovn_s32(vcvtnq_s32_f32(f1)),
+                    vqmovn_s32(vcvtaq_s32_f32(f0)),
+                    vqmovn_s32(vcvtaq_s32_f32(f1)),
                 );
                 let s23 = vcombine_s16(
-                    vqmovn_s32(vcvtnq_s32_f32(f2)),
-                    vqmovn_s32(vcvtnq_s32_f32(f3)),
+                    vqmovn_s32(vcvtaq_s32_f32(f2)),
+                    vqmovn_s32(vcvtaq_s32_f32(f3)),
                 );
                 vst1q_s8(out, vcombine_s8(vqmovn_s16(s01), vqmovn_s16(s23)));
                 out = out.add(16);
