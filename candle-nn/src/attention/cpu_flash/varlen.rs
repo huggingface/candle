@@ -11,6 +11,10 @@ use candle::{DType, Device, Result, Storage, Tensor};
 use half::f16;
 use rayon::prelude::*;
 
+use super::dot_f32;
+use super::online_softmax::online_softmax_step;
+use super::standard::FLASH_ATTN_POOL;
+
 /// Fused variable-length flash attention on CPU.
 ///
 /// **Input shapes** (packed, no batch dim):
@@ -199,108 +203,75 @@ pub fn flash_attn_varlen_cpu(
 
             let mut out = vec![0f32; total_q * hq * d];
 
-            #[inline(always)]
-            fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
-                let mut s = 0.0f32;
-                let mut i = 0;
-                while i + 4 <= a.len() {
-                    s += a[i] * b[i]
-                        + a[i + 1] * b[i + 1]
-                        + a[i + 2] * b[i + 2]
-                        + a[i + 3] * b[i + 3];
-                    i += 4;
-                }
-                while i < a.len() {
-                    s += a[i] * b[i];
-                    i += 1;
-                }
-                s
-            }
+            FLASH_ATTN_POOL.install(|| {
+                out.par_chunks_mut(d).enumerate().for_each_init(
+                    || vec![0f32; d],
+                    |acc, (row, out_row)| {
+                        let q_idx = row / hq;
+                        let h = row % hq;
 
-            out.par_chunks_mut(d).enumerate().for_each_init(
-                || vec![0f32; d],
-                |acc, (row, out_row)| {
-                    let q_idx = row / hq;
-                    let h = row % hq;
+                        let b = batch_of_q[q_idx];
+                        let q_pos = pos_in_b[q_idx];
 
-                    let b = batch_of_q[q_idx];
-                    let q_pos = pos_in_b[q_idx];
-
-                    let lq = seqlens_q_vec[b] as usize;
-                    let lk = seqlens_k_vec[b] as usize;
-                    if lq == 0 || lk == 0 {
-                        out_row.fill(0.0);
-                        return;
-                    }
-
-                    let start_k = cumsum_k[b];
-                    let offset = lk as isize - lq as isize;
-
-                    let Some((j0, j1)) =
-                        key_range(q_pos, lk, offset, causal, window_left, window_right)
-                    else {
-                        out_row.fill(0.0);
-                        return;
-                    };
-                    if j0 > j1 {
-                        out_row.fill(0.0);
-                        return;
-                    }
-
-                    let k_head = h / rk;
-                    let v_head = h / rv;
-
-                    let slope = slopes.as_ref().map(|s| s[h]).unwrap_or(0.0);
-                    let i_k = q_pos as isize + offset;
-
-                    let q_base = (q_idx * hq + h) * d;
-                    let q_row = &q_data[q_base..q_base + d];
-
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
-
-                    for j in j0..=j1 {
-                        let k_base = ((start_k + j) * hk + k_head) * d;
-                        let k_row = &k_data[k_base..k_base + d];
-
-                        let mut score = dot_f32(q_row, k_row) * softmax_scale;
-                        if slopes.is_some() {
-                            score += alibi_bias(slope, i_k, j as isize, causal);
+                        let lq = seqlens_q_vec[b] as usize;
+                        let lk = seqlens_k_vec[b] as usize;
+                        if lq == 0 || lk == 0 {
+                            out_row.fill(0.0);
+                            return;
                         }
 
-                        if score > m {
-                            let scale_old = (m - score).exp();
-                            #[allow(clippy::needless_range_loop)]
-                            for t in 0..d {
-                                acc[t] *= scale_old;
+                        let start_k = cumsum_k[b];
+                        let offset = lk as isize - lq as isize;
+
+                        let Some((j0, j1)) =
+                            key_range(q_pos, lk, offset, causal, window_left, window_right)
+                        else {
+                            out_row.fill(0.0);
+                            return;
+                        };
+                        if j0 > j1 {
+                            out_row.fill(0.0);
+                            return;
+                        }
+
+                        let k_head = h / rk;
+                        let v_head = h / rv;
+
+                        let slope = slopes.as_ref().map(|s| s[h]).unwrap_or(0.0);
+                        let i_k = q_pos as isize + offset;
+
+                        let q_base = (q_idx * hq + h) * d;
+                        let q_row = &q_data[q_base..q_base + d];
+
+                        acc.fill(0.0);
+                        let mut m = f32::NEG_INFINITY;
+                        let mut ssum = 0.0f32;
+
+                        for j in j0..=j1 {
+                            let k_base = ((start_k + j) * hk + k_head) * d;
+                            let k_row = &k_data[k_base..k_base + d];
+
+                            let mut score = dot_f32(q_row, k_row) * softmax_scale;
+                            if slopes.is_some() {
+                                score += alibi_bias(slope, i_k, j as isize, causal);
                             }
-                            ssum *= scale_old;
-                            m = score;
 
                             let v_base = ((start_k + j) * hv + v_head) * d;
                             let v_row = &v_data[v_base..v_base + d];
-                            for t in 0..d {
-                                acc[t] += v_row[t];
-                            }
-                            ssum += 1.0;
-                        } else {
-                            let w = (score - m).exp();
-                            let v_base = ((start_k + j) * hv + v_head) * d;
-                            let v_row = &v_data[v_base..v_base + d];
-                            for t in 0..d {
-                                acc[t] += v_row[t] * w;
-                            }
-                            ssum += w;
+                            online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                                for t in 0..d {
+                                    acc[t] += v_row[t] * w;
+                                }
+                            });
                         }
-                    }
 
-                    let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d {
-                        out_row[t] = acc[t] * inv;
-                    }
-                },
-            );
+                        let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                        for t in 0..d {
+                            out_row[t] = acc[t] * inv;
+                        }
+                    },
+                );
+            });
 
             Tensor::from_vec(out, (total_q, hq, d), &Device::Cpu)
         }
@@ -324,114 +295,76 @@ pub fn flash_attn_varlen_cpu(
                 _ => candle::bail!("v not cpu"),
             };
 
-            #[inline(always)]
-            fn dot_qf32_kf16(q: &[f32], k: &[f16]) -> f32 {
-                let mut s = 0.0f32;
-                let mut i = 0usize;
-                while i + 8 <= q.len() {
-                    s += q[i] * k[i].to_f32()
-                        + q[i + 1] * k[i + 1].to_f32()
-                        + q[i + 2] * k[i + 2].to_f32()
-                        + q[i + 3] * k[i + 3].to_f32()
-                        + q[i + 4] * k[i + 4].to_f32()
-                        + q[i + 5] * k[i + 5].to_f32()
-                        + q[i + 6] * k[i + 6].to_f32()
-                        + q[i + 7] * k[i + 7].to_f32();
-                    i += 8;
-                }
-                while i < q.len() {
-                    s += q[i] * k[i].to_f32();
-                    i += 1;
-                }
-                s
-            }
-
             let mut out = vec![f16::from_f32(0.0); total_q * hq * d];
 
-            out.par_chunks_mut(d).enumerate().for_each_init(
-                || (vec![0f32; d], vec![0f32; d]),
-                |(q_row_f32, acc), (row, out_row)| {
-                    let q_idx = row / hq;
-                    let h = row % hq;
+            FLASH_ATTN_POOL.install(|| {
+                out.par_chunks_mut(d).enumerate().for_each_init(
+                    || vec![0f32; d],
+                    |acc, (row, out_row)| {
+                        let q_idx = row / hq;
+                        let h = row % hq;
 
-                    let b = batch_of_q[q_idx];
-                    let q_pos = pos_in_b[q_idx];
+                        let b = batch_of_q[q_idx];
+                        let q_pos = pos_in_b[q_idx];
 
-                    let lq = seqlens_q_vec[b] as usize;
-                    let lk = seqlens_k_vec[b] as usize;
-                    if lq == 0 || lk == 0 {
-                        out_row.fill(f16::from_f32(0.0));
-                        return;
-                    }
-
-                    let start_k = cumsum_k[b];
-                    let offset = lk as isize - lq as isize;
-
-                    let Some((j0, j1)) =
-                        key_range(q_pos, lk, offset, causal, window_left, window_right)
-                    else {
-                        out_row.fill(f16::from_f32(0.0));
-                        return;
-                    };
-                    if j0 > j1 {
-                        out_row.fill(f16::from_f32(0.0));
-                        return;
-                    }
-
-                    let k_head = h / rk;
-                    let v_head = h / rv;
-
-                    let slope = slopes.as_ref().map(|s| s[h]).unwrap_or(0.0);
-                    let i_k = q_pos as isize + offset;
-
-                    let q_base = (q_idx * hq + h) * d;
-                    for t in 0..d {
-                        q_row_f32[t] = q_data[q_base + t].to_f32();
-                    }
-
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
-
-                    for j in j0..=j1 {
-                        let k_base = ((start_k + j) * hk + k_head) * d;
-                        let k_row = &k_data[k_base..k_base + d];
-
-                        let mut score = dot_qf32_kf16(q_row_f32, k_row) * softmax_scale;
-                        if slopes.is_some() {
-                            score += alibi_bias(slope, i_k, j as isize, causal);
+                        let lq = seqlens_q_vec[b] as usize;
+                        let lk = seqlens_k_vec[b] as usize;
+                        if lq == 0 || lk == 0 {
+                            out_row.fill(f16::from_f32(0.0));
+                            return;
                         }
 
-                        if score > m {
-                            let scale_old = (m - score).exp();
-                            #[allow(clippy::needless_range_loop)]
-                            for t in 0..d {
-                                acc[t] *= scale_old;
-                            }
-                            ssum *= scale_old;
-                            m = score;
+                        let start_k = cumsum_k[b];
+                        let offset = lk as isize - lq as isize;
 
-                            let v_base = ((start_k + j) * hv + v_head) * d;
-                            for t in 0..d {
-                                acc[t] += v_data[v_base + t].to_f32();
-                            }
-                            ssum += 1.0;
-                        } else {
-                            let w = (score - m).exp();
-                            let v_base = ((start_k + j) * hv + v_head) * d;
-                            for t in 0..d {
-                                acc[t] += v_data[v_base + t].to_f32() * w;
-                            }
-                            ssum += w;
+                        let Some((j0, j1)) =
+                            key_range(q_pos, lk, offset, causal, window_left, window_right)
+                        else {
+                            out_row.fill(f16::from_f32(0.0));
+                            return;
+                        };
+                        if j0 > j1 {
+                            out_row.fill(f16::from_f32(0.0));
+                            return;
                         }
-                    }
 
-                    let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d {
-                        out_row[t] = f16::from_f32(acc[t] * inv);
-                    }
-                },
-            );
+                        let k_head = h / rk;
+                        let v_head = h / rv;
+
+                        let slope = slopes.as_ref().map(|s| s[h]).unwrap_or(0.0);
+                        let i_k = q_pos as isize + offset;
+
+                        let q_base = (q_idx * hq + h) * d;
+                        let q_row = &q_data[q_base..q_base + d];
+
+                        acc.fill(0.0);
+                        let mut m = f32::NEG_INFINITY;
+                        let mut ssum = 0.0f32;
+
+                        for j in j0..=j1 {
+                            let k_base = ((start_k + j) * hk + k_head) * d;
+                            let k_row = &k_data[k_base..k_base + d];
+
+                            let mut score = dot_f32(q_row, k_row) * softmax_scale;
+                            if slopes.is_some() {
+                                score += alibi_bias(slope, i_k, j as isize, causal);
+                            }
+
+                            let v_base = ((start_k + j) * hv + v_head) * d;
+                            online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                                for t in 0..d {
+                                    acc[t] += v_data[v_base + t].to_f32() * w;
+                                }
+                            });
+                        }
+
+                        let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                        for t in 0..d {
+                            out_row[t] = f16::from_f32(acc[t] * inv);
+                        }
+                    },
+                );
+            });
 
             Tensor::from_vec(out, (total_q, hq, d), &Device::Cpu)
         }
