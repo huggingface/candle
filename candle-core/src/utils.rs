@@ -1,10 +1,12 @@
 //! Useful functions for checking features.
+use std::any::Any;
 use std::cell::UnsafeCell;
 use std::hint::spin_loop;
 use std::ops::Div;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::thread::Thread;
 
 /// Per-worker control on its own 64-byte cache line to prevent false sharing.
 #[repr(C, align(64))]
@@ -23,8 +25,11 @@ struct WorkDesc {
 
 struct BarrierPoolInner {
     slots: Box<[Slot]>,
+    /// Thread handles for unpark.
+    handles: OnceLock<Box<[Thread]>>,
     work: UnsafeCell<WorkDesc>,
     stop: AtomicBool,
+    panic_payload: Mutex<Option<Box<dyn Any + Send>>>,
 }
 
 unsafe impl Sync for BarrierPoolInner {}
@@ -104,18 +109,20 @@ impl BarrierPool {
                 })
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            handles: OnceLock::new(),
             work: UnsafeCell::new(WorkDesc {
                 trampoline: |_, _| {},
                 data: std::ptr::null(),
             }),
             stop: AtomicBool::new(false),
+            panic_payload: Mutex::new(None),
         });
 
         let inner_ptr = &*inner as *const BarrierPoolInner as usize;
         let cluster_size = get_cluster_size();
         let (children, root_workers) = compute_tree(n_workers, cluster_size);
 
-        let threads = (0..n_workers)
+        let threads: Vec<_> = (0..n_workers)
             .map(|tid| {
                 let children = children[tid].clone();
                 std::thread::Builder::new()
@@ -126,34 +133,45 @@ impl BarrierPool {
                         let slot = &inner.slots[tid];
                         let mut gen = 0usize;
 
+                        const SPIN_LIMIT: u32 = 10_000;
                         loop {
-                            // Continuously check `slot.go` for next work item.
+                            // Spin briefly then park, waiting for next work item.
+                            let mut spins = 0u32;
                             loop {
                                 let g = slot.go.load(Ordering::Acquire);
                                 if g != gen {
-                                    // There is new work, so we move out ot the loop
                                     gen = g;
                                     break;
                                 }
-                                // Early exit if stop flag is true
                                 if inner.stop.load(Ordering::Relaxed) {
                                     return;
                                 }
-                                // Otherwise we spin for a bit
-                                spin_loop();
+                                spins += 1;
+                                if spins < SPIN_LIMIT {
+                                    spin_loop();
+                                } else {
+                                    // Park deposits a token; unpark() before park() returns immediately — no race.
+                                    std::thread::park();
+                                    spins = 0;
+                                }
                             }
                             if inner.stop.load(Ordering::Relaxed) {
                                 break;
                             }
 
-                            // Fan work out to children
+                            // Fan work out to children.
+                            let handles = inner.handles.get().unwrap();
                             for &child in &children {
                                 inner.slots[child].go.store(gen, Ordering::Release);
+                                handles[child].unpark();
                             }
 
-                            // Execute own work concurrently with children
-                            let work = unsafe { &*inner.work.get() };
-                            unsafe { (work.trampoline)(work.data, tid) };
+                            // Execute own work, catching panics so done is always signalled.
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let work = unsafe { &*inner.work.get() };
+                                    unsafe { (work.trampoline)(work.data, tid) };
+                                }));
 
                             // Reduce: wait for all children before signalling parent.
                             for &child in &children {
@@ -162,13 +180,31 @@ impl BarrierPool {
                                 }
                             }
 
+                            // Signal done unconditionally so main/parent never deadlocks.
                             slot.done.store(gen, Ordering::Release);
+
+                            if let Err(payload) = result {
+                                let mut p = inner.panic_payload.lock().unwrap();
+                                if p.is_none() {
+                                    *p = Some(payload);
+                                }
+                            }
                         }
                     })
                     .expect("failed to spawn candle barrier pool worker")
             })
             .collect();
 
+        inner
+            .handles
+            .set(
+                threads
+                    .iter()
+                    .map(|jh| jh.thread().clone())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )
+            .ok();
         BarrierPool {
             inner,
             threads,
@@ -181,7 +217,33 @@ impl BarrierPool {
     pub fn n_workers(&self) -> usize {
         self.threads.len()
     }
+}
 
+/// RAII guard that blocks until all root workers have finished.
+struct BarrierGuard<'a> {
+    inner: &'a BarrierPoolInner,
+    roots: &'a [usize],
+    gen: usize,
+}
+
+impl Drop for BarrierGuard<'_> {
+    fn drop(&mut self) {
+        for &root in self.roots {
+            while self.inner.slots[root].done.load(Ordering::Acquire) != self.gen {
+                spin_loop();
+            }
+        }
+        // Always clear any stored panic. Propagate unless main is not already unwinding.
+        let payload = self.inner.panic_payload.lock().unwrap().take();
+        if !std::thread::panicking() {
+            if let Some(p) = payload {
+                std::panic::resume_unwind(p);
+            }
+        }
+    }
+}
+
+impl BarrierPool {
     pub fn execute<F: Fn(usize) + Sync>(&self, f: F) {
         let n = self.threads.len();
         if n == 0 {
@@ -199,18 +261,22 @@ impl BarrierPool {
             work.data = &f as *const F as *const ();
         }
 
+        let handles = self.inner.handles.get().unwrap();
         for &root in &self.root_workers {
             self.inner.slots[root].go.store(new_gen, Ordering::Release);
+            handles[root].unpark();
         }
+
+        // Guard waits for workers and propagates panics on drop.
+        let _guard = BarrierGuard {
+            inner: &self.inner,
+            roots: &self.root_workers,
+            gen: new_gen,
+        };
 
         // Main thread participates as worker n (workers are 0..n-1).
         f(n);
-
-        for &root in &self.root_workers {
-            while self.inner.slots[root].done.load(Ordering::Acquire) != new_gen {
-                spin_loop();
-            }
-        }
+        // _guard drops here, waiting for root workers.
     }
 }
 
@@ -221,9 +287,13 @@ impl Drop for BarrierPool {
         }
         self.inner.stop.store(true, Ordering::Relaxed);
         let new_gen = self.call_lock.lock().unwrap().wrapping_add(1);
-        // Signal ALL slots directly
-        for slot in self.inner.slots.iter() {
+        let handles = self.inner.handles.get();
+        // Signal ALL slots and unpark them so parked workers wake immediately.
+        for (i, slot) in self.inner.slots.iter().enumerate() {
             slot.go.store(new_gen, Ordering::Release);
+            if let Some(hs) = handles {
+                hs[i].unpark();
+            }
         }
         for t in self.threads.drain(..) {
             let _ = t.join();
