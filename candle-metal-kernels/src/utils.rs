@@ -1,8 +1,27 @@
-use crate::metal::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
+use crate::metal::{Buffer, CommandsGuard, ComputeCommandEncoder, ComputePipeline};
 use crate::MTLSize;
 use std::ffi::OsStr;
 use std::ops::Deref;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
+
+pub struct WrappedEncoder<'a> {
+    inner: &'a ComputeCommandEncoder,
+    end_encoding_on_drop: bool,
+}
+
+impl Drop for WrappedEncoder<'_> {
+    fn drop(&mut self) {
+        if self.end_encoding_on_drop {
+            self.inner.end_encoding()
+        }
+    }
+}
+
+impl AsRef<ComputeCommandEncoder> for WrappedEncoder<'_> {
+    fn as_ref(&self) -> &ComputeCommandEncoder {
+        self.inner
+    }
+}
 
 /// Most kernels apply similarly across the tensors
 /// This creates a strategy that uses the maximum amount of threads per threadgroup (capped at the
@@ -124,36 +143,117 @@ impl<T> EncoderParam for &[T] {
 
 impl EncoderParam for &Buffer {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data), 0);
+        encoder.set_input_buffer(position, Some(data), 0);
     }
 }
 
 impl EncoderParam for (&Buffer, usize) {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data.0), data.1);
+        encoder.set_input_buffer(position, Some(data.0), data.1);
     }
 }
 
 impl EncoderParam for &BufferOffset<'_> {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data.buffer), data.offset_in_bytes);
+        encoder.set_input_buffer(position, Some(data.buffer), data.offset_in_bytes);
     }
 }
 
 impl EncoderParam for &mut Buffer {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data), 0);
+        encoder.set_output_buffer(position, Some(data), 0);
     }
 }
 
 impl EncoderParam for (&mut Buffer, usize) {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_buffer(position, Some(data.0), data.1);
+        encoder.set_output_buffer(position, Some(data.0), data.1);
     }
 }
 
 impl EncoderParam for () {
     fn set_param(_: &ComputeCommandEncoder, _: usize, _: Self) {}
+}
+
+/// Marks a buffer as a read input in `set_params!` calls, enabling hazard tracking.
+///
+/// # Examples
+/// ```ignore
+/// set_params!(encoder, (length, Input::new(input), output));
+/// ```
+#[derive(Copy, Clone)]
+pub struct Input<'a> {
+    buffer: &'a Buffer,
+    offset: usize,
+}
+
+impl<'a> Input<'a> {
+    #[inline]
+    pub fn new(buffer: &'a Buffer) -> Self {
+        Self { buffer, offset: 0 }
+    }
+
+    #[inline]
+    pub fn with_offset(buffer: &'a Buffer, offset: usize) -> Self {
+        Self { buffer, offset }
+    }
+
+    #[inline]
+    pub fn from_buffer_offset(bo: &'a BufferOffset<'a>) -> Self {
+        Self {
+            buffer: bo.buffer,
+            offset: bo.offset_in_bytes,
+        }
+    }
+}
+
+impl<'a> EncoderParam for Input<'a> {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_input_buffer(position, Some(data.buffer), data.offset);
+    }
+}
+
+/// Marks a buffer as a write output in `set_params!` calls, enabling hazard tracking.
+///
+/// Use this wrapper wherever a kernel writes to a buffer so the encoder can detect
+/// read-after-write (RAW) hazards and insert barriers before concurrent dispatches.
+///
+/// # Examples
+/// ```ignore
+/// set_params!(encoder, (length, &input, Output::new(output)));
+/// set_params!(encoder, (k, m, n, Output::from_buffer_offset(dst_bo)));
+/// set_params!(encoder, (n, Output::with_offset(dst, dst_offset)));
+/// ```
+#[derive(Copy, Clone)]
+pub struct Output<'a> {
+    buffer: &'a Buffer,
+    offset: usize,
+}
+
+impl<'a> Output<'a> {
+    #[inline]
+    pub fn new(buffer: &'a Buffer) -> Self {
+        Self { buffer, offset: 0 }
+    }
+
+    #[inline]
+    pub fn with_offset(buffer: &'a Buffer, offset: usize) -> Self {
+        Self { buffer, offset }
+    }
+
+    #[inline]
+    pub fn from_buffer_offset(bo: &'a BufferOffset<'a>) -> Self {
+        Self {
+            buffer: bo.buffer,
+            offset: bo.offset_in_bytes,
+        }
+    }
+}
+
+impl<'a> EncoderParam for Output<'a> {
+    fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+        encoder.set_output_buffer(position, Some(data.buffer), data.offset);
+    }
 }
 
 #[macro_export]
@@ -167,41 +267,46 @@ macro_rules! set_params {
     );
 }
 
+/// Scope a Metal debug group around the current dispatch, e.g.
+/// `debug_group!(encoder, "kernel {a}")`. The guard binds into the caller's
+/// block (like `set_params!`), so the group pops after the dispatch. Gated at
+/// the macro definition: off-feature it expands to nothing.
+#[cfg(feature = "debug-labels")]
+#[macro_export]
+macro_rules! debug_group {
+    ($enc:expr, $($arg:tt)+) => {
+        let _debug_group_guard = $enc.debug_group(&::std::format!($($arg)+));
+    };
+}
+
+#[cfg(not(feature = "debug-labels"))]
+#[macro_export]
+macro_rules! debug_group {
+    ($enc:expr, $($arg:tt)+) => {};
+}
+
+/// Apply a persistent `MTLBuffer`/queue debug label, e.g.
+/// `metal_label!(buffer, "name")`. Gated like [`debug_group!`].
+#[cfg(feature = "debug-labels")]
+#[macro_export]
+macro_rules! metal_label {
+    ($obj:expr, $($arg:tt)+) => {
+        $obj.set_label(&::std::format!($($arg)+));
+    };
+}
+
+#[cfg(not(feature = "debug-labels"))]
+#[macro_export]
+macro_rules! metal_label {
+    ($obj:expr, $($arg:tt)+) => {};
+}
+
 pub trait EncoderProvider {
     type Encoder<'a>: AsRef<ComputeCommandEncoder>
     where
         Self: 'a;
 
     fn encoder(&self) -> Self::Encoder<'_>;
-}
-
-pub struct WrappedEncoder<'a> {
-    inner: &'a ComputeCommandEncoder,
-    end_encoding_on_drop: bool,
-}
-
-impl Drop for WrappedEncoder<'_> {
-    fn drop(&mut self) {
-        if self.end_encoding_on_drop {
-            self.inner.end_encoding()
-        }
-    }
-}
-
-impl AsRef<ComputeCommandEncoder> for WrappedEncoder<'_> {
-    fn as_ref(&self) -> &ComputeCommandEncoder {
-        self.inner
-    }
-}
-
-impl EncoderProvider for &CommandBuffer {
-    type Encoder<'a>
-        = ComputeCommandEncoder
-    where
-        Self: 'a;
-    fn encoder(&self) -> Self::Encoder<'_> {
-        self.compute_command_encoder()
-    }
 }
 
 impl EncoderProvider for &ComputeCommandEncoder {
@@ -214,6 +319,16 @@ impl EncoderProvider for &ComputeCommandEncoder {
             inner: self,
             end_encoding_on_drop: false,
         }
+    }
+}
+
+impl EncoderProvider for &CommandsGuard<'_> {
+    type Encoder<'a>
+        = &'a CommandsGuard<'a>
+    where
+        Self: 'a;
+    fn encoder(&self) -> Self::Encoder<'_> {
+        self
     }
 }
 

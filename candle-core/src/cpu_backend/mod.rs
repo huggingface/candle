@@ -883,48 +883,63 @@ fn copy2d_<T: Copy>(
     src_offset: usize,
     dst_offset: usize,
 ) {
-    for i1 in 0..d1 {
-        let dst_idx = i1 * dst_stride1 + dst_offset;
-        let src_idx = i1 * src_stride1 + src_offset;
-        let dst = &mut dst[dst_idx..dst_idx + d2];
-        let src = &src[src_idx..src_idx + d2];
-        dst.copy_from_slice(src)
+    // Both are contiguous - one memcpy covers everything.
+    if src_stride1 == d2 && dst_stride1 == d2 {
+        let src_start = src_offset;
+        let dst_start = dst_offset;
+        dst[dst_start..dst_start + d1 * d2].copy_from_slice(&src[src_start..src_start + d1 * d2]);
+        return;
+    }
+    let mut src_idx = src_offset;
+    let mut dst_idx = dst_offset;
+    for _ in 0..d1 {
+        dst[dst_idx..dst_idx + d2].copy_from_slice(&src[src_idx..src_idx + d2]);
+        src_idx += src_stride1;
+        dst_idx += dst_stride1;
     }
 }
 
 fn copy_strided_src_<T: Copy>(src: &[T], dst: &mut [T], dst_offset: usize, src_l: &Layout) {
     match src_l.strided_blocks() {
-        crate::StridedBlocks::SingleBlock { start_offset, len } => {
-            let to_copy = (dst.len() - dst_offset).min(len);
-            dst[dst_offset..dst_offset + to_copy]
-                .copy_from_slice(&src[start_offset..start_offset + to_copy])
-        }
+        crate::StridedBlocks::SingleBlock { start_offset, len } => dst
+            [dst_offset..dst_offset + len]
+            .copy_from_slice(&src[start_offset..start_offset + len]),
+        crate::StridedBlocks::UniformBlocks {
+            start_offset,
+            block_len,
+            count,
+            src_stride,
+        } => copy2d_(
+            src,
+            dst,
+            count,
+            block_len,
+            src_stride,
+            block_len,
+            start_offset,
+            dst_offset,
+        ),
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
             block_len: 1,
         } => {
-            for (dst_index, src_index) in block_start_index.enumerate() {
-                let dst_index = dst_index + dst_offset;
-                if dst_index >= dst.len() {
-                    break;
-                }
-                dst[dst_index] = src[src_index]
+            let n = block_start_index.len();
+            let dst = &mut dst[dst_offset..dst_offset + n];
+            for (dst_elem, src_index) in dst.iter_mut().zip(block_start_index) {
+                *dst_elem = src[src_index]
             }
         }
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
             block_len,
         } => {
-            let mut dst_index = dst_offset;
+            let n_blocks = block_start_index.len();
+            let dst = &mut dst[dst_offset..dst_offset + n_blocks * block_len];
+            let mut dst_index = 0;
             for src_index in block_start_index {
-                let next_dst_index = dst_index + block_len;
-                if dst_index >= dst.len() {
-                    break;
-                }
-                let to_copy = usize::min(block_len, dst.len() - dst_index);
-                dst[dst_index..dst_index + to_copy]
-                    .copy_from_slice(&src[src_index..src_index + to_copy]);
-                dst_index = next_dst_index
+                dst[dst_index..dst_index + block_len]
+                    .copy_from_slice(&src[src_index..src_index + block_len]);
+                dst_index += block_len;
             }
         }
     }
@@ -2449,40 +2464,20 @@ impl BackendStorage for CpuStorage {
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         match self {
             Self::BF16(storage) => {
-                if B::BF16_VEC {
-                    let data = unary_map_vec(storage, layout, B::bf16, B::bf16_vec);
-                    Ok(Self::BF16(data))
-                } else {
-                    let data = unary_map(storage, layout, B::bf16);
-                    Ok(Self::BF16(data))
-                }
+                let data = unary_map_vec(storage, layout, B::bf16, B::bf16_vec);
+                Ok(Self::BF16(data))
             }
             Self::F16(storage) => {
-                if B::F16_VEC {
-                    let data = unary_map_vec(storage, layout, B::f16, B::f16_vec);
-                    Ok(Self::F16(data))
-                } else {
-                    let data = unary_map(storage, layout, B::f16);
-                    Ok(Self::F16(data))
-                }
+                let data = unary_map_vec(storage, layout, B::f16, B::f16_vec);
+                Ok(Self::F16(data))
             }
             Self::F32(storage) => {
-                if B::F32_VEC {
-                    let data = unary_map_vec(storage, layout, B::f32, B::f32_vec);
-                    Ok(Self::F32(data))
-                } else {
-                    let data = unary_map(storage, layout, B::f32);
-                    Ok(Self::F32(data))
-                }
+                let data = unary_map_vec(storage, layout, B::f32, B::f32_vec);
+                Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                if B::F64_VEC {
-                    let data = unary_map_vec(storage, layout, B::f64, B::f64_vec);
-                    Ok(Self::F64(data))
-                } else {
-                    let data = unary_map(storage, layout, B::f64);
-                    Ok(Self::F64(data))
-                }
+                let data = unary_map_vec(storage, layout, B::f64, B::f64_vec);
+                Ok(Self::F64(data))
             }
             Self::U8(storage) => {
                 let data = unary_map(storage, layout, B::u8);
@@ -2523,67 +2518,104 @@ impl BackendStorage for CpuStorage {
     ) -> Result<Self> {
         match (self, rhs) {
             (Self::BF16(lhs), Self::BF16(rhs)) => {
-                let data = if B::BF16_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::bf16, B::bf16_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::bf16)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::bf16,
+                    B::bf16_vec,
+                    B::bf16_scalar_vec,
+                );
                 Ok(Self::BF16(data))
             }
             (Self::F16(lhs), Self::F16(rhs)) => {
-                let data = if B::F16_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f16, B::f16_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f16)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::f16,
+                    B::f16_vec,
+                    B::f16_scalar_vec,
+                );
                 Ok(Self::F16(data))
             }
             (Self::F32(lhs), Self::F32(rhs)) => {
-                let data = if B::F32_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f32, B::f32_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f32)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::f32,
+                    B::f32_vec,
+                    B::f32_scalar_vec,
+                );
                 Ok(Self::F32(data))
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
-                let data = if B::F64_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f64, B::f64_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f64)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::f64,
+                    B::f64_vec,
+                    B::f64_scalar_vec,
+                );
                 Ok(Self::F64(data))
             }
             (Self::U32(lhs), Self::U32(rhs)) => {
-                let data = if B::U32_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u32, B::u32_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::u32)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::u32,
+                    B::u32_vec,
+                    B::u32_scalar_vec,
+                );
                 Ok(Self::U32(data))
             }
             (Self::I16(lhs), Self::I16(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::i16);
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::i16,
+                    B::i16_vec,
+                    B::i16_scalar_vec,
+                );
                 Ok(Self::I16(data))
             }
             (Self::I32(lhs), Self::I32(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::i32);
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::i32,
+                    B::i32_vec,
+                    B::i32_scalar_vec,
+                );
                 Ok(Self::I32(data))
             }
             (Self::I64(lhs), Self::I64(rhs)) => {
-                let data = if B::I64_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::i64, B::i64_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::i64)
-                };
+                let data = binary_map_vec(
+                    lhs_l,
+                    rhs_l,
+                    lhs,
+                    rhs,
+                    B::i64,
+                    B::i64_vec,
+                    B::i64_scalar_vec,
+                );
                 Ok(Self::I64(data))
             }
             (Self::U8(lhs), Self::U8(rhs)) => {
-                let data = if B::U8_VEC {
-                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u8, B::u8_vec)
-                } else {
-                    binary_map(lhs_l, rhs_l, lhs, rhs, B::u8)
-                };
+                let data =
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u8, B::u8_vec, B::u8_scalar_vec);
                 Ok(Self::U8(data))
             }
             (Self::F8E4M3(lhs), Self::F8E4M3(rhs)) => {
@@ -2970,6 +3002,17 @@ impl BackendStorage for CpuStorage {
             match l.strided_blocks() {
                 crate::StridedBlocks::SingleBlock { start_offset, len } => {
                     src[start_offset..start_offset + len].fill(s)
+                }
+                crate::StridedBlocks::UniformBlocks {
+                    start_offset,
+                    block_len,
+                    count,
+                    src_stride,
+                } => {
+                    for i in 0..count {
+                        let start = start_offset + i * src_stride;
+                        src[start..start + block_len].fill(s)
+                    }
                 }
                 crate::StridedBlocks::MultipleBlocks {
                     block_start_index,

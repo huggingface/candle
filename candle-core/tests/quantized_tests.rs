@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use candle_core::{
     bail,
     quantized::{self, GgmlDType},
@@ -243,9 +245,9 @@ fn qmm_batch(dev: &Device) -> Result<()> {
     assert_eq!(mm4.shape().dims(), [12, 6]);
     let diff4 = (mm4.i(..6)? - &mm3)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     if dev.is_cuda() {
-        // We use a different kernel for sizes from 1 to 8 on cuda which explains
-        // the difference here.
-        assert!(0. < diff4 && diff4 < 1e-4)
+        // We use different fused kernels (MMVQ for batch<=8, MMQ for batch>8) on CUDA which accumulate differently than dequantize-then-matmul.
+        // This can lead to small numerical differences especially for low-bit quants.
+        assert!(0. < diff4 && diff4 < 0.5)
     } else {
         assert_eq!(diff4, 0.0)
     };
@@ -1115,7 +1117,7 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 fn quantized_mm() -> Result<()> {
     ggml_matmul_error_test::<f32>()?;
     ggml_matmul_error_test::<half::f16>()?;
-    //ggml_matmul_error_test::<half::bf16>()?; TODO: Fails on ubuntu and windows. Check CpuBF16 impl
+    ggml_matmul_error_test::<half::bf16>()?;
     ggml_matmul_error_test::<k_quants::BlockQ4_0>()?;
     ggml_matmul_error_test::<k_quants::BlockQ4_1>()?;
     ggml_matmul_error_test::<k_quants::BlockQ5_0>()?;

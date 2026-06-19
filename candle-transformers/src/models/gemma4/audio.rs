@@ -83,7 +83,11 @@ impl SSCPConvBlock {
         input_freq_dim: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let in_channels = if idx == 0 { 1 } else { cfg.sscp_conv_channel_size[idx - 1] };
+        let in_channels = if idx == 0 {
+            1
+        } else {
+            cfg.sscp_conv_channel_size[idx - 1]
+        };
         let out_channels = cfg.sscp_conv_channel_size[idx];
         let kernel_t = cfg.sscp_conv_kernel_size[idx][0];
         let _kernel_f = cfg.sscp_conv_kernel_size[idx][1];
@@ -122,7 +126,11 @@ impl SSCPConvBlock {
         })
     }
 
-    fn forward(&self, audio_encodings: &Tensor, audio_mel_mask: &Tensor) -> Result<(Tensor, Tensor)> {
+    fn forward(
+        &self,
+        audio_encodings: &Tensor,
+        audio_mel_mask: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
         // Zero out padded positions
         let valid_mask = audio_mel_mask
             .eq(0.0)?
@@ -234,11 +242,8 @@ impl RelativePositionEmbedding {
         let max_forward = cfg.conf_attention_context_right;
         let num_timescales = channels / 2;
 
-        let pos_proj = candle_nn::linear_no_bias(
-            channels,
-            num_heads * head_dim,
-            vb.pp("relative_k_proj"),
-        )?;
+        let pos_proj =
+            candle_nn::linear_no_bias(channels, num_heads * head_dim, vb.pp("relative_k_proj"))?;
 
         let min_timescale = 1.0_f64;
         let max_timescale = 10_000.0_f64;
@@ -399,9 +404,12 @@ impl ConformerAttention {
         let attn_vb = vb.pp("self_attn");
         let relative_position_embedding = RelativePositionEmbedding::new(cfg, attn_vb.clone())?;
         let per_dim_scale = attn_vb.get(head_dim, "per_dim_scale")?;
-        let q_proj = candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("q_proj"))?;
-        let k_proj = candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("k_proj"))?;
-        let v_proj = candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("v_proj"))?;
+        let q_proj =
+            candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("q_proj"))?;
+        let k_proj =
+            candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("k_proj"))?;
+        let v_proj =
+            candle_nn::linear_no_bias(hidden_size, num_heads * head_dim, attn_vb.pp("v_proj"))?;
         let post = candle_nn::linear_no_bias(hidden_size, hidden_size, attn_vb.pp("post"))?;
 
         let pre_attn_norm = RmsNorm::new(hidden_size, cfg.rms_norm_eps, vb.pp("norm_pre_attn"))?;
@@ -415,7 +423,8 @@ impl ConformerAttention {
         for i in 0..chunk_size {
             for j in 0..context_size {
                 let lower = j >= i;
-                let upper = (j as isize) <= (i as isize + (max_past_horizon + max_future_horizon) as isize);
+                let upper =
+                    (j as isize) <= (i as isize + (max_past_horizon + max_future_horizon) as isize);
                 if lower && upper {
                     mask_vec[i * context_size + j] = 1;
                 }
@@ -509,9 +518,9 @@ impl ConformerAttention {
             .to_dtype(DType::F32)?;
 
         // Scale Q and K
-        let q = q.affine(self.q_scale, 0.0)?.broadcast_mul(
-            &per_dim_scale.reshape((1, 1, 1, self.head_dim))?,
-        )?;
+        let q = q
+            .affine(self.q_scale, 0.0)?
+            .broadcast_mul(&per_dim_scale.reshape((1, 1, 1, self.head_dim))?)?;
         let k = k.affine(self.k_scale, 0.0)?;
 
         // Convert to blocks
@@ -594,12 +603,10 @@ impl ConformerAttention {
         // Broadcast mask to logits shape
         let final_cond = final_cond.broadcast_as(logits.shape())?;
 
-        let invalid_logits =
-            Tensor::new(self.invalid_logits_value as f32, logits.device())?
-                .broadcast_as(logits.shape())?;
+        let invalid_logits = Tensor::new(self.invalid_logits_value as f32, logits.device())?
+            .broadcast_as(logits.shape())?;
         let masked_logits = final_cond.where_cond(&logits, &invalid_logits)?;
-        let probabilities =
-            candle_nn::ops::softmax_last_dim(&masked_logits.to_dtype(DType::F32)?)?;
+        let probabilities = candle_nn::ops::softmax_last_dim(&masked_logits.to_dtype(DType::F32)?)?;
 
         // Weighted sum of values
         let (b_dim, n_dim, u_dim, w_dim, c_dim) = probabilities.dims5()?;
@@ -618,7 +625,12 @@ impl ConformerAttention {
             .matmul(&vals_p)?
             .reshape((b_dim, u_dim, n_dim, w_dim, h_dim))?
             .permute((0, 1, 3, 2, 4))?
-            .reshape((b, num_query_blocks * self.chunk_size, self.num_heads, self.head_dim))?
+            .reshape((
+                b,
+                num_query_blocks * self.chunk_size,
+                self.num_heads,
+                self.head_dim,
+            ))?
             .narrow(1, 0, t)?;
 
         let context_vectors = context_vectors.reshape((b, t, self.hidden_size))?;
@@ -646,7 +658,11 @@ impl ConformerFeedForward {
     fn new(cfg: &Gemma4AudioConfig, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             scale: cfg.conf_residual_weight,
-            pre_layer_norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("pre_layer_norm"))?,
+            pre_layer_norm: RmsNorm::new(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                vb.pp("pre_layer_norm"),
+            )?,
             ffw_layer_1: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.hidden_size * 4,
@@ -696,7 +712,11 @@ struct ConformerLightConv1d {
 impl ConformerLightConv1d {
     fn new(cfg: &Gemma4AudioConfig, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            pre_layer_norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("pre_layer_norm"))?,
+            pre_layer_norm: RmsNorm::new(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                vb.pp("pre_layer_norm"),
+            )?,
             linear_start: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.hidden_size * 2,
@@ -805,7 +825,11 @@ impl AudioModel {
             conformer.push(ConformerBlock::new(cfg, vb_layers.pp(i))?);
         }
         let output_proj = if let Some(output_dim) = cfg.output_proj_dims {
-            Some(candle_nn::linear(cfg.hidden_size, output_dim, vb.pp("output_proj"))?)
+            Some(candle_nn::linear(
+                cfg.hidden_size,
+                output_dim,
+                vb.pp("output_proj"),
+            )?)
         } else {
             None
         };
@@ -817,11 +841,7 @@ impl AudioModel {
         })
     }
 
-    pub fn forward(
-        &self,
-        audio_mel: &Tensor,
-        audio_mel_mask: &Tensor,
-    ) -> Result<(Tensor, Tensor)> {
+    pub fn forward(&self, audio_mel: &Tensor, audio_mel_mask: &Tensor) -> Result<(Tensor, Tensor)> {
         let (mut audio_encodings, mut current_mask) = self
             .subsample_conv_projection
             .forward(audio_mel, audio_mel_mask)?;
