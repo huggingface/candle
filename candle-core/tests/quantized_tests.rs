@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use candle_core::{
     bail,
     quantized::{self, GgmlDType},
@@ -9,6 +7,7 @@ use candle_core::{
 };
 use quantized::{k_quants, GgmlType};
 use rand::prelude::*;
+use std::borrow::Cow;
 
 const GGML_TEST_SIZE: usize = 32 * 128;
 
@@ -421,7 +420,7 @@ fn compare_with_error(values: &[f32], expected: &[f32], tolerance: f32) {
         let difference = (value - expected_value).abs();
 
         assert!(
-            difference <= tolerance,
+            difference < tolerance,
             "Error at index {i}: value = {value}, expected = {expected_value}. Difference = {difference} exceeds tolerance = {tolerance}."
         );
     }
@@ -922,6 +921,17 @@ fn quantize_q8k(device: &Device) -> Result<()> {
     let dst = dst.to_vec1::<f32>()?;
     compare_with_error(dst.as_slice(), src.as_slice(), 0.008);
 
+    // Test some specific values
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
+    let dst = round_vector(&dst);
+    assert_eq!(
+        [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
+        [-0.5, -0.375, -0.25, -0.0, 0.281, 0.499]
+    );
+
     let src_big = get_test_vector2(128.0, 1024, device)?;
     let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
@@ -935,7 +945,7 @@ fn quantize_q8k(device: &Device) -> Result<()> {
 
     let src_big = src_big.to_vec1::<f32>()?;
     let dst_big = dst_big.to_vec1::<f32>()?;
-    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 1.0);
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 0.6);
 
     ggml_quantization_error_test(dtype, device, GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
     Ok(())
@@ -1255,9 +1265,8 @@ fn quantized_matmul_q2k() -> Result<()> {
 
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
-    let dst = &[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]];
-    let expected = &[0.916f32, 0.422, 0.215, 1.668];
-    compare_with_error(dst, expected, 0.01);
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [0.916, 0.422, 0.215, 1.668]);
 
     ggml_matmul_error_test::<BlockQ2K>()?;
 
@@ -1282,9 +1291,8 @@ fn quantized_matmul_q3k() -> Result<()> {
 
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
-    let dst = &[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]];
-    let expected = &[1.029, 1.418, -0.314, 1.495];
-    compare_with_error(dst, expected, 0.01);
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.029, 1.418, -0.314, 1.495]);
 
     ggml_matmul_error_test::<BlockQ3K>()?;
 
@@ -1309,9 +1317,8 @@ fn quantized_matmul_q4k() -> Result<()> {
 
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
-    let dst = &[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]];
-    let expected = &[1.125, 1.435, -0.201, 1.589];
-    compare_with_error(dst, expected, 0.01);
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.125, 1.435, -0.201, 1.589]);
 
     ggml_matmul_error_test::<BlockQ4K>()?;
 
@@ -1336,9 +1343,8 @@ fn quantized_matmul_q5k() -> Result<()> {
 
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
-    let dst = &[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]];
-    let expected = &[1.192, 1.491, -0.18, 1.743];
-    compare_with_error(dst, expected, 0.01);
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.192, 1.491, -0.18, 1.743]);
 
     //Expected: 0.000740408897
     ggml_matmul_error_test::<BlockQ5K>()?;
@@ -1364,9 +1370,8 @@ fn quantized_matmul_q6k() -> Result<()> {
 
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
-    let dst = &[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]];
-    let expected = &[1.324, 1.49, -0.164, 1.741];
-    compare_with_error(dst, expected, 0.01);
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.324, 1.49, -0.164, 1.741]);
 
     ggml_matmul_error_test::<BlockQ6K>()?;
     Ok(())
@@ -1390,9 +1395,8 @@ fn quantized_matmul_q8k() -> Result<()> {
 
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
-    let dst = &[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]];
-    let expected = &[1.266, 1.504, -0.204, 1.7];
-    compare_with_error(dst, expected, 0.01);
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.266, 1.504, -0.204, 1.7]);
 
     ggml_matmul_error_test::<BlockQ8K>()?;
     Ok(())
