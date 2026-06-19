@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use candle_core::{
     bail,
     quantized::{self, GgmlDType},
@@ -243,9 +245,9 @@ fn qmm_batch(dev: &Device) -> Result<()> {
     assert_eq!(mm4.shape().dims(), [12, 6]);
     let diff4 = (mm4.i(..6)? - &mm3)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     if dev.is_cuda() {
-        // We use a different kernel for sizes from 1 to 8 on cuda which explains
-        // the difference here.
-        assert!(0. < diff4 && diff4 < 1e-4)
+        // We use different fused kernels (MMVQ for batch<=8, MMQ for batch>8) on CUDA which accumulate differently than dequantize-then-matmul.
+        // This can lead to small numerical differences especially for low-bit quants.
+        assert!(0. < diff4 && diff4 < 0.5)
     } else {
         assert_eq!(diff4, 0.0)
     };
@@ -1113,7 +1115,7 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 fn quantized_mm() -> Result<()> {
     ggml_matmul_error_test::<f32>()?;
     ggml_matmul_error_test::<half::f16>()?;
-    //ggml_matmul_error_test::<half::bf16>()?; TODO: Fails on ubuntu and windows. Check CpuBF16 impl
+    ggml_matmul_error_test::<half::bf16>()?;
     ggml_matmul_error_test::<k_quants::BlockQ4_0>()?;
     ggml_matmul_error_test::<k_quants::BlockQ4_1>()?;
     ggml_matmul_error_test::<k_quants::BlockQ5_0>()?;
@@ -1400,3 +1402,35 @@ fn quantized_matmul_q8k() -> Result<()> {
     ggml_matmul_error_test::<BlockQ8K>()?;
     Ok(())
 }
+
+fn from_data_dequant_matches_canonical_when_caller_passes_cow_owned(device: &Device) -> Result<()> {
+    let cpu = Device::Cpu;
+    let n = 1024usize;
+    let src_data: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.013).sin()).collect();
+    let src = Tensor::from_vec(src_data, (n,), &cpu)?;
+    let qt_canonical = quantized::QTensor::quantize(&src, GgmlDType::Q4_0)?;
+    let canonical_dequant = qt_canonical.dequantize(&cpu)?.to_vec1::<f32>()?;
+
+    let bytes_owned: Vec<u8> = qt_canonical.data()?.to_vec();
+    let storage = quantized::QStorage::from_data(Cow::Owned(bytes_owned), device, GgmlDType::Q4_0)?;
+    let qt_via_from_data = quantized::QTensor::new(storage, (n,))?;
+    let observed_dequant = qt_via_from_data.dequantize(device)?.to_vec1::<f32>()?;
+
+    let max_diff = canonical_dequant
+        .iter()
+        .zip(observed_dequant.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0f32, f32::max);
+    assert!(
+        max_diff < 1e-5,
+        "QStorage::from_data dequant mismatch on {device:?} (max |Δ| = {max_diff})"
+    );
+    Ok(())
+}
+
+test_device!(
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cpu,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
+);

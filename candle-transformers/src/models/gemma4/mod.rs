@@ -71,11 +71,7 @@ impl Model {
     }
 
     /// Text-only forward pass.
-    pub fn forward(
-        &mut self,
-        input_ids: &Tensor,
-        seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         self.language_model.forward(input_ids, seqlen_offset)
     }
 
@@ -114,16 +110,23 @@ impl Model {
                 .unsqueeze(D::Minus1)?
                 .broadcast_as(input_embeds.shape())?
                 .to_dtype(input_embeds.dtype())?;
-            let image_embeds_broadcast =
-                broadcast_embed_to_mask(&image_embeds_flat, &image_mask)?;
+            let image_embeds_broadcast = broadcast_embed_to_mask(&image_embeds_flat, &image_mask)?;
             input_embeds = ((mask_expanded.clone() * image_embeds_broadcast)?
                 + ((1.0 - mask_expanded)? * input_embeds)?)?;
         }
 
         // ── Audio embedding injection ───────────────────────────────────
-        if let (Some(audio_mel), Some(audio_mel_mask), Some(ref audio_tower), Some(ref embed_audio)) =
-            (audio_mel, audio_mel_mask, &self.audio_tower, &self.embed_audio)
-        {
+        if let (
+            Some(audio_mel),
+            Some(audio_mel_mask),
+            Some(ref audio_tower),
+            Some(ref embed_audio),
+        ) = (
+            audio_mel,
+            audio_mel_mask,
+            &self.audio_tower,
+            &self.embed_audio,
+        ) {
             let audio_mask = input_ids
                 .to_dtype(DType::F32)?
                 .eq(self.cfg.audio_token_id as f64)?;
@@ -189,9 +192,7 @@ fn broadcast_embed_to_mask(embeds: &Tensor, mask: &Tensor) -> Result<Tensor> {
     // For single-batch simple case, just expand embeds to the output shape
     // and let the caller do the masking.
     if b_sz == 1 {
-        let num_tokens = mask_f32
-            .sum_all()?
-            .to_scalar::<f32>()? as usize;
+        let num_tokens = mask_f32.sum_all()?.to_scalar::<f32>()? as usize;
         if num_tokens == 0 {
             return Ok(zeros);
         }
@@ -200,7 +201,11 @@ fn broadcast_embed_to_mask(embeds: &Tensor, mask: &Tensor) -> Result<Tensor> {
         if embed_len >= seq_len {
             return embeds.narrow(0, 0, seq_len)?.unsqueeze(0);
         }
-        let padding = Tensor::zeros((seq_len - embed_len, hidden), embeds.dtype(), embeds.device())?;
+        let padding = Tensor::zeros(
+            (seq_len - embed_len, hidden),
+            embeds.dtype(),
+            embeds.device(),
+        )?;
         let padded = Tensor::cat(&[embeds, &padding], 0)?;
         return padded.unsqueeze(0);
     }

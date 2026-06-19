@@ -202,7 +202,11 @@ impl candle::CustomOp3 for RotaryEmbI {
             0usize
         };
         let el = b * h * t * d;
-        let output = device.new_buffer(el, src.dtype(), "rope_i")?;
+        let output = device
+            .new_buffer_builder()
+            .with_size_for(el, src.dtype())
+            .with_label("rope_i")
+            .build()?;
         candle_metal_kernels::call_rope_i(
             device.metal_device(),
             &encoder,
@@ -485,7 +489,11 @@ impl candle::CustomOp3 for RotaryEmb {
             0usize
         };
         let el = b * h * t * d;
-        let output = device.new_buffer(el, src.dtype(), "rope")?;
+        let output = device
+            .new_buffer_builder()
+            .with_size_for(el, src.dtype())
+            .with_label("rope")
+            .build()?;
         candle_metal_kernels::call_rope(
             device.metal_device(),
             &encoder,
@@ -755,7 +763,11 @@ impl candle::CustomOp3 for RotaryEmbThd {
             0usize
         };
         let el = b * h * t * d;
-        let output = device.new_buffer(el, src.dtype(), "rope_thd")?;
+        let output = device
+            .new_buffer_builder()
+            .with_size_for(el, src.dtype())
+            .with_label("rope_thd")
+            .build()?;
         candle_metal_kernels::call_rope_thd(
             device.metal_device(),
             &encoder,

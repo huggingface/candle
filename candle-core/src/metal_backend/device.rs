@@ -4,14 +4,13 @@ use crate::{DType, Result};
 use candle_metal_kernels::metal::ComputePipeline;
 use candle_metal_kernels::{
     metal::{
-        BlitCommandEncoder, Buffer, BufferMap, Commands, ComputeCommandEncoder, Device,
-        MTLResourceOptions,
+        BlitCommandsGuard, Buffer, BufferMap, Commands, CommandsGuard, Device, MTLResourceOptions,
+        ResidencySet,
     },
     Kernels,
 };
 use objc2_foundation::NSURL;
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
-
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -39,7 +38,7 @@ pub struct MetalDevice {
     /// Raw metal device: <https://developer.apple.com/documentation/metal/mtldevice?language=objc>
     pub(crate) device: Device,
 
-    pub(crate) commands: Arc<RwLock<Commands>>,
+    pub(crate) commands: Arc<Commands>,
 
     /// Simple allocator struct.
     /// The buffers are stored in size buckets since ML tends to use similar shapes over and over.
@@ -67,19 +66,21 @@ pub struct MetalDevice {
     pub(crate) seed: Arc<Mutex<Buffer>>,
     /// Last seed value set on this device.
     pub(crate) seed_value: Arc<RwLock<u64>>,
+    /// Residency set registered on the command queue.
+    pub(crate) residency_set: Arc<ResidencySet>,
 }
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
-pub const RESOURCE_OPTIONS: MTLResourceOptions =
-    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
-//| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
-//);
-
+pub const RESOURCE_OPTIONS: MTLResourceOptions = objc2_metal::MTLResourceOptions(
+    MTLResourceOptions::StorageModeShared.0 | MTLResourceOptions::HazardTrackingModeUntracked.0,
+);
 // Resource options used for `new_private_buffer`. This uses `private` where supported.
 #[cfg(target_os = "ios")]
-pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModeShared;
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = RESOURCE_OPTIONS;
 #[cfg(not(target_os = "ios"))]
-pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModePrivate;
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = objc2_metal::MTLResourceOptions(
+    MTLResourceOptions::StorageModePrivate.0 | MTLResourceOptions::HazardTrackingModeUntracked.0,
+);
 
 impl std::fmt::Debug for MetalDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -130,37 +131,58 @@ impl MetalDevice {
     fn drop_unused_buffers(&self) -> Result<()> {
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         for subbuffers in buffers.values_mut() {
-            let newbuffers = subbuffers
-                .iter()
-                .filter(|s| Arc::strong_count(*s) > 1)
-                .map(Arc::clone)
-                .collect();
-            *subbuffers = newbuffers;
+            subbuffers.retain(|s| {
+                if Arc::strong_count(s) == 1 {
+                    self.residency_set.remove(s);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        let mut private_buffers = self.private_buffers.write().map_err(MetalError::from)?;
+        for subbuffers in private_buffers.values_mut() {
+            subbuffers.retain(|s| {
+                if Arc::strong_count(s) == 1 {
+                    self.residency_set.remove(s);
+                    false
+                } else {
+                    true
+                }
+            });
         }
         Ok(())
     }
 
-    pub fn command_encoder(&self) -> Result<ComputeCommandEncoder> {
-        let commands = self.commands.write().map_err(MetalError::from)?;
-        let (flush, command_encoder) = commands.command_encoder().map_err(MetalError::from)?;
-        if flush {
-            self.drop_unused_buffers()?
-        }
+    pub fn command_encoder<'a>(&'a self) -> Result<CommandsGuard<'a>> {
+        let command_encoder = self.commands.command_encoder().map_err(MetalError::from)?;
         Ok(command_encoder)
     }
 
-    pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder> {
-        let commands = self.commands.write().map_err(MetalError::from)?;
-        let (flush, command_encoder) = commands.blit_command_encoder().map_err(MetalError::from)?;
-        if flush {
-            self.drop_unused_buffers()?
-        }
+    pub fn blit_command_encoder(&self) -> Result<BlitCommandsGuard<'_>> {
+        let command_encoder = self
+            .commands
+            .blit_command_encoder()
+            .map_err(MetalError::from)?;
         Ok(command_encoder)
     }
 
     pub fn wait_until_completed(&self) -> Result<()> {
-        let commands = self.commands.write().map_err(MetalError::from)?;
-        commands.wait_until_completed().map_err(MetalError::from)?;
+        self.commands
+            .wait_until_completed()
+            .map_err(MetalError::from)?;
+
+        self.drop_unused_buffers()?;
+        Ok(())
+    }
+
+    /// Commit and wait on the buffer holding the caller's work; safe for concurrent CPU readbacks.
+    pub fn flush_and_wait_current(&self) -> Result<()> {
+        self.commands
+            .flush_and_wait_current()
+            .map_err(MetalError::from)?;
+
+        self.drop_unused_buffers()?;
         Ok(())
     }
 
@@ -170,6 +192,11 @@ impl MetalDevice {
 
     pub fn device(&self) -> &Device {
         &self.device
+    }
+
+    /// Returns a builder for buffer allocation. See `BufferBuilder`.
+    pub fn new_buffer_builder(&self) -> BufferBuilder<'_> {
+        BufferBuilder::new(self)
     }
 
     /// Creates a new buffer (not necessarily zeroed).
@@ -195,6 +222,7 @@ impl MetalDevice {
             .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
             .map_err(MetalError::from)?;
         let new_buffer = Arc::new(new_buffer);
+        self.residency_set.insert(&new_buffer);
         subbuffers.push(new_buffer.clone());
         Ok(new_buffer)
     }
@@ -213,7 +241,9 @@ impl MetalDevice {
             .device
             .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
             .map_err(MetalError::from)?;
-        Ok(Arc::new(buffer))
+        let buffer = Arc::new(buffer);
+        self.residency_set.insert(&buffer);
+        Ok(buffer)
     }
 
     /// Creates a new buffer from data.
@@ -231,16 +261,32 @@ impl MetalDevice {
         let subbuffers = buffers.entry(size).or_insert(vec![]);
 
         let new_buffer = Arc::new(new_buffer);
+        self.residency_set.insert(&new_buffer);
         subbuffers.push(new_buffer.clone());
         Ok(new_buffer)
     }
 
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
         let buffer = self.allocate_buffer(size_in_bytes)?;
-        let blit = self.blit_command_encoder()?;
+        let mut blit = self.blit_command_encoder()?;
         blit.set_label("zeros");
         blit.fill_buffer(&buffer, (0, buffer.length()), 0);
-        blit.end_encoding();
+        /*
+        // Alternative impl
+        if size_in_bytes > 0 {
+            let encoder = self.command_encoder()?;
+            call_const_fill(
+                &self.device,
+                &encoder,
+                &self.kernels,
+                "fill_u8",
+                size_in_bytes,
+                &buffer,
+                0u8,
+            )
+            .map_err(crate::Error::wrap)?;
+        }
+        */
         Ok(buffer)
     }
 
@@ -259,6 +305,7 @@ impl MetalDevice {
             .new_buffer(size, RESOURCE_OPTIONS)
             .map_err(MetalError::from)?;
         let new_buffer = Arc::new(new_buffer);
+        self.residency_set.insert(&new_buffer);
         subbuffers.push(new_buffer.clone());
         Ok(new_buffer)
     }
@@ -288,6 +335,105 @@ impl MetalDevice {
 
 fn buf_size(size: usize) -> usize {
     size.next_power_of_two()
+}
+
+/// Applies the [`BufferBuilder`] label, clearing any stale label on a reused pooled buffer.
+#[cfg(feature = "metal-debug-labels")]
+#[inline]
+fn buffer_label(buffer: &Buffer, label: Option<&str>) {
+    buffer.set_label(label.unwrap_or("unlabeled"));
+}
+#[cfg(not(feature = "metal-debug-labels"))]
+#[inline]
+fn buffer_label(_buffer: &Buffer, _label: Option<&str>) {}
+
+type DataUpload<'a> = Box<dyn FnOnce(&MetalDevice) -> Result<Arc<Buffer>> + 'a>;
+
+enum BufferInit<'a> {
+    Typed { elem_count: usize, dtype: DType },
+    Size(usize),
+    Zeros(usize),
+    Data(DataUpload<'a>),
+}
+
+/// Builder for `MTLBuffer` allocations; pool reuse handled by [`MetalDevice`].
+pub struct BufferBuilder<'a> {
+    device: &'a MetalDevice,
+    label: Option<&'a str>,
+}
+
+/// [`BufferBuilder`] with an init kind set; `build()` lives here.
+pub struct ReadyBufferBuilder<'a> {
+    device: &'a MetalDevice,
+    init: BufferInit<'a>,
+    label: Option<&'a str>,
+}
+
+impl<'a> BufferBuilder<'a> {
+    fn new(device: &'a MetalDevice) -> Self {
+        Self {
+            device,
+            label: None,
+        }
+    }
+
+    /// Allocate elem_count * dtype size bytes, uninitialized, private storage.
+    pub fn with_size_for(self, elem_count: usize, dtype: DType) -> ReadyBufferBuilder<'a> {
+        self.ready(BufferInit::Typed { elem_count, dtype })
+    }
+
+    /// Allocate size bytes, uninitialized, shared storage.
+    pub fn with_size(self, size: usize) -> ReadyBufferBuilder<'a> {
+        self.ready(BufferInit::Size(size))
+    }
+
+    /// Allocate size bytes, zero-filled, shared storage. Pool rounding may make
+    /// the allocation larger than size; the extra bytes are also zeroed.
+    pub fn with_zeros(self, size: usize) -> ReadyBufferBuilder<'a> {
+        self.ready(BufferInit::Zeros(size))
+    }
+
+    /// Allocate a shared buffer initialized from data. Always allocates; does not
+    /// reuse the pool.
+    pub fn with_data<T>(self, data: &'a [T]) -> ReadyBufferBuilder<'a> {
+        self.ready(BufferInit::Data(Box::new(move |device| {
+            device.new_buffer_with_data(data)
+        })))
+    }
+
+    pub fn with_label(mut self, label: &'a str) -> Self {
+        self.label = Some(label);
+        self
+    }
+
+    #[inline]
+    fn ready(self, init: BufferInit<'a>) -> ReadyBufferBuilder<'a> {
+        ReadyBufferBuilder {
+            device: self.device,
+            init,
+            label: self.label,
+        }
+    }
+}
+
+impl<'a> ReadyBufferBuilder<'a> {
+    pub fn with_label(mut self, label: &'a str) -> Self {
+        self.label = Some(label);
+        self
+    }
+
+    pub fn build(self) -> Result<Arc<Buffer>> {
+        let buffer = match self.init {
+            BufferInit::Typed { elem_count, dtype } => {
+                self.device.new_buffer(elem_count, dtype, "")?
+            }
+            BufferInit::Size(size) => self.device.allocate_buffer(size)?,
+            BufferInit::Zeros(size) => self.device.allocate_zeros(size)?,
+            BufferInit::Data(upload) => upload(self.device)?,
+        };
+        buffer_label(&buffer, self.label);
+        Ok(buffer)
+    }
 }
 
 #[cfg(test)]
