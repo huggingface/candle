@@ -33,6 +33,21 @@ unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
     }
 }
 
+/// Merge two per-lane (abs_max, signed_val) accumulator pairs.
+/// Each output lane holds the signed value with the larger absolute value.
+#[inline(always)]
+unsafe fn merge_signed_max(
+    abs_a: float32x4_t,
+    smax_a: float32x4_t,
+    abs_b: float32x4_t,
+    smax_b: float32x4_t,
+) -> (float32x4_t, float32x4_t) {
+    (
+        vmaxq_f32(abs_a, abs_b),
+        vbslq_f32(vcgtq_f32(abs_b, abs_a), smax_b, smax_a),
+    )
+}
+
 #[inline(always)]
 pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> f32 {
     debug_assert!(
@@ -613,6 +628,88 @@ pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> f32
         }
     }
     sumf
+}
+
+/// Quantize a row of f32 activations into Q8K format
+#[inline(always)]
+pub(crate) fn quantize_row_q8k(xs: &[f32], ys: &mut [BlockQ8K]) {
+    debug_assert!(
+        xs.len().is_multiple_of(QK_K),
+        "quantize_row_q8k: {} is not a multiple of {QK_K}",
+        xs.len()
+    );
+    unsafe {
+        for (chunk, y) in xs.chunks_exact(QK_K).zip(ys.iter_mut()) {
+            // Find the element with the maximum absolute value, preserving its sign.
+            let (mut vabs_max0, mut vsmax0) = (vdupq_n_f32(0.0), vdupq_n_f32(0.0));
+            let (mut vabs_max1, mut vsmax1) = (vdupq_n_f32(0.0), vdupq_n_f32(0.0));
+            let (mut vabs_max2, mut vsmax2) = (vdupq_n_f32(0.0), vdupq_n_f32(0.0));
+            let (mut vabs_max3, mut vsmax3) = (vdupq_n_f32(0.0), vdupq_n_f32(0.0));
+            let mut p = chunk.as_ptr();
+            for _ in 0..QK_K / 16 {
+                let (v0, v1) = (vld1q_f32(p), vld1q_f32(p.add(4)));
+                let (v2, v3) = (vld1q_f32(p.add(8)), vld1q_f32(p.add(12)));
+                p = p.add(16);
+                (vabs_max0, vsmax0) = merge_signed_max(vabs_max0, vsmax0, vabsq_f32(v0), v0);
+                (vabs_max1, vsmax1) = merge_signed_max(vabs_max1, vsmax1, vabsq_f32(v1), v1);
+                (vabs_max2, vsmax2) = merge_signed_max(vabs_max2, vsmax2, vabsq_f32(v2), v2);
+                (vabs_max3, vsmax3) = merge_signed_max(vabs_max3, vsmax3, vabsq_f32(v3), v3);
+            }
+            // Tree-reduce 4 accumulators to 1.
+            let (abs01, smax01) = merge_signed_max(vabs_max0, vsmax0, vabs_max1, vsmax1);
+            let (abs23, smax23) = merge_signed_max(vabs_max2, vsmax2, vabs_max3, vsmax3);
+            let (abs_v, smax_v) = merge_signed_max(abs01, smax01, abs23, smax23);
+            // Cross lane reduce to scalar
+            let mask_lohi = vcgt_f32(vget_high_f32(abs_v), vget_low_f32(abs_v));
+            let abs_pair = vmax_f32(vget_low_f32(abs_v), vget_high_f32(abs_v));
+            let smax_pair = vbsl_f32(mask_lohi, vget_high_f32(smax_v), vget_low_f32(smax_v));
+            let max_signed = if vget_lane_f32(abs_pair, 1) > vget_lane_f32(abs_pair, 0) {
+                vget_lane_f32(smax_pair, 1)
+            } else {
+                vget_lane_f32(smax_pair, 0)
+            };
+
+            if max_signed == 0.0f32 {
+                y.d = 0.0f32;
+                y.qs.fill(0);
+                y.bsums.fill(0);
+                continue;
+            }
+
+            let iscale = -128.0f32 / max_signed;
+            let vscale = vdupq_n_f32(iscale);
+
+            // Quantize f32 -> i8. Multiply, round-to-nearest, saturating narrow.
+            let mut out = y.qs.as_mut_ptr();
+            let mut p = chunk.as_ptr();
+            for _ in 0..QK_K / 16 {
+                let f0 = vmulq_f32(vld1q_f32(p), vscale);
+                let f1 = vmulq_f32(vld1q_f32(p.add(4)), vscale);
+                let f2 = vmulq_f32(vld1q_f32(p.add(8)), vscale);
+                let f3 = vmulq_f32(vld1q_f32(p.add(12)), vscale);
+                p = p.add(16);
+                let s01 = vcombine_s16(
+                    vqmovn_s32(vcvtaq_s32_f32(f0)),
+                    vqmovn_s32(vcvtaq_s32_f32(f1)),
+                );
+                let s23 = vcombine_s16(
+                    vqmovn_s32(vcvtaq_s32_f32(f2)),
+                    vqmovn_s32(vcvtaq_s32_f32(f3)),
+                );
+                vst1q_s8(out, vcombine_s8(vqmovn_s16(s01), vqmovn_s16(s23)));
+                out = out.add(16);
+            }
+
+            // Sum of each 16-element group of quantized values
+            let qp = y.qs.as_ptr();
+            for j in 0..QK_K / 16 {
+                let v = vld1q_s8(qp.add(j * 16));
+                y.bsums[j] = vaddvq_s32(vpaddlq_s16(vpaddlq_s8(v))) as i16;
+            }
+
+            y.d = 1.0f32 / iscale;
+        }
+    }
 }
 
 #[inline(always)]
