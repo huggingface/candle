@@ -311,7 +311,10 @@ impl Qwen3Attention {
                 )?;
                 ctx_f32.to_dtype(DType::BF16)?
             }
-            dtype => candle::bail!("Unsupported dtype for CPU flash attention: {:?}", dtype),
+            // f64 (and other dtypes) are intentionally unsupported on the CPU flash
+            // path: Qwen3 runs in f32/bf16, and f64 CPU inference is not a target.
+            // Cast to f32 before calling if a wider dtype is ever needed.
+            dtype => candle::bail!("Unsupported dtype for CPU flash attention: {:?} (f64 unsupported; use f32 or bf16)", dtype),
         };
 
         // Output from CPU flash attention is (B, H, S, D), transpose to (B, S, H, D)

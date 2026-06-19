@@ -20,13 +20,24 @@ use super::AttnMask;
 
 /// Dot product of two equal-length `T` rows, returned as f32.
 ///
-/// Thin glue over candle's architecture-tuned `VecOps::vec_dot` intrinsic
-/// (NEON / AVX2 / SIMD128), which `WithDType` already requires. Q and K stream
-/// in their native dtype (no per-row dequantization). f16/bf16 accumulate in
-/// f32 inside the intrinsic; only the returned scalar is narrowed back to `T`.
+/// Q and K stream in their native dtype (no per-row dequantization).
+///
+/// For f32 this is thin glue over candle's architecture-tuned `VecOps::vec_dot`
+/// intrinsic (NEON / AVX2 / SIMD128). For f16/bf16 we accumulate in f32 by hand:
+/// `VecOps::vec_dot` narrows its internal f32 accumulator back to the half type
+/// before returning, which would round the attention score (and can overflow it
+/// to `inf`) *before* softmax. Keeping the score in f32 preserves its full range
+/// and precision, matching the pre-standardization half kernels.
 #[inline]
 pub(crate) fn dot_f32<T: WithDType>(a: &[T], b: &[T]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
+    if matches!(T::DTYPE, DType::F16 | DType::BF16) {
+        let mut acc = 0f32;
+        for (&x, &y) in a.iter().zip(b.iter()) {
+            acc += (x.to_f64() as f32) * (y.to_f64() as f32);
+        }
+        return acc;
+    }
     let mut res = T::zero();
     // SAFETY: `a` and `b` are both at least `a.len()` long and `res` is a valid
     // out pointer, pre-zeroed for the scalar fallback that accumulates into it.
