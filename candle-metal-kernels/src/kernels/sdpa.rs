@@ -109,11 +109,12 @@ pub fn call_sdpa_full(
     let align_k = (kl % bk) == 0;
     let has_mask = mask_buffer.is_some();
 
-    // When an explicit additive mask is supplied it already encodes causality.
-    // Also enabling the in-kernel `do_causal` path double-applies causality and,
-    // at periodic sequence lengths, leaves a query row fully masked -> softmax
-    // normalizer sum(exp) == 0 -> final divide computes 0/0 = NaN logits.
-    let do_causal = do_causal && !has_mask;
+    // `mask` (additive bias / padding) and `do_causal` are independent inputs and
+    // the kernel applies both. A fully-masked query row no longer produces NaN
+    // (the kernel clamps the softmax normalizer before the final divide), so we
+    // must not silently drop causal masking when a mask is also supplied --
+    // otherwise a padding/bias mask combined with `do_causal` would attend to
+    // future keys and corrupt the output.
 
     let itype_repr = match itype {
         SdpaDType::BF16 => "bfloat16",
