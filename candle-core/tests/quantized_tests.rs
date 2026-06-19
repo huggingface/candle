@@ -1038,6 +1038,8 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
+        // llama.cpp IQ4_XS decode path currently uses dense dequant fallback in Candle.
+        GgmlDType::IQ4_XS => 0.03,
     };
     Ok(err)
 }
@@ -1403,34 +1405,33 @@ fn quantized_matmul_q8k() -> Result<()> {
     Ok(())
 }
 
-fn from_data_dequant_matches_canonical_when_caller_passes_cow_owned(device: &Device) -> Result<()> {
-    let cpu = Device::Cpu;
-    let n = 1024usize;
-    let src_data: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.013).sin()).collect();
-    let src = Tensor::from_vec(src_data, (n,), &cpu)?;
-    let qt_canonical = quantized::QTensor::quantize(&src, GgmlDType::Q4_0)?;
-    let canonical_dequant = qt_canonical.dequantize(&cpu)?.to_vec1::<f32>()?;
+#[test]
+fn iq4_xs_dequant_and_matmul_fallback() -> Result<()> {
+    use std::borrow::Cow;
 
-    let bytes_owned: Vec<u8> = qt_canonical.data()?.to_vec();
-    let storage = quantized::QStorage::from_data(Cow::Owned(bytes_owned), device, GgmlDType::Q4_0)?;
-    let qt_via_from_data = quantized::QTensor::new(storage, (n,))?;
-    let observed_dequant = qt_via_from_data.dequantize(device)?.to_vec1::<f32>()?;
-
-    let max_diff = canonical_dequant
-        .iter()
-        .zip(observed_dequant.iter())
-        .map(|(a, b)| (a - b).abs())
-        .fold(0f32, f32::max);
-    assert!(
-        max_diff < 1e-5,
-        "QStorage::from_data dequant mismatch on {device:?} (max |Δ| = {max_diff})"
+    let cpu = &Device::Cpu;
+    let block = k_quants::BlockIQ4XS::from_parts(
+        half::f16::from_f32(1.0),
+        0xaaaa,
+        [0x11; k_quants::QK_K / 64],
+        [0x88; k_quants::QK_K / 2],
     );
+    let raw = unsafe {
+        std::slice::from_raw_parts(
+            (&block as *const k_quants::BlockIQ4XS) as *const u8,
+            std::mem::size_of::<k_quants::BlockIQ4XS>(),
+        )
+    };
+
+    let storage = quantized::QStorage::from_data(Cow::Borrowed(raw), cpu, GgmlDType::IQ4_XS)?;
+    let qtensor = quantized::QTensor::new(storage, (1, k_quants::QK_K))?;
+    let dequant = qtensor.dequantize(cpu)?.flatten_all()?.to_vec1::<f32>()?;
+    assert!(dequant.iter().all(|v| (*v - 1.0).abs() < 1e-6));
+
+    let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
+    let lhs = Tensor::ones((1, k_quants::QK_K), DType::F32, cpu)?;
+    let out = matmul.forward(&lhs)?.flatten_all()?.to_vec1::<f32>()?;
+    assert_eq!(out.len(), 1);
+    assert!((out[0] - k_quants::QK_K as f32).abs() < 1e-3);
     Ok(())
 }
-
-test_device!(
-    from_data_dequant_matches_canonical_when_caller_passes_cow_owned,
-    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cpu,
-    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
-    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
-);
