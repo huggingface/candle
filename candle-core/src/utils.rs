@@ -167,11 +167,17 @@ impl BarrierPool {
                             }
 
                             // Execute own work, catching panics so done is always signalled.
-                            let result =
+                            if let Err(payload) =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     let work = unsafe { &*inner.work.get() };
                                     unsafe { (work.trampoline)(work.data, tid) };
-                                }));
+                                }))
+                            {
+                                let mut p = inner.panic_payload.lock().unwrap();
+                                if p.is_none() {
+                                    *p = Some(payload);
+                                }
+                            }
 
                             // Reduce: wait for all children before signalling parent.
                             for &child in &children {
@@ -182,13 +188,6 @@ impl BarrierPool {
 
                             // Signal done unconditionally so main/parent never deadlocks.
                             slot.done.store(gen, Ordering::Release);
-
-                            if let Err(payload) = result {
-                                let mut p = inner.panic_payload.lock().unwrap();
-                                if p.is_none() {
-                                    *p = Some(payload);
-                                }
-                            }
                         }
                     })
                     .expect("failed to spawn candle barrier pool worker")
