@@ -8,7 +8,6 @@ use rayon::prelude::*;
 
 use super::dot_f32;
 use super::online_softmax::online_softmax_step;
-use super::standard::FLASH_ATTN_POOL;
 
 /// Prefetch a cache line for read.
 #[inline(always)]
@@ -204,55 +203,53 @@ fn causal_decode_f32(
 
     let mut out = vec![0f32; h_q * d];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d).enumerate().for_each_init(
-            || vec![0f32; d],
-            |acc, (h_i, out_chunk)| {
-                let slope = 2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32);
-                let k_head_off = (h_i / rk) * d;
-                let v_head_off = (h_i / rv) * d;
-                let q_row = &q_data[h_i * d..(h_i + 1) * d];
+    out.par_chunks_mut(d).enumerate().for_each_init(
+        || vec![0f32; d],
+        |acc, (h_i, out_chunk)| {
+            let slope = 2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32);
+            let k_head_off = (h_i / rk) * d;
+            let v_head_off = (h_i / rv) * d;
+            let q_row = &q_data[h_i * d..(h_i + 1) * d];
 
-                acc.fill(0.0);
-                let mut m = f32::NEG_INFINITY;
-                let mut ssum = 0.0f32;
+            acc.fill(0.0);
+            let mut m = f32::NEG_INFINITY;
+            let mut ssum = 0.0f32;
 
-                for kv_pos in 0..kv_len {
-                    let alibi_bias = slope * (kv_pos as f32 - (kv_len - 1) as f32);
-                    let k_base = kv_pos * k_seq_stride + k_head_off;
-                    let k_row = &k_data[k_base..k_base + d];
+            for kv_pos in 0..kv_len {
+                let alibi_bias = slope * (kv_pos as f32 - (kv_len - 1) as f32);
+                let k_base = kv_pos * k_seq_stride + k_head_off;
+                let k_row = &k_data[k_base..k_base + d];
 
-                    if kv_pos + 1 < kv_len {
-                        prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
-                    }
-
-                    let mut score = dot_f32(q_row, k_row) * scale_pre;
-                    if do_softcap {
-                        score = logit_softcap * score.tanh();
-                    }
-                    score += alibi_bias;
-
-                    let v_base = kv_pos * v_seq_stride + v_head_off;
-                    let v_row = &v_data[v_base..v_base + d];
-
-                    if kv_pos + 1 < kv_len {
-                        prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
-                    }
-
-                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                        for t in 0..d {
-                            acc[t] += v_row[t] * w;
-                        }
-                    });
+                if kv_pos + 1 < kv_len {
+                    prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                 }
 
-                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                for t in 0..d {
-                    out_chunk[t] = acc[t] * inv;
+                let mut score = dot_f32(q_row, k_row) * scale_pre;
+                if do_softcap {
+                    score = logit_softcap * score.tanh();
                 }
-            },
-        );
-    });
+                score += alibi_bias;
+
+                let v_base = kv_pos * v_seq_stride + v_head_off;
+                let v_row = &v_data[v_base..v_base + d];
+
+                if kv_pos + 1 < kv_len {
+                    prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
+                }
+
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                    for t in 0..d {
+                        acc[t] += v_row[t] * w;
+                    }
+                });
+            }
+
+            let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+            for t in 0..d {
+                out_chunk[t] = acc[t] * inv;
+            }
+        },
+    );
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
@@ -278,49 +275,47 @@ fn causal_decode_f32_lean(
 
     let mut out = vec![0f32; h_q * d];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d).enumerate().for_each_init(
-            || vec![0f32; d],
-            |acc, (h_i, out_chunk)| {
-                let k_head_off = (h_i / rk) * d;
-                let v_head_off = (h_i / rv) * d;
-                let q_row = &q_data[h_i * d..(h_i + 1) * d];
+    out.par_chunks_mut(d).enumerate().for_each_init(
+        || vec![0f32; d],
+        |acc, (h_i, out_chunk)| {
+            let k_head_off = (h_i / rk) * d;
+            let v_head_off = (h_i / rv) * d;
+            let q_row = &q_data[h_i * d..(h_i + 1) * d];
 
-                acc.fill(0.0);
-                let mut m = f32::NEG_INFINITY;
-                let mut ssum = 0.0f32;
+            acc.fill(0.0);
+            let mut m = f32::NEG_INFINITY;
+            let mut ssum = 0.0f32;
 
-                for kv_pos in 0..kv_len {
-                    let k_base = kv_pos * k_seq_stride + k_head_off;
-                    let k_row = &k_data[k_base..k_base + d];
+            for kv_pos in 0..kv_len {
+                let k_base = kv_pos * k_seq_stride + k_head_off;
+                let k_row = &k_data[k_base..k_base + d];
 
-                    if kv_pos + 1 < kv_len {
-                        prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
-                    }
-
-                    let score = dot_f32(q_row, k_row) * scale;
-
-                    let v_base = kv_pos * v_seq_stride + v_head_off;
-                    let v_row = &v_data[v_base..v_base + d];
-
-                    if kv_pos + 1 < kv_len {
-                        prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
-                    }
-
-                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                        for t in 0..d {
-                            acc[t] += v_row[t] * w;
-                        }
-                    });
+                if kv_pos + 1 < kv_len {
+                    prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                 }
 
-                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                for t in 0..d {
-                    out_chunk[t] = acc[t] * inv;
+                let score = dot_f32(q_row, k_row) * scale;
+
+                let v_base = kv_pos * v_seq_stride + v_head_off;
+                let v_row = &v_data[v_base..v_base + d];
+
+                if kv_pos + 1 < kv_len {
+                    prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
                 }
-            },
-        );
-    });
+
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                    for t in 0..d {
+                        acc[t] += v_row[t] * w;
+                    }
+                });
+            }
+
+            let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+            for t in 0..d {
+                out_chunk[t] = acc[t] * inv;
+            }
+        },
+    );
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
@@ -346,45 +341,43 @@ pub fn causal_decode_f32_interleaved(
 
     let mut out = vec![0f32; h_q * d];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d).enumerate().for_each_init(
-            || vec![0f32; d],
-            |acc, (h_i, out_chunk)| {
-                let kv_head = h_i / rk;
-                let kv_head_off = kv_head * kv_head_stride;
-                let q_row = &q_data[h_i * d..(h_i + 1) * d];
+    out.par_chunks_mut(d).enumerate().for_each_init(
+        || vec![0f32; d],
+        |acc, (h_i, out_chunk)| {
+            let kv_head = h_i / rk;
+            let kv_head_off = kv_head * kv_head_stride;
+            let q_row = &q_data[h_i * d..(h_i + 1) * d];
 
-                acc.fill(0.0);
-                let mut m = f32::NEG_INFINITY;
-                let mut ssum = 0.0f32;
+            acc.fill(0.0);
+            let mut m = f32::NEG_INFINITY;
+            let mut ssum = 0.0f32;
 
-                for kv_pos in 0..kv_len {
-                    // K and V share a base pointer (adjacent in memory)
-                    let kv_base = kv_pos * kv_seq_stride + kv_head_off;
-                    let k_row = &kv_data[kv_base..kv_base + d];
-                    let v_row = &kv_data[kv_base + d..kv_base + 2 * d];
+            for kv_pos in 0..kv_len {
+                // K and V share a base pointer (adjacent in memory)
+                let kv_base = kv_pos * kv_seq_stride + kv_head_off;
+                let k_row = &kv_data[kv_base..kv_base + d];
+                let v_row = &kv_data[kv_base + d..kv_base + 2 * d];
 
-                    // One prefetch loads both next K and V
-                    if kv_pos + 1 < kv_len {
-                        prefetch_read(kv_data[kv_base + kv_seq_stride..].as_ptr());
+                // One prefetch loads both next K and V
+                if kv_pos + 1 < kv_len {
+                    prefetch_read(kv_data[kv_base + kv_seq_stride..].as_ptr());
+                }
+
+                let score = dot_f32(q_row, k_row) * scale;
+
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                    for t in 0..d {
+                        acc[t] += v_row[t] * w;
                     }
+                });
+            }
 
-                    let score = dot_f32(q_row, k_row) * scale;
-
-                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                        for t in 0..d {
-                            acc[t] += v_row[t] * w;
-                        }
-                    });
-                }
-
-                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                for t in 0..d {
-                    out_chunk[t] = acc[t] * inv;
-                }
-            },
-        );
-    });
+            let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+            for t in 0..d {
+                out_chunk[t] = acc[t] * inv;
+            }
+        },
+    );
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
@@ -430,75 +423,73 @@ fn causal_prefill_f32(
 
     let mut out = vec![0f32; h_q * s_q * d];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d)
-            .with_min_len(64)
-            .enumerate()
-            .for_each_init(
-                || vec![0f32; d],
-                |acc, (row_idx, out_chunk)| {
-                    let h_i = row_idx / s_q;
-                    let q_pos = row_idx % s_q;
+    out.par_chunks_mut(d)
+        .with_min_len(64)
+        .enumerate()
+        .for_each_init(
+            || vec![0f32; d],
+            |acc, (row_idx, out_chunk)| {
+                let h_i = row_idx / s_q;
+                let q_pos = row_idx % s_q;
 
-                    let slope = if max_bias > 0.0 {
-                        2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                let slope = if max_bias > 0.0 {
+                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                } else {
+                    0.0
+                };
+
+                let k_head_off = (h_i / rk) * d;
+                let v_head_off = (h_i / rv) * d;
+
+                let q_base = q_pos * q_seq_stride + h_i * d;
+                let q_row = &q_data[q_base..q_base + d];
+
+                acc.fill(0.0);
+                let mut m = f32::NEG_INFINITY;
+                let mut ssum = 0.0f32;
+
+                let kv_end = (q_pos + kv_offset + 1).min(kv_len);
+
+                for kv_pos in 0..kv_end {
+                    let alibi_bias = if max_bias > 0.0 {
+                        slope * (kv_pos as i64 - (q_pos + kv_offset) as i64) as f32
                     } else {
                         0.0
                     };
 
-                    let k_head_off = (h_i / rk) * d;
-                    let v_head_off = (h_i / rv) * d;
+                    let k_base = kv_pos * k_seq_stride + k_head_off;
+                    let k_row = &k_data[k_base..k_base + d];
 
-                    let q_base = q_pos * q_seq_stride + h_i * d;
-                    let q_row = &q_data[q_base..q_base + d];
-
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
-
-                    let kv_end = (q_pos + kv_offset + 1).min(kv_len);
-
-                    for kv_pos in 0..kv_end {
-                        let alibi_bias = if max_bias > 0.0 {
-                            slope * (kv_pos as i64 - (q_pos + kv_offset) as i64) as f32
-                        } else {
-                            0.0
-                        };
-
-                        let k_base = kv_pos * k_seq_stride + k_head_off;
-                        let k_row = &k_data[k_base..k_base + d];
-
-                        if kv_pos + 1 < kv_end {
-                            prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
-                        }
-
-                        let mut score = dot_f32(q_row, k_row) * scale_pre;
-                        if do_softcap {
-                            score = logit_softcap * score.tanh();
-                        }
-                        score += alibi_bias;
-
-                        let v_base = kv_pos * v_seq_stride + v_head_off;
-                        let v_row = &v_data[v_base..v_base + d];
-
-                        if kv_pos + 1 < kv_end {
-                            prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
-                        }
-
-                        online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                            for t in 0..d {
-                                acc[t] += v_row[t] * w;
-                            }
-                        });
+                    if kv_pos + 1 < kv_end {
+                        prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                     }
 
-                    let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d {
-                        out_chunk[t] = acc[t] * inv;
+                    let mut score = dot_f32(q_row, k_row) * scale_pre;
+                    if do_softcap {
+                        score = logit_softcap * score.tanh();
                     }
-                },
-            );
-    });
+                    score += alibi_bias;
+
+                    let v_base = kv_pos * v_seq_stride + v_head_off;
+                    let v_row = &v_data[v_base..v_base + d];
+
+                    if kv_pos + 1 < kv_end {
+                        prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
+                    }
+
+                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                        for t in 0..d {
+                            acc[t] += v_row[t] * w;
+                        }
+                    });
+                }
+
+                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                for t in 0..d {
+                    out_chunk[t] = acc[t] * inv;
+                }
+            },
+        );
 
     Tensor::from_vec(out, (h_q, s_q, d), &Device::Cpu)
 }
@@ -526,59 +517,57 @@ fn causal_prefill_f32_lean(
 
     let mut out = vec![0f32; h_q * s_q * d];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d)
-            .with_min_len(64)
-            .enumerate()
-            .for_each_init(
-                || vec![0f32; d],
-                |acc, (row_idx, out_chunk)| {
-                    let h_i = row_idx / s_q;
-                    let q_pos = row_idx % s_q;
+    out.par_chunks_mut(d)
+        .with_min_len(64)
+        .enumerate()
+        .for_each_init(
+            || vec![0f32; d],
+            |acc, (row_idx, out_chunk)| {
+                let h_i = row_idx / s_q;
+                let q_pos = row_idx % s_q;
 
-                    let k_head_off = (h_i / rk) * d;
-                    let v_head_off = (h_i / rv) * d;
+                let k_head_off = (h_i / rk) * d;
+                let v_head_off = (h_i / rv) * d;
 
-                    let q_base = q_pos * q_seq_stride + h_i * d;
-                    let q_row = &q_data[q_base..q_base + d];
+                let q_base = q_pos * q_seq_stride + h_i * d;
+                let q_row = &q_data[q_base..q_base + d];
 
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
+                acc.fill(0.0);
+                let mut m = f32::NEG_INFINITY;
+                let mut ssum = 0.0f32;
 
-                    let kv_end = (q_pos + kv_offset + 1).min(kv_len);
+                let kv_end = (q_pos + kv_offset + 1).min(kv_len);
 
-                    for kv_pos in 0..kv_end {
-                        let k_base = kv_pos * k_seq_stride + k_head_off;
-                        let k_row = &k_data[k_base..k_base + d];
+                for kv_pos in 0..kv_end {
+                    let k_base = kv_pos * k_seq_stride + k_head_off;
+                    let k_row = &k_data[k_base..k_base + d];
 
-                        if kv_pos + 1 < kv_end {
-                            prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
-                        }
-
-                        let score = dot_f32(q_row, k_row) * scale;
-
-                        let v_base = kv_pos * v_seq_stride + v_head_off;
-                        let v_row = &v_data[v_base..v_base + d];
-
-                        if kv_pos + 1 < kv_end {
-                            prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
-                        }
-
-                        online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                            for t in 0..d {
-                                acc[t] += v_row[t] * w;
-                            }
-                        });
+                    if kv_pos + 1 < kv_end {
+                        prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                     }
 
-                    let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d {
-                        out_chunk[t] = acc[t] * inv;
+                    let score = dot_f32(q_row, k_row) * scale;
+
+                    let v_base = kv_pos * v_seq_stride + v_head_off;
+                    let v_row = &v_data[v_base..v_base + d];
+
+                    if kv_pos + 1 < kv_end {
+                        prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
                     }
-                },
-            );
-    });
+
+                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                        for t in 0..d {
+                            acc[t] += v_row[t] * w;
+                        }
+                    });
+                }
+
+                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                for t in 0..d {
+                    out_chunk[t] = acc[t] * inv;
+                }
+            },
+        );
 
     Tensor::from_vec(out, (h_q, s_q, d), &Device::Cpu)
 }
@@ -613,53 +602,51 @@ fn causal_decode_generic<T: WithDType>(
 
     let mut out = vec![0f32; h_q * d];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d).enumerate().for_each_init(
-            || vec![0f32; d],
-            |acc, (h_i, out_chunk)| {
-                let slope = if max_bias > 0.0 {
-                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+    out.par_chunks_mut(d).enumerate().for_each_init(
+        || vec![0f32; d],
+        |acc, (h_i, out_chunk)| {
+            let slope = if max_bias > 0.0 {
+                2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+            } else {
+                0.0
+            };
+            let k_head_off = (h_i / rk) * d;
+            let v_head_off = (h_i / rv) * d;
+            let q_row = &q_data[h_i * d..(h_i + 1) * d];
+
+            acc.fill(0.0);
+            let mut m = f32::NEG_INFINITY;
+            let mut ssum = 0.0f32;
+
+            for kv_pos in 0..kv_len {
+                let alibi_bias = if max_bias > 0.0 {
+                    slope * (kv_pos as f32 - (kv_len - 1) as f32)
                 } else {
                     0.0
                 };
-                let k_head_off = (h_i / rk) * d;
-                let v_head_off = (h_i / rv) * d;
-                let q_row = &q_data[h_i * d..(h_i + 1) * d];
+                let k_base = kv_pos * k_seq_stride + k_head_off;
+                let k_row = &k_data[k_base..k_base + d];
+                let mut s_val = dot_f32(q_row, k_row);
+                s_val *= scale_pre;
+                if do_softcap {
+                    s_val = logit_softcap * s_val.tanh();
+                }
+                s_val += alibi_bias;
 
-                acc.fill(0.0);
-                let mut m = f32::NEG_INFINITY;
-                let mut ssum = 0.0f32;
-
-                for kv_pos in 0..kv_len {
-                    let alibi_bias = if max_bias > 0.0 {
-                        slope * (kv_pos as f32 - (kv_len - 1) as f32)
-                    } else {
-                        0.0
-                    };
-                    let k_base = kv_pos * k_seq_stride + k_head_off;
-                    let k_row = &k_data[k_base..k_base + d];
-                    let mut s_val = dot_f32(q_row, k_row);
-                    s_val *= scale_pre;
-                    if do_softcap {
-                        s_val = logit_softcap * s_val.tanh();
+                let v_base = kv_pos * v_seq_stride + v_head_off;
+                let v_row = &v_data[v_base..v_base + d];
+                online_softmax_step(s_val, &mut m, &mut ssum, acc, |acc, w| {
+                    for t in 0..d {
+                        acc[t] += v_row[t].to_f64() as f32 * w;
                     }
-                    s_val += alibi_bias;
-
-                    let v_base = kv_pos * v_seq_stride + v_head_off;
-                    let v_row = &v_data[v_base..v_base + d];
-                    online_softmax_step(s_val, &mut m, &mut ssum, acc, |acc, w| {
-                        for t in 0..d {
-                            acc[t] += v_row[t].to_f64() as f32 * w;
-                        }
-                    });
-                }
-                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                for t in 0..d {
-                    out_chunk[t] = acc[t] * inv;
-                }
-            },
-        );
-    });
+                });
+            }
+            let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+            for t in 0..d {
+                out_chunk[t] = acc[t] * inv;
+            }
+        },
+    );
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
@@ -695,60 +682,58 @@ fn causal_prefill_generic<T: WithDType>(
 
     let mut out = vec![0f32; h_q * s_q * d];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(d)
-            .with_min_len(64)
-            .enumerate()
-            .for_each_init(
-                || vec![0f32; d],
-                |acc, (row_idx, out_chunk)| {
-                    let h_i = row_idx / s_q;
-                    let q_pos = row_idx % s_q;
-                    let slope = if max_bias > 0.0 {
-                        2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+    out.par_chunks_mut(d)
+        .with_min_len(64)
+        .enumerate()
+        .for_each_init(
+            || vec![0f32; d],
+            |acc, (row_idx, out_chunk)| {
+                let h_i = row_idx / s_q;
+                let q_pos = row_idx % s_q;
+                let slope = if max_bias > 0.0 {
+                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                } else {
+                    0.0
+                };
+                let k_head_off = (h_i / rk) * d;
+                let v_head_off = (h_i / rv) * d;
+                let q_base = q_pos * q_seq_stride + h_i * d;
+                let q_row = &q_data[q_base..q_base + d];
+
+                acc.fill(0.0);
+                let mut m = f32::NEG_INFINITY;
+                let mut ssum = 0.0f32;
+                let kv_end = (q_pos + kv_offset + 1).min(kv_len);
+
+                for kv_pos in 0..kv_end {
+                    let alibi_bias = if max_bias > 0.0 {
+                        slope * (kv_pos as i64 - (q_pos + kv_offset) as i64) as f32
                     } else {
                         0.0
                     };
-                    let k_head_off = (h_i / rk) * d;
-                    let v_head_off = (h_i / rv) * d;
-                    let q_base = q_pos * q_seq_stride + h_i * d;
-                    let q_row = &q_data[q_base..q_base + d];
+                    let k_base = kv_pos * k_seq_stride + k_head_off;
+                    let k_row = &k_data[k_base..k_base + d];
+                    let mut s_val = dot_f32(q_row, k_row);
+                    s_val *= scale_pre;
+                    if do_softcap {
+                        s_val = logit_softcap * s_val.tanh();
+                    }
+                    s_val += alibi_bias;
 
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
-                    let kv_end = (q_pos + kv_offset + 1).min(kv_len);
-
-                    for kv_pos in 0..kv_end {
-                        let alibi_bias = if max_bias > 0.0 {
-                            slope * (kv_pos as i64 - (q_pos + kv_offset) as i64) as f32
-                        } else {
-                            0.0
-                        };
-                        let k_base = kv_pos * k_seq_stride + k_head_off;
-                        let k_row = &k_data[k_base..k_base + d];
-                        let mut s_val = dot_f32(q_row, k_row);
-                        s_val *= scale_pre;
-                        if do_softcap {
-                            s_val = logit_softcap * s_val.tanh();
+                    let v_base = kv_pos * v_seq_stride + v_head_off;
+                    let v_row = &v_data[v_base..v_base + d];
+                    online_softmax_step(s_val, &mut m, &mut ssum, acc, |acc, w| {
+                        for t in 0..d {
+                            acc[t] += v_row[t].to_f64() as f32 * w;
                         }
-                        s_val += alibi_bias;
-
-                        let v_base = kv_pos * v_seq_stride + v_head_off;
-                        let v_row = &v_data[v_base..v_base + d];
-                        online_softmax_step(s_val, &mut m, &mut ssum, acc, |acc, w| {
-                            for t in 0..d {
-                                acc[t] += v_row[t].to_f64() as f32 * w;
-                            }
-                        });
-                    }
-                    let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for t in 0..d {
-                        out_chunk[t] = acc[t] * inv;
-                    }
-                },
-            );
-    });
+                    });
+                }
+                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                for t in 0..d {
+                    out_chunk[t] = acc[t] * inv;
+                }
+            },
+        );
 
     Tensor::from_vec(out, (h_q, s_q, d), &Device::Cpu)
 }
