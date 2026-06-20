@@ -3,7 +3,6 @@
 //! **Deprecated:** Use `candle_nn::attention::{flash_attn, AttnMask}` instead.
 
 use candle::{Result, Tensor, WithDType};
-use std::iter::Sum;
 
 /// Deprecated: use `candle_nn::attention::flash_attn` with `AttnMask` instead.
 ///
@@ -22,7 +21,7 @@ pub fn run_flash_attn_cpu<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real + 'static,
+    T: WithDType + 'static,
 {
     use crate::attention::{flash_attn, AttnMask};
 

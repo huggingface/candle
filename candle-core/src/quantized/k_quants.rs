@@ -7,7 +7,6 @@ use crate::quantized::utils::{make_qkx3_quants, make_qp_quants};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::{bf16, f16, slice::HalfFloatSliceExt};
-use rayon::prelude::*;
 
 // Default to QK_K 256 rather than 64.
 pub const QK_K: usize = 256;
@@ -46,9 +45,30 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
 
     fn direct_copy(_xs: &[f32], _ys: &mut [Self]) {}
 
-    /// Dot product used as a building block for quantized mat-mul.
+    /// Dot product used as a building block for quantized matmul.
     /// n is the number of elements to be considered.
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32;
+
+    /// Two dot products sharing one LHS load: returns (dot(xs0,ys), dot(xs1,ys)).
+    /// Can be overriden with optimized kernel
+    fn vec_dot_2(n: usize, xs0: &[Self], xs1: &[Self], ys: &[Self::VecDotType]) -> (f32, f32) {
+        (Self::vec_dot(n, xs0, ys), Self::vec_dot(n, xs1, ys))
+    }
+
+    /// Four dot products sharing one LHS load: returns (dot(xs0,ys),..dot(xs3,ys)).
+    /// Can be overriden with optimized kernel
+    fn vec_dot_4(
+        n: usize,
+        xs0: &[Self],
+        xs1: &[Self],
+        xs2: &[Self],
+        xs3: &[Self],
+        ys: &[Self::VecDotType],
+    ) -> (f32, f32, f32, f32) {
+        let (d0, d1) = Self::vec_dot_2(n, xs0, xs1, ys);
+        let (d2, d3) = Self::vec_dot_2(n, xs2, xs3, ys);
+        (d0, d1, d2, d3)
+    }
 
     /// Generic implementation of the dot product without simd optimizations.
     fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32;
@@ -2211,7 +2231,11 @@ impl GgmlType for BlockQ8K {
         sumf
     }
 
+    #[allow(unreachable_code)]
     fn from_float(xs: &[f32], ys: &mut [Self]) {
+        #[cfg(target_feature = "neon")]
+        return super::neon::quantize_row_q8k(xs, ys);
+
         let k = xs.len();
         debug_assert!(
             k.is_multiple_of(QK_K),
@@ -2284,34 +2308,104 @@ pub fn matmul<T: GgmlType>(
     );
     let k_in_blocks = k.div_ceil(T::BLCK_SIZE);
 
-    // TODO: Pre-allocate this.
-    let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_blocks];
-    // f32, f16, and bf16 support direct copy
-    if T::DIRECT_COPY {
-        T::VecDotType::direct_copy(lhs, &mut lhs_b);
-    } else {
-        for row_idx in 0..m {
-            let lhs_b_mut = &mut lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
-            let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
-            T::VecDotType::from_float(lhs, lhs_b_mut)
+    // Thread-local scratch buffer reused across calls to avoid per-matmul
+    // heap allocation of the quantized LHS.
+    // Using u64 ensures sufficient alignment regardless of `T::VecDotType`.
+    thread_local! {
+        static LHS_SCRATCH: std::cell::RefCell<Vec<u64>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    let elem_size = std::mem::size_of::<T::VecDotType>();
+    // Required scratch buffer length in u64
+    let required_scratch_len = (m * k_in_blocks * elem_size).div_ceil(8);
+
+    LHS_SCRATCH.with(|cell| -> Result<()> {
+        let mut scratch = cell.borrow_mut();
+        if scratch.len() < required_scratch_len {
+            scratch.resize(required_scratch_len, 0);
         }
-    }
+        // SAFETY: u64 ensures sufficient alignment. Resize ensures sufficient size.
+        // All elements written before reading.
+        let lhs_b: &mut [T::VecDotType] = unsafe {
+            std::slice::from_raw_parts_mut(
+                scratch.as_mut_ptr() as *mut T::VecDotType,
+                m * k_in_blocks,
+            )
+        };
+        // f32, f16, and bf16 support direct copy
+        if T::DIRECT_COPY {
+            T::VecDotType::direct_copy(lhs, lhs_b);
+        } else {
+            for row_idx in 0..m {
+                let lhs_b_mut = &mut lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
+                let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
+                T::VecDotType::from_float(lhs, lhs_b_mut)
+            }
+        }
+        let n_quad = n & !3;
+        let quads_total = n_quad / 4;
+        let n_tail = n - n_quad; // 0..=3
+        let pool = crate::utils::barrier_pool();
+        // Workers 0..n_workers + calling thread as worker n_workers.
+        let n_total = pool.n_workers() + 1;
+        let quads_per_thread = quads_total.div_ceil(n_total);
+        let lhs_b: &[T::VecDotType] = lhs_b;
 
-    for row_idx in 0..m {
-        let lhs_row = &lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
-        let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
+        for row_idx in 0..m {
+            let lhs_row = &lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
+            let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
+            let (main, tail) = dst_row.split_at_mut(n_quad);
+            let main_ptr = main.as_mut_ptr() as usize;
 
-        dst_row
-            .into_par_iter()
-            .enumerate()
-            .with_min_len(128)
-            .with_max_len(512)
-            .for_each(|(col_idx, dst)| {
-                let rhs_col = &rhs_t[col_idx * k_in_blocks..(col_idx + 1) * k_in_blocks];
-                *dst = T::vec_dot(k, rhs_col, lhs_row);
+            pool.execute(|tid| {
+                let start = tid * quads_per_thread;
+                if start >= quads_total {
+                    return;
+                }
+                let end = quads_total.min((tid + 1) * quads_per_thread);
+                let main_ptr = main_ptr as *mut f32;
+                for quad_idx in start..end {
+                    let col = quad_idx * 4;
+                    let (d0, d1, d2, d3) = T::vec_dot_4(
+                        k,
+                        &rhs_t[col * k_in_blocks..(col + 1) * k_in_blocks],
+                        &rhs_t[(col + 1) * k_in_blocks..(col + 2) * k_in_blocks],
+                        &rhs_t[(col + 2) * k_in_blocks..(col + 3) * k_in_blocks],
+                        &rhs_t[(col + 3) * k_in_blocks..(col + 4) * k_in_blocks],
+                        lhs_row,
+                    );
+                    unsafe {
+                        let base = main_ptr.add(quad_idx * 4);
+                        *base = d0;
+                        *base.add(1) = d1;
+                        *base.add(2) = d2;
+                        *base.add(3) = d3;
+                    }
+                }
             });
-    }
-    Ok(())
+            if n_tail >= 2 {
+                let col = n_quad;
+                let (d0, d1) = T::vec_dot_2(
+                    k,
+                    &rhs_t[col * k_in_blocks..(col + 1) * k_in_blocks],
+                    &rhs_t[(col + 1) * k_in_blocks..(col + 2) * k_in_blocks],
+                    lhs_row,
+                );
+                tail[0] = d0;
+                tail[1] = d1;
+            }
+            if n_tail & 1 == 1 {
+                let col = n - 1;
+                tail[n_tail - 1] = T::vec_dot(
+                    k,
+                    &rhs_t[col * k_in_blocks..(col + 1) * k_in_blocks],
+                    lhs_row,
+                );
+            }
+        }
+        Ok(())
+    })
 }
 
 pub fn matmul_f16<T: GgmlType>(

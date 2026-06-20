@@ -10,6 +10,11 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 
+[features]
+default = []
+# Emit per-dispatch Metal debug groups for Xcode GPU captures / Instruments.
+debug-labels = []
+
 [dependencies]
 half = { version = "2.5.0", features = [
     "num-traits",
