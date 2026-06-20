@@ -3,33 +3,11 @@
 //! Single-batch (B=1) CPU flash attention kernels. B>1 routes to varlen via mod.rs.
 
 use candle::{Device, Result, Storage, Tensor, WithDType};
-use std::f32;
-use std::sync::LazyLock;
-
 use rayon::prelude::*;
-use rayon::ThreadPool;
+use std::f32;
 
 use super::dot_f32;
 use super::online_softmax::online_softmax_step;
-
-#[cfg(target_os = "macos")]
-unsafe fn set_thread_affinity() {
-    use libc::{pthread_set_qos_class_self_np, qos_class_t::QOS_CLASS_USER_INTERACTIVE};
-    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-}
-
-#[cfg(not(target_os = "macos"))]
-#[inline(always)]
-unsafe fn set_thread_affinity() {}
-
-pub(crate) static FLASH_ATTN_POOL: LazyLock<ThreadPool> = LazyLock::new(|| {
-    rayon::ThreadPoolBuilder::new()
-        .start_handler(|_| unsafe {
-            set_thread_affinity();
-        })
-        .build()
-        .expect("Failed to build flash-attention thread pool")
-});
 
 /// Fused softmax(qk^T*scale)v on CPU, B=1 only. Output shape (1, H, S, Dv).
 pub fn run_flash_attn_cpu<T>(
@@ -182,49 +160,47 @@ fn flash_attn_decode_lean<T: WithDType>(
 
     let mut out = vec![0f32; h * dv];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(dv).enumerate().for_each_init(
-            || vec![0f32; dv],
-            |acc, (h_i, out_chunk)| {
-                let k_head = h_i / rk2;
-                let v_head = h_i / rv2;
+    out.par_chunks_mut(dv).enumerate().for_each_init(
+        || vec![0f32; dv],
+        |acc, (h_i, out_chunk)| {
+            let k_head = h_i / rk2;
+            let v_head = h_i / rv2;
 
-                let q_base = h_i * qstride[2];
-                let q_row = &q_data[q_base..q_base + d];
+            let q_base = h_i * qstride[2];
+            let q_row = &q_data[q_base..q_base + d];
 
-                acc.fill(0.0);
-                let mut m = f32::NEG_INFINITY;
-                let mut ssum = 0.0f32;
+            acc.fill(0.0);
+            let mut m = f32::NEG_INFINITY;
+            let mut ssum = 0.0f32;
 
-                for kv_pos in 0..kv_len {
-                    let k_base = kv_pos * kstride[1] + k_head * kstride[2];
-                    let k_row = &k_data[k_base..k_base + d];
+            for kv_pos in 0..kv_len {
+                let k_base = kv_pos * kstride[1] + k_head * kstride[2];
+                let k_row = &k_data[k_base..k_base + d];
 
-                    let score = dot_f32(q_row, k_row) * scale;
+                let score = dot_f32(q_row, k_row) * scale;
 
-                    let v_base = kv_pos * vstride[1] + v_head * vstride[2];
+                let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
-                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                        if v_contiguous {
-                            let v_row = &v_data[v_base..v_base + dv];
-                            for d_i in 0..dv {
-                                acc[d_i] += v_row[d_i].to_f64() as f32 * w;
-                            }
-                        } else {
-                            for d_i in 0..dv {
-                                acc[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
-                            }
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                    if v_contiguous {
+                        let v_row = &v_data[v_base..v_base + dv];
+                        for d_i in 0..dv {
+                            acc[d_i] += v_row[d_i].to_f64() as f32 * w;
                         }
-                    });
-                }
+                    } else {
+                        for d_i in 0..dv {
+                            acc[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
+                        }
+                    }
+                });
+            }
 
-                let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                for (out_v, acc_v) in out_chunk.iter_mut().zip(acc.iter()) {
-                    *out_v = *acc_v * inv_s;
-                }
-            },
-        );
-    });
+            let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+            for (out_v, acc_v) in out_chunk.iter_mut().zip(acc.iter()) {
+                *out_v = *acc_v * inv_s;
+            }
+        },
+    );
 
     Tensor::from_vec(out, (1usize, h, 1usize, dv), &Device::Cpu)
 }
@@ -265,69 +241,67 @@ fn flash_attn_decode<T: WithDType>(
 
     let mut out = vec![0f32; h * dv];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(dv).enumerate().for_each_init(
-            || vec![0f32; dv],
-            |acc, (h_i, out_chunk)| {
-                let slope = if max_bias > 0.0 {
-                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+    out.par_chunks_mut(dv).enumerate().for_each_init(
+        || vec![0f32; dv],
+        |acc, (h_i, out_chunk)| {
+            let slope = if max_bias > 0.0 {
+                2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+            } else {
+                1.0
+            };
+
+            let k_head = h_i / rk2;
+            let v_head = h_i / rv2;
+
+            let q_base = h_i * qstride[2];
+            let q_row = &q_data[q_base..q_base + d];
+
+            acc.fill(0.0);
+            let mut m = f32::NEG_INFINITY;
+            let mut ssum = 0.0f32;
+
+            for kv_pos in 0..kv_len {
+                let mv = if let Some(mv_vec) = mask_vec {
+                    let mval = mv_vec[kv_pos];
+                    slope * mval.to_f64() as f32
                 } else {
-                    1.0
+                    0.0
                 };
+                if mv == f32::NEG_INFINITY {
+                    continue;
+                }
 
-                let k_head = h_i / rk2;
-                let v_head = h_i / rv2;
+                let k_base = kv_pos * kstride[1] + k_head * kstride[2];
+                let k_row = &k_data[k_base..k_base + d];
 
-                let q_base = h_i * qstride[2];
-                let q_row = &q_data[q_base..q_base + d];
+                let mut score = dot_f32(q_row, k_row) * scale_pre;
+                if do_softcap {
+                    score = logit_softcap * score.tanh();
+                }
+                score += mv;
 
-                acc.fill(0.0);
-                let mut m = f32::NEG_INFINITY;
-                let mut ssum = 0.0f32;
+                let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
-                for kv_pos in 0..kv_len {
-                    let mv = if let Some(mv_vec) = mask_vec {
-                        let mval = mv_vec[kv_pos];
-                        slope * mval.to_f64() as f32
-                    } else {
-                        0.0
-                    };
-                    if mv == f32::NEG_INFINITY {
-                        continue;
-                    }
-
-                    let k_base = kv_pos * kstride[1] + k_head * kstride[2];
-                    let k_row = &k_data[k_base..k_base + d];
-
-                    let mut score = dot_f32(q_row, k_row) * scale_pre;
-                    if do_softcap {
-                        score = logit_softcap * score.tanh();
-                    }
-                    score += mv;
-
-                    let v_base = kv_pos * vstride[1] + v_head * vstride[2];
-
-                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                        if v_contiguous {
-                            let v_row = &v_data[v_base..v_base + dv];
-                            for d_i in 0..dv {
-                                acc[d_i] += v_row[d_i].to_f64() as f32 * w;
-                            }
-                        } else {
-                            for d_i in 0..dv {
-                                acc[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
-                            }
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                    if v_contiguous {
+                        let v_row = &v_data[v_base..v_base + dv];
+                        for d_i in 0..dv {
+                            acc[d_i] += v_row[d_i].to_f64() as f32 * w;
                         }
-                    });
-                }
+                    } else {
+                        for d_i in 0..dv {
+                            acc[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
+                        }
+                    }
+                });
+            }
 
-                let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                for (out_v, acc_v) in out_chunk.iter_mut().zip(acc.iter()) {
-                    *out_v = *acc_v * inv_s;
-                }
-            },
-        );
-    });
+            let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+            for (out_v, acc_v) in out_chunk.iter_mut().zip(acc.iter()) {
+                *out_v = *acc_v * inv_s;
+            }
+        },
+    );
 
     Tensor::from_vec(out, (1usize, h, 1usize, dv), &Device::Cpu)
 }
@@ -356,56 +330,53 @@ fn flash_attn_prefill_lean<T: WithDType>(
 
     let mut out = vec![0f32; h * q_len * dv];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(dv)
-            .with_min_len(64)
-            .enumerate()
-            .for_each_init(
-                || vec![0f32; dv],
-                |acc, (row_idx, out_chunk)| {
-                    let h_i = row_idx / q_len;
-                    let q_pos = row_idx % q_len;
+    out.par_chunks_mut(dv)
+        .with_min_len(64)
+        .enumerate()
+        .for_each_init(
+            || vec![0f32; dv],
+            |acc, (row_idx, out_chunk)| {
+                let h_i = row_idx / q_len;
+                let q_pos = row_idx % q_len;
 
-                    let k_head = h_i / rk2;
-                    let v_head = h_i / rv2;
+                let k_head = h_i / rk2;
+                let v_head = h_i / rv2;
 
-                    let q_base = q_pos * qstride[1] + h_i * qstride[2];
-                    let q_row = &q_data[q_base..q_base + d];
+                let q_base = q_pos * qstride[1] + h_i * qstride[2];
+                let q_row = &q_data[q_base..q_base + d];
 
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
+                acc.fill(0.0);
+                let mut m = f32::NEG_INFINITY;
+                let mut ssum = 0.0f32;
 
-                    for kv_pos in 0..kv_len {
-                        let k_base = kv_pos * kstride[1] + k_head * kstride[2];
-                        let k_row = &k_data[k_base..k_base + d];
+                for kv_pos in 0..kv_len {
+                    let k_base = kv_pos * kstride[1] + k_head * kstride[2];
+                    let k_row = &k_data[k_base..k_base + d];
 
-                        let score = dot_f32(q_row, k_row) * scale;
+                    let score = dot_f32(q_row, k_row) * scale;
 
-                        let v_base = kv_pos * vstride[1] + v_head * vstride[2];
+                    let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
-                        online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                            if v_contiguous {
-                                let v_row = &v_data[v_base..v_base + dv];
-                                for d_i in 0..dv {
-                                    acc[d_i] += v_row[d_i].to_f64() as f32 * w;
-                                }
-                            } else {
-                                for d_i in 0..dv {
-                                    acc[d_i] +=
-                                        v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
-                                }
+                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                        if v_contiguous {
+                            let v_row = &v_data[v_base..v_base + dv];
+                            for d_i in 0..dv {
+                                acc[d_i] += v_row[d_i].to_f64() as f32 * w;
                             }
-                        });
-                    }
+                        } else {
+                            for d_i in 0..dv {
+                                acc[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
+                            }
+                        }
+                    });
+                }
 
-                    let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for (out_v, acc_v) in out_chunk.iter_mut().zip(acc.iter()) {
-                        *out_v = *acc_v * inv_s;
-                    }
-                },
-            );
-    });
+                let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                for (out_v, acc_v) in out_chunk.iter_mut().zip(acc.iter()) {
+                    *out_v = *acc_v * inv_s;
+                }
+            },
+        );
 
     Tensor::from_vec(out, (1usize, h, q_len, dv), &Device::Cpu)
 }
@@ -446,76 +417,73 @@ fn flash_attn_prefill<T: WithDType>(
 
     let mut out = vec![0f32; h * q_len * dv];
 
-    FLASH_ATTN_POOL.install(|| {
-        out.par_chunks_mut(dv)
-            .with_min_len(64)
-            .enumerate()
-            .for_each_init(
-                || vec![0f32; dv],
-                |acc, (row_idx, out_chunk)| {
-                    let h_i = row_idx / q_len;
-                    let q_pos = row_idx % q_len;
+    out.par_chunks_mut(dv)
+        .with_min_len(64)
+        .enumerate()
+        .for_each_init(
+            || vec![0f32; dv],
+            |acc, (row_idx, out_chunk)| {
+                let h_i = row_idx / q_len;
+                let q_pos = row_idx % q_len;
 
-                    let slope = if max_bias > 0.0 {
-                        2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                let slope = if max_bias > 0.0 {
+                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+                } else {
+                    1.0
+                };
+
+                let k_head = h_i / rk2;
+                let v_head = h_i / rv2;
+
+                let q_base = q_pos * qstride[1] + h_i * qstride[2];
+                let q_row = &q_data[q_base..q_base + d];
+
+                acc.fill(0.0);
+                let mut m = f32::NEG_INFINITY;
+                let mut ssum = 0.0f32;
+
+                for kv_pos in 0..kv_len {
+                    let mv = if let Some(mv_vec) = mask_vec {
+                        let mval = mv_vec[q_pos * kv_len + kv_pos];
+                        slope * mval.to_f64() as f32
                     } else {
-                        1.0
+                        0.0
                     };
+                    if mv == f32::NEG_INFINITY {
+                        continue;
+                    }
 
-                    let k_head = h_i / rk2;
-                    let v_head = h_i / rv2;
+                    let k_base = kv_pos * kstride[1] + k_head * kstride[2];
+                    let k_row = &k_data[k_base..k_base + d];
 
-                    let q_base = q_pos * qstride[1] + h_i * qstride[2];
-                    let q_row = &q_data[q_base..q_base + d];
+                    let mut score = dot_f32(q_row, k_row) * scale_pre;
+                    if do_softcap {
+                        score = logit_softcap * score.tanh();
+                    }
+                    score += mv;
 
-                    acc.fill(0.0);
-                    let mut m = f32::NEG_INFINITY;
-                    let mut ssum = 0.0f32;
+                    let v_base = kv_pos * vstride[1] + v_head * vstride[2];
 
-                    for kv_pos in 0..kv_len {
-                        let mv = if let Some(mv_vec) = mask_vec {
-                            let mval = mv_vec[q_pos * kv_len + kv_pos];
-                            slope * mval.to_f64() as f32
-                        } else {
-                            0.0
-                        };
-                        if mv == f32::NEG_INFINITY {
-                            continue;
-                        }
-
-                        let k_base = kv_pos * kstride[1] + k_head * kstride[2];
-                        let k_row = &k_data[k_base..k_base + d];
-
-                        let mut score = dot_f32(q_row, k_row) * scale_pre;
-                        if do_softcap {
-                            score = logit_softcap * score.tanh();
-                        }
-                        score += mv;
-
-                        let v_base = kv_pos * vstride[1] + v_head * vstride[2];
-
-                        online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                            if v_contiguous {
-                                let v_row = &v_data[v_base..v_base + dv];
-                                for d_i in 0..dv {
-                                    acc[d_i] += v_row[d_i].to_f64() as f32 * w;
-                                }
-                            } else {
-                                for d_i in 0..dv {
-                                    acc[d_i] +=
-                                        v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
-                                }
+                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                        if v_contiguous {
+                            let v_row = &v_data[v_base..v_base + dv];
+                            for d_i in 0..dv {
+                                acc[d_i] += v_row[d_i].to_f64() as f32 * w;
                             }
-                        });
-                    }
+                        } else {
+                            for d_i in 0..dv {
+                                acc[d_i] += v_data[v_base + d_i * vstride[3]].to_f64() as f32 * w;
+                            }
+                        }
+                    });
+                }
 
-                    let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                    for (out_v, acc_v) in out_chunk.iter_mut().zip(acc.iter()) {
-                        *out_v = *acc_v * inv_s;
-                    }
-                },
-            );
-    });
+                let inv_s = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+                for (out_v, acc_v) in out_chunk.iter_mut().zip(acc.iter()) {
+                    *out_v = *acc_v * inv_s;
+                }
+            },
+        );
 
     Tensor::from_vec(out, (1usize, h, q_len, dv), &Device::Cpu)
 }
