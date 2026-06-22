@@ -1981,6 +1981,23 @@ impl GgmlType for BlockQ6K {
         Self::vec_dot_unopt(n, xs, ys)
     }
 
+    #[allow(unreachable_code)]
+    fn vec_dot_4(
+        n: usize,
+        xs0: &[Self],
+        xs1: &[Self],
+        xs2: &[Self],
+        xs3: &[Self],
+        ys: &[Self::VecDotType],
+    ) -> (f32, f32, f32, f32) {
+        #[cfg(target_feature = "neon")]
+        return super::neon::vec_dot_4_q6k_q8k(n, xs0, xs1, xs2, xs3, ys);
+
+        let (d0, d1) = Self::vec_dot_2(n, xs0, xs1, ys);
+        let (d2, d3) = Self::vec_dot_2(n, xs2, xs3, ys);
+        (d0, d1, d2, d3)
+    }
+
     fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
         debug_assert!(
             n.is_multiple_of(QK_K),

@@ -371,6 +371,168 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> f32
     sum
 }
 
+/// Four Q6K dot products sharing one Q8K load.
+#[inline(always)]
+pub(crate) fn vec_dot_4_q6k_q8k(
+    n: usize,
+    xs0: &[BlockQ6K],
+    xs1: &[BlockQ6K],
+    xs2: &[BlockQ6K],
+    xs3: &[BlockQ6K],
+    ys: &[BlockQ8K],
+) -> (f32, f32, f32, f32) {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_4_q6k_q8k: {n} is not divisible by {QK_K}"
+    );
+
+    let mut sum0 = 0f32;
+    let mut sum1 = 0f32;
+    let mut sum2 = 0f32;
+    let mut sum3 = 0f32;
+
+    unsafe {
+        let m4b = vdupq_n_u8(0xF);
+        let mone = vdupq_n_u8(3);
+
+        for ((((x0, x1), x2), x3), y) in xs0
+            .iter()
+            .zip(xs1.iter())
+            .zip(xs2.iter())
+            .zip(xs3.iter())
+            .zip(ys.iter())
+        {
+            let yd = y.d;
+
+            // Q8K bsums - loaded once for all four columns.
+            let q8sums = vld1q_s16_x2(y.bsums.as_ptr());
+
+            // Compute isum_mins for each column: dot(q8sums, column_scales).
+            macro_rules! col_isum_mins {
+                ($x:ident) => {{
+                    let scales_v = vld1q_s8($x.scales.as_ptr());
+                    let q6sc = int16x8x2_t(
+                        vmovl_s8(vget_low_s8(scales_v)),
+                        vmovl_s8(vget_high_s8(scales_v)),
+                    );
+                    let prod = vaddq_s32(
+                        vaddq_s32(
+                            vmull_s16(vget_low_s16(q8sums.0), vget_low_s16(q6sc.0)),
+                            vmull_s16(vget_high_s16(q8sums.0), vget_high_s16(q6sc.0)),
+                        ),
+                        vaddq_s32(
+                            vmull_s16(vget_low_s16(q8sums.1), vget_low_s16(q6sc.1)),
+                            vmull_s16(vget_high_s16(q8sums.1), vget_high_s16(q6sc.1)),
+                        ),
+                    );
+                    vaddvq_s32(prod)
+                }};
+            }
+
+            let isum_mins0 = col_isum_mins!(x0);
+            let isum_mins1 = col_isum_mins!(x1);
+            let isum_mins2 = col_isum_mins!(x2);
+            let isum_mins3 = col_isum_mins!(x3);
+
+            let mut q6_0 = x0.ql.as_ptr();
+            let mut qh_0 = x0.qh.as_ptr();
+            let mut sc_0 = x0.scales.as_ptr();
+            let mut q6_1 = x1.ql.as_ptr();
+            let mut qh_1 = x1.qh.as_ptr();
+            let mut sc_1 = x1.scales.as_ptr();
+            let mut q6_2 = x2.ql.as_ptr();
+            let mut qh_2 = x2.qh.as_ptr();
+            let mut sc_2 = x2.scales.as_ptr();
+            let mut q6_3 = x3.ql.as_ptr();
+            let mut qh_3 = x3.qh.as_ptr();
+            let mut sc_3 = x3.scales.as_ptr();
+            let mut q8 = y.qs.as_ptr();
+
+            let mut isum0 = 0i32;
+            let mut isum1 = 0i32;
+            let mut isum2 = 0i32;
+            let mut isum3 = 0i32;
+
+            for _j in 0..QK_K / 128 {
+                // Load Q8K bytes once - shared across all four columns.
+                let q8lo = vld1q_s8_x4(q8);
+                q8 = q8.add(64);
+                let q8hi = vld1q_s8_x4(q8);
+                q8 = q8.add(64);
+
+                // Decode one column's Q6 bits and accumulate into its isum.
+                // q8lo/q8hi are shared from the outer scope.
+                macro_rules! process_col {
+                    ($q6:ident, $qh:ident, $sc:ident, $isum:ident) => {
+                        let qhb = vld1q_u8_x2($qh);
+                        $qh = $qh.add(32);
+                        let q6b = vld1q_u8_x4($q6);
+                        $q6 = $q6.add(64);
+
+                        // First half: low nibbles of ql + bits[1:0] and bits[3:2] of qh.
+                        let qh00 = vshlq_n_u8(vandq_u8(mone, qhb.0), 4);
+                        let qh01 = vshlq_n_u8(vandq_u8(mone, qhb.1), 4);
+                        let qh10 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhb.0, 2)), 4);
+                        let qh11 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhb.1, 2)), 4);
+
+                        let q6b0 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6b.0, m4b), qh00));
+                        let q6b1 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6b.1, m4b), qh01));
+                        let q6b2 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6b.2, m4b), qh10));
+                        let q6b3 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6b.3, m4b), qh11));
+
+                        let p0 = vdotq_s32(q6b0, q8lo.0);
+                        let p1 = vdotq_s32(q6b1, q8lo.1);
+                        $isum +=
+                            vaddvq_s32(p0) * (*$sc as i32) + vaddvq_s32(p1) * (*$sc.add(1) as i32);
+                        $sc = $sc.add(2);
+
+                        let p2 = vdotq_s32(q6b2, q8lo.2);
+                        let p3 = vdotq_s32(q6b3, q8lo.3);
+                        $isum +=
+                            vaddvq_s32(p2) * (*$sc as i32) + vaddvq_s32(p3) * (*$sc.add(1) as i32);
+                        $sc = $sc.add(2);
+
+                        // Second half: high nibbles of ql + bits[5:4] and bits[7:6] of qh.
+                        let qh20 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhb.0, 4)), 4);
+                        let qh21 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhb.1, 4)), 4);
+                        let qh30 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhb.0, 6)), 4);
+                        let qh31 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhb.1, 6)), 4);
+
+                        let q6b0 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6b.0, 4), qh20));
+                        let q6b1 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6b.1, 4), qh21));
+                        let q6b2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6b.2, 4), qh30));
+                        let q6b3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6b.3, 4), qh31));
+
+                        let p0 = vdotq_s32(q6b0, q8hi.0);
+                        let p1 = vdotq_s32(q6b1, q8hi.1);
+                        $isum +=
+                            vaddvq_s32(p0) * (*$sc as i32) + vaddvq_s32(p1) * (*$sc.add(1) as i32);
+                        $sc = $sc.add(2);
+
+                        let p2 = vdotq_s32(q6b2, q8hi.2);
+                        let p3 = vdotq_s32(q6b3, q8hi.3);
+                        $isum +=
+                            vaddvq_s32(p2) * (*$sc as i32) + vaddvq_s32(p3) * (*$sc.add(1) as i32);
+                        $sc = $sc.add(2);
+                    };
+                }
+
+                process_col!(q6_0, qh_0, sc_0, isum0);
+                process_col!(q6_1, qh_1, sc_1, isum1);
+                process_col!(q6_2, qh_2, sc_2, isum2);
+                process_col!(q6_3, qh_3, sc_3, isum3);
+            }
+
+            sum0 += x0.d.to_f32() * yd * ((isum0 - 32 * isum_mins0) as f32);
+            sum1 += x1.d.to_f32() * yd * ((isum1 - 32 * isum_mins1) as f32);
+            sum2 += x2.d.to_f32() * yd * ((isum2 - 32 * isum_mins2) as f32);
+            sum3 += x3.d.to_f32() * yd * ((isum3 - 32 * isum_mins3) as f32);
+        }
+    }
+
+    (sum0, sum1, sum2, sum3)
+}
+
 #[inline(always)]
 pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> f32 {
     debug_assert!(
