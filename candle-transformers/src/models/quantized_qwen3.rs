@@ -310,7 +310,6 @@ impl AttentionWeights {
                     scale,
                 )?;
 
-                let ctx = ctx.unsqueeze(0)?.transpose(1, 2)?;
                 ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
             } else {
                 // Prefill: interleaved cache + flash_attn; also populate raw cache for decode.
