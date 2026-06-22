@@ -537,6 +537,163 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> f32
     sumf
 }
 
+/// Four Q4K dot products sharing one Q8K load.
+#[inline(always)]
+pub(crate) fn vec_dot_4_q4k_q8k(
+    n: usize,
+    xs0: &[BlockQ4K],
+    xs1: &[BlockQ4K],
+    xs2: &[BlockQ4K],
+    xs3: &[BlockQ4K],
+    ys: &[BlockQ8K],
+) -> (f32, f32, f32, f32) {
+    debug_assert!(
+        n.is_multiple_of(QK_K),
+        "vec_dot_4_q4k_q8k: {n} is not divisible by {QK_K}"
+    );
+
+    let mut sum0 = 0f32;
+    let mut sum1 = 0f32;
+    let mut sum2 = 0f32;
+    let mut sum3 = 0f32;
+
+    let mut utmp = [0u32; 4];
+    let mut sc0 = [0u8; 16];
+    let mut sc1 = [0u8; 16];
+    let mut sc2 = [0u8; 16];
+    let mut sc3 = [0u8; 16];
+
+    const KMASK1: u32 = 0x3f3f3f3f;
+    const KMASK2: u32 = 0x0f0f0f0f;
+    const KMASK3: u32 = 0x03030303;
+
+    // Decode Q4K scale+min bytes into an 8-entry scales array and a float32x4x2
+    // mins vector. Returns the mins vector so the caller can compute min correction.
+    macro_rules! decode_q4k_scales {
+        ($x:ident, $sc:ident) => {{
+            LittleEndian::read_u32_into(&$x.scales, &mut utmp[0..3]);
+            let mins8 = vld1_u32(
+                [
+                    utmp[1] & KMASK1,
+                    ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4),
+                ]
+                .as_ptr(),
+            );
+            utmp[1] = (utmp[2] & KMASK2) | (((utmp[0] >> 6) & KMASK3) << 4);
+            utmp[0] &= KMASK1;
+            LittleEndian::write_u32_into(&utmp, &mut $sc);
+            vreinterpretq_s16_u16(vmovl_u8(vreinterpret_u8_u32(mins8)))
+        }};
+    }
+
+    // Accumulate one column's nibble-group contribution into a scalar sumi.
+    macro_rules! dot_col {
+        ($q4:ident, $sc:ident, $vsum1:ident, $vsum2:ident, $q8lo:ident, $q8hi:ident, $j:ident, $m4b:ident) => {
+            let bits = vld1q_u8_x2($q4);
+            $q4 = $q4.add(32);
+            let q4lo = int8x16x2_t(
+                vreinterpretq_s8_u8(vandq_u8(bits.0, $m4b)),
+                vreinterpretq_s8_u8(vandq_u8(bits.1, $m4b)),
+            );
+            $vsum1 = vmlaq_n_s32(
+                $vsum1,
+                vdotq_s32_pair(q4lo.0, $q8lo.0, q4lo.1, $q8lo.1),
+                $sc[2 * $j] as i32,
+            );
+            let q4hi = int8x16x2_t(
+                vreinterpretq_s8_u8(vshrq_n_u8(bits.0, 4)),
+                vreinterpretq_s8_u8(vshrq_n_u8(bits.1, 4)),
+            );
+            $vsum2 = vmlaq_n_s32(
+                $vsum2,
+                vdotq_s32_pair(q4hi.0, $q8hi.0, q4hi.1, $q8hi.1),
+                $sc[2 * $j + 1] as i32,
+            );
+        };
+    }
+
+    unsafe {
+        let m4b = vdupq_n_u8(0xF);
+
+        for ((((x0, x1), x2), x3), y) in xs0
+            .iter()
+            .zip(xs1.iter())
+            .zip(xs2.iter())
+            .zip(xs3.iter())
+            .zip(ys.iter())
+        {
+            let yd = y.d;
+
+            // Q8K bsums - loaded once for all four columns.
+            let q8sums = vpaddq_s16(
+                vld1q_s16(y.bsums.as_ptr()),
+                vld1q_s16(y.bsums.as_ptr().add(8)),
+            );
+
+            // Decode scales and apply min correction for each column.
+            let mins0 = decode_q4k_scales!(x0, sc0);
+            let mins1 = decode_q4k_scales!(x1, sc1);
+            let mins2 = decode_q4k_scales!(x2, sc2);
+            let mins3 = decode_q4k_scales!(x3, sc3);
+
+            let d0 = yd * x0.d.to_f32();
+            let d1 = yd * x1.d.to_f32();
+            let d2 = yd * x2.d.to_f32();
+            let d3 = yd * x3.d.to_f32();
+
+            // min correction: sum -= dmin * dot(q8sums, mins)
+            macro_rules! min_correct {
+                ($mins:ident, $dmin:expr, $sum:ident) => {
+                    let prod = vaddq_s32(
+                        vmull_s16(vget_low_s16(q8sums), vget_low_s16($mins)),
+                        vmull_s16(vget_high_s16(q8sums), vget_high_s16($mins)),
+                    );
+                    $sum -= $dmin * vaddvq_s32(prod) as f32;
+                };
+            }
+            min_correct!(mins0, yd * x0.dmin.to_f32(), sum0);
+            min_correct!(mins1, yd * x1.dmin.to_f32(), sum1);
+            min_correct!(mins2, yd * x2.dmin.to_f32(), sum2);
+            min_correct!(mins3, yd * x3.dmin.to_f32(), sum3);
+
+            let mut q4_0 = x0.qs.as_ptr();
+            let mut q4_1 = x1.qs.as_ptr();
+            let mut q4_2 = x2.qs.as_ptr();
+            let mut q4_3 = x3.qs.as_ptr();
+            let mut q8 = y.qs.as_ptr();
+
+            let mut s0a = vdupq_n_s32(0);
+            let mut s0b = vdupq_n_s32(0);
+            let mut s1a = vdupq_n_s32(0);
+            let mut s1b = vdupq_n_s32(0);
+            let mut s2a = vdupq_n_s32(0);
+            let mut s2b = vdupq_n_s32(0);
+            let mut s3a = vdupq_n_s32(0);
+            let mut s3b = vdupq_n_s32(0);
+
+            for j in 0..QK_K / 64 {
+                // Load Q8K once and reuse across all four columns.
+                let q8lo = vld1q_s8_x2(q8);
+                q8 = q8.add(32);
+                let q8hi = vld1q_s8_x2(q8);
+                q8 = q8.add(32);
+
+                dot_col!(q4_0, sc0, s0a, s0b, q8lo, q8hi, j, m4b);
+                dot_col!(q4_1, sc1, s1a, s1b, q8lo, q8hi, j, m4b);
+                dot_col!(q4_2, sc2, s2a, s2b, q8lo, q8hi, j, m4b);
+                dot_col!(q4_3, sc3, s3a, s3b, q8lo, q8hi, j, m4b);
+            }
+
+            sum0 += d0 * vaddvq_s32(vaddq_s32(s0a, s0b)) as f32;
+            sum1 += d1 * vaddvq_s32(vaddq_s32(s1a, s1b)) as f32;
+            sum2 += d2 * vaddvq_s32(vaddq_s32(s2a, s2b)) as f32;
+            sum3 += d3 * vaddvq_s32(vaddq_s32(s3a, s3b)) as f32;
+        }
+    }
+
+    (sum0, sum1, sum2, sum3)
+}
+
 #[inline(always)]
 pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> f32 {
     debug_assert!(
