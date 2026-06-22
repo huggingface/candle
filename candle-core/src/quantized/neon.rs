@@ -1136,13 +1136,13 @@ pub(crate) fn quantize_row_q8k(xs: &[f32], ys: &mut [BlockQ8K]) {
                 continue;
             }
 
-            let iscale = -128.0f32 / max_signed;
+            let iscale = -127.0f32 / max_signed;
             let vscale = vdupq_n_f32(iscale);
 
             // Quantize f32 -> i8. Multiply, round-to-nearest, saturating narrow.
             let mut out = y.qs.as_mut_ptr();
             let mut p = chunk.as_ptr();
-            for _ in 0..QK_K / 16 {
+            for j in 0..QK_K / 16 {
                 let f0 = vmulq_f32(vld1q_f32(p), vscale);
                 let f1 = vmulq_f32(vld1q_f32(p.add(4)), vscale);
                 let f2 = vmulq_f32(vld1q_f32(p.add(8)), vscale);
@@ -1156,15 +1156,10 @@ pub(crate) fn quantize_row_q8k(xs: &[f32], ys: &mut [BlockQ8K]) {
                     vqmovn_s32(vcvtaq_s32_f32(f2)),
                     vqmovn_s32(vcvtaq_s32_f32(f3)),
                 );
-                vst1q_s8(out, vcombine_s8(vqmovn_s16(s01), vqmovn_s16(s23)));
+                let q = vcombine_s8(vqmovn_s16(s01), vqmovn_s16(s23));
+                vst1q_s8(out, q);
                 out = out.add(16);
-            }
-
-            // Sum of each 16-element group of quantized values
-            let qp = y.qs.as_ptr();
-            for j in 0..QK_K / 16 {
-                let v = vld1q_s8(qp.add(j * 16));
-                y.bsums[j] = vaddvq_s32(vpaddlq_s16(vpaddlq_s8(v))) as i16;
+                y.bsums[j] = vaddvq_s32(vpaddlq_s16(vpaddlq_s8(q))) as i16;
             }
 
             y.d = 1.0f32 / iscale;
