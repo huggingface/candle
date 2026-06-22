@@ -33,6 +33,52 @@ unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
     }
 }
 
+/// Two SDOT ops into one accumulator
+#[inline(always)]
+unsafe fn vdotq_s32_pair(a0: int8x16_t, b0: int8x16_t, a1: int8x16_t, b1: int8x16_t) -> int32x4_t {
+    #[cfg(target_feature = "dotprod")]
+    {
+        let mut acc: int32x4_t = vdupq_n_s32(0);
+        core::arch::asm!(
+            "sdot {acc:v}.4s, {a0:v}.16b, {b0:v}.16b",
+            "sdot {acc:v}.4s, {a1:v}.16b, {b1:v}.16b",
+            acc = inout(vreg) acc,
+            a0 = in(vreg) a0,
+            b0 = in(vreg) b0,
+            a1 = in(vreg) a1,
+            b1 = in(vreg) b1,
+            options(nostack, nomem),
+        );
+        return acc;
+    }
+    #[cfg(not(target_feature = "dotprod"))]
+    {
+        let p0 = vmull_s8(vget_low_s8(a0), vget_low_s8(b0));
+        let p1 = vmull_s8(vget_high_s8(a0), vget_high_s8(b0));
+        let p2 = vmull_s8(vget_low_s8(a1), vget_low_s8(b1));
+        let p3 = vmull_s8(vget_high_s8(a1), vget_high_s8(b1));
+        vaddq_s32(
+            vaddq_s32(vpaddlq_s16(p0), vpaddlq_s16(p1)),
+            vaddq_s32(vpaddlq_s16(p2), vpaddlq_s16(p3)),
+        )
+    }
+}
+
+/// Accumulating SDOT: acc += dot4(a, b) for each lane.
+#[cfg(target_feature = "dotprod")]
+#[inline(always)]
+unsafe fn sdot_acc(acc: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_t {
+    let mut out = acc;
+    core::arch::asm!(
+        "sdot {out:v}.4s, {a:v}.16b, {b:v}.16b",
+        out = inout(vreg) out,
+        a   = in(vreg) a,
+        b   = in(vreg) b,
+        options(nostack, nomem),
+    );
+    out
+}
+
 /// Merge two per-lane (abs_max, signed_val) accumulator pairs.
 /// Each output lane holds the signed value with the larger absolute value.
 #[inline(always)]
@@ -120,6 +166,74 @@ pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) ->
             );
         }
         vaddvq_f32(sumv0)
+    }
+}
+
+#[inline(always)]
+pub(crate) fn vec_dot_4_q8_0_q8_0(
+    n: usize,
+    xs0: &[BlockQ8_0],
+    xs1: &[BlockQ8_0],
+    xs2: &[BlockQ8_0],
+    xs3: &[BlockQ8_0],
+    ys: &[BlockQ8_0],
+) -> (f32, f32, f32, f32) {
+    debug_assert!(
+        n.is_multiple_of(QK8_0),
+        "vec_dot_4_q8_0_q8_0: {n} is not divisible by {QK8_0}"
+    );
+    let nb = n / QK8_0;
+    unsafe {
+        let mut sum0 = vdupq_n_f32(0.0f32);
+        let mut sum1 = vdupq_n_f32(0.0f32);
+        let mut sum2 = vdupq_n_f32(0.0f32);
+        let mut sum3 = vdupq_n_f32(0.0f32);
+        for i in 0..nb {
+            let y = &ys[i];
+            let y0 = vld1q_s8(y.qs.as_ptr());
+            let y1 = vld1q_s8(y.qs.as_ptr().add(16));
+            let yd = y.d.to_f32();
+            let x0 = &xs0[i];
+            let x1 = &xs1[i];
+            let x2 = &xs2[i];
+            let x3 = &xs3[i];
+            // Each column uses 2 SDOTs fused into one accumulator via vdotq_s32_pair.
+            // All 4 columns share y0/y1 and have independent accumulators.
+            let p0 = vdotq_s32_pair(
+                vld1q_s8(x0.qs.as_ptr()),
+                y0,
+                vld1q_s8(x0.qs.as_ptr().add(16)),
+                y1,
+            );
+            let p1 = vdotq_s32_pair(
+                vld1q_s8(x1.qs.as_ptr()),
+                y0,
+                vld1q_s8(x1.qs.as_ptr().add(16)),
+                y1,
+            );
+            let p2 = vdotq_s32_pair(
+                vld1q_s8(x2.qs.as_ptr()),
+                y0,
+                vld1q_s8(x2.qs.as_ptr().add(16)),
+                y1,
+            );
+            let p3 = vdotq_s32_pair(
+                vld1q_s8(x3.qs.as_ptr()),
+                y0,
+                vld1q_s8(x3.qs.as_ptr().add(16)),
+                y1,
+            );
+            sum0 = vmlaq_n_f32(sum0, vcvtq_f32_s32(p0), x0.d.to_f32() * yd);
+            sum1 = vmlaq_n_f32(sum1, vcvtq_f32_s32(p1), x1.d.to_f32() * yd);
+            sum2 = vmlaq_n_f32(sum2, vcvtq_f32_s32(p2), x2.d.to_f32() * yd);
+            sum3 = vmlaq_n_f32(sum3, vcvtq_f32_s32(p3), x3.d.to_f32() * yd);
+        }
+        (
+            vaddvq_f32(sum0),
+            vaddvq_f32(sum1),
+            vaddvq_f32(sum2),
+            vaddvq_f32(sum3),
+        )
     }
 }
 
