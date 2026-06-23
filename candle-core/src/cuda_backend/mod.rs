@@ -28,7 +28,7 @@ type ParamCache = HashMap<(DeviceId, Vec<usize>), Arc<CudaSlice<usize>>>;
 static CUDA_PARAM_CACHE: OnceLock<Mutex<ParamCache>> = OnceLock::new();
 
 thread_local! {
-    static CUDA_PARAM_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
+    pub(crate) static CUDA_PARAM_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
 }
 
 pub struct CudaParamCacheGuard {
@@ -1753,6 +1753,16 @@ impl BackendStorage for CudaStorage {
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        if CUDA_PARAM_CACHE_ENABLED.with(|e| e.get()) {
+            let is_capturing = self.device.cuda_stream().capture_status()
+                == Ok(cudarc::driver::sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_ACTIVE);
+            if is_capturing {
+                crate::bail!(
+                    "to_cpu_storage during CUDA graph capture: host/device copies are not \
+                     permitted while capturing"
+                );
+            }
+        }
         match &self.slice {
             CudaStorageSlice::U8(slice) => {
                 let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
