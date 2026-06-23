@@ -23,8 +23,9 @@ pub use device::{CudaDevice, DeviceId};
 pub use error::{CudaError, WrapErr};
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
 
-static CUDA_PARAM_CACHE: OnceLock<Mutex<HashMap<(DeviceId, Vec<usize>), Arc<CudaSlice<usize>>>>> =
-    OnceLock::new();
+type ParamCache = HashMap<(DeviceId, Vec<usize>), Arc<CudaSlice<usize>>>;
+
+static CUDA_PARAM_CACHE: OnceLock<Mutex<ParamCache>> = OnceLock::new();
 
 thread_local! {
     static CUDA_PARAM_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
@@ -34,9 +35,22 @@ pub struct CudaParamCacheGuard {
     previous: bool,
 }
 
+impl CudaParamCacheGuard {
+    pub fn clear_cache(&self) {
+        if let Some(cache) = CUDA_PARAM_CACHE.get() {
+            cache.lock().unwrap().clear();
+        }
+    }
+}
+
 impl Drop for CudaParamCacheGuard {
     fn drop(&mut self) {
         CUDA_PARAM_CACHE_ENABLED.with(|enabled| enabled.set(self.previous));
+        if !self.previous {
+            if let Some(cache) = CUDA_PARAM_CACHE.get() {
+                cache.lock().unwrap().clear();
+            }
+        }
     }
 }
 
@@ -94,12 +108,17 @@ impl SlicePtrOrNull<usize> {
 
             let is_capturing = dev.cuda_stream().capture_status()
                 == Ok(cudarc::driver::sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_ACTIVE);
-            if !is_capturing {
-                let slice = Arc::new(dev.clone_htod(&params)?);
-                let mut cache = cache.lock().unwrap();
-                let slice = cache.entry(key).or_insert_with(|| slice).clone();
-                return Ok(SlicePtrOrNull::Cached(slice));
+            if is_capturing {
+                crate::bail!(
+                    "h2d param cache miss during CUDA graph capture: \
+                     warmup did not populate all required parameter vectors"
+                );
             }
+
+            let slice = Arc::new(dev.clone_htod(&params)?);
+            let mut cache = cache.lock().unwrap();
+            let slice = cache.entry(key).or_insert_with(|| slice).clone();
+            return Ok(SlicePtrOrNull::Cached(slice));
         }
 
         Ok(SlicePtrOrNull::Ptr(dev.clone_htod(&params)?))
@@ -1747,6 +1766,16 @@ impl BackendStorage for CudaStorage {
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        if CUDA_PARAM_CACHE_ENABLED.with(|enabled| enabled.get()) {
+            let is_capturing = self.device.cuda_stream().capture_status()
+                == Ok(cudarc::driver::sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_ACTIVE);
+            if is_capturing {
+                crate::bail!(
+                    "d2h copy attempted during CUDA graph capture: \
+                     device-to-host transfers are not permitted while capturing"
+                );
+            }
+        }
         match &self.slice {
             CudaStorageSlice::U8(slice) => {
                 let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
