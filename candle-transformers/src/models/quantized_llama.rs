@@ -555,6 +555,16 @@ impl ModelWeights {
         }
     }
 
+    /// Clear the KV cache across all layers.
+    ///
+    /// Call this between independent conversations to free cached attention
+    /// state without recreating the model.
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.kv_cache = None;
+        }
+    }
+
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = if seq_len == 1 {

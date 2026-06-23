@@ -285,6 +285,14 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        // f64 is not a target for Qwen3 (CPU flash runs in f32, GPU flash in f16/bf16).
+        // Reject it here, at the single point where the model dtype is set, so no f64
+        // tensor can ever reach the attention kernels and the inner paths never branch on it.
+        if vb.dtype() == DType::F64 {
+            candle::bail!(
+                "Qwen3 does not support f64; load weights as f32 or bf16 (CPU) or f16/bf16 (GPU)"
+            );
+        }
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let rotary = Arc::new(Qwen3RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);

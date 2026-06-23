@@ -3,8 +3,8 @@ use super::{Cpu, CpuBF16, CpuF16};
 use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
-
 use half::{bf16, f16};
+use std::{is_x86_feature_detected, mem::transmute};
 
 pub struct CurrentCpu {}
 
@@ -12,16 +12,13 @@ const STEP: usize = 32;
 const EPR: usize = 8;
 const ARR: usize = STEP / EPR;
 
-impl Cpu<ARR> for CurrentCpu {
+impl Cpu for CurrentCpu {
     type Unit = __m256;
     type Array = [__m256; ARR];
 
     const STEP: usize = STEP;
     const EPR: usize = EPR;
-
-    fn n() -> usize {
-        ARR
-    }
+    const ARR: usize = ARR;
 
     unsafe fn zero() -> Self::Unit {
         _mm256_setzero_ps()
@@ -69,16 +66,13 @@ impl Cpu<ARR> for CurrentCpu {
 }
 
 pub struct CurrentCpuF16 {}
-impl CpuF16<ARR> for CurrentCpuF16 {
+impl CpuF16 for CurrentCpuF16 {
     type Unit = __m256;
     type Array = [__m256; ARR];
 
     const STEP: usize = STEP;
     const EPR: usize = EPR;
-
-    fn n() -> usize {
-        ARR
-    }
+    const ARR: usize = ARR;
 
     unsafe fn zero() -> Self::Unit {
         _mm256_setzero_ps()
@@ -148,16 +142,13 @@ impl CpuF16<ARR> for CurrentCpuF16 {
 }
 
 pub struct CurrentCpuBF16 {}
-impl CpuBF16<ARR> for CurrentCpuBF16 {
+impl CpuBF16 for CurrentCpuBF16 {
     type Unit = __m256;
     type Array = [__m256; ARR];
 
     const STEP: usize = STEP;
     const EPR: usize = EPR;
-
-    fn n() -> usize {
-        ARR
-    }
+    const ARR: usize = ARR;
 
     unsafe fn zero() -> Self::Unit {
         _mm256_setzero_ps()
@@ -171,18 +162,18 @@ impl CpuBF16<ARR> for CurrentCpuBF16 {
         _mm256_set1_ps(v)
     }
 
-    #[cfg(target_feature = "f16c")]
     unsafe fn load(mem_addr: *const bf16) -> Self::Unit {
-        _mm256_cvtph_ps(_mm_loadu_si128(mem_addr as *const __m128i))
-    }
-
-    #[cfg(not(target_feature = "f16c"))]
-    unsafe fn load(mem_addr: *const bf16) -> Self::Unit {
-        let mut tmp = [0.0f32; 8];
-        for i in 0..8 {
-            tmp[i] = (*mem_addr.add(i)).to_f32();
+        if is_x86_feature_detected!("avx512bf16") && is_x86_feature_detected!("avx512vl") {
+            _mm256_cvtpbh_ps(transmute::<__m128i, __m128bh>(_mm_loadu_si128(
+                mem_addr as *const __m128i,
+            )))
+        } else {
+            let mut tmp = [0.0f32; 8];
+            for i in 0..8 {
+                tmp[i] = (*mem_addr.add(i)).to_f32();
+            }
+            _mm256_loadu_ps(tmp.as_ptr())
         }
-        _mm256_loadu_ps(tmp.as_ptr())
     }
 
     unsafe fn vec_add(a: Self::Unit, b: Self::Unit) -> Self::Unit {
@@ -193,17 +184,18 @@ impl CpuBF16<ARR> for CurrentCpuBF16 {
         _mm256_add_ps(_mm256_mul_ps(b, c), a)
     }
 
-    #[cfg(target_feature = "f16c")]
     unsafe fn vec_store(mem_addr: *mut bf16, a: Self::Unit) {
-        _mm_storeu_si128(mem_addr as *mut __m128i, _mm256_cvtps_ph(a, 0))
-    }
-
-    #[cfg(not(target_feature = "f16c"))]
-    unsafe fn vec_store(mem_addr: *mut bf16, a: Self::Unit) {
-        let mut tmp = [0.0f32; 8];
-        _mm256_storeu_ps(tmp.as_mut_ptr(), a);
-        for i in 0..8 {
-            *mem_addr.add(i) = bf16::from_f32(tmp[i]);
+        if is_x86_feature_detected!("avx512bf16") && is_x86_feature_detected!("avx512vl") {
+            _mm_storeu_si128(
+                mem_addr as *mut __m128i,
+                transmute::<__m128bh, __m128i>(_mm256_cvtneps_pbh(a)),
+            )
+        } else {
+            let mut tmp = [0.0f32; 8];
+            _mm256_storeu_ps(tmp.as_mut_ptr(), a);
+            for i in 0..8 {
+                *mem_addr.add(i) = bf16::from_f32(tmp[i]);
+            }
         }
     }
 
