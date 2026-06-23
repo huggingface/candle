@@ -932,6 +932,32 @@ fn conv2d_c_eq_h_eq_w(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+fn conv2d_non_contiguous_kernel(dev: &Device) -> Result<()> {
+    let data = (0..25).map(|i| i as f32 * 0.1 - 1.2).collect::<Vec<_>>();
+    let t = Tensor::from_vec(data, (1, 1, 5, 5), dev)?;
+    let w = Tensor::from_vec(
+        vec![1.0f32, -2.0, 3.0, 0.5, -0.25, 0.75, -1.5, 2.5, -3.5],
+        (1, 1, 3, 3),
+        dev,
+    )?;
+    let w = w.transpose(2, 3)?;
+    assert!(!w.is_contiguous());
+
+    let got = t.conv2d(&w, 0, 1, 1, 1)?;
+    let expected = t.conv2d(&w.contiguous()?, 0, 1, 1, 1)?;
+    let max_abs = got
+        .sub(&expected)?
+        .abs()?
+        .flatten_all()?
+        .max_all()?
+        .to_scalar::<f32>()?;
+    assert!(
+        max_abs < 1e-6,
+        "conv2d with non-contiguous kernel differs from contiguous kernel copy: max_abs={max_abs}"
+    );
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -969,4 +995,10 @@ test_device!(
     conv2d_c_eq_h_eq_w_cpu,
     conv2d_c_eq_h_eq_w_gpu,
     conv2d_c_eq_h_eq_w_metal
+);
+test_device!(
+    conv2d_non_contiguous_kernel,
+    conv2d_non_contiguous_kernel_cpu,
+    conv2d_non_contiguous_kernel_gpu,
+    conv2d_non_contiguous_kernel_metal
 );

@@ -9,7 +9,5 @@ keywords = ["blas", "tensor", "machine-learning"]
 categories = ["science"]
 license = "MIT OR Apache-2.0"
 
-[dependencies]
-
 [build-dependencies]
-cudaforge = "0.1.2"
+cudaforge = { git = "https://github.com/guoqingbao/cudaforge", rev = "64a7f7a7926cc0c1a9b896ab853dedbcb74617a6" }

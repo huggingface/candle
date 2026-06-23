@@ -23,13 +23,16 @@
 #include <cassert>
 #include <cstring>
 #include "moe_utils.cuh"
+constexpr int WMMA_K = 16;
+
+#if HAS_WMMA
 using namespace nvcuda::wmma;
+#endif
 
 namespace vllm_rs {
 
 #define CEILDIV(x,y) (((x) + (y) - 1) / (y))
 
-constexpr int WMMA_K = 16;
 using VecT = float4;
 
 // Vectorized load size (float4 = 128 bits = 8 half/bfloat16 values)
@@ -62,6 +65,7 @@ constexpr int K_BLK = WMMA_K;           // 16
  *  @param size_n           Output hidden dimension (per expert)
  *  @param size_k           Input hidden dimension
 */
+#if HAS_WMMA
 template<typename T, int WMMA_M, int WMMA_N, int WARPS_N>
 __global__ void moe_gemm_grouped_kernel(
     const T* __restrict__ input,           // [size_m, size_k]
@@ -216,9 +220,11 @@ __global__ void moe_gemm_grouped_kernel(
         }
     } // end m_base loop
 }
+#endif
 
 }
 
+#if HAS_WMMA
 #define LAUNCH_MOE_WMMA(DTYPE, WMMA_M, WMMA_N, WARPS_N)\
     vllm_rs::moe_gemm_grouped_kernel<DTYPE, WMMA_M, WMMA_N, WARPS_N><<<grid, block, smem_bytes, stream>>>(\
         reinterpret_cast<const DTYPE*>(input),\
@@ -230,6 +236,28 @@ __global__ void moe_gemm_grouped_kernel(
         num_experts, topk,\
         size_m, size_n, size_k \
     );\
+#else
+#define LAUNCH_MOE_WMMA(DTYPE, WMMA_M, WMMA_N, WARPS_N) (void)0;
+#endif
+
+extern "C" void moe_gemm_hfma2(
+    const void* input,
+    const void* weights,
+    const int32_t* sorted_token_ids,
+    const int32_t* expert_ids,
+    const float* topk_weights,
+    void* output,
+    int32_t* expert_counts,
+    int32_t* expert_offsets,
+    int num_experts,
+    int topk,
+    int size_m,
+    int size_n,
+    int size_k,
+    int data_type,
+    bool is_prefill,
+    cudaStream_t stream
+);
 
 extern "C" void moe_gemm_wmma(
     const void* input,                // [size_m, size_k]
@@ -249,6 +277,19 @@ extern "C" void moe_gemm_wmma(
     bool is_prefill,
     cudaStream_t stream
 ) {
+    // Rust selects the preferred backend; keep a build-time fallback for direct callers/tests.
+    if (data_type == 0) { // half
+#if !HAS_WMMA_F16
+        moe_gemm_hfma2(input, weights, sorted_token_ids, expert_ids, topk_weights, output, expert_counts, expert_offsets, num_experts, topk, size_m, size_n, size_k, data_type, is_prefill, stream);
+        return;
+#endif
+    } else if (data_type == 1) { // bfloat16
+#if !HAS_WMMA_BF16
+        moe_gemm_hfma2(input, weights, sorted_token_ids, expert_ids, topk_weights, output, expert_counts, expert_offsets, num_experts, topk, size_m, size_n, size_k, data_type, is_prefill, stream);
+        return;
+#endif
+    }
+
     if (is_prefill) {
         calculate_expert_offsets(expert_ids, size_m, expert_counts, expert_offsets, num_experts, stream);
     } else {
@@ -268,20 +309,21 @@ extern "C" void moe_gemm_wmma(
     size_t smem_bytes = AB_bytes + pad + C_sh_bytes; // ~6KB total needed
 
     if (data_type == 0) { // half
+#if HAS_WMMA_F16
         if (is_prefill) {
             LAUNCH_MOE_WMMA(half, 16, 16, 2)
         } else {
             // we use smaller M_tile and larger N_tile for decoding
             LAUNCH_MOE_WMMA(half, 8, 32, 1)
         }
-    }
-#ifndef NO_BF16_KERNEL
-    else if (data_type == 1) { // bfloat16
+#endif
+    } else if (data_type == 1) { // bfloat16
+#if HAS_WMMA_BF16
         if (is_prefill) {
             LAUNCH_MOE_WMMA(nv_bfloat16, 16, 16, 2)
         } else {
             LAUNCH_MOE_WMMA(nv_bfloat16, 8, 32, 1)
         }
-    }
 #endif
+    }
 }
