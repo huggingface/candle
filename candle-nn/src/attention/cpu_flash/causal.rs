@@ -5,9 +5,9 @@
 
 use candle::{DType, Device, Result, Storage, Tensor, WithDType};
 use rayon::prelude::*;
-use std::iter::Sum;
 
-use super::standard::vec_dot;
+use super::dot_f32;
+use super::online_softmax::online_softmax_step;
 
 /// Prefetch a cache line for read.
 #[inline(always)]
@@ -41,7 +41,7 @@ pub fn run_causal_attn_cpu<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real,
+    T: WithDType,
 {
     let b = q.dims()[0];
     if b != 1 {
@@ -165,24 +165,6 @@ where
     }
 }
 
-// f32 dot product
-
-#[inline(always)]
-fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
-    let n = a.len();
-    let mut s = 0.0f32;
-    let mut i = 0;
-    while i + 4 <= n {
-        s += a[i] * b[i] + a[i + 1] * b[i + 1] + a[i + 2] * b[i + 2] + a[i + 3] * b[i + 3];
-        i += 4;
-    }
-    while i < n {
-        s += a[i] * b[i];
-        i += 1;
-    }
-    s
-}
-
 // f32 decode (q_len=1).
 // Input layout is contiguous (1, S, H, D); we index past the batch dim.
 // q[h] starts at h*D; k/v[pos, h] starts at pos*H_kv*D + h*D.
@@ -255,24 +237,11 @@ fn causal_decode_f32(
                     prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
                 }
 
-                if score > m {
-                    let scale_old = f32::exp(m - score);
-                    for t in 0..d {
-                        acc[t] *= scale_old;
-                    }
-                    ssum *= scale_old;
-                    m = score;
-                    for t in 0..d {
-                        acc[t] += v_row[t];
-                    }
-                    ssum += 1.0;
-                } else {
-                    let w = f32::exp(score - m);
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                     for t in 0..d {
                         acc[t] += v_row[t] * w;
                     }
-                    ssum += w;
-                }
+                });
             }
 
             let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -334,24 +303,11 @@ fn causal_decode_f32_lean(
                     prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
                 }
 
-                if score > m {
-                    let scale_old = f32::exp(m - score);
-                    for t in 0..d {
-                        acc[t] *= scale_old;
-                    }
-                    ssum *= scale_old;
-                    m = score;
-                    for t in 0..d {
-                        acc[t] += v_row[t];
-                    }
-                    ssum += 1.0;
-                } else {
-                    let w = f32::exp(score - m);
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                     for t in 0..d {
                         acc[t] += v_row[t] * w;
                     }
-                    ssum += w;
-                }
+                });
             }
 
             let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -409,24 +365,11 @@ pub fn causal_decode_f32_interleaved(
 
                 let score = dot_f32(q_row, k_row) * scale;
 
-                if score > m {
-                    let scale_old = f32::exp(m - score);
-                    for t in 0..d {
-                        acc[t] *= scale_old;
-                    }
-                    ssum *= scale_old;
-                    m = score;
-                    for t in 0..d {
-                        acc[t] += v_row[t];
-                    }
-                    ssum += 1.0;
-                } else {
-                    let w = f32::exp(score - m);
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                     for t in 0..d {
                         acc[t] += v_row[t] * w;
                     }
-                    ssum += w;
-                }
+                });
             }
 
             let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -534,25 +477,11 @@ fn causal_prefill_f32(
                         prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
                     }
 
-                    if score > m {
-                        let scale_old = f32::exp(m - score);
-                        for t in 0..d {
-                            acc[t] *= scale_old;
-                        }
-                        ssum *= scale_old;
-                        m = score;
-
-                        for t in 0..d {
-                            acc[t] += v_row[t];
-                        }
-                        ssum += 1.0;
-                    } else {
-                        let w = f32::exp(score - m);
+                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                         for t in 0..d {
                             acc[t] += v_row[t] * w;
                         }
-                        ssum += w;
-                    }
+                    });
                 }
 
                 let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -626,24 +555,11 @@ fn causal_prefill_f32_lean(
                         prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
                     }
 
-                    if score > m {
-                        let scale_old = f32::exp(m - score);
-                        for t in 0..d {
-                            acc[t] *= scale_old;
-                        }
-                        ssum *= scale_old;
-                        m = score;
-                        for t in 0..d {
-                            acc[t] += v_row[t];
-                        }
-                        ssum += 1.0;
-                    } else {
-                        let w = f32::exp(score - m);
+                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                         for t in 0..d {
                             acc[t] += v_row[t] * w;
                         }
-                        ssum += w;
-                    }
+                    });
                 }
 
                 let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -659,7 +575,7 @@ fn causal_prefill_f32_lean(
 // Generic fallback (non-f32)
 
 #[allow(clippy::too_many_arguments)]
-fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real>(
+fn causal_decode_generic<T: WithDType>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -710,35 +626,20 @@ fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real>(
                 };
                 let k_base = kv_pos * k_seq_stride + k_head_off;
                 let k_row = &k_data[k_base..k_base + d];
-                let mut s_val = vec_dot::<T>(q_row, k_row).to_f32().unwrap_or(0.0);
+                let mut s_val = dot_f32(q_row, k_row);
                 s_val *= scale_pre;
                 if do_softcap {
                     s_val = logit_softcap * s_val.tanh();
                 }
                 s_val += alibi_bias;
 
-                if s_val > m {
-                    let ms = (m - s_val).exp();
+                let v_base = kv_pos * v_seq_stride + v_head_off;
+                let v_row = &v_data[v_base..v_base + d];
+                online_softmax_step(s_val, &mut m, &mut ssum, acc, |acc, w| {
                     for t in 0..d {
-                        acc[t] *= ms;
+                        acc[t] += v_row[t].to_f64() as f32 * w;
                     }
-                    ssum *= ms;
-                    m = s_val;
-                    let v_base = kv_pos * v_seq_stride + v_head_off;
-                    let v_row = &v_data[v_base..v_base + d];
-                    for t in 0..d {
-                        acc[t] += v_row[t].to_f32().unwrap_or(0.0);
-                    }
-                    ssum += 1.0;
-                } else {
-                    let w = (s_val - m).exp();
-                    let v_base = kv_pos * v_seq_stride + v_head_off;
-                    let v_row = &v_data[v_base..v_base + d];
-                    for t in 0..d {
-                        acc[t] += v_row[t].to_f32().unwrap_or(0.0) * w;
-                    }
-                    ssum += w;
-                }
+                });
             }
             let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
             for t in 0..d {
@@ -751,7 +652,7 @@ fn causal_decode_generic<T: WithDType + Sum + num_traits::real::Real>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real>(
+fn causal_prefill_generic<T: WithDType>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -812,35 +713,20 @@ fn causal_prefill_generic<T: WithDType + Sum + num_traits::real::Real>(
                     };
                     let k_base = kv_pos * k_seq_stride + k_head_off;
                     let k_row = &k_data[k_base..k_base + d];
-                    let mut s_val = vec_dot::<T>(q_row, k_row).to_f32().unwrap_or(0.0);
+                    let mut s_val = dot_f32(q_row, k_row);
                     s_val *= scale_pre;
                     if do_softcap {
                         s_val = logit_softcap * s_val.tanh();
                     }
                     s_val += alibi_bias;
 
-                    if s_val > m {
-                        let ms = (m - s_val).exp();
+                    let v_base = kv_pos * v_seq_stride + v_head_off;
+                    let v_row = &v_data[v_base..v_base + d];
+                    online_softmax_step(s_val, &mut m, &mut ssum, acc, |acc, w| {
                         for t in 0..d {
-                            acc[t] *= ms;
+                            acc[t] += v_row[t].to_f64() as f32 * w;
                         }
-                        ssum *= ms;
-                        m = s_val;
-                        let v_base = kv_pos * v_seq_stride + v_head_off;
-                        let v_row = &v_data[v_base..v_base + d];
-                        for t in 0..d {
-                            acc[t] += v_row[t].to_f32().unwrap_or(0.0);
-                        }
-                        ssum += 1.0;
-                    } else {
-                        let w = (s_val - m).exp();
-                        let v_base = kv_pos * v_seq_stride + v_head_off;
-                        let v_row = &v_data[v_base..v_base + d];
-                        for t in 0..d {
-                            acc[t] += v_row[t].to_f32().unwrap_or(0.0) * w;
-                        }
-                        ssum += w;
-                    }
+                    });
                 }
                 let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
                 for t in 0..d {
