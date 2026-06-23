@@ -35,22 +35,15 @@ pub struct CudaParamCacheGuard {
     previous: bool,
 }
 
-impl CudaParamCacheGuard {
-    pub fn clear_cache(&self) {
-        if let Some(cache) = CUDA_PARAM_CACHE.get() {
-            cache.lock().unwrap().clear();
-        }
-    }
-}
-
 impl Drop for CudaParamCacheGuard {
     fn drop(&mut self) {
         CUDA_PARAM_CACHE_ENABLED.with(|enabled| enabled.set(self.previous));
-        if !self.previous {
-            if let Some(cache) = CUDA_PARAM_CACHE.get() {
-                cache.lock().unwrap().clear();
-            }
-        }
+    }
+}
+
+pub fn clear_cuda_param_cache() {
+    if let Some(cache) = CUDA_PARAM_CACHE.get() {
+        cache.lock().unwrap().clear();
     }
 }
 
