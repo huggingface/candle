@@ -41,12 +41,6 @@ impl Drop for CudaParamCacheGuard {
     }
 }
 
-pub fn clear_cuda_param_cache() {
-    if let Some(cache) = CUDA_PARAM_CACHE.get() {
-        cache.lock().unwrap().clear();
-    }
-}
-
 pub fn cuda_param_cache_scope(enabled: bool) -> CudaParamCacheGuard {
     let previous = CUDA_PARAM_CACHE_ENABLED.with(|cache_enabled| {
         let previous = cache_enabled.get();
@@ -1759,16 +1753,6 @@ impl BackendStorage for CudaStorage {
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        if CUDA_PARAM_CACHE_ENABLED.with(|enabled| enabled.get()) {
-            let is_capturing = self.device.cuda_stream().capture_status()
-                == Ok(cudarc::driver::sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_ACTIVE);
-            if is_capturing {
-                crate::bail!(
-                    "d2h copy attempted during CUDA graph capture: \
-                     device-to-host transfers are not permitted while capturing"
-                );
-            }
-        }
         match &self.slice {
             CudaStorageSlice::U8(slice) => {
                 let cpu_storage = slice.stream().clone_dtoh(slice).w()?;
