@@ -176,6 +176,88 @@ pub fn call_quantized_matmul_mv_t(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_get_rows(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    row_dim: usize,
+    num_indices: usize,
+    src0: &Buffer,
+    indices: &Buffer,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match dtype {
+        GgmlDType::Q4_0 => "kernel_get_rows_q4_0",
+        GgmlDType::Q4_1 => "kernel_get_rows_q4_1",
+        GgmlDType::Q5_0 => "kernel_get_rows_q5_0",
+        GgmlDType::Q5_1 => "kernel_get_rows_q5_1",
+        GgmlDType::Q8_0 => "kernel_get_rows_q8_0",
+        GgmlDType::Q2K => "kernel_get_rows_q2_K",
+        GgmlDType::Q3K => "kernel_get_rows_q3_K",
+        GgmlDType::Q4K => "kernel_get_rows_q4_K",
+        GgmlDType::Q5K => "kernel_get_rows_q5_K",
+        GgmlDType::Q6K => "kernel_get_rows_q6_K",
+        dtype => {
+            return Err(MetalKernelError::LoadLibraryError(format!(
+                "get_rows not supported for {dtype:?}"
+            )));
+        }
+    };
+
+    let (type_size, block_size) = match dtype {
+        GgmlDType::Q4_0 => (18, 32),
+        GgmlDType::Q4_1 => (20, 32),
+        GgmlDType::Q5_0 => (22, 32),
+        GgmlDType::Q5_1 => (24, 32),
+        GgmlDType::Q8_0 => (34, 32),
+        GgmlDType::Q2K => (84, 256),
+        GgmlDType::Q3K => (110, 256),
+        GgmlDType::Q4K => (144, 256),
+        GgmlDType::Q5K => (176, 256),
+        GgmlDType::Q6K => (210, 256),
+        _ => unreachable!(),
+    };
+    let blocks_per_row = row_dim / block_size;
+    let nb01 = (blocks_per_row * type_size) as u64;
+
+    let ne00 = row_dim as i64;
+    let nb02 = 0u64;
+    let ne10 = num_indices as i64;
+    let nb10 = 4u64;
+    let nb11 = 0u64;
+    let nb1 = (row_dim * std::mem::size_of::<f32>()) as u64;
+    let nb2 = 0u64;
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            src0, indices, dst, ne00, nb01, nb02, ne10, nb10, nb11, nb1, nb2
+        )
+    );
+
+    let threads_per_row = (row_dim / 16).min(1024);
+    let thread_groups_count = MTLSize {
+        width: num_indices,
+        height: 1,
+        depth: 1,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: threads_per_row,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+    Ok(())
+}
+
 /// - src0 is usually weight
 /// - src1 is usually xs
 #[allow(clippy::too_many_arguments)]
