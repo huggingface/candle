@@ -724,7 +724,12 @@ impl QTensor {
                 }
                 _ => unreachable!("ids were moved to the QTensor device"),
             },
-            QStorage::Cuda(_) => crate::bail!("quantized embedding is not implemented for CUDA"),
+            QStorage::Cuda(storage) => match &*ids.storage() {
+                Storage::Cuda(ids_storage) => {
+                    Storage::Cuda(storage.embedding(rows, hidden, ids_storage, ids.layout())?)
+                }
+                _ => unreachable!("ids were moved to the QTensor device"),
+            },
         };
         let none = crate::op::BackpropOp::none();
         Ok(crate::tensor::from_storage(storage, out_shape, none, false))
