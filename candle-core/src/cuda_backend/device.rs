@@ -156,7 +156,7 @@ impl CudaDevice {
     }
 
     fn check_capture_copy(&self, op: &str) -> Result<()> {
-        if super::CUDA_PARAM_CACHE_ENABLED.with(|e| e.get()) {
+        if cuda_graph_htod_cache_enabled() {
             let is_capturing = self.cuda_graph_capture_active();
             if is_capturing {
                 crate::bail!(
@@ -245,7 +245,7 @@ impl CudaDevice {
     }
 }
 
-fn cuda_graph_htod_cache_enabled() -> bool {
+pub(crate) fn cuda_graph_htod_cache_enabled() -> bool {
     CUDA_GRAPH_HTOD_CACHE_DEPTH.with(|depth| depth.get() > 0)
 }
 

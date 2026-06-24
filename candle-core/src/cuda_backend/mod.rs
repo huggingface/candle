@@ -10,7 +10,6 @@ use cudarc::driver::{
     CudaSlice, DevicePtr, DeviceRepr, LaunchConfig, PushKernelArg, ValidAsZeroBits,
 };
 use half::{bf16, f16};
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -26,29 +25,6 @@ pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
 type ParamCache = HashMap<(DeviceId, Vec<usize>), Arc<CudaSlice<usize>>>;
 
 static CUDA_PARAM_CACHE: OnceLock<Mutex<ParamCache>> = OnceLock::new();
-
-thread_local! {
-    pub(crate) static CUDA_PARAM_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
-}
-
-pub struct CudaParamCacheGuard {
-    previous: bool,
-}
-
-impl Drop for CudaParamCacheGuard {
-    fn drop(&mut self) {
-        CUDA_PARAM_CACHE_ENABLED.with(|enabled| enabled.set(self.previous));
-    }
-}
-
-pub fn cuda_param_cache_scope(enabled: bool) -> CudaParamCacheGuard {
-    let previous = CUDA_PARAM_CACHE_ENABLED.with(|cache_enabled| {
-        let previous = cache_enabled.get();
-        cache_enabled.set(enabled);
-        previous
-    });
-    CudaParamCacheGuard { previous }
-}
 
 pub enum SlicePtrOrNull<T> {
     Ptr(CudaSlice<T>),
@@ -86,7 +62,7 @@ impl crate::scalar::Scalar {
 
 impl SlicePtrOrNull<usize> {
     pub fn params_from_vec(dev: &CudaDevice, params: Vec<usize>) -> Result<Self> {
-        if CUDA_PARAM_CACHE_ENABLED.with(|enabled| enabled.get()) {
+        if device::cuda_graph_htod_cache_enabled() {
             let key = (dev.id(), params.clone());
             let cache = CUDA_PARAM_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
             if let Some(slice) = cache.lock().unwrap().get(&key).cloned() {
@@ -102,7 +78,7 @@ impl SlicePtrOrNull<usize> {
                 );
             }
 
-            let slice = Arc::new(dev.clone_htod(&params)?);
+            let slice = Arc::new(dev.cuda_stream().clone_htod(&params).w()?);
             let mut cache = cache.lock().unwrap();
             let slice = cache.entry(key).or_insert_with(|| slice).clone();
             return Ok(SlicePtrOrNull::Cached(slice));
@@ -1753,7 +1729,7 @@ impl BackendStorage for CudaStorage {
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        if CUDA_PARAM_CACHE_ENABLED.with(|e| e.get()) {
+        if device::cuda_graph_htod_cache_enabled() {
             let is_capturing = self.device.cuda_stream().capture_status()
                 == Ok(cudarc::driver::sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_ACTIVE);
             if is_capturing {
