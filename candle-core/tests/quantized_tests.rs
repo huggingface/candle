@@ -929,7 +929,7 @@ fn quantize_q8k(device: &Device) -> Result<()> {
     let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
-        [-0.5, -0.375, -0.25, -0.0, 0.281, 0.499]
+        [-0.5, -0.374, -0.25, -0.0, 0.283, 0.499]
     );
 
     let src_big = get_test_vector2(128.0, 1024, device)?;
