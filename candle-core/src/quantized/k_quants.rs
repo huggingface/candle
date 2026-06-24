@@ -2485,9 +2485,9 @@ pub(crate) fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<u8> {
         for b in 0..k_blocks {
             let dst = unsafe { &mut *out_ptr.add(g * k_blocks + b) };
             let src: [&BlockQ4K; 8] = std::array::from_fn(|i| &blocks[(g * 8 + i) * k_blocks + b]);
-            for i in 0..8usize {
-                dst.d[i] = src[i].d;
-                dst.dmin[i] = src[i].dmin;
+            for (i, s) in src.iter().enumerate() {
+                dst.d[i] = s.d;
+                dst.dmin[i] = s.dmin;
             }
             // Interleave nibbles 8 bytes at a time.
             for i in 0..128usize {

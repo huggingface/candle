@@ -60,6 +60,8 @@ pub struct QTensor {
     storage: QStorage,
     shape: Shape,
     /// Lazily initialized storage for repacked quantized data. Currently raw bits, could be `QStorage` in the future.
+    /// Not always used.
+    #[allow(dead_code)]
     repacked_qs: OnceLock<Option<Vec<u8>>>,
 }
 
