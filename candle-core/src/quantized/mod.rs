@@ -867,7 +867,8 @@ impl crate::CustomOp1 for QTensor {
                                 total_blocks,
                             )
                         };
-                        Some(k_quants::pack_to_q4kx8(blocks, n))
+                        let packed = k_quants::pack_to_q4kx8(blocks, n);
+                        Some(k_quants::vec_to_bytes(packed))
                     });
                     if let Some(repacked_bytes) = repacked {
                         let x8_slice = unsafe {

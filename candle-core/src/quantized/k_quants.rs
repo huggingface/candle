@@ -192,7 +192,7 @@ const _: () = assert!(4 + QK_K + QK_K / 16 * 2 == std::mem::size_of::<BlockQ8K>(
 /// 8 Q4K blocks packed in interleaved format facilitating 8-column GEMV.
 /// Currently only compiled on AArch64 (with dotprod enabled).
 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct BlockQ4Kx8 {
     pub(crate) d: [f16; 8],
@@ -2471,16 +2471,38 @@ pub fn matmul<T: GgmlType>(
     })
 }
 
+/// Reinterpret a `Vec<T>` as a `Vec<u8>` without copying, consuming the input.
+///
+/// `T: Copy` bound ensures no drop impl is skipped by `forget`.
+///
+/// `align_of::<T>() <= 4` invariant is verified at compile time. There is no
+/// architecture supported by rust that has < 4 as minimum alignment.
+/// This limit can be increased by calculating the architectures' minimum alignment
+/// at compile time like rust std does [here](https://github.com/rust-lang/rust/blob/f28ac764c36004fa6a6e098d15b4016a838c13c6/library/std/src/sys/alloc/mod.rs#L9)
+#[allow(dead_code)]
+pub(crate) fn vec_to_bytes<T: Copy>(mut v: Vec<T>) -> Vec<u8> {
+    const { assert!(std::mem::align_of::<T>() <= 4) };
+
+    let ptr = v.as_mut_ptr() as *mut u8;
+    let len = v.len() * std::mem::size_of::<T>();
+    let cap = v.capacity() * std::mem::size_of::<T>();
+
+    // Prevent the original Vec from freeing the memory buffer
+    std::mem::forget(v);
+
+    unsafe { Vec::from_raw_parts(ptr, len, cap) }
+}
+
 /// Pack Q4K blocks into the 8-column interleaved format for 8 x GEMV
 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-pub(crate) fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<u8> {
+pub(crate) fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<BlockQ4Kx8> {
     debug_assert!(n.is_multiple_of(8));
     debug_assert_eq!(blocks.len() % n, 0);
     let k_blocks = blocks.len() / n;
     let n_groups = n / 8;
-    let block_bytes = std::mem::size_of::<BlockQ4Kx8>();
-    let mut out = vec![0u8; n_groups * k_blocks * block_bytes];
-    let out_ptr = out.as_mut_ptr() as *mut BlockQ4Kx8;
+    let count = n_groups * k_blocks;
+    let mut out: Vec<BlockQ4Kx8> = Vec::with_capacity(count);
+    let out_ptr = out.as_mut_ptr();
     for g in 0..n_groups {
         for b in 0..k_blocks {
             let dst = unsafe { &mut *out_ptr.add(g * k_blocks + b) };
@@ -2542,6 +2564,8 @@ pub(crate) fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<u8> {
             }
         }
     }
+    // SAFETY: all `count` elements were fully initialized in the loop above.
+    unsafe { out.set_len(count) };
     out
 }
 
