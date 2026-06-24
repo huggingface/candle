@@ -7,16 +7,13 @@ const STEP: usize = 16;
 const EPR: usize = 4;
 const ARR: usize = STEP / EPR;
 
-impl Cpu<ARR> for CurrentCpu {
+impl Cpu for CurrentCpu {
     type Unit = v128;
     type Array = [v128; ARR];
 
     const STEP: usize = STEP;
     const EPR: usize = EPR;
-
-    fn n() -> usize {
-        ARR
-    }
+    const ARR: usize = ARR;
 
     unsafe fn zero() -> Self::Unit {
         f32x4_splat(0.0)

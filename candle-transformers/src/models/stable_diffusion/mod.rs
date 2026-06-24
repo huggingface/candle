@@ -491,6 +491,25 @@ impl StableDiffusionConfig {
         Ok(unet)
     }
 
+    pub fn build_unet_sharded<P: AsRef<std::path::Path>>(
+        &self,
+        unet_weight_files: &[P],
+        device: &Device,
+        in_channels: usize,
+        use_flash_attn: bool,
+        dtype: DType,
+    ) -> Result<unet_2d::UNet2DConditionModel> {
+        let vs_unet =
+            unsafe { nn::VarBuilder::from_mmaped_safetensors(unet_weight_files, dtype, device)? };
+        unet_2d::UNet2DConditionModel::new(
+            vs_unet,
+            in_channels,
+            4,
+            use_flash_attn,
+            self.unet.clone(),
+        )
+    }
+
     pub fn build_scheduler(&self, n_steps: usize) -> Result<Box<dyn Scheduler>> {
         self.scheduler.build(n_steps)
     }

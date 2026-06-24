@@ -539,6 +539,99 @@ __device__ void upsample_nearest2d(
   dst[dst_i] = src[src_i];
 }
 
+template <typename scalar_t>
+__device__ void upsample_bilinear2d(
+    const size_t w_out,
+    const size_t h_out,
+    const bool align_corners,
+    const bool has_scale_h,
+    const double scale_h_factor,
+    const bool has_scale_w,
+    const double scale_w_factor,
+    const size_t *info,
+    const scalar_t *src,
+    scalar_t *dst
+) {
+    const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // src: (b_size, c_in, h_in, w_in)  // Standard NCHW layout
+    const size_t *src_dims = info;
+    const size_t *src_s = info + 4;
+    
+    const size_t c = src_dims[1];
+    const size_t h_in = src_dims[2];  // dims[2] = height
+    const size_t w_in = src_dims[3];  // dims[3] = width
+    
+    if (dst_i >= src_dims[0] * c * h_out * w_out) {
+        return;
+    }
+    
+    // Compute output position (NCHW layout)
+    const size_t b_idx = dst_i / (h_out * w_out * c);
+    const size_t c_idx = (dst_i / (h_out * w_out)) % c;
+    const size_t dst_h = (dst_i / w_out) % h_out;
+    const size_t dst_w = dst_i % w_out;
+    
+    // Calculate scale factors following PyTorch's area_pixel_compute_scale logic
+    double h_scale, w_scale;
+    if (align_corners) {
+        h_scale = (h_out > 1) ? static_cast<double>(h_in - 1) / (h_out - 1) : 0.0;
+        w_scale = (w_out > 1) ? static_cast<double>(w_in - 1) / (w_out - 1) : 0.0;
+    } else {
+        // PyTorch's compute_scales_value logic
+        h_scale = has_scale_h ? (1.0 / scale_h_factor) : (static_cast<double>(h_in) / h_out);
+        w_scale = has_scale_w ? (1.0 / scale_w_factor) : (static_cast<double>(w_in) / w_out);
+    }
+    
+    // Compute source position (floating point)
+    double src_h_fp, src_w_fp;
+    if (align_corners) {
+        src_h_fp = h_scale * dst_h;
+        src_w_fp = w_scale * dst_w;
+    } else {
+        src_h_fp = h_scale * (dst_h + 0.5) - 0.5;
+        src_w_fp = w_scale * (dst_w + 0.5) - 0.5;
+    }
+    
+    // Clamp to valid range
+    src_h_fp = fmax(0.0, src_h_fp);
+    src_w_fp = fmax(0.0, src_w_fp);
+    
+    // Get integer indices
+    size_t h0 = static_cast<size_t>(floor(src_h_fp));
+    size_t w0 = static_cast<size_t>(floor(src_w_fp));
+    size_t h1 = min(h0 + 1, h_in - 1);
+    size_t w1 = min(w0 + 1, w_in - 1);
+    
+    // Compute interpolation weights
+    double weight_h = src_h_fp - h0;
+    double weight_w = src_w_fp - w0;
+    weight_h = fmin(fmax(weight_h, 0.0), 1.0);
+    weight_w = fmin(fmax(weight_w, 0.0), 1.0);
+    
+    // Get base index
+    const size_t base = b_idx * src_s[0] + c_idx * src_s[1];
+    
+    // Read four neighboring pixels
+    const scalar_t v00 = src[base + h0 * src_s[2] + w0 * src_s[3]];
+    const scalar_t v10 = src[base + h0 * src_s[2] + w1 * src_s[3]];
+    const scalar_t v01 = src[base + h1 * src_s[2] + w0 * src_s[3]];
+    const scalar_t v11 = src[base + h1 * src_s[2] + w1 * src_s[3]];
+    
+    // Bilinear interpolation
+    // Convert to double for computation to avoid type issues with __half and __nv_bfloat16
+    const double v00_d = static_cast<double>(v00);
+    const double v10_d = static_cast<double>(v10);
+    const double v01_d = static_cast<double>(v01);
+    const double v11_d = static_cast<double>(v11);
+    
+    const double v_top = v00_d * (1.0 - weight_w) + v10_d * weight_w;
+    const double v_bottom = v01_d * (1.0 - weight_w) + v11_d * weight_w;
+    const double value = v_top * (1.0 - weight_h) + v_bottom * weight_h;
+    
+    dst[dst_i] = static_cast<scalar_t>(value);
+}
+
 
 #define CONV1D_OP(TYPENAME, TYPEACC, FN_NAME) \
 extern "C" __global__ void FN_NAME(  \
@@ -691,6 +784,22 @@ extern "C" __global__ void FN_NAME(  \
   upsample_nearest2d<TYPENAME>(w_out, h_out, w_scale, h_scale, info, src, dst); \
 } \
 
+#define UPSAMPLE_BILINEAR2D_OP(TYPENAME, FN_NAME) \
+extern "C" __global__ void FN_NAME(  \
+    const size_t w_out, \
+    const size_t h_out, \
+    const bool align_corners, \
+    const bool has_scale_h, \
+    const double scale_h_factor, \
+    const bool has_scale_w, \
+    const double scale_w_factor, \
+    const size_t *info, \
+    const TYPENAME *src, \
+    TYPENAME *dst \
+) {  \
+  upsample_bilinear2d<TYPENAME>(w_out, h_out, align_corners, has_scale_h, scale_h_factor, has_scale_w, scale_w_factor, info, src, dst); \
+} \
+
 #if __CUDA_ARCH__ >= 800
 CONV1D_OP(__nv_bfloat16, float, conv1d_bf16)
 CONV2D_OP(__nv_bfloat16, float, conv2d_bf16)
@@ -699,9 +808,22 @@ CONVT2D_OP(__nv_bfloat16, float, conv_transpose2d_bf16)
 AVG_POOL2D_OP(__nv_bfloat16, float, avg_pool2d_bf16)
 MAX_POOL2D_OP(__nv_bfloat16, max_pool2d_bf16)
 UPSAMPLE_NEAREST2D_OP(__nv_bfloat16, upsample_nearest2d_bf16)
+UPSAMPLE_BILINEAR2D_OP(__nv_bfloat16, upsample_bilinear2d_bf16)
 IM2COL_OP(__nv_bfloat16, im2col_bf16)
 IM2COL1D_OP(__nv_bfloat16, im2col1d_bf16)
 COL2IM1D_OP(__nv_bfloat16, col2im1d_bf16)
+
+// NOTE: No conv ops for f8
+// CONV1D_OP(__nv_bfloat16, float, conv1d_f8_e5m)
+// CONV2D_OP(__nv_fp8_e4m3, float, conv2d_f8_e5m)
+// CONVT1D_OP(__nv_fp8_e4m3, float, conv_transpose1d_f8_e5m)
+// CONVT2D_OP(__nv_fp8_e4m3, float, conv_transpose2d_f8_e5m)
+// AVG_POOL2D_OP(__nv_fp8_e4m3, float, avg_pool2d_f8_e5m)
+// MAX_POOL2D_OP(__nv_fp8_e4m3, max_pool2d_f8_e5m)
+// UPSAMPLE_NEAREST2D_OP(__nv_fp8_e4m3, upsample_nearest2d_f8_e5m)
+// IM2COL_OP(__nv_fp8_e4m3, im2col_f8_e5m)
+// IM2COL1D_OP(__nv_fp8_e4m3, im2col1d_f8_e5m)
+// COL2IM1D_OP(__nv_fp8_e4m3, col2im1d_f8_e5m)
 #endif
 
 #if __CUDA_ARCH__ >= 530
@@ -712,6 +834,7 @@ CONVT2D_OP(__half, float, conv_transpose2d_f16)
 AVG_POOL2D_OP(__half, float, avg_pool2d_f16)
 MAX_POOL2D_OP(__half, max_pool2d_f16)
 UPSAMPLE_NEAREST2D_OP(__half, upsample_nearest2d_f16)
+UPSAMPLE_BILINEAR2D_OP(__half, upsample_bilinear2d_f16)
 IM2COL_OP(__half, im2col_f16)
 IM2COL1D_OP(__half, im2col1d_f16)
 COL2IM1D_OP(__half, col2im1d_f16)
@@ -751,6 +874,11 @@ UPSAMPLE_NEAREST2D_OP(float, upsample_nearest2d_f32)
 UPSAMPLE_NEAREST2D_OP(double, upsample_nearest2d_f64)
 UPSAMPLE_NEAREST2D_OP(uint8_t, upsample_nearest2d_u8)
 UPSAMPLE_NEAREST2D_OP(uint32_t, upsample_nearest2d_u32)
+
+UPSAMPLE_BILINEAR2D_OP(float, upsample_bilinear2d_f32)
+UPSAMPLE_BILINEAR2D_OP(double, upsample_bilinear2d_f64)
+UPSAMPLE_BILINEAR2D_OP(uint8_t, upsample_bilinear2d_u8)
+UPSAMPLE_BILINEAR2D_OP(uint32_t, upsample_bilinear2d_u32)
 
 IM2COL_OP(float, im2col_f32)
 IM2COL_OP(double, im2col_f64)

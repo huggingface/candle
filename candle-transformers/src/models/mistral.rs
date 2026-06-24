@@ -2,7 +2,7 @@
 //!
 //! See Mistral and Mixtral at:
 //! - [Hugging Face](https://huggingface.co/docs/transformers/model_doc/mixtral)
-//! - [Github](https://github.com/mistralai/mistral-src)
+//! - [GitHub](https://github.com/mistralai/mistral-src)
 //!
 
 use crate::models::with_tracing::{linear_no_bias, Linear, RmsNorm};

@@ -14,7 +14,7 @@ fn test_pth_with_key() {
 }
 
 #[test]
-fn test_pth_fortran_congiguous() {
+fn test_pth_fortran_contiguous() {
     let tensors =
         candle_core::pickle::PthTensors::new("tests/fortran_tensor_3d.pth", None).unwrap();
     let tensor = tensors.get("tensor_fortran").unwrap().unwrap();

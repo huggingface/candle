@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{test_device, test_utils::to_vec3_round, Device, Result, Tensor};
+use candle::{test_device, test_utils::to_vec3_round, Device, IndexOp, Result, Tensor};
 
 fn softmax(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
@@ -88,6 +88,7 @@ fn rms_norml(device: &Device) -> Result<()> {
     let alpha = Tensor::ones(head_dim, candle::DType::F32, device)?;
     let t = candle_nn::ops::rms_norm(&tensor, &alpha, 1e-5)?;
     let t2 = candle_nn::ops::rms_norm_slow(&tensor, &alpha, 1e-5)?;
+    assert_eq!(to_vec3_round(&t, 2)?, to_vec3_round(&t2, 2)?);
     let diff = (t - t2)?
         .abs()?
         .flatten_all()?
@@ -95,6 +96,46 @@ fn rms_norml(device: &Device) -> Result<()> {
         .reshape(())?
         .to_vec0::<f32>()?;
     assert!(diff < 1e-5);
+    Ok(())
+}
+
+fn rms_norm_large_magnitude(device: &Device) -> Result<()> {
+    let (rows, hidden) = (4usize, 6912usize);
+    let data: Vec<f32> = (0..rows * hidden)
+        .map(|i| {
+            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+            sign * ((i as f32 * 0.17).sin().abs() * 7e9)
+        })
+        .collect();
+    let tensor = Tensor::from_vec(data, (rows, hidden), device)?;
+    let alpha = Tensor::ones(hidden, candle::DType::F32, device)?;
+
+    let fused = candle_nn::ops::rms_norm(&tensor, &alpha, 1e-5)?;
+    let slow = candle_nn::ops::rms_norm_slow(&tensor, &alpha, 1e-5)?;
+
+    let fused_v = fused.flatten_all()?.to_vec1::<f32>()?;
+    let slow_v = slow.flatten_all()?.to_vec1::<f32>()?;
+    for &v in &fused_v {
+        assert!(
+            v.is_finite(),
+            "rms_norm produced a non-finite value for large-magnitude input"
+        );
+    }
+    for &v in &slow_v {
+        assert!(
+            v.is_finite(),
+            "rms_norm_slow produced a non-finite value for large-magnitude input"
+        );
+    }
+    let diff = fused_v
+        .iter()
+        .zip(slow_v.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0f32, f32::max);
+    assert!(
+        diff < 5e-3,
+        "rms_norm and rms_norm_slow disagree: max |Δ| = {diff}"
+    );
     Ok(())
 }
 
@@ -179,6 +220,28 @@ fn ropei(device: &Device) -> Result<()> {
     } else {
         assert!(sum_diff < 1e-4);
     }
+
+    // Test with a 3d cos/sin
+    let cos2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let cos2 = Tensor::from_vec(cos2, (seq_len, head_dim / 2), device)?;
+    let sin2 = Tensor::from_vec(sin2, (seq_len, head_dim / 2), device)?;
+    let rope1 = candle_nn::rotary_emb::rope_i(&src.i(0..1)?, &cos, &sin)?;
+    let rope2 = candle_nn::rotary_emb::rope_i(&src.i(1..2)?, &cos2, &sin2)?;
+
+    let both_cos = Tensor::stack(&[cos, cos2], 0)?;
+    let both_sin = Tensor::stack(&[sin, sin2], 0)?;
+    let both_rope = candle_nn::rotary_emb::rope_i(&src, &both_cos, &both_sin)?;
+    let both_rope2 = Tensor::cat(&[rope1, rope2], 0)?;
+    let sum_diff = (both_rope - both_rope2)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(sum_diff, 0.);
     Ok(())
 }
 
@@ -206,6 +269,28 @@ fn rope(device: &Device) -> Result<()> {
     } else {
         assert!(sum_diff < 1e-4);
     }
+
+    // Test with a 3d cos/sin
+    let cos2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let cos2 = Tensor::from_vec(cos2, (seq_len, head_dim / 2), device)?;
+    let sin2 = Tensor::from_vec(sin2, (seq_len, head_dim / 2), device)?;
+    let rope1 = candle_nn::rotary_emb::rope(&src.i(0..1)?, &cos, &sin)?;
+    let rope2 = candle_nn::rotary_emb::rope(&src.i(1..2)?, &cos2, &sin2)?;
+
+    let both_cos = Tensor::stack(&[cos, cos2], 0)?;
+    let both_sin = Tensor::stack(&[sin, sin2], 0)?;
+    let both_rope = candle_nn::rotary_emb::rope(&src, &both_cos, &both_sin)?;
+    let both_rope2 = Tensor::cat(&[rope1, rope2], 0)?;
+    let sum_diff = (both_rope - both_rope2)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(sum_diff, 0.);
     Ok(())
 }
 
@@ -236,6 +321,37 @@ fn rope_thd(device: &Device) -> Result<()> {
     } else {
         assert!(sum_diff < 1e-4);
     }
+
+    // Test with a 3d cos/sin
+    let cos2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let cos2 = Tensor::from_vec(cos2, (seq_len, head_dim / 2), device)?;
+    let sin2 = Tensor::from_vec(sin2, (seq_len, head_dim / 2), device)?;
+    let rope1 = {
+        let src = src.transpose(1, 2)?.contiguous()?;
+        candle_nn::rotary_emb::rope_thd(&src.i(0..1)?, &cos, &sin)?
+    };
+    let rope2 = {
+        let src = src.transpose(1, 2)?.contiguous()?;
+        candle_nn::rotary_emb::rope_thd(&src.i(1..2)?, &cos2, &sin2)?
+    };
+
+    let both_cos = Tensor::stack(&[cos, cos2], 0)?;
+    let both_sin = Tensor::stack(&[sin, sin2], 0)?;
+    let both_rope = {
+        let src = src.transpose(1, 2)?.contiguous()?;
+        candle_nn::rotary_emb::rope_thd(&src, &both_cos, &both_sin)?
+    };
+    let both_rope2 = Tensor::cat(&[rope1, rope2], 0)?;
+    let sum_diff = (both_rope - both_rope2)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(sum_diff, 0.);
     Ok(())
 }
 
@@ -255,6 +371,12 @@ test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
 test_device!(softmax, softmax_cpu, softmax_gpu, softmax_metal);
 test_device!(rms_norm, rms_norm_cpu, rms_norm_gpu, rms_norm_metal);
 test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal);
+test_device!(
+    rms_norm_large_magnitude,
+    rms_norm_large_magnitude_cpu,
+    rms_norm_large_magnitude_gpu,
+    rms_norm_large_magnitude_metal
+);
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);

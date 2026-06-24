@@ -253,7 +253,7 @@ fn main() -> Result<()> {
         .to_device(&device)?
         .to_dtype(dtype)?
         .unsqueeze(0)?;
-    println!("loaded image with shape {:?}", image);
+    println!("loaded image with shape {image:?}");
     let start = std::time::Instant::now();
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
     let model = Model::new(&config, vb)?;

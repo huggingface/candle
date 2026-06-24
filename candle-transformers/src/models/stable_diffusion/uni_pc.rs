@@ -323,7 +323,7 @@ impl EdmDpmMultistepScheduler {
             .timesteps()
             .iter()
             .enumerate()
-            .filter(|(_, t)| (*t == &timestep))
+            .filter(|(_, t)| *t == &timestep)
             .map(|(i, _)| i)
             .collect::<Vec<_>>();
 
@@ -930,8 +930,8 @@ mod linalg {
         let cofactor = cofactor(m)?;
         let m0 = m.i((0, 0))?;
         let det = (0..s)
-            .map(|i| (m.i((0, i))? * cofactor.i((0, i))?))
-            .try_fold(m0.zeros_like()?, |acc, cur| (acc + cur?))?;
+            .map(|i| m.i((0, i))? * cofactor.i((0, i))?)
+            .try_fold(m0.zeros_like()?, |acc, cur| acc + cur?)?;
 
         Ok(det)
     }

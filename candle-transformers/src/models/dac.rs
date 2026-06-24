@@ -358,7 +358,6 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let vb = vb.pp("model");
         let encoder = Encoder::new(64, &[2, 4, 8, 8], cfg.latent_dim, vb.pp("encoder"))?;
         let quantizer = ResidualVectorQuantizer::new(
             cfg.latent_dim,

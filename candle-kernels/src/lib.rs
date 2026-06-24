@@ -1,4 +1,6 @@
-mod ptx;
+mod ptx {
+    include!(concat!(env!("OUT_DIR"), "/ptx.rs"));
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,3 +78,5 @@ mdl!(REDUCE, Reduce);
 mdl!(SORT, Sort);
 mdl!(TERNARY, Ternary);
 mdl!(UNARY, Unary);
+
+pub mod ffi;

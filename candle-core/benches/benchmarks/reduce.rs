@@ -1,7 +1,8 @@
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
 use candle_core::{DType, Device, Tensor};
-use criterion::{black_box, criterion_group, Criterion, Throughput};
+use criterion::{criterion_group, Criterion, Throughput};
 use half::{bf16, f16};
+use std::hint::black_box;
 use std::time::Instant;
 
 fn run_sum(a: &Tensor) {
@@ -44,12 +45,12 @@ fn run_reduce<T: candle_core::FloatDType>(
     let k = 1024;
 
     let a = if strided {
-        Tensor::rand(lo, up, (b, m, k), &device)
+        Tensor::rand(lo, up, (b, m, k), device)
             .unwrap()
             .transpose(0, 2)
             .unwrap()
     } else {
-        Tensor::rand(lo, up, (b, m, k), &device).unwrap()
+        Tensor::rand(lo, up, (b, m, k), device).unwrap()
     };
 
     let flops = b * m * k * T::DTYPE.size_in_bytes();
@@ -105,12 +106,12 @@ fn run_arg_reduce<T: candle_core::FloatDType>(
     let k = 1024;
 
     let a = if strided {
-        Tensor::rand(lo, up, (b, m, k), &device)
+        Tensor::rand(lo, up, (b, m, k), device)
             .unwrap()
             .transpose(0, 2)
             .unwrap()
     } else {
-        Tensor::rand(lo, up, (b, m, k), &device).unwrap()
+        Tensor::rand(lo, up, (b, m, k), device).unwrap()
     };
 
     let flops = b * m * k * T::DTYPE.size_in_bytes();

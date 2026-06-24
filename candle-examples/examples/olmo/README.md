@@ -3,7 +3,7 @@
 OLMo is a series of Open Language Models designed to enable the science of language models.
 
 - **Project Page:** https://allenai.org/olmo
-- **Paper:** [Link](https://arxiv.org/abs/2402.00838)
+- **Papers:** [OLMo](https://arxiv.org/abs/2402.00838) [OLMo 2](https://arxiv.org/abs/2501.00656)
 - **Technical blog post:** https://blog.allenai.org/olmo-open-language-model-87ccfc95f580
 - **W&B Logs:** https://wandb.ai/ai2-llm/OLMo-1B/reports/OLMo-1B--Vmlldzo2NzY1Njk1
 <!-- - **Press release:** TODO -->

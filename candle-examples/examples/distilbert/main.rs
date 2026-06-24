@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
 enum ModelType {
-    Masked(DistilBertForMaskedLM),
-    UnMasked(DistilBertModel),
+    Masked(Box<DistilBertForMaskedLM>),
+    UnMasked(Box<DistilBertModel>),
 }
 
 impl ModelType {
@@ -134,7 +134,7 @@ impl Args {
         Ok((config, tokenizer, weights))
     }
 
-    fn load_variables(&self, weights_path: &PathBuf, device: &Device) -> Result<VarBuilder> {
+    fn load_variables(&self, weights_path: &PathBuf, device: &Device) -> Result<VarBuilder<'_>> {
         if self.use_pth {
             Ok(VarBuilder::from_pth(weights_path, DTYPE, device)?)
         } else {
@@ -144,10 +144,12 @@ impl Args {
 
     fn create_model(&self, config: &Config, vb: VarBuilder) -> Result<ModelType> {
         match self.model {
-            Which::DistilbertForMaskedLM => {
-                Ok(ModelType::Masked(DistilBertForMaskedLM::load(vb, config)?))
-            }
-            Which::DistilBert => Ok(ModelType::UnMasked(DistilBertModel::load(vb, config)?)),
+            Which::DistilbertForMaskedLM => Ok(ModelType::Masked(
+                DistilBertForMaskedLM::load(vb, config)?.into(),
+            )),
+            Which::DistilBert => Ok(ModelType::UnMasked(
+                DistilBertModel::load(vb, config)?.into(),
+            )),
         }
     }
 }
@@ -241,7 +243,7 @@ fn process_masked_output(
 
     for (token_idx, &token_id) in input_ids_vec[0].iter().enumerate() {
         if token_id == mask_token_id {
-            println!("Predictions for [MASK] at position {}:", token_idx);
+            println!("Predictions for [MASK] at position {token_idx}:");
 
             let pos_logits = output.get(0)?.get(token_idx)?;
             let probs = candle_nn::ops::softmax(&pos_logits, 0)?;

@@ -1,0 +1,19 @@
+[package]
+name = "candle-ug"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+ug = { workspace = true }
+ug-cuda = { workspace = true, optional = true }
+ug-metal = { workspace = true, optional = true }
+
+[features]
+default = []
+cuda = ["dep:ug-cuda"]
+metal = ["dep:ug-metal"]

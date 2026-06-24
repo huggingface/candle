@@ -168,7 +168,7 @@ fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
 
     // pad audio with at least one extra chunk of zeros
     let pad = 100 * worker::m::CHUNK_LENGTH / 2;
-    let n_len = if n_len % pad != 0 {
+    let n_len = if !n_len.is_multiple_of(pad) {
         (n_len / pad + 1) * pad
     } else {
         n_len

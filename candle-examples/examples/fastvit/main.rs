@@ -32,7 +32,7 @@ impl Which {
             Self::SA36 => "sa36",
             Self::MA36 => "ma36",
         };
-        format!("timm/fastvit_{}.apple_in1k", name)
+        format!("timm/fastvit_{name}.apple_in1k")
     }
 
     fn config(&self) -> fastvit::Config {

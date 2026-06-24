@@ -30,7 +30,7 @@ impl Which {
             Self::M4 => "m4",
             Self::M5 => "m5",
         };
-        format!("timm/efficientvit_{}.r224_in1k", name)
+        format!("timm/efficientvit_{name}.r224_in1k")
     }
 
     fn config(&self) -> efficientvit::Config {

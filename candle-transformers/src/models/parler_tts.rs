@@ -367,7 +367,7 @@ impl Model {
             None
         };
         let audio_encoder =
-            crate::models::dac::Model::new(&cfg.audio_encoder, vb.pp("audio_encoder"))?;
+            crate::models::dac::Model::new(&cfg.audio_encoder, vb.pp("audio_encoder.model"))?;
         Ok(Self {
             decoder,
             text_encoder,

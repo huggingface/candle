@@ -35,6 +35,6 @@ cargo run --example llava --features cuda -- --model-path liuhaotian/llava-v1.6-
 ```
 
 ## Major Limitations
-1. Currently only support llama-2/vicuna llm. Haven't supoort Mistral yet.
+1. Currently only support llama-2/vicuna llm. Haven't support Mistral yet.
 2. There are some ops like split, nonzero and where are not supported by candle.
 3. Lack of quantization and LoRA support.

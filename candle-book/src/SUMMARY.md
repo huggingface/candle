@@ -16,6 +16,7 @@
 - [Running a model](inference/inference.md)
     - [Using the hub](inference/hub.md)
 - [Error management](error_manage.md)
+- [Tracing](tracing.md)
 - [Training](training/training.md)
     - [Simplified](training/simplified.md)
     - [MNIST](training/mnist.md)

@@ -247,7 +247,7 @@ impl Model {
     }
 
     fn run(&mut self, prompt: &str) -> Result<()> {
-        println!("running the model on '{}'", prompt);
+        println!("running the model on '{prompt}'");
         let device = &self.device;
         let prompt = format!("{voice}: {prompt}", voice = self.voice.as_str());
         let tokens = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
@@ -259,7 +259,7 @@ impl Model {
         ]
         .concat();
         if self.verbose_prompt {
-            println!("{:?}", tokens);
+            println!("{tokens:?}");
         }
         let mut cache = self.cache.clone();
 

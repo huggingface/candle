@@ -19,14 +19,14 @@ impl Platform {
 }
 
 fn compile(platform: Platform) -> Result<(), String> {
-    println!("cargo::rerun-if-changed=src/reduce.metal");
-    println!("cargo::rerun-if-changed=src/utils.metal");
+    println!("cargo::rerun-if-changed=src/metal_src/reduce.metal");
+    println!("cargo::rerun-if-changed=src/metal_src/utils.metal");
     println!("cargo::rerun-if-changed=build.rs");
 
     let current_dir = env::current_dir().expect("Failed to get current directory");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
     let working_directory = out_dir.to_string_lossy().to_string();
-    let sources = current_dir.join("src");
+    let sources = current_dir.join("src").join("metal_src");
 
     // Compile metal to air
     let mut compile_air_cmd = Command::new("xcrun");
@@ -44,7 +44,6 @@ fn compile(platform: Platform) -> Result<(), String> {
         compile_air_cmd.arg(sources.join(format!("{metal_file}.metal")));
     }
     compile_air_cmd.arg(sources.join("utils.metal"));
-    compile_air_cmd.spawn().expect("Failed to compile air");
 
     let mut child = compile_air_cmd.spawn().expect("Failed to compile air");
 

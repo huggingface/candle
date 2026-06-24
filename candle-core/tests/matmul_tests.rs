@@ -82,6 +82,26 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn tensor_dot() -> Result<()> {
+    let lhs = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
+    let rhs = Tensor::new(&[4., 5., 6.], &Device::Cpu)?;
+    let expected = Tensor::new(32., &Device::Cpu)?;
+    let dot_ret = lhs.dot(&rhs)?;
+    candle_core::test_utils::assert_tensor_eq(&dot_ret, &expected)?;
+    Ok(())
+}
+
+#[test]
+fn tensor_mv() -> Result<()> {
+    let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
+    let vec = Tensor::new(&[1., 1., 1.], &Device::Cpu)?;
+    let expected = Tensor::new(&[6., 15.], &Device::Cpu)?;
+    let mv_ret = mat.mv(&vec)?;
+    candle_core::test_utils::assert_tensor_eq(&mv_ret, &expected)?;
+    Ok(())
+}
+
 // https://github.com/huggingface/candle/issues/1948
 fn squeeze_mm(device: &Device) -> Result<()> {
     let seq_len = 8_usize;

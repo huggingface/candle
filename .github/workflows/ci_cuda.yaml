@@ -10,10 +10,9 @@ jobs:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-4xlarge-cache
     container:
-      image: nvidia/cuda:12.3.1-devel-ubuntu22.04
-      options: --gpus 0 
+      image: nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
       contents: write
@@ -22,13 +21,15 @@ jobs:
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
       security-events: write
+    env:
+      CUDA_COMPUTE_CAP: 86
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Install dependencies
-        run: apt-get update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config -y
+        run: apt update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config -y
       - name: Install Rust Stable
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: Swatinem/rust-cache@v2
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Test (cuda)
         run: cargo test --features cuda

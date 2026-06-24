@@ -1,0 +1,25 @@
+use crate::linear_split;
+use crate::{
+    debug_group, set_params, Buffer, ComputeCommandEncoder, Device, EncoderParam, EncoderProvider,
+    Kernels, MetalKernelError, Output, Source,
+};
+
+pub fn call_const_fill(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    length: usize,
+    output: &Buffer,
+    v: impl EncoderParam,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Fill, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "const_fill {name} elems={length}");
+    set_params!(encoder, (Output::new(output), v, length));
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}

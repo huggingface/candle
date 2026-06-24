@@ -207,7 +207,7 @@ fn main() -> Result<()> {
     for (turn_idx, prompt) in args.prompt.split('|').enumerate() {
         println!("{prompt:?}");
         let speaker_idx = turn_idx % 2;
-        let prompt = format!("[{speaker_idx}]{}<|end_of_text|>", prompt);
+        let prompt = format!("[{speaker_idx}]{prompt}<|end_of_text|>");
         let prompt = tokenizer.encode(prompt, true).map_err(E::msg)?;
 
         let (mut tokens, mut mask) = model.text_tokens_and_mask(prompt.get_ids())?;

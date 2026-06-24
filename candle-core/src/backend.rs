@@ -69,17 +69,38 @@ pub trait BackendStorage: Sized {
     fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self>;
     fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self>;
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self>;
+    fn upsample_bilinear2d(
+        &self,
+        _: &Layout,
+        _: usize,
+        _: usize,
+        _: bool,
+        _: Option<f64>,
+        _: Option<f64>,
+    ) -> Result<Self>;
 
     fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self>;
-    fn scatter_add(
-        &self,
+
+    fn scatter_set(
+        &mut self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: usize,
-    ) -> Result<Self>;
+    ) -> Result<()>;
+
+    fn scatter_add_set(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<()>;
+
     fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self>;
     fn index_add(
         &self,
@@ -113,6 +134,8 @@ pub trait BackendStorage: Sized {
         _src_offset: usize,
         _dst_offset: usize,
     ) -> Result<()>;
+
+    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()>;
 }
 
 pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
@@ -126,8 +149,6 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
     fn same_device(&self, _: &Self) -> bool;
 
     fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
-
-    fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
 
     /// # Safety
     /// This function is unsafe as it doesn't initialize the underlying data store.
@@ -146,6 +167,7 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
 
     fn set_seed(&self, _: u64) -> Result<()>;
+    fn get_current_seed(&self) -> Result<u64>;
 
     /// Synchronize should block until all the operations on the device are completed.
     fn synchronize(&self) -> Result<()>;

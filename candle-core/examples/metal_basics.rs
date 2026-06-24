@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     let x = Tensor::randn(0f32, 1.0, (128, 128), &device)?;
     let x1 = x.add(&x)?;
     println!("{x1:?}");
-    // This second synchronize ensures that the command buffer gets commited before the end of the
+    // This second synchronize ensures that the command buffer gets committed before the end of the
     // capture scope.
     device.synchronize()?;
     Ok(())

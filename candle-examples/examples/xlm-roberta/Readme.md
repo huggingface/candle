@@ -28,3 +28,26 @@ Ranking Results:
 > Rank #1  | Score: 0.9990 | The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China.
 --------------------------------------------------------------------------------
 ```
+
+Text-Classification:
+```bash
+cargo run --example xlm-roberta -- --task text-classification --model xlmr-formality-classifier
+```
+```markdown
+Formality Scores:
+Text 1: "I like you. I love you"
+  formal: 0.9933
+  informal: 0.0067
+
+Text 2: "Hey, what's up?"
+  formal: 0.8812
+  informal: 0.1188
+
+Text 3: "Siema, co porabiasz?"
+  formal: 0.9358
+  informal: 0.0642
+
+Text 4: "I feel deep regret and sadness about the situation in international politics."
+  formal: 0.9987
+  informal: 0.0013
+```

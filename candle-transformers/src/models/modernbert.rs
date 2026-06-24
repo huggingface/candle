@@ -2,7 +2,7 @@
 //!
 //! ModernBERT is a modernized bidirectional encoder-only Transformer model.
 //! - [Arxiv](https://arxiv.org/abs/2412.13663) "Smarter, Better, Faster, Longer: A Modern Bidirectional Encoder for Fast, Memory Efficient, and Long Context Finetuning and Inference"
-//! - Upstream [Github repo](https://github.com/AnswerDotAI/ModernBERT).
+//! - Upstream [GitHub repo](https://github.com/AnswerDotAI/ModernBERT).
 //! - See modernbert in [candle-examples](https://github.com/huggingface/candle/tree/main/candle-examples/) for runnable code
 //!
 
@@ -488,7 +488,7 @@ impl ModernBertForSequenceClassification {
     pub fn forward(&self, xs: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let output = self.model.forward(xs, mask)?;
         let last_hidden_state = match self.classifier_pooling {
-            ClassifierPooling::CLS => output.i((.., .., 0))?,
+            ClassifierPooling::CLS => output.i((.., 0, ..))?.contiguous()?,
             ClassifierPooling::MEAN => {
                 let unsqueezed_mask = &mask.unsqueeze(D::Minus1)?.to_dtype(DType::F32)?;
                 let sum_output = output.broadcast_mul(unsqueezed_mask)?.sum(1)?;
