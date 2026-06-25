@@ -3,11 +3,31 @@
 
 // Single-batch (B=1) causal attention using loop-bound masking.
 
-use candle::{DType, Device, Result, Storage, Tensor, WithDType};
+use candle::{cpu::kernels::VecOps, DType, Device, Result, Storage, Tensor, WithDType};
 use rayon::prelude::*;
 
 use super::dot_f32;
 use super::online_softmax::online_softmax_step;
+
+// These utils are mostly for readability.
+
+// Multiply-add a vector into an accumulator.
+#[inline(always)]
+fn vec_fmadd_scalar(acc: &mut [f32], v: &[f32], w: f32) {
+    acc.iter_mut().zip(v).for_each(|(a, e)| *a += e * w);
+}
+
+// Scale an accumulator in place
+#[inline(always)]
+fn vec_scale(acc: &mut [f32], s: f32) {
+    acc.iter_mut().for_each(|a| *a *= s);
+}
+
+// Add v into acc
+#[inline(always)]
+fn vec_add(acc: &mut [f32], v: &[f32]) {
+    acc.iter_mut().zip(v).for_each(|(a, e)| *a += e);
+}
 
 /// Prefetch a cache line for read.
 #[inline(always)]
@@ -41,7 +61,7 @@ pub fn run_causal_attn_cpu<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType,
+    T: WithDType + num_traits::Float,
 {
     let b = q.dims()[0];
     if b != 1 {
@@ -168,7 +188,6 @@ where
 // f32 decode (q_len=1).
 // Input layout is contiguous (1, S, H, D); we index past the batch dim.
 // q[h] starts at h*D; k/v[pos, h] starts at pos*H_kv*D + h*D.
-
 #[allow(clippy::too_many_arguments)]
 fn causal_decode_f32(
     q_data: &[f32],
@@ -203,9 +222,28 @@ fn causal_decode_f32(
 
     let mut out = vec![0f32; h_q * d];
 
-    out.par_chunks_mut(d).enumerate().for_each_init(
-        || vec![0f32; d],
-        |acc, (h_i, out_chunk)| {
+    let pool = candle::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let mut scratch = vec![0f32; n_total * d];
+    let scratch_ptr = scratch.as_mut_ptr() as usize;
+    let out_ptr = out.as_mut_ptr() as usize;
+    let q_ptr = q_data.as_ptr() as usize;
+    let k_ptr = k_data.as_ptr() as usize;
+    let v_ptr = v_data.as_ptr() as usize;
+
+    pool.execute(|tid| unsafe {
+        let start_h = tid * h_q / n_total;
+        let end_h = (tid + 1) * h_q / n_total;
+        if start_h >= end_h {
+            return;
+        }
+        let acc = std::slice::from_raw_parts_mut((scratch_ptr as *mut f32).add(tid * d), d);
+        let q_data = std::slice::from_raw_parts(q_ptr as *const f32, h_q * d);
+        let k_data = std::slice::from_raw_parts(k_ptr as *const f32, kv_len * k_seq_stride);
+        let v_data = std::slice::from_raw_parts(v_ptr as *const f32, kv_len * v_seq_stride);
+
+        for h_i in start_h..end_h {
+            let out_chunk = std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(h_i * d), d);
             let slope = 2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32);
             let k_head_off = (h_i / rk) * d;
             let v_head_off = (h_i / rv) * d;
@@ -224,7 +262,10 @@ fn causal_decode_f32(
                     prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                 }
 
-                let mut score = dot_f32(q_row, k_row) * scale_pre;
+                let mut score = 0.0f32;
+                f32::vec_dot(q_row.as_ptr(), k_row.as_ptr(), &mut score, q_row.len());
+                score *= scale_pre;
+
                 if do_softcap {
                     score = logit_softcap * score.tanh();
                 }
@@ -245,11 +286,10 @@ fn causal_decode_f32(
             }
 
             let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-            for t in 0..d {
-                out_chunk[t] = acc[t] * inv;
-            }
-        },
-    );
+            out_chunk.fill(0.0);
+            vec_fmadd_scalar(out_chunk, acc, inv);
+        }
+    });
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
@@ -275,9 +315,28 @@ fn causal_decode_f32_lean(
 
     let mut out = vec![0f32; h_q * d];
 
-    out.par_chunks_mut(d).enumerate().for_each_init(
-        || vec![0f32; d],
-        |acc, (h_i, out_chunk)| {
+    let pool = candle::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let mut scratch = vec![0f32; n_total * d];
+    let scratch_ptr = scratch.as_mut_ptr() as usize;
+    let out_ptr = out.as_mut_ptr() as usize;
+    let q_ptr = q_data.as_ptr() as usize;
+    let k_ptr = k_data.as_ptr() as usize;
+    let v_ptr = v_data.as_ptr() as usize;
+
+    pool.execute(|tid| unsafe {
+        let start_h = tid * h_q / n_total;
+        let end_h = (tid + 1) * h_q / n_total;
+        if start_h >= end_h {
+            return;
+        }
+        let acc = std::slice::from_raw_parts_mut((scratch_ptr as *mut f32).add(tid * d), d);
+        let q_data = std::slice::from_raw_parts(q_ptr as *const f32, h_q * d);
+        let k_data = std::slice::from_raw_parts(k_ptr as *const f32, kv_len * k_seq_stride);
+        let v_data = std::slice::from_raw_parts(v_ptr as *const f32, kv_len * v_seq_stride);
+
+        for h_i in start_h..end_h {
+            let out_chunk = std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(h_i * d), d);
             let k_head_off = (h_i / rk) * d;
             let v_head_off = (h_i / rv) * d;
             let q_row = &q_data[h_i * d..(h_i + 1) * d];
@@ -294,7 +353,9 @@ fn causal_decode_f32_lean(
                     prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                 }
 
-                let score = dot_f32(q_row, k_row) * scale;
+                let mut score = 0.0f32;
+                f32::vec_dot(q_row.as_ptr(), k_row.as_ptr(), &mut score, q_row.len());
+                score *= scale;
 
                 let v_base = kv_pos * v_seq_stride + v_head_off;
                 let v_row = &v_data[v_base..v_base + d];
@@ -311,11 +372,10 @@ fn causal_decode_f32_lean(
             }
 
             let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-            for t in 0..d {
-                out_chunk[t] = acc[t] * inv;
-            }
-        },
-    );
+            out_chunk.fill(0.0);
+            vec_fmadd_scalar(out_chunk, acc, inv);
+        }
+    });
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
@@ -336,16 +396,35 @@ pub fn causal_decode_f32_interleaved(
     scale: f32,
 ) -> Result<Tensor> {
     let rk = h_q / h_kv;
-    let kv_head_stride = 2 * d; // each head has K (d) + V (d)
-    let kv_seq_stride = h_kv * kv_head_stride; // stride between positions
+    if rk == 2 {
+        return causal_decode_f32_interleaved_gqa2(q_data, kv_data, h_kv, d, kv_len, scale);
+    }
+    let kv_head_stride = 2 * d;
+    let kv_seq_stride = h_kv * kv_head_stride;
 
     let mut out = vec![0f32; h_q * d];
 
-    out.par_chunks_mut(d).enumerate().for_each_init(
-        || vec![0f32; d],
-        |acc, (h_i, out_chunk)| {
-            let kv_head = h_i / rk;
-            let kv_head_off = kv_head * kv_head_stride;
+    let pool = candle::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let mut scratch = vec![0f32; n_total * d];
+    let scratch_ptr = scratch.as_mut_ptr() as usize;
+    let out_ptr = out.as_mut_ptr() as usize;
+    let q_ptr = q_data.as_ptr() as usize;
+    let kv_ptr = kv_data.as_ptr() as usize;
+
+    pool.execute(|tid| unsafe {
+        let start_h = tid * h_q / n_total;
+        let end_h = (tid + 1) * h_q / n_total;
+        if start_h >= end_h {
+            return;
+        }
+        let acc = std::slice::from_raw_parts_mut((scratch_ptr as *mut f32).add(tid * d), d);
+        let q_data = std::slice::from_raw_parts(q_ptr as *const f32, h_q * d);
+        let kv_data = std::slice::from_raw_parts(kv_ptr as *const f32, kv_len * kv_seq_stride);
+
+        for h_i in start_h..end_h {
+            let out_chunk = std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(h_i * d), d);
+            let kv_head_off = (h_i / rk) * kv_head_stride;
             let q_row = &q_data[h_i * d..(h_i + 1) * d];
 
             acc.fill(0.0);
@@ -353,17 +432,17 @@ pub fn causal_decode_f32_interleaved(
             let mut ssum = 0.0f32;
 
             for kv_pos in 0..kv_len {
-                // K and V share a base pointer (adjacent in memory)
                 let kv_base = kv_pos * kv_seq_stride + kv_head_off;
                 let k_row = &kv_data[kv_base..kv_base + d];
                 let v_row = &kv_data[kv_base + d..kv_base + 2 * d];
 
-                // One prefetch loads both next K and V
                 if kv_pos + 1 < kv_len {
                     prefetch_read(kv_data[kv_base + kv_seq_stride..].as_ptr());
                 }
 
-                let score = dot_f32(q_row, k_row) * scale;
+                let mut score = 0.0f32;
+                f32::vec_dot(q_row.as_ptr(), k_row.as_ptr(), &mut score, q_row.len());
+                score *= scale;
 
                 online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                     for t in 0..d {
@@ -373,11 +452,117 @@ pub fn causal_decode_f32_interleaved(
             }
 
             let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-            for t in 0..d {
-                out_chunk[t] = acc[t] * inv;
+            out_chunk.fill(0.0);
+            vec_fmadd_scalar(out_chunk, acc, inv);
+        }
+    });
+
+    Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
+}
+
+/// GQA-2 specialization: each pair of query heads (h*2, h*2+1) shares a KV head.
+/// Loads K and V once per position, accumulates into both heads simultaneously.
+fn causal_decode_f32_interleaved_gqa2(
+    q_data: &[f32],
+    kv_data: &[f32],
+    h_kv: usize,
+    d: usize,
+    kv_len: usize,
+    scale: f32,
+) -> Result<Tensor> {
+    let h_q = h_kv * 2;
+    let kv_head_stride = 2 * d;
+    let kv_seq_stride = h_kv * kv_head_stride;
+
+    let mut out = vec![0f32; h_q * d];
+
+    let pool = candle::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let mut scratch = vec![0f32; n_total * 2 * d];
+    let scratch_ptr = scratch.as_mut_ptr() as usize;
+    let out_ptr = out.as_mut_ptr() as usize;
+    let q_ptr = q_data.as_ptr() as usize;
+    let kv_ptr = kv_data.as_ptr() as usize;
+
+    pool.execute(|tid| unsafe {
+        let start_h = tid * h_kv / n_total;
+        let end_h = (tid + 1) * h_kv / n_total;
+        if start_h >= end_h {
+            return;
+        }
+
+        let acc0 = std::slice::from_raw_parts_mut((scratch_ptr as *mut f32).add(tid * 2 * d), d);
+        let acc1 =
+            std::slice::from_raw_parts_mut((scratch_ptr as *mut f32).add(tid * 2 * d + d), d);
+        let q_data = std::slice::from_raw_parts(q_ptr as *const f32, h_q * d);
+        let kv_data = std::slice::from_raw_parts(kv_ptr as *const f32, kv_len * kv_seq_stride);
+
+        for kv_h in start_h..end_h {
+            let out0 = std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(kv_h * 2 * d), d);
+            let out1 =
+                std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(kv_h * 2 * d + d), d);
+            let kv_head_off = kv_h * kv_head_stride;
+            let q0 = &q_data[kv_h * 2 * d..(kv_h * 2 + 1) * d];
+            let q1 = &q_data[(kv_h * 2 + 1) * d..(kv_h * 2 + 2) * d];
+
+            acc0.fill(0.0);
+            acc1.fill(0.0);
+            let mut m0 = f32::NEG_INFINITY;
+            let mut m1 = f32::NEG_INFINITY;
+            let mut s0 = 0.0f32;
+            let mut s1 = 0.0f32;
+
+            for kv_pos in 0..kv_len {
+                let kv_base = kv_pos * kv_seq_stride + kv_head_off;
+                let k_row = &kv_data[kv_base..kv_base + d];
+                let v_row = &kv_data[kv_base + d..kv_base + 2 * d];
+
+                if kv_pos + 1 < kv_len {
+                    prefetch_read(kv_data[kv_base + kv_seq_stride..].as_ptr());
+                }
+
+                let mut sc0 = 0.0f32;
+                let mut sc1 = 0.0f32;
+                f32::vec_dot(q0.as_ptr(), k_row.as_ptr(), &mut sc0, q0.len());
+                f32::vec_dot(q1.as_ptr(), k_row.as_ptr(), &mut sc1, q1.len());
+                sc0 *= scale;
+                sc1 *= scale;
+
+                if sc0 > m0 {
+                    let so = f32::exp(m0 - sc0);
+                    vec_scale(acc0, so);
+                    s0 *= so;
+                    m0 = sc0;
+                    vec_add(acc0, v_row);
+                    s0 += 1.0;
+                } else {
+                    let w = f32::exp(sc0 - m0);
+                    vec_fmadd_scalar(acc0, v_row, w);
+                    s0 += w;
+                }
+
+                if sc1 > m1 {
+                    let so = f32::exp(m1 - sc1);
+                    vec_scale(acc1, so);
+                    s1 *= so;
+                    m1 = sc1;
+                    vec_add(acc1, v_row);
+                    s1 += 1.0;
+                } else {
+                    let w = f32::exp(sc1 - m1);
+                    vec_fmadd_scalar(acc1, v_row, w);
+                    s1 += w;
+                }
             }
-        },
-    );
+
+            let inv0 = if s0 > 0.0 { 1.0 / s0 } else { 0.0 };
+            let inv1 = if s1 > 0.0 { 1.0 / s1 } else { 0.0 };
+            out0.fill(0.0);
+            out1.fill(0.0);
+            vec_fmadd_scalar(out0, acc0, inv0);
+            vec_fmadd_scalar(out1, acc1, inv1);
+        }
+    });
 
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
@@ -423,73 +608,93 @@ fn causal_prefill_f32(
 
     let mut out = vec![0f32; h_q * s_q * d];
 
-    out.par_chunks_mut(d)
-        .with_min_len(64)
-        .enumerate()
-        .for_each_init(
-            || vec![0f32; d],
-            |acc, (row_idx, out_chunk)| {
-                let h_i = row_idx / s_q;
-                let q_pos = row_idx % s_q;
+    let pool = candle::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let n_rows = h_q * s_q;
+    let mut scratch = vec![0f32; n_total * d];
+    let scratch_ptr = scratch.as_mut_ptr() as usize;
+    let out_ptr = out.as_mut_ptr() as usize;
+    let q_ptr = q_data.as_ptr() as usize;
+    let k_ptr = k_data.as_ptr() as usize;
+    let v_ptr = v_data.as_ptr() as usize;
 
-                let slope = if max_bias > 0.0 {
-                    2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+    pool.execute(|tid| unsafe {
+        let start_row = tid * n_rows / n_total;
+        let end_row = (tid + 1) * n_rows / n_total;
+        if start_row >= end_row {
+            return;
+        }
+        let acc = std::slice::from_raw_parts_mut((scratch_ptr as *mut f32).add(tid * d), d);
+        let q_data = std::slice::from_raw_parts(q_ptr as *const f32, s_q * h_q * d);
+        let k_data = std::slice::from_raw_parts(k_ptr as *const f32, kv_len * k_seq_stride);
+        let v_data = std::slice::from_raw_parts(v_ptr as *const f32, kv_len * v_seq_stride);
+
+        for row_idx in start_row..end_row {
+            let out_chunk =
+                std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(row_idx * d), d);
+            let h_i = row_idx / s_q;
+            let q_pos = row_idx % s_q;
+
+            let slope = if max_bias > 0.0 {
+                2.0f32.powf(-max_bias * ((h_i + 1) as f32) / n2 as f32)
+            } else {
+                0.0
+            };
+
+            let k_head_off = (h_i / rk) * d;
+            let v_head_off = (h_i / rv) * d;
+
+            let q_base = q_pos * q_seq_stride + h_i * d;
+            let q_row = &q_data[q_base..q_base + d];
+
+            acc.fill(0.0);
+            let mut m = f32::NEG_INFINITY;
+            let mut ssum = 0.0f32;
+
+            let kv_end = (q_pos + kv_offset + 1).min(kv_len);
+
+            for kv_pos in 0..kv_end {
+                let alibi_bias = if max_bias > 0.0 {
+                    slope * (kv_pos as i64 - (q_pos + kv_offset) as i64) as f32
                 } else {
                     0.0
                 };
 
-                let k_head_off = (h_i / rk) * d;
-                let v_head_off = (h_i / rv) * d;
+                let k_base = kv_pos * k_seq_stride + k_head_off;
+                let k_row = &k_data[k_base..k_base + d];
 
-                let q_base = q_pos * q_seq_stride + h_i * d;
-                let q_row = &q_data[q_base..q_base + d];
-
-                acc.fill(0.0);
-                let mut m = f32::NEG_INFINITY;
-                let mut ssum = 0.0f32;
-
-                let kv_end = (q_pos + kv_offset + 1).min(kv_len);
-
-                for kv_pos in 0..kv_end {
-                    let alibi_bias = if max_bias > 0.0 {
-                        slope * (kv_pos as i64 - (q_pos + kv_offset) as i64) as f32
-                    } else {
-                        0.0
-                    };
-
-                    let k_base = kv_pos * k_seq_stride + k_head_off;
-                    let k_row = &k_data[k_base..k_base + d];
-
-                    if kv_pos + 1 < kv_end {
-                        prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
-                    }
-
-                    let mut score = dot_f32(q_row, k_row) * scale_pre;
-                    if do_softcap {
-                        score = logit_softcap * score.tanh();
-                    }
-                    score += alibi_bias;
-
-                    let v_base = kv_pos * v_seq_stride + v_head_off;
-                    let v_row = &v_data[v_base..v_base + d];
-
-                    if kv_pos + 1 < kv_end {
-                        prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
-                    }
-
-                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                        for t in 0..d {
-                            acc[t] += v_row[t] * w;
-                        }
-                    });
+                if kv_pos + 1 < kv_end {
+                    prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                 }
 
-                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                for t in 0..d {
-                    out_chunk[t] = acc[t] * inv;
+                let mut score = 0.0f32;
+                f32::vec_dot(q_row.as_ptr(), k_row.as_ptr(), &mut score, q_row.len());
+                score *= scale_pre;
+
+                if do_softcap {
+                    score = logit_softcap * score.tanh();
                 }
-            },
-        );
+                score += alibi_bias;
+
+                let v_base = kv_pos * v_seq_stride + v_head_off;
+                let v_row = &v_data[v_base..v_base + d];
+
+                if kv_pos + 1 < kv_end {
+                    prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
+                }
+
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                    for t in 0..d {
+                        acc[t] += v_row[t] * w;
+                    }
+                });
+            }
+
+            let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+            out_chunk.fill(0.0);
+            vec_fmadd_scalar(out_chunk, acc, inv);
+        }
+    });
 
     Tensor::from_vec(out, (h_q, s_q, d), &Device::Cpu)
 }
@@ -517,57 +722,76 @@ fn causal_prefill_f32_lean(
 
     let mut out = vec![0f32; h_q * s_q * d];
 
-    out.par_chunks_mut(d)
-        .with_min_len(64)
-        .enumerate()
-        .for_each_init(
-            || vec![0f32; d],
-            |acc, (row_idx, out_chunk)| {
-                let h_i = row_idx / s_q;
-                let q_pos = row_idx % s_q;
+    let pool = candle::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let n_rows = h_q * s_q;
+    let mut scratch = vec![0f32; n_total * d];
+    let scratch_ptr = scratch.as_mut_ptr() as usize;
+    let out_ptr = out.as_mut_ptr() as usize;
+    let q_ptr = q_data.as_ptr() as usize;
+    let k_ptr = k_data.as_ptr() as usize;
+    let v_ptr = v_data.as_ptr() as usize;
 
-                let k_head_off = (h_i / rk) * d;
-                let v_head_off = (h_i / rv) * d;
+    pool.execute(|tid| unsafe {
+        let start_row = tid * n_rows / n_total;
+        let end_row = (tid + 1) * n_rows / n_total;
+        if start_row >= end_row {
+            return;
+        }
+        let acc = std::slice::from_raw_parts_mut((scratch_ptr as *mut f32).add(tid * d), d);
+        let q_data = std::slice::from_raw_parts(q_ptr as *const f32, s_q * h_q * d);
+        let k_data = std::slice::from_raw_parts(k_ptr as *const f32, kv_len * k_seq_stride);
+        let v_data = std::slice::from_raw_parts(v_ptr as *const f32, kv_len * v_seq_stride);
 
-                let q_base = q_pos * q_seq_stride + h_i * d;
-                let q_row = &q_data[q_base..q_base + d];
+        for row_idx in start_row..end_row {
+            let out_chunk =
+                std::slice::from_raw_parts_mut((out_ptr as *mut f32).add(row_idx * d), d);
+            let h_i = row_idx / s_q;
+            let q_pos = row_idx % s_q;
 
-                acc.fill(0.0);
-                let mut m = f32::NEG_INFINITY;
-                let mut ssum = 0.0f32;
+            let k_head_off = (h_i / rk) * d;
+            let v_head_off = (h_i / rv) * d;
 
-                let kv_end = (q_pos + kv_offset + 1).min(kv_len);
+            let q_base = q_pos * q_seq_stride + h_i * d;
+            let q_row = &q_data[q_base..q_base + d];
 
-                for kv_pos in 0..kv_end {
-                    let k_base = kv_pos * k_seq_stride + k_head_off;
-                    let k_row = &k_data[k_base..k_base + d];
+            acc.fill(0.0);
+            let mut m = f32::NEG_INFINITY;
+            let mut ssum = 0.0f32;
 
-                    if kv_pos + 1 < kv_end {
-                        prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
-                    }
+            let kv_end = (q_pos + kv_offset + 1).min(kv_len);
 
-                    let score = dot_f32(q_row, k_row) * scale;
+            for kv_pos in 0..kv_end {
+                let k_base = kv_pos * k_seq_stride + k_head_off;
+                let k_row = &k_data[k_base..k_base + d];
 
-                    let v_base = kv_pos * v_seq_stride + v_head_off;
-                    let v_row = &v_data[v_base..v_base + d];
-
-                    if kv_pos + 1 < kv_end {
-                        prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
-                    }
-
-                    online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
-                        for t in 0..d {
-                            acc[t] += v_row[t] * w;
-                        }
-                    });
+                if kv_pos + 1 < kv_end {
+                    prefetch_read(k_data[k_base + k_seq_stride..].as_ptr());
                 }
 
-                let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
-                for t in 0..d {
-                    out_chunk[t] = acc[t] * inv;
+                let mut score = 0.0f32;
+                f32::vec_dot(q_row.as_ptr(), k_row.as_ptr(), &mut score, q_row.len());
+                score *= scale;
+
+                let v_base = kv_pos * v_seq_stride + v_head_off;
+                let v_row = &v_data[v_base..v_base + d];
+
+                if kv_pos + 1 < kv_end {
+                    prefetch_read(v_data[v_base + v_seq_stride..].as_ptr());
                 }
-            },
-        );
+
+                online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
+                    for t in 0..d {
+                        acc[t] += v_row[t] * w;
+                    }
+                });
+            }
+
+            let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
+            out_chunk.fill(0.0);
+            vec_fmadd_scalar(out_chunk, acc, inv);
+        }
+    });
 
     Tensor::from_vec(out, (h_q, s_q, d), &Device::Cpu)
 }
@@ -575,7 +799,7 @@ fn causal_prefill_f32_lean(
 // Generic fallback (non-f32)
 
 #[allow(clippy::too_many_arguments)]
-fn causal_decode_generic<T: WithDType>(
+fn causal_decode_generic<T: WithDType + num_traits::Float>(
     q_data: &[T],
     k_data: &[T],
     v_data: &[T],
@@ -626,7 +850,9 @@ fn causal_decode_generic<T: WithDType>(
                 };
                 let k_base = kv_pos * k_seq_stride + k_head_off;
                 let k_row = &k_data[k_base..k_base + d];
-                let mut s_val = dot_f32(q_row, k_row);
+                let mut s_val_t = T::zero();
+                unsafe { T::vec_dot(q_row.as_ptr(), k_row.as_ptr(), &mut s_val_t, q_row.len()) }
+                let mut s_val = s_val_t.to_f32().unwrap_or(0.0);
                 s_val *= scale_pre;
                 if do_softcap {
                     s_val = logit_softcap * s_val.tanh();
@@ -637,7 +863,7 @@ fn causal_decode_generic<T: WithDType>(
                 let v_row = &v_data[v_base..v_base + d];
                 online_softmax_step(s_val, &mut m, &mut ssum, acc, |acc, w| {
                     for t in 0..d {
-                        acc[t] += v_row[t].to_f64() as f32 * w;
+                        acc[t] += v_row[t].to_f32().unwrap_or(0.0) * w;
                     }
                 });
             }

@@ -2,7 +2,6 @@
 use std::any::Any;
 use std::cell::UnsafeCell;
 use std::hint::spin_loop;
-use std::ops::Div;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -304,7 +303,7 @@ static BARRIER_POOL: OnceLock<BarrierPool> = OnceLock::new();
 
 /// Persistent barrier pool
 pub fn barrier_pool() -> &'static BarrierPool {
-    BARRIER_POOL.get_or_init(|| BarrierPool::new(get_num_threads().saturating_sub(1)))
+    BARRIER_POOL.get_or_init(|| BarrierPool::new(candle_num_threads().saturating_sub(1)))
 }
 
 pub fn with_threadpool<F: FnOnce() -> R + Send, R: Send>(f: F) -> R {
@@ -312,8 +311,6 @@ pub fn with_threadpool<F: FnOnce() -> R + Send, R: Send>(f: F) -> R {
 }
 
 fn default_num_threads() -> usize {
-    // NOTE: When the CPU backend is optimized further so as not to trash shared
-    // caches etc the amount of threads can be increased.
     let physical = {
         #[cfg(target_os = "macos")]
         {
@@ -324,39 +321,28 @@ fn default_num_threads() -> usize {
             num_cpus::get_physical()
         }
     };
-    let physical = physical.max(1); // safeguard against bad number
-    if physical <= 4 {
-        physical
-    } else {
-        // NOTE: When the CPU backend is optimized further so as not to trash shared
-        // caches etc the amount of threads can be increased.
-        physical.div(2)
-    }
+    physical.max(1) // safeguard against bad number
 }
 
-fn rayon_num_threads() -> Option<usize> {
+fn rayon_num_threads() -> usize {
     std::env::var("RAYON_NUM_THREADS")
         .ok()
         .and_then(|s| usize::from_str(&s).ok())
         .filter(|nt| nt > &0)
+        .unwrap_or_else(default_num_threads)
 }
 
-fn candle_num_threads() -> Option<usize> {
+fn candle_num_threads() -> usize {
     std::env::var("CANDLE_NUM_THREADS")
         .ok()
         .and_then(|s| usize::from_str(&s).ok())
         .filter(|nt| nt > &0)
+        .unwrap_or_else(default_num_threads)
 }
 
 pub fn get_num_threads() -> usize {
     // Respond to the same environment variable as rayon.
-    if let Some(cnt) = candle_num_threads() {
-        return cnt;
-    }
-    if let Some(rnt) = rayon_num_threads() {
-        return rnt;
-    }
-    default_num_threads()
+    rayon_num_threads()
 }
 
 /// On Apple Silicon: P-core count via `hw.perflevel0.logicalcpu`.
