@@ -192,6 +192,11 @@ impl Tensor {
         };
         if groups == 1 {
             self.conv1d_single_group(kernel, &params)
+        } else if c_in_k == 1 && c_out == c_in && groups == c_in && stride == 1 && dilation == 1 {
+            // Depthwise fast path: the per-group decomposition below launches O(groups) tiny
+            // kernels, which dominates runtime on CUDA (issue #3389). Restricted to unit
+            // stride/dilation as there is no strided-narrow primitive yet.
+            self.conv1d_depthwise(kernel, &params)
         } else {
             let blocks = self.chunk(groups, 1)?;
             let kernel = kernel.chunk(groups, 0)?;
@@ -201,6 +206,36 @@ impl Tensor {
                 .map(|(block, kernel)| block.conv1d_single_group(kernel, &params))
                 .collect::<Result<Vec<_>>>()?;
             Tensor::cat(&blocks, 1)
+        }
+    }
+
+    // Depthwise 1D conv as a per-channel weighted sum of k_size shifted slices, elementwise only.
+    // `self`: (b_size, c, l_in); `kernel`: (c, 1, k_size); out: (b_size, c, l_out).
+    fn conv1d_depthwise(&self, kernel: &Self, params: &ParamsConv1D) -> Result<Self> {
+        let (b_size, c, _l_in) = self.dims3()?;
+        let l_out = params.l_out();
+        let padded = if params.padding == 0 {
+            self.clone()
+        } else {
+            self.pad_with_zeros(2, params.padding, params.padding)?
+        };
+        // (c, 1, k_size) -> (1, c, k_size) to broadcast over the batch dimension.
+        let kernel = kernel.reshape((c, params.k_size))?.unsqueeze(0)?;
+        let mut out: Option<Tensor> = None;
+        for k in 0..params.k_size {
+            // out[b, c, t] += padded[b, c, t + k] * kernel[c, k]
+            let slice = padded.narrow(2, k, l_out)?; // (b_size, c, l_out)
+            let w_k = kernel.narrow(2, k, 1)?; // (1, c, 1)
+            let term = slice.broadcast_mul(&w_k)?;
+            out = Some(match out {
+                None => term,
+                Some(acc) => (acc + term)?,
+            });
+        }
+        match out {
+            Some(out) => Ok(out),
+            // k_size == 0 is rejected upstream; handled defensively.
+            None => Tensor::zeros((b_size, c, l_out), self.dtype(), self.device()),
         }
     }
 
@@ -328,6 +363,9 @@ impl Tensor {
         };
         if groups == 1 {
             self.conv2d_single_group(kernel, &params)
+        } else if c_in_k == 1 && c_out == c_in && groups == c_in && stride == 1 && dilation == 1 {
+            // Depthwise fast path, see `conv1d_with_algo` (issue #3389).
+            self.conv2d_depthwise(kernel, &params)
         } else {
             let blocks = self.chunk(groups, 1)?;
             let kernel = kernel.chunk(groups, 0)?;
@@ -337,6 +375,38 @@ impl Tensor {
                 .map(|(block, kernel)| block.conv2d_single_group(kernel, &params))
                 .collect::<Result<Vec<_>>>()?;
             Tensor::cat(&blocks, 1)
+        }
+    }
+
+    // Depthwise 2D conv, the 2D analogue of `conv1d_depthwise`.
+    // `self`: (b, c, h, w); `kernel`: (c, 1, k_h, k_w); out: (b, c, out_h, out_w).
+    fn conv2d_depthwise(&self, kernel: &Self, params: &ParamsConv2D) -> Result<Self> {
+        let (b_size, c, _i_h, _i_w) = self.dims4()?;
+        let (out_h, out_w) = (params.out_h(), params.out_w());
+        let padded = if params.padding == 0 {
+            self.clone()
+        } else {
+            self.pad_with_zeros(2, params.padding, params.padding)?
+                .pad_with_zeros(3, params.padding, params.padding)?
+        };
+        // (c, 1, k_h, k_w) -> (1, c, k_h, k_w) to broadcast over the batch dimension.
+        let kernel = kernel.reshape((c, params.k_h, params.k_w))?.unsqueeze(0)?;
+        let mut out: Option<Tensor> = None;
+        for kh in 0..params.k_h {
+            for kw in 0..params.k_w {
+                // out[b, c, i, j] += padded[b, c, i + kh, j + kw] * kernel[c, kh, kw]
+                let slice = padded.narrow(2, kh, out_h)?.narrow(3, kw, out_w)?; // (b, c, out_h, out_w)
+                let w = kernel.narrow(2, kh, 1)?.narrow(3, kw, 1)?; // (1, c, 1, 1)
+                let term = slice.broadcast_mul(&w)?;
+                out = Some(match out {
+                    None => term,
+                    Some(acc) => (acc + term)?,
+                });
+            }
+        }
+        match out {
+            Some(out) => Ok(out),
+            None => Tensor::zeros((b_size, c, out_h, out_w), self.dtype(), self.device()),
         }
     }
 
