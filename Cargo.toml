@@ -66,6 +66,7 @@ half = { version = "2.5.0", features = [
     "num-traits",
     "use-intrinsics",
     "rand_distr",
+    "zerocopy"
 ] }
 float8 = { version = "0.7.0", features = ["num-traits", "rand_distr"] }
 hound = "3.5.1"
@@ -101,6 +102,7 @@ ug-cuda = "0.5.0"
 ug-metal = "0.5.0"
 yoke = { version = "0.8.1", features = ["derive"] }
 zip = { version = "8.6.0", default-features = false }
+zerocopy = "0.8"
 objc2-metal = { version = "0.3.1" }
 objc2-foundation = { version = "0.3.1" }
 
