@@ -10,9 +10,7 @@
 mod ffi;
 
 use candle::backend::BackendStorage;
-use candle::cuda_backend::{
-    cudarc::driver::{DevicePtr, DevicePtrMut},
-};
+use candle::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 

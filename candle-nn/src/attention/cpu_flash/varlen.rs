@@ -11,6 +11,9 @@ use candle::{DType, Device, Result, Storage, Tensor};
 use half::f16;
 use rayon::prelude::*;
 
+use super::dot_f32;
+use super::online_softmax::online_softmax_step;
+
 /// Fused variable-length flash attention on CPU.
 ///
 /// **Input shapes** (packed, no batch dim):
@@ -199,24 +202,6 @@ pub fn flash_attn_varlen_cpu(
 
             let mut out = vec![0f32; total_q * hq * d];
 
-            #[inline(always)]
-            fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
-                let mut s = 0.0f32;
-                let mut i = 0;
-                while i + 4 <= a.len() {
-                    s += a[i] * b[i]
-                        + a[i + 1] * b[i + 1]
-                        + a[i + 2] * b[i + 2]
-                        + a[i + 3] * b[i + 3];
-                    i += 4;
-                }
-                while i < a.len() {
-                    s += a[i] * b[i];
-                    i += 1;
-                }
-                s
-            }
-
             out.par_chunks_mut(d).enumerate().for_each_init(
                 || vec![0f32; d],
                 |acc, (row, out_row)| {
@@ -269,30 +254,13 @@ pub fn flash_attn_varlen_cpu(
                             score += alibi_bias(slope, i_k, j as isize, causal);
                         }
 
-                        if score > m {
-                            let scale_old = (m - score).exp();
-                            #[allow(clippy::needless_range_loop)]
-                            for t in 0..d {
-                                acc[t] *= scale_old;
-                            }
-                            ssum *= scale_old;
-                            m = score;
-
-                            let v_base = ((start_k + j) * hv + v_head) * d;
-                            let v_row = &v_data[v_base..v_base + d];
-                            for t in 0..d {
-                                acc[t] += v_row[t];
-                            }
-                            ssum += 1.0;
-                        } else {
-                            let w = (score - m).exp();
-                            let v_base = ((start_k + j) * hv + v_head) * d;
-                            let v_row = &v_data[v_base..v_base + d];
+                        let v_base = ((start_k + j) * hv + v_head) * d;
+                        let v_row = &v_data[v_base..v_base + d];
+                        online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                             for t in 0..d {
                                 acc[t] += v_row[t] * w;
                             }
-                            ssum += w;
-                        }
+                        });
                     }
 
                     let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };
@@ -324,33 +292,11 @@ pub fn flash_attn_varlen_cpu(
                 _ => candle::bail!("v not cpu"),
             };
 
-            #[inline(always)]
-            fn dot_qf32_kf16(q: &[f32], k: &[f16]) -> f32 {
-                let mut s = 0.0f32;
-                let mut i = 0usize;
-                while i + 8 <= q.len() {
-                    s += q[i] * k[i].to_f32()
-                        + q[i + 1] * k[i + 1].to_f32()
-                        + q[i + 2] * k[i + 2].to_f32()
-                        + q[i + 3] * k[i + 3].to_f32()
-                        + q[i + 4] * k[i + 4].to_f32()
-                        + q[i + 5] * k[i + 5].to_f32()
-                        + q[i + 6] * k[i + 6].to_f32()
-                        + q[i + 7] * k[i + 7].to_f32();
-                    i += 8;
-                }
-                while i < q.len() {
-                    s += q[i] * k[i].to_f32();
-                    i += 1;
-                }
-                s
-            }
-
             let mut out = vec![f16::from_f32(0.0); total_q * hq * d];
 
             out.par_chunks_mut(d).enumerate().for_each_init(
-                || (vec![0f32; d], vec![0f32; d]),
-                |(q_row_f32, acc), (row, out_row)| {
+                || vec![0f32; d],
+                |acc, (row, out_row)| {
                     let q_idx = row / hq;
                     let h = row % hq;
 
@@ -385,9 +331,7 @@ pub fn flash_attn_varlen_cpu(
                     let i_k = q_pos as isize + offset;
 
                     let q_base = (q_idx * hq + h) * d;
-                    for t in 0..d {
-                        q_row_f32[t] = q_data[q_base + t].to_f32();
-                    }
+                    let q_row = &q_data[q_base..q_base + d];
 
                     acc.fill(0.0);
                     let mut m = f32::NEG_INFINITY;
@@ -397,33 +341,17 @@ pub fn flash_attn_varlen_cpu(
                         let k_base = ((start_k + j) * hk + k_head) * d;
                         let k_row = &k_data[k_base..k_base + d];
 
-                        let mut score = dot_qf32_kf16(q_row_f32, k_row) * softmax_scale;
+                        let mut score = dot_f32(q_row, k_row) * softmax_scale;
                         if slopes.is_some() {
                             score += alibi_bias(slope, i_k, j as isize, causal);
                         }
 
-                        if score > m {
-                            let scale_old = (m - score).exp();
-                            #[allow(clippy::needless_range_loop)]
-                            for t in 0..d {
-                                acc[t] *= scale_old;
-                            }
-                            ssum *= scale_old;
-                            m = score;
-
-                            let v_base = ((start_k + j) * hv + v_head) * d;
-                            for t in 0..d {
-                                acc[t] += v_data[v_base + t].to_f32();
-                            }
-                            ssum += 1.0;
-                        } else {
-                            let w = (score - m).exp();
-                            let v_base = ((start_k + j) * hv + v_head) * d;
+                        let v_base = ((start_k + j) * hv + v_head) * d;
+                        online_softmax_step(score, &mut m, &mut ssum, acc, |acc, w| {
                             for t in 0..d {
                                 acc[t] += v_data[v_base + t].to_f32() * w;
                             }
-                            ssum += w;
-                        }
+                        });
                     }
 
                     let inv = if ssum > 0.0 { 1.0 / ssum } else { 0.0 };

@@ -10,13 +10,40 @@
 //! - **B>1 unsupported config**: hard error (explicit mask + B>1, softcap + B>1, etc.)
 
 pub mod causal;
+pub(crate) mod online_softmax;
 pub mod standard;
 pub mod varlen;
 
 use candle::{DType, Result, Tensor, WithDType};
-use std::iter::Sum;
 
 use super::AttnMask;
+
+/// Dot product of two equal-length `T` rows, returned as f32.
+///
+/// Q and K stream in their native dtype (no per-row dequantization).
+///
+/// For f32 this is thin glue over candle's architecture-tuned `VecOps::vec_dot`
+/// intrinsic (NEON / AVX2 / SIMD128). For f16/bf16 we accumulate in f32 by hand:
+/// `VecOps::vec_dot` narrows its internal f32 accumulator back to the half type
+/// before returning, which would round the attention score (and can overflow it
+/// to `inf`) *before* softmax. Keeping the score in f32 preserves its full range
+/// and precision, matching the pre-standardization half kernels.
+#[inline]
+pub(crate) fn dot_f32<T: WithDType>(a: &[T], b: &[T]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    if matches!(T::DTYPE, DType::F16 | DType::BF16) {
+        let mut acc = 0f32;
+        for (&x, &y) in a.iter().zip(b.iter()) {
+            acc += (x.to_f64() as f32) * (y.to_f64() as f32);
+        }
+        return acc;
+    }
+    let mut res = T::zero();
+    // SAFETY: `a` and `b` are both at least `a.len()` long and `res` is a valid
+    // out pointer, pre-zeroed for the scalar fallback that accumulates into it.
+    unsafe { T::vec_dot(a.as_ptr(), b.as_ptr(), &mut res, a.len()) };
+    res.to_f64() as f32
+}
 
 /// Flash attention with automatic dispatch.
 ///
@@ -46,7 +73,7 @@ pub fn flash_attn<T>(
     softcap: Option<f32>,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real,
+    T: WithDType,
 {
     let b = q.dims()[0];
 
