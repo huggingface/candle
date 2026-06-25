@@ -7,6 +7,7 @@ pub(crate) mod conv_transpose2d;
 pub(crate) mod copy;
 pub(crate) mod matmul;
 pub(crate) mod qmatmul;
+pub(crate) mod qmatmul_id;
 pub(crate) mod random;
 pub(crate) mod reduce;
 pub(crate) mod unary;

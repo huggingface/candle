@@ -2451,3 +2451,164 @@ fn commands_concurrent_acquisition() {
 
     commands.wait_until_completed().unwrap();
 }
+
+// Correctness test for `call_quantized_matmul_mm_id`.
+//
+// Validates that the per-expert MoE dispatcher routes each `(token, slot)`
+// pair to the expert selected by `ids` and that the resulting matmul matches
+// a naive CPU reference. F32 is used as the dtype because it carries no
+// quantization rounding; tolerance is per-element abs diff < 1e-3.
+//
+// The kernel (templated on `<float4x4, 1, dequantize_f32>`) requires `K` to
+// be a multiple of `BLOCK_SIZE_K = 32`. `M`, `T`, and `N` may be smaller
+// than the output tile (`64 x 32`); the kernel clamps `n_rows` / `n_cols`.
+//
+// Output layout (post fix): dst is a contiguous `[num_tokens, experts_per_tok, n]`
+// f32 tensor. dst[t, s, j] sits at flat index `t * (experts_per_tok * n) +
+// s * n + j`. The wrapper sets the kernel's host `ne1 = nei0` so the
+// `jid[1] * (ne0 * ne1)` write offset lands at the right per-token stride.
+// src1 is `[num_tokens, k]` and the wrapper sets `ne11 = 1`, `nb11 = 0`,
+// `ne12 = num_tokens`, `nb12 = k * 4`, so the kernel reads `src1[token, k]`
+// for any slot of that token.
+#[test]
+fn qmatmul_mm_id_f32_correctness() {
+    use crate::kernels::quantized::call_quantized_matmul_mm_id;
+    use crate::kernels::GgmlDType;
+
+    let num_experts: usize = 4;
+    let num_tokens: usize = 3;
+    let experts_per_tok: usize = 2;
+    let n: usize = 8;
+    // K must be a multiple of BLOCK_SIZE_K = 32 in the kernel.
+    let k: usize = 32;
+
+    // Deterministic, well-spread routing: ids[t, s] = (t * 2 + s) % E.
+    // For (E=4, M=3, T=2) this yields:
+    //   t=0: [0, 1], t=1: [2, 3], t=2: [0, 1].
+    // Every expert is hit at least once.
+    let ids_i32: Vec<i32> = (0..(num_tokens * experts_per_tok))
+        .map(|i| (i as i32) % (num_experts as i32))
+        .collect();
+
+    // Distinct, bounded values to keep the f32 sums in a safe range.
+    let weights_f32: Vec<f32> = (0..(num_experts * n * k))
+        .map(|v| ((v % 17) as f32) * 0.01 - 0.08)
+        .collect();
+    let input_f32: Vec<f32> = (0..(num_tokens * k))
+        .map(|v| ((v % 13) as f32) * 0.02 - 0.12)
+        .collect();
+
+    // Contiguous `[num_tokens, experts_per_tok, n]` output layout.
+    let token_stride = experts_per_tok * n;
+    let out_elems = num_tokens * token_stride;
+
+    // CPU reference: out[t * token_stride + s * n + j]
+    //   = sum_k weights[ids[t, s], j, k] * input[t, k].
+    let mut expected = vec![0.0f32; out_elems];
+    for t in 0..num_tokens {
+        for s in 0..experts_per_tok {
+            let e = ids_i32[t * experts_per_tok + s] as usize;
+            for j in 0..n {
+                let mut acc = 0.0f32;
+                for kk in 0..k {
+                    let w = weights_f32[e * n * k + j * k + kk];
+                    let x = input_f32[t * k + kk];
+                    acc += w * x;
+                }
+                expected[t * token_stride + s * n + j] = acc;
+            }
+        }
+    }
+
+    let device = device();
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+
+    let weights_buf = new_buffer(&device, &weights_f32);
+    let input_buf = new_buffer(&device, &input_f32);
+    let ids_buf = new_buffer(&device, &ids_i32);
+    let out_buf = new_buffer(&device, &vec![0.0f32; out_elems]);
+
+    let f32_size = core::mem::size_of::<f32>();
+    let i32_size = core::mem::size_of::<i32>();
+
+    let src0_shape = [num_experts, n, k];
+    // Row-major byte strides for [E, N, K] f32. The wrapper indexes
+    // strides from the end (`[sr - 2]` is the N-row stride, `[sr - 3]` is
+    // the per-expert stride), so a leading "batch" stride is required to
+    // place those at the right positions in a length-4 array.
+    let row_bytes = k * f32_size;
+    let expert_bytes = n * row_bytes;
+    let src0_stride = [
+        num_experts * expert_bytes,
+        expert_bytes,
+        row_bytes,
+        f32_size,
+    ];
+
+    let src1_shape = [num_tokens, k];
+    let src1_stride = [k * f32_size, f32_size];
+
+    let ids_shape = [num_tokens, experts_per_tok];
+    let ids_stride = [experts_per_tok * i32_size, i32_size];
+
+    let kernels = Kernels::new();
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &src0_shape,
+        &src0_stride,
+        &weights_buf,
+        &src1_shape,
+        &src1_stride,
+        &input_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &[num_tokens, experts_per_tok, n],
+        0,
+        &out_buf,
+    )
+    .unwrap();
+
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&out_buf, out_elems);
+    assert_eq!(got.len(), expected.len());
+
+    // Per-element abs diff < 1e-3 over the cells the kernel actually writes
+    // (one `n`-wide row per (token, slot) pair, strided by `token_stride`).
+    // f32 matmul over K=32 has accumulated rounding well under this bound;
+    // tightening to 1e-5 would also pass on an M-series GPU but 1e-3 is
+    // robust across hardware.
+    let tol = 1e-3f32;
+    let mut max_abs_diff = 0.0f32;
+    let mut worst_idx = 0usize;
+    for t in 0..num_tokens {
+        for s in 0..experts_per_tok {
+            for j in 0..n {
+                let i = t * token_stride + s * n + j;
+                let d = (got[i] - expected[i]).abs();
+                if d > max_abs_diff {
+                    max_abs_diff = d;
+                    worst_idx = i;
+                }
+            }
+        }
+    }
+    assert!(
+        max_abs_diff < tol,
+        "qmatmul_mm_id F32 output diverges from CPU reference: \
+         max_abs_diff = {} at flat index {} (got = {}, expected = {}, tol = {})",
+        max_abs_diff,
+        worst_idx,
+        got[worst_idx],
+        expected[worst_idx],
+        tol,
+    );
+}

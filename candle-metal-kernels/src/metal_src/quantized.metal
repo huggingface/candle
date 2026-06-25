@@ -7295,24 +7295,38 @@ kernel void kernel_mul_mm_id(
 
     device const uchar * src0 = src0s + i02*nb02;
 
-    // row indices
+    // row indices, stored in threadgroup memory just past the 8192-byte
+    // simdgroup tile region.
     threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192);
 
-    // TODO: parallelize this loop
-    int64_t _ne1 = 0;
-    for (ushort ii1 = 0; ii1 < nei1; ii1++) {
-        for (ushort ii0 = 0; ii0 < nei0; ii0++) {
-            int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
-            if (id == i02) {
-                //if (tiitg == 0) {
-                    rowids[_ne1] = ushort2(ii0, ii1);
-                //}
-                _ne1++;
-            }
+    // Parallelized rowids fan-out. Upstream ggml-metal-quantized.metal
+    // carries a "TODO: parallelize this loop" here and runs the scan
+    // serially in every thread of the threadgroup; for the typical MoE
+    // shape (num_experts=128, T=8) at large M this dominates the kernel
+    // runtime. Each thread now scans a stride-128 slice of the ids buffer,
+    // claims an output slot via an atomic counter, and writes its rowid in
+    // place. The downstream matmul reads rowids by index and writes into
+    // dst[jid[0], jid[1], :], so rowid order may be non-deterministic
+    // without affecting the output.
+    threadgroup atomic_uint rowids_count;
+    if (tiitg == 0) {
+        atomic_store_explicit(&rowids_count, 0u, memory_order_relaxed);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint scan_total = (uint)(nei0 * nei1);
+    for (uint idx = tiitg; idx < scan_total; idx += 128u) {
+        const ushort ii1 = (ushort)(idx / (uint)nei0);
+        const ushort ii0 = (ushort)(idx % (uint)nei0);
+        const int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
+        if (id == i02) {
+            const uint slot = atomic_fetch_add_explicit(&rowids_count, 1u, memory_order_relaxed);
+            rowids[slot] = ushort2(ii0, ii1);
         }
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
+    const int64_t _ne1 = (int64_t)atomic_load_explicit(&rowids_count, memory_order_relaxed);
 
     kernel_mul_mm_id_impl<block_q, nl, dequantize_func>(
         src0,
