@@ -46,6 +46,34 @@ __forceinline__ __device__ auto get_lse_tile(const Params &params, const int bid
         return local_tile(mLSE_slice, Shape<Int<kBlockM>>{}, make_coord(m_block));
 }
 
+template<int kBlockM, int kBlockN, typename Params, typename BlockInfoT>
+__forceinline__ __device__ void expand_mm_prefix_block_range(
+        const Params &params,
+        const int bidb,
+        const int m_block,
+        const BlockInfoT &binfo,
+        const int lower_bound,
+        const int upper_bound,
+        int &n_block_min,
+        int &n_block_max) {
+    if (params.mm_prefix_ranges == nullptr || params.max_mm_prefix_ranges <= 0) {
+        return;
+    }
+    const int q_start = m_block * kBlockM + binfo.actual_seqlen_k - binfo.actual_seqlen_q;
+    const int q_end = q_start + kBlockM;
+    const int *ranges = params.mm_prefix_ranges + bidb * params.mm_prefix_range_batch_stride;
+    for (int i = 0; i < params.max_mm_prefix_ranges; ++i) {
+        const int range_start = ranges[i * 2];
+        const int range_end = ranges[i * 2 + 1];
+        if (range_start < range_end && q_start < range_end && q_end > range_start) {
+            n_block_min = std::min(n_block_min, std::max(lower_bound, range_start / kBlockN));
+            n_block_max = std::max(
+                n_block_max,
+                std::min(upper_bound, cute::ceil_div(range_end, kBlockN)));
+        }
+    }
+}
+
 
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Is_local, bool Has_alibi, bool Is_even_MN, bool Is_even_K, bool Is_softcap, bool Return_softmax, typename Params>
 inline __device__ void compute_attn_1rowblock(const Params &params, const int bidb, const int bidh, const int m_block) {
@@ -80,7 +108,7 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     const BlockInfo</*Varlen=*/!Is_even_MN> binfo(params, bidb);
     if (m_block * kBlockM >= binfo.actual_seqlen_q) return;
 
-    const int n_block_min = !Is_local ? 0 : std::max(0, (m_block * kBlockM + binfo.actual_seqlen_k - binfo.actual_seqlen_q - params.window_size_left) / kBlockN);
+    int n_block_min = !Is_local ? 0 : std::max(0, (m_block * kBlockM + binfo.actual_seqlen_k - binfo.actual_seqlen_q - params.window_size_left) / kBlockN);
     int n_block_max = cute::ceil_div(binfo.actual_seqlen_k, kBlockN);
     if (Is_causal || Is_local) {
         n_block_max = std::min(n_block_max,
@@ -88,6 +116,11 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         // if (threadIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
         //     printf("m_block = %d, n_block_max = %d\n", m_block, n_block_max);
         // }
+    }
+    if (Is_causal || Is_local) {
+        expand_mm_prefix_block_range<kBlockM, kBlockN>(
+            params, bidb, m_block, binfo, 0, cute::ceil_div(binfo.actual_seqlen_k, kBlockN),
+            n_block_min, n_block_max);
     }
     // We exit early and write 0 to gO and gLSE. This also covers the case where actual_seqlen_k == 0.
     // Otherwise we might read OOB elements from gK and gV.
@@ -285,7 +318,10 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
     flash::Softmax<2 * size<1>(acc_o)> softmax;
 
     const float alibi_slope = !Has_alibi || params.alibi_slopes_ptr == nullptr ? 0.0f : reinterpret_cast<float *>(params.alibi_slopes_ptr)[bidb * params.alibi_slopes_batch_stride + bidh] / params.scale_softmax;
-    flash::Mask<Is_causal, Is_local, Has_alibi> mask(binfo.actual_seqlen_k, binfo.actual_seqlen_q, params.window_size_left, params.window_size_right, alibi_slope);
+    flash::Mask<Is_causal, Is_local, Has_alibi> mask(
+        binfo.actual_seqlen_k, binfo.actual_seqlen_q, params.window_size_left, params.window_size_right,
+        alibi_slope, params.mm_prefix_ranges, params.mm_prefix_range_batch_stride,
+        params.max_mm_prefix_ranges, bidb);
 
     // For performance reason, we separate out two kinds of iterations:
     // those that need masking on S, and those that don't.
@@ -526,13 +562,19 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     if (m_block * kBlockM >= binfo.actual_seqlen_q) return;
 
     const int n_blocks_per_split = ((params.seqlen_k + kBlockN - 1) / kBlockN + num_n_splits - 1) / num_n_splits;
-    const int n_block_min = !Is_local
+    int n_block_min = !Is_local
         ? n_split_idx * n_blocks_per_split
         : std::max(n_split_idx * n_blocks_per_split, (m_block * kBlockM + binfo.actual_seqlen_k - binfo.actual_seqlen_q - params.window_size_left) / kBlockN);
     int n_block_max = std::min(cute::ceil_div(binfo.actual_seqlen_k, kBlockN), (n_split_idx + 1) * n_blocks_per_split);
     if (Is_causal || Is_local) {
         n_block_max = std::min(n_block_max,
                                cute::ceil_div((m_block + 1) * kBlockM + binfo.actual_seqlen_k - binfo.actual_seqlen_q + params.window_size_right, kBlockN));
+    }
+    if (Is_causal || Is_local) {
+        expand_mm_prefix_block_range<kBlockM, kBlockN>(
+            params, bidb, m_block, binfo, n_split_idx * n_blocks_per_split,
+            std::min(cute::ceil_div(binfo.actual_seqlen_k, kBlockN), (n_split_idx + 1) * n_blocks_per_split),
+            n_block_min, n_block_max);
     }
     if (n_block_min >= n_block_max) {  // This also covers the case where n_block_max <= 0
         // We exit early and write 0 to gOaccum and -inf to gLSEaccum.
@@ -542,7 +584,10 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
             + m_block * kBlockM * params.o_row_stride + bidh * params.o_head_stride;
         const index_t row_offset_oaccum = (((n_split_idx * params.b + bidb) * params.h + bidh) * params.seqlen_q
             + m_block * kBlockM) * params.d_rounded;
-        const index_t row_offset_lseaccum = ((n_split_idx * params.b + bidb) * params.h + bidh) * params.seqlen_q + m_block * kBlockM;
+        const index_t row_offset_lseaccum = (Split || !params.unpadded_lse ?
+                ((n_split_idx * params.b + bidb) * params.h + bidh) * params.seqlen_q
+                : bidh * params.total_q + binfo.q_offset(params.seqlen_q, 1, bidb)
+            ) + m_block * kBlockM;
         Tensor gOaccum = make_tensor(make_gmem_ptr(reinterpret_cast<ElementO *>(Split ? params.oaccum_ptr : params.o_ptr) + (Split ? row_offset_oaccum : row_offset_o)),
                                       Shape<Int<kBlockM>, Int<kHeadDim>>{},
                                      make_stride(Split ? kHeadDim : params.o_row_stride, _1{}));
@@ -836,7 +881,10 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
     flash::Softmax<2 * size<1>(acc_o)> softmax;
 
     const float alibi_slope = !Has_alibi ? 0.0f : reinterpret_cast<float *>(params.alibi_slopes_ptr)[bidb * params.alibi_slopes_batch_stride + bidh] / params.scale_softmax;
-    flash::Mask<Is_causal, Is_local, Has_alibi> mask(binfo.actual_seqlen_k, binfo.actual_seqlen_q, params.window_size_left, params.window_size_right, alibi_slope);
+    flash::Mask<Is_causal, Is_local, Has_alibi> mask(
+        binfo.actual_seqlen_k, binfo.actual_seqlen_q, params.window_size_left, params.window_size_right,
+        alibi_slope, params.mm_prefix_ranges, params.mm_prefix_range_batch_stride,
+        params.max_mm_prefix_ranges, bidb);
 
     // For performance reason, we separate out two kinds of iterations:
     // those that need masking on S, and those that don't.
