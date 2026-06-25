@@ -7,7 +7,6 @@ use crate::quantized::utils::{make_qkx3_quants, make_qp_quants};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::{bf16, f16, slice::HalfFloatSliceExt};
-use zerocopy;
 
 // Default to QK_K 256 rather than 64.
 pub const QK_K: usize = 256;
@@ -2477,20 +2476,6 @@ pub fn matmul<T: GgmlType>(
         }
         Ok(())
     })
-}
-
-/// Copy a `Vec<T>` to `Vec<u8>`, consuming the input.
-#[allow(dead_code)]
-pub(crate) fn vec_to_bytes<T: Copy>(v: Vec<T>) -> Vec<u8> {
-    let len = v.len() * std::mem::size_of::<T>();
-    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len) }.to_vec()
-}
-
-/// Copy `&[u8]` bytes to `&[T]`.
-#[allow(dead_code)]
-pub(crate) fn bytes_to_slice<T: Copy>(bytes: &[u8]) -> &[T] {
-    let len = bytes.len() / std::mem::size_of::<T>();
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const T, len) }
 }
 
 /// Pack Q4K blocks into the 8-column interleaved format for 8 x GEMV
