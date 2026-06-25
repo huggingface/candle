@@ -4,7 +4,11 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{test_device, test_utils::to_vec3_round, Device, IndexOp, Result, Tensor};
+use candle::{
+    test_device,
+    test_utils::{to_vec2_round, to_vec3_round},
+    Device, IndexOp, Result, Tensor, Var, D,
+};
 
 fn softmax(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
@@ -193,6 +197,37 @@ fn softmax_numerical_stability() -> Result<()> {
     let xs = Tensor::new(&[1234f32, 0.], dev)?;
     let softmax = candle_nn::ops::softmax(&xs, 0)?;
     assert_eq!(softmax.to_vec1::<f32>()?, &[1f32, 0.]);
+    Ok(())
+}
+
+#[test]
+fn softmax_last_dim_backward() -> Result<()> {
+    let device = &Device::Cpu;
+    let data = [[1f32, 2., 3.], [2., 0., -1.]];
+    let xs = Var::new(&data, device)?;
+    let xs = xs.as_tensor();
+    let out = candle_nn::ops::softmax_last_dim(xs)?;
+    let loss = out.sqr()?.sum_all()?;
+    let grads = loss.backward()?;
+    let grad = grads
+        .get(xs)
+        .ok_or_else(|| candle::Error::Msg("no grad for softmax_last_dim input".into()))?;
+
+    let xs_ref = Var::new(&data, device)?;
+    let xs_ref = xs_ref.as_tensor();
+    let out_ref = candle_nn::ops::softmax(xs_ref, D::Minus1)?;
+    let loss_ref = out_ref.sqr()?.sum_all()?;
+    let grads_ref = loss_ref.backward()?;
+    let grad_ref = grads_ref
+        .get(xs_ref)
+        .ok_or_else(|| candle::Error::Msg("no grad for softmax input".into()))?;
+
+    let grad = to_vec2_round(grad, 4)?;
+    assert_eq!(
+        grad,
+        &[[-0.0757, -0.1301, 0.2058], [0.1974, -0.1399, -0.0575]]
+    );
+    assert_eq!(grad, to_vec2_round(grad_ref, 4)?);
     Ok(())
 }
 
