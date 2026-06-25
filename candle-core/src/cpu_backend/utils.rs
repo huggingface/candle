@@ -2,8 +2,101 @@
 use crate::backend::BackendStorage;
 use crate::nditer::NdIter;
 use crate::{Error, Layout, Result, WithDType};
+use std::sync::LazyLock;
 
 type C = super::CpuStorage;
+
+// Parallelize large CONTIGUOUS elementwise ops (residual adds, SwiGLU mul, SiLU,
+// scaling) across the barrier pool. candle's `binary_map`/`unary_map` are serial
+// for-loops; at high thread counts they become an Amdahl drag on prefill (the
+// matmuls scale ~Nx but these don't). This threads only the contiguous f32 case at
+// the op-dispatch point - each output range is independent so it is bit-identical
+// to the serial path. Default ON; CANDLE_PAR_ELEMWISE=0 forces serial (A/B knob).
+static PAR_ELEMWISE: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("CANDLE_PAR_ELEMWISE")
+        .map(|s| s != "0")
+        .unwrap_or(true)
+});
+// Below this element count the per-op pool fork-join isn't worth it (tiny tensors:
+// norm scales, biases). Tunable via CANDLE_PAR_ELEMWISE_MIN.
+static PAR_ELEMWISE_MIN: LazyLock<usize> = LazyLock::new(|| {
+    std::env::var("CANDLE_PAR_ELEMWISE_MIN")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16_384)
+});
+
+/// Parallel contiguous f32 UNARY op: `out[i] = f_vec(src)[i]` over the contiguous
+/// region `layout` views, split across the barrier pool. Returns `None` (caller
+/// falls back to the serial path) unless enabled, large enough, and contiguous.
+/// `f_vec` is a pure elementwise vectorized fn, so per-range application is exact.
+pub(crate) fn par_unary_vec_f32(
+    storage: &[f32],
+    layout: &Layout,
+    f_vec: fn(&[f32], &mut [f32]),
+) -> Option<Vec<f32>> {
+    if !*PAR_ELEMWISE {
+        return None;
+    }
+    let (start, end) = layout.contiguous_offsets()?;
+    let len = end - start;
+    if len < *PAR_ELEMWISE_MIN {
+        return None;
+    }
+    let src = &storage[start..end];
+    let mut out = vec![0f32; len];
+    par_range_apply(len, out.as_mut_ptr(), |s, e, dst| f_vec(&src[s..e], dst));
+    Some(out)
+}
+
+/// Parallel contiguous f32 BINARY op for the no-broadcast same-shape case (residual
+/// add, SwiGLU mul). Returns `None` (serial fallback) unless enabled, large, and
+/// both operands contiguous with equal length.
+pub(crate) fn par_binary_vec_f32(
+    lhs: &[f32],
+    rhs: &[f32],
+    lhs_l: &Layout,
+    rhs_l: &Layout,
+    f_vec: fn(&[f32], &[f32], &mut [f32]),
+) -> Option<Vec<f32>> {
+    if !*PAR_ELEMWISE {
+        return None;
+    }
+    let (ls, le) = lhs_l.contiguous_offsets()?;
+    let (rs, re) = rhs_l.contiguous_offsets()?;
+    let len = le - ls;
+    if len != re - rs || len < *PAR_ELEMWISE_MIN {
+        return None;
+    }
+    let l = &lhs[ls..le];
+    let r = &rhs[rs..re];
+    let mut out = vec![0f32; len];
+    par_range_apply(len, out.as_mut_ptr(), |s, e, dst| {
+        f_vec(&l[s..e], &r[s..e], dst)
+    });
+    Some(out)
+}
+
+/// Split `0..len` into one contiguous range per pool worker (+ main) and run
+/// `f(start, end, &mut out[start..end])` on each. `out_ptr` must point to `len`
+/// writable f32. The ranges are disjoint so the raw-pointer writes are sound.
+fn par_range_apply(len: usize, out_ptr: *mut f32, f: impl Fn(usize, usize, &mut [f32]) + Sync) {
+    struct P(*mut f32);
+    unsafe impl Sync for P {}
+    let op = P(out_ptr);
+    let pool = crate::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let per = len.div_ceil(n_total);
+    pool.execute(|tid| {
+        let p = &op;
+        let s = tid * per;
+        if s < len {
+            let e = len.min((tid + 1) * per);
+            let dst = unsafe { std::slice::from_raw_parts_mut(p.0.add(s), e - s) };
+            f(s, e, dst);
+        }
+    });
+}
 pub trait Map1 {
     fn f<T: WithDType>(&self, vs: &[T], layout: &Layout) -> Result<Vec<T>>;
 
@@ -359,5 +452,60 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
                 ys
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod par_elemwise_tests {
+    use super::*;
+    use crate::Shape;
+
+    // Parallel split MUST be byte-identical to applying f_vec over the whole range
+    // (each output element is independent). Large enough to exceed PAR_ELEMWISE_MIN.
+    #[test]
+    fn par_unary_matches_serial() {
+        let n = 100_003usize; // not a multiple of typical worker counts (remainder)
+        let src: Vec<f32> = (0..n).map(|i| (i as f32 * 0.001).sin()).collect();
+        let layout = Layout::contiguous(Shape::from_dims(&[n]));
+        fn fv(s: &[f32], d: &mut [f32]) {
+            for i in 0..s.len() {
+                d[i] = s[i] * s[i] - 0.5; // silu-like nonlinearity stand-in
+            }
+        }
+        let par = par_unary_vec_f32(&src, &layout, fv).expect("should parallelize");
+        let mut serial = vec![0f32; n];
+        fv(&src, &mut serial);
+        assert_eq!(par, serial);
+    }
+
+    #[test]
+    fn par_binary_matches_serial() {
+        let n = 100_003usize;
+        let a: Vec<f32> = (0..n).map(|i| i as f32 * 0.1).collect();
+        let b: Vec<f32> = (0..n).map(|i| (i as f32).cos()).collect();
+        let la = Layout::contiguous(Shape::from_dims(&[n]));
+        let lb = Layout::contiguous(Shape::from_dims(&[n]));
+        fn fv(x: &[f32], y: &[f32], d: &mut [f32]) {
+            for i in 0..x.len() {
+                d[i] = x[i] * y[i] + 1.0;
+            }
+        }
+        let par = par_binary_vec_f32(&a, &b, &la, &lb, fv).expect("should parallelize");
+        let mut serial = vec![0f32; n];
+        fv(&a, &b, &mut serial);
+        assert_eq!(par, serial);
+    }
+
+    // Below the threshold (and for non-contiguous layouts) it must fall back to
+    // serial (returns None) so tiny ops don't pay fork-join overhead.
+    #[test]
+    fn par_below_threshold_falls_back() {
+        let n = 100usize;
+        let src = vec![1f32; n];
+        let layout = Layout::contiguous(Shape::from_dims(&[n]));
+        fn fv(s: &[f32], d: &mut [f32]) {
+            d[..s.len()].copy_from_slice(s);
+        }
+        assert!(par_unary_vec_f32(&src, &layout, fv).is_none());
     }
 }
