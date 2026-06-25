@@ -1,12 +1,9 @@
-use crate::kernels::macros::ops;
 use crate::utils::{BufferOffset, EncoderProvider};
 use crate::{
     debug_group, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
     Output, Source,
 };
 use crate::{get_tile_size, linear_split};
-
-ops!(badd, bsub, bmul, bdiv, bminimum, bmaximum, eq, ne, le, lt, ge, gt);
 
 #[allow(clippy::too_many_arguments)]
 pub fn call_binary_contiguous<S: ToString>(
