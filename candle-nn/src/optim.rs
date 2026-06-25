@@ -79,6 +79,13 @@ impl SGD {
     }
 }
 
+/// Parameters for the AdamW optimizer
+/// # Members
+/// - lr: learning rate, default to 0.001
+/// - beta1,beta2: first/second moment decay rate, default to 0.9/0.999
+/// - eps: Numerical stability term to prevent div by zero,default to 1e-8
+/// - weight_decay: Weight decay coefficient, default to 0.01
+/// - amsgrad: Whether to use AMSGrad algorithm,default to false. See the <https://openreview.net/forum?id=ryQu7f-RZ>.
 #[derive(Clone, Debug)]
 pub struct ParamsAdamW {
     pub lr: f64,
@@ -86,6 +93,7 @@ pub struct ParamsAdamW {
     pub beta2: f64,
     pub eps: f64,
     pub weight_decay: f64,
+    pub amsgrad: bool,
 }
 
 impl Default for ParamsAdamW {
@@ -96,6 +104,7 @@ impl Default for ParamsAdamW {
             beta2: 0.999,
             eps: 1e-8,
             weight_decay: 0.01,
+            amsgrad: false,
         }
     }
 }
@@ -105,8 +114,12 @@ struct VarAdamW {
     var: Var,
     first_moment: Var,
     second_moment: Var,
+    max_second_moment: Option<Var>,
 }
 
+/// AdamW Optimizer
+///
+/// AdamW is a variant of the Adam optimizer that decouples `weight decay`
 #[derive(Debug)]
 pub struct AdamW {
     vars: Vec<VarAdamW>,
@@ -127,10 +140,16 @@ impl Optimizer for AdamW {
                 let device = var.device();
                 let first_moment = Var::zeros(shape, dtype, device)?;
                 let second_moment = Var::zeros(shape, dtype, device)?;
+                let max_second_moment = if params.amsgrad {
+                    Some(Var::zeros(shape, dtype, device)?)
+                } else {
+                    None
+                };
                 Ok(VarAdamW {
                     var,
                     first_moment,
                     second_moment,
+                    max_second_moment,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -148,7 +167,6 @@ impl Optimizer for AdamW {
     fn set_learning_rate(&mut self, lr: f64) {
         self.params.lr = lr
     }
-
     fn step(&mut self, grads: &candle::backprop::GradStore) -> Result<()> {
         self.step_t += 1;
         let lr = self.params.lr;
@@ -169,7 +187,21 @@ impl Optimizer for AdamW {
                 let next_m = ((m.as_tensor() * beta1)? + (g * (1.0 - beta1))?)?;
                 let next_v = ((v.as_tensor() * beta2)? + (g.sqr()? * (1.0 - beta2))?)?;
                 let m_hat = (&next_m * scale_m)?;
-                let v_hat = (&next_v * scale_v)?;
+                let v_hat = if self.params.amsgrad {
+                    let max_v = match &var.max_second_moment {
+                        Some(max_v) => {
+                            let new_max = next_v.maximum(max_v.as_tensor())?;
+                            max_v.set(&new_max)?;
+                            (&new_max * scale_v)?
+                        }
+                        None => {
+                            candle::bail!("AMSGrad enabled but max_second_moment not initialized")
+                        }
+                    };
+                    max_v
+                } else {
+                    (&next_v * scale_v)?
+                };
                 let next_theta = (theta.as_tensor() * (1f64 - lr_lambda))?;
                 let adjusted_grad = (m_hat / (v_hat.sqrt()? + self.params.eps)?)?;
                 let next_theta = (next_theta - (adjusted_grad * lr)?)?;
