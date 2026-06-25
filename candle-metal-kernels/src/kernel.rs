@@ -117,11 +117,11 @@ impl Kernels {
             Ok(lib.clone())
         } else {
             let lib = match source {
-                Source::Candle => device
-                    .new_library_with_data(CANDLE)
-                    .map_err(|e| MetalKernelError::LoadLibraryError(format!(
+                Source::Candle => device.new_library_with_data(CANDLE).map_err(|e| {
+                    MetalKernelError::LoadLibraryError(format!(
                         "Cannot load precompiled candle metal library: {e}"
-                    )))?,
+                    ))
+                })?,
                 source => {
                     let source_content = self.get_library_source(source);
                     let compile_options = get_compile_options();

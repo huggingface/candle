@@ -120,8 +120,10 @@ impl Device {
         let dispatch_data =
             unsafe { dispatch_data_create(buffer, data.len(), None, ptr::null_mut()) };
         assert!(!dispatch_data.is_null());
-        let result: Result<Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>, Retained<NSError>> =
-            unsafe { msg_send![self.as_ref(), newLibraryWithData: dispatch_data, error: _] };
+        let result: Result<
+            Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>,
+            Retained<NSError>,
+        > = unsafe { msg_send![self.as_ref(), newLibraryWithData: dispatch_data, error: _] };
         unsafe { dispatch_release(dispatch_data) };
         result
             .map(Library::new)
