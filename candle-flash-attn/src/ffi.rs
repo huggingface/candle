@@ -48,6 +48,17 @@ extern "C" {
         window_size_right: c_int,
 
         softcap: f32,
+
+        // PR-FA-2: split-KV dispatch surface. With `num_splits <= 1` and
+        // `force_split_kernel == 0` the dispatcher takes the dense path
+        // (existing behavior). The accumulator buffers (`softmax_lseaccum_ptr`,
+        // `oaccum_ptr`) must be fp32 and live on the same device — only
+        // dereferenced when `num_splits > 1` or `force_split_kernel != 0`.
+        // Allocation is the caller's responsibility (lib.rs / PR-FA-3).
+        num_splits: c_int,
+        softmax_lseaccum_ptr: *const c_void,
+        oaccum_ptr: *const c_void,
+        force_split_kernel: c_int,
     );
 
 }
