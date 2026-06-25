@@ -25,6 +25,10 @@ macro_rules! fail {
 pub struct DeviceId(usize);
 
 impl CudaDevice {
+    pub fn supports_bf16(&self) -> bool {
+        false
+    }
+
     pub fn new_with_stream(_: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
