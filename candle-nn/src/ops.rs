@@ -629,6 +629,45 @@ impl candle::CustomOp2 for RmsNorm {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
+
+    fn bwd(
+        &self,
+        arg1: &Tensor,
+        arg2: &Tensor,
+        _res: &Tensor,
+        grad_res: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>)> {
+        // y = x * alpha / rms, where rms = sqrt(sum(x^2) / n + eps)
+        // n = last dimension size
+        let n = arg1.dim(D::Minus1)? as f64;
+        let n_inv = 1.0 / n;
+        // rms = sqrt(sum(x^2) / n + eps)
+        let sum_x2 = arg1.sqr()?.sum_keepdim(D::Minus1)?;
+        let rms = ((sum_x2 * n_inv)? + self.eps as f64)?.sqrt()?;
+        // rms^2 = sum(x^2) / n + eps
+        let rms_sq = rms.sqr()?;
+
+        // grad_x:
+        // dy_i/dx_j = alpha_i / rms      if i == j
+        //           = -x_j * alpha_i * x_i / (rms^3 * n)   if i != j (through rms)
+        //
+        // Simplification:
+        // grad_x_i = (alpha_i / rms) * grad_i - (x_i * alpha_i) / (rms^3 * n) * sum_j(x_j * grad_j)
+        //
+        // More compactly:
+        // grad_x = alpha / rms * (grad - x * sum(x * grad * alpha) / (rms^2 * n))
+        let alpha_over_rms = arg2.broadcast_div(&rms)?;
+        let x_dot_grad_alpha = (arg1 * grad_res * arg2)?.sum_keepdim(D::Minus1)?;
+        let correction = (arg1 * &x_dot_grad_alpha / (rms_sq * n_inv)?)?;
+        let grad_x = alpha_over_rms.broadcast_mul(&(grad_res - correction)?)?;
+
+        // grad_alpha:
+        // y_i = x_i * alpha_i / rms
+        // dy_i/dalpha_i = x_i / rms
+        let grad_alpha = (arg1 * grad_res / rms)?.sum_keepdim(D::Minus1)?;
+
+        Ok((Some(grad_x), Some(grad_alpha)))
+    }
 }
 
 pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
@@ -654,7 +693,7 @@ pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
             alpha.shape()
         )
     }
-    xs.apply_op2_no_bwd(alpha, &RmsNorm { eps })
+    xs.apply_op2(alpha, RmsNorm { eps })
 }
 
 #[derive(Debug, Clone)]
