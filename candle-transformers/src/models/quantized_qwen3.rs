@@ -11,7 +11,7 @@ use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Storage, Tensor};
 use candle_nn::attention::cpu_flash::causal::causal_decode_f32_interleaved;
-use candle_nn::attention::{flash_attn, AttnMask};
+use candle_nn::attention::{flash_attn, is_flash_attn_disabled, AttnMask};
 use candle_nn::kv_cache::{ConcatKvCache, InterleavedKvCache, RawInterleavedKvCache};
 use candle_nn::{Activation, Embedding, Module};
 use std::io::{Read, Seek};
@@ -266,7 +266,7 @@ impl AttentionWeights {
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
         // TODO: b > 1 needs varlen CPU flash with interleaved cache support.
-        if x.device().is_cpu() && b == 1 {
+        if x.device().is_cpu() && b == 1 && !is_flash_attn_disabled() {
             let scale = 1.0 / (self.head_dim as f32).sqrt();
 
             if l == 1 && b == 1 && q.dtype() == DType::F32 {
@@ -353,25 +353,14 @@ impl AttentionWeights {
                 ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
             }
         } else {
-            // Standard matmul attention (no flash)
+            // GPU or non-CPU path: use unified attention dispatch
             let (k, v) = self.kv_cache.as_mut().unwrap().append(&k, &v)?;
 
             let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
             let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-            let scale = 1.0 / (self.head_dim as f64).sqrt();
-            let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-            if let Some(m) = attn_mask {
-                let scores_dtype = scores.dtype();
-                let mask = if m.dtype() != scores_dtype {
-                    m.to_dtype(scores_dtype)?
-                } else {
-                    m.clone()
-                };
-                scores = scores.broadcast_add(&mask)?;
-            }
-            let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-            let ctx = probs.matmul(&v)?;
+            let scale = 1.0 / (self.head_dim as f32).sqrt();
+            let ctx = candle_nn::attention::attention(&q, &k, &v, scale, attn_mask)?;
             let reshaped_ctx = ctx.transpose(1, 2)?.reshape((b, l, self.hidden_size))?;
             self.o_proj.forward(&reshaped_ctx)
         }
