@@ -2471,26 +2471,11 @@ pub fn matmul<T: GgmlType>(
     })
 }
 
-/// Reinterpret a `Vec<T>` as a `Vec<u8>` without copying, consuming the input.
-///
-/// `T: Copy` bound ensures no drop impl is skipped by `forget`.
-///
-/// `align_of::<T>() <= 4` invariant is verified at compile time. There is no
-/// architecture supported by rust that has < 4 as minimum alignment.
-/// This limit can be increased by calculating the architectures' minimum alignment
-/// at compile time like rust std does [here](https://github.com/rust-lang/rust/blob/f28ac764c36004fa6a6e098d15b4016a838c13c6/library/std/src/sys/alloc/mod.rs#L9)
+/// Copy a `Vec<T>` to `Vec<u8>`, consuming the input.
 #[allow(dead_code)]
-pub(crate) fn vec_to_bytes<T: Copy>(mut v: Vec<T>) -> Vec<u8> {
-    const { assert!(std::mem::align_of::<T>() <= 4) };
-
-    let ptr = v.as_mut_ptr() as *mut u8;
+pub(crate) fn vec_to_bytes<T: Copy>(v: Vec<T>) -> Vec<u8> {
     let len = v.len() * std::mem::size_of::<T>();
-    let cap = v.capacity() * std::mem::size_of::<T>();
-
-    // Prevent the original Vec from freeing the memory buffer
-    std::mem::forget(v);
-
-    unsafe { Vec::from_raw_parts(ptr, len, cap) }
+    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len) }.to_vec()
 }
 
 /// Pack Q4K blocks into the 8-column interleaved format for 8 x GEMV
