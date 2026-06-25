@@ -262,6 +262,86 @@ test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
 
+fn embedding_weight(device: &Device) -> Result<Tensor> {
+    let values = (0..(8 * 256))
+        .map(|i| {
+            let x = i as f32;
+            (x * 0.003).sin() * 0.5 + (x * 0.007).cos() * 0.25
+        })
+        .collect::<Vec<_>>();
+    Tensor::from_vec(values, (8, 256), device)
+}
+
+fn assert_embedding_close(dtype: GgmlDType, a: &Tensor, b: &Tensor, tol: f32) -> Result<()> {
+    let a = a.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+    let b = b.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+    for (idx, (a, b)) in a.iter().zip(b.iter()).enumerate() {
+        assert!(
+            (a - b).abs() <= tol,
+            "{dtype:?} embedding mismatch at {idx}: {a} != {b}"
+        );
+    }
+    Ok(())
+}
+
+fn run_quantized_embedding(device: &Device, dtype: GgmlDType, tol: f32) -> Result<()> {
+    let w = embedding_weight(device)?;
+    let ids = Tensor::from_vec(vec![3u32, 1, 3, 7], (2, 2), device)?;
+    let q = quantized::QTensor::quantize(&w, dtype)?;
+    let got = q.embedding(&ids)?;
+    let expected = q
+        .dequantize(device)?
+        .index_select(&ids.flatten_all()?, 0)?
+        .reshape((2, 2, 256))?;
+    assert_embedding_close(dtype, &got, &expected, tol)
+}
+
+#[test]
+fn quantized_embedding_cpu() -> Result<()> {
+    let device = Device::Cpu;
+    for dtype in [
+        GgmlDType::F32,
+        GgmlDType::F16,
+        GgmlDType::BF16,
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q8_1,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+        GgmlDType::Q8K,
+    ] {
+        run_quantized_embedding(&device, dtype, 1e-6)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn quantized_embedding_metal() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    for dtype in [
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+    ] {
+        run_quantized_embedding(&device, dtype, 1e-3)?;
+    }
+    Ok(())
+}
+
 fn quantize_q4_0(device: &Device) -> Result<()> {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
 
