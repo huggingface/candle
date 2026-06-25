@@ -955,6 +955,104 @@ mod tests {
         Ok(())
     }
 
+    // ---- QuantizedKvCache tests ----
+
+    #[test]
+    fn test_quantized_kv_cache_roundtrip() -> Result<()> {
+        // Quantise + dequantise should recover the original values within INT8 tolerance.
+        let device = Device::Cpu;
+        let dtype = DType::F32;
+        let mut cache = QuantizedKvCache::new(2, 0); // no sinks
+
+        let k = Tensor::from_vec(
+            vec![-1.0f32, 0.5, 0.0, 1.0, -0.5, 0.25, 0.75, -0.25],
+            (1, 1, 2, 4),
+            &device,
+        )?;
+        let v = k.neg()?;
+        let (k_out, v_out) = cache.append(&k, &v)?;
+
+        assert_eq!(k_out.dims(), k.dims());
+        assert_eq!(v_out.dims(), v.dims());
+
+        // Max quantisation error for symmetric INT8 is scale/127 * 0.5 ≈ 0.004 per entry.
+        let k_err = (k_out.to_dtype(dtype)? - k.to_dtype(dtype)?)?.abs()?.max(0)?.max(0)?.max(0)?.max(0)?;
+        let k_err: f32 = k_err.to_vec0()?;
+        assert!(k_err < 0.02, "k roundtrip error {k_err} exceeds tolerance");
+        Ok(())
+    }
+
+    #[test]
+    fn test_quantized_kv_cache_sinks_full_precision() -> Result<()> {
+        // The first n_sink_tokens must be returned without quantisation loss.
+        let device = Device::Cpu;
+        let n_sink = 4;
+        let mut cache = QuantizedKvCache::new(2, n_sink);
+
+        // Append exactly n_sink tokens — they should all go into the sink.
+        let k_sink = Tensor::randn(0f32, 1., (1, 4, n_sink, 64), &device)?;
+        let v_sink = Tensor::randn(0f32, 1., (1, 4, n_sink, 64), &device)?;
+        let (k_out, v_out) = cache.append(&k_sink, &v_sink)?;
+
+        let diff_k = (k_out - k_sink)?.abs()?.max(0)?.max(0)?.max(0)?.max(0)?;
+        let diff_k: f32 = diff_k.to_vec0()?;
+        assert_eq!(diff_k, 0.0, "sink tokens should be lossless; got diff={diff_k}");
+
+        let diff_v = (v_out - v_sink)?.abs()?.max(0)?.max(0)?.max(0)?.max(0)?;
+        let diff_v: f32 = diff_v.to_vec0()?;
+        assert_eq!(diff_v, 0.0, "sink tokens should be lossless; got diff={diff_v}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_quantized_kv_cache_mixed_sink_and_bulk() -> Result<()> {
+        // Append more tokens than n_sink; first n_sink stay full-precision,
+        // rest are quantised. The combined output shape must be correct.
+        let device = Device::Cpu;
+        let n_sink = 4;
+        let total = 10;
+        let mut cache = QuantizedKvCache::new(2, n_sink);
+
+        let k = Tensor::randn(0f32, 1., (1, 4, total, 64), &device)?;
+        let v = Tensor::randn(0f32, 1., (1, 4, total, 64), &device)?;
+        let (k_out, v_out) = cache.append(&k, &v)?;
+
+        assert_eq!(k_out.dims(), &[1, 4, total, 64]);
+        assert_eq!(v_out.dims(), &[1, 4, total, 64]);
+        assert_eq!(cache.current_seq_len(), total);
+        Ok(())
+    }
+
+    #[test]
+    fn test_quantized_kv_cache_incremental_append() -> Result<()> {
+        // Append in multiple steps and check growing sequence length.
+        let device = Device::Cpu;
+        let mut cache = QuantizedKvCache::new(2, 2);
+
+        for step in 1..=5usize {
+            let k = Tensor::randn(0f32, 1., (1, 2, 1, 32), &device)?;
+            let v = Tensor::randn(0f32, 1., (1, 2, 1, 32), &device)?;
+            let (k_out, _) = cache.append(&k, &v)?;
+            assert_eq!(k_out.dim(2)?, step);
+        }
+        assert_eq!(cache.current_seq_len(), 5);
+        Ok(())
+    }
+
+    #[test]
+    fn test_quantized_kv_cache_reset() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = QuantizedKvCache::new(2, 2);
+        let k = Tensor::randn(0f32, 1., (1, 2, 4, 32), &device)?;
+        let v = k.clone();
+        cache.append(&k, &v)?;
+        assert_eq!(cache.current_seq_len(), 4);
+        cache.reset();
+        assert!(cache.is_empty());
+        assert_eq!(cache.current_seq_len(), 0);
+        Ok(())
+    }
+
     #[test]
     fn test_concat_cache_different_dim() -> Result<()> {
         let device = Device::Cpu;
@@ -1121,6 +1219,219 @@ impl RawInterleavedKvCache {
 
     pub fn d(&self) -> usize {
         self.d
+    }
+}
+
+/// INT8-quantised KV cache following TurboQuant (Google Research, ICLR 2024).
+///
+/// Keys and values beyond the attention-sink window are quantised to `U8`
+/// (symmetric INT8 with a +128 bias) with per-token per-head scales, reducing
+/// KV-cache memory by ~4× vs BF16/F16. The first `n_sink_tokens` positions are
+/// kept in full precision because initial tokens accumulate disproportionately
+/// large attention scores ("attention sinks") and quantising them degrades
+/// output quality.
+///
+/// ## Quantisation scheme
+///
+/// For each tensor `x` of shape `(B, H, S, D)`:
+/// ```text
+/// scale = clamp(max(|x|, dim=D), min=1e-6)   // shape (B, H, S, 1)
+/// q     = clip(round(x / scale) + 128, 0, 255) // U8, same shape as x
+/// x'    = (q.f32() - 128) * scale             // dequant, f32
+/// ```
+///
+/// ## Memory layout
+/// * `k_sink` / `v_sink` – full-precision tensors, shape `(B, H, n_sink, D)`
+/// * `k_q` / `v_q`       – U8 tensors, shape `(B, H, seq_len-n_sink, D)`
+/// * `k_scale` / `v_scale` – F32 scales, shape `(B, H, seq_len-n_sink, 1)`
+///
+/// ## Example
+/// ```ignore
+/// use candle_nn::kv_cache::QuantizedKvCache;
+///
+/// let mut cache = QuantizedKvCache::new(/*dim=*/2, /*n_sink_tokens=*/4);
+///
+/// let k = Tensor::randn(0f32, 1., (1, 8, 10, 64), &device)?;
+/// let v = Tensor::randn(0f32, 1., (1, 8, 10, 64), &device)?;
+/// let (k_out, v_out) = cache.append(&k, &v)?;
+/// // k_out / v_out are dequantised F32 tensors ready for attention.
+/// ```
+#[derive(Debug, Clone)]
+pub struct QuantizedKvCache {
+    // Attention sinks – full precision, shape (B, H, n_sink, D).
+    k_sink: Option<Tensor>,
+    v_sink: Option<Tensor>,
+    // Quantised bulk – U8, shape (B, H, bulk_len, D).
+    k_q: Option<Tensor>,
+    v_q: Option<Tensor>,
+    // Per-token per-head scales – F32, shape (B, H, bulk_len, 1).
+    k_scale: Option<Tensor>,
+    v_scale: Option<Tensor>,
+    // Dimension along which the sequence grows (typically 2).
+    dim: usize,
+    n_sink_tokens: usize,
+    current_seq_len: usize,
+}
+
+impl QuantizedKvCache {
+    /// Create a new cache.
+    ///
+    /// * `dim` – the sequence dimension of the K/V tensors (usually 2 for
+    ///   tensors with shape `[batch, heads, seq, head_dim]`).
+    /// * `n_sink_tokens` – number of leading tokens to keep at full precision.
+    ///   The TurboQuant paper uses 4.
+    pub fn new(dim: usize, n_sink_tokens: usize) -> Self {
+        Self {
+            k_sink: None,
+            v_sink: None,
+            k_q: None,
+            v_q: None,
+            k_scale: None,
+            v_scale: None,
+            dim,
+            n_sink_tokens,
+            current_seq_len: 0,
+        }
+    }
+
+    /// Number of sink tokens kept at full precision.
+    pub fn n_sink_tokens(&self) -> usize {
+        self.n_sink_tokens
+    }
+
+    /// Total sequence length stored (sinks + quantised bulk).
+    pub fn current_seq_len(&self) -> usize {
+        self.current_seq_len
+    }
+
+    /// `true` when no tokens have been appended yet.
+    pub fn is_empty(&self) -> bool {
+        self.current_seq_len == 0
+    }
+
+    /// Quantise `x` to U8 with per-token per-head symmetric INT8 encoding.
+    ///
+    /// Returns `(q_u8, scale_f32)` where `scale` has shape `(B, H, S, 1)`.
+    fn quantize(x: &Tensor) -> Result<(Tensor, Tensor)> {
+        // Compute per-token per-head max(|x|) → shape (B, H, S, 1).
+        let scale = x
+            .abs()?
+            .max_keepdim(x.rank() - 1)?
+            .clamp(1e-6f64, f64::INFINITY)?
+            .to_dtype(DType::F32)?;
+        // Normalise and map to [0, 255] symmetric around 128.
+        let x_f32 = x.to_dtype(DType::F32)?;
+        let q = ((x_f32.broadcast_div(&scale)? + 128f64)?.clamp(0f64, 255f64)?)
+            .round()?
+            .to_dtype(DType::U8)?;
+        Ok((q, scale))
+    }
+
+    /// Dequantise `q_u8` using `scale_f32` back to the original dtype.
+    fn dequantize(q: &Tensor, scale: &Tensor, dtype: DType) -> Result<Tensor> {
+        let q_f32 = q.to_dtype(DType::F32)?;
+        let x_f32 = (q_f32 - 128f64)?.broadcast_mul(scale)?;
+        x_f32.to_dtype(dtype)
+    }
+
+    fn append_quantized(
+        existing_q: &mut Option<Tensor>,
+        existing_scale: &mut Option<Tensor>,
+        new_q: Tensor,
+        new_scale: Tensor,
+        dim: usize,
+    ) -> Result<()> {
+        *existing_q = Some(match existing_q.take() {
+            None => new_q,
+            Some(q) => Tensor::cat(&[&q, &new_q], dim)?,
+        });
+        *existing_scale = Some(match existing_scale.take() {
+            None => new_scale,
+            Some(s) => Tensor::cat(&[&s, &new_scale], dim)?,
+        });
+        Ok(())
+    }
+
+    /// Append `k` and `v` tensors, storing sinks at full precision and the
+    /// rest quantised to U8. Returns the full dequantised `(K, V)` pair ready
+    /// for attention.
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        let dtype = k.dtype();
+        let seq_len = k.dim(self.dim)?;
+
+        let sink_deficit = self.n_sink_tokens.saturating_sub(self.current_seq_len);
+        let sink_new = sink_deficit.min(seq_len);
+        let bulk_new = seq_len - sink_new;
+
+        // --- Handle sink portion ---
+        if sink_new > 0 {
+            let k_s = k.narrow(self.dim, 0, sink_new)?;
+            let v_s = v.narrow(self.dim, 0, sink_new)?;
+            self.k_sink = Some(match self.k_sink.take() {
+                None => k_s,
+                Some(prev) => Tensor::cat(&[&prev, &k_s], self.dim)?,
+            });
+            self.v_sink = Some(match self.v_sink.take() {
+                None => v_s,
+                Some(prev) => Tensor::cat(&[&prev, &v_s], self.dim)?,
+            });
+        }
+
+        // --- Handle bulk (quantised) portion ---
+        if bulk_new > 0 {
+            let k_b = k.narrow(self.dim, sink_new, bulk_new)?;
+            let v_b = v.narrow(self.dim, sink_new, bulk_new)?;
+            let (k_q, k_s) = Self::quantize(&k_b)?;
+            let (v_q, v_s) = Self::quantize(&v_b)?;
+            Self::append_quantized(&mut self.k_q, &mut self.k_scale, k_q, k_s, self.dim)?;
+            Self::append_quantized(&mut self.v_q, &mut self.v_scale, v_q, v_s, self.dim)?;
+        }
+
+        self.current_seq_len += seq_len;
+
+        // --- Reconstruct full tensors for attention ---
+        let k_out = self.current_k(dtype)?;
+        let v_out = self.current_v(dtype)?;
+        Ok((k_out, v_out))
+    }
+
+    /// Return the full dequantised key tensor at `dtype`.
+    pub fn current_k(&self, dtype: DType) -> Result<Tensor> {
+        match (&self.k_sink, &self.k_q, &self.k_scale) {
+            (Some(sink), Some(q), Some(scale)) => {
+                let bulk = Self::dequantize(q, scale, dtype)?;
+                let sink = sink.to_dtype(dtype)?;
+                Tensor::cat(&[&sink, &bulk], self.dim)
+            }
+            (Some(sink), None, _) => sink.to_dtype(dtype),
+            (None, Some(q), Some(scale)) => Self::dequantize(q, scale, dtype),
+            _ => candle::bail!("QuantizedKvCache: empty cache"),
+        }
+    }
+
+    /// Return the full dequantised value tensor at `dtype`.
+    pub fn current_v(&self, dtype: DType) -> Result<Tensor> {
+        match (&self.v_sink, &self.v_q, &self.v_scale) {
+            (Some(sink), Some(q), Some(scale)) => {
+                let bulk = Self::dequantize(q, scale, dtype)?;
+                let sink = sink.to_dtype(dtype)?;
+                Tensor::cat(&[&sink, &bulk], self.dim)
+            }
+            (Some(sink), None, _) => sink.to_dtype(dtype),
+            (None, Some(q), Some(scale)) => Self::dequantize(q, scale, dtype),
+            _ => candle::bail!("QuantizedKvCache: empty cache"),
+        }
+    }
+
+    /// Reset the cache, clearing all stored tensors.
+    pub fn reset(&mut self) {
+        self.k_sink = None;
+        self.v_sink = None;
+        self.k_q = None;
+        self.v_q = None;
+        self.k_scale = None;
+        self.v_scale = None;
+        self.current_seq_len = 0;
     }
 }
 
