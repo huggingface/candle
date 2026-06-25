@@ -62,6 +62,16 @@ impl QCudaStorage {
         0
     }
 
+    pub fn embedding(
+        &self,
+        _rows: usize,
+        _hidden: usize,
+        _ids: &CudaStorage,
+        _ids_l: &crate::Layout,
+    ) -> Result<CudaStorage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub fn fwd(
         &self,
         _self_shape: &crate::Shape,

@@ -1,6 +1,6 @@
 use super::{GgmlDType, QStorage};
 use crate::backend::BackendStorage;
-use crate::{DType, MetalDevice, MetalStorage, Result, Shape, D};
+use crate::{DType, Layout, MetalDevice, MetalStorage, Result, Shape, D};
 use candle_metal_kernels::metal::Buffer;
 use std::sync::Arc;
 
@@ -219,6 +219,64 @@ impl QMetalStorage {
 
     pub fn storage_size_in_bytes(&self) -> usize {
         self.buffer.length()
+    }
+
+    pub fn embedding(
+        &self,
+        rows: usize,
+        hidden: usize,
+        ids: &MetalStorage,
+        ids_l: &Layout,
+    ) -> Result<MetalStorage> {
+        use crate::MetalError;
+
+        if ids.dtype() != DType::U32 {
+            crate::bail!("quantized embedding expects u32 ids, got {:?}", ids.dtype())
+        }
+        if !ids_l.is_contiguous() {
+            crate::bail!("quantized embedding requires contiguous ids")
+        }
+        if !hidden.is_multiple_of(self.dtype.block_size()) {
+            crate::bail!(
+                "quantized embedding hidden size {hidden} is not divisible by block size {}",
+                self.dtype.block_size()
+            )
+        }
+        let expected_size = rows * hidden * self.dtype.type_size() / self.dtype.block_size();
+        if self.storage_size_in_bytes() != expected_size {
+            crate::bail!(
+                "quantized tensor has {} bytes, expected {expected_size}",
+                self.storage_size_in_bytes()
+            )
+        }
+        let ids_len = ids_l.shape().elem_count();
+        let device = self.device.clone();
+        let dst = device
+            .new_buffer_builder()
+            .with_size_for(ids_len * hidden, DType::F32)
+            .with_label("qembedding")
+            .build()?;
+        let encoder = device.command_encoder()?;
+        candle_metal_kernels::call_quantized_get_rows(
+            device.device(),
+            &encoder,
+            device.kernels(),
+            self.dtype.into(),
+            hidden,
+            hidden * self.dtype.type_size() / self.dtype.block_size(),
+            ids_len,
+            &self.buffer,
+            ids.buffer(),
+            ids_l.start_offset() * DType::U32.size_in_bytes(),
+            &dst,
+        )
+        .map_err(MetalError::from)?;
+        Ok(MetalStorage::new(
+            dst,
+            device.clone(),
+            ids_len * hidden,
+            DType::F32,
+        ))
     }
 
     fn fwd_mv(
