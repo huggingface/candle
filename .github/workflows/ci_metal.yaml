@@ -1,0 +1,36 @@
+name: CI / metal
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_ref:
+        description: 'Branch/tag/SHA to checkout and test (defaults to the dispatched ref)'
+        required: false
+        type: string
+  pull_request:
+
+jobs:
+  test-metal:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+    # GitHub-hosted Apple Silicon runner (free for public repos), exposes a
+    # real Metal GPU. Only runs for same-repo PRs / manual dispatch.
+    runs-on: macos-14
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
+    env:
+      # Turn a missing Metal device into a hard failure so a green run
+      # guarantees the Metal path actually executed (see the metal tests).
+      CANDLE_METAL_REQUIRED: 1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.test_ref || github.ref }}
+      - name: Remove cargo config (macOS ring crate fix)
+        run: rm -f .cargo/config.toml
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test (metal) - paged attention
+        run: cargo test -p candle-nn --features metal --test paged_attention -- --nocapture
