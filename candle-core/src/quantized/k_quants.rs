@@ -2486,21 +2486,26 @@ pub(crate) fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<BlockQ4Kx8> {
     let k_blocks = blocks.len() / n;
     let n_groups = n / 8;
     let count = n_groups * k_blocks;
-    let mut out: Vec<BlockQ4Kx8> = Vec::with_capacity(count);
-    let out_ptr = out.as_mut_ptr();
+    let mut packed: Vec<BlockQ4Kx8> = Vec::with_capacity(count);
     for g in 0..n_groups {
         for b in 0..k_blocks {
-            let dst = unsafe { &mut *out_ptr.add(g * k_blocks + b) };
+            let mut p = BlockQ4Kx8 {
+                d: [f16::ZERO; 8],
+                dmin: [f16::ZERO; 8],
+                scales: [0; 96],
+                qs: [0; 1024],
+            };
+
             let src: [&BlockQ4K; 8] = std::array::from_fn(|i| &blocks[(g * 8 + i) * k_blocks + b]);
             for (i, s) in src.iter().enumerate() {
-                dst.d[i] = s.d;
-                dst.dmin[i] = s.dmin;
+                p.d[i] = s.d;
+                p.dmin[i] = s.dmin;
             }
             // Interleave nibbles 8 bytes at a time.
             for i in 0..128usize {
                 let col = i % 8;
                 let off = (i / 8) * 8;
-                dst.qs[i * 8..i * 8 + 8].copy_from_slice(&src[col].qs[off..off + 8]);
+                p.qs[i * 8..i * 8 + 8].copy_from_slice(&src[col].qs[off..off + 8]);
             }
             // First 48 bytes of scales: lo-nibble scales[0..3] and mins[0..3] for all 8 cols.
             for i in 0..4usize {
@@ -2511,18 +2516,18 @@ pub(crate) fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<BlockQ4Kx8> {
                     m[j] = src[j].scales[i + 4] & 63;
                 }
                 let b12 = i * 12;
-                dst.scales[b12] = (s[0] & 63) + ((s[4] & 48) << 2);
-                dst.scales[b12 + 1] = (s[1] & 63) + ((s[5] & 48) << 2);
-                dst.scales[b12 + 2] = (s[2] & 63) + ((s[6] & 48) << 2);
-                dst.scales[b12 + 3] = (s[3] & 63) + ((s[7] & 48) << 2);
-                dst.scales[b12 + 4] = (m[0] & 63) + ((m[4] & 48) << 2);
-                dst.scales[b12 + 5] = (m[1] & 63) + ((m[5] & 48) << 2);
-                dst.scales[b12 + 6] = (m[2] & 63) + ((m[6] & 48) << 2);
-                dst.scales[b12 + 7] = (m[3] & 63) + ((m[7] & 48) << 2);
-                dst.scales[b12 + 8] = (s[4] & 15) + ((m[4] & 15) << 4);
-                dst.scales[b12 + 9] = (s[5] & 15) + ((m[5] & 15) << 4);
-                dst.scales[b12 + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
-                dst.scales[b12 + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
+                p.scales[b12] = (s[0] & 63) + ((s[4] & 48) << 2);
+                p.scales[b12 + 1] = (s[1] & 63) + ((s[5] & 48) << 2);
+                p.scales[b12 + 2] = (s[2] & 63) + ((s[6] & 48) << 2);
+                p.scales[b12 + 3] = (s[3] & 63) + ((s[7] & 48) << 2);
+                p.scales[b12 + 4] = (m[0] & 63) + ((m[4] & 48) << 2);
+                p.scales[b12 + 5] = (m[1] & 63) + ((m[5] & 48) << 2);
+                p.scales[b12 + 6] = (m[2] & 63) + ((m[6] & 48) << 2);
+                p.scales[b12 + 7] = (m[3] & 63) + ((m[7] & 48) << 2);
+                p.scales[b12 + 8] = (s[4] & 15) + ((m[4] & 15) << 4);
+                p.scales[b12 + 9] = (s[5] & 15) + ((m[5] & 15) << 4);
+                p.scales[b12 + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
+                p.scales[b12 + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
             }
             // Last 48 bytes of scales: hi-nibble scales[4..7] and mins[4..7] for all 8 cols.
             for i in 0..4usize {
@@ -2534,24 +2539,24 @@ pub(crate) fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<BlockQ4Kx8> {
                         ((src[j].scales[i + 4] & 192) >> 2) | ((src[j].scales[i + 8] & 240) >> 4);
                 }
                 let b12 = i * 12 + 48;
-                dst.scales[b12] = (s[0] & 63) + ((s[4] & 48) << 2);
-                dst.scales[b12 + 1] = (s[1] & 63) + ((s[5] & 48) << 2);
-                dst.scales[b12 + 2] = (s[2] & 63) + ((s[6] & 48) << 2);
-                dst.scales[b12 + 3] = (s[3] & 63) + ((s[7] & 48) << 2);
-                dst.scales[b12 + 4] = (m[0] & 63) + ((m[4] & 48) << 2);
-                dst.scales[b12 + 5] = (m[1] & 63) + ((m[5] & 48) << 2);
-                dst.scales[b12 + 6] = (m[2] & 63) + ((m[6] & 48) << 2);
-                dst.scales[b12 + 7] = (m[3] & 63) + ((m[7] & 48) << 2);
-                dst.scales[b12 + 8] = (s[4] & 15) + ((m[4] & 15) << 4);
-                dst.scales[b12 + 9] = (s[5] & 15) + ((m[5] & 15) << 4);
-                dst.scales[b12 + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
-                dst.scales[b12 + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
+                p.scales[b12] = (s[0] & 63) + ((s[4] & 48) << 2);
+                p.scales[b12 + 1] = (s[1] & 63) + ((s[5] & 48) << 2);
+                p.scales[b12 + 2] = (s[2] & 63) + ((s[6] & 48) << 2);
+                p.scales[b12 + 3] = (s[3] & 63) + ((s[7] & 48) << 2);
+                p.scales[b12 + 4] = (m[0] & 63) + ((m[4] & 48) << 2);
+                p.scales[b12 + 5] = (m[1] & 63) + ((m[5] & 48) << 2);
+                p.scales[b12 + 6] = (m[2] & 63) + ((m[6] & 48) << 2);
+                p.scales[b12 + 7] = (m[3] & 63) + ((m[7] & 48) << 2);
+                p.scales[b12 + 8] = (s[4] & 15) + ((m[4] & 15) << 4);
+                p.scales[b12 + 9] = (s[5] & 15) + ((m[5] & 15) << 4);
+                p.scales[b12 + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
+                p.scales[b12 + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
             }
+
+            packed.push(p);
         }
     }
-    // SAFETY: all `count` elements were fully initialized in the loop above.
-    unsafe { out.set_len(count) };
-    out
+    packed
 }
 
 /// Q4K matmul with 8-column `BlockQ4Kx8` interleaved layout.
