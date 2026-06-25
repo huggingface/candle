@@ -15,8 +15,9 @@ jobs:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
     # GitHub-hosted Apple Silicon runner (free for public repos), exposes a
-    # real Metal GPU. Only runs for same-repo PRs / manual dispatch.
-    runs-on: macos-14
+    # real Metal GPU. macOS 15 is required: candle's Metal backend uses the
+    # MTLResidencySet API (Metal 3.2), which is absent on macos-14.
+    runs-on: macos-15
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     env:
       # Turn a missing Metal device into a hard failure so a green run
