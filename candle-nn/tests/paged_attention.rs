@@ -330,20 +330,31 @@ fn block_allocator_pools_blocks() {
 // ------------------------------------------------------------------------
 // Metal path. Mirrors the CPU cases on an actual Metal device and adds a
 // Metal-vs-CPU consistency check. Compiled out unless the `metal` feature
-// is enabled, and skipped gracefully if no Metal device is present.
+// is enabled. By default it skips gracefully when no Metal device is
+// present (e.g. CPU-only dev machines); set `CANDLE_METAL_REQUIRED=1` (as
+// the macOS CI does) to turn a missing device into a hard failure so a
+// green run actually means the Metal path executed.
 // ------------------------------------------------------------------------
 #[cfg(feature = "metal")]
 mod metal {
     use super::*;
 
     fn metal_device() -> Option<Device> {
-        Device::new_metal(0).ok()
+        match Device::new_metal(0) {
+            Ok(dev) => Some(dev),
+            Err(e) => {
+                if std::env::var("CANDLE_METAL_REQUIRED").is_ok() {
+                    panic!("CANDLE_METAL_REQUIRED is set but no Metal device is available: {e}");
+                }
+                eprintln!("skipping: no Metal device ({e})");
+                None
+            }
+        }
     }
 
     #[test]
     fn paged_matches_dense_metal() -> Result<()> {
         let Some(dev) = metal_device() else {
-            eprintln!("skipping: no Metal device");
             return Ok(());
         };
         run_case_on(&dev, 4, 1, 8, 4, &[4, 7, 1, 16])?;
