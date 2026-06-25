@@ -7226,3 +7226,165 @@ fn test_one_hot() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_dequantize_linear() -> Result<()> {
+    // Test based on: https://github.com/onnx/onnx/blob/main/docs/Operators.md#dequantizelinear
+    {
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "DequantizeLinear".to_string(),
+                attribute: vec![],
+                input: vec![
+                    "x".to_string(),
+                    "scale".to_string(),
+                    "zero_point".to_string(),
+                ],
+                output: vec!["y".to_string()],
+                name: "test_dequantize_linear_axis".to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: "y".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+
+        let x = Tensor::from_vec(
+            vec![
+                3u8, 89, 34, 200, 74, 59, 5, 24, 24, 87, 32, 13, 245, 99, 4, 142, 121, 102,
+            ],
+            (1, 3, 3, 2),
+            &Device::Cpu,
+        )?;
+        let scale = Tensor::from_vec(vec![2.0f32, 4.0, 5.0], (3,), &Device::Cpu)?;
+        let zero_point = Tensor::from_vec(vec![84u8, 24, 196], (3,), &Device::Cpu)?;
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert("x".to_string(), x);
+        inputs.insert("scale".to_string(), scale);
+        inputs.insert("zero_point".to_string(), zero_point);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let y = eval.get("y").unwrap();
+
+        let expected = vec![
+            -162.0f32, 10.0, -100.0, 232.0, -20.0, -50.0, -76.0, 0.0, 0.0, 252.0, 32.0, -44.0,
+            245.0, -485.0, -960.0, -270.0, -375.0, -470.0,
+        ];
+
+        assert_eq!(y.flatten_all()?.to_vec1::<f32>()?, expected);
+        assert_eq!(y.dims(), &[1, 3, 3, 2]);
+    }
+    {
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "DequantizeLinear".to_string(),
+                attribute: vec![
+                    AttributeProto {
+                        name: "axis".to_string(),
+                        r#type: AttributeType::Int.into(),
+                        i: 1,
+                        ..Default::default()
+                    },
+                    AttributeProto {
+                        name: "block_size".to_string(),
+                        r#type: AttributeType::Int.into(),
+                        i: 2,
+                        ..Default::default()
+                    },
+                ],
+                input: vec![
+                    "x".to_string(),
+                    "scale".to_string(),
+                    "zero_point".to_string(),
+                ],
+                output: vec!["y".to_string()],
+                name: "test_dequantize_linear_blocked".to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: "y".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+
+        let x = Tensor::from_vec(
+            vec![
+                3u8, 89, 34, 200, 74, 59, 5, 24, 24, 87, 32, 13, 5, 12, 12, 33, 65, 42, 245, 99, 4,
+                142, 121, 102,
+            ],
+            (1, 4, 3, 2),
+            &Device::Cpu,
+        )?;
+        let scale = Tensor::from_vec(
+            vec![
+                3.0f32, 2.0, 4.0, 1.0, 2.0, 2.0, 5.0, 2.0, 4.0, 3.0, 5.0, 2.0,
+            ],
+            (1, 2, 3, 2),
+            &Device::Cpu,
+        )?;
+        let zero_point = Tensor::from_vec(
+            vec![1u8, 0, 0, 1, 2, 20, 3, 2, 4, 3, 15, 2],
+            (1, 2, 3, 2),
+            &Device::Cpu,
+        )?;
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert("x".to_string(), x);
+        inputs.insert("scale".to_string(), scale);
+        inputs.insert("zero_point".to_string(), zero_point);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let y = eval.get("y").unwrap();
+
+        let expected = vec![
+            6.0f32, 178.0, 136.0, 199.0, 144.0, 78.0, 12.0, 48.0, 96.0, 86.0, 60.0, -14.0, 10.0,
+            20.0, 32.0, 90.0, 250.0, 80.0, 1210.0, 194.0, 0.0, 417.0, 530.0, 200.0,
+        ];
+
+        assert_eq!(y.flatten_all()?.to_vec1::<f32>()?, expected);
+        assert_eq!(y.dims(), &[1, 4, 3, 2]);
+    }
+    {
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "DequantizeLinear".to_string(),
+                input: vec![
+                    "x".to_string(),
+                    "scale".to_string(),
+                    "zero_point".to_string(),
+                ],
+                output: vec!["y".to_string()],
+                name: "test_dequantize_linear_dequantizelinear".to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: "y".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+
+        let x = Tensor::from_vec(vec![0u8, 3, 128, 255], (4,), &Device::Cpu)?;
+        let scale = Tensor::new(2.0f32, &Device::Cpu)?;
+        let zero_point = Tensor::new(128u8, &Device::Cpu)?;
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert("x".to_string(), x);
+        inputs.insert("scale".to_string(), scale);
+        inputs.insert("zero_point".to_string(), zero_point);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let y = eval.get("y").unwrap();
+
+        let expected = vec![-256.0f32, -250.0, 0.0, 254.0];
+
+        assert_eq!(y.to_vec1::<f32>()?, expected);
+        assert_eq!(y.dims(), &[4]);
+    }
+
+    Ok(())
+}

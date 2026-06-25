@@ -2547,6 +2547,139 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
+            // https://onnx.ai/onnx/operators/onnx__DequantizeLinear.html
+            "DequantizeLinear" => {
+                let x = get(&node.input[0])?;
+                let x_dt = x.dtype();
+                match x_dt {
+                    DType::U8 => {}
+                    x_dt => bail!("unsupported dtype {x_dt:?} for DequantizeLinear"),
+                }
+                let scale = get(&node.input[1])?;
+                // local reimplementation of 'to_scalar_flexible()' function - as function would cast scale to one fixed dtype, this allows scale to have original dtype
+                let scale = if scale.rank() == 1 && scale.elem_count() == 1 {
+                    scale.reshape(())?
+                } else {
+                    scale.clone()
+                };
+                let scale_dt = scale.dtype();
+                match scale_dt {
+                    DType::F16 | DType::F32 => {}
+                    scale_dt => bail!("unsupported dtype {scale_dt:?} for DequantizeLinear"),
+                }
+
+                let zero_point = if node.input.len() > 2 && !node.input[2].is_empty() {
+                    get(&node.input[2])?
+                } else {
+                    // onnx docs: optional - default: 0, must match 'scale' shape, dtype as 'x'
+                    &Tensor::zeros(scale.shape(), x.dtype(), scale.device())?
+                };
+                let zero_point = if zero_point.rank() == 1 && zero_point.elem_count() == 1 {
+                    zero_point.reshape(())?
+                } else {
+                    zero_point.clone()
+                };
+
+                let r = x.rank() as i64;
+
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1);
+                let axis = if scale.rank() == 0 {
+                    0
+                } else {
+                    x.normalize_axis(axis)?
+                };
+
+                let block_size = get_attr_opt::<i64>(node, "block_size")?
+                    .copied()
+                    .unwrap_or(0);
+                if block_size < 0 {
+                    bail!("the block size {} must be a positive integer.", block_size)
+                } // onnx docs: block size is a positive integer
+
+                let dt = get_attr_opt::<i64>(node, "output_dtype")?
+                    .copied()
+                    .unwrap_or(0);
+                let out_dtype = if dt != 0 {
+                    match DataType::try_from(dt as i32) {
+                        Ok(dt) => match dtype(dt) {
+                            Some(DType::U8 | DType::U32 | DType::I64 | DType::F64) => {
+                                // onnx docs: tensor(bfloat16), tensor(float), tensor(float16) - type of the output ‘y’
+                                bail!(
+                                    "unsupported 'dtype' value {dt:?}, only floats-like are allowed, for {}",
+                                    node.name
+                                )
+                            }
+                            Some(dt) => dt,
+                            None => bail!(
+                                // cast from Dtype to candle DType is not possible
+                                "unsupported by candle output_dtype {:?} for DequantizeLinear",
+                                dt
+                            ),
+                        },
+                        Err(_) => bail!("invalid output_dtype attribute integer: {}", dt),
+                    }
+                } else {
+                    scale_dt
+                }; // onnx docs: output type is specified by the output_dtype attribute or, in its absence, the type of x_scale
+
+                let x = x.to_dtype(out_dtype)?;
+                let mut zero_point = zero_point.to_dtype(out_dtype)?;
+                let mut scale = scale.to_dtype(out_dtype)?;
+
+                (zero_point, scale) = match scale.rank() {
+                    // linear dequantization
+                    0 => (zero_point, scale),
+                    // axis dequantization
+                    1 => {
+                        let x_shape = x.dims();
+                        let mut broadcast_shape = vec![1usize; r as usize];
+                        broadcast_shape[axis] = x_shape[axis]; // onnx docs: all values apart from 'axis' ax are masked with 1
+
+                        scale = scale.reshape(broadcast_shape.clone())?;
+                        zero_point = zero_point.reshape(broadcast_shape)?;
+                        (zero_point, scale)
+                    }
+                    _ => {
+                        if block_size == 0 {
+                            bail!(
+                                "block_size must be > 0 for blocked DequantizeLinear in {}",
+                                node.name
+                            );
+                        }
+
+                        let repeats = block_size as usize; // how many scale repeats to perform
+                        let slices: Vec<Tensor> = (0..scale.dim(axis)?)
+                            .map(|i| {
+                                let slice = scale.narrow(axis, i, 1)?;
+                                slice.repeat(
+                                    //defines along which axis perform scaling 'repeats' times, rest is scaled '1' time
+                                    (0..scale.rank())
+                                        .map(|d| if d == axis { repeats } else { 1 })
+                                        .collect::<Vec<_>>(),
+                                )
+                            })
+                            .collect::<Result<_>>()?;
+                        scale = Tensor::cat(&slices, axis)?;
+
+                        let slices: Vec<Tensor> = (0..zero_point.dim(axis)?)
+                            .map(|i| {
+                                let slice = zero_point.narrow(axis, i, 1)?;
+                                slice.repeat(
+                                    (0..zero_point.rank())
+                                        .map(|d| if d == axis { repeats } else { 1 })
+                                        .collect::<Vec<_>>(),
+                                )
+                            })
+                            .collect::<Result<_>>()?;
+                        zero_point = Tensor::cat(&slices, axis)?;
+
+                        (zero_point, scale)
+                    }
+                };
+
+                let output = x.broadcast_sub(&zero_point)?.broadcast_mul(&scale)?;
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
