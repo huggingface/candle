@@ -7,6 +7,7 @@ use crate::quantized::utils::{make_qkx3_quants, make_qp_quants};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::{bf16, f16, slice::HalfFloatSliceExt};
+use zerocopy;
 
 // Default to QK_K 256 rather than 64.
 pub const QK_K: usize = 256;
@@ -192,7 +193,14 @@ const _: () = assert!(4 + QK_K + QK_K / 16 * 2 == std::mem::size_of::<BlockQ8K>(
 /// 8 Q4K blocks packed in interleaved format facilitating 8-column GEMV.
 /// Currently only compiled on AArch64 (with dotprod enabled).
 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-#[derive(Clone, Copy)]
+#[derive(
+    Clone,
+    Copy,
+    zerocopy::FromBytes,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::Immutable,
+)]
 #[repr(C)]
 pub(crate) struct BlockQ4Kx8 {
     pub(crate) d: [f16; 8],
@@ -2476,6 +2484,13 @@ pub fn matmul<T: GgmlType>(
 pub(crate) fn vec_to_bytes<T: Copy>(v: Vec<T>) -> Vec<u8> {
     let len = v.len() * std::mem::size_of::<T>();
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len) }.to_vec()
+}
+
+/// Copy `&[u8]` bytes to `&[T]`.
+#[allow(dead_code)]
+pub(crate) fn bytes_to_slice<T: Copy>(bytes: &[u8]) -> &[T] {
+    let len = bytes.len() / std::mem::size_of::<T>();
+    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const T, len) }
 }
 
 /// Pack Q4K blocks into the 8-column interleaved format for 8 x GEMV

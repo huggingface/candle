@@ -858,6 +858,8 @@ impl crate::CustomOp1 for QTensor {
                 // Try the 8-column BlockQ4Kx8 repacked path.
                 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
                 if self_storage.dtype() == GgmlDType::Q4K && n.is_multiple_of(8) {
+                    use zerocopy::{FromBytes, IntoBytes};
+
                     let total_blocks =
                         self_storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
                     let repacked = self.repacked_qs.get_or_init(|| {
@@ -868,19 +870,20 @@ impl crate::CustomOp1 for QTensor {
                             )
                         };
                         let packed = k_quants::pack_to_q4kx8(blocks, n);
-                        Some(k_quants::vec_to_bytes(packed))
+                        Some(packed.as_bytes().to_vec())
                     });
                     if let Some(repacked_bytes) = repacked {
-                        let x8_slice = unsafe {
-                            std::slice::from_raw_parts(
-                                repacked_bytes.as_ptr() as *const BlockQ4Kx8,
-                                repacked_bytes.len() / std::mem::size_of::<BlockQ4Kx8>(),
-                            )
-                        };
+                        let block_x8: &[BlockQ4Kx8] =
+                            <[BlockQ4Kx8]>::ref_from_bytes(repacked_bytes).map_err(|_| {
+                                crate::Error::Msg(
+                                    "repacked_qs alignment invariant violated".to_string(),
+                                )
+                            })?;
+
                         k_quants::matmul_q4k_x8(
                             (dst_shape.elem_count() / n, k, n),
                             slice,
-                            x8_slice,
+                            block_x8,
                             &mut dst_storage,
                         )?;
                         return Ok((crate::CpuStorage::F32(dst_storage), dst_shape));
