@@ -59,6 +59,8 @@ extern "C" {
 
         total_q: u32,
         total_k: u32,
+
+        cuda_stream: *mut c_void,
     );
 
 }
