@@ -535,6 +535,47 @@ fn test_flip_backprop() -> Result<()> {
     Ok(())
 }
 
+fn omit_unnecessary_gradients(device: &Device) -> Result<()> {
+    let x = Var::ones((2, 2), DType::F64, device)?;
+    let x = x.as_tensor();
+    let a = x.ones_like()?;
+    let b = x.ones_like()?;
+    let c = x.ones_like()?;
+    let r1 = (x * x + &a)?;
+    let r2 = (&r1 * &r1 + &b)?;
+    let y = (&r2 * &r2 + &c)?;
+    let grads = y.backward()?;
+
+    /* We only needed to compute the gradients for r2 and r1 to find the
+     * gradient for x; make sure the gradstore doesn't have gradients for a, b, or c.
+     * Note: this only checks that the gradstore doesn't _currently_ contain a/b/c;
+     * ideally, we'd want to make sure we _never_ computed those gradients. */
+
+    let x_grad = grads
+        .get(&x)
+        .expect("computed gradient for x since it's a variable");
+    assert!(grads.get(&a).is_none(), "gradient of `a` not needed");
+    assert!(grads.get(&b).is_none(), "gradient of `b` not needed");
+    assert!(grads.get(&c).is_none(), "gradient of `c` not needed");
+
+    /* also make sure that we don't unnecessarily keep
+     * intermediate tensors used to compute the gradient
+     * alive for longer than necessary. */
+
+    if std::env::var("CANDLE_GRAD_DO_NOT_DETACH").is_ok_and(|s| !["", "0"].contains(&&*s)) {
+        // ignore the "make sure gradients are detached" part of this test
+        // if we are in "do not make sure gradients are detached" mode
+        return Ok(());
+    }
+
+    assert!(
+        !x_grad.track_op(),
+        "gradient should not prevent its operands from being freed"
+    );
+
+    Ok(())
+}
+
 test_device!(
     simple_grad,
     simple_grad_cpu,
@@ -560,4 +601,10 @@ test_device!(
     binary_grad_cpu,
     binary_grad_gpu,
     binary_grad_metal
+);
+test_device!(
+    omit_unnecessary_gradients,
+    omit_unnecessary_gradients_cpu,
+    omit_unnecessary_gradients_gpu,
+    omit_unnecessary_gradients_metal
 );
