@@ -334,7 +334,22 @@ impl Model {
         let on_false = Tensor::new(f32::NEG_INFINITY, &self.device)?
             .broadcast_as(mask.shape())?
             .to_dtype(self.dtype)?;
-        mask.where_cond(&on_true, &on_false)
+        let padding_mask = mask.where_cond(&on_true, &on_false)?;
+        // The padding mask alone is bidirectional; decoding still has to be causal.
+        let causal: Vec<_> = (0..sql_len)
+            .flat_map(|i| {
+                (0..sql_len).map(move |j| {
+                    if i < j || j + self.sliding_window < i {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
+            })
+            .collect();
+        let causal =
+            Tensor::from_slice(&causal, (sql_len, sql_len), &self.device)?.to_dtype(self.dtype)?;
+        padding_mask.broadcast_add(&causal)
     }
 
     pub fn forward(
@@ -398,5 +413,54 @@ impl ModelForCausalLM {
 
     pub fn clear_kv_cache(&mut self) {
         self.base_model.clear_kv_cache()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_model() -> Result<Model> {
+        let cfg = Config {
+            vocab_size: 16,
+            hidden_size: 8,
+            intermediate_size: 16,
+            num_hidden_layers: 1,
+            num_attention_heads: 2,
+            num_key_value_heads: 2,
+            max_position_embeddings: 32,
+            sliding_window: 32,
+            max_window_layers: 1,
+            tie_word_embeddings: false,
+            rope_theta: 10_000.,
+            rms_norm_eps: 1e-6,
+            use_sliding_window: false,
+            hidden_act: Activation::Silu,
+        };
+        let vb = VarBuilder::zeros(DType::F32, &Device::Cpu);
+        Model::new(&cfg, vb)
+    }
+
+    #[test]
+    fn padding_mask_is_causal() -> Result<()> {
+        let model = test_model()?;
+        // Batch of two: first sequence has its last position padded out.
+        let attn_mask = Tensor::new(&[[1u8, 1, 0], [1, 1, 1]], &Device::Cpu)?;
+        let mask = model.prepare_attention_mask(&attn_mask)?;
+        assert_eq!(mask.dims(), [2, 1, 3, 3]);
+        let mask = mask.squeeze(1)?.to_vec3::<f32>()?;
+        for (b, batch) in mask.iter().enumerate() {
+            for (i, row) in batch.iter().enumerate() {
+                for (j, &v) in row.iter().enumerate() {
+                    let padded = b == 0 && j == 2;
+                    if j > i || padded {
+                        assert_eq!(v, f32::NEG_INFINITY, "b={b} i={i} j={j} should be masked");
+                    } else {
+                        assert_eq!(v, 0., "b={b} i={i} j={j} should be attendable");
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
