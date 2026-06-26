@@ -1329,6 +1329,19 @@ quantized_matmul!(
     GgmlDType::Q8K
 );
 
+// Exercises the aarch64 lane=row Q4_K prefill kernel end-to-end through QMatMul:
+// m >= 4 + n % 8 == 0 routes the matmul through the `try_matmul_q4k_lanerow_prefill`
+// dispatch (quantized/mod.rs) instead of the upstream BlockQ4Kx8 decode path. On
+// non-dotprod hosts the dispatch falls through, so this just re-checks Q4_K matmul.
+// Catches a wiring regression that the m=3 `quantized_matmul_q4k` test cannot.
+#[test]
+fn quantized_matmul_q4k_lanerow_prefill_cpu() -> Result<()> {
+    let cpu = &Device::Cpu;
+    test_matmul(cpu, (1, 8, 16, 256), GgmlDType::Q4K)?;
+    test_matmul(cpu, (1, 6, 24, 512), GgmlDType::Q4K)?; // 6 rows = one full + zero-padded tile
+    Ok(())
+}
+
 #[test]
 fn quantized_matmul_q2k() -> Result<()> {
     use k_quants::BlockQ2K;

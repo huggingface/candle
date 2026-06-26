@@ -6,8 +6,14 @@
 //! driven by `gemm_q6kx8_q8k`; no runtime repack.
 #![allow(clippy::needless_range_loop)]
 
+#[cfg(target_feature = "dotprod")]
+use super::k_quants::BlockQ4K;
 use super::k_quants::{BlockQ6K, BlockQ8K, GgmlType, QK_K};
 use half::f16;
+#[cfg(target_feature = "dotprod")]
+use std::collections::HashMap;
+#[cfg(target_feature = "dotprod")]
+use std::sync::Mutex;
 use std::sync::{Arc, LazyLock};
 
 // ---- shared interleave constants ----
@@ -532,4 +538,434 @@ mod tests {
             assert_eq!(want[i].to_bits(), got[i].to_bits(), "dequant idx {i}");
         }
     }
+
+    // The lane=row 8x4 SDOT kernel (laneq-4 weights + q8_Kx4 4x4 activations) vs
+    // the f32 ground truth: validates the laneq weight layout, the q8_Kx4 (4x4)
+    // activation pack, the 6-bit scale unpack, and the lane-row tiling/fold. Runs on
+    // any dotprod host (incl. M1), so this is a real check of the N1 kernel.
+    #[cfg(all(target_feature = "neon", target_feature = "dotprod"))]
+    #[test]
+    fn gemm_q4kx8_lanerow_matches_reference() {
+        use crate::quantized::k_quants::BlockQ4K;
+        use crate::quantized::neon::gemm_q4kx8_q8k_lanerow;
+
+        let nb = 3usize;
+        let k = nb * QK_K;
+        let mut st = 0x9e37_79b9_7f4a_7c15u64;
+
+        let mut wq: Vec<Vec<BlockQ4K>> = Vec::new();
+        let mut wf: Vec<Vec<f32>> = Vec::new();
+        for _ in 0..8 {
+            let f: Vec<f32> = (0..k).map(|_| lcg(&mut st)).collect();
+            let mut q = vec![BlockQ4K::zeros(); nb];
+            BlockQ4K::from_float(&f, &mut q);
+            let mut deq = vec![0f32; k];
+            BlockQ4K::to_float(&q, &mut deq);
+            wq.push(q);
+            wf.push(deq);
+        }
+        let cols: [&[BlockQ4K]; 8] = std::array::from_fn(|c| wq[c].as_slice());
+        let packed = repack_q4kx8_laneq4(&cols);
+
+        let af: Vec<Vec<f32>> = (0..4)
+            .map(|_| (0..k).map(|_| lcg(&mut st)).collect())
+            .collect();
+        let arows: [&[f32]; 4] = std::array::from_fn(|r| af[r].as_slice());
+        let q8 = quantize_mat_q8_k_4x4(&arows, nb);
+
+        let mut dst = [0f32; 32];
+        gemm_q4kx8_q8k_lanerow(&packed, &q8, &mut dst);
+
+        // Reconstruct each row's q8 from the 4x4 interleave: element e of row r
+        // lives at qs[j], j = (e/4)*16 + r*4 + (e%4).
+        for r in 0..4 {
+            for col in 0..8 {
+                let mut sum = 0f64;
+                for blk in 0..nb {
+                    let qb = &q8[blk];
+                    for e in 0..QK_K {
+                        let j = (e / 4) * 16 + r * 4 + (e % 4);
+                        let actd = qb.d[r] as f64 * qb.qs[j] as f64;
+                        sum += wf[col][blk * QK_K + e] as f64 * actd;
+                    }
+                }
+                let got = dst[r * 8 + col] as f64;
+                let rel = (got - sum).abs() / sum.abs().max(1e-6);
+                assert!(rel < 1e-2, "r{r} col{col}: got {got} ref {sum} rel {rel}");
+            }
+        }
+    }
+
+    // The lane=row prefill driver must match the baseline matmul end-to-end (full
+    // dst, multiple 8-channel groups), for m a multiple of 4 and not (zero-padded
+    // remainder). Validates tiling, scatter, and the parallel group partition.
+    #[cfg(all(target_feature = "neon", target_feature = "dotprod"))]
+    #[test]
+    fn matmul_q4kx8l_lanerow_matches_baseline() {
+        use crate::quantized::k_quants::{matmul, BlockQ4K};
+
+        let k = 512usize; // 2 super-blocks
+        let n = 24usize; // 3 groups of 8
+        let nb = k / QK_K;
+        let mut st = 0xc0ff_ee00_1234_abcdu64;
+
+        let mut rhs_t = vec![BlockQ4K::zeros(); n * nb];
+        for r in 0..n {
+            let f: Vec<f32> = (0..k).map(|_| lcg(&mut st)).collect();
+            BlockQ4K::from_float(&f, &mut rhs_t[r * nb..(r + 1) * nb]);
+        }
+        let laneq = repack_q4k_weight_laneq4(&rhs_t, n, nb);
+
+        for &m in &[4usize, 7usize, 16usize] {
+            let lhs: Vec<f32> = (0..m * k).map(|_| lcg(&mut st)).collect();
+            let mut dst_base = vec![0f32; m * n];
+            let mut dst_lr = vec![0f32; m * n];
+            matmul::<BlockQ4K>((m, k, n), &lhs, &rhs_t, &mut dst_base).unwrap();
+            matmul_q4kx8l_lanerow((m, k, n), &lhs, &laneq, &mut dst_lr);
+            let mut err = 0f64;
+            let mut sig = 0f64;
+            for i in 0..m * n {
+                let d = dst_lr[i] as f64 - dst_base[i] as f64;
+                err += d * d;
+                sig += (dst_base[i] as f64) * (dst_base[i] as f64);
+            }
+            let rel = (err / sig.max(1e-12)).sqrt();
+            assert!(rel < 2e-2, "m={m}: relative L2 error {rel} too high");
+        }
+    }
+}
+
+#[cfg(target_feature = "dotprod")]
+#[repr(C)]
+#[derive(Clone)]
+pub struct BlockQ4Kx8L {
+    pub(crate) d: [f16; 8],
+    pub(crate) dmin: [f16; 8],
+    pub(crate) scales: [u8; 96], // 6-bit scales+mins, repacked (8 cols)
+    pub(crate) qs: [u8; 1024],   // 4-bit quants, 8-byte round-robin interleave
+}
+
+#[cfg(target_feature = "dotprod")]
+impl BlockQ4Kx8L {
+    fn zeroed() -> Self {
+        Self {
+            d: [f16::ZERO; 8],
+            dmin: [f16::ZERO; 8],
+            scales: [0; 96],
+            qs: [0; 1024],
+        }
+    }
+}
+
+/// Port of llama's `make_block_q4_Kx8` for one super-block of 8 columns. `bsi` is
+/// the `blck_size_interleave` (4 for the lane=row `8x4` kernel) - only the qs
+/// interleave stride depends on it; scales/mins are identical. Pure data
+/// rearrangement; deterministic.
+#[cfg(target_feature = "dotprod")]
+fn make_q4kx8_laneq_bsi(cols: &[&[BlockQ4K]; 8], i: usize, bsi: usize) -> BlockQ4Kx8L {
+    let mut out = BlockQ4Kx8L::zeroed();
+    for c in 0..8 {
+        out.d[c] = cols[c][i].d;
+        out.dmin[c] = cols[c][i].dmin;
+    }
+    // qs: take `bsi` bytes at a time, round-robin across the 8 columns.
+    // end = QK_K * 4 / bsi; src col = t%8, src off = (t/8)*bsi, dst = t*bsi.
+    let end = QK_K * 4 / bsi;
+    for t in 0..end {
+        let src_id = t % 8;
+        let src_off = (t / 8) * bsi;
+        let dst_off = t * bsi;
+        out.qs[dst_off..dst_off + bsi].copy_from_slice(&cols[src_id][i].qs[src_off..src_off + bsi]);
+    }
+    // scales: repack the 6-bit packed scales/mins of all 8 columns into 96 bytes.
+    let mut s = [0u8; 8];
+    let mut m = [0u8; 8];
+    for ii in 0..4 {
+        for j in 0..8 {
+            s[j] = cols[j][i].scales[ii] & 63;
+            m[j] = cols[j][i].scales[ii + 4] & 63;
+        }
+        let b = ii * 12;
+        out.scales[b] = (s[0] & 63) + ((s[4] & 48) << 2);
+        out.scales[b + 1] = (s[1] & 63) + ((s[5] & 48) << 2);
+        out.scales[b + 2] = (s[2] & 63) + ((s[6] & 48) << 2);
+        out.scales[b + 3] = (s[3] & 63) + ((s[7] & 48) << 2);
+        out.scales[b + 4] = (m[0] & 63) + ((m[4] & 48) << 2);
+        out.scales[b + 5] = (m[1] & 63) + ((m[5] & 48) << 2);
+        out.scales[b + 6] = (m[2] & 63) + ((m[6] & 48) << 2);
+        out.scales[b + 7] = (m[3] & 63) + ((m[7] & 48) << 2);
+        out.scales[b + 8] = (s[4] & 15) + ((m[4] & 15) << 4);
+        out.scales[b + 9] = (s[5] & 15) + ((m[5] & 15) << 4);
+        out.scales[b + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
+        out.scales[b + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
+    }
+    for ii in 0..4 {
+        for j in 0..8 {
+            s[j] = ((cols[j][i].scales[ii] & 192) >> 2) | (cols[j][i].scales[ii + 8] & 15);
+            m[j] =
+                ((cols[j][i].scales[ii + 4] & 192) >> 2) | ((cols[j][i].scales[ii + 8] & 240) >> 4);
+        }
+        let b = ii * 12 + 48;
+        out.scales[b] = (s[0] & 63) + ((s[4] & 48) << 2);
+        out.scales[b + 1] = (s[1] & 63) + ((s[5] & 48) << 2);
+        out.scales[b + 2] = (s[2] & 63) + ((s[6] & 48) << 2);
+        out.scales[b + 3] = (s[3] & 63) + ((s[7] & 48) << 2);
+        out.scales[b + 4] = (m[0] & 63) + ((m[4] & 48) << 2);
+        out.scales[b + 5] = (m[1] & 63) + ((m[5] & 48) << 2);
+        out.scales[b + 6] = (m[2] & 63) + ((m[6] & 48) << 2);
+        out.scales[b + 7] = (m[3] & 63) + ((m[7] & 48) << 2);
+        out.scales[b + 8] = (s[4] & 15) + ((m[4] & 15) << 4);
+        out.scales[b + 9] = (s[5] & 15) + ((m[5] & 15) << 4);
+        out.scales[b + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
+        out.scales[b + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
+    }
+    out
+}
+
+/// Repack 8 weight columns into `nb` laneq blocks, interleave 4 (the weight layout
+/// the lane=row `8x4` DOTPROD kernel consumes - 4 bytes/column per 16-byte read).
+#[cfg(target_feature = "dotprod")]
+pub(crate) fn repack_q4kx8_laneq4(cols: &[&[BlockQ4K]; 8]) -> Vec<BlockQ4Kx8L> {
+    let nb = cols[0].len();
+    (0..nb).map(|i| make_q4kx8_laneq_bsi(cols, i, 4)).collect()
+}
+
+// ===========================================================================
+
+/// Four Q8_K activation rows interleaved for the lane=row GEMM. Mirrors llama's
+/// `block_q8_Kx4` field layout (`d[4]`, interleaved `qs`, grouped `bsums`).
+#[cfg(target_feature = "dotprod")]
+#[repr(C)]
+#[derive(Clone)]
+pub(crate) struct BlockQ8Kx4 {
+    pub(crate) d: [f32; 4],
+    pub(crate) qs: [i8; QK_K * 4],
+    pub(crate) bsums: [i16; QK_K / 4],
+}
+
+#[cfg(target_feature = "dotprod")]
+impl BlockQ8Kx4 {
+    fn zeroed() -> Self {
+        Self {
+            d: [0.0; 4],
+            qs: [0; QK_K * 4],
+            bsums: [0; QK_K / 4],
+        }
+    }
+}
+
+/// Quantize and interleave 4 activation rows into the `nb` `BlockQ8Kx4` of `out`
+/// (`out.len() == nb`) with `blck_size_interleave = 4` - the layout llama's DOTPROD
+/// `ggml_gemm_q4_K_8x4` consumes, where the SDOT lane index selects the ROW (4
+/// bytes/row per 16-byte group). Distinct from `quantize_mat_q8_k_4x8_into`
+/// (interleave 8, for the i8mm/SMMLA kernel) only in the interleave stride and the
+/// bsums index. Each super-block is independent (safe on disjoint `out` slices from
+/// different threads). Port of llama's `ggml_quantize_mat_q8_K_4x4_generic`.
+#[cfg(target_feature = "dotprod")]
+pub(crate) fn quantize_mat_q8_k_4x4_into(rows: &[&[f32]; 4], out: &mut [BlockQ8Kx4]) {
+    const BSI: usize = 4; // blck_size_interleave
+    for (i, blk) in out.iter_mut().enumerate() {
+        *blk = BlockQ8Kx4::zeroed();
+        let mut srcv = [[0f32; QK_K]; 4];
+        let mut iscale = [0f32; 4];
+        for (row, &r) in rows.iter().enumerate() {
+            let mut amax = 0f32;
+            let mut max = 0f32;
+            for j in 0..QK_K {
+                let v = r[i * QK_K + j];
+                srcv[row][j] = v;
+                if amax < v.abs() {
+                    amax = v.abs();
+                    max = v;
+                }
+            }
+            iscale[row] = if amax != 0.0 { -127.0 / max } else { 0.0 };
+            blk.d[row] = if amax != 0.0 { 1.0 / iscale[row] } else { 0.0 };
+        }
+        // Quants interleaved in 4-byte runs across the 4 rows; bsums grouped
+        // 4-at-a-time per source super-block (the kernel's bias term).
+        for j in 0..QK_K * 4 {
+            let mut src_offset = (j / (4 * BSI)) * BSI;
+            let src_id = (j % (4 * BSI)) / BSI;
+            src_offset += j % BSI;
+            let index = (((j & 15) >> 2) << 2) + ((j >> 8) << 4) + ((j >> 6) & 3);
+            let x0 = srcv[src_id][src_offset] * iscale[src_id];
+            let q = x0.round() as i8;
+            blk.qs[j] = q;
+            blk.bsums[index] += q as i16;
+        }
+    }
+}
+
+/// Vec-returning convenience wrapper over `quantize_mat_q8_k_4x4_into` (test only).
+#[cfg(all(test, target_feature = "dotprod"))]
+pub(crate) fn quantize_mat_q8_k_4x4(rows: &[&[f32]; 4], nb: usize) -> Vec<BlockQ8Kx4> {
+    let mut out = vec![BlockQ8Kx4::zeroed(); nb];
+    quantize_mat_q8_k_4x4_into(rows, &mut out);
+    out
+}
+
+// A/B switch for the lane=row prefill path (default ON for dotprod builds). Set
+// CANDLE_PREFILL_LANEROW=0 to force the upstream #3643 SDOT path for same-binary
+// benchmarking on N1.
+#[cfg(target_feature = "dotprod")]
+static PREFILL_LANEROW: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("CANDLE_PREFILL_LANEROW")
+        .map(|s| s != "0")
+        .unwrap_or(true)
+});
+
+// A/B switch for parallelizing the prefill activation quantization across the
+// barrier pool (default ON). The lane=row driver quantizes all m rows to Q8 before
+// the parallel GEMM; doing it serially is an Amdahl ceiling on multi-thread prefill
+// scaling. Set CANDLE_PREFILL_PARQUANT=0 to force the serial quant for same-binary
+// A/B on N1. Result is bit-identical either way (per-tile independent).
+#[cfg(target_feature = "dotprod")]
+static PREFILL_PARQUANT: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("CANDLE_PREFILL_PARQUANT")
+        .map(|s| s != "0")
+        .unwrap_or(true)
+});
+
+/// Repack a Q4_K weight into the interleave-4 laneq `BlockQ4Kx8L` groups the
+/// lane=row `8x4` kernel consumes (`repack_q4kx8_laneq4` per 8-channel group).
+#[cfg(target_feature = "dotprod")]
+pub(crate) fn repack_q4k_weight_laneq4(rows: &[BlockQ4K], n: usize, nb: usize) -> Vec<BlockQ4Kx8L> {
+    debug_assert_eq!(n % Q4KX8_ROWS, 0, "repack_q4k_weight_laneq4: n {n} not /8");
+    debug_assert_eq!(
+        rows.len(),
+        n * nb,
+        "repack_q4k_weight_laneq4: rows len mismatch"
+    );
+    let mut packed = Vec::with_capacity((n / 8) * nb);
+    for g in 0..n / 8 {
+        let grp: [&[BlockQ4K]; Q4KX8_ROWS] =
+            std::array::from_fn(|r| &rows[(g * 8 + r) * nb..(g * 8 + r + 1) * nb]);
+        packed.extend(repack_q4kx8_laneq4(&grp));
+    }
+    packed
+}
+
+/// Interleave-4 laneq repack cache, keyed on the source Q4_K pointer. Populated on
+/// first lane=row prefill of each weight; model weights live for the whole run.
+#[cfg(target_feature = "dotprod")]
+static LANEQ4_CACHE: LazyLock<Mutex<HashMap<usize, Arc<Vec<BlockQ4Kx8L>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(target_feature = "dotprod")]
+fn packed_laneq4_cache_get(rhs: &[BlockQ4K], n: usize, nb: usize) -> Arc<Vec<BlockQ4Kx8L>> {
+    let key = rhs.as_ptr() as usize;
+    {
+        if let Some(p) = LANEQ4_CACHE.lock().unwrap().get(&key) {
+            return p.clone();
+        }
+    }
+    let mut map = LANEQ4_CACHE.lock().unwrap();
+    if let Some(p) = map.get(&key) {
+        return p.clone();
+    }
+    let arc = Arc::new(repack_q4k_weight_laneq4(rhs, n, nb));
+    map.insert(key, arc.clone());
+    arc
+}
+
+/// Lane=row prefill GEMM driver: `dst(m,n) = lhs(m,k) x W^T` over interleave-4
+/// laneq weights. Mirrors `matmul_q4kx8l_prepacked_i8mm` exactly (4-row activation
+/// tiles via `quantize_mat_q8_k_4x4`, last tile zero-padded, barrier-pool over
+/// channel groups, same 4x8 sub-tile scatter), but calls the lane=row SDOT kernel
+/// instead of SMMLA - so it runs on any dotprod core (Graviton2/N1).
+#[cfg(all(target_feature = "neon", target_feature = "dotprod"))]
+pub(crate) fn matmul_q4kx8l_lanerow(
+    (m, k, n): (usize, usize, usize),
+    lhs: &[f32],
+    packed: &[BlockQ4Kx8L],
+    dst: &mut [f32],
+) {
+    use super::neon::gemm_q4kx8_q8k_lanerow;
+    let nb = k / QK_K;
+    let groups = n / Q4KX8_ROWS;
+    let row_tiles = m.div_ceil(4);
+
+    // Quantize all m activation rows to Q8 (4x4 interleave) into 4-row tiles, the
+    // last zero-padded. Parallelized over row-tiles on the barrier pool (each tile
+    // is independent), so it does not serialize multi-thread prefill; identical
+    // bytes to the serial path. CANDLE_PREFILL_PARQUANT=0 forces serial for A/B.
+    let zeros = vec![0f32; k];
+    let mut q8: Vec<BlockQ8Kx4> = vec![BlockQ8Kx4::zeroed(); row_tiles * nb];
+    let tile_rows = |rt: usize| -> [&[f32]; 4] {
+        std::array::from_fn(|a| {
+            let r = rt * 4 + a;
+            if r < m {
+                &lhs[r * k..(r + 1) * k]
+            } else {
+                zeros.as_slice()
+            }
+        })
+    };
+    if *PREFILL_PARQUANT {
+        crate::utils::par_chunks_mut(&mut q8, nb, |rt, chunk| {
+            quantize_mat_q8_k_4x4_into(&tile_rows(rt), chunk);
+        });
+    } else {
+        for rt in 0..row_tiles {
+            quantize_mat_q8_k_4x4_into(&tile_rows(rt), &mut q8[rt * nb..(rt + 1) * nb]);
+        }
+    }
+
+    struct DstPtr(*mut f32);
+    unsafe impl Sync for DstPtr {}
+    let dptr = DstPtr(dst.as_mut_ptr());
+
+    let process = |g: usize| {
+        let w = &packed[g * nb..(g + 1) * nb];
+        let p = &dptr;
+        for rt in 0..row_tiles {
+            let q8t = &q8[rt * nb..(rt + 1) * nb];
+            let mut t = [0f32; 32];
+            gemm_q4kx8_q8k_lanerow(w, q8t, &mut t);
+            for a in 0..4 {
+                let r = rt * 4 + a;
+                if r >= m {
+                    break;
+                }
+                for c in 0..Q4KX8_ROWS {
+                    unsafe { *p.0.add(r * n + g * 8 + c) = t[a * 8 + c] };
+                }
+            }
+        }
+    };
+
+    let pool = crate::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let gpt = groups.div_ceil(n_total);
+    pool.execute(|tid| {
+        let start = tid * gpt;
+        if start < groups {
+            let end = groups.min((tid + 1) * gpt);
+            for g in start..end {
+                process(g);
+            }
+        }
+    });
+}
+
+/// Prefill entry point layered on the upstream (#3643) Q4_K matmul: if this is a
+/// wide GEMM (`m >= 4`) and the lane=row path is enabled, repack the weight to the
+/// interleave-4 laneq layout (cached) and run the `8x4` SDOT GEMM, returning `true`.
+/// Returns `false` for decode (`m < 4`) or when disabled, so the caller falls
+/// through to the upstream `BlockQ4Kx8` path (which owns decode). CPU-only.
+#[cfg(target_feature = "dotprod")]
+pub(crate) fn try_matmul_q4k_lanerow_prefill(
+    (m, k, n): (usize, usize, usize),
+    lhs: &[f32],
+    rhs_q4k: &[BlockQ4K],
+    dst: &mut [f32],
+) -> bool {
+    if m < 4 || !*PREFILL_LANEROW {
+        return false;
+    }
+    let nb = k / QK_K;
+    let packed = packed_laneq4_cache_get(rhs_q4k, n, nb);
+    matmul_q4kx8l_lanerow((m, k, n), lhs, &packed, dst);
+    true
 }

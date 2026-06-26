@@ -962,6 +962,29 @@ impl crate::CustomOp1 for QTensor {
 
                     let total_blocks =
                         self_storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
+
+                    // Prefill (m >= 4): route to the lane=row 8x4 SDOT GEMM (llama's
+                    // N1 prefill kernel), which beats the per-column SDOT path on
+                    // wide prompts. Decode (m < 4) returns false and falls through
+                    // to the upstream BlockQ4Kx8 repacked path below.
+                    {
+                        let m = dst_shape.elem_count() / n;
+                        let blocks = unsafe {
+                            std::slice::from_raw_parts(
+                                self_storage.as_ptr() as *const BlockQ4K,
+                                total_blocks,
+                            )
+                        };
+                        if repack::try_matmul_q4k_lanerow_prefill(
+                            (m, k, n),
+                            slice,
+                            blocks,
+                            &mut dst_storage,
+                        ) {
+                            return Ok((crate::CpuStorage::F32(dst_storage), dst_shape));
+                        }
+                    }
+
                     let repacked = self.repacked_qs.get_or_init(|| {
                         let blocks = unsafe {
                             std::slice::from_raw_parts(
