@@ -8,24 +8,31 @@
 
 #[cfg(target_feature = "dotprod")]
 use super::k_quants::BlockQ4K;
-use super::k_quants::{BlockQ6K, BlockQ8K, GgmlType, QK_K};
+use super::k_quants::{BlockQ6K, QK_K};
+// Used only by the NEON-gated Q6 packed GEMM driver.
+#[cfg(target_feature = "neon")]
+use super::k_quants::{BlockQ8K, GgmlType};
 use half::f16;
 #[cfg(target_feature = "dotprod")]
 use std::collections::HashMap;
+use std::sync::Arc;
+#[cfg(target_feature = "neon")]
+use std::sync::LazyLock;
 #[cfg(target_feature = "dotprod")]
 use std::sync::Mutex;
-use std::sync::{Arc, LazyLock};
 
 // ---- shared interleave constants ----
 pub(crate) const Q4KX8_ROWS: usize = 8;
 
-// ---- prefill tile selection (shared with the Q4 path upstream) ----
+// ---- prefill tile selection (NEON Q6 driver only) ----
+#[cfg(target_feature = "neon")]
 #[derive(Clone, Copy, PartialEq)]
 enum PrefillTile {
     Nc8mr4,
     Nc4mr4,
     Nc8mr2,
 }
+#[cfg(target_feature = "neon")]
 static PACKED_PREFILL_TILE: LazyLock<PrefillTile> = LazyLock::new(|| {
     match std::env::var("CANDLE_PACKED_PREFILL")
         .unwrap_or_default()
@@ -39,12 +46,20 @@ static PACKED_PREFILL_TILE: LazyLock<PrefillTile> = LazyLock::new(|| {
 });
 
 // ---- packed Q6_K weight block + repack ----
+// `#[repr(C)]` is load-bearing: this block is the on-disk Q6Kx8 GGUF format
+// (`PackedQ6Kx8::from_bytes` memcpy's raw file bytes in, `from_mmap` casts the
+// mapping). A default-repr struct may reorder fields across compiler versions,
+// which would silently mis-decode baked models. Mirrors `k_quants::BlockQ4Kx8`.
+#[repr(C)]
 pub struct BlockQ6Kx8 {
     pub(crate) d: [f16; Q4KX8_ROWS],
     pub(crate) scales: [i8; Q4KX8_ROWS * (QK_K / 16)], // 128
     pub(crate) ql: [u8; Q4KX8_ROWS * (QK_K / 2)],      // 1024: [chunk(2)][row(8)][64]
     pub(crate) qh: [u8; Q4KX8_ROWS * (QK_K / 4)],      // 512:  [chunk(2)][row(8)][32]
 }
+// d (16) + scales (128) + ql (1024) + qh (512); all fields are <=2-byte aligned, so
+// the packed layout has no interior padding. Pins the persisted block size.
+const _: () = assert!(std::mem::size_of::<BlockQ6Kx8>() == 1680);
 
 impl BlockQ6Kx8 {
     fn zeroed() -> Self {
@@ -104,6 +119,10 @@ pub fn repack_q6k_weight(rows: &[BlockQ6K], n: usize, nb: usize) -> Vec<BlockQ6K
 }
 
 // ---- prepacked GEMM driver ----
+// NEON-only: `gemm_q6kx8_q8k` lives in the `neon` module, which is not compiled on
+// non-NEON targets. The `matmul_t` caller has a `not(neon)` arm that bails, so this
+// must carry the same gate or the `super::neon` import fails to resolve on x86_64.
+#[cfg(target_feature = "neon")]
 pub(crate) fn matmul_q6kx8_prepacked(
     (m, k, n): (usize, usize, usize),
     lhs: &[f32],
