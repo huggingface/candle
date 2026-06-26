@@ -12,6 +12,7 @@ members = [
     "tensor-tools",
 ]
 exclude = [
+    "candle-awq-kernels",
     "candle-book",
     "candle-flash-attn",
     "candle-flash-attn-v3",
@@ -37,6 +38,7 @@ accelerate-src = { version = "0.3.2" }
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
 candle = { path = "./candle-core", package = "candle-core", version = "0.10.2" }
+candle-awq-kernels = { path = "./candle-awq-kernels", version = "0.10.2", default-features = false }
 candle-datasets = { path = "./candle-datasets", version = "0.10.2" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.10.2" }
 candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.10.2" }

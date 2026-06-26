@@ -1,21 +1,36 @@
-//! Qwen2 with GPTQ-quantized linear layers, loaded directly from an AutoGPTQ/GPTQModel
-//! checkpoint (e.g. `Qwen/Qwen2-0.5B-Instruct-GPTQ-Int4` on the Hugging Face Hub).
+//! Qwen2 with quantized linear layers, loaded directly from a GPTQ (AutoGPTQ/GPTQModel) or AWQ
+//! (AutoAWQ "GEMM" layout) checkpoint on the Hugging Face Hub (e.g.
+//! `Qwen/Qwen2-0.5B-Instruct-GPTQ-Int4` or `Qwen/Qwen2-0.5B-Instruct-AWQ`).
 //!
 //! This mirrors [`crate::models::qwen2`] but routes every attention/MLP projection through
-//! [`crate::quantized_gptq::gptq_linear`], which reads the checkpoint's packed
-//! `qweight`/`qzeros`/`scales`/(optional `g_idx`) tensors and dequantizes them once at load time.
-//! `embed_tokens`, the RMSNorm layers, and (when present) `lm_head` stay dense, matching how
-//! GPTQ checkpoints are actually exported. Real checkpoints store a `bias` tensor on every
-//! quantized projection (unlike the dense Qwen2 model, which omits bias on `o_proj` and the MLP
-//! projections), so all projections here are built with `bias: true`.
+//! [`crate::quantized_linear::QuantizedLinear`], which reads the checkpoint's packed
+//! `qweight`/`qzeros`/`scales`/(optional `g_idx`) tensors for either format and either
+//! dequantizes them once at load time or, when a matching `{gptq,awq}-{cuda,metal}` feature is
+//! enabled, keeps them packed behind a fused dequantize+GEMM kernel. `embed_tokens`, the RMSNorm
+//! layers, and (when present) `lm_head` stay dense. Whether each projection carries a `bias`
+//! tensor varies by checkpoint (GPTQ exports tend to add `bias` to every quantized projection;
+//! AWQ exports tend to follow the dense model's own bias layout, i.e. only on `q`/`k`/`v_proj`),
+//! so bias presence is detected per-tensor via `VarBuilder::contains_tensor` rather than assumed.
 
 use crate::models::with_tracing::{linear_no_bias, Linear as TracingLinear, RmsNorm};
-use crate::quantized_gptq::{gptq_linear, GptqConfig};
+use crate::quantized_linear::{QuantMethod, QuantizedLinear};
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Activation, Linear, VarBuilder};
+use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
 pub use crate::models::qwen2::Config;
+
+/// Build a quantized projection at `vb`'s path, detecting `bias` presence from the checkpoint
+/// rather than assuming it.
+fn quant_linear(
+    in_dim: usize,
+    out_dim: usize,
+    method: QuantMethod,
+    vb: VarBuilder,
+) -> Result<QuantizedLinear> {
+    let bias = vb.contains_tensor("bias");
+    QuantizedLinear::load(in_dim, out_dim, method, bias, vb)
+}
 
 #[derive(Debug, Clone)]
 struct RotaryEmbedding {
@@ -61,31 +76,19 @@ impl RotaryEmbedding {
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: QuantizedLinear,
+    up_proj: QuantizedLinear,
+    down_proj: QuantizedLinear,
     act_fn: Activation,
 }
 
 impl MLP {
-    fn new(cfg: &Config, gptq_cfg: GptqConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, method: QuantMethod, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let gate_proj = gptq_linear(
-            hidden_sz,
-            intermediate_sz,
-            gptq_cfg,
-            true,
-            vb.pp("gate_proj"),
-        )?;
-        let up_proj = gptq_linear(hidden_sz, intermediate_sz, gptq_cfg, true, vb.pp("up_proj"))?;
-        let down_proj = gptq_linear(
-            intermediate_sz,
-            hidden_sz,
-            gptq_cfg,
-            true,
-            vb.pp("down_proj"),
-        )?;
+        let gate_proj = quant_linear(hidden_sz, intermediate_sz, method, vb.pp("gate_proj"))?;
+        let up_proj = quant_linear(hidden_sz, intermediate_sz, method, vb.pp("up_proj"))?;
+        let down_proj = quant_linear(intermediate_sz, hidden_sz, method, vb.pp("down_proj"))?;
         Ok(Self {
             gate_proj,
             up_proj,
@@ -105,10 +108,10 @@ impl Module for MLP {
 
 #[derive(Debug, Clone)]
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: QuantizedLinear,
+    k_proj: QuantizedLinear,
+    v_proj: QuantizedLinear,
+    o_proj: QuantizedLinear,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -122,7 +125,7 @@ impl Attention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
-        gptq_cfg: GptqConfig,
+        method: QuantMethod,
         vb: VarBuilder,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
@@ -130,34 +133,10 @@ impl Attention {
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = hidden_sz / num_heads;
-        let q_proj = gptq_linear(
-            hidden_sz,
-            num_heads * head_dim,
-            gptq_cfg,
-            true,
-            vb.pp("q_proj"),
-        )?;
-        let k_proj = gptq_linear(
-            hidden_sz,
-            num_kv_heads * head_dim,
-            gptq_cfg,
-            true,
-            vb.pp("k_proj"),
-        )?;
-        let v_proj = gptq_linear(
-            hidden_sz,
-            num_kv_heads * head_dim,
-            gptq_cfg,
-            true,
-            vb.pp("v_proj"),
-        )?;
-        let o_proj = gptq_linear(
-            num_heads * head_dim,
-            hidden_sz,
-            gptq_cfg,
-            true,
-            vb.pp("o_proj"),
-        )?;
+        let q_proj = quant_linear(hidden_sz, num_heads * head_dim, method, vb.pp("q_proj"))?;
+        let k_proj = quant_linear(hidden_sz, num_kv_heads * head_dim, method, vb.pp("k_proj"))?;
+        let v_proj = quant_linear(hidden_sz, num_kv_heads * head_dim, method, vb.pp("v_proj"))?;
+        let o_proj = quant_linear(num_heads * head_dim, hidden_sz, method, vb.pp("o_proj"))?;
         Ok(Self {
             q_proj,
             k_proj,
@@ -247,11 +226,11 @@ impl DecoderLayer {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
-        gptq_cfg: GptqConfig,
+        method: QuantMethod,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, gptq_cfg, vb.pp("self_attn"))?;
-        let mlp = MLP::new(cfg, gptq_cfg, vb.pp("mlp"))?;
+        let self_attn = Attention::new(rotary_emb, cfg, method, vb.pp("self_attn"))?;
+        let mlp = MLP::new(cfg, method, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = RmsNorm::new(
@@ -298,7 +277,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(cfg: &Config, gptq_cfg: GptqConfig, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, method: QuantMethod, vb: VarBuilder) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -306,7 +285,7 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, gptq_cfg, vb_l.pp(layer_idx))?;
+            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, method, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -376,8 +355,8 @@ pub struct ModelForCausalLM {
 }
 
 impl ModelForCausalLM {
-    pub fn new(cfg: &Config, gptq_cfg: GptqConfig, vb: VarBuilder) -> Result<Self> {
-        let base_model = Model::new(cfg, gptq_cfg, vb.clone())?;
+    pub fn new(cfg: &Config, method: QuantMethod, vb: VarBuilder) -> Result<Self> {
+        let base_model = Model::new(cfg, method, vb.clone())?;
         let lm_head = if vb.contains_tensor("lm_head.weight") {
             linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
         } else {

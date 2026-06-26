@@ -13,6 +13,7 @@ readme = "README.md"
 accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle = { workspace = true }
+candle-awq-kernels = { workspace = true, optional = true }
 candle-flash-attn = { workspace = true, optional = true }
 candle-gptq-kernels = { workspace = true, optional = true }
 candle-nn = { workspace = true }
@@ -31,6 +32,8 @@ default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda"]
 cudnn = ["candle/cudnn", "candle-nn/cudnn"]
+awq-cuda = ["cuda", "dep:candle-awq-kernels", "candle-awq-kernels/cuda"]
+awq-metal = ["metal", "dep:candle-awq-kernels", "candle-awq-kernels/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 gptq-cuda = ["cuda", "dep:candle-gptq-kernels", "candle-gptq-kernels/cuda"]
 gptq-metal = ["metal", "dep:candle-gptq-kernels", "candle-gptq-kernels/metal"]

@@ -1,12 +1,13 @@
-//! End-to-end example: download a GPTQ-quantized Qwen2 checkpoint from the Hugging Face Hub
-//! (e.g. `Qwen/Qwen2-0.5B-Instruct-GPTQ-Int4`) and run text generation through the fused/CPU
-//! GPTQ kernels in `candle-gptq-kernels` / `candle_transformers::quantized_gptq`.
+//! End-to-end example: download a GPTQ- or AWQ-quantized Qwen2 checkpoint from the Hugging Face
+//! Hub (e.g. `Qwen/Qwen2-0.5B-Instruct-GPTQ-Int4` or `Qwen/Qwen2-0.5B-Instruct-AWQ`) and run text
+//! generation through the fused/CPU kernels in `candle-gptq-kernels`/`candle-awq-kernels` via
+//! `candle_transformers::quantized_linear::QuantizedLinear`.
 //!
-//! The checkpoint's `config.json` carries a `quantization_config` block (`bits`, `group_size`,
-//! ...) produced by AutoGPTQ/GPTQModel; this example reads it to build a
-//! [`candle_transformers::quantized_gptq::GptqConfig`] and constructs the model with
-//! [`candle_transformers::models::gptq_qwen2::ModelForCausalLM`], which mirrors the dense Qwen2
-//! model but routes every attention/MLP projection through the GPTQ dequantized linear layer.
+//! The checkpoint's `config.json` carries a `quantization_config` block whose `quant_method`
+//! field (`"gptq"` or `"awq"`) and `bits`/`group_size` this example reads to build a
+//! [`candle_transformers::quantized_linear::QuantMethod`] and constructs the model with
+//! [`candle_transformers::models::quant_linear_qwen2::ModelForCausalLM`], which mirrors the dense
+//! Qwen2 model but routes every attention/MLP projection through `QuantizedLinear`.
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -21,13 +22,16 @@ use candle::{DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::gptq_qwen2::{Config, ModelForCausalLM};
+use candle_transformers::models::quant_linear_qwen2::{Config, ModelForCausalLM};
+use candle_transformers::quantized_awq::AwqConfig;
 use candle_transformers::quantized_gptq::GptqConfig;
+use candle_transformers::quantized_linear::QuantMethod;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 #[derive(serde::Deserialize)]
 struct QuantizationConfig {
+    quant_method: String,
     bits: usize,
     group_size: usize,
 }
@@ -35,6 +39,22 @@ struct QuantizationConfig {
 #[derive(serde::Deserialize)]
 struct ConfigFile {
     quantization_config: QuantizationConfig,
+}
+
+fn quant_method_from_config(cfg: &QuantizationConfig) -> Result<QuantMethod> {
+    match cfg.quant_method.as_str() {
+        "gptq" => Ok(QuantMethod::Gptq(GptqConfig {
+            bits: cfg.bits,
+            group_size: cfg.group_size,
+        })),
+        "awq" => Ok(QuantMethod::Awq(AwqConfig {
+            bits: cfg.bits,
+            group_size: cfg.group_size,
+        })),
+        other => anyhow::bail!(
+            "unsupported quantization_config.quant_method {other:?}, expected \"gptq\" or \"awq\""
+        ),
+    }
 }
 
 struct TextGeneration {
@@ -223,19 +243,17 @@ fn main() -> Result<()> {
     let config_bytes = std::fs::read(&config_filename)?;
     let config: Config = serde_json::from_slice(&config_bytes)?;
     let quant_config: ConfigFile = serde_json::from_slice(&config_bytes)?;
-    let gptq_config = GptqConfig {
-        bits: quant_config.quantization_config.bits,
-        group_size: quant_config.quantization_config.group_size,
-    };
+    let method = quant_method_from_config(&quant_config.quantization_config)?;
 
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
-    // The packed `qweight`/`qzeros`/`g_idx` tensors are always read as i32 regardless of this
-    // dtype (see `gptq_linear`); this only controls the dense embed/norm/lm_head tensors and the
-    // dequantized GPTQ weights, which are converted to it.
+    // The packed `qweight`/`qzeros`/`g_idx` (GPTQ) or `qweight`/`qzeros`/`scales` (AWQ) tensors
+    // are always read as i32 regardless of this dtype (see `gptq_linear`/`awq_linear`); this only
+    // controls the dense embed/norm/lm_head tensors and the dequantized weights, which are
+    // converted to it.
     let dtype = DType::F32;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weights_filename, dtype, &device)? };
-    let model = ModelForCausalLM::new(&config, gptq_config, vb)?;
+    let model = ModelForCausalLM::new(&config, method, vb)?;
     println!("loaded the model in {:?}", start.elapsed());
 
     let mut pipeline = TextGeneration::new(
