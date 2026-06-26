@@ -2033,6 +2033,113 @@ impl Tensor {
         &self.device
     }
 
+    pub fn copy_from_slice_offset_u32(&self, src: &[u32], dst_offset: usize) -> Result<()> {
+        if self.dtype() != DType::U32 {
+            bail!(
+                "unexpected dtype in copy_from_slice_offset_u32, expected {:?}, got {:?}",
+                DType::U32,
+                self.dtype()
+            )
+        }
+        if !self.is_contiguous() {
+            bail!("copy_from_slice_offset_u32 expects a contiguous tensor")
+        }
+        if !self.device().is_cuda() {
+            bail!("copy_from_slice_offset_u32 expects a cuda tensor")
+        }
+
+        let (mut storage, layout) = self.storage_mut_and_layout();
+        let start = layout.start_offset() + dst_offset;
+        let elem_count = layout.shape().elem_count();
+        if start + src.len() > elem_count {
+            bail!(
+                "copy_from_slice_offset_u32 out of bounds (start={}, len={}, elem_count={})",
+                start,
+                src.len(),
+                elem_count
+            )
+        }
+
+        match &mut *storage {
+            Storage::Cuda(storage) => {
+                #[cfg(feature = "cuda")]
+                {
+                    let dev = storage.device.clone();
+                    let dst = storage.as_cuda_slice_mut::<u32>()?;
+                    let mut dst = dst.slice_mut(start..start + src.len());
+                    dev.memcpy_htod(src, &mut dst)?;
+                    Ok(())
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    let _ = storage;
+                    Err(Error::NotCompiledWithCudaSupport.bt())
+                }
+            }
+            Storage::Cpu(_) | Storage::Metal(_) => {
+                bail!("copy_from_slice_offset_u32 expects a cuda tensor")
+            }
+        }
+    }
+
+    pub fn copy_from_slice_u32(&self, src: &[u32]) -> Result<()> {
+        self.copy_from_slice_offset_u32(src, 0)
+    }
+
+    pub fn copy_from_tensor_f32(&self, src: &Tensor) -> Result<()> {
+        if self.dtype() != DType::F32 || src.dtype() != DType::F32 {
+            bail!(
+                "copy_from_tensor_f32 expects f32 tensors (dst={:?}, src={:?})",
+                self.dtype(),
+                src.dtype()
+            )
+        }
+        if !self.is_contiguous() || !src.is_contiguous() {
+            bail!("copy_from_tensor_f32 expects contiguous tensors")
+        }
+        if !self.device().is_cuda() || !src.device().is_cuda() {
+            bail!("copy_from_tensor_f32 expects cuda tensors")
+        }
+        if !self.device().same_device(src.device()) {
+            bail!("copy_from_tensor_f32 expects tensors on the same cuda device")
+        }
+        if self.shape().elem_count() != src.shape().elem_count() {
+            bail!(
+                "copy_from_tensor_f32 shape mismatch (dst_elems={}, src_elems={})",
+                self.shape().elem_count(),
+                src.shape().elem_count()
+            )
+        }
+
+        let (mut dst_storage, _dst_layout) = self.storage_mut_and_layout();
+        let (src_storage, _src_layout) = src.storage_and_layout();
+
+        match (&mut *dst_storage, &*src_storage) {
+            (Storage::Cuda(dst), Storage::Cuda(_src_storage)) => {
+                #[cfg(feature = "cuda")]
+                {
+                    let dst_start = _dst_layout.start_offset();
+                    let src_start = _src_layout.start_offset();
+                    let len = src.shape().elem_count();
+                    let dev = dst.device.clone();
+                    let src = _src_storage.as_cuda_slice::<f32>()?;
+                    let dst = dst.as_cuda_slice_mut::<f32>()?;
+                    let src = src.slice(src_start..src_start + len);
+                    let mut dst = dst.slice_mut(dst_start..dst_start + len);
+                    dev.memcpy_dtod(&src, &mut dst)?;
+                    Ok(())
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    let _ = dst;
+                    let _ = src;
+                    Err(Error::NotCompiledWithCudaSupport.bt())
+                }
+            }
+            _ => bail!("copy_from_tensor_f32 expects cuda tensors"),
+        }
+    }
+
     /// The tensor shape, i.e. dimension sizes on each axis.
     pub fn shape(&self) -> &Shape {
         self.layout().shape()
