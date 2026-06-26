@@ -14,6 +14,7 @@ pub mod imatrix_file;
 pub mod k_quants;
 #[cfg(feature = "metal")]
 pub mod metal;
+pub mod repack;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tokenizer;
 #[cfg(not(feature = "metal"))]
@@ -111,6 +112,7 @@ impl QStorage {
                 GgmlDType::Q6K => metal::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
+                GgmlDType::Q6Kx8 => crate::bail!("Q6Kx8 is CPU-only"),
             },
             Device::Cuda(d) => match dtype {
                 GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
@@ -128,6 +130,7 @@ impl QStorage {
                 GgmlDType::Q6K => cuda::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
+                GgmlDType::Q6Kx8 => crate::bail!("Q6Kx8 is CPU-only"),
             },
         }
     }
@@ -294,6 +297,11 @@ pub enum GgmlDType {
     Q5K,
     Q6K,
     Q8K,
+    /// 8-row-interleaved Q6_K for the fast aarch64 SDOT GEMM (`repack::BlockQ6Kx8`).
+    /// Baked offline (via gguf-requant `--pack`); llama.cpp will not read it. The
+    /// Q6_K analogue of the upstream runtime-repacked Q4_K x8 path, for the residual
+    /// Q6_K tensors (attn_v / ffn_down). CPU-only.
+    Q6Kx8,
 }
 
 impl GgmlDType {
@@ -315,6 +323,7 @@ impl GgmlDType {
             15 => Self::Q8K,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             30 => Self::BF16,
+            1001 => Self::Q6Kx8,
             _ => crate::bail!("unknown dtype for tensor {u}"),
         };
         Ok(dtype)
@@ -338,6 +347,7 @@ impl GgmlDType {
             Self::Q8K => 15,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             Self::BF16 => 30,
+            Self::Q6Kx8 => 1001,
         }
     }
 
@@ -359,6 +369,7 @@ impl GgmlDType {
             Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
             Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
             Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
+            Self::Q6Kx8 => unreachable!("Q6Kx8 loaded via qtensor_from_ggml/mmap"),
         }
     }
 
@@ -380,6 +391,8 @@ impl GgmlDType {
             Self::Q6K => Box::new(as_t_slice::<BlockQ6K>(data).to_vec()),
             Self::Q8K => Box::new(as_t_slice::<BlockQ8K>(data).to_vec()),
             Self::BF16 => Box::new(as_t_slice::<bf16>(data).to_vec()),
+            // n is not available here; Q6Kx8 is built in qtensor_from_ggml/mmap.
+            Self::Q6Kx8 => unreachable!("Q6Kx8 loaded via qtensor_from_ggml/mmap"),
         }
     }
 
@@ -402,6 +415,13 @@ impl GgmlDType {
             Self::Q5K => std::mem::size_of::<BlockQ5K>(),
             Self::Q6K => std::mem::size_of::<BlockQ6K>(),
             Self::Q8K => std::mem::size_of::<BlockQ8K>(),
+            // 8-row interleaved: type_size is the per-row block stride, so
+            // (n/8)*(k/256)*sizeof = exactly the BlockQ6Kx8 byte count.
+            Self::Q6Kx8 => {
+                let sz = std::mem::size_of::<repack::BlockQ6Kx8>();
+                debug_assert_eq!(sz % repack::Q4KX8_ROWS, 0, "BlockQ6Kx8 size {sz} not /8");
+                sz / repack::Q4KX8_ROWS
+            }
         }
     }
 
@@ -417,6 +437,7 @@ impl GgmlDType {
             Self::Q8_0 => k_quants::QK8_0,
             Self::Q8_1 => k_quants::QK8_1,
             Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K | Self::Q8K => k_quants::QK_K,
+            Self::Q6Kx8 => k_quants::QK_K,
         }
     }
 }

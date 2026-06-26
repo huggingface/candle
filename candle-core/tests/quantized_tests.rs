@@ -1117,6 +1117,8 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
+        // Baked CPU-only repack of Q6_K; same numerical error as Q6_K.
+        GgmlDType::Q6Kx8 => 0.000952,
     };
     Ok(err)
 }

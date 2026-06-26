@@ -184,6 +184,20 @@ pub fn qtensor_from_ggml(
         GgmlDType::Q6K => {
             from_raw_data::<k_quants::BlockQ6K>(raw_data, size_in_bytes, dims, device)
         }
+        GgmlDType::Q6Kx8 => {
+            // Pre-packed interleaved Q6_K: owned copy from the raw bytes. n = dims[0]
+            // (output channels); k = dims[1]. CPU only.
+            if !matches!(device, Device::Cpu) {
+                crate::bail!("Q6Kx8 is CPU-only");
+            }
+            let n = match dims.first() {
+                Some(n) => *n,
+                None => crate::bail!("Q6Kx8 tensor has no dims"),
+            };
+            let packed = super::repack::PackedQ6Kx8::from_bytes(&raw_data[..size_in_bytes], n);
+            let storage = QStorage::Cpu(Box::new(packed));
+            super::QTensor::new(storage, dims)
+        }
         _ => crate::bail!("quantized type {ggml_dtype:?} is not supported yet"),
     }
 }

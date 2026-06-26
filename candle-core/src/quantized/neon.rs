@@ -3,6 +3,7 @@ use super::k_quants::BlockQ4Kx8;
 use super::k_quants::{
     BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K,
 };
+use super::repack::BlockQ6Kx8;
 use byteorder::{ByteOrder, LittleEndian};
 
 #[allow(unused_imports)]
@@ -1324,4 +1325,125 @@ pub(crate) fn vec_dot_8_q4k_q8k(n: usize, xs: &[BlockQ4Kx8], ys: &[BlockQ8K]) ->
         vst1q_f32(out.as_mut_ptr().add(4), vacc_1);
     }
     out
+}
+
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn gemm_q6kx8_q8k<const MR: usize>(
+    packed: &[BlockQ6Kx8],
+    rows: &[&[BlockQ8K]; MR],
+    dst: &mut [f32],
+) {
+    const NC: usize = 8;
+    const QLC: usize = QK_K / 4; // 64 ql bytes / chunk
+    const QHC: usize = QK_K / 8; // 32 qh bytes / chunk
+    const NSC: usize = QK_K / 16; // 16 scales / super-block
+    debug_assert!(dst.len() == NC * MR);
+    let nb = packed.len();
+    let mut sumf = [[0f32; MR]; NC];
+    unsafe {
+        let m4b = vdupq_n_u8(0xF);
+        let mone = vdupq_n_u8(3);
+        for i in 0..nb {
+            let blk = &packed[i];
+            // Hoist base pointers once per block (same address-arithmetic win as the Q4 kernel):
+            // inner addresses become `base + const` instead of re-walking `blk.*.as_ptr().add(..)`
+            // and re-indexing `rows[a][i]` every chunk.
+            let qh_ptr = blk.qh.as_ptr();
+            let ql_ptr = blk.ql.as_ptr();
+            let sc_ptr = blk.scales.as_ptr();
+            let mut rq = [core::ptr::null::<i8>(); MR];
+            let mut rd = [0f32; MR];
+            for a in 0..MR {
+                rq[a] = rows[a][i].qs.as_ptr();
+                rd[a] = rows[a][i].d;
+            }
+            // Bias: isum_mins[c][a] = sum_s scales[c][s] * bsums[a][s] (16 sub-blocks).
+            let mut bsums = [(vdupq_n_s16(0), vdupq_n_s16(0)); MR];
+            for a in 0..MR {
+                let b = rows[a][i].bsums.as_ptr();
+                bsums[a] = (vld1q_s16(b), vld1q_s16(b.add(8)));
+            }
+            let mut isum_mins = [[0i32; MR]; NC];
+            for c in 0..NC {
+                let sc8 = vld1q_s8(sc_ptr.add(c * NSC));
+                let s_lo = vmovl_s8(vget_low_s8(sc8));
+                let s_hi = vmovl_s8(vget_high_s8(sc8));
+                for a in 0..MR {
+                    let prod = vaddq_s32(
+                        vaddq_s32(
+                            vmull_s16(vget_low_s16(bsums[a].0), vget_low_s16(s_lo)),
+                            vmull_s16(vget_high_s16(bsums[a].0), vget_high_s16(s_lo)),
+                        ),
+                        vaddq_s32(
+                            vmull_s16(vget_low_s16(bsums[a].1), vget_low_s16(s_hi)),
+                            vmull_s16(vget_high_s16(bsums[a].1), vget_high_s16(s_hi)),
+                        ),
+                    );
+                    isum_mins[c][a] = vaddvq_s32(prod);
+                }
+            }
+            // Main: isum[c][a].
+            let mut isum = [[0i32; MR]; NC];
+            for j in 0..QK_K / 128 {
+                let ql_base = j * (NC * QLC);
+                let qh_base = j * (NC * QHC);
+                for c in 0..NC {
+                    let qhbits = vld1q_u8_x2(qh_ptr.add(qh_base + c * QHC));
+                    let q6bits = vld1q_u8_x4(ql_ptr.add(ql_base + c * QLC));
+                    let sc = sc_ptr.add(c * NSC + j * 8);
+                    // First half: low nibbles + low two-bit highs.
+                    let q6h_0 = vshlq_n_u8(vandq_u8(mone, qhbits.0), 4);
+                    let q6h_1 = vshlq_n_u8(vandq_u8(mone, qhbits.1), 4);
+                    let q6h_2 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.0, 2)), 4);
+                    let q6h_3 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.1, 2)), 4);
+                    let b0 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.0, m4b), q6h_0));
+                    let b1 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.1, m4b), q6h_1));
+                    let b2 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.2, m4b), q6h_2));
+                    let b3 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.3, m4b), q6h_3));
+                    for a in 0..MR {
+                        let q8 = vld1q_s8_x4(rq[a].add(j * 128));
+                        let p0 = vdotq_s32(b0, q8.0);
+                        let p1 = vdotq_s32(b1, q8.1);
+                        isum[c][a] +=
+                            vaddvq_s32(p0) * (*sc as i32) + vaddvq_s32(p1) * (*sc.add(1) as i32);
+                        let p2 = vdotq_s32(b2, q8.2);
+                        let p3 = vdotq_s32(b3, q8.3);
+                        isum[c][a] += vaddvq_s32(p2) * (*sc.add(2) as i32)
+                            + vaddvq_s32(p3) * (*sc.add(3) as i32);
+                    }
+                    // Second half: high nibbles + high two-bit highs.
+                    let q6h_0 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.0, 4)), 4);
+                    let q6h_1 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.1, 4)), 4);
+                    let q6h_2 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.0, 6)), 4);
+                    let q6h_3 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.1, 6)), 4);
+                    let b0 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.0, 4), q6h_0));
+                    let b1 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.1, 4), q6h_1));
+                    let b2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.2, 4), q6h_2));
+                    let b3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.3, 4), q6h_3));
+                    for a in 0..MR {
+                        let q8 = vld1q_s8_x4(rq[a].add(j * 128 + 64));
+                        let p0 = vdotq_s32(b0, q8.0);
+                        let p1 = vdotq_s32(b1, q8.1);
+                        isum[c][a] += vaddvq_s32(p0) * (*sc.add(4) as i32)
+                            + vaddvq_s32(p1) * (*sc.add(5) as i32);
+                        let p2 = vdotq_s32(b2, q8.2);
+                        let p3 = vdotq_s32(b3, q8.3);
+                        isum[c][a] += vaddvq_s32(p2) * (*sc.add(6) as i32)
+                            + vaddvq_s32(p3) * (*sc.add(7) as i32);
+                    }
+                }
+            }
+            for c in 0..NC {
+                let dc = blk.d[c].to_f32();
+                for a in 0..MR {
+                    sumf[c][a] += dc * rd[a] * ((isum[c][a] - 32 * isum_mins[c][a]) as f32);
+                }
+            }
+        }
+        for c in 0..NC {
+            for a in 0..MR {
+                dst[c * MR + a] = sumf[c][a];
+            }
+        }
+    }
 }
