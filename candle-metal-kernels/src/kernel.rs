@@ -1,6 +1,6 @@
 use crate::source::{
-    AFFINE, BINARY, CAST, CONV, FILL, GEMV, INDEXING, MLX_GEMM, MLX_SORT, QUANTIZED, RANDOM,
-    REDUCE, SDPA, SORT, TERNARY, UNARY,
+    AFFINE, BINARY, CANDLE, CAST, CONV, FILL, GEMV, INDEXING, MLX_GEMM, MLX_SORT, QUANTIZED,
+    RANDOM, REDUCE, SDPA, SORT, TERNARY, UNARY,
 };
 use crate::utils::get_env_bool;
 use crate::{
@@ -101,6 +101,7 @@ impl Kernels {
             Source::Ternary => TERNARY,
             Source::Unary => UNARY,
             Source::Sdpa => SDPA,
+            Source::Candle => unreachable!("Candle uses precompiled library"),
         }
     }
 
@@ -115,12 +116,19 @@ impl Kernels {
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let lib = {
-                let source_content = self.get_library_source(source);
-                let compile_options = get_compile_options();
-                device
-                    .new_library_with_source(source_content, Some(&compile_options))
-                    .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+            let lib = match source {
+                Source::Candle => device.new_library_with_data(CANDLE).map_err(|e| {
+                    MetalKernelError::LoadLibraryError(format!(
+                        "Cannot load precompiled candle metal library: {e}"
+                    ))
+                })?,
+                source => {
+                    let source_content = self.get_library_source(source);
+                    let compile_options = get_compile_options();
+                    device
+                        .new_library_with_source(source_content, Some(&compile_options))
+                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+                }
             };
             libraries.insert(source, lib.clone());
             Ok(lib)

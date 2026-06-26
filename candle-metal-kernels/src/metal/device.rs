@@ -1,10 +1,22 @@
 use crate::{
     Buffer, CommandQueue, ComputePipeline, Function, Library, MTLResourceOptions, MetalKernelError,
 };
-use objc2::{rc::Retained, runtime::AnyObject, runtime::ProtocolObject};
-use objc2_foundation::NSString;
+use objc2::{msg_send, rc::Retained, runtime::AnyObject, runtime::ProtocolObject};
+use objc2_foundation::{NSError, NSString};
 use objc2_metal::{MTLCompileOptions, MTLCopyAllDevices, MTLCreateSystemDefaultDevice, MTLDevice};
 use std::{ffi::c_void, ptr};
+
+#[link(name = "System")]
+extern "C" {
+    fn dispatch_data_create(
+        buffer: ptr::NonNull<c_void>,
+        size: usize,
+        queue: Option<ptr::NonNull<c_void>>,
+        destructor: *mut c_void,
+    ) -> *mut AnyObject;
+
+    fn dispatch_release(object: *mut AnyObject);
+}
 
 /// Metal device type classification based on Apple Silicon architecture.
 ///
@@ -99,6 +111,23 @@ impl Device {
                     "Buffer".to_string(),
                 ))
         }
+    }
+
+    pub fn new_library_with_data(&self, data: &[u8]) -> Result<Library, MetalKernelError> {
+        let buffer = ptr::NonNull::new(data.as_ptr().cast_mut())
+            .ok_or_else(|| MetalKernelError::LoadLibraryError("empty metallib data".into()))?
+            .cast::<c_void>();
+        let dispatch_data =
+            unsafe { dispatch_data_create(buffer, data.len(), None, ptr::null_mut()) };
+        assert!(!dispatch_data.is_null());
+        let result: Result<
+            Retained<ProtocolObject<dyn objc2_metal::MTLLibrary>>,
+            Retained<NSError>,
+        > = unsafe { msg_send![self.as_ref(), newLibraryWithData: dispatch_data, error: _] };
+        unsafe { dispatch_release(dispatch_data) };
+        result
+            .map(Library::new)
+            .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))
     }
 
     pub fn new_library_with_source(
