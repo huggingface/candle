@@ -8,6 +8,13 @@
 //! [`candle_transformers::quantized_linear::QuantMethod`] and constructs the model with
 //! [`candle_transformers::models::quant_linear_qwen2::ModelForCausalLM`], which mirrors the dense
 //! Qwen2 model but routes every attention/MLP projection through `QuantizedLinear`.
+//!
+//! Block-wise FP8 (the third format `QuantizedLinear` supports) isn't wired up in this example:
+//! the small public Qwen2 FP8 checkpoints on the Hub (e.g. `RedHatAI/Qwen2-0.5B-Instruct-FP8`)
+//! use per-tensor static scales (vLLM/compressed-tensors layout), not the per-128x128-block
+//! `weight_scale_inv` layout `candle_transformers::quantized_fp8` implements (DeepSeek-V3-style),
+//! so there is no small checkpoint to demonstrate it end-to-end against; see that module's own
+//! unit tests for coverage instead.
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;

@@ -295,10 +295,13 @@ Cheatsheet:
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
 - [candle-onnx](./candle-onnx/): ONNX model evaluation.
-- [candle-gptq-kernels](./candle-gptq-kernels/), [candle-awq-kernels](./candle-awq-kernels/): fused
-  dequantize+GEMM CUDA/Metal kernels for GPTQ/AWQ-quantized linear layers, used by
-  `candle-transformers`' `quantized_linear::QuantizedLinear` when the corresponding
-  `{gptq,awq}-{cuda,metal}` feature is enabled.
+- [candle-gptq-kernels](./candle-gptq-kernels/), [candle-awq-kernels](./candle-awq-kernels/),
+  [candle-fp8-kernels](./candle-fp8-kernels/): fused dequantize+GEMM CUDA/Metal kernels for
+  GPTQ/AWQ/block-wise-FP8 quantized linear layers, used by `candle-transformers`'
+  `quantized_linear::QuantizedLinear` when the corresponding `{gptq,awq,fp8}-{cuda,metal}`
+  feature is enabled. Kept as separate crates rather than folded into `candle-kernels` so they're
+  only built for checkpoints that actually use that format; see
+  [candle-gptq-kernels' README](./candle-gptq-kernels/README.md) for the full rationale.
 
 ## FAQ
 

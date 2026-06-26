@@ -43,6 +43,15 @@ $ cargo run --example quantized-qwen2 --release -- \
     --prompt "Hello there "
 ```
 
+### FP8 is not demonstrated here
+
+`QuantizedLinear` also supports a third format, block-wise FP8 (DeepSeek-V3-style, with a
+per-128x128-block `weight_scale_inv` tensor). The small public Qwen2 FP8 checkpoints on the Hub
+(e.g. `RedHatAI/Qwen2-0.5B-Instruct-FP8`) don't use that layout — they use per-tensor static scalar
+scales (the vLLM / compressed-tensors layout), which `candle_transformers::quantized_fp8` does not
+implement. There is currently no small public checkpoint to demonstrate the block-wise FP8 path
+end-to-end against; see `candle_transformers::quantized_fp8`'s own unit tests for coverage instead.
+
 ## Implementation notes
 
 This example always uses the portable CPU dequantize-at-load path (`gptq_linear`/`awq_linear`),

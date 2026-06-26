@@ -16,6 +16,7 @@ exclude = [
     "candle-book",
     "candle-flash-attn",
     "candle-flash-attn-v3",
+    "candle-fp8-kernels",
     "candle-gptq-kernels",
     "candle-kernels",
     "candle-metal-kernels",
@@ -42,6 +43,7 @@ candle-awq-kernels = { path = "./candle-awq-kernels", version = "0.10.2", defaul
 candle-datasets = { path = "./candle-datasets", version = "0.10.2" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.10.2" }
 candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.10.2" }
+candle-fp8-kernels = { path = "./candle-fp8-kernels", version = "0.10.2", default-features = false }
 candle-gptq-kernels = { path = "./candle-gptq-kernels", version = "0.10.2", default-features = false }
 candle-kernels = { path = "./candle-kernels", version = "0.10.2" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.10.2" }
