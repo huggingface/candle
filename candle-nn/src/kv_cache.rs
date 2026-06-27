@@ -1127,6 +1127,7 @@ impl RawInterleavedKvCache {
 // Head-major f16 interleaved K/V cache for the f16-KV CPU flash kernels: f16 (half the
 // decode bandwidth), each kv head's positions contiguous. Per-head block h starts at
 // h * head_stride() and holds len positions of [K(d), V(d)].
+#[derive(Debug, Clone)]
 pub struct RawInterleavedKvCacheF16 {
     buf: Vec<half::f16>,
     h_kv: usize,

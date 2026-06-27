@@ -10,10 +10,22 @@ use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Storage, Tensor};
-use candle_nn::attention::cpu_flash::causal::causal_decode_f32_interleaved;
+use candle_nn::attention::cpu_flash::causal::{
+    causal_decode_f16kv_interleaved, causal_decode_f32_interleaved,
+};
 use candle_nn::attention::{flash_attn, AttnMask};
-use candle_nn::kv_cache::{ConcatKvCache, InterleavedKvCache, RawInterleavedKvCache};
+use candle_nn::kv_cache::{
+    ConcatKvCache, InterleavedKvCache, RawInterleavedKvCache, RawInterleavedKvCacheF16,
+};
 use candle_nn::{Activation, Embedding, Module};
+
+// f16 KV cache halves the decode cache bytes/token (memory/bandwidth win). Default
+// on; CANDLE_F16_KV=0 keeps the f32 cache for same-binary A/B.
+static F16_KV: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    std::env::var("CANDLE_F16_KV")
+        .map(|s| s != "0")
+        .unwrap_or(true)
+});
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -228,6 +240,7 @@ struct AttentionWeights {
     kv_cache: Option<ConcatKvCache>,
     interleaved_cache: Option<InterleavedKvCache>,
     raw_cache: Option<RawInterleavedKvCache>,
+    raw_cache_f16: Option<RawInterleavedKvCacheF16>,
     span_attn: tracing::Span,
 }
 
@@ -267,8 +280,13 @@ impl AttentionWeights {
         } else {
             None
         };
-        let raw_cache = if on_cpu {
+        let raw_cache = if on_cpu && !*F16_KV {
             Some(RawInterleavedKvCache::new(num_kv_heads, head_dim, 4096))
+        } else {
+            None
+        };
+        let raw_cache_f16 = if on_cpu && *F16_KV {
+            Some(RawInterleavedKvCacheF16::new(num_kv_heads, head_dim, 4096))
         } else {
             None
         };
@@ -291,6 +309,7 @@ impl AttentionWeights {
             kv_cache,
             interleaved_cache,
             raw_cache,
+            raw_cache_f16,
             span_attn,
         })
     }
@@ -352,23 +371,35 @@ impl AttentionWeights {
                     _ => candle::bail!("Expected CPU storage"),
                 };
 
-                // Write K, V into raw cache (no tensor allocation)
+                // Write K, V into the raw cache (no tensor alloc) and run the
+                // interleaved decode kernel; f16 cache halves bytes/token.
                 let k_len = self.num_kv_heads * self.head_dim;
-                let rc = self.raw_cache.as_mut().unwrap();
-                rc.write_kv(&k_data[..k_len], &v_data[..k_len]);
-
-                // Run interleaved decode kernel
-                let kv_len = rc.len();
                 let q_len = self.num_heads * self.head_dim;
-                let ctx = causal_decode_f32_interleaved(
-                    &q_data[..q_len],
-                    rc.data(),
-                    self.num_heads,
-                    self.num_kv_heads,
-                    self.head_dim,
-                    kv_len,
-                    scale,
-                )?;
+                let ctx = if let Some(rc) = self.raw_cache_f16.as_mut() {
+                    rc.write_kv(&k_data[..k_len], &v_data[..k_len]);
+                    causal_decode_f16kv_interleaved(
+                        &q_data[..q_len],
+                        rc.data(),
+                        rc.head_stride(),
+                        self.num_heads,
+                        self.num_kv_heads,
+                        self.head_dim,
+                        rc.len(),
+                        scale,
+                    )?
+                } else {
+                    let rc = self.raw_cache.as_mut().unwrap();
+                    rc.write_kv(&k_data[..k_len], &v_data[..k_len]);
+                    causal_decode_f32_interleaved(
+                        &q_data[..q_len],
+                        rc.data(),
+                        self.num_heads,
+                        self.num_kv_heads,
+                        self.head_dim,
+                        rc.len(),
+                        scale,
+                    )?
+                };
 
                 ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
             } else {
@@ -390,7 +421,11 @@ impl AttentionWeights {
                         Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[vl.start_offset()..],
                         _ => candle::bail!("Expected CPU"),
                     };
-                    self.raw_cache.as_mut().unwrap().write_kv_batch(k_d, v_d, l);
+                    if let Some(rc) = self.raw_cache_f16.as_mut() {
+                        rc.write_kv_batch(k_d, v_d, l);
+                    } else {
+                        self.raw_cache.as_mut().unwrap().write_kv_batch(k_d, v_d, l);
+                    }
                 }
 
                 let kv_k = kv.narrow(2, 0, self.head_dim)?.unsqueeze(0)?;
@@ -445,6 +480,9 @@ impl AttentionWeights {
             c.reset();
         }
         if let Some(c) = &mut self.raw_cache {
+            c.reset();
+        }
+        if let Some(c) = &mut self.raw_cache_f16 {
             c.reset();
         }
     }
