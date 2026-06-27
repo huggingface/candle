@@ -64,6 +64,11 @@ pub struct QTensor {
     /// Not always used.
     #[allow(dead_code)]
     repacked_qs: OnceLock<Option<Vec<u8>>>,
+    /// Lazily initialized lane=row (interleave-4) Q4_K repack for the aarch64
+    /// prefill GEMM (`repack::BlockQ4Kx8L`), raw bytes. Tied to this tensor's
+    /// lifetime so a dropped/reallocated weight can't return a stale pack. CPU-only.
+    #[allow(dead_code)]
+    repacked_laneq: OnceLock<Option<Vec<u8>>>,
 }
 
 impl Device {
@@ -558,6 +563,7 @@ impl QTensor {
             storage,
             shape,
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -579,6 +585,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -615,6 +622,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -659,6 +667,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -688,6 +697,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -965,22 +975,40 @@ impl crate::CustomOp1 for QTensor {
 
                     // Prefill (m >= 4): route to the lane=row 8x4 SDOT GEMM (llama's
                     // N1 prefill kernel), which beats the per-column SDOT path on
-                    // wide prompts. Decode (m < 4) returns false and falls through
-                    // to the upstream BlockQ4Kx8 repacked path below.
-                    {
+                    // wide prompts. The interleave-4 pack is cached on THIS tensor
+                    // (`repacked_laneq`, like `repacked_qs`) so it shares the weight's
+                    // lifetime - no stale reuse if the tensor is dropped/reallocated.
+                    // Decode (m < 4) or a disabled toggle falls through to the
+                    // upstream BlockQ4Kx8 path below.
+                    if dst_shape.elem_count() / n >= 4 && repack::prefill_lanerow_enabled() {
                         let m = dst_shape.elem_count() / n;
-                        let blocks = unsafe {
-                            std::slice::from_raw_parts(
-                                self_storage.as_ptr() as *const BlockQ4K,
-                                total_blocks,
-                            )
-                        };
-                        if repack::try_matmul_q4k_lanerow_prefill(
-                            (m, k, n),
-                            slice,
-                            blocks,
-                            &mut dst_storage,
-                        ) {
+                        let laneq = self.repacked_laneq.get_or_init(|| {
+                            let blocks = unsafe {
+                                std::slice::from_raw_parts(
+                                    self_storage.as_ptr() as *const BlockQ4K,
+                                    total_blocks,
+                                )
+                            };
+                            let packed =
+                                repack::repack_q4k_weight_laneq4(blocks, n, total_blocks / n);
+                            Some(packed.as_bytes().to_vec())
+                        });
+                        if let Some(laneq_bytes) = laneq {
+                            let laneq_blocks: &[repack::BlockQ4Kx8L] =
+                                <[repack::BlockQ4Kx8L]>::ref_from_bytes(laneq_bytes).map_err(
+                                    |_| {
+                                        crate::Error::Msg(
+                                            "repacked_laneq alignment invariant violated"
+                                                .to_string(),
+                                        )
+                                    },
+                                )?;
+                            repack::matmul_q4kx8l_lanerow(
+                                (m, k, n),
+                                slice,
+                                laneq_blocks,
+                                &mut dst_storage,
+                            );
                             return Ok((crate::CpuStorage::F32(dst_storage), dst_shape));
                         }
                     }

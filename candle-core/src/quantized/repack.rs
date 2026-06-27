@@ -13,13 +13,9 @@ use super::k_quants::{BlockQ6K, QK_K};
 #[cfg(target_feature = "neon")]
 use super::k_quants::{BlockQ8K, GgmlType};
 use half::f16;
-#[cfg(target_feature = "dotprod")]
-use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(target_feature = "neon")]
 use std::sync::LazyLock;
-#[cfg(target_feature = "dotprod")]
-use std::sync::Mutex;
 
 // ---- shared interleave constants ----
 pub(crate) const Q4KX8_ROWS: usize = 8;
@@ -654,15 +650,27 @@ mod tests {
     }
 }
 
+// Same fields/size (1152 B) as `k_quants::BlockQ4Kx8`; only the `qs` interleave
+// differs (bsi=4 lane=row vs #3643's bsi=8). zerocopy derives let the per-QTensor
+// `repacked_laneq` cache round-trip it through raw bytes, mirroring #3643.
 #[cfg(target_feature = "dotprod")]
+#[derive(
+    Clone,
+    Copy,
+    zerocopy::FromBytes,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::Immutable,
+)]
 #[repr(C)]
-#[derive(Clone)]
 pub struct BlockQ4Kx8L {
     pub(crate) d: [f16; 8],
     pub(crate) dmin: [f16; 8],
     pub(crate) scales: [u8; 96], // 6-bit scales+mins, repacked (8 cols)
-    pub(crate) qs: [u8; 1024],   // 4-bit quants, 8-byte round-robin interleave
+    pub(crate) qs: [u8; 1024],   // 4-bit quants, 4-byte round-robin interleave
 }
+#[cfg(target_feature = "dotprod")]
+const _: () = assert!(std::mem::size_of::<BlockQ4Kx8L>() == 1152);
 
 #[cfg(target_feature = "dotprod")]
 impl BlockQ4Kx8L {
@@ -865,27 +873,12 @@ pub(crate) fn repack_q4k_weight_laneq4(rows: &[BlockQ4K], n: usize, nb: usize) -
     packed
 }
 
-/// Interleave-4 laneq repack cache, keyed on the source Q4_K pointer. Populated on
-/// first lane=row prefill of each weight; model weights live for the whole run.
+/// Whether the lane=row Q4_K prefill path is enabled (default on for dotprod
+/// builds; `CANDLE_PREFILL_LANEROW=0` forces the upstream #3643 path). The repacked
+/// weight is cached per-QTensor (`QTensor::repacked_laneq`), not globally.
 #[cfg(target_feature = "dotprod")]
-static LANEQ4_CACHE: LazyLock<Mutex<HashMap<usize, Arc<Vec<BlockQ4Kx8L>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-#[cfg(target_feature = "dotprod")]
-fn packed_laneq4_cache_get(rhs: &[BlockQ4K], n: usize, nb: usize) -> Arc<Vec<BlockQ4Kx8L>> {
-    let key = rhs.as_ptr() as usize;
-    {
-        if let Some(p) = LANEQ4_CACHE.lock().unwrap().get(&key) {
-            return p.clone();
-        }
-    }
-    let mut map = LANEQ4_CACHE.lock().unwrap();
-    if let Some(p) = map.get(&key) {
-        return p.clone();
-    }
-    let arc = Arc::new(repack_q4k_weight_laneq4(rhs, n, nb));
-    map.insert(key, arc.clone());
-    arc
+pub(crate) fn prefill_lanerow_enabled() -> bool {
+    *PREFILL_LANEROW
 }
 
 /// Lane=row prefill GEMM driver: `dst(m,n) = lhs(m,k) x W^T` over interleave-4
@@ -966,25 +959,4 @@ pub(crate) fn matmul_q4kx8l_lanerow(
             }
         }
     });
-}
-
-/// Prefill entry point layered on the upstream (#3643) Q4_K matmul: if this is a
-/// wide GEMM (`m >= 4`) and the lane=row path is enabled, repack the weight to the
-/// interleave-4 laneq layout (cached) and run the `8x4` SDOT GEMM, returning `true`.
-/// Returns `false` for decode (`m < 4`) or when disabled, so the caller falls
-/// through to the upstream `BlockQ4Kx8` path (which owns decode). CPU-only.
-#[cfg(target_feature = "dotprod")]
-pub(crate) fn try_matmul_q4k_lanerow_prefill(
-    (m, k, n): (usize, usize, usize),
-    lhs: &[f32],
-    rhs_q4k: &[BlockQ4K],
-    dst: &mut [f32],
-) -> bool {
-    if m < 4 || !*PREFILL_LANEROW {
-        return false;
-    }
-    let nb = k / QK_K;
-    let packed = packed_laneq4_cache_get(rhs_q4k, n, nb);
-    matmul_q4kx8l_lanerow((m, k, n), lhs, &packed, dst);
-    true
 }
