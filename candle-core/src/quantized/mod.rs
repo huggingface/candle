@@ -14,6 +14,7 @@ pub mod imatrix_file;
 pub mod k_quants;
 #[cfg(feature = "metal")]
 pub mod metal;
+pub mod repack;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tokenizer;
 #[cfg(not(feature = "metal"))]
@@ -63,6 +64,10 @@ pub struct QTensor {
     /// Not always used.
     #[allow(dead_code)]
     repacked_qs: OnceLock<Option<Vec<u8>>>,
+    /// Lazily repacked lane=row Q4_K weight (`repack::BlockQ4Kx8L` bytes) for the
+    /// aarch64 prefill GEMM; tied to this tensor's lifetime so it can't go stale.
+    #[allow(dead_code)]
+    repacked_laneq: OnceLock<Option<Vec<u8>>>,
 }
 
 impl Device {
@@ -111,6 +116,7 @@ impl QStorage {
                 GgmlDType::Q6K => metal::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => metal::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => metal::load_quantized(d, as_t_slice::<bf16>(data)),
+                GgmlDType::Q6Kx8 => crate::bail!("Q6Kx8 is CPU-only"),
             },
             Device::Cuda(d) => match dtype {
                 GgmlDType::F32 => cuda::load_quantized(d, as_t_slice::<f32>(data)),
@@ -128,6 +134,7 @@ impl QStorage {
                 GgmlDType::Q6K => cuda::load_quantized(d, as_t_slice::<BlockQ6K>(data)),
                 GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
+                GgmlDType::Q6Kx8 => crate::bail!("Q6Kx8 is CPU-only"),
             },
         }
     }
@@ -294,6 +301,9 @@ pub enum GgmlDType {
     Q5K,
     Q6K,
     Q8K,
+    /// 8-row-interleaved Q6_K (`repack::BlockQ6Kx8`), baked offline via gguf-requant
+    /// `--pack`. CPU-only; the Q6_K analogue of the upstream Q4_K x8 path.
+    Q6Kx8,
 }
 
 impl GgmlDType {
@@ -315,6 +325,7 @@ impl GgmlDType {
             15 => Self::Q8K,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             30 => Self::BF16,
+            1001 => Self::Q6Kx8,
             _ => crate::bail!("unknown dtype for tensor {u}"),
         };
         Ok(dtype)
@@ -338,6 +349,7 @@ impl GgmlDType {
             Self::Q8K => 15,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             Self::BF16 => 30,
+            Self::Q6Kx8 => 1001,
         }
     }
 
@@ -359,6 +371,7 @@ impl GgmlDType {
             Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
             Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
             Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
+            Self::Q6Kx8 => unreachable!("Q6Kx8 loaded via qtensor_from_ggml/mmap"),
         }
     }
 
@@ -380,6 +393,8 @@ impl GgmlDType {
             Self::Q6K => Box::new(as_t_slice::<BlockQ6K>(data).to_vec()),
             Self::Q8K => Box::new(as_t_slice::<BlockQ8K>(data).to_vec()),
             Self::BF16 => Box::new(as_t_slice::<bf16>(data).to_vec()),
+            // n is not available here; Q6Kx8 is built in qtensor_from_ggml/mmap.
+            Self::Q6Kx8 => unreachable!("Q6Kx8 loaded via qtensor_from_ggml/mmap"),
         }
     }
 
@@ -402,6 +417,12 @@ impl GgmlDType {
             Self::Q5K => std::mem::size_of::<BlockQ5K>(),
             Self::Q6K => std::mem::size_of::<BlockQ6K>(),
             Self::Q8K => std::mem::size_of::<BlockQ8K>(),
+            // 8-row interleaved: per-row block stride = BlockQ6Kx8 size / 8.
+            Self::Q6Kx8 => {
+                let sz = std::mem::size_of::<repack::BlockQ6Kx8>();
+                debug_assert_eq!(sz % repack::Q4KX8_ROWS, 0, "BlockQ6Kx8 size {sz} not /8");
+                sz / repack::Q4KX8_ROWS
+            }
         }
     }
 
@@ -417,6 +438,7 @@ impl GgmlDType {
             Self::Q8_0 => k_quants::QK8_0,
             Self::Q8_1 => k_quants::QK8_1,
             Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K | Self::Q8K => k_quants::QK_K,
+            Self::Q6Kx8 => k_quants::QK_K,
         }
     }
 }
@@ -537,6 +559,7 @@ impl QTensor {
             storage,
             shape,
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -558,6 +581,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -594,6 +618,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -638,6 +663,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -667,6 +693,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_laneq: OnceLock::new(),
         })
     }
 
@@ -941,6 +968,43 @@ impl crate::CustomOp1 for QTensor {
 
                     let total_blocks =
                         self_storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
+
+                    // Prefill (m >= 4) routes to the lane=row 8x4 GEMM; the pack is
+                    // cached on this tensor (`repacked_laneq`). Decode (m < 4) or a
+                    // disabled toggle falls through to the #3643 path below.
+                    if dst_shape.elem_count() / n >= 4 && repack::prefill_lanerow_enabled() {
+                        let m = dst_shape.elem_count() / n;
+                        let laneq = self.repacked_laneq.get_or_init(|| {
+                            let blocks = unsafe {
+                                std::slice::from_raw_parts(
+                                    self_storage.as_ptr() as *const BlockQ4K,
+                                    total_blocks,
+                                )
+                            };
+                            let packed =
+                                repack::repack_q4k_weight_laneq4(blocks, n, total_blocks / n);
+                            Some(packed.as_bytes().to_vec())
+                        });
+                        if let Some(laneq_bytes) = laneq {
+                            let laneq_blocks: &[repack::BlockQ4Kx8L] =
+                                <[repack::BlockQ4Kx8L]>::ref_from_bytes(laneq_bytes).map_err(
+                                    |_| {
+                                        crate::Error::Msg(
+                                            "repacked_laneq alignment invariant violated"
+                                                .to_string(),
+                                        )
+                                    },
+                                )?;
+                            repack::matmul_q4kx8l_lanerow(
+                                (m, k, n),
+                                slice,
+                                laneq_blocks,
+                                &mut dst_storage,
+                            );
+                            return Ok((crate::CpuStorage::F32(dst_storage), dst_shape));
+                        }
+                    }
+
                     let repacked = self.repacked_qs.get_or_init(|| {
                         let blocks = unsafe {
                             std::slice::from_raw_parts(

@@ -10,6 +10,7 @@ mod utils;
 pub use utils::{
     binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2InPlace, Map2U8,
 };
+use utils::{par_binary_vec_f32, par_unary_vec_f32};
 mod conv2d;
 use conv2d::Conv2D;
 
@@ -2472,7 +2473,10 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F16(data))
             }
             Self::F32(storage) => {
-                let data = unary_map_vec(storage, layout, B::f32, B::f32_vec);
+                let data = match par_unary_vec_f32(storage, layout, B::f32_vec) {
+                    Some(d) => d,
+                    None => unary_map_vec(storage, layout, B::f32, B::f32_vec),
+                };
                 Ok(Self::F32(data))
             }
             Self::F64(storage) => {
@@ -2542,15 +2546,18 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F16(data))
             }
             (Self::F32(lhs), Self::F32(rhs)) => {
-                let data = binary_map_vec(
-                    lhs_l,
-                    rhs_l,
-                    lhs,
-                    rhs,
-                    B::f32,
-                    B::f32_vec,
-                    B::f32_scalar_vec,
-                );
+                let data = match par_binary_vec_f32(lhs, rhs, lhs_l, rhs_l, B::f32_vec) {
+                    Some(d) => d,
+                    None => binary_map_vec(
+                        lhs_l,
+                        rhs_l,
+                        lhs,
+                        rhs,
+                        B::f32,
+                        B::f32_vec,
+                        B::f32_scalar_vec,
+                    ),
+                };
                 Ok(Self::F32(data))
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
