@@ -452,18 +452,19 @@ mod par_elemwise_tests {
     use super::*;
     use crate::Shape;
 
-    // Parallel split must be byte-identical to the serial whole-range apply.
+    // Parallel split must be byte-identical to the serial whole-range apply. Drives
+    // par_range_apply directly so it runs regardless of the CANDLE_PAR_ELEMWISE gate.
     #[test]
     fn par_unary_matches_serial() {
         let n = 100_003usize; // not a multiple of typical worker counts (remainder)
         let src: Vec<f32> = (0..n).map(|i| (i as f32 * 0.001).sin()).collect();
-        let layout = Layout::contiguous(Shape::from_dims(&[n]));
         fn fv(s: &[f32], d: &mut [f32]) {
             for i in 0..s.len() {
                 d[i] = s[i] * s[i] - 0.5; // silu-like nonlinearity stand-in
             }
         }
-        let par = par_unary_vec_f32(&src, &layout, fv).expect("should parallelize");
+        let mut par = vec![0f32; n];
+        par_range_apply(n, par.as_mut_ptr(), |s, e, dst| fv(&src[s..e], dst));
         let mut serial = vec![0f32; n];
         fv(&src, &mut serial);
         assert_eq!(par, serial);
@@ -474,14 +475,13 @@ mod par_elemwise_tests {
         let n = 100_003usize;
         let a: Vec<f32> = (0..n).map(|i| i as f32 * 0.1).collect();
         let b: Vec<f32> = (0..n).map(|i| (i as f32).cos()).collect();
-        let la = Layout::contiguous(Shape::from_dims(&[n]));
-        let lb = Layout::contiguous(Shape::from_dims(&[n]));
         fn fv(x: &[f32], y: &[f32], d: &mut [f32]) {
             for i in 0..x.len() {
                 d[i] = x[i] * y[i] + 1.0;
             }
         }
-        let par = par_binary_vec_f32(&a, &b, &la, &lb, fv).expect("should parallelize");
+        let mut par = vec![0f32; n];
+        par_range_apply(n, par.as_mut_ptr(), |s, e, dst| fv(&a[s..e], &b[s..e], dst));
         let mut serial = vec![0f32; n];
         fv(&a, &b, &mut serial);
         assert_eq!(par, serial);
