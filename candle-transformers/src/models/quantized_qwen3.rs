@@ -390,7 +390,10 @@ impl AttentionWeights {
                         Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[vl.start_offset()..],
                         _ => candle::bail!("Expected CPU"),
                     };
-                    self.raw_cache_f16.as_mut().unwrap().write_kv_batch(k_d, v_d, l);
+                    self.raw_cache_f16
+                        .as_mut()
+                        .unwrap()
+                        .write_kv_batch(k_d, v_d, l);
                 }
 
                 let kv_k = kv.narrow(2, 0, self.head_dim)?.unsqueeze(0)?;
