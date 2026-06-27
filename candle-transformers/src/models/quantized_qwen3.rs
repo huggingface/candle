@@ -165,8 +165,13 @@ impl RotaryEmbedding {
     fn rope_neox_f32(&self, x: &Tensor, offset: usize) -> Result<Tensor> {
         let (b, h, t, d) = x.dims4()?;
         let half = d / 2;
-        // Runtime check (debug_assert is compiled out in release): a head dim that
-        // mismatches the table would index past cos[j]/sin[j] or use a partial table.
+        // Runtime checks (debug_assert is compiled out in release): RoPE needs a
+        // positive EVEN head dim - an odd d would leave the last coord unrotated and
+        // d <= 1 divides by half_d == 0 below - and it must match the table. The op
+        // path rejects these via cos_n_embd * 2 != n_embd.
+        if half == 0 || 2 * half != d {
+            candle::bail!("rope head dim {d} must be a positive even number");
+        }
         if half != self.half_d {
             candle::bail!(
                 "rope head dim {d} (half {half}) does not match table half_d {}",
@@ -700,6 +705,17 @@ mod tests {
         let dev = Device::Cpu;
         let rope = RotaryEmbedding::new(DType::F32, 16, 64, 1_000_000.0, &dev)?;
         let q = Tensor::zeros((1usize, 2usize, 1usize, 8usize), DType::F32, &dev)?;
+        assert!(rope.rope_neox_f32(&q, 0).is_err());
+        Ok(())
+    }
+
+    // An odd head dim (here d=1, which also has half_d==0) must bail, not panic on
+    // the max_pos division or leave the last coordinate unrotated.
+    #[test]
+    fn fused_rope_rejects_odd_head_dim() -> Result<()> {
+        let dev = Device::Cpu;
+        let rope = RotaryEmbedding::new(DType::F32, 1, 8, 1_000_000.0, &dev)?;
+        let q = Tensor::zeros((1usize, 1usize, 1usize, 1usize), DType::F32, &dev)?;
         assert!(rope.rope_neox_f32(&q, 0).is_err());
         Ok(())
     }
