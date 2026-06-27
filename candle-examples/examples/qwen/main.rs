@@ -29,10 +29,10 @@ enum Model {
 impl Model {
     fn forward(&mut self, xs: &Tensor, s: usize) -> candle::Result<Tensor> {
         match self {
-            Self::Moe(ref mut m) => m.forward(xs, s),
-            Self::Base(ref mut m) => m.forward(xs, s),
-            Self::Base3(ref mut m) => m.forward(xs, s),
-            Self::Moe3(ref mut m) => m.forward(xs, s),
+            Self::Moe(m) => m.forward(xs, s),
+            Self::Base(m) => m.forward(xs, s),
+            Self::Base3(m) => m.forward(xs, s),
+            Self::Moe3(m) => m.forward(xs, s),
         }
     }
 }
