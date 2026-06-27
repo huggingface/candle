@@ -6,19 +6,15 @@ use std::sync::LazyLock;
 
 type C = super::CpuStorage;
 
-// Parallelize large CONTIGUOUS elementwise ops (residual adds, SwiGLU mul, SiLU,
-// scaling) across the barrier pool. candle's `binary_map`/`unary_map` are serial
-// for-loops; at high thread counts they become an Amdahl drag on prefill (the
-// matmuls scale ~Nx but these don't). This threads only the contiguous f32 case at
-// the op-dispatch point - each output range is independent so it is bit-identical
-// to the serial path. Default ON; CANDLE_PAR_ELEMWISE=0 forces serial (A/B knob).
+// Parallelize large contiguous f32 elementwise ops across the barrier pool; serial
+// unary_map/binary_map are an Amdahl drag at high thread counts. Bit-identical to
+// serial (disjoint ranges). Default ON; CANDLE_PAR_ELEMWISE=0 forces serial.
 static PAR_ELEMWISE: LazyLock<bool> = LazyLock::new(|| {
     std::env::var("CANDLE_PAR_ELEMWISE")
         .map(|s| s != "0")
         .unwrap_or(true)
 });
-// Below this element count the per-op pool fork-join isn't worth it (tiny tensors:
-// norm scales, biases). Tunable via CANDLE_PAR_ELEMWISE_MIN.
+// Below this element count the fork-join isn't worth it. Tunable via CANDLE_PAR_ELEMWISE_MIN.
 static PAR_ELEMWISE_MIN: LazyLock<usize> = LazyLock::new(|| {
     std::env::var("CANDLE_PAR_ELEMWISE_MIN")
         .ok()
@@ -26,10 +22,8 @@ static PAR_ELEMWISE_MIN: LazyLock<usize> = LazyLock::new(|| {
         .unwrap_or(16_384)
 });
 
-/// Parallel contiguous f32 UNARY op: `out[i] = f_vec(src)[i]` over the contiguous
-/// region `layout` views, split across the barrier pool. Returns `None` (caller
-/// falls back to the serial path) unless enabled, large enough, and contiguous.
-/// `f_vec` is a pure elementwise vectorized fn, so per-range application is exact.
+// Parallel contiguous f32 unary op; None (serial fallback) unless enabled, large
+// enough, and contiguous.
 pub(crate) fn par_unary_vec_f32(
     storage: &[f32],
     layout: &Layout,
@@ -49,9 +43,8 @@ pub(crate) fn par_unary_vec_f32(
     Some(out)
 }
 
-/// Parallel contiguous f32 BINARY op for the no-broadcast same-shape case (residual
-/// add, SwiGLU mul). Returns `None` (serial fallback) unless enabled, large, and
-/// both operands contiguous with equal length.
+// Parallel contiguous f32 binary op, no-broadcast same-shape case; None unless
+// enabled, large, and both operands contiguous with equal length.
 pub(crate) fn par_binary_vec_f32(
     lhs: &[f32],
     rhs: &[f32],
@@ -77,9 +70,8 @@ pub(crate) fn par_binary_vec_f32(
     Some(out)
 }
 
-/// Split `0..len` into one contiguous range per pool worker (+ main) and run
-/// `f(start, end, &mut out[start..end])` on each. `out_ptr` must point to `len`
-/// writable f32. The ranges are disjoint so the raw-pointer writes are sound.
+// Split 0..len into one disjoint contiguous range per worker (+ main) and run f on
+// each. out_ptr must point to len writable f32; disjoint ranges keep the writes sound.
 fn par_range_apply(len: usize, out_ptr: *mut f32, f: impl Fn(usize, usize, &mut [f32]) + Sync) {
     struct P(*mut f32);
     unsafe impl Sync for P {}
@@ -460,8 +452,7 @@ mod par_elemwise_tests {
     use super::*;
     use crate::Shape;
 
-    // Parallel split MUST be byte-identical to applying f_vec over the whole range
-    // (each output element is independent). Large enough to exceed PAR_ELEMWISE_MIN.
+    // Parallel split must be byte-identical to the serial whole-range apply.
     #[test]
     fn par_unary_matches_serial() {
         let n = 100_003usize; // not a multiple of typical worker counts (remainder)
