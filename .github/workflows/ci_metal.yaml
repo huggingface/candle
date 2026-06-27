@@ -41,3 +41,8 @@ jobs:
         run: cargo test --manifest-path candle-awq-kernels/Cargo.toml --no-default-features --features metal -- --nocapture
       - name: Test (metal) - block-wise FP8 fused dequant+GEMM kernel
         run: cargo test --manifest-path candle-fp8-kernels/Cargo.toml --no-default-features --features metal -- --nocapture
+      - name: Test (metal) - FlashInfer-style decode attention kernel
+        # The crate is CPU-only by default; `--features metal` compiles (at runtime) and runs the
+        # Metal kernel. This step exercises both the Metal forward pass and the CPU reference fwd
+        # (decode_attention_cpu_matches_reference), which run side by side here.
+        run: cargo test --manifest-path candle-flashinfer-kernels/Cargo.toml --features metal -- --nocapture

@@ -37,3 +37,8 @@ jobs:
         run: cargo test -p candle-transformers --features cuda,gptq-cuda,awq-cuda,fp8-cuda
       - name: Test (cuda) - GPTQ tensor-core kernel correctness
         run: cargo test --manifest-path candle-gptq-kernels/Cargo.toml
+      - name: Build+test (cuda) - FlashInfer-style decode attention kernel
+        # `--features cuda` compiles and exercises the GPU kernel; the crate also builds
+        # CPU-only (default features), and the CPU reference fwd is covered by the
+        # decode_attention_cpu_matches_reference test either way.
+        run: cargo test --manifest-path candle-flashinfer-kernels/Cargo.toml --features cuda
