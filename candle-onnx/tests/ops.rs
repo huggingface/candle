@@ -1,11 +1,11 @@
 use candle::test_utils::to_vec2_round;
-use candle::{DType, Device, NdArray, Result, Tensor};
+use candle::{test_device, DType, Device, NdArray, Result, Tensor};
 use candle_onnx::onnx::attribute_proto::AttributeType;
 use candle_onnx::onnx::tensor_proto::DataType;
 use candle_onnx::onnx::tensor_shape_proto::{dimension, Dimension};
 use candle_onnx::onnx::{type_proto, TensorProto, TensorShapeProto, TypeProto};
 use candle_onnx::onnx::{AttributeProto, GraphProto, ModelProto, NodeProto, ValueInfoProto};
-use candle_onnx::simple_eval;
+use candle_onnx::{simple_eval, simple_eval_with_placement, Placement};
 use std::collections::HashMap;
 
 const INPUT_X: &str = "x";
@@ -33,7 +33,7 @@ fn create_model_proto_with_graph(graph: Option<GraphProto>) -> ModelProto {
 fn test_evaluation_fails_without_defined_graph() -> Result<()> {
     let manual_graph = create_model_proto_with_graph(None);
     let inputs: HashMap<String, Tensor> = HashMap::new();
-    match candle_onnx::simple_eval(&manual_graph, inputs) {
+    match candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu) {
         Err(err) => assert_eq!(err.to_string(), "no graph defined in proto"),
         Ok(_) => panic!("Expected an error due to undefined graph"),
     }
@@ -71,7 +71,7 @@ fn test_add_operation() -> Result<()> {
     inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
     inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -111,7 +111,7 @@ fn test_sub_operation() -> Result<()> {
     inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
     inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -151,7 +151,7 @@ fn test_mul_operation() -> Result<()> {
     inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
     inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -191,7 +191,7 @@ fn test_div_operation() -> Result<()> {
     inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
     inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -232,7 +232,7 @@ fn test_exp_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -277,7 +277,7 @@ fn test_equal_operation() -> Result<()> {
     inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
     inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -317,7 +317,7 @@ fn test_not_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), Tensor::new(&[0.], &Device::Cpu)?);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -374,7 +374,7 @@ fn test_matmul_operation() -> Result<()> {
         )?,
     );
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -439,7 +439,7 @@ fn test_reshape_operation() -> Result<()> {
     inputs.insert(INPUT_X.to_string(), x);
     inputs.insert(INPUT_Y.to_string(), y);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -499,7 +499,7 @@ fn test_logsoftmax_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -562,7 +562,7 @@ fn test_softmax_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -625,7 +625,7 @@ fn test_transpose_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -684,7 +684,7 @@ fn test_dropout_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -764,7 +764,7 @@ fn test_flatten_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs.clone())?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs.clone(), &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -809,7 +809,7 @@ fn test_flatten_operation() -> Result<()> {
         quantization_annotation: vec![],
     }));
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -958,7 +958,7 @@ fn test_constant_of_shape() -> Result<()> {
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), Tensor::new(input, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval
@@ -1022,7 +1022,7 @@ fn test_unsqueeze() -> Result<()> {
 
     let inputs = HashMap::from_iter([(INPUT_X.to_string(), x.clone()), (INPUT_Y.to_string(), y)]);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1149,7 +1149,7 @@ fn test_gather_operation() -> Result<()> {
         inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
         inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1306,7 +1306,7 @@ fn test_gather_elements() -> Result<()> {
         inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
         inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1360,7 +1360,7 @@ fn test_size_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1405,7 +1405,7 @@ fn test_shape_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1467,7 +1467,7 @@ fn test_abs_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1521,7 +1521,7 @@ fn test_cos_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1569,7 +1569,7 @@ fn test_sin_operation() -> Result<()> {
     let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &Device::Cpu)?;
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
     assert_eq!(to_vec2_round(z, 4)?, [[0.0, 0.8415], [0.9093, 0.1411]]);
@@ -1618,7 +1618,7 @@ fn test_neg_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1675,7 +1675,7 @@ fn test_tanh_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1732,7 +1732,7 @@ fn test_sigmoid_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1789,16 +1789,14 @@ fn test_gelu_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-    let results = z.to_vec2::<f32>()?;
-
     assert_eq!(
-        results,
-        vec![vec![0.0, 0.8413448], vec![1.9544997, 2.9959502]]
+        to_vec2_round(z, 6)?,
+        [[0.0, 0.841345], [1.9545, 2.99595]]
     );
 
     Ok(())
@@ -1843,7 +1841,7 @@ fn test_relu_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -1904,7 +1902,7 @@ fn test_prelu_operation() -> Result<()> {
     inputs.insert(INPUT_X.to_string(), x);
     inputs.insert(INPUT_Y.to_string(), y);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -2394,7 +2392,7 @@ fn test_reduce_max() -> Result<()> {
             }
         }
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -2913,7 +2911,7 @@ fn test_reduce_min() -> Result<()> {
             }
         }
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -3114,7 +3112,7 @@ fn test_reduce_mean() -> Result<()> {
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -3168,7 +3166,7 @@ fn test_sqrt() -> Result<()> {
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -3310,7 +3308,7 @@ fn test_random_uniform() -> Result<()> {
             sparse_initializer: vec![],
             quantization_annotation: vec![],
         }));
-        let eval = candle_onnx::simple_eval(&manual_graph, HashMap::new())?;
+        let eval = candle_onnx::simple_eval(&manual_graph, HashMap::new(), &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
         let min = z
@@ -3456,7 +3454,7 @@ fn test_random_normal() -> Result<()> {
             sparse_initializer: vec![],
             quantization_annotation: vec![],
         }));
-        let eval = candle_onnx::simple_eval(&manual_graph, HashMap::new())?;
+        let eval = candle_onnx::simple_eval(&manual_graph, HashMap::new(), &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -3526,7 +3524,7 @@ fn test_range() -> Result<()> {
         inputs.insert(INPUT_Y.to_string(), Tensor::new(limit, &Device::Cpu)?);
         inputs.insert(INPUT_A.to_string(), Tensor::new(delta, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval
@@ -3587,7 +3585,7 @@ fn test_greater() -> Result<()> {
         inputs.insert(INPUT_X.to_string(), Tensor::new(a, &Device::Cpu)?);
         inputs.insert(INPUT_Y.to_string(), Tensor::new(b, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval
@@ -3648,7 +3646,7 @@ fn test_less() -> Result<()> {
         inputs.insert(INPUT_X.to_string(), Tensor::new(a, &Device::Cpu)?);
         inputs.insert(INPUT_Y.to_string(), Tensor::new(b, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval
@@ -3705,7 +3703,7 @@ fn test_log() -> Result<()> {
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -3770,7 +3768,7 @@ fn test_min() -> Result<()> {
         inputs.insert(INPUT_Y.to_string(), Tensor::new(b, &Device::Cpu)?);
         inputs.insert(INPUT_A.to_string(), Tensor::new(c, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -3848,7 +3846,7 @@ fn test_where() -> Result<()> {
         inputs.insert(INPUT_Y.to_string(), Tensor::new(x, &Device::Cpu)?);
         inputs.insert(INPUT_A.to_string(), Tensor::new(y, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval
@@ -3921,7 +3919,7 @@ fn test_floor() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -3997,7 +3995,7 @@ fn test_ceil() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
 
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -4189,7 +4187,7 @@ fn test_argmin() -> Result<()> {
         }));
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
         let expected = Tensor::new(expected, &Device::Cpu)?;
@@ -4371,7 +4369,7 @@ fn test_argmax() -> Result<()> {
         }));
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
         let expected = Tensor::new(expected, &Device::Cpu)?;
@@ -4446,7 +4444,7 @@ fn test_leakyrelu() -> Result<()> {
         }));
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
         let expected = Tensor::new(expected, &Device::Cpu)?;
@@ -4565,7 +4563,7 @@ fn test_if() -> Result<()> {
     for cond in [1u8, 0] {
         let inputs =
             HashMap::from_iter([("cond".to_string(), Tensor::full(cond, (1,), &Device::Cpu)?)]);
-        let outputs = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let outputs = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         let expected = if cond != 0 { &x } else { &y };
         let Some(res) = outputs.get("res") else {
             candle::bail!("outputs didn't contain expected key `res`: {outputs:?}");
@@ -4628,7 +4626,7 @@ fn test_pad() -> Result<()> {
     }));
 
     let inputs = HashMap::from_iter([("data".to_string(), data), ("pads".to_string(), pads)]);
-    let res = candle_onnx::simple_eval(&model, inputs)?;
+    let res = candle_onnx::simple_eval(&model, inputs, &Device::Cpu)?;
     let Some(actual) = res.get("output") else {
         candle::bail!("outputs didn't contain expected key `output`: {res:?}");
     };
@@ -4709,6 +4707,7 @@ fn test_slice() -> Result<()> {
                 Tensor::from_vec(vec![1i64, 2], (2,), &Device::Cpu)?,
             ),
         ]),
+        &Device::Cpu,
     )?;
     let actual = outputs.get("result").unwrap().to_vec2::<i64>()?;
     assert_eq!(actual, vec![vec![5i64, 7]]);
@@ -4765,6 +4764,7 @@ fn test_slice() -> Result<()> {
                 Tensor::from_vec(vec![-1i64, 1000], (2,), &Device::Cpu)?,
             ),
         ]),
+        &Device::Cpu,
     )?;
     let actual = outputs.get("result").unwrap().to_vec2::<i64>()?;
     assert_eq!(actual, vec![vec![2i64, 3, 4]]);
@@ -5209,6 +5209,7 @@ fn test_lstm() -> Result<()> {
             ("h".to_string(), h0),
             ("c".to_string(), c0),
         ]),
+        &Device::Cpu,
     )?;
     let actual_output = result.get("output").unwrap();
     assert_eq!(output.dims(), actual_output.dims());
@@ -5489,6 +5490,7 @@ fn test_rnn() -> Result<()> {
             ("b".to_string(), b),
             ("h".to_string(), h),
         ]),
+        &Device::Cpu,
     )?;
     let actual_output = result.get("output").unwrap();
     assert_eq!(output.dims(), actual_output.dims());
@@ -5561,7 +5563,7 @@ fn test_expand_dim_changed() -> Result<()> {
         ("data".to_string(), data),
         ("new_shape".to_string(), new_shape),
     ]);
-    let result = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let result = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
 
     // Retrieve and compare the result
     let expanded = result.get("expanded").expect("Output 'expanded' not found");
@@ -5631,7 +5633,7 @@ fn test_expand_dim_unchanged() -> Result<()> {
         ("data".to_string(), data),
         ("new_shape".to_string(), new_shape),
     ]);
-    let result = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let result = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
 
     // Retrieve and compare the result
     let expanded = result.get("expanded").expect("Output 'expanded' not found");
@@ -5664,7 +5666,7 @@ fn test_split_equal_parts_1d_opset13() -> Result<()> {
     {
         let manual_graph =
             make_split_graph_helper(&["input"], &["output_1", "output_2", "output_3"], 0);
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs.clone())?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs.clone(), &Device::Cpu)?;
         assert_eq!(eval.len(), 3);
 
         let out1 = eval.get("output_1").expect("Output 'output_1' not found");
@@ -5682,7 +5684,7 @@ fn test_split_equal_parts_1d_opset13() -> Result<()> {
 
         let manual_graph =
             make_split_graph_helper(&["input", "split"], &["output_1", "output_2"], 0);
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 2);
 
         let out1 = eval.get("output_1").expect("Output 'output_1' not found");
@@ -5739,7 +5741,7 @@ fn test_reduce_sum_default_axes_keepdims() -> Result<()> {
         inputs.insert("data".to_string(), data);
         // inputs.insert("axes".to_string(), axes);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let reduced = eval.get("reduced").expect("Output 'reduced' not found");
@@ -5760,7 +5762,7 @@ fn test_reduce_sum_default_axes_keepdims() -> Result<()> {
         let mut inputs = HashMap::new();
         inputs.insert("data".to_string(), data.clone());
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let reduced = eval.get("reduced").expect("Output 'reduced' not found");
@@ -5791,7 +5793,7 @@ fn test_reduce_sum_do_not_keep_dims() -> Result<()> {
         inputs.insert("data".to_string(), data);
         inputs.insert("axes".to_string(), axes);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let reduced = eval.get("reduced").expect("Output 'reduced' not found");
@@ -5820,7 +5822,7 @@ fn test_reduce_sum_do_not_keep_dims() -> Result<()> {
         inputs.insert("data".to_string(), data.clone());
         inputs.insert("axes".to_string(), axes);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let reduced = eval.get("reduced").expect("Output 'reduced' not found");
@@ -6170,7 +6172,7 @@ fn test_xor() -> Result<()> {
             (INPUT_Y.to_string(), Tensor::new(other, &Device::Cpu)?),
         ]);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -6237,7 +6239,7 @@ fn test_sign_operation() -> Result<()> {
         INPUT_X.to_string(),
         Tensor::new(vec![-2f32, -1., 0., 1., 2.], &Device::Cpu)?,
     );
-    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
     assert_eq!(
@@ -6275,7 +6277,7 @@ fn test_selu_operator() -> Result<()> {
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
 
-        let eval = simple_eval(&default_graph, inputs)?;
+        let eval = simple_eval(&default_graph, inputs, &Device::Cpu)?;
         let output = eval.get("output").unwrap();
         let out_vec = to_vec2_round(output, 4)?;
         assert_eq!(out_vec, vec![vec![-1.1113, 0.0], vec![1.0507, 2.1014]]);
@@ -6318,7 +6320,7 @@ fn test_selu_operator() -> Result<()> {
         let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0, 2.0], (2, 2), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
-        let eval = simple_eval(&custom_graph, inputs)?;
+        let eval = simple_eval(&custom_graph, inputs, &Device::Cpu)?;
         let output = eval.get("output").unwrap();
         let out_vec = to_vec2_round(output, 4)?;
         assert_eq!(out_vec, vec![vec![-0.6321, 0.0], vec![0.5, 1.0]]);
@@ -6350,7 +6352,7 @@ fn test_selu_operator() -> Result<()> {
         let input = Tensor::from_vec(vec![-10.0f32, -5.0, 0.0, 10.0], (2, 2), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
-        let eval = simple_eval(&manual_graph, inputs)?;
+        let eval = simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         let output = eval.get("output").unwrap();
         let out_vec = to_vec2_round(output, 4)?;
         assert_eq!(
@@ -6400,7 +6402,7 @@ fn test_selu_operator() -> Result<()> {
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
 
-        let eval = simple_eval(&graph, inputs)?;
+        let eval = simple_eval(&graph, inputs, &Device::Cpu)?;
         let output = eval.get("output").unwrap();
         let out_vec = output.to_vec1::<f32>()?;
         let expected = vec![-3.7927232, 0.0, 3.0];
@@ -6434,7 +6436,7 @@ fn test_selu_operator() -> Result<()> {
         let input = Tensor::from_vec(vec![] as Vec<f32>, (0, 2), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
-        let eval = simple_eval(&manual_graph, inputs)?;
+        let eval = simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         let output = eval.get("output").unwrap();
         assert_eq!(output.dims(), &[0, 2]);
     }
@@ -6467,7 +6469,7 @@ fn test_hard_swish() -> candle::Result<()> {
         let mut inputs = HashMap::new();
         inputs.insert(INPUT_X.to_string(), input_tensor);
 
-        let outputs = simple_eval(&manual_graph, inputs)?;
+        let outputs = simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         let output = outputs.get(OUTPUT_Z).expect("missing output Z");
         let output_vec = output.to_vec1::<f32>()?;
 
@@ -6504,7 +6506,7 @@ fn test_hard_swish() -> candle::Result<()> {
         let mut inputs = HashMap::new();
         inputs.insert(INPUT_X.to_string(), input_tensor);
 
-        let outputs = simple_eval(&manual_graph, inputs)?;
+        let outputs = simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         let output = outputs.get(OUTPUT_Z).expect("missing output Z");
         let output_vec = output.to_vec1::<f32>()?;
 
@@ -6594,7 +6596,7 @@ fn test_scatternd_operation() -> Result<()> {
         inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &Device::Cpu)?);
         inputs.insert(INPUT_A.to_string(), Tensor::new(updates, &Device::Cpu)?);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -6656,7 +6658,7 @@ fn test_trilu_operation() -> Result<()> {
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), x);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -6722,7 +6724,7 @@ fn test_trilu_operation() -> Result<()> {
         inputs.insert(INPUT_X.to_string(), x);
         inputs.insert(INPUT_Y.to_string(), k);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -6778,7 +6780,7 @@ fn test_trilu_operation() -> Result<()> {
         inputs.insert(INPUT_X.to_string(), x);
         inputs.insert(INPUT_Y.to_string(), k);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -6853,7 +6855,7 @@ fn test_trilu_operation() -> Result<()> {
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), x);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -6932,7 +6934,7 @@ fn test_trilu_operation() -> Result<()> {
         inputs.insert(INPUT_X.to_string(), x);
         inputs.insert(INPUT_Y.to_string(), k);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -7010,7 +7012,7 @@ fn test_trilu_operation() -> Result<()> {
         inputs.insert(INPUT_X.to_string(), x);
         inputs.insert(INPUT_Y.to_string(), k);
 
-        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
@@ -7077,7 +7079,7 @@ fn test_one_hot() -> Result<()> {
         inputs.insert("depth".to_string(), depth_value);
         inputs.insert("values".to_string(), values_tensor);
 
-        let eval = simple_eval(&manual_graph, inputs)?;
+        let eval = simple_eval(&manual_graph, inputs, &Device::Cpu)?;
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
         let expected = vec![
@@ -7120,7 +7122,7 @@ fn test_one_hot() -> Result<()> {
         inputs.insert("depth".into(), depth);
         inputs.insert("values".into(), values);
 
-        let eval = simple_eval(&graph, inputs)?;
+        let eval = simple_eval(&graph, inputs, &Device::Cpu)?;
         let y = eval.get("y").unwrap();
         assert_eq!(y.dims(), &[2, 10, 2]);
     }
@@ -7155,7 +7157,7 @@ fn test_one_hot() -> Result<()> {
         inputs.insert("depth".into(), depth);
         inputs.insert("values".into(), values);
 
-        let eval = simple_eval(&graph, inputs)?;
+        let eval = simple_eval(&graph, inputs, &Device::Cpu)?;
         let y = eval.get("y").unwrap();
         assert_eq!(y.dims(), &[2, 10, 2]);
     }
@@ -7190,7 +7192,7 @@ fn test_one_hot() -> Result<()> {
         inputs.insert("depth".into(), depth);
         inputs.insert("values".into(), values);
 
-        let eval = simple_eval(&graph, inputs)?;
+        let eval = simple_eval(&graph, inputs, &Device::Cpu)?;
         let y = eval.get("y").unwrap();
         assert_eq!(y.dims(), &[3, 10]);
     }
@@ -7219,10 +7221,592 @@ fn test_one_hot() -> Result<()> {
         inputs.insert("depth".into(), depth);
         inputs.insert("values".into(), values);
 
-        let eval = simple_eval(&graph, inputs)?;
+        let eval = simple_eval(&graph, inputs, &Device::Cpu)?;
         let y = eval.get("y").unwrap();
         assert_eq!(y.dims(), &[3, 12]);
     }
 
+    Ok(())
+}
+
+// Regression tests for https://github.com/huggingface/candle/issues/3491
+//
+// `simple_eval` used to hard-code `Device::Cpu` for initializers, `Constant`
+// values, `ConstantOfShape` defaults, `RandomUniform`/`RandomNormal` outputs
+// and the `Gemm` alpha/beta scalars. This meant that running a model on a
+// non-CPU device failed with a device-mismatch error as soon as a user input
+// was combined with one of those values. Each test below builds a tiny graph
+// that exercises one of the previously hard-coded code paths and checks that
+// the result lives on the device that was passed to `simple_eval`.
+
+// "Add" between a user input and a graph initializer (i.e. a model weight),
+// which is exactly the scenario from the linked issue.
+fn simple_eval_initializer_device(device: &Device) -> Result<()> {
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Add".to_string(),
+            input: vec![INPUT_X.to_string(), "weight".to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        initializer: vec![TensorProto {
+            data_type: DataType::Float.into(),
+            dims: vec![3],
+            float_data: vec![1.0, 2.0, 3.0],
+            name: "weight".to_string(),
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::new(&[10f32, 20., 30.], device)?,
+    );
+
+    let eval = simple_eval(&graph, inputs, device)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(device));
+    assert_eq!(z.to_vec1::<f32>()?, vec![11f32, 22., 33.]);
+    Ok(())
+}
+test_device!(
+    simple_eval_initializer_device,
+    simple_eval_initializer_device_cpu,
+    simple_eval_initializer_device_gpu,
+    simple_eval_initializer_device_metal
+);
+
+// "Constant" node whose value comes from an attribute tensor.
+fn simple_eval_constant_device(device: &Device) -> Result<()> {
+    let tensor = TensorProto {
+        data_type: DataType::Float.into(),
+        dims: vec![3],
+        float_data: vec![1.0, 2.0, 3.0],
+        ..Default::default()
+    };
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Constant".to_string(),
+            attribute: vec![AttributeProto {
+                name: "value".to_string(),
+                r#type: AttributeType::Tensor.into(),
+                t: Some(tensor),
+                ..Default::default()
+            }],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let eval = simple_eval(&graph, HashMap::new(), device)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(device));
+    assert_eq!(z.to_vec1::<f32>()?, vec![1f32, 2., 3.]);
+    Ok(())
+}
+test_device!(
+    simple_eval_constant_device,
+    simple_eval_constant_device_cpu,
+    simple_eval_constant_device_gpu,
+    simple_eval_constant_device_metal
+);
+
+// "ConstantOfShape" without a "value" attribute, which falls back to a
+// default tensor that used to be pinned to the CPU.
+fn simple_eval_constant_of_shape_device(device: &Device) -> Result<()> {
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "ConstantOfShape".to_string(),
+            input: vec![INPUT_X.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2i64, 3], device)?);
+
+    let eval = simple_eval(&graph, inputs, device)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(device));
+    assert_eq!(
+        z.to_vec2::<f32>()?,
+        vec![vec![0f32, 0., 0.], vec![0f32, 0., 0.]]
+    );
+    Ok(())
+}
+test_device!(
+    simple_eval_constant_of_shape_device,
+    simple_eval_constant_of_shape_device_cpu,
+    simple_eval_constant_of_shape_device_gpu,
+    simple_eval_constant_of_shape_device_metal
+);
+
+// "RandomUniform" has no tensor inputs at all, so its output device only
+// ever came from the (previously hard-coded) device argument.
+fn simple_eval_random_uniform_device(device: &Device) -> Result<()> {
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "RandomUniform".to_string(),
+            attribute: vec![AttributeProto {
+                name: "shape".to_string(),
+                r#type: AttributeType::Ints.into(),
+                ints: vec![2, 2],
+                ..Default::default()
+            }],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let eval = simple_eval(&graph, HashMap::new(), device)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(device));
+    assert_eq!(z.dims(), &[2, 2]);
+    Ok(())
+}
+test_device!(
+    simple_eval_random_uniform_device,
+    simple_eval_random_uniform_device_cpu,
+    simple_eval_random_uniform_device_gpu,
+    simple_eval_random_uniform_device_metal
+);
+
+// Same as above but for "RandomNormal".
+fn simple_eval_random_normal_device(device: &Device) -> Result<()> {
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "RandomNormal".to_string(),
+            attribute: vec![AttributeProto {
+                name: "shape".to_string(),
+                r#type: AttributeType::Ints.into(),
+                ints: vec![2, 2],
+                ..Default::default()
+            }],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let eval = simple_eval(&graph, HashMap::new(), device)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(device));
+    assert_eq!(z.dims(), &[2, 2]);
+    Ok(())
+}
+test_device!(
+    simple_eval_random_normal_device,
+    simple_eval_random_normal_device_cpu,
+    simple_eval_random_normal_device_gpu,
+    simple_eval_random_normal_device_metal
+);
+
+// "Range" derives its output device from the "start" input tensor, which
+// must therefore stay on the device the caller asked for.
+fn simple_eval_range_device(device: &Device) -> Result<()> {
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Range".to_string(),
+            input: vec![
+                "start".to_string(),
+                "limit".to_string(),
+                "delta".to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert("start".to_string(), Tensor::new(0i64, device)?);
+    inputs.insert("limit".to_string(), Tensor::new(5i64, device)?);
+    inputs.insert("delta".to_string(), Tensor::new(1i64, device)?);
+
+    let eval = simple_eval(&graph, inputs, device)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(device));
+    assert_eq!(z.to_vec1::<i64>()?, vec![0i64, 1, 2, 3, 4]);
+    Ok(())
+}
+test_device!(
+    simple_eval_range_device,
+    simple_eval_range_device_cpu,
+    simple_eval_range_device_gpu,
+    simple_eval_range_device_metal
+);
+
+// "Gemm" without explicit alpha/beta attributes builds internal scalar
+// tensors that used to be pinned to the CPU regardless of the operands.
+fn simple_eval_gemm_device(device: &Device) -> Result<()> {
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Gemm".to_string(),
+            input: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(
+        "a".to_string(),
+        Tensor::from_vec(vec![1f32, 2., 3., 4.], (2, 2), device)?,
+    );
+    inputs.insert(
+        "b".to_string(),
+        Tensor::from_vec(vec![1f32, 0., 0., 1.], (2, 2), device)?,
+    );
+    inputs.insert(
+        "c".to_string(),
+        Tensor::from_vec(vec![0f32, 0., 0., 0.], (2, 2), device)?,
+    );
+
+    let eval = simple_eval(&graph, inputs, device)?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(device));
+    assert_eq!(z.to_vec2::<f32>()?, vec![vec![1f32, 2.], vec![3., 4.]]);
+    Ok(())
+}
+test_device!(
+    simple_eval_gemm_device,
+    simple_eval_gemm_device_cpu,
+    simple_eval_gemm_device_gpu,
+    simple_eval_gemm_device_metal
+);
+
+// Pipeline-parallelism tests for `simple_eval_with_placement`
+// (follow-up to https://github.com/huggingface/candle/issues/3491).
+//
+// They check that a single ONNX graph can be evaluated with its nodes spread
+// across several devices, with cross-device copies inserted automatically at
+// stage boundaries. The CPU-only tests exercise placement resolution and the
+// lazy-initializer logic; the CUDA tests (feature-gated) exercise the actual
+// cross-device transfers.
+
+// A two-stage graph: z = (x + w0) * w1, with the two compute nodes named so they
+// can be assigned to different stages/devices:
+//   node "stage0/add": t = x + w0
+//   node "stage1/mul": z = t * w1
+fn two_stage_graph() -> ModelProto {
+    create_model_proto_with_graph(Some(GraphProto {
+        node: vec![
+            NodeProto {
+                op_type: "Add".to_string(),
+                name: "stage0/add".to_string(),
+                input: vec![INPUT_X.to_string(), "w0".to_string()],
+                output: vec!["t".to_string()],
+                ..Default::default()
+            },
+            NodeProto {
+                op_type: "Mul".to_string(),
+                name: "stage1/mul".to_string(),
+                input: vec!["t".to_string(), "w1".to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                ..Default::default()
+            },
+        ],
+        initializer: vec![
+            TensorProto {
+                data_type: DataType::Float.into(),
+                dims: vec![3],
+                float_data: vec![1.0, 1.0, 1.0],
+                name: "w0".to_string(),
+                ..Default::default()
+            },
+            TensorProto {
+                data_type: DataType::Float.into(),
+                dims: vec![3],
+                float_data: vec![2.0, 2.0, 2.0],
+                name: "w1".to_string(),
+                ..Default::default()
+            },
+        ],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }))
+}
+
+// `Placement::uniform(device)` must behave exactly like `simple_eval(.., device)`.
+#[test]
+fn placement_uniform_matches_simple_eval() -> Result<()> {
+    let graph = two_stage_graph();
+    let device = Device::Cpu;
+    let x = Tensor::new(&[10f32, 20., 30.], &device)?;
+
+    let mut inputs = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), x.clone());
+    let baseline = simple_eval(&graph, inputs, &device)?;
+
+    let mut inputs = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), x);
+    let placed = simple_eval_with_placement(&graph, inputs, &Placement::uniform(&device))?;
+
+    let baseline_z = baseline.get(OUTPUT_Z).unwrap().to_vec1::<f32>()?;
+    let placed_z = placed.get(OUTPUT_Z).unwrap().to_vec1::<f32>()?;
+    assert_eq!(baseline_z, placed_z);
+    assert_eq!(placed_z, vec![22f32, 42., 62.]);
+    Ok(())
+}
+
+// Prefix rules + data-flow inheritance, exercised on CPU (so the devices compare
+// equal, but the resolution, lazy-init and input pre-staging code paths all run).
+#[test]
+fn placement_prefix_resolution_cpu() -> Result<()> {
+    let graph = two_stage_graph();
+    let cpu = Device::Cpu;
+    // "stage1/mul" is matched explicitly; "stage0/add" inherits cpu from `x`.
+    let placement = Placement::new(&cpu).with_prefix("stage1", &cpu);
+
+    let mut inputs = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[10f32, 20., 30.], &cpu)?);
+    let eval = simple_eval_with_placement(&graph, inputs, &placement)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(&cpu));
+    assert_eq!(z.to_vec1::<f32>()?, vec![22f32, 42., 62.]);
+    Ok(())
+}
+
+// A graph output that is an initializer consumed by no node must still be
+// returned (the lazy-initializer path materializes it on the fallback device).
+#[test]
+fn placement_initializer_only_output_cpu() -> Result<()> {
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![],
+        initializer: vec![TensorProto {
+            data_type: DataType::Float.into(),
+            dims: vec![3],
+            float_data: vec![1.0, 2.0, 3.0],
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let eval =
+        simple_eval_with_placement(&graph, HashMap::new(), &Placement::uniform(&Device::Cpu))?;
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.to_vec1::<f32>()?, vec![1f32, 2., 3.]);
+    Ok(())
+}
+
+// Real cross-device execution on a single CUDA GPU: stage0 runs on the CPU and
+// stage1 on cuda:0, so the run exercises both cuda->cpu and cpu->cuda boundary
+// copies as well as lazy initializer materialization on each device.
+#[cfg(feature = "cuda")]
+#[test]
+fn simple_eval_placement_cpu_to_cuda() -> Result<()> {
+    let cuda = Device::new_cuda(0)?;
+    let graph = two_stage_graph();
+    let placement = Placement::new(&cuda)
+        .with_prefix("stage0", &Device::Cpu)
+        .with_prefix("stage1", &cuda);
+
+    let mut inputs = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[10f32, 20., 30.], &cuda)?);
+    let eval = simple_eval_with_placement(&graph, inputs, &placement)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(&cuda));
+    assert_eq!(z.to_vec1::<f32>()?, vec![22f32, 42., 62.]);
+    Ok(())
+}
+
+// Pipeline split across two physical GPUs (the homelab use case): the boundary
+// inserts a genuine cuda:0 -> cuda:1 device-to-device copy. Ignored by default
+// since CI machines rarely have two GPUs; run with:
+//   cargo test --features cuda -- --ignored simple_eval_placement_two_cuda_gpus
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires two CUDA GPUs"]
+fn simple_eval_placement_two_cuda_gpus() -> Result<()> {
+    let cuda0 = Device::new_cuda(0)?;
+    let cuda1 = Device::new_cuda(1)?;
+    let graph = two_stage_graph();
+    // stage0 inherits cuda:0 from the input; stage1 is pinned to cuda:1.
+    let placement = Placement::new(&cuda0).with_prefix("stage1", &cuda1);
+
+    let mut inputs = HashMap::new();
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::new(&[10f32, 20., 30.], &cuda0)?,
+    );
+    let eval = simple_eval_with_placement(&graph, inputs, &placement)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(&cuda1));
+    assert_eq!(z.to_vec1::<f32>()?, vec![22f32, 42., 62.]);
+    Ok(())
+}
+
+// Regression test: under `Placement::uniform` (no prefix rules, used by plain
+// `simple_eval`), a node must always run on the fallback device, even when one
+// of its inputs is already present on a different device (e.g. a caller-supplied
+// input tensor). Inheriting the input's device in that case would silently
+// defeat the device argument that `simple_eval` is documented to honor.
+#[cfg(feature = "cuda")]
+#[test]
+fn simple_eval_placement_uniform_overrides_input_device() -> Result<()> {
+    let cuda = Device::new_cuda(0)?;
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Identity".to_string(),
+            name: "identity".to_string(),
+            input: vec![INPUT_X.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    // `x` lives on the CPU, but the requested fallback device is cuda:0.
+    let mut inputs = HashMap::new();
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::new(&[1f32, 2., 3.], &Device::Cpu)?,
+    );
+    let eval = simple_eval(&graph, inputs, &cuda)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert!(z.device().same_device(&cuda));
+    assert_eq!(z.to_vec1::<f32>()?, vec![1f32, 2., 3.]);
+    Ok(())
+}
+
+// Regression test: an `If` branch must be able to reference an initializer
+// declared on an enclosing (parent) graph even when no node of the parent graph
+// consumes that initializer directly. Since initializers are materialized
+// lazily on first use, the parent's initializer map must be inherited by the
+// subgraph rather than rebuilt from scratch, mirroring ONNX's lexical scoping
+// rules for control-flow subgraphs.
+#[test]
+fn placement_if_subgraph_uses_parent_initializer() -> Result<()> {
+    let then_branch = GraphProto {
+        node: vec![NodeProto {
+            op_type: "Identity".to_string(),
+            input: vec!["w".to_string()],
+            output: vec!["then_out".to_string()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: "then_out".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let else_branch = GraphProto {
+        node: vec![NodeProto {
+            op_type: "Constant".to_string(),
+            output: vec!["else_out".to_string()],
+            attribute: vec![AttributeProto {
+                name: "value".to_string(),
+                r#type: AttributeType::Tensor.into(),
+                t: Some(TensorProto {
+                    dims: vec![3],
+                    float_data: vec![0.0, 0.0, 0.0],
+                    data_type: DataType::Float.into(),
+                    ..TensorProto::default()
+                }),
+                ..AttributeProto::default()
+            }],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: "else_out".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    // `w` is declared on the parent graph but is only ever read from inside the
+    // `then_branch` subgraph: no parent-level node consumes it directly, so it
+    // is never eagerly materialized into `values` before the `If` node runs.
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "If".to_string(),
+            input: vec!["cond".to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            attribute: vec![
+                AttributeProto {
+                    name: "then_branch".to_string(),
+                    r#type: AttributeType::Graph.into(),
+                    g: Some(then_branch),
+                    ..AttributeProto::default()
+                },
+                AttributeProto {
+                    name: "else_branch".to_string(),
+                    r#type: AttributeType::Graph.into(),
+                    g: Some(else_branch),
+                    ..AttributeProto::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        initializer: vec![TensorProto {
+            data_type: DataType::Float.into(),
+            dims: vec![3],
+            float_data: vec![1.0, 2.0, 3.0],
+            name: "w".to_string(),
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert("cond".to_string(), Tensor::full(1u8, (1,), &Device::Cpu)?);
+    let eval = simple_eval(&graph, inputs, &Device::Cpu)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.to_vec1::<f32>()?, vec![1f32, 2., 3.]);
     Ok(())
 }
