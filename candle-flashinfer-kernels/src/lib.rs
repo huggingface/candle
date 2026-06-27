@@ -8,6 +8,8 @@
 //! kernels optimize); it is not a port of FlashInfer's own tensor-core/split-KV kernels.
 #[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(feature = "metal")]
+mod metal;
 
 #[cfg(feature = "cuda")]
 use candle::backend::BackendStorage;
@@ -17,6 +19,7 @@ use candle::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
 use candle::DType;
 use candle::{CpuStorage, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
+use rayon::prelude::*;
 
 pub struct DecodeAttention {
     pub softmax_scale: f32,
@@ -26,8 +29,10 @@ pub struct DecodeAttention {
 /// per sequence, with grouped-query attention (`num_heads` a multiple of `num_heads_kv`).
 ///
 /// Computes in f32 regardless of the storage type for numerical stability, honoring the
-/// arbitrary strides/offsets of the input layouts.
-fn cpu_decode_attention<T: Copy>(
+/// arbitrary strides/offsets of the input layouts. The independent `(batch, head)` outputs
+/// are computed in parallel with rayon, which matters on the many-core CPUs (incl. Apple
+/// Silicon) this serves as a fallback for.
+fn cpu_decode_attention<T: Copy + Send + Sync>(
     softmax_scale: f32,
     q: &[T],
     q_l: &Layout,
@@ -35,8 +40,8 @@ fn cpu_decode_attention<T: Copy>(
     k_l: &Layout,
     v: &[T],
     v_l: &Layout,
-    to_f32: impl Fn(T) -> f32,
-    from_f32: impl Fn(f32) -> T,
+    to_f32: impl Fn(T) -> f32 + Sync,
+    from_f32: impl Fn(f32) -> T + Sync,
 ) -> Result<(Vec<T>, Shape)> {
     let (b_sz, num_heads, head_dim) = q_l.shape().dims3()?;
     let (b_sz_k, num_heads_k, seqlen_k, head_dim_k) = k_l.shape().dims4()?;
@@ -65,14 +70,19 @@ fn cpu_decode_attention<T: Copy>(
     let (v_o, v_s) = (v_l.start_offset(), v_l.stride());
 
     let mut out = vec![from_f32(0f32); b_sz * num_heads * head_dim];
-    let mut scores = vec![0f32; seqlen_k];
-    for bi in 0..b_sz {
-        for h in 0..num_heads {
+    // Each `(batch, head)` writes a disjoint `head_dim`-sized slice of `out`, so they can run
+    // concurrently. Chunk index `c` maps back to `bi = c / num_heads`, `h = c % num_heads`.
+    out.par_chunks_mut(head_dim)
+        .enumerate()
+        .for_each(|(c, out_chunk)| {
+            let bi = c / num_heads;
+            let h = c % num_heads;
             let h_kv = h / group;
             // scores[l] = scale * dot(q[bi, h], k[bi, h_kv, l]), tracking the max for a
             // numerically-stable softmax.
+            let mut scores = vec![0f32; seqlen_k];
             let mut max = f32::NEG_INFINITY;
-            for l in 0..seqlen_k {
+            for (l, score) in scores.iter_mut().enumerate() {
                 let mut dot = 0f32;
                 for i in 0..head_dim {
                     let qv = to_f32(q[q_o + bi * q_s[0] + h * q_s[1] + i * q_s[2]]);
@@ -80,7 +90,7 @@ fn cpu_decode_attention<T: Copy>(
                     dot += qv * kv;
                 }
                 let s = dot * softmax_scale;
-                scores[l] = s;
+                *score = s;
                 if s > max {
                     max = s;
                 }
@@ -93,16 +103,15 @@ fn cpu_decode_attention<T: Copy>(
             }
             let inv = if denom > 0f32 { 1f32 / denom } else { 0f32 };
             // out[bi, h, i] = sum_l softmax[l] * v[bi, h_kv, l, i]
-            for i in 0..head_dim {
+            for (i, out_i) in out_chunk.iter_mut().enumerate() {
                 let mut acc = 0f32;
-                for l in 0..seqlen_k {
+                for (l, &p) in scores.iter().enumerate() {
                     let vv = to_f32(v[v_o + bi * v_s[0] + h_kv * v_s[1] + l * v_s[2] + i * v_s[3]]);
-                    acc += scores[l] * vv;
+                    acc += p * vv;
                 }
-                out[(bi * num_heads + h) * head_dim + i] = from_f32(acc * inv);
+                *out_i = from_f32(acc * inv);
             }
-        }
-    }
+        });
     Ok((out, (b_sz, num_heads, head_dim).into()))
 }
 
@@ -254,6 +263,19 @@ impl candle::CustomOp3 for DecodeAttention {
                 "flashinfer-decode-attention cpu: q/k/v must share dtype (f32/f16/bf16)"
             ),
         }
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        q: &candle::MetalStorage,
+        q_l: &Layout,
+        k: &candle::MetalStorage,
+        k_l: &Layout,
+        v: &candle::MetalStorage,
+        v_l: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        metal::decode_attention_metal_fwd(self, q, q_l, k, k_l, v, v_l)
     }
 
     #[cfg(feature = "cuda")]

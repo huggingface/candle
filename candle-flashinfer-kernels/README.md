@@ -28,8 +28,11 @@ let out = candle_flashinfer_kernels::flashinfer_decode_attention(
 
 - **`cuda`** (off by default): compiles and links the CUDA kernel and enables the
   GPU forward pass. Requires the CUDA toolchain (`nvcc`).
+- **`metal`** (off by default): enables the Metal forward pass on Apple Silicon
+  (`f32`/`f16`). The shader is compiled at runtime, so no extra toolchain is needed.
 
-Without the `cuda` feature the crate builds CPU-only and the same
+With no GPU feature the crate builds CPU-only and the same
 `flashinfer_decode_attention` entry point runs a reference CPU implementation
-(`cpu_fwd`, `f32`/`f16`/`bf16`). This makes the backend usable as a CPU fallback
-and testable without a GPU; enable `cuda` to run the GPU kernel on CUDA tensors.
+(`cpu_fwd`, `f32`/`f16`/`bf16`, parallelized across `(batch, head)` with rayon).
+This makes the backend usable as a CPU fallback and testable without a GPU;
+enable `cuda` or `metal` to run the corresponding GPU kernel.

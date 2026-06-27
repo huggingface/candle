@@ -65,3 +65,10 @@ fn decode_attention_cuda_matches_reference() -> Result<()> {
     };
     run_case(&device)
 }
+
+#[cfg(feature = "metal")]
+#[test]
+fn decode_attention_metal_matches_reference() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    run_case(&device)
+}
