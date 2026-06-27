@@ -45,6 +45,12 @@ impl CudaGraph {
     pub fn capture<T>(device: &CudaDevice, f: impl FnOnce() -> Result<T>) -> Result<(Self, T)> {
         let stream = device.cuda_stream();
         let _cache_guard = device.enable_cuda_graph_htod_cache();
+        // candle drives cudarc in multi-stream mode, so each kernel launch would
+        // otherwise emit cuStreamWaitEvent/cuEventRecord against the tensors'
+        // dependency-tracking events. Those event waits reference events recorded
+        // outside the capture region and make capture fail with
+        // CUDA_ERROR_INVALID_VALUE, so pause event tracking for the capture.
+        let _event_tracking_guard = device.pause_event_tracking();
 
         unsafe {
             sys::cuStreamBeginCapture_v2(
