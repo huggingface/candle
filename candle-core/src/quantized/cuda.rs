@@ -691,6 +691,8 @@ impl QCudaStorage {
             GgmlDType::Q5K => deq::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out),
             GgmlDType::Q6K => deq::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out),
             GgmlDType::Q8K => deq::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out),
+            // CPU-only; never loaded onto CUDA (from_data bails first).
+            GgmlDType::Q6Kx8 => crate::bail!("Q6Kx8 is CPU-only"),
         }
 
         self.device

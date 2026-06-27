@@ -3,6 +3,9 @@ use super::k_quants::BlockQ4Kx8;
 use super::k_quants::{
     BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K,
 };
+use super::repack::BlockQ6Kx8;
+#[cfg(target_feature = "dotprod")]
+use super::repack::{BlockQ4Kx8L, BlockQ8Kx4};
 use byteorder::{ByteOrder, LittleEndian};
 
 #[allow(unused_imports)]
@@ -1324,4 +1327,325 @@ pub(crate) fn vec_dot_8_q4k_q8k(n: usize, xs: &[BlockQ4Kx8], ys: &[BlockQ8K]) ->
         vst1q_f32(out.as_mut_ptr().add(4), vacc_1);
     }
     out
+}
+
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn gemm_q6kx8_q8k<const MR: usize>(
+    packed: &[BlockQ6Kx8],
+    rows: &[&[BlockQ8K]; MR],
+    dst: &mut [f32],
+) {
+    const NC: usize = 8;
+    const QLC: usize = QK_K / 4; // 64 ql bytes / chunk
+    const QHC: usize = QK_K / 8; // 32 qh bytes / chunk
+    const NSC: usize = QK_K / 16; // 16 scales / super-block
+    debug_assert!(dst.len() == NC * MR);
+    let nb = packed.len();
+    let mut sumf = [[0f32; MR]; NC];
+    unsafe {
+        let m4b = vdupq_n_u8(0xF);
+        let mone = vdupq_n_u8(3);
+        for i in 0..nb {
+            let blk = &packed[i];
+            // Hoist base pointers once per block (same address-arithmetic win as the Q4 kernel):
+            // inner addresses become `base + const` instead of re-walking `blk.*.as_ptr().add(..)`
+            // and re-indexing `rows[a][i]` every chunk.
+            let qh_ptr = blk.qh.as_ptr();
+            let ql_ptr = blk.ql.as_ptr();
+            let sc_ptr = blk.scales.as_ptr();
+            let mut rq = [core::ptr::null::<i8>(); MR];
+            let mut rd = [0f32; MR];
+            for a in 0..MR {
+                rq[a] = rows[a][i].qs.as_ptr();
+                rd[a] = rows[a][i].d;
+            }
+            // Bias: isum_mins[c][a] = sum_s scales[c][s] * bsums[a][s] (16 sub-blocks).
+            let mut bsums = [(vdupq_n_s16(0), vdupq_n_s16(0)); MR];
+            for a in 0..MR {
+                let b = rows[a][i].bsums.as_ptr();
+                bsums[a] = (vld1q_s16(b), vld1q_s16(b.add(8)));
+            }
+            let mut isum_mins = [[0i32; MR]; NC];
+            for c in 0..NC {
+                let sc8 = vld1q_s8(sc_ptr.add(c * NSC));
+                let s_lo = vmovl_s8(vget_low_s8(sc8));
+                let s_hi = vmovl_s8(vget_high_s8(sc8));
+                for a in 0..MR {
+                    let prod = vaddq_s32(
+                        vaddq_s32(
+                            vmull_s16(vget_low_s16(bsums[a].0), vget_low_s16(s_lo)),
+                            vmull_s16(vget_high_s16(bsums[a].0), vget_high_s16(s_lo)),
+                        ),
+                        vaddq_s32(
+                            vmull_s16(vget_low_s16(bsums[a].1), vget_low_s16(s_hi)),
+                            vmull_s16(vget_high_s16(bsums[a].1), vget_high_s16(s_hi)),
+                        ),
+                    );
+                    isum_mins[c][a] = vaddvq_s32(prod);
+                }
+            }
+            // Main: isum[c][a].
+            let mut isum = [[0i32; MR]; NC];
+            for j in 0..QK_K / 128 {
+                let ql_base = j * (NC * QLC);
+                let qh_base = j * (NC * QHC);
+                for c in 0..NC {
+                    let qhbits = vld1q_u8_x2(qh_ptr.add(qh_base + c * QHC));
+                    let q6bits = vld1q_u8_x4(ql_ptr.add(ql_base + c * QLC));
+                    let sc = sc_ptr.add(c * NSC + j * 8);
+                    // First half: low nibbles + low two-bit highs.
+                    let q6h_0 = vshlq_n_u8(vandq_u8(mone, qhbits.0), 4);
+                    let q6h_1 = vshlq_n_u8(vandq_u8(mone, qhbits.1), 4);
+                    let q6h_2 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.0, 2)), 4);
+                    let q6h_3 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.1, 2)), 4);
+                    let b0 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.0, m4b), q6h_0));
+                    let b1 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.1, m4b), q6h_1));
+                    let b2 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.2, m4b), q6h_2));
+                    let b3 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.3, m4b), q6h_3));
+                    for a in 0..MR {
+                        let q8 = vld1q_s8_x4(rq[a].add(j * 128));
+                        let p0 = vdotq_s32(b0, q8.0);
+                        let p1 = vdotq_s32(b1, q8.1);
+                        isum[c][a] +=
+                            vaddvq_s32(p0) * (*sc as i32) + vaddvq_s32(p1) * (*sc.add(1) as i32);
+                        let p2 = vdotq_s32(b2, q8.2);
+                        let p3 = vdotq_s32(b3, q8.3);
+                        isum[c][a] += vaddvq_s32(p2) * (*sc.add(2) as i32)
+                            + vaddvq_s32(p3) * (*sc.add(3) as i32);
+                    }
+                    // Second half: high nibbles + high two-bit highs.
+                    let q6h_0 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.0, 4)), 4);
+                    let q6h_1 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.1, 4)), 4);
+                    let q6h_2 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.0, 6)), 4);
+                    let q6h_3 = vshlq_n_u8(vandq_u8(mone, vshrq_n_u8(qhbits.1, 6)), 4);
+                    let b0 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.0, 4), q6h_0));
+                    let b1 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.1, 4), q6h_1));
+                    let b2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.2, 4), q6h_2));
+                    let b3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.3, 4), q6h_3));
+                    for a in 0..MR {
+                        let q8 = vld1q_s8_x4(rq[a].add(j * 128 + 64));
+                        let p0 = vdotq_s32(b0, q8.0);
+                        let p1 = vdotq_s32(b1, q8.1);
+                        isum[c][a] += vaddvq_s32(p0) * (*sc.add(4) as i32)
+                            + vaddvq_s32(p1) * (*sc.add(5) as i32);
+                        let p2 = vdotq_s32(b2, q8.2);
+                        let p3 = vdotq_s32(b3, q8.3);
+                        isum[c][a] += vaddvq_s32(p2) * (*sc.add(6) as i32)
+                            + vaddvq_s32(p3) * (*sc.add(7) as i32);
+                    }
+                }
+            }
+            for c in 0..NC {
+                let dc = blk.d[c].to_f32();
+                for a in 0..MR {
+                    sumf[c][a] += dc * rd[a] * ((isum[c][a] - 32 * isum_mins[c][a]) as f32);
+                }
+            }
+        }
+        for c in 0..NC {
+            for a in 0..MR {
+                dst[c * MR + a] = sumf[c][a];
+            }
+        }
+    }
+}
+
+// Unpack a 12-byte laneq scale group into 8 i8 scales + an int16x8 of mins.
+#[cfg(target_feature = "dotprod")]
+#[inline(always)]
+unsafe fn decode_q_kx8_6bit_scales(
+    scales_in: &[u8],
+    out_mins: &mut int16x8_t,
+    out_scales: &mut [i8; 8],
+) {
+    const KMASK1: u32 = 0x3f3f_3f3f;
+    const KMASK2: u32 = 0x0f0f_0f0f;
+    const KMASK3: u32 = 0x0303_0303;
+    let sm = [
+        u32::from_le_bytes([scales_in[0], scales_in[1], scales_in[2], scales_in[3]]),
+        u32::from_le_bytes([scales_in[4], scales_in[5], scales_in[6], scales_in[7]]),
+        u32::from_le_bytes([scales_in[8], scales_in[9], scales_in[10], scales_in[11]]),
+    ];
+    let mins_0_3 = sm[1] & KMASK1;
+    let mins_4_7 = ((sm[2] >> 4) & KMASK2) | (((sm[1] >> 6) & KMASK3) << 4);
+    let mins_u32 = [mins_0_3, mins_4_7];
+    let mins_u8 = vreinterpret_u8_u32(vld1_u32(mins_u32.as_ptr()));
+    *out_mins = vreinterpretq_s16_u16(vmovl_u8(mins_u8));
+    let s0 = (sm[0] & KMASK1).to_le_bytes();
+    let s1 = ((sm[2] & KMASK2) | (((sm[0] >> 6) & KMASK3) << 4)).to_le_bytes();
+    for l in 0..4 {
+        out_scales[l] = s0[l] as i8;
+        out_scales[4 + l] = s1[l] as i8;
+    }
+}
+
+// Lane-indexed SDOT (emits `sdot ... .4b[LANE]`; the std vdotq_laneq_s32 is unstable).
+// LANE selects the activation row, so one weight load feeds all 4 rows of the tile.
+#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+#[inline(always)]
+unsafe fn vdot_laneq<const LANE: i32>(mut acc: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_t {
+    core::arch::asm!(
+        "sdot {acc:v}.4s, {a:v}.16b, {b:v}.4b[{lane}]",
+        acc = inout(vreg) acc,
+        a = in(vreg) a,
+        b = in(vreg) b,
+        lane = const LANE,
+        options(pure, nomem, nostack, preserves_flags),
+    );
+    acc
+}
+
+// llama's DOTPROD N1 prefill kernel (ggml_gemm_q4_K_8x4_q8_K): 8 channels x 4 rows,
+// row-major 4x8 tile. The SDOT lane selects the row (one weight load feeds 4 rows)
+// and the 6-bit scale folds to f32 per sub-block, keeping ~16 live int accs so the
+// tile fits the 32 NEON regs. Equivalent to the scalar Q4_K dot mod f32 reassociation.
+#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn gemm_q4kx8_q8k_lanerow(q4: &[BlockQ4Kx8L], q8: &[BlockQ8Kx4], dst: &mut [f32]) {
+    let nb = q4.len();
+    debug_assert!(q8.len() == nb && dst.len() == 32);
+    unsafe {
+        let m4b = vdupq_n_u8(0x0f);
+        // f32 output accumulators: acc_f32[2*row + cg], cg 0 = cols 0123, 1 = 4567.
+        let mut acc_f32 = [vdupq_n_f32(0.0); 8];
+        for b in 0..nb {
+            let q4b = &q4[b];
+            let q8b = &q8[b];
+            let q4d0 = {
+                let a: [f32; 4] = core::array::from_fn(|l| q4b.d[l].to_f32());
+                vld1q_f32(a.as_ptr())
+            };
+            let q4d1 = {
+                let a: [f32; 4] = core::array::from_fn(|l| q4b.d[4 + l].to_f32());
+                vld1q_f32(a.as_ptr())
+            };
+            let q4m0 = {
+                let a: [f32; 4] = core::array::from_fn(|l| q4b.dmin[l].to_f32());
+                vld1q_f32(a.as_ptr())
+            };
+            let q4m1 = {
+                let a: [f32; 4] = core::array::from_fn(|l| q4b.dmin[4 + l].to_f32());
+                vld1q_f32(a.as_ptr())
+            };
+            let q8d = vld1q_f32(q8b.d.as_ptr());
+            // Per-row super-block scale/min (q4_d * q8_d[row]).
+            let sbd_s0 = [
+                vmulq_laneq_f32(q4d0, q8d, 0),
+                vmulq_laneq_f32(q4d0, q8d, 1),
+                vmulq_laneq_f32(q4d0, q8d, 2),
+                vmulq_laneq_f32(q4d0, q8d, 3),
+            ];
+            let sbd_s1 = [
+                vmulq_laneq_f32(q4d1, q8d, 0),
+                vmulq_laneq_f32(q4d1, q8d, 1),
+                vmulq_laneq_f32(q4d1, q8d, 2),
+                vmulq_laneq_f32(q4d1, q8d, 3),
+            ];
+            let sbd_m0 = [
+                vmulq_laneq_f32(q4m0, q8d, 0),
+                vmulq_laneq_f32(q4m0, q8d, 1),
+                vmulq_laneq_f32(q4m0, q8d, 2),
+                vmulq_laneq_f32(q4m0, q8d, 3),
+            ];
+            let sbd_m1 = [
+                vmulq_laneq_f32(q4m1, q8d, 0),
+                vmulq_laneq_f32(q4m1, q8d, 1),
+                vmulq_laneq_f32(q4m1, q8d, 2),
+                vmulq_laneq_f32(q4m1, q8d, 3),
+            ];
+            let mut bsums_arr = [[0i16; 8]; 4];
+            for r in 0..4 {
+                let p = q8b.bsums.as_ptr().add(16 * r);
+                let v = vpaddq_s16(vld1q_s16(p), vld1q_s16(p.add(8)));
+                vst1q_s16(bsums_arr[r].as_mut_ptr(), v);
+            }
+            let mut bias_acc = [vdupq_n_s32(0); 8];
+            for sb in 0..QK_K / 64 {
+                let mut acc_lo = [vdupq_n_s32(0); 8]; // [row]=cols0123, [row+4]=4567
+                let mut acc_hi = [vdupq_n_s32(0); 8];
+                let mut q4sb_scales = [vdupq_n_s16(0); 2];
+                let mut q4sb_mins = [vdupq_n_s16(0); 2];
+                for i in 0..2 {
+                    let mut aux = [0i8; 8];
+                    decode_q_kx8_6bit_scales(
+                        &q4b.scales[sb * 24 + i * 12..],
+                        &mut q4sb_mins[i],
+                        &mut aux,
+                    );
+                    q4sb_scales[i] = vmovl_s8(vld1_s8(aux.as_ptr()));
+                }
+                for k in 0..8 {
+                    let q8_blk0 = vld1q_s8(q8b.qs.as_ptr().add(sb * 256 + 16 * k));
+                    let q8_blk1 = vld1q_s8(q8b.qs.as_ptr().add(sb * 256 + 16 * k + 128));
+                    let q4_0123 = vld1q_u8(q4b.qs.as_ptr().add(sb * QK_K + 32 * k));
+                    let q4_4567 = vld1q_u8(q4b.qs.as_ptr().add(sb * QK_K + 32 * k + 16));
+                    let lo0 = vreinterpretq_s8_u8(vandq_u8(q4_0123, m4b));
+                    let hi0 = vreinterpretq_s8_u8(vshrq_n_u8(q4_0123, 4));
+                    let lo1 = vreinterpretq_s8_u8(vandq_u8(q4_4567, m4b));
+                    let hi1 = vreinterpretq_s8_u8(vshrq_n_u8(q4_4567, 4));
+                    // One weight load feeds all 4 rows; LANE = row.
+                    acc_lo[0] = vdot_laneq::<0>(acc_lo[0], lo0, q8_blk0);
+                    acc_lo[1] = vdot_laneq::<1>(acc_lo[1], lo0, q8_blk0);
+                    acc_lo[2] = vdot_laneq::<2>(acc_lo[2], lo0, q8_blk0);
+                    acc_lo[3] = vdot_laneq::<3>(acc_lo[3], lo0, q8_blk0);
+                    acc_hi[0] = vdot_laneq::<0>(acc_hi[0], hi0, q8_blk1);
+                    acc_hi[1] = vdot_laneq::<1>(acc_hi[1], hi0, q8_blk1);
+                    acc_hi[2] = vdot_laneq::<2>(acc_hi[2], hi0, q8_blk1);
+                    acc_hi[3] = vdot_laneq::<3>(acc_hi[3], hi0, q8_blk1);
+                    acc_lo[4] = vdot_laneq::<0>(acc_lo[4], lo1, q8_blk0);
+                    acc_lo[5] = vdot_laneq::<1>(acc_lo[5], lo1, q8_blk0);
+                    acc_lo[6] = vdot_laneq::<2>(acc_lo[6], lo1, q8_blk0);
+                    acc_lo[7] = vdot_laneq::<3>(acc_lo[7], lo1, q8_blk0);
+                    acc_hi[4] = vdot_laneq::<0>(acc_hi[4], hi1, q8_blk1);
+                    acc_hi[5] = vdot_laneq::<1>(acc_hi[5], hi1, q8_blk1);
+                    acc_hi[6] = vdot_laneq::<2>(acc_hi[6], hi1, q8_blk1);
+                    acc_hi[7] = vdot_laneq::<3>(acc_hi[7], hi1, q8_blk1);
+                }
+                // Fold the 6-bit scale to f32 for THIS sub-block (keeps live int
+                // accumulators at 16, so the 8x4 tile fits in registers).
+                let sc0_lo = vmovl_s16(vget_low_s16(q4sb_scales[0]));
+                let sc1_lo = vmovl_s16(vget_high_s16(q4sb_scales[0]));
+                let sc0_hi = vmovl_s16(vget_low_s16(q4sb_scales[1]));
+                let sc1_hi = vmovl_s16(vget_high_s16(q4sb_scales[1]));
+                for row in 0..4 {
+                    let sumf0 = vcvtq_f32_s32(vaddq_s32(
+                        vmulq_s32(sc0_lo, acc_lo[row]),
+                        vmulq_s32(sc0_hi, acc_hi[row]),
+                    ));
+                    acc_f32[2 * row] = vfmaq_f32(acc_f32[2 * row], sbd_s0[row], sumf0);
+                    let sumf1 = vcvtq_f32_s32(vaddq_s32(
+                        vmulq_s32(sc1_lo, acc_lo[row + 4]),
+                        vmulq_s32(sc1_hi, acc_hi[row + 4]),
+                    ));
+                    acc_f32[2 * row + 1] = vfmaq_f32(acc_f32[2 * row + 1], sbd_s1[row], sumf1);
+                    let blo = vdup_n_s16(bsums_arr[sb][row * 2]);
+                    let bhi = vdup_n_s16(bsums_arr[sb][row * 2 + 1]);
+                    bias_acc[2 * row] =
+                        vmlal_s16(bias_acc[2 * row], blo, vget_low_s16(q4sb_mins[0]));
+                    bias_acc[2 * row] =
+                        vmlal_s16(bias_acc[2 * row], bhi, vget_low_s16(q4sb_mins[1]));
+                    bias_acc[2 * row + 1] =
+                        vmlal_s16(bias_acc[2 * row + 1], blo, vget_high_s16(q4sb_mins[0]));
+                    bias_acc[2 * row + 1] =
+                        vmlal_s16(bias_acc[2 * row + 1], bhi, vget_high_s16(q4sb_mins[1]));
+                }
+            }
+            for row in 0..4 {
+                acc_f32[2 * row] = vmlsq_f32(
+                    acc_f32[2 * row],
+                    vcvtq_f32_s32(bias_acc[2 * row]),
+                    sbd_m0[row],
+                );
+                acc_f32[2 * row + 1] = vmlsq_f32(
+                    acc_f32[2 * row + 1],
+                    vcvtq_f32_s32(bias_acc[2 * row + 1]),
+                    sbd_m1[row],
+                );
+            }
+        }
+        for row in 0..4 {
+            vst1q_f32(dst.as_mut_ptr().add(row * 8), acc_f32[2 * row]);
+            vst1q_f32(dst.as_mut_ptr().add(row * 8 + 4), acc_f32[2 * row + 1]);
+        }
+    }
 }
