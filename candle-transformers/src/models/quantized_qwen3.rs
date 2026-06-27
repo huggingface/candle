@@ -10,22 +10,11 @@ use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Storage, Tensor};
-use candle_nn::attention::cpu_flash::causal::{
-    causal_decode_f16kv_interleaved, causal_decode_f32_interleaved,
-};
+use candle_nn::attention::cpu_flash::causal::causal_decode_f16kv_interleaved;
 use candle_nn::attention::{flash_attn, AttnMask};
-use candle_nn::kv_cache::{
-    ConcatKvCache, InterleavedKvCache, RawInterleavedKvCache, RawInterleavedKvCacheF16,
-};
+use candle_nn::kv_cache::{ConcatKvCache, InterleavedKvCache, RawInterleavedKvCacheF16};
 use candle_nn::{Activation, Embedding, Module};
 
-// f16 KV cache halves the decode cache bytes/token (memory/bandwidth win). Default
-// on; CANDLE_F16_KV=0 keeps the f32 cache for same-binary A/B.
-static F16_KV: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
-    std::env::var("CANDLE_F16_KV")
-        .map(|s| s != "0")
-        .unwrap_or(true)
-});
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -97,12 +86,7 @@ impl Module for MlpWeights {
 
 // Fused CPU/f32 neox RoPE on raw slices, skipping the per-call narrow/to_dtype/
 // contiguous/apply_op3 chain (rope is ~13% of single-thread decode, nearly all
-// framework overhead). Default on; CANDLE_ROPE_FUSED=0 forces the original path.
-static FUSED_ROPE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
-    std::env::var("CANDLE_ROPE_FUSED")
-        .map(|s| s != "0")
-        .unwrap_or(true)
-});
+// framework overhead).
 
 #[derive(Debug, Clone)]
 pub struct RotaryEmbedding {
@@ -159,7 +143,7 @@ impl RotaryEmbedding {
         // CPU f32 decode (seq_len == 1) fast path: fused neox on raw slices, bit-
         // identical to the op path. Prefill keeps the op path, which parallelizes
         // over t while this serial loop would not.
-        if seq_len == 1 && *FUSED_ROPE && q.device().is_cpu() && q.dtype() == DType::F32 {
+        if seq_len == 1 && q.device().is_cpu() && q.dtype() == DType::F32 {
             return Ok((
                 self.rope_neox_f32(q, offset)?,
                 self.rope_neox_f32(k, offset)?,
@@ -177,8 +161,13 @@ impl RotaryEmbedding {
     fn rope_neox_f32(&self, x: &Tensor, offset: usize) -> Result<Tensor> {
         let (b, h, t, d) = x.dims4()?;
         let half = d / 2;
-        // Runtime check (debug_assert is compiled out in release): a head dim that
-        // mismatches the table would index past cos[j]/sin[j] or use a partial table.
+        // Runtime checks (debug_assert is compiled out in release): RoPE needs a
+        // positive EVEN head dim - an odd d would leave the last coord unrotated and
+        // d <= 1 divides by half_d == 0 below - and it must match the table. The op
+        // path rejects these via cos_n_embd * 2 != n_embd.
+        if half == 0 || 2 * half != d {
+            candle::bail!("rope head dim {d} must be a positive even number");
+        }
         if half != self.half_d {
             candle::bail!(
                 "rope head dim {d} (half {half}) does not match table half_d {}",
@@ -239,7 +228,6 @@ struct AttentionWeights {
     rotary_emb: Arc<RotaryEmbedding>,
     kv_cache: Option<ConcatKvCache>,
     interleaved_cache: Option<InterleavedKvCache>,
-    raw_cache: Option<RawInterleavedKvCache>,
     raw_cache_f16: Option<RawInterleavedKvCacheF16>,
     span_attn: tracing::Span,
 }
@@ -280,12 +268,7 @@ impl AttentionWeights {
         } else {
             None
         };
-        let raw_cache = if on_cpu && !*F16_KV {
-            Some(RawInterleavedKvCache::new(num_kv_heads, head_dim, 4096))
-        } else {
-            None
-        };
-        let raw_cache_f16 = if on_cpu && *F16_KV {
+        let raw_cache_f16 = if on_cpu {
             Some(RawInterleavedKvCacheF16::new(num_kv_heads, head_dim, 4096))
         } else {
             None
@@ -308,7 +291,6 @@ impl AttentionWeights {
             rotary_emb,
             kv_cache,
             interleaved_cache,
-            raw_cache,
             raw_cache_f16,
             span_attn,
         })
@@ -375,31 +357,18 @@ impl AttentionWeights {
                 // interleaved decode kernel; f16 cache halves bytes/token.
                 let k_len = self.num_kv_heads * self.head_dim;
                 let q_len = self.num_heads * self.head_dim;
-                let ctx = if let Some(rc) = self.raw_cache_f16.as_mut() {
-                    rc.write_kv(&k_data[..k_len], &v_data[..k_len]);
-                    causal_decode_f16kv_interleaved(
-                        &q_data[..q_len],
-                        rc.data(),
-                        rc.head_stride(),
-                        self.num_heads,
-                        self.num_kv_heads,
-                        self.head_dim,
-                        rc.len(),
-                        scale,
-                    )?
-                } else {
-                    let rc = self.raw_cache.as_mut().unwrap();
-                    rc.write_kv(&k_data[..k_len], &v_data[..k_len]);
-                    causal_decode_f32_interleaved(
-                        &q_data[..q_len],
-                        rc.data(),
-                        self.num_heads,
-                        self.num_kv_heads,
-                        self.head_dim,
-                        rc.len(),
-                        scale,
-                    )?
-                };
+                let rc = self.raw_cache_f16.as_mut().unwrap();
+                rc.write_kv(&k_data[..k_len], &v_data[..k_len]);
+                let ctx = causal_decode_f16kv_interleaved(
+                    &q_data[..q_len],
+                    rc.data(),
+                    rc.head_stride(),
+                    self.num_heads,
+                    self.num_kv_heads,
+                    self.head_dim,
+                    rc.len(),
+                    scale,
+                )?;
 
                 ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
             } else {
@@ -421,11 +390,7 @@ impl AttentionWeights {
                         Storage::Cpu(cpu) => &cpu.as_slice::<f32>()?[vl.start_offset()..],
                         _ => candle::bail!("Expected CPU"),
                     };
-                    if let Some(rc) = self.raw_cache_f16.as_mut() {
-                        rc.write_kv_batch(k_d, v_d, l);
-                    } else {
-                        self.raw_cache.as_mut().unwrap().write_kv_batch(k_d, v_d, l);
-                    }
+                    self.raw_cache_f16.as_mut().unwrap().write_kv_batch(k_d, v_d, l);
                 }
 
                 let kv_k = kv.narrow(2, 0, self.head_dim)?.unsqueeze(0)?;
@@ -477,9 +442,6 @@ impl AttentionWeights {
             c.reset();
         }
         if let Some(c) = &mut self.interleaved_cache {
-            c.reset();
-        }
-        if let Some(c) = &mut self.raw_cache {
             c.reset();
         }
         if let Some(c) = &mut self.raw_cache_f16 {
@@ -738,6 +700,17 @@ mod tests {
         let dev = Device::Cpu;
         let rope = RotaryEmbedding::new(DType::F32, 16, 64, 1_000_000.0, &dev)?;
         let q = Tensor::zeros((1usize, 2usize, 1usize, 8usize), DType::F32, &dev)?;
+        assert!(rope.rope_neox_f32(&q, 0).is_err());
+        Ok(())
+    }
+
+    // An odd head dim (here d=1, which also has half_d==0) must bail, not panic on
+    // the max_pos division or leave the last coordinate unrotated.
+    #[test]
+    fn fused_rope_rejects_odd_head_dim() -> Result<()> {
+        let dev = Device::Cpu;
+        let rope = RotaryEmbedding::new(DType::F32, 1, 8, 1_000_000.0, &dev)?;
+        let q = Tensor::zeros((1usize, 1usize, 1usize, 1usize), DType::F32, &dev)?;
         assert!(rope.rope_neox_f32(&q, 0).is_err());
         Ok(())
     }

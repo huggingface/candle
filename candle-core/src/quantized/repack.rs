@@ -23,23 +23,14 @@ pub(crate) const Q4KX8_ROWS: usize = 8;
 // ---- prefill tile selection (NEON Q6 driver only) ----
 #[cfg(target_feature = "neon")]
 #[derive(Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 enum PrefillTile {
     Nc8mr4,
     Nc4mr4,
     Nc8mr2,
 }
 #[cfg(target_feature = "neon")]
-static PACKED_PREFILL_TILE: LazyLock<PrefillTile> = LazyLock::new(|| {
-    match std::env::var("CANDLE_PACKED_PREFILL")
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "nc8mr4" => PrefillTile::Nc8mr4,
-        "nc8mr2" => PrefillTile::Nc8mr2,
-        _ => PrefillTile::Nc4mr4,
-    }
-});
+static PACKED_PREFILL_TILE: LazyLock<PrefillTile> = LazyLock::new(|| PrefillTile::Nc4mr4);
 
 // On-disk Q6Kx8 GGUF block (from_bytes memcpy / from_mmap cast); repr(C) pins the
 // field order so baked models can't mis-decode across rustc versions.
@@ -120,8 +111,7 @@ pub(crate) fn matmul_q6kx8_prepacked(
     let groups = n / Q4KX8_ROWS;
     // Q6 has only the 8-channel kernel. MR=2 (16 accumulators) is the default and
     // the N1-safe tile; MR=4 (32 acc) tends to spill the 32 NEON regs - the same
-    // regression seen on Q4's nc8mr4 tile. CANDLE_PACKED_PREFILL=nc8mr4 opts into
-    // MR=4 for wide cores where it does not spill.
+    // regression seen on Q4's nc8mr4 tile.
     let mr4 = *PACKED_PREFILL_TILE == PrefillTile::Nc8mr4;
 
     thread_local! {
@@ -812,23 +802,6 @@ pub(crate) fn quantize_mat_q8_k_4x4(rows: &[&[f32]; 4], nb: usize) -> Vec<BlockQ
     out
 }
 
-// Default ON; CANDLE_PREFILL_LANEROW=0 forces the upstream #3643 path (same-binary A/B).
-#[cfg(target_feature = "dotprod")]
-static PREFILL_LANEROW: LazyLock<bool> = LazyLock::new(|| {
-    std::env::var("CANDLE_PREFILL_LANEROW")
-        .map(|s| s != "0")
-        .unwrap_or(true)
-});
-
-// Default ON: parallelize the prefill activation quant over the pool (bit-identical
-// to serial). CANDLE_PREFILL_PARQUANT=0 forces serial for A/B.
-#[cfg(target_feature = "dotprod")]
-static PREFILL_PARQUANT: LazyLock<bool> = LazyLock::new(|| {
-    std::env::var("CANDLE_PREFILL_PARQUANT")
-        .map(|s| s != "0")
-        .unwrap_or(true)
-});
-
 // Repack a full Q4_K weight into interleave-4 laneq groups for all n/8 channels.
 #[cfg(target_feature = "dotprod")]
 pub(crate) fn repack_q4k_weight_laneq4(rows: &[BlockQ4K], n: usize, nb: usize) -> Vec<BlockQ4Kx8L> {
@@ -850,7 +823,7 @@ pub(crate) fn repack_q4k_weight_laneq4(rows: &[BlockQ4K], n: usize, nb: usize) -
 // Whether the lane=row Q4_K prefill path is enabled; the pack is cached per-QTensor.
 #[cfg(target_feature = "dotprod")]
 pub(crate) fn prefill_lanerow_enabled() -> bool {
-    *PREFILL_LANEROW
+    true
 }
 
 // Lane=row prefill GEMM: dst(m,n) = lhs(m,k) x W^T over interleave-4 laneq weights,
@@ -870,7 +843,7 @@ pub(crate) fn matmul_q4kx8l_lanerow(
     // Quantize all m activation rows to Q8 (4x4 interleave) into 4-row tiles, the
     // last zero-padded. Parallelized over row-tiles on the barrier pool (each tile
     // is independent), so it does not serialize multi-thread prefill; identical
-    // bytes to the serial path. CANDLE_PREFILL_PARQUANT=0 forces serial for A/B.
+    // bytes to the serial path.
     let zeros = vec![0f32; k];
     let mut q8: Vec<BlockQ8Kx4> = vec![BlockQ8Kx4::zeroed(); row_tiles * nb];
     let tile_rows = |rt: usize| -> [&[f32]; 4] {
@@ -883,15 +856,9 @@ pub(crate) fn matmul_q4kx8l_lanerow(
             }
         })
     };
-    if *PREFILL_PARQUANT {
-        crate::utils::par_chunks_mut(&mut q8, nb, |rt, chunk| {
-            quantize_mat_q8_k_4x4_into(&tile_rows(rt), chunk);
-        });
-    } else {
-        for rt in 0..row_tiles {
-            quantize_mat_q8_k_4x4_into(&tile_rows(rt), &mut q8[rt * nb..(rt + 1) * nb]);
-        }
-    }
+    crate::utils::par_chunks_mut(&mut q8, nb, |rt, chunk| {
+        quantize_mat_q8_k_4x4_into(&tile_rows(rt), chunk);
+    });
 
     struct DstPtr(*mut f32);
     unsafe impl Sync for DstPtr {}

@@ -8,12 +8,7 @@ type C = super::CpuStorage;
 
 // Parallelize large contiguous f32 elementwise ops across the barrier pool; serial
 // unary_map/binary_map are an Amdahl drag at high thread counts. Bit-identical to
-// serial (disjoint ranges). Default ON; CANDLE_PAR_ELEMWISE=0 forces serial.
-static PAR_ELEMWISE: LazyLock<bool> = LazyLock::new(|| {
-    std::env::var("CANDLE_PAR_ELEMWISE")
-        .map(|s| s != "0")
-        .unwrap_or(true)
-});
+// serial (disjoint ranges).
 // Below this element count the fork-join isn't worth it. Tunable via CANDLE_PAR_ELEMWISE_MIN.
 static PAR_ELEMWISE_MIN: LazyLock<usize> = LazyLock::new(|| {
     std::env::var("CANDLE_PAR_ELEMWISE_MIN")
@@ -29,9 +24,6 @@ pub(crate) fn par_unary_vec_f32(
     layout: &Layout,
     f_vec: fn(&[f32], &mut [f32]),
 ) -> Option<Vec<f32>> {
-    if !*PAR_ELEMWISE {
-        return None;
-    }
     let (start, end) = layout.contiguous_offsets()?;
     let len = end - start;
     if len < *PAR_ELEMWISE_MIN {
@@ -52,9 +44,6 @@ pub(crate) fn par_binary_vec_f32(
     rhs_l: &Layout,
     f_vec: fn(&[f32], &[f32], &mut [f32]),
 ) -> Option<Vec<f32>> {
-    if !*PAR_ELEMWISE {
-        return None;
-    }
     let (ls, le) = lhs_l.contiguous_offsets()?;
     let (rs, re) = rhs_l.contiguous_offsets()?;
     let len = le - ls;
@@ -453,7 +442,7 @@ mod par_elemwise_tests {
     use crate::Shape;
 
     // Parallel split must be byte-identical to the serial whole-range apply. Drives
-    // par_range_apply directly so it runs regardless of the CANDLE_PAR_ELEMWISE gate.
+    // par_range_apply directly.
     #[test]
     fn par_unary_matches_serial() {
         let n = 100_003usize; // not a multiple of typical worker counts (remainder)
