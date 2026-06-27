@@ -143,14 +143,16 @@ impl RotaryEmbedding {
 
     /// Apply RoPE (q, k shape: B x H x L x D)
     pub fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
-        // CPU f32 fast path: fused neox on raw slices, bit-identical to the op path.
-        if *FUSED_ROPE && q.device().is_cpu() && q.dtype() == DType::F32 {
+        let (_, _, seq_len, _) = q.dims4()?;
+        // CPU f32 decode (seq_len == 1) fast path: fused neox on raw slices, bit-
+        // identical to the op path. Prefill keeps the op path, which parallelizes
+        // over t while this serial loop would not.
+        if seq_len == 1 && *FUSED_ROPE && q.device().is_cpu() && q.dtype() == DType::F32 {
             return Ok((
                 self.rope_neox_f32(q, offset)?,
                 self.rope_neox_f32(k, offset)?,
             ));
         }
-        let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let sin = self.sin.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
