@@ -306,11 +306,9 @@ pub fn barrier_pool() -> &'static BarrierPool {
     BARRIER_POOL.get_or_init(|| BarrierPool::new(candle_num_threads().saturating_sub(1)))
 }
 
-/// Apply `f` to each `chunk`-sized slice of `dst` in parallel across the barrier
-/// pool. `dst.len()` must be a multiple of `chunk`; `f(chunk_index, &mut chunk)`
-/// gets disjoint sub-slices, so it must not touch any state outside its own chunk.
-/// Used to parallelize the prefill activation quantization (each tile independent).
-pub fn par_chunks_mut<U>(dst: &mut [U], chunk: usize, f: impl Fn(usize, &mut [U]) + Sync) {
+// Apply `f` to each `chunk`-sized disjoint sub-slice of `dst` in parallel across the
+// barrier pool. `dst.len()` must be a multiple of `chunk`.
+pub fn par_chunks_mut<U: Send>(dst: &mut [U], chunk: usize, f: impl Fn(usize, &mut [U]) + Sync) {
     let n = dst.len() / chunk;
     struct DstP<U>(*mut U);
     unsafe impl<U> Sync for DstP<U> {}

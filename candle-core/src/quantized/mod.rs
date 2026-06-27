@@ -64,9 +64,8 @@ pub struct QTensor {
     /// Not always used.
     #[allow(dead_code)]
     repacked_qs: OnceLock<Option<Vec<u8>>>,
-    /// Lazily initialized lane=row (interleave-4) Q4_K repack for the aarch64
-    /// prefill GEMM (`repack::BlockQ4Kx8L`), raw bytes. Tied to this tensor's
-    /// lifetime so a dropped/reallocated weight can't return a stale pack. CPU-only.
+    /// Lazily repacked lane=row Q4_K weight (`repack::BlockQ4Kx8L` bytes) for the
+    /// aarch64 prefill GEMM; tied to this tensor's lifetime so it can't go stale.
     #[allow(dead_code)]
     repacked_laneq: OnceLock<Option<Vec<u8>>>,
 }
@@ -302,10 +301,8 @@ pub enum GgmlDType {
     Q5K,
     Q6K,
     Q8K,
-    /// 8-row-interleaved Q6_K for the fast aarch64 SDOT GEMM (`repack::BlockQ6Kx8`).
-    /// Baked offline (via gguf-requant `--pack`); llama.cpp will not read it. The
-    /// Q6_K analogue of the upstream runtime-repacked Q4_K x8 path, for the residual
-    /// Q6_K tensors (attn_v / ffn_down). CPU-only.
+    /// 8-row-interleaved Q6_K (`repack::BlockQ6Kx8`), baked offline via gguf-requant
+    /// `--pack`. CPU-only; the Q6_K analogue of the upstream Q4_K x8 path.
     Q6Kx8,
 }
 
@@ -420,8 +417,7 @@ impl GgmlDType {
             Self::Q5K => std::mem::size_of::<BlockQ5K>(),
             Self::Q6K => std::mem::size_of::<BlockQ6K>(),
             Self::Q8K => std::mem::size_of::<BlockQ8K>(),
-            // 8-row interleaved: type_size is the per-row block stride, so
-            // (n/8)*(k/256)*sizeof = exactly the BlockQ6Kx8 byte count.
+            // 8-row interleaved: per-row block stride = BlockQ6Kx8 size / 8.
             Self::Q6Kx8 => {
                 let sz = std::mem::size_of::<repack::BlockQ6Kx8>();
                 debug_assert_eq!(sz % repack::Q4KX8_ROWS, 0, "BlockQ6Kx8 size {sz} not /8");
@@ -973,13 +969,9 @@ impl crate::CustomOp1 for QTensor {
                     let total_blocks =
                         self_storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
 
-                    // Prefill (m >= 4): route to the lane=row 8x4 SDOT GEMM (llama's
-                    // N1 prefill kernel), which beats the per-column SDOT path on
-                    // wide prompts. The interleave-4 pack is cached on THIS tensor
-                    // (`repacked_laneq`, like `repacked_qs`) so it shares the weight's
-                    // lifetime - no stale reuse if the tensor is dropped/reallocated.
-                    // Decode (m < 4) or a disabled toggle falls through to the
-                    // upstream BlockQ4Kx8 path below.
+                    // Prefill (m >= 4) routes to the lane=row 8x4 GEMM; the pack is
+                    // cached on this tensor (`repacked_laneq`). Decode (m < 4) or a
+                    // disabled toggle falls through to the #3643 path below.
                     if dst_shape.elem_count() / n >= 4 && repack::prefill_lanerow_enabled() {
                         let m = dst_shape.elem_count() / n;
                         let laneq = self.repacked_laneq.get_or_init(|| {

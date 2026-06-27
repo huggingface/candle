@@ -41,11 +41,8 @@ static PACKED_PREFILL_TILE: LazyLock<PrefillTile> = LazyLock::new(|| {
     }
 });
 
-// ---- packed Q6_K weight block + repack ----
-// `#[repr(C)]` is load-bearing: this block is the on-disk Q6Kx8 GGUF format
-// (`PackedQ6Kx8::from_bytes` memcpy's raw file bytes in, `from_mmap` casts the
-// mapping). A default-repr struct may reorder fields across compiler versions,
-// which would silently mis-decode baked models. Mirrors `k_quants::BlockQ4Kx8`.
+// On-disk Q6Kx8 GGUF block (from_bytes memcpy / from_mmap cast); repr(C) pins the
+// field order so baked models can't mis-decode across rustc versions.
 #[repr(C)]
 pub struct BlockQ6Kx8 {
     pub(crate) d: [f16; Q4KX8_ROWS],
@@ -53,8 +50,6 @@ pub struct BlockQ6Kx8 {
     pub(crate) ql: [u8; Q4KX8_ROWS * (QK_K / 2)],      // 1024: [chunk(2)][row(8)][64]
     pub(crate) qh: [u8; Q4KX8_ROWS * (QK_K / 4)],      // 512:  [chunk(2)][row(8)][32]
 }
-// d (16) + scales (128) + ql (1024) + qh (512); all fields are <=2-byte aligned, so
-// the packed layout has no interior padding. Pins the persisted block size.
 const _: () = assert!(std::mem::size_of::<BlockQ6Kx8>() == 1680);
 
 impl BlockQ6Kx8 {
@@ -68,9 +63,7 @@ impl BlockQ6Kx8 {
     }
 }
 
-/// Repack `Q4KX8_ROWS` Q6_K weight rows (each `nb` super-blocks) into `nb`
-/// interleaved `BlockQ6Kx8`. Scalar (load-time, not perf-critical); the i8 scales
-/// copy directly and the 128B `ql`/64B `qh` split into two 64B/32B chunks.
+// Repack 8 Q6_K weight rows into interleaved `BlockQ6Kx8` (load-time, scalar).
 pub(crate) fn repack_q6k_x8(rows: &[&[BlockQ6K]; Q4KX8_ROWS]) -> Vec<BlockQ6Kx8> {
     let nb = rows[0].len();
     debug_assert!(
@@ -100,8 +93,7 @@ pub(crate) fn repack_q6k_x8(rows: &[&[BlockQ6K]; Q4KX8_ROWS]) -> Vec<BlockQ6Kx8>
     out
 }
 
-/// Repack a full row-major Q6_K weight matrix into the interleaved `BlockQ6Kx8`
-/// layout for all `n/8` channel groups. Mirror of `repack_q4k_weight`.
+// Repack a full row-major Q6_K weight into `BlockQ6Kx8` for all n/8 channel groups.
 pub fn repack_q6k_weight(rows: &[BlockQ6K], n: usize, nb: usize) -> Vec<BlockQ6Kx8> {
     debug_assert_eq!(n % Q4KX8_ROWS, 0, "repack_q6k_weight: n {n} not /8");
     debug_assert_eq!(rows.len(), n * nb, "repack_q6k_weight: rows len mismatch");
@@ -115,9 +107,7 @@ pub fn repack_q6k_weight(rows: &[BlockQ6K], n: usize, nb: usize) -> Vec<BlockQ6K
 }
 
 // ---- prepacked GEMM driver ----
-// NEON-only: `gemm_q6kx8_q8k` lives in the `neon` module, which is not compiled on
-// non-NEON targets. The `matmul_t` caller has a `not(neon)` arm that bails, so this
-// must carry the same gate or the `super::neon` import fails to resolve on x86_64.
+// NEON-only (uses `neon::gemm_q6kx8_q8k`); `matmul_t` bails on the not(neon) arm.
 #[cfg(target_feature = "neon")]
 pub(crate) fn matmul_q6kx8_prepacked(
     (m, k, n): (usize, usize, usize),
@@ -230,8 +220,7 @@ enum PackedStoreQ6 {
 unsafe impl Send for PackedStoreQ6 {}
 unsafe impl Sync for PackedStoreQ6 {}
 
-/// A pre-packed Q6_K weight: `n` output channels (`n % 8 == 0`) stored as the
-/// interleaved `BlockQ6Kx8` groups, ready for the SDOT GEMM with no repack.
+// Pre-packed Q6_K weight: n output channels (n % 8 == 0) as `BlockQ6Kx8` groups.
 pub struct PackedQ6Kx8 {
     store: PackedStoreQ6,
     n: usize,
@@ -259,8 +248,7 @@ impl PackedQ6Kx8 {
         }
     }
 
-    /// Build an owned `PackedQ6Kx8` by copying raw interleaved bytes. `raw` length
-    /// must be a whole number of blocks.
+    // Owned copy from raw interleaved bytes (whole number of blocks).
     pub fn from_bytes(raw: &[u8], n: usize) -> Self {
         let bs = std::mem::size_of::<BlockQ6Kx8>();
         assert_eq!(
@@ -281,8 +269,7 @@ impl PackedQ6Kx8 {
         }
     }
 
-    /// Build a zero-copy `PackedQ6Kx8` viewing `byte_len` bytes at `offset` in an
-    /// mmap'd GGUF. Validates bounds and alignment.
+    // Zero-copy view of `byte_len` bytes at `offset` in an mmap'd GGUF.
     pub fn from_mmap(
         mmap: Arc<memmap2::Mmap>,
         offset: usize,
@@ -317,10 +304,7 @@ impl PackedQ6Kx8 {
         })
     }
 
-    /// Dequantize the packed weight back to f32 of shape `[n, k]` (row-major).
-    /// Mirrors `BlockQ6K::to_float` per channel: the i8 sub-block scales and the
-    /// `ql`/`qh` quants come from the chunk-major, row-interleaved layout produced
-    /// by `repack_q6k_x8`. Correctness-only (not perf).
+    // Dequantize back to row-major f32 [n, k]; mirrors `BlockQ6K::to_float`.
     fn dequantize_to(&self, elem_count: usize, ys: &mut [f32]) {
         const QLC: usize = QK_K / 4; // 64 ql bytes / 128-value chunk
         const QHC: usize = QK_K / 8; // 32 qh bytes / chunk
@@ -500,22 +484,21 @@ mod tests {
     // reproduce the original Q6_K dequant.
     #[test]
     fn packed_q6kx8_from_bytes_matches_baseline() {
-        use crate::quantized::k_quants::{matmul, BlockQ6K};
+        use crate::quantized::k_quants::BlockQ6K;
         use crate::quantized::QuantizedType;
 
-        let k = 512usize; // 2 super-blocks
-        let n = 24usize; // 3 groups of 8
+        let k = 512usize;
+        let n = 24usize;
         let nb = k / QK_K;
         let mut st = 0x51c6_ba9d_2244_8821u64;
 
-        // Row-major Q6_K weight: channel r at r*nb.
         let mut rhs_t = vec![BlockQ6K::zeros(); n * nb];
         for r in 0..n {
             let f: Vec<f32> = (0..k).map(|_| lcg(&mut st)).collect();
             BlockQ6K::from_float(&f, &mut rhs_t[r * nb..(r + 1) * nb]);
         }
 
-        // Offline bake: repack -> raw bytes -> PackedQ6Kx8 (owned, from bytes).
+        // bake: repack -> raw bytes -> owned PackedQ6Kx8
         let packed = repack_q6k_weight(&rhs_t, n, nb);
         let raw: &[u8] = unsafe {
             std::slice::from_raw_parts(
@@ -525,24 +508,28 @@ mod tests {
         };
         let pq = PackedQ6Kx8::from_bytes(raw, n);
 
-        for &m in &[1usize, 4usize] {
-            let lhs: Vec<f32> = (0..m * k).map(|_| lcg(&mut st)).collect();
-            let mut dst_base = vec![0f32; m * n];
-            let mut dst_pack = vec![0f32; m * n];
-            matmul::<BlockQ6K>((m, k, n), &lhs, &rhs_t, &mut dst_base).unwrap();
-            pq.matmul_t((m, k, n), &lhs, &mut dst_pack).unwrap();
-            for i in 0..m * n {
-                assert_eq!(
-                    dst_base[i].to_bits(),
-                    dst_pack[i].to_bits(),
-                    "m={m} idx {i}: base {} packed {}",
-                    dst_base[i],
-                    dst_pack[i]
-                );
+        // matmul_t requires NEON; off-NEON it bails, so only assert it there.
+        #[cfg(target_feature = "neon")]
+        {
+            use crate::quantized::k_quants::matmul;
+            for &m in &[1usize, 4usize] {
+                let lhs: Vec<f32> = (0..m * k).map(|_| lcg(&mut st)).collect();
+                let mut dst_base = vec![0f32; m * n];
+                let mut dst_pack = vec![0f32; m * n];
+                matmul::<BlockQ6K>((m, k, n), &lhs, &rhs_t, &mut dst_base).unwrap();
+                pq.matmul_t((m, k, n), &lhs, &mut dst_pack).unwrap();
+                for i in 0..m * n {
+                    assert_eq!(
+                        dst_base[i].to_bits(),
+                        dst_pack[i].to_bits(),
+                        "m={m} idx {i}: base {} packed {}",
+                        dst_base[i],
+                        dst_pack[i]
+                    );
+                }
             }
         }
 
-        // dequantize() must reproduce the original Q6_K dequant (same formula).
         let mut want = vec![0f32; n * k];
         BlockQ6K::to_float(&rhs_t, &mut want);
         let got = match pq.dequantize(n * k).unwrap() {
@@ -650,9 +637,8 @@ mod tests {
     }
 }
 
-// Same fields/size (1152 B) as `k_quants::BlockQ4Kx8`; only the `qs` interleave
-// differs (bsi=4 lane=row vs #3643's bsi=8). zerocopy derives let the per-QTensor
-// `repacked_laneq` cache round-trip it through raw bytes, mirroring #3643.
+// Same 1152-byte layout as k_quants::BlockQ4Kx8 (only the qs interleave differs:
+// bsi=4 vs 8); zerocopy derives let the per-QTensor `repacked_laneq` cache it as bytes.
 #[cfg(target_feature = "dotprod")]
 #[derive(
     Clone,
@@ -684,10 +670,8 @@ impl BlockQ4Kx8L {
     }
 }
 
-/// Port of llama's `make_block_q4_Kx8` for one super-block of 8 columns. `bsi` is
-/// the `blck_size_interleave` (4 for the lane=row `8x4` kernel) - only the qs
-/// interleave stride depends on it; scales/mins are identical. Pure data
-/// rearrangement; deterministic.
+// Port of llama's make_block_q4_Kx8 for one 8-column super-block; `bsi` is the qs
+// interleave stride (4 for the lane=row kernel). Scales/mins are bsi-independent.
 #[cfg(target_feature = "dotprod")]
 fn make_q4kx8_laneq_bsi(cols: &[&[BlockQ4K]; 8], i: usize, bsi: usize) -> BlockQ4Kx8L {
     let mut out = BlockQ4Kx8L::zeroed();
@@ -749,18 +733,14 @@ fn make_q4kx8_laneq_bsi(cols: &[&[BlockQ4K]; 8], i: usize, bsi: usize) -> BlockQ
     out
 }
 
-/// Repack 8 weight columns into `nb` laneq blocks, interleave 4 (the weight layout
-/// the lane=row `8x4` DOTPROD kernel consumes - 4 bytes/column per 16-byte read).
+// Repack 8 weight columns into `nb` interleave-4 laneq blocks (lane=row layout).
 #[cfg(target_feature = "dotprod")]
 pub(crate) fn repack_q4kx8_laneq4(cols: &[&[BlockQ4K]; 8]) -> Vec<BlockQ4Kx8L> {
     let nb = cols[0].len();
     (0..nb).map(|i| make_q4kx8_laneq_bsi(cols, i, 4)).collect()
 }
 
-// ===========================================================================
-
-/// Four Q8_K activation rows interleaved for the lane=row GEMM. Mirrors llama's
-/// `block_q8_Kx4` field layout (`d[4]`, interleaved `qs`, grouped `bsums`).
+// Four Q8_K activation rows interleaved for the lane=row GEMM (llama block_q8_Kx4).
 #[cfg(target_feature = "dotprod")]
 #[repr(C)]
 #[derive(Clone)]
@@ -781,13 +761,9 @@ impl BlockQ8Kx4 {
     }
 }
 
-/// Quantize and interleave 4 activation rows into the `nb` `BlockQ8Kx4` of `out`
-/// (`out.len() == nb`) with `blck_size_interleave = 4` - the layout llama's DOTPROD
-/// `ggml_gemm_q4_K_8x4` consumes, where the SDOT lane index selects the ROW (4
-/// bytes/row per 16-byte group). Distinct from `quantize_mat_q8_k_4x8_into`
-/// (interleave 8, for the i8mm/SMMLA kernel) only in the interleave stride and the
-/// bsums index. Each super-block is independent (safe on disjoint `out` slices from
-/// different threads). Port of llama's `ggml_quantize_mat_q8_K_4x4_generic`.
+// Quantize+interleave 4 activation rows into `out` (len nb), interleave-4 so the
+// SDOT lane selects the row. Per-super-block independent. Port of llama's
+// ggml_quantize_mat_q8_K_4x4_generic.
 #[cfg(target_feature = "dotprod")]
 pub(crate) fn quantize_mat_q8_k_4x4_into(rows: &[&[f32]; 4], out: &mut [BlockQ8Kx4]) {
     const BSI: usize = 4; // blck_size_interleave
@@ -824,7 +800,7 @@ pub(crate) fn quantize_mat_q8_k_4x4_into(rows: &[&[f32]; 4], out: &mut [BlockQ8K
     }
 }
 
-/// Vec-returning convenience wrapper over `quantize_mat_q8_k_4x4_into` (test only).
+// Vec-returning wrapper over `quantize_mat_q8_k_4x4_into` (test only).
 #[cfg(all(test, target_feature = "dotprod"))]
 pub(crate) fn quantize_mat_q8_k_4x4(rows: &[&[f32]; 4], nb: usize) -> Vec<BlockQ8Kx4> {
     let mut out = vec![BlockQ8Kx4::zeroed(); nb];
@@ -832,9 +808,7 @@ pub(crate) fn quantize_mat_q8_k_4x4(rows: &[&[f32]; 4], nb: usize) -> Vec<BlockQ
     out
 }
 
-// A/B switch for the lane=row prefill path (default ON for dotprod builds). Set
-// CANDLE_PREFILL_LANEROW=0 to force the upstream #3643 SDOT path for same-binary
-// benchmarking on N1.
+// Default ON; CANDLE_PREFILL_LANEROW=0 forces the upstream #3643 path (same-binary A/B).
 #[cfg(target_feature = "dotprod")]
 static PREFILL_LANEROW: LazyLock<bool> = LazyLock::new(|| {
     std::env::var("CANDLE_PREFILL_LANEROW")
@@ -842,11 +816,8 @@ static PREFILL_LANEROW: LazyLock<bool> = LazyLock::new(|| {
         .unwrap_or(true)
 });
 
-// A/B switch for parallelizing the prefill activation quantization across the
-// barrier pool (default ON). The lane=row driver quantizes all m rows to Q8 before
-// the parallel GEMM; doing it serially is an Amdahl ceiling on multi-thread prefill
-// scaling. Set CANDLE_PREFILL_PARQUANT=0 to force the serial quant for same-binary
-// A/B on N1. Result is bit-identical either way (per-tile independent).
+// Default ON: parallelize the prefill activation quant over the pool (bit-identical
+// to serial). CANDLE_PREFILL_PARQUANT=0 forces serial for A/B.
 #[cfg(target_feature = "dotprod")]
 static PREFILL_PARQUANT: LazyLock<bool> = LazyLock::new(|| {
     std::env::var("CANDLE_PREFILL_PARQUANT")
@@ -854,8 +825,7 @@ static PREFILL_PARQUANT: LazyLock<bool> = LazyLock::new(|| {
         .unwrap_or(true)
 });
 
-/// Repack a Q4_K weight into the interleave-4 laneq `BlockQ4Kx8L` groups the
-/// lane=row `8x4` kernel consumes (`repack_q4kx8_laneq4` per 8-channel group).
+// Repack a full Q4_K weight into interleave-4 laneq groups for all n/8 channels.
 #[cfg(target_feature = "dotprod")]
 pub(crate) fn repack_q4k_weight_laneq4(rows: &[BlockQ4K], n: usize, nb: usize) -> Vec<BlockQ4Kx8L> {
     debug_assert_eq!(n % Q4KX8_ROWS, 0, "repack_q4k_weight_laneq4: n {n} not /8");
@@ -873,19 +843,14 @@ pub(crate) fn repack_q4k_weight_laneq4(rows: &[BlockQ4K], n: usize, nb: usize) -
     packed
 }
 
-/// Whether the lane=row Q4_K prefill path is enabled (default on for dotprod
-/// builds; `CANDLE_PREFILL_LANEROW=0` forces the upstream #3643 path). The repacked
-/// weight is cached per-QTensor (`QTensor::repacked_laneq`), not globally.
+// Whether the lane=row Q4_K prefill path is enabled; the pack is cached per-QTensor.
 #[cfg(target_feature = "dotprod")]
 pub(crate) fn prefill_lanerow_enabled() -> bool {
     *PREFILL_LANEROW
 }
 
-/// Lane=row prefill GEMM driver: `dst(m,n) = lhs(m,k) x W^T` over interleave-4
-/// laneq weights. Mirrors `matmul_q4kx8l_prepacked_i8mm` exactly (4-row activation
-/// tiles via `quantize_mat_q8_k_4x4`, last tile zero-padded, barrier-pool over
-/// channel groups, same 4x8 sub-tile scatter), but calls the lane=row SDOT kernel
-/// instead of SMMLA - so it runs on any dotprod core (Graviton2/N1).
+// Lane=row prefill GEMM: dst(m,n) = lhs(m,k) x W^T over interleave-4 laneq weights,
+// 4-row tiles (last zero-padded), parallelized over channel groups on the pool.
 #[cfg(all(target_feature = "neon", target_feature = "dotprod"))]
 pub(crate) fn matmul_q4kx8l_lanerow(
     (m, k, n): (usize, usize, usize),

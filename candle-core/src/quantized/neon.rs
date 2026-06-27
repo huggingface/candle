@@ -1450,8 +1450,7 @@ pub(crate) fn gemm_q6kx8_q8k<const MR: usize>(
     }
 }
 
-/// Unpack one sub-block-pair's 6-bit scales/mins from the laneq 12-byte group into
-/// 8 i8 scales + an int16x8 of mins. Port of llama's `decode_q_Kx8_6bit_scales`.
+// Unpack a 12-byte laneq scale group into 8 i8 scales + an int16x8 of mins.
 #[cfg(target_feature = "dotprod")]
 #[inline(always)]
 unsafe fn decode_q_kx8_6bit_scales(
@@ -1480,11 +1479,8 @@ unsafe fn decode_q_kx8_6bit_scales(
     }
 }
 
-/// Lane-indexed SDOT: `acc += dot4(a[i], b[LANE])` per output lane i, where b's
-/// 4-byte group `LANE` is broadcast as the multiplier. Emits `SDOT (by element)`
-/// directly (the std `vdotq_laneq_s32` intrinsic is unstable). Safe on stable:
-/// `dotprod` is a target feature. Used by the lane=row GEMM where LANE selects the
-/// activation ROW, so one weight load feeds all 4 rows of the tile.
+// Lane-indexed SDOT (emits `sdot ... .4b[LANE]`; the std vdotq_laneq_s32 is unstable).
+// LANE selects the activation row, so one weight load feeds all 4 rows of the tile.
 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
 #[inline(always)]
 unsafe fn vdot_laneq<const LANE: i32>(mut acc: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_t {
@@ -1499,18 +1495,10 @@ unsafe fn vdot_laneq<const LANE: i32>(mut acc: int32x4_t, a: int8x16_t, b: int8x
     acc
 }
 
-/// Packed Q4_K prefill GEMM, lane=row SDOT: 8 output channels x 4 activation rows,
-/// writing a row-major 4x8 tile `dst[row*8 + col]` (same as `gemm_q4kx8_q8k_i8mm`,
-/// so it shares that driver/scatter). This is llama's ACTUAL N1 prefill kernel
-/// (`ggml_gemm_q4_K_8x4_q8_K`, DOTPROD branch) - NOT i8mm, runs on any dotprod core
-/// incl. N1. The win vs candle's `gemm_q4kx_q8k`: the activation is the row-
-/// interleaved `BlockQ8Kx4` (4x4 pack) so the SDOT LANE selects the row - one
-/// weight load (`q4_0123_lo`) feeds all 4 rows via 4 lane dots - AND the 6-bit
-/// scale is folded to f32 PER SUB-BLOCK, so only ~16 live int accumulators are
-/// needed for the 8-col x 4-row tile (candle's kernel holds 32 scaled-int accs
-/// across all chunks, which spills the 32 NEON regs at this tile width). Consumes
-/// the `BlockQ4Kx8L` weight (interleave 8) + `BlockQ8Kx4` from `quantize_mat_q8_k_4x4`.
-/// Bit-exact (mod f32 reassociation) to the scalar Q4_K dot.
+// llama's DOTPROD N1 prefill kernel (ggml_gemm_q4_K_8x4_q8_K): 8 channels x 4 rows,
+// row-major 4x8 tile. The SDOT lane selects the row (one weight load feeds 4 rows)
+// and the 6-bit scale folds to f32 per sub-block, keeping ~16 live int accs so the
+// tile fits the 32 NEON regs. Equivalent to the scalar Q4_K dot mod f32 reassociation.
 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
 #[allow(clippy::needless_range_loop)]
 pub(crate) fn gemm_q4kx8_q8k_lanerow(q4: &[BlockQ4Kx8L], q8: &[BlockQ8Kx4], dst: &mut [f32]) {

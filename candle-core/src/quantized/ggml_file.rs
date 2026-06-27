@@ -185,8 +185,7 @@ pub fn qtensor_from_ggml(
             from_raw_data::<k_quants::BlockQ6K>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q6Kx8 => {
-            // Pre-packed interleaved Q6_K: owned copy from the raw bytes. n = dims[0]
-            // (output channels); k = dims[1]. CPU only.
+            // Pre-packed Q6_K, owned copy from raw bytes (n = dims[0]); CPU only.
             if !matches!(device, Device::Cpu) {
                 crate::bail!("Q6Kx8 is CPU-only");
             }
