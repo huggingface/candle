@@ -1,10 +1,21 @@
 // Build script compiling the single-token decode attention CUDA kernel into a static lib.
-use cudaforge::KernelBuilder;
-use std::path::PathBuf;
+// The kernel is only compiled and linked when the `cuda` feature is enabled; otherwise the
+// crate builds CPU-only and relies on the reference `cpu_fwd` implementation.
 
 fn main() -> anyhow::Result<()> {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=kernels/decode_attention.cu");
+
+    #[cfg(feature = "cuda")]
+    compile_cuda_kernel()?;
+
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn compile_cuda_kernel() -> anyhow::Result<()> {
+    use cudaforge::KernelBuilder;
+    use std::path::PathBuf;
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
 

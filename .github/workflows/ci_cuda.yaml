@@ -62,4 +62,7 @@ jobs:
       - name: Build+test (cuda) - CudaGraph capture/replay
         run: cargo test -p candle-core --features cuda --test cuda_graph_tests
       - name: Build+test (cuda) - FlashInfer-style decode attention kernel
-        run: cargo test --manifest-path candle-flashinfer-kernels/Cargo.toml
+        # `--features cuda` compiles and exercises the GPU kernel; the crate also builds
+        # CPU-only (default features), and the CPU reference fwd is covered by the
+        # decode_attention_cpu_matches_reference test either way.
+        run: cargo test --manifest-path candle-flashinfer-kernels/Cargo.toml --features cuda

@@ -6,18 +6,108 @@
 //! token, attending over an arbitrarily long key/value cache. The kernel here is a reference,
 //! numerically-stable implementation of that workload (the one FlashInfer's batch-decode
 //! kernels optimize); it is not a port of FlashInfer's own tensor-core/split-KV kernels.
+#[cfg(feature = "cuda")]
 mod ffi;
 
+#[cfg(feature = "cuda")]
 use candle::backend::BackendStorage;
+#[cfg(feature = "cuda")]
 use candle::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
-use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
+#[cfg(feature = "cuda")]
+use candle::DType;
+use candle::{CpuStorage, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 
 pub struct DecodeAttention {
     pub softmax_scale: f32,
 }
 
+/// Reference CPU decode attention: `softmax(q @ k^T * scale) @ v` for a single query token
+/// per sequence, with grouped-query attention (`num_heads` a multiple of `num_heads_kv`).
+///
+/// Computes in f32 regardless of the storage type for numerical stability, honoring the
+/// arbitrary strides/offsets of the input layouts.
+fn cpu_decode_attention<T: Copy>(
+    softmax_scale: f32,
+    q: &[T],
+    q_l: &Layout,
+    k: &[T],
+    k_l: &Layout,
+    v: &[T],
+    v_l: &Layout,
+    to_f32: impl Fn(T) -> f32,
+    from_f32: impl Fn(f32) -> T,
+) -> Result<(Vec<T>, Shape)> {
+    let (b_sz, num_heads, head_dim) = q_l.shape().dims3()?;
+    let (b_sz_k, num_heads_k, seqlen_k, head_dim_k) = k_l.shape().dims4()?;
+    if k_l.shape() != v_l.shape() {
+        candle::bail!(
+            "shape mismatch between k {:?} and v {:?}",
+            k_l.shape(),
+            v_l.shape()
+        );
+    }
+    if b_sz_k != b_sz || head_dim_k != head_dim {
+        candle::bail!(
+            "shape mismatch between q {:?} and k {:?}",
+            q_l.shape(),
+            k_l.shape()
+        );
+    }
+    if num_heads % num_heads_k != 0 {
+        candle::bail!(
+            "number of kv heads {num_heads_k} must divide the number of query heads {num_heads}"
+        )
+    }
+    let group = num_heads / num_heads_k;
+    let (q_o, q_s) = (q_l.start_offset(), q_l.stride());
+    let (k_o, k_s) = (k_l.start_offset(), k_l.stride());
+    let (v_o, v_s) = (v_l.start_offset(), v_l.stride());
+
+    let mut out = vec![from_f32(0f32); b_sz * num_heads * head_dim];
+    let mut scores = vec![0f32; seqlen_k];
+    for bi in 0..b_sz {
+        for h in 0..num_heads {
+            let h_kv = h / group;
+            // scores[l] = scale * dot(q[bi, h], k[bi, h_kv, l]), tracking the max for a
+            // numerically-stable softmax.
+            let mut max = f32::NEG_INFINITY;
+            for l in 0..seqlen_k {
+                let mut dot = 0f32;
+                for i in 0..head_dim {
+                    let qv = to_f32(q[q_o + bi * q_s[0] + h * q_s[1] + i * q_s[2]]);
+                    let kv = to_f32(k[k_o + bi * k_s[0] + h_kv * k_s[1] + l * k_s[2] + i * k_s[3]]);
+                    dot += qv * kv;
+                }
+                let s = dot * softmax_scale;
+                scores[l] = s;
+                if s > max {
+                    max = s;
+                }
+            }
+            let mut denom = 0f32;
+            for s in scores.iter_mut() {
+                let e = (*s - max).exp();
+                *s = e;
+                denom += e;
+            }
+            let inv = if denom > 0f32 { 1f32 / denom } else { 0f32 };
+            // out[bi, h, i] = sum_l softmax[l] * v[bi, h_kv, l, i]
+            for i in 0..head_dim {
+                let mut acc = 0f32;
+                for l in 0..seqlen_k {
+                    let vv = to_f32(v[v_o + bi * v_s[0] + h_kv * v_s[1] + l * v_s[2] + i * v_s[3]]);
+                    acc += scores[l] * vv;
+                }
+                out[(bi * num_heads + h) * head_dim + i] = from_f32(acc * inv);
+            }
+        }
+    }
+    Ok((out, (b_sz, num_heads, head_dim).into()))
+}
+
 impl DecodeAttention {
+    #[cfg(feature = "cuda")]
     fn cuda_fwd_t<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
     >(
@@ -118,16 +208,55 @@ impl candle::CustomOp3 for DecodeAttention {
 
     fn cpu_fwd(
         &self,
-        _: &CpuStorage,
-        _: &Layout,
-        _: &CpuStorage,
-        _: &Layout,
-        _: &CpuStorage,
-        _: &Layout,
+        q: &CpuStorage,
+        q_l: &Layout,
+        k: &CpuStorage,
+        k_l: &Layout,
+        v: &CpuStorage,
+        v_l: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for flashinfer-decode-attention")
+        let scale = self.softmax_scale;
+        match (q, k, v) {
+            (CpuStorage::F32(q), CpuStorage::F32(k), CpuStorage::F32(v)) => {
+                let (out, shape) =
+                    cpu_decode_attention(scale, q, q_l, k, k_l, v, v_l, |x| x, |x| x)?;
+                Ok((CpuStorage::F32(out), shape))
+            }
+            (CpuStorage::F16(q), CpuStorage::F16(k), CpuStorage::F16(v)) => {
+                let (out, shape) = cpu_decode_attention(
+                    scale,
+                    q,
+                    q_l,
+                    k,
+                    k_l,
+                    v,
+                    v_l,
+                    |x: f16| x.to_f32(),
+                    f16::from_f32,
+                )?;
+                Ok((CpuStorage::F16(out), shape))
+            }
+            (CpuStorage::BF16(q), CpuStorage::BF16(k), CpuStorage::BF16(v)) => {
+                let (out, shape) = cpu_decode_attention(
+                    scale,
+                    q,
+                    q_l,
+                    k,
+                    k_l,
+                    v,
+                    v_l,
+                    |x: bf16| x.to_f32(),
+                    bf16::from_f32,
+                )?;
+                Ok((CpuStorage::BF16(out), shape))
+            }
+            _ => candle::bail!(
+                "flashinfer-decode-attention cpu: q/k/v must share dtype (f32/f16/bf16)"
+            ),
+        }
     }
 
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         q: &candle::CudaStorage,
@@ -141,7 +270,9 @@ impl candle::CustomOp3 for DecodeAttention {
             DType::F32 => self.cuda_fwd_t::<f32>(q, q_l, k, k_l, v, v_l, 0),
             DType::F16 => self.cuda_fwd_t::<f16>(q, q_l, k, k_l, v, v_l, 1),
             DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l, k, k_l, v, v_l, 2),
-            dt => candle::bail!("flashinfer-decode-attention is only supported for f32/f16/bf16 ({dt:?})"),
+            dt => candle::bail!(
+                "flashinfer-decode-attention is only supported for f32/f16/bf16 ({dt:?})"
+            ),
         }
     }
 }

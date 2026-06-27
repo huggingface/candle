@@ -23,3 +23,13 @@ let out = candle_flashinfer_kernels::flashinfer_decode_attention(
     softmax_scale,
 )?;
 ```
+
+## Features
+
+- **`cuda`** (off by default): compiles and links the CUDA kernel and enables the
+  GPU forward pass. Requires the CUDA toolchain (`nvcc`).
+
+Without the `cuda` feature the crate builds CPU-only and the same
+`flashinfer_decode_attention` entry point runs a reference CPU implementation
+(`cpu_fwd`, `f32`/`f16`/`bf16`). This makes the backend usable as a CPU fallback
+and testable without a GPU; enable `cuda` to run the GPU kernel on CUDA tensors.

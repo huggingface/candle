@@ -11,13 +11,18 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../candle-core", features = ["cuda"], package = "candle-core", version = "0.11.0" }
+candle = { path = "../candle-core", default-features = false, package = "candle-core", version = "0.11.0" }
 half = { version = "2.3.1", features = ["num-traits"] }
 
 [build-dependencies]
-cudaforge = "0.1.2"
+cudaforge = { version = "0.1.2", optional = true }
 anyhow = { version = "1", features = ["backtrace"] }
+
+[features]
+default = []
+# Compiles and links the CUDA decode-attention kernel and enables the GPU forward
+# pass. Without it the crate builds CPU-only and uses the reference `cpu_fwd`.
+cuda = ["dep:cudaforge", "candle/cuda"]
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
-candle-nn = { path = "../candle-nn", features = ["cuda"] }
