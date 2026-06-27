@@ -42,6 +42,13 @@ impl CudaGraph {
     /// are disallowed once capture starts and invalidate the capture
     /// (`CUDA_ERROR_STREAM_CAPTURE_INVALIDATED`) if attempted while it is
     /// active.
+    ///
+    /// Any buffer whose contents you need to read between replays must be
+    /// allocated *before* capture and written in place by `f` (e.g. via
+    /// `Tensor::slice_set`). A tensor allocated *inside* `f` becomes a
+    /// graph-owned allocation node whose device memory is only valid while the
+    /// graph is executing, so reading it outside of a replay fails with
+    /// `CUDA_ERROR_INVALID_VALUE`.
     pub fn capture<T>(device: &CudaDevice, f: impl FnOnce() -> Result<T>) -> Result<(Self, T)> {
         let stream = device.cuda_stream();
         let _cache_guard = device.enable_cuda_graph_htod_cache();
