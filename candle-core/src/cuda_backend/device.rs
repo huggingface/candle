@@ -51,6 +51,24 @@ impl Drop for CudaGraphHtodCacheGuard {
     }
 }
 
+/// Restores cudarc's event-tracking setting when dropped.
+/// Created by [`CudaDevice::pause_event_tracking`].
+#[must_use]
+pub(crate) struct EventTrackingGuard {
+    context: Arc<cudarc::driver::CudaContext>,
+    restore_to_enabled: bool,
+}
+
+impl Drop for EventTrackingGuard {
+    fn drop(&mut self) {
+        if self.restore_to_enabled {
+            // SAFETY: re-enabling the tracking that `pause_event_tracking` disabled,
+            // restoring the context to the state it was in before the guard.
+            unsafe { self.context.enable_event_tracking() };
+        }
+    }
+}
+
 pub struct ModuleStore {
     mdls: [Option<Arc<cudarc::driver::CudaModule>>; kernels::ALL_IDS.len()],
 }
@@ -305,6 +323,36 @@ impl CudaDevice {
 
     pub fn is_event_tracking(&self) -> bool {
         self.context.is_event_tracking()
+    }
+
+    /// Disables cudarc's per-tensor CUDA-event dependency tracking for as long as
+    /// the returned guard is alive, restoring the previous setting on drop.
+    ///
+    /// candle runs cudarc in multi-stream mode, so by default every kernel launch
+    /// issues `cuStreamWaitEvent`/`cuEventRecord` against each tensor's read/write
+    /// events to order work across streams. Those event waits are illegal during
+    /// CUDA graph capture (they reference events recorded outside the capture
+    /// region) and make capture fail with `CUDA_ERROR_INVALID_VALUE`. Since a
+    /// captured graph encodes its own ordering and is replayed on a single stream,
+    /// the tracking is unnecessary while capturing.
+    ///
+    /// # Safety
+    ///
+    /// While tracking is paused the caller must not rely on event-based
+    /// cross-stream synchronization for tensors used in this scope (see
+    /// [`CudaDevice::disable_event_tracking`]). [`CudaGraph::capture`] only ever
+    /// uses this around a single-stream capture, where ordering is guaranteed by
+    /// the stream itself, so this holds.
+    pub(crate) fn pause_event_tracking(&self) -> EventTrackingGuard {
+        let was_enabled = self.context.is_event_tracking();
+        if was_enabled {
+            // SAFETY: restored to `was_enabled` when the guard is dropped.
+            unsafe { self.context.disable_event_tracking() };
+        }
+        EventTrackingGuard {
+            context: self.context.clone(),
+            restore_to_enabled: was_enabled,
+        }
     }
 
     #[cfg(all(feature = "ug", not(target_arch = "wasm32")))]

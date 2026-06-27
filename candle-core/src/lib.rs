@@ -116,7 +116,7 @@ pub use cuda_backend as cuda;
 #[cfg(not(feature = "cuda"))]
 pub use dummy_cuda_backend as cuda;
 
-pub use cuda::{CudaDevice, CudaStorage};
+pub use cuda::{CudaDevice, CudaGraph, CudaStorage};
 
 #[cfg(feature = "metal")]
 pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
