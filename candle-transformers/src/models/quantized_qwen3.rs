@@ -83,6 +83,15 @@ impl Module for MlpWeights {
     }
 }
 
+// Fused CPU/f32 neox RoPE on raw slices, skipping the per-call narrow/to_dtype/
+// contiguous/apply_op3 chain (rope is ~13% of single-thread decode, nearly all
+// framework overhead). Default on; CANDLE_ROPE_FUSED=0 forces the original path.
+static FUSED_ROPE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    std::env::var("CANDLE_ROPE_FUSED")
+        .map(|s| s != "0")
+        .unwrap_or(true)
+});
+
 #[derive(Debug, Clone)]
 pub struct RotaryEmbedding {
     sin: Tensor,
@@ -135,11 +144,67 @@ impl RotaryEmbedding {
     /// Apply RoPE (q, k shape: B x H x L x D)
     pub fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
         let (_, _, seq_len, _) = q.dims4()?;
+        // CPU f32 decode (seq_len == 1) fast path: fused neox on raw slices, bit-
+        // identical to the op path. Prefill keeps the op path, which parallelizes
+        // over t while this serial loop would not.
+        if seq_len == 1 && *FUSED_ROPE && q.device().is_cpu() && q.dtype() == DType::F32 {
+            return Ok((
+                self.rope_neox_f32(q, offset)?,
+                self.rope_neox_f32(k, offset)?,
+            ));
+        }
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let sin = self.sin.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
         let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
         Ok((q_embed, k_embed))
+    }
+
+    // Fused neox RoPE on a CPU f32 tensor (B x H x L x D), bit-identical to
+    // candle_nn::rotary_emb::rope (same op order) but on raw slices, no apply_op3.
+    fn rope_neox_f32(&self, x: &Tensor, offset: usize) -> Result<Tensor> {
+        let (b, h, t, d) = x.dims4()?;
+        let half = d / 2;
+        // Runtime checks (debug_assert is compiled out in release): RoPE needs a
+        // positive EVEN head dim - an odd d would leave the last coord unrotated and
+        // d <= 1 divides by half_d == 0 below - and it must match the table. The op
+        // path rejects these via cos_n_embd * 2 != n_embd.
+        if half == 0 || 2 * half != d {
+            candle::bail!("rope head dim {d} must be a positive even number");
+        }
+        if half != self.half_d {
+            candle::bail!(
+                "rope head dim {d} (half {half}) does not match table half_d {}",
+                self.half_d
+            );
+        }
+        // cos_sin_at slices the table unchecked; bail on out-of-range positions so
+        // the caller gets an error instead of a panic (matches the narrow() path).
+        let max_pos = self.cos_f32.len() / self.half_d;
+        if offset + t > max_pos {
+            candle::bail!("rope position {} exceeds max {max_pos}", offset + t);
+        }
+        let xc = x.contiguous()?;
+        let (storage, layout) = xc.storage_and_layout();
+        let src: &[f32] = match &*storage {
+            Storage::Cpu(c) => &c.as_slice::<f32>()?[layout.start_offset()..],
+            _ => candle::bail!("rope_neox_f32: expected CPU storage"),
+        };
+        let mut dst = vec![0f32; b * h * t * d];
+        for bh in 0..b * h {
+            let chunk = bh * t * d;
+            for it in 0..t {
+                let (cos, sin) = self.cos_sin_at(offset + it);
+                let tb = chunk + it * d;
+                for j in 0..half {
+                    let a = src[tb + j];
+                    let bb = src[tb + half + j];
+                    dst[tb + j] = a * cos[j] - bb * sin[j];
+                    dst[tb + half + j] = a * sin[j] + bb * cos[j];
+                }
+            }
+        }
+        Tensor::from_vec(dst, (b, h, t, d), x.device())
     }
 
     /// Zero-allocation cos/sin slices for a single position.
@@ -585,5 +650,73 @@ impl ModelWeights {
         for layer in &mut self.layers {
             layer.clear_kv_cache();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Fused neox RoPE must be bit-identical to the candle_nn op path.
+    #[test]
+    fn fused_rope_matches_op_path() -> Result<()> {
+        let dev = Device::Cpu;
+        let (b, h, t, d) = (1usize, 4usize, 6usize, 16usize);
+        let offset = 3usize;
+        let rope = RotaryEmbedding::new(DType::F32, d, 64, 1_000_000.0, &dev)?;
+        let n = b * h * t * d;
+        let data: Vec<f32> = (0..n).map(|i| (i as f32 * 0.01).sin()).collect();
+        let q = Tensor::from_vec(data, (b, h, t, d), &dev)?;
+
+        let fused = rope.rope_neox_f32(&q, offset)?;
+        let cos = rope.cos.narrow(0, offset, t)?.to_dtype(DType::F32)?;
+        let sin = rope.sin.narrow(0, offset, t)?.to_dtype(DType::F32)?;
+        let want = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+
+        let got: Vec<f32> = fused.flatten_all()?.to_vec1()?;
+        let want: Vec<f32> = want.flatten_all()?.to_vec1()?;
+        for i in 0..n {
+            assert_eq!(
+                got[i].to_bits(),
+                want[i].to_bits(),
+                "idx {i}: fused {} op {}",
+                got[i],
+                want[i]
+            );
+        }
+        Ok(())
+    }
+
+    // Out-of-range positions must return an error, not panic on the table slice.
+    #[test]
+    fn fused_rope_rejects_out_of_range_position() -> Result<()> {
+        let dev = Device::Cpu;
+        let (b, h, t, d) = (1usize, 2usize, 4usize, 16usize);
+        let rope = RotaryEmbedding::new(DType::F32, d, 8, 1_000_000.0, &dev)?;
+        let q = Tensor::zeros((b, h, t, d), DType::F32, &dev)?;
+        // offset 6 + t 4 = 10 > max 8.
+        assert!(rope.rope_neox_f32(&q, 6).is_err());
+        Ok(())
+    }
+
+    // A head dim that mismatches the table must bail, not panic in release.
+    #[test]
+    fn fused_rope_rejects_head_dim_mismatch() -> Result<()> {
+        let dev = Device::Cpu;
+        let rope = RotaryEmbedding::new(DType::F32, 16, 64, 1_000_000.0, &dev)?;
+        let q = Tensor::zeros((1usize, 2usize, 1usize, 8usize), DType::F32, &dev)?;
+        assert!(rope.rope_neox_f32(&q, 0).is_err());
+        Ok(())
+    }
+
+    // An odd head dim (here d=1, which also has half_d==0) must bail, not panic on
+    // the max_pos division or leave the last coordinate unrotated.
+    #[test]
+    fn fused_rope_rejects_odd_head_dim() -> Result<()> {
+        let dev = Device::Cpu;
+        let rope = RotaryEmbedding::new(DType::F32, 1, 8, 1_000_000.0, &dev)?;
+        let q = Tensor::zeros((1usize, 1usize, 1usize, 1usize), DType::F32, &dev)?;
+        assert!(rope.rope_neox_f32(&q, 0).is_err());
+        Ok(())
     }
 }
