@@ -164,6 +164,12 @@ impl RotaryEmbedding {
         let (b, h, t, d) = x.dims4()?;
         let half = d / 2;
         debug_assert_eq!(half, self.half_d);
+        // cos_sin_at slices the table unchecked; bail on out-of-range positions so
+        // the caller gets an error instead of a panic (matches the narrow() path).
+        let max_pos = self.cos_f32.len() / self.half_d;
+        if offset + t > max_pos {
+            candle::bail!("rope position {} exceeds max {max_pos}", offset + t);
+        }
         let xc = x.contiguous()?;
         let (storage, layout) = xc.storage_and_layout();
         let src: &[f32] = match &*storage {
@@ -664,6 +670,18 @@ mod tests {
                 want[i]
             );
         }
+        Ok(())
+    }
+
+    // Out-of-range positions must return an error, not panic on the table slice.
+    #[test]
+    fn fused_rope_rejects_out_of_range_position() -> Result<()> {
+        let dev = Device::Cpu;
+        let (b, h, t, d) = (1usize, 2usize, 4usize, 16usize);
+        let rope = RotaryEmbedding::new(DType::F32, d, 8, 1_000_000.0, &dev)?;
+        let q = Tensor::zeros((b, h, t, d), DType::F32, &dev)?;
+        // offset 6 + t 4 = 10 > max 8.
+        assert!(rope.rope_neox_f32(&q, 6).is_err());
         Ok(())
     }
 }
