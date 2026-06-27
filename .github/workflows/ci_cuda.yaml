@@ -28,10 +28,10 @@ jobs:
       security-events: write
     env:
       CUDA_COMPUTE_CAP: 86
-      # Scoping the test step to GPU-relevant crates (below) wasn't enough on its own: this
-      # runner still OOM-kills (exit 137) while compiling candle-transformers at full rustc
-      # parallelism. Cap parallel rustc jobs to reduce peak memory; the two fixes address
-      # different causes (crate count vs. per-crate codegen parallelism) and are both needed.
+      # `cargo test --features cuda` at the workspace root builds every member, including
+      # candle-pyo3 and the wasm/yew examples, which pulls in pyo3/wasm-bindgen/yew and OOM-kills
+      # (exit 137) this runner. Scope to the GPU-relevant crates instead, and cap parallel rustc
+      # jobs to further reduce peak memory.
       CARGO_BUILD_JOBS: 2
     steps:
       - name: Checkout repository
@@ -44,7 +44,7 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Test (cuda)
-        run: cargo test --features cuda
+        run: cargo test --features cuda -p candle-core -p candle-nn -p candle-transformers -p candle-examples
       - name: Build+test (cuda) - CudaGraph capture/replay
         run: cargo test -p candle-core --features cuda --test cuda_graph_tests
       - name: Build+test (cuda) - FlashInfer-style decode attention kernel
