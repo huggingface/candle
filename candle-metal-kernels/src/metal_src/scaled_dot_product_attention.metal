@@ -2275,7 +2275,18 @@ template <
     loader_v.next();
   }
 
-  // Normalize output
+  // Normalize output. A fully-masked query row (every key excluded by the
+  // additive mask and/or causal masking) ends the loop with sum_score == 0 and
+  // an all-zero Otile. The ExpSubOp/rescale guards above keep that row NaN-free
+  // during accumulation, but the final divide would still compute 0/0 = NaN.
+  // Clamp a zero normalizer to 1 so the row stays zeroed instead of poisoning
+  // the output (this is what lets `has_mask` and `do_causal` be combined).
+  STEEL_PRAGMA_UNROLL
+  for (short i = 0; i < kRowsPT; ++i) {
+    if (sum_score[i] == AccumType(0)) {
+      sum_score[i] = AccumType(1);
+    }
+  }
   Otile.template row_bin_op<DivOp>(sum_score);
   threadgroup_barrier(mem_flags::mem_none);
 
