@@ -87,6 +87,9 @@ inline void decode_attention_impl(
     }
 }
 
+// Metal requires all thread-position attributes in a kernel to share the same
+// dimensionality, so every position attribute below is `uint2` and the threadgroup-local
+// index/size use the `.x` component (the threadgroup is 1-D).
 kernel void decode_attention_f32(
     device const float *q [[buffer(0)]],
     device const float *k [[buffer(1)]],
@@ -94,10 +97,10 @@ kernel void decode_attention_f32(
     device float *out [[buffer(3)]],
     constant DecodeParams &p [[buffer(4)]],
     uint2 tg_pos [[threadgroup_position_in_grid]],
-    uint tid [[thread_position_in_threadgroup]],
-    uint tcount [[threads_per_threadgroup]]) {
+    uint2 tid [[thread_position_in_threadgroup]],
+    uint2 tcount [[threads_per_threadgroup]]) {
     threadgroup float red[1024];
-    decode_attention_impl<float>(q, k, v, out, p, red, tg_pos, tid, tcount);
+    decode_attention_impl<float>(q, k, v, out, p, red, tg_pos, tid.x, tcount.x);
 }
 
 kernel void decode_attention_f16(
@@ -107,8 +110,8 @@ kernel void decode_attention_f16(
     device half *out [[buffer(3)]],
     constant DecodeParams &p [[buffer(4)]],
     uint2 tg_pos [[threadgroup_position_in_grid]],
-    uint tid [[thread_position_in_threadgroup]],
-    uint tcount [[threads_per_threadgroup]]) {
+    uint2 tid [[thread_position_in_threadgroup]],
+    uint2 tcount [[threads_per_threadgroup]]) {
     threadgroup float red[1024];
-    decode_attention_impl<half>(q, k, v, out, p, red, tg_pos, tid, tcount);
+    decode_attention_impl<half>(q, k, v, out, p, red, tg_pos, tid.x, tcount.x);
 }
