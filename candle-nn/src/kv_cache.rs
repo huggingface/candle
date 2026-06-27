@@ -1124,14 +1124,9 @@ impl RawInterleavedKvCache {
     }
 }
 
-/// HEAD-MAJOR f16 interleaved K/V cache for the f16-KV CPU flash kernels.
-///
-/// Distinct from [`RawInterleavedKvCache`] (position-major, f32): this stores the
-/// KV as `f16` (half the bytes streamed per token -> less decode bandwidth) and
-/// lays it out HEAD-MAJOR so each kv head's positions are contiguous - matching
-/// `causal_decode_f16kv_interleaved` / `causal_prefill_f16kv_headmajor`, which read
-/// one head's stream sequentially. Per-head block `h` starts at `h * head_stride()`
-/// and holds `len` positions of `[K(d), V(d)]`.
+// Head-major f16 interleaved K/V cache for the f16-KV CPU flash kernels: f16 (half the
+// decode bandwidth), each kv head's positions contiguous. Per-head block h starts at
+// h * head_stride() and holds len positions of [K(d), V(d)].
 pub struct RawInterleavedKvCacheF16 {
     buf: Vec<half::f16>,
     h_kv: usize,
@@ -1141,7 +1136,7 @@ pub struct RawInterleavedKvCacheF16 {
 }
 
 impl RawInterleavedKvCacheF16 {
-    /// Create a new cache with space for `max_seq` positions.
+    // Create a cache with space for max_seq positions.
     pub fn new(h_kv: usize, d: usize, max_seq: usize) -> Self {
         Self {
             buf: vec![half::f16::ZERO; h_kv * max_seq * 2 * d],
@@ -1152,7 +1147,7 @@ impl RawInterleavedKvCacheF16 {
         }
     }
 
-    /// Number of positions currently cached.
+    // Number of positions currently cached.
     pub fn len(&self) -> usize {
         self.len
     }
@@ -1161,14 +1156,12 @@ impl RawInterleavedKvCacheF16 {
         self.len == 0
     }
 
-    /// Elements between consecutive kv-head blocks in [`Self::data`].
+    // Elements between consecutive kv-head blocks in data().
     pub fn head_stride(&self) -> usize {
         self.cap * 2 * self.d
     }
 
-    /// Write one position of K and V into the cache.
-    ///
-    /// `k_flat` and `v_flat` are flat `(H_kv * D)` slices from the projection output.
+    // Write one position of K and V. k_flat/v_flat are flat (H_kv * D) slices.
     pub fn write_kv(&mut self, k_flat: &[f32], v_flat: &[f32]) {
         if self.len == self.cap {
             self.grow();
@@ -1206,9 +1199,7 @@ impl RawInterleavedKvCacheF16 {
         self.cap = new_cap;
     }
 
-    /// Write multiple positions of K and V (for prefill).
-    ///
-    /// `k_flat` is `(S, H_kv * D)` row-major, `v_flat` same.
+    // Write multiple positions for prefill. k_flat is (S, H_kv * D) row-major, v_flat same.
     pub fn write_kv_batch(&mut self, k_flat: &[f32], v_flat: &[f32], seq_len: usize) {
         let hd = self.h_kv * self.d;
         for s in 0..seq_len {
@@ -1218,8 +1209,7 @@ impl RawInterleavedKvCacheF16 {
         }
     }
 
-    /// The full cache buffer; per-head blocks start at `h * head_stride()` and
-    /// hold `len` positions of `[K(d), V(d)]` each.
+    // Full cache buffer; per-head block h starts at h * head_stride(), len positions of [K(d), V(d)].
     pub fn data(&self) -> &[half::f16] {
         &self.buf
     }

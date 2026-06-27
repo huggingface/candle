@@ -36,7 +36,7 @@ fn vec_add(acc: &mut [f32], v: &[f32]) {
     acc.iter_mut().zip(v).for_each(|(a, e)| *a += e);
 }
 
-/// Prefetch a cache line for read. Generic so f32 and f16-KV callers share it.
+// Prefetch a cache line for read. Generic so f32 and f16-KV callers share it.
 #[inline(always)]
 fn prefetch_read<T>(ptr: *const T) {
     #[cfg(target_arch = "aarch64")]
@@ -971,16 +971,14 @@ fn causal_prefill_generic<T: WithDType>(
     Tensor::from_vec(out, (h_q, s_q, d), &Device::Cpu)
 }
 
-// Opt-in (CANDLE_VEC_SOFTMAX_EXP=1) NEON polynomial exp for the flash-attention softmax.
-// The N1 instruction breakdown showed `expf` (libm, scalar) as the kernel's `transcendental`
-// cost; this replaces it with FMA (~1e-6 accurate, normalized out by softmax). Default OFF so
-// the default path stays bit-reproducible; flip on once validated on N1.
+// Opt-in (CANDLE_VEC_SOFTMAX_EXP=1) NEON polynomial exp for softmax, replacing scalar
+// libm expf (~1e-6, normalized out). Default OFF to stay bit-reproducible.
 #[cfg(target_arch = "aarch64")]
 static VEC_SOFTMAX_EXP: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var("CANDLE_VEC_SOFTMAX_EXP").is_ok());
 
-// exp(x) via range-reduction x = n*ln2 + r, exp(x) = 2^n * poly(r). Scalar form so the
-// vector body and the <4 tail use the SAME approximation (consistent softmax values).
+// exp(x) via range reduction x = n*ln2 + r, exp(x) = 2^n * poly(r). Scalar form so the
+// vector body and the <4 tail share one approximation.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 fn poly_exp_scalar(x: f32) -> f32 {
@@ -1037,7 +1035,7 @@ unsafe fn vec_exp_sub_sum_neon(s: &mut [f32], mr: f32) -> f32 {
     sum
 }
 
-/// For each `x` in `s`, set `x = exp(x - mr)` and return the sum. The softmax inner loop.
+// For each x in s, set x = exp(x - mr) and return the sum (softmax inner loop).
 #[inline(always)]
 fn exp_sub_sum(s: &mut [f32], mr: f32) -> f32 {
     #[cfg(target_arch = "aarch64")]
@@ -1053,10 +1051,8 @@ fn exp_sub_sum(s: &mut [f32], mr: f32) -> f32 {
     sum
 }
 
-/// f16-KV interleaved causal decode (q_len=1). Reads the head-major f16 KV cache
-/// (`RawInterleavedKvCacheF16`) one head's stream at a time - half the bytes of an
-/// f32 cache. With `f16-attn-dot` the score is a native f16.f16 dot; otherwise K is
-/// widened in-register.
+// f16-KV interleaved causal decode (q_len=1). Reads the head-major f16 KV cache one
+// head's stream at a time - half the bytes of an f32 cache.
 #[allow(clippy::too_many_arguments)]
 pub fn causal_decode_f16kv_interleaved(
     q_data: &[f32],
@@ -1072,9 +1068,8 @@ pub fn causal_decode_f16kv_interleaved(
 
     let mut out = vec![0f32; h_q * d];
 
-    // One task per kv head, computing all `rk` of its GQA query heads in a single
-    // pass: the head-major cache makes the stream contiguous, and each K/V row is
-    // read from memory once instead of once per query head.
+    // One task per kv head, all rk GQA query heads in one pass so each contiguous
+    // K/V row is read from memory once, not once per query head.
     let process =
         |kv_h: usize, out_chunk: &mut [f32], acc: &mut [f32], m: &mut [f32], ssum: &mut [f32]| {
             let head_base = kv_h * head_stride;
@@ -1083,9 +1078,8 @@ pub fn causal_decode_f16kv_interleaved(
             m.fill(f32::NEG_INFINITY);
             ssum.fill(0.0);
 
-            // `f16-attn-dot`: narrow this kv-head's `rk` query rows to f16 ONCE here
-            // (amortized over all `kv_len` positions), so the inner score is a pure
-            // f16.f16 dot. Default build skips this entirely.
+            // f16-attn-dot: narrow this kv-head's rk query rows to f16 once (amortized
+            // over kv_len), so the inner score is a pure f16.f16 dot. Off by default.
             #[cfg(feature = "f16-attn-dot")]
             let q_f16: Vec<half::f16> = {
                 let base = kv_h * rk * d;
@@ -1135,9 +1129,8 @@ pub fn causal_decode_f16kv_interleaved(
             }
         };
 
-    // CONTIGUOUS per-thread partition of the h_kv kv-heads on the barrier pool (replaces
-    // rayon's fine-grained par_chunks, which thrashed the shared cache and limited decode
-    // scaling on N1). `execute` with a 0-worker pool runs f(0) inline - zero overhead at 1 vCPU.
+    // Contiguous per-thread partition of the h_kv kv-heads on the barrier pool (vs rayon's
+    // par_chunks, which thrashed shared cache on N1). 0-worker pool runs f(0) inline.
     struct OutPtr(*mut f32);
     unsafe impl Sync for OutPtr {}
     let optr = OutPtr(out.as_mut_ptr());
@@ -1163,14 +1156,9 @@ pub fn causal_decode_f16kv_interleaved(
     Tensor::from_vec(out, (h_q, 1usize, d), &Device::Cpu)
 }
 
-/// Causal prefill over the f16 head-major interleaved KV cache (the same layout
-/// [`causal_decode_f16kv_interleaved`] reads, so prefill and decode share one cache).
-///
-/// Structure matches [`causal_prefill_f32_lean`]: one task per (kv head, query
-/// block), the `rk` GQA query heads sharing every K/V row load, KV-blocked softmax.
-/// The QK dot widens the f16 K row in-register against the f32 query (`dot_f32_f16`);
-/// the PV accumulator stays f32 (`axpy_f16` widens V in-register). Same dot strategy
-/// as [`causal_decode_f16kv_interleaved`], including the `f16-attn-dot` variant.
+// Causal prefill over the f16 head-major interleaved KV cache (same layout decode reads).
+// One task per (kv head, query block), rk GQA heads sharing every K/V row, KV-blocked
+// softmax; QK widens f16 K in-register, PV accumulator stays f32.
 #[allow(clippy::too_many_arguments)]
 pub fn causal_prefill_f16kv_headmajor(
     q_data: &[f32],
@@ -1196,8 +1184,8 @@ pub fn causal_prefill_f16kv_headmajor(
     unsafe impl Sync for OutPtr {}
     let out_ptr = OutPtr(out.as_mut_ptr());
 
-    // CONTIGUOUS per-thread partition of the (kv-head, q-block) tasks on the barrier pool
-    // (replaces rayon's fine-grained into_par_iter). execute(0 workers) runs f(0) inline.
+    // Contiguous per-thread partition of (kv-head, q-block) tasks on the barrier pool.
+    // 0-worker pool runs f(0) inline.
     let n_tasks = h_kv * n_qblocks;
     let pool = candle::utils::barrier_pool();
     let n_total = pool.n_workers() + 1;
@@ -1219,9 +1207,8 @@ pub fn causal_prefill_f16kv_headmajor(
             let head_base = kv_h * head_stride;
             let p = &out_ptr;
 
-            // `f16-attn-dot`: narrow this q block's rows to f16 so the QK dot is a
-            // pure f16.f16 FMLA. Reused across q positions; the default build keeps
-            // Q in f32 and the dot widens K in-register (`dot_f32_f16`).
+            // f16-attn-dot: narrow this q block's rows to f16 so the QK dot is a pure
+            // f16.f16 FMLA. Default keeps Q in f32 and widens K in-register.
             #[cfg(feature = "f16-attn-dot")]
             let mut qf16 = vec![half::f16::ZERO; rk * d];
 

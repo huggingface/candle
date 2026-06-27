@@ -178,9 +178,7 @@ fn flash_attn_via_varlen(
     ctx.reshape((b, s_q, h_q, d))?.transpose(1, 2)?.contiguous()
 }
 
-/// the bytes streamed per token. The f16 elements are widened in-register
-/// (`fcvtl`, baseline aarch64 NEON) so there is no scratch buffer and no
-/// precision loss beyond the f16 storage itself.
+// f32.f16 dot; f16 K widened in-register (fcvtl, baseline NEON), no scratch buffer.
 #[cfg(all(target_arch = "aarch64", not(feature = "f16-attn-dot")))]
 #[inline]
 pub(crate) fn dot_f32_f16(a: &[f32], b: &[half::f16]) -> f32 {
@@ -227,11 +225,8 @@ pub(crate) fn dot_f32_f16(a: &[f32], b: &[half::f16]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y.to_f32()).sum()
 }
 
-/// Native-fp16 q.k dot for the decode flash kernel (opt-in `f16-attn-dot`).
-/// The accumulator is f16, so a head_dim-long sum loses low-order bits
-/// (~1e-3 rel); softmax + greedy argmax absorb it (verified: identical text).
-/// Two accumulators hide the fp16-FMA latency. The exact f32-accumulating
-/// `dot_f32_f16` above is the default and is what runs without this feature.
+// Native fp16 q.k dot (opt-in f16-attn-dot). f16 accumulator loses ~1e-3 rel,
+// absorbed by softmax+argmax; two accumulators hide FMA latency.
 #[cfg(all(target_arch = "aarch64", feature = "f16-attn-dot"))]
 #[inline]
 pub(crate) fn dot_f16_f16(a: &[half::f16], b: &[half::f16]) -> f32 {
@@ -291,8 +286,7 @@ pub(crate) fn dot_f16_f16(a: &[half::f16], b: &[half::f16]) -> f32 {
 #[inline]
 pub(crate) fn dot_f16_f16(a: &[half::f16], b: &[half::f16]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
-    // Portable reference: f16 products into an f16 running sum (matches the
-    // lossy-accumulation semantics of the aarch64 path closely enough for tests).
+    // Portable reference: f16 products into an f16 running sum (lossy, matches aarch64).
     let mut acc = half::f16::ZERO;
     for (x, y) in a.iter().zip(b) {
         acc += *x * *y;
@@ -300,7 +294,7 @@ pub(crate) fn dot_f16_f16(a: &[half::f16], b: &[half::f16]) -> f32 {
     acc.to_f32()
 }
 
-/// `acc[i] += v[i] * w` with an f16 value row widened in-register (f32 accumulator).
+// acc[i] += v[i] * w; f16 value row widened in-register, f32 accumulator.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 pub(crate) fn axpy_f16(acc: &mut [f32], v: &[half::f16], w: f32) {
