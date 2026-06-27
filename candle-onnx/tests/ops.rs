@@ -3790,6 +3790,118 @@ fn test_min() -> Result<()> {
     Ok(())
 }
 
+// "DynamicQuantizeLinear"
+#[test]
+fn test_dynamic_quantize_linear() -> Result<()> {
+    test(
+        &[0f32, 2., -3., -2.5, 1.34, 0.5],
+        &[153u8, 255, 0, 26, 221, 179],
+        0.019607844,
+        153,
+    )?;
+    test(
+        &[-1f32, -2.1, -1.3, -2.5, -3.34, -4.],
+        &[191u8, 121, 172, 96, 42, 0],
+        0.015686275,
+        255,
+    )?;
+    test(
+        &[
+            [1f32, 2.1, 1.3, 2.5],
+            [3.34, 4., 1.5, 2.6],
+            [3.9, 4., 3., 2.345],
+        ],
+        &[
+            [64u8, 134, 83, 159],
+            [213, 255, 96, 166],
+            [249, 255, 191, 149],
+        ],
+        0.015686275,
+        0,
+    )?;
+    test(&[0f32, 0.], &[0u8, 0], 0.003921569, 0)?;
+    test(&[0.0019607844f32, 1.], &[0u8, 255], 0.003921569, 0)?;
+
+    fn test(
+        input: impl NdArray,
+        expected_y: impl NdArray,
+        expected_scale: f32,
+        expected_zero_point: u8,
+    ) -> Result<()> {
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "DynamicQuantizeLinear".to_string(),
+                domain: "".to_string(),
+                attribute: vec![],
+                input: vec![INPUT_X.to_string()],
+                output: vec![
+                    "y".to_string(),
+                    "y_scale".to_string(),
+                    "y_zero_point".to_string(),
+                ],
+                name: "".to_string(),
+                doc_string: "".to_string(),
+            }],
+            name: "".to_string(),
+            initializer: vec![],
+            input: vec![],
+            output: vec![
+                ValueInfoProto {
+                    name: "y".to_string(),
+                    doc_string: "".to_string(),
+                    r#type: None,
+                },
+                ValueInfoProto {
+                    name: "y_scale".to_string(),
+                    doc_string: "".to_string(),
+                    r#type: None,
+                },
+                ValueInfoProto {
+                    name: "y_zero_point".to_string(),
+                    doc_string: "".to_string(),
+                    r#type: None,
+                },
+            ],
+            value_info: vec![],
+            doc_string: "".to_string(),
+            sparse_initializer: vec![],
+            quantization_annotation: vec![],
+        }));
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), Tensor::new(input, &Device::Cpu)?);
+
+        let eval = simple_eval(&manual_graph, inputs)?;
+        assert_eq!(eval.len(), 3);
+
+        let y = eval.get("y").expect("Output 'y' not found");
+        let expected_y = Tensor::new(expected_y, &Device::Cpu)?;
+        assert_eq!(y.dtype(), DType::U8);
+        assert_eq!(y.dims(), expected_y.dims());
+        assert_eq!(
+            y.flatten_all()?.to_vec1::<u8>()?,
+            expected_y.flatten_all()?.to_vec1::<u8>()?
+        );
+
+        let y_scale = eval.get("y_scale").expect("Output 'y_scale' not found");
+        assert_eq!(y_scale.dtype(), DType::F32);
+        assert!(y_scale.dims().is_empty());
+        let actual_scale = y_scale.to_vec0::<f32>()?;
+        assert!((actual_scale - expected_scale).abs() < 1e-7);
+
+        let y_zero_point = eval
+            .get("y_zero_point")
+            .expect("Output 'y_zero_point' not found");
+        assert_eq!(y_zero_point.dtype(), DType::U8);
+        assert!(y_zero_point.dims().is_empty());
+        assert_eq!(y_zero_point.to_vec0::<u8>()?, expected_zero_point);
+
+        Ok(())
+    }
+
+    Ok(())
+}
+
 // "Where"
 #[test]
 fn test_where() -> Result<()> {
