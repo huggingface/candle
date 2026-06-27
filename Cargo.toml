@@ -12,9 +12,12 @@ members = [
     "tensor-tools",
 ]
 exclude = [
+    "candle-awq-kernels",
     "candle-book",
     "candle-flash-attn",
     "candle-flash-attn-v3",
+    "candle-fp8-kernels",
+    "candle-gptq-kernels",
     "candle-kernels",
     "candle-metal-kernels",
     "candle-onnx",

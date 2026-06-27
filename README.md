@@ -93,6 +93,9 @@ We also provide some command line based examples using state of the art models:
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
 - [Quantized Qwen3 MoE](./candle-examples/examples/quantized-qwen3-moe/): support gguf quantized models of Qwen3 MoE models.
+- [Quantized Qwen2](./candle-examples/examples/quantized-qwen2/): load GPTQ- or
+  AWQ-quantized Qwen2 checkpoints directly from the Hugging Face Hub, auto-detecting the format
+  from `config.json`.
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/quantized/assets/aoc.gif" width="600">
   
@@ -292,6 +295,13 @@ Cheatsheet:
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
 - [candle-onnx](./candle-onnx/): ONNX model evaluation.
+- [candle-gptq-kernels](./candle-gptq-kernels/), [candle-awq-kernels](./candle-awq-kernels/),
+  [candle-fp8-kernels](./candle-fp8-kernels/): fused dequantize+GEMM CUDA/Metal kernels for
+  GPTQ/AWQ/block-wise-FP8 quantized linear layers, used by `candle-transformers`'
+  `quantized_linear::QuantizedLinear` when the corresponding `{gptq,awq,fp8}-{cuda,metal}`
+  feature is enabled. Kept as separate crates rather than folded into `candle-kernels` so they're
+  only built for checkpoints that actually use that format; see
+  [candle-gptq-kernels' README](./candle-gptq-kernels/README.md) for the full rationale.
 
 ## FAQ
 
