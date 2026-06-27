@@ -10,7 +10,7 @@ use std::sync::Arc;
 use cudarc::driver::sys;
 
 use super::{CudaDevice, WrapErr};
-use crate::Result;
+use crate::{Context, Result};
 
 /// A captured, replayable sequence of CUDA operations.
 ///
@@ -53,7 +53,8 @@ impl CudaGraph {
             )
         }
         .result()
-        .w()?;
+        .w()
+        .context("cuStreamBeginCapture_v2 failed")?;
 
         let value = match f() {
             Ok(value) => value,
@@ -70,7 +71,8 @@ impl CudaGraph {
         let mut cu_graph: sys::CUgraph = std::ptr::null_mut();
         unsafe { sys::cuStreamEndCapture(stream.cu_stream(), &mut cu_graph) }
             .result()
-            .w()?;
+            .w()
+            .context("cuStreamEndCapture failed")?;
         if cu_graph.is_null() {
             crate::bail!("cuda graph capture recorded no operations");
         }
@@ -78,7 +80,8 @@ impl CudaGraph {
         let mut cu_graph_exec: sys::CUgraphExec = std::ptr::null_mut();
         let instantiate = unsafe { sys::cuGraphInstantiateWithFlags(&mut cu_graph_exec, cu_graph, 0) }
             .result()
-            .w();
+            .w()
+            .context("cuGraphInstantiateWithFlags failed");
         if let Err(err) = instantiate {
             let _ = unsafe { sys::cuGraphDestroy(cu_graph) };
             return Err(err);
@@ -99,6 +102,7 @@ impl CudaGraph {
         unsafe { sys::cuGraphLaunch(self.cu_graph_exec, self.stream.cu_stream()) }
             .result()
             .w()
+            .context("cuGraphLaunch failed")
     }
 }
 
