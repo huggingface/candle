@@ -446,3 +446,4 @@ impl Model {
         }
     }
 }
+crate::impl_causal_lm!(Model, "gemma");

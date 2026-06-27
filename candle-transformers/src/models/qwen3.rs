@@ -517,3 +517,4 @@ impl ModelForCausalLM {
         self.base.clear_kv_cache();
     }
 }
+crate::impl_causal_lm!(ModelForCausalLM, "qwen3");

@@ -597,6 +597,15 @@ impl ModelWeights {
         }
     }
 
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            match &mut layer.kind {
+                LayerKind::Attention(attn) => attn.kv_cache = None,
+                LayerKind::ShortConv(conv) => conv.cache = None,
+            }
+        }
+    }
+
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = if seq_len == 1 {
@@ -628,3 +637,5 @@ impl ModelWeights {
         self.output.forward(&hidden)
     }
 }
+
+crate::impl_causal_lm!(ModelWeights, "lfm2");

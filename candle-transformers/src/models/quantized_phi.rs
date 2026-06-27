@@ -300,4 +300,11 @@ impl ModelWeights {
         let _enter = self.span_output.enter();
         self.output.forward(&xs)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.kv_cache = None;
+        }
+    }
 }
+crate::impl_causal_lm!(ModelWeights, "phi");
