@@ -11,6 +11,25 @@ use cudarc::driver::{
 };
 use half::{bf16, f16};
 
+fn launch_config_for_num_elems(elem_count: usize) -> Result<LaunchConfig> {
+    let elem_count = u32::try_from(elem_count).map_err(|_| {
+        crate::Error::Msg(
+            format!("cuda kernel launch element count {elem_count} exceeds u32::MAX").into(),
+        )
+        .bt()
+    })?;
+    Ok(LaunchConfig::for_num_elems(elem_count))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn launch_config_rejects_more_than_u32_max_elements() {
+        let err = super::launch_config_for_num_elems(u32::MAX as usize + 1).unwrap_err();
+        assert!(err.to_string().contains("exceeds u32::MAX"), "{err}");
+    }
+}
+
 #[cfg(feature = "cudnn")]
 pub mod cudnn;
 mod device;
@@ -110,7 +129,7 @@ impl Map1 for Affine {
         let shape = layout.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let cfg = launch_config_for_num_elems(el)?;
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("affine"), &kernels::AFFINE)?;
@@ -141,7 +160,7 @@ impl Map1 for Elu {
         let shape = layout.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let cfg = launch_config_for_num_elems(el)?;
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), &kernels::UNARY)?;
@@ -186,7 +205,7 @@ impl Map1 for Im2Col1D {
         let dims = shape.dims();
         let l_out = self.l_out(dims[2]);
         let threads = dims[0] * l_out * dims[1];
-        let cfg = LaunchConfig::for_num_elems(threads as u32);
+        let cfg = launch_config_for_num_elems(threads)?;
         let ds = dev.clone_htod(&[dims, layout.stride()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), &kernels::CONV)?;
@@ -237,7 +256,7 @@ impl Map1 for Im2Col {
         let dims = shape.dims();
         let (h_out, w_out) = self.hw_out(dims[2], dims[3]);
         let dst_el = dims[0] * h_out * w_out * dims[1] * self.h_k * self.w_k;
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let ds = dev.clone_htod(&[dims, layout.stride()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), &kernels::CONV)?;
@@ -272,7 +291,7 @@ impl Map1 for Powf {
         let shape = layout.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let cfg = launch_config_for_num_elems(el)?;
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), &kernels::UNARY)?;
@@ -383,7 +402,7 @@ impl<U: UnaryOpT> Map1 for U {
         let shape = layout.shape();
         let dims = shape.dims();
         let el_count = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(el_count as u32);
+        let cfg = launch_config_for_num_elems(el_count)?;
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::UNARY)?;
@@ -439,7 +458,7 @@ impl Map1 for IndexSelect<'_> {
         let src_dim_size = src_l.dims()[self.2];
         let ids_dim_size = ids_shape.elem_count();
         let dst_el = ids_shape.elem_count() * left_size * right_size;
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
@@ -486,7 +505,7 @@ impl Map1 for Gather<'_> {
             })?,
         };
         let el = ids_l.shape().elem_count();
-        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let cfg = launch_config_for_num_elems(el)?;
         let src = match src_l.contiguous_offsets() {
             Some((o1, o2)) => src.slice(o1..o2),
             None => Err(crate::Error::RequiresContiguous { op: "gather" }.bt())?,
@@ -553,7 +572,7 @@ impl Map2InPlace for IndexAdd<'_> {
         let src_dim_sz = src_l.dims()[dim];
         let dst_dim_sz = dst_l.dims()[dim];
         let ids_dim_sz = ids_l.dims()[0];
-        let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
+        let cfg = launch_config_for_num_elems(left_sz * right_sz)?;
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         let mut builder = func.builder();
         barg!(builder, ids);
@@ -606,7 +625,7 @@ impl Map2InPlace for Scatter<'_> {
         let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
         let src_dim_sz = src_l.dims()[dim];
         let dst_dim_sz = dst_l.dims()[dim];
-        let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
+        let cfg = launch_config_for_num_elems(left_sz * right_sz)?;
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         let mut builder = func.builder();
         barg!(builder, ids);
@@ -658,7 +677,7 @@ impl Map2InPlace for ScatterAdd<'_> {
         let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
         let src_dim_sz = src_l.dims()[dim];
         let dst_dim_sz = dst_l.dims()[dim];
-        let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
+        let cfg = launch_config_for_num_elems(left_sz * right_sz)?;
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         let mut builder = func.builder();
         barg!(builder, ids);
@@ -691,7 +710,7 @@ impl Map2 for Conv1D<'_> {
         let el = shape.elem_count();
         let l_out = p.l_out();
         let dst_el = p.c_out * l_out * p.b_size;
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
@@ -738,7 +757,7 @@ impl Map2 for Conv2D<'_> {
 
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), &kernels::CONV)?;
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
@@ -775,7 +794,7 @@ impl Map1 for Col2Im1D {
         let dst_el = b_size * c_out * l_out;
         let mut im = unsafe { dev.alloc::<T>(dst_el)? };
 
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let func = dev.get_or_load_func(&kernel_name::<T>("col2im1d"), &kernels::CONV)?;
         let mut builder = func.builder();
         barg!(builder, dst_el, l_out, l_in, c_out, k_size, stride);
@@ -809,7 +828,7 @@ impl Map2 for ConvTranspose1D<'_> {
 
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose1d"), &kernels::CONV)?;
         let ds = if dims.len() == 3 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
@@ -857,7 +876,7 @@ impl Map2 for ConvTranspose2D<'_> {
 
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose2d"), &kernels::CONV)?;
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
@@ -916,7 +935,7 @@ impl Map1 for Pool2D {
         let out_w = (dims[2] - self.w_k) / self.w_stride + 1;
         let out_h = (dims[3] - self.h_k) / self.h_stride + 1;
         let dst_el = out_w * out_h * dims[0] * dims[1];
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let kname = match self.op {
             PoolOp::Max => "max_pool2d",
             PoolOp::Avg => "avg_pool2d",
@@ -959,7 +978,7 @@ impl Map1 for UpsampleNearest2D {
         };
         let (out_w, out_h) = (self.0, self.1);
         let dst_el = out_w * out_h * dims[0] * dims[1];
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el)? };
@@ -1006,7 +1025,7 @@ impl Map1 for UpsampleBilinear2D {
 
         let (out_w, out_h) = (self.out_w, self.out_h);
         let dst_el = out_w * out_h * dims[0] * dims[1];
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let cfg = launch_config_for_num_elems(dst_el)?;
         let func =
             dev.get_or_load_func(&kernel_name::<T>("upsample_bilinear2d"), &kernels::CONV)?;
 
@@ -1066,7 +1085,7 @@ impl Map2 for WhereCond<'_> {
         let shape = ids_l.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let cfg = launch_config_for_num_elems(el)?;
         let ds =
             dev.clone_htod(&[dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())?;
         let t = &t.slice(layout_t.start_offset()..);
@@ -1100,7 +1119,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         let shape = lhs_l.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+        let cfg = launch_config_for_num_elems(elem_count)?;
         let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
@@ -1137,7 +1156,7 @@ impl Map2Any for Cmp {
         let shape = lhs_l.shape();
         let dims = shape.dims();
         let elem_count = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+        let cfg = launch_config_for_num_elems(elem_count)?;
         let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
@@ -1469,7 +1488,7 @@ impl BackendStorage for CudaStorage {
         let shape = layout.shape();
         let dims = shape.dims();
         let el_count = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(el_count as u32);
+        let cfg = launch_config_for_num_elems(el_count)?;
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src_o = layout.start_offset();
         let ((src, _guard_src), kernel_name) = match &mut self.slice {
@@ -1508,7 +1527,7 @@ impl BackendStorage for CudaStorage {
         let shape = layout.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let cfg = launch_config_for_num_elems(el)?;
         let dev = self.device();
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let start_o = layout.start_offset();
@@ -2252,13 +2271,14 @@ impl BackendStorage for CudaStorage {
         dst_o: usize,
     ) -> Result<()> {
         let dev = &self.device;
-        let d1 = d1 as u32;
-        let d2 = d2 as u32;
         // Nothing to copy so we exit early to avoid launching a kernel and some potential invalid
         // argument with a null pointer.
         if d1 == 0 || d2 == 0 {
             return Ok(());
         }
+        let cfg = launch_config_for_num_elems(d1 * d2)?;
+        let d1 = d1 as u32;
+        let d2 = d2 as u32;
         let dst_s = dst_s as u32;
         let src_s = src_s as u32;
         let ((src, _guard_src), (dst, _guard_dst), kname) = match (&self.slice, &mut dst.slice) {
@@ -2276,7 +2296,6 @@ impl BackendStorage for CudaStorage {
             _ => Err(CudaError::InternalError("dtype mismatch in copy2d"))?,
         };
         let func = dev.get_or_load_func(kname, &kernels::FILL)?;
-        let cfg = LaunchConfig::for_num_elems(d1 * d2);
         let mut builder = func.builder();
         barg!(builder, src);
         barg!(builder, dst);
@@ -2296,7 +2315,7 @@ impl BackendStorage for CudaStorage {
         if el_count == 0 {
             return Ok(());
         }
-        let cfg = LaunchConfig::for_num_elems(el_count as u32);
+        let cfg = launch_config_for_num_elems(el_count)?;
         let dev = &self.device;
         let ds = SlicePtrOrNull::params_from_layout(dev, src_l)?;
         match (&self.slice, &mut dst.slice) {
