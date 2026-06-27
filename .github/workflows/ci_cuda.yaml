@@ -2,6 +2,11 @@ name: CI / cuda
 
 on:
   workflow_dispatch:
+    inputs:
+      test_ref:
+        description: 'Branch/tag/SHA to checkout and test (defaults to the dispatched ref)'
+        required: false
+        type: string
   pull_request:
 
 jobs:
@@ -9,10 +14,10 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
-    runs-on:
-      group: aws-g5-4xlarge-cache
+    runs-on: arc-gpu-candle
     container:
       image: nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+      options: --gpus all
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
       contents: write
@@ -23,9 +28,16 @@ jobs:
       security-events: write
     env:
       CUDA_COMPUTE_CAP: 86
+      # Scoping the test step to GPU-relevant crates (below) wasn't enough on its own: this
+      # runner still OOM-kills (exit 137) while compiling candle-transformers at full rustc
+      # parallelism. Cap parallel rustc jobs to reduce peak memory; the two fixes address
+      # different causes (crate count vs. per-crate codegen parallelism) and are both needed.
+      CARGO_BUILD_JOBS: 2
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.inputs.test_ref || github.ref }}
       - name: Install dependencies
         run: apt update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config -y
       - name: Install Rust Stable
@@ -33,3 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Test (cuda)
         run: cargo test --features cuda
+      - name: Build+test (cuda) - CudaGraph capture/replay
+        run: cargo test -p candle-core --features cuda --test cuda_graph_tests
+      - name: Build+test (cuda) - FlashInfer-style decode attention kernel
+        run: cargo test --manifest-path candle-flashinfer-kernels/Cargo.toml

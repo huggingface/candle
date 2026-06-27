@@ -1,0 +1,23 @@
+[package]
+name = "candle-flashinfer-kernels"
+version = "0.11.0"
+edition = "2021"
+
+description = "Optional FlashInfer-style single-token decode attention kernel for the candle ML framework."
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[dependencies]
+candle = { path = "../candle-core", features = ["cuda"], package = "candle-core", version = "0.11.0" }
+half = { version = "2.3.1", features = ["num-traits"] }
+
+[build-dependencies]
+cudaforge = "0.1.2"
+anyhow = { version = "1", features = ["backtrace"] }
+
+[dev-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+candle-nn = { path = "../candle-nn", features = ["cuda"] }
