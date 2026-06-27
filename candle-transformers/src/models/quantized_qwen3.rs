@@ -165,7 +165,14 @@ impl RotaryEmbedding {
     fn rope_neox_f32(&self, x: &Tensor, offset: usize) -> Result<Tensor> {
         let (b, h, t, d) = x.dims4()?;
         let half = d / 2;
-        debug_assert_eq!(half, self.half_d);
+        // Runtime check (debug_assert is compiled out in release): a head dim that
+        // mismatches the table would index past cos[j]/sin[j] or use a partial table.
+        if half != self.half_d {
+            candle::bail!(
+                "rope head dim {d} (half {half}) does not match table half_d {}",
+                self.half_d
+            );
+        }
         // cos_sin_at slices the table unchecked; bail on out-of-range positions so
         // the caller gets an error instead of a panic (matches the narrow() path).
         let max_pos = self.cos_f32.len() / self.half_d;
@@ -684,6 +691,16 @@ mod tests {
         let q = Tensor::zeros((b, h, t, d), DType::F32, &dev)?;
         // offset 6 + t 4 = 10 > max 8.
         assert!(rope.rope_neox_f32(&q, 6).is_err());
+        Ok(())
+    }
+
+    // A head dim that mismatches the table must bail, not panic in release.
+    #[test]
+    fn fused_rope_rejects_head_dim_mismatch() -> Result<()> {
+        let dev = Device::Cpu;
+        let rope = RotaryEmbedding::new(DType::F32, 16, 64, 1_000_000.0, &dev)?;
+        let q = Tensor::zeros((1usize, 2usize, 1usize, 8usize), DType::F32, &dev)?;
+        assert!(rope.rope_neox_f32(&q, 0).is_err());
         Ok(())
     }
 }
