@@ -1,0 +1,31 @@
+[package]
+name = "candle-fp8-kernels"
+version = "0.10.2"
+edition = "2021"
+
+description = "Fused dequantize+GEMM CUDA kernel for block-wise FP8-quantized linear layers, for the candle ML framework."
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+candle = { path = "../candle-core", package = "candle-core", version = "0.10.2" }
+float8 = { version = "0.7.0", features = ["num-traits", "rand_distr"] }
+candle-metal-kernels = { path = "../candle-metal-kernels", version = "0.10.2", optional = true }
+objc2-metal = { version = "0.3.2", optional = true }
+
+[features]
+default = ["cuda"]
+# Fused dequant+GEMM CUDA kernel (block-wise FP8 E4M3).
+cuda = ["candle/cuda"]
+# Fused dequant+GEMM Metal kernel (block-wise FP8 E4M3) for Apple Silicon.
+metal = ["candle/metal", "dep:candle-metal-kernels", "dep:objc2-metal"]
+
+[build-dependencies]
+cudaforge = "0.1.2"
+anyhow = { version = "1", features = ["backtrace"] }
+
+[dev-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+candle-nn = { path = "../candle-nn" }
