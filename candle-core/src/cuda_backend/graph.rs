@@ -70,7 +70,7 @@ impl CudaGraph {
                 if !cu_graph.is_null() {
                     let _ = unsafe { sys::cuGraphDestroy(cu_graph) };
                 }
-                return Err(err);
+                return Err(err).context("operation inside cuda graph capture closure failed");
             }
         };
 
