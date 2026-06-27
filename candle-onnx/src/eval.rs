@@ -231,6 +231,66 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     }
 }
 
+fn python_mod_i64(lhs: i64, rhs: i64) -> Result<i64> {
+    if rhs == 0 {
+        bail!("Mod divisor contains zero")
+    }
+    if lhs == i64::MIN && rhs == -1 {
+        return Ok(0);
+    }
+    let rem = lhs % rhs;
+    if rem != 0 && ((rem < 0) != (rhs < 0)) {
+        Ok(rem + rhs)
+    } else {
+        Ok(rem)
+    }
+}
+
+fn onnx_mod(lhs: &Tensor, rhs: &Tensor, fmod: bool) -> Result<Tensor> {
+    if lhs.dtype() != rhs.dtype() {
+        bail!(
+            "Mod inputs must have the same dtype, got {:?} and {:?}",
+            lhs.dtype(),
+            rhs.dtype()
+        )
+    }
+    let dtype = lhs.dtype();
+    let device = lhs.device();
+    let shape = broadcast_shape(lhs.dims(), rhs.dims())?;
+    let lhs = lhs.broadcast_as(shape.clone())?;
+    let rhs = rhs.broadcast_as(shape.clone())?;
+
+    match (fmod, dtype) {
+        (false, DType::U8 | DType::U32 | DType::I16 | DType::I32 | DType::I64) => {
+            let lhs = lhs.to_dtype(DType::I64)?.flatten_all()?.to_vec1::<i64>()?;
+            let rhs = rhs.to_dtype(DType::I64)?.flatten_all()?.to_vec1::<i64>()?;
+            let output = lhs
+                .iter()
+                .zip(rhs.iter())
+                .map(|(&lhs, &rhs)| python_mod_i64(lhs, rhs))
+                .collect::<Result<Vec<_>>>()?;
+            Tensor::from_vec(output, shape.as_slice(), device)?.to_dtype(dtype)
+        }
+        (false, DType::BF16 | DType::F16 | DType::F32 | DType::F64) => {
+            bail!("Mod with fmod=0 only supports integer dtypes, got {dtype:?}")
+        }
+        (true, DType::BF16 | DType::F16 | DType::F32 | DType::F64) => {
+            let lhs = lhs.to_dtype(DType::F64)?.flatten_all()?.to_vec1::<f64>()?;
+            let rhs = rhs.to_dtype(DType::F64)?.flatten_all()?.to_vec1::<f64>()?;
+            let output = lhs
+                .iter()
+                .zip(rhs.iter())
+                .map(|(&lhs, &rhs)| lhs % rhs)
+                .collect::<Vec<_>>();
+            Tensor::from_vec(output, shape.as_slice(), device)?.to_dtype(dtype)
+        }
+        (true, DType::U8 | DType::U32 | DType::I16 | DType::I32 | DType::I64) => {
+            bail!("Mod with fmod=1 only supports floating dtypes, got {dtype:?}")
+        }
+        (_, dtype) => bail!("unsupported dtype {dtype:?} for Mod"),
+    }
+}
+
 // This function provides a direct evaluation of the proto.
 // Longer-term, we should first convert the proto to an intermediate representation of the compute
 // graph so as to make multiple evaluations more efficient.
@@ -356,6 +416,18 @@ fn simple_eval_(
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?;
                 let output = input0.broadcast_div(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Mod" => {
+                // https://onnx.ai/onnx/operators/onnx__Mod.html
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[1])?;
+                let fmod = match get_attr_opt::<i64>(node, "fmod")?.copied().unwrap_or(0) {
+                    0 => false,
+                    1 => true,
+                    value => bail!("unsupported Mod fmod value {value}"),
+                };
+                let output = onnx_mod(input0, input1, fmod)?;
                 values.insert(node.output[0].clone(), output);
             }
             "Pow" => {
