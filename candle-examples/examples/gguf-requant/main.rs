@@ -19,8 +19,11 @@ struct Args {
     input: String,
     #[arg(long)]
     output: String,
-    /// Comma-separated substrings; any tensor whose name contains one is requantized.
-    #[arg(long, default_value = "token_embd,output")]
+    /// Comma-separated substrings; any tensor whose name contains one is requantized
+    /// to --dtype. Empty (default) = no requant: --pack alone only bakes Q6Kx8 and
+    /// leaves embeddings/lm_head untouched. Pass e.g. --tensors token_embd,output to
+    /// opt into requant (q6->q4 lm_head).
+    #[arg(long, default_value = "")]
     tensors: String,
     /// Requant target dtype: q4k | q5k | q3k | q4_0.
     #[arg(long, default_value = "q4k")]
