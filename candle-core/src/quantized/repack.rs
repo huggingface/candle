@@ -118,8 +118,10 @@ pub(crate) fn matmul_q6kx8_prepacked(
     use super::neon::gemm_q6kx8_q8k;
     let nb = k / QK_K;
     let groups = n / Q4KX8_ROWS;
-    // Q6 has only the 8-channel kernel; widen the prefill tile to MR=4 (the nc8mr4
-    // default) for the same channel+row reuse win, else MR=2.
+    // Q6 has only the 8-channel kernel. MR=2 (16 accumulators) is the default and
+    // the N1-safe tile; MR=4 (32 acc) tends to spill the 32 NEON regs - the same
+    // regression seen on Q4's nc8mr4 tile. CANDLE_PACKED_PREFILL=nc8mr4 opts into
+    // MR=4 for wide cores where it does not spill.
     let mr4 = *PACKED_PREFILL_TILE == PrefillTile::Nc8mr4;
 
     thread_local! {
@@ -277,12 +279,14 @@ impl PackedQ6Kx8 {
         n: usize,
     ) -> crate::Result<Self> {
         let bs = std::mem::size_of::<BlockQ6Kx8>();
-        if offset + byte_len > mmap.len() {
-            crate::bail!(
-                "Q6Kx8 mmap region end {} exceeds map len {}",
-                offset + byte_len,
+        // checked_add: a malformed offset near usize::MAX would otherwise wrap and
+        // pass the bounds check, yielding a pointer outside the mapping.
+        match offset.checked_add(byte_len) {
+            Some(end) if end <= mmap.len() => {}
+            _ => crate::bail!(
+                "Q6Kx8 mmap region at offset {offset} (+{byte_len}) out of bounds for map len {}",
                 mmap.len()
-            );
+            ),
         }
         if !byte_len.is_multiple_of(bs) {
             crate::bail!("Q6Kx8 mmap byte_len {byte_len} not a multiple of block size {bs}");
