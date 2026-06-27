@@ -93,6 +93,8 @@ We also provide some command line based examples using state of the art models:
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
 - [Quantized Qwen3 MoE](./candle-examples/examples/quantized-qwen3-moe/): support gguf quantized models of Qwen3 MoE models.
+- [Quantized GPTQ Qwen2](./candle-examples/examples/quantized-gptq-qwen2/): load
+  GPTQ-quantized Qwen2 checkpoints directly from the Hugging Face Hub.
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/quantized/assets/aoc.gif" width="600">
   
@@ -292,6 +294,9 @@ Cheatsheet:
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
 - [candle-onnx](./candle-onnx/): ONNX model evaluation.
+- [candle-gptq-kernels](./candle-gptq-kernels/): fused dequantize+GEMM CUDA/Metal
+  kernel for GPTQ-quantized linear layers, used by `candle-transformers` when the
+  `gptq-cuda`/`gptq-metal` feature is enabled.
 
 ## FAQ
 
