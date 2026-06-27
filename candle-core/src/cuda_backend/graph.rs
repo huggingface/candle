@@ -34,6 +34,14 @@ impl CudaGraph {
     /// constants are served from a cache (see
     /// [`CudaDevice::enable_cuda_graph_htod_cache`]) since a fresh upload
     /// cannot be recorded as a replayable graph node.
+    ///
+    /// Callers must run the same operations `f` will perform at least once,
+    /// outside of capture, before calling this function. That warm-up run
+    /// JIT-loads any CUDA modules the operations need and populates the
+    /// host-to-device upload cache; both module loading and uncached uploads
+    /// are disallowed once capture starts and invalidate the capture
+    /// (`CUDA_ERROR_STREAM_CAPTURE_INVALIDATED`) if attempted while it is
+    /// active.
     pub fn capture<T>(device: &CudaDevice, f: impl FnOnce() -> Result<T>) -> Result<(Self, T)> {
         let stream = device.cuda_stream();
         let _cache_guard = device.enable_cuda_graph_htod_cache();
