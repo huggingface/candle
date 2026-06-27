@@ -2284,7 +2284,7 @@ fn simple_eval_(
                 let input = get(&node.input[0])?;
 
                 if input.rank() != 4 {
-                    bail!("Unsupported rank for nearest resize: {}", input.rank());
+                    bail!("Unsupported rank for resize: {}", input.rank());
                 }
 
                 let scales = if node.input.len() > 2 && !node.input[2].is_empty() {
@@ -2329,24 +2329,40 @@ fn simple_eval_(
                 let nearest_mode =
                     get_attr_opt::<str>(node, "nearest_mode")?.unwrap_or("round_prefer_floor");
 
-                if mode != "nearest" {
-                    bail!("Unsupported resize mode: {}", mode);
-                }
-
-                if nearest_mode != "floor" {
-                    bail!("Unsupported nearest_mode for resize: {}", nearest_mode);
-                }
-
-                if coordinate_transformation_mode != "asymmetric" {
-                    bail!(
-                        "Unsupported coordinate_transformation_mode for resize: {}",
-                        coordinate_transformation_mode
-                    );
+                if output_dims.len() != 4 {
+                    bail!("Resize expects 4 output dimensions, got {output_dims:?}");
                 }
 
                 let h = output_dims[2];
                 let w = output_dims[3];
-                let output = input.upsample_nearest2d(h, w)?;
+                let output = match mode {
+                    "nearest" => {
+                        if nearest_mode != "floor" {
+                            bail!("Unsupported nearest_mode for resize: {}", nearest_mode);
+                        }
+
+                        if coordinate_transformation_mode != "asymmetric" {
+                            bail!(
+                                "Unsupported coordinate_transformation_mode for resize: {}",
+                                coordinate_transformation_mode
+                            );
+                        }
+
+                        input.upsample_nearest2d(h, w)?
+                    }
+                    "linear" => {
+                        let align_corners = match coordinate_transformation_mode {
+                            "half_pixel" => false,
+                            "align_corners" => true,
+                            mode => bail!(
+                                "Unsupported coordinate_transformation_mode for linear resize: {}",
+                                mode
+                            ),
+                        };
+                        input.upsample_bilinear2d(h, w, align_corners)?
+                    }
+                    mode => bail!("Unsupported resize mode: {}", mode),
+                };
 
                 values.insert(node.output[0].clone(), output);
             }
