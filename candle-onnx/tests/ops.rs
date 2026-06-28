@@ -1794,10 +1794,7 @@ fn test_gelu_operation() -> Result<()> {
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-    assert_eq!(
-        to_vec2_round(z, 6)?,
-        [[0.0, 0.841345], [1.9545, 2.99595]]
-    );
+    assert_eq!(to_vec2_round(z, 6)?, [[0.0, 0.841345], [1.9545, 2.99595]]);
 
     Ok(())
 }
