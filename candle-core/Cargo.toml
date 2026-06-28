@@ -47,6 +47,10 @@ criterion = { workspace = true }
 
 [features]
 default = []
+# Parallelize the quantized matmul on wasm32 via rayon (backed by
+# wasm-bindgen-rayon). Off by default: without an initialized worker pool rayon
+# would panic in the browser, so the caller must set up the pool before inference.
+wasm-threads = []
 cuda = ["cudarc", "dep:candle-kernels", "candle-ug?/cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
