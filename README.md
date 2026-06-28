@@ -196,6 +196,7 @@ And then head over to
 - [`atoma-infer`](https://github.com/atoma-network/atoma-infer): A Rust library for fast inference at scale, leveraging FlashAttention2 for efficient attention computation, PagedAttention for efficient KV-cache memory management, and multi-GPU support. It is OpenAI api compatible.
 - [`llms-from-scratch-rs`](https://github.com/nerdai/llms-from-scratch-rs): A comprehensive Rust translation of the code from Sebastian Raschka's Build an LLM from Scratch book.
 - [`vllm.rs`](https://github.com/guoqingbao/vllm.rs): A minimalist vLLM implementation in Rust based on Candle.
+- [`yolo26-rs`](https://github.com/wzh19960613/yolo26-rs): YOLO26 and YOLOE26 implementations in Rust based on Candle, with a [live demo](https://wzh19960613.github.io/yolo26-wasm/).
 
 If you have an addition to this list, please submit a pull request.
 
