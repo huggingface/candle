@@ -407,7 +407,9 @@ impl ZImageTextEncoder {
                 (0..(tgt + offset)).map(move |j| if j <= i + offset { 0.0 } else { minf })
             })
             .collect();
-        Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
+        Tensor::from_slice(&mask, (1, 1, tgt, tgt + offset), &self.device)?
+            .broadcast_as((b, 1, tgt, tgt + offset))?
+            .to_dtype(self.dtype)
     }
 
     /// Encode text, returning second-to-last layer hidden states
