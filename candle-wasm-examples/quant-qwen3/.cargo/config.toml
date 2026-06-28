@@ -5,6 +5,8 @@ rustflags = [
     # feature, but shared memory must be requested explicitly at link (and a shared
     # memory REQUIRES a max). Without --shared-memory the exported memory is a plain
     # ArrayBuffer and can't be postMessage'd to workers.
+    # A/B: relaxed-simd OFF to measure all-Q4 with the plain simd128 Q4_K kernel.
+    # Re-add ,+relaxed-simd to restore the fused i32x4_relaxed_dot Q4_K path.
     '-C', 'target-feature=+simd128,+atomics,+bulk-memory,+mutable-globals',
     '-C', 'link-arg=--shared-memory',
     '-C', 'link-arg=--max-memory=4294967296',
