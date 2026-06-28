@@ -8,7 +8,7 @@ fn run(lhs: &Tensor, rhs: &Tensor) -> Tensor {
     lhs.mul(rhs).unwrap()
 }
 
-fn run_unary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+fn run_binary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
     let b = 1;
     let m = 1024;
     let k = 1024;
@@ -48,8 +48,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
         for dtype in [DType::F32, DType::BF16, DType::F16] {
-            let name = format!("binary_mul_{:?}", dtype);
-            run_unary_benchmark(c, &device, dtype, &name);
+            let name = format!("binary_mul_{dtype:?}");
+            run_binary_benchmark(c, &device, dtype, &name);
         }
     }
 }

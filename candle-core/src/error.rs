@@ -174,9 +174,9 @@ pub enum Error {
     #[error("Metal error {0}")]
     Metal(#[from] MetalError),
 
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), feature = "ug"))]
     #[error(transparent)]
-    Ug(#[from] ug::Error),
+    Ug(#[from] candle_ug::Error),
 
     #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),

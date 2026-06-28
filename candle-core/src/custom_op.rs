@@ -376,6 +376,7 @@ impl Tensor {
     }
 }
 
+#[cfg(feature = "ug")]
 pub struct UgIOp1 {
     name: &'static str,
     #[cfg(feature = "cuda")]
@@ -384,12 +385,13 @@ pub struct UgIOp1 {
     func: candle_metal_kernels::metal::ComputePipeline,
 }
 
+#[cfg(feature = "ug")]
 impl UgIOp1 {
     #[allow(unused)]
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn new(
         name: &'static str,
-        kernel: ug::lang::ssa::Kernel,
+        kernel: candle_ug::lang::ssa::Kernel,
         device: &crate::Device,
     ) -> Result<Self> {
         #[cfg(feature = "cuda")]
@@ -414,6 +416,7 @@ impl UgIOp1 {
     }
 }
 
+#[cfg(feature = "ug")]
 impl InplaceOp1 for UgIOp1 {
     fn name(&self) -> &'static str {
         self.name
@@ -436,6 +439,7 @@ impl InplaceOp1 for UgIOp1 {
         let device = sto.device();
         let encoder = device.command_encoder()?;
         encoder.set_compute_pipeline_state(&self.func);
+        candle_metal_kernels::debug_group!(encoder, "{}", self.name);
         let (g, b) = if elem_count.is_multiple_of(32) {
             (elem_count / 32, 32)
         } else {
@@ -447,9 +451,7 @@ impl InplaceOp1 for UgIOp1 {
             depth: 1,
         };
         let group_dims = candle_metal_kernels::utils::get_block_dims(b, 1, 1);
-        candle_metal_kernels::utils::set_param(&encoder, 0, (sto.buffer(), 0usize));
-
-        encoder.use_resource(sto.buffer(), objc2_metal::MTLResourceUsage::Write);
+        encoder.set_output_buffer(0, Some(sto.buffer()), 0);
         encoder.dispatch_threads(grid_dims, group_dims);
 
         Ok(())

@@ -89,7 +89,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             run_cast_benchmark(c, &device, dtype, to_dtype, &name);
         }
         for dtype in [DType::F32, DType::BF16, DType::F16] {
-            let name = format!("sqrt_{:?}", dtype);
+            let name = format!("sqrt_{dtype:?}");
             run_unary_benchmark(c, &device, dtype, &name);
         }
     }

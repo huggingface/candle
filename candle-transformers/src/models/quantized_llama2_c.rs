@@ -90,7 +90,7 @@ impl CausalSelfAttention {
         let att = if seq_len <= 1 {
             att
         } else {
-            let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
+            let mask = cache.mask(seq_len, index_pos)?.broadcast_as(att.shape())?;
             masked_fill(&att, &mask, f32::NEG_INFINITY)?
         };
         let att = candle_nn::ops::softmax(&att, D::Minus1)?;

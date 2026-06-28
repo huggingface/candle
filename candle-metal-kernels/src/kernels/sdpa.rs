@@ -1,9 +1,9 @@
 use crate::utils::EncoderProvider;
 use crate::{
-    set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, EncoderParam, Kernels,
-    MetalKernelError, Source, Value,
+    debug_group, set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, EncoderParam,
+    Kernels, MetalKernelError, Output, Source, Value,
 };
-use objc2_metal::{MTLResourceUsage, MTLSize};
+use objc2_metal::MTLSize;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum SdpaDType {
@@ -73,19 +73,29 @@ pub fn call_sdpa_full(
         m_strides: [i64; 3],
     }
 
-    const WM: usize = 4;
-    const WN: usize = 1;
-
-    const BQ: usize = 32;
     let bd = q_shape[q_shape.len() - 1];
-    if ![32, 64, 72, 80, 96, 128, 256].contains(&bd) {
+    if ![32, 64, 72, 80, 96, 128, 256, 512].contains(&bd) {
         return Err(MetalKernelError::SdpaHeadSizeMismatch {
             variation: "full",
             got: bd,
-            expected: vec![32, 64, 72, 80, 96, 128, 256],
+            expected: vec![32, 64, 72, 80, 96, 128, 256, 512],
         });
     };
-    let bk = if bd < 128 { 32 } else { 16 };
+
+    // BD=512 uses reduced tiles to fit 32KB threadgroup memory (f16/bf16 only).
+    let (bq, bk, wm, wn): (usize, usize, usize, usize) = if bd == 512 {
+        if itype == SdpaDType::F32 {
+            return Err(MetalKernelError::SdpaHeadSizeMismatch {
+                variation: "full (f32 unsupported at head_dim=512)",
+                got: bd,
+                expected: vec![32, 64, 72, 80, 96, 128, 256],
+            });
+        }
+        (8, 8, 1, 1)
+    } else {
+        let bk = if bd < 128 { 32 } else { 16 };
+        (32, bk, 4, 1)
+    };
 
     let b = q_shape[0];
     let h = q_shape[1];
@@ -95,9 +105,15 @@ pub fn call_sdpa_full(
     let ql = q_shape[2];
     let kl = k_shape[2];
 
-    let align_q = (ql % BQ) == 0;
+    let align_q = (ql % bq) == 0;
     let align_k = (kl % bk) == 0;
     let has_mask = mask_buffer.is_some();
+
+    // When an explicit additive mask is supplied it already encodes causality.
+    // Also enabling the in-kernel `do_causal` path double-applies causality and,
+    // at periodic sequence lengths, leaves a query row fully masked -> softmax
+    // normalizer sum(exp) == 0 -> final divide computes 0/0 = NaN logits.
+    let do_causal = do_causal && !has_mask;
 
     let itype_repr = match itype {
         SdpaDType::BF16 => "bfloat16",
@@ -111,7 +127,7 @@ pub fn call_sdpa_full(
         None => itype_repr,
     };
     let name =
-        format!("steel_attention_{itype_repr}_bq{BQ}_bk{bk}_bd{bd}_wm{WM}_wn{WN}_mask{mask_repr}");
+        format!("steel_attention_{itype_repr}_bq{bq}_bk{bk}_bd{bd}_wm{wm}_wn{wn}_mask{mask_repr}");
 
     let constants = Some(ConstantValues::new(vec![
         (200, Value::Bool(/* align_Q */ align_q)),
@@ -120,15 +136,21 @@ pub fn call_sdpa_full(
         (301, Value::Bool(/* do_causal */ do_causal)),
     ]));
 
+    #[cfg(feature = "debug-labels")]
+    let name_for_label = name.clone();
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "sdpa_full {name_for_label} B={b} H={h} D={d} QL={ql} KL={kl}"
+    );
 
-    let nq = (ql + BQ - 1) / BQ;
+    let nq = (ql + bq - 1) / bq;
     let nk = (kl + bk - 1) / bk;
 
-    let nq_aligned = ql / BQ;
+    let nq_aligned = ql / bq;
     let nk_aligned = kl / bk;
 
     let params = AttnParams {
@@ -144,7 +166,7 @@ pub fn call_sdpa_full(
         nk: nk as i32,
         nq_aligned: nq_aligned as i32,
         nk_aligned: nk_aligned as i32,
-        ql_rem: ql.wrapping_sub(nq_aligned * BQ) as i32,
+        ql_rem: ql.wrapping_sub(nq_aligned * bq) as i32,
         kl_rem: kl.wrapping_sub(nk_aligned * bk) as i32,
         ql_off: kl.wrapping_sub(ql) as i32,
         q_strides: [
@@ -190,7 +212,6 @@ pub fn call_sdpa_full(
                 mask_strides[2] as i64,
             ],
         };
-        encoder.use_resource(mask, MTLResourceUsage::Read);
 
         set_params!(
             encoder,
@@ -198,7 +219,7 @@ pub fn call_sdpa_full(
                 (q_buffer, q_offset),
                 (k_buffer, k_offset),
                 (v_buffer, v_offset),
-                output,
+                Output::new(output),
                 params,
                 mask_params,
                 mask
@@ -211,7 +232,7 @@ pub fn call_sdpa_full(
                 (q_buffer, q_offset),
                 (k_buffer, k_offset),
                 (v_buffer, v_offset),
-                output,
+                Output::new(output),
                 params
             )
         );
@@ -224,13 +245,9 @@ pub fn call_sdpa_full(
     };
     let group_dims = MTLSize {
         width: 32,
-        height: WM,
-        depth: WN,
+        height: wm,
+        depth: wn,
     };
-    encoder.use_resource(q_buffer, MTLResourceUsage::Read);
-    encoder.use_resource(k_buffer, MTLResourceUsage::Read);
-    encoder.use_resource(v_buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_dims, group_dims);
 
     Ok(())
@@ -274,21 +291,24 @@ pub fn call_sdpa_vector(
         (96, SdpaDType::F16) => "sdpa_vector_float16_t_96",
         (128, SdpaDType::F16) => "sdpa_vector_float16_t_128",
         (256, SdpaDType::F16) => "sdpa_vector_float16_t_256",
+        (512, SdpaDType::F16) => "sdpa_vector_float16_t_512",
         (32, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_32",
         (64, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_64",
         (96, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_96",
         (128, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_128",
         (256, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_256",
+        (512, SdpaDType::BF16) => "sdpa_vector_bfloat16_t_512",
         (32, SdpaDType::F32) => "sdpa_vector_float_32",
         (64, SdpaDType::F32) => "sdpa_vector_float_64",
         (96, SdpaDType::F32) => "sdpa_vector_float_96",
         (128, SdpaDType::F32) => "sdpa_vector_float_128",
         (256, SdpaDType::F32) => "sdpa_vector_float_256",
+        (512, SdpaDType::F32) => "sdpa_vector_float_512",
         (other, _) => {
             return Err(MetalKernelError::SdpaHeadSizeMismatch {
                 variation: "vector",
                 got: *other,
-                expected: vec![32, 64, 96, 128, 256],
+                expected: vec![32, 64, 96, 128, 256, 512],
             })
         }
     };
@@ -308,6 +328,7 @@ pub fn call_sdpa_vector(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(encoder, "sdpa_vector bk={bk} B={b} N={n}");
 
     // q = (bs, qhead, seq, hidden)
     // k/v = (bs, kv_head, kv_seq, hidden)
@@ -318,7 +339,7 @@ pub fn call_sdpa_vector(
             (q_buffer, q_offset),
             (k_buffer, k_offset),
             (v_buffer, v_offset),
-            output,
+            Output::new(output),
             gqa_factor,
             n,
             kstride,
@@ -338,10 +359,6 @@ pub fn call_sdpa_vector(
         height: 1,
         depth: 1,
     };
-    encoder.use_resource(q_buffer, MTLResourceUsage::Read);
-    encoder.use_resource(k_buffer, MTLResourceUsage::Read);
-    encoder.use_resource(v_buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_dims, group_dims);
     Ok(())
 }
@@ -385,21 +402,24 @@ pub fn call_sdpa_vector_2pass(
             (96, SdpaDType::F16) => "sdpa_vector_2pass_1_float16_t_96",
             (128, SdpaDType::F16) => "sdpa_vector_2pass_1_float16_t_128",
             (256, SdpaDType::F16) => "sdpa_vector_2pass_1_float16_t_256",
+            (512, SdpaDType::F16) => "sdpa_vector_2pass_1_float16_t_512",
             (32, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_32",
             (64, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_64",
             (96, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_96",
             (128, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_128",
             (256, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_256",
+            (512, SdpaDType::BF16) => "sdpa_vector_2pass_1_bfloat16_t_512",
             (32, SdpaDType::F32) => "sdpa_vector_2pass_1_float_32",
             (64, SdpaDType::F32) => "sdpa_vector_2pass_1_float_64",
             (96, SdpaDType::F32) => "sdpa_vector_2pass_1_float_96",
             (128, SdpaDType::F32) => "sdpa_vector_2pass_1_float_128",
             (256, SdpaDType::F32) => "sdpa_vector_2pass_1_float_256",
+            (512, SdpaDType::F32) => "sdpa_vector_2pass_1_float_512",
             (other, _) => {
                 return Err(MetalKernelError::SdpaHeadSizeMismatch {
                     variation: "vector_2pass_1",
                     got: *other,
-                    expected: vec![32, 64, 96, 128, 256],
+                    expected: vec![32, 64, 96, 128, 256, 512],
                 })
             }
         };
@@ -426,6 +446,7 @@ pub fn call_sdpa_vector_2pass(
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoder = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
+        debug_group!(encoder, "sdpa_vector_2pass pass1 bk={bk} B={b} N={n}");
 
         // q = (bs, qhead, seq, hidden)
         // k/v = (bs, kv_head, kv_seq, hidden)
@@ -436,9 +457,9 @@ pub fn call_sdpa_vector_2pass(
                 (q_buffer, q_offset),
                 (k_buffer, k_offset),
                 (v_buffer, v_offset),
-                intermediate,
-                sums,
-                maxs,
+                Output::new(intermediate),
+                Output::new(sums),
+                Output::new(maxs),
                 gqa_factor,
                 n,
                 kstride,
@@ -458,12 +479,6 @@ pub fn call_sdpa_vector_2pass(
             height: 1,
             depth: 1,
         };
-        encoder.use_resource(q_buffer, MTLResourceUsage::Read);
-        encoder.use_resource(k_buffer, MTLResourceUsage::Read);
-        encoder.use_resource(v_buffer, MTLResourceUsage::Read);
-        encoder.use_resource(intermediate, MTLResourceUsage::Write);
-        encoder.use_resource(sums, MTLResourceUsage::Write);
-        encoder.use_resource(maxs, MTLResourceUsage::Write);
 
         encoder.dispatch_thread_groups(grid_dims, group_dims);
     }
@@ -476,21 +491,24 @@ pub fn call_sdpa_vector_2pass(
             (96, SdpaDType::F16) => "sdpa_vector_2pass_2_float16_t_96",
             (128, SdpaDType::F16) => "sdpa_vector_2pass_2_float16_t_128",
             (256, SdpaDType::F16) => "sdpa_vector_2pass_2_float16_t_256",
+            (512, SdpaDType::F16) => "sdpa_vector_2pass_2_float16_t_512",
             (32, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_32",
             (64, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_64",
             (96, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_96",
             (128, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_128",
             (256, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_256",
+            (512, SdpaDType::BF16) => "sdpa_vector_2pass_2_bfloat16_t_512",
             (32, SdpaDType::F32) => "sdpa_vector_2pass_2_float_32",
             (64, SdpaDType::F32) => "sdpa_vector_2pass_2_float_64",
             (96, SdpaDType::F32) => "sdpa_vector_2pass_2_float_96",
             (128, SdpaDType::F32) => "sdpa_vector_2pass_2_float_128",
             (256, SdpaDType::F32) => "sdpa_vector_2pass_2_float_256",
+            (512, SdpaDType::F32) => "sdpa_vector_2pass_2_float_512",
             (other, _) => {
                 return Err(MetalKernelError::SdpaHeadSizeMismatch {
                     variation: "vector_2pass_2",
                     got: *other,
-                    expected: vec![32, 64, 96, 128, 256],
+                    expected: vec![32, 64, 96, 128, 256, 512],
                 })
             }
         };
@@ -501,11 +519,12 @@ pub fn call_sdpa_vector_2pass(
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoder = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
+        debug_group!(encoder, "sdpa_vector_2pass pass2 bk={bk} B={b}");
 
         // q = (bs, qhead, seq, hidden)
         // k/v = (bs, kv_head, kv_seq, hidden)
 
-        set_params!(encoder, (intermediate, sums, maxs, output));
+        set_params!(encoder, (intermediate, sums, maxs, Output::new(output)));
 
         let grid_dims = MTLSize {
             width: 1,
@@ -517,10 +536,6 @@ pub fn call_sdpa_vector_2pass(
             height: 1,
             depth: 1,
         };
-        encoder.use_resource(intermediate, MTLResourceUsage::Write);
-        encoder.use_resource(sums, MTLResourceUsage::Write);
-        encoder.use_resource(maxs, MTLResourceUsage::Write);
-        encoder.use_resource(output, MTLResourceUsage::Write);
 
         encoder.dispatch_thread_groups(grid_dims, group_dims);
     }

@@ -85,9 +85,11 @@ mod cuda {
             let ncols = self.last_dim;
             let nrows = elem_count / ncols;
             let ncols_pad = next_power_of_2(ncols);
+            // Limit block dim to 1024 threads, which is the maximum on modern CUDA gpus.
+            let block_dim = ncols_pad.min(1024);
             let cfg = LaunchConfig {
                 grid_dim: (nrows as u32, 1, 1),
-                block_dim: (ncols_pad as u32, 1, 1),
+                block_dim: (block_dim as u32, 1, 1),
                 shared_mem_bytes: (ncols_pad * std::mem::size_of::<u32>()) as u32,
             };
             let stream = dev.cuda_stream();
@@ -218,7 +220,11 @@ impl crate::CustomOp1 for ArgSort {
         let ncols = self.last_dim;
         let nrows = el / ncols;
         let src = crate::metal_backend::buffer_o(storage.buffer(), layout, storage.dtype());
-        let dst = device.new_buffer(el, DType::U32, "asort")?;
+        let dst = device
+            .new_buffer_builder()
+            .with_size_for(el, DType::U32)
+            .with_label("asort")
+            .build()?;
         let mut ncols_pad = 1;
         while ncols_pad < ncols {
             ncols_pad *= 2;

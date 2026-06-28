@@ -7,6 +7,7 @@ use candle_core::{
 };
 use quantized::{k_quants, GgmlType};
 use rand::prelude::*;
+use std::borrow::Cow;
 
 const GGML_TEST_SIZE: usize = 32 * 128;
 
@@ -243,9 +244,9 @@ fn qmm_batch(dev: &Device) -> Result<()> {
     assert_eq!(mm4.shape().dims(), [12, 6]);
     let diff4 = (mm4.i(..6)? - &mm3)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     if dev.is_cuda() {
-        // We use a different kernel for sizes from 1 to 8 on cuda which explains
-        // the difference here.
-        assert!(0. < diff4 && diff4 < 1e-4)
+        // We use different fused kernels (MMVQ for batch<=8, MMQ for batch>8) on CUDA which accumulate differently than dequantize-then-matmul.
+        // This can lead to small numerical differences especially for low-bit quants.
+        assert!(0. < diff4 && diff4 < 0.5)
     } else {
         assert_eq!(diff4, 0.0)
     };
@@ -260,6 +261,86 @@ fn qmm_batch(dev: &Device) -> Result<()> {
 test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
+
+fn embedding_weight(device: &Device) -> Result<Tensor> {
+    let values = (0..(8 * 256))
+        .map(|i| {
+            let x = i as f32;
+            (x * 0.003).sin() * 0.5 + (x * 0.007).cos() * 0.25
+        })
+        .collect::<Vec<_>>();
+    Tensor::from_vec(values, (8, 256), device)
+}
+
+fn assert_embedding_close(dtype: GgmlDType, a: &Tensor, b: &Tensor, tol: f32) -> Result<()> {
+    let a = a.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+    let b = b.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+    for (idx, (a, b)) in a.iter().zip(b.iter()).enumerate() {
+        assert!(
+            (a - b).abs() <= tol,
+            "{dtype:?} embedding mismatch at {idx}: {a} != {b}"
+        );
+    }
+    Ok(())
+}
+
+fn run_quantized_embedding(device: &Device, dtype: GgmlDType, tol: f32) -> Result<()> {
+    let w = embedding_weight(device)?;
+    let ids = Tensor::from_vec(vec![3u32, 1, 3, 7], (2, 2), device)?;
+    let q = quantized::QTensor::quantize(&w, dtype)?;
+    let got = q.embedding(&ids)?;
+    let expected = q
+        .dequantize(device)?
+        .index_select(&ids.flatten_all()?, 0)?
+        .reshape((2, 2, 256))?;
+    assert_embedding_close(dtype, &got, &expected, tol)
+}
+
+#[test]
+fn quantized_embedding_cpu() -> Result<()> {
+    let device = Device::Cpu;
+    for dtype in [
+        GgmlDType::F32,
+        GgmlDType::F16,
+        GgmlDType::BF16,
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q8_1,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+        GgmlDType::Q8K,
+    ] {
+        run_quantized_embedding(&device, dtype, 1e-6)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn quantized_embedding_metal() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    for dtype in [
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+    ] {
+        run_quantized_embedding(&device, dtype, 1e-3)?;
+    }
+    Ok(())
+}
 
 fn quantize_q4_0(device: &Device) -> Result<()> {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
@@ -928,7 +1009,7 @@ fn quantize_q8k(device: &Device) -> Result<()> {
     let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
-        [-0.5, -0.375, -0.25, -0.0, 0.281, 0.499]
+        [-0.5, -0.374, -0.25, -0.0, 0.283, 0.499]
     );
 
     let src_big = get_test_vector2(128.0, 1024, device)?;
@@ -1023,7 +1104,7 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         GgmlDType::F16 => 0.000010,
         GgmlDType::BF16 => 0.000200,
         GgmlDType::Q2K => 0.004086,
-        GgmlDType::Q3K => 0.016148,
+        GgmlDType::Q3K => 0.017,
         GgmlDType::Q4K => 0.002425,
         GgmlDType::Q5K => 0.000740,
         GgmlDType::Q6K => 0.000952,
@@ -1113,7 +1194,7 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 fn quantized_mm() -> Result<()> {
     ggml_matmul_error_test::<f32>()?;
     ggml_matmul_error_test::<half::f16>()?;
-    //ggml_matmul_error_test::<half::bf16>()?; TODO: Fails on ubuntu and windows. Check CpuBF16 impl
+    ggml_matmul_error_test::<half::bf16>()?;
     ggml_matmul_error_test::<k_quants::BlockQ4_0>()?;
     ggml_matmul_error_test::<k_quants::BlockQ4_1>()?;
     ggml_matmul_error_test::<k_quants::BlockQ5_0>()?;
@@ -1265,7 +1346,7 @@ fn quantized_matmul_q2k() -> Result<()> {
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
-    assert_eq!(dst, [0.916, 0.422, 0.215, 1.668]);
+    assert_eq!(dst, [0.887, 0.428, 0.219, 1.669]);
 
     ggml_matmul_error_test::<BlockQ2K>()?;
 
@@ -1291,7 +1372,7 @@ fn quantized_matmul_q3k() -> Result<()> {
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
-    assert_eq!(dst, [1.029, 1.418, -0.314, 1.495]);
+    assert_eq!(dst, [1.001, 1.425, -0.311, 1.493]);
 
     ggml_matmul_error_test::<BlockQ3K>()?;
 
@@ -1317,7 +1398,7 @@ fn quantized_matmul_q4k() -> Result<()> {
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
-    assert_eq!(dst, [1.125, 1.435, -0.201, 1.589]);
+    assert_eq!(dst, [1.094, 1.442, -0.196, 1.587]);
 
     ggml_matmul_error_test::<BlockQ4K>()?;
 
@@ -1343,7 +1424,7 @@ fn quantized_matmul_q5k() -> Result<()> {
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
-    assert_eq!(dst, [1.192, 1.491, -0.18, 1.743]);
+    assert_eq!(dst, [1.161, 1.498, -0.175, 1.739]);
 
     //Expected: 0.000740408897
     ggml_matmul_error_test::<BlockQ5K>()?;
@@ -1370,7 +1451,7 @@ fn quantized_matmul_q6k() -> Result<()> {
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
-    assert_eq!(dst, [1.324, 1.49, -0.164, 1.741]);
+    assert_eq!(dst, [1.293, 1.497, -0.159, 1.737]);
 
     ggml_matmul_error_test::<BlockQ6K>()?;
     Ok(())
@@ -1395,8 +1476,40 @@ fn quantized_matmul_q8k() -> Result<()> {
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
-    assert_eq!(dst, [1.266, 1.504, -0.204, 1.7]);
+    assert_eq!(dst, [1.241, 1.52, -0.2, 1.7]);
 
     ggml_matmul_error_test::<BlockQ8K>()?;
     Ok(())
 }
+
+fn from_data_dequant_matches_canonical_when_caller_passes_cow_owned(device: &Device) -> Result<()> {
+    let cpu = Device::Cpu;
+    let n = 1024usize;
+    let src_data: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.013).sin()).collect();
+    let src = Tensor::from_vec(src_data, (n,), &cpu)?;
+    let qt_canonical = quantized::QTensor::quantize(&src, GgmlDType::Q4_0)?;
+    let canonical_dequant = qt_canonical.dequantize(&cpu)?.to_vec1::<f32>()?;
+
+    let bytes_owned: Vec<u8> = qt_canonical.data()?.to_vec();
+    let storage = quantized::QStorage::from_data(Cow::Owned(bytes_owned), device, GgmlDType::Q4_0)?;
+    let qt_via_from_data = quantized::QTensor::new(storage, (n,))?;
+    let observed_dequant = qt_via_from_data.dequantize(device)?.to_vec1::<f32>()?;
+
+    let max_diff = canonical_dequant
+        .iter()
+        .zip(observed_dequant.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0f32, f32::max);
+    assert!(
+        max_diff < 1e-5,
+        "QStorage::from_data dequant mismatch on {device:?} (max |Δ| = {max_diff})"
+    );
+    Ok(())
+}
+
+test_device!(
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cpu,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
+    from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
+);

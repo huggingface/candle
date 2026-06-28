@@ -155,7 +155,7 @@ class BertEmbeddings(Module):
         )
 
     def forward(self, input_ids: Tensor, token_type_ids: Tensor) -> Tensor:
-        (_batch_size, seq_len) = input_ids.shape
+        _batch_size, seq_len = input_ids.shape
         input_embeddings = self.word_embeddings.forward(input_ids)
         token_type_embeddings = self.token_type_embeddings.forward(token_type_ids)
         embeddings: Tensor = input_embeddings + token_type_embeddings

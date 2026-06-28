@@ -1,7 +1,7 @@
 //! Methods for backpropagation of gradients.
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 
 // arg has been reduced to node via reduce_dims, expand it back to arg.
 // This has to handle keepdims.
@@ -118,6 +118,7 @@ impl Tensor {
                     Op::Reshape(node)
                     | Op::UpsampleNearest1D { arg: node, .. }
                     | Op::UpsampleNearest2D { arg: node, .. }
+                    | Op::UpsampleBilinear2D { arg: node, .. }
                     | Op::AvgPool2D { arg: node, .. }
                     | Op::MaxPool2D { arg: node, .. }
                     | Op::Copy(node)
@@ -406,6 +407,9 @@ impl Tensor {
                         let conv_sum = grad.conv2d(&kernel, 0, scale_h, 1, c)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = conv_sum;
+                    }
+                    Op::UpsampleBilinear2D { .. } => {
+                        crate::bail!("backward not supported for upsample_bilinear2d")
                     }
                     Op::SliceScatter0(lhs, rhs, start_rhs) => {
                         let rhs_sum_grad = grads.or_insert(rhs)?;
@@ -725,13 +729,13 @@ impl Tensor {
 }
 
 /// A store for gradients, associating a tensor id to the corresponding gradient tensor, used for back propagation.
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct GradStore(HashMap<TensorId, Tensor>);
 
 impl GradStore {
     /// Create a new gradient store
     fn new() -> Self {
-        GradStore(HashMap::new())
+        Self::default()
     }
 
     /// Get the gradient tensor corresponding to the given tensor id
@@ -762,7 +766,6 @@ impl GradStore {
     /// Get the gradient tensor associated with the given tensor, or, if it does not exist,
     /// insert a tensor of zeroes, with the same shape and type as the given tensors and return it
     fn or_insert(&mut self, tensor: &Tensor) -> Result<&mut Tensor> {
-        use std::collections::hash_map::Entry;
         let grad = match self.0.entry(tensor.id()) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
@@ -771,6 +774,32 @@ impl GradStore {
             }
         };
         Ok(grad)
+    }
+
+    /// Extend this gradient store with the contents of another.
+    /// If an entry is already occupied, updates and ensures new tensor follows correct detach semantics.
+    /// Otherwise simply inserts.
+    pub fn extend(&mut self, other: Self) -> Result<()> {
+        for (id, grad) in other.0 {
+            match self.0.entry(id) {
+                Entry::Occupied(mut entry) => {
+                    let new_grad = entry.get().add(&grad)?;
+
+                    let do_not_detach = CANDLE_GRAD_DO_NOT_DETACH.with(|b| *b);
+                    let new_grad = if do_not_detach {
+                        new_grad
+                    } else {
+                        new_grad.detach()
+                    };
+
+                    *entry.get_mut() = new_grad;
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(grad);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Get the tensor ids of the stored gradient tensors

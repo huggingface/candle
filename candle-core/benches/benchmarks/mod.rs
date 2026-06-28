@@ -1,6 +1,8 @@
 pub(crate) mod affine;
 pub(crate) mod binary;
 pub(crate) mod broadcast;
+pub(crate) mod cat;
+pub(crate) mod contiguous;
 pub(crate) mod conv_transpose2d;
 pub(crate) mod copy;
 pub(crate) mod matmul;
@@ -8,6 +10,7 @@ pub(crate) mod qmatmul;
 pub(crate) mod random;
 pub(crate) mod reduce;
 pub(crate) mod unary;
+pub(crate) mod vec_dot;
 pub(crate) mod where_cond;
 
 use candle_core::{Device, Result};
@@ -29,13 +32,13 @@ impl BenchDevice for Device {
                     return Ok(device.synchronize()?);
                 }
                 #[cfg(not(feature = "cuda"))]
-                panic!("Cuda device without cuda feature enabled: {:?}", device)
+                panic!("Cuda device without cuda feature enabled: {device:?}")
             }
             Device::Metal(device) => {
                 #[cfg(feature = "metal")]
                 return device.wait_until_completed();
                 #[cfg(not(feature = "metal"))]
-                panic!("Metal device without metal feature enabled: {:?}", device)
+                panic!("Metal device without metal feature enabled: {device:?}")
             }
         }
     }

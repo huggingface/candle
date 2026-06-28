@@ -39,8 +39,8 @@ impl RotaryEmbedding {
         let dim = cfg
             .head_dim
             .unwrap_or(cfg.hidden_size / cfg.num_attention_heads);
-        let rotary_dim = if cfg.partial_rotary_factor.is_some() {
-            (cfg.partial_rotary_factor.unwrap() * dim as f32) as usize
+        let rotary_dim = if let Some(factor) = cfg.partial_rotary_factor {
+            (factor * dim as f32) as usize
         } else {
             dim
         };
