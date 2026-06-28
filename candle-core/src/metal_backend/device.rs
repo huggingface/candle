@@ -441,6 +441,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_new_metal_returns_err_on_empty_or_out_of_range() {
+        // Calling Device::new_metal with a very high ordinal should never panic.
+        // It should return Err (no such device), which lets users fall back
+        // gracefully via the normal Result contract instead of unwinding.
+        let result = crate::Device::new_metal(9999);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_buf_size_exact_powers_of_two() {
         assert_eq!(buf_size(1), 1);
         assert_eq!(buf_size(2), 2);
