@@ -41,6 +41,50 @@ fn fa_acausal_softcap(q: &Tensor, k: &Tensor, v: &Tensor, softcap: f32) -> Resul
     Ok(output)
 }
 
+fn fa_windowed_mm_prefix(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    window: usize,
+    ranges: &[(usize, usize)],
+) -> Result<Tensor> {
+    let in_dtype = q.dtype();
+    let q = q.to_dtype(DType::F32)?;
+    let k = k.to_dtype(DType::F32)?;
+    let v = v.to_dtype(DType::F32)?;
+    let (seq_len, n_heads, _) = q.dims3()?;
+    let (_, n_kv_heads, _) = k.dims3()?;
+    let groups = n_heads / n_kv_heads;
+    let mut heads = Vec::with_capacity(n_heads);
+    for head in 0..n_heads {
+        let kv_head = head / groups;
+        let q_h = q.i((.., head, ..))?.contiguous()?;
+        let k_h = k.i((.., kv_head, ..))?.contiguous()?;
+        let v_h = v.i((.., kv_head, ..))?.contiguous()?;
+        let mut mask = Vec::with_capacity(seq_len * seq_len);
+        for q_idx in 0..seq_len {
+            for k_idx in 0..seq_len {
+                let mm_prefix = ranges.iter().any(|&(start, end)| {
+                    q_idx >= start && q_idx < end && k_idx >= start && k_idx < end
+                });
+                let future = k_idx > q_idx;
+                let too_old = q_idx >= window && k_idx <= q_idx - window;
+                mask.push(if (future || too_old) && !mm_prefix {
+                    f32::NEG_INFINITY
+                } else {
+                    0.0
+                });
+            }
+        }
+        let mask = Tensor::from_vec(mask, (seq_len, seq_len), q.device())?;
+        let att = ((q_h.matmul(&k_h.t()?)? * softmax_scale as f64)? + mask)?;
+        let att = candle_nn::ops::softmax(&att, D::Minus1)?;
+        heads.push(att.matmul(&v_h.contiguous()?)?);
+    }
+    Ok(Tensor::stack(&heads, 1)?.to_dtype(in_dtype)?)
+}
+
 #[test]
 fn flash_attn_acausal() -> Result<()> {
     let device = Device::new_cuda(0)?;
@@ -138,6 +182,182 @@ fn flash_attn_acausal_softcap() -> Result<()> {
     assert_eq!(ys1.dims(), &[3, 5, 8]);
     assert_eq!(ys2.dims(), &[3, 5, 8]);
     assert!(diff.to_vec0::<f32>()?.abs() < 1e-3);
+    Ok(())
+}
+
+#[test]
+fn flash_attn_varlen_paged_mm_prefix_windowed() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    let seq_len: usize = 296;
+    let n_heads: usize = 8;
+    let n_kv_heads: usize = 2;
+    let head_dim: usize = 256;
+    let block_size: usize = 32;
+    let num_blocks = seq_len.div_ceil(block_size);
+    let padded_len = num_blocks * block_size;
+    let elem_count = seq_len * n_heads * head_dim;
+    let q_data = (0..elem_count)
+        .map(|i| ((i % 251) as f32 - 125.0) / 125.0)
+        .collect::<Vec<_>>();
+    let q =
+        Tensor::from_vec(q_data, (seq_len, n_heads, head_dim), &device)?.to_dtype(DType::BF16)?;
+    let kv_elem_count = seq_len * n_kv_heads * head_dim;
+    let kv_data = (0..kv_elem_count)
+        .map(|i| ((i % 193) as f32 - 96.0) / 96.0)
+        .collect::<Vec<_>>();
+    let kv = Tensor::from_vec(kv_data, (seq_len, n_kv_heads, head_dim), &device)?
+        .to_dtype(DType::BF16)?;
+    let k_seq = (&kv / 4.)?;
+    let v_seq = (&kv / 5.)?;
+    let pad = Tensor::zeros(
+        (padded_len - seq_len, n_kv_heads, head_dim),
+        DType::BF16,
+        &device,
+    )?;
+    let k_paged =
+        Tensor::cat(&[&k_seq, &pad], 0)?.reshape((num_blocks, block_size, n_kv_heads, head_dim))?;
+    let v_paged =
+        Tensor::cat(&[&v_seq, &pad], 0)?.reshape((num_blocks, block_size, n_kv_heads, head_dim))?;
+    let seqlens = Tensor::new(&[0u32, seq_len as u32], &device)?;
+    let block_table = Tensor::new((0..num_blocks as u32).collect::<Vec<_>>(), &device)?
+        .reshape((1, num_blocks))?;
+    let mm_prefix_ranges = Tensor::new(&[6i32, 262i32], &device)?.reshape((1, 1, 2))?;
+
+    let ys_ref =
+        fa_windowed_mm_prefix(&q, &k_seq, &v_seq, 1.0, 1024, &[(6, 262)])?.to_dtype(DType::F32)?;
+    let ys_causal_ref =
+        fa_windowed_mm_prefix(&q, &k_seq, &v_seq, 1.0, 1024, &[])?.to_dtype(DType::F32)?;
+    let ys_causal = candle_flash_attn::flash_attn_varlen_paged_windowed(
+        &q,
+        &k_paged,
+        &v_paged,
+        &seqlens,
+        &seqlens,
+        &block_table,
+        None,
+        seq_len,
+        seq_len,
+        1.0,
+        Some(1024),
+        Some(0),
+        block_size,
+        None,
+    )?
+    .to_dtype(DType::F32)?;
+    let causal_diff = ys_causal_ref
+        .sub(&ys_causal)?
+        .abs()?
+        .flatten_all()?
+        .max(0)?;
+    let causal_diff = causal_diff.to_vec0::<f32>()?.abs();
+    assert!(causal_diff < 0.125, "causal max diff {causal_diff}");
+
+    let ys = candle_flash_attn::flash_attn_varlen_paged_windowed(
+        &q,
+        &k_paged,
+        &v_paged,
+        &seqlens,
+        &seqlens,
+        &block_table,
+        Some(&mm_prefix_ranges),
+        seq_len,
+        seq_len,
+        1.0,
+        Some(1024),
+        Some(0),
+        block_size,
+        None,
+    )?
+    .to_dtype(DType::F32)?;
+
+    let diff = ys_ref.sub(&ys)?.abs()?.flatten_all()?.max(0)?;
+    let diff = diff.to_vec0::<f32>()?.abs();
+    assert!(diff < 0.125, "max diff {diff}");
+    Ok(())
+}
+
+#[test]
+fn flash_attn_varlen_paged_shuffled_block_table_hd256() -> Result<()> {
+    paged_shuffled_block_table(256)
+}
+
+#[test]
+fn flash_attn_varlen_paged_shuffled_block_table_hd512() -> Result<()> {
+    paged_shuffled_block_table(512)
+}
+
+fn paged_shuffled_block_table(head_dim: usize) -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    let seq_len: usize = 296;
+    let n_heads: usize = 8;
+    let n_kv_heads: usize = 2;
+    let block_size: usize = 32;
+    let num_blocks = seq_len.div_ceil(block_size);
+    let pool_blocks = num_blocks + 7;
+    let perm = (0..num_blocks)
+        .map(|i| (i * 5 + 3) % pool_blocks)
+        .collect::<Vec<_>>();
+    let elem_count = seq_len * n_heads * head_dim;
+    let q_data = (0..elem_count)
+        .map(|i| ((i % 251) as f32 - 125.0) / 125.0)
+        .collect::<Vec<_>>();
+    let q =
+        Tensor::from_vec(q_data, (seq_len, n_heads, head_dim), &device)?.to_dtype(DType::BF16)?;
+    let kv_elem_count = seq_len * n_kv_heads * head_dim;
+    let kv_data = (0..kv_elem_count)
+        .map(|i| ((i % 193) as f32 - 96.0) / 96.0)
+        .collect::<Vec<_>>();
+    let kv = Tensor::from_vec(kv_data, (seq_len, n_kv_heads, head_dim), &device)?
+        .to_dtype(DType::BF16)?;
+    let k_seq = (&kv / 4.)?;
+    let v_seq = (&kv / 5.)?;
+
+    let block_elems = block_size * n_kv_heads * head_dim;
+    let scatter = |seq: &Tensor| -> Result<Tensor> {
+        let data = seq.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        let mut pool = vec![0f32; pool_blocks * block_elems];
+        for (logical, &physical) in perm.iter().enumerate() {
+            let src = logical * block_elems;
+            let len = block_elems.min(data.len() - src);
+            pool[physical * block_elems..physical * block_elems + len]
+                .copy_from_slice(&data[src..src + len]);
+        }
+        Ok(Tensor::from_vec(
+            pool,
+            (pool_blocks, block_size, n_kv_heads, head_dim),
+            &device,
+        )?
+        .to_dtype(DType::BF16)?)
+    };
+    let k_paged = scatter(&k_seq)?;
+    let v_paged = scatter(&v_seq)?;
+
+    let seqlens = Tensor::new(&[0u32, seq_len as u32], &device)?;
+    let block_table = Tensor::new(perm.iter().map(|&b| b as u32).collect::<Vec<_>>(), &device)?
+        .reshape((1, num_blocks))?;
+
+    let ys_ref = fa_windowed_mm_prefix(&q, &k_seq, &v_seq, 1.0, 1024, &[])?.to_dtype(DType::F32)?;
+    let ys = candle_flash_attn::flash_attn_varlen_paged_windowed(
+        &q,
+        &k_paged,
+        &v_paged,
+        &seqlens,
+        &seqlens,
+        &block_table,
+        None,
+        seq_len,
+        seq_len,
+        1.0,
+        Some(1024),
+        Some(0),
+        block_size,
+        None,
+    )?
+    .to_dtype(DType::F32)?;
+
+    let diff = ys_ref.sub(&ys)?.abs()?.flatten_all()?.max(0)?;
+    let diff = diff.to_vec0::<f32>()?.abs();
+    assert!(diff < 0.125, "max diff {diff}");
     Ok(())
 }
 
