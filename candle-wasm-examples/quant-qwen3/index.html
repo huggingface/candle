@@ -348,6 +348,7 @@
 
     <script type="module">
         import init, {
+            initThreadPool,
             Model,
             profile_print_stats,
             profile_clear,
@@ -692,6 +693,13 @@
             try {
                 updateStatus('Initializing WASM...', 'loading');
                 await init();
+
+                // Spin up the rayon worker pool (one per hardware thread) that
+                // backs candle's wasm-threads matmul. Requires cross-origin
+                // isolation; serve.py sends the COOP/COEP headers.
+                const threads = navigator.hardwareConcurrency || 4;
+                updateStatus(`Starting ${threads} worker threads...`, 'loading');
+                await initThreadPool(threads);
 
                 updateStatus('Loading model files...', 'loading');
 

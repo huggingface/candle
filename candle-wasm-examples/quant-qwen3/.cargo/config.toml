@@ -1,5 +1,10 @@
 [target.wasm32-unknown-unknown]
 rustflags = [
     '--cfg', 'getrandom_backend="wasm_js"',
-    '-C', 'target-feature=+simd128',
+    # +atomics,+bulk-memory enable wasm shared-memory threads (wasm-bindgen-rayon).
+    '-C', 'target-feature=+simd128,+atomics,+bulk-memory',
 ]
+
+# Threads need std rebuilt with atomics, which requires nightly + rust-src.
+[unstable]
+build-std = ["std", "panic_abort"]
