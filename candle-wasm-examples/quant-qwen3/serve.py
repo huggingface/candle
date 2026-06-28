@@ -127,6 +127,12 @@ class CustomHandler(SimpleHTTPRequestHandler):
             self.send_file(self.tokenizer_dir / 'tokenizer.json', 'application/json')
         elif self.path == '/config.json':
             self.send_file(self.tokenizer_dir / 'config.json', 'application/json')
+        elif self.path in ('/pkg/', '/pkg'):
+            # wasm-bindgen-rayon's worker does `import('../../..')`, which resolves to
+            # /pkg/ (a directory). Bundlers map that to the package entry via
+            # package.json; a plain server returns the dir listing (text/html) and the
+            # module import is rejected. Map /pkg/ to the main module JS instead.
+            self.send_file(Path('pkg/candle_wasm_example_quant_qwen3.js'), 'application/javascript')
         else:
             SimpleHTTPRequestHandler.do_GET(self)
 
