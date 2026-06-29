@@ -522,6 +522,13 @@ impl Tensor {
         is_variable: bool,
     ) -> Result<Self> {
         let shape = shape.into_shape(data.len())?;
+        if shape.elem_count() != data.len() {
+            return Err(Error::ShapeMismatch {
+                buffer_size: data.len(),
+                shape,
+            }
+            .bt());
+        }
         let storage = device.storage_owned(data)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, is_variable))
@@ -567,6 +574,13 @@ impl Tensor {
         device: &Device,
     ) -> Result<Self> {
         let shape = shape.into_shape(array.len())?;
+        if shape.elem_count() != array.len() {
+            return Err(Error::ShapeMismatch {
+                buffer_size: array.len(),
+                shape,
+            }
+            .bt());
+        }
         let storage = device.storage_from_slice(array)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, false))
@@ -2873,6 +2887,84 @@ impl Tensor {
             }
             src = src.pad_with_zeros(i, start_included, self_dims[i] - end_excluded)?;
             mask = mask.pad_with_zeros(i, start_included, self_dims[i] - end_excluded)?
+        }
+        mask.where_cond(/* on_true= */ &src, /* on_false= */ self)
+    }
+
+    /// Returns a copy of `self` where the values within the stepped `ranges` have been replaced
+    /// with the content of `src`. Each range comes with a step: element `k` of `src` along dim
+    /// `i` is written at position `start + k * step`, like Python's `dst[start:end:step] = src`.
+    pub fn slice_assign_with_step<D: std::ops::RangeBounds<usize>>(
+        &self,
+        ranges: &[(D, usize)],
+        src: &Tensor,
+    ) -> Result<Self> {
+        let src_dims = src.dims();
+        let self_dims = self.dims();
+        if self_dims.len() != src_dims.len() {
+            bail!(
+                "slice-assign requires input with the same rank {} <> {}",
+                self_dims.len(),
+                src_dims.len()
+            )
+        }
+        if self_dims.len() != ranges.len() {
+            bail!(
+                "slice-assign requires input with the same rank as there are ranges {} <> {}",
+                self_dims.len(),
+                ranges.len()
+            )
+        }
+        let mut src = src.clone();
+        let mut mask = Self::ones(src.shape(), DType::U8, src.device())?;
+        for (i, (range, step)) in ranges.iter().enumerate() {
+            let step = *step;
+            if step == 0 {
+                bail!("slice-assign: step must be non-zero for dim {i}")
+            }
+            let start_included = match range.start_bound() {
+                std::ops::Bound::Unbounded => 0,
+                std::ops::Bound::Included(v) => *v,
+                std::ops::Bound::Excluded(v) => *v + 1,
+            };
+            let end_excluded = match range.end_bound() {
+                std::ops::Bound::Unbounded => self_dims[i],
+                std::ops::Bound::Included(v) => *v + 1,
+                std::ops::Bound::Excluded(v) => *v,
+            };
+            if end_excluded <= start_included {
+                bail!("slice-assign: empty range for dim {i}, {start_included} {end_excluded}")
+            }
+            if self_dims[i] < end_excluded {
+                bail!(
+                    "slice-assign: upper bound is out of range for dim {i}, {end_excluded} {}",
+                    self_dims[i]
+                )
+            }
+            let covered = (end_excluded - start_included).div_ceil(step);
+            if covered != src_dims[i] {
+                bail!(
+                    "slice-assign: the range for dim {i} ({start_included}..{end_excluded} step {step}) covers {covered} positions but src has {}",
+                    src_dims[i]
+                )
+            }
+            if step > 1 {
+                // Dilate src and mask along dim i: element k moves to position k * step.
+                let dilate = |t: &Tensor| -> Result<Tensor> {
+                    let n = t.dim(i)?;
+                    let mut dims = t.dims().to_vec();
+                    dims[i] = n * step;
+                    t.unsqueeze(i + 1)?
+                        .pad_with_zeros(i + 1, 0, step - 1)?
+                        .reshape(dims)?
+                        .narrow(i, 0, n * step - (step - 1))
+                };
+                src = dilate(&src)?;
+                mask = dilate(&mask)?;
+            }
+            let len = src.dim(i)?;
+            src = src.pad_with_zeros(i, start_included, self_dims[i] - start_included - len)?;
+            mask = mask.pad_with_zeros(i, start_included, self_dims[i] - start_included - len)?;
         }
         mask.where_cond(/* on_true= */ &src, /* on_false= */ self)
     }
