@@ -348,6 +348,7 @@
 
     <script type="module">
         import init, {
+            initThreadPool,
             Model,
             profile_print_stats,
             profile_clear,
@@ -692,6 +693,21 @@
             try {
                 updateStatus('Initializing WASM...', 'loading');
                 await init();
+
+                // Spin up the rayon worker pool (one per hardware thread) that
+                // backs candle's wasm-threads matmul. Requires cross-origin
+                // isolation; serve.py sends the COOP/COEP headers. Override the
+                // count with ?threads=N (use ?threads=1 for the single-thread A/B).
+                // Decode is memory-bandwidth-bound, so it saturates at a few cores;
+                // using all logical CPUs (e.g. M1's 8 = 4P+4E) lands work on slow
+                // E-cores + adds sync overhead and is SLOWER than ~2-4. Default to a
+                // small count; override with ?threads=N (?threads=1 for the A/B).
+                const threadParam = parseInt(new URLSearchParams(location.search).get('threads'), 10);
+                const threads = threadParam > 0
+                    ? threadParam
+                    : Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) >> 1));
+                updateStatus(`Starting ${threads} worker threads...`, 'loading');
+                await initThreadPool(threads);
 
                 updateStatus('Loading model files...', 'loading');
 

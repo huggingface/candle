@@ -1,0 +1,6 @@
+# wasm threads (wasm-bindgen-rayon) require building std with atomics via
+# -Z build-std, which is nightly-only and needs the rust-src component.
+[toolchain]
+channel = "nightly"
+components = ["rust-src"]
+targets = ["wasm32-unknown-unknown"]
