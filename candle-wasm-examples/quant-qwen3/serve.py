@@ -18,6 +18,12 @@ HF_CACHE = HOME / '.cache/huggingface/hub'
 
 # Model configurations
 MODELS = {
+    '0.6b-allq4': {
+        'repo': 'DrJesseGlass/Qwen3-0.6B-Q4_K',
+        'filename': 'Qwen3-0.6B-allq4k-f16src.gguf',
+        'size': '~326MB',
+        'description': 'all-Q4_K from F16 source (smallest; tied lm_head on the relaxed-SIMD Q4_K path; fastest in WASM)'
+    },
     '0.6b-q8': {
         'repo': 'unsloth/Qwen3-0.6B-GGUF',
         'filename': 'Qwen3-0.6B-Q8_0.gguf',
@@ -159,11 +165,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Use default Q8_0 model
+  # Use default all-Q4_K model (fastest in WASM)
   %(prog)s
 
-  # Use Q4 model (smaller, less accurate, slower in WASM SIMD)
-  %(prog)s --model 0.6b-q4
+  # Use the Q8_0 model
+  %(prog)s --model 0.6b-q8
 
   # Use custom model file
   %(prog)s --path /path/to/model.gguf
@@ -176,8 +182,8 @@ Examples:
     parser.add_argument(
         '--model', '-m',
         choices=list(MODELS.keys()),
-        default='0.6b-q8',
-        help='Model to use (default: 0.6b-q8)'
+        default='0.6b-allq4',
+        help='Model to use (default: 0.6b-allq4)'
     )
 
     parser.add_argument(
