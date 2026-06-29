@@ -723,13 +723,22 @@ impl ModelLoader {
             }
             let mut cur = Cursor::new(&self.buf[..]);
             if let Ok(content) = gguf_file::Content::read(&mut cur) {
-                self.data_offset = cur.position();
+                // Tensor data starts at the aligned tensor_data_offset, which may
+                // sit past the cursor (alignment padding after the info table).
+                // Anchor the window there, and wait until that padding is buffered
+                // so the first tensor's bytes are never read early.
+                let data_offset = content.tensor_data_offset;
+                if (self.buf.len() as u64) < data_offset {
+                    self.next_parse_at = data_offset as usize;
+                    return Ok(());
+                }
+                self.data_offset = data_offset;
                 let mut order: Vec<String> = content.tensor_infos.keys().cloned().collect();
                 order.sort_by_key(|n| content.tensor_infos[n].offset);
                 self.order = order;
                 self.content = Some(content);
-                self.buf.drain(0..self.data_offset as usize);
-                self.base = self.data_offset;
+                self.buf.drain(0..data_offset as usize);
+                self.base = data_offset;
             } else {
                 // Header not fully arrived; wait for the buffer to roughly double.
                 self.next_parse_at = self.buf.len() * 2;

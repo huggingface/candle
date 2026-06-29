@@ -123,17 +123,30 @@ class CustomHandler(SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
         self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
-        # Never cache code (html/js/wasm) so a rebuild is always picked up; only
-        # the large gguf may cache. This kills the stale-pkg confusion during dev.
+        # Never cache code (html/js/wasm) so a rebuild is always picked up. The
+        # large gguf revalidates via an ETag keyed to the selected model, so a
+        # reload is cheap (304) but switching --model/--path serves fresh bytes
+        # instead of a stale model under the same URL.
         if self.path.endswith('.gguf'):
-            self.send_header('Cache-Control', 'public, max-age=86400')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('ETag', self.gguf_etag())
         else:
-            self.send_header('Cache-Control', 'no-store, must-revalidate')
+            self.send_header('Cache-Control', 'no-store')
         SimpleHTTPRequestHandler.end_headers(self)
+
+    @classmethod
+    def gguf_etag(cls):
+        st = cls.model_path.stat()
+        return f'"{cls.model_path.name}-{st.st_size}-{int(st.st_mtime)}"'
 
     def do_GET(self):
         # Serve model file
         if self.path.endswith('.gguf'):
+            # Cheap revalidation: 304 when the cached model matches the ETag.
+            if self.headers.get('If-None-Match') == self.gguf_etag():
+                self.send_response(304)
+                self.end_headers()
+                return
             self.send_file(self.model_path, 'application/octet-stream')
         elif self.path == '/tokenizer.json':
             self.send_file(self.tokenizer_dir / 'tokenizer.json', 'application/json')
