@@ -5,7 +5,10 @@ rustflags = [
     # feature, but shared memory must be requested explicitly at link (and a shared
     # memory REQUIRES a max). Without --shared-memory the exported memory is a plain
     # ArrayBuffer and can't be postMessage'd to workers.
-    '-C', 'target-feature=+simd128,+atomics,+bulk-memory,+mutable-globals',
+    # +relaxed-simd: fused i32x4_relaxed_dot_i8x16_i7x16_add Q4_K kernel. Big win on
+    # all-Q4 (~30 vs ~23 tok/s) because it covers the Q4_K lm_head. Needs a
+    # relaxed-simd browser (Chrome 114+/FF120+/Safari18+).
+    '-C', 'target-feature=+simd128,+atomics,+bulk-memory,+mutable-globals,+relaxed-simd',
     '-C', 'link-arg=--shared-memory',
     '-C', 'link-arg=--max-memory=4294967296',
     # wasm-bindgen's thread transform requires an IMPORTED shared memory (it asserts
