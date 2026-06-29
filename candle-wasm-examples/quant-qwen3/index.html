@@ -290,7 +290,7 @@
                 Running <strong>Qwen3-0.6B</strong> in your browser via WebAssembly.
                 Built with <a href="https://github.com/huggingface/candle" target="_blank">Candle</a> by <a href="https://github.com/DrJesseGlass" target="_blank">Jesse Glass</a>.
                 The <a href="https://github.com/QwenLM/Qwen" target="_blank">Qwen team at Alibaba Cloud</a> developed the model
-                and <a href="https://huggingface.co/unsloth" target="_blank">Unsloth</a> provided the quantized weights.
+                and the all-Q4_K quantized weights were produced by <a href="https://huggingface.co/DrJesseGlass/Qwen3-0.6B-Q4_K" target="_blank">Jesse Glass</a>.
             </p>
         </div>
 
@@ -348,7 +348,9 @@
 
     <script type="module">
         import init, {
+            initThreadPool,
             Model,
+            ModelLoader,
             profile_print_stats,
             profile_clear,
             get_memory_info,
@@ -693,31 +695,51 @@
                 updateStatus('Initializing WASM...', 'loading');
                 await init();
 
-                updateStatus('Loading model files...', 'loading');
+                // Spin up the rayon worker pool (one per hardware thread) that
+                // backs candle's wasm-threads matmul. Requires cross-origin
+                // isolation; serve.py sends the COOP/COEP headers. Override the
+                // count with ?threads=N (use ?threads=1 for the single-thread A/B).
+                // Decode is memory-bandwidth-bound, so it saturates at a few cores;
+                // using all logical CPUs (e.g. M1's 8 = 4P+4E) lands work on slow
+                // E-cores + adds sync overhead and is SLOWER than ~2-4. Default to a
+                // small count; override with ?threads=N (?threads=1 for the A/B).
+                const threadParam = parseInt(new URLSearchParams(location.search).get('threads'), 10);
+                const threads = threadParam > 0
+                    ? threadParam
+                    : Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) >> 1));
+                updateStatus(`Starting ${threads} worker threads...`, 'loading');
+                await initThreadPool(threads);
 
-                const [weights, tokenizer, config] = await Promise.all([
-                    fetch(MODEL_FILE).then(r => {
-                        if (!r.ok) throw new Error(`Failed to load ${MODEL_FILE}`);
-                        return r.arrayBuffer();
-                    }),
-                    fetch('tokenizer.json').then(r => {
-                        if (!r.ok) throw new Error('Failed to load tokenizer');
-                        return r.arrayBuffer();
-                    }),
-                    fetch('config.json').then(r => {
-                        if (!r.ok) throw new Error('Failed to load config');
-                        return r.arrayBuffer();
-                    }),
-                ]);
-
-                updateStatus('Creating model...', 'loading');
                 profile_clear();
 
-                model = new Model(
-                    new Uint8Array(weights),
-                    new Uint8Array(tokenizer),
-                    new Uint8Array(config)
-                );
+                // Stream the gguf straight into the wasm loader: it quantizes
+                // tensors in file order and drops consumed bytes, so the whole file
+                // is never held at once (lower peak memory than new Model(...)).
+                const tokenizer = await fetch('tokenizer.json').then(r => {
+                    if (!r.ok) throw new Error('Failed to load tokenizer');
+                    return r.arrayBuffer();
+                });
+
+                const resp = await fetch(MODEL_FILE);
+                if (!resp.ok) throw new Error(`Failed to load ${MODEL_FILE}`);
+                const total = parseInt(resp.headers.get('content-length')) || (326 * 1024 * 1024);
+                const reader = resp.body.getReader();
+                const loader = new ModelLoader();
+                let loaded = 0;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    loader.push(value);
+                    loaded += value.length;
+                    updateStatus(`Streaming model... ${(loaded / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`, 'loading');
+                    // Yield every 10MB to keep the UI responsive.
+                    if (loaded % (10 * 1024 * 1024) < value.length) {
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+
+                updateStatus('Building model...', 'loading');
+                model = loader.finish(new Uint8Array(tokenizer));
 
                 // Initialize conversation
                 const enableThinking = document.getElementById('enableThinking').checked;

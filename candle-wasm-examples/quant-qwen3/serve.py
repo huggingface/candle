@@ -18,6 +18,12 @@ HF_CACHE = HOME / '.cache/huggingface/hub'
 
 # Model configurations
 MODELS = {
+    '0.6b-allq4': {
+        'repo': 'DrJesseGlass/Qwen3-0.6B-Q4_K',
+        'filename': 'Qwen3-0.6B-allq4k-f16src.gguf',
+        'size': '~326MB',
+        'description': 'all-Q4_K from F16 source (smallest; tied lm_head on the relaxed-SIMD Q4_K path; fastest in WASM)'
+    },
     '0.6b-q8': {
         'repo': 'unsloth/Qwen3-0.6B-GGUF',
         'filename': 'Qwen3-0.6B-Q8_0.gguf',
@@ -117,16 +123,41 @@ class CustomHandler(SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
         self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
+        # Never cache code (html/js/wasm) so a rebuild is always picked up. The
+        # large gguf revalidates via an ETag keyed to the selected model, so a
+        # reload is cheap (304) but switching --model/--path serves fresh bytes
+        # instead of a stale model under the same URL.
+        if self.path.endswith('.gguf'):
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('ETag', self.gguf_etag())
+        else:
+            self.send_header('Cache-Control', 'no-store')
         SimpleHTTPRequestHandler.end_headers(self)
+
+    @classmethod
+    def gguf_etag(cls):
+        st = cls.model_path.stat()
+        return f'"{cls.model_path.name}-{st.st_size}-{int(st.st_mtime)}"'
 
     def do_GET(self):
         # Serve model file
         if self.path.endswith('.gguf'):
+            # Cheap revalidation: 304 when the cached model matches the ETag.
+            if self.headers.get('If-None-Match') == self.gguf_etag():
+                self.send_response(304)
+                self.end_headers()
+                return
             self.send_file(self.model_path, 'application/octet-stream')
         elif self.path == '/tokenizer.json':
             self.send_file(self.tokenizer_dir / 'tokenizer.json', 'application/json')
         elif self.path == '/config.json':
             self.send_file(self.tokenizer_dir / 'config.json', 'application/json')
+        elif self.path in ('/pkg/', '/pkg'):
+            # wasm-bindgen-rayon's worker does `import('../../..')`, which resolves to
+            # /pkg/ (a directory). Bundlers map that to the package entry via
+            # package.json; a plain server returns the dir listing (text/html) and the
+            # module import is rejected. Map /pkg/ to the main module JS instead.
+            self.send_file(Path('pkg/candle_wasm_example_quant_qwen3.js'), 'application/javascript')
         else:
             SimpleHTTPRequestHandler.do_GET(self)
 
@@ -153,11 +184,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Use default Q8_0 model
+  # Use default all-Q4_K model (fastest in WASM)
   %(prog)s
 
-  # Use Q4 model (smaller, less accurate, slower in WASM SIMD)
-  %(prog)s --model 0.6b-q4
+  # Use the Q8_0 model
+  %(prog)s --model 0.6b-q8
 
   # Use custom model file
   %(prog)s --path /path/to/model.gguf
@@ -170,8 +201,8 @@ Examples:
     parser.add_argument(
         '--model', '-m',
         choices=list(MODELS.keys()),
-        default='0.6b-q8',
-        help='Model to use (default: 0.6b-q8)'
+        default='0.6b-allq4',
+        help='Model to use (default: 0.6b-allq4)'
     )
 
     parser.add_argument(
