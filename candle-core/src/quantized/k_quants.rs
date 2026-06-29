@@ -1434,10 +1434,7 @@ impl GgmlType for BlockQ4K {
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q4k_q8k(n, xs, ys);
 
-        #[cfg(all(target_feature = "simd128", target_feature = "relaxed-simd"))]
-        return super::simd128::vec_dot_q4k_q8k_relaxed(n, xs, ys);
-
-        #[cfg(all(target_feature = "simd128", not(target_feature = "relaxed-simd")))]
+        #[cfg(target_feature = "simd128")]
         return super::simd128::vec_dot_q4k_q8k(n, xs, ys);
 
         Self::vec_dot_unopt(n, xs, ys)
