@@ -2430,15 +2430,12 @@ pub fn matmul<T: GgmlType>(
             }
         }
         let n_quad = n & !3;
-        let n_tail = n - n_quad; // 0..=3
-        // Native parallelizes the column quads over the barrier pool. wasm32 can't
-        // spawn std threads, so with the `wasm-threads` feature it uses a rayon path
-        // (backed by wasm-bindgen-rayon); otherwise it runs the quads serially.
+        let n_tail = n - n_quad;
+        // wasm32 has no barrier pool: wasm-threads uses rayon, otherwise serial.
         #[cfg(not(target_arch = "wasm32"))]
         let quads_total = n_quad / 4;
         #[cfg(not(target_arch = "wasm32"))]
         let pool = crate::utils::barrier_pool();
-        // Workers 0..n_workers + calling thread as worker n_workers.
         #[cfg(not(target_arch = "wasm32"))]
         let quads_per_thread = quads_total.div_ceil(pool.n_workers() + 1);
         let lhs_b: &[T::VecDotType] = lhs_b;
