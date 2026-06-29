@@ -730,16 +730,13 @@ impl QTensor {
     }
 
     // Build the aarch64 Q4_K matmul repack and free the original blocks; the matmul
-    // then runs from the cached repack alone. Caller must not use this tensor for
-    // dequantize/embedding afterward (e.g. a tied lm_head). No-op off aarch64/Q4_K.
-    pub fn drop_source_after_repack(&mut self) {
+    // then runs from the cached repack alone. No-op off aarch64/Q4_K. Private: only
+    // from_arc calls it, on a uniquely-owned tensor that has ruled out dequant.
+    fn drop_source_after_repack(&mut self) {
         #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
         if let Ok((n, _k)) = self.shape.dims2() {
-            if self.storage.dtype() == GgmlDType::Q4K
-                && n.is_multiple_of(8)
-                && self.q4kx8_repack(n).is_some()
-            {
-                let dtype = self.storage.dtype();
+            let dtype = self.storage.dtype();
+            if dtype == GgmlDType::Q4K && n.is_multiple_of(8) && self.q4kx8_repack(n).is_some() {
                 let device = self.storage.device();
                 if let Ok(empty) = device.qzeros(0, dtype) {
                     self.storage = empty;
@@ -885,6 +882,14 @@ impl QMatMul {
             let tensor = qtensor.dequantize_f16(&qtensor.device())?;
             Self::TensorF16(tensor)
         } else {
+            // Staying quantized (dequantization ruled out above): on aarch64 build
+            // the Q4_K matmul repack and free the original blocks. Only when we
+            // uniquely own the tensor -- a shared one (e.g. a tied lm_head reusing
+            // the embedding) keeps its blocks for embedding/dequantize.
+            let mut qtensor = qtensor;
+            if let Some(qt) = std::sync::Arc::get_mut(&mut qtensor) {
+                qt.drop_source_after_repack();
+            }
             Self::QTensor(qtensor)
         };
         Ok(t)
