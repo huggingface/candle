@@ -1276,6 +1276,47 @@ quantized_matmul!(
     quantized_matmul_q8_0_metal,
     GgmlDType::Q8_0
 );
+
+#[test]
+fn quantized_matmul_q4_0_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 4, 256), GgmlDType::Q4_0)
+}
+
+#[test]
+fn quantized_matmul_q8_0_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 4, 256), GgmlDType::Q8_0)
+}
+
+#[test]
+fn quantized_matmul_q6k_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 8, 256), GgmlDType::Q6K)
+}
+
+#[test]
+fn quantized_matmul_q5k_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 8, 256), GgmlDType::Q5K)
+}
+
+#[test]
+fn quantized_matmul_q4k_repacked_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 4, 8, 256), GgmlDType::Q4K)
+}
+
+#[test]
+fn quantized_matmul_q4k_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 8, 256), GgmlDType::Q4K)
+}
+
+#[test]
+fn quantized_matmul_q6k_repacked_gemv_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 1, 8, 256), GgmlDType::Q6K)
+}
+
+#[test]
+fn quantized_matmul_q4k_repack_fallback_cpu() -> Result<()> {
+    test_matmul(&Device::Cpu, (1, 3, 8, 256), GgmlDType::Q4K)
+}
+
 quantized_matmul!(
     quantized_matmul_q8_1_bis,
     quantized_matmul_q8_1_cpu,
