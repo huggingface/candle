@@ -47,6 +47,59 @@ impl<R: Read + Seek> Gguf<R> {
     }
 }
 
+// Source of named quantized tensors for model construction: either a seekable
+// gguf reader (lazy per-tensor reads) or a prebuilt tensor map. The map path lets
+// a streaming loader build QTensors in file order and drop the input bytes as it
+// goes, so the full input buffer is never held alongside the built tensors.
+trait Weights {
+    fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value>;
+    fn take_tensor(&mut self, name: &str) -> Result<QTensor>;
+    fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
+        QMatMul::from_weights(self.take_tensor(name)?.into())
+    }
+    fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm> {
+        RmsNorm::from_qtensor(self.take_tensor(name)?, eps)
+    }
+}
+
+impl<R: Read + Seek> Weights for Gguf<R> {
+    fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value> {
+        &self.ct.metadata
+    }
+    fn take_tensor(&mut self, name: &str) -> Result<QTensor> {
+        self.ct.tensor(&mut self.reader, name, &self.device)
+    }
+}
+
+/// Prebuilt tensor map for the streaming/incremental load. Tensors are quantized
+/// from the network stream in file-offset order and removed here by name, so peak
+/// memory is the built tensors plus one in-flight tensor rather than buffer + all.
+pub struct TensorMap {
+    metadata: std::collections::HashMap<String, gguf_file::Value>,
+    tensors: std::collections::HashMap<String, QTensor>,
+}
+
+impl TensorMap {
+    pub fn new(
+        metadata: std::collections::HashMap<String, gguf_file::Value>,
+        tensors: std::collections::HashMap<String, QTensor>,
+    ) -> Self {
+        Self { metadata, tensors }
+    }
+}
+
+impl Weights for TensorMap {
+    fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value> {
+        &self.metadata
+    }
+    fn take_tensor(&mut self, name: &str) -> Result<QTensor> {
+        match self.tensors.remove(name) {
+            Some(t) => Ok(t),
+            None => candle::bail!("cannot find tensor {name}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MlpWeights {
     gate_proj: QMatMul,
@@ -57,7 +110,7 @@ struct MlpWeights {
 }
 
 impl MlpWeights {
-    fn new<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
+    fn new<W: Weights>(gg: &mut W, prefix: &str) -> Result<Self> {
         let gate_proj = gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?;
         let up_proj = gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?;
         let down_proj = gg.qmatmul(&format!("{prefix}.ffn_down.weight"))?;
@@ -173,8 +226,8 @@ struct AttentionWeights {
 
 impl AttentionWeights {
     #[allow(clippy::too_many_arguments)]
-    fn new<R: Read + Seek>(
-        gg: &mut Gguf<R>,
+    fn new<W: Weights>(
+        gg: &mut W,
         num_heads: usize,
         num_kv_heads: usize,
         head_dim: usize,
@@ -400,8 +453,8 @@ struct LayerWeights {
 
 impl LayerWeights {
     #[allow(clippy::too_many_arguments)]
-    fn new<R: Read + Seek>(
-        gg: &mut Gguf<R>,
+    fn new<W: Weights>(
+        gg: &mut W,
         num_attention_heads: usize,
         num_key_value_heads: usize,
         head_dim: usize,
@@ -466,6 +519,23 @@ impl ModelWeights {
         device: &Device,
     ) -> Result<Self> {
         let mut gg = Gguf::new(ct, reader, device.clone());
+        Self::from_source(&mut gg, device)
+    }
+
+    /// Build the model from tensors already loaded into a map. Used by the wasm
+    /// streaming loader, which quantizes tensors from the network stream in file
+    /// order and frees the source bytes as it goes, so the full input buffer is
+    /// never held alongside the built QTensors.
+    pub fn from_gguf_tensors(
+        metadata: std::collections::HashMap<String, gguf_file::Value>,
+        tensors: std::collections::HashMap<String, QTensor>,
+        device: &Device,
+    ) -> Result<Self> {
+        let mut src = TensorMap::new(metadata, tensors);
+        Self::from_source(&mut src, device)
+    }
+
+    fn from_source<W: Weights>(gg: &mut W, device: &Device) -> Result<Self> {
         let md_get = |s: &str| match gg.metadata().get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
             Some(v) => Ok(v),
@@ -493,7 +563,7 @@ impl ModelWeights {
 
         // Keep the embedding quantized; dequantize only the input-token rows per
         // forward (QTensor::embedding). Arc shared with the tied lm_head below.
-        let embed_tokens: Arc<QTensor> = gg.tensor("token_embd.weight")?.into();
+        let embed_tokens: Arc<QTensor> = gg.take_tensor("token_embd.weight")?.into();
 
         let rotary = Arc::new(RotaryEmbedding::new(
             dtype,
@@ -506,7 +576,7 @@ impl ModelWeights {
         let mut layers = Vec::with_capacity(num_layers);
         for i in 0..num_layers {
             layers.push(LayerWeights::new(
-                &mut gg,
+                gg,
                 num_attention_heads,
                 num_kv_heads,
                 head_dim,
@@ -520,7 +590,7 @@ impl ModelWeights {
         let norm = gg.rms_norm("output_norm.weight", rms_norm_eps)?;
         // Output projection, falling back to tied embeddings like gemma3; when
         // tied, reuse the shared token_embd Arc instead of loading it again.
-        let lm_head = match gg.tensor("output.weight") {
+        let lm_head = match gg.take_tensor("output.weight") {
             Ok(tensor) => QMatMul::from_weights(tensor.into())?,
             Err(_) => QMatMul::from_weights(embed_tokens.clone())?,
         };
