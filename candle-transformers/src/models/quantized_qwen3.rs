@@ -29,7 +29,9 @@ impl<R: Read + Seek> Gguf<R> {
     }
 
     pub fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
-        let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
+        let mut ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
+        // Matmul-only weight: release the original Q4_K blocks after repacking.
+        ws.drop_source_after_repack();
         QMatMul::from_weights(ws.into())
     }
 
@@ -515,11 +517,13 @@ impl ModelWeights {
         }
 
         let norm = gg.rms_norm("output_norm.weight", rms_norm_eps)?;
-        // Load output projection tensor, falling back to tied embeddings like gemma3
-        let lm_head_tensor = match gg.tensor("output.weight") {
+        // Load output projection, falling back to tied embeddings like gemma3.
+        // Matmul-only here (embed_tokens has its own dequantized copy), so release.
+        let mut lm_head_tensor = match gg.tensor("output.weight") {
             Ok(tensor) => tensor,
             Err(_) => gg.tensor("token_embd.weight")?,
         };
+        lm_head_tensor.drop_source_after_repack();
         let lm_head = QMatMul::from_weights(lm_head_tensor.into())?;
         let span = tracing::span!(tracing::Level::TRACE, "model");
         let span_output = tracing::span!(tracing::Level::TRACE, "output");

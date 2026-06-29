@@ -709,6 +709,45 @@ impl QTensor {
         }
     }
 
+    // Build-once cached BlockQ4Kx8 repack of a Q4_K weight with n output rows.
+    // Later calls return it without reading storage, so the original can be freed.
+    #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+    fn q4kx8_repack(&self, n: usize) -> &Option<Vec<u8>> {
+        use zerocopy::IntoBytes;
+        self.repacked_qs.get_or_init(|| {
+            let s = match &self.storage {
+                QStorage::Cpu(s) => s,
+                _ => return None,
+            };
+            let total_blocks = s.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
+            if total_blocks == 0 {
+                return None;
+            }
+            let blocks =
+                unsafe { std::slice::from_raw_parts(s.as_ptr() as *const BlockQ4K, total_blocks) };
+            Some(k_quants::pack_to_q4kx8(blocks, n).as_bytes().to_vec())
+        })
+    }
+
+    // Build the aarch64 Q4_K matmul repack and free the original blocks; the matmul
+    // then runs from the cached repack alone. Caller must not use this tensor for
+    // dequantize/embedding afterward (e.g. a tied lm_head). No-op off aarch64/Q4_K.
+    pub fn drop_source_after_repack(&mut self) {
+        #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+        if let Ok((n, _k)) = self.shape.dims2() {
+            if self.storage.dtype() == GgmlDType::Q4K
+                && n.is_multiple_of(8)
+                && self.q4kx8_repack(n).is_some()
+            {
+                let dtype = self.storage.dtype();
+                let device = self.storage.device();
+                if let Ok(empty) = device.qzeros(0, dtype) {
+                    self.storage = empty;
+                }
+            }
+        }
+    }
+
     pub fn embedding(&self, ids: &Tensor) -> Result<Tensor> {
         let (rows, hidden) = self.shape.dims2()?;
         if !hidden.is_multiple_of(self.dtype().block_size()) {
@@ -934,24 +973,12 @@ impl crate::CustomOp1 for QTensor {
                     &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
                 let mut dst_storage = vec![0f32; dst_shape.elem_count()];
 
-                // Try the 8-column BlockQ4Kx8 repacked path.
+                // 8-column BlockQ4Kx8 path; the cached repack stays valid even
+                // after the original Q4_K blocks are released.
                 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
                 if self_storage.dtype() == GgmlDType::Q4K && n.is_multiple_of(8) {
-                    use zerocopy::{FromBytes, IntoBytes};
-
-                    let total_blocks =
-                        self_storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
-                    let repacked = self.repacked_qs.get_or_init(|| {
-                        let blocks = unsafe {
-                            std::slice::from_raw_parts(
-                                self_storage.as_ptr() as *const BlockQ4K,
-                                total_blocks,
-                            )
-                        };
-                        let packed = k_quants::pack_to_q4kx8(blocks, n);
-                        Some(packed.as_bytes().to_vec())
-                    });
-                    if let Some(repacked_bytes) = repacked {
+                    use zerocopy::FromBytes;
+                    if let Some(repacked_bytes) = self.q4kx8_repack(n) {
                         let block_x8: &[BlockQ4Kx8] =
                             <[BlockQ4Kx8]>::ref_from_bytes(repacked_bytes).map_err(|_| {
                                 crate::Error::Msg(
