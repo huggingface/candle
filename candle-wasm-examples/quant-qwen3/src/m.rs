@@ -655,12 +655,11 @@ impl Seek for WindowReader<'_> {
         self.pos = match p {
             SeekFrom::Start(o) => o,
             SeekFrom::Current(d) => (self.pos as i64 + d) as u64,
-            SeekFrom::End(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "WindowReader: SeekFrom::End unsupported",
-                ))
-            }
+            // End is relative to the end of the buffered window in file
+            // coordinates. gguf_file uses End(0) only to read a file size for a
+            // bounds check; the tensor being read is fully inside the window, so
+            // window-end >= tensor-end and the check passes.
+            SeekFrom::End(d) => ((self.base + self.buf.len() as u64) as i64 + d) as u64,
         };
         Ok(self.pos)
     }
@@ -791,6 +790,12 @@ impl ModelLoader {
         let model = QuantizedQwen3::from_gguf_tensors(content.metadata, self.tensors, &device)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
+        // Post-load memory before any generation -- this is the streaming load's
+        // footprint to compare against the all-at-once Model::load path.
+        console_log!(
+            "[ModelLoader] streaming load complete. {}",
+            crate::profiler::get_wasm_memory_info()
+        );
         Ok(Model::assemble(model, tokenizer))
     }
 }
