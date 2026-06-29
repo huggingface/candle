@@ -123,6 +123,12 @@ class CustomHandler(SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
         self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
+        # Never cache code (html/js/wasm) so a rebuild is always picked up; only
+        # the large gguf may cache. This kills the stale-pkg confusion during dev.
+        if self.path.endswith('.gguf'):
+            self.send_header('Cache-Control', 'public, max-age=86400')
+        else:
+            self.send_header('Cache-Control', 'no-store, must-revalidate')
         SimpleHTTPRequestHandler.end_headers(self)
 
     def do_GET(self):

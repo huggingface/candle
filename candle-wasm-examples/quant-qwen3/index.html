@@ -350,6 +350,7 @@
         import init, {
             initThreadPool,
             Model,
+            ModelLoader,
             profile_print_stats,
             profile_clear,
             get_memory_info,
@@ -709,31 +710,36 @@
                 updateStatus(`Starting ${threads} worker threads...`, 'loading');
                 await initThreadPool(threads);
 
-                updateStatus('Loading model files...', 'loading');
-
-                const [weights, tokenizer, config] = await Promise.all([
-                    fetch(MODEL_FILE).then(r => {
-                        if (!r.ok) throw new Error(`Failed to load ${MODEL_FILE}`);
-                        return r.arrayBuffer();
-                    }),
-                    fetch('tokenizer.json').then(r => {
-                        if (!r.ok) throw new Error('Failed to load tokenizer');
-                        return r.arrayBuffer();
-                    }),
-                    fetch('config.json').then(r => {
-                        if (!r.ok) throw new Error('Failed to load config');
-                        return r.arrayBuffer();
-                    }),
-                ]);
-
-                updateStatus('Creating model...', 'loading');
                 profile_clear();
 
-                model = new Model(
-                    new Uint8Array(weights),
-                    new Uint8Array(tokenizer),
-                    new Uint8Array(config)
-                );
+                // Stream the gguf straight into the wasm loader: it quantizes
+                // tensors in file order and drops consumed bytes, so the whole file
+                // is never held at once (lower peak memory than new Model(...)).
+                const tokenizer = await fetch('tokenizer.json').then(r => {
+                    if (!r.ok) throw new Error('Failed to load tokenizer');
+                    return r.arrayBuffer();
+                });
+
+                const resp = await fetch(MODEL_FILE);
+                if (!resp.ok) throw new Error(`Failed to load ${MODEL_FILE}`);
+                const total = parseInt(resp.headers.get('content-length')) || (326 * 1024 * 1024);
+                const reader = resp.body.getReader();
+                const loader = new ModelLoader();
+                let loaded = 0;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    loader.push(value);
+                    loaded += value.length;
+                    updateStatus(`Streaming model... ${(loaded / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`, 'loading');
+                    // Yield every 10MB to keep the UI responsive.
+                    if (loaded % (10 * 1024 * 1024) < value.length) {
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+
+                updateStatus('Building model...', 'loading');
+                model = loader.finish(new Uint8Array(tokenizer));
 
                 // Initialize conversation
                 const enableThinking = document.getElementById('enableThinking').checked;
