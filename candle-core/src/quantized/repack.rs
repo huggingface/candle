@@ -346,6 +346,8 @@ pub(crate) fn try_matmul_f32(
 impl PackedKind {
     fn select(dtype: GgmlDType, (m, _k, n): (usize, usize, usize)) -> Option<Self> {
         match dtype {
+            #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+            GgmlDType::Q4_0 if n.is_multiple_of(4) && m == 1 => Some(Self::Q4_0x4),
             #[cfg(all(
                 target_arch = "aarch64",
                 any(target_feature = "dotprod", target_feature = "i8mm")
@@ -377,6 +379,8 @@ impl PackedKind {
                 not(target_feature = "i8mm")
             ))]
             GgmlDType::Q4K if n.is_multiple_of(8) => Some(Self::Q4Kx8),
+            #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+            GgmlDType::Q5K if n.is_multiple_of(8) && m == 1 => Some(Self::Q5Kx8),
             #[cfg(all(
                 target_arch = "aarch64",
                 any(target_feature = "dotprod", target_feature = "i8mm")
@@ -393,6 +397,8 @@ impl PackedKind {
             GgmlDType::Q6K if n.is_multiple_of(8) && m >= 4 && m.is_multiple_of(4) => {
                 Some(Self::Q6Kx8)
             }
+            #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+            GgmlDType::Q8_0 if n.is_multiple_of(4) && m == 1 => Some(Self::Q8_0x4),
             #[cfg(all(target_arch = "aarch64", target_feature = "i8mm"))]
             GgmlDType::Q8_0 if n.is_multiple_of(4) && m >= 4 && m.is_multiple_of(4) => {
                 Some(Self::Q8_0x4)
