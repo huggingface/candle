@@ -655,15 +655,30 @@ impl Seek for WindowReader<'_> {
         self.pos = match p {
             SeekFrom::Start(o) => o,
             SeekFrom::Current(d) => (self.pos as i64 + d) as u64,
-            // End is relative to the end of the buffered window in file
-            // coordinates. gguf_file uses End(0) only to read a file size for a
-            // bounds check; the tensor being read is fully inside the window, so
-            // window-end >= tensor-end and the check passes.
+            // End maps to the window end in file coords; gguf only uses End(0)
+            // for a bounds check, and the tensor read is fully inside the window.
             SeekFrom::End(d) => ((self.base + self.buf.len() as u64) as i64 + d) as u64,
         };
         Ok(self.pos)
     }
 }
+
+// Build one tensor from the buffered window via a WindowReader.
+fn build_tensor(
+    buf: &[u8],
+    base: u64,
+    content: &gguf_file::Content,
+    name: &str,
+    device: &Device,
+) -> candle::Result<QTensor> {
+    let mut wr = WindowReader { buf, base, pos: 0 };
+    content.tensor(&mut wr, name, device)
+}
+
+// The gguf header carries the full token list, so it can be several MB. Start
+// attempting the parse here, backing off exponentially on failure so the metadata
+// is rescanned O(log) times rather than once per small chunk.
+const INITIAL_PARSE_AT: usize = 256 * 1024;
 
 // Streaming gguf loader. JS pushes fetch chunks; tensors are quantized in file
 // order and the consumed bytes are dropped as we go, so the full input buffer is
@@ -672,13 +687,12 @@ impl Seek for WindowReader<'_> {
 pub struct ModelLoader {
     buf: Vec<u8>,
     base: u64,
-    received: u64,
     content: Option<gguf_file::Content>,
     data_offset: u64,
     order: Vec<String>,
     next: usize,
     tensors: HashMap<String, QTensor>,
-    last_parse_len: usize,
+    next_parse_at: usize,
 }
 
 #[wasm_bindgen]
@@ -690,29 +704,23 @@ impl ModelLoader {
         ModelLoader {
             buf: Vec::new(),
             base: 0,
-            received: 0,
             content: None,
             data_offset: 0,
             order: Vec::new(),
             next: 0,
             tensors: HashMap::new(),
-            last_parse_len: 0,
+            next_parse_at: INITIAL_PARSE_AT,
         }
     }
 
     // Push one chunk from the network stream.
     pub fn push(&mut self, chunk: &[u8]) -> Result<(), JsError> {
-        self.received += chunk.len() as u64;
         self.buf.extend_from_slice(chunk);
 
         if self.content.is_none() {
-            // The gguf header carries the full token list, so it can be several MB.
-            // Retry the parse as the buffer grows, throttled to avoid rescanning on
-            // every small chunk.
-            if self.buf.len() - self.last_parse_len < 256 * 1024 {
+            if self.buf.len() < self.next_parse_at {
                 return Ok(());
             }
-            self.last_parse_len = self.buf.len();
             let mut cur = Cursor::new(&self.buf[..]);
             if let Ok(content) = gguf_file::Content::read(&mut cur) {
                 self.data_offset = cur.position();
@@ -723,7 +731,9 @@ impl ModelLoader {
                 self.buf.drain(0..self.data_offset as usize);
                 self.base = self.data_offset;
             } else {
-                return Ok(()); // header not fully arrived yet
+                // Header not fully arrived; wait for the buffer to roughly double.
+                self.next_parse_at = self.buf.len() * 2;
+                return Ok(());
             }
         }
 
@@ -736,7 +746,6 @@ impl ModelLoader {
         let ModelLoader {
             buf,
             base,
-            received,
             content,
             data_offset,
             order,
@@ -751,15 +760,10 @@ impl ModelLoader {
         let device = Device::Cpu;
         while *next + 1 < order.len() {
             let next_start = *data_offset + content.tensor_infos[&order[*next + 1]].offset;
-            if *received < next_start {
+            if (*base + buf.len() as u64) < next_start {
                 break;
             }
-            let mut wr = WindowReader {
-                buf: &buf[..],
-                base: *base,
-                pos: 0,
-            };
-            let qt = content.tensor(&mut wr, &order[*next], &device)?;
+            let qt = build_tensor(&buf[..], *base, content, &order[*next], &device)?;
             tensors.insert(order[*next].clone(), qt);
             *next += 1;
             let new_start = *data_offset + content.tensor_infos[&order[*next]].offset;
@@ -778,20 +782,14 @@ impl ModelLoader {
         let device = Device::Cpu;
         while self.next < self.order.len() {
             let name = &self.order[self.next];
-            let mut wr = WindowReader {
-                buf: &self.buf[..],
-                base: self.base,
-                pos: 0,
-            };
-            let qt = content.tensor(&mut wr, name, &device)?;
+            let qt = build_tensor(&self.buf[..], self.base, &content, name, &device)?;
             self.tensors.insert(name.clone(), qt);
             self.next += 1;
         }
         let model = QuantizedQwen3::from_gguf_tensors(content.metadata, self.tensors, &device)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
-        // Post-load memory before any generation -- this is the streaming load's
-        // footprint to compare against the all-at-once Model::load path.
+        // Post-load footprint before any generation.
         console_log!(
             "[ModelLoader] streaming load complete. {}",
             crate::profiler::get_wasm_memory_info()

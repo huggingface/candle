@@ -375,11 +375,7 @@ impl QuantizedAttention {
                 None
             },
             raw_cache: if use_flash_attn {
-                Some(RawInterleavedKvCache::new(
-                    num_kv_heads,
-                    head_dim,
-                    MAX_SEQ_LEN,
-                ))
+                Some(RawInterleavedKvCache::new(num_kv_heads, head_dim))
             } else {
                 None
             },
