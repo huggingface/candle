@@ -330,7 +330,7 @@ const DEFAULT_MAX_COMPLEXITY: u64 = 1_000_000;
 pub struct Stack {
     stack: Vec<Object>,
     memo: HashMap<u32, Object>,
-    /// Cumulative count of nodes materialised so far (charged on every memo_get).
+    /// Cumulative count of nodes cloned by memo retrievals so far.
     complexity: u64,
     /// Budget: an error is returned once `complexity` exceeds this value.
     max_complexity: u64,
@@ -441,27 +441,27 @@ impl Stack {
     }
 
     fn memo_get(&mut self, id: u32) -> Result<Object> {
-        match self.memo.get(&id) {
+        // Count nodes first (immutable borrow ends after this block) so we can
+        // enforce the budget before performing the expensive clone.
+        let cost = match self.memo.get(&id) {
             None => crate::bail!("missing object in memo {id}"),
-            Some(obj) => {
-                // Charge the cost of cloning this object tree before cloning it so that a
-                // malicious pickle cannot exhaust CPU/memory by repeatedly doubling a memoised
-                // structure.
-                let cost = obj.node_count();
-                // Clone first so the borrow on `self.memo` is released before we mutate `self`.
-                let obj = obj.clone();
-                self.complexity = self.complexity.saturating_add(cost);
-                if self.complexity > self.max_complexity {
-                    crate::bail!(
-                        "pickle complexity limit exceeded ({} > {}); \
-                         the input may be a malicious payload",
-                        self.complexity,
-                        self.max_complexity
-                    )
-                }
-                Ok(obj)
-            }
+            Some(obj) => obj.node_count(),
+        };
+        let new_complexity = self.complexity.saturating_add(cost);
+        if new_complexity > self.max_complexity {
+            crate::bail!(
+                "pickle complexity limit exceeded ({} > {}); \
+                 the input may be a malicious payload",
+                new_complexity,
+                self.max_complexity
+            )
         }
+        self.complexity = new_complexity;
+        // Reborrow only after the budget check passes.
+        self.memo
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| crate::Error::Msg("missing object in memo".into()))
     }
 
     fn memo_put(&mut self, id: u32) -> Result<()> {
