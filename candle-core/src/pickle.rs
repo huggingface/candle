@@ -461,7 +461,7 @@ impl Stack {
         self.memo
             .get(&id)
             .cloned()
-            .ok_or_else(|| crate::Error::Msg("missing object in memo".into()))
+            .ok_or_else(|| crate::Error::Msg(format!("missing object in memo {id}")))
     }
 
     fn memo_put(&mut self, id: u32) -> Result<()> {
@@ -1040,18 +1040,12 @@ mod tests {
 
     #[test]
     fn test_deep_chain_does_not_stack_overflow() {
-        // 100_000-level deep Tuple1 chain. With a recursive node_count() this
-        // would overflow the native call stack (~8 MB) before the complexity
-        // guard could fire. The iterative implementation must handle it safely —
-        // either returning an error (complexity exceeded) or succeeding, but
-        // never panicking.
-        //
-        // Each BinGet in iteration k charges k+1 nodes (memo[0] grows by one
-        // node per iteration as the chain deepens). Total complexity after K
-        // iterations = K*(K+1)/2, which exceeds 1_000_000 at K ≈ 1_414.
-        // Parsing therefore returns a complexity error well before depth=100_000;
-        // the important property under test is that it errors cleanly rather
-        // than crashing with a native stack overflow.
+        // Payload containing 100_000 memo-expansion iterations. The complexity
+        // budget fires at roughly iteration 1_414 (cumulative cost K*(K+1)/2
+        // exceeds 1_000_000), so the parser never walks all 100_000 levels.
+        // The payload is large to ensure a recursive node_count() would overflow
+        // the native stack before the guard could fire; the iterative
+        // implementation must reject cleanly without panicking.
         let payload = make_deep_chain_payload(100_000);
         // If parse panics (stack overflow), the test harness catches it and the
         // test fails — that is the "no stack overflow" guarantee. This assertion
