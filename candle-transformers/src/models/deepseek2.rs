@@ -208,7 +208,7 @@ impl BincountOp for Tensor {
     }
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+pub(crate) fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -235,7 +235,7 @@ serde_default_fn!(Activation, hidden_act, Activation::Silu);
 serde_default_fn!(bool, tie_word_embeddings, false);
 
 #[derive(Deserialize, Clone, Debug)]
-enum TopkMethod {
+pub(crate) enum TopkMethod {
     #[serde(rename = "greedy")]
     Greedy,
     #[serde(rename = "group_limited_greedy")]
@@ -243,7 +243,7 @@ enum TopkMethod {
 }
 
 #[derive(Deserialize, Clone, Debug)]
-enum ScoringFunc {
+pub(crate) enum ScoringFunc {
     #[serde(rename = "softmax")]
     Softmax,
 }
@@ -261,7 +261,7 @@ pub struct DeepSeekV2Config {
     #[serde(default = "routed_scaling_factor")]
     pub(crate) routed_scaling_factor: f64,
     #[serde(default = "topk_method")]
-    topk_method: TopkMethod,
+    pub(crate) topk_method: TopkMethod,
     pub(crate) num_experts_per_tok: Option<usize>,
     #[serde(default = "moe_layer_freq")]
     pub(crate) moe_layer_freq: usize,
@@ -271,7 +271,7 @@ pub struct DeepSeekV2Config {
     #[serde(default = "norm_topk_prob")]
     pub(crate) norm_topk_prob: bool,
     #[serde(default = "scoring_func")]
-    scoring_func: ScoringFunc,
+    pub(crate) scoring_func: ScoringFunc,
     #[serde(default = "hidden_act")]
     pub(crate) hidden_act: Activation,
     pub(crate) max_position_embeddings: usize,
@@ -532,7 +532,9 @@ impl QProj {
     }
 }
 
-struct Attention {
+/// Multi-head Latent Attention, shared between DeepSeek-V2 and DeepSeek-V3 as the
+/// mechanism is unchanged between the two architectures.
+pub(crate) struct Attention {
     q: QProj,
     kv_a_proj_with_mqa: Linear,
     kv_a_layernorm: RmsNorm,
@@ -546,7 +548,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(
+    pub(crate) fn new(
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
@@ -609,7 +611,7 @@ impl Attention {
         })
     }
 
-    fn forward(
+    pub(crate) fn forward(
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
@@ -693,12 +695,14 @@ impl Attention {
         self.o_proj.forward(&attn_out)
     }
 
-    fn clear_kv_cache(&mut self) {
+    pub(crate) fn clear_kv_cache(&mut self) {
         self.kv_cache = None
     }
 }
 
-struct Mlp {
+/// Gated MLP, shared between DeepSeek-V2 and DeepSeek-V3 (used both as the dense
+/// MLP and as the building block of each MoE expert).
+pub(crate) struct Mlp {
     gate: Linear,
     up: Linear,
     down: Linear,
@@ -706,7 +710,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(
+    pub(crate) fn new(
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
         hidden_size: Option<usize>,
@@ -723,7 +727,7 @@ impl Mlp {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub(crate) fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let lhs = self.gate.forward(xs)?.apply(&self.act)?;
         let rhs = self.up.forward(xs)?;
         self.down.forward(&(&lhs * &rhs)?)
