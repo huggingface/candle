@@ -131,6 +131,36 @@ pub enum Object {
 type OResult<T> = std::result::Result<T, Object>;
 
 impl Object {
+    /// Counts the total number of nodes in the object tree.
+    /// Used for complexity accounting to prevent algorithmic-complexity DoS.
+    ///
+    /// Intentionally iterative (not recursive) so that a deeply-nested input
+    /// cannot cause a native stack overflow before the complexity guard fires.
+    fn node_count(&self) -> u64 {
+        let mut count = 0u64;
+        let mut work: Vec<&Object> = vec![self];
+        while let Some(obj) = work.pop() {
+            count += 1;
+            match obj {
+                Self::Tuple(v) | Self::List(v) => work.extend(v.iter()),
+                Self::Dict(pairs) => {
+                    for (k, v) in pairs {
+                        work.push(k);
+                        work.push(v);
+                    }
+                }
+                Self::Reduce { callable, args } | Self::Build { callable, args } => {
+                    work.push(callable);
+                    work.push(args);
+                }
+                Self::PersistentLoad(inner) => work.push(inner),
+                // Leaf nodes: Class, Int, Long, Float, Unicode, Bool, None, Mark
+                _ => {}
+            }
+        }
+        count
+    }
+
     pub fn unicode(self) -> OResult<String> {
         match self {
             Self::Unicode(t) => Ok(t),
@@ -292,17 +322,40 @@ impl<T: TryFrom<Object, Error = Object>> TryFrom<Object> for Vec<T> {
     }
 }
 
+/// Default cumulative node budget for unpickling. Prevents algorithmic-complexity DoS
+/// from malicious pickles that exploit memo expansion to double object trees repeatedly.
+const DEFAULT_MAX_COMPLEXITY: u64 = 1_000_000;
+
 #[derive(Debug)]
 pub struct Stack {
     stack: Vec<Object>,
     memo: HashMap<u32, Object>,
+    /// Cumulative count of nodes cloned by memo retrievals so far.
+    complexity: u64,
+    /// Budget: an error is returned once `complexity` exceeds this value.
+    max_complexity: u64,
 }
 
 impl Stack {
     pub fn empty() -> Self {
+        Self::with_limit(DEFAULT_MAX_COMPLEXITY)
+    }
+
+    /// Create a stack with a custom complexity budget.
+    ///
+    /// The budget is consumed by `memo_get`: each retrieval charges the node
+    /// count of the retrieved object. The counter accumulates across all calls
+    /// to `read_loop` on the same `Stack` instance.
+    ///
+    /// A budget of `0` rejects any memo retrieval, including single leaf nodes.
+    /// A budget of `u64::MAX` disables the limit check (node counting still
+    /// runs on every retrieval, so there is a performance cost).
+    pub fn with_limit(max_complexity: u64) -> Self {
         Self {
             stack: Vec::with_capacity(512),
             memo: HashMap::new(),
+            complexity: 0,
+            max_complexity,
         }
     }
 
@@ -387,14 +440,28 @@ impl Stack {
         }
     }
 
-    fn memo_get(&self, id: u32) -> Result<Object> {
-        match self.memo.get(&id) {
+    fn memo_get(&mut self, id: u32) -> Result<Object> {
+        // Count nodes first (immutable borrow ends after this block) so we can
+        // enforce the budget before performing the expensive clone.
+        let cost = match self.memo.get(&id) {
             None => crate::bail!("missing object in memo {id}"),
-            Some(obj) => {
-                // Maybe we should use refcounting rather than doing potential large clones here.
-                Ok(obj.clone())
-            }
+            Some(obj) => obj.node_count(),
+        };
+        let new_complexity = self.complexity.saturating_add(cost);
+        if new_complexity > self.max_complexity {
+            crate::bail!(
+                "pickle complexity limit exceeded ({} > {}); \
+                 the input may be a malicious payload",
+                new_complexity,
+                self.max_complexity
+            )
         }
+        self.complexity = new_complexity;
+        // Reborrow only after the budget check passes.
+        self.memo
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| crate::Error::Msg(format!("missing object in memo {id}")))
     }
 
     fn memo_put(&mut self, id: u32) -> Result<()> {
@@ -838,4 +905,272 @@ pub fn read_all_with_key<P: AsRef<std::path::Path>>(
 /// * `path` - Path to the pth file.
 pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
     read_all_with_key(path, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::BufReader;
+
+    /// Parse a raw pickle byte slice and return the top-level object.
+    fn parse(bytes: &[u8]) -> crate::Result<Object> {
+        let mut stack = Stack::empty();
+        stack.read_loop(&mut BufReader::new(bytes))?;
+        stack.finalize()
+    }
+
+    /// Same but with a custom complexity budget.
+    fn parse_with_limit(bytes: &[u8], limit: u64) -> crate::Result<Object> {
+        let mut stack = Stack::with_limit(limit);
+        stack.read_loop(&mut BufReader::new(bytes))?;
+        stack.finalize()
+    }
+
+    /// Build a pickle payload that stores an integer in memo slot 0 and then
+    /// repeatedly retrieves it twice and wraps both copies in a Tuple2, storing
+    /// the result back into the next memo slot. After `iters` doublings the
+    /// memoised tree has 2^(iters+1)-1 nodes; the cumulative clone cost grows
+    /// exponentially.
+    fn make_tuple_doubling_payload(iters: u8) -> Vec<u8> {
+        // OpCode bytes used below:
+        //   Proto    = 0x80
+        //   BinInt1  = 0x4b  ('K')
+        //   BinPut   = 0x71  ('q')
+        //   BinGet   = 0x68  ('h')
+        //   Tuple2   = 0x86
+        //   Stop     = 0x2e  ('.')
+        // BinPut uses a u8 memo slot; i+1 would wrap at iters=255.
+        assert!(iters < 255, "iters must be < 255 to avoid u8 memo-slot overflow");
+        let mut p = vec![0x80u8, 0x02]; // Proto 2
+        p.extend_from_slice(&[0x4b, 0x01, 0x71, 0x00]); // BinInt1(1), BinPut(0)
+        for i in 0..iters {
+            // BinGet(i), BinGet(i), Tuple2, BinPut(i+1)
+            p.extend_from_slice(&[0x68, i, 0x68, i, 0x86, 0x71, i + 1]);
+        }
+        p.push(0x2e); // Stop
+        p
+    }
+
+    /// Build a payload that stores a one-entry dict in memo slot 0 and then
+    /// repeatedly retrieves it twice and merges them via BUILD, storing the
+    /// result back. After `iters` doublings the dict has 2^iters entries.
+    fn make_dict_doubling_payload(iters: u8) -> Vec<u8> {
+        // Extra OpCode bytes:
+        //   EmptyDict = 0x7d  ('}')
+        //   SetItem   = 0x73  ('s')
+        //   Build     = 0x62  ('b')
+        // BinPut uses a u8 memo slot; i+1 would wrap at iters=255.
+        assert!(iters < 255, "iters must be < 255 to avoid u8 memo-slot overflow");
+        let mut p = vec![0x80u8, 0x02]; // Proto 2
+        // EmptyDict, BinInt1(1), BinInt1(2), SetItem -> {1: 2}, BinPut(0)
+        p.extend_from_slice(&[0x7d, 0x4b, 0x01, 0x4b, 0x02, 0x73, 0x71, 0x00]);
+        for i in 0..iters {
+            // BinGet(i), BinGet(i), Build, BinPut(i+1)
+            p.extend_from_slice(&[0x68, i, 0x68, i, 0x62, 0x71, i + 1]);
+        }
+        p.push(0x2e); // Stop
+        p
+    }
+
+    // --- normal-input regression: must continue to parse successfully ---
+
+    #[test]
+    fn test_normal_int() {
+        // Proto 2, BinInt1(42), Stop  ->  Object::Int(42)
+        let bytes = [0x80u8, 0x02, 0x4b, 0x2a, 0x2e];
+        let obj = parse(&bytes).expect("should parse cleanly");
+        assert_eq!(obj, Object::Int(42));
+    }
+
+    #[test]
+    fn test_normal_memo_small() {
+        // A few memo round-trips well within the default budget should succeed.
+        let payload = make_tuple_doubling_payload(5); // 5 doublings: tiny
+        parse(&payload).expect("small memo round-trips should succeed");
+    }
+
+    #[test]
+    fn test_normal_dict_small() {
+        let payload = make_dict_doubling_payload(5);
+        parse(&payload).expect("small dict doublings should succeed");
+    }
+
+    /// Build a payload that creates a deeply-nested Tuple1 chain without memo
+    /// doubling: each iteration retrieves memo[0], wraps it in Tuple1, and
+    /// overwrites memo[0]. After `depth` iterations, memo[0] is a chain of
+    /// `depth` nested Tuple1 wrappers. `node_count()` must walk this chain
+    /// without overflowing the native call stack.
+    fn make_deep_chain_payload(depth: u32) -> Vec<u8> {
+        // OpCode bytes:
+        //   Tuple1 = 0x85
+        let mut p = vec![0x80u8, 0x02]; // Proto 2
+        p.extend_from_slice(&[0x4b, 0x01, 0x71, 0x00]); // BinInt1(1), BinPut(0)
+        for _ in 0..depth {
+            // BinGet(0), Tuple1, BinPut(0)  — wraps and overwrites memo[0]
+            p.extend_from_slice(&[0x68, 0x00, 0x85, 0x71, 0x00]);
+        }
+        p.push(0x2e); // Stop
+        p
+    }
+
+    // --- complexity-limit regression: malicious payloads must be rejected ---
+
+    #[test]
+    fn test_tuple_doubling_exceeds_default_limit() {
+        // 30 doublings produce a tree with ~2^31 nodes; cumulative clone cost
+        // hits the 1 000 000-node budget long before that.
+        let payload = make_tuple_doubling_payload(30);
+        let err = parse(&payload).expect_err("should be rejected by complexity limit");
+        assert!(
+            err.to_string().contains("complexity"),
+            "expected a complexity error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_dict_build_doubling_exceeds_default_limit() {
+        // Same idea but using dict merging via the BUILD opcode.
+        let payload = make_dict_doubling_payload(30);
+        let err = parse(&payload).expect_err("should be rejected by complexity limit");
+        assert!(
+            err.to_string().contains("complexity"),
+            "expected a complexity error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_deep_chain_does_not_stack_overflow() {
+        // Payload containing 100_000 memo-expansion iterations. The complexity
+        // budget fires at roughly iteration 1_414 (cumulative cost K*(K+1)/2
+        // exceeds 1_000_000), so the parser never walks all 100_000 levels.
+        // The payload is large to ensure a recursive node_count() would overflow
+        // the native stack before the guard could fire; the iterative
+        // implementation must reject cleanly without panicking.
+        let payload = make_deep_chain_payload(100_000);
+        // If parse panics (stack overflow), the test harness catches it and the
+        // test fails — that is the "no stack overflow" guarantee. This assertion
+        // only fires on a third case: parse returned an unexpected non-complexity error.
+        let result = parse(&payload);
+        assert!(
+            result.is_ok() || result.unwrap_err().to_string().contains("complexity"),
+            "parse returned an unexpected error type (expected ok or complexity limit)"
+        );
+    }
+
+    #[test]
+    fn test_custom_limit_respected() {
+        // A single retrieval of a 3-node tuple (1 + 2 leaf ints) exceeds a
+        // budget of 2 but fits in a budget of 4.
+        let payload = make_tuple_doubling_payload(2); // memo[2] has 7 nodes; first retrieval costs 1, then 3
+        // BinGet(0)×2 each cost 1 node (total 2, still within budget), then
+        // BinGet(1) costs 3 nodes (total 5 > 2) — the error fires on the third
+        // BinGet call, which is the first retrieval of the 3-node tuple.
+        let err = parse_with_limit(&payload, 2)
+            .expect_err("budget of 2 should be exceeded");
+        assert!(err.to_string().contains("complexity"), "{err}");
+
+        // Budget of 1_000_000 (default) should accept the 2-doubling payload.
+        parse_with_limit(&payload, 1_000_000).expect("default budget should accept 2 doublings");
+    }
+
+    // --- PoC regression: exact payloads from the original CVE report ---
+
+    #[test]
+    fn test_poc_a_cpu_exhaustion() {
+        // Reproduces PoC Path A from the original report:
+        //
+        //   NEWFALSE = b'\x89'; BINPUT = b'q'; BINGET = b'h'; TUPLE2 = b'\x86'; STOP = b'.'
+        //   N = 20
+        //   poc = NEWFALSE + BINPUT + b'\x00'
+        //   for _ in range(N):
+        //       poc += BINGET + b'\x00' + BINGET + b'\x00' + TUPLE2 + BINPUT + b'\x00'
+        //   poc += STOP
+        //
+        // Before the fix, N=20 stalled for ~0.175 s and N=25 for ~5.7 s on a
+        // release binary. After the fix the complexity limit fires during
+        // iteration 18 (total charged nodes exceed 1_000_000) and returns
+        // an error immediately.
+        // No Proto header — matching the original PoC verbatim; Proto is optional.
+        let mut poc = vec![
+            0x89, // NewFalse  — push Bool(false)
+            0x71, 0x00, // BinPut(0) — memo[0] = Bool(false)
+        ];
+        for _ in 0..20 {
+            poc.extend_from_slice(&[
+                0x68, 0x00, // BinGet(0)
+                0x68, 0x00, // BinGet(0)
+                0x86, // Tuple2
+                0x71, 0x00, // BinPut(0) — overwrite memo[0] with doubled tree
+            ]);
+        }
+        poc.push(0x2e); // Stop
+
+        let err = parse(&poc).expect_err("PoC A must be rejected by complexity limit");
+        assert!(
+            err.to_string().contains("complexity"),
+            "expected complexity error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_poc_b_memory_exhaustion() {
+        // Reproduces PoC Path B from the original report: the same exponential
+        // doubling driven through BUILD dict-merge instead of Tuple2.
+        //
+        // Before the fix, ~92 GB RSS was measured on a 128 GB host before
+        // termination. After the fix the complexity limit fires at the same
+        // threshold as PoC A and returns an error immediately.
+        let mut poc = vec![
+            0x7d, // EmptyDict    — push {}
+            0x4b, 0x01, // BinInt1(1) — key
+            0x4b, 0x02, // BinInt1(2) — value
+            0x73, // SetItem      — {1: 2}
+            0x71, 0x00, // BinPut(0)   — memo[0] = {1: 2}
+        ];
+        for _ in 0..20 {
+            poc.extend_from_slice(&[
+                0x68, 0x00, // BinGet(0)
+                0x68, 0x00, // BinGet(0)
+                0x62, // Build  — dict-merge: doubles entry count
+                0x71, 0x00, // BinPut(0) — overwrite memo[0]
+            ]);
+        }
+        poc.push(0x2e); // Stop
+
+        let err = parse(&poc).expect_err("PoC B must be rejected by complexity limit");
+        assert!(
+            err.to_string().contains("complexity"),
+            "expected complexity error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_unlimited_budget_allows_large_payload() {
+        // with_limit(u64::MAX) is documented to disable the limit check.
+        // 20 iterations exceed the default 1 000 000-node budget (which fires at
+        // iteration 17) but produce a final tree of only ~2 M nodes (~100 MB),
+        // safe to materialise on any development machine.
+        // Previously used 30 iterations (2^31 nodes, ~50 GB), which crashed the host.
+        let payload = make_tuple_doubling_payload(20);
+        parse_with_limit(&payload, u64::MAX).expect("unlimited budget should allow any payload");
+    }
+
+    #[test]
+    fn test_zero_limit_rejects_any_memo_get() {
+        // Budget of 0 is documented to reject any memo retrieval, even a single
+        // leaf node. The very first BinGet charges 1 node > 0, so it must error.
+        let payload = make_tuple_doubling_payload(1); // one BinGet of Int(1) before doubling
+        let err = parse_with_limit(&payload, 0).expect_err("budget of 0 should reject memo gets");
+        assert!(err.to_string().contains("complexity"), "{err}");
+    }
+
+    #[test]
+    fn test_zero_limit_allows_pickle_with_no_memo_get() {
+        // A pickle that never calls BinGet charges nothing, so a budget of 0
+        // must not prevent it from parsing.
+        // Proto 2, BinInt1(42), Stop — no memo access at all.
+        let bytes = [0x80u8, 0x02, 0x4b, 0x2a, 0x2e];
+        let obj = parse_with_limit(&bytes, 0).expect("no-memo pickle should succeed with budget 0");
+        assert_eq!(obj, Object::Int(42));
+    }
 }
