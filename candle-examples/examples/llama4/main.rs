@@ -226,13 +226,16 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config: Config = {
+    let config_value: serde_json::Value = {
         let config_file = repo.get("config.json")?;
-        let config_value: serde_json::Value = serde_json::from_slice(&std::fs::read(config_file)?)?;
-        // Real Llama 4 checkpoints nest the text-decoder config under `text_config`.
-        let text_config = config_value.get("text_config").unwrap_or(&config_value);
-        serde_json::from_value(text_config.clone())?
+        serde_json::from_slice(&std::fs::read(config_file)?)?
     };
+    // Real Llama 4 checkpoints are multimodal (`Llama4ForConditionalGeneration`): the
+    // text-decoder config lives under `text_config` and its weights are prefixed with
+    // `language_model.` in the checkpoint.
+    let is_multimodal = config_value.get("text_config").is_some();
+    let text_config = config_value.get("text_config").unwrap_or(&config_value);
+    let config: Config = serde_json::from_value(text_config.clone())?;
     let device = candle_examples::device(args.cpu)?;
     let (model, device) = {
         let dtype = if device.is_cpu() {
@@ -241,6 +244,11 @@ fn main() -> Result<()> {
             DType::BF16
         };
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let vb = if is_multimodal {
+            vb.pp("language_model")
+        } else {
+            vb
+        };
         let model = ModelForCausalLM::new(&config, vb)?;
         (model, device)
     };

@@ -8,7 +8,7 @@
 //! Reference: <https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama4/modeling_llama4.py>
 
 use super::with_tracing::{linear_b, linear_no_bias, Linear, RmsNorm};
-use candle::{DType, Device, Module, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{kv_cache::ConcatKvCache, Activation, VarBuilder};
 
 fn default_rope_theta() -> f64 {
@@ -41,6 +41,24 @@ fn default_no_rope_layer_interval() -> usize {
 
 fn default_hidden_act() -> Activation {
     Activation::Silu
+}
+
+/// Some real config.json files (e.g. `yujiepan/llama-4-tiny-random`) encode this flag as a
+/// raw JSON integer (`4`) rather than a boolean; treat any nonzero integer as `true`.
+fn deserialize_bool_like<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum BoolLike {
+        Bool(bool),
+        Int(i64),
+    }
+    match serde::Deserialize::deserialize(deserializer)? {
+        BoolLike::Bool(b) => Ok(b),
+        BoolLike::Int(i) => Ok(i != 0),
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -80,7 +98,7 @@ pub struct Config {
     pub no_rope_layer_interval: usize,
     #[serde(default)]
     pub no_rope_layers: Option<Vec<usize>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bool_like")]
     pub attn_temperature_tuning: bool,
     #[serde(default = "default_attn_scale")]
     pub attn_scale: f64,
@@ -201,35 +219,55 @@ impl Module for Mlp {
 #[derive(Debug, Clone)]
 struct MoeBlock {
     router: Linear,
-    experts: Vec<Mlp>,
+    // Batched expert parameters, matching the reference implementation's `nn.Parameter`
+    // layout: experts are not separate named sub-modules, but stacked along dim 0 and
+    // applied with a per-expert matmul (no transpose, unlike a regular `nn.Linear` weight).
+    gate_up_proj: Tensor, // (num_local_experts, hidden_size, 2 * intermediate_size)
+    down_proj: Tensor,    // (num_local_experts, intermediate_size, hidden_size)
     shared_expert: Mlp,
     num_experts_per_tok: usize,
+    num_local_experts: usize,
+    intermediate_size: usize,
+    act_fn: Activation,
 }
 
 impl MoeBlock {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let router = linear_no_bias(cfg.hidden_size, cfg.num_local_experts, vb.pp("router"))?;
-        let mut experts = Vec::with_capacity(cfg.num_local_experts);
         let vb_e = vb.pp("experts");
-        for idx in 0..cfg.num_local_experts {
-            experts.push(Mlp::new(
+        let gate_up_proj = vb_e.get(
+            (
+                cfg.num_local_experts,
                 cfg.hidden_size,
+                2 * cfg.intermediate_size,
+            ),
+            "gate_up_proj",
+        )?;
+        let down_proj = vb_e.get(
+            (
+                cfg.num_local_experts,
                 cfg.intermediate_size,
-                cfg.hidden_act,
-                vb_e.pp(idx),
-            )?);
-        }
+                cfg.hidden_size,
+            ),
+            "down_proj",
+        )?;
+        // The shared expert uses the routed-expert intermediate size, not the dense-layer
+        // `intermediate_size_mlp`.
         let shared_expert = Mlp::new(
             cfg.hidden_size,
-            cfg.intermediate_size_mlp(),
+            cfg.intermediate_size,
             cfg.hidden_act,
             vb.pp("shared_expert"),
         )?;
         Ok(Self {
             router,
-            experts,
+            gate_up_proj,
+            down_proj,
             shared_expert,
             num_experts_per_tok: cfg.num_experts_per_tok,
+            num_local_experts: cfg.num_local_experts,
+            intermediate_size: cfg.intermediate_size,
+            act_fn: cfg.hidden_act,
         })
     }
 }
@@ -254,8 +292,8 @@ impl Module for MoeBlock {
         let routing_weights = routing_weights.to_vec2::<f32>()?;
         let top_idxs = top_idxs.to_vec2::<u32>()?;
 
-        let mut top_x = vec![vec![]; self.experts.len()];
-        let mut selected_weights = vec![vec![]; self.experts.len()];
+        let mut top_x = vec![vec![]; self.num_local_experts];
+        let mut selected_weights = vec![vec![]; self.num_local_experts];
         for (row_idx, (rw, expert_idxs)) in routing_weights.iter().zip(top_idxs.iter()).enumerate()
         {
             for (&rw, &expert_idx) in rw.iter().zip(expert_idxs.iter()) {
@@ -265,7 +303,7 @@ impl Module for MoeBlock {
         }
 
         let mut ys = xs.zeros_like()?;
-        for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
+        for expert_idx in 0..self.num_local_experts {
             let rows = &top_x[expert_idx];
             if rows.is_empty() {
                 continue;
@@ -275,7 +313,15 @@ impl Module for MoeBlock {
                 .reshape(((), 1))?
                 .to_dtype(xs.dtype())?;
             let current_state = xs.index_select(&rows, 0)?.reshape(((), hidden_dim))?;
-            let current_hidden_states = expert_layer.forward(&current_state)?;
+
+            // `gate_up_proj`/`down_proj` are raw parameter tensors already laid out for a
+            // direct (untransposed) matmul, unlike a regular `nn.Linear` weight.
+            let gate_up_w = self.gate_up_proj.i(expert_idx)?.to_dtype(xs.dtype())?;
+            let down_w = self.down_proj.i(expert_idx)?.to_dtype(xs.dtype())?;
+            let gate_up = current_state.matmul(&gate_up_w)?;
+            let gate = gate_up.narrow(D::Minus1, 0, self.intermediate_size)?;
+            let up = gate_up.narrow(D::Minus1, self.intermediate_size, self.intermediate_size)?;
+            let current_hidden_states = (gate.apply(&self.act_fn)? * up)?.matmul(&down_w)?;
             let current_hidden_states = current_hidden_states.broadcast_mul(&weights)?;
             ys = ys.index_add(&rows, &current_hidden_states, 0)?;
         }
@@ -680,23 +726,16 @@ mod tests {
                     format!("{p}.feed_forward.router.weight"),
                     var(&[cfg.num_local_experts, h], dev),
                 );
-                for e in 0..cfg.num_local_experts {
-                    let ep = format!("{p}.feed_forward.experts.{e}");
-                    w.insert(
-                        format!("{ep}.gate_proj.weight"),
-                        var(&[cfg.intermediate_size, h], dev),
-                    );
-                    w.insert(
-                        format!("{ep}.up_proj.weight"),
-                        var(&[cfg.intermediate_size, h], dev),
-                    );
-                    w.insert(
-                        format!("{ep}.down_proj.weight"),
-                        var(&[h, cfg.intermediate_size], dev),
-                    );
-                }
+                w.insert(
+                    format!("{p}.feed_forward.experts.gate_up_proj"),
+                    var(&[cfg.num_local_experts, h, 2 * cfg.intermediate_size], dev),
+                );
+                w.insert(
+                    format!("{p}.feed_forward.experts.down_proj"),
+                    var(&[cfg.num_local_experts, cfg.intermediate_size, h], dev),
+                );
                 let sp = format!("{p}.feed_forward.shared_expert");
-                let im = cfg.intermediate_size_mlp();
+                let im = cfg.intermediate_size;
                 w.insert(format!("{sp}.gate_proj.weight"), var(&[im, h], dev));
                 w.insert(format!("{sp}.up_proj.weight"), var(&[im, h], dev));
                 w.insert(format!("{sp}.down_proj.weight"), var(&[h, im], dev));
