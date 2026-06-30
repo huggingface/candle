@@ -234,7 +234,11 @@ fn main() -> Result<()> {
         args.revision,
     ));
     let tokenizer_filename = repo.get("tokenizer.json")?;
-    let filenames = candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
+    let filenames =
+        match candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json") {
+            Ok(filenames) => filenames,
+            Err(_) => vec![repo.get("model.safetensors")?],
+        };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
