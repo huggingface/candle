@@ -8,16 +8,24 @@ fn main() -> Result<()> {
     println!("cargo::rerun-if-changed=src/cuda_utils.cuh");
     println!("cargo::rerun-if-changed=src/binary_op_macros.cuh");
 
+    let is_target_msvc = std::env::var("TARGET")
+        .map(|t| t.contains("msvc"))
+        .unwrap_or(false);
+
     // Build for PTX
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");
-    let bindings = KernelBuilder::new()
+    let mut ptx_builder = KernelBuilder::new()
         .source_dir("src") // Scan src/ for .cu files
         .exclude(&["moe_*.cu", "mmvq_gguf.cu", "mmq_*.cu"]) // Exclude statically compiled kernels from ptx build
         .arg("--expt-relaxed-constexpr")
         .arg("-std=c++17")
-        .arg("-O3")
-        .build_ptx()?;
+        .arg("-O3");
+    // CUDA 13.x CCCL headers hard-error unless cl.exe is in /Zc:preprocessor mode.
+    if is_target_msvc {
+        ptx_builder = ptx_builder.arg("-Xcompiler=/Zc:preprocessor");
+    }
+    let bindings = ptx_builder.build_ptx()?;
 
     bindings.write(&ptx_path)?;
 
@@ -52,12 +60,10 @@ fn main() -> Result<()> {
         moe_builder = moe_builder.arg("-DNO_BF16_KERNEL");
     }
 
-    let mut is_target_msvc = false;
-    if let Ok(target) = std::env::var("TARGET") {
-        if target.contains("msvc") {
-            is_target_msvc = true;
-            moe_builder = moe_builder.arg("-D_USE_MATH_DEFINES");
-        }
+    if is_target_msvc {
+        moe_builder = moe_builder
+            .arg("-D_USE_MATH_DEFINES")
+            .arg("-Xcompiler=/Zc:preprocessor");
     }
 
     if !is_target_msvc {
