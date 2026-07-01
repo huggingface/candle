@@ -2,7 +2,7 @@ use crate::{
     backend::BackendStorage, CpuStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use k_quants::*;
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::OnceLock};
 
 #[cfg(target_feature = "avx2")]
 pub mod avx;
@@ -59,6 +59,10 @@ fn as_t_slice<T>(data: &[u8]) -> &[T] {
 pub struct QTensor {
     storage: QStorage,
     shape: Shape,
+    /// Lazily initialized storage for repacked quantized data. Currently raw bits, could be `QStorage` in the future.
+    /// Not always used.
+    #[allow(dead_code)]
+    repacked_qs: OnceLock<Option<Vec<u8>>>,
 }
 
 impl Device {
@@ -529,7 +533,11 @@ impl QTensor {
     pub fn new<S: Into<Shape>>(storage: QStorage, shape: S) -> Result<Self> {
         let shape = shape.into();
         check_shape(&shape, storage.block_size())?;
-        Ok(Self { storage, shape })
+        Ok(Self {
+            storage,
+            shape,
+            repacked_qs: OnceLock::new(),
+        })
     }
 
     pub fn quantize(src: &Tensor, dtype: GgmlDType) -> Result<Self> {
@@ -549,6 +557,7 @@ impl QTensor {
         Ok(Self {
             storage,
             shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
         })
     }
 
@@ -584,6 +593,7 @@ impl QTensor {
         Ok(Self {
             storage,
             shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
         })
     }
 
@@ -627,6 +637,7 @@ impl QTensor {
         Ok(Self {
             storage,
             shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
         })
     }
 
@@ -655,6 +666,7 @@ impl QTensor {
         Ok(Self {
             storage,
             shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
         })
     }
 
@@ -921,6 +933,42 @@ impl crate::CustomOp1 for QTensor {
                 let slice =
                     &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
                 let mut dst_storage = vec![0f32; dst_shape.elem_count()];
+
+                // Try the 8-column BlockQ4Kx8 repacked path.
+                #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+                if self_storage.dtype() == GgmlDType::Q4K && n.is_multiple_of(8) {
+                    use zerocopy::{FromBytes, IntoBytes};
+
+                    let total_blocks =
+                        self_storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
+                    let repacked = self.repacked_qs.get_or_init(|| {
+                        let blocks = unsafe {
+                            std::slice::from_raw_parts(
+                                self_storage.as_ptr() as *const BlockQ4K,
+                                total_blocks,
+                            )
+                        };
+                        let packed = k_quants::pack_to_q4kx8(blocks, n);
+                        Some(packed.as_bytes().to_vec())
+                    });
+                    if let Some(repacked_bytes) = repacked {
+                        let block_x8: &[BlockQ4Kx8] =
+                            <[BlockQ4Kx8]>::ref_from_bytes(repacked_bytes).map_err(|_| {
+                                crate::Error::Msg(
+                                    "repacked_qs alignment invariant violated".to_string(),
+                                )
+                            })?;
+
+                        k_quants::matmul_q4k_x8(
+                            (dst_shape.elem_count() / n, k, n),
+                            slice,
+                            block_x8,
+                            &mut dst_storage,
+                        )?;
+                        return Ok((crate::CpuStorage::F32(dst_storage), dst_shape));
+                    }
+                }
+
                 self_storage.matmul_t(
                     (dst_shape.elem_count() / n, k, n),
                     slice,
