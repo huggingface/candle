@@ -462,7 +462,9 @@ impl Model {
                 })
             })
             .collect();
-        Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
+        Tensor::from_slice(&mask, (tgt, tgt + offset), &self.device)?
+            .expand((b, 1, tgt, tgt + offset))?
+            .to_dtype(self.dtype)
     }
 
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
@@ -515,5 +517,57 @@ impl ModelForCausalLM {
 
     pub fn clear_kv_cache(&mut self) {
         self.base.clear_kv_cache();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::IndexOp;
+    use candle_nn::VarMap;
+
+    fn tiny_config() -> Config {
+        Config {
+            vocab_size: 16,
+            hidden_size: 8,
+            intermediate_size: 16,
+            num_hidden_layers: 1,
+            num_attention_heads: 2,
+            head_dim: 4,
+            attention_bias: false,
+            num_key_value_heads: 1,
+            max_position_embeddings: 32,
+            sliding_window: None,
+            max_window_layers: 0,
+            tie_word_embeddings: false,
+            rope_theta: 10000.0,
+            rms_norm_eps: 1e-6,
+            use_sliding_window: false,
+            hidden_act: Activation::Silu,
+        }
+    }
+
+    // Regression test for https://github.com/huggingface/candle/issues/3582:
+    // the causal mask is batch-independent, so every batch row must be the exact
+    // same mask. Before the fix the buffer held only `tgt * (tgt + offset)`
+    // values but was shaped `(b, 1, tgt, tgt + offset)`, leaving rows >= 1 backed
+    // by out-of-range data and corrupting attention for batch size > 1.
+    #[test]
+    fn causal_mask_is_batch_independent() -> Result<()> {
+        let device = Device::Cpu;
+        let vb = VarBuilder::from_varmap(&VarMap::new(), DType::F32, &device);
+        let model = Model::new(&tiny_config(), vb)?;
+        let (b, tgt) = (3, 5);
+        let mask = model.causal_mask(b, tgt, 0, None)?;
+        assert_eq!(mask.dims(), &[b, 1, tgt, tgt]);
+        let row0 = mask.i(0)?.flatten_all()?.to_vec1::<f32>()?;
+        for r in 1..b {
+            let row = mask.i(r)?.flatten_all()?.to_vec1::<f32>()?;
+            assert_eq!(
+                row, row0,
+                "batch row {r} of the causal mask differs from row 0"
+            );
+        }
+        Ok(())
     }
 }
