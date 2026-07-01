@@ -417,11 +417,11 @@ pub fn metal_is_available() -> bool {
 }
 
 pub fn with_avx() -> bool {
-    cfg!(target_feature = "avx2")
+    crate::cpu::features::get().avx2
 }
 
 pub fn with_neon() -> bool {
-    cfg!(target_feature = "neon")
+    crate::cpu::features::get().neon
 }
 
 pub fn with_simd128() -> bool {
@@ -429,5 +429,5 @@ pub fn with_simd128() -> bool {
 }
 
 pub fn with_f16c() -> bool {
-    cfg!(target_feature = "f16c")
+    crate::cpu::features::get().f16c
 }

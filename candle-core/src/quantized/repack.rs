@@ -1,43 +1,22 @@
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 use super::GgmlDType;
 use super::QuantizedType;
 use crate::Result;
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 use std::sync::OnceLock;
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 use super::k_quants::{BlockQ4K, BlockQ4_0, QK4_0};
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 use super::k_quants::{BlockQ5K, BlockQ6K, QK_K};
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 use super::k_quants::{BlockQ8_0, QK8_0};
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 use half::f16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 enum PackedKind {
     Q4_0x4,
     Q4Kx8,
@@ -46,10 +25,7 @@ enum PackedKind {
     Q8_0x4,
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 pub(crate) enum PackedStorage {
     Q4_0x4(Vec<BlockQ4_0x4>),
     Q4Kx8(Vec<BlockQ4Kx8>),
@@ -60,107 +36,56 @@ pub(crate) enum PackedStorage {
 
 #[allow(dead_code)]
 pub(crate) struct PackedCache {
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
+    #[cfg(target_arch = "aarch64")]
     q4_0x4: OnceLock<PackedStorage>,
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
+    #[cfg(target_arch = "aarch64")]
     q4kx8: OnceLock<PackedStorage>,
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
+    #[cfg(target_arch = "aarch64")]
     q5kx8: OnceLock<PackedStorage>,
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
+    #[cfg(target_arch = "aarch64")]
     q6kx8: OnceLock<PackedStorage>,
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
+    #[cfg(target_arch = "aarch64")]
     q8_0x4: OnceLock<PackedStorage>,
 }
 
 impl PackedCache {
     pub(crate) fn new() -> Self {
         Self {
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             q4_0x4: OnceLock::new(),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             q4kx8: OnceLock::new(),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             q5kx8: OnceLock::new(),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             q6kx8: OnceLock::new(),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             q8_0x4: OnceLock::new(),
         }
     }
 
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
+    #[cfg(target_arch = "aarch64")]
     fn get_or_init(
         &self,
         kind: PackedKind,
         init: impl FnOnce() -> PackedStorage,
     ) -> &PackedStorage {
         match kind {
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             PackedKind::Q4_0x4 => self.q4_0x4.get_or_init(init),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             PackedKind::Q4Kx8 => self.q4kx8.get_or_init(init),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             PackedKind::Q5Kx8 => self.q5kx8.get_or_init(init),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             PackedKind::Q6Kx8 => self.q6kx8.get_or_init(init),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             PackedKind::Q8_0x4 => self.q8_0x4.get_or_init(init),
         }
     }
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 #[derive(
     Clone,
     Copy,
@@ -175,16 +100,10 @@ pub(crate) struct BlockQ8_0x4 {
     pub(crate) qs: [i8; QK8_0 * 4],
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 const _: () = assert!(std::mem::size_of::<BlockQ8_0x4>() == 136);
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 #[derive(
     Clone,
     Copy,
@@ -199,16 +118,10 @@ pub(crate) struct BlockQ4_0x4 {
     pub(crate) qs: [i8; QK4_0 * 2],
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 const _: () = assert!(std::mem::size_of::<BlockQ4_0x4>() == 72);
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 #[derive(
     Clone,
     Copy,
@@ -225,16 +138,10 @@ pub(crate) struct BlockQ4Kx8 {
     pub(crate) qs: [u8; 1024],
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 const _: () = assert!(std::mem::size_of::<BlockQ4Kx8>() == 1152);
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 #[derive(
     Clone,
     Copy,
@@ -252,16 +159,10 @@ pub(crate) struct BlockQ5Kx8 {
     pub(crate) qs: [u8; QK_K / 2 * 8],
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 const _: () = assert!(std::mem::size_of::<BlockQ5Kx8>() == 1408);
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 #[derive(
     Clone,
     Copy,
@@ -278,16 +179,10 @@ pub(crate) struct BlockQ6Kx8 {
     pub(crate) qh: [u8; QK_K / 4 * 8],
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 const _: () = assert!(std::mem::size_of::<BlockQ6Kx8>() == 1680);
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 #[derive(
     Clone,
     Copy,
@@ -303,10 +198,7 @@ pub(crate) struct BlockQ8Kx4 {
     pub(crate) bsums: [i16; QK_K / 4],
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 const _: () = assert!(std::mem::size_of::<BlockQ8Kx4>() == 1168);
 
 pub(crate) fn try_matmul_f32(
@@ -316,10 +208,7 @@ pub(crate) fn try_matmul_f32(
     lhs: &[f32],
     dst: &mut [f32],
 ) -> Result<bool> {
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
+    #[cfg(target_arch = "aarch64")]
     {
         let Some(kind) = PackedKind::select(storage.dtype(), mkn) else {
             return Ok(false);
@@ -329,86 +218,33 @@ pub(crate) fn try_matmul_f32(
         Ok(true)
     }
 
-    #[cfg(not(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    )))]
+    #[cfg(not(target_arch = "aarch64"))]
     {
         let _ = (storage, packed, mkn, lhs, dst);
         Ok(false)
     }
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 impl PackedKind {
     fn select(dtype: GgmlDType, (m, _k, n): (usize, usize, usize)) -> Option<Self> {
+        let features = crate::cpu::features::get();
+        let has_dotprod_gemv = features.dotprod && m == 1;
+        let has_tiled_matmul = (features.dotprod || features.i8mm) && m >= 4 && m.is_multiple_of(4);
         match dtype {
-            #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-            GgmlDType::Q4_0 if n.is_multiple_of(4) && m == 1 => Some(Self::Q4_0x4),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
-            GgmlDType::Q4_0 if n.is_multiple_of(4) && m >= 4 && m.is_multiple_of(4) => {
+            GgmlDType::Q4_0 if n.is_multiple_of(4) && (has_dotprod_gemv || has_tiled_matmul) => {
                 Some(Self::Q4_0x4)
             }
-            #[cfg(all(
-                target_arch = "aarch64",
-                target_feature = "i8mm",
-                target_feature = "dotprod"
-            ))]
-            GgmlDType::Q4K
-                if n.is_multiple_of(8) && (m == 1 || (m >= 4 && m.is_multiple_of(4))) =>
-            {
+            GgmlDType::Q4K if n.is_multiple_of(8) && (has_dotprod_gemv || has_tiled_matmul) => {
                 Some(Self::Q4Kx8)
             }
-            #[cfg(all(
-                target_arch = "aarch64",
-                target_feature = "i8mm",
-                not(target_feature = "dotprod")
-            ))]
-            GgmlDType::Q4K if n.is_multiple_of(8) && m >= 4 && m.is_multiple_of(4) => {
-                Some(Self::Q4Kx8)
-            }
-            #[cfg(all(
-                target_arch = "aarch64",
-                target_feature = "dotprod",
-                not(target_feature = "i8mm")
-            ))]
-            GgmlDType::Q4K if n.is_multiple_of(8) => Some(Self::Q4Kx8),
-            #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-            GgmlDType::Q5K if n.is_multiple_of(8) && m == 1 => Some(Self::Q5Kx8),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
-            GgmlDType::Q5K if n.is_multiple_of(8) && m >= 4 && m.is_multiple_of(4) => {
+            GgmlDType::Q5K if n.is_multiple_of(8) && (has_dotprod_gemv || has_tiled_matmul) => {
                 Some(Self::Q5Kx8)
             }
-            #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-            GgmlDType::Q6K if n.is_multiple_of(8) && m == 1 => Some(Self::Q6Kx8),
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
-            GgmlDType::Q6K if n.is_multiple_of(8) && m >= 4 && m.is_multiple_of(4) => {
+            GgmlDType::Q6K if n.is_multiple_of(8) && (has_dotprod_gemv || has_tiled_matmul) => {
                 Some(Self::Q6Kx8)
             }
-            #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-            GgmlDType::Q8_0 if n.is_multiple_of(4) && m == 1 => Some(Self::Q8_0x4),
-            #[cfg(all(target_arch = "aarch64", target_feature = "i8mm"))]
-            GgmlDType::Q8_0 if n.is_multiple_of(4) && m >= 4 && m.is_multiple_of(4) => {
-                Some(Self::Q8_0x4)
-            }
-            #[cfg(all(
-                target_arch = "aarch64",
-                target_feature = "dotprod",
-                not(target_feature = "i8mm")
-            ))]
-            GgmlDType::Q8_0 if n.is_multiple_of(4) && m >= 4 && m.is_multiple_of(4) => {
+            GgmlDType::Q8_0 if n.is_multiple_of(4) && (has_dotprod_gemv || has_tiled_matmul) => {
                 Some(Self::Q8_0x4)
             }
             _ => None,
@@ -416,30 +252,22 @@ impl PackedKind {
     }
 
     fn pack(self, storage: &dyn QuantizedType, n: usize) -> PackedStorage {
+        let interleave = if crate::cpu::features::get().i8mm {
+            8
+        } else {
+            4
+        };
         match self {
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             Self::Q4_0x4 => {
                 let total_blocks =
                     storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4_0>();
                 let blocks = unsafe {
                     std::slice::from_raw_parts(storage.as_ptr() as *const BlockQ4_0, total_blocks)
                 };
-                #[cfg(target_feature = "i8mm")]
-                {
-                    PackedStorage::Q4_0x4(pack_to_q4_0x4(blocks, n, 8))
-                }
-                #[cfg(not(target_feature = "i8mm"))]
-                {
-                    PackedStorage::Q4_0x4(pack_to_q4_0x4(blocks, n, 4))
-                }
+                PackedStorage::Q4_0x4(pack_to_q4_0x4(blocks, n, interleave))
             }
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             Self::Q4Kx8 => {
                 let total_blocks =
                     storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
@@ -448,62 +276,32 @@ impl PackedKind {
                 };
                 PackedStorage::Q4Kx8(pack_to_q4kx8(blocks, n))
             }
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             Self::Q5Kx8 => {
                 let total_blocks =
                     storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ5K>();
                 let blocks = unsafe {
                     std::slice::from_raw_parts(storage.as_ptr() as *const BlockQ5K, total_blocks)
                 };
-                #[cfg(target_feature = "i8mm")]
-                {
-                    PackedStorage::Q5Kx8(pack_to_q5kx8(blocks, n, 8))
-                }
-                #[cfg(not(target_feature = "i8mm"))]
-                {
-                    PackedStorage::Q5Kx8(pack_to_q5kx8(blocks, n, 4))
-                }
+                PackedStorage::Q5Kx8(pack_to_q5kx8(blocks, n, interleave))
             }
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             Self::Q6Kx8 => {
                 let total_blocks =
                     storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ6K>();
                 let blocks = unsafe {
                     std::slice::from_raw_parts(storage.as_ptr() as *const BlockQ6K, total_blocks)
                 };
-                #[cfg(target_feature = "i8mm")]
-                {
-                    PackedStorage::Q6Kx8(pack_to_q6kx8(blocks, n, 8))
-                }
-                #[cfg(not(target_feature = "i8mm"))]
-                {
-                    PackedStorage::Q6Kx8(pack_to_q6kx8(blocks, n, 4))
-                }
+                PackedStorage::Q6Kx8(pack_to_q6kx8(blocks, n, interleave))
             }
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             Self::Q8_0x4 => {
                 let total_blocks =
                     storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ8_0>();
                 let blocks = unsafe {
                     std::slice::from_raw_parts(storage.as_ptr() as *const BlockQ8_0, total_blocks)
                 };
-                #[cfg(target_feature = "i8mm")]
-                {
-                    PackedStorage::Q8_0x4(pack_to_q8_0x4(blocks, n, 8))
-                }
-                #[cfg(all(target_feature = "dotprod", not(target_feature = "i8mm")))]
-                {
-                    PackedStorage::Q8_0x4(pack_to_q8_0x4(blocks, n, 4))
-                }
+                PackedStorage::Q8_0x4(pack_to_q8_0x4(blocks, n, interleave))
             }
         }
     }
@@ -515,68 +313,39 @@ impl PackedKind {
         packed: &PackedStorage,
         dst: &mut [f32],
     ) -> Result<()> {
+        let features = crate::cpu::features::get();
         match (self, packed) {
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             (Self::Q4_0x4, PackedStorage::Q4_0x4(packed)) => {
-                #[cfg(target_feature = "i8mm")]
-                {
+                if features.i8mm && mkn.0 >= 4 {
                     super::neon::matmul_q4_0_x4_i8mm(mkn, lhs, packed, dst)
-                }
-                #[cfg(not(target_feature = "i8mm"))]
-                {
+                } else {
                     super::neon::matmul_q4_0_x4(mkn, lhs, packed, dst)
                 }
             }
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             (Self::Q4Kx8, PackedStorage::Q4Kx8(packed)) => {
-                #[cfg(all(target_feature = "i8mm", target_feature = "dotprod"))]
-                {
-                    if mkn.0 == 1 {
-                        super::k_quants::matmul_q4k_x8(mkn, lhs, packed, dst)
-                    } else {
-                        super::neon::matmul_q4k_x8_i8mm(mkn, lhs, packed, dst)
-                    }
-                }
-                #[cfg(all(target_feature = "i8mm", not(target_feature = "dotprod")))]
-                {
+                if features.i8mm && mkn.0 >= 4 {
                     super::neon::matmul_q4k_x8_i8mm(mkn, lhs, packed, dst)
-                }
-                #[cfg(all(target_feature = "dotprod", not(target_feature = "i8mm")))]
-                {
+                } else {
                     super::k_quants::matmul_q4k_x8(mkn, lhs, packed, dst)
                 }
             }
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             (Self::Q5Kx8, PackedStorage::Q5Kx8(packed)) => {
                 super::neon::matmul_q5k_x8(mkn, lhs, packed, dst)
             }
-            #[cfg(all(
-                target_arch = "aarch64",
-                any(target_feature = "dotprod", target_feature = "i8mm")
-            ))]
+            #[cfg(target_arch = "aarch64")]
             (Self::Q6Kx8, PackedStorage::Q6Kx8(packed)) => {
                 super::neon::matmul_q6k_x8(mkn, lhs, packed, dst)
             }
-            #[cfg(all(target_arch = "aarch64", target_feature = "i8mm"))]
+            #[cfg(target_arch = "aarch64")]
             (Self::Q8_0x4, PackedStorage::Q8_0x4(packed)) => {
-                super::neon::matmul_q8_0_x4_i8mm(mkn, lhs, packed, dst)
-            }
-            #[cfg(all(
-                target_arch = "aarch64",
-                target_feature = "dotprod",
-                not(target_feature = "i8mm")
-            ))]
-            (Self::Q8_0x4, PackedStorage::Q8_0x4(packed)) => {
-                super::neon::matmul_q8_0_x4(mkn, lhs, packed, dst)
+                if features.i8mm && mkn.0 >= 4 {
+                    super::neon::matmul_q8_0_x4_i8mm(mkn, lhs, packed, dst)
+                } else {
+                    super::neon::matmul_q8_0_x4(mkn, lhs, packed, dst)
+                }
             }
             #[allow(unreachable_patterns)]
             _ => crate::bail!("packed storage kind mismatch"),
@@ -584,10 +353,7 @@ impl PackedKind {
     }
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<BlockQ4Kx8> {
     debug_assert!(n.is_multiple_of(8));
     debug_assert_eq!(blocks.len() % n, 0);
@@ -621,10 +387,7 @@ fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<BlockQ4Kx8> {
     packed
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 fn pack_to_q5kx8(blocks: &[BlockQ5K], n: usize, block_len: usize) -> Vec<BlockQ5Kx8> {
     debug_assert!(n.is_multiple_of(8));
     debug_assert!((QK_K / 2).is_multiple_of(block_len));
@@ -668,10 +431,7 @@ fn pack_to_q5kx8(blocks: &[BlockQ5K], n: usize, block_len: usize) -> Vec<BlockQ5
     packed
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 fn pack_to_q6kx8(blocks: &[BlockQ6K], n: usize, block_len: usize) -> Vec<BlockQ6Kx8> {
     debug_assert!(n.is_multiple_of(8));
     debug_assert!((QK_K / 2).is_multiple_of(block_len));
@@ -717,10 +477,7 @@ fn pack_to_q6kx8(blocks: &[BlockQ6K], n: usize, block_len: usize) -> Vec<BlockQ6
     packed
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 fn pack_k_scale_min_x8(src: &[&[u8; 12]; 8], dst: &mut [u8; 96]) {
     for i in 0..4usize {
         let mut s = [0u8; 8];
@@ -766,10 +523,7 @@ fn pack_k_scale_min_x8(src: &[&[u8; 12]; 8], dst: &mut [u8; 96]) {
     }
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 fn pack_to_q4_0x4(blocks: &[BlockQ4_0], n: usize, block_len: usize) -> Vec<BlockQ4_0x4> {
     debug_assert!(n.is_multiple_of(4));
     debug_assert!((QK4_0 / 2).is_multiple_of(block_len));
@@ -803,10 +557,7 @@ fn pack_to_q4_0x4(blocks: &[BlockQ4_0], n: usize, block_len: usize) -> Vec<Block
     packed
 }
 
-#[cfg(all(
-    target_arch = "aarch64",
-    any(target_feature = "dotprod", target_feature = "i8mm")
-))]
+#[cfg(target_arch = "aarch64")]
 fn pack_to_q8_0x4(blocks: &[BlockQ8_0], n: usize, block_len: usize) -> Vec<BlockQ8_0x4> {
     debug_assert!(n.is_multiple_of(4));
     debug_assert!(QK8_0.is_multiple_of(block_len));
