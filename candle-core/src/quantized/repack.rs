@@ -1,5 +1,14 @@
-use super::{GgmlDType, QuantizedType};
+#[cfg(all(
+    target_arch = "aarch64",
+    any(target_feature = "dotprod", target_feature = "i8mm")
+))]
+use super::GgmlDType;
+use super::QuantizedType;
 use crate::Result;
+#[cfg(all(
+    target_arch = "aarch64",
+    any(target_feature = "dotprod", target_feature = "i8mm")
+))]
 use std::sync::OnceLock;
 
 #[cfg(all(
@@ -25,59 +34,27 @@ use super::k_quants::{BlockQ8_0, QK8_0};
 use half::f16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(all(
+    target_arch = "aarch64",
+    any(target_feature = "dotprod", target_feature = "i8mm")
+))]
 enum PackedKind {
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q4_0x4,
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q4Kx8,
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q5Kx8,
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q6Kx8,
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q8_0x4,
 }
 
+#[cfg(all(
+    target_arch = "aarch64",
+    any(target_feature = "dotprod", target_feature = "i8mm")
+))]
 pub(crate) enum PackedStorage {
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q4_0x4(Vec<BlockQ4_0x4>),
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q4Kx8(Vec<BlockQ4Kx8>),
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q5Kx8(Vec<BlockQ5Kx8>),
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q6Kx8(Vec<BlockQ6Kx8>),
-    #[cfg(all(
-        target_arch = "aarch64",
-        any(target_feature = "dotprod", target_feature = "i8mm")
-    ))]
     Q8_0x4(Vec<BlockQ8_0x4>),
 }
 
@@ -141,6 +118,10 @@ impl PackedCache {
         }
     }
 
+    #[cfg(all(
+        target_arch = "aarch64",
+        any(target_feature = "dotprod", target_feature = "i8mm")
+    ))]
     fn get_or_init(
         &self,
         kind: PackedKind,
@@ -335,14 +316,33 @@ pub(crate) fn try_matmul_f32(
     lhs: &[f32],
     dst: &mut [f32],
 ) -> Result<bool> {
-    let Some(kind) = PackedKind::select(storage.dtype(), mkn) else {
-        return Ok(false);
-    };
-    let packed = packed.get_or_init(kind, || kind.pack(storage, mkn.2));
-    kind.matmul(mkn, lhs, packed, dst)?;
-    Ok(true)
+    #[cfg(all(
+        target_arch = "aarch64",
+        any(target_feature = "dotprod", target_feature = "i8mm")
+    ))]
+    {
+        let Some(kind) = PackedKind::select(storage.dtype(), mkn) else {
+            return Ok(false);
+        };
+        let packed = packed.get_or_init(kind, || kind.pack(storage, mkn.2));
+        kind.matmul(mkn, lhs, packed, dst)?;
+        Ok(true)
+    }
+
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        any(target_feature = "dotprod", target_feature = "i8mm")
+    )))]
+    {
+        let _ = (storage, packed, mkn, lhs, dst);
+        Ok(false)
+    }
 }
 
+#[cfg(all(
+    target_arch = "aarch64",
+    any(target_feature = "dotprod", target_feature = "i8mm")
+))]
 impl PackedKind {
     fn select(dtype: GgmlDType, (m, _k, n): (usize, usize, usize)) -> Option<Self> {
         match dtype {
