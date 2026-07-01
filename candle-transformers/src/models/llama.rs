@@ -6,8 +6,134 @@
 
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_nn::lora::LoraLinear;
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::{collections::HashMap, f32::consts::PI};
+
+/// Rank, scaling and target projections for a LoRA adapter to inject into a
+/// [`Llama`] model at load time. `target_modules` is matched against the
+/// projection names `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`,
+/// `up_proj` and `down_proj`.
+#[derive(Debug, Clone)]
+pub struct LoraConfig {
+    pub rank: usize,
+    pub alpha: f64,
+    pub target_modules: Vec<String>,
+}
+
+impl LoraConfig {
+    fn wants(&self, module: &str) -> bool {
+        self.target_modules.iter().any(|m| m == module)
+    }
+}
+
+type LoraSpec<'a> = (String, VarBuilder<'a>, LoraConfig);
+
+/// Prefix under which a standard PEFT `PeftModel` checkpoint stores its base
+/// model's weights, e.g. `base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight`.
+/// This is the default root [`LlamaLoadConfig::with_lora_adapter`] resolves
+/// LoRA tensor paths against.
+pub const PEFT_ADAPTER_PREFIX: &str = "base_model.model";
+
+/// Configuration used by [`Llama::load_with_config`] to inject one or more
+/// named LoRA adapters into the base model's attention and MLP projections.
+/// Building a model with an empty (default) config is equivalent to
+/// [`Llama::load`].
+#[derive(Clone, Default)]
+pub struct LlamaLoadConfig<'a> {
+    lora_adapters: Vec<LoraSpec<'a>>,
+}
+
+impl<'a> LlamaLoadConfig<'a> {
+    /// Registers a named LoRA adapter, loaded from `vb`, to be injected into
+    /// the projections listed in `config.target_modules`. `vb` is assumed to
+    /// be rooted at the standard PEFT checkpoint layout, i.e. tensors live
+    /// under [`PEFT_ADAPTER_PREFIX`] `.model.layers.{i}.self_attn.q_proj` (and
+    /// so on), each holding `lora_A.weight` / `lora_B.weight`. Use
+    /// [`LlamaLoadConfig::with_lora_adapter_prefixed`] if the checkpoint was
+    /// saved under a different root, or if `vb` is already scoped past that
+    /// prefix.
+    pub fn with_lora_adapter(self, name: &str, vb: VarBuilder<'a>, config: LoraConfig) -> Self {
+        self.with_lora_adapter_prefixed(name, vb, config, PEFT_ADAPTER_PREFIX)
+    }
+
+    /// Like [`LlamaLoadConfig::with_lora_adapter`], but resolves LoRA tensors
+    /// under `prefix` instead of the standard [`PEFT_ADAPTER_PREFIX`]. Pass an
+    /// empty string if `vb` is already scoped to the model root (i.e. tensors
+    /// live directly under `model.layers.{i}...`).
+    pub fn with_lora_adapter_prefixed(
+        mut self,
+        name: &str,
+        vb: VarBuilder<'a>,
+        config: LoraConfig,
+        prefix: &str,
+    ) -> Self {
+        let vb = if prefix.is_empty() { vb } else { vb.pp(prefix) };
+        self.lora_adapters.push((name.to_string(), vb, config));
+        self
+    }
+}
+
+/// A linear projection that is either a plain frozen layer or one augmented
+/// with LoRA adapters, depending on whether the loader was asked to inject
+/// adapters into it.
+#[derive(Debug, Clone)]
+enum Proj {
+    Plain(Linear),
+    Lora(LoraLinear),
+}
+
+impl Proj {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Plain(l) => l.forward(x),
+            Self::Lora(l) => l.forward(x),
+        }
+    }
+
+    fn has_adapter(&self, name: &str) -> bool {
+        match self {
+            Self::Plain(_) => false,
+            Self::Lora(l) => l.adapter_names().contains(&name),
+        }
+    }
+
+    /// Activates `name` on this projection if it carries an adapter under
+    /// that name, deactivates any adapter when `name` is `None`, and is a
+    /// no-op otherwise (this projection simply wasn't targeted by `name`).
+    fn set_active_adapter(&mut self, name: Option<&str>) -> Result<()> {
+        let Self::Lora(l) = self else {
+            return Ok(());
+        };
+        match name {
+            None => l.set_active_adapter(None),
+            Some(name) if l.adapter_names().contains(&name) => l.set_active_adapter(Some(name)),
+            Some(_) => Ok(()),
+        }
+    }
+}
+
+fn load_projection(
+    module: &str,
+    size_in: usize,
+    size_out: usize,
+    vb: VarBuilder,
+    lora_adapters: &[LoraSpec],
+) -> Result<Proj> {
+    let matching: Vec<_> = lora_adapters
+        .iter()
+        .filter(|(_, _, cfg)| cfg.wants(module))
+        .collect();
+    if matching.is_empty() {
+        return Ok(Proj::Plain(linear(size_in, size_out, vb)?));
+    }
+    let base = candle_nn::linear_no_bias(size_in, size_out, vb)?;
+    let mut lora = LoraLinear::new(base);
+    for (name, adapter_vb, cfg) in matching {
+        lora.load_adapter(name, adapter_vb.pp(module), cfg.rank, cfg.alpha)?;
+    }
+    Ok(Proj::Lora(lora))
+}
 
 pub const DEFAULT_MAX_SEQ_LEN: usize = 4096;
 
@@ -229,10 +355,10 @@ impl Cache {
 
 #[derive(Debug, Clone)]
 struct CausalSelfAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Proj,
+    k_proj: Proj,
+    v_proj: Proj,
+    o_proj: Proj,
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
@@ -359,16 +485,38 @@ impl CausalSelfAttention {
         crate::utils::repeat_kv(x, self.num_attention_heads / self.num_key_value_heads)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn has_adapter(&self, name: &str) -> bool {
+        [&self.q_proj, &self.k_proj, &self.v_proj, &self.o_proj]
+            .into_iter()
+            .any(|p| p.has_adapter(name))
+    }
+
+    fn set_active_adapter(&mut self, name: Option<&str>) -> Result<()> {
+        for p in [
+            &mut self.q_proj,
+            &mut self.k_proj,
+            &mut self.v_proj,
+            &mut self.o_proj,
+        ] {
+            p.set_active_adapter(name)?;
+        }
+        Ok(())
+    }
+
+    fn load(vb: VarBuilder, cfg: &Config, lora_adapters: &[LoraSpec]) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "attn");
         let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-        let q_proj = linear(size_in, size_q, vb.pp("q_proj"))?;
-        let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
-        let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
-        let o_proj = linear(size_q, size_in, vb.pp("o_proj"))?;
+        let lora_adapters: Vec<_> = lora_adapters
+            .iter()
+            .map(|(name, vb, cfg)| (name.clone(), vb.pp("self_attn"), cfg.clone()))
+            .collect();
+        let q_proj = load_projection("q_proj", size_in, size_q, vb.pp("q_proj"), &lora_adapters)?;
+        let k_proj = load_projection("k_proj", size_in, size_kv, vb.pp("k_proj"), &lora_adapters)?;
+        let v_proj = load_projection("v_proj", size_in, size_kv, vb.pp("v_proj"), &lora_adapters)?;
+        let o_proj = load_projection("o_proj", size_q, size_in, vb.pp("o_proj"), &lora_adapters)?;
         Ok(Self {
             q_proj,
             k_proj,
@@ -394,9 +542,9 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 
 #[derive(Debug, Clone)]
 struct Mlp {
-    c_fc1: Linear,
-    c_fc2: Linear,
-    c_proj: Linear,
+    c_fc1: Proj,
+    c_fc2: Proj,
+    c_proj: Proj,
     span: tracing::Span,
 }
 
@@ -407,13 +555,42 @@ impl Mlp {
         self.c_proj.forward(&x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn has_adapter(&self, name: &str) -> bool {
+        [&self.c_fc1, &self.c_fc2, &self.c_proj]
+            .into_iter()
+            .any(|p| p.has_adapter(name))
+    }
+
+    fn set_active_adapter(&mut self, name: Option<&str>) -> Result<()> {
+        for p in [&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj] {
+            p.set_active_adapter(name)?;
+        }
+        Ok(())
+    }
+
+    fn load(vb: VarBuilder, cfg: &Config, lora_adapters: &[LoraSpec]) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"))?;
-        let c_fc2 = linear(h_size, i_size, vb.pp("up_proj"))?;
-        let c_proj = linear(i_size, h_size, vb.pp("down_proj"))?;
+        let lora_adapters: Vec<_> = lora_adapters
+            .iter()
+            .map(|(name, vb, cfg)| (name.clone(), vb.pp("mlp"), cfg.clone()))
+            .collect();
+        let c_fc1 = load_projection(
+            "gate_proj",
+            h_size,
+            i_size,
+            vb.pp("gate_proj"),
+            &lora_adapters,
+        )?;
+        let c_fc2 = load_projection("up_proj", h_size, i_size, vb.pp("up_proj"), &lora_adapters)?;
+        let c_proj = load_projection(
+            "down_proj",
+            i_size,
+            h_size,
+            vb.pp("down_proj"),
+            &lora_adapters,
+        )?;
         Ok(Self {
             c_fc1,
             c_fc2,
@@ -449,10 +626,34 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn has_adapter(&self, name: &str) -> bool {
+        self.attn.has_adapter(name) || self.mlp.has_adapter(name)
+    }
+
+    fn set_active_adapter(&mut self, name: Option<&str>) -> Result<()> {
+        self.attn.set_active_adapter(name)?;
+        self.mlp.set_active_adapter(name)
+    }
+
+    fn load(
+        vb: VarBuilder,
+        cfg: &Config,
+        layer_idx: usize,
+        lora_adapters: &[LoraSpec],
+    ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "block");
-        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
+        let block_lora: Vec<_> = lora_adapters
+            .iter()
+            .map(|(name, vb, cfg)| {
+                (
+                    name.clone(),
+                    vb.pp(format!("model.layers.{layer_idx}")),
+                    cfg.clone(),
+                )
+            })
+            .collect();
+        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, &block_lora)?;
+        let mlp = Mlp::load(vb.pp("mlp"), cfg, &block_lora)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
@@ -513,6 +714,20 @@ impl Llama {
     }
 
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+        Self::load_with_config(vb, cfg, LlamaLoadConfig::default())
+    }
+
+    /// Like [`Llama::load`], but additionally injects the LoRA adapters
+    /// listed in `load_config` into the matching attention/MLP projections.
+    /// With no adapters registered this behaves exactly like `Llama::load`.
+    /// Use [`Llama::set_active_adapter`] to select which (if any) of the
+    /// registered adapters applies to subsequent forward passes.
+    pub fn load_with_config(
+        vb: VarBuilder,
+        cfg: &Config,
+        load_config: LlamaLoadConfig,
+    ) -> Result<Self> {
+        let lora_adapters = load_config.lora_adapters;
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = if cfg.tie_word_embeddings {
             Linear::from_weights(wte.embeddings().clone(), None)
@@ -521,8 +736,8 @@ impl Llama {
         };
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
-            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cfg).unwrap())
-            .collect();
+            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cfg, i, &lora_adapters))
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             wte,
@@ -530,5 +745,225 @@ impl Llama {
             ln_f,
             lm_head,
         })
+    }
+
+    /// Selects the LoRA adapter that subsequent calls to `forward` /
+    /// `forward_input_embed` should use, or falls back to the frozen base
+    /// weights when `name` is `None`. Switching adapters does not reload or
+    /// duplicate the base model weights.
+    pub fn set_active_adapter(&mut self, name: Option<&str>) -> Result<()> {
+        if let Some(name) = name {
+            if !self.blocks.iter().any(|b| b.has_adapter(name)) {
+                candle::bail!("no such LoRA adapter: {name}")
+            }
+        }
+        for block in &mut self.blocks {
+            block.set_active_adapter(name)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tiny_config() -> Config {
+        Config {
+            hidden_size: 4,
+            intermediate_size: 4,
+            vocab_size: 8,
+            num_hidden_layers: 1,
+            num_attention_heads: 2,
+            num_key_value_heads: 2,
+            use_flash_attn: false,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            bos_token_id: None,
+            eos_token_id: None,
+            rope_scaling: None,
+            max_position_embeddings: 16,
+            tie_word_embeddings: false,
+        }
+    }
+
+    fn base_weights(cfg: &Config, dev: &Device) -> HashMap<String, Tensor> {
+        let h = cfg.hidden_size;
+        let i = cfg.intermediate_size;
+        let v = cfg.vocab_size;
+        let mut ts = HashMap::new();
+        ts.insert(
+            "model.embed_tokens.weight".to_string(),
+            Tensor::ones((v, h), DType::F32, dev).unwrap(),
+        );
+        ts.insert(
+            "model.norm.weight".to_string(),
+            Tensor::ones(h, DType::F32, dev).unwrap(),
+        );
+        ts.insert(
+            "lm_head.weight".to_string(),
+            (Tensor::ones((v, h), DType::F32, dev).unwrap() * 0.1).unwrap(),
+        );
+        for i_layer in 0..cfg.num_hidden_layers {
+            let p = format!("model.layers.{i_layer}");
+            ts.insert(
+                format!("{p}.input_layernorm.weight"),
+                Tensor::ones(h, DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.post_attention_layernorm.weight"),
+                Tensor::ones(h, DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.self_attn.q_proj.weight"),
+                Tensor::zeros((h, h), DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.self_attn.k_proj.weight"),
+                Tensor::zeros((h, h), DType::F32, dev).unwrap(),
+            );
+            // Non-zero v_proj so the attention output (and thus o_proj's
+            // input) is non-zero, letting a LoRA adapter on o_proj have an
+            // observable effect even with a single-token sequence.
+            ts.insert(
+                format!("{p}.self_attn.v_proj.weight"),
+                (Tensor::ones((h, h), DType::F32, dev).unwrap() * 0.1).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.self_attn.o_proj.weight"),
+                Tensor::zeros((h, h), DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.mlp.gate_proj.weight"),
+                Tensor::zeros((i, h), DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.mlp.up_proj.weight"),
+                Tensor::zeros((i, h), DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.mlp.down_proj.weight"),
+                Tensor::zeros((h, i), DType::F32, dev).unwrap(),
+            );
+        }
+        ts
+    }
+
+    fn lora_adapter_weights(
+        cfg: &Config,
+        rank: usize,
+        dev: &Device,
+        prefix: &str,
+    ) -> HashMap<String, Tensor> {
+        let h = cfg.hidden_size;
+        let mut ts = HashMap::new();
+        for i_layer in 0..cfg.num_hidden_layers {
+            let p = if prefix.is_empty() {
+                format!("model.layers.{i_layer}.self_attn.o_proj")
+            } else {
+                format!("{prefix}.model.layers.{i_layer}.self_attn.o_proj")
+            };
+            ts.insert(
+                format!("{p}.lora_A.weight"),
+                Tensor::ones((rank, h), DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.lora_B.weight"),
+                Tensor::ones((h, rank), DType::F32, dev).unwrap(),
+            );
+        }
+        ts
+    }
+
+    #[test]
+    fn load_without_lora_matches_plain_load() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let vb = VarBuilder::from_tensors(base_weights(&cfg, &dev), DType::F32, &dev);
+        let mut model = Llama::load(vb, &cfg)?;
+        let input = Tensor::new(&[[1u32, 2, 3]], &dev)?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        // Should run without error and produce the expected output shape.
+        let logits = model.forward(&input, 0, &mut cache)?;
+        assert_eq!(logits.dims(), &[1, cfg.vocab_size]);
+        // No adapters were registered, so activating one must fail.
+        assert!(model.set_active_adapter(Some("missing")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn lora_adapter_changes_output_only_when_active() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let base_vb = VarBuilder::from_tensors(base_weights(&cfg, &dev), DType::F32, &dev);
+        // Adapter weights follow the standard PEFT `base_model.model.` layout;
+        // `with_lora_adapter` should resolve them without any extra scoping.
+        let adapter_vb = VarBuilder::from_tensors(
+            lora_adapter_weights(&cfg, 2, &dev, PEFT_ADAPTER_PREFIX),
+            DType::F32,
+            &dev,
+        );
+        let load_config = LlamaLoadConfig::default().with_lora_adapter(
+            "adapter",
+            adapter_vb,
+            LoraConfig {
+                rank: 2,
+                alpha: 4.0,
+                target_modules: vec!["o_proj".to_string()],
+            },
+        );
+        let mut model = Llama::load_with_config(base_vb, &cfg, load_config)?;
+
+        let input = Tensor::new(&[[1u32, 2, 3]], &dev)?;
+
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let base_logits = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
+
+        model.set_active_adapter(Some("adapter"))?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let adapter_logits = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
+        assert_ne!(base_logits, adapter_logits);
+
+        model.set_active_adapter(None)?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let back_to_base_logits = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
+        assert_eq!(base_logits, back_to_base_logits);
+
+        assert!(model.set_active_adapter(Some("missing")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn lora_adapter_with_custom_prefix() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let base_vb = VarBuilder::from_tensors(base_weights(&cfg, &dev), DType::F32, &dev);
+        // Adapter checkpoint saved without any wrapping prefix (tensors live
+        // directly under `model.layers.{i}...`), as if already unwrapped from
+        // a PeftModel. `with_lora_adapter` alone would look under
+        // `base_model.model.` and fail to find these tensors.
+        let adapter_vb =
+            VarBuilder::from_tensors(lora_adapter_weights(&cfg, 2, &dev, ""), DType::F32, &dev);
+        let load_config = LlamaLoadConfig::default().with_lora_adapter_prefixed(
+            "adapter",
+            adapter_vb,
+            LoraConfig {
+                rank: 2,
+                alpha: 4.0,
+                target_modules: vec!["o_proj".to_string()],
+            },
+            "",
+        );
+        let mut model = Llama::load_with_config(base_vb, &cfg, load_config)?;
+
+        let input = Tensor::new(&[[1u32, 2, 3]], &dev)?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let base_logits = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
+
+        model.set_active_adapter(Some("adapter"))?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let adapter_logits = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
+        assert_ne!(base_logits, adapter_logits);
+        Ok(())
     }
 }
