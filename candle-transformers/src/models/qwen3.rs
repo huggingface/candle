@@ -462,7 +462,9 @@ impl Model {
                 })
             })
             .collect();
-        Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
+        Tensor::from_slice(&mask, (1, 1, tgt, tgt + offset), &self.device)?
+            .to_dtype(self.dtype)?
+            .expand((b, 1, tgt, tgt + offset))
     }
 
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
@@ -515,5 +517,44 @@ impl ModelForCausalLM {
 
     pub fn clear_kv_cache(&mut self) {
         self.base.clear_kv_cache();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn causal_mask_is_correct_for_every_batch_row() -> Result<()> {
+        let cfg = Config {
+            vocab_size: 16,
+            hidden_size: 8,
+            intermediate_size: 16,
+            num_hidden_layers: 1,
+            num_attention_heads: 2,
+            head_dim: 4,
+            attention_bias: false,
+            num_key_value_heads: 2,
+            max_position_embeddings: 32,
+            sliding_window: None,
+            max_window_layers: 1,
+            tie_word_embeddings: false,
+            rope_theta: 10_000.,
+            rms_norm_eps: 1e-6,
+            use_sliding_window: false,
+            hidden_act: Activation::Silu,
+        };
+        let vb = VarBuilder::zeros(DType::F32, &Device::Cpu);
+        let model = Model::new(&cfg, vb)?;
+
+        let (b, tgt, offset) = (3, 2, 1);
+        let mask = model.causal_mask(b, tgt, offset, None)?;
+        assert_eq!(mask.dims(), [b, 1, tgt, tgt + offset]);
+        let rows = mask.reshape((b, tgt, tgt + offset))?.to_vec3::<f32>()?;
+        let expected = vec![vec![0., 0., f32::NEG_INFINITY], vec![0., 0., 0.]];
+        for (batch_idx, row) in rows.iter().enumerate() {
+            assert_eq!(row, &expected, "wrong mask for batch row {batch_idx}");
+        }
+        Ok(())
     }
 }
