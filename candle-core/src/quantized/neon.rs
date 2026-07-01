@@ -1023,9 +1023,9 @@ unsafe fn store_q4kx8_4x8_i8mm(
         let x = &rhs[b];
         let y = &lhs[b];
         let mut bsums_arr = [[0i16; 8]; 4];
-        for r in 0..4 {
-            for i in 0..8 {
-                bsums_arr[r][i] = y.bsums[16 * r + i] + y.bsums[16 * r + i + 8];
+        for (r, bsums_row) in bsums_arr.iter_mut().enumerate() {
+            for (i, bsums) in bsums_row.iter_mut().enumerate() {
+                *bsums = y.bsums[16 * r + i] + y.bsums[16 * r + i + 8];
             }
         }
 
@@ -1042,9 +1042,10 @@ unsafe fn store_q4kx8_4x8_i8mm(
 
             let q8_base = y.qs.as_ptr().add(sb * 256);
             let mut q8s = [[vdupq_n_s8(0); 8]; 2];
-            for i in 0..8 {
-                q8s[0][i] = vld1q_s8(q8_base.add(i * 32));
-                q8s[1][i] = vld1q_s8(q8_base.add(i * 32 + 16));
+            let (q8s_0, q8s_1) = q8s.split_at_mut(1);
+            for (i, (q8_0, q8_1)) in q8s_0[0].iter_mut().zip(q8s_1[0].iter_mut()).enumerate() {
+                *q8_0 = vld1q_s8(q8_base.add(i * 32));
+                *q8_1 = vld1q_s8(q8_base.add(i * 32 + 16));
             }
 
             for cp in 0..4 {
@@ -1465,20 +1466,20 @@ unsafe fn store_q5kx8_4x8_i8mm(
         let x = &rhs[b];
         let y = &lhs[b];
         let mut bsums_arr = [[0i16; 8]; 4];
-        for r in 0..4 {
-            for i in 0..8 {
-                bsums_arr[r][i] = y.bsums[16 * r + i] + y.bsums[16 * r + i + 8];
+        for (r, bsums_row) in bsums_arr.iter_mut().enumerate() {
+            for (i, bsums) in bsums_row.iter_mut().enumerate() {
+                *bsums = y.bsums[16 * r + i] + y.bsums[16 * r + i + 8];
             }
         }
 
         let mut acc = [vdupq_n_s32(0); 8];
         let mut bias_acc = [vdupq_n_s32(0); 8];
         let mut qh = [[vdupq_n_u8(0); 4]; 4];
-        for cp in 0..4 {
-            qh[cp][0] = vld1q_u8(x.qh.as_ptr().add(16 * cp));
-            qh[cp][1] = vld1q_u8(x.qh.as_ptr().add(16 * cp + 64));
-            qh[cp][2] = vld1q_u8(x.qh.as_ptr().add(16 * cp + 128));
-            qh[cp][3] = vld1q_u8(x.qh.as_ptr().add(16 * cp + 192));
+        for (cp, qh_cp) in qh.iter_mut().enumerate() {
+            qh_cp[0] = vld1q_u8(x.qh.as_ptr().add(16 * cp));
+            qh_cp[1] = vld1q_u8(x.qh.as_ptr().add(16 * cp + 64));
+            qh_cp[2] = vld1q_u8(x.qh.as_ptr().add(16 * cp + 128));
+            qh_cp[3] = vld1q_u8(x.qh.as_ptr().add(16 * cp + 192));
         }
 
         for sb in 0..QK_K / 64 {
@@ -1491,9 +1492,10 @@ unsafe fn store_q5kx8_4x8_i8mm(
 
             let q8_base = y.qs.as_ptr().add(sb * 256);
             let mut q8s = [[vdupq_n_s8(0); 8]; 2];
-            for i in 0..8 {
-                q8s[0][i] = vld1q_s8(q8_base.add(i * 32));
-                q8s[1][i] = vld1q_s8(q8_base.add(i * 32 + 16));
+            let (q8s_0, q8s_1) = q8s.split_at_mut(1);
+            for (i, (q8_0, q8_1)) in q8s_0[0].iter_mut().zip(q8s_1[0].iter_mut()).enumerate() {
+                *q8_0 = vld1q_s8(q8_base.add(i * 32));
+                *q8_1 = vld1q_s8(q8_base.add(i * 32 + 16));
             }
 
             for cp in 0..4 {
@@ -1751,11 +1753,11 @@ unsafe fn vec_dot_8_q5kx8_q8k_8x8(n: usize, xs: &[BlockQ5Kx8], ys: &[BlockQ8K]) 
         let mut bsums_arr = [0i16; 8];
         vst1q_s16(bsums_arr.as_mut_ptr(), bsums);
         let mut qh = [[vdupq_n_u8(0); 4]; 4];
-        for cp in 0..4 {
-            qh[cp][0] = vld1q_u8(q5.qh.as_ptr().add(16 * cp));
-            qh[cp][1] = vld1q_u8(q5.qh.as_ptr().add(16 * cp + 64));
-            qh[cp][2] = vld1q_u8(q5.qh.as_ptr().add(16 * cp + 128));
-            qh[cp][3] = vld1q_u8(q5.qh.as_ptr().add(16 * cp + 192));
+        for (cp, qh_cp) in qh.iter_mut().enumerate() {
+            qh_cp[0] = vld1q_u8(q5.qh.as_ptr().add(16 * cp));
+            qh_cp[1] = vld1q_u8(q5.qh.as_ptr().add(16 * cp + 64));
+            qh_cp[2] = vld1q_u8(q5.qh.as_ptr().add(16 * cp + 128));
+            qh_cp[3] = vld1q_u8(q5.qh.as_ptr().add(16 * cp + 192));
         }
         let mut bias_acc = [vdupq_n_s32(0); 2];
 
