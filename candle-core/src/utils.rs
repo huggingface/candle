@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread::Thread;
 
+const DEFAULT_BARRIER_POOL_SPIN_LIMIT: u32 = 25_000;
+
 /// Per-worker control on its own 64-byte cache line to prevent false sharing.
 #[repr(C, align(64))]
 struct Slot {
@@ -98,6 +100,13 @@ fn get_cluster_size() -> usize {
     usize::MAX
 }
 
+fn barrier_pool_spin_limit() -> u32 {
+    std::env::var("CANDLE_BARRIER_POOL_SPIN_LIMIT")
+        .ok()
+        .and_then(|s| u32::from_str(&s).ok())
+        .unwrap_or(DEFAULT_BARRIER_POOL_SPIN_LIMIT)
+}
+
 impl BarrierPool {
     fn new(n_workers: usize) -> Self {
         let inner = Box::new(BarrierPoolInner {
@@ -120,6 +129,7 @@ impl BarrierPool {
         let inner_ptr = &*inner as *const BarrierPoolInner as usize;
         let cluster_size = get_cluster_size();
         let (children, root_workers) = compute_tree(n_workers, cluster_size);
+        let spin_limit = barrier_pool_spin_limit();
 
         let threads: Vec<_> = (0..n_workers)
             .map(|tid| {
@@ -132,7 +142,6 @@ impl BarrierPool {
                         let slot = &inner.slots[tid];
                         let mut gen = 0usize;
 
-                        const SPIN_LIMIT: u32 = 10_000;
                         loop {
                             // Spin briefly then park, waiting for next work item.
                             let mut spins = 0u32;
@@ -146,7 +155,7 @@ impl BarrierPool {
                                     return;
                                 }
                                 spins += 1;
-                                if spins < SPIN_LIMIT {
+                                if spins < spin_limit {
                                     spin_loop();
                                 } else {
                                     // Park deposits a token; unpark() before park() returns immediately — no race.
@@ -408,11 +417,11 @@ pub fn metal_is_available() -> bool {
 }
 
 pub fn with_avx() -> bool {
-    cfg!(target_feature = "avx2")
+    crate::cpu::features::get().avx2
 }
 
 pub fn with_neon() -> bool {
-    cfg!(target_feature = "neon")
+    crate::cpu::features::get().neon
 }
 
 pub fn with_simd128() -> bool {
@@ -420,5 +429,5 @@ pub fn with_simd128() -> bool {
 }
 
 pub fn with_f16c() -> bool {
-    cfg!(target_feature = "f16c")
+    crate::cpu::features::get().f16c
 }

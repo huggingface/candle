@@ -8,6 +8,15 @@ use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::{bf16, f16, slice::HalfFloatSliceExt};
 
+#[cfg(target_arch = "aarch64")]
+use super::repack::BlockQ4Kx8;
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn has_avx2_fma() -> bool {
+    let features = crate::cpu::features::get();
+    features.avx2 && features.fma
+}
+
 // Default to QK_K 256 rather than 64.
 pub const QK_K: usize = 256;
 pub const K_SCALE_SIZE: usize = 12;
@@ -189,27 +198,6 @@ pub struct BlockQ8K {
 }
 const _: () = assert!(4 + QK_K + QK_K / 16 * 2 == std::mem::size_of::<BlockQ8K>());
 
-/// 8 Q4K blocks packed in interleaved format facilitating 8-column GEMV.
-/// Currently only compiled on AArch64 (with dotprod enabled).
-#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-#[derive(
-    Clone,
-    Copy,
-    zerocopy::FromBytes,
-    zerocopy::IntoBytes,
-    zerocopy::KnownLayout,
-    zerocopy::Immutable,
-)]
-#[repr(C)]
-pub(crate) struct BlockQ4Kx8 {
-    pub(crate) d: [f16; 8],
-    pub(crate) dmin: [f16; 8],
-    pub(crate) scales: [u8; 96],
-    pub(crate) qs: [u8; 1024],
-}
-#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-const _: () = assert!(std::mem::size_of::<BlockQ4Kx8>() == 1152);
-
 impl GgmlType for BlockQ4_0 {
     const DTYPE: GgmlDType = GgmlDType::Q4_0;
     const BLCK_SIZE: usize = QK4_0;
@@ -279,8 +267,10 @@ impl GgmlType for BlockQ4_0 {
     // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L2361C10-L2361C122
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        #[cfg(target_feature = "avx2")]
-        return super::avx::vec_dot_q4_0_q8_0(n, xs, ys);
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            return unsafe { super::avx::vec_dot_q4_0_q8_0(n, xs, ys) };
+        }
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q4_0_q8_0(n, xs, ys);
@@ -656,40 +646,49 @@ impl GgmlType for BlockQ8_0 {
     }
 
     fn from_float(xs: &[f32], ys: &mut [Self]) {
-        // quantize_row_q8_0
-        let k = xs.len();
-        debug_assert!(
-            k.is_multiple_of(Self::BLCK_SIZE),
-            "{k} is not divisible by {}",
-            Self::BLCK_SIZE
-        );
-        debug_assert_eq!(
-            ys.len(),
-            k / Self::BLCK_SIZE,
-            "size mismatch {} {} {}",
-            xs.len(),
-            ys.len(),
-            Self::BLCK_SIZE
-        );
-        for (i, ys) in ys.iter_mut().enumerate() {
-            let mut amax = 0f32;
-            let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
-            for &x in xs.iter() {
-                amax = amax.max(x.abs())
-            }
-            let d = amax / ((1 << 7) - 1) as f32;
-            let id = if d != 0f32 { 1. / d } else { 0. };
-            ys.d = f16::from_f32(d);
-            for (y, &x) in ys.qs.iter_mut().zip(xs.iter()) {
-                *y = f32::round(x * id) as i8
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        {
+            super::neon::quantize_q8_0(xs, ys);
+        }
+
+        #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+        {
+            let k = xs.len();
+            debug_assert!(
+                k.is_multiple_of(Self::BLCK_SIZE),
+                "{k} is not divisible by {}",
+                Self::BLCK_SIZE
+            );
+            debug_assert_eq!(
+                ys.len(),
+                k / Self::BLCK_SIZE,
+                "size mismatch {} {} {}",
+                xs.len(),
+                ys.len(),
+                Self::BLCK_SIZE
+            );
+            for (i, ys) in ys.iter_mut().enumerate() {
+                let mut amax = 0f32;
+                let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
+                for &x in xs.iter() {
+                    amax = amax.max(x.abs())
+                }
+                let d = amax / ((1 << 7) - 1) as f32;
+                let id = if d != 0f32 { 1. / d } else { 0. };
+                ys.d = f16::from_f32(d);
+                for (y, &x) in ys.qs.iter_mut().zip(xs.iter()) {
+                    *y = f32::round(x * id) as i8
+                }
             }
         }
     }
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        #[cfg(target_feature = "avx2")]
-        return super::avx::vec_dot_q8_0_q8_0(n, xs, ys);
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            return unsafe { super::avx::vec_dot_q8_0_q8_0(n, xs, ys) };
+        }
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q8_0_q8_0(n, xs, ys);
@@ -823,8 +822,10 @@ impl GgmlType for BlockQ2K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        #[cfg(target_feature = "avx2")]
-        return super::avx::vec_dot_q2k_q8k(n, xs, ys);
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            return unsafe { super::avx::vec_dot_q2k_q8k(n, xs, ys) };
+        }
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q2k_q8k(n, xs, ys);
@@ -1056,8 +1057,10 @@ impl GgmlType for BlockQ3K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        #[cfg(target_feature = "avx2")]
-        return super::avx::vec_dot_q3k_q8k(n, xs, ys);
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            return unsafe { super::avx::vec_dot_q3k_q8k(n, xs, ys) };
+        }
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q3k_q8k(n, xs, ys);
@@ -1428,8 +1431,10 @@ impl GgmlType for BlockQ4K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        #[cfg(target_feature = "avx2")]
-        return super::avx::vec_dot_q4k_q8k(n, xs, ys);
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            return unsafe { super::avx::vec_dot_q4k_q8k(n, xs, ys) };
+        }
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q4k_q8k(n, xs, ys);
@@ -1702,8 +1707,10 @@ impl GgmlType for BlockQ5K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        #[cfg(target_feature = "avx2")]
-        return super::avx::vec_dot_q5k_q8k(n, xs, ys);
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            return unsafe { super::avx::vec_dot_q5k_q8k(n, xs, ys) };
+        }
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q5k_q8k(n, xs, ys);
@@ -2003,8 +2010,10 @@ impl GgmlType for BlockQ6K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        #[cfg(target_feature = "avx2")]
-        return super::avx::vec_dot_q6k_q8k(n, xs, ys);
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            return unsafe { super::avx::vec_dot_q6k_q8k(n, xs, ys) };
+        }
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q6k_q8k(n, xs, ys);
@@ -2285,8 +2294,10 @@ impl GgmlType for BlockQ8K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> f32 {
-        #[cfg(target_feature = "avx2")]
-        return super::avx::vec_dot_q8k_q8k(n, xs, ys);
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if has_avx2_fma() {
+            return unsafe { super::avx::vec_dot_q8k_q8k(n, xs, ys) };
+        }
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q8k_q8k(n, xs, ys);
@@ -2491,91 +2502,7 @@ pub fn matmul<T: GgmlType>(
     })
 }
 
-/// Pack Q4K blocks into the 8-column interleaved format for 8 x GEMV
-#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
-pub(crate) fn pack_to_q4kx8(blocks: &[BlockQ4K], n: usize) -> Vec<BlockQ4Kx8> {
-    debug_assert!(n.is_multiple_of(8));
-    debug_assert_eq!(blocks.len() % n, 0);
-    let k_blocks = blocks.len() / n;
-    let n_groups = n / 8;
-    let count = n_groups * k_blocks;
-    let mut packed: Vec<BlockQ4Kx8> = Vec::with_capacity(count);
-    for g in 0..n_groups {
-        for b in 0..k_blocks {
-            let mut p = BlockQ4Kx8 {
-                d: [f16::ZERO; 8],
-                dmin: [f16::ZERO; 8],
-                scales: [0; 96],
-                qs: [0; 1024],
-            };
-
-            let src: [&BlockQ4K; 8] = std::array::from_fn(|i| &blocks[(g * 8 + i) * k_blocks + b]);
-            for (i, s) in src.iter().enumerate() {
-                p.d[i] = s.d;
-                p.dmin[i] = s.dmin;
-            }
-            // Interleave nibbles 8 bytes at a time.
-            for i in 0..128usize {
-                let col = i % 8;
-                let off = (i / 8) * 8;
-                p.qs[i * 8..i * 8 + 8].copy_from_slice(&src[col].qs[off..off + 8]);
-            }
-            // First 48 bytes of scales: lo-nibble scales[0..3] and mins[0..3] for all 8 cols.
-            for i in 0..4usize {
-                let mut s = [0u8; 8];
-                let mut m = [0u8; 8];
-                for j in 0..8 {
-                    s[j] = src[j].scales[i] & 63;
-                    m[j] = src[j].scales[i + 4] & 63;
-                }
-                let b12 = i * 12;
-                p.scales[b12] = (s[0] & 63) + ((s[4] & 48) << 2);
-                p.scales[b12 + 1] = (s[1] & 63) + ((s[5] & 48) << 2);
-                p.scales[b12 + 2] = (s[2] & 63) + ((s[6] & 48) << 2);
-                p.scales[b12 + 3] = (s[3] & 63) + ((s[7] & 48) << 2);
-                p.scales[b12 + 4] = (m[0] & 63) + ((m[4] & 48) << 2);
-                p.scales[b12 + 5] = (m[1] & 63) + ((m[5] & 48) << 2);
-                p.scales[b12 + 6] = (m[2] & 63) + ((m[6] & 48) << 2);
-                p.scales[b12 + 7] = (m[3] & 63) + ((m[7] & 48) << 2);
-                p.scales[b12 + 8] = (s[4] & 15) + ((m[4] & 15) << 4);
-                p.scales[b12 + 9] = (s[5] & 15) + ((m[5] & 15) << 4);
-                p.scales[b12 + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
-                p.scales[b12 + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
-            }
-            // Last 48 bytes of scales: hi-nibble scales[4..7] and mins[4..7] for all 8 cols.
-            for i in 0..4usize {
-                let mut s = [0u8; 8];
-                let mut m = [0u8; 8];
-                for j in 0..8 {
-                    s[j] = ((src[j].scales[i] & 192) >> 2) | (src[j].scales[i + 8] & 15);
-                    m[j] =
-                        ((src[j].scales[i + 4] & 192) >> 2) | ((src[j].scales[i + 8] & 240) >> 4);
-                }
-                let b12 = i * 12 + 48;
-                p.scales[b12] = (s[0] & 63) + ((s[4] & 48) << 2);
-                p.scales[b12 + 1] = (s[1] & 63) + ((s[5] & 48) << 2);
-                p.scales[b12 + 2] = (s[2] & 63) + ((s[6] & 48) << 2);
-                p.scales[b12 + 3] = (s[3] & 63) + ((s[7] & 48) << 2);
-                p.scales[b12 + 4] = (m[0] & 63) + ((m[4] & 48) << 2);
-                p.scales[b12 + 5] = (m[1] & 63) + ((m[5] & 48) << 2);
-                p.scales[b12 + 6] = (m[2] & 63) + ((m[6] & 48) << 2);
-                p.scales[b12 + 7] = (m[3] & 63) + ((m[7] & 48) << 2);
-                p.scales[b12 + 8] = (s[4] & 15) + ((m[4] & 15) << 4);
-                p.scales[b12 + 9] = (s[5] & 15) + ((m[5] & 15) << 4);
-                p.scales[b12 + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
-                p.scales[b12 + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
-            }
-
-            packed.push(p);
-        }
-    }
-    packed
-}
-
-/// Q4K matmul with 8-column `BlockQ4Kx8` interleaved layout.
-///
-/// Currently only enabled on AArch64 (with dotprod enabled).
-#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+#[cfg(target_arch = "aarch64")]
 pub(crate) fn matmul_q4k_x8(
     (m, k, n): (usize, usize, usize),
     lhs: &[f32],
@@ -2615,6 +2542,35 @@ pub(crate) fn matmul_q4k_x8(
         let lhs_b: &[BlockQ8K] = lhs_b;
         let repacked_ptr = repacked.as_ptr() as usize;
         let x8_block_bytes = std::mem::size_of::<BlockQ4Kx8>();
+
+        if m == 1 {
+            let lhs_row_ptr = lhs_b.as_ptr() as usize;
+            let dst_row_ptr = dst.as_mut_ptr() as usize;
+            pool.execute(|tid| {
+                let start = tid * groups_per_thread;
+                if start >= n_groups {
+                    return;
+                }
+                let end = n_groups.min((tid + 1) * groups_per_thread);
+                let lhs_row: &[BlockQ8K] = unsafe {
+                    std::slice::from_raw_parts(lhs_row_ptr as *const BlockQ8K, k_in_blocks)
+                };
+                let dst_ptr = dst_row_ptr as *mut f32;
+                for g in start..end {
+                    let xs = unsafe {
+                        std::slice::from_raw_parts(
+                            (repacked_ptr + g * k_in_blocks * x8_block_bytes) as *const BlockQ4Kx8,
+                            k_in_blocks,
+                        )
+                    };
+                    let results = vec_dot_8_q4k_q8k(k, xs, lhs_row);
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(results.as_ptr(), dst_ptr.add(g * 8), 8);
+                    }
+                }
+            });
+            return Ok(());
+        }
 
         for row_idx in 0..m {
             let lhs_row = &lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
