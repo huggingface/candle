@@ -113,16 +113,44 @@ struct Mask {
     const int max_seqlen_k, max_seqlen_q;
     const int window_size_left, window_size_right;
     const float alibi_slope;
+    const int *__restrict__ mm_prefix_ranges;
+    const int mm_prefix_range_batch_stride;
+    const int max_mm_prefix_ranges;
 
     __forceinline__ __device__ Mask(const int max_seqlen_k, const int max_seqlen_q,
                                     const int window_size_left, const int window_size_right,
-                                    const float alibi_slope=0.f)
+                                    const float alibi_slope=0.f,
+                                    const int *__restrict__ mm_prefix_ranges=nullptr,
+                                    const int mm_prefix_range_batch_stride=0,
+                                    const int max_mm_prefix_ranges=0,
+                                    const int bidb=0)
         : max_seqlen_k(max_seqlen_k)
         , max_seqlen_q(max_seqlen_q)
         , window_size_left(window_size_left)
         , window_size_right(window_size_right)
-        , alibi_slope(!Has_alibi ? 0.0 : alibi_slope) {
+        , alibi_slope(!Has_alibi ? 0.0 : alibi_slope)
+        , mm_prefix_ranges(mm_prefix_ranges == nullptr ? nullptr : mm_prefix_ranges + bidb * mm_prefix_range_batch_stride)
+        , mm_prefix_range_batch_stride(mm_prefix_range_batch_stride)
+        , max_mm_prefix_ranges(max_mm_prefix_ranges) {
     };
+
+    __forceinline__ __device__ bool mm_prefix_allowed(const int row_idx, const int col_idx) const {
+        if (mm_prefix_ranges == nullptr || col_idx >= max_seqlen_k) {
+            return false;
+        }
+        const int query_abs_pos = row_idx + max_seqlen_k - max_seqlen_q;
+        #pragma unroll
+        for (int i = 0; i < max_mm_prefix_ranges; ++i) {
+            const int range_start = mm_prefix_ranges[i * 2];
+            const int range_end = mm_prefix_ranges[i * 2 + 1];
+            if (range_start < range_end
+                && query_abs_pos >= range_start && query_abs_pos < range_end
+                && col_idx >= range_start && col_idx < range_end) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     // Causal_mask: whether this particular iteration needs causal masking
     template <bool Causal_mask=false, bool Is_even_MN=true, typename Engine, typename Layout>
@@ -185,12 +213,14 @@ struct Mask {
                                     }
                                 }
                                 if constexpr (Causal_mask) {
-                                    if (col_idx >= col_idx_limit_right) {
+                                    if (col_idx >= col_idx_limit_right
+                                        && !mm_prefix_allowed(row_idx, col_idx)) {
                                         tensor(make_coord(i, mi), make_coord(j, nj)) = -INFINITY;
                                     }
                                 }
                                 if constexpr (Is_local) {
-                                    if (col_idx >= col_idx_limit_right || col_idx < col_idx_limit_left) {
+                                    if ((col_idx >= col_idx_limit_right || col_idx < col_idx_limit_left)
+                                        && !mm_prefix_allowed(row_idx, col_idx)) {
                                         tensor(make_coord(i, mi), make_coord(j, nj)) = -INFINITY;
                                     }
                                 }
