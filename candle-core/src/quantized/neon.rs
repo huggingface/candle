@@ -379,7 +379,7 @@ fn quantize_q8_0x4_interleaved<const BLOCK_LEN: usize>(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn vec_dot_4_q4_0x4_q8_0_4x4(n: usize, xs: &[BlockQ4_0x4], ys: &[BlockQ8_0]) -> [f32; 4] {
     debug_assert!(n.is_multiple_of(QK8_0));
     let mut out = [0f32; 4];
@@ -456,7 +456,7 @@ unsafe fn vec_dot_4_q4_0x4_q8_0_4x4(n: usize, xs: &[BlockQ4_0x4], ys: &[BlockQ8_
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn vec_dot_4_q4_0x4_q8_0_4x8(n: usize, xs: &[BlockQ4_0x4], ys: &[BlockQ8_0]) -> [f32; 4] {
     debug_assert!(n.is_multiple_of(QK8_0));
     let mut out = [0f32; 4];
@@ -607,7 +607,7 @@ fn matmul_q4_0_x4_gemv(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn store_q4_0x4_4x4(
     dst: *mut f32,
     n: usize,
@@ -691,6 +691,7 @@ unsafe fn store_q4_0x4_4x4(
 }
 
 #[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "dotprod")]
 pub(crate) fn matmul_q4_0_x4(
     (m, k, n): (usize, usize, usize),
     lhs: &[f32],
@@ -774,7 +775,7 @@ pub(crate) fn matmul_q4_0_x4(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "i8mm")]
 unsafe fn store_q4_0x4_4x4_i8mm(
     dst: *mut f32,
     n: usize,
@@ -873,6 +874,7 @@ unsafe fn store_q4_0x4_4x4_i8mm(
 }
 
 #[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "i8mm")]
 pub(crate) fn matmul_q4_0_x4_i8mm(
     (m, k, n): (usize, usize, usize),
     lhs: &[f32],
@@ -881,9 +883,6 @@ pub(crate) fn matmul_q4_0_x4_i8mm(
 ) -> crate::Result<()> {
     debug_assert!(k.is_multiple_of(QK8_0));
     debug_assert!(n.is_multiple_of(4));
-    if crate::cpu::features::get().dotprod && m == 1 {
-        return matmul_q4_0_x4_gemv((m, k, n), lhs, repacked, dst);
-    }
     debug_assert!(m.is_multiple_of(4));
     let k_in_blocks = k / QK8_0;
     let n_groups = n / 4;
@@ -1004,7 +1003,7 @@ fn quantize_q8k_x4_interleaved<const BLOCK_LEN: usize>(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "i8mm")]
 unsafe fn store_q4kx8_4x8_i8mm(
     dst: *mut f32,
     n: usize,
@@ -1156,6 +1155,7 @@ unsafe fn store_q4kx8_4x8_i8mm(
 }
 
 #[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "i8mm")]
 pub(crate) fn matmul_q4k_x8_i8mm(
     (m, k, n): (usize, usize, usize),
     lhs: &[f32],
@@ -1238,7 +1238,7 @@ pub(crate) fn matmul_q4k_x8_i8mm(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn store_q5kx8_4x8(
     dst: *mut f32,
     n: usize,
@@ -1445,7 +1445,7 @@ unsafe fn store_q5kx8_4x8(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "i8mm")]
 unsafe fn store_q5kx8_4x8_i8mm(
     dst: *mut f32,
     n: usize,
@@ -1612,7 +1612,7 @@ unsafe fn store_q5kx8_4x8_i8mm(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn vec_dot_8_q5kx8_q8k_8x4(n: usize, xs: &[BlockQ5Kx8], ys: &[BlockQ8K]) -> [f32; 8] {
     debug_assert!(n.is_multiple_of(QK_K));
     let mut out = [0f32; 8];
@@ -1729,7 +1729,7 @@ unsafe fn vec_dot_8_q5kx8_q8k_8x4(n: usize, xs: &[BlockQ5Kx8], ys: &[BlockQ8K]) 
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "i8mm")]
 unsafe fn vec_dot_8_q5kx8_q8k_8x8(n: usize, xs: &[BlockQ5Kx8], ys: &[BlockQ8K]) -> [f32; 8] {
     debug_assert!(n.is_multiple_of(QK_K));
     let mut out = [0f32; 8];
@@ -2010,7 +2010,7 @@ pub(crate) fn matmul_q5k_x8(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn store_q6kx8_4x8(
     dst: *mut f32,
     n: usize,
@@ -2193,7 +2193,7 @@ unsafe fn store_q6kx8_4x8(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "i8mm")]
 unsafe fn store_q6kx8_4x8_i8mm(
     dst: *mut f32,
     n: usize,
@@ -2356,7 +2356,7 @@ unsafe fn load_i32x4(a: i32, b: i32, c: i32, d: i32) -> int32x4_t {
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "i8mm")]
 unsafe fn vec_dot_8_q6kx8_q8k_8x8(n: usize, xs: &[BlockQ6Kx8], ys: &[BlockQ8K]) -> [f32; 8] {
     debug_assert!(n.is_multiple_of(QK_K));
     let mut out = [0f32; 8];
@@ -2493,7 +2493,7 @@ unsafe fn vec_dot_8_q6kx8_q8k_8x8(n: usize, xs: &[BlockQ6Kx8], ys: &[BlockQ8K]) 
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn vec_dot_8_q6kx8_q8k_8x4(n: usize, xs: &[BlockQ6Kx8], ys: &[BlockQ8K]) -> [f32; 8] {
     debug_assert!(n.is_multiple_of(QK_K));
     let mut out = [0f32; 8];
@@ -2809,7 +2809,7 @@ pub(crate) fn matmul_q6k_x8(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn store_q8_0x4_4x4(
     dst: *mut f32,
     n: usize,
@@ -2882,7 +2882,7 @@ unsafe fn store_q8_0x4_4x4(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn vec_dot_4_q8_0x4_q8_0_4x4(n: usize, xs: &[BlockQ8_0x4], ys: &[BlockQ8_0]) -> [f32; 4] {
     debug_assert!(n.is_multiple_of(QK8_0));
     let mut out = [0f32; 4];
@@ -2914,7 +2914,7 @@ unsafe fn vec_dot_4_q8_0x4_q8_0_4x4(n: usize, xs: &[BlockQ8_0x4], ys: &[BlockQ8_
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 unsafe fn vec_dot_4_q8_0x4_q8_0_4x8(n: usize, xs: &[BlockQ8_0x4], ys: &[BlockQ8_0]) -> [f32; 4] {
     debug_assert!(n.is_multiple_of(QK8_0));
     let mut out = [0f32; 4];
@@ -3026,6 +3026,7 @@ fn matmul_q8_0_x4_gemv(
 }
 
 #[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "dotprod")]
 pub(crate) fn matmul_q8_0_x4(
     (m, k, n): (usize, usize, usize),
     lhs: &[f32],
@@ -3109,7 +3110,7 @@ pub(crate) fn matmul_q8_0_x4(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "i8mm")]
 unsafe fn store_q8_0x4_4x4_i8mm(
     dst: *mut f32,
     n: usize,
@@ -3177,6 +3178,7 @@ unsafe fn store_q8_0x4_4x4_i8mm(
 }
 
 #[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "i8mm")]
 pub(crate) fn matmul_q8_0_x4_i8mm(
     (m, k, n): (usize, usize, usize),
     lhs: &[f32],
@@ -3185,9 +3187,6 @@ pub(crate) fn matmul_q8_0_x4_i8mm(
 ) -> crate::Result<()> {
     debug_assert!(k.is_multiple_of(QK8_0));
     debug_assert!(n.is_multiple_of(4));
-    if crate::cpu::features::get().dotprod && m == 1 {
-        return matmul_q8_0_x4_gemv((m, k, n), lhs, repacked, dst);
-    }
     debug_assert!(m.is_multiple_of(4));
     let k_in_blocks = k / QK8_0;
     let n_groups = n / 4;
@@ -4176,7 +4175,7 @@ unsafe fn multiply_accum_with_scale(
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[target_feature(enable = "dotprod")]
 pub(crate) fn vec_dot_8_q4k_q8k(n: usize, xs: &[BlockQ4Kx8], ys: &[BlockQ8K]) -> [f32; 8] {
     debug_assert!(n.is_multiple_of(QK_K));
     let mut out = [0f32; 8];

@@ -318,17 +318,17 @@ impl PackedKind {
             #[cfg(target_arch = "aarch64")]
             (Self::Q4_0x4, PackedStorage::Q4_0x4(packed)) => {
                 if features.i8mm && mkn.0 >= 4 {
-                    super::neon::matmul_q4_0_x4_i8mm(mkn, lhs, packed, dst)
+                    unsafe { super::neon::matmul_q4_0_x4_i8mm(mkn, lhs, packed, dst) }
                 } else {
-                    super::neon::matmul_q4_0_x4(mkn, lhs, packed, dst)
+                    unsafe { super::neon::matmul_q4_0_x4(mkn, lhs, packed, dst) }
                 }
             }
             #[cfg(target_arch = "aarch64")]
             (Self::Q4Kx8, PackedStorage::Q4Kx8(packed)) => {
                 if features.i8mm && mkn.0 >= 4 {
-                    super::neon::matmul_q4k_x8_i8mm(mkn, lhs, packed, dst)
+                    unsafe { super::neon::matmul_q4k_x8_i8mm(mkn, lhs, packed, dst) }
                 } else {
-                    super::k_quants::matmul_q4k_x8(mkn, lhs, packed, dst)
+                    unsafe { super::k_quants::matmul_q4k_x8(mkn, lhs, packed, dst) }
                 }
             }
             #[cfg(target_arch = "aarch64")]
@@ -342,9 +342,9 @@ impl PackedKind {
             #[cfg(target_arch = "aarch64")]
             (Self::Q8_0x4, PackedStorage::Q8_0x4(packed)) => {
                 if features.i8mm && mkn.0 >= 4 {
-                    super::neon::matmul_q8_0_x4_i8mm(mkn, lhs, packed, dst)
+                    unsafe { super::neon::matmul_q8_0_x4_i8mm(mkn, lhs, packed, dst) }
                 } else {
-                    super::neon::matmul_q8_0_x4(mkn, lhs, packed, dst)
+                    unsafe { super::neon::matmul_q8_0_x4(mkn, lhs, packed, dst) }
                 }
             }
             #[allow(unreachable_patterns)]

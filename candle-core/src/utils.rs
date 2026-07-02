@@ -319,13 +319,28 @@ pub fn with_threadpool<F: FnOnce() -> R + Send, R: Send>(f: F) -> R {
     candle_pool().install(f)
 }
 
+pub fn init_global_threadpool() {
+    set_thread_affinity();
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(get_num_threads())
+        .start_handler(|_| set_thread_affinity())
+        .build_global();
+}
+
 fn default_num_threads() -> usize {
     let physical = {
         #[cfg(target_os = "macos")]
         {
             perf_core_count().unwrap_or_else(num_cpus::get_physical)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            linux_env_cpu_mask()
+                .or_else(linux_preferred_cpus)
+                .map(<[_]>::len)
+                .unwrap_or_else(num_cpus::get_physical)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             num_cpus::get_physical()
         }
@@ -346,7 +361,7 @@ fn candle_num_threads() -> usize {
         .ok()
         .and_then(|s| usize::from_str(&s).ok())
         .filter(|nt| nt > &0)
-        .unwrap_or_else(default_num_threads)
+        .unwrap_or_else(rayon_num_threads)
 }
 
 pub fn get_num_threads() -> usize {
@@ -373,6 +388,108 @@ fn perf_core_count() -> Option<usize> {
     (ret == 0 && count > 0).then_some(count as usize)
 }
 
+#[cfg(target_os = "linux")]
+fn linux_preferred_cpus() -> Option<&'static [usize]> {
+    static CPUS: OnceLock<Option<Vec<usize>>> = OnceLock::new();
+    CPUS.get_or_init(linux_detect_preferred_cpus).as_deref()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_env_cpu_mask() -> Option<&'static [usize]> {
+    static CPUS: OnceLock<Option<Vec<usize>>> = OnceLock::new();
+    CPUS.get_or_init(|| {
+        std::env::var("CANDLE_CPU_MASK")
+            .ok()
+            .and_then(|mask| linux_parse_cpu_list(&mask))
+    })
+    .as_deref()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_affinity_enabled() -> bool {
+    std::env::var("CANDLE_CPU_AFFINITY")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_affinity_cpus() -> Option<&'static [usize]> {
+    linux_env_cpu_mask().or_else(|| {
+        linux_affinity_enabled()
+            .then(linux_preferred_cpus)
+            .flatten()
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_parse_cpu_list(mask: &str) -> Option<Vec<usize>> {
+    let mut cpus = Vec::new();
+    for part in mask
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let (start, end) = if let Some((start, end)) = part.split_once('-') {
+            let start = start.trim().parse::<usize>().ok()?;
+            let end = end.trim().parse::<usize>().ok()?;
+            (start, end)
+        } else {
+            let cpu = part.parse::<usize>().ok()?;
+            (cpu, cpu)
+        };
+        if start > end {
+            return None;
+        }
+        cpus.extend(start..=end);
+    }
+    cpus.sort_unstable();
+    cpus.dedup();
+    (!cpus.is_empty()).then_some(cpus)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_detect_preferred_cpus() -> Option<Vec<usize>> {
+    struct Cpu {
+        idx: usize,
+        capacity: usize,
+    }
+
+    let mut cpus = Vec::new();
+    for entry in std::fs::read_dir("/sys/devices/system/cpu").ok()?.flatten() {
+        let cpu_name = entry.file_name();
+        let cpu_name = cpu_name.to_str()?;
+        let Some(idx) = cpu_name
+            .strip_prefix("cpu")
+            .and_then(|idx| idx.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let path = entry.path();
+        let capacity = std::fs::read_to_string(path.join("cpu_capacity"))
+            .ok()?
+            .trim()
+            .parse::<usize>()
+            .ok()?;
+        cpus.push(Cpu { idx, capacity });
+    }
+    if cpus.len() < 2 {
+        return None;
+    }
+    let min = cpus.iter().map(|cpu| cpu.capacity).min()?;
+    let max = cpus.iter().map(|cpu| cpu.capacity).max()?;
+    if max == 0 || min * 10 >= max * 9 {
+        return None;
+    }
+    let total_cpus = cpus.len();
+    let mut preferred = cpus
+        .iter()
+        .filter(|cpu| cpu.capacity * 10 >= max * 9)
+        .map(|cpu| cpu.idx)
+        .collect::<Vec<_>>();
+    preferred.sort_unstable();
+    (preferred.len() < total_cpus).then_some(preferred)
+}
+
 static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
 
 pub(crate) fn candle_pool() -> &'static rayon::ThreadPool {
@@ -387,7 +504,7 @@ pub(crate) fn candle_pool() -> &'static rayon::ThreadPool {
 
 #[cfg(target_os = "macos")]
 /// Elevate the thread QoS so macOS prefers running on Performance (P) cores.
-fn set_thread_affinity() {
+pub fn set_thread_affinity() {
     use libc::{pthread_set_qos_class_self_np, qos_class_t::QOS_CLASS_USER_INTERACTIVE};
     unsafe {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -396,8 +513,22 @@ fn set_thread_affinity() {
 
 #[cfg(not(target_os = "macos"))]
 #[inline(always)]
-fn set_thread_affinity() {
-    // On non‑macOS platforms we currently leave thread affinity untouched.
+pub fn set_thread_affinity() {
+    #[cfg(target_os = "linux")]
+    if let Some(cpus) = linux_affinity_cpus() {
+        unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            libc::CPU_ZERO(&mut set);
+            for &cpu in cpus {
+                libc::CPU_SET(cpu, &mut set);
+            }
+            let _ = libc::pthread_setaffinity_np(
+                libc::pthread_self(),
+                std::mem::size_of::<libc::cpu_set_t>(),
+                &set,
+            );
+        }
+    }
 }
 
 pub fn has_accelerate() -> bool {
@@ -430,4 +561,25 @@ pub fn with_simd128() -> bool {
 
 pub fn with_f16c() -> bool {
     crate::cpu::features::get().f16c
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::linux_parse_cpu_list;
+
+    #[test]
+    fn parses_cpu_list() {
+        assert_eq!(
+            linux_parse_cpu_list("5-9,15,17-19"),
+            Some(vec![5, 6, 7, 8, 9, 15, 17, 18, 19])
+        );
+        assert_eq!(linux_parse_cpu_list(" 3 , 1-2,2 "), Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn rejects_invalid_cpu_list() {
+        assert_eq!(linux_parse_cpu_list(""), None);
+        assert_eq!(linux_parse_cpu_list("9-5"), None);
+        assert_eq!(linux_parse_cpu_list("5,a"), None);
+    }
 }

@@ -32,7 +32,10 @@ mod cuda {
     pub use super::dummy_cuda::*;
 }
 
-#[cfg(target_feature = "neon")]
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "arm", target_feature = "neon")
+))]
 pub mod neon;
 #[cfg(target_feature = "simd128")]
 pub mod simd128;
