@@ -1,0 +1,58 @@
+name: 🔨 Build/Compilation Failure
+description: Report issues building Candle or its dependencies
+labels: ["build"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Build issues often involve missing dependencies or linker configuration.
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Build Error
+      description: Full compilation error output
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: flags
+    attributes:
+      label: Feature Flags & Optimizations
+      description: Cargo features and compilation flags used
+      placeholder: |
+        features = ["cuda", "cudnn", "mkl"]
+        RUSTFLAGS = "-C target-cpu=native"
+
+  - type: textarea
+    id: cargo-toml
+    attributes:
+      label: Cargo.toml Dependencies
+      description: Relevant section of your Cargo.toml
+      render: toml
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS (Intel)
+        - macOS (Apple Silicon)
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Details
+      description: Rust version, CUDA version, system libraries, etc.
+      placeholder: |
+        rustc --version: 1.85.0
+        CUDA version: 12.3
+        Installed libs: libmkl-dev, cutlass
