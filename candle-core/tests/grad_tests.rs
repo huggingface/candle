@@ -505,6 +505,19 @@ fn binary_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn cumsum_grad(device: &Device) -> Result<()> {
+    let x = Var::from_slice(&[1f32, 2., 3., 4., 5., 6.], (2, 3), device)?;
+    let weights = Tensor::from_slice(&[1f32, 2., 3., 4., 5., 6.], (2, 3), device)?;
+    let y = (x.as_tensor().cumsum(1)? * weights)?.sum_all()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        grad_x.to_vec2::<f32>()?,
+        [[6.0, 5.0, 3.0], [15.0, 11.0, 6.0]]
+    );
+    Ok(())
+}
+
 #[test]
 fn test_flip_backprop() -> Result<()> {
     let device = &Device::Cpu;
@@ -542,6 +555,12 @@ test_device!(
     simple_grad_metal
 );
 test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal);
+test_device!(
+    cumsum_grad,
+    cumsum_grad_cpu,
+    cumsum_grad_gpu,
+    cumsum_grad_metal
+);
 test_device!(
     matmul_grad,
     matmul_grad_cpu,

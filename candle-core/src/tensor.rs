@@ -2806,8 +2806,25 @@ impl Tensor {
     pub fn cumsum<D: Dim>(&self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "cumsum")?;
         let rank = self.rank();
-        if rank == 0 {
+        if rank == 0 || self.shape().elem_count() == 0 {
             return Ok(self.clone());
+        }
+        if crate::cumsum::Cumsum::is_supported(self, dim) {
+            return self.apply_op1(crate::cumsum::Cumsum::new(dim));
+        }
+        #[cfg(feature = "cuda")]
+        if matches!(&*self.storage(), Storage::Cuda(_))
+            && crate::cumsum::Cumsum::is_cuda_dtype_supported(self.dtype())
+        {
+            let last = rank - 1;
+            if dim == last {
+                return self
+                    .contiguous()?
+                    .apply_op1(crate::cumsum::Cumsum::new(dim));
+            }
+            let t = self.transpose(dim, last)?.contiguous()?;
+            let t = t.apply_op1(crate::cumsum::Cumsum::new(last))?;
+            return t.transpose(dim, last);
         }
         let n_axis = self.dim(dim)?;
         let triu = Tensor::triu2(n_axis, self.dtype(), self.device())?;
