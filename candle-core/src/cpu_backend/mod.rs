@@ -585,6 +585,131 @@ impl Map1 for UpsampleBilinear2D {
     }
 }
 
+struct UpsampleBilinear2DAntialias {
+    target_h: usize,
+    target_w: usize,
+}
+
+impl UpsampleBilinear2DAntialias {
+    /// Build a per-axis weight matrix of shape `(dst, src)` where row `o`
+    /// contains normalized triangle weights for the input pixels contributing
+    /// to output `o`. Matches PyTorch's antialiased bilinear: support is
+    /// `max(1, 1/scale)` in input coordinates, weights linear in distance from
+    /// the mapped output center, normalized so each row sums to 1.
+    fn weight_matrix(src: usize, dst: usize) -> Result<Vec<f64>> {
+        if src == 0 || dst == 0 {
+            crate::bail!("weight_matrix requires src > 0 and dst > 0; got ({src}, {dst})");
+        }
+        let scale = dst as f64 / src as f64;
+        let support = (1.0_f64 / scale).max(1.0);
+        let mut weights = vec![0f64; dst * src];
+        for o in 0..dst {
+            let center = (o as f64 + 0.5) / scale - 0.5;
+            let i_min = ((center - support).floor() as i64).max(0) as usize;
+            // (center + support).ceil() is the exclusive upper bound: weights
+            // at or beyond it are zero by the (1 - dist).max(0) clamp below.
+            // No `.max(0)` here: for src >= 1, dst >= 1, o in 0..dst, the value
+            // is provably >= 0, so any negative would indicate a math bug we'd
+            // rather surface than silently clamp.
+            let i_max_excl = ((center + support).ceil() as i64).max(0) as usize;
+            let i_max_excl = i_max_excl.min(src);
+            // Defensive: if the window collapses to empty (unreachable today
+            // given the kernel's positive-dim guard, but cheap insurance under
+            // future refactors), fall back to a single-pixel weight at i_min
+            // clamped to src-1. Avoids silently emitting T::zero() at every
+            // output pixel using this row.
+            if i_min >= i_max_excl {
+                let i = i_min.min(src - 1);
+                weights[o * src + i] = 1.0;
+                continue;
+            }
+            let mut row_sum = 0f64;
+            for i in i_min..i_max_excl {
+                let dist = (i as f64 - center).abs() / support;
+                let w = (1.0 - dist).max(0.0);
+                weights[o * src + i] = w;
+                row_sum += w;
+            }
+            if row_sum > 0.0 {
+                for i in i_min..i_max_excl {
+                    weights[o * src + i] /= row_sum;
+                }
+            } else {
+                // All weights clamped to zero (e.g. degenerate fp edge case).
+                // Same fallback as the empty-window case above: single-pixel
+                // identity weight. Never silently emit zeros.
+                let i = i_min.min(src - 1);
+                weights[o * src + i] = 1.0;
+            }
+        }
+        Ok(weights)
+    }
+}
+
+impl Map1 for UpsampleBilinear2DAntialias {
+    fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
+        let (batch, channels, height_in, width_in) = layout.shape().dims4()?;
+        let height_out = self.target_h;
+        let width_out = self.target_w;
+
+        // Reject zero-sized dims explicitly: dims4()? validates rank but not
+        // that each dim is positive. A zero input dim divides by zero in the
+        // weight-matrix scale calculation; a zero target dim returns an empty
+        // tensor that callers usually didn't intend.
+        if height_in == 0 || width_in == 0 || height_out == 0 || width_out == 0 {
+            crate::bail!(
+                "upsample_bilinear2d_antialias requires positive dims; \
+                 input ({batch}, {channels}, {height_in}, {width_in}), \
+                 target ({height_out}, {width_out})"
+            );
+        }
+
+        let stride = layout.stride();
+        let src_offset = layout.start_offset();
+
+        let weights_h = Self::weight_matrix(height_in, height_out)?;
+        let weights_w = Self::weight_matrix(width_in, width_out)?;
+
+        let mut dst = vec![T::zero(); batch * channels * height_out * width_out];
+
+        // Per-output-pixel triangle-weighted sum, equivalent in exact
+        // arithmetic to `output = W_h @ input @ W_w^T` with W_h of shape
+        // (height_out, height_in) and W_w of shape (width_out, width_in).
+        // Accumulate in f64 and cast once at the end to preserve precision;
+        // floating-point equivalence to the matmul form depends on this f64
+        // accumulator. A T-typed accumulator would round differently.
+        for b in 0..batch {
+            for c in 0..channels {
+                let base_idx = src_offset + b * stride[0] + c * stride[1];
+                let dst_base = (b * channels + c) * height_out * width_out;
+
+                for h_out in 0..height_out {
+                    let row_h = &weights_h[h_out * height_in..(h_out + 1) * height_in];
+                    for w_out in 0..width_out {
+                        let row_w = &weights_w[w_out * width_in..(w_out + 1) * width_in];
+                        let mut value = 0f64;
+                        for (h_in, &weight_h) in row_h.iter().enumerate() {
+                            if weight_h == 0.0 {
+                                continue;
+                            }
+                            for (w_in, &weight_w) in row_w.iter().enumerate() {
+                                if weight_w == 0.0 {
+                                    continue;
+                                }
+                                let idx = base_idx + h_in * stride[2] + w_in * stride[3];
+                                value += src[idx].to_f64() * weight_h * weight_w;
+                            }
+                        }
+                        dst[dst_base + h_out * width_out + w_out] = T::from_f64(value);
+                    }
+                }
+            }
+        }
+
+        Ok(dst)
+    }
+}
+
 struct Gather<'a, I: IntDType> {
     ids: &'a [I],
     ids_l: &'a Layout,
@@ -2390,6 +2515,14 @@ impl BackendStorage for CpuStorage {
         .map(self, layout)
     }
 
+    fn upsample_bilinear2d_antialias(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
+        UpsampleBilinear2DAntialias {
+            target_h: h,
+            target_w: w,
+        }
+        .map(self, layout)
+    }
+
     fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {
         use num_traits::Float;
         // TODO: Have some generic map for functions that apply on num_traits::Float elements.
@@ -3324,4 +3457,108 @@ macro_rules! map_dtype {
             s => Err(Error::UnsupportedDTypeForOp(s.dtype(), $name).bt())?,
         }
     };
+}
+
+#[cfg(test)]
+mod upsample_bilinear2d_antialias_tests {
+    use super::UpsampleBilinear2DAntialias;
+
+    #[test]
+    fn weight_matrix_invariants_across_ratios() {
+        // Mix of square-ish, prime, and extreme ratios. Extreme cases (1, 64)
+        // and (64, 1) test single-pixel rows and large support windows.
+        for &(src, dst) in &[
+            (8, 4),
+            (16, 8),
+            (8, 5),
+            (4, 4),
+            (4, 8),
+            (1, 1),
+            (7, 3),
+            (3, 7),
+            (64, 1),
+            (1, 64),
+        ] {
+            let m = UpsampleBilinear2DAntialias::weight_matrix(src, dst).unwrap();
+            assert_eq!(m.len(), dst * src, "shape mismatch for ({src}, {dst})");
+            for row in 0..dst {
+                let sum: f64 = m[row * src..(row + 1) * src].iter().sum();
+                assert!(
+                    (sum - 1.0).abs() < 1e-12,
+                    "weight_matrix({src}, {dst}) row {row} sum = {sum}, expected 1.0"
+                );
+            }
+            assert!(
+                m.iter().all(|&w| w >= 0.0),
+                "weight_matrix({src}, {dst}) has a negative weight"
+            );
+        }
+    }
+
+    #[test]
+    fn weight_matrix_zero_dim_errors() {
+        assert!(UpsampleBilinear2DAntialias::weight_matrix(0, 4).is_err());
+        assert!(UpsampleBilinear2DAntialias::weight_matrix(4, 0).is_err());
+        assert!(UpsampleBilinear2DAntialias::weight_matrix(0, 0).is_err());
+    }
+
+    #[test]
+    fn weight_matrix_known_values_2_to_1() {
+        // 2 -> 1: single output pixel averages both inputs equally.
+        // scale = 0.5, support = 2.0, center = (0+0.5)/0.5 - 0.5 = 0.5.
+        // Distances 0 and 1 from center (0.5) are 0.5 and 0.5 in input units;
+        // normalized by support (2.0) gives 0.25 and 0.25.
+        // Triangle weights: (1 - 0.25) = 0.75 each; row sum 1.5; normalized 0.5 each.
+        let m = UpsampleBilinear2DAntialias::weight_matrix(2, 1).unwrap();
+        assert_eq!(m.len(), 2);
+        assert!((m[0] - 0.5).abs() < 1e-12, "expected 0.5, got {}", m[0]);
+        assert!((m[1] - 0.5).abs() < 1e-12, "expected 0.5, got {}", m[1]);
+    }
+
+    #[test]
+    fn weight_matrix_known_values_1_to_2() {
+        // 1 -> 2: each output pixel sees only the single input pixel.
+        // Both rows must be [1.0] after normalization.
+        let m = UpsampleBilinear2DAntialias::weight_matrix(1, 2).unwrap();
+        assert_eq!(m.len(), 2);
+        assert!(
+            (m[0] - 1.0).abs() < 1e-12,
+            "row 0: expected 1.0, got {}",
+            m[0]
+        );
+        assert!(
+            (m[1] - 1.0).abs() < 1e-12,
+            "row 1: expected 1.0, got {}",
+            m[1]
+        );
+    }
+
+    #[test]
+    fn weight_matrix_known_values_4_to_2() {
+        // 4 -> 2: scale = 0.5, support = 2.0.
+        // Row 0: center = (0+0.5)/0.5 - 0.5 = 0.5.
+        //   weights at i=0,1,2,3: (1 - |0-0.5|/2), (1 - |1-0.5|/2), (1 - |2-0.5|/2), (1 - |3-0.5|/2)
+        //   = 0.75, 0.75, 0.25, 0.0 -> sum 1.75 -> normalized 0.75/1.75, 0.75/1.75, 0.25/1.75, 0.
+        // Row 1: center = (1+0.5)/0.5 - 0.5 = 2.5.
+        //   weights: 0, 0.25, 0.75, 0.75 -> sum 1.75 -> mirror of row 0.
+        let m = UpsampleBilinear2DAntialias::weight_matrix(4, 2).unwrap();
+        assert_eq!(m.len(), 8);
+        let row_sum = 1.75_f64;
+        let expected_row0 = [0.75 / row_sum, 0.75 / row_sum, 0.25 / row_sum, 0.0];
+        let expected_row1 = [0.0, 0.25 / row_sum, 0.75 / row_sum, 0.75 / row_sum];
+        for i in 0..4 {
+            assert!(
+                (m[i] - expected_row0[i]).abs() < 1e-12,
+                "row 0 col {i}: expected {}, got {}",
+                expected_row0[i],
+                m[i]
+            );
+            assert!(
+                (m[4 + i] - expected_row1[i]).abs() < 1e-12,
+                "row 1 col {i}: expected {}, got {}",
+                expected_row1[i],
+                m[4 + i]
+            );
+        }
+    }
 }
