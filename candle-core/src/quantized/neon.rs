@@ -1022,7 +1022,9 @@ unsafe fn store_q4kx8_4x8_i8mm(
         let mut bsums_arr = [[0i16; 8]; 4];
         for (r, bsums_row) in bsums_arr.iter_mut().enumerate() {
             for (i, bsums) in bsums_row.iter_mut().enumerate() {
-                *bsums = y.bsums[16 * r + i] + y.bsums[16 * r + i + 8];
+                // quarter-major interleaved layout: [16 * quarter + 4 * row + half-pair]
+                let base = 16 * (i / 2) + 4 * r + (2 * i) % 4;
+                *bsums = y.bsums[base] + y.bsums[base + 1];
             }
         }
 
@@ -1321,7 +1323,9 @@ unsafe fn store_q5kx8_4x8(
         let mut bsums_arr = [[0i16; 8]; 4];
         for r in 0..4 {
             for i in 0..8 {
-                bsums_arr[r][i] = y.bsums[16 * r + i] + y.bsums[16 * r + i + 8];
+                // quarter-major interleaved layout: [16 * quarter + 4 * row + half-pair]
+                let base = 16 * (i / 2) + 4 * r + (2 * i) % 4;
+                bsums_arr[r][i] = y.bsums[base] + y.bsums[base + 1];
             }
         }
 
@@ -1466,7 +1470,9 @@ unsafe fn store_q5kx8_4x8_i8mm(
         let mut bsums_arr = [[0i16; 8]; 4];
         for (r, bsums_row) in bsums_arr.iter_mut().enumerate() {
             for (i, bsums) in bsums_row.iter_mut().enumerate() {
-                *bsums = y.bsums[16 * r + i] + y.bsums[16 * r + i + 8];
+                // quarter-major interleaved layout: [16 * quarter + 4 * row + half-pair]
+                let base = 16 * (i / 2) + 4 * r + (2 * i) % 4;
+                *bsums = y.bsums[base] + y.bsums[base + 1];
             }
         }
 

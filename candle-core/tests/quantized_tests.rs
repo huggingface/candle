@@ -1569,3 +1569,31 @@ test_device!(
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
 );
+
+// Repacked aarch64 kernels must agree with the dequantized reference across the m tiers
+// that select different paths: 1 (gemv), 4/512 (tiled), 23 (generic fallback).
+#[test]
+fn qmatmul_repack_matches_reference_across_m() -> Result<()> {
+    let dev = Device::Cpu;
+    let (k, n) = (512, 256);
+    for dtype in [GgmlDType::Q4K, GgmlDType::Q5K, GgmlDType::Q6K, GgmlDType::Q8_0] {
+        let weight = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let qtensor = quantized::QTensor::quantize(&weight, dtype)?;
+        let wref = qtensor.dequantize(&dev)?;
+        let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
+        for m in [1usize, 4, 8, 23, 512] {
+            let lhs = Tensor::rand(-1f32, 1f32, (m, k), &dev)?;
+            let got = matmul.forward(&lhs)?;
+            let want = lhs.matmul(&wref.t()?)?;
+            let diff = (&got - &want)?.abs()?.max_all()?.to_scalar::<f32>()?;
+            let scale = want.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
+            assert!(
+                diff / scale < 5e-2,
+                "{dtype:?} m={m}: rel diff {} too large",
+                diff / scale
+            );
+        }
+    }
+    Ok(())
+}
+
