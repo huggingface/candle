@@ -1871,10 +1871,9 @@ fn tril_triu_eye() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn cumsum() -> Result<()> {
+fn cumsum(device: &Device) -> Result<()> {
     let t = &[3f32, 1., 4., 1., 5.];
-    let t = Tensor::new(t, &Device::Cpu)?;
+    let t = Tensor::new(t, device)?;
     assert_eq!(t.cumsum(0)?.to_vec1::<f32>()?, [3., 4., 8., 9., 14.]);
     let t = t.unsqueeze(1)?;
     assert_eq!(
@@ -1886,7 +1885,7 @@ fn cumsum() -> Result<()> {
         [[3.0], [1.0], [4.0], [1.0], [5.0]]
     );
     let t = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
-    let t = Tensor::new(t, &Device::Cpu)?;
+    let t = Tensor::new(t, device)?;
     assert_eq!(
         t.cumsum(1)?.to_vec2::<f32>()?,
         [[3.0, 4.0, 8.0, 9.0, 14.0], [2.0, 3.0, 10.0, 18.0, 20.0]],
@@ -1895,6 +1894,152 @@ fn cumsum() -> Result<()> {
         t.cumsum(0)?.to_vec2::<f32>()?,
         [[3.0, 1.0, 4.0, 1.0, 5.0], [5.0, 2.0, 11.0, 9.0, 7.0]]
     );
+    let t = Tensor::arange(0f32, 2060f32, device)?.reshape((2, 1030))?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 0))?.to_scalar::<f32>()?, 0.0);
+    assert_eq!(c.i((0, 1029))?.to_scalar::<f32>()?, 529935.0);
+    assert_eq!(c.i((1, 0))?.to_scalar::<f32>()?, 1030.0);
+
+    let t = Tensor::zeros((2, 0, 4), DType::F32, device)?;
+    assert_eq!(t.cumsum(1)?.dims(), &[2, 0, 4]);
+    Ok(())
+}
+
+test_device!(cumsum, cumsum_cpu, cumsum_gpu, cumsum_metal);
+
+#[test]
+fn cumsum_cpu_non_contiguous() -> Result<()> {
+    let device = &Device::Cpu;
+    let t = Tensor::arange(0f32, 12f32, device)?.reshape((3, 4))?;
+    let t = t.t()?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [
+            [0.0, 4.0, 12.0],
+            [1.0, 6.0, 15.0],
+            [2.0, 8.0, 18.0],
+            [3.0, 10.0, 21.0]
+        ]
+    );
+
+    let t = Tensor::arange(0f32, 20f32, device)?.reshape((4, 5))?;
+    let t = t.narrow(1, 1, 3)?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [
+            [1.0, 3.0, 6.0],
+            [6.0, 13.0, 21.0],
+            [11.0, 23.0, 36.0],
+            [16.0, 33.0, 51.0]
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn cumsum_cpu_integer_dtype() -> Result<()> {
+    let device = &Device::Cpu;
+    let t = Tensor::new(&[[1u32, 2, 3], [4, 5, 6]], device)?;
+    assert_eq!(t.cumsum(1)?.to_vec2::<u32>()?, [[1u32, 3, 6], [4, 9, 15]]);
+    let t = Tensor::new(&[-3i64, 1, 4, -1], device)?;
+    assert_eq!(t.cumsum(0)?.to_vec1::<i64>()?, [-3, -2, 2, 1]);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_adapts_layouts() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+
+    let t = Tensor::arange(0f32, 12f32, &device)?.reshape((3, 4))?;
+    assert_eq!(
+        t.cumsum(0)?.to_vec2::<f32>()?,
+        [
+            [0.0, 1.0, 2.0, 3.0],
+            [4.0, 6.0, 8.0, 10.0],
+            [12.0, 15.0, 18.0, 21.0]
+        ]
+    );
+
+    let t = t.t()?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [
+            [0.0, 4.0, 12.0],
+            [1.0, 6.0, 15.0],
+            [2.0, 8.0, 18.0],
+            [3.0, 10.0, 21.0]
+        ]
+    );
+    assert_eq!(
+        t.cumsum(0)?.to_vec2::<f32>()?,
+        [
+            [0.0, 4.0, 8.0],
+            [1.0, 9.0, 17.0],
+            [3.0, 15.0, 27.0],
+            [6.0, 22.0, 38.0]
+        ]
+    );
+
+    let t = Tensor::arange(0f32, 20f32, &device)?.reshape((4, 5))?;
+    let t = t.narrow(1, 1, 3)?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [
+            [1.0, 3.0, 6.0],
+            [6.0, 13.0, 21.0],
+            [11.0, 23.0, 36.0],
+            [16.0, 33.0, 51.0]
+        ]
+    );
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_supported_dtypes() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+
+    let t = Tensor::new(&[[1f64, 2., 3.], [4., 5., 6.]], &device)?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f64>()?,
+        [[1.0, 3.0, 6.0], [4.0, 9.0, 15.0]]
+    );
+
+    let t = Tensor::new(&[[1u32, 2, 3], [4, 5, 6]], &device)?;
+    assert_eq!(t.cumsum(1)?.to_vec2::<u32>()?, [[1u32, 3, 6], [4, 9, 15]]);
+
+    let t = Tensor::new(&[[-3i64, 1, 4], [2, -5, 7]], &device)?;
+    assert_eq!(t.cumsum(1)?.to_vec2::<i64>()?, [[-3, -2, 2], [2, -3, 4]]);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cumsum_cuda_multi_block_large_last_dim() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+
+    let t = Tensor::ones((2, 4097), DType::F32, &device)?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 0))?.to_scalar::<f32>()?, 1.0);
+    assert_eq!(c.i((0, 4095))?.to_scalar::<f32>()?, 4096.0);
+    assert_eq!(c.i((0, 4096))?.to_scalar::<f32>()?, 4097.0);
+    assert_eq!(c.i((1, 4096))?.to_scalar::<f32>()?, 4097.0);
+
+    let t = Tensor::ones((2, 4097), DType::F64, &device)?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 4096))?.to_scalar::<f64>()?, 4097.0);
+    assert_eq!(c.i((1, 4096))?.to_scalar::<f64>()?, 4097.0);
+
+    let t = Tensor::arange(0u32, 8194, &device)?.reshape((2, 4097))?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 4096))?.to_scalar::<u32>()?, 8390656);
+    assert_eq!(c.i((1, 4096))?.to_scalar::<u32>()?, 25176065);
+
+    let t = Tensor::ones((2, 4097), DType::I64, &device)?;
+    let c = t.cumsum(1)?;
+    assert_eq!(c.i((0, 4096))?.to_scalar::<i64>()?, 4097);
+    assert_eq!(c.i((1, 4096))?.to_scalar::<i64>()?, 4097);
     Ok(())
 }
 
