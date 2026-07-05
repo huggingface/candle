@@ -15,6 +15,8 @@ pub mod k_quants;
 #[cfg(feature = "metal")]
 pub mod metal;
 pub mod repack;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod repack_x86;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tokenizer;
 #[cfg(not(feature = "metal"))]
@@ -954,7 +956,69 @@ impl QTensor {
                 .collect::<Result<Vec<_>>>()?;
             Ok(Some(outs))
         }
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(target_arch = "x86_64")]
+        {
+            if ts.is_empty() || !lhs.device().is_cpu() || lhs.dtype() != crate::DType::F32 {
+                return Ok(None);
+            }
+            if !lhs.is_contiguous() {
+                return Ok(None);
+            }
+            let dims = lhs.dims();
+            let Some((&k, batch)) = dims.split_last() else {
+                return Ok(None);
+            };
+            let m: usize = batch.iter().product::<usize>().max(1);
+            let dtype = ts[0].dtype();
+            let mut shapes = Vec::with_capacity(ts.len());
+            for t in ts {
+                let Ok((n, tk)) = t.shape.dims2() else {
+                    return Ok(None);
+                };
+                if tk != k || t.dtype() != dtype || !repack_x86::select(dtype, n, k) {
+                    return Ok(None);
+                }
+                shapes.push(n);
+            }
+            let guard = lhs.storage();
+            let crate::Storage::Cpu(cpu) = &*guard else {
+                return Ok(None);
+            };
+            let slice = cpu.as_slice::<f32>()?;
+            let offset = lhs.layout().start_offset();
+            let lhs_data = &slice[offset..offset + m * k];
+            let lhs_q = repack_x86::quantize_lhs(lhs_data, m, k);
+            let packs: Vec<&repack_x86::PackedX86> = ts
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let n = shapes[i];
+                    t.repacked_qs
+                        .x86_get_or_init(|| repack_x86::pack(dtype, t.storage_ref(), n, k))
+                })
+                .collect();
+            let parts: Vec<(&repack_x86::PackedX86, usize)> = packs
+                .iter()
+                .zip(shapes.iter())
+                .map(|(p, &n)| (*p, n))
+                .collect();
+            let mut dsts: Vec<Vec<f32>> = shapes.iter().map(|&n| vec![0f32; m * n]).collect();
+            repack_x86::gemv_fused(&parts, &lhs_q, m, k, &mut dsts);
+            drop(guard);
+            let mut out = Vec::with_capacity(ts.len());
+            let mut out_dims = dims.to_vec();
+            for (dst, &n) in dsts.into_iter().zip(shapes.iter()) {
+                *out_dims.last_mut().unwrap() = n;
+                out.push(Tensor::from_vec(
+                    dst,
+                    out_dims.clone(),
+                    &crate::Device::Cpu,
+                )?);
+            }
+            Ok(Some(out))
+        }
+
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
         {
             let _ = (ts, lhs);
             Ok(None)
@@ -963,6 +1027,13 @@ impl QTensor {
 }
 
 impl QTensor {
+    pub(crate) fn storage_ref(&self) -> &dyn QuantizedType {
+        match &self.storage {
+            QStorage::Cpu(s) => s.as_ref(),
+            _ => unreachable!("cpu-only path"),
+        }
+    }
+
     /// Indexed (MoE) matmul over stacked expert weights [n_experts, n_out, k]: each
     /// (token, expert-id) pair gemvs against its expert's rows via the repacked cache.
     /// Returns None when the layout, dtype, or device is unsupported.

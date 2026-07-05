@@ -2,7 +2,6 @@
 use super::GgmlDType;
 use super::QuantizedType;
 use crate::Result;
-#[cfg(target_arch = "aarch64")]
 use std::sync::OnceLock;
 
 #[cfg(target_arch = "aarch64")]
@@ -36,6 +35,10 @@ pub(crate) enum PackedStorage {
 
 #[allow(dead_code)]
 pub(crate) struct PackedCache {
+    #[cfg(target_arch = "x86_64")]
+    x86: OnceLock<super::repack_x86::PackedX86>,
+    #[cfg(target_arch = "x86_64")]
+    x86_amx: OnceLock<Vec<super::repack_x86::TileQ4KAmx>>,
     #[cfg(target_arch = "aarch64")]
     q4_0x4: OnceLock<PackedStorage>,
     #[cfg(target_arch = "aarch64")]
@@ -49,8 +52,20 @@ pub(crate) struct PackedCache {
 }
 
 impl PackedCache {
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn x86_get_or_init(
+        &self,
+        init: impl FnOnce() -> super::repack_x86::PackedX86,
+    ) -> &super::repack_x86::PackedX86 {
+        self.x86.get_or_init(init)
+    }
+
     pub(crate) fn new() -> Self {
         Self {
+            #[cfg(target_arch = "x86_64")]
+            x86: OnceLock::new(),
+            #[cfg(target_arch = "x86_64")]
+            x86_amx: OnceLock::new(),
             #[cfg(target_arch = "aarch64")]
             q4_0x4: OnceLock::new(),
             #[cfg(target_arch = "aarch64")]
@@ -218,7 +233,29 @@ pub(crate) fn try_matmul_f32(
         Ok(true)
     }
 
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        let (m, k, n) = mkn;
+        if !super::repack_x86::select(storage.dtype(), n, k) {
+            return Ok(false);
+        }
+        let dtype = storage.dtype();
+        let lhs_q = super::repack_x86::quantize_lhs(lhs, m, k);
+        if m >= 32 && dtype == super::GgmlDType::Q4K && super::repack_x86::amx_available() {
+            let tiles = packed
+                .x86_amx
+                .get_or_init(|| super::repack_x86::pack_q4k_amx(storage, n, k));
+            super::repack_x86::matmul_amx_q4k(tiles, &lhs_q, m, k, n, dst);
+            return Ok(true);
+        }
+        let tiles = packed
+            .x86
+            .get_or_init(|| super::repack_x86::pack(dtype, storage, n, k));
+        super::repack_x86::matmul_tiles(tiles, &lhs_q, m, k, n, dst);
+        Ok(true)
+    }
+
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         let _ = (storage, packed, mkn, lhs, dst);
         Ok(false)
