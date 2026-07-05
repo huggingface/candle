@@ -1655,6 +1655,7 @@ impl BackendStorage for MetalStorage {
             ids_el,
             dim,
             src_l.is_contiguous(),
+            src_l.dims().len(),
             src_l.dims(),
             src_l.stride(),
             src,
