@@ -315,6 +315,111 @@ mod kernels {
 // Full matmul over the packed tiles: lhs is m rows already quantized to BlockQ8K,
 // parallelized over (m-tiles x n-tiles) on the barrier pool by the caller's chunker.
 #[allow(clippy::too_many_arguments)]
+// Per-unit bodies live in #[target_feature] fns so intrinsics inline under portable
+// (target-cpu=generic) release builds; closures cannot carry the attribute.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vnni,avx512bw")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn matmul_unit_512(
+    packed: &PackedX86,
+    lhs_q: &[BlockQ8K],
+    kb: usize,
+    nt: usize,
+    m0: usize,
+    mt: usize,
+    dst_ptr: *mut f32,
+    n: usize,
+) {
+    use core::arch::x86_64::*;
+    let mut act_refs: [&BlockQ8K; kernels::MAX_MT] = [&lhs_q[m0 * kb]; kernels::MAX_MT];
+    let mut acc = [[_mm512_setzero_ps(); 1]; kernels::MAX_MT];
+    for b in 0..kb {
+        for (i, a) in act_refs.iter_mut().enumerate().take(mt) {
+            *a = &lhs_q[(m0 + i) * kb + b];
+        }
+        match packed {
+            PackedX86::Q4K(tiles) => {
+                kernels::q4k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
+            }
+            PackedX86::Q6K(tiles) => {
+                kernels::q6k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
+            }
+            PackedX86::Q8_0(tiles) => {
+                // q8_0 tiles cover 32 k-values each; 8 tiles per q8k superblock
+                for s in (0..8).step_by(2) {
+                    kernels::q8_0_tile2(
+                        &tiles[nt * (kb * 8) + b * 8 + s],
+                        &tiles[nt * (kb * 8) + b * 8 + s + 1],
+                        &act_refs[..mt],
+                        s,
+                        &mut acc,
+                    );
+                }
+            }
+        }
+    }
+    for i in 0..mt {
+        _mm512_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn matmul_unit_256(
+    packed: &PackedX86,
+    lhs_q: &[BlockQ8K],
+    kb: usize,
+    nt: usize,
+    m0: usize,
+    mt: usize,
+    dst_ptr: *mut f32,
+    n: usize,
+    vnni: bool,
+) {
+    use core::arch::x86_64::*;
+    let mut act_refs: [&BlockQ8K; kernels::MAX_MT] = [&lhs_q[m0 * kb]; kernels::MAX_MT];
+    let mut acc = [[_mm256_setzero_ps(); 2]; kernels::MAX_MT];
+    for b in 0..kb {
+        for (i, a) in act_refs.iter_mut().enumerate().take(mt) {
+            *a = &lhs_q[(m0 + i) * kb + b];
+        }
+        match packed {
+            PackedX86::Q4K(tiles) => {
+                let t = &tiles[nt * kb + b];
+                if vnni {
+                    kernels256::q4k_tile_avxvnni(t, &act_refs[..mt], &mut acc)
+                } else {
+                    kernels256::q4k_tile_avx2(t, &act_refs[..mt], &mut acc)
+                }
+            }
+            PackedX86::Q6K(tiles) => {
+                let t = &tiles[nt * kb + b];
+                if vnni {
+                    kernels256::q6k_tile_avxvnni(t, &act_refs[..mt], &mut acc)
+                } else {
+                    kernels256::q6k_tile_avx2(t, &act_refs[..mt], &mut acc)
+                }
+            }
+            PackedX86::Q8_0(tiles) => {
+                for s in (0..8).step_by(2) {
+                    kernels256::q8_0_tile2_avxvnni(
+                        &tiles[nt * (kb * 8) + b * 8 + s],
+                        &tiles[nt * (kb * 8) + b * 8 + s + 1],
+                        &act_refs[..mt],
+                        s,
+                        &mut acc,
+                    );
+                }
+            }
+        }
+    }
+    for i in 0..mt {
+        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
+        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N + 8), acc[i][1]);
+    }
+}
+
 pub(crate) fn matmul_tiles(
     packed: &PackedX86,
     lhs_q: &[BlockQ8K],
@@ -324,8 +429,7 @@ pub(crate) fn matmul_tiles(
     dst: &mut [f32],
 ) {
     #[cfg(target_arch = "x86_64")]
-    unsafe {
-        use core::arch::x86_64::*;
+    {
         let lv = level().expect("select() gated");
         let kb = k / QK_K;
         let n_tiles = n / TILE_N;
@@ -339,76 +443,21 @@ pub(crate) fn matmul_tiles(
                 let nt = unit / m_units;
                 let m0 = (unit % m_units) * mt_step;
                 let mt = (m - m0).min(mt_step);
-                let mut act_refs: [&BlockQ8K; kernels::MAX_MT] = [&lhs_q[m0 * kb]; kernels::MAX_MT];
-                if lv == X86Level::Avx512Vnni {
-                    let mut acc = [[_mm512_setzero_ps(); 1]; kernels::MAX_MT];
-                    for b in 0..kb {
-                        for (i, a) in act_refs.iter_mut().enumerate().take(mt) {
-                            *a = &lhs_q[(m0 + i) * kb + b];
-                        }
-                        match packed {
-                            PackedX86::Q4K(tiles) => {
-                                kernels::q4k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
-                            }
-                            PackedX86::Q6K(tiles) => {
-                                kernels::q6k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
-                            }
-                            PackedX86::Q8_0(tiles) => {
-                                // q8_0 tiles cover 32 k-values each; 8 tiles per q8k superblock
-                                for s in (0..8).step_by(2) {
-                                    kernels::q8_0_tile2(
-                                        &tiles[nt * (kb * 8) + b * 8 + s],
-                                        &tiles[nt * (kb * 8) + b * 8 + s + 1],
-                                        &act_refs[..mt],
-                                        s,
-                                        &mut acc,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    for i in 0..mt {
-                        _mm512_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
-                    }
-                } else {
-                    let mut acc = [[_mm256_setzero_ps(); 2]; kernels::MAX_MT];
-                    for b in 0..kb {
-                        for (i, a) in act_refs.iter_mut().enumerate().take(mt) {
-                            *a = &lhs_q[(m0 + i) * kb + b];
-                        }
-                        match packed {
-                            PackedX86::Q4K(tiles) => {
-                                let t = &tiles[nt * kb + b];
-                                if lv == X86Level::AvxVnni {
-                                    kernels256::q4k_tile_avxvnni(t, &act_refs[..mt], &mut acc)
-                                } else {
-                                    kernels256::q4k_tile_avx2(t, &act_refs[..mt], &mut acc)
-                                }
-                            }
-                            PackedX86::Q6K(tiles) => {
-                                let t = &tiles[nt * kb + b];
-                                if lv == X86Level::AvxVnni {
-                                    kernels256::q6k_tile_avxvnni(t, &act_refs[..mt], &mut acc)
-                                } else {
-                                    kernels256::q6k_tile_avx2(t, &act_refs[..mt], &mut acc)
-                                }
-                            }
-                            PackedX86::Q8_0(tiles) => {
-                                for s in (0..8).step_by(2) {
-                                    kernels256::q8_0_tile2_avxvnni(
-                                        &tiles[nt * (kb * 8) + b * 8 + s],
-                                        &tiles[nt * (kb * 8) + b * 8 + s + 1],
-                                        &act_refs[..mt],
-                                        s,
-                                        &mut acc,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    for i in 0..mt {
-                        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
-                        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N + 8), acc[i][1]);
+                unsafe {
+                    if lv == X86Level::Avx512Vnni {
+                        matmul_unit_512(packed, lhs_q, kb, nt, m0, mt, dst_ptr, n);
+                    } else {
+                        matmul_unit_256(
+                            packed,
+                            lhs_q,
+                            kb,
+                            nt,
+                            m0,
+                            mt,
+                            dst_ptr,
+                            n,
+                            lv == X86Level::AvxVnni,
+                        );
                     }
                 }
             }
@@ -457,7 +506,8 @@ pub(crate) fn quantize_lhs(lhs: &[f32], m: usize, k: usize) -> Vec<BlockQ8K> {
 }
 
 // Fused multi-projection gemv: one lhs quantization and one barrier region across
-// all projections sharing the same activations (qkv, gate/up).
+// all projections sharing the same activations (qkv, gate/up). 512-bit only; the
+// per-unit body reuses matmul_unit_512 so intrinsics inline in portable builds.
 pub(crate) fn gemv_fused(
     parts: &[(&PackedX86, usize)],
     lhs_q: &[BlockQ8K],
@@ -466,12 +516,11 @@ pub(crate) fn gemv_fused(
     dsts: &mut [Vec<f32>],
 ) {
     #[cfg(target_arch = "x86_64")]
-    unsafe {
-        use core::arch::x86_64::*;
+    {
         let kb = k / QK_K;
         let mt_step = kernels::MAX_MT;
         let m_units = m.div_ceil(mt_step);
-        // (packed ptr idx, n, dst ptr, unit offset)
+        // (n, dst ptr, unit offset)
         let mut metas: Vec<(usize, usize, usize)> = Vec::with_capacity(parts.len());
         let mut total = 0usize;
         for (i, (_p, n)) in parts.iter().enumerate() {
@@ -490,36 +539,17 @@ pub(crate) fn gemv_fused(
                 let nt = local / m_units;
                 let m0 = (local % m_units) * mt_step;
                 let mt = (m - m0).min(mt_step);
-                let dst_ptr = dst_ptr as *mut f32;
-                let mut acc = [[_mm512_setzero_ps(); 1]; kernels::MAX_MT];
-                for b in 0..kb {
-                    let mut act_refs: [&BlockQ8K; kernels::MAX_MT] =
-                        [&lhs_q[m0 * kb + b]; kernels::MAX_MT];
-                    for (i, a) in act_refs.iter_mut().enumerate().take(mt) {
-                        *a = &lhs_q[(m0 + i) * kb + b];
-                    }
-                    match parts_ref[pi].0 {
-                        PackedX86::Q4K(tiles) => {
-                            kernels::q4k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
-                        }
-                        PackedX86::Q6K(tiles) => {
-                            kernels::q6k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
-                        }
-                        PackedX86::Q8_0(tiles) => {
-                            for s in (0..8).step_by(2) {
-                                kernels::q8_0_tile2(
-                                    &tiles[nt * (kb * 8) + b * 8 + s],
-                                    &tiles[nt * (kb * 8) + b * 8 + s + 1],
-                                    &act_refs[..mt],
-                                    s,
-                                    &mut acc,
-                                );
-                            }
-                        }
-                    }
-                }
-                for i in 0..mt {
-                    _mm512_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
+                unsafe {
+                    matmul_unit_512(
+                        parts_ref[pi].0,
+                        lhs_q,
+                        kb,
+                        nt,
+                        m0,
+                        mt,
+                        dst_ptr as *mut f32,
+                        n,
+                    );
                 }
             }
         });
@@ -681,8 +711,9 @@ mod amx {
     // a_pack: [kb][8 subs][16 rows * 32 bytes]; returns via dst rows of n floats.
     // 32m x 32n macro-tile: 4 C tiles per (2 A, 2 B) loads so tdp throughput is not
     // gated on tile loads. a_pack holds 32 m-rows (two 16-row halves interleaved by sub).
+    #[target_feature(enable = "avx512f,avx512bw")]
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn q4k_m32(
+    pub(super) unsafe fn q4k_m32(
         tiles: &[TileQ4KAmx],
         nt0: usize,
         n_tiles: usize,
@@ -828,17 +859,19 @@ pub(crate) fn matmul_amx_q4k(
                 }
                 let mut nt = 0;
                 while nt < n_tiles {
-                    amx::q4k_m32(
-                        tiles,
-                        nt,
-                        n_tiles,
-                        kb,
-                        &a_pack,
-                        &act_rows,
-                        mt,
-                        unsafe { dst_ptr.add(m0 * n) },
-                        n,
-                    );
+                    unsafe {
+                        amx::q4k_m32(
+                            tiles,
+                            nt,
+                            n_tiles,
+                            kb,
+                            &a_pack,
+                            &act_rows,
+                            mt,
+                            dst_ptr.add(m0 * n),
+                            n,
+                        )
+                    };
                     nt += 2;
                 }
             }

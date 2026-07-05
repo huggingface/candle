@@ -1603,6 +1603,8 @@ fn qmatmul_repack_matches_reference_across_m() -> Result<()> {
 }
 
 // Indexed (MoE) gemv must match dequantize + per-pair matmul for stacked expert weights.
+// aarch64 only: x86 has no indexed path yet and falls back to dequantize-and-gather.
+#[cfg(target_arch = "aarch64")]
 #[test]
 fn indexed_gemv_matches_reference() -> Result<()> {
     let dev = Device::Cpu;

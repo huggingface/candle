@@ -20,62 +20,42 @@ use core::arch::arm::*;
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::*;
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "dotprod")]
 unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
-    #[cfg(target_feature = "dotprod")]
-    {
-        let mut acc: int32x4_t = vdupq_n_s32(0);
-        core::arch::asm!(
-            "sdot {acc:v}.4s, {a:v}.16b, {b:v}.16b",
-            acc = inout(vreg) acc,
-            a = in(vreg) a,
-            b = in(vreg) b,
-            options(nostack, nomem),
-        );
-        acc
-    }
-    #[cfg(not(target_feature = "dotprod"))]
-    {
-        let p0 = vmull_s8(vget_low_s8(a), vget_low_s8(b));
-        let p1 = vmull_s8(vget_high_s8(a), vget_high_s8(b));
-        vaddq_s32(vpaddlq_s16(p0), vpaddlq_s16(p1))
-    }
+    let mut acc: int32x4_t = vdupq_n_s32(0);
+    core::arch::asm!(
+        "sdot {acc:v}.4s, {a:v}.16b, {b:v}.16b",
+        acc = inout(vreg) acc,
+        a = in(vreg) a,
+        b = in(vreg) b,
+        options(nostack, nomem),
+    );
+    acc
 }
 
 /// Two SDOT ops into one accumulator
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "dotprod")]
 unsafe fn vdotq_s32_pair(a0: int8x16_t, b0: int8x16_t, a1: int8x16_t, b1: int8x16_t) -> int32x4_t {
-    #[cfg(target_feature = "dotprod")]
-    {
-        let mut acc: int32x4_t = vdupq_n_s32(0);
-        core::arch::asm!(
-            "sdot {acc:v}.4s, {a0:v}.16b, {b0:v}.16b",
-            "sdot {acc:v}.4s, {a1:v}.16b, {b1:v}.16b",
-            acc = inout(vreg) acc,
-            a0 = in(vreg) a0,
-            b0 = in(vreg) b0,
-            a1 = in(vreg) a1,
-            b1 = in(vreg) b1,
-            options(nostack, nomem),
-        );
-        acc
-    }
-    #[cfg(not(target_feature = "dotprod"))]
-    {
-        let p0 = vmull_s8(vget_low_s8(a0), vget_low_s8(b0));
-        let p1 = vmull_s8(vget_high_s8(a0), vget_high_s8(b0));
-        let p2 = vmull_s8(vget_low_s8(a1), vget_low_s8(b1));
-        let p3 = vmull_s8(vget_high_s8(a1), vget_high_s8(b1));
-        vaddq_s32(
-            vaddq_s32(vpaddlq_s16(p0), vpaddlq_s16(p1)),
-            vaddq_s32(vpaddlq_s16(p2), vpaddlq_s16(p3)),
-        )
-    }
+    let mut acc: int32x4_t = vdupq_n_s32(0);
+    core::arch::asm!(
+        "sdot {acc:v}.4s, {a0:v}.16b, {b0:v}.16b",
+        "sdot {acc:v}.4s, {a1:v}.16b, {b1:v}.16b",
+        acc = inout(vreg) acc,
+        a0 = in(vreg) a0,
+        b0 = in(vreg) b0,
+        a1 = in(vreg) a1,
+        b1 = in(vreg) b1,
+        options(nostack, nomem),
+    );
+    acc
 }
 
 /// Accumulating SDOT: acc += dot4(a, b) for each lane.
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "dotprod")]
 unsafe fn sdot_acc(acc: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_t {
     let mut out = acc;
     core::arch::asm!(
@@ -99,7 +79,8 @@ unsafe fn sdot_laneq_s32<const LANE: i32>(acc: int32x4_t, a: int8x16_t, b: int8x
 }
 
 #[cfg(target_arch = "aarch64")]
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "i8mm")]
 unsafe fn smmla_s32(acc: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_t {
     let mut out = acc;
     core::arch::asm!(
