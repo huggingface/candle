@@ -63,6 +63,10 @@ pub struct QTensor {
     /// Not always used.
     #[allow(dead_code)]
     repacked_qs: OnceLock<Option<Vec<u8>>>,
+    /// Lazily repacked Q8_0 weight (`k_quants::BlockQ8_0x4` bytes) for the
+    /// aarch64 GEMM/GEMV paths; same lifetime/caching scheme as `repacked_qs`.
+    #[allow(dead_code)]
+    repacked_q8_0: OnceLock<Option<Vec<u8>>>,
 }
 
 impl Device {
@@ -537,6 +541,7 @@ impl QTensor {
             storage,
             shape,
             repacked_qs: OnceLock::new(),
+            repacked_q8_0: OnceLock::new(),
         })
     }
 
@@ -558,6 +563,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_q8_0: OnceLock::new(),
         })
     }
 
@@ -594,6 +600,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_q8_0: OnceLock::new(),
         })
     }
 
@@ -638,6 +645,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_q8_0: OnceLock::new(),
         })
     }
 
@@ -667,6 +675,7 @@ impl QTensor {
             storage,
             shape: shape.clone(),
             repacked_qs: OnceLock::new(),
+            repacked_q8_0: OnceLock::new(),
         })
     }
 
@@ -965,6 +974,40 @@ impl crate::CustomOp1 for QTensor {
                             block_x8,
                             &mut dst_storage,
                         )?;
+                        return Ok((crate::CpuStorage::F32(dst_storage), dst_shape));
+                    }
+                }
+
+                // Packed Q8_0 (block_q8_0x4): lane-broadcast SDOT GEMM/GEMV, the
+                // llama.cpp aarch64 online-repack equivalent. Serves all m.
+                #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+                if self_storage.dtype() == GgmlDType::Q8_0 && n.is_multiple_of(4) {
+                    use zerocopy::{FromBytes, IntoBytes};
+
+                    let total_blocks =
+                        self_storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ8_0>();
+                    let repacked = self.repacked_q8_0.get_or_init(|| {
+                        let blocks = unsafe {
+                            std::slice::from_raw_parts(
+                                self_storage.as_ptr() as *const BlockQ8_0,
+                                total_blocks,
+                            )
+                        };
+                        Some(k_quants::repack_q8_0_weight(blocks, n).as_bytes().to_vec())
+                    });
+                    if let Some(bytes) = repacked {
+                        let packed: &[BlockQ8_0x4] = <[BlockQ8_0x4]>::ref_from_bytes(bytes)
+                            .map_err(|_| {
+                                crate::Error::Msg(
+                                    "repacked_q8_0 alignment invariant violated".to_string(),
+                                )
+                            })?;
+                        k_quants::matmul_q8_0x4(
+                            (dst_shape.elem_count() / n, k, n),
+                            slice,
+                            packed,
+                            &mut dst_storage,
+                        );
                         return Ok((crate::CpuStorage::F32(dst_storage), dst_shape));
                     }
                 }

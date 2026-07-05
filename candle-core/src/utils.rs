@@ -422,3 +422,26 @@ pub fn with_simd128() -> bool {
 pub fn with_f16c() -> bool {
     cfg!(target_feature = "f16c")
 }
+
+// Apply `f` to each `chunk`-sized disjoint sub-slice of `dst` in parallel across the
+// barrier pool. `dst.len()` must be a multiple of `chunk`.
+pub fn par_chunks_mut<U: Send>(dst: &mut [U], chunk: usize, f: impl Fn(usize, &mut [U]) + Sync) {
+    let n = dst.len() / chunk;
+    struct DstP<U>(*mut U);
+    unsafe impl<U> Sync for DstP<U> {}
+    let dp = DstP(dst.as_mut_ptr());
+    let pool = barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let cpt = n.div_ceil(n_total);
+    pool.execute(|tid| {
+        let p = &dp;
+        let start = tid * cpt;
+        if start < n {
+            let end = n.min((tid + 1) * cpt);
+            for ci in start..end {
+                let d = unsafe { std::slice::from_raw_parts_mut(p.0.add(ci * chunk), chunk) };
+                f(ci, d);
+            }
+        }
+    });
+}
