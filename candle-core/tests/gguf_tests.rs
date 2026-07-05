@@ -128,6 +128,18 @@ fn rejects_tensor_size_exceeding_file() {
 }
 
 #[test]
+fn rejects_zero_general_alignment() {
+    // `general.alignment` is read from untrusted metadata and only rejected
+    // when negative; a zero value used to reach `position.div_ceil(0)` and
+    // panic with "attempt to divide by zero". It must be rejected instead.
+    let mut buf = header(0, 1);
+    buf.extend(length_prefixed(b"general.alignment"));
+    buf.extend_from_slice(&4u32.to_le_bytes()); // value_type = U32
+    buf.extend_from_slice(&0u32.to_le_bytes()); // alignment = 0
+    assert_rejects(buf, "alignment");
+}
+
+#[test]
 fn rejects_string_length_above_remaining_file_bytes() {
     let mut buf = header(1, 0);
     buf.extend_from_slice(&(1u64 << 20).to_le_bytes()); // 1 MB, below cap, above file size

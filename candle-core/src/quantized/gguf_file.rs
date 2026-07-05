@@ -557,6 +557,15 @@ impl Content {
             Some(Value::I32(v)) if *v >= 0 => *v as u64,
             _ => DEFAULT_ALIGNMENT,
         };
+        // `general.alignment` comes from untrusted metadata. The guards above
+        // only reject negative values, so a zero would reach `div_ceil(0)` and
+        // panic. Per the GGUF spec the alignment must be a non-zero power of
+        // two; reject anything else with a clear error instead of panicking.
+        if alignment == 0 || !alignment.is_power_of_two() {
+            crate::bail!(
+                "gguf: invalid general.alignment {alignment}, must be a non-zero power of two"
+            )
+        }
         let tensor_data_offset = position.div_ceil(alignment) * alignment;
         Ok(Self {
             magic,
