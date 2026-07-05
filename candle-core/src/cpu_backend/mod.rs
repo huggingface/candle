@@ -330,8 +330,14 @@ impl Map1 for AvgPool2D {
         let w_out = (w - k_w) / s_w + 1;
         let src_index = layout.start_offset();
         let mut dst = vec![T::zero(); b_sz * c * h_out * w_out];
-        let scale = 1f64 / (k_h * k_w) as f64;
-        let scale = T::from_f64(scale);
+        let count = (k_h * k_w) as f64;
+        let scale = T::from_f64(1f64 / count);
+        // Narrow floats saturate when a large window (e.g. global average
+        // pooling) is summed in their own dtype, so the average comes out far
+        // too small; accumulate those in f64 instead (the Metal backend already
+        // accumulates in f32). f32/f64/integer dtypes keep the native
+        // accumulation so results stay bit-identical (e.g. PyTorch parity).
+        let wide = matches!(T::DTYPE, DType::F16 | DType::BF16);
         for b_idx in 0..b_sz {
             let dst = &mut dst[b_idx * c * h_out * w_out..];
             let src_index = src_index + b_idx * stride[0];
@@ -340,15 +346,28 @@ impl Map1 for AvgPool2D {
                 let src_index = src_index + c_idx * stride[1];
                 for h_idx in 0..h_out {
                     for w_idx in 0..w_out {
-                        let mut sum = T::zero();
-                        for m in 0..k_h {
-                            for n in 0..k_w {
-                                let m = s_h * h_idx + m;
-                                let n = s_w * w_idx + n;
-                                sum += src[src_index + m * stride_h + n * stride_w]
+                        let dst_val = if wide {
+                            let mut sum = 0f64;
+                            for m in 0..k_h {
+                                for n in 0..k_w {
+                                    let m = s_h * h_idx + m;
+                                    let n = s_w * w_idx + n;
+                                    sum += src[src_index + m * stride_h + n * stride_w].to_f64();
+                                }
                             }
-                        }
-                        dst[h_idx * w_out + w_idx] = sum * scale;
+                            T::from_f64(sum / count)
+                        } else {
+                            let mut sum = T::zero();
+                            for m in 0..k_h {
+                                for n in 0..k_w {
+                                    let m = s_h * h_idx + m;
+                                    let n = s_w * w_idx + n;
+                                    sum += src[src_index + m * stride_h + n * stride_w];
+                                }
+                            }
+                            sum * scale
+                        };
+                        dst[h_idx * w_out + w_idx] = dst_val;
                     }
                 }
             }
