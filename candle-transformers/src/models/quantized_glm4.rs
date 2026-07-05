@@ -454,6 +454,16 @@ impl ModelWeights {
         Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
     }
 
+    /// Clear the KV cache across all layers.
+    ///
+    /// Call this between independent conversations to free cached attention
+    /// state without recreating the model.
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.kv_cache.reset();
+        }
+    }
+
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (b, l) = input.dims2()?;

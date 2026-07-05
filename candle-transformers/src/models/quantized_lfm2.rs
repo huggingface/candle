@@ -597,6 +597,23 @@ impl ModelWeights {
         }
     }
 
+    /// Clear the per-layer state across all layers: the KV cache of attention
+    /// layers and the conv state of short-conv layers.
+    ///
+    /// Call this between independent conversations to guarantee no state leaks
+    /// from one request into the next without recreating the model. Note that
+    /// `ShortConvLayer::forward` ignores `index_pos`, so a request whose first
+    /// forward has `seq_len == 1` would otherwise reuse the previous
+    /// conversation's conv state.
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            match &mut layer.kind {
+                LayerKind::Attention(attn) => attn.kv_cache = None,
+                LayerKind::ShortConv(conv) => conv.cache = None,
+            }
+        }
+    }
+
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = if seq_len == 1 {
