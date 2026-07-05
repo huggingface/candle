@@ -1601,3 +1601,47 @@ fn qmatmul_repack_matches_reference_across_m() -> Result<()> {
     }
     Ok(())
 }
+
+// Indexed (MoE) gemv must match dequantize + per-pair matmul for stacked expert weights.
+#[test]
+fn indexed_gemv_matches_reference() -> Result<()> {
+    let dev = Device::Cpu;
+    let (n_experts, n_out, k) = (8usize, 64usize, 512usize);
+    for dtype in [GgmlDType::Q4K, GgmlDType::Q6K, GgmlDType::Q8_0] {
+        let w = Tensor::rand(-1f32, 1f32, (n_experts, n_out, k), &dev)?;
+        let qt = quantized::QTensor::quantize(&w, dtype)?;
+        let wref = qt.dequantize(&dev)?;
+        for (batch, topk, x_t) in [(3usize, 4usize, 1usize), (2, 2, 2)] {
+            let x = Tensor::rand(-1f32, 1f32, (batch, x_t, k), &dev)?;
+            let ids_v: Vec<u32> = (0..batch * topk)
+                .map(|i| ((i * 3 + 1) % n_experts) as u32)
+                .collect();
+            let ids = Tensor::from_vec(ids_v.clone(), (batch, topk), &dev)?;
+            let got = qt.indexed_gemv(&x, &ids)?.expect("indexed path supported");
+            for b in 0..batch {
+                for t in 0..topk {
+                    let e = ids_v[b * topk + t] as usize;
+                    let xr = x
+                        .narrow(0, b, 1)?
+                        .narrow(1, t.min(x_t - 1), 1)?
+                        .squeeze(0)?;
+                    let we = wref.narrow(0, e, 1)?.squeeze(0)?;
+                    let want = xr.matmul(&we.t()?)?.squeeze(0)?;
+                    let g = got
+                        .narrow(0, b, 1)?
+                        .narrow(1, t, 1)?
+                        .squeeze(0)?
+                        .squeeze(0)?;
+                    let diff = (&g - &want)?.abs()?.max_all()?.to_scalar::<f32>()?;
+                    let scale = want.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
+                    assert!(
+                        diff / scale < 5e-2,
+                        "{dtype:?} b={b} t={t}: rel diff {}",
+                        diff / scale
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}

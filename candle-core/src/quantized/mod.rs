@@ -962,6 +962,77 @@ impl QTensor {
     }
 }
 
+impl QTensor {
+    /// Indexed (MoE) matmul over stacked expert weights [n_experts, n_out, k]: each
+    /// (token, expert-id) pair gemvs against its expert's rows via the repacked cache.
+    /// Returns None when the layout, dtype, or device is unsupported.
+    pub fn indexed_gemv(&self, x: &Tensor, ids: &Tensor) -> Result<Option<Tensor>> {
+        #[cfg(target_arch = "aarch64")]
+        {
+            if !x.device().is_cpu() || x.dtype() != crate::DType::F32 || !x.is_contiguous() {
+                return Ok(None);
+            }
+            let Ok((n_experts, n_out, k)) = self.shape.dims3() else {
+                return Ok(None);
+            };
+            let Ok((batch, x_t, xk)) = x.dims3() else {
+                return Ok(None);
+            };
+            let Ok((ids_b, topk)) = ids.dims2() else {
+                return Ok(None);
+            };
+            if xk != k || ids_b != batch || (x_t != 1 && x_t != topk) {
+                return Ok(None);
+            }
+            let QStorage::Cpu(storage) = &self.storage else {
+                return Ok(None);
+            };
+            let ids_v: Vec<u32> = ids
+                .to_dtype(crate::DType::U32)?
+                .flatten_all()?
+                .to_vec1::<u32>()?;
+            if ids_v.iter().any(|&e| e as usize >= n_experts) {
+                crate::bail!("expert index out of range");
+            }
+            let guard = x.storage();
+            let crate::Storage::Cpu(cpu) = &*guard else {
+                return Ok(None);
+            };
+            let slice = cpu.as_slice::<f32>()?;
+            let offset = x.layout().start_offset();
+            let n_rows = batch * x_t;
+            let lhs = &slice[offset..offset + n_rows * k];
+            let mut dst = vec![0f32; batch * topk * n_out];
+            let ok = repack::try_indexed_gemv(
+                storage.as_ref(),
+                &self.repacked_qs,
+                n_experts,
+                n_out,
+                k,
+                lhs,
+                n_rows,
+                &ids_v,
+                topk,
+                &mut dst,
+            )?;
+            drop(guard);
+            if !ok {
+                return Ok(None);
+            }
+            Ok(Some(Tensor::from_vec(
+                dst,
+                (batch, topk, n_out),
+                &crate::Device::Cpu,
+            )?))
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let _ = (x, ids);
+            Ok(None)
+        }
+    }
+}
+
 impl crate::CustomOp1 for QTensor {
     fn name(&self) -> &'static str {
         "qmatmul"

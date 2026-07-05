@@ -757,3 +757,182 @@ pub(crate) fn try_gemv_fused(
         Ok(false)
     }
 }
+
+// Indexed (MoE) gemv: each (token, expert) pair runs a gemv against one expert's row
+// block inside the packed [n_experts * n_out, k] weights, all in one barrier region.
+#[cfg(target_arch = "aarch64")]
+macro_rules! define_indexed_gemv {
+    ($fname:ident, $blk:ty, $variant:ident, $kernel:path, $w:expr, $lhs_blk:ty, $qk:expr) => {
+        #[target_feature(enable = "dotprod")]
+        #[allow(clippy::too_many_arguments)]
+        unsafe fn $fname(
+            kind: PackedKind,
+            storage: &dyn QuantizedType,
+            cache: &PackedCache,
+            n_experts: usize,
+            n_out: usize,
+            k: usize,
+            lhs: &[f32],
+            n_rows: usize,
+            ids: &[u32],
+            topk: usize,
+            dst: &mut [f32],
+        ) {
+            use super::GgmlType as _;
+            let k_in_blocks = k / $qk;
+            let total_rows = n_experts * n_out;
+            let ps = cache.get_or_init(kind, || kind.pack(storage, total_rows));
+            let PackedStorage::$variant(packed) = ps else {
+                return;
+            };
+
+            // quantize each distinct lhs row once
+            let mut lhs_q: Vec<$lhs_blk> = Vec::with_capacity(n_rows * k_in_blocks);
+            #[allow(clippy::uninit_vec)]
+            unsafe {
+                lhs_q.set_len(n_rows * k_in_blocks)
+            };
+            let lhs_q_ptr = lhs_q.as_mut_ptr() as usize;
+            let pool = crate::utils::barrier_pool();
+            pool.execute_chunked(n_rows, |range| {
+                let lhs_q_ptr = lhs_q_ptr as *mut $lhs_blk;
+                for r in range {
+                    let row = &lhs[r * k..(r + 1) * k];
+                    let out = unsafe {
+                        std::slice::from_raw_parts_mut(lhs_q_ptr.add(r * k_in_blocks), k_in_blocks)
+                    };
+                    <$lhs_blk>::from_float(row, out);
+                }
+            });
+
+            let groups_per_expert = n_out / $w;
+            let n_pairs = ids.len();
+            let total_units = n_pairs * groups_per_expert;
+            let packed_ptr = packed.as_ptr() as usize;
+            let lhs_q_ptr = lhs_q.as_ptr() as usize;
+            let dst_ptr = dst.as_mut_ptr() as usize;
+            let blk_bytes = std::mem::size_of::<$blk>();
+
+            pool.execute_chunked(total_units, |range| {
+                let packed_ptr = packed_ptr as *const u8;
+                let lhs_q_ptr = lhs_q_ptr as *const $lhs_blk;
+                let dst_ptr = dst_ptr as *mut f32;
+                for unit in range {
+                    let pair = unit / groups_per_expert;
+                    let g = unit % groups_per_expert;
+                    let expert = ids[pair] as usize;
+                    // x may carry one row per token (shared across that token's experts)
+                    let row = if n_rows == n_pairs { pair } else { pair / topk };
+                    let lhs_row = unsafe {
+                        std::slice::from_raw_parts(lhs_q_ptr.add(row * k_in_blocks), k_in_blocks)
+                    };
+                    let group_global = expert * groups_per_expert + g;
+                    let xs = unsafe {
+                        std::slice::from_raw_parts(
+                            packed_ptr.add(group_global * k_in_blocks * blk_bytes) as *const $blk,
+                            k_in_blocks,
+                        )
+                    };
+                    let r = $kernel(k, xs, lhs_row);
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            r.as_ptr(),
+                            dst_ptr.add(pair * n_out + g * $w),
+                            $w,
+                        );
+                    }
+                }
+            });
+        }
+    };
+}
+
+#[cfg(target_arch = "aarch64")]
+define_indexed_gemv!(
+    indexed_gemv_q4k,
+    BlockQ4Kx8,
+    Q4Kx8,
+    super::neon::vec_dot_8_q4k_q8k,
+    8,
+    super::k_quants::BlockQ8K,
+    QK_K
+);
+#[cfg(target_arch = "aarch64")]
+define_indexed_gemv!(
+    indexed_gemv_q6k,
+    BlockQ6Kx8,
+    Q6Kx8,
+    super::neon::vec_dot_8_q6kx8_q8k,
+    8,
+    super::k_quants::BlockQ8K,
+    QK_K
+);
+#[cfg(target_arch = "aarch64")]
+define_indexed_gemv!(
+    indexed_gemv_q8_0,
+    BlockQ8_0x4,
+    Q8_0x4,
+    super::neon::vec_dot_4_q8_0x4_q8_0,
+    4,
+    BlockQ8_0,
+    QK8_0
+);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn try_indexed_gemv(
+    storage: &dyn QuantizedType,
+    cache: &PackedCache,
+    n_experts: usize,
+    n_out: usize,
+    k: usize,
+    lhs: &[f32],
+    n_rows: usize,
+    ids: &[u32],
+    topk: usize,
+    dst: &mut [f32],
+) -> Result<bool> {
+    #[cfg(target_arch = "aarch64")]
+    {
+        let features = crate::cpu::features::get();
+        if !features.dotprod {
+            return Ok(false);
+        }
+        let Some(kind) = PackedKind::select(storage.dtype(), (1, k, n_experts * n_out)) else {
+            return Ok(false);
+        };
+        match kind {
+            PackedKind::Q4Kx8 if k.is_multiple_of(QK_K) && n_out.is_multiple_of(8) => {
+                unsafe {
+                    indexed_gemv_q4k(
+                        kind, storage, cache, n_experts, n_out, k, lhs, n_rows, ids, topk, dst,
+                    )
+                };
+                Ok(true)
+            }
+            PackedKind::Q6Kx8 if k.is_multiple_of(QK_K) && n_out.is_multiple_of(8) => {
+                unsafe {
+                    indexed_gemv_q6k(
+                        kind, storage, cache, n_experts, n_out, k, lhs, n_rows, ids, topk, dst,
+                    )
+                };
+                Ok(true)
+            }
+            PackedKind::Q8_0x4 if k.is_multiple_of(QK8_0) && n_out.is_multiple_of(4) => {
+                unsafe {
+                    indexed_gemv_q8_0(
+                        kind, storage, cache, n_experts, n_out, k, lhs, n_rows, ids, topk, dst,
+                    )
+                };
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = (
+            storage, cache, n_experts, n_out, k, lhs, n_rows, ids, topk, dst,
+        );
+        Ok(false)
+    }
+}
