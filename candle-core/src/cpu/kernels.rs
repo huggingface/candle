@@ -134,6 +134,19 @@ impl VecOps for half::f16 {
         super::vec_dot_f16(lhs, rhs, &mut res_f32, len);
         *res = half::f16::from_f32(res_f32);
     }
+
+    // Accumulate in f32: a sequential sum in f16 saturates on long axes (e.g. an
+    // f16 sum of 4096 ones stalls at 2048 once the running ULP exceeds 1),
+    // giving wrong `sum`/`mean` results that also disagree with the Metal
+    // backend. This mirrors the f32 accumulation already used by `vec_dot`.
+    #[inline(always)]
+    unsafe fn vec_reduce_sum(xs: *const Self, res: *mut Self, len: usize) {
+        let mut sum = 0f32;
+        for i in 0..len {
+            sum += (*xs.add(i)).to_f32();
+        }
+        *res = half::f16::from_f32(sum);
+    }
 }
 
 impl VecOps for f64 {
@@ -186,6 +199,19 @@ impl VecOps for half::bf16 {
         let mut res_f32 = 0f32;
         super::vec_dot_bf16(lhs, rhs, &mut res_f32, len);
         *res = half::bf16::from_f32(res_f32);
+    }
+
+    // Accumulate in f32: a sequential sum in bf16 saturates on long axes (bf16
+    // has only 8 mantissa bits, so the running sum stalls even sooner than
+    // f16), giving wrong `sum`/`mean` results that also disagree with the Metal
+    // backend. This mirrors the f32 accumulation already used by `vec_dot`.
+    #[inline(always)]
+    unsafe fn vec_reduce_sum(xs: *const Self, res: *mut Self, len: usize) {
+        let mut sum = 0f32;
+        for i in 0..len {
+            sum += (*xs.add(i)).to_f32();
+        }
+        *res = half::bf16::from_f32(sum);
     }
 }
 impl VecOps for u8 {
