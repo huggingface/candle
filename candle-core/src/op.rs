@@ -690,6 +690,145 @@ impl UnaryOpT for Gelu {
     fn f64_vec(xs: &[f64], ys: &mut [f64]) {
         crate::accelerate::vd_gelu(xs, ys)
     }
+
+    // NEON tanh-GELU: the scalar path spends nearly all its time in libm tanh
+    // (one call per element); vision encoders run tens of millions of GELUs
+    // per image. CANDLE_FAST_GELU=0 restores the exact libm path.
+    #[cfg(all(
+        target_arch = "aarch64",
+        not(feature = "mkl"),
+        not(feature = "accelerate")
+    ))]
+    #[inline(always)]
+    fn f32_vec(xs: &[f32], ys: &mut [f32]) {
+        if fast_gelu::enabled() {
+            fast_gelu::gelu_f32_vec(xs, ys)
+        } else {
+            xs.iter().zip(ys).for_each(|(&x, y)| *y = Self::f32(x))
+        }
+    }
+}
+
+// Vectorized tanh-GELU for aarch64. tanh via the Eigen-style rational
+// approximation x*P(x^2)/Q(x^2) on the clamped range (beyond +-7.9053111 f32
+// tanh saturates to +-1), accurate to a few ULP - orders of magnitude tighter
+// than the f16 lookup table llama.cpp uses for its GELU.
+#[cfg(all(
+    target_arch = "aarch64",
+    not(feature = "mkl"),
+    not(feature = "accelerate")
+))]
+#[allow(clippy::excessive_precision)]
+mod fast_gelu {
+    use super::SQRT_TWO_OVER_PI_F32;
+
+    const TANH_BOUND: f32 = 7.905_311;
+    const A1: f32 = 4.893_525_6e-3;
+    const A3: f32 = 6.372_619_3e-4;
+    const A5: f32 = 1.485_722_4e-5;
+    const A7: f32 = 5.122_297_1e-8;
+    const A9: f32 = -8.604_671_5e-11;
+    const A11: f32 = 2.000_187_9e-13;
+    const A13: f32 = -2.760_768_5e-16;
+    const B0: f32 = 4.893_525_2e-3;
+    const B2: f32 = 2.268_434_6e-3;
+    const B4: f32 = 1.185_347_1e-4;
+    const B6: f32 = 1.198_258_4e-6;
+
+    pub(super) fn enabled() -> bool {
+        static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+            std::env::var("CANDLE_FAST_GELU").map_or(true, |v| v != "0")
+        });
+        *ON
+    }
+
+    #[inline(always)]
+    fn tanh_rational(x: f32) -> f32 {
+        // Saturate exactly like libm tanhf so gelu(x) is exactly x / exactly 0
+        // for large |x| instead of leaking a ~2ulp residue times x.
+        if x >= TANH_BOUND {
+            return 1.0;
+        }
+        if x <= -TANH_BOUND {
+            return -1.0;
+        }
+        let x2 = x * x;
+        let p = ((((((A13 * x2 + A11) * x2 + A9) * x2 + A7) * x2 + A5) * x2 + A3) * x2 + A1) * x;
+        let q = ((B6 * x2 + B4) * x2 + B2) * x2 + B0;
+        p / q
+    }
+
+    #[inline(always)]
+    fn gelu_scalar(v: f32) -> f32 {
+        let inner = SQRT_TWO_OVER_PI_F32 * v * (1.0 + 0.044715 * v * v);
+        0.5 * v * (1.0 + tanh_rational(inner))
+    }
+
+    pub(super) fn gelu_f32_vec(xs: &[f32], ys: &mut [f32]) {
+        use core::arch::aarch64::*;
+        let n = xs.len();
+        let mut i = 0;
+        unsafe {
+            let one = vdupq_n_f32(1.0);
+            let bound = vdupq_n_f32(TANH_BOUND);
+            let nbound = vdupq_n_f32(-TANH_BOUND);
+            while i + 4 <= n {
+                let v = vld1q_f32(xs.as_ptr().add(i));
+                let v2 = vmulq_f32(v, v);
+                // inner = sqrt(2/pi) * v * (1 + 0.044715 v^2)
+                let inner = vmulq_f32(
+                    vmulq_n_f32(v, SQRT_TWO_OVER_PI_F32),
+                    vfmaq_f32(one, v2, vdupq_n_f32(0.044715)),
+                );
+                let x = vminq_f32(vmaxq_f32(inner, nbound), bound);
+                let x2 = vmulq_f32(x, x);
+                let mut p = vdupq_n_f32(A13);
+                p = vfmaq_f32(vdupq_n_f32(A11), p, x2);
+                p = vfmaq_f32(vdupq_n_f32(A9), p, x2);
+                p = vfmaq_f32(vdupq_n_f32(A7), p, x2);
+                p = vfmaq_f32(vdupq_n_f32(A5), p, x2);
+                p = vfmaq_f32(vdupq_n_f32(A3), p, x2);
+                p = vfmaq_f32(vdupq_n_f32(A1), p, x2);
+                let p = vmulq_f32(p, x);
+                let mut q = vdupq_n_f32(B6);
+                q = vfmaq_f32(vdupq_n_f32(B4), q, x2);
+                q = vfmaq_f32(vdupq_n_f32(B2), q, x2);
+                q = vfmaq_f32(vdupq_n_f32(B0), q, x2);
+                let t = vdivq_f32(p, q);
+                // Saturate exactly to +-1 outside the rational's range.
+                let t = vbslq_f32(vcgeq_f32(inner, bound), one, t);
+                let t = vbslq_f32(vcleq_f32(inner, nbound), vnegq_f32(one), t);
+                // gelu = 0.5 * v * (1 + tanh)
+                let r = vmulq_f32(vmulq_n_f32(v, 0.5), vaddq_f32(one, t));
+                vst1q_f32(ys.as_mut_ptr().add(i), r);
+                i += 4;
+            }
+        }
+        for j in i..n {
+            ys[j] = gelu_scalar(xs[j]);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn fast_gelu_close_to_libm() {
+            // Sweep a wide range incl. the tanh saturation boundary.
+            let xs: Vec<f32> = (-4000..=4001).map(|i| i as f32 * 0.005).collect();
+            let mut ys = vec![0f32; xs.len()];
+            gelu_f32_vec(&xs, &mut ys);
+            for (&x, &y) in xs.iter().zip(ys.iter()) {
+                let exact = 0.5
+                    * x
+                    * (1.0 + f32::tanh(SQRT_TWO_OVER_PI_F32 * x * (1.0 + 0.044715 * x * x)));
+                let err = (y - exact).abs();
+                let tol = 1e-6f32.max(exact.abs() * 2e-6);
+                assert!(err <= tol, "x={x}: fast {y} vs libm {exact} (err {err})");
+            }
+        }
+    }
 }
 
 /// `erf` operation
