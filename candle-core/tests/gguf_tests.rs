@@ -140,6 +140,27 @@ fn rejects_zero_general_alignment() {
 }
 
 #[test]
+fn rejects_tensor_shape_product_overflow() {
+    // Two dims of 2^40 overflow `Shape::elem_count()` (their product is 2^80).
+    // Loading the tensor used to panic ("attempt to multiply with overflow") in
+    // debug builds and wrap to a bogus small size in release builds.
+    let mut buf = header(1, 0);
+    buf.extend(length_prefixed(b"t"));
+    buf.extend_from_slice(&2u32.to_le_bytes()); // n dims
+    buf.extend_from_slice(&(1u64 << 40).to_le_bytes()); // dim 0
+    buf.extend_from_slice(&(1u64 << 40).to_le_bytes()); // dim 1
+    buf.extend_from_slice(&0u32.to_le_bytes()); // F32
+    buf.extend_from_slice(&0u64.to_le_bytes()); // offset
+    let mut cursor = Cursor::new(buf);
+    let content = Content::read(&mut cursor).expect("header should parse");
+    let err = content
+        .tensor(&mut cursor, "t", &Device::Cpu)
+        .expect_err("expected Err from overflowing tensor shape");
+    let msg = format!("{err}");
+    assert!(msg.contains("overflow"), "unexpected error: {msg}");
+}
+
+#[test]
 fn rejects_string_length_above_remaining_file_bytes() {
     let mut buf = header(1, 0);
     buf.extend_from_slice(&(1u64 << 20).to_le_bytes()); // 1 MB, below cap, above file size
