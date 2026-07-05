@@ -1576,7 +1576,12 @@ test_device!(
 fn qmatmul_repack_matches_reference_across_m() -> Result<()> {
     let dev = Device::Cpu;
     let (k, n) = (512, 256);
-    for dtype in [GgmlDType::Q4K, GgmlDType::Q5K, GgmlDType::Q6K, GgmlDType::Q8_0] {
+    for dtype in [
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+        GgmlDType::Q8_0,
+    ] {
         let weight = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
         let qtensor = quantized::QTensor::quantize(&weight, dtype)?;
         let wref = qtensor.dequantize(&dev)?;
@@ -1596,4 +1601,3 @@ fn qmatmul_repack_matches_reference_across_m() -> Result<()> {
     }
     Ok(())
 }
-

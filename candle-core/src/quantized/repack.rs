@@ -589,3 +589,171 @@ fn pack_to_q8_0x4(blocks: &[BlockQ8_0], n: usize, block_len: usize) -> Vec<Block
     }
     packed
 }
+
+// One lhs quantization and one barrier region for several same-dtype m==1 matmuls
+// sharing the lhs (qkv / gate+up in decode), instead of one of each per projection.
+#[cfg(target_arch = "aarch64")]
+macro_rules! define_gemv_fused {
+    ($fname:ident, $blk:ty, $variant:ident, $kernel:path, $w:expr, $lhs_blk:ty, $qk:expr) => {
+        #[target_feature(enable = "dotprod")]
+        unsafe fn $fname(
+            kind: PackedKind,
+            k: usize,
+            lhs: &[f32],
+            parts: &[(&dyn QuantizedType, &PackedCache)],
+            dsts: &mut [Vec<f32>],
+        ) {
+            use super::GgmlType as _;
+            let k_in_blocks = k / $qk;
+
+            thread_local! {
+                static FUSED_LHS_SCRATCH: std::cell::RefCell<Vec<u64>> =
+                    const { std::cell::RefCell::new(Vec::new()) };
+            }
+            FUSED_LHS_SCRATCH.with(|cell| {
+                let mut scratch = cell.borrow_mut();
+                let elem_size = std::mem::size_of::<$lhs_blk>();
+                let required_len = (k_in_blocks * elem_size).div_ceil(8);
+                if scratch.len() < required_len {
+                    scratch.resize(required_len, 0);
+                }
+                let lhs_b: &mut [$lhs_blk] = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        scratch.as_mut_ptr() as *mut $lhs_blk,
+                        k_in_blocks,
+                    )
+                };
+                <$lhs_blk>::from_float(lhs, lhs_b);
+
+                // (packed ptr, n_groups, dst ptr, running offset) per projection
+                let mut metas: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(parts.len());
+                let mut total = 0usize;
+                for (i, (storage, cache)) in parts.iter().enumerate() {
+                    let n = dsts[i].len();
+                    let ps = cache.get_or_init(kind, || kind.pack(*storage, n));
+                    let PackedStorage::$variant(v) = ps else {
+                        return;
+                    };
+                    metas.push((
+                        v.as_ptr() as usize,
+                        n / $w,
+                        dsts[i].as_mut_ptr() as usize,
+                        total,
+                    ));
+                    total += n / $w;
+                }
+
+                let blk_bytes = std::mem::size_of::<$blk>();
+                let lhs_ptr = lhs_b.as_ptr() as usize;
+                let pool = crate::utils::barrier_pool();
+                pool.execute_chunked(total, |range| {
+                    let lhs_row: &[$lhs_blk] = unsafe {
+                        std::slice::from_raw_parts(lhs_ptr as *const $lhs_blk, k_in_blocks)
+                    };
+                    for gg in range {
+                        let &(pptr, _ng, dptr, off) = metas
+                            .iter()
+                            .find(|&&(_, ng, _, off)| gg < off + ng)
+                            .unwrap();
+                        let g = gg - off;
+                        let xs = unsafe {
+                            std::slice::from_raw_parts(
+                                (pptr + g * k_in_blocks * blk_bytes) as *const $blk,
+                                k_in_blocks,
+                            )
+                        };
+                        let r = $kernel(k, xs, lhs_row);
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                r.as_ptr(),
+                                (dptr as *mut f32).add(g * $w),
+                                $w,
+                            );
+                        }
+                    }
+                });
+            });
+        }
+    };
+}
+
+#[cfg(target_arch = "aarch64")]
+define_gemv_fused!(
+    gemv_fused_q4k,
+    BlockQ4Kx8,
+    Q4Kx8,
+    super::neon::vec_dot_8_q4k_q8k,
+    8,
+    super::k_quants::BlockQ8K,
+    QK_K
+);
+#[cfg(target_arch = "aarch64")]
+define_gemv_fused!(
+    gemv_fused_q6k,
+    BlockQ6Kx8,
+    Q6Kx8,
+    super::neon::vec_dot_8_q6kx8_q8k,
+    8,
+    super::k_quants::BlockQ8K,
+    QK_K
+);
+#[cfg(target_arch = "aarch64")]
+define_gemv_fused!(
+    gemv_fused_q8_0,
+    BlockQ8_0x4,
+    Q8_0x4,
+    super::neon::vec_dot_4_q8_0x4_q8_0,
+    4,
+    BlockQ8_0,
+    QK8_0
+);
+
+pub(crate) fn try_gemv_fused(
+    k: usize,
+    lhs: &[f32],
+    parts: &[(&dyn QuantizedType, &PackedCache)],
+    dsts: &mut [Vec<f32>],
+) -> Result<bool> {
+    #[cfg(target_arch = "aarch64")]
+    {
+        if parts.is_empty() || parts.len() != dsts.len() {
+            return Ok(false);
+        }
+        let features = crate::cpu::features::get();
+        if !features.dotprod {
+            return Ok(false);
+        }
+        let dtype = parts[0].0.dtype();
+        if parts.iter().any(|(s, _)| s.dtype() != dtype) {
+            return Ok(false);
+        }
+        let Some(kind) = PackedKind::select(dtype, (1, k, dsts[0].len())) else {
+            return Ok(false);
+        };
+        for d in dsts.iter() {
+            if PackedKind::select(dtype, (1, k, d.len())) != Some(kind) {
+                return Ok(false);
+            }
+        }
+        match kind {
+            PackedKind::Q4Kx8 if k.is_multiple_of(QK_K) => {
+                unsafe { gemv_fused_q4k(kind, k, lhs, parts, dsts) };
+                Ok(true)
+            }
+            PackedKind::Q6Kx8 if k.is_multiple_of(QK_K) => {
+                unsafe { gemv_fused_q6k(kind, k, lhs, parts, dsts) };
+                Ok(true)
+            }
+            PackedKind::Q8_0x4 if k.is_multiple_of(QK8_0) => {
+                unsafe { gemv_fused_q8_0(kind, k, lhs, parts, dsts) };
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = (k, lhs, parts, dsts);
+        Ok(false)
+    }
+}

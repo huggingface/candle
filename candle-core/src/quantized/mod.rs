@@ -898,6 +898,70 @@ impl QMatMul {
     }
 }
 
+impl QTensor {
+    /// Fused m==1 matmul over same-dtype tensors sharing one lhs (e.g. qkv or gate+up in
+    /// decode): one lhs quantization and one parallel region. None when unsupported.
+    pub fn gemv_fused_shared_lhs(ts: &[&Self], lhs: &Tensor) -> Result<Option<Vec<Tensor>>> {
+        #[cfg(target_arch = "aarch64")]
+        {
+            if ts.is_empty() || !lhs.device().is_cpu() || lhs.dtype() != crate::DType::F32 {
+                return Ok(None);
+            }
+            if !lhs.is_contiguous() {
+                return Ok(None);
+            }
+            let dims = lhs.dims();
+            let Some((&k, batch)) = dims.split_last() else {
+                return Ok(None);
+            };
+            if batch.iter().product::<usize>() != 1 {
+                return Ok(None);
+            }
+            let mut ns = Vec::with_capacity(ts.len());
+            let mut parts: Vec<(&dyn QuantizedType, &repack::PackedCache)> =
+                Vec::with_capacity(ts.len());
+            for t in ts {
+                let (n, tk) = t.shape.dims2()?;
+                if tk != k {
+                    return Ok(None);
+                }
+                let QStorage::Cpu(s) = &t.storage else {
+                    return Ok(None);
+                };
+                ns.push(n);
+                parts.push((s.as_ref(), &t.repacked_qs));
+            }
+            let storage = lhs.storage();
+            let crate::Storage::Cpu(cpu) = &*storage else {
+                return Ok(None);
+            };
+            let slice = cpu.as_slice::<f32>()?;
+            let offset = lhs.layout().start_offset();
+            let slice = &slice[offset..offset + k];
+            let mut dsts: Vec<Vec<f32>> = ns.iter().map(|&n| vec![0f32; n]).collect();
+            if !repack::try_gemv_fused(k, slice, &parts, &mut dsts)? {
+                return Ok(None);
+            }
+            drop(storage);
+            let outs = dsts
+                .into_iter()
+                .zip(&ns)
+                .map(|(d, &n)| {
+                    let mut shape = dims.to_vec();
+                    *shape.last_mut().unwrap() = n;
+                    Tensor::from_vec(d, shape, &crate::Device::Cpu)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Some(outs))
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let _ = (ts, lhs);
+            Ok(None)
+        }
+    }
+}
+
 impl crate::CustomOp1 for QTensor {
     fn name(&self) -> &'static str {
         "qmatmul"

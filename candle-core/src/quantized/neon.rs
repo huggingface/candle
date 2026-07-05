@@ -572,23 +572,16 @@ fn matmul_q4_0_x4_gemv(
         <BlockQ8_0 as super::GgmlType>::from_float(lhs, lhs_b);
 
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let groups_per_thread = n_groups.div_ceil(n_total);
         let lhs_ptr = lhs_b.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
         let x4_block_bytes = std::mem::size_of::<BlockQ4_0x4>();
 
-        pool.execute(|tid| {
-            let start = tid * groups_per_thread;
-            if start >= n_groups {
-                return;
-            }
-            let end = n_groups.min((tid + 1) * groups_per_thread);
+        pool.execute_chunked(n_groups, |range| {
             let lhs_row =
                 unsafe { std::slice::from_raw_parts(lhs_ptr as *const BlockQ8_0, k_in_blocks) };
             let dst_ptr = dst_ptr as *mut f32;
-            for g in start..end {
+            for g in range {
                 let xs = unsafe {
                     std::slice::from_raw_parts(
                         (repacked_ptr + g * k_in_blocks * x4_block_bytes) as *const BlockQ4_0x4,
@@ -737,22 +730,15 @@ pub(crate) fn matmul_q4_0_x4(
 
         let tiles_total = row_groups * n_groups;
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let tiles_per_thread = tiles_total.div_ceil(n_total);
         let lhs_ptr = lhs_x4.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
 
-        pool.execute(|tid| {
-            let start = tid * tiles_per_thread;
-            if start >= tiles_total {
-                return;
-            }
-            let end = tiles_total.min((tid + 1) * tiles_per_thread);
+        pool.execute_chunked(tiles_total, |range| {
             let lhs_ptr = lhs_ptr as *const BlockQ8_0x4;
             let repacked_ptr = repacked_ptr as *const BlockQ4_0x4;
             let dst_ptr = dst_ptr as *mut f32;
-            for tile in start..end {
+            for tile in range {
                 let row_group = tile / n_groups;
                 let col_group = tile - row_group * n_groups;
                 let row = row_group * 4;
@@ -917,22 +903,15 @@ pub(crate) fn matmul_q4_0_x4_i8mm(
 
         let tiles_total = row_groups * n_groups;
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let tiles_per_thread = tiles_total.div_ceil(n_total);
         let lhs_ptr = lhs_x4.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
 
-        pool.execute(|tid| {
-            let start = tid * tiles_per_thread;
-            if start >= tiles_total {
-                return;
-            }
-            let end = tiles_total.min((tid + 1) * tiles_per_thread);
+        pool.execute_chunked(tiles_total, |range| {
             let lhs_ptr = lhs_ptr as *const BlockQ8_0x4;
             let repacked_ptr = repacked_ptr as *const BlockQ4_0x4;
             let dst_ptr = dst_ptr as *mut f32;
-            for tile in start..end {
+            for tile in range {
                 let row_group = tile / n_groups;
                 let col_group = tile - row_group * n_groups;
                 let row = row_group * 4;
@@ -1200,22 +1179,15 @@ pub(crate) fn matmul_q4k_x8_i8mm(
 
         let tiles_total = row_groups * n_groups;
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let tiles_per_thread = tiles_total.div_ceil(n_total);
         let lhs_ptr = lhs_x4.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
 
-        pool.execute(|tid| {
-            let start = tid * tiles_per_thread;
-            if start >= tiles_total {
-                return;
-            }
-            let end = tiles_total.min((tid + 1) * tiles_per_thread);
+        pool.execute_chunked(tiles_total, |range| {
             let lhs_ptr = lhs_ptr as *const BlockQ8Kx4;
             let repacked_ptr = repacked_ptr as *const BlockQ4Kx8;
             let dst_ptr = dst_ptr as *mut f32;
-            for tile in start..end {
+            for tile in range {
                 let row_group = tile / n_groups;
                 let col_group = tile - row_group * n_groups;
                 let row = row_group * 4;
@@ -1879,23 +1851,16 @@ fn matmul_q5k_x8_gemv(
         <BlockQ8K as super::GgmlType>::from_float(lhs, lhs_b);
 
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let groups_per_thread = n_groups.div_ceil(n_total);
         let lhs_ptr = lhs_b.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
         let x8_block_bytes = std::mem::size_of::<BlockQ5Kx8>();
 
-        pool.execute(|tid| {
-            let start = tid * groups_per_thread;
-            if start >= n_groups {
-                return;
-            }
-            let end = n_groups.min((tid + 1) * groups_per_thread);
+        pool.execute_chunked(n_groups, |range| {
             let lhs_row =
                 unsafe { std::slice::from_raw_parts(lhs_ptr as *const BlockQ8K, k_in_blocks) };
             let dst_ptr = dst_ptr as *mut f32;
-            for g in start..end {
+            for g in range {
                 let xs = unsafe {
                     std::slice::from_raw_parts(
                         (repacked_ptr + g * k_in_blocks * x8_block_bytes) as *const BlockQ5Kx8,
@@ -1970,22 +1935,15 @@ pub(crate) fn matmul_q5k_x8(
 
         let tiles_total = row_groups * n_groups;
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let tiles_per_thread = tiles_total.div_ceil(n_total);
         let lhs_ptr = lhs_x4.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
 
-        pool.execute(|tid| {
-            let start = tid * tiles_per_thread;
-            if start >= tiles_total {
-                return;
-            }
-            let end = tiles_total.min((tid + 1) * tiles_per_thread);
+        pool.execute_chunked(tiles_total, |range| {
             let lhs_ptr = lhs_ptr as *const BlockQ8Kx4;
             let repacked_ptr = repacked_ptr as *const BlockQ5Kx8;
             let dst_ptr = dst_ptr as *mut f32;
-            for tile in start..end {
+            for tile in range {
                 let row_group = tile / n_groups;
                 let col_group = tile - row_group * n_groups;
                 let row = row_group * 4;
@@ -2678,23 +2636,16 @@ fn matmul_q6k_x8_gemv(
         <BlockQ8K as super::GgmlType>::from_float(lhs, lhs_b);
 
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let groups_per_thread = n_groups.div_ceil(n_total);
         let lhs_ptr = lhs_b.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
         let x8_block_bytes = std::mem::size_of::<BlockQ6Kx8>();
 
-        pool.execute(|tid| {
-            let start = tid * groups_per_thread;
-            if start >= n_groups {
-                return;
-            }
-            let end = n_groups.min((tid + 1) * groups_per_thread);
+        pool.execute_chunked(n_groups, |range| {
             let lhs_row =
                 unsafe { std::slice::from_raw_parts(lhs_ptr as *const BlockQ8K, k_in_blocks) };
             let dst_ptr = dst_ptr as *mut f32;
-            for g in start..end {
+            for g in range {
                 let xs = unsafe {
                     std::slice::from_raw_parts(
                         (repacked_ptr + g * k_in_blocks * x8_block_bytes) as *const BlockQ6Kx8,
@@ -2769,22 +2720,15 @@ pub(crate) fn matmul_q6k_x8(
 
         let tiles_total = row_groups * n_groups;
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let tiles_per_thread = tiles_total.div_ceil(n_total);
         let lhs_ptr = lhs_x4.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
 
-        pool.execute(|tid| {
-            let start = tid * tiles_per_thread;
-            if start >= tiles_total {
-                return;
-            }
-            let end = tiles_total.min((tid + 1) * tiles_per_thread);
+        pool.execute_chunked(tiles_total, |range| {
             let lhs_ptr = lhs_ptr as *const BlockQ8Kx4;
             let repacked_ptr = repacked_ptr as *const BlockQ6Kx8;
             let dst_ptr = dst_ptr as *mut f32;
-            for tile in start..end {
+            for tile in range {
                 let row_group = tile / n_groups;
                 let col_group = tile - row_group * n_groups;
                 let row = row_group * 4;
@@ -2957,7 +2901,7 @@ unsafe fn vec_dot_4_q8_0x4_q8_0_4x8(n: usize, xs: &[BlockQ8_0x4], ys: &[BlockQ8_
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn vec_dot_4_q8_0x4_q8_0(n: usize, xs: &[BlockQ8_0x4], ys: &[BlockQ8_0]) -> [f32; 4] {
+pub(crate) fn vec_dot_4_q8_0x4_q8_0(n: usize, xs: &[BlockQ8_0x4], ys: &[BlockQ8_0]) -> [f32; 4] {
     unsafe {
         if crate::cpu::features::get().i8mm {
             vec_dot_4_q8_0x4_q8_0_4x8(n, xs, ys)
@@ -2997,23 +2941,16 @@ fn matmul_q8_0_x4_gemv(
         <BlockQ8_0 as super::GgmlType>::from_float(lhs, lhs_b);
 
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let groups_per_thread = n_groups.div_ceil(n_total);
         let lhs_ptr = lhs_b.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
         let x4_block_bytes = std::mem::size_of::<BlockQ8_0x4>();
 
-        pool.execute(|tid| {
-            let start = tid * groups_per_thread;
-            if start >= n_groups {
-                return;
-            }
-            let end = n_groups.min((tid + 1) * groups_per_thread);
+        pool.execute_chunked(n_groups, |range| {
             let lhs_row =
                 unsafe { std::slice::from_raw_parts(lhs_ptr as *const BlockQ8_0, k_in_blocks) };
             let dst_ptr = dst_ptr as *mut f32;
-            for g in start..end {
+            for g in range {
                 let xs = unsafe {
                     std::slice::from_raw_parts(
                         (repacked_ptr + g * k_in_blocks * x4_block_bytes) as *const BlockQ8_0x4,
@@ -3078,22 +3015,15 @@ pub(crate) fn matmul_q8_0_x4(
 
         let tiles_total = row_groups * n_groups;
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let tiles_per_thread = tiles_total.div_ceil(n_total);
         let lhs_ptr = lhs_x4.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
 
-        pool.execute(|tid| {
-            let start = tid * tiles_per_thread;
-            if start >= tiles_total {
-                return;
-            }
-            let end = tiles_total.min((tid + 1) * tiles_per_thread);
+        pool.execute_chunked(tiles_total, |range| {
             let lhs_ptr = lhs_ptr as *const BlockQ8_0x4;
             let repacked_ptr = repacked_ptr as *const BlockQ8_0x4;
             let dst_ptr = dst_ptr as *mut f32;
-            for tile in start..end {
+            for tile in range {
                 let row_group = tile / n_groups;
                 let col_group = tile - row_group * n_groups;
                 let row = row_group * 4;
@@ -3227,21 +3157,14 @@ pub(crate) fn matmul_q8_0_x4_i8mm(
 
         let tiles_total = row_groups * n_groups;
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let tiles_per_thread = tiles_total.div_ceil(n_total);
         let lhs_ptr = lhs_x4.as_ptr() as usize;
         let repacked_ptr = repacked.as_ptr() as usize;
         let dst_ptr = dst.as_mut_ptr() as usize;
-        pool.execute(|tid| {
-            let start = tid * tiles_per_thread;
-            if start >= tiles_total {
-                return;
-            }
-            let end = tiles_total.min((tid + 1) * tiles_per_thread);
+        pool.execute_chunked(tiles_total, |range| {
             let lhs_ptr = lhs_ptr as *const BlockQ8_0x4;
             let repacked_ptr = repacked_ptr as *const BlockQ8_0x4;
             let dst_ptr = dst_ptr as *mut f32;
-            for tile in start..end {
+            for tile in range {
                 let row_group = tile / n_groups;
                 let col_group = tile - row_group * n_groups;
                 let row = row_group * 4;

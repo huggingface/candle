@@ -285,6 +285,25 @@ impl BarrierPool {
         f(n);
         // _guard drops here, waiting for root workers.
     }
+
+    // Static per-tid slices make every op wait for the slowest thread; a shared cursor
+    // lets fast threads absorb a straggler's work instead of spinning at the barrier.
+    pub fn execute_chunked<F: Fn(std::ops::Range<usize>) + Sync>(&self, n_items: usize, f: F) {
+        if n_items == 0 {
+            return;
+        }
+        let n_threads = self.threads.len() + 1;
+        // ~8 grabs per thread amortizes cursor contention while keeping tail imbalance small
+        let chunk = n_items.div_ceil(n_threads * 8).max(1);
+        let cursor = AtomicUsize::new(0);
+        self.execute(|_| loop {
+            let start = cursor.fetch_add(chunk, Ordering::Relaxed);
+            if start >= n_items {
+                break;
+            }
+            f(start..n_items.min(start + chunk));
+        });
+    }
 }
 
 impl Drop for BarrierPool {

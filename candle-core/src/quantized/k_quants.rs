@@ -2442,8 +2442,6 @@ pub fn matmul<T: GgmlType>(
         let n_tail = n - n_quad; // 0..=3
         let pool = crate::utils::barrier_pool();
         // Workers 0..n_workers + calling thread as worker n_workers.
-        let n_total = pool.n_workers() + 1;
-        let quads_per_thread = quads_total.div_ceil(n_total);
         let lhs_b: &[T::VecDotType] = lhs_b;
 
         for row_idx in 0..m {
@@ -2452,14 +2450,9 @@ pub fn matmul<T: GgmlType>(
             let (main, tail) = dst_row.split_at_mut(n_quad);
             let main_ptr = main.as_mut_ptr() as usize;
 
-            pool.execute(|tid| {
-                let start = tid * quads_per_thread;
-                if start >= quads_total {
-                    return;
-                }
-                let end = quads_total.min((tid + 1) * quads_per_thread);
+            pool.execute_chunked(quads_total, |range| {
                 let main_ptr = main_ptr as *mut f32;
-                for quad_idx in start..end {
+                for quad_idx in range {
                     let col = quad_idx * 4;
                     let (d0, d1, d2, d3) = T::vec_dot_4(
                         k,
@@ -2538,8 +2531,6 @@ pub(crate) fn matmul_q4k_x8(
         }
 
         let pool = crate::utils::barrier_pool();
-        let n_total = pool.n_workers() + 1;
-        let groups_per_thread = n_groups.div_ceil(n_total);
         let lhs_b: &[BlockQ8K] = lhs_b;
         let repacked_ptr = repacked.as_ptr() as usize;
         let x8_block_bytes = std::mem::size_of::<BlockQ4Kx8>();
@@ -2547,17 +2538,12 @@ pub(crate) fn matmul_q4k_x8(
         if m == 1 {
             let lhs_row_ptr = lhs_b.as_ptr() as usize;
             let dst_row_ptr = dst.as_mut_ptr() as usize;
-            pool.execute(|tid| {
-                let start = tid * groups_per_thread;
-                if start >= n_groups {
-                    return;
-                }
-                let end = n_groups.min((tid + 1) * groups_per_thread);
+            pool.execute_chunked(n_groups, |range| {
                 let lhs_row: &[BlockQ8K] = unsafe {
                     std::slice::from_raw_parts(lhs_row_ptr as *const BlockQ8K, k_in_blocks)
                 };
                 let dst_ptr = dst_row_ptr as *mut f32;
-                for g in start..end {
+                for g in range {
                     let xs = unsafe {
                         std::slice::from_raw_parts(
                             (repacked_ptr + g * k_in_blocks * x8_block_bytes) as *const BlockQ4Kx8,
@@ -2578,17 +2564,12 @@ pub(crate) fn matmul_q4k_x8(
             let lhs_row_ptr = lhs_row.as_ptr() as usize;
             let dst_row_ptr = dst[row_idx * n..(row_idx + 1) * n].as_mut_ptr() as usize;
 
-            pool.execute(|tid| {
-                let start = tid * groups_per_thread;
-                if start >= n_groups {
-                    return;
-                }
-                let end = n_groups.min((tid + 1) * groups_per_thread);
+            pool.execute_chunked(n_groups, |range| {
                 let lhs_row: &[BlockQ8K] = unsafe {
                     std::slice::from_raw_parts(lhs_row_ptr as *const BlockQ8K, k_in_blocks)
                 };
                 let dst_ptr = dst_row_ptr as *mut f32;
-                for g in start..end {
+                for g in range {
                     let xs = unsafe {
                         std::slice::from_raw_parts(
                             (repacked_ptr + g * k_in_blocks * x8_block_bytes) as *const BlockQ4Kx8,
