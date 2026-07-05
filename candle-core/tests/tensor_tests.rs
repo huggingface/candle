@@ -221,21 +221,23 @@ fn asort(device: &Device) -> Result<()> {
 
 /// Test sorting a large tensor that exceeds 1024 elements.
 fn asort_big(device: &Device) -> Result<()> {
-    // Skip on metal for now
-    if device.is_metal() {
-        return Ok(());
-    }
-    const SIZE: usize = 2000;
+    const SIZE: usize = 2000; // > 1024, exceeds the single-threadgroup bitonic path
     let data: Vec<f32> = (0..SIZE).map(|x| (SIZE - x) as f32).collect();
     let tensor = Tensor::new(data.as_slice(), device)?;
 
+    // Ascending argsort of a strictly descending input is the reversed index range.
     let indexes = tensor.arg_sort_last_dim(true)?;
     let expected_indexes: Vec<u32> = (0..SIZE).rev().map(|x| x as u32).collect();
     assert_eq!(indexes.to_vec1::<u32>()?, expected_indexes);
 
-    let indexes = tensor.arg_sort_last_dim(false)?;
-    let expected_indexes: Vec<u32> = (0..SIZE).map(|x| x as u32).collect();
-    assert_eq!(indexes.to_vec1::<u32>()?, expected_indexes);
+    // Large descending sorts are not yet supported on Metal: the multi-block MLX
+    // kernel that handles rows past the single-threadgroup limit is ascending-only,
+    // so the Metal path returns an error there instead of a wrong result.
+    if !device.is_metal() {
+        let indexes = tensor.arg_sort_last_dim(false)?;
+        let expected_indexes: Vec<u32> = (0..SIZE).map(|x| x as u32).collect();
+        assert_eq!(indexes.to_vec1::<u32>()?, expected_indexes);
+    }
     Ok(())
 }
 

@@ -229,18 +229,52 @@ impl crate::CustomOp1 for ArgSort {
         while ncols_pad < ncols {
             ncols_pad *= 2;
         }
-        candle_metal_kernels::call_arg_sort(
-            device.metal_device(),
-            &command_encoder,
-            kernels,
-            name,
-            nrows,
-            ncols,
-            ncols_pad,
-            src,
-            &dst,
-        )
-        .map_err(crate::Error::wrap)?;
+        // The bitonic kernel sorts a whole row inside a single threadgroup, so it
+        // is capped at ncols_pad <= the Metal max threads per threadgroup (1024 on
+        // Apple GPUs). Past that the dispatch silently returned wrong indices
+        // (issue #2570). Route large ascending sorts through the multi-block MLX
+        // kernel where it is supported, and error clearly otherwise rather than
+        // corrupting the output.
+        const MAX_THREADS_PER_THREADGROUP: usize = 1024;
+        if ncols_pad <= MAX_THREADS_PER_THREADGROUP {
+            candle_metal_kernels::call_arg_sort(
+                device.metal_device(),
+                &command_encoder,
+                kernels,
+                name,
+                nrows,
+                ncols,
+                ncols_pad,
+                src,
+                &dst,
+            )
+            .map_err(crate::Error::wrap)?;
+        } else if self.asc && matches!(storage.dtype(), DType::F32 | DType::U32) {
+            let mlx_dtype = match storage.dtype() {
+                DType::F32 => candle_metal_kernels::DType::F32,
+                DType::U32 => candle_metal_kernels::DType::U32,
+                _ => unreachable!("guarded by the matches! above"),
+            };
+            candle_metal_kernels::call_mlx_arg_sort(
+                device.metal_device(),
+                &command_encoder,
+                kernels,
+                mlx_dtype,
+                nrows,
+                ncols,
+                src,
+                &dst,
+            )
+            .map_err(crate::Error::wrap)?;
+        } else {
+            crate::bail!(
+                "Metal argsort is limited to {MAX_THREADS_PER_THREADGROUP} elements per row for \
+                 dtype {:?} with ascending={}; got ncols={ncols}. Rows longer than that are \
+                 currently only supported for ascending F32/U32 sorts.",
+                storage.dtype(),
+                self.asc
+            );
+        }
         let dst = crate::MetalStorage::new(dst, device.clone(), el, DType::U32);
         Ok((dst, layout.shape().clone()))
     }
