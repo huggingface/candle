@@ -8,7 +8,8 @@ use rayon::prelude::*;
 
 mod utils;
 pub use utils::{
-    binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2InPlace, Map2U8,
+    binary_map, binary_map_vec, binary_map_vec_par, unary_map, unary_map_vec, unary_map_vec_par,
+    Map1, Map1Any, Map2, Map2InPlace, Map2U8,
 };
 mod conv2d;
 use conv2d::Conv2D;
@@ -2464,19 +2465,19 @@ impl BackendStorage for CpuStorage {
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         match self {
             Self::BF16(storage) => {
-                let data = unary_map_vec(storage, layout, B::bf16, B::bf16_vec);
+                let data = unary_map_vec_par(storage, layout, B::bf16, B::bf16_vec);
                 Ok(Self::BF16(data))
             }
             Self::F16(storage) => {
-                let data = unary_map_vec(storage, layout, B::f16, B::f16_vec);
+                let data = unary_map_vec_par(storage, layout, B::f16, B::f16_vec);
                 Ok(Self::F16(data))
             }
             Self::F32(storage) => {
-                let data = unary_map_vec(storage, layout, B::f32, B::f32_vec);
+                let data = unary_map_vec_par(storage, layout, B::f32, B::f32_vec);
                 Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                let data = unary_map_vec(storage, layout, B::f64, B::f64_vec);
+                let data = unary_map_vec_par(storage, layout, B::f64, B::f64_vec);
                 Ok(Self::F64(data))
             }
             Self::U8(storage) => {
@@ -2518,7 +2519,7 @@ impl BackendStorage for CpuStorage {
     ) -> Result<Self> {
         match (self, rhs) {
             (Self::BF16(lhs), Self::BF16(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2530,7 +2531,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::BF16(data))
             }
             (Self::F16(lhs), Self::F16(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2542,7 +2543,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F16(data))
             }
             (Self::F32(lhs), Self::F32(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2554,7 +2555,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F32(data))
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2566,7 +2567,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F64(data))
             }
             (Self::U32(lhs), Self::U32(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2578,7 +2579,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::U32(data))
             }
             (Self::I16(lhs), Self::I16(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2590,7 +2591,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::I16(data))
             }
             (Self::I32(lhs), Self::I32(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,
@@ -2602,7 +2603,7 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::I32(data))
             }
             (Self::I64(lhs), Self::I64(rhs)) => {
-                let data = binary_map_vec(
+                let data = binary_map_vec_par(
                     lhs_l,
                     rhs_l,
                     lhs,

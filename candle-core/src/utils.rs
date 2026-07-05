@@ -54,6 +54,10 @@ pub struct BarrierPool {
 unsafe impl Sync for BarrierPool {}
 unsafe impl Send for BarrierPool {}
 
+thread_local! {
+    static IN_BARRIER_POOL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 unsafe fn call_trampoline<F: Fn(usize)>(data: *const (), tid: usize) {
     (*(data as *const F))(tid);
 }
@@ -137,6 +141,7 @@ impl BarrierPool {
                 std::thread::Builder::new()
                     .name(format!("candle-bp-{tid}"))
                     .spawn(move || {
+                        IN_BARRIER_POOL.with(|f| f.set(true));
                         set_thread_affinity();
                         let inner = unsafe { &*(inner_ptr as *const BarrierPoolInner) };
                         let slot = &inner.slots[tid];
@@ -290,6 +295,11 @@ impl BarrierPool {
     // lets fast threads absorb a straggler's work instead of spinning at the barrier.
     pub fn execute_chunked<F: Fn(std::ops::Range<usize>) + Sync>(&self, n_items: usize, f: F) {
         if n_items == 0 {
+            return;
+        }
+        // nested use from a worker would deadlock on the call lock; run inline instead
+        if IN_BARRIER_POOL.with(|f| f.get()) {
+            f(0..n_items);
             return;
         }
         let n_threads = self.threads.len() + 1;
