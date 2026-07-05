@@ -30,7 +30,7 @@ pub(crate) struct TileQ6K {
 // One 32-value block group for 16 rows of q8_0 weights, stored offset by +128.
 #[repr(C)]
 pub(crate) struct TileQ8_0 {
-    pub(crate) d: [f32; TILE_N],
+    pub(crate) d: [f16; TILE_N],
     pub(crate) qs: [u8; QK8_0 * TILE_N],
 }
 
@@ -177,12 +177,12 @@ pub(crate) fn pack_q8_0(storage: &dyn QuantizedType, n: usize, k: usize) -> Pack
     for t in 0..n_tiles {
         for b in 0..kb {
             let mut tile = TileQ8_0 {
-                d: [0.0; TILE_N],
+                d: [f16::ZERO; TILE_N],
                 qs: [0; QK8_0 * TILE_N],
             };
             for r in 0..TILE_N {
                 let blk = &blocks[(t * TILE_N + r) * kb + b];
-                tile.d[r] = blk.d.to_f32();
+                tile.d[r] = blk.d;
                 for g in 0..QK8_0 / 4 {
                     for j in 0..4 {
                         tile.qs[(g * TILE_N + r) * 4 + j] = (blk.qs[g * 4 + j] as i16 + 128) as u8;
@@ -302,7 +302,7 @@ mod kernels {
             }
         }
         for (blk, isum, tile) in [(sub32, &isum_a, t0), (sub32 + 1, &isum_b, t1)] {
-            let dw = _mm512_loadu_ps(tile.d.as_ptr());
+            let dw = _mm512_cvtph_ps(_mm256_loadu_si256(tile.d.as_ptr() as *const _));
             for (m, act) in acts.iter().enumerate() {
                 let bsum = (act.bsums[blk * 2] as i32 + act.bsums[blk * 2 + 1] as i32) as f32;
                 let f = _mm512_sub_ps(_mm512_cvtepi32_ps(isum[m]), _mm512_set1_ps(128.0 * bsum));
