@@ -343,6 +343,50 @@ impl PackedKind {
         }
     }
 
+    // matmul against one expert's row block inside stacked packed storage; subslices
+    // per arm so nothing is copied
+    #[cfg(target_arch = "aarch64")]
+    fn matmul_expert_range(
+        self,
+        mkn: (usize, usize, usize),
+        lhs: &[f32],
+        packed: &PackedStorage,
+        expert: usize,
+        dst: &mut [f32],
+    ) -> Result<()> {
+        let (_m, k, n_out) = mkn;
+        let features = crate::cpu::features::get();
+        macro_rules! sub {
+            ($v:expr, $width:expr, $qk:expr) => {{
+                let kb = k / $qk;
+                let groups = n_out / $width;
+                &$v[expert * groups * kb..(expert + 1) * groups * kb]
+            }};
+        }
+        match (self, packed) {
+            (Self::Q4Kx8, PackedStorage::Q4Kx8(v)) => {
+                let p = sub!(v, 8, QK_K);
+                if features.i8mm && mkn.0 >= 4 && mkn.0.is_multiple_of(4) {
+                    unsafe { super::neon::matmul_q4k_x8_i8mm(mkn, lhs, p, dst) }
+                } else {
+                    unsafe { super::k_quants::matmul_q4k_x8(mkn, lhs, p, dst) }
+                }
+            }
+            (Self::Q6Kx8, PackedStorage::Q6Kx8(v)) => {
+                super::neon::matmul_q6k_x8(mkn, lhs, sub!(v, 8, QK_K), dst)
+            }
+            (Self::Q8_0x4, PackedStorage::Q8_0x4(v)) => {
+                let p = sub!(v, 4, QK8_0);
+                if features.i8mm && mkn.0 >= 4 && mkn.0.is_multiple_of(4) {
+                    unsafe { super::neon::matmul_q8_0_x4_i8mm(mkn, lhs, p, dst) }
+                } else {
+                    unsafe { super::neon::matmul_q8_0_x4(mkn, lhs, p, dst) }
+                }
+            }
+            _ => crate::bail!("unsupported expert-range kind"),
+        }
+    }
+
     fn matmul(
         self,
         mkn: (usize, usize, usize),
@@ -916,6 +960,8 @@ define_indexed_gemv!(
 );
 
 #[allow(clippy::too_many_arguments)]
+const INDEXED_BUCKET_MIN_PAIRS: usize = 32;
+
 pub(crate) fn try_indexed_gemv(
     storage: &dyn QuantizedType,
     cache: &PackedCache,
@@ -937,6 +983,44 @@ pub(crate) fn try_indexed_gemv(
         let Some(kind) = PackedKind::select(storage.dtype(), (1, k, n_experts * n_out)) else {
             return Ok(false);
         };
+        // prefill: bucket pairs by expert and run one tiled matmul per expert instead
+        // of a gemv per (token, expert) pair
+        if ids.len() >= INDEXED_BUCKET_MIN_PAIRS
+            && matches!(
+                kind,
+                PackedKind::Q4Kx8 | PackedKind::Q6Kx8 | PackedKind::Q8_0x4
+            )
+        {
+            let ps = cache.get_or_init(kind, || kind.pack(storage, n_experts * n_out));
+            let n_pairs = ids.len();
+            let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); n_experts];
+            for (pair, &e) in ids.iter().enumerate() {
+                buckets[e as usize].push(pair);
+            }
+            let mut gathered: Vec<f32> = Vec::new();
+            let mut scratch: Vec<f32> = Vec::new();
+            for (e, bucket) in buckets.iter().enumerate() {
+                if bucket.is_empty() {
+                    continue;
+                }
+                let cnt = bucket.len();
+                let cnt_pad = cnt.next_multiple_of(4);
+                gathered.clear();
+                gathered.resize(cnt_pad * k, 0.0);
+                for (i, &pair) in bucket.iter().enumerate() {
+                    let row = if n_rows == n_pairs { pair } else { pair / topk };
+                    gathered[i * k..(i + 1) * k].copy_from_slice(&lhs[row * k..(row + 1) * k]);
+                }
+                scratch.clear();
+                scratch.resize(cnt_pad * n_out, 0.0);
+                kind.matmul_expert_range((cnt_pad, k, n_out), &gathered, ps, e, &mut scratch)?;
+                for (i, &pair) in bucket.iter().enumerate() {
+                    dst[pair * n_out..(pair + 1) * n_out]
+                        .copy_from_slice(&scratch[i * n_out..(i + 1) * n_out]);
+                }
+            }
+            return Ok(true);
+        }
         match kind {
             PackedKind::Q4Kx8 if k.is_multiple_of(QK_K) && n_out.is_multiple_of(8) => {
                 unsafe {

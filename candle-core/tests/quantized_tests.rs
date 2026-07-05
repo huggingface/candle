@@ -1611,10 +1611,12 @@ fn indexed_gemv_matches_reference() -> Result<()> {
         let w = Tensor::rand(-1f32, 1f32, (n_experts, n_out, k), &dev)?;
         let qt = quantized::QTensor::quantize(&w, dtype)?;
         let wref = qt.dequantize(&dev)?;
-        for (batch, topk, x_t) in [(3usize, 4usize, 1usize), (2, 2, 2)] {
+        // 24x4 = 96 pairs exercises the bucketed per-expert matmul path; skewed ids
+        // land some experts with dozens of rows and others with none
+        for (batch, topk, x_t) in [(3usize, 4usize, 1usize), (2, 2, 2), (24, 4, 1)] {
             let x = Tensor::rand(-1f32, 1f32, (batch, x_t, k), &dev)?;
             let ids_v: Vec<u32> = (0..batch * topk)
-                .map(|i| ((i * 3 + 1) % n_experts) as u32)
+                .map(|i| ((i * i * 3 + 1) % n_experts) as u32)
                 .collect();
             let ids = Tensor::from_vec(ids_v.clone(), (batch, topk), &dev)?;
             let got = qt.indexed_gemv(&x, &ids)?.expect("indexed path supported");
