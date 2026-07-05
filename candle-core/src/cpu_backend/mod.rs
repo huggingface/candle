@@ -2982,6 +2982,18 @@ impl BackendStorage for CpuStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
+        // no bf16 gemm kernel yet: widen to f32, multiply, narrow back
+        if let (Self::BF16(lhs_v), Self::BF16(rhs_v)) = (self, rhs) {
+            let lhs32 = Self::F32(lhs_v.iter().map(|v| v.to_f32()).collect());
+            let rhs32 = Self::F32(rhs_v.iter().map(|v| v.to_f32()).collect());
+            let out = MatMul(bmnk).map(&lhs32, lhs_l, &rhs32, rhs_l)?;
+            let Self::F32(out_v) = out else {
+                crate::bail!("matmul dtype mismatch")
+            };
+            return Ok(Self::BF16(
+                out_v.iter().map(|v| half::bf16::from_f32(*v)).collect(),
+            ));
+        }
         MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
     }
 

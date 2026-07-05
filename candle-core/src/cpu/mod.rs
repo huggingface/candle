@@ -292,6 +292,20 @@ pub(crate) unsafe fn vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f1
 }
 
 #[inline(always)]
+pub(crate) unsafe fn vec_mul_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf16, k: usize) {
+    #[cfg(any(
+        target_arch = "aarch64",
+        all(target_arch = "arm", target_feature = "neon")
+    ))]
+    if use_neon_bf16() {
+        return neon::vec_mul_bf16(a_row, b_row, c, k);
+    }
+    for j in 0..k {
+        *c.add(j) = *a_row.add(j) * *b_row.add(j);
+    }
+}
+
+#[inline(always)]
 pub(crate) unsafe fn vec_scalar_add_bf16(scalar: bf16, xs: *const bf16, ys: *mut bf16, k: usize) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if use_avx2() {

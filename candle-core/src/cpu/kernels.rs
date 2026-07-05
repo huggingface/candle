@@ -11,6 +11,18 @@ pub trait VecOps: num_traits::NumAssign + Copy {
             .for_each(|((&a, &b), y)| *y = a + b)
     }
 
+    fn vec_mul(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
+        lhs.iter()
+            .zip(rhs)
+            .zip(res)
+            .for_each(|((&a, &b), y)| *y = a * b)
+    }
+
+    #[inline(always)]
+    fn scalar_mul(scalar: Self, xs: &[Self], ys: &mut [Self]) {
+        xs.iter().zip(ys).for_each(|(&x, y)| *y = x * scalar)
+    }
+
     /// Add a broadcast scalar to every element of a slice: `ys[i] = xs[i] + scalar`.
     #[inline(always)]
     fn scalar_add(scalar: Self, xs: &[Self], ys: &mut [Self]) {
@@ -174,6 +186,10 @@ impl VecOps for half::bf16 {
     #[inline(always)]
     fn vec_add(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
         unsafe { super::vec_add_bf16(lhs.as_ptr(), rhs.as_ptr(), res.as_mut_ptr(), lhs.len()) }
+    }
+
+    fn vec_mul(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
+        unsafe { super::vec_mul_bf16(lhs.as_ptr(), rhs.as_ptr(), res.as_mut_ptr(), lhs.len()) }
     }
 
     #[inline(always)]

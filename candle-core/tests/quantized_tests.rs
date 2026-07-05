@@ -1645,3 +1645,23 @@ fn indexed_gemv_matches_reference() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn bf16_lhs_matmul_matches_f32() -> Result<()> {
+    let dev = Device::Cpu;
+    let (n, k) = (64usize, 512usize);
+    for m in [1usize, 4, 9] {
+        let w = Tensor::rand(-1f32, 1f32, (n, k), &dev)?;
+        let qt = quantized::QTensor::quantize(&w, GgmlDType::Q4K)?;
+        let mm = quantized::QMatMul::from_qtensor(qt)?;
+        let x = Tensor::rand(-1f32, 1f32, (1, m, k), &dev)?;
+        let y32 = mm.forward(&x)?;
+        let ybf = mm
+            .forward(&x.to_dtype(DType::BF16)?)?
+            .to_dtype(DType::F32)?;
+        let diff = (&y32 - &ybf)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let scale = y32.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
+        assert!(diff / scale < 3e-2, "m={m}: rel diff {}", diff / scale);
+    }
+    Ok(())
+}
