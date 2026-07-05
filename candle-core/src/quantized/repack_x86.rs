@@ -40,18 +40,18 @@ pub(crate) enum PackedX86 {
     Q8_0(Vec<TileQ8_0>),
 }
 
-pub(crate) fn supported() -> bool {
-    is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vnni")
-}
-
 pub(crate) fn select(dtype: super::GgmlDType, n: usize, k: usize) -> bool {
     use super::GgmlDType as D;
-    if !supported() || !n.is_multiple_of(TILE_N) {
+    let Some(lv) = level() else {
+        return false;
+    };
+    if !n.is_multiple_of(TILE_N) || !k.is_multiple_of(QK_K) {
         return false;
     }
     match dtype {
-        D::Q4K | D::Q6K => k.is_multiple_of(QK_K),
-        D::Q8_0 => k.is_multiple_of(QK_K),
+        D::Q4K | D::Q6K => true,
+        // pure avx2 maddubs overflows on the +128 u8 range; q8_0 needs real dpbusd
+        D::Q8_0 => lv != X86Level::Avx2,
         _ => false,
     }
 }
@@ -326,6 +326,7 @@ pub(crate) fn matmul_tiles(
     #[cfg(target_arch = "x86_64")]
     unsafe {
         use core::arch::x86_64::*;
+        let lv = level().expect("select() gated");
         let kb = k / QK_K;
         let n_tiles = n / TILE_N;
         let mt_step = kernels::MAX_MT;
@@ -338,36 +339,77 @@ pub(crate) fn matmul_tiles(
                 let nt = unit / m_units;
                 let m0 = (unit % m_units) * mt_step;
                 let mt = (m - m0).min(mt_step);
-                let mut acc = [[_mm512_setzero_ps(); 1]; kernels::MAX_MT];
-                for b in 0..kb {
-                    let mut act_refs: [&BlockQ8K; kernels::MAX_MT] =
-                        [&lhs_q[m0 * kb + b]; kernels::MAX_MT];
-                    for (i, a) in act_refs.iter_mut().enumerate().take(mt) {
-                        *a = &lhs_q[(m0 + i) * kb + b];
-                    }
-                    match packed {
-                        PackedX86::Q4K(tiles) => {
-                            kernels::q4k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
+                let mut act_refs: [&BlockQ8K; kernels::MAX_MT] = [&lhs_q[m0 * kb]; kernels::MAX_MT];
+                if lv == X86Level::Avx512Vnni {
+                    let mut acc = [[_mm512_setzero_ps(); 1]; kernels::MAX_MT];
+                    for b in 0..kb {
+                        for (i, a) in act_refs.iter_mut().enumerate().take(mt) {
+                            *a = &lhs_q[(m0 + i) * kb + b];
                         }
-                        PackedX86::Q6K(tiles) => {
-                            kernels::q6k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
-                        }
-                        PackedX86::Q8_0(tiles) => {
-                            // q8_0 tiles cover 32 k-values each; 8 tiles per q8k superblock
-                            for s in (0..8).step_by(2) {
-                                kernels::q8_0_tile2(
-                                    &tiles[nt * (kb * 8) + b * 8 + s],
-                                    &tiles[nt * (kb * 8) + b * 8 + s + 1],
-                                    &act_refs[..mt],
-                                    s,
-                                    &mut acc,
-                                );
+                        match packed {
+                            PackedX86::Q4K(tiles) => {
+                                kernels::q4k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
+                            }
+                            PackedX86::Q6K(tiles) => {
+                                kernels::q6k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
+                            }
+                            PackedX86::Q8_0(tiles) => {
+                                // q8_0 tiles cover 32 k-values each; 8 tiles per q8k superblock
+                                for s in (0..8).step_by(2) {
+                                    kernels::q8_0_tile2(
+                                        &tiles[nt * (kb * 8) + b * 8 + s],
+                                        &tiles[nt * (kb * 8) + b * 8 + s + 1],
+                                        &act_refs[..mt],
+                                        s,
+                                        &mut acc,
+                                    );
+                                }
                             }
                         }
                     }
-                }
-                for i in 0..mt {
-                    _mm512_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
+                    for i in 0..mt {
+                        _mm512_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
+                    }
+                } else {
+                    let mut acc = [[_mm256_setzero_ps(); 2]; kernels::MAX_MT];
+                    for b in 0..kb {
+                        for (i, a) in act_refs.iter_mut().enumerate().take(mt) {
+                            *a = &lhs_q[(m0 + i) * kb + b];
+                        }
+                        match packed {
+                            PackedX86::Q4K(tiles) => {
+                                let t = &tiles[nt * kb + b];
+                                if lv == X86Level::AvxVnni {
+                                    kernels256::q4k_tile_avxvnni(t, &act_refs[..mt], &mut acc)
+                                } else {
+                                    kernels256::q4k_tile_avx2(t, &act_refs[..mt], &mut acc)
+                                }
+                            }
+                            PackedX86::Q6K(tiles) => {
+                                let t = &tiles[nt * kb + b];
+                                if lv == X86Level::AvxVnni {
+                                    kernels256::q6k_tile_avxvnni(t, &act_refs[..mt], &mut acc)
+                                } else {
+                                    kernels256::q6k_tile_avx2(t, &act_refs[..mt], &mut acc)
+                                }
+                            }
+                            PackedX86::Q8_0(tiles) => {
+                                for s in (0..8).step_by(2) {
+                                    kernels256::q8_0_tile2_avxvnni(
+                                        &tiles[nt * (kb * 8) + b * 8 + s],
+                                        &tiles[nt * (kb * 8) + b * 8 + s + 1],
+                                        &act_refs[..mt],
+                                        s,
+                                        &mut acc,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    for i in 0..mt {
+                        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
+                        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N + 8), acc[i][1]);
+                    }
                 }
             }
         });
@@ -505,6 +547,10 @@ pub(crate) fn amx_available() -> bool {
     use std::sync::OnceLock;
     static OK: OnceLock<bool> = OnceLock::new();
     *OK.get_or_init(|| {
+        // forced downlevel testing must exercise the 256-bit paths end to end
+        if level() != Some(X86Level::Avx512Vnni) {
+            return false;
+        }
         // is_x86_feature_detected!("amx-int8") is unstable; read CPUID leaf 7 directly
         #[cfg(target_arch = "x86_64")]
         let has_amx = {
@@ -802,5 +848,206 @@ pub(crate) fn matmul_amx_q4k(
     {
         let _ = (tiles, lhs_q, m, k, n, dst);
         unreachable!()
+    }
+}
+
+// 256-bit kernel tier for CPUs without AVX512: AVX-VNNI (vpdpbusd ymm) or pure AVX2
+// (maddubs+madd, safe for the u4/u6 x i8 operand ranges). Same tile layout, each
+// 16-column group processed as two ymm halves.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum X86Level {
+    Avx512Vnni,
+    AvxVnni,
+    Avx2,
+}
+
+pub(crate) fn level() -> Option<X86Level> {
+    use std::sync::OnceLock;
+    static LEVEL: OnceLock<Option<X86Level>> = OnceLock::new();
+    *LEVEL.get_or_init(|| {
+        let force_avx2 = std::env::var("MISTRALRS_FORCE_AVX2").as_deref() == Ok("1");
+        let force_vnni = std::env::var("MISTRALRS_FORCE_AVXVNNI").as_deref() == Ok("1");
+        if !force_avx2
+            && !force_vnni
+            && is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512vnni")
+        {
+            return Some(X86Level::Avx512Vnni);
+        }
+        if !force_avx2
+            && (force_vnni || is_x86_feature_detected!("avxvnni"))
+            && is_x86_feature_detected!("avx2")
+        {
+            return Some(X86Level::AvxVnni);
+        }
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            return Some(X86Level::Avx2);
+        }
+        None
+    })
+}
+
+#[cfg(target_arch = "x86_64")]
+mod kernels256 {
+    use super::kernels::MAX_MT;
+    use super::*;
+    use core::arch::x86_64::*;
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn bcast4_256(act: &[i8], off: usize) -> __m256i {
+        _mm256_set1_epi32(std::ptr::read_unaligned(act.as_ptr().add(off) as *const i32))
+    }
+
+    #[target_feature(enable = "avx2,avxvnni")]
+    unsafe fn dp_vnni(acc: __m256i, w_u8: __m256i, a_i8: __m256i) -> __m256i {
+        _mm256_dpbusd_avx_epi32(acc, w_u8, a_i8)
+    }
+
+    // dpbusd stand-in for pure AVX2: maddubs (u8 x i8 -> i16 pairs) then madd against ones.
+    #[target_feature(enable = "avx2")]
+    unsafe fn dp_avx2(acc: __m256i, w_u8: __m256i, a_i8: __m256i) -> __m256i {
+        let prod16 = _mm256_maddubs_epi16(w_u8, a_i8);
+        _mm256_add_epi32(acc, _mm256_madd_epi16(prod16, _mm256_set1_epi16(1)))
+    }
+
+    macro_rules! q4k_tile_256 {
+        ($fname:ident, $dp:path, $feat:literal) => {
+            #[target_feature(enable = $feat)]
+            pub(crate) unsafe fn $fname(
+                tile: &TileQ4K,
+                acts: &[&BlockQ8K],
+                acc: &mut [[__m256; 2]],
+            ) {
+                let mask = _mm256_set1_epi8(0x0F_u8 as i8);
+                for sub in 0..8 {
+                    let mut isum = [[_mm256_setzero_si256(); 2]; MAX_MT];
+                    for g4 in 0..4 {
+                        let g = sub * 4 + g4;
+                        for h in 0..2 {
+                            let w = _mm256_loadu_si256(
+                                tile.qs.as_ptr().add(g * TILE_N * 4 + h * 32) as *const _,
+                            );
+                            let lo = _mm256_and_si256(w, mask);
+                            let hi = _mm256_and_si256(_mm256_srli_epi16(w, 4), mask);
+                            for (m, act) in acts.iter().enumerate() {
+                                let a_lo = bcast4_256(&act.qs, sub * 32 + g4 * 8);
+                                let a_hi = bcast4_256(&act.qs, sub * 32 + g4 * 8 + 4);
+                                isum[m][h] = $dp(isum[m][h], lo, a_lo);
+                                isum[m][h] = $dp(isum[m][h], hi, a_hi);
+                            }
+                        }
+                    }
+                    for h in 0..2 {
+                        let scale = _mm256_loadu_ps(tile.scales[sub].as_ptr().add(h * 8));
+                        let min = _mm256_loadu_ps(tile.mins[sub].as_ptr().add(h * 8));
+                        for (m, act) in acts.iter().enumerate() {
+                            let dall = act.d;
+                            let f = _mm256_cvtepi32_ps(isum[m][h]);
+                            acc[m][h] = _mm256_fmadd_ps(
+                                f,
+                                _mm256_mul_ps(scale, _mm256_set1_ps(dall)),
+                                acc[m][h],
+                            );
+                            let bsum =
+                                (act.bsums[sub * 2] as i32 + act.bsums[sub * 2 + 1] as i32) as f32;
+                            acc[m][h] =
+                                _mm256_fnmadd_ps(min, _mm256_set1_ps(dall * bsum), acc[m][h]);
+                        }
+                    }
+                }
+            }
+        };
+    }
+    q4k_tile_256!(q4k_tile_avxvnni, dp_vnni, "avx2,avxvnni,fma");
+    q4k_tile_256!(q4k_tile_avx2, dp_avx2, "avx2,fma");
+
+    macro_rules! q6k_tile_256 {
+        ($fname:ident, $dp:path, $feat:literal) => {
+            #[target_feature(enable = $feat)]
+            pub(crate) unsafe fn $fname(
+                tile: &TileQ6K,
+                acts: &[&BlockQ8K],
+                acc: &mut [[__m256; 2]],
+            ) {
+                for sub in 0..16 {
+                    let mut isum = [[_mm256_setzero_si256(); 2]; MAX_MT];
+                    for g4 in 0..4 {
+                        let g = sub * 4 + g4;
+                        for h in 0..2 {
+                            let w = _mm256_loadu_si256(
+                                tile.qs.as_ptr().add(g * TILE_N * 4 + h * 32) as *const _,
+                            );
+                            for (m, act) in acts.iter().enumerate() {
+                                let a = bcast4_256(&act.qs, sub * 16 + g4 * 4);
+                                isum[m][h] = $dp(isum[m][h], w, a);
+                            }
+                        }
+                    }
+                    for h in 0..2 {
+                        let scale = _mm256_loadu_ps(tile.scales[sub].as_ptr().add(h * 8));
+                        for (m, act) in acts.iter().enumerate() {
+                            let dall = act.d;
+                            let bsum = act.bsums[sub] as f32;
+                            let f = _mm256_sub_ps(
+                                _mm256_cvtepi32_ps(isum[m][h]),
+                                _mm256_set1_ps(32.0 * bsum),
+                            );
+                            acc[m][h] = _mm256_fmadd_ps(
+                                f,
+                                _mm256_mul_ps(scale, _mm256_set1_ps(dall)),
+                                acc[m][h],
+                            );
+                        }
+                    }
+                }
+            }
+        };
+    }
+    q6k_tile_256!(q6k_tile_avxvnni, dp_vnni, "avx2,avxvnni,fma");
+    q6k_tile_256!(q6k_tile_avx2, dp_avx2, "avx2,fma");
+
+    // q8_0 needs true dpbusd (u8 range overflows maddubs' i16 pairs), so vnni only.
+    #[target_feature(enable = "avx2,avxvnni,fma")]
+    pub(crate) unsafe fn q8_0_tile2_avxvnni(
+        t0: &TileQ8_0,
+        t1: &TileQ8_0,
+        acts: &[&BlockQ8K],
+        sub32: usize,
+        acc: &mut [[__m256; 2]],
+    ) {
+        let mut isum_a = [[_mm256_setzero_si256(); 2]; MAX_MT];
+        let mut isum_b = [[_mm256_setzero_si256(); 2]; MAX_MT];
+        for g4 in 0..8 {
+            for h in 0..2 {
+                let wa =
+                    _mm256_loadu_si256(t0.qs.as_ptr().add(g4 * TILE_N * 4 + h * 32) as *const _);
+                let wb =
+                    _mm256_loadu_si256(t1.qs.as_ptr().add(g4 * TILE_N * 4 + h * 32) as *const _);
+                for (m, act) in acts.iter().enumerate() {
+                    isum_a[m][h] = _mm256_dpbusd_avx_epi32(
+                        isum_a[m][h],
+                        wa,
+                        bcast4_256(&act.qs, sub32 * 32 + g4 * 4),
+                    );
+                    isum_b[m][h] = _mm256_dpbusd_avx_epi32(
+                        isum_b[m][h],
+                        wb,
+                        bcast4_256(&act.qs, (sub32 + 1) * 32 + g4 * 4),
+                    );
+                }
+            }
+        }
+        for (blk, isum, tile) in [(sub32, &isum_a, t0), (sub32 + 1, &isum_b, t1)] {
+            for h in 0..2 {
+                let dw = _mm256_cvtph_ps(_mm_loadu_si128(tile.d.as_ptr().add(h * 8) as *const _));
+                for (m, act) in acts.iter().enumerate() {
+                    let bsum = (act.bsums[blk * 2] as i32 + act.bsums[blk * 2 + 1] as i32) as f32;
+                    let f =
+                        _mm256_sub_ps(_mm256_cvtepi32_ps(isum[m][h]), _mm256_set1_ps(128.0 * bsum));
+                    acc[m][h] =
+                        _mm256_fmadd_ps(f, _mm256_mul_ps(dw, _mm256_set1_ps(act.d)), acc[m][h]);
+                }
+            }
+        }
     }
 }

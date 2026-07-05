@@ -958,6 +958,11 @@ impl QTensor {
         }
         #[cfg(target_arch = "x86_64")]
         {
+            // the fused kernel is 512-bit only; downlevel tiers fall through to
+            // per-matmul calls which dispatch to the 256-bit kernels
+            if repack_x86::level() != Some(repack_x86::X86Level::Avx512Vnni) {
+                return Ok(None);
+            }
             if ts.is_empty() || !lhs.device().is_cpu() || lhs.dtype() != crate::DType::F32 {
                 return Ok(None);
             }
