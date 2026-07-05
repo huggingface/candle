@@ -279,27 +279,35 @@ mod kernels {
         }
     }
 
-    // q8_0 (+128 offset weights): one 32-value block group; correction is 128 * block sum.
+    // q8_0 (+128 offset weights), two 32-value block groups per call with independent
+    // integer accumulators so the dpbusd latency chain never serializes at small m.
     #[target_feature(enable = "avx512f,avx512vnni,avx512bw")]
-    pub(crate) unsafe fn q8_0_tile(
-        tile: &TileQ8_0,
+    pub(crate) unsafe fn q8_0_tile2(
+        t0: &TileQ8_0,
+        t1: &TileQ8_0,
         acts: &[&BlockQ8K],
         sub32: usize,
         acc: &mut [[__m512; 1]],
     ) {
-        let mut isum = [_mm512_setzero_si512(); MAX_MT];
+        let mut isum_a = [_mm512_setzero_si512(); MAX_MT];
+        let mut isum_b = [_mm512_setzero_si512(); MAX_MT];
         for g4 in 0..8 {
-            let w = _mm512_loadu_si512(tile.qs.as_ptr().add(g4 * TILE_N * 4) as *const _);
+            let wa = _mm512_loadu_si512(t0.qs.as_ptr().add(g4 * TILE_N * 4) as *const _);
+            let wb = _mm512_loadu_si512(t1.qs.as_ptr().add(g4 * TILE_N * 4) as *const _);
             for (m, act) in acts.iter().enumerate() {
-                let a = bcast4(&act.qs, sub32 * 32 + g4 * 4);
-                isum[m] = _mm512_dpbusd_epi32(isum[m], w, a);
+                isum_a[m] =
+                    _mm512_dpbusd_epi32(isum_a[m], wa, bcast4(&act.qs, sub32 * 32 + g4 * 4));
+                isum_b[m] =
+                    _mm512_dpbusd_epi32(isum_b[m], wb, bcast4(&act.qs, (sub32 + 1) * 32 + g4 * 4));
             }
         }
-        let dw = _mm512_loadu_ps(tile.d.as_ptr());
-        for (m, act) in acts.iter().enumerate() {
-            let bsum = (act.bsums[sub32 * 2] as i32 + act.bsums[sub32 * 2 + 1] as i32) as f32;
-            let f = _mm512_sub_ps(_mm512_cvtepi32_ps(isum[m]), _mm512_set1_ps(128.0 * bsum));
-            acc[m][0] = _mm512_fmadd_ps(f, _mm512_mul_ps(dw, _mm512_set1_ps(act.d)), acc[m][0]);
+        for (blk, isum, tile) in [(sub32, &isum_a, t0), (sub32 + 1, &isum_b, t1)] {
+            let dw = _mm512_loadu_ps(tile.d.as_ptr());
+            for (m, act) in acts.iter().enumerate() {
+                let bsum = (act.bsums[blk * 2] as i32 + act.bsums[blk * 2 + 1] as i32) as f32;
+                let f = _mm512_sub_ps(_mm512_cvtepi32_ps(isum[m]), _mm512_set1_ps(128.0 * bsum));
+                acc[m][0] = _mm512_fmadd_ps(f, _mm512_mul_ps(dw, _mm512_set1_ps(act.d)), acc[m][0]);
+            }
         }
     }
 }
@@ -346,9 +354,10 @@ pub(crate) fn matmul_tiles(
                         }
                         PackedX86::Q8_0(tiles) => {
                             // q8_0 tiles cover 32 k-values each; 8 tiles per q8k superblock
-                            for s in 0..8 {
-                                kernels::q8_0_tile(
+                            for s in (0..8).step_by(2) {
+                                kernels::q8_0_tile2(
                                     &tiles[nt * (kb * 8) + b * 8 + s],
+                                    &tiles[nt * (kb * 8) + b * 8 + s + 1],
                                     &act_refs[..mt],
                                     s,
                                     &mut acc,
@@ -455,9 +464,10 @@ pub(crate) fn gemv_fused(
                             kernels::q6k_tile(&tiles[nt * kb + b], &act_refs[..mt], &mut acc)
                         }
                         PackedX86::Q8_0(tiles) => {
-                            for s in 0..8 {
-                                kernels::q8_0_tile(
+                            for s in (0..8).step_by(2) {
+                                kernels::q8_0_tile2(
                                     &tiles[nt * (kb * 8) + b * 8 + s],
+                                    &tiles[nt * (kb * 8) + b * 8 + s + 1],
                                     &act_refs[..mt],
                                     s,
                                     &mut acc,
