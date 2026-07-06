@@ -592,17 +592,23 @@ pub(crate) fn amx_available() -> bool {
         if !has_amx {
             return false;
         }
-        // Linux gates AMX tile state behind a per-process permission request.
-        const ARCH_REQ_XCOMP_PERM: i32 = 0x1023;
-        const XFEATURE_XTILEDATA: u64 = 18;
-        let r = unsafe {
-            libc::syscall(
-                libc::SYS_arch_prctl,
-                ARCH_REQ_XCOMP_PERM,
-                XFEATURE_XTILEDATA,
-            )
-        };
-        r == 0
+        // Linux gates AMX tile state behind a per-process permission request; other
+        // OSes would need their own enablement, so AMX stays off there.
+        #[cfg(target_os = "linux")]
+        {
+            const ARCH_REQ_XCOMP_PERM: i32 = 0x1023;
+            const XFEATURE_XTILEDATA: u64 = 18;
+            let r = unsafe {
+                libc::syscall(
+                    libc::SYS_arch_prctl,
+                    ARCH_REQ_XCOMP_PERM,
+                    XFEATURE_XTILEDATA,
+                )
+            };
+            r == 0
+        }
+        #[cfg(not(target_os = "linux"))]
+        false
     })
 }
 
