@@ -268,109 +268,11 @@ impl Config {
     }
 }
 
-/// Physical K/V storage and per-sequence block table for paged attention on
-/// a single transformer layer, in the layout
-/// `candle_flash_attn::flash_attn_varlen_paged_windowed` expects.
-/// Constructed and owned by the caller — e.g. a downstream block
-/// allocator/scheduler — and handed to [`Cache::new_paged`] as one entry per
-/// transformer layer, in `Config::num_hidden_layers` order.
-///
-/// `Llama::forward` only writes the newly computed K/V for the tokens at
-/// `index_pos..index_pos + seq_len` into the slots `block_table` indicates,
-/// and reads `block_table` / `seqlens_k` to attend over the pool. Block
-/// allocation, eviction and admission stay a caller concern.
-#[derive(Debug, Clone)]
-pub struct PagedKvCache {
-    /// `(num_blocks, page_block_size, num_key_value_heads, head_dim)`.
-    pub key_cache: Tensor,
-    /// `(num_blocks, page_block_size, num_key_value_heads, head_dim)`.
-    pub value_cache: Tensor,
-    /// `(batch_size, max_blocks)`, physical block ids (`u32`), one row per
-    /// sequence in the batch, in the same order as the model's input batch.
-    pub block_table: Tensor,
-    /// `(batch_size + 1,)`, cumulative per-sequence context length in
-    /// tokens (`u32`), covering the tokens this `forward` call is about to
-    /// write (e.g. for a uniform batch, `[0, L, 2*L, .., batch_size*L]` with
-    /// `L = index_pos + seq_len`). The flash-attn path reads this as-is; the
-    /// dense fallback (used when `Config::use_flash_attn` is `false`)
-    /// instead assumes a uniform `index_pos + seq_len` context length across
-    /// the batch, matching the contiguous cache path.
-    pub seqlens_k: Tensor,
-    /// Number of tokens stored per block in `key_cache` / `value_cache`.
-    pub page_block_size: usize,
-}
-
-impl PagedKvCache {
-    /// Writes `k`/`v` (already rotary-embedded for `k`), shaped `(b_sz,
-    /// num_key_value_heads, seq_len, head_dim)`, into this layer's pool at
-    /// the slots `block_table` indicates for `index_pos..index_pos+seq_len`.
-    fn write(&self, k: &Tensor, v: &Tensor, index_pos: usize) -> Result<()> {
-        let (b_sz, _num_kv_heads, seq_len, _head_dim) = k.dims4()?;
-        let page_block_size = self.page_block_size;
-        let k = k.transpose(1, 2)?.contiguous()?;
-        let v = v.transpose(1, 2)?.contiguous()?;
-        let block_table = self.block_table.to_dtype(DType::U32)?.to_vec2::<u32>()?;
-
-        let mut t = 0usize;
-        while t < seq_len {
-            let pos = index_pos + t;
-            let logical_block = pos / page_block_size;
-            let offset = pos % page_block_size;
-            let run = (page_block_size - offset).min(seq_len - t);
-            for (b, row) in block_table.iter().enumerate().take(b_sz) {
-                let physical_block = row[logical_block] as usize;
-                let k_run = k.i((b, t..t + run))?.contiguous()?;
-                let v_run = v.i((b, t..t + run))?.contiguous()?;
-                self.key_cache
-                    .i(physical_block)?
-                    .slice_set(&k_run, 0, offset)?;
-                self.value_cache
-                    .i(physical_block)?
-                    .slice_set(&v_run, 0, offset)?;
-            }
-            t += run;
-        }
-        Ok(())
-    }
-
-    /// Gathers `kv_len` tokens of history per sequence out of the pool via
-    /// `block_table`, for the dense (non flash-attn) fallback path. Returns
-    /// `(k, v)` shaped `(b_sz, num_key_value_heads, kv_len, head_dim)`.
-    fn gather(&self, b_sz: usize, kv_len: usize) -> Result<(Tensor, Tensor)> {
-        let page_block_size = self.page_block_size;
-        let num_logical_blocks = kv_len.div_ceil(page_block_size);
-        let block_table = self.block_table.to_dtype(DType::U32)?.to_vec2::<u32>()?;
-        let mut ks = Vec::with_capacity(b_sz);
-        let mut vs = Vec::with_capacity(b_sz);
-        for row in block_table.iter().take(b_sz) {
-            let k_blocks: Vec<_> = row[..num_logical_blocks]
-                .iter()
-                .map(|&pb| self.key_cache.i(pb as usize))
-                .collect::<Result<_>>()?;
-            let v_blocks: Vec<_> = row[..num_logical_blocks]
-                .iter()
-                .map(|&pb| self.value_cache.i(pb as usize))
-                .collect::<Result<_>>()?;
-            ks.push(Tensor::cat(&k_blocks, 0)?.narrow(0, 0, kv_len)?);
-            vs.push(Tensor::cat(&v_blocks, 0)?.narrow(0, 0, kv_len)?);
-        }
-        let k = Tensor::stack(&ks, 0)?.transpose(1, 2)?.contiguous()?;
-        let v = Tensor::stack(&vs, 0)?.transpose(1, 2)?.contiguous()?;
-        Ok((k, v))
-    }
-}
-
-#[derive(Debug, Clone)]
-enum KvStore {
-    Contiguous(Vec<Option<(Tensor, Tensor)>>),
-    Paged(Vec<PagedKvCache>),
-}
-
 #[derive(Debug, Clone)]
 pub struct Cache {
     masks: HashMap<(usize, usize), Tensor>,
     pub use_kv_cache: bool,
-    kv_store: KvStore,
+    kvs: Vec<Option<(Tensor, Tensor)>>,
     cos: Tensor,
     sin: Tensor,
     device: Device,
@@ -432,41 +334,11 @@ impl Cache {
         Ok(Self {
             masks: HashMap::new(),
             use_kv_cache,
-            kv_store: KvStore::Contiguous(vec![None; config.num_hidden_layers]),
+            kvs: vec![None; config.num_hidden_layers],
             device: device.clone(),
             cos,
             sin,
         })
-    }
-
-    /// Like [`Cache::new`], but backs the KV storage with caller-owned
-    /// [`PagedKvCache`] pools instead of the contiguous concat-and-narrow
-    /// path — one entry per transformer layer, in `config.num_hidden_layers`
-    /// order. When `Config::use_flash_attn` is set, `Llama::forward` attends
-    /// over the pools via
-    /// `candle_flash_attn::flash_attn_varlen_paged_windowed`; otherwise it
-    /// falls back to gathering the referenced blocks into a dense tensor for
-    /// a plain masked matmul (works without the `flash-attn` feature, e.g.
-    /// for CPU testing). Block allocation, eviction and admission remain the
-    /// caller's responsibility — this only wires the attention/cache call
-    /// site.
-    pub fn new_paged(
-        use_kv_cache: bool,
-        dtype: DType,
-        config: &Config,
-        device: &Device,
-        layers: Vec<PagedKvCache>,
-    ) -> Result<Self> {
-        if layers.len() != config.num_hidden_layers {
-            candle::bail!(
-                "expected {} paged KV cache layers, got {}",
-                config.num_hidden_layers,
-                layers.len()
-            )
-        }
-        let mut cache = Self::new(use_kv_cache, dtype, config, device)?;
-        cache.kv_store = KvStore::Paged(layers);
-        Ok(cache)
     }
 
     fn mask(&mut self, seq_len: usize, index_pos: usize) -> Result<Tensor> {
@@ -512,57 +384,6 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
     unimplemented!("compile with '--features flash-attn'")
 }
 
-#[cfg(feature = "flash-attn")]
-#[allow(clippy::too_many_arguments)]
-fn flash_attn_paged(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    seqlens_q: &Tensor,
-    seqlens_k: &Tensor,
-    block_table: &Tensor,
-    max_seqlen_q: usize,
-    max_seqlen_k: usize,
-    softmax_scale: f32,
-    window_size_right: Option<usize>,
-    page_block_size: usize,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn_varlen_paged_windowed(
-        q,
-        k,
-        v,
-        seqlens_q,
-        seqlens_k,
-        block_table,
-        None,
-        max_seqlen_q,
-        max_seqlen_k,
-        softmax_scale,
-        None,
-        window_size_right,
-        page_block_size,
-        None,
-    )
-}
-
-#[cfg(not(feature = "flash-attn"))]
-#[allow(clippy::too_many_arguments)]
-fn flash_attn_paged(
-    _q: &Tensor,
-    _k: &Tensor,
-    _v: &Tensor,
-    _seqlens_q: &Tensor,
-    _seqlens_k: &Tensor,
-    _block_table: &Tensor,
-    _max_seqlen_q: usize,
-    _max_seqlen_k: usize,
-    _softmax_scale: f32,
-    _window_size_right: Option<usize>,
-    _page_block_size: usize,
-) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
-}
-
 impl CausalSelfAttention {
     fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize, cache: &Cache) -> Result<Tensor> {
         let _enter = self.span_rot.enter();
@@ -593,67 +414,17 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let v = v
+        let mut v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
         let q = self.apply_rotary_emb(&q, index_pos, cache)?;
-        let k = self.apply_rotary_emb(&k, index_pos, cache)?;
+        let mut k = self.apply_rotary_emb(&k, index_pos, cache)?;
 
-        // Only needed by the dense (non flash-attn) paths below; computed
-        // once, ahead of borrowing `cache.kv_store` mutably, since building
-        // it requires `&mut cache` too (for the memoized mask cache).
-        let mask = if !self.use_flash_attn && seq_len > 1 {
-            Some(cache.mask(seq_len, index_pos)?)
-        } else {
-            None
-        };
-
-        let use_kv_cache = cache.use_kv_cache;
-        let y = match &mut cache.kv_store {
-            KvStore::Contiguous(kvs) => self.forward_contiguous(
-                q,
-                k,
-                v,
-                seq_len,
-                use_kv_cache,
-                &mut kvs[block_idx],
-                mask.as_ref(),
-            )?,
-            KvStore::Paged(layers) => self.forward_paged(
-                q,
-                k,
-                v,
-                index_pos,
-                seq_len,
-                b_sz,
-                &layers[block_idx],
-                mask.as_ref(),
-            )?,
-        };
-
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
-        let y = self.o_proj.forward(&y)?;
-        Ok(y)
-    }
-
-    /// Today's contiguous concat-and-narrow KV cache path, unchanged in
-    /// behavior from before [`PagedKvCache`] was added.
-    #[allow(clippy::too_many_arguments)]
-    fn forward_contiguous(
-        &self,
-        q: Tensor,
-        mut k: Tensor,
-        mut v: Tensor,
-        seq_len: usize,
-        use_kv_cache: bool,
-        kv: &mut Option<(Tensor, Tensor)>,
-        mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
-        if use_kv_cache {
-            if let Some((cache_k, cache_v)) = kv {
-                k = Tensor::cat(&[&*cache_k, &k], 2)?.contiguous()?;
-                v = Tensor::cat(&[&*cache_v, &v], 2)?.contiguous()?;
+        if cache.use_kv_cache {
+            if let Some((cache_k, cache_v)) = &cache.kvs[block_idx] {
+                k = Tensor::cat(&[cache_k, &k], 2)?.contiguous()?;
+                v = Tensor::cat(&[cache_v, &v], 2)?.contiguous()?;
                 let k_seq_len = k.dims()[1];
                 if k_seq_len > self.max_position_embeddings {
                     k = k
@@ -675,109 +446,39 @@ impl CausalSelfAttention {
                         .contiguous()?
                 }
             }
-            *kv = Some((k.clone(), v.clone()))
+            cache.kvs[block_idx] = Some((k.clone(), v.clone()))
         }
 
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        if self.use_flash_attn {
+        let y = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2)
+            flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2)?
         } else {
             let in_dtype = q.dtype();
             let q = q.to_dtype(DType::F32)?;
             let k = k.to_dtype(DType::F32)?;
             let v = v.to_dtype(DType::F32)?;
             let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let att = match mask {
-                None => att,
-                Some(mask) => {
-                    masked_fill(&att, &mask.broadcast_as(att.shape())?, f32::NEG_INFINITY)?
-                }
+            let att = if seq_len == 1 {
+                att
+            } else {
+                let mask = cache.mask(seq_len, index_pos)?.broadcast_as(att.shape())?;
+                masked_fill(&att, &mask, f32::NEG_INFINITY)?
             };
 
             let att = candle_nn::ops::softmax_last_dim(&att)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
-            att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)
-        }
-    }
-
-    /// Additive paged-attention path: writes this step's K/V into the
-    /// caller-owned [`PagedKvCache`] pool, then either attends via the
-    /// paged flash-attn kernel or, without the `flash-attn` feature /
-    /// `Config::use_flash_attn`, falls back to gathering the referenced
-    /// blocks into a dense tensor for a plain masked matmul.
-    #[allow(clippy::too_many_arguments)]
-    fn forward_paged(
-        &self,
-        q: Tensor,
-        k: Tensor,
-        v: Tensor,
-        index_pos: usize,
-        seq_len: usize,
-        b_sz: usize,
-        paged: &PagedKvCache,
-        mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
-        paged.write(&k, &v, index_pos)?;
-
-        if self.use_flash_attn {
-            let device = q.device().clone();
-            let q = q
-                .transpose(1, 2)?
-                .reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?
-                .contiguous()?;
-            let seqlens_q: Vec<u32> = (0..=b_sz as u32).map(|i| i * seq_len as u32).collect();
-            let seqlens_q = Tensor::new(seqlens_q, &device)?;
-            let seqlens_k = paged.seqlens_k.to_dtype(DType::U32)?;
-            let max_seqlen_k = seqlens_k
-                .to_vec1::<u32>()?
-                .windows(2)
-                .map(|w| (w[1] - w[0]) as usize)
-                .max()
-                .unwrap_or(0);
-            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
-            let window_size_right = if seq_len > 1 { Some(0) } else { None };
-            let y = flash_attn_paged(
-                &q,
-                &paged.key_cache,
-                &paged.value_cache,
-                &seqlens_q,
-                &seqlens_k,
-                &paged.block_table,
-                seq_len,
-                max_seqlen_k,
-                softmax_scale,
-                window_size_right,
-                paged.page_block_size,
-            )?;
-            y.reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()
-        } else {
-            let kv_len = index_pos + seq_len;
-            let (k, v) = paged.gather(b_sz, kv_len)?;
-            let k = self.repeat_kv(k)?;
-            let v = self.repeat_kv(v)?;
-            let in_dtype = q.dtype();
-            let q = q.to_dtype(DType::F32)?;
-            let k = k.to_dtype(DType::F32)?;
-            let v = v.to_dtype(DType::F32)?;
-            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let att = match mask {
-                None => att,
-                Some(mask) => {
-                    masked_fill(&att, &mask.broadcast_as(att.shape())?, f32::NEG_INFINITY)?
-                }
-            };
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
-            att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)
-        }
+            att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
+        };
+        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
+        let y = self.o_proj.forward(&y)?;
+        Ok(y)
     }
 
     fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
@@ -1172,135 +873,6 @@ mod tests {
             );
         }
         ts
-    }
-
-    /// Unlike [`base_weights`] (uniform embeddings, zeroed q/k projections),
-    /// this gives every token id a distinct embedding and makes q/k/v/o
-    /// projections the identity, so attention output actually depends on
-    /// *which* positions the KV cache reconstructs and in what order —
-    /// letting [`paged_cache_matches_contiguous_cache`] catch addressing
-    /// bugs that a uniform-embedding fixture would miss.
-    fn distinct_weights(cfg: &Config, dev: &Device) -> HashMap<String, Tensor> {
-        let h = cfg.hidden_size;
-        let i = cfg.intermediate_size;
-        let v = cfg.vocab_size;
-        let mut ts = HashMap::new();
-        let embed: Vec<f32> = (0..v * h)
-            .map(|idx| (idx / h) as f32 * 0.1 + (idx % h) as f32 * 0.01)
-            .collect();
-        ts.insert(
-            "model.embed_tokens.weight".to_string(),
-            Tensor::from_vec(embed, (v, h), dev).unwrap(),
-        );
-        ts.insert(
-            "model.norm.weight".to_string(),
-            Tensor::ones(h, DType::F32, dev).unwrap(),
-        );
-        ts.insert(
-            "lm_head.weight".to_string(),
-            (Tensor::ones((v, h), DType::F32, dev).unwrap() * 0.1).unwrap(),
-        );
-        let identity: Vec<f32> = (0..h * h)
-            .map(|idx| if idx / h == idx % h { 1.0 } else { 0.0 })
-            .collect();
-        for i_layer in 0..cfg.num_hidden_layers {
-            let p = format!("model.layers.{i_layer}");
-            ts.insert(
-                format!("{p}.input_layernorm.weight"),
-                Tensor::ones(h, DType::F32, dev).unwrap(),
-            );
-            ts.insert(
-                format!("{p}.post_attention_layernorm.weight"),
-                Tensor::ones(h, DType::F32, dev).unwrap(),
-            );
-            for proj in ["q_proj", "k_proj", "v_proj", "o_proj"] {
-                ts.insert(
-                    format!("{p}.self_attn.{proj}.weight"),
-                    Tensor::from_vec(identity.clone(), (h, h), dev).unwrap(),
-                );
-            }
-            ts.insert(
-                format!("{p}.mlp.gate_proj.weight"),
-                Tensor::zeros((i, h), DType::F32, dev).unwrap(),
-            );
-            ts.insert(
-                format!("{p}.mlp.up_proj.weight"),
-                Tensor::zeros((i, h), DType::F32, dev).unwrap(),
-            );
-            ts.insert(
-                format!("{p}.mlp.down_proj.weight"),
-                Tensor::zeros((h, i), DType::F32, dev).unwrap(),
-            );
-        }
-        ts
-    }
-
-    /// End-to-end regression test for the additive `Cache::new_paged` seam
-    /// (candle issue #8): with `Config::use_flash_attn` off, the paged path
-    /// falls back to gathering blocks into a dense tensor, so this runs on
-    /// CPU without the `flash-attn` feature. A 3-token prefill followed by
-    /// two single-token decode steps against a `PagedKvCache` (block size 2,
-    /// identity block table) must reproduce the contiguous cache's logits
-    /// exactly, proving the block/offset write-and-gather addressing lines
-    /// up with the plain concat-and-narrow path.
-    #[test]
-    fn paged_cache_matches_contiguous_cache() -> Result<()> {
-        let dev = Device::Cpu;
-        let cfg = tiny_config();
-        let vb = VarBuilder::from_tensors(distinct_weights(&cfg, &dev), DType::F32, &dev);
-        let model = Llama::load(vb, &cfg)?;
-
-        let prompt = Tensor::new(&[[1u32, 2, 3]], &dev)?;
-        let step1 = Tensor::new(&[[4u32]], &dev)?;
-        let step2 = Tensor::new(&[[5u32]], &dev)?;
-
-        let mut contiguous_cache = Cache::new(true, DType::F32, &cfg, &dev)?;
-        let contiguous_prompt = model
-            .forward(&prompt, 0, &mut contiguous_cache)?
-            .to_vec2::<f32>()?;
-        let contiguous_step1 = model
-            .forward(&step1, 3, &mut contiguous_cache)?
-            .to_vec2::<f32>()?;
-        let contiguous_step2 = model
-            .forward(&step2, 4, &mut contiguous_cache)?
-            .to_vec2::<f32>()?;
-
-        let page_block_size = 2usize;
-        let num_blocks = 3usize;
-        let num_kv_heads = cfg.num_key_value_heads;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let paged_layer = PagedKvCache {
-            key_cache: Tensor::zeros(
-                (num_blocks, page_block_size, num_kv_heads, head_dim),
-                DType::F32,
-                &dev,
-            )?,
-            value_cache: Tensor::zeros(
-                (num_blocks, page_block_size, num_kv_heads, head_dim),
-                DType::F32,
-                &dev,
-            )?,
-            block_table: Tensor::new(&[[0u32, 1, 2]], &dev)?,
-            // Unused by the dense fallback, which derives context length
-            // from `index_pos + seq_len` (see `PagedKvCache::seqlens_k`).
-            seqlens_k: Tensor::new(&[0u32, 0], &dev)?,
-            page_block_size,
-        };
-        let mut paged_cache = Cache::new_paged(true, DType::F32, &cfg, &dev, vec![paged_layer])?;
-        let paged_prompt = model
-            .forward(&prompt, 0, &mut paged_cache)?
-            .to_vec2::<f32>()?;
-        let paged_step1 = model
-            .forward(&step1, 3, &mut paged_cache)?
-            .to_vec2::<f32>()?;
-        let paged_step2 = model
-            .forward(&step2, 4, &mut paged_cache)?
-            .to_vec2::<f32>()?;
-
-        assert_eq!(contiguous_prompt, paged_prompt);
-        assert_eq!(contiguous_step1, paged_step1);
-        assert_eq!(contiguous_step2, paged_step2);
-        Ok(())
     }
 
     #[test]
