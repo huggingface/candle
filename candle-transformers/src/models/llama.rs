@@ -354,21 +354,21 @@ impl PagedKvCache {
             .broadcast_as((b_sz * seq_len, num_kv_heads, head_dim))?
             .contiguous()?;
 
-        let k_flat = k
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
-        let v_flat = v
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
+        let k_flat =
+            k.transpose(1, 2)?
+                .contiguous()?
+                .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
+        let v_flat =
+            v.transpose(1, 2)?
+                .contiguous()?
+                .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
 
-        let key_flat = self
-            .key_cache
-            .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
-        let value_flat = self
-            .value_cache
-            .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
+        let key_flat =
+            self.key_cache
+                .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
+        let value_flat =
+            self.value_cache
+                .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
         key_flat.scatter_set(&indices, &k_flat, 0)?;
         value_flat.scatter_set(&indices, &v_flat, 0)?;
         Ok(())
@@ -699,14 +699,13 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         paged.write_new_kv(k, v, index_pos)?;
 
-        let q = q
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
+        let q = q.transpose(1, 2)?.contiguous()?.reshape((
+            b_sz * seq_len,
+            self.num_attention_heads,
+            self.head_dim,
+        ))?;
         let seqlens_q = Tensor::new(
-            (0..=b_sz)
-                .map(|i| (i * seq_len) as u32)
-                .collect::<Vec<_>>(),
+            (0..=b_sz).map(|i| (i * seq_len) as u32).collect::<Vec<_>>(),
             q.device(),
         )?;
         let max_seqlen_k = paged.block_table.dim(1)? * paged.page_block_size;
