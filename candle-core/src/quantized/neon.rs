@@ -1328,8 +1328,7 @@ pub(crate) fn vec_dot_8_q4k_q8k(n: usize, xs: &[BlockQ4Kx8], ys: &[BlockQ8K]) ->
     out
 }
 
-// Lane-indexed SDOT (emits `sdot ... .4b[LANE]`; the std vdotq_laneq_s32 is unstable).
-// LANE selects the activation row, so one weight load feeds all 4 rows of the tile.
+// Lane-indexed SDOT (std vdotq_laneq_s32 is unstable); LANE picks the activation row.
 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
 #[inline(always)]
 unsafe fn vdot_laneq<const LANE: i32>(mut acc: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_t {
@@ -1344,13 +1343,10 @@ unsafe fn vdot_laneq<const LANE: i32>(mut acc: int32x4_t, a: int8x16_t, b: int8x
     acc
 }
 
-// ---- Packed Q8_0 (block_q8_0x4) kernels, ports of llama.cpp's
-// ggml_gemm_q8_0_4x4_q8_0 / ggml_gemv_q8_0_4x4_q8_0 (arch/arm/repack.cpp).
-// The x4 layout interleaves 4 rows in 4-byte chunks so one SDOT covers 4
-// output columns via lane broadcast; see repack::BlockQ8_0x4.
+// Packed Q8_0 kernels: ports of llama.cpp ggml_gemm/gemv_q8_0_4x4_q8_0
+// (arch/arm/repack.cpp) over the BlockQ8_0x4 layout.
 
-/// One 4-col x 4-row tile: w = 4 interleaved weight rows, a = 4 interleaved
-/// activation rows, both `nb` blocks long. out[r * 4 + c] = row r x col c.
+/// One 4x4 tile over `nb` blocks; out[r * 4 + c] = activation row r x weight col c.
 #[cfg(all(target_feature = "neon", target_feature = "dotprod"))]
 #[allow(clippy::needless_range_loop)]
 pub(crate) fn gemm_q8_0x4(w: &[BlockQ8_0x4], a: &[BlockQ8_0x4], out: &mut [f32; 16]) {
@@ -1386,8 +1382,7 @@ pub(crate) fn gemm_q8_0x4(w: &[BlockQ8_0x4], a: &[BlockQ8_0x4], out: &mut [f32; 
     }
 }
 
-/// GEMV against one 4-col weight group: a is a plain Q8_0 activation row.
-/// out[c] = a x col c.
+/// GEMV against one 4-col weight group; out[c] = plain Q8_0 row a x col c.
 #[cfg(all(target_feature = "neon", target_feature = "dotprod"))]
 #[allow(clippy::needless_range_loop)]
 pub(crate) fn gemv_q8_0x4(w: &[BlockQ8_0x4], a: &[BlockQ8_0], out: &mut [f32; 4]) {
@@ -1423,10 +1418,9 @@ pub(crate) fn gemv_q8_0x4(w: &[BlockQ8_0x4], a: &[BlockQ8_0], out: &mut [f32; 4]
     }
 }
 
-/// NEON activation pack for the Q8_0x4 GEMM: quantize 4 rows and write the
-/// 4-byte-interleaved layout directly (port of llama ggml_quantize_mat_q8_0_4x4).
-/// Bit-identical to the scalar `BlockQ8_0::from_float` + interleave: vcvtaq
-/// rounds ties away from zero exactly like Rust `f32::round`.
+/// Quantize 4 activation rows into the interleaved layout (port of llama
+/// ggml_quantize_mat_q8_0_4x4). Bit-identical to scalar `BlockQ8_0::from_float`
+/// + interleave: vcvtaq rounds ties away from zero like `f32::round`.
 #[cfg(all(target_feature = "neon", target_feature = "dotprod"))]
 #[allow(clippy::needless_range_loop)]
 pub(crate) fn quantize_mat_q8_0x4_neon(rows: &[&[f32]; 4], out: &mut [BlockQ8_0x4]) {

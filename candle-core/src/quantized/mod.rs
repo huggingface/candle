@@ -63,8 +63,8 @@ pub struct QTensor {
     /// Not always used.
     #[allow(dead_code)]
     repacked_qs: OnceLock<Option<Vec<u8>>>,
-    /// Lazily repacked Q8_0 weight (`k_quants::BlockQ8_0x4` bytes) for the
-    /// aarch64 GEMM/GEMV paths; same lifetime/caching scheme as `repacked_qs`.
+    /// Lazily repacked Q8_0 weight (`k_quants::BlockQ8_0x4` bytes); same scheme
+    /// as `repacked_qs`.
     #[allow(dead_code)]
     repacked_q8_0: OnceLock<Option<Vec<u8>>>,
 }
@@ -978,8 +978,7 @@ impl crate::CustomOp1 for QTensor {
                     }
                 }
 
-                // Packed Q8_0 (block_q8_0x4): lane-broadcast SDOT GEMM/GEMV, the
-                // llama.cpp aarch64 online-repack equivalent. Serves all m.
+                // Packed Q8_0: lane-broadcast SDOT GEMM/GEMV (all m).
                 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
                 if self_storage.dtype() == GgmlDType::Q8_0 && n.is_multiple_of(4) {
                     use zerocopy::{FromBytes, IntoBytes};

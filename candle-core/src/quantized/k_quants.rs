@@ -2840,11 +2840,8 @@ verify_block_sizes!(
     BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
 );
 
-// ---- Packed Q8_0 (llama block_q8_0x4), the q8_0 sibling of BlockQ4Kx8: 4 rows
-// interleaved in 4-byte chunks so the NEON kernels broadcast one activation
-// load across 4 output columns via SDOT lane selection. Built once per weight
-// tensor (cached on the QTensor, see mod.rs) and used for BOTH the m>=4 GEMM
-// and the decode GEMV.
+// Packed Q8_0 (llama block_q8_0x4): 4 rows interleaved in 4-byte chunks so one
+// SDOT covers 4 output columns via lane broadcast. Repacked once per tensor.
 
 #[derive(
     Debug,
@@ -2875,8 +2872,7 @@ impl BlockQ8_0x4 {
     }
 }
 
-/// Repack plain Q8_0 weight rows (n rows of nb blocks) into the x4 interleaved
-/// layout: out[g*nb + b] holds block b of rows 4g..4g+4. Requires n % 4 == 0.
+/// Repack n (n % 4 == 0) rows of Q8_0 blocks into the x4 interleaved layout.
 #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
 pub(crate) fn repack_q8_0_weight(blocks: &[BlockQ8_0], n: usize) -> Vec<BlockQ8_0x4> {
     assert!(n.is_multiple_of(4), "q8_0 x4 repack needs n % 4 == 0");
@@ -2899,8 +2895,7 @@ pub(crate) fn repack_q8_0_weight(blocks: &[BlockQ8_0], n: usize) -> Vec<BlockQ8_
     out
 }
 
-/// Scalar reference twin of `neon::quantize_mat_q8_0x4_neon`: from_float per
-/// row + interleave. Kept for the bit-exactness test of the NEON pack.
+/// Scalar twin of `neon::quantize_mat_q8_0x4_neon`, kept for its bit-exactness test.
 #[cfg(all(test, target_arch = "aarch64", target_feature = "dotprod"))]
 pub(crate) fn quantize_q8_0_x4_into(rows: &[&[f32]; 4], out: &mut [BlockQ8_0x4]) {
     let nb = out.len();
@@ -2920,9 +2915,8 @@ pub(crate) fn quantize_q8_0_x4_into(rows: &[&[f32]; 4], out: &mut [BlockQ8_0x4])
     }
 }
 
-/// dst(m,n) = lhs(m,k) x W^T over x4-packed Q8_0 weights. m >= 4 runs 4-row
-/// GEMM tiles (last tile zero-padded); m < 4 runs the GEMV per row. Column
-/// groups are partitioned contiguously across the barrier pool.
+/// dst(m,n) = lhs(m,k) x W^T: 4-row GEMM tiles for m >= 4 (zero-padded tail),
+/// per-row GEMV below; column groups split across the barrier pool.
 #[cfg(all(
     target_arch = "aarch64",
     target_feature = "neon",
