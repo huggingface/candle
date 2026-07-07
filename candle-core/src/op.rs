@@ -691,9 +691,7 @@ impl UnaryOpT for Gelu {
         crate::accelerate::vd_gelu(xs, ys)
     }
 
-    // NEON tanh-GELU: the scalar path spends nearly all its time in libm tanh
-    // (one call per element); vision encoders run tens of millions of GELUs
-    // per image. CANDLE_FAST_GELU=0 restores the exact libm path.
+    // NEON tanh-GELU; CANDLE_FAST_GELU=0 restores the exact libm path.
     #[cfg(all(
         target_arch = "aarch64",
         not(feature = "mkl"),
@@ -709,10 +707,8 @@ impl UnaryOpT for Gelu {
     }
 }
 
-// Vectorized tanh-GELU for aarch64. tanh via the Eigen-style rational
-// approximation x*P(x^2)/Q(x^2) on the clamped range (beyond +-7.9053111 f32
-// tanh saturates to +-1), accurate to a few ULP - orders of magnitude tighter
-// than the f16 lookup table llama.cpp uses for its GELU.
+// Vectorized tanh-GELU for aarch64: Eigen-style rational tanh x*P(x^2)/Q(x^2),
+// exact saturation beyond +-7.9053111, within 2e-6 of libm.
 #[cfg(all(
     target_arch = "aarch64",
     not(feature = "mkl"),
@@ -744,8 +740,7 @@ mod fast_gelu {
 
     #[inline(always)]
     fn tanh_rational(x: f32) -> f32 {
-        // Saturate exactly like libm tanhf so gelu(x) is exactly x / exactly 0
-        // for large |x| instead of leaking a ~2ulp residue times x.
+        // Saturate exactly so gelu(x) is exactly x / exactly 0 for large |x|.
         if x >= TANH_BOUND {
             return 1.0;
         }
@@ -815,7 +810,6 @@ mod fast_gelu {
 
         #[test]
         fn fast_gelu_close_to_libm() {
-            // Sweep a wide range incl. the tanh saturation boundary.
             let xs: Vec<f32> = (-4000..=4001).map(|i| i as f32 * 0.005).collect();
             let mut ys = vec![0f32; xs.len()];
             gelu_f32_vec(&xs, &mut ys);
