@@ -1268,10 +1268,18 @@ mod tests {
         // `out` is allocated before capture and written in place via `slice_set`,
         // per `CudaGraph::capture`'s contract: a tensor allocated inside the
         // capture closure would be a graph-owned allocation, unreadable outside
-        // replay. Warm-up run outside of capture JIT-loads the kernels `f` uses.
+        // replay. The warm-up run must itself hold `enable_cuda_graph_htod_cache`:
+        // that guard is what makes the *first* upload of a given host constant
+        // (here, `index_select`'s non-contiguous-layout parameter vector) populate
+        // the cache instead of performing a plain upload; `CudaGraph::capture` only
+        // enables the guard for its own call, so a warm-up run outside of any guard
+        // never seeds the cache, and capture then fails with a cache-miss error.
         let out = Tensor::zeros((1, 1, cfg.hidden_size), dtype, &device)?;
-        let y = attn.forward(&x, 0, 0, &mut cache)?;
-        out.slice_set(&y, 0, 0)?;
+        {
+            let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+            let y = attn.forward(&x, 0, 0, &mut cache)?;
+            out.slice_set(&y, 0, 0)?;
+        }
         device.synchronize()?;
 
         let (graph, ()) = CudaGraph::capture(cuda_device, || {
