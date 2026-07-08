@@ -15,6 +15,7 @@ byteorder = { workspace = true }
 candle = { workspace = true }
 candle-awq-kernels = { workspace = true, optional = true }
 candle-flash-attn = { workspace = true, optional = true }
+candle-flashinfer-kernels = { workspace = true, optional = true }
 candle-fp8-kernels = { workspace = true, optional = true }
 candle-gptq-kernels = { workspace = true, optional = true }
 candle-nn = { workspace = true }
@@ -36,6 +37,7 @@ cudnn = ["candle/cudnn", "candle-nn/cudnn"]
 awq-cuda = ["cuda", "dep:candle-awq-kernels", "candle-awq-kernels/cuda"]
 awq-metal = ["metal", "dep:candle-awq-kernels", "candle-awq-kernels/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
+flashinfer-kernels = ["dep:candle-flashinfer-kernels"]
 fp8-cuda = ["cuda", "dep:candle-fp8-kernels", "candle-fp8-kernels/cuda"]
 fp8-metal = ["metal", "dep:candle-fp8-kernels", "candle-fp8-kernels/metal"]
 gptq-cuda = ["cuda", "dep:candle-gptq-kernels", "candle-gptq-kernels/cuda"]

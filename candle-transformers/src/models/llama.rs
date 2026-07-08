@@ -201,6 +201,7 @@ impl LlamaConfig {
             rms_norm_eps: self.rms_norm_eps,
             rope_theta: self.rope_theta,
             use_flash_attn,
+            use_flashinfer_attention: false,
             bos_token_id: self.bos_token_id,
             eos_token_id: self.eos_token_id,
             rope_scaling: self.rope_scaling,
@@ -219,6 +220,14 @@ pub struct Config {
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
     pub use_flash_attn: bool,
+    /// Additive, decode-only seam: when set, the decode step (`seq_len == 1`) attends via
+    /// `candle_flashinfer_kernels::flashinfer_decode_attention` instead of the dense
+    /// matmul+softmax or `flash_attn` path. Prefill (`seq_len > 1`) is unaffected, and a
+    /// layer with paged KV storage attached (see `Cache::set_paged_kv`) always takes the
+    /// paged path regardless of this flag. No-op unless the `flashinfer-kernels` cargo
+    /// feature is enabled. Defaults to `false` everywhere.
+    #[cfg_attr(not(feature = "flashinfer-kernels"), allow(dead_code))]
+    pub use_flashinfer_attention: bool,
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
@@ -238,6 +247,7 @@ impl Config {
             num_attention_heads: 32,
             num_key_value_heads: 32,
             use_flash_attn,
+            use_flashinfer_attention: false,
             rms_norm_eps: 1e-6,
             rope_theta: 10_000.0,
             bos_token_id: None,
@@ -257,6 +267,7 @@ impl Config {
             num_attention_heads: 32,
             num_key_value_heads: 32,
             use_flash_attn,
+            use_flashinfer_attention: false,
             rms_norm_eps: 1e-5,
             rope_theta: 10_000.0,
             bos_token_id: None,
@@ -505,6 +516,7 @@ struct CausalSelfAttention {
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
+    use_flashinfer_attention: bool,
     span: tracing::Span,
     span_rot: tracing::Span,
     max_position_embeddings: usize,
@@ -524,6 +536,21 @@ fn flash_attn(
 #[cfg(not(feature = "flash-attn"))]
 fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
     unimplemented!("compile with '--features flash-attn'")
+}
+
+#[cfg(feature = "flashinfer-kernels")]
+fn flashinfer_decode_attention(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+) -> Result<Tensor> {
+    candle_flashinfer_kernels::flashinfer_decode_attention(q, k, v, softmax_scale)
+}
+
+#[cfg(not(feature = "flashinfer-kernels"))]
+fn flashinfer_decode_attention(_: &Tensor, _: &Tensor, _: &Tensor, _: f32) -> Result<Tensor> {
+    unimplemented!("compile with '--features flashinfer-kernels'")
 }
 
 #[cfg(feature = "flash-attn")]
@@ -643,6 +670,19 @@ impl CausalSelfAttention {
                 }
             }
             cache.kvs[block_idx] = Some((k.clone(), v.clone()))
+        }
+
+        // Additive seam: the decode step (one new query token per sequence) can attend via
+        // `flashinfer_decode_attention` directly against the pre-`repeat_kv` k/v — it handles
+        // grouped-query attention internally, so it must see the `num_key_value_heads`-shaped
+        // cache, not the repeated one the branches below use. Prefill (`seq_len > 1`) always
+        // falls through to the existing paths below.
+        if self.use_flashinfer_attention && seq_len == 1 {
+            let q_dec = q.squeeze(2)?.contiguous()?;
+            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
+            let y = flashinfer_decode_attention(&q_dec, &k, &v, softmax_scale)?;
+            let y = y.reshape(&[b_sz, 1, hidden_size])?;
+            return self.o_proj.forward(&y);
         }
 
         let k = self.repeat_kv(k)?;
@@ -768,6 +808,7 @@ impl CausalSelfAttention {
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
+            use_flashinfer_attention: cfg.use_flashinfer_attention,
             span,
             span_rot,
             max_position_embeddings: cfg.max_position_embeddings,
@@ -1019,6 +1060,7 @@ mod tests {
             num_attention_heads: 2,
             num_key_value_heads: 2,
             use_flash_attn: false,
+            use_flashinfer_attention: false,
             rms_norm_eps: 1e-5,
             rope_theta: 10_000.0,
             bos_token_id: None,
@@ -1419,6 +1461,7 @@ mod tests {
             num_key_value_heads,
             head_dim,
             use_flash_attn: false,
+            use_flashinfer_attention: false,
             span: tracing::span!(tracing::Level::TRACE, "attn"),
             span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
             max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
@@ -1471,6 +1514,130 @@ mod tests {
             .max(0)?
             .to_vec0::<f32>()?;
         assert!(diff < 0.1, "paged vs dense max abs diff {diff}");
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "flashinfer-kernels"))]
+mod flashinfer_attention_tests {
+    use super::*;
+
+    fn tiny_config(use_flashinfer_attention: bool) -> Config {
+        Config {
+            hidden_size: 8,
+            intermediate_size: 8,
+            vocab_size: 16,
+            num_hidden_layers: 1,
+            num_attention_heads: 4,
+            num_key_value_heads: 2,
+            use_flash_attn: false,
+            use_flashinfer_attention,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            bos_token_id: None,
+            eos_token_id: None,
+            rope_scaling: None,
+            max_position_embeddings: 16,
+            tie_word_embeddings: false,
+        }
+    }
+
+    fn weights(cfg: &Config, dev: &Device) -> HashMap<String, Tensor> {
+        let h = cfg.hidden_size;
+        let i = cfg.intermediate_size;
+        let v = cfg.vocab_size;
+        let mut ts = HashMap::new();
+        ts.insert(
+            "model.embed_tokens.weight".to_string(),
+            Tensor::rand(0f32, 1f32, (v, h), dev).unwrap(),
+        );
+        ts.insert(
+            "model.norm.weight".to_string(),
+            Tensor::ones(h, DType::F32, dev).unwrap(),
+        );
+        ts.insert(
+            "lm_head.weight".to_string(),
+            Tensor::rand(0f32, 1f32, (v, h), dev).unwrap(),
+        );
+        for i_layer in 0..cfg.num_hidden_layers {
+            let p = format!("model.layers.{i_layer}");
+            ts.insert(
+                format!("{p}.input_layernorm.weight"),
+                Tensor::ones(h, DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.post_attention_layernorm.weight"),
+                Tensor::ones(h, DType::F32, dev).unwrap(),
+            );
+            let size_q = h;
+            let size_kv = (h / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            ts.insert(
+                format!("{p}.self_attn.q_proj.weight"),
+                Tensor::rand(-1f32, 1f32, (size_q, h), dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.self_attn.k_proj.weight"),
+                Tensor::rand(-1f32, 1f32, (size_kv, h), dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.self_attn.v_proj.weight"),
+                Tensor::rand(-1f32, 1f32, (size_kv, h), dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.self_attn.o_proj.weight"),
+                Tensor::rand(-1f32, 1f32, (size_q, h), dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.mlp.gate_proj.weight"),
+                Tensor::zeros((i, h), DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.mlp.up_proj.weight"),
+                Tensor::zeros((i, h), DType::F32, dev).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.mlp.down_proj.weight"),
+                Tensor::zeros((h, i), DType::F32, dev).unwrap(),
+            );
+        }
+        ts
+    }
+
+    // The decode-step flashinfer seam is purely additive: with the flag unset the
+    // forward pass must be byte-for-byte identical to the pre-existing dense path,
+    // and with it set the numerically-equivalent flashinfer kernel must reproduce
+    // the same logits (up to floating-point tolerance) for a single-token decode
+    // step following a multi-token prefill.
+    #[test]
+    fn flashinfer_decode_matches_dense_path() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg_dense = tiny_config(false);
+        let cfg_flashinfer = tiny_config(true);
+        let ts = weights(&cfg_dense, &dev);
+
+        let vb = VarBuilder::from_tensors(ts.clone(), DType::F32, &dev);
+        let model_dense = Llama::load(vb, &cfg_dense)?;
+        let vb = VarBuilder::from_tensors(ts, DType::F32, &dev);
+        let model_flashinfer = Llama::load(vb, &cfg_flashinfer)?;
+
+        let prefill = Tensor::new(&[[1u32, 2, 3]], &dev)?;
+        let mut cache_dense = Cache::new(true, DType::F32, &cfg_dense, &dev)?;
+        let mut cache_flashinfer = Cache::new(true, DType::F32, &cfg_flashinfer, &dev)?;
+        model_dense.forward(&prefill, 0, &mut cache_dense)?;
+        model_flashinfer.forward(&prefill, 0, &mut cache_flashinfer)?;
+
+        let decode = Tensor::new(&[[4u32]], &dev)?;
+        let dense_logits = model_dense
+            .forward(&decode, 3, &mut cache_dense)?
+            .to_vec2::<f32>()?;
+        let flashinfer_logits = model_flashinfer
+            .forward(&decode, 3, &mut cache_flashinfer)?
+            .to_vec2::<f32>()?;
+
+        assert_eq!(dense_logits.len(), flashinfer_logits.len());
+        for (a, b) in dense_logits[0].iter().zip(flashinfer_logits[0].iter()) {
+            assert!((a - b).abs() < 1e-4, "dense={a} flashinfer={b}");
+        }
         Ok(())
     }
 }
