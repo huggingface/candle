@@ -259,6 +259,11 @@ pub struct Cache {
     // contiguous concat-and-narrow path byte-for-byte; existing callers that
     // never touch this are entirely unaffected. See `PagedKvCache`.
     paged_kvs: Vec<Option<PagedKvCache>>,
+    // Additive seam: caller-owned, graph-replay-safe decode-position tensor per
+    // transformer layer, indexed by `block_idx`. `None` (the default for every
+    // layer) preserves today's host-side `narrow(0, index_pos, seq_len)` rotary
+    // lookup byte-for-byte. See `Cache::set_decode_position`.
+    decode_positions: Vec<Option<Tensor>>,
     cos: Tensor,
     sin: Tensor,
     device: Device,
@@ -322,6 +327,7 @@ impl Cache {
             use_kv_cache,
             kvs: vec![None; config.num_hidden_layers],
             paged_kvs: vec![None; config.num_hidden_layers],
+            decode_positions: vec![None; config.num_hidden_layers],
             device: device.clone(),
             cos,
             sin,
@@ -355,6 +361,59 @@ impl Cache {
 
     pub fn paged_kv(&self, block_idx: usize) -> Option<&PagedKvCache> {
         self.paged_kvs.get(block_idx).and_then(|p| p.as_ref())
+    }
+
+    /// Attaches a persistent, caller-owned decode-position tensor (shape `(1,)`,
+    /// an integer dtype accepted by [`Tensor::index_select`], e.g. `DType::U32`)
+    /// for one transformer layer.
+    ///
+    /// Once set, that layer's rotary embedding lookup reads `cos`/`sin` via
+    /// [`Tensor::index_select`] against this device tensor instead of
+    /// `narrow(0, index_pos, seq_len)`. `narrow`'s offset is computed on the
+    /// host from `index_pos` and baked into the exact device pointer a CUDA
+    /// graph capture (`candle_core::CudaGraph`) would record, so replaying a
+    /// graph captured at one decode step would silently reuse that step's
+    /// rotary embeddings forever. Reading the position from a device tensor
+    /// instead keeps the captured kernel launches identical across steps: the
+    /// caller updates `position`'s *contents* in place (e.g. via
+    /// `Tensor::slice_set`) before each replay, while the tensor's
+    /// identity/address stays fixed.
+    ///
+    /// Scoped to the decode step only (`seq_len == 1`, one query token) —
+    /// `CausalSelfAttention::forward` returns an error if a layer with a
+    /// decode position attached is called with `seq_len != 1`. Prefill always
+    /// uses the existing `narrow`-based path unconditionally, so callers must
+    /// not attach a decode position before the first decode step.
+    ///
+    /// Existing callers that never call this are entirely unaffected.
+    pub fn set_decode_position(&mut self, block_idx: usize, position: Tensor) -> Result<()> {
+        let Some(slot) = self.decode_positions.get_mut(block_idx) else {
+            candle::bail!(
+                "block_idx {block_idx} out of range for {} layers",
+                self.decode_positions.len()
+            )
+        };
+        if position.dims() != [1] {
+            candle::bail!(
+                "decode position tensor must have shape (1,), got {:?}",
+                position.dims()
+            )
+        }
+        *slot = Some(position);
+        Ok(())
+    }
+
+    /// Reverts a layer to the host-side `narrow`-based rotary lookup.
+    pub fn clear_decode_position(&mut self, block_idx: usize) {
+        if let Some(slot) = self.decode_positions.get_mut(block_idx) {
+            *slot = None;
+        }
+    }
+
+    pub fn decode_position(&self, block_idx: usize) -> Option<&Tensor> {
+        self.decode_positions
+            .get(block_idx)
+            .and_then(|p| p.as_ref())
     }
 
     fn mask(&mut self, seq_len: usize, index_pos: usize) -> Result<Tensor> {
@@ -450,11 +509,32 @@ fn flash_attn_varlen_paged(
 }
 
 impl CausalSelfAttention {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize, cache: &Cache) -> Result<Tensor> {
+    fn apply_rotary_emb(
+        &self,
+        x: &Tensor,
+        index_pos: usize,
+        block_idx: usize,
+        cache: &Cache,
+    ) -> Result<Tensor> {
         let _enter = self.span_rot.enter();
         let (_b_sz, _, seq_len, _hidden_size) = x.dims4()?;
-        let cos = cache.cos.narrow(0, index_pos, seq_len)?;
-        let sin = cache.sin.narrow(0, index_pos, seq_len)?;
+        let (cos, sin) = match cache.decode_position(block_idx) {
+            Some(position) => {
+                if seq_len != 1 {
+                    candle::bail!(
+                        "Cache::set_decode_position is decode-only (seq_len must be 1), got seq_len {seq_len}"
+                    )
+                }
+                (
+                    cache.cos.index_select(position, 0)?,
+                    cache.sin.index_select(position, 0)?,
+                )
+            }
+            None => (
+                cache.cos.narrow(0, index_pos, seq_len)?,
+                cache.sin.narrow(0, index_pos, seq_len)?,
+            ),
+        };
         candle_nn::rotary_emb::rope(x, &cos, &sin)
     }
 
@@ -483,8 +563,8 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let q = self.apply_rotary_emb(&q, index_pos, cache)?;
-        let mut k = self.apply_rotary_emb(&k, index_pos, cache)?;
+        let q = self.apply_rotary_emb(&q, index_pos, block_idx, cache)?;
+        let mut k = self.apply_rotary_emb(&k, index_pos, block_idx, cache)?;
 
         if let Some(paged) = cache.paged_kv(block_idx) {
             let v = v.contiguous()?;
@@ -1060,6 +1140,102 @@ mod tests {
             .max(0)?
             .to_vec0::<f32>()?;
         assert!(diff < 0.1, "paged vs dense max abs diff {diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn decode_position_seam_is_additive_by_default() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = paged_test_config();
+        let cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        // Every layer defaults to the host-side narrow path: nothing changes
+        // unless a caller explicitly attaches a decode-position tensor.
+        for block_idx in 0..cfg.num_hidden_layers {
+            assert!(cache.decode_position(block_idx).is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn set_and_clear_decode_position() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = paged_test_config();
+        let mut cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        cache.set_decode_position(0, Tensor::new(&[3u32], &device)?)?;
+        assert!(cache.decode_position(0).is_some());
+        assert!(cache.decode_position(1).is_none());
+
+        cache.clear_decode_position(0);
+        assert!(cache.decode_position(0).is_none());
+
+        // Out-of-range layers are rejected rather than silently ignored.
+        assert!(cache
+            .set_decode_position(cfg.num_hidden_layers, Tensor::new(&[3u32], &device)?)
+            .is_err());
+
+        // Anything other than a single-element tensor is rejected: the seam
+        // is decode-only (one query token per layer per step).
+        assert!(cache
+            .set_decode_position(0, Tensor::new(&[3u32, 4u32], &device)?)
+            .is_err());
+        Ok(())
+    }
+
+    fn tiny_causal_self_attention(cfg: &Config, device: &Device) -> Result<CausalSelfAttention> {
+        let hidden_size = cfg.hidden_size;
+        let kv_size = (hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
+            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), device)?;
+            Ok(Linear::from_weights(w, None))
+        };
+        Ok(CausalSelfAttention {
+            q_proj: new_linear(hidden_size, hidden_size)?,
+            k_proj: new_linear(kv_size, hidden_size)?,
+            v_proj: new_linear(kv_size, hidden_size)?,
+            o_proj: new_linear(hidden_size, hidden_size)?,
+            num_attention_heads: cfg.num_attention_heads,
+            num_key_value_heads: cfg.num_key_value_heads,
+            head_dim: hidden_size / cfg.num_attention_heads,
+            use_flash_attn: false,
+            span: tracing::span!(tracing::Level::TRACE, "attn"),
+            span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
+            max_position_embeddings: cfg.max_position_embeddings,
+        })
+    }
+
+    #[test]
+    fn decode_position_matches_narrow_based_rotary_lookup() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let attn = tiny_causal_self_attention(&cfg, &device)?;
+        let x = Tensor::randn(0f32, 1., (1, 1, cfg.hidden_size), &device)?;
+        let index_pos = 3;
+
+        // Baseline: today's host-side narrow-based rotary lookup.
+        let mut narrow_cache = Cache::new(false, DType::F32, &cfg, &device)?;
+        let y_narrow = attn.forward(&x, index_pos, 0, &mut narrow_cache)?;
+
+        // Candidate: device-tensor decode-position gather, same absolute position.
+        let mut gather_cache = Cache::new(false, DType::F32, &cfg, &device)?;
+        gather_cache.set_decode_position(0, Tensor::new(&[index_pos as u32], &device)?)?;
+        let y_gather = attn.forward(&x, index_pos, 0, &mut gather_cache)?;
+
+        assert_eq!(y_narrow.to_vec3::<f32>()?, y_gather.to_vec3::<f32>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_position_rejects_multi_token_forward() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let attn = tiny_causal_self_attention(&cfg, &device)?;
+        // Prefill-shaped input (seq_len > 1) must not be routed through the
+        // decode-only gather path.
+        let x = Tensor::randn(0f32, 1., (1, 3, cfg.hidden_size), &device)?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &device)?;
+        cache.set_decode_position(0, Tensor::new(&[0u32], &device)?)?;
+        assert!(attn.forward(&x, 0, 0, &mut cache).is_err());
         Ok(())
     }
 }
