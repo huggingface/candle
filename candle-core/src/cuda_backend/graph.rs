@@ -77,7 +77,7 @@ impl CudaGraph {
                 if !cu_graph.is_null() {
                     let _ = unsafe { sys::cuGraphDestroy(cu_graph) };
                 }
-                return Err(err);
+                return Err(err).context("operation inside cuda graph capture closure failed");
             }
         };
 
@@ -91,10 +91,11 @@ impl CudaGraph {
         }
 
         let mut cu_graph_exec: sys::CUgraphExec = std::ptr::null_mut();
-        let instantiate = unsafe { sys::cuGraphInstantiateWithFlags(&mut cu_graph_exec, cu_graph, 0) }
-            .result()
-            .w()
-            .context("cuGraphInstantiateWithFlags failed");
+        let instantiate =
+            unsafe { sys::cuGraphInstantiateWithFlags(&mut cu_graph_exec, cu_graph, 0) }
+                .result()
+                .w()
+                .context("cuGraphInstantiateWithFlags failed");
         if let Err(err) = instantiate {
             let _ = unsafe { sys::cuGraphDestroy(cu_graph) };
             return Err(err);
