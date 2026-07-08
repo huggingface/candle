@@ -228,21 +228,21 @@ impl PagedKvCache {
             .broadcast_as((b_sz * seq_len, num_kv_heads, head_dim))?
             .contiguous()?;
 
-        let k_flat = k
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
-        let v_flat = v
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
+        let k_flat =
+            k.transpose(1, 2)?
+                .contiguous()?
+                .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
+        let v_flat =
+            v.transpose(1, 2)?
+                .contiguous()?
+                .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
 
-        let key_flat = self
-            .key_cache
-            .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
-        let value_flat = self
-            .value_cache
-            .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
+        let key_flat =
+            self.key_cache
+                .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
+        let value_flat =
+            self.value_cache
+                .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
         key_flat.scatter_set(&indices, &k_flat, 0)?;
         value_flat.scatter_set(&indices, &v_flat, 0)?;
         Ok(())
@@ -573,14 +573,13 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         paged.write_new_kv(k, v, index_pos)?;
 
-        let q = q
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
+        let q = q.transpose(1, 2)?.contiguous()?.reshape((
+            b_sz * seq_len,
+            self.num_attention_heads,
+            self.head_dim,
+        ))?;
         let seqlens_q = Tensor::new(
-            (0..=b_sz)
-                .map(|i| (i * seq_len) as u32)
-                .collect::<Vec<_>>(),
+            (0..=b_sz).map(|i| (i * seq_len) as u32).collect::<Vec<_>>(),
             q.device(),
         )?;
         let max_seqlen_k = paged.block_table.dim(1)? * paged.page_block_size;
@@ -1019,6 +1018,10 @@ mod tests {
         cfg.num_attention_heads = num_attention_heads;
         cfg.num_key_value_heads = num_key_value_heads;
         cfg.num_hidden_layers = 1;
+        // `paged_test_config()`'s base `max_position_embeddings` (16) is too small
+        // for this test's `seq_len` (17); the dense reference path narrows the
+        // RoPE cos/sin cache to `max_position_embeddings` rows.
+        cfg.max_position_embeddings = DEFAULT_MAX_SEQ_LEN;
 
         let x = Tensor::randn(0f32, 1., (1, seq_len, hidden_size), &device)?.to_dtype(dtype)?;
 
