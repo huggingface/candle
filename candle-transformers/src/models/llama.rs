@@ -1692,6 +1692,75 @@ mod tests {
         assert!(attn.forward(&x, 0, 0, &mut cache).is_err());
         Ok(())
     }
+
+    // Requires a CUDA device (feature-gated behind flash-attn, same as the paged-
+    // attention GPU test above, since that's the GPU feature this crate's CI
+    // compiles under); not runnable on the CPU-only sandbox this crate is
+    // normally developed in. Exercises the actual property issue #12 is about:
+    // a CudaGraph capturing a decode step must replay against the *current*
+    // contents of the attached decode-position tensor, not the position that
+    // was live at capture time.
+    #[cfg(feature = "flash-attn")]
+    #[test]
+    fn decode_position_stays_correct_across_cuda_graph_replay() -> Result<()> {
+        use candle::CudaGraph;
+
+        let device = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_device) = &device else {
+            unreachable!()
+        };
+        let dtype = DType::F32;
+
+        let cfg = tiny_config();
+        let attn = tiny_causal_self_attention(&cfg, &device)?;
+        let x = Tensor::randn(0f32, 1., (1, 1, cfg.hidden_size), &device)?;
+
+        let position = Tensor::new(&[0u32], &device)?;
+        let mut cache = Cache::new(false, dtype, &cfg, &device)?;
+        cache.set_decode_position(0, position.clone())?;
+
+        // `out` is allocated before capture and written in place via `slice_set`,
+        // per `CudaGraph::capture`'s contract: a tensor allocated inside the
+        // capture closure would be a graph-owned allocation, unreadable outside
+        // replay. Warm-up run outside of capture JIT-loads the kernels `f` uses.
+        let out = Tensor::zeros((1, 1, cfg.hidden_size), dtype, &device)?;
+        let y = attn.forward(&x, 0, 0, &mut cache)?;
+        out.slice_set(&y, 0, 0)?;
+        device.synchronize()?;
+
+        let (graph, ()) = CudaGraph::capture(cuda_device, || {
+            let y = attn.forward(&x, 0, 0, &mut cache)?;
+            out.slice_set(&y, 0, 0)?;
+            Ok(())
+        })?;
+
+        // Replaying at the captured position (0) must match the dense narrow-based
+        // path at position 0.
+        graph.replay()?;
+        device.synchronize()?;
+        let mut narrow_cache_0 = Cache::new(false, dtype, &cfg, &device)?;
+        let y_expected_0 = attn.forward(&x, 0, 0, &mut narrow_cache_0)?;
+        assert_eq!(out.to_vec3::<f32>()?, y_expected_0.to_vec3::<f32>()?);
+
+        // Update the position tensor's *contents* in place (its identity/address
+        // is unchanged) and replay again: the graph must pick up position 5, not
+        // silently keep replaying position 0.
+        position.slice_set(&Tensor::new(&[5u32], &device)?, 0, 0)?;
+        graph.replay()?;
+        device.synchronize()?;
+        let mut narrow_cache_5 = Cache::new(false, dtype, &cfg, &device)?;
+        let y_expected_5 = attn.forward(&x, 5, 0, &mut narrow_cache_5)?;
+        assert_eq!(out.to_vec3::<f32>()?, y_expected_5.to_vec3::<f32>()?);
+
+        // Sanity check that positions 0 and 5 actually produce different rotary
+        // embeddings; otherwise the assertions above wouldn't distinguish a
+        // graph that's still stuck on the captured position from one that isn't.
+        assert_ne!(
+            y_expected_0.to_vec3::<f32>()?,
+            y_expected_5.to_vec3::<f32>()?
+        );
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "flashinfer-kernels"))]
