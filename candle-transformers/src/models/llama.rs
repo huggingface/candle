@@ -1713,7 +1713,15 @@ mod tests {
 
         let cfg = tiny_config();
         let attn = tiny_causal_self_attention(&cfg, &device)?;
-        let x = Tensor::randn(0f32, 1., (1, 1, cfg.hidden_size), &device)?;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        // Shape (b_sz, heads, seq_len=1, head_dim): what `apply_rotary_emb` sees
+        // for a single decode step's query. Capture that call directly instead
+        // of routing through the full attention `forward`: with one query
+        // attending only to itself and no cached history, softmax over a
+        // single key is trivially 1.0 and the attention *output* is
+        // position-invariant regardless of rotary correctness, so it can't
+        // distinguish a graph stuck on a stale position from a correct one.
+        let q_in = Tensor::randn(0f32, 1., (1, cfg.num_attention_heads, 1, head_dim), &device)?;
 
         let position = Tensor::new(&[0u32], &device)?;
         let mut cache = Cache::new(false, dtype, &cfg, &device)?;
@@ -1728,17 +1736,17 @@ mod tests {
         // the cache instead of performing a plain upload; `CudaGraph::capture` only
         // enables the guard for its own call, so a warm-up run outside of any guard
         // never seeds the cache, and capture then fails with a cache-miss error.
-        let out = Tensor::zeros((1, 1, cfg.hidden_size), dtype, &device)?;
+        let out = Tensor::zeros((1, cfg.num_attention_heads, 1, head_dim), dtype, &device)?;
         {
             let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
-            let y = attn.forward(&x, 0, 0, &mut cache)?;
-            out.slice_set(&y, 0, 0)?;
+            let rotated = attn.apply_rotary_emb(&q_in, 0, 0, &cache)?;
+            out.slice_set(&rotated, 0, 0)?;
         }
         device.synchronize()?;
 
         let (graph, ()) = CudaGraph::capture(cuda_device, || {
-            let y = attn.forward(&x, 0, 0, &mut cache)?;
-            out.slice_set(&y, 0, 0)?;
+            let rotated = attn.apply_rotary_emb(&q_in, 0, 0, &cache)?;
+            out.slice_set(&rotated, 0, 0)?;
             Ok(())
         })?;
 
@@ -1746,9 +1754,12 @@ mod tests {
         // path at position 0.
         graph.replay()?;
         device.synchronize()?;
-        let mut narrow_cache_0 = Cache::new(false, dtype, &cfg, &device)?;
-        let y_expected_0 = attn.forward(&x, 0, 0, &mut narrow_cache_0)?;
-        assert_eq!(out.to_vec3::<f32>()?, y_expected_0.to_vec3::<f32>()?);
+        let narrow_cache_0 = Cache::new(false, dtype, &cfg, &device)?;
+        let expected_0 = attn.apply_rotary_emb(&q_in, 0, 0, &narrow_cache_0)?;
+        assert_eq!(
+            out.flatten_all()?.to_vec1::<f32>()?,
+            expected_0.flatten_all()?.to_vec1::<f32>()?
+        );
 
         // Update the position tensor's *contents* in place (its identity/address
         // is unchanged) and replay again: the graph must pick up position 5, not
@@ -1756,16 +1767,19 @@ mod tests {
         position.slice_set(&Tensor::new(&[5u32], &device)?, 0, 0)?;
         graph.replay()?;
         device.synchronize()?;
-        let mut narrow_cache_5 = Cache::new(false, dtype, &cfg, &device)?;
-        let y_expected_5 = attn.forward(&x, 5, 0, &mut narrow_cache_5)?;
-        assert_eq!(out.to_vec3::<f32>()?, y_expected_5.to_vec3::<f32>()?);
+        let narrow_cache_5 = Cache::new(false, dtype, &cfg, &device)?;
+        let expected_5 = attn.apply_rotary_emb(&q_in, 5, 0, &narrow_cache_5)?;
+        assert_eq!(
+            out.flatten_all()?.to_vec1::<f32>()?,
+            expected_5.flatten_all()?.to_vec1::<f32>()?
+        );
 
         // Sanity check that positions 0 and 5 actually produce different rotary
         // embeddings; otherwise the assertions above wouldn't distinguish a
         // graph that's still stuck on the captured position from one that isn't.
         assert_ne!(
-            y_expected_0.to_vec3::<f32>()?,
-            y_expected_5.to_vec3::<f32>()?
+            expected_0.flatten_all()?.to_vec1::<f32>()?,
+            expected_5.flatten_all()?.to_vec1::<f32>()?
         );
         Ok(())
     }
