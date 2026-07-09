@@ -49,9 +49,9 @@ fn sample_with_top_k() -> Result<()> {
     );
     let logits = Tensor::new(&[0.1, 0.2, 0.3, 0.4], &Device::Cpu)?;
     let token = logits_process.sample(&logits)?;
-    assert_eq!(token, 3);
-    let token = logits_process.sample(&logits)?;
     assert_eq!(token, 2);
+    let token = logits_process.sample(&logits)?;
+    assert_eq!(token, 3);
     Ok(())
 }
 
