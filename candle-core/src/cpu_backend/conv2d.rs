@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
+    backend::BackendStorage,
     conv::ParamsConv2D,
     cpu_backend::{copy_strided_src_, Im2Col, Map1, Map2, MatMul},
     shape::dims4,
@@ -10,6 +11,7 @@ use crate::{
 };
 
 pub(super) struct Conv2D<'a>(pub(super) &'a crate::conv::ParamsConv2D);
+pub(super) struct Conv2DWithBias<'a>(pub(super) &'a crate::conv::ParamsConv2D);
 
 #[allow(dead_code)]
 enum Conv2dImpl {
@@ -190,7 +192,7 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
 
         let num_tiles = total_out_pixels.div_ceil(TILE_SIZE);
         (0..num_tiles).into_par_iter().try_for_each(|tile_idx| {
-            // Determine actual tile size (may be smaller at the end) {
+            // Determine actual tile size (may be smaller at the end).
             let tile_start = tile_idx * TILE_SIZE;
             let tile_end = (tile_start + TILE_SIZE).min(total_out_pixels);
             let tile_size = tile_end - tile_start;
@@ -415,4 +417,103 @@ fn conv2d_im2col_gemm<T: WithDType + num_traits::Num + Copy + 'static>(
     let mut res_t = alloc_uninit_vec(res_l.shape().elem_count());
     copy_strided_src_(&res, &mut res_t, 0, &res_l);
     Ok(res_t)
+}
+
+/// Apply bias in-place to a contiguous conv2d output buffer with layout [b_size, c_out, out_h, out_w].
+/// Bias has shape [c_out].
+fn apply_bias_inplace<T: WithDType + num_traits::Num + Copy + 'static>(
+    dst: &mut [T],
+    bias: &[T],
+    bias_l: &Layout,
+    p: &ParamsConv2D,
+) {
+    let (out_h, out_w) = (p.out_h(), p.out_w());
+    let spatial = out_h * out_w;
+    let bias_offset = bias_l.start_offset();
+    let bias_stride = if bias_l.stride().is_empty() {
+        1
+    } else {
+        bias_l.stride()[0]
+    };
+    for b in 0..p.b_size {
+        for c in 0..p.c_out {
+            let bv = bias[bias_offset + c * bias_stride];
+            let offset = (b * p.c_out + c) * spatial;
+            for i in 0..spatial {
+                dst[offset + i] += bv;
+            }
+        }
+    }
+}
+
+impl Conv2DWithBias<'_> {
+    pub(super) fn map(
+        &self,
+        inp: &super::CpuStorage,
+        inp_l: &Layout,
+        kernel: &super::CpuStorage,
+        kernel_l: &Layout,
+        bias: &super::CpuStorage,
+        bias_l: &Layout,
+    ) -> Result<super::CpuStorage> {
+        use super::CpuStorage as C;
+        match (inp, kernel, bias) {
+            (C::U8(inp), C::U8(k), C::U8(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::U8(out))
+            }
+            (C::U32(inp), C::U32(k), C::U32(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::U32(out))
+            }
+            (C::I16(inp), C::I16(k), C::I16(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::I16(out))
+            }
+            (C::I32(inp), C::I32(k), C::I32(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::I32(out))
+            }
+            (C::I64(inp), C::I64(k), C::I64(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::I64(out))
+            }
+            (C::BF16(inp), C::BF16(k), C::BF16(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::BF16(out))
+            }
+            (C::F16(inp), C::F16(k), C::F16(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::F16(out))
+            }
+            (C::F32(inp), C::F32(k), C::F32(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::F32(out))
+            }
+            (C::F64(inp), C::F64(k), C::F64(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::F64(out))
+            }
+            (C::F8E4M3(inp), C::F8E4M3(k), C::F8E4M3(b)) => {
+                let mut out = Conv2D(self.0).f(inp, inp_l, k, kernel_l)?;
+                apply_bias_inplace(&mut out, b, bias_l, self.0);
+                Ok(C::F8E4M3(out))
+            }
+            _ => Err(crate::Error::DTypeMismatchBinaryOp {
+                lhs: inp.dtype(),
+                rhs: kernel.dtype(),
+                op: "conv2d_with_bias",
+            }
+            .bt()),
+        }
+    }
 }
