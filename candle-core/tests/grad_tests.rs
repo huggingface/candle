@@ -5,14 +5,14 @@ use candle_core::{test_device, test_utils, DType, Device, Shape, Tensor, Var};
 fn simple_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
     let x = x.as_tensor();
-    let y = (((x * x)? + x * 5f64)? + 4f64)?;
+    let y = (((x * (x - (0.5 * x)?)?)? + x * 5f64)? + 4f64)?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(x.to_vec1::<f32>()?, [3., 1., 4.]);
-    // y = x^2 + 5.x + 4
-    assert_eq!(y.to_vec1::<f32>()?, [28., 10., 40.]);
-    // dy/dx = 2.x + 5
-    assert_eq!(grad_x.to_vec1::<f32>()?, [11., 7., 13.]);
+    // y = 0.5 * x^2 + 5.x + 4
+    assert_eq!(y.to_vec1::<f32>()?, [23.5, 9.5, 32.]);
+    // dy/dx = x + 5
+    assert_eq!(grad_x.to_vec1::<f32>()?, [8., 6., 9.]);
     Ok(())
 }
 

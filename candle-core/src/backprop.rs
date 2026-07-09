@@ -183,32 +183,24 @@ impl Tensor {
             if let Some(op) = node.op() {
                 match op {
                     Op::Binary(lhs, rhs, BinaryOp::Add) => {
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.add(&grad)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.add(&grad)?;
+                        grads.add_or_insert(lhs.id(), &grad)?;
+                        grads.add_or_insert(rhs.id(), &grad)?;
                     }
                     Op::Binary(lhs, rhs, BinaryOp::Sub) => {
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.add(&grad)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.sub(&grad)?;
+                        grads.add_or_insert(lhs.id(), &grad)?;
+                        grads.sub_or_insert_negated(rhs.id(), &grad)?;
                     }
                     Op::Binary(lhs, rhs, BinaryOp::Mul) => {
                         let lhs_grad = grad.mul(rhs)?;
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
+                        grads.add_or_insert(lhs.id(), &lhs_grad)?;
                         let rhs_grad = grad.mul(lhs)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                        grads.add_or_insert(rhs.id(), &rhs_grad)?;
                     }
                     Op::Binary(lhs, rhs, BinaryOp::Div) => {
                         let lhs_grad = grad.div(rhs)?;
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
+                        grads.add_or_insert(lhs.id(), &lhs_grad)?;
                         let rhs_grad = grad.mul(lhs)?.div(&rhs.sqr()?)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.sub(&rhs_grad)?;
+                        grads.sub_or_insert_negated(rhs.id(), &rhs_grad)?;
                     }
                     Op::Binary(lhs, rhs, BinaryOp::Minimum)
                     | Op::Binary(lhs, rhs, BinaryOp::Maximum) => {
@@ -218,21 +210,17 @@ impl Tensor {
                         // If both masks are 1 one the same point, we want to scale the
                         // gradient by 0.5 rather than 1.
                         let lhs_grad = mask_lhs.mul(&grad)?.div(&(&mask_rhs + 1.)?)?;
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
+                        grads.add_or_insert(lhs.id(), &lhs_grad)?;
 
                         let rhs_grad = mask_rhs.mul(&grad)?.div(&(&mask_lhs + 1.)?)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                        grads.add_or_insert(rhs.id(), &rhs_grad)?;
                     }
                     Op::WhereCond(pred, t, f) => {
                         let zeros = grad.zeros_like()?;
-                        let t_sum_grad = grads.or_insert(t)?;
                         let t_grad = pred.where_cond(&grad, &zeros)?;
-                        *t_sum_grad = t_sum_grad.add(&t_grad)?;
-                        let f_sum_grad = grads.or_insert(f)?;
+                        grads.add_or_insert(t.id(), &t_grad)?;
                         let f_grad = pred.where_cond(&zeros, &grad)?;
-                        *f_sum_grad = f_sum_grad.add(&f_grad)?;
+                        grads.add_or_insert(f.id(), &f_grad)?;
                     }
                     Op::Conv1D {
                         arg,
@@ -256,14 +244,12 @@ impl Tensor {
                             *dilation,
                             /* groups */ 1,
                         )?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&grad_arg)?;
+                        grads.add_or_insert(arg.id(), &grad_arg)?;
 
                         let grad_kernel = arg
                             .transpose(0, 1)?
                             .conv1d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
                             .transpose(0, 1)?;
-                        let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0) = kernel.dims3()?;
                         let (_, _, g_k0) = grad_kernel.dims3()?;
                         let grad_kernel = if g_k0 != k0 {
@@ -271,7 +257,7 @@ impl Tensor {
                         } else {
                             grad_kernel
                         };
-                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                        grads.add_or_insert(kernel.id(), &grad_kernel)?;
                     }
                     Op::Conv2D {
                         arg,
@@ -294,14 +280,12 @@ impl Tensor {
                             *stride,
                             *dilation,
                         )?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&grad_arg)?;
+                        grads.add_or_insert(arg.id(), &grad_arg)?;
 
                         let grad_kernel = arg
                             .transpose(0, 1)?
                             .conv2d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
                             .transpose(0, 1)?;
-                        let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0, k1) = kernel.dims4()?;
                         let (_, _, g_k0, g_k1) = grad_kernel.dims4()?;
                         let grad_kernel = if g_k0 != k0 || g_k1 != k1 {
@@ -309,7 +293,7 @@ impl Tensor {
                         } else {
                             grad_kernel
                         };
-                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                        grads.add_or_insert(kernel.id(), &grad_kernel)?;
                     }
                     Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
                         op: "conv-transpose1d",
@@ -323,14 +307,12 @@ impl Tensor {
                         output_padding: _output_padding,
                     } => {
                         let grad_arg = grad.conv2d(kernel, *padding, *stride, *dilation, 1)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&grad_arg)?;
+                        grads.add_or_insert(arg.id(), &grad_arg)?;
 
                         let grad_kernel = grad
                             .transpose(0, 1)?
                             .conv2d(&arg.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
                             .transpose(0, 1)?;
-                        let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0, k1) = kernel.dims4()?;
                         let (_, _, g_k0, g_k1) = grad_kernel.dims4()?;
                         let grad_kernel = if g_k0 != k0 || g_k1 != k1 {
@@ -338,7 +320,7 @@ impl Tensor {
                         } else {
                             grad_kernel
                         };
-                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                        grads.add_or_insert(kernel.id(), &grad_kernel)?;
                     }
                     Op::AvgPool2D {
                         arg,
@@ -352,8 +334,8 @@ impl Tensor {
                         let grad_arg = grad.upsample_nearest2d(h, w)?;
                         let grad_arg =
                             (grad_arg * (1f64 / (kernel_size.0 * kernel_size.1) as f64))?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&grad_arg)?;
+
+                        grads.add_or_insert(arg.id(), &grad_arg)?;
                     }
                     Op::MaxPool2D {
                         arg,
@@ -372,8 +354,7 @@ impl Tensor {
                         let mask = arg.eq(&node_upsampled)?.to_dtype(arg.dtype())?;
                         let avg = mask.avg_pool2d_with_stride(*kernel_size, *stride)?;
                         let grad_arg = ((grad * avg)?.upsample_nearest2d(h, w)? * mask)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&grad_arg)?;
+                        grads.add_or_insert(arg.id(), &grad_arg)?;
                     }
                     Op::UpsampleNearest1D { arg, target_size } => {
                         let (_n, c, size) = arg.dims3()?;
@@ -384,8 +365,7 @@ impl Tensor {
 
                         let kernel = Tensor::ones((c, 1, scale), arg.dtype(), arg.device())?;
                         let conv_sum = grad.conv1d(&kernel, 0, scale, 1, c)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = conv_sum;
+                        grads.overwrite_or_insert(arg.id(), conv_sum)?
                     }
                     Op::UpsampleNearest2D {
                         arg,
@@ -405,53 +385,44 @@ impl Tensor {
                         let kernel =
                             Tensor::ones((c, 1, scale_h, scale_w), arg.dtype(), arg.device())?;
                         let conv_sum = grad.conv2d(&kernel, 0, scale_h, 1, c)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = conv_sum;
+                        grads.overwrite_or_insert(arg.id(), conv_sum)?
                     }
                     Op::UpsampleBilinear2D { .. } => {
                         crate::bail!("backward not supported for upsample_bilinear2d")
                     }
                     Op::SliceScatter0(lhs, rhs, start_rhs) => {
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
                         let rhs_grad = grad.narrow(0, *start_rhs, rhs.dim(0)?)?;
-                        *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                        grads.add_or_insert(rhs.id(), &rhs_grad)?;
 
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
                         let lhs_grad = grad.slice_scatter0(&rhs.zeros_like()?, *start_rhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?
+                        grads.add_or_insert(lhs.id(), &lhs_grad)?;
                     }
                     Op::Gather(arg, indexes, dim) => {
-                        let sum_grad = grads.or_insert(arg)?;
+                        let sum_grad = grads.or_insert_zeros(arg)?;
                         *sum_grad = sum_grad.scatter_add(indexes, &grad, *dim)?;
                     }
                     Op::Scatter(init, indexes, src, dim) => {
-                        let init_sum_grad = grads.or_insert(init)?;
-                        *init_sum_grad = init_sum_grad.add(&grad)?;
+                        grads.add_or_insert(init.id(), &grad)?;
 
                         let src_grad = grad.gather(indexes, *dim)?;
-                        let src_sum_grad = grads.or_insert(src)?;
-                        *src_sum_grad = src_sum_grad.add(&src_grad)?;
+                        grads.add_or_insert(src.id(), &src_grad)?;
                     }
                     Op::ScatterAdd(init, indexes, src, dim) => {
-                        let init_sum_grad = grads.or_insert(init)?;
                         let mask = init.ones_like()?;
                         let mask = mask.scatter(indexes, &mask.zeros_like()?, *dim)?;
-                        *init_sum_grad = init_sum_grad.add(&grad.mul(&mask)?)?;
+                        grads.add_or_insert(init.id(), &grad.mul(&mask)?)?;
 
                         let src_grad = grad.gather(indexes, *dim)?;
-                        let src_sum_grad = grads.or_insert(src)?;
-                        *src_sum_grad = src_sum_grad.add(&src_grad)?;
+                        grads.add_or_insert(src.id(), &src_grad)?
                     }
                     Op::IndexAdd(init, indexes, src, dim) => {
-                        let init_sum_grad = grads.or_insert(init)?;
-                        *init_sum_grad = init_sum_grad.add(&grad)?;
+                        grads.add_or_insert(init.id(), &grad)?;
 
                         let src_grad = grad.index_select(indexes, *dim)?;
-                        let src_sum_grad = grads.or_insert(src)?;
-                        *src_sum_grad = src_sum_grad.add(&src_grad)?;
+                        grads.add_or_insert(src.id(), &src_grad)?
                     }
                     Op::IndexSelect(arg, indexes, dim) => {
-                        let sum_grad = grads.or_insert(arg)?;
+                        let sum_grad = grads.or_insert_zeros(arg)?;
                         *sum_grad = sum_grad.index_add(indexes, &grad, *dim)?;
                     }
                     Op::Matmul(lhs, rhs) => {
@@ -459,20 +430,17 @@ impl Tensor {
                         // the matmul size checks for now.
 
                         let lhs_grad = grad.matmul(&rhs.t()?)?;
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
+                        grads.add_or_insert(lhs.id(), &lhs_grad)?;
 
                         let rhs_grad = lhs.t()?.matmul(&grad)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                        grads.add_or_insert(rhs.id(), &rhs_grad)?
                     }
                     Op::Cat(args, dim) => {
                         let mut start_idx = 0;
                         for arg in args {
                             let len = arg.dims()[*dim];
                             let arg_grad = grad.narrow(*dim, start_idx, len)?;
-                            let sum_grad = grads.or_insert(arg)?;
-                            *sum_grad = sum_grad.add(&arg_grad)?;
+                            grads.add_or_insert(arg.id(), &arg_grad)?;
                             start_idx += len;
                         }
                     }
@@ -496,76 +464,61 @@ impl Tensor {
                         for _i in 0..left_dims {
                             arg_grad = arg_grad.squeeze(0)?
                         }
-                        let sum_grad = grads.or_insert(arg)?;
+                        let sum_grad = grads.or_insert_zeros(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad.broadcast_as(sum_grad.dims())?)?;
                     }
                     Op::Reduce(arg, ReduceOp::Sum, reduced_dims) => {
                         let grad = broadcast_back(arg, &grad, reduced_dims)?;
-                        let sum_grad = grads.or_insert(arg)?;
+                        let sum_grad = grads.or_insert_zeros(arg)?;
                         *sum_grad = sum_grad.add(&grad)?;
                     }
                     Op::Reduce(arg, ReduceOp::Max, reduced_dims) => {
                         let node = broadcast_back(arg, node, reduced_dims)?;
                         let grad = broadcast_back(arg, &grad, reduced_dims)?;
                         let grad = node.eq(arg)?.to_dtype(grad.dtype())?.mul(&grad)?;
-                        let sum_grad = grads.or_insert(arg)?;
+                        let sum_grad = grads.or_insert_zeros(arg)?;
                         *sum_grad = sum_grad.add(&grad.broadcast_as(sum_grad.dims())?)?;
                     }
                     Op::Reduce(arg, ReduceOp::Min, reduced_dims) => {
                         let node = broadcast_back(arg, node, reduced_dims)?;
                         let grad = broadcast_back(arg, &grad, reduced_dims)?;
                         let grad = node.eq(arg)?.to_dtype(grad.dtype())?.mul(&grad)?;
-                        let sum_grad = grads.or_insert(arg)?;
+                        let sum_grad = grads.or_insert_zeros(arg)?;
                         *sum_grad = sum_grad.add(&grad.broadcast_as(sum_grad.dims())?)?;
                     }
                     Op::ToDType(arg) => {
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&grad.to_dtype(arg.dtype())?)?
+                        grads.add_or_insert(arg.id(), &grad.to_dtype(arg.dtype())?)?
                     }
-                    Op::Copy(arg) => {
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&grad)?
-                    }
+                    Op::Copy(arg) => grads.add_or_insert(arg.id(), &grad)?,
                     Op::Affine { arg, mul, .. } => {
                         let arg_grad = grad.affine(*mul, 0.)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&arg_grad)?
+                        grads.add_or_insert(arg.id(), &arg_grad)?
                     }
                     Op::Unary(arg, UnaryOp::Log) => {
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&(grad / arg)?)?
+                        grads.add_or_insert(arg.id(), &(grad / arg)?)?
                     }
                     Op::Unary(arg, UnaryOp::Sin) => {
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&(&grad * arg.cos())?)?
+                        grads.add_or_insert(arg.id(), &(&grad * arg.cos())?)?
                     }
                     Op::Unary(arg, UnaryOp::Cos) => {
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.sub(&(&grad * arg.sin())?)?
+                        grads.sub_or_insert_negated(arg.id(), &(&grad * arg.sin())?)?
                     }
                     Op::Unary(arg, UnaryOp::Tanh) => {
-                        let sum_grad = grads.or_insert(arg)?;
                         let minus_dtanh = (node.sqr()? - 1.)?;
-                        *sum_grad = sum_grad.sub(&(&grad * &minus_dtanh)?)?
+                        grads.sub_or_insert_negated(arg.id(), &(&grad * &minus_dtanh)?)?
                     }
                     Op::Unary(arg, UnaryOp::Abs) => {
-                        let sum_grad = grads.or_insert(arg)?;
                         let ones = arg.ones_like()?;
                         let abs_grad = arg.ge(&arg.zeros_like()?)?.where_cond(&ones, &ones.neg()?);
-                        *sum_grad = sum_grad.add(&(&grad * abs_grad)?)?
+                        grads.add_or_insert(arg.id(), &(&grad * abs_grad)?)?
                     }
                     Op::Unary(arg, UnaryOp::Exp) => {
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&(&grad * *node)?)?
+                        grads.add_or_insert(arg.id(), &(&grad * *node)?)?
                     }
-                    Op::Unary(arg, UnaryOp::Neg) => {
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.sub(&grad)?
-                    }
+                    Op::Unary(arg, UnaryOp::Neg) => grads.sub_or_insert_negated(arg.id(), &grad)?,
                     Op::Unary(arg, UnaryOp::Recip) => {
-                        let sum_grad = grads.or_insert(arg)?;
                         let grad = (grad / arg.sqr()?)?;
-                        *sum_grad = sum_grad.sub(&grad)?
+                        grads.sub_or_insert_negated(arg.id(), &grad)?
                     }
                     &Op::Narrow(ref arg, dim, start_idx, len) => {
                         let arg_dims = arg.dims();
@@ -590,8 +543,7 @@ impl Tensor {
                             (None, Some(r)) => Tensor::cat(&[&grad, &r], dim)?,
                             (Some(l), Some(r)) => Tensor::cat(&[&l, &grad, &r], dim)?,
                         };
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&arg_grad)?
+                        grads.add_or_insert(arg.id(), &arg_grad)?
                     }
                     Op::Unary(_, UnaryOp::Floor)
                     | Op::Unary(_, UnaryOp::Round)
@@ -601,116 +553,99 @@ impl Tensor {
                     | Op::Cmp(_, _) => {}
                     Op::Reshape(arg) => {
                         let arg_grad = grad.reshape(arg.dims())?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&arg_grad)?
+                        grads.add_or_insert(arg.id(), &arg_grad)?
                     }
                     Op::Unary(_, UnaryOp::Ceil) => Err(Error::BackwardNotSupported { op: "ceil" })?,
                     Op::Unary(arg, UnaryOp::Gelu) => {
-                        let sum_grad = grads.or_insert(arg)?;
                         let cube = arg.powf(3.)?;
                         let tanh = (0.0356774 * &cube + (0.797885 * arg)?)?.tanh()?;
                         let gelu_grad = (((0.5 * &tanh)?
                             + (0.0535161 * cube + (0.398942 * arg)?)? * (1. - tanh.powf(2.)?))?
                             + 0.5)?;
-                        *sum_grad = sum_grad.add(&(&grad * gelu_grad)?)?
+                        grads.add_or_insert(arg.id(), &(&grad * gelu_grad)?)?
                     }
                     Op::Unary(arg, UnaryOp::Erf) => {
-                        let sum_grad = grads.or_insert(arg)?;
                         // d/dx erf(x) = 2/sqrt(pi) * e^(-x^2)
                         let erf_grad =
                             (2. / std::f64::consts::PI.sqrt()) * (arg.sqr()?.neg()?).exp()?;
-                        *sum_grad = sum_grad.add(&(&grad * erf_grad)?)?
+                        grads.add_or_insert(arg.id(), &(&grad * erf_grad)?)?
                     }
                     Op::Unary(arg, UnaryOp::GeluErf) => {
-                        let sum_grad = grads.or_insert(arg)?;
                         // d/dx gelu_erf(x) = 0.5 + 0.398942 e^(-x^2/2) x + 0.5 erf(x/sqrt(2))
                         let neg_half_square = (arg.sqr()?.neg()? / 2.)?;
                         let scaled_exp_arg = (0.398942 * neg_half_square.exp()? * arg)?;
                         let arg_scaled_sqrt = (arg / 2f64.sqrt())?;
                         let erf_scaled_sqrt = (0.5 * arg_scaled_sqrt.erf()?)?;
                         let gelu_erf_grad = (0.5 + scaled_exp_arg + erf_scaled_sqrt)?;
-                        *sum_grad = sum_grad.add(&(&grad * gelu_erf_grad)?)?;
+                        grads.add_or_insert(arg.id(), &(&grad * gelu_erf_grad)?)?;
                     }
                     Op::Unary(arg, UnaryOp::Relu) => {
-                        let sum_grad = grads.or_insert(arg)?;
                         let relu_grad = arg.ge(&arg.zeros_like()?)?.to_dtype(arg.dtype())?;
-                        *sum_grad = sum_grad.add(&(&grad * relu_grad)?)?
+                        grads.add_or_insert(arg.id(), &(&grad * relu_grad)?)?
                     }
                     Op::Unary(arg, UnaryOp::Silu) => {
-                        let sum_grad = grads.or_insert(arg)?;
                         // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x))) = sigmoid(x) * (1 - node) + node
                         let sigmoid_arg = (arg.neg()?.exp()? + 1.)?.recip()?;
                         let silu_grad = &sigmoid_arg * (1. - *node) + *node;
-                        *sum_grad = sum_grad.add(&(&grad * silu_grad)?)?
+                        grads.add_or_insert(arg.id(), &(&grad * silu_grad)?)?
                     }
                     Op::Elu(arg, alpha) => {
                         // d/dx elu(x) = 1 for x > 0, alpha * e^x for x <= 0
-                        let sum_grad = grads.or_insert(arg)?;
                         let zeros = arg.zeros_like()?;
                         let positive_mask = arg.gt(&zeros)?.to_dtype(arg.dtype())?;
                         let negative_mask = arg.le(&zeros)?.to_dtype(arg.dtype())?;
                         // node == alpha * (e^x - 1) for x <= 0, reuse it
                         let negative_exp_mask = (negative_mask * (*node + *alpha))?;
                         let combined_mask = (positive_mask + negative_exp_mask)?;
-                        *sum_grad = sum_grad.add(&(grad * combined_mask)?)?
+                        grads.add_or_insert(arg.id(), &(grad * combined_mask)?)?
                     }
                     Op::Powf(arg, e) => {
                         let arg_grad = (&(grad * arg.powf(e - 1.)?)? * *e)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&arg_grad)?
+                        grads.add_or_insert(arg.id(), &arg_grad)?
                     }
                     Op::CustomOp1(arg, c) => {
                         if let Some(arg_grad) = c.bwd(arg, node, &grad)? {
-                            let sum_grad = grads.or_insert(arg)?;
-                            *sum_grad = sum_grad.add(&arg_grad)?
+                            grads.add_or_insert(arg.id(), &arg_grad)?
                         }
                     }
                     Op::CustomOp2(arg1, arg2, c) => {
                         let (arg_grad1, arg_grad2) = c.bwd(arg1, arg2, node, &grad)?;
                         if let Some(arg_grad1) = arg_grad1 {
-                            let sum_grad = grads.or_insert(arg1)?;
-                            *sum_grad = sum_grad.add(&arg_grad1)?
+                            grads.add_or_insert(arg1.id(), &arg_grad1)?
                         }
                         if let Some(arg_grad2) = arg_grad2 {
-                            let sum_grad = grads.or_insert(arg2)?;
-                            *sum_grad = sum_grad.add(&arg_grad2)?
+                            grads.add_or_insert(arg2.id(), &arg_grad2)?
                         }
                     }
                     Op::CustomOp3(arg1, arg2, arg3, c) => {
                         let (arg_grad1, arg_grad2, arg_grad3) =
                             c.bwd(arg1, arg2, arg3, node, &grad)?;
                         if let Some(arg_grad1) = arg_grad1 {
-                            let sum_grad = grads.or_insert(arg1)?;
-                            *sum_grad = sum_grad.add(&arg_grad1)?
+                            grads.add_or_insert(arg1.id(), &arg_grad1)?
                         }
                         if let Some(arg_grad2) = arg_grad2 {
-                            let sum_grad = grads.or_insert(arg2)?;
-                            *sum_grad = sum_grad.add(&arg_grad2)?
+                            grads.add_or_insert(arg2.id(), &arg_grad2)?
                         }
                         if let Some(arg_grad3) = arg_grad3 {
-                            let sum_grad = grads.or_insert(arg3)?;
-                            *sum_grad = sum_grad.add(&arg_grad3)?
+                            grads.add_or_insert(arg3.id(), &arg_grad3)?
                         }
                     }
                     Op::Unary(arg, UnaryOp::Sqr) => {
                         let arg_grad = arg.mul(&grad)?.affine(2., 0.)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&arg_grad)?
+                        grads.add_or_insert(arg.id(), &arg_grad)?
                     }
                     Op::Unary(arg, UnaryOp::Sqrt) => {
                         let arg_grad = grad.div(node)?.affine(0.5, 0.)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&arg_grad)?
+                        grads.add_or_insert(arg.id(), &arg_grad)?
                     }
                     Op::ToDevice(arg) => {
-                        let sum_grad = grads.or_insert(arg)?;
+                        let sum_grad = grads.or_insert_zeros(arg)?;
                         let arg_grad = grad.to_device(sum_grad.device())?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
                     Op::Transpose(arg, dim1, dim2) => {
                         let arg_grad = grad.transpose(*dim1, *dim2)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&arg_grad)?
+                        grads.add_or_insert(arg.id(), &arg_grad)?
                     }
                     Op::Permute(arg, dims) => {
                         let mut inv_dims = vec![0; dims.len()];
@@ -718,8 +653,7 @@ impl Tensor {
                             inv_dims[dim_idx] = i
                         }
                         let arg_grad = grad.permute(inv_dims)?;
-                        let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&arg_grad)?
+                        grads.add_or_insert(arg.id(), &arg_grad)?
                     }
                 };
             }
@@ -763,9 +697,51 @@ impl GradStore {
         self.0.insert(id, grad)
     }
 
+    /// Add gradient tensor to existing entry, or insert it if the entry does not exist
+    fn add_or_insert(&mut self, id: TensorId, grad: &Tensor) -> Result<()> {
+        match self.0.entry(id) {
+            Entry::Occupied(entry) => {
+                let entry = entry.into_mut();
+                *entry = entry.add(grad)?;
+            }
+            Entry::Vacant(entry) => {
+                let _ = entry.insert(grad.clone());
+            }
+        };
+        Ok(())
+    }
+
+    /// Overwrite entry, or populate it if there is no entry yet
+    fn overwrite_or_insert(&mut self, id: TensorId, grad: Tensor) -> Result<()> {
+        match self.0.entry(id) {
+            Entry::Occupied(entry) => {
+                let entry = entry.into_mut();
+                *entry = grad;
+            }
+            Entry::Vacant(entry) => {
+                let _ = entry.insert(grad);
+            }
+        };
+        Ok(())
+    }
+
+    /// Subtract gradient tensor from existing entry, or insert its negative if the entry does not exist
+    fn sub_or_insert_negated(&mut self, id: TensorId, grad: &Tensor) -> Result<()> {
+        match self.0.entry(id) {
+            Entry::Occupied(entry) => {
+                let entry = entry.into_mut();
+                *entry = entry.sub(grad)?;
+            }
+            Entry::Vacant(entry) => {
+                let _ = entry.insert(grad.neg()?);
+            }
+        };
+        Ok(())
+    }
+
     /// Get the gradient tensor associated with the given tensor, or, if it does not exist,
     /// insert a tensor of zeroes, with the same shape and type as the given tensors and return it
-    fn or_insert(&mut self, tensor: &Tensor) -> Result<&mut Tensor> {
+    fn or_insert_zeros(&mut self, tensor: &Tensor) -> Result<&mut Tensor> {
         let grad = match self.0.entry(tensor.id()) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
