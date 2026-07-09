@@ -535,6 +535,33 @@ fn test_flip_backprop() -> Result<()> {
     Ok(())
 }
 
+fn test_upsample_grad(device: &Device) -> Result<()> {
+    /* interpolate1d test */
+    let shape = (1, 1, 2);
+    let x = Var::ones(shape, DType::F64, device)?;
+    // source and destination dimensions are the same, so `interpolated` == `x`
+    let interpolated = x.interpolate1d(shape.2)?;
+    // this is effectively x + x, so each element of the gradient should be 2
+    let interpolated_plus_x = (&interpolated + x.as_tensor())?;
+    let grads = interpolated_plus_x.backward()?;
+    let grad_x = grads.get_id(x.id()).unwrap();
+    let expected_grad_x = Tensor::from_vec(vec![2., 2.], shape, device)?;
+    test_utils::assert_tensor_eq(grad_x, &expected_grad_x)?;
+
+    /* interpolate2d test */
+    let shape = (1, 1, 2, 2);
+    let x = Var::ones(shape, DType::F64, device)?;
+    // source and destination dimensions are the same, so `interpolated` == `x`
+    let interpolated = x.interpolate2d(shape.2, shape.3)?;
+    // this is effectively x + x, so each element of the gradient should be 2
+    let interpolated_plus_x = (&interpolated + x.as_tensor())?;
+    let grads = interpolated_plus_x.backward()?;
+    let grad_x = grads.get_id(x.id()).unwrap();
+    let expected_grad_x = Tensor::from_vec(vec![2., 2., 2., 2.], shape, device)?;
+    test_utils::assert_tensor_eq(grad_x, &expected_grad_x)?;
+    Ok(())
+}
+
 test_device!(
     simple_grad,
     simple_grad_cpu,
@@ -560,4 +587,10 @@ test_device!(
     binary_grad_cpu,
     binary_grad_gpu,
     binary_grad_metal
+);
+test_device!(
+    test_upsample_grad,
+    test_upsample_cpu,
+    test_upsample_gpu,
+    test_upsample_metal
 );
