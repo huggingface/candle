@@ -19,6 +19,7 @@ pub mod activation;
 pub mod attention;
 pub mod batch_norm;
 pub mod conv;
+pub mod deform_conv;
 pub mod cpu_flash_attention;
 pub mod embedding;
 pub mod encoding;
@@ -49,6 +50,10 @@ pub use conv::{
     conv1d, conv1d_no_bias, conv2d, conv2d_no_bias, conv_transpose1d, conv_transpose1d_no_bias,
     conv_transpose2d, conv_transpose2d_no_bias, Conv1d, Conv1dConfig, Conv2d, Conv2dConfig,
     ConvTranspose1d, ConvTranspose1dConfig, ConvTranspose2d, ConvTranspose2dConfig,
+};
+pub use deform_conv::{
+    deform_conv2d, deform_conv2d_layer, deform_conv2d_layer_no_bias, DeformConv2d,
+    DeformConv2dConfig,
 };
 pub use embedding::{embedding, Embedding};
 pub use func::{func, func_t, Func, FuncT};
