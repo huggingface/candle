@@ -2547,6 +2547,51 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
+            // https://onnx.ai/onnx/operators/onnx__NonZero.html
+            "NonZero" => {
+                let input = get(&node.input[0])?;
+                let rank = input.rank();
+                let dims = input.dims();
+
+                let dt = input.dtype();
+                match dt {
+                    DType::U8
+                    | DType::U32
+                    | DType::I64
+                    | DType::F16
+                    | DType::F32
+                    | DType::F64 => {}
+                    dt => bail!("unsupported dtype {dt:?} for NonZero"),
+                };
+
+                let is_zero = input.eq(&input.zeros_like()?)?.flatten_all()?.to_vec1::<u8>()?;
+
+                let mut indices = vec![];
+                for (i, &val) in is_zero.iter().enumerate() {
+                    if val == 0 {
+                        indices.push(i);
+                    }
+                }
+                
+                let num_nonzero = indices.len();
+                let mut out = Vec::with_capacity(rank * num_nonzero);
+
+                if rank > 0 {
+                    let mut strides = vec![1; rank];
+                    for i in (0..rank - 1).rev() {
+                        strides[i] = strides[i + 1] * dims[i + 1];
+                    }
+
+                    for dim in 0..rank {
+                        for &i in &indices {
+                            out.push(((i / strides[dim]) % dims[dim]) as i64);
+                        }
+                    }
+                }
+
+                let output = Tensor::from_vec(out, vec![rank, num_nonzero], input.device())?;
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
