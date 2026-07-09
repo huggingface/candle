@@ -68,15 +68,16 @@ impl Qwen3VLModel {
     ) -> Result<Tensor> {
         let (bs, seqlen) = input_ids.dims2()?;
         let attention_mask = if seqlen <= 1 {
+            None
+        } else {
+            let seqlen_offset = seqlen_offsets.first().copied().unwrap_or(0);
             Some(self.prepare_decoder_attention_mask(
                 bs,
                 seqlen,
-                seqlen_offsets[0],
+                seqlen_offset,
                 self.text.dtype,
                 input_ids.device(),
             )?)
-        } else {
-            None
         };
 
         let mut input_embeds = self.text.embed_tokens(input_ids)?;
