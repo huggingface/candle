@@ -17,9 +17,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub mod cudnn;
 mod device;
 mod error;
+mod graph;
 mod utils;
 pub use device::{CudaDevice, DeviceId};
 pub use error::{CudaError, WrapErr};
+pub use graph::CudaGraph;
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
 
 type ParamCache = HashMap<(DeviceId, Vec<usize>), Arc<CudaSlice<usize>>>;
