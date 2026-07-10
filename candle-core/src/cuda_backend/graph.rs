@@ -36,12 +36,19 @@ impl CudaGraph {
     /// cannot be recorded as a replayable graph node.
     ///
     /// Callers must run the same operations `f` will perform at least once,
-    /// outside of capture, before calling this function. That warm-up run
-    /// JIT-loads any CUDA modules the operations need and populates the
-    /// host-to-device upload cache; both module loading and uncached uploads
-    /// are disallowed once capture starts and invalidate the capture
+    /// outside of capture, before calling this function, with that warm-up
+    /// run itself wrapped in [`CudaDevice::enable_cuda_graph_htod_cache`]
+    /// (this function only holds that guard for its own call, not for
+    /// whatever warm-up the caller ran beforehand). The warm-up run JIT-loads
+    /// any CUDA modules the operations need and, under the guard, populates
+    /// the host-to-device upload cache; both module loading and uncached
+    /// uploads are disallowed once capture starts and invalidate the capture
     /// (`CUDA_ERROR_STREAM_CAPTURE_INVALIDATED`) if attempted while it is
-    /// active.
+    /// active. A warm-up run outside of the guard JIT-loads modules but
+    /// leaves the cache empty, so capture still fails on any operation that
+    /// needs an uncached host upload (e.g. a kernel launch's non-contiguous
+    /// layout parameters, or `Tensor::index_select` against a small index
+    /// tensor).
     ///
     /// Any buffer whose contents you need to read between replays must be
     /// allocated *before* capture and written in place by `f` (e.g. via
