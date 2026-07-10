@@ -56,6 +56,10 @@ pub struct Config {
     pub max_position_embeddings: usize,
     pub original_max_position_embeddings: Option<usize>,
     pub partial_rotary_factor: Option<f64>,
+    /// Sliding attention window size from `config.json` (e.g. 2047 for Phi-3-mini-4k).
+    /// When set, a query only attends keys within this many positions.
+    #[serde(default)]
+    pub sliding_window: Option<usize>,
     #[serde(default)]
     pub tie_word_embeddings: bool,
 }
@@ -80,6 +84,8 @@ impl RotaryEmbedding {
             .as_ref()
             .map(|v| (v * cfg.head_dim() as f64) as usize);
         let dim = partial_dim.unwrap_or(cfg.head_dim());
+        // Build the phase table in F32 (like mistral/llama). Using the model dtype
+        // (e.g. BF16) quantizes positions and phases on long axes and corrupts RoPE.
         let freqs = match cfg.rope_scaling.as_ref() {
             None => {
                 let max_seq_len = cfg.max_position_embeddings;
@@ -87,9 +93,9 @@ impl RotaryEmbedding {
                     .step_by(2)
                     .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
                     .collect();
-                let inv_freq = Tensor::from_vec(inv_freq, (1, ()), dev)?.to_dtype(dtype)?;
+                let inv_freq = Tensor::from_vec(inv_freq, (1, ()), dev)?.to_dtype(DType::F32)?;
                 let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-                    .to_dtype(dtype)?
+                    .to_dtype(DType::F32)?
                     .reshape((max_seq_len, 1))?;
                 t.matmul(&inv_freq)?
             }
@@ -99,18 +105,19 @@ impl RotaryEmbedding {
                     .zip(rope_scaling.short_factor.iter())
                     .map(|(i, &f)| f / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
                     .collect();
-                let inv_freq_s = Tensor::from_vec(inv_freq_s, (1, ()), dev)?.to_dtype(dtype)?;
+                let inv_freq_s =
+                    Tensor::from_vec(inv_freq_s, (1, ()), dev)?.to_dtype(DType::F32)?;
                 let max_seq_len = cfg.max_position_embeddings;
                 match cfg.original_max_position_embeddings {
                     None => {
                         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-                            .to_dtype(dtype)?
+                            .to_dtype(DType::F32)?
                             .reshape((max_seq_len, 1))?;
                         t.matmul(&inv_freq_s)?
                     }
                     Some(original_max_seq_len) => {
                         let t_s = Tensor::arange(0u32, original_max_seq_len as u32, dev)?
-                            .to_dtype(dtype)?
+                            .to_dtype(DType::F32)?
                             .reshape((original_max_seq_len, 1))?;
                         let freq_s = t_s.matmul(&inv_freq_s)?;
                         let inv_freq_l: Vec<_> = (0..dim)
@@ -119,10 +126,10 @@ impl RotaryEmbedding {
                             .map(|(i, &f)| f / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
                             .collect();
                         let inv_freq_l =
-                            Tensor::from_vec(inv_freq_l, (1, ()), dev)?.to_dtype(dtype)?;
+                            Tensor::from_vec(inv_freq_l, (1, ()), dev)?.to_dtype(DType::F32)?;
                         let t_l =
                             Tensor::arange(original_max_seq_len as u32, max_seq_len as u32, dev)?
-                                .to_dtype(dtype)?
+                                .to_dtype(DType::F32)?
                                 .reshape(((), 1))?;
                         let freq_l = t_l.matmul(&inv_freq_l)?;
                         Tensor::cat(&[&freq_s, &freq_l], 0)?
@@ -130,10 +137,11 @@ impl RotaryEmbedding {
                 }
             }
         };
+        // sin/cos are in [-1, 1]; casting to the model dtype after is safe.
         Ok(Self {
             partial_dim,
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
+            sin: freqs.sin()?.to_dtype(dtype)?,
+            cos: freqs.cos()?.to_dtype(dtype)?,
         })
     }
 
@@ -351,6 +359,7 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
+    sliding_window: Option<usize>,
     device: Device,
     dtype: DType,
 }
@@ -378,38 +387,58 @@ impl Model {
             layers,
             norm,
             lm_head,
+            sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
         })
     }
 
+    /// Causal (+ optional sliding-window) attention mask.
+    ///
+    /// Rows are queries in the current step (absolute pos = `seqlen_offset + i`).
+    /// Columns are all key positions `0..tgt_len + seqlen_offset`.
+    /// Masks key `j` when `j > q_pos` (causal) or `q_pos - j >= sliding_window`.
     fn prepare_decoder_attention_mask(
         &self,
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
+        let total_len = tgt_len + seqlen_offset;
+        let sliding_window = self.sliding_window;
         let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
+            .flat_map(|i| {
+                let q_pos = seqlen_offset + i;
+                (0..total_len).map(move |j| {
+                    if j > q_pos {
+                        f32::NEG_INFINITY
+                    } else if sliding_window.is_some_and(|w| q_pos - j >= w) {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
+            })
             .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
+        let mask = Tensor::from_slice(&mask, (tgt_len, total_len), &self.device)?;
+        mask.expand((b_size, 1, tgt_len, total_len))?
             .to_dtype(self.dtype)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        let attention_mask = if seq_len <= 1 {
-            None
-        } else {
+        // Always build a mask for multi-token steps. For single-token decode, still
+        // apply a mask once the KV length exceeds the sliding window so generation
+        // past the window stays in-distribution for the model.
+        let need_mask = seq_len > 1
+            || self
+                .sliding_window
+                .is_some_and(|w| seqlen_offset + seq_len > w);
+        let attention_mask = if need_mask {
             let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
             Some(mask)
+        } else {
+            None
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for layer in self.layers.iter_mut() {
@@ -424,5 +453,85 @@ impl Model {
         for layer in self.layers.iter_mut() {
             layer.clear_kv_cache()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::Device;
+
+    fn minimal_cfg(sliding_window: Option<usize>) -> Config {
+        Config {
+            vocab_size: 100,
+            hidden_act: candle_nn::Activation::Silu,
+            hidden_size: 64,
+            intermediate_size: 128,
+            num_hidden_layers: 1,
+            num_attention_heads: 4,
+            num_key_value_heads: 4,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            bos_token_id: None,
+            eos_token_id: None,
+            rope_scaling: None,
+            max_position_embeddings: 4096,
+            original_max_position_embeddings: None,
+            partial_rotary_factor: None,
+            sliding_window,
+            tie_word_embeddings: false,
+        }
+    }
+
+    #[test]
+    fn rope_sin_cos_cast_to_model_dtype() {
+        let cfg = minimal_cfg(None);
+        let rope = RotaryEmbedding::new(DType::BF16, &cfg, &Device::Cpu).unwrap();
+        assert_eq!(rope.sin.dtype(), DType::BF16);
+        assert_eq!(rope.cos.dtype(), DType::BF16);
+        assert_eq!(rope.sin.dims()[0], 4096);
+    }
+
+    #[test]
+    fn config_deserializes_sliding_window() {
+        let json = r#"{
+            "vocab_size": 100,
+            "hidden_act": "silu",
+            "hidden_size": 64,
+            "intermediate_size": 128,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 4,
+            "rms_norm_eps": 1e-5,
+            "rope_theta": 10000.0,
+            "max_position_embeddings": 4096,
+            "sliding_window": 2047
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.sliding_window, Some(2047));
+    }
+
+    #[test]
+    fn sliding_window_mask_blocks_distant_keys() {
+        // Emulate mask rules used by prepare_decoder_attention_mask without building weights.
+        let sliding_window = Some(4usize);
+        let seqlen_offset = 0usize;
+        let tgt_len = 6usize;
+        let total_len = tgt_len + seqlen_offset;
+        let mut values = Vec::new();
+        for i in 0..tgt_len {
+            let q_pos = seqlen_offset + i;
+            for j in 0..total_len {
+                let masked = j > q_pos || sliding_window.is_some_and(|w| q_pos - j >= w);
+                values.push(!masked);
+            }
+        }
+        // Query at pos 5 may attend keys 2..5 only when window=4 (q_pos - j < 4 => j > 1).
+        let row5 = &values[5 * total_len..(5 + 1) * total_len];
+        assert!(!row5[0]); // j=0: 5-0 >= 4 → masked
+        assert!(!row5[1]); // j=1: 5-1 >= 4 → masked
+        assert!(row5[2]); // j=2: 5-2 < 4 → allowed
+        assert!(row5[5]); // self
+        assert!(!row5.iter().skip(6).any(|&x| x)); // no future keys in total_len=6
     }
 }
