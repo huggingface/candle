@@ -440,7 +440,7 @@ fn run_dequantize(
     let mut in_file = std::fs::File::open(in_file)?;
     let content = gguf_file::Content::read(&mut in_file)?;
     let mut tensors = std::collections::HashMap::new();
-    for (tensor_name, _) in content.tensor_infos.iter() {
+    for tensor_name in content.tensor_infos.keys() {
         let tensor = content.tensor(&mut in_file, tensor_name, device)?;
         let tensor = tensor.dequantize(device)?;
         tensors.insert(tensor_name.to_string(), tensor);
