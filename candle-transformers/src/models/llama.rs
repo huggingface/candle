@@ -142,11 +142,128 @@ impl Config {
     }
 }
 
+/// Physical KV storage and per-sequence block table for paged attention.
+///
+/// Constructed and owned by the caller (e.g. an external block allocator/eviction
+/// engine such as a vLLM-style scheduler). `key_cache`/`value_cache` must be
+/// contiguous: the model writes the newly computed K/V for the current forward
+/// pass into the slots designated by `block_table`, then reads the full paged
+/// history back through
+/// [`candle_flash_attn::flash_attn_varlen_paged_windowed`]. `block_table` and
+/// `seqlens_k` are read-only from the model's perspective — the caller owns
+/// block allocation, eviction, and keeping them in sync with what it wants
+/// written. One `PagedKvCache` covers a single transformer layer; attach one per
+/// layer via [`Cache::set_paged_kv`].
+#[derive(Debug, Clone)]
+pub struct PagedKvCache {
+    /// `(num_blocks, page_block_size, num_kv_heads, head_dim)`, contiguous.
+    pub key_cache: Tensor,
+    /// `(num_blocks, page_block_size, num_kv_heads, head_dim)`, contiguous.
+    pub value_cache: Tensor,
+    /// `(batch_size, max_blocks)`, physical block ids per sequence.
+    pub block_table: Tensor,
+    /// `(batch_size + 1,)`, cumulative sequence lengths (including the tokens
+    /// about to be written by this forward pass), used to drive the varlen kernel.
+    pub seqlens_k: Tensor,
+    pub page_block_size: usize,
+}
+
+impl PagedKvCache {
+    /// Scatters the newly computed K/V (shape `(b_sz, num_kv_heads, seq_len,
+    /// head_dim)`) into `key_cache`/`value_cache` at the physical slots that
+    /// `block_table` designates for absolute positions
+    /// `index_pos..index_pos+seq_len`.
+    fn write_new_kv(&self, k: &Tensor, v: &Tensor, index_pos: usize) -> Result<()> {
+        if !self.key_cache.is_contiguous() || !self.value_cache.is_contiguous() {
+            candle::bail!("PagedKvCache key_cache/value_cache must be contiguous")
+        }
+        let (b_sz, num_kv_heads, seq_len, head_dim) = k.dims4()?;
+        let (num_blocks, page_block_size, kv_heads_cache, head_dim_cache) =
+            self.key_cache.dims4()?;
+        if page_block_size != self.page_block_size {
+            candle::bail!(
+                "PagedKvCache.page_block_size ({}) does not match key_cache shape (block size {page_block_size})",
+                self.page_block_size
+            )
+        }
+        if kv_heads_cache != num_kv_heads || head_dim_cache != head_dim {
+            candle::bail!(
+                "PagedKvCache key/value cache shape {:?} is incompatible with new kv (heads={num_kv_heads}, head_dim={head_dim})",
+                self.key_cache.dims()
+            )
+        }
+        let block_table = self.block_table.to_dtype(DType::U32)?.to_vec2::<u32>()?;
+        if block_table.len() != b_sz {
+            candle::bail!(
+                "block_table batch dim ({}) does not match kv batch dim ({b_sz})",
+                block_table.len()
+            )
+        }
+        let last_pos = index_pos + seq_len - 1;
+        let mut slots = Vec::with_capacity(b_sz * seq_len);
+        for row in &block_table {
+            let max_logical_block = last_pos / self.page_block_size;
+            if max_logical_block >= row.len() {
+                candle::bail!(
+                    "block_table has {} blocks, but position {last_pos} needs logical block {max_logical_block}",
+                    row.len()
+                )
+            }
+            for t in 0..seq_len {
+                let pos = index_pos + t;
+                let logical_block = pos / self.page_block_size;
+                let offset = pos % self.page_block_size;
+                let physical_block = row[logical_block] as usize;
+                if physical_block >= num_blocks {
+                    candle::bail!(
+                        "block_table references physical block {physical_block}, but key_cache only has {num_blocks} blocks"
+                    )
+                }
+                slots.push((physical_block * self.page_block_size + offset) as u32);
+            }
+        }
+
+        let device = k.device();
+        let indices = Tensor::from_vec(slots, (b_sz * seq_len, 1, 1), device)?
+            .broadcast_as((b_sz * seq_len, num_kv_heads, head_dim))?
+            .contiguous()?;
+
+        let k_flat =
+            k.transpose(1, 2)?
+                .contiguous()?
+                .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
+        let v_flat =
+            v.transpose(1, 2)?
+                .contiguous()?
+                .reshape((b_sz * seq_len, num_kv_heads, head_dim))?;
+
+        let key_flat =
+            self.key_cache
+                .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
+        let value_flat =
+            self.value_cache
+                .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?;
+        key_flat.scatter_set(&indices, &k_flat, 0)?;
+        value_flat.scatter_set(&indices, &v_flat, 0)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Cache {
     masks: HashMap<(usize, usize), Tensor>,
     pub use_kv_cache: bool,
     kvs: Vec<Option<(Tensor, Tensor)>>,
+    // Additive seam: caller-owned paged KV storage per transformer layer, indexed
+    // by `block_idx`. `None` (the default for every layer) preserves today's
+    // contiguous concat-and-narrow path byte-for-byte; existing callers that
+    // never touch this are entirely unaffected. See `PagedKvCache`.
+    paged_kvs: Vec<Option<PagedKvCache>>,
+    // Additive seam: caller-owned, graph-replay-safe decode-position tensor per
+    // transformer layer, indexed by `block_idx`. `None` (the default for every
+    // layer) preserves today's host-side `narrow(0, index_pos, seq_len)` rotary
+    // lookup byte-for-byte. See `Cache::set_decode_position`.
+    decode_positions: Vec<Option<Tensor>>,
     cos: Tensor,
     sin: Tensor,
     device: Device,
@@ -209,10 +326,94 @@ impl Cache {
             masks: HashMap::new(),
             use_kv_cache,
             kvs: vec![None; config.num_hidden_layers],
+            paged_kvs: vec![None; config.num_hidden_layers],
+            decode_positions: vec![None; config.num_hidden_layers],
             device: device.clone(),
             cos,
             sin,
         })
+    }
+
+    /// Attaches caller-owned paged KV storage for one transformer layer.
+    ///
+    /// Once set, that layer's attention routes through
+    /// `candle_flash_attn::flash_attn_varlen_paged_windowed` against the
+    /// caller-owned `key_cache`/`value_cache`/`block_table` instead of the
+    /// contiguous concat-and-narrow path. Existing callers that never call this
+    /// see no behavior change.
+    pub fn set_paged_kv(&mut self, block_idx: usize, paged: PagedKvCache) -> Result<()> {
+        let Some(slot) = self.paged_kvs.get_mut(block_idx) else {
+            candle::bail!(
+                "block_idx {block_idx} out of range for {} layers",
+                self.paged_kvs.len()
+            )
+        };
+        *slot = Some(paged);
+        Ok(())
+    }
+
+    /// Reverts a layer to the contiguous KV cache path.
+    pub fn clear_paged_kv(&mut self, block_idx: usize) {
+        if let Some(slot) = self.paged_kvs.get_mut(block_idx) {
+            *slot = None;
+        }
+    }
+
+    pub fn paged_kv(&self, block_idx: usize) -> Option<&PagedKvCache> {
+        self.paged_kvs.get(block_idx).and_then(|p| p.as_ref())
+    }
+
+    /// Attaches a persistent, caller-owned decode-position tensor (shape `(1,)`,
+    /// an integer dtype accepted by [`Tensor::index_select`], e.g. `DType::U32`)
+    /// for one transformer layer.
+    ///
+    /// Once set, that layer's rotary embedding lookup reads `cos`/`sin` via
+    /// [`Tensor::index_select`] against this device tensor instead of
+    /// `narrow(0, index_pos, seq_len)`. `narrow`'s offset is computed on the
+    /// host from `index_pos` and baked into the exact device pointer a CUDA
+    /// graph capture (`candle_core::CudaGraph`) would record, so replaying a
+    /// graph captured at one decode step would silently reuse that step's
+    /// rotary embeddings forever. Reading the position from a device tensor
+    /// instead keeps the captured kernel launches identical across steps: the
+    /// caller updates `position`'s *contents* in place (e.g. via
+    /// `Tensor::slice_set`) before each replay, while the tensor's
+    /// identity/address stays fixed.
+    ///
+    /// Scoped to the decode step only (`seq_len == 1`, one query token) —
+    /// `CausalSelfAttention::forward` returns an error if a layer with a
+    /// decode position attached is called with `seq_len != 1`. Prefill always
+    /// uses the existing `narrow`-based path unconditionally, so callers must
+    /// not attach a decode position before the first decode step.
+    ///
+    /// Existing callers that never call this are entirely unaffected.
+    pub fn set_decode_position(&mut self, block_idx: usize, position: Tensor) -> Result<()> {
+        let Some(slot) = self.decode_positions.get_mut(block_idx) else {
+            candle::bail!(
+                "block_idx {block_idx} out of range for {} layers",
+                self.decode_positions.len()
+            )
+        };
+        if position.dims() != [1] {
+            candle::bail!(
+                "decode position tensor must have shape (1,), got {:?}",
+                position.dims()
+            )
+        }
+        *slot = Some(position);
+        Ok(())
+    }
+
+    /// Reverts a layer to the host-side `narrow`-based rotary lookup.
+    pub fn clear_decode_position(&mut self, block_idx: usize) {
+        if let Some(slot) = self.decode_positions.get_mut(block_idx) {
+            *slot = None;
+        }
+    }
+
+    pub fn decode_position(&self, block_idx: usize) -> Option<&Tensor> {
+        self.decode_positions
+            .get(block_idx)
+            .and_then(|p| p.as_ref())
     }
 
     fn mask(&mut self, seq_len: usize, index_pos: usize) -> Result<Tensor> {
@@ -258,12 +459,82 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
     unimplemented!("compile with '--features flash-attn'")
 }
 
+#[cfg(feature = "flash-attn")]
+#[allow(clippy::too_many_arguments)]
+fn flash_attn_varlen_paged(
+    q: &Tensor,
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    seqlens_q: &Tensor,
+    seqlens_k: &Tensor,
+    block_table: &Tensor,
+    max_seqlen_q: usize,
+    max_seqlen_k: usize,
+    softmax_scale: f32,
+    page_block_size: usize,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn_varlen_paged_windowed(
+        q,
+        key_cache,
+        value_cache,
+        seqlens_q,
+        seqlens_k,
+        block_table,
+        None,
+        max_seqlen_q,
+        max_seqlen_k,
+        softmax_scale,
+        None,
+        Some(0),
+        page_block_size,
+        None,
+    )
+}
+
+#[cfg(not(feature = "flash-attn"))]
+#[allow(clippy::too_many_arguments)]
+fn flash_attn_varlen_paged(
+    _: &Tensor,
+    _: &Tensor,
+    _: &Tensor,
+    _: &Tensor,
+    _: &Tensor,
+    _: &Tensor,
+    _: usize,
+    _: usize,
+    _: f32,
+    _: usize,
+) -> Result<Tensor> {
+    unimplemented!("compile with '--features flash-attn'")
+}
+
 impl CausalSelfAttention {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize, cache: &Cache) -> Result<Tensor> {
+    fn apply_rotary_emb(
+        &self,
+        x: &Tensor,
+        index_pos: usize,
+        block_idx: usize,
+        cache: &Cache,
+    ) -> Result<Tensor> {
         let _enter = self.span_rot.enter();
         let (_b_sz, _, seq_len, _hidden_size) = x.dims4()?;
-        let cos = cache.cos.narrow(0, index_pos, seq_len)?;
-        let sin = cache.sin.narrow(0, index_pos, seq_len)?;
+        let (cos, sin) = match cache.decode_position(block_idx) {
+            Some(position) => {
+                if seq_len != 1 {
+                    candle::bail!(
+                        "Cache::set_decode_position is decode-only (seq_len must be 1), got seq_len {seq_len}"
+                    )
+                }
+                (
+                    cache.cos.index_select(position, 0)?,
+                    cache.sin.index_select(position, 0)?,
+                )
+            }
+            None => (
+                cache.cos.narrow(0, index_pos, seq_len)?,
+                cache.sin.narrow(0, index_pos, seq_len)?,
+            ),
+        };
         candle_nn::rotary_emb::rope(x, &cos, &sin)
     }
 
@@ -292,8 +563,13 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let q = self.apply_rotary_emb(&q, index_pos, cache)?;
-        let mut k = self.apply_rotary_emb(&k, index_pos, cache)?;
+        let q = self.apply_rotary_emb(&q, index_pos, block_idx, cache)?;
+        let mut k = self.apply_rotary_emb(&k, index_pos, block_idx, cache)?;
+
+        if let Some(paged) = cache.paged_kv(block_idx) {
+            let v = v.contiguous()?;
+            return self.forward_paged(&q, &k, &v, index_pos, b_sz, seq_len, hidden_size, paged);
+        }
 
         if cache.use_kv_cache {
             if let Some((cache_k, cache_v)) = &cache.kvs[block_idx] {
@@ -357,6 +633,52 @@ impl CausalSelfAttention {
 
     fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
         crate::utils::repeat_kv(x, self.num_attention_heads / self.num_key_value_heads)
+    }
+
+    /// Writes the current forward pass' K/V into the caller-owned paged cache,
+    /// then attends over the full paged history via
+    /// `candle_flash_attn::flash_attn_varlen_paged_windowed`. `q`, `k`, `v` are
+    /// `(b_sz, heads, seq_len, head_dim)`, post-RoPE for `q`/`k`.
+    #[allow(clippy::too_many_arguments)]
+    fn forward_paged(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        index_pos: usize,
+        b_sz: usize,
+        seq_len: usize,
+        hidden_size: usize,
+        paged: &PagedKvCache,
+    ) -> Result<Tensor> {
+        paged.write_new_kv(k, v, index_pos)?;
+
+        let q = q.transpose(1, 2)?.contiguous()?.reshape((
+            b_sz * seq_len,
+            self.num_attention_heads,
+            self.head_dim,
+        ))?;
+        let seqlens_q = Tensor::new(
+            (0..=b_sz).map(|i| (i * seq_len) as u32).collect::<Vec<_>>(),
+            q.device(),
+        )?;
+        let max_seqlen_k = paged.block_table.dim(1)? * paged.page_block_size;
+        let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
+
+        let y = flash_attn_varlen_paged(
+            &q,
+            &paged.key_cache,
+            &paged.value_cache,
+            &seqlens_q,
+            &paged.seqlens_k,
+            &paged.block_table,
+            seq_len,
+            max_seqlen_k,
+            softmax_scale,
+            paged.page_block_size,
+        )?
+        .reshape((b_sz, seq_len, hidden_size))?;
+        self.o_proj.forward(&y)
     }
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
@@ -530,5 +852,481 @@ impl Llama {
             ln_f,
             lm_head,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tiny_config() -> Config {
+        Config {
+            hidden_size: 4,
+            intermediate_size: 4,
+            vocab_size: 8,
+            num_hidden_layers: 1,
+            num_attention_heads: 2,
+            num_key_value_heads: 2,
+            use_flash_attn: false,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            bos_token_id: None,
+            eos_token_id: None,
+            rope_scaling: None,
+            max_position_embeddings: 16,
+            tie_word_embeddings: false,
+        }
+    }
+
+    // Distinct from `tiny_config()` above: uses 2 layers so paged-cache tests can
+    // exercise per-layer attach/detach independently.
+    fn paged_test_config() -> Config {
+        Config {
+            num_hidden_layers: 2,
+            ..tiny_config()
+        }
+    }
+
+    #[test]
+    fn paged_kv_seam_is_additive_by_default() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = paged_test_config();
+        let cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        // Every layer defaults to the contiguous path: nothing to opt into paged
+        // attention unless a caller explicitly attaches a `PagedKvCache`.
+        for block_idx in 0..cfg.num_hidden_layers {
+            assert!(cache.paged_kv(block_idx).is_none());
+        }
+        assert!(cache.use_kv_cache);
+        Ok(())
+    }
+
+    #[test]
+    fn set_and_clear_paged_kv() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = paged_test_config();
+        let mut cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        let num_blocks = 2;
+        let page_block_size = 4;
+        let num_kv_heads = 1;
+        let head_dim = 2;
+        let paged = PagedKvCache {
+            key_cache: Tensor::zeros(
+                (num_blocks, page_block_size, num_kv_heads, head_dim),
+                DType::F32,
+                &device,
+            )?,
+            value_cache: Tensor::zeros(
+                (num_blocks, page_block_size, num_kv_heads, head_dim),
+                DType::F32,
+                &device,
+            )?,
+            block_table: Tensor::from_vec(vec![0u32, 1u32], (1, 2), &device)?,
+            seqlens_k: Tensor::new(&[0u32, 4u32], &device)?,
+            page_block_size,
+        };
+        cache.set_paged_kv(0, paged)?;
+        assert!(cache.paged_kv(0).is_some());
+        assert!(cache.paged_kv(1).is_none());
+
+        cache.clear_paged_kv(0);
+        assert!(cache.paged_kv(0).is_none());
+
+        // Out-of-range layers are rejected rather than silently ignored.
+        let paged = PagedKvCache {
+            key_cache: Tensor::zeros(
+                (num_blocks, page_block_size, num_kv_heads, head_dim),
+                DType::F32,
+                &device,
+            )?,
+            value_cache: Tensor::zeros(
+                (num_blocks, page_block_size, num_kv_heads, head_dim),
+                DType::F32,
+                &device,
+            )?,
+            block_table: Tensor::from_vec(vec![0u32, 1u32], (1, 2), &device)?,
+            seqlens_k: Tensor::new(&[0u32, 4u32], &device)?,
+            page_block_size,
+        };
+        assert!(cache.set_paged_kv(cfg.num_hidden_layers, paged).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn paged_kv_cache_writes_land_in_the_slots_the_block_table_designates() -> Result<()> {
+        let device = Device::Cpu;
+        // 2 physical blocks of 4 slots each, 1 kv head, head_dim 2.
+        let num_blocks = 2;
+        let page_block_size = 4;
+        let num_kv_heads = 1;
+        let head_dim = 2;
+        let key_cache = Tensor::zeros(
+            (num_blocks, page_block_size, num_kv_heads, head_dim),
+            DType::F32,
+            &device,
+        )?;
+        let value_cache = Tensor::zeros(
+            (num_blocks, page_block_size, num_kv_heads, head_dim),
+            DType::F32,
+            &device,
+        )?;
+        // Logical block 0 -> physical block 1, logical block 1 -> physical block 0.
+        let block_table = Tensor::from_vec(vec![1u32, 0u32], (1, 2), &device)?;
+        let paged = PagedKvCache {
+            key_cache: key_cache.clone(),
+            value_cache: value_cache.clone(),
+            block_table,
+            seqlens_k: Tensor::new(&[0u32, 5u32], &device)?,
+            page_block_size,
+        };
+
+        // 3 new tokens at absolute positions 2, 3, 4 (b_sz=1).
+        // pos 2 -> logical block 0, offset 2 -> physical slot 1*4+2 = 6
+        // pos 3 -> logical block 0, offset 3 -> physical slot 1*4+3 = 7
+        // pos 4 -> logical block 1, offset 0 -> physical slot 0*4+0 = 0
+        let index_pos = 2;
+        let seq_len = 3;
+        let k = Tensor::from_vec(
+            vec![10f32, 11., 20., 21., 30., 31.],
+            (1, num_kv_heads, seq_len, head_dim),
+            &device,
+        )?;
+        let v = Tensor::from_vec(
+            vec![-10f32, -11., -20., -21., -30., -31.],
+            (1, num_kv_heads, seq_len, head_dim),
+            &device,
+        )?;
+
+        paged.write_new_kv(&k, &v, index_pos)?;
+
+        let key_flat = paged
+            .key_cache
+            .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?
+            .i((.., 0, ..))?
+            .to_vec2::<f32>()?;
+        let value_flat = paged
+            .value_cache
+            .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?
+            .i((.., 0, ..))?
+            .to_vec2::<f32>()?;
+
+        assert_eq!(key_flat[6], [10., 11.]);
+        assert_eq!(key_flat[7], [20., 21.]);
+        assert_eq!(key_flat[0], [30., 31.]);
+        assert_eq!(value_flat[6], [-10., -11.]);
+        assert_eq!(value_flat[7], [-20., -21.]);
+        assert_eq!(value_flat[0], [-30., -31.]);
+
+        // Untouched slots stay zero.
+        for slot in [1, 2, 3, 4, 5] {
+            assert_eq!(key_flat[slot], [0., 0.]);
+            assert_eq!(value_flat[slot], [0., 0.]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn paged_kv_cache_rejects_block_table_overflow() -> Result<()> {
+        let device = Device::Cpu;
+        let num_blocks = 1;
+        let page_block_size = 2;
+        let num_kv_heads = 1;
+        let head_dim = 2;
+        let paged = PagedKvCache {
+            key_cache: Tensor::zeros(
+                (num_blocks, page_block_size, num_kv_heads, head_dim),
+                DType::F32,
+                &device,
+            )?,
+            value_cache: Tensor::zeros(
+                (num_blocks, page_block_size, num_kv_heads, head_dim),
+                DType::F32,
+                &device,
+            )?,
+            // Only one logical block available.
+            block_table: Tensor::from_vec(vec![0u32], (1, 1), &device)?,
+            seqlens_k: Tensor::new(&[0u32, 2u32], &device)?,
+            page_block_size,
+        };
+        // Position 2 needs logical block 1, which doesn't exist in the table.
+        let k = Tensor::zeros((1, num_kv_heads, 1, head_dim), DType::F32, &device)?;
+        let v = Tensor::zeros((1, num_kv_heads, 1, head_dim), DType::F32, &device)?;
+        assert!(paged.write_new_kv(&k, &v, 2).is_err());
+        Ok(())
+    }
+
+    // Requires a CUDA device and the `flash-attn` feature (which compiles the real
+    // `flash_attn_varlen_paged_windowed` kernel); not runnable on the CPU-only sandbox
+    // this crate is normally developed in. Exercises the actual GPU code path end to
+    // end: writes new K/V into a caller-owned paged cache and checks the attention
+    // output against the long-established dense (non-flash) causal path.
+    #[cfg(feature = "flash-attn")]
+    #[test]
+    fn paged_attention_matches_dense_causal_attention_on_gpu() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let dtype = DType::BF16;
+
+        let num_attention_heads = 2;
+        let num_key_value_heads = 2;
+        let head_dim = 64;
+        let hidden_size = num_attention_heads * head_dim;
+        let kv_size = num_key_value_heads * head_dim;
+        let seq_len = 17;
+        let page_block_size = 32;
+
+        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
+            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), &device)?.to_dtype(dtype)?;
+            Ok(Linear::from_weights(w, None))
+        };
+        let attn = CausalSelfAttention {
+            q_proj: new_linear(hidden_size, hidden_size)?,
+            k_proj: new_linear(kv_size, hidden_size)?,
+            v_proj: new_linear(kv_size, hidden_size)?,
+            o_proj: new_linear(hidden_size, hidden_size)?,
+            num_attention_heads,
+            num_key_value_heads,
+            head_dim,
+            use_flash_attn: false,
+            span: tracing::span!(tracing::Level::TRACE, "attn"),
+            span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
+            max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
+        };
+
+        let mut cfg = paged_test_config();
+        cfg.hidden_size = hidden_size;
+        cfg.num_attention_heads = num_attention_heads;
+        cfg.num_key_value_heads = num_key_value_heads;
+        cfg.num_hidden_layers = 1;
+        // `paged_test_config()`'s base `max_position_embeddings` (16) is too small
+        // for this test's `seq_len` (17); the dense reference path narrows the
+        // RoPE cos/sin cache to `max_position_embeddings` rows.
+        cfg.max_position_embeddings = DEFAULT_MAX_SEQ_LEN;
+
+        let x = Tensor::randn(0f32, 1., (1, seq_len, hidden_size), &device)?.to_dtype(dtype)?;
+
+        // Ground truth: the long-established dense (non-flash) causal softmax path.
+        let mut dense_cache = Cache::new(true, dtype, &cfg, &device)?;
+        let y_dense = attn.forward(&x, 0, 0, &mut dense_cache)?;
+
+        // Candidate: paged cache sized to hold the whole sequence in a single block,
+        // routed through `flash_attn_varlen_paged_windowed`.
+        let key_cache = Tensor::zeros(
+            (1, page_block_size, num_key_value_heads, head_dim),
+            dtype,
+            &device,
+        )?;
+        let value_cache = Tensor::zeros(
+            (1, page_block_size, num_key_value_heads, head_dim),
+            dtype,
+            &device,
+        )?;
+        let paged = PagedKvCache {
+            key_cache,
+            value_cache,
+            block_table: Tensor::from_vec(vec![0u32], (1, 1), &device)?,
+            seqlens_k: Tensor::new(&[0u32, seq_len as u32], &device)?,
+            page_block_size,
+        };
+        let mut paged_cache = Cache::new(true, dtype, &cfg, &device)?;
+        paged_cache.set_paged_kv(0, paged)?;
+        let y_paged = attn.forward(&x, 0, 0, &mut paged_cache)?;
+
+        let diff = y_dense
+            .to_dtype(DType::F32)?
+            .sub(&y_paged.to_dtype(DType::F32)?)?
+            .abs()?
+            .flatten_all()?
+            .max(0)?
+            .to_vec0::<f32>()?;
+        assert!(diff < 0.1, "paged vs dense max abs diff {diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn decode_position_seam_is_additive_by_default() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = paged_test_config();
+        let cache = Cache::new(true, DType::F32, &cfg, &device)?;
+        // Every layer defaults to the host-side narrow path: nothing changes
+        // unless a caller explicitly attaches a decode-position tensor.
+        for block_idx in 0..cfg.num_hidden_layers {
+            assert!(cache.decode_position(block_idx).is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn set_and_clear_decode_position() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = paged_test_config();
+        let mut cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        cache.set_decode_position(0, Tensor::new(&[3u32], &device)?)?;
+        assert!(cache.decode_position(0).is_some());
+        assert!(cache.decode_position(1).is_none());
+
+        cache.clear_decode_position(0);
+        assert!(cache.decode_position(0).is_none());
+
+        // Out-of-range layers are rejected rather than silently ignored.
+        assert!(cache
+            .set_decode_position(cfg.num_hidden_layers, Tensor::new(&[3u32], &device)?)
+            .is_err());
+
+        // Anything other than a single-element tensor is rejected: the seam
+        // is decode-only (one query token per layer per step).
+        assert!(cache
+            .set_decode_position(0, Tensor::new(&[3u32, 4u32], &device)?)
+            .is_err());
+        Ok(())
+    }
+
+    fn tiny_causal_self_attention(cfg: &Config, device: &Device) -> Result<CausalSelfAttention> {
+        let hidden_size = cfg.hidden_size;
+        let kv_size = (hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
+            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), device)?;
+            Ok(Linear::from_weights(w, None))
+        };
+        Ok(CausalSelfAttention {
+            q_proj: new_linear(hidden_size, hidden_size)?,
+            k_proj: new_linear(kv_size, hidden_size)?,
+            v_proj: new_linear(kv_size, hidden_size)?,
+            o_proj: new_linear(hidden_size, hidden_size)?,
+            num_attention_heads: cfg.num_attention_heads,
+            num_key_value_heads: cfg.num_key_value_heads,
+            head_dim: hidden_size / cfg.num_attention_heads,
+            use_flash_attn: false,
+            span: tracing::span!(tracing::Level::TRACE, "attn"),
+            span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
+            max_position_embeddings: cfg.max_position_embeddings,
+        })
+    }
+
+    #[test]
+    fn decode_position_matches_narrow_based_rotary_lookup() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let attn = tiny_causal_self_attention(&cfg, &device)?;
+        let x = Tensor::randn(0f32, 1., (1, 1, cfg.hidden_size), &device)?;
+        let index_pos = 3;
+
+        // Baseline: today's host-side narrow-based rotary lookup.
+        let mut narrow_cache = Cache::new(false, DType::F32, &cfg, &device)?;
+        let y_narrow = attn.forward(&x, index_pos, 0, &mut narrow_cache)?;
+
+        // Candidate: device-tensor decode-position gather, same absolute position.
+        let mut gather_cache = Cache::new(false, DType::F32, &cfg, &device)?;
+        gather_cache.set_decode_position(0, Tensor::new(&[index_pos as u32], &device)?)?;
+        let y_gather = attn.forward(&x, index_pos, 0, &mut gather_cache)?;
+
+        assert_eq!(y_narrow.to_vec3::<f32>()?, y_gather.to_vec3::<f32>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_position_rejects_multi_token_forward() -> Result<()> {
+        let device = Device::Cpu;
+        let cfg = tiny_config();
+        let attn = tiny_causal_self_attention(&cfg, &device)?;
+        // Prefill-shaped input (seq_len > 1) must not be routed through the
+        // decode-only gather path.
+        let x = Tensor::randn(0f32, 1., (1, 3, cfg.hidden_size), &device)?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &device)?;
+        cache.set_decode_position(0, Tensor::new(&[0u32], &device)?)?;
+        assert!(attn.forward(&x, 0, 0, &mut cache).is_err());
+        Ok(())
+    }
+
+    // Requires a CUDA device (feature-gated behind flash-attn, same as the paged-
+    // attention GPU test above, since that's the GPU feature this crate's CI
+    // compiles under); not runnable on the CPU-only sandbox this crate is
+    // normally developed in. Exercises the actual property issue #12 is about:
+    // a CudaGraph capturing a decode step must replay against the *current*
+    // contents of the attached decode-position tensor, not the position that
+    // was live at capture time.
+    #[cfg(feature = "flash-attn")]
+    #[test]
+    fn decode_position_stays_correct_across_cuda_graph_replay() -> Result<()> {
+        use candle::CudaGraph;
+
+        let device = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_device) = &device else {
+            unreachable!()
+        };
+        let dtype = DType::F32;
+
+        let cfg = tiny_config();
+        let attn = tiny_causal_self_attention(&cfg, &device)?;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        // Shape (b_sz, heads, seq_len=1, head_dim): what `apply_rotary_emb` sees
+        // for a single decode step's query. Capture that call directly instead
+        // of routing through the full attention `forward`: with one query
+        // attending only to itself and no cached history, softmax over a
+        // single key is trivially 1.0 and the attention *output* is
+        // position-invariant regardless of rotary correctness, so it can't
+        // distinguish a graph stuck on a stale position from a correct one.
+        let q_in = Tensor::randn(0f32, 1., (1, cfg.num_attention_heads, 1, head_dim), &device)?;
+
+        let position = Tensor::new(&[0u32], &device)?;
+        let mut cache = Cache::new(false, dtype, &cfg, &device)?;
+        cache.set_decode_position(0, position.clone())?;
+
+        // `out` is allocated before capture and written in place via `slice_set`,
+        // per `CudaGraph::capture`'s contract: a tensor allocated inside the
+        // capture closure would be a graph-owned allocation, unreadable outside
+        // replay. The warm-up run must itself hold `enable_cuda_graph_htod_cache`:
+        // that guard is what makes the *first* upload of a given host constant
+        // (here, `index_select`'s non-contiguous-layout parameter vector) populate
+        // the cache instead of performing a plain upload; `CudaGraph::capture` only
+        // enables the guard for its own call, so a warm-up run outside of any guard
+        // never seeds the cache, and capture then fails with a cache-miss error.
+        let out = Tensor::zeros((1, cfg.num_attention_heads, 1, head_dim), dtype, &device)?;
+        {
+            let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+            let rotated = attn.apply_rotary_emb(&q_in, 0, 0, &cache)?;
+            out.slice_set(&rotated, 0, 0)?;
+        }
+        device.synchronize()?;
+
+        let (graph, ()) = CudaGraph::capture(cuda_device, || {
+            let rotated = attn.apply_rotary_emb(&q_in, 0, 0, &cache)?;
+            out.slice_set(&rotated, 0, 0)?;
+            Ok(())
+        })?;
+
+        // Replaying at the captured position (0) must match the dense narrow-based
+        // path at position 0.
+        graph.replay()?;
+        device.synchronize()?;
+        let narrow_cache_0 = Cache::new(false, dtype, &cfg, &device)?;
+        let expected_0 = attn.apply_rotary_emb(&q_in, 0, 0, &narrow_cache_0)?;
+        assert_eq!(
+            out.flatten_all()?.to_vec1::<f32>()?,
+            expected_0.flatten_all()?.to_vec1::<f32>()?
+        );
+
+        // Update the position tensor's *contents* in place (its identity/address
+        // is unchanged) and replay again: the graph must pick up position 5, not
+        // silently keep replaying position 0.
+        position.slice_set(&Tensor::new(&[5u32], &device)?, 0, 0)?;
+        graph.replay()?;
+        device.synchronize()?;
+        let narrow_cache_5 = Cache::new(false, dtype, &cfg, &device)?;
+        let expected_5 = attn.apply_rotary_emb(&q_in, 5, 0, &narrow_cache_5)?;
+        assert_eq!(
+            out.flatten_all()?.to_vec1::<f32>()?,
+            expected_5.flatten_all()?.to_vec1::<f32>()?
+        );
+
+        // Sanity check that positions 0 and 5 actually produce different rotary
+        // embeddings; otherwise the assertions above wouldn't distinguish a
+        // graph that's still stuck on the captured position from one that isn't.
+        assert_ne!(
+            expected_0.flatten_all()?.to_vec1::<f32>()?,
+            expected_5.flatten_all()?.to_vec1::<f32>()?
+        );
+        Ok(())
     }
 }
