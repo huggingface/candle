@@ -2739,7 +2739,7 @@ impl Tensor {
 
     // If we extend the visibility of this function to be usable outside of this crate, we should
     // make it unsafe.
-    pub unsafe fn storage_mut_and_layout(
+    pub(crate) fn storage_mut_and_layout(
         &self,
     ) -> (std::sync::RwLockWriteGuard<'_, Storage>, &Layout) {
         let storage = self.storage.write().unwrap();
