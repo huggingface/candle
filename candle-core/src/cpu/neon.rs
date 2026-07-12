@@ -78,7 +78,9 @@ mod fp16 {
     use std::arch::asm;
 
     // Fallback: widen f16 to f32 on load using FCVTL, accumulate in f32.
-    #[cfg(not(target_feature = "fp16"))]
+    // Also used on stable toolchains: the optimized tier below needs the
+    // unstable stdarch_neon_f16 feature (see lib.rs).
+    #[cfg(not(all(target_feature = "fp16", candle_nightly)))]
     mod inner {
         use super::*;
 
@@ -150,7 +152,7 @@ mod fp16 {
     }
 
     // Optimized: accumulate in f16 using FMLA.8h, flush to f32 periodically.
-    #[cfg(target_feature = "fp16")]
+    #[cfg(all(target_feature = "fp16", candle_nightly))]
     mod inner {
         use super::*;
 
