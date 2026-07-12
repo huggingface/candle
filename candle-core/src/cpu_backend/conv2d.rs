@@ -401,10 +401,11 @@ fn conv2d_im2col_gemm<T: WithDType + num_traits::Num + Copy + 'static>(
             .broadcast_as((b, k, n))?;
         MatMul((b, m, n, k)).f(&col, &col_l, kernel, &kernel_l)?
     } else {
-        // Make the kernel contiguous if not already the case.
+        // copy_strided_src_ materializes the kernel into kernel_c starting at index 0, so the
+        // matmul layout must use offset 0, not the original (strided) kernel's start offset.
         let mut kernel_c = alloc_uninit_vec(kernel_l.shape().elem_count());
         copy_strided_src_(kernel, &mut kernel_c, 0, kernel_l);
-        let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
+        let kernel_l = Layout::contiguous_with_offset((1, n, k), 0)
             .transpose(1, 2)?
             .broadcast_as((b, k, n))?;
         MatMul((b, m, n, k)).f(&col, &col_l, &kernel_c, &kernel_l)?

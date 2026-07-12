@@ -932,6 +932,49 @@ fn conv2d_c_eq_h_eq_w(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+// Regression test for https://github.com/huggingface/candle/issues/3735: a non-contiguous
+// kernel and its contiguous copy must produce identical forward results and gradients.
+fn conv2d_grad_noncontiguous_kernel(dev: &Device) -> Result<()> {
+    use candle_core::Var;
+    let input_data: Vec<f32> = (1..=32).map(|v| v as f32 * 0.1).collect();
+    let weight_data: Vec<f32> = (1..=12).map(|v| v as f32 * 0.1).collect();
+
+    // Non-contiguous kernel: a channel slice of a larger weight, so it has a non-zero offset.
+    let input = Var::from_slice(&input_data, (1, 2, 4, 4), dev)?;
+    let weight = Var::from_slice(&weight_data, (3, 4, 1, 1), dev)?;
+    let kernel = weight.i((.., 1..3, .., ..))?;
+    let loss = input.conv2d(&kernel, 0, 2, 1, 1)?.sqr()?.sum_all()?;
+    let grads = loss.backward()?;
+    let grad_input = grads.get(&input).unwrap();
+    let grad_weight = grads.get(&weight).unwrap();
+
+    // Reference: the same logical kernel forced contiguous.
+    let input_ref = Var::from_slice(&input_data, (1, 2, 4, 4), dev)?;
+    let weight_ref = Var::from_slice(&weight_data, (3, 4, 1, 1), dev)?;
+    let kernel_ref = weight_ref.i((.., 1..3, .., ..))?.contiguous()?;
+    let loss_ref = input_ref
+        .conv2d(&kernel_ref, 0, 2, 1, 1)?
+        .sqr()?
+        .sum_all()?;
+    let grads_ref = loss_ref.backward()?;
+    let grad_input_ref = grads_ref.get(&input_ref).unwrap();
+    let grad_weight_ref = grads_ref.get(&weight_ref).unwrap();
+
+    assert_eq!(
+        test_utils::to_vec0_round(&loss, 4)?,
+        test_utils::to_vec0_round(&loss_ref, 4)?,
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&grad_input.flatten_all()?, 4)?,
+        test_utils::to_vec1_round(&grad_input_ref.flatten_all()?, 4)?,
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&grad_weight.flatten_all()?, 4)?,
+        test_utils::to_vec1_round(&grad_weight_ref.flatten_all()?, 4)?,
+    );
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal);
 test_device!(
     conv1d_small,
@@ -969,4 +1012,10 @@ test_device!(
     conv2d_c_eq_h_eq_w_cpu,
     conv2d_c_eq_h_eq_w_gpu,
     conv2d_c_eq_h_eq_w_metal
+);
+test_device!(
+    conv2d_grad_noncontiguous_kernel,
+    conv2d_grad_noncontiguous_kernel_cpu,
+    conv2d_grad_noncontiguous_kernel_gpu,
+    conv2d_grad_noncontiguous_kernel_metal
 );
