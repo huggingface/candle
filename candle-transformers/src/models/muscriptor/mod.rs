@@ -80,6 +80,34 @@ fn sin_embedding(offset: usize, t: usize, dim: usize, device: &Device) -> Result
     Tensor::from_vec(data, (t, dim), device)
 }
 
+/// LayerNorm that dispatches to the fused kernel on Metal (a single launch
+/// instead of the decomposed mean/variance op chain, which dominates decode
+/// time at batch 1-4) and to the standard module elsewhere.
+#[derive(Debug, Clone)]
+struct Norm {
+    inner: LayerNorm,
+    fused: bool,
+}
+
+impl Norm {
+    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+        let fused = vb.device().is_metal();
+        Ok(Self {
+            inner: layer_norm(dim, LN_EPS, vb)?,
+            fused,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match (self.fused, self.inner.bias()) {
+            (true, Some(bias)) => {
+                candle_nn::ops::layer_norm(xs, self.inner.weight(), bias, LN_EPS as f32)
+            }
+            _ => self.inner.forward(xs),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct StreamingMultiheadAttention {
     in_proj: Linear,
@@ -119,21 +147,29 @@ impl StreamingMultiheadAttention {
         let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
         let scale = 1f64 / (self.head_dim as f64).sqrt();
-        let attn = (q.contiguous()?.matmul(&k.transpose(2, 3)?)? * scale)?;
-        let attn = match mask {
-            None => attn,
-            Some(mask) => attn.broadcast_add(mask)?,
-        };
-        // Softmax in f32 as torch's SDPA does for half-precision inputs.
-        let dtype = attn.dtype();
-        let attn = if dtype == DType::F32 {
-            candle_nn::ops::softmax_last_dim(&attn)?
+        let attn = if xs.device().is_metal() {
+            // Fused kernels; they read the KV cache's narrowed views through
+            // their strides directly. Prefill always starts from an empty
+            // cache (q_len == k_len), so plain causal alignment is correct;
+            // a single decode step attends to the whole cache.
+            candle_nn::ops::sdpa(&q.contiguous()?, &k, &v, None, t > 1, scale as f32, 1.0)?
         } else {
-            let attn = attn.to_dtype(DType::F32)?;
-            candle_nn::ops::softmax_last_dim(&attn)?.to_dtype(dtype)?
+            let attn = (q.contiguous()?.matmul(&k.transpose(2, 3)?)? * scale)?;
+            let attn = match mask {
+                None => attn,
+                Some(mask) => attn.broadcast_add(mask)?,
+            };
+            // Softmax in f32 as torch's SDPA does for half-precision inputs.
+            let dtype = attn.dtype();
+            let attn = if dtype == DType::F32 {
+                candle_nn::ops::softmax_last_dim(&attn)?
+            } else {
+                let attn = attn.to_dtype(DType::F32)?;
+                candle_nn::ops::softmax_last_dim(&attn)?.to_dtype(dtype)?
+            };
+            attn.matmul(&v.contiguous()?)?
         };
-        attn.matmul(&v.contiguous()?)?
-            .transpose(1, 2)?
+        attn.transpose(1, 2)?
             .reshape((b, t, dim))?
             .apply(&self.out_proj)
     }
@@ -142,8 +178,8 @@ impl StreamingMultiheadAttention {
 #[derive(Debug, Clone)]
 struct StreamingTransformerLayer {
     self_attn: StreamingMultiheadAttention,
-    norm1: LayerNorm,
-    norm2: LayerNorm,
+    norm1: Norm,
+    norm2: Norm,
     linear1: Linear,
     linear2: Linear,
 }
@@ -152,17 +188,18 @@ impl StreamingTransformerLayer {
     fn new(dim: usize, num_heads: usize, hidden: usize, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             self_attn: StreamingMultiheadAttention::new(dim, num_heads, vb.pp("self_attn"))?,
-            norm1: layer_norm(dim, LN_EPS, vb.pp("norm1"))?,
-            norm2: layer_norm(dim, LN_EPS, vb.pp("norm2"))?,
+            norm1: Norm::new(dim, vb.pp("norm1"))?,
+            norm2: Norm::new(dim, vb.pp("norm2"))?,
             linear1: linear_no_bias(dim, hidden, vb.pp("linear1"))?,
             linear2: linear_no_bias(hidden, dim, vb.pp("linear2"))?,
         })
     }
 
     fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
-        let xs = (xs + self.self_attn.forward(&xs.apply(&self.norm1)?, mask)?)?;
-        let ff = xs
-            .apply(&self.norm2)?
+        let xs = (xs + self.self_attn.forward(&self.norm1.forward(xs)?, mask)?)?;
+        let ff = self
+            .norm2
+            .forward(&xs)?
             .apply(&self.linear1)?
             // torch's F.gelu defaults to the exact erf formulation.
             .gelu_erf()?
@@ -203,8 +240,9 @@ impl StreamingTransformer {
         let (_b, t, dim) = xs.dims3()?;
         let pos_emb = sin_embedding(self.offset, t, dim, xs.device())?.to_dtype(xs.dtype())?;
         let mut xs = xs.broadcast_add(&pos_emb)?;
-        let mask = if t <= 1 {
-            // A single decode step attends to the whole cache: no mask needed.
+        let mask = if t <= 1 || xs.device().is_metal() {
+            // A single decode step attends to the whole cache, and the fused
+            // Metal attention applies causality itself: no mask needed.
             None
         } else {
             let offset = self.offset;
@@ -353,7 +391,7 @@ pub struct Model {
     pub dataset_conditioner: ClassConditioner,
     emb: Embedding,
     transformer: StreamingTransformer,
-    out_norm: LayerNorm,
+    out_norm: Norm,
     linear: Linear,
     card: usize,
     dtype: DType,
@@ -384,7 +422,7 @@ impl Model {
             dataset_conditioner,
             emb: Embedding::new(emb_weight, cfg.dim),
             transformer: StreamingTransformer::new(cfg, vb.pp("transformer"))?,
-            out_norm: layer_norm(cfg.dim, LN_EPS, vb.pp("out_norm"))?,
+            out_norm: Norm::new(cfg.dim, vb.pp("out_norm"))?,
             linear: Linear::new(linear_weight, None),
             card: cfg.card,
             dtype: vb.dtype(),
@@ -428,8 +466,10 @@ impl Model {
     fn forward_embeds(&mut self, xs: &Tensor) -> Result<Tensor> {
         let t = xs.dim(1)?;
         let out = self.transformer.forward(xs)?;
-        let out = out.narrow(1, t - 1, 1)?;
-        let logits = out.apply(&self.out_norm)?.apply(&self.linear)?;
+        // contiguous: the fused layer-norm kernel requires it, and narrowing
+        // the time axis leaves a strided view when b > 1.
+        let out = out.narrow(1, t - 1, 1)?.contiguous()?;
+        let logits = self.out_norm.forward(&out)?.apply(&self.linear)?;
         // The reference sets logits at indices >= 1393 (reserved rows) to
         // -inf; restricting the head to the usable vocabulary is equivalent.
         let vocab = self.card.min(tokenizer::VOCAB_SIZE);
@@ -466,15 +506,16 @@ impl Model {
                 break;
             }
             let logits = self.forward_embeds(&input)?;
-            let mut tokens = Vec::with_capacity(b);
-            for row in 0..b {
-                let row_logits = logits.narrow(0, row, 1)?.squeeze(0)?;
-                let token = match logits_processor.as_mut() {
-                    None => row_logits.argmax(D::Minus1)?.to_scalar::<u32>()?,
-                    Some(lp) => lp.sample(&row_logits)?,
-                };
-                tokens.push(token);
-            }
+            // One device→host transfer per step, not one per batch row.
+            let tokens = match logits_processor.as_mut() {
+                None => logits.argmax(D::Minus1)?.to_vec1::<u32>()?,
+                Some(lp) => {
+                    let logits = logits.to_device(&Device::Cpu)?;
+                    (0..b)
+                        .map(|row| lp.sample(&logits.narrow(0, row, 1)?.squeeze(0)?))
+                        .collect::<Result<Vec<_>>>()?
+                }
+            };
             on_step(&tokens)?;
             for row in 0..b {
                 if !done[row] {

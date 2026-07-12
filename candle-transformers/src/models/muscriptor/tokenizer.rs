@@ -547,7 +547,10 @@ mod tests {
         assert_eq!(decode_token(EOS_ID), Some(Event::Eos));
         assert_eq!(decode_token(2), Some(Event::Unk));
         assert_eq!(decode_token(3), Some(Event::Shift(0)));
-        assert_eq!(decode_token(3 + MAX_SHIFT_STEPS - 1), Some(Event::Shift(1000)));
+        assert_eq!(
+            decode_token(3 + MAX_SHIFT_STEPS - 1),
+            Some(Event::Shift(1000))
+        );
         assert_eq!(decode_token(1004), Some(Event::Pitch(0)));
         assert_eq!(decode_token(1131), Some(Event::Pitch(127)));
         assert_eq!(decode_token(1132), Some(Event::Velocity(0)));
