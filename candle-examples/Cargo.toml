@@ -119,6 +119,10 @@ name = "onnx_basics"
 required-features = ["onnx"]
 
 [[example]]
+name = "muscriptor"
+required-features = ["symphonia"]
+
+[[example]]
 name = "whisper"
 required-features = ["symphonia"]
 
