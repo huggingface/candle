@@ -147,6 +147,18 @@ impl Drop for CudaGraph {
         unsafe {
             let _ = sys::cuGraphExecDestroy(self.cu_graph_exec);
             let _ = sys::cuGraphDestroy(self.cu_graph);
+            // A tensor allocated *inside* the captured closure (see `capture`'s
+            // doc comment) becomes a graph memory-alloc/free node pair rather
+            // than a plain `cuMemAllocAsync`/`cuMemFreeAsync` call, backed by
+            // the driver's per-device graph memory pool. That pool retains the
+            // physical memory a destroyed graph exec used, for reuse by future
+            // graph launches, instead of releasing it immediately -- by design,
+            // as a performance optimization. Trim it explicitly once this graph
+            // exec is gone so a later, independent capture (or any other
+            // stream-ordered allocation on this device) starts from a pool the
+            // driver has fully reconciled, rather than one still carrying this
+            // graph's now-orphaned reservations.
+            let _ = sys::cuDeviceGraphMemTrim(self.stream.context().cu_device());
         }
         // `_event_tracking_guard` is dropped after this body runs, restoring
         // event tracking only once the captured graph is fully destroyed.
