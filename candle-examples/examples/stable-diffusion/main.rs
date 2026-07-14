@@ -236,7 +236,7 @@ impl ModelFile {
         version: StableDiffusionVersion,
         use_f16: bool,
     ) -> Result<std::path::PathBuf> {
-        use hf_hub::api::sync::Api;
+        use hf_hub::HFClientSync;
         match filename {
             Some(filename) => Ok(std::path::PathBuf::from(filename)),
             None => {
@@ -280,7 +280,12 @@ impl ModelFile {
                         }
                     }
                 };
-                let filename = Api::new()?.model(repo.to_string()).get(path)?;
+                let (owner, name) = hf_hub::split_id(repo);
+                let filename = HFClientSync::new()?
+                    .model(owner, name)
+                    .download_file()
+                    .filename(path)
+                    .send()?;
                 Ok(filename)
             }
         }

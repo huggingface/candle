@@ -9,7 +9,7 @@ use candle::{DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::snac::{Config, Model};
 use clap::{Parser, ValueEnum};
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 
 mod audio_io;
 
@@ -91,16 +91,23 @@ fn main() -> Result<()> {
     let model_sample_rate = args.which.sample_rate();
     let config = match args.config {
         Some(c) => std::path::PathBuf::from(c),
-        None => Api::new()?
-            .model(args.which.config_repo().to_string())
-            .get("config.json")?,
+        None => {
+            let (owner, name) = hf_hub::split_id(args.which.config_repo());
+            HFClientSync::new()?
+                .model(owner, name)
+                .download_file()
+                .filename("config.json")
+                .send()?
+        }
     };
     let config: Config = serde_json::from_slice(&std::fs::read(config)?)?;
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
-        None => Api::new()?
-            .model("lmz/candle-snac".to_string())
-            .get(args.which.model_file())?,
+        None => HFClientSync::new()?
+            .model("lmz", "candle-snac")
+            .download_file()
+            .filename(args.which.model_file())
+            .send()?,
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
     let model = Model::new(&config, vb)?;

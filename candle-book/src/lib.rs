@@ -13,12 +13,12 @@ mod tests {
     async fn book_hub_1() {
 // ANCHOR: book_hub_1
 use candle::Device;
-use hf_hub::api::tokio::Api;
+use hf_hub::HFClient;
 
-let api = Api::new().unwrap();
-let repo = api.model("bert-base-uncased".to_string());
+let client = HFClient::new().unwrap();
+let repo = client.model("google-bert", "bert-base-uncased");
 
-let weights_filename = repo.get("model.safetensors").await.unwrap();
+let weights_filename = repo.download_file().filename("model.safetensors").send().await.unwrap();
 
 let weights = candle::safetensors::load(weights_filename, &Device::Cpu).unwrap();
 // ANCHOR_END: book_hub_1
@@ -31,13 +31,13 @@ let weights = candle::safetensors::load(weights_filename, &Device::Cpu).unwrap()
         {
 // ANCHOR: book_hub_2
 use candle::Device;
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 use memmap2::Mmap;
 use std::fs;
 
-let api = Api::new().unwrap();
-let repo = api.model("bert-base-uncased".to_string());
-let weights_filename = repo.get("model.safetensors").unwrap();
+let client = HFClientSync::new().unwrap();
+let repo = client.model("google-bert", "bert-base-uncased");
+let weights_filename = repo.download_file().filename("model.safetensors").send().unwrap();
 
 let file = fs::File::open(weights_filename).unwrap();
 let mmap = unsafe { Mmap::map(&file).unwrap() };
@@ -52,15 +52,15 @@ let weights = candle::safetensors::load_buffer(&mmap[..], &Device::Cpu).unwrap()
     {
 // ANCHOR: book_hub_3
 use candle::{DType, Device, Tensor};
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 use memmap2::Mmap;
 use safetensors::slice::IndexOp;
 use safetensors::SafeTensors;
 use std::fs;
 
-let api = Api::new().unwrap();
-let repo = api.model("bert-base-uncased".to_string());
-let weights_filename = repo.get("model.safetensors").unwrap();
+let client = HFClientSync::new().unwrap();
+let repo = client.model("google-bert", "bert-base-uncased");
+let weights_filename = repo.download_file().filename("model.safetensors").send().unwrap();
 
 let file = fs::File::open(weights_filename).unwrap();
 let mmap = unsafe { Mmap::map(&file).unwrap() };
@@ -110,19 +110,15 @@ let tp_tensor = Tensor::from_raw_buffer(&raw, dtype, &tp_shape, &Device::Cpu).un
     #[rustfmt::skip]
     fn book_training_1() -> Result<()>{
 // ANCHOR: book_training_1
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 
-let dataset_id = "mnist".to_string();
+let dataset_id = "ylecun/mnist".to_string();
 
-let api = Api::new()?;
-let repo = Repo::with_revision(
-    dataset_id,
-    RepoType::Dataset,
-    "refs/convert/parquet".to_string(),
-);
-let repo = api.repo(repo);
-let test_parquet_filename = repo.get("mnist/test/0000.parquet")?;
-let train_parquet_filename = repo.get("mnist/train/0000.parquet")?;
+let client = HFClientSync::new()?;
+let (owner, name) = hf_hub::split_id(&dataset_id);
+let repo = client.dataset(owner, name);
+let test_parquet_filename = repo.download_file().filename("mnist/test/0000.parquet").revision("refs/convert/parquet").send()?;
+let train_parquet_filename = repo.download_file().filename("mnist/train/0000.parquet").revision("refs/convert/parquet").send()?;
 let test_parquet =
     SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)?;
 let train_parquet =
@@ -137,8 +133,8 @@ for row in test_parquet {
     }
 }
 // ANCHOR_END: book_training_2
-let test_parquet_filename = repo.get("mnist/test/0000.parquet")?;
-let train_parquet_filename = repo.get("mnist/train/0000.parquet")?;
+let test_parquet_filename = repo.download_file().filename("mnist/test/0000.parquet").revision("refs/convert/parquet").send()?;
+let train_parquet_filename = repo.download_file().filename("mnist/train/0000.parquet").revision("refs/convert/parquet").send()?;
 let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)?;
 let train_parquet = SerializedFileReader::new(std::fs::File::open(train_parquet_filename)?)?;
 // ANCHOR: book_training_3

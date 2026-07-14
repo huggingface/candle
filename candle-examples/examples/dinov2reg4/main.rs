@@ -45,12 +45,15 @@ pub fn main() -> anyhow::Result<()> {
 
     let model_file = match args.model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api =
-                api.model("vincent-espitalier/dino-v2-reg4-with-plantclef2024-weights".into());
-            api.get(
-                "vit_base_patch14_reg4_dinov2_lvd142m_pc24_onlyclassifier_then_all.safetensors",
-            )?
+            let client = hf_hub::HFClientSync::new()?;
+            let (owner, name) =
+                hf_hub::split_id("vincent-espitalier/dino-v2-reg4-with-plantclef2024-weights");
+            let repo = client.model(owner, name);
+            repo.download_file()
+                .filename(
+                    "vit_base_patch14_reg4_dinov2_lvd142m_pc24_onlyclassifier_then_all.safetensors",
+                )
+                .send()?
         }
         Some(model) => model.into(),
     };

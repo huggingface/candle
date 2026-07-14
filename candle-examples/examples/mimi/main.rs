@@ -9,7 +9,7 @@ use candle::{DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::mimi::{Config, Model};
 use clap::{Parser, ValueEnum};
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 
 mod audio_io;
 
@@ -51,9 +51,12 @@ fn main() -> Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
-        None => Api::new()?
-            .model("kyutai/mimi".to_string())
-            .get("model.safetensors")?,
+        None => {
+            let client = HFClientSync::new()?;
+            let (owner, name) = hf_hub::split_id("kyutai/mimi");
+            let repo = client.model(owner, name);
+            repo.download_file().filename("model.safetensors").send()?
+        }
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
     let config = Config::v0_1(None);

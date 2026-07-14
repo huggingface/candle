@@ -12,7 +12,7 @@ use anyhow::{Error as E, Result};
 use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, api::sync::ApiRepo, Repo, RepoType};
+use hf_hub::{HFClientSync, HFRepositorySync, RepoTypeModel};
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug, Copy, ValueEnum)]
@@ -91,31 +91,47 @@ impl T5ModelBuilder {
             (None, None) => (default_model, "main".to_string()),
         };
 
-        let repo = Repo::with_revision(model_id, RepoType::Model, revision);
-        let api = Api::new()?;
-        let api = api.repo(repo);
+        let client = HFClientSync::new()?;
+        let (owner, name) = hf_hub::split_id(&model_id);
+        let repo = client.model(owner, name);
         let config_filename = match &args.config_file {
-            Some(filename) => Self::get_local_or_remote_file(filename, &api)?,
-            None => match args.which {
-                Which::T5Small => api.get("config.json")?,
-                Which::FlanT5Small => api.get("config-flan-t5-small.json")?,
-                Which::FlanT5Base => api.get("config-flan-t5-base.json")?,
-                Which::FlanT5Large => api.get("config-flan-t5-large.json")?,
-                Which::FlanT5Xl => api.get("config-flan-t5-xl.json")?,
-                Which::FlanT5Xxl => api.get("config-flan-t5-xxl.json")?,
-            },
+            Some(filename) => Self::get_local_or_remote_file(filename, &repo, revision.as_str())?,
+            None => {
+                let filename = match args.which {
+                    Which::T5Small => "config.json",
+                    Which::FlanT5Small => "config-flan-t5-small.json",
+                    Which::FlanT5Base => "config-flan-t5-base.json",
+                    Which::FlanT5Large => "config-flan-t5-large.json",
+                    Which::FlanT5Xl => "config-flan-t5-xl.json",
+                    Which::FlanT5Xxl => "config-flan-t5-xxl.json",
+                };
+                repo.download_file()
+                    .filename(filename)
+                    .revision(revision.as_str())
+                    .send()?
+            }
         };
-        let tokenizer_filename = api.get("tokenizer.json")?;
+        let tokenizer_filename = repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.as_str())
+            .send()?;
         let weights_filename = match &args.weight_file {
-            Some(filename) => Self::get_local_or_remote_file(filename, &api)?,
-            None => match args.which {
-                Which::T5Small => api.get("model.gguf")?,
-                Which::FlanT5Small => api.get("model-flan-t5-small.gguf")?,
-                Which::FlanT5Base => api.get("model-flan-t5-base.gguf")?,
-                Which::FlanT5Large => api.get("model-flan-t5-large.gguf")?,
-                Which::FlanT5Xl => api.get("model-flan-t5-xl.gguf")?,
-                Which::FlanT5Xxl => api.get("model-flan-t5-xxl.gguf")?,
-            },
+            Some(filename) => Self::get_local_or_remote_file(filename, &repo, revision.as_str())?,
+            None => {
+                let filename = match args.which {
+                    Which::T5Small => "model.gguf",
+                    Which::FlanT5Small => "model-flan-t5-small.gguf",
+                    Which::FlanT5Base => "model-flan-t5-base.gguf",
+                    Which::FlanT5Large => "model-flan-t5-large.gguf",
+                    Which::FlanT5Xl => "model-flan-t5-xl.gguf",
+                    Which::FlanT5Xxl => "model-flan-t5-xxl.gguf",
+                };
+                repo.download_file()
+                    .filename(filename)
+                    .revision(revision.as_str())
+                    .send()?
+            }
         };
         let config = std::fs::read_to_string(config_filename)?;
         let mut config: t5::Config = serde_json::from_str(&config)?;
@@ -137,12 +153,20 @@ impl T5ModelBuilder {
         Ok(t5::T5ForConditionalGeneration::load(vb, &self.config)?)
     }
 
-    fn get_local_or_remote_file(filename: &str, api: &ApiRepo) -> Result<PathBuf> {
+    fn get_local_or_remote_file(
+        filename: &str,
+        repo: &HFRepositorySync<RepoTypeModel>,
+        revision: &str,
+    ) -> Result<PathBuf> {
         let local_filename = std::path::PathBuf::from(filename);
         if local_filename.exists() {
             Ok(local_filename)
         } else {
-            Ok(api.get(filename)?)
+            Ok(repo
+                .download_file()
+                .filename(filename)
+                .revision(revision)
+                .send()?)
         }
     }
 }

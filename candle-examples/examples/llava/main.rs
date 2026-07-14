@@ -15,7 +15,7 @@ use candle_transformers::models::llava::{config::LLaVAConfig, LLaVA};
 use clap::Parser;
 use constants::*;
 use conversation::Conversation;
-use hf_hub::api::sync::Api;
+use hf_hub::HFClientSync;
 use image_processor::{process_image, ImageProcessor};
 use std::io::Write;
 use tokenizers::Tokenizer;
@@ -150,21 +150,28 @@ fn main() -> Result<()> {
     let mut args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
     println!("Start loading model");
-    let api = Api::new()?;
-    let api = api.model(args.model_path.clone());
+    let client = HFClientSync::new()?;
+    let (owner, name) = hf_hub::split_id(&args.model_path);
+    let repo = client.model(owner, name);
     let (llava_config, tokenizer, clip_vision_config, image_processor) = if args.hf {
-        let config_filename = api.get("config.json")?;
+        let config_filename = repo.download_file().filename("config.json").send()?;
         let hf_llava_config: HFLLaVAConfig =
             serde_json::from_slice(&std::fs::read(config_filename)?)?;
-        let generation_config_filename = api.get("generation_config.json")?;
+        let generation_config_filename = repo
+            .download_file()
+            .filename("generation_config.json")
+            .send()?;
         let generation_config: HFGenerationConfig =
             serde_json::from_slice(&std::fs::read(generation_config_filename)?)?;
-        let preprocessor_config_filename = api.get("preprocessor_config.json")?;
+        let preprocessor_config_filename = repo
+            .download_file()
+            .filename("preprocessor_config.json")
+            .send()?;
         let preprocessor_config: HFPreProcessorConfig =
             serde_json::from_slice(&std::fs::read(preprocessor_config_filename)?)?;
         let llava_config =
             hf_llava_config.to_llava_config(&generation_config, &preprocessor_config);
-        let tokenizer_filename = api.get("tokenizer.json")?;
+        let tokenizer_filename = repo.download_file().filename("tokenizer.json").send()?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
         let clip_vision_config = hf_llava_config.to_clip_vision_config();
         (
@@ -174,7 +181,7 @@ fn main() -> Result<()> {
             ImageProcessor::from_hf_preprocessor_config(&preprocessor_config),
         )
     } else {
-        let config_filename = api.get("config.json")?;
+        let config_filename = repo.download_file().filename("config.json").send()?;
         let llava_config: LLaVAConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
         let tokenizer = Tokenizer::from_file(&args.tokenizer_path)
             .map_err(|e| E::msg(format!("Error loading {}: {}", &args.tokenizer_path, e)))?;
@@ -201,7 +208,7 @@ fn main() -> Result<()> {
     println!("loading model weights");
 
     let weight_filenames =
-        candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?;
+        candle_examples::hub_load_safetensors(&repo, "main", "model.safetensors.index.json")?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weight_filenames, dtype, &device)? };
     let llava: LLaVA = LLaVA::load(vb, &llava_config, clip_vision_config)?;
 

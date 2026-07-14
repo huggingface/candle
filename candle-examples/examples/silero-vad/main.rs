@@ -124,13 +124,22 @@ fn main() -> Result<()> {
     let model_id = match &args.model_id {
         Some(model_id) => std::path::PathBuf::from(model_id),
         None => match args.which {
-            Which::Silero => hf_hub::api::sync::Api::new()?
-                .model("onnx-community/silero-vad".into())
-                .get("onnx/model.onnx")?,
-            // TODO: candle-onnx doesn't support Int8 dtype
-            // Which::SileroQuantized => hf_hub::api::sync::Api::new()?
-            //     .model("onnx-community/silero-vad".into())
-            //     .get("onnx/model_quantized.onnx")?,
+            Which::Silero => {
+                let (owner, name) = hf_hub::split_id("onnx-community/silero-vad");
+                hf_hub::HFClientSync::new()?
+                    .model(owner, name)
+                    .download_file()
+                    .filename("onnx/model.onnx")
+                    .send()?
+            } // TODO: candle-onnx doesn't support Int8 dtype
+              // Which::SileroQuantized => {
+              //     let (owner, name) = hf_hub::split_id("onnx-community/silero-vad");
+              //     hf_hub::HFClientSync::new()?
+              //         .model(owner, name)
+              //         .download_file()
+              //         .filename("onnx/model_quantized.onnx")
+              //         .send()?
+              // }
         },
     };
     let (sample_rate, frame_size, context_size): (i64, usize, usize) = match args.sample_rate {

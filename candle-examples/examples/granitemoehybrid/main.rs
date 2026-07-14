@@ -13,7 +13,7 @@ use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::granitemoehybrid as model;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use model::{GraniteMoeHybrid, GraniteMoeHybridCache, GraniteMoeHybridConfig};
 
 use std::{io::Write, path::Path};
@@ -151,17 +151,29 @@ fn main() -> Result<()> {
                 config,
             )
         } else {
-            let api = Api::new()?;
+            let client = HFClientSync::new()?;
             let revision = args.revision.clone().unwrap_or_else(|| "main".to_string());
-            let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+            let (owner, name) = hf_hub::split_id(&model_id);
+            let repo = client.model(owner, name);
 
-            let tokenizer_filename = repo.get("tokenizer.json")?;
-            let config_filename = repo.get("config.json")?;
+            let tokenizer_filename = repo
+                .download_file()
+                .filename("tokenizer.json")
+                .revision(revision.as_str())
+                .send()?;
+            let config_filename = repo
+                .download_file()
+                .filename("config.json")
+                .revision(revision.as_str())
+                .send()?;
             let config: GraniteMoeHybridConfig =
                 serde_json::from_slice(&std::fs::read(config_filename)?)?;
             let config = config.into_config(args.use_flash_attn);
-            let filenames =
-                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
+            let filenames = candle_examples::hub_load_safetensors(
+                &repo,
+                revision.as_str(),
+                "model.safetensors.index.json",
+            )?;
             let cache = GraniteMoeHybridCache::new(!args.no_kv_cache, dtype, &config, &device)?;
             let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
             (

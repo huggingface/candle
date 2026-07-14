@@ -4,7 +4,7 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::colpali::Model;
 use candle_transformers::models::{colpali, paligemma};
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use image::DynamicImage;
 use pdf2image::{RenderOptionsBuilder, PDF};
 use tokenizers::Tokenizer;
@@ -195,26 +195,25 @@ fn main() -> Result<()> {
         candle::utils::with_f16c()
     );
 
-    let api = Api::new()?;
+    let client = HFClientSync::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
         None => "vidore/colpali-v1.2-merged".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
 
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => api
-            .repo(Repo::with_revision(
-                "vidore/colpali".to_string(),
-                RepoType::Model,
-                "main".to_string(),
-            ))
-            .get("tokenizer.json")?,
+        None => {
+            let (owner, name) = hf_hub::split_id("vidore/colpali");
+            client
+                .model(owner, name)
+                .download_file()
+                .filename("tokenizer.json")
+                .revision("main")
+                .send()?
+        }
     };
 
     let filenames = match args.weight_files {
@@ -222,7 +221,11 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => candle_examples::hub_load_safetensors(
+            &repo,
+            args.revision.as_str(),
+            "model.safetensors.index.json",
+        )?,
     };
 
     let start = std::time::Instant::now();
