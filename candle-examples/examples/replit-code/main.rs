@@ -13,7 +13,7 @@ use candle_transformers::models::quantized_mpt::Model as Q;
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -208,7 +208,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let client = HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => "lmz/candle-replit-code".to_string(),
@@ -217,18 +217,29 @@ fn main() -> Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.as_str())
+            .send()?,
     };
     let filename = match args.weight_file {
         Some(weight_file) => std::path::PathBuf::from(weight_file),
         None => {
             if args.quantized {
-                repo.get("model-replit-code-v1_5-q4k.gguf")?
+                repo.download_file()
+                    .filename("model-replit-code-v1_5-q4k.gguf")
+                    .revision(revision.as_str())
+                    .send()?
             } else {
-                repo.get("model.safetensors")?
+                repo.download_file()
+                    .filename("model.safetensors")
+                    .revision(revision.as_str())
+                    .send()?
             }
         }
     };

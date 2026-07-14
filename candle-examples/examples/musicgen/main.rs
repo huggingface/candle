@@ -18,7 +18,7 @@ use anyhow::{Error as E, Result};
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 
 const DTYPE: DType = DType::F32;
 
@@ -51,9 +51,14 @@ fn main() -> Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let tokenizer = match args.tokenizer {
         Some(tokenizer) => std::path::PathBuf::from(tokenizer),
-        None => Api::new()?
-            .model("facebook/musicgen-small".to_string())
-            .get("tokenizer.json")?,
+        None => {
+            let (owner, name) = hf_hub::split_id("facebook/musicgen-small");
+            HFClientSync::new()?
+                .model(owner, name)
+                .download_file()
+                .filename("tokenizer.json")
+                .send()?
+        }
     };
     let mut tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
     let tokenizer = tokenizer
@@ -63,13 +68,15 @@ fn main() -> Result<()> {
 
     let model = match args.model {
         Some(model) => std::path::PathBuf::from(model),
-        None => Api::new()?
-            .repo(Repo::with_revision(
-                "facebook/musicgen-small".to_string(),
-                RepoType::Model,
-                "refs/pr/13".to_string(),
-            ))
-            .get("model.safetensors")?,
+        None => {
+            let (owner, name) = hf_hub::split_id("facebook/musicgen-small");
+            HFClientSync::new()?
+                .model(owner, name)
+                .download_file()
+                .filename("model.safetensors")
+                .revision("refs/pr/13")
+                .send()?
+        }
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DTYPE, &device)? };
     let config = GenConfig::small();

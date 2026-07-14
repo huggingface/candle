@@ -11,7 +11,7 @@ use candle_transformers::models::csm::{Config, Model};
 
 use candle::{DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -124,7 +124,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let client = HFClientSync::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
         None => {
@@ -134,29 +134,40 @@ fn main() -> Result<()> {
             name.to_string()
         }
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
     let filenames = match args.weights {
         Some(files) => files
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => vec![repo.get("model.safetensors")?],
+        None => vec![repo
+            .download_file()
+            .filename("model.safetensors")
+            .revision(args.revision.as_str())
+            .send()?],
     };
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
-        None => api
-            .model("meta-llama/Llama-3.2-1B".to_string())
-            .get("tokenizer.json")?,
+        None => {
+            let (owner, name) = hf_hub::split_id("meta-llama/Llama-3.2-1B");
+            client
+                .model(owner, name)
+                .download_file()
+                .filename("tokenizer.json")
+                .send()?
+        }
     };
     let mimi_filename = match args.mimi_weights {
         Some(model) => std::path::PathBuf::from(model),
-        None => Api::new()?
-            .model("kyutai/mimi".to_string())
-            .get("model.safetensors")?,
+        None => {
+            let (owner, name) = hf_hub::split_id("kyutai/mimi");
+            HFClientSync::new()?
+                .model(owner, name)
+                .download_file()
+                .filename("model.safetensors")
+                .send()?
+        }
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
@@ -165,7 +176,11 @@ fn main() -> Result<()> {
     let config: Config = match args.config {
         Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
         None => {
-            let config_file = repo.get("config.json")?;
+            let config_file = repo
+                .download_file()
+                .filename("config.json")
+                .revision(args.revision.as_str())
+                .send()?;
             serde_json::from_slice(&std::fs::read(config_file)?)?
         }
     };

@@ -77,14 +77,19 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let model_name = args.which.model_name();
-    let api = hf_hub::api::sync::Api::new()?;
-    let api = api.model(model_name);
+    let client = hf_hub::HFClientSync::new()?;
+    let (owner, name) = hf_hub::split_id(&model_name);
+    let repo = client.model(owner, name);
     let model_file = if args.use_pth {
-        api.get("open_clip_pytorch_model.bin")?
+        repo.download_file()
+            .filename("open_clip_pytorch_model.bin")
+            .send()?
     } else {
-        api.get("open_clip_model.safetensors")?
+        repo.download_file()
+            .filename("open_clip_model.safetensors")
+            .send()?
     };
-    let tokenizer = api.get("tokenizer.json")?;
+    let tokenizer = repo.download_file().filename("tokenizer.json").send()?;
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
     let config = &args.which.config();
     let device = candle_examples::device(args.cpu)?;

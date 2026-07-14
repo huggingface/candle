@@ -16,7 +16,7 @@ use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -284,7 +284,7 @@ fn main() -> Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = Api::new()?;
+    let client = HFClientSync::new()?;
     let use_chat_template = args.should_use_chat_template();
     let thinking = args.thinking;
     let model_id = match args.model_id {
@@ -311,21 +311,27 @@ fn main() -> Result<()> {
             format!("Qwen/Qwen{version}-{size}")
         }
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
+    let revision = args.revision;
 
     let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer_file.as_ref()) {
         (Some(_), Some(file)) => std::path::PathBuf::from(file),
         (None, Some(file)) => std::path::PathBuf::from(file),
         (Some(path), None) => std::path::Path::new(path).join("tokenizer.json"),
-        (None, None) => repo.get("tokenizer.json")?,
+        (None, None) => repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.as_str())
+            .send()?,
     };
     let config_file = match &args.weight_path {
         Some(path) => std::path::Path::new(path).join("config.json"),
-        _ => repo.get("config.json")?,
+        _ => repo
+            .download_file()
+            .filename("config.json")
+            .revision(revision.as_str())
+            .send()?,
     };
 
     let filenames = match args.weight_path {
@@ -345,7 +351,11 @@ fn main() -> Result<()> {
             | WhichModel::W2_1_5b
             | WhichModel::W1_8b
             | WhichModel::W3_0_6b => {
-                vec![repo.get("model.safetensors")?]
+                vec![repo
+                    .download_file()
+                    .filename("model.safetensors")
+                    .revision(revision.as_str())
+                    .send()?]
             }
             WhichModel::W4b
             | WhichModel::W7b
@@ -357,9 +367,11 @@ fn main() -> Result<()> {
             | WhichModel::W3_1_7b
             | WhichModel::W3_4b
             | WhichModel::W3_8b
-            | WhichModel::W3MoeA3b => {
-                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
-            }
+            | WhichModel::W3MoeA3b => candle_examples::hub_load_safetensors(
+                &repo,
+                revision.as_str(),
+                "model.safetensors.index.json",
+            )?,
         },
     };
     println!("retrieved the files in {:?}", start.elapsed());

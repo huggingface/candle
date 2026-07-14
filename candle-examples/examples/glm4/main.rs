@@ -5,7 +5,6 @@ use candle_transformers::models::glm4::{Config as ConfigOld, EosTokenId, Model a
 use candle_transformers::models::glm4_new::{Config as ConfigNew, ModelForCausalLM as ModelNew};
 
 use clap::Parser;
-use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
 enum Model {
@@ -213,13 +212,12 @@ fn main() -> anyhow::Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = match args.cache_path.as_ref() {
-        None => hf_hub::api::sync::Api::new()?,
-        Some(path) => {
-            hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(path.to_string().into()))
-                .build()
-                .map_err(anyhow::Error::msg)?
-        }
+    let client = match args.cache_path.as_ref() {
+        None => hf_hub::HFClientSync::new()?,
+        Some(path) => hf_hub::HFClient::builder()
+            .cache_dir(path.to_string())
+            .build_sync()
+            .map_err(anyhow::Error::msg)?,
     };
 
     let model_id = match args.model_id.as_ref() {
@@ -233,23 +231,36 @@ fn main() -> anyhow::Result<()> {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
-    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let (owner, name) = hf_hub::split_id(&model_id);
+    let repo = client.model(owner, name);
     let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer.as_ref()) {
         (Some(_), Some(file)) => std::path::PathBuf::from(file),
         (None, Some(file)) => std::path::PathBuf::from(file),
         (Some(path), None) => std::path::Path::new(path).join("tokenizer.json"),
-        (None, None) => repo.get("tokenizer.json")?,
+        (None, None) => repo
+            .download_file()
+            .filename("tokenizer.json")
+            .revision(revision.as_str())
+            .send()?,
     };
     let config_filename = match &args.weight_path {
         Some(path) => std::path::Path::new(path).join("config.json"),
-        _ => repo.get("config.json")?,
+        _ => repo
+            .download_file()
+            .filename("config.json")
+            .revision(revision.as_str())
+            .send()?,
     };
 
     let filenames = match &args.weight_path {
         Some(path) => {
             candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
         }
-        _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        _ => candle_examples::hub_load_safetensors(
+            &repo,
+            revision.as_str(),
+            "model.safetensors.index.json",
+        )?,
     };
 
     println!("retrieved the files in {:?}", start.elapsed());
