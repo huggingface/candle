@@ -33,3 +33,8 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Test (cuda)
         run: cargo test --features cuda
+      - name: Build+test (cuda) - FlashInfer-style decode attention kernel
+        # `--features cuda` compiles and exercises the GPU kernel; the crate also builds
+        # CPU-only (default features), and the CPU reference fwd is covered by the
+        # decode_attention_cpu_matches_reference test either way.
+        run: cargo test --manifest-path candle-flashinfer-kernels/Cargo.toml --features cuda
