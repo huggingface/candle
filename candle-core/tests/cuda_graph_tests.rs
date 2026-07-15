@@ -238,8 +238,27 @@ fn second_independent_capture_with_many_graph_owned_allocations() -> Result<()> 
         .iter()
         .map(|row| row.iter().map(|a| a.sin()).collect())
         .collect();
-    assert_eq!(cos.to_vec2::<f32>()?, expected_cos);
-    assert_eq!(sin.to_vec2::<f32>()?, expected_sin);
+    // The GPU's cos/sin intrinsics aren't required to be bit-identical to the
+    // host's, so compare with a tolerance rather than exact equality -- this
+    // step only needs to prove the allocation chain ran and produced sane
+    // values, not to pin down transcendental-function precision.
+    let close = |actual: &[Vec<f32>], expected: &[Vec<f32>]| {
+        actual
+            .iter()
+            .flatten()
+            .zip(expected.iter().flatten())
+            .all(|(a, e)| (a - e).abs() < 1e-4)
+    };
+    let cos_actual = cos.to_vec2::<f32>()?;
+    let sin_actual = sin.to_vec2::<f32>()?;
+    assert!(
+        close(&cos_actual, &expected_cos),
+        "cos mismatch: {cos_actual:?} vs {expected_cos:?}"
+    );
+    assert!(
+        close(&sin_actual, &expected_sin),
+        "sin mismatch: {sin_actual:?} vs {expected_sin:?}"
+    );
 
     // The second request then runs its own independent capture/replay cycle
     // against the same device, reusing the shared model-level buffer, again
