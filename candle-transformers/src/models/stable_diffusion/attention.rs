@@ -215,13 +215,7 @@ impl CrossAttention {
         let key = self.reshape_heads_to_batch_dim(&key)?;
         let value = self.reshape_heads_to_batch_dim(&value)?;
         let dim0 = query.dim(0)?;
-        let slice_size = self.slice_size.and_then(|slice_size| {
-            if dim0 < slice_size {
-                None
-            } else {
-                Some(slice_size)
-            }
-        });
+        let slice_size = self.slice_size.filter(|&slice_size| dim0 >= slice_size);
         let xs = match slice_size {
             None => self.attention(&query, &key, &value)?,
             Some(slice_size) => self.sliced_attention(&query, &key, &value, slice_size)?,
