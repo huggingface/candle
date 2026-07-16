@@ -167,6 +167,11 @@ impl Drop for CudaGraph {
             // driver has fully reconciled, rather than one still carrying this
             // graph's now-orphaned reservations.
             let _ = sys::cuDeviceGraphMemTrim(self.stream.context().cu_device());
+            // Graph destruction and pool trimming are ordered on this stream.
+            // Complete them before a later independent capture or allocation
+            // reuses the device; otherwise that next operation can still see
+            // CUDA_ERROR_INVALID_VALUE from the graph's retiring allocations.
+            let _ = self.stream.synchronize();
         }
         // `_event_tracking_guard` is dropped after this body runs, restoring
         // event tracking only once the captured graph is fully destroyed.
