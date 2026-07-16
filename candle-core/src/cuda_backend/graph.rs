@@ -153,6 +153,15 @@ impl CudaGraph {
 impl Drop for CudaGraph {
     fn drop(&mut self) {
         unsafe {
+            // A caller may `drop` this graph right after `replay()` with no
+            // intervening `device.synchronize()`, leaving that launch still
+            // queued on this stream. Wait for it to finish first: destroying
+            // an exec that's still executing only defers the actual free to
+            // whenever the driver reconciles it, and trimming the pool below
+            // before that happens misses the graph's still-in-flight
+            // alloc/free nodes entirely (trim only reclaims memory that is
+            // already idle, not memory that becomes idle later).
+            let _ = self.stream.synchronize();
             let _ = sys::cuGraphExecDestroy(self.cu_graph_exec);
             let _ = sys::cuGraphDestroy(self.cu_graph);
             // A tensor allocated *inside* the captured closure (see `capture`'s
@@ -162,16 +171,11 @@ impl Drop for CudaGraph {
             // physical memory a destroyed graph exec used, for reuse by future
             // graph launches, instead of releasing it immediately -- by design,
             // as a performance optimization. Trim it explicitly once this graph
-            // exec is gone so a later, independent capture (or any other
-            // stream-ordered allocation on this device) starts from a pool the
-            // driver has fully reconciled, rather than one still carrying this
-            // graph's now-orphaned reservations.
+            // exec is gone and the stream above is idle, so a later, independent
+            // capture (or any other stream-ordered allocation on this device)
+            // starts from a pool the driver has fully reconciled, rather than
+            // one still carrying this graph's now-orphaned reservations.
             let _ = sys::cuDeviceGraphMemTrim(self.stream.context().cu_device());
-            // Graph destruction and pool trimming are ordered on this stream.
-            // Complete them before a later independent capture or allocation
-            // reuses the device; otherwise that next operation can still see
-            // CUDA_ERROR_INVALID_VALUE from the graph's retiring allocations.
-            let _ = self.stream.synchronize();
         }
         // `_event_tracking_guard` is dropped after this body runs, restoring
         // event tracking only once the captured graph is fully destroyed.
