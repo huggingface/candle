@@ -133,11 +133,14 @@ struct Attention {
     span: tracing::Span,
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+fn get_mask(size: usize, seqlen_offset: usize, device: &Device) -> Result<Tensor> {
+    // With a cached prefix of `seqlen_offset` tokens the attention weights
+    // are (b, h, size, seqlen_offset + size): the prefix is fully visible,
+    // the new chunk is causal.
     let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
+        .flat_map(|i| (0..seqlen_offset + size).map(move |j| u8::from(j > i + seqlen_offset)))
         .collect();
-    Tensor::from_slice(&mask, (size, size), device)
+    Tensor::from_slice(&mask, (size, seqlen_offset + size), device)
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -348,7 +351,11 @@ impl Model {
         let mask = if seq_len <= 1 {
             None
         } else {
-            Some(get_mask(seq_len, xs.device())?)
+            let seqlen_offset = match &self.layers[0].self_attn.kv_cache {
+                Some((k, _)) => k.dim(2)?,
+                None => 0,
+            };
+            Some(get_mask(seq_len, seqlen_offset, xs.device())?)
         };
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, mask.as_ref())?;
