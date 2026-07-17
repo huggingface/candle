@@ -132,3 +132,22 @@ fn huber_loss() -> Result<()> {
     assert_eq!(to_vec0_round(&loss, 4)?, 0.4483);
     Ok(())
 }
+
+/* Equivalent python code:
+import torch
+import torch.nn.functional as F
+x1 = torch.tensor([1.0, 2.0, 3.0])
+x2 = torch.tensor([2.0, 1.0, 0.5])
+target = torch.tensor([1.0, -1.0, 1.0])
+print(F.margin_ranking_loss(x1, x2, target, margin=0.5))  # tensor(1.)
+*/
+#[test]
+fn margin_ranking() -> Result<()> {
+    let cpu = Device::Cpu;
+    let x1 = Tensor::new(&[1f32, 2., 3.], &cpu)?;
+    let x2 = Tensor::new(&[2f32, 1., 0.5], &cpu)?;
+    let target = Tensor::new(&[1f32, -1., 1.], &cpu)?;
+    let loss = candle_nn::loss::margin_ranking(&x1, &x2, &target, 0.5)?;
+    assert_eq!(to_vec0_round(&loss, 4)?, 1.0);
+    Ok(())
+}
