@@ -1,7 +1,6 @@
 use cudaforge::{KernelBuilder, Result};
 use std::env;
 use std::path::PathBuf;
-use std::io::Write;
 
 fn main() -> Result<()> {
     println!("cargo::rerun-if-changed=build.rs");
@@ -21,11 +20,6 @@ fn main() -> Result<()> {
         .build_ptx()?;
 
     bindings.write(&ptx_path)?;
-    // KernelBuilder generates this module index. Keep the dynamic-shared Q4
-    // executor explicit so candle-kernels exposes its PTX to decode extensions.
-    let mut ptx_index = std::fs::OpenOptions::new().append(true).open(&ptx_path)?;
-    writeln!(ptx_index, "pub const Q4K_DYNAMIC_MMVQ: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/q4k_dynamic_mmvq.ptx\"));")?;
-
     let mut moe_builder = KernelBuilder::default()
         .source_files(vec![
             "src/moe/moe_gguf.cu",
