@@ -2232,7 +2232,10 @@ mod tests {
         let head_dim = 64;
         let hidden_size = num_attention_heads * head_dim;
         let kv_size = num_key_value_heads * head_dim;
-        let page_block_size = 4;
+        // The real paged flash-attn kernel (unlike the direct
+        // `PagedKvCache::write_new_kv` tests above, which never call it)
+        // requires page_block_size to be a multiple of 32.
+        let page_block_size = 32;
         let num_layers = 2;
 
         let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
