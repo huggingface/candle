@@ -2193,6 +2193,8 @@ mod tests {
         cache: &mut Cache,
         layers: &[CausalSelfAttention],
     ) -> Result<Tensor> {
+        use candle::Context;
+
         let mut x = x.clone();
         for (block_idx, layer) in layers.iter().enumerate() {
             x = layer
