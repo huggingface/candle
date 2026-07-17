@@ -2064,6 +2064,117 @@ mod tests {
         assert_eq!(flat_slot(&paged.value_cache, 5)?, [-10., -11.]);
         Ok(())
     }
+
+    // Regression test for astorise/candle#17 (reopened multiple times):
+    // Tachyon-Mesh's real production capture -- a second, independent
+    // `CudaGraph` request against an already-loaded model, whose first
+    // operation is `Cache::new(...)` -- kept failing with
+    // `CUDA_ERROR_INVALID_VALUE` even after candle-core-level regression
+    // tests using synthetic tensors (not this crate's real
+    // `PagedKvCache::write_new_kv` seam or the real `Cache::new`) passed on
+    // real hardware. This test drives the exact real code path: two
+    // independent `PagedKvCache::write_new_kv` capture/replay cycles against
+    // freshly-allocated per-request paged KV storage, with a real
+    // `Cache::new(...)` call (which itself builds the RoPE cos/sin tables via
+    // `Tensor::new`/`arange`/`matmul`/`cos`/`sin`, exactly as production code
+    // does) as the "unrelated" operation between them, mirroring the
+    // production failure point precisely instead of standing in for it.
+    #[cfg(feature = "flash-attn")]
+    #[test]
+    fn second_independent_paged_kv_capture_after_first_graph_dropped() -> Result<()> {
+        use candle::CudaGraph;
+
+        let device = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_device) = &device else {
+            unreachable!()
+        };
+        let num_blocks = 2;
+        let page_block_size = 4;
+        let num_kv_heads = 1;
+        let head_dim = 2;
+
+        let make_paged = |device: &Device| -> Result<PagedKvCache> {
+            Ok(PagedKvCache {
+                key_cache: Tensor::zeros(
+                    (num_blocks, page_block_size, num_kv_heads, head_dim),
+                    DType::F32,
+                    device,
+                )?,
+                value_cache: Tensor::zeros(
+                    (num_blocks, page_block_size, num_kv_heads, head_dim),
+                    DType::F32,
+                    device,
+                )?,
+                block_table: Tensor::from_vec(vec![0u32, 1u32], (1, 2), device)?,
+                seqlens_k: Tensor::new(&[0u32, 1u32], device)?,
+                page_block_size,
+            })
+        };
+
+        let flat_slot = |cache: &Tensor, slot: usize| -> Result<Vec<f32>> {
+            cache
+                .reshape((num_blocks * page_block_size, num_kv_heads, head_dim))?
+                .i((slot, 0, ..))?
+                .to_vec1::<f32>()
+        };
+
+        {
+            // First, independent request: exactly the existing single-capture
+            // test above, dropped at the end of this scope (per-request
+            // buffers and the graph itself) before the second request begins,
+            // matching the production request lifecycle.
+            let paged = make_paged(&device)?;
+            let decode_slot = Tensor::new(&[0u32], &device)?;
+            let k = Tensor::new(&[[[[10f32, 11.]]]], &device)?;
+            let v = Tensor::new(&[[[[-10f32, -11.]]]], &device)?;
+
+            {
+                let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+                paged.write_new_kv(&k, &v, 0, Some(&decode_slot))?;
+            }
+            device.synchronize()?;
+
+            let (graph, ()) = CudaGraph::capture(cuda_device, || {
+                paged.write_new_kv(&k, &v, 0, Some(&decode_slot))?;
+                Ok(())
+            })?;
+            graph.replay()?;
+            device.synchronize()?;
+            assert_eq!(flat_slot(&paged.key_cache, 0)?, [10., 11.]);
+            assert_eq!(flat_slot(&paged.value_cache, 0)?, [-10., -11.]);
+        }
+
+        // The real operation that failed in production: building a fresh
+        // `Cache` for the second, independent request against the
+        // already-loaded model. This is the very first thing the second
+        // request does, before any of its own capture/replay code runs.
+        let cfg = paged_test_config();
+        let _cache = Cache::new(true, DType::F32, &cfg, &device)?;
+
+        // Second, independent request: fresh paged KV storage, fresh decode
+        // slot, its own warm-up/capture/replay cycle from scratch, same
+        // already-loaded device as the first request.
+        let paged2 = make_paged(&device)?;
+        let decode_slot2 = Tensor::new(&[0u32], &device)?;
+        let k2 = Tensor::new(&[[[[20f32, 21.]]]], &device)?;
+        let v2 = Tensor::new(&[[[[-20f32, -21.]]]], &device)?;
+
+        {
+            let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+            paged2.write_new_kv(&k2, &v2, 0, Some(&decode_slot2))?;
+        }
+        device.synchronize()?;
+
+        let (graph2, ()) = CudaGraph::capture(cuda_device, || {
+            paged2.write_new_kv(&k2, &v2, 0, Some(&decode_slot2))?;
+            Ok(())
+        })?;
+        graph2.replay()?;
+        device.synchronize()?;
+        assert_eq!(flat_slot(&paged2.key_cache, 0)?, [20., 21.]);
+        assert_eq!(flat_slot(&paged2.value_cache, 0)?, [-20., -21.]);
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "flashinfer-kernels"))]
