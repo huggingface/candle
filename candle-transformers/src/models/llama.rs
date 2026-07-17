@@ -2195,7 +2195,9 @@ mod tests {
     ) -> Result<Tensor> {
         let mut x = x.clone();
         for (block_idx, layer) in layers.iter().enumerate() {
-            x = layer.forward(&x, index_pos, block_idx, cache)?;
+            x = layer
+                .forward(&x, index_pos, block_idx, cache)
+                .with_context(|| format!("layer {block_idx} forward"))?;
         }
         Ok(x)
     }
@@ -2219,7 +2221,7 @@ mod tests {
     #[cfg(feature = "flash-attn")]
     #[test]
     fn second_independent_capture_with_paged_attention_and_decode_position() -> Result<()> {
-        use candle::CudaGraph;
+        use candle::{Context, CudaGraph};
 
         let device = Device::new_cuda(0)?;
         let Device::Cuda(cuda_device) = &device else {
@@ -2317,20 +2319,34 @@ mod tests {
 
             {
                 let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
-                let y = run_paged_decode_step(&x, 0, &mut cache, &layers)?;
-                out.slice_set(&y, 0, 0)?;
+                let y = run_paged_decode_step(&x, 0, &mut cache, &layers)
+                    .context("request 1: warm-up run")?;
+                out.slice_set(&y, 0, 0)
+                    .context("request 1: warm-up slice_set")?;
             }
-            out.slice_set(&zeros, 0, 0)?;
-            device.synchronize()?;
+            out.slice_set(&zeros, 0, 0)
+                .context("request 1: reset out to zeros")?;
+            device
+                .synchronize()
+                .context("request 1: post-warm-up synchronize")?;
 
             let (graph, ()) = CudaGraph::capture(cuda_device, || {
                 let y = run_paged_decode_step(&x, 0, &mut cache, &layers)?;
                 out.slice_set(&y, 0, 0)?;
                 Ok(())
-            })?;
-            graph.replay()?;
-            device.synchronize()?;
-            let sum = out.to_dtype(DType::F32)?.sum_all()?.to_vec0::<f32>()?;
+            })
+            .context("request 1: capture")?;
+            graph.replay().context("request 1: replay")?;
+            device
+                .synchronize()
+                .context("request 1: post-replay synchronize")?;
+            let sum = out
+                .to_dtype(DType::F32)
+                .context("request 1: out.to_dtype")?
+                .sum_all()
+                .context("request 1: out.sum_all")?
+                .to_vec0::<f32>()
+                .context("request 1: out.to_vec0")?;
             assert!(sum.is_finite(), "first request produced non-finite output");
             // `graph` (and this request's paged KV cache/decode-position
             // buffers) is dropped at the end of this scope, before the
@@ -2341,32 +2357,47 @@ mod tests {
         // `Cache` for the second, independent request against the
         // already-loaded model, before any of that request's own
         // capture/replay code runs.
-        let _cache_for_second_request = Cache::new(true, dtype, &cfg, &device)?;
+        let _cache_for_second_request = Cache::new(true, dtype, &cfg, &device)
+            .context("unrelated Cache::new between requests")?;
 
         // Second, independent request: fresh paged KV storage,
         // decode-position, and decode-slot seams, its own
         // warm-up/capture/replay cycle from scratch, reusing the same
         // already-loaded layer weights as the first request.
-        let mut cache2 = Cache::new(true, dtype, &cfg, &device)?;
-        attach_seams(&device, &mut cache2)?;
+        let mut cache2 = Cache::new(true, dtype, &cfg, &device).context("request 2: Cache::new")?;
+        attach_seams(&device, &mut cache2).context("request 2: attach_seams")?;
         let out2 = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
 
         {
             let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
-            let y2 = run_paged_decode_step(&x, 0, &mut cache2, &layers)?;
-            out2.slice_set(&y2, 0, 0)?;
+            let y2 = run_paged_decode_step(&x, 0, &mut cache2, &layers)
+                .context("request 2: warm-up run")?;
+            out2.slice_set(&y2, 0, 0)
+                .context("request 2: warm-up slice_set")?;
         }
-        out2.slice_set(&zeros, 0, 0)?;
-        device.synchronize()?;
+        out2.slice_set(&zeros, 0, 0)
+            .context("request 2: reset out2 to zeros")?;
+        device
+            .synchronize()
+            .context("request 2: post-warm-up synchronize")?;
 
         let (graph2, ()) = CudaGraph::capture(cuda_device, || {
             let y2 = run_paged_decode_step(&x, 0, &mut cache2, &layers)?;
             out2.slice_set(&y2, 0, 0)?;
             Ok(())
-        })?;
-        graph2.replay()?;
-        device.synchronize()?;
-        let sum2 = out2.to_dtype(DType::F32)?.sum_all()?.to_vec0::<f32>()?;
+        })
+        .context("request 2: capture")?;
+        graph2.replay().context("request 2: replay")?;
+        device
+            .synchronize()
+            .context("request 2: post-replay synchronize")?;
+        let sum2 = out2
+            .to_dtype(DType::F32)
+            .context("request 2: out2.to_dtype")?
+            .sum_all()
+            .context("request 2: out2.sum_all")?
+            .to_vec0::<f32>()
+            .context("request 2: out2.to_vec0")?;
         assert!(
             sum2.is_finite(),
             "second request produced non-finite output"
