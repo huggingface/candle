@@ -824,6 +824,23 @@ impl QTensor {
         let (ptr, guard) = self.device_ptr_with_guard(stream)?;
         Ok((ptr, self.storage_size_in_bytes(), guard))
     }
+
+    /// Returns a mutable guarded raw CUDA byte pointer for an exclusive layout
+    /// transform. # Safety: caller must guarantee no Candle/custom kernel can
+    /// read this QTensor until the transform and any required reverse transform
+    /// have completed. The GGUF dtype/shape byte length must remain unchanged.
+    #[cfg(feature = "cuda")]
+    pub unsafe fn cuda_raw_bytes_mut_with_guard<'a>(
+        &'a self,
+        stream: &'a crate::cuda_backend::cudarc::driver::CudaStream,
+    ) -> Result<(
+        *mut u8,
+        usize,
+        crate::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    )> {
+        let (ptr, guard) = self.device_ptr_with_guard(stream)?;
+        Ok((ptr as *mut u8, self.storage_size_in_bytes(), guard))
+    }
 }
 
 #[derive(Clone, Debug)]
