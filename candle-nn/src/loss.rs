@@ -102,3 +102,11 @@ pub fn huber(inp: &Tensor, target: &Tensor, delta: f64) -> Result<Tensor> {
     let loss = mask.where_cond(&squared_loss, &linear_loss)?;
     loss.mean_all()
 }
+
+/// The mean absolute error loss (L1 loss).
+///
+/// Computes the element-wise absolute difference between `inp` and `target`,
+/// matching `torch.nn.functional.l1_loss` with the default `mean` reduction.
+pub fn l1(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
+    (inp - target)?.abs()?.mean_all()
+}
