@@ -57,8 +57,8 @@ impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let gate = self.feed_forward_gate.forward(xs)?;
         let up = self.feed_forward_up.forward(xs)?;
-        let silu = candle_nn::ops::silu(&gate)?;
-        let gated = (silu * up)?;
+        let gate = gate.apply(&candle_nn::Activation::GeluPytorchTanh)?;
+        let gated = (gate * up)?;
         self.feed_forward_down.forward(&gated)
     }
 }
