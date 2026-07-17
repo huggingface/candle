@@ -2175,6 +2175,201 @@ mod tests {
         assert_eq!(flat_slot(&paged2.value_cache, 0)?, [-20., -21.]);
         Ok(())
     }
+
+    // Runs one decode step (seq_len=1) through every layer sequentially --
+    // exactly what `Llama::forward`'s per-block loop does -- with all three
+    // graph-replay-safe seams attached per layer: RoPE via
+    // `Cache::set_decode_position`, the paged KV scatter-index via
+    // `Cache::set_paged_kv_decode_slot`, and the real
+    // `candle_flash_attn::flash_attn_varlen_paged_windowed` kernel via
+    // `Cache::set_paged_kv`. `second_independent_paged_kv_capture_after_first_graph_dropped`
+    // above only exercised the KV-write seam in isolation (calling
+    // `PagedKvCache::write_new_kv` directly), never the real flash-attn
+    // kernel call or RoPE combined with it in the same captured pass.
+    #[cfg(feature = "flash-attn")]
+    fn run_paged_decode_step(
+        x: &Tensor,
+        index_pos: usize,
+        cache: &mut Cache,
+        layers: &[CausalSelfAttention],
+    ) -> Result<Tensor> {
+        let mut x = x.clone();
+        for (block_idx, layer) in layers.iter().enumerate() {
+            x = layer.forward(&x, index_pos, block_idx, cache)?;
+        }
+        Ok(x)
+    }
+
+    // Regression test for astorise/candle#17 (reopened multiple times):
+    // Tachyon-Mesh's real production capture -- a second, independent
+    // `cuda_graph_decode` request against an already-loaded model -- keeps
+    // failing with `CUDA_ERROR_INVALID_VALUE` in `Cache::new(...)` even after
+    // four rounds of fixes to `CudaGraph::drop`. Per Tachyon-Mesh's own
+    // minimal reproducer, it needs: paged-attention only (no flashinfer),
+    // `Cache::set_decode_position` + `Cache::set_paged_kv_decode_slot` +
+    // `Cache::set_paged_kv` all attached on every layer of a >=2-layer model,
+    // combined in the same forward pass -- confirmed via astorise/candle#17's
+    // comment thread, since `second_independent_paged_kv_capture_after_first_graph_dropped`
+    // (the paged KV write alone, one layer, no RoPE seam) did not reproduce
+    // it. This test drives that exact combination: a real 2-layer,
+    // paged-attention-only decode step (RoPE + paged KV write + the actual
+    // flash-attn kernel, not a stand-in), captured and replayed twice
+    // independently against the same already-loaded weights, with a real
+    // `Cache::new(...)` call as the "unrelated" op in between.
+    #[cfg(feature = "flash-attn")]
+    #[test]
+    fn second_independent_capture_with_paged_attention_and_decode_position() -> Result<()> {
+        use candle::CudaGraph;
+
+        let device = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_device) = &device else {
+            unreachable!()
+        };
+        let dtype = DType::BF16;
+
+        let num_attention_heads = 2;
+        let num_key_value_heads = 2;
+        let head_dim = 64;
+        let hidden_size = num_attention_heads * head_dim;
+        let kv_size = num_key_value_heads * head_dim;
+        let page_block_size = 4;
+        let num_layers = 2;
+
+        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
+            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), &device)?.to_dtype(dtype)?;
+            Ok(Linear::from_weights(w, None))
+        };
+        let make_attn = || -> Result<CausalSelfAttention> {
+            Ok(CausalSelfAttention {
+                q_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
+                k_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
+                v_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
+                o_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
+                num_attention_heads,
+                num_key_value_heads,
+                head_dim,
+                use_flash_attn: false,
+                use_flashinfer_attention: false,
+                span: tracing::span!(tracing::Level::TRACE, "attn"),
+                span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
+                max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
+            })
+        };
+        // Same already-loaded weights reused by both independent requests
+        // below, matching Tachyon-Mesh's "same already-loaded model" setup.
+        let layers: Vec<CausalSelfAttention> = (0..num_layers)
+            .map(|_| make_attn())
+            .collect::<Result<_>>()?;
+
+        let make_paged_kv = |device: &Device| -> Result<PagedKvCache> {
+            Ok(PagedKvCache {
+                key_cache: Tensor::zeros(
+                    (1, page_block_size, num_key_value_heads, head_dim),
+                    dtype,
+                    device,
+                )?,
+                value_cache: Tensor::zeros(
+                    (1, page_block_size, num_key_value_heads, head_dim),
+                    dtype,
+                    device,
+                )?,
+                block_table: Tensor::from_vec(vec![0u32], (1, 1), device)?,
+                seqlens_k: Tensor::new(&[0u32, 1u32], device)?,
+                page_block_size,
+            })
+        };
+
+        // Attaches a fresh paged KV cache, decode-position, and decode-slot
+        // seam to every layer of `cache`, standing in for one independent
+        // request's per-request session state.
+        let attach_seams = |device: &Device, cache: &mut Cache| -> Result<()> {
+            for block_idx in 0..num_layers {
+                cache.set_paged_kv(block_idx, make_paged_kv(device)?)?;
+                cache.set_decode_position(block_idx, Tensor::new(&[0u32], device)?)?;
+                cache.set_paged_kv_decode_slot(block_idx, Tensor::new(&[0u32], device)?)?;
+            }
+            Ok(())
+        };
+
+        let mut cfg = paged_test_config();
+        cfg.hidden_size = hidden_size;
+        cfg.num_attention_heads = num_attention_heads;
+        cfg.num_key_value_heads = num_key_value_heads;
+        cfg.num_hidden_layers = num_layers;
+        cfg.max_position_embeddings = DEFAULT_MAX_SEQ_LEN;
+
+        let x = Tensor::randn(0f32, 1., (1, 1, hidden_size), &device)?.to_dtype(dtype)?;
+        let zeros = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+        {
+            // First, independent request. `out` is allocated *before* capture
+            // and written in place with `slice_set`, matching every other
+            // capture test in this file: a tensor allocated *inside* the
+            // captured closure becomes a graph-owned allocation node that is
+            // only valid while the graph is executing, so reading it after
+            // `replay()` (as the closure's own return value would be) fails.
+            let mut cache = Cache::new(true, dtype, &cfg, &device)?;
+            attach_seams(&device, &mut cache)?;
+            let out = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+            {
+                let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+                let y = run_paged_decode_step(&x, 0, &mut cache, &layers)?;
+                out.slice_set(&y, 0, 0)?;
+            }
+            out.slice_set(&zeros, 0, 0)?;
+            device.synchronize()?;
+
+            let (graph, ()) = CudaGraph::capture(cuda_device, || {
+                let y = run_paged_decode_step(&x, 0, &mut cache, &layers)?;
+                out.slice_set(&y, 0, 0)?;
+                Ok(())
+            })?;
+            graph.replay()?;
+            device.synchronize()?;
+            let sum = out.to_dtype(DType::F32)?.sum_all()?.to_vec0::<f32>()?;
+            assert!(sum.is_finite(), "first request produced non-finite output");
+            // `graph` (and this request's paged KV cache/decode-position
+            // buffers) is dropped at the end of this scope, before the
+            // second, independent request below runs.
+        }
+
+        // The real operation that failed in production: building a fresh
+        // `Cache` for the second, independent request against the
+        // already-loaded model, before any of that request's own
+        // capture/replay code runs.
+        let _cache_for_second_request = Cache::new(true, dtype, &cfg, &device)?;
+
+        // Second, independent request: fresh paged KV storage,
+        // decode-position, and decode-slot seams, its own
+        // warm-up/capture/replay cycle from scratch, reusing the same
+        // already-loaded layer weights as the first request.
+        let mut cache2 = Cache::new(true, dtype, &cfg, &device)?;
+        attach_seams(&device, &mut cache2)?;
+        let out2 = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+        {
+            let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+            let y2 = run_paged_decode_step(&x, 0, &mut cache2, &layers)?;
+            out2.slice_set(&y2, 0, 0)?;
+        }
+        out2.slice_set(&zeros, 0, 0)?;
+        device.synchronize()?;
+
+        let (graph2, ()) = CudaGraph::capture(cuda_device, || {
+            let y2 = run_paged_decode_step(&x, 0, &mut cache2, &layers)?;
+            out2.slice_set(&y2, 0, 0)?;
+            Ok(())
+        })?;
+        graph2.replay()?;
+        device.synchronize()?;
+        let sum2 = out2.to_dtype(DType::F32)?.sum_all()?.to_vec0::<f32>()?;
+        assert!(
+            sum2.is_finite(),
+            "second request produced non-finite output"
+        );
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "flashinfer-kernels"))]
