@@ -9,3 +9,4 @@ pub const REDUCE: &str = include_str!(concat!(env!("OUT_DIR"), "/reduce.ptx"));
 pub const SORT: &str = include_str!(concat!(env!("OUT_DIR"), "/sort.ptx"));
 pub const TERNARY: &str = include_str!(concat!(env!("OUT_DIR"), "/ternary.ptx"));
 pub const UNARY: &str = include_str!(concat!(env!("OUT_DIR"), "/unary.ptx"));
+pub const Q4K_DYNAMIC_MMVQ: &str = include_str!(concat!(env!("OUT_DIR"), "/q4k_dynamic_mmvq.ptx"));
