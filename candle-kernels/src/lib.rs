@@ -80,3 +80,8 @@ mdl!(TERNARY, Ternary);
 mdl!(UNARY, Unary);
 
 pub mod ffi;
+
+/// Dynamic-shared raw Q4_K decode executor used by the Senior Agent decode
+/// extension. Kept outside the generated module index because it is loaded
+/// explicitly as an experimental PTX module rather than a Candle core op.
+pub const Q4K_DYNAMIC_MMVQ: &str = include_str!(concat!(env!("OUT_DIR"), "/q4k_dynamic_mmvq.ptx"));
