@@ -2406,6 +2406,191 @@ mod tests {
         );
         Ok(())
     }
+
+    // Bisection for astorise/candle#17: `second_independent_capture_with_paged_attention_and_decode_position`
+    // (above) fails with `DriverError(CUDA_ERROR_INVALID_VALUE, "invalid
+    // argument")` on a *plain, uncaptured* `Cache::new(...)` call placed
+    // between the two independent requests -- i.e. after request 1's
+    // capture/replay/drop cycle has fully finished, before request 2's own
+    // cache/capture setup even starts. That call touches neither the CUDA
+    // graph HTOD cache (its `enable_cuda_graph_htod_cache` guard is out of
+    // scope by then) nor `CUDA_PARAM_CACHE`'s kernel-launch-parameter path,
+    // so the corruption must be device/allocator-global, left behind by
+    // request 1's capture+replay+`Drop for CudaGraph` cycle itself.
+    //
+    // This test is identical to
+    // `second_independent_capture_with_paged_attention_and_decode_position`
+    // except `attach_seams` here does *not* call
+    // `Cache::set_decode_position`: RoPE falls back to the plain
+    // `cache.cos.narrow(index_pos, seq_len)` lookup instead of
+    // `index_select`. If this still fails the same way, the RoPE
+    // decode-position/`index_select` seam is not required to trigger the
+    // corruption -- the real flash-attn kernel's own graph-owned scratch
+    // allocations (`dst`/`softmax_lse`, freshly allocated inside the
+    // captured closure on each of 2 layers) are already sufficient on
+    // their own.
+    #[cfg(feature = "flash-attn")]
+    #[test]
+    fn second_independent_capture_with_paged_attention_no_decode_position() -> Result<()> {
+        use candle::{Context, CudaGraph};
+
+        let device = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_device) = &device else {
+            unreachable!()
+        };
+        let dtype = DType::BF16;
+
+        let num_attention_heads = 2;
+        let num_key_value_heads = 2;
+        let head_dim = 64;
+        let hidden_size = num_attention_heads * head_dim;
+        let kv_size = num_key_value_heads * head_dim;
+        let page_block_size = 32;
+        let num_layers = 2;
+
+        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
+            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), &device)?.to_dtype(dtype)?;
+            Ok(Linear::from_weights(w, None))
+        };
+        let make_attn = || -> Result<CausalSelfAttention> {
+            Ok(CausalSelfAttention {
+                q_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
+                k_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
+                v_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
+                o_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
+                num_attention_heads,
+                num_key_value_heads,
+                head_dim,
+                use_flash_attn: false,
+                use_flashinfer_attention: false,
+                span: tracing::span!(tracing::Level::TRACE, "attn"),
+                span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
+                max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
+            })
+        };
+        let layers: Vec<CausalSelfAttention> = (0..num_layers)
+            .map(|_| make_attn())
+            .collect::<Result<_>>()?;
+
+        let make_paged_kv = |device: &Device| -> Result<PagedKvCache> {
+            Ok(PagedKvCache {
+                key_cache: Tensor::zeros(
+                    (1, page_block_size, num_key_value_heads, head_dim),
+                    dtype,
+                    device,
+                )?,
+                value_cache: Tensor::zeros(
+                    (1, page_block_size, num_key_value_heads, head_dim),
+                    dtype,
+                    device,
+                )?,
+                block_table: Tensor::from_vec(vec![0u32], (1, 1), device)?,
+                seqlens_k: Tensor::new(&[0u32, 1u32], device)?,
+                page_block_size,
+            })
+        };
+
+        // Same as `attach_seams` in the sibling test, minus
+        // `set_decode_position` -- the one difference under test.
+        let attach_seams_no_decode_position = |device: &Device, cache: &mut Cache| -> Result<()> {
+            for block_idx in 0..num_layers {
+                cache.set_paged_kv(block_idx, make_paged_kv(device)?)?;
+                cache.set_paged_kv_decode_slot(block_idx, Tensor::new(&[0u32], device)?)?;
+            }
+            Ok(())
+        };
+
+        let mut cfg = paged_test_config();
+        cfg.hidden_size = hidden_size;
+        cfg.num_attention_heads = num_attention_heads;
+        cfg.num_key_value_heads = num_key_value_heads;
+        cfg.num_hidden_layers = num_layers;
+        cfg.max_position_embeddings = DEFAULT_MAX_SEQ_LEN;
+
+        let x = Tensor::randn(0f32, 1., (1, 1, hidden_size), &device)?.to_dtype(dtype)?;
+        let zeros = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+        {
+            let mut cache = Cache::new(true, dtype, &cfg, &device)?;
+            attach_seams_no_decode_position(&device, &mut cache)?;
+            let out = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+            {
+                let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+                let y = run_paged_decode_step(&x, 0, &mut cache, &layers)
+                    .context("request 1: warm-up run")?;
+                out.slice_set(&y, 0, 0)
+                    .context("request 1: warm-up slice_set")?;
+            }
+            out.slice_set(&zeros, 0, 0)
+                .context("request 1: reset out to zeros")?;
+            device
+                .synchronize()
+                .context("request 1: post-warm-up synchronize")?;
+
+            let (graph, ()) = CudaGraph::capture(cuda_device, || {
+                let y = run_paged_decode_step(&x, 0, &mut cache, &layers)?;
+                out.slice_set(&y, 0, 0)?;
+                Ok(())
+            })
+            .context("request 1: capture")?;
+            graph.replay().context("request 1: replay")?;
+            device
+                .synchronize()
+                .context("request 1: post-replay synchronize")?;
+            let sum = out
+                .to_dtype(DType::F32)
+                .context("request 1: out.to_dtype")?
+                .sum_all()
+                .context("request 1: out.sum_all")?
+                .to_vec0::<f32>()
+                .context("request 1: out.to_vec0")?;
+            assert!(sum.is_finite(), "first request produced non-finite output");
+        }
+
+        let _cache_for_second_request = Cache::new(true, dtype, &cfg, &device)
+            .context("unrelated Cache::new between requests")?;
+
+        let mut cache2 = Cache::new(true, dtype, &cfg, &device).context("request 2: Cache::new")?;
+        attach_seams_no_decode_position(&device, &mut cache2).context("request 2: attach_seams")?;
+        let out2 = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+        {
+            let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+            let y2 = run_paged_decode_step(&x, 0, &mut cache2, &layers)
+                .context("request 2: warm-up run")?;
+            out2.slice_set(&y2, 0, 0)
+                .context("request 2: warm-up slice_set")?;
+        }
+        out2.slice_set(&zeros, 0, 0)
+            .context("request 2: reset out2 to zeros")?;
+        device
+            .synchronize()
+            .context("request 2: post-warm-up synchronize")?;
+
+        let (graph2, ()) = CudaGraph::capture(cuda_device, || {
+            let y2 = run_paged_decode_step(&x, 0, &mut cache2, &layers)?;
+            out2.slice_set(&y2, 0, 0)?;
+            Ok(())
+        })
+        .context("request 2: capture")?;
+        graph2.replay().context("request 2: replay")?;
+        device
+            .synchronize()
+            .context("request 2: post-replay synchronize")?;
+        let sum2 = out2
+            .to_dtype(DType::F32)
+            .context("request 2: out2.to_dtype")?
+            .sum_all()
+            .context("request 2: out2.sum_all")?
+            .to_vec0::<f32>()
+            .context("request 2: out2.to_vec0")?;
+        assert!(
+            sum2.is_finite(),
+            "second request produced non-finite output"
+        );
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "flashinfer-kernels"))]
