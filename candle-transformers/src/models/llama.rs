@@ -2592,177 +2592,9 @@ mod tests {
         Ok(())
     }
 
-    // Probe for astorise/candle#17, third bisection round. The two
-    // `second_independent_capture_with_paged_attention_*` tests above both
-    // fail on the plain `Cache::new(...)` placed *between* the requests --
-    // i.e. after a single warm-up/capture/replay/drop cycle, before the
-    // second request even starts. So one cycle is sufficient, and the open
-    // questions are (a) whether `Drop for CudaGraph` is the trigger or the
-    // capture/replay itself already corrupts the device, and (b) which
-    // class of driver primitive the corruption breaks first. This test
-    // answers both in one run: after a single captured+replayed paged
-    // decode step it probes, first with the graph still alive and then
-    // after dropping it, each primitive class in isolation -- a raw
-    // stream-ordered `cuMemAllocAsync` (no memset, no kernel), an
-    // `alloc_zeros` (alloc + memset), a host-to-device upload, an `arange`
-    // kernel launch, a unary-op kernel launch, a cuBLAS matmul, and
-    // finally the full `Cache::new` that production trips on. Whichever
-    // `.context()` label surfaces in the failure names the trigger and the
-    // victim primitive.
-    #[cfg(feature = "flash-attn")]
-    #[test]
-    fn unrelated_allocations_after_single_paged_attention_capture() -> Result<()> {
-        use candle::{Context, CudaGraph};
-
-        let device = Device::new_cuda(0)?;
-        let Device::Cuda(cuda_device) = &device else {
-            unreachable!()
-        };
-        let dtype = DType::BF16;
-
-        let num_attention_heads = 2;
-        let num_key_value_heads = 2;
-        let head_dim = 64;
-        let hidden_size = num_attention_heads * head_dim;
-        let kv_size = num_key_value_heads * head_dim;
-        let page_block_size = 32;
-        let num_layers = 2;
-
-        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
-            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), &device)?.to_dtype(dtype)?;
-            Ok(Linear::from_weights(w, None))
-        };
-        let make_attn = || -> Result<CausalSelfAttention> {
-            Ok(CausalSelfAttention {
-                q_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
-                k_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
-                v_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
-                o_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
-                num_attention_heads,
-                num_key_value_heads,
-                head_dim,
-                use_flash_attn: false,
-                use_flashinfer_attention: false,
-                span: tracing::span!(tracing::Level::TRACE, "attn"),
-                span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
-                max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
-            })
-        };
-        let layers: Vec<CausalSelfAttention> = (0..num_layers)
-            .map(|_| make_attn())
-            .collect::<Result<_>>()?;
-
-        let make_paged_kv = |device: &Device| -> Result<PagedKvCache> {
-            Ok(PagedKvCache {
-                key_cache: Tensor::zeros(
-                    (1, page_block_size, num_key_value_heads, head_dim),
-                    dtype,
-                    device,
-                )?,
-                value_cache: Tensor::zeros(
-                    (1, page_block_size, num_key_value_heads, head_dim),
-                    dtype,
-                    device,
-                )?,
-                block_table: Tensor::from_vec(vec![0u32], (1, 1), device)?,
-                seqlens_k: Tensor::new(&[0u32, 1u32], device)?,
-                page_block_size,
-            })
-        };
-
-        let attach_seams = |device: &Device, cache: &mut Cache| -> Result<()> {
-            for block_idx in 0..num_layers {
-                cache.set_paged_kv(block_idx, make_paged_kv(device)?)?;
-                cache.set_decode_position(block_idx, Tensor::new(&[0u32], device)?)?;
-                cache.set_paged_kv_decode_slot(block_idx, Tensor::new(&[0u32], device)?)?;
-            }
-            Ok(())
-        };
-
-        let mut cfg = paged_test_config();
-        cfg.hidden_size = hidden_size;
-        cfg.num_attention_heads = num_attention_heads;
-        cfg.num_key_value_heads = num_key_value_heads;
-        cfg.num_hidden_layers = num_layers;
-        cfg.max_position_embeddings = DEFAULT_MAX_SEQ_LEN;
-
-        // One probe pass over every primitive class, cheapest/lowest-level
-        // first so the first failure names the narrowest victim. Values are
-        // returned (not dropped mid-probe) so a probe's own `Drop`-time
-        // event recording can't be mistaken for the next probe's failure.
-        use candle::cuda_backend::cudarc::driver::CudaSlice;
-        #[allow(clippy::type_complexity)]
-        let probe = |label: &str| -> Result<(CudaSlice<f32>, CudaSlice<f32>, Tensor, Cache)> {
-            let raw = unsafe { cuda_device.alloc::<f32>(256) }
-                .context(format!("{label}: raw stream-ordered cuMemAllocAsync"))?;
-            let zeroed = cuda_device
-                .alloc_zeros::<f32>(256)
-                .context(format!("{label}: alloc_zeros (alloc + memset)"))?;
-            let uploaded = Tensor::from_vec(vec![1f32; 256], 256, &device)
-                .context(format!("{label}: host-to-device upload"))?;
-            let _aranged = Tensor::arange(0u32, 256u32, &device)
-                .context(format!("{label}: arange kernel launch"))?;
-            let cosd = uploaded
-                .cos()
-                .context(format!("{label}: unary-op kernel launch"))?;
-            let square = cosd
-                .reshape((16, 16))
-                .context(format!("{label}: reshape"))?;
-            let mm = square
-                .matmul(&square)
-                .context(format!("{label}: cublas matmul"))?;
-            let unrelated_cache = Cache::new(true, dtype, &cfg, &device)
-                .context(format!("{label}: full Cache::new"))?;
-            device
-                .synchronize()
-                .context(format!("{label}: synchronize after probes"))?;
-            Ok((raw, zeroed, mm, unrelated_cache))
-        };
-
-        let x = Tensor::randn(0f32, 1., (1, 1, hidden_size), &device)?.to_dtype(dtype)?;
-        let zeros = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
-
-        let mut cache = Cache::new(true, dtype, &cfg, &device)?;
-        attach_seams(&device, &mut cache)?;
-        let out = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
-
-        {
-            let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
-            let y = run_paged_decode_step(&x, 0, &mut cache, &layers).context("warm-up run")?;
-            out.slice_set(&y, 0, 0).context("warm-up slice_set")?;
-        }
-        out.slice_set(&zeros, 0, 0).context("reset out to zeros")?;
-        device.synchronize().context("post-warm-up synchronize")?;
-
-        let (graph, ()) = CudaGraph::capture(cuda_device, || {
-            let y = run_paged_decode_step(&x, 0, &mut cache, &layers)?;
-            out.slice_set(&y, 0, 0)?;
-            Ok(())
-        })
-        .context("capture")?;
-        graph.replay().context("replay")?;
-        device.synchronize().context("post-replay synchronize")?;
-
-        // Probe pass 1: the graph object (and its paused-event-tracking
-        // guard) is still alive. A failure here means capture/replay alone
-        // corrupts the device state, independent of `Drop for CudaGraph`.
-        let _live_probes = probe("while graph alive")?;
-
-        drop(graph);
-
-        // Probe pass 2: after `Drop for CudaGraph` (stream sync, exec/graph
-        // destroy, cuDeviceGraphMemTrim, event tracking restored). This is
-        // the position where the sibling tests' plain `Cache::new` fails. A
-        // failure here (with pass 1 clean) pins the trigger on Drop.
-        let _post_drop_probes = probe("after graph drop")?;
-
-        Ok(())
-    }
-
     // One rung per driver-primitive class, cheapest/lowest-level first, so
-    // the first failure names the narrowest victim. Same ladder as the
-    // `probe` closure in `unrelated_allocations_after_single_paged_attention_capture`,
-    // factored out for the teardown-bisection tests below.
+    // the first failure names the narrowest victim. Used by
+    // `probe_ladder_interleaved_with_first_request_teardown` below.
     #[cfg(feature = "flash-attn")]
     fn probe_ladder(label: &str, device: &Device, dtype: DType, cfg: &Config) -> Result<()> {
         use candle::Context;
@@ -2770,15 +2602,15 @@ mod tests {
         let Device::Cuda(cuda_device) = device else {
             unreachable!()
         };
-        // The working root-cause hypothesis (fifth round) is cudarc's
+        // The failure mode this ladder guards against is cudarc's
         // parked-error mechanism: `Drop for CudaSlice` cannot return the
-        // error from its unconditional `cuStreamWaitEvent` on an event whose
-        // last record was a node of a since-destroyed captured graph, so it
+        // error from a failed `cuStreamWaitEvent` on an event whose last
+        // record was a node of a since-destroyed captured graph, so it
         // parks the error in `CudaContext::error_state`; the next cudarc
         // call through `bind_to_thread()`/`check_err()` returns it and
-        // `check_err` clears the state (`swap(0)`). That predicts the exact
-        // same call, retried immediately, succeeds. Encode that prediction:
-        // on first-rung failure, retry once and report which way it went.
+        // `check_err` clears the state (`swap(0)`) -- meaning the exact
+        // same call, retried immediately, succeeds. On first-rung failure,
+        // retry once and report which of the two shapes the failure has.
         let _raw = match unsafe { cuda_device.alloc::<f32>(256) } {
             Ok(raw) => raw,
             Err(first_err) => match unsafe { cuda_device.alloc::<f32>(256) } {
@@ -2817,149 +2649,25 @@ mod tests {
         Ok(())
     }
 
-    // Fourth bisection round for astorise/candle#17.
-    // `unrelated_allocations_after_single_paged_attention_capture` (above)
-    // passes: after one warm-up/capture/replay cycle, every primitive class
-    // succeeds both while the graph is alive and after dropping it. Yet the
-    // two `second_independent_capture_*` tests keep failing on their plain
-    // `Cache::new`. Diffing the passing probe against the failing tests
-    // leaves exactly two ingredients the probe was missing: the
-    // device-to-host readback of `out` after replay
-    // (`to_dtype`/`sum_all`/`to_vec0`), and the teardown of request 1's
-    // state -- scope end drops `graph`, then `out`, then `cache` (whose
-    // paged KV tensors were handed to the flash-attn kernel via raw
-    // `device_ptr()` during capture) -- before the failing allocation.
+    // Regression test for astorise/candle#17's root cause, at the exact
+    // step the bisection pinned it to. cudarc 0.19.8's teardown paths
+    // (`Drop for CudaSlice`'s `cuStreamWaitEvent`s, `SyncOnDrop::Record`'s
+    // `cuEventRecord`) ignored `is_managing_stream_synchronization()`: a
+    // persistent tensor accessed via `device_ptr()` inside a capture got
+    // its dependency event recorded as a node of that graph, and dropping
+    // the tensor after the graph's destruction failed with
+    // `CUDA_ERROR_INVALID_VALUE`, parked in `CudaContext::error_state` and
+    // replayed on the next unrelated call (Tachyon-Mesh's crashing
+    // `Cache::new`). Fixed by gating those teardown paths (see the cudarc
+    // `[patch.crates-io]` entry in the workspace Cargo.toml).
     //
-    // This test replays the failing tests' *exact* prefix -- same inner
-    // scope, same declaration order, readback included, natural
-    // graph/out/cache drop order at scope end -- and then runs the probe
-    // ladder where the failing tests run their fatal `Cache::new`. The rung
-    // that fails names the victim primitive class at the exact failing
-    // position.
-    #[cfg(feature = "flash-attn")]
-    #[test]
-    fn probe_ladder_after_exact_first_request_teardown() -> Result<()> {
-        use candle::{Context, CudaGraph};
-
-        let device = Device::new_cuda(0)?;
-        let Device::Cuda(cuda_device) = &device else {
-            unreachable!()
-        };
-        let dtype = DType::BF16;
-
-        let num_attention_heads = 2;
-        let num_key_value_heads = 2;
-        let head_dim = 64;
-        let hidden_size = num_attention_heads * head_dim;
-        let kv_size = num_key_value_heads * head_dim;
-        let page_block_size = 32;
-        let num_layers = 2;
-
-        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
-            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), &device)?.to_dtype(dtype)?;
-            Ok(Linear::from_weights(w, None))
-        };
-        let make_attn = || -> Result<CausalSelfAttention> {
-            Ok(CausalSelfAttention {
-                q_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
-                k_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
-                v_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
-                o_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
-                num_attention_heads,
-                num_key_value_heads,
-                head_dim,
-                use_flash_attn: false,
-                use_flashinfer_attention: false,
-                span: tracing::span!(tracing::Level::TRACE, "attn"),
-                span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
-                max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
-            })
-        };
-        let layers: Vec<CausalSelfAttention> = (0..num_layers)
-            .map(|_| make_attn())
-            .collect::<Result<_>>()?;
-
-        let make_paged_kv = |device: &Device| -> Result<PagedKvCache> {
-            Ok(PagedKvCache {
-                key_cache: Tensor::zeros(
-                    (1, page_block_size, num_key_value_heads, head_dim),
-                    dtype,
-                    device,
-                )?,
-                value_cache: Tensor::zeros(
-                    (1, page_block_size, num_key_value_heads, head_dim),
-                    dtype,
-                    device,
-                )?,
-                block_table: Tensor::from_vec(vec![0u32], (1, 1), device)?,
-                seqlens_k: Tensor::new(&[0u32, 1u32], device)?,
-                page_block_size,
-            })
-        };
-
-        let attach_seams = |device: &Device, cache: &mut Cache| -> Result<()> {
-            for block_idx in 0..num_layers {
-                cache.set_paged_kv(block_idx, make_paged_kv(device)?)?;
-                cache.set_decode_position(block_idx, Tensor::new(&[0u32], device)?)?;
-                cache.set_paged_kv_decode_slot(block_idx, Tensor::new(&[0u32], device)?)?;
-            }
-            Ok(())
-        };
-
-        let mut cfg = paged_test_config();
-        cfg.hidden_size = hidden_size;
-        cfg.num_attention_heads = num_attention_heads;
-        cfg.num_key_value_heads = num_key_value_heads;
-        cfg.num_hidden_layers = num_layers;
-        cfg.max_position_embeddings = DEFAULT_MAX_SEQ_LEN;
-
-        let x = Tensor::randn(0f32, 1., (1, 1, hidden_size), &device)?.to_dtype(dtype)?;
-        let zeros = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
-
-        {
-            let mut cache = Cache::new(true, dtype, &cfg, &device)?;
-            attach_seams(&device, &mut cache)?;
-            let out = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
-
-            {
-                let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
-                let y = run_paged_decode_step(&x, 0, &mut cache, &layers).context("warm-up run")?;
-                out.slice_set(&y, 0, 0).context("warm-up slice_set")?;
-            }
-            out.slice_set(&zeros, 0, 0).context("reset out to zeros")?;
-            device.synchronize().context("post-warm-up synchronize")?;
-
-            let (graph, ()) = CudaGraph::capture(cuda_device, || {
-                let y = run_paged_decode_step(&x, 0, &mut cache, &layers)?;
-                out.slice_set(&y, 0, 0)?;
-                Ok(())
-            })
-            .context("capture")?;
-            graph.replay().context("replay")?;
-            device.synchronize().context("post-replay synchronize")?;
-            let sum = out
-                .to_dtype(DType::F32)
-                .context("out.to_dtype")?
-                .sum_all()
-                .context("out.sum_all")?
-                .to_vec0::<f32>()
-                .context("out.to_vec0")?;
-            assert!(sum.is_finite(), "request produced non-finite output");
-            // Scope end: `graph`, then `out`, then `cache` drop, exactly as
-            // in the failing tests.
-        }
-
-        probe_ladder("after first-request teardown", &device, dtype, &cfg)
-    }
-
-    // Companion to `probe_ladder_after_exact_first_request_teardown`: same
-    // single-request setup, but the teardown is unrolled step by step with
-    // the full probe ladder run after each step -- readback with the graph
-    // still alive, graph drop, `out` drop, decode-seam clears, paged-KV
-    // clears (the tensors the flash-attn kernel touched via raw
-    // `device_ptr()` during capture), and finally the `cache` drop. The
-    // first step whose subsequent ladder fails names the teardown action
-    // that poisons the device.
+    // This test unrolls one captured request's teardown step by step and
+    // runs the full probe ladder after each step -- readback with the graph
+    // still alive, graph drop, `out` drop, decode-seam clears (the step
+    // that failed before the fix: those index tensors' events were last
+    // recorded inside the destroyed graph), paged-KV clears, and finally
+    // the `cache` drop -- so any regression names the poisoning teardown
+    // action and the victim primitive in one failure message.
     #[cfg(feature = "flash-attn")]
     #[test]
     fn probe_ladder_interleaved_with_first_request_teardown() -> Result<()> {
