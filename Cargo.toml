@@ -117,3 +117,15 @@ objc2-foundation = { version = "0.3.1" }
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+# Temporary override for astorise/candle#17: cudarc 0.19.8's teardown paths
+# (Drop for CudaSlice's cuStreamWaitEvent calls and SyncOnDrop::Record's
+# cuEventRecord) ignore is_managing_stream_synchronization(). A persistent
+# tensor accessed via device_ptr() inside a CUDA graph capture gets its
+# dependency event recorded as a node of that graph; dropping the tensor after
+# the graph is destroyed then fails CUDA_ERROR_INVALID_VALUE, which cudarc
+# parks in CudaContext::error_state and surfaces on the next unrelated call.
+# The fork gates those teardown paths symmetrically with the entry paths.
+# Remove once the fix lands upstream in a cudarc release.
+[patch.crates-io]
+cudarc = { git = "https://github.com/astorise/cudarc", tag = "candle-v0.19.9" }
