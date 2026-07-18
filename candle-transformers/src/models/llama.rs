@@ -2770,8 +2770,29 @@ mod tests {
         let Device::Cuda(cuda_device) = device else {
             unreachable!()
         };
-        let _raw = unsafe { cuda_device.alloc::<f32>(256) }
-            .context(format!("{label}: raw stream-ordered cuMemAllocAsync"))?;
+        // The working root-cause hypothesis (fifth round) is cudarc's
+        // parked-error mechanism: `Drop for CudaSlice` cannot return the
+        // error from its unconditional `cuStreamWaitEvent` on an event whose
+        // last record was a node of a since-destroyed captured graph, so it
+        // parks the error in `CudaContext::error_state`; the next cudarc
+        // call through `bind_to_thread()`/`check_err()` returns it and
+        // `check_err` clears the state (`swap(0)`). That predicts the exact
+        // same call, retried immediately, succeeds. Encode that prediction:
+        // on first-rung failure, retry once and report which way it went.
+        let _raw = match unsafe { cuda_device.alloc::<f32>(256) } {
+            Ok(raw) => raw,
+            Err(first_err) => match unsafe { cuda_device.alloc::<f32>(256) } {
+                Ok(_) => candle::bail!(
+                    "{label}: raw cuMemAllocAsync failed with {first_err} but the identical \
+                     retry succeeded -- cudarc parked-error mechanism confirmed"
+                ),
+                Err(retry_err) => candle::bail!(
+                    "{label}: raw cuMemAllocAsync failed with {first_err} and the identical \
+                     retry also failed with {retry_err} -- persistent corruption, not a \
+                     parked error"
+                ),
+            },
+        };
         let _zeroed = cuda_device
             .alloc_zeros::<f32>(256)
             .context(format!("{label}: alloc_zeros (alloc + memset)"))?;
