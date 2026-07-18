@@ -2758,6 +2758,318 @@ mod tests {
 
         Ok(())
     }
+
+    // One rung per driver-primitive class, cheapest/lowest-level first, so
+    // the first failure names the narrowest victim. Same ladder as the
+    // `probe` closure in `unrelated_allocations_after_single_paged_attention_capture`,
+    // factored out for the teardown-bisection tests below.
+    #[cfg(feature = "flash-attn")]
+    fn probe_ladder(label: &str, device: &Device, dtype: DType, cfg: &Config) -> Result<()> {
+        use candle::Context;
+
+        let Device::Cuda(cuda_device) = device else {
+            unreachable!()
+        };
+        let _raw = unsafe { cuda_device.alloc::<f32>(256) }
+            .context(format!("{label}: raw stream-ordered cuMemAllocAsync"))?;
+        let _zeroed = cuda_device
+            .alloc_zeros::<f32>(256)
+            .context(format!("{label}: alloc_zeros (alloc + memset)"))?;
+        let uploaded = Tensor::from_vec(vec![1f32; 256], 256, device)
+            .context(format!("{label}: host-to-device upload"))?;
+        let _aranged = Tensor::arange(0u32, 256u32, device)
+            .context(format!("{label}: arange kernel launch"))?;
+        let cosd = uploaded
+            .cos()
+            .context(format!("{label}: unary-op kernel launch"))?;
+        let square = cosd
+            .reshape((16, 16))
+            .context(format!("{label}: reshape"))?;
+        let _mm = square
+            .matmul(&square)
+            .context(format!("{label}: cublas matmul"))?;
+        let _unrelated_cache =
+            Cache::new(true, dtype, cfg, device).context(format!("{label}: full Cache::new"))?;
+        device
+            .synchronize()
+            .context(format!("{label}: synchronize after probes"))?;
+        Ok(())
+    }
+
+    // Fourth bisection round for astorise/candle#17.
+    // `unrelated_allocations_after_single_paged_attention_capture` (above)
+    // passes: after one warm-up/capture/replay cycle, every primitive class
+    // succeeds both while the graph is alive and after dropping it. Yet the
+    // two `second_independent_capture_*` tests keep failing on their plain
+    // `Cache::new`. Diffing the passing probe against the failing tests
+    // leaves exactly two ingredients the probe was missing: the
+    // device-to-host readback of `out` after replay
+    // (`to_dtype`/`sum_all`/`to_vec0`), and the teardown of request 1's
+    // state -- scope end drops `graph`, then `out`, then `cache` (whose
+    // paged KV tensors were handed to the flash-attn kernel via raw
+    // `device_ptr()` during capture) -- before the failing allocation.
+    //
+    // This test replays the failing tests' *exact* prefix -- same inner
+    // scope, same declaration order, readback included, natural
+    // graph/out/cache drop order at scope end -- and then runs the probe
+    // ladder where the failing tests run their fatal `Cache::new`. The rung
+    // that fails names the victim primitive class at the exact failing
+    // position.
+    #[cfg(feature = "flash-attn")]
+    #[test]
+    fn probe_ladder_after_exact_first_request_teardown() -> Result<()> {
+        use candle::{Context, CudaGraph};
+
+        let device = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_device) = &device else {
+            unreachable!()
+        };
+        let dtype = DType::BF16;
+
+        let num_attention_heads = 2;
+        let num_key_value_heads = 2;
+        let head_dim = 64;
+        let hidden_size = num_attention_heads * head_dim;
+        let kv_size = num_key_value_heads * head_dim;
+        let page_block_size = 32;
+        let num_layers = 2;
+
+        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
+            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), &device)?.to_dtype(dtype)?;
+            Ok(Linear::from_weights(w, None))
+        };
+        let make_attn = || -> Result<CausalSelfAttention> {
+            Ok(CausalSelfAttention {
+                q_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
+                k_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
+                v_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
+                o_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
+                num_attention_heads,
+                num_key_value_heads,
+                head_dim,
+                use_flash_attn: false,
+                use_flashinfer_attention: false,
+                span: tracing::span!(tracing::Level::TRACE, "attn"),
+                span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
+                max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
+            })
+        };
+        let layers: Vec<CausalSelfAttention> = (0..num_layers)
+            .map(|_| make_attn())
+            .collect::<Result<_>>()?;
+
+        let make_paged_kv = |device: &Device| -> Result<PagedKvCache> {
+            Ok(PagedKvCache {
+                key_cache: Tensor::zeros(
+                    (1, page_block_size, num_key_value_heads, head_dim),
+                    dtype,
+                    device,
+                )?,
+                value_cache: Tensor::zeros(
+                    (1, page_block_size, num_key_value_heads, head_dim),
+                    dtype,
+                    device,
+                )?,
+                block_table: Tensor::from_vec(vec![0u32], (1, 1), device)?,
+                seqlens_k: Tensor::new(&[0u32, 1u32], device)?,
+                page_block_size,
+            })
+        };
+
+        let attach_seams = |device: &Device, cache: &mut Cache| -> Result<()> {
+            for block_idx in 0..num_layers {
+                cache.set_paged_kv(block_idx, make_paged_kv(device)?)?;
+                cache.set_decode_position(block_idx, Tensor::new(&[0u32], device)?)?;
+                cache.set_paged_kv_decode_slot(block_idx, Tensor::new(&[0u32], device)?)?;
+            }
+            Ok(())
+        };
+
+        let mut cfg = paged_test_config();
+        cfg.hidden_size = hidden_size;
+        cfg.num_attention_heads = num_attention_heads;
+        cfg.num_key_value_heads = num_key_value_heads;
+        cfg.num_hidden_layers = num_layers;
+        cfg.max_position_embeddings = DEFAULT_MAX_SEQ_LEN;
+
+        let x = Tensor::randn(0f32, 1., (1, 1, hidden_size), &device)?.to_dtype(dtype)?;
+        let zeros = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+        {
+            let mut cache = Cache::new(true, dtype, &cfg, &device)?;
+            attach_seams(&device, &mut cache)?;
+            let out = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+            {
+                let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+                let y = run_paged_decode_step(&x, 0, &mut cache, &layers).context("warm-up run")?;
+                out.slice_set(&y, 0, 0).context("warm-up slice_set")?;
+            }
+            out.slice_set(&zeros, 0, 0).context("reset out to zeros")?;
+            device.synchronize().context("post-warm-up synchronize")?;
+
+            let (graph, ()) = CudaGraph::capture(cuda_device, || {
+                let y = run_paged_decode_step(&x, 0, &mut cache, &layers)?;
+                out.slice_set(&y, 0, 0)?;
+                Ok(())
+            })
+            .context("capture")?;
+            graph.replay().context("replay")?;
+            device.synchronize().context("post-replay synchronize")?;
+            let sum = out
+                .to_dtype(DType::F32)
+                .context("out.to_dtype")?
+                .sum_all()
+                .context("out.sum_all")?
+                .to_vec0::<f32>()
+                .context("out.to_vec0")?;
+            assert!(sum.is_finite(), "request produced non-finite output");
+            // Scope end: `graph`, then `out`, then `cache` drop, exactly as
+            // in the failing tests.
+        }
+
+        probe_ladder("after first-request teardown", &device, dtype, &cfg)
+    }
+
+    // Companion to `probe_ladder_after_exact_first_request_teardown`: same
+    // single-request setup, but the teardown is unrolled step by step with
+    // the full probe ladder run after each step -- readback with the graph
+    // still alive, graph drop, `out` drop, decode-seam clears, paged-KV
+    // clears (the tensors the flash-attn kernel touched via raw
+    // `device_ptr()` during capture), and finally the `cache` drop. The
+    // first step whose subsequent ladder fails names the teardown action
+    // that poisons the device.
+    #[cfg(feature = "flash-attn")]
+    #[test]
+    fn probe_ladder_interleaved_with_first_request_teardown() -> Result<()> {
+        use candle::{Context, CudaGraph};
+
+        let device = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_device) = &device else {
+            unreachable!()
+        };
+        let dtype = DType::BF16;
+
+        let num_attention_heads = 2;
+        let num_key_value_heads = 2;
+        let head_dim = 64;
+        let hidden_size = num_attention_heads * head_dim;
+        let kv_size = num_key_value_heads * head_dim;
+        let page_block_size = 32;
+        let num_layers = 2;
+
+        let new_linear = |out_dim: usize, in_dim: usize| -> Result<Linear> {
+            let w = Tensor::randn(0f32, 0.02, (out_dim, in_dim), &device)?.to_dtype(dtype)?;
+            Ok(Linear::from_weights(w, None))
+        };
+        let make_attn = || -> Result<CausalSelfAttention> {
+            Ok(CausalSelfAttention {
+                q_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
+                k_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
+                v_proj: Proj::Plain(new_linear(kv_size, hidden_size)?),
+                o_proj: Proj::Plain(new_linear(hidden_size, hidden_size)?),
+                num_attention_heads,
+                num_key_value_heads,
+                head_dim,
+                use_flash_attn: false,
+                use_flashinfer_attention: false,
+                span: tracing::span!(tracing::Level::TRACE, "attn"),
+                span_rot: tracing::span!(tracing::Level::TRACE, "attn-rot"),
+                max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
+            })
+        };
+        let layers: Vec<CausalSelfAttention> = (0..num_layers)
+            .map(|_| make_attn())
+            .collect::<Result<_>>()?;
+
+        let make_paged_kv = |device: &Device| -> Result<PagedKvCache> {
+            Ok(PagedKvCache {
+                key_cache: Tensor::zeros(
+                    (1, page_block_size, num_key_value_heads, head_dim),
+                    dtype,
+                    device,
+                )?,
+                value_cache: Tensor::zeros(
+                    (1, page_block_size, num_key_value_heads, head_dim),
+                    dtype,
+                    device,
+                )?,
+                block_table: Tensor::from_vec(vec![0u32], (1, 1), device)?,
+                seqlens_k: Tensor::new(&[0u32, 1u32], device)?,
+                page_block_size,
+            })
+        };
+
+        let attach_seams = |device: &Device, cache: &mut Cache| -> Result<()> {
+            for block_idx in 0..num_layers {
+                cache.set_paged_kv(block_idx, make_paged_kv(device)?)?;
+                cache.set_decode_position(block_idx, Tensor::new(&[0u32], device)?)?;
+                cache.set_paged_kv_decode_slot(block_idx, Tensor::new(&[0u32], device)?)?;
+            }
+            Ok(())
+        };
+
+        let mut cfg = paged_test_config();
+        cfg.hidden_size = hidden_size;
+        cfg.num_attention_heads = num_attention_heads;
+        cfg.num_key_value_heads = num_key_value_heads;
+        cfg.num_hidden_layers = num_layers;
+        cfg.max_position_embeddings = DEFAULT_MAX_SEQ_LEN;
+
+        let x = Tensor::randn(0f32, 1., (1, 1, hidden_size), &device)?.to_dtype(dtype)?;
+        let zeros = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+        let mut cache = Cache::new(true, dtype, &cfg, &device)?;
+        attach_seams(&device, &mut cache)?;
+        let out = Tensor::zeros((1, 1, hidden_size), dtype, &device)?;
+
+        {
+            let _warmup_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+            let y = run_paged_decode_step(&x, 0, &mut cache, &layers).context("warm-up run")?;
+            out.slice_set(&y, 0, 0).context("warm-up slice_set")?;
+        }
+        out.slice_set(&zeros, 0, 0).context("reset out to zeros")?;
+        device.synchronize().context("post-warm-up synchronize")?;
+
+        let (graph, ()) = CudaGraph::capture(cuda_device, || {
+            let y = run_paged_decode_step(&x, 0, &mut cache, &layers)?;
+            out.slice_set(&y, 0, 0)?;
+            Ok(())
+        })
+        .context("capture")?;
+        graph.replay().context("replay")?;
+        device.synchronize().context("post-replay synchronize")?;
+
+        let sum = out
+            .to_dtype(DType::F32)
+            .context("out.to_dtype")?
+            .sum_all()
+            .context("out.sum_all")?
+            .to_vec0::<f32>()
+            .context("out.to_vec0")?;
+        assert!(sum.is_finite(), "request produced non-finite output");
+        probe_ladder("after readback, graph alive", &device, dtype, &cfg)?;
+
+        drop(graph);
+        probe_ladder("after graph drop", &device, dtype, &cfg)?;
+
+        drop(out);
+        probe_ladder("after out drop", &device, dtype, &cfg)?;
+
+        for block_idx in 0..num_layers {
+            cache.clear_decode_position(block_idx);
+            cache.clear_paged_kv_decode_slot(block_idx);
+        }
+        probe_ladder("after decode seam clears", &device, dtype, &cfg)?;
+
+        for block_idx in 0..num_layers {
+            cache.clear_paged_kv(block_idx);
+        }
+        probe_ladder("after paged kv clears", &device, dtype, &cfg)?;
+
+        drop(cache);
+        probe_ladder("after cache drop", &device, dtype, &cfg)
+    }
 }
 
 #[cfg(all(test, feature = "flashinfer-kernels"))]
