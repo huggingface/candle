@@ -64,6 +64,74 @@ fn matmul_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn assert_close(actual: &Tensor, expected: &Tensor) -> Result<()> {
+    assert_eq!(actual.shape(), expected.shape());
+    let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+    assert!(max_diff < 1e-5, "tensor mismatch: {max_diff}");
+    Ok(())
+}
+
+fn matmul_broadcast_grad(device: &Device) -> Result<()> {
+    let (b, m, k, n) = (4, 3, 5, 2);
+    let lhs_data: Vec<_> = (0..m * k).map(|v| v as f32).collect();
+    let rhs_data: Vec<_> = (0..b * k * n).map(|v| v as f32 / 7.).collect();
+    let weights = Tensor::arange(1f32, (b * m * n + 1) as f32, device)?.reshape((b, m, n))?;
+
+    let lhs = Var::from_slice(&lhs_data, (1, m, k), device)?;
+    let rhs = Var::from_slice(&rhs_data, (b, k, n), device)?;
+    let out = lhs.broadcast_as((b, m, k))?.matmul(&rhs)?;
+    let grads = (&out * &weights)?.sum_all()?.backward()?;
+
+    let lhs_ref = Var::from_slice(&lhs_data, (1, m, k), device)?;
+    let rhs_ref = Var::from_slice(&rhs_data, (b, k, n), device)?;
+    let out_ref = lhs_ref
+        .broadcast_as((b, m, k))?
+        .contiguous()?
+        .matmul(&rhs_ref)?;
+    let grads_ref = (&out_ref * &weights)?.sum_all()?.backward()?;
+
+    assert_close(
+        grads.get(&lhs).context("no grad for lhs")?,
+        grads_ref
+            .get(&lhs_ref)
+            .context("no reference grad for lhs")?,
+    )?;
+    assert_close(
+        grads.get(&rhs).context("no grad for rhs")?,
+        grads_ref
+            .get(&rhs_ref)
+            .context("no reference grad for rhs")?,
+    )?;
+
+    let lhs_data: Vec<_> = (0..b * k * m).map(|v| v as f32 / 5.).collect();
+    let rhs_data: Vec<_> = (0..k * n).map(|v| v as f32).collect();
+    let lhs = Var::from_slice(&lhs_data, (b, k, m), device)?;
+    let rhs = Var::from_slice(&rhs_data, (1, k, n), device)?;
+    let out = lhs.transpose(1, 2)?.matmul(&rhs.broadcast_as((b, k, n))?)?;
+    let grads = (&out * &weights)?.sum_all()?.backward()?;
+
+    let lhs_ref = Var::from_slice(&lhs_data, (b, k, m), device)?;
+    let rhs_ref = Var::from_slice(&rhs_data, (1, k, n), device)?;
+    let out_ref = lhs_ref
+        .transpose(1, 2)?
+        .contiguous()?
+        .matmul(&rhs_ref.broadcast_as((b, k, n))?.contiguous()?)?;
+    let grads_ref = (&out_ref * &weights)?.sum_all()?.backward()?;
+
+    assert_close(
+        grads.get(&lhs).context("no grad for transposed lhs")?,
+        grads_ref
+            .get(&lhs_ref)
+            .context("no reference grad for transposed lhs")?,
+    )?;
+    assert_close(
+        grads.get(&rhs).context("no grad for broadcast rhs")?,
+        grads_ref
+            .get(&rhs_ref)
+            .context("no reference grad for broadcast rhs")?,
+    )
+}
+
 // The simplest gradient descent, using scalar variable.
 fn grad_descent(device: &Device) -> Result<()> {
     let x = Var::new(0f32, device)?;
@@ -547,6 +615,12 @@ test_device!(
     matmul_grad_cpu,
     matmul_grad_gpu,
     matmul_grad_metal
+);
+test_device!(
+    matmul_broadcast_grad,
+    matmul_broadcast_grad_cpu,
+    matmul_broadcast_grad_gpu,
+    matmul_broadcast_grad_metal
 );
 test_device!(
     grad_descent,
