@@ -4,14 +4,21 @@ use crate::metal::{
 };
 use crate::MetalKernelError;
 use block2::RcBlock;
-use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2::{
+    rc::{autoreleasepool, Retained},
+    runtime::ProtocolObject,
+};
 use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue};
 use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-// Use Retained when appropriate. Gives us a more elegant way of handling memory (peaks) than autoreleasepool.
+// We track owned Metal resources with `Retained`, but that only manages ownership,
+// not the thread's autorelease pool. Many Metal APIs (command buffer / encoder creation,
+// commit, waits) still return autoreleased temporaries; without a pool to drain them in a
+// tight loop they accumulate for the whole program lifetime. The creation and sync paths
+// below are therefore wrapped in `autoreleasepool`. See huggingface/candle#2271.
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
 pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 
@@ -162,29 +169,38 @@ impl Commands {
         let count = self.compute_count.fetch_add(1, Ordering::Relaxed);
         let flush = count >= self.compute_per_buffer;
 
-        if flush {
-            self.commit_swap_locked(&mut state_guard, 1)?;
-        }
+        // Create the command buffer / encoder inside an autorelease pool so the
+        // autoreleased Metal temporaries are reclaimed as soon as this returns.
+        // The objects we keep are held via `Retained` (in `state_guard`), so they
+        // survive the drain; only the pool's extra references are freed. Without
+        // this, autoreleased command buffers and encoders accumulate for the whole
+        // program lifetime (see huggingface/candle#2271).
+        autoreleasepool(|_| -> Result<(), MetalKernelError> {
+            if flush {
+                self.commit_swap_locked(&mut state_guard, 1)?;
+            }
 
-        if state_guard.current_encoder.is_none() {
-            let fence = Arc::new(Fence::new(&self.device));
-            let enc = state_guard.current.compute_command_encoder(&fence);
-            // Wait for all prior encoder fences before the first dispatch.
-            // Using HazardTrackingModeUntracked implies that Metal does not automatically flush GPU caches
-            // at encoder or command buffer boundaries.
-            {
-                use std::collections::HashSet;
-                let map = self.prev_ce_outputs.lock().unwrap();
-                let mut seen = HashSet::new();
-                for f in map.values() {
-                    let ptr = Arc::as_ptr(f) as usize;
-                    if seen.insert(ptr) {
-                        enc.wait_for_fence(f);
+            if state_guard.current_encoder.is_none() {
+                let fence = Arc::new(Fence::new(&self.device));
+                let enc = state_guard.current.compute_command_encoder(&fence);
+                // Wait for all prior encoder fences before the first dispatch.
+                // Using HazardTrackingModeUntracked implies that Metal does not automatically flush GPU caches
+                // at encoder or command buffer boundaries.
+                {
+                    use std::collections::HashSet;
+                    let map = self.prev_ce_outputs.lock().unwrap();
+                    let mut seen = HashSet::new();
+                    for f in map.values() {
+                        let ptr = Arc::as_ptr(f) as usize;
+                        if seen.insert(ptr) {
+                            enc.wait_for_fence(f);
+                        }
                     }
                 }
+                state_guard.current_encoder = Some(enc);
             }
-            state_guard.current_encoder = Some(enc);
-        }
+            Ok(())
+        })?;
 
         Ok(CommandsGuard { guard: state_guard })
     }
@@ -194,33 +210,37 @@ impl Commands {
         let count = self.compute_count.fetch_add(1, Ordering::Relaxed);
         let flush = count >= self.compute_per_buffer;
 
-        if flush {
-            self.commit_swap_locked(&mut state_guard, 1)?;
-        }
+        // See `command_encoder` for why this is wrapped in an autorelease pool.
+        let encoder = autoreleasepool(|_| -> Result<BlitCommandEncoder, MetalKernelError> {
+            if flush {
+                self.commit_swap_locked(&mut state_guard, 1)?;
+            }
 
-        // End compute encoder before starting blit.
-        if let Some(enc) = state_guard.current_encoder.take() {
-            self.end_encoding(enc);
-        }
+            // End compute encoder before starting blit.
+            if let Some(enc) = state_guard.current_encoder.take() {
+                self.end_encoding(enc);
+            }
 
-        let fence = Arc::new(Fence::new(&self.device));
-        let encoder = state_guard
-            .current
-            .blit_command_encoder(&fence, &self.prev_ce_outputs);
+            let fence = Arc::new(Fence::new(&self.device));
+            let encoder = state_guard
+                .current
+                .blit_command_encoder(&fence, &self.prev_ce_outputs);
 
-        // Wait for all prior encoder fences before any blit commands execute.
-        // Required for HazardTrackingModeUntracked: GPU caches are not auto-flushed.
-        {
-            use std::collections::HashSet;
-            let map = self.prev_ce_outputs.lock().unwrap();
-            let mut seen = HashSet::new();
-            for f in map.values() {
-                let ptr = Arc::as_ptr(f) as usize;
-                if seen.insert(ptr) {
-                    encoder.wait_for_fence(f);
+            // Wait for all prior encoder fences before any blit commands execute.
+            // Required for HazardTrackingModeUntracked: GPU caches are not auto-flushed.
+            {
+                use std::collections::HashSet;
+                let map = self.prev_ce_outputs.lock().unwrap();
+                let mut seen = HashSet::new();
+                for f in map.values() {
+                    let ptr = Arc::as_ptr(f) as usize;
+                    if seen.insert(ptr) {
+                        encoder.wait_for_fence(f);
+                    }
                 }
             }
-        }
+            Ok(encoder)
+        })?;
 
         Ok(BlitCommandsGuard {
             _guard: state_guard,
@@ -233,62 +253,72 @@ impl Commands {
     }
 
     pub fn flush_and_wait(&self) -> Result<(), MetalKernelError> {
-        let to_wait = {
-            let mut state = self.state.lock()?;
-            if self.compute_count.load(Ordering::Acquire) > 0 {
-                self.commit_swap_locked(&mut state, 0)?;
+        // Wrapped in an autorelease pool: committing swaps in a fresh command buffer
+        // (an autoreleased Metal object) and waiting spins up transient temporaries.
+        // See `command_encoder` and huggingface/candle#2271.
+        autoreleasepool(|_| -> Result<(), MetalKernelError> {
+            let to_wait = {
+                let mut state = self.state.lock()?;
+                if self.compute_count.load(Ordering::Acquire) > 0 {
+                    self.commit_swap_locked(&mut state, 0)?;
+                }
+                std::mem::take(&mut state.in_flight)
+            };
+
+            // Wait only on the last CB. Metal executes CBs in queue order, so all earlier
+            // CBs are guaranteed complete when the last one is. Calling waitUntilCompleted on
+            // each CB individually pays OS notification latency (~1-2ms) N times unnecessarily.
+            if let Some(last) = to_wait.last() {
+                Self::ensure_completed(last)?;
             }
-            std::mem::take(&mut state.in_flight)
-        };
-
-        // Wait only on the last CB. Metal executes CBs in queue order, so all earlier
-        // CBs are guaranteed complete when the last one is. Calling waitUntilCompleted on
-        // each CB individually pays OS notification latency (~1-2ms) N times unnecessarily.
-        if let Some(last) = to_wait.last() {
-            Self::ensure_completed(last)?;
-        }
-        // Check earlier CBs for errors (no need to block — they're already done).
-        for cb in &to_wait[..to_wait.len().saturating_sub(1)] {
-            if cb.status() == MTLCommandBufferStatus::Error {
-                let msg = cb
-                    .error()
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "unknown error".to_string());
-                return Err(MetalKernelError::CommandBufferError(msg));
+            // Check earlier CBs for errors (no need to block — they're already done).
+            for cb in &to_wait[..to_wait.len().saturating_sub(1)] {
+                if cb.status() == MTLCommandBufferStatus::Error {
+                    let msg = cb
+                        .error()
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "unknown error".to_string());
+                    return Err(MetalKernelError::CommandBufferError(msg));
+                }
             }
-        }
 
-        self.prev_ce_outputs.lock()?.clear();
+            self.prev_ce_outputs.lock()?.clear();
 
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Commit the current command buffer and wait on that specific buffer, for CPU readbacks.
     /// [`Self::wait_until_completed`] waits on the last in-flight buffer, which a concurrent
     /// `flush_and_wait` on another thread may already have taken, returning before our work ran.
     pub fn flush_and_wait_current(&self) -> Result<(), MetalKernelError> {
-        let cb = {
-            let mut state = self.state.lock()?;
-            self.commit_swap_locked(&mut state, 0)?;
-            state.in_flight.last().cloned()
-        };
-        if let Some(cb) = cb {
-            Self::ensure_completed(&cb)?;
-            // queue is FIFO: everything committed before cb is done too
-            let mut state = self.state.lock()?;
-            state
-                .in_flight
-                .retain(|c| c.status() != MTLCommandBufferStatus::Completed);
-        }
-        Ok(())
+        // See `flush_and_wait` / huggingface/candle#2271 for why this drains a pool.
+        autoreleasepool(|_| -> Result<(), MetalKernelError> {
+            let cb = {
+                let mut state = self.state.lock()?;
+                self.commit_swap_locked(&mut state, 0)?;
+                state.in_flight.last().cloned()
+            };
+            if let Some(cb) = cb {
+                Self::ensure_completed(&cb)?;
+                // queue is FIFO: everything committed before cb is done too
+                let mut state = self.state.lock()?;
+                state
+                    .in_flight
+                    .retain(|c| c.status() != MTLCommandBufferStatus::Completed);
+            }
+            Ok(())
+        })
     }
 
     pub fn flush(&self) -> Result<(), MetalKernelError> {
-        let mut state = self.state.lock()?;
-        if self.compute_count.load(Ordering::Acquire) > 0 {
-            self.commit_swap_locked(&mut state, 0)?;
-        }
-        Ok(())
+        autoreleasepool(|_| -> Result<(), MetalKernelError> {
+            let mut state = self.state.lock()?;
+            if self.compute_count.load(Ordering::Acquire) > 0 {
+                self.commit_swap_locked(&mut state, 0)?;
+            }
+            Ok(())
+        })
     }
 
     fn commit_swap_locked(
