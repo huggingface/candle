@@ -111,7 +111,12 @@ impl Kernels {
         device: &Device,
         source: Source,
     ) -> Result<Library, MetalKernelError> {
+        if let Some(lib) = self.libraries.read()?.get(&source) {
+            return Ok(lib.clone());
+        }
+
         let mut libraries = self.libraries.write()?;
+        // Recheck after acquiring the write lock in case another thread inserted it.
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
@@ -150,8 +155,13 @@ impl Kernels {
         name: impl Into<KernelName>,
         constants: Option<ConstantValues>,
     ) -> Result<ComputePipeline, MetalKernelError> {
-        let mut pipelines = self.pipelines.write()?;
         let key = (source, name.into(), constants);
+        if let Some(pipeline) = self.pipelines.read()?.get(&key) {
+            return Ok(pipeline.clone());
+        }
+
+        let mut pipelines = self.pipelines.write()?;
+        // Recheck after acquiring the write lock in case another thread inserted it.
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())
         } else {
@@ -200,4 +210,51 @@ fn get_compile_options() -> Retained<MTLCompileOptions> {
         compile_options.setFastMathEnabled(fast_math_enabled);
     }
     compile_options
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    #[test]
+    fn concurrent_cache_loads_insert_once() {
+        const THREADS: usize = 8;
+        const WARM_HITS: usize = 100;
+
+        let device = Device::system_default().unwrap();
+        let kernels = Kernels::new();
+        let barrier = Barrier::new(THREADS);
+
+        let pipelines = std::thread::scope(|scope| {
+            let handles = (0..THREADS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        let pipeline = kernels
+                            .load_pipeline(&device, Source::Unary, "cos_f32")
+                            .unwrap();
+                        for _ in 0..WARM_HITS {
+                            let cached = kernels
+                                .load_pipeline(&device, Source::Unary, "cos_f32")
+                                .unwrap();
+                            assert!(std::ptr::eq(pipeline.as_ref(), cached.as_ref()));
+                            kernels.load_library(&device, Source::Unary).unwrap();
+                        }
+                        pipeline
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(pipelines
+            .iter()
+            .all(|pipeline| std::ptr::eq(pipelines[0].as_ref(), pipeline.as_ref())));
+        assert_eq!(kernels.libraries.read().unwrap().len(), 1);
+        assert_eq!(kernels.pipelines.read().unwrap().len(), 1);
+    }
 }
