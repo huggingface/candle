@@ -10,6 +10,11 @@
 //! and several adapters can coexist so that the active one can be swapped at
 //! runtime with [`LoraLinear::set_active_adapter`].
 //!
+//! For serving scenarios where a single batch mixes sequences that target
+//! different adapters (S-LoRA / Punica style multi-tenant inference),
+//! [`LoraLinear::forward_with_adapters`] applies a per-row adapter selection
+//! in one batched computation instead of one forward per adapter group.
+//!
 //! ```rust
 //! use candle::{Device, Tensor};
 //! use candle_nn::{linear, lora::LoraLinear, Module, VarBuilder};
@@ -42,6 +47,32 @@ impl Adapter {
     /// `(B·A) * scale`, i.e. the delta that gets added to the base weight.
     fn delta_weight(&self) -> Result<Tensor> {
         self.lora_b.matmul(&self.lora_a)?.affine(self.scale, 0.)
+    }
+
+    fn rank(&self) -> Result<usize> {
+        self.lora_a.dim(0)
+    }
+
+    /// `A^T [in, r]` zero-padded along the rank dimension to `r_max`.
+    fn a_t_padded(&self, r_max: usize) -> Result<Tensor> {
+        let a_t = self.lora_a.t()?.contiguous()?;
+        let (in_dim, r) = a_t.dims2()?;
+        if r == r_max {
+            return Ok(a_t);
+        }
+        let pad = Tensor::zeros((in_dim, r_max - r), a_t.dtype(), a_t.device())?;
+        Tensor::cat(&[a_t, pad], 1)
+    }
+
+    /// `B^T * scale [r, out]` zero-padded along the rank dimension to `r_max`.
+    fn b_t_scaled_padded(&self, r_max: usize) -> Result<Tensor> {
+        let b_t = self.lora_b.t()?.affine(self.scale, 0.)?;
+        let (r, out_dim) = b_t.dims2()?;
+        if r == r_max {
+            return Ok(b_t);
+        }
+        let pad = Tensor::zeros((r_max - r, out_dim), b_t.dtype(), b_t.device())?;
+        Tensor::cat(&[b_t, pad], 0)
     }
 
     /// `(x·A^T)·B^T * scale`, i.e. the LoRA contribution to the output.
@@ -222,6 +253,99 @@ impl LoraLinear {
     /// The underlying base layer.
     pub fn base(&self) -> &Linear {
         &self.base
+    }
+
+    /// Forward pass over a heterogeneous batch where each row selects its own
+    /// adapter (S-LoRA / Punica style multi-adapter batching).
+    ///
+    /// `x` has shape `[batch, in_dim]` or `[batch, seq, in_dim]` and
+    /// `assignments` holds, for each batch row, either `Some(adapter_name)` or
+    /// `None` for rows that should only go through the base layer. The
+    /// currently active adapter is ignored by this method.
+    ///
+    /// Rather than splitting the batch and running one forward per adapter
+    /// group, the selected `A`/`B` matrices are gathered into per-row stacks
+    /// (zero-padded to the largest rank, with the `alpha/r` scaling folded in)
+    /// and applied with two batched matmuls, SGMV-style:
+    /// `y = W·x + gather(B_all)·gather(A_all)·x`. Rows with no adapter hit an
+    /// all-zero slot, so the base-only path is preserved exactly and the
+    /// result matches running each row separately with its own adapter.
+    pub fn forward_with_adapters(
+        &self,
+        x: &Tensor,
+        assignments: &[Option<&str>],
+    ) -> Result<Tensor> {
+        if let Some(merged) = &self.merged {
+            candle::bail!(
+                "cannot use forward_with_adapters while adapter {merged} is merged into the base \
+                 weight, call unmerge first"
+            )
+        }
+        let batch = x.dim(0)?;
+        if assignments.len() != batch {
+            candle::bail!(
+                "forward_with_adapters: {} adapter assignments for a batch of {batch} rows",
+                assignments.len()
+            )
+        }
+        let base_out = self.base.forward(x)?;
+        // Map each row to a slot in the gathered stacks; slot 0 is an all-zero
+        // adapter used by the `None` rows.
+        let mut involved: Vec<&str> = Vec::new();
+        let mut row_slots: Vec<u32> = Vec::with_capacity(batch);
+        for assignment in assignments {
+            match assignment {
+                None => row_slots.push(0),
+                Some(name) => {
+                    if !self.adapters.contains_key(*name) {
+                        candle::bail!("no such LoRA adapter: {name}")
+                    }
+                    let slot = match involved.iter().position(|n| n == name) {
+                        Some(i) => i + 1,
+                        None => {
+                            involved.push(name);
+                            involved.len()
+                        }
+                    };
+                    row_slots.push(slot as u32);
+                }
+            }
+        }
+        if involved.is_empty() {
+            return Ok(base_out);
+        }
+        let (out_dim, in_dim) = self.base.weight().dims2()?;
+        let r_max = involved
+            .iter()
+            .map(|name| self.adapters[*name].rank())
+            .try_fold(0, |acc, r| r.map(|r| acc.max(r)))?;
+        let (dtype, device) = (x.dtype(), x.device());
+        let mut a_stack = vec![Tensor::zeros((in_dim, r_max), dtype, device)?];
+        let mut b_stack = vec![Tensor::zeros((r_max, out_dim), dtype, device)?];
+        for name in involved {
+            let adapter = &self.adapters[name];
+            a_stack.push(adapter.a_t_padded(r_max)?.to_dtype(dtype)?);
+            b_stack.push(adapter.b_t_scaled_padded(r_max)?.to_dtype(dtype)?);
+        }
+        let row_slots = Tensor::from_vec(row_slots, batch, device)?;
+        // [batch, in_dim, r_max] and [batch, r_max, out_dim].
+        let a_sel = Tensor::stack(&a_stack, 0)?.index_select(&row_slots, 0)?;
+        let b_sel = Tensor::stack(&b_stack, 0)?.index_select(&row_slots, 0)?;
+        let x3 = match x.rank() {
+            2 => x.unsqueeze(1)?,
+            3 => x.clone(),
+            rank => candle::bail!(
+                "forward_with_adapters expects a [batch, in] or [batch, seq, in] input, got a \
+                 rank {rank} tensor"
+            ),
+        };
+        let delta = x3.contiguous()?.matmul(&a_sel)?.matmul(&b_sel)?;
+        let delta = if x.rank() == 2 {
+            delta.squeeze(1)?
+        } else {
+            delta
+        };
+        base_out.add(&delta)
     }
 }
 
