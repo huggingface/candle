@@ -212,6 +212,12 @@ impl Tensor {
                     }
                     Op::Binary(lhs, rhs, BinaryOp::Minimum)
                     | Op::Binary(lhs, rhs, BinaryOp::Maximum) => {
+                        // There are no ties to split on an empty domain.
+                        if node.elem_count() == 0 {
+                            grads.or_insert(lhs)?;
+                            grads.or_insert(rhs)?;
+                            continue;
+                        }
                         let mask_lhs = node.eq(lhs)?.to_dtype(grad.dtype())?;
                         let mask_rhs = node.eq(rhs)?.to_dtype(grad.dtype())?;
 
@@ -477,6 +483,12 @@ impl Tensor {
                         }
                     }
                     Op::Broadcast(arg) => {
+                        // Summing an empty broadcast gradient is always zero, even when the
+                        // source tensor is non-empty.
+                        if node.elem_count() == 0 {
+                            grads.or_insert(arg)?;
+                            continue;
+                        }
                         let arg_dims = arg.dims();
                         let node_dims = node.dims();
                         // The number of dims that have been inserted on the left.

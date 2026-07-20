@@ -96,7 +96,7 @@ macro_rules! binary_op {
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
             let shape = self.same_shape_binary_op(rhs, stringify!($fn_name))?;
             if shape.elem_count() == 0 {
-                return Ok(self.clone());
+                return self.empty_binary_op::<crate::op::$op_name>(rhs, shape, BinaryOp::$op_name);
             }
             let storage = self.storage().binary_impl::<crate::op::$op_name>(
                 &*rhs.storage(),
@@ -120,8 +120,12 @@ macro_rules! binary_op_scalar {
                     .broadcast_as(self.shape())?,
             };
             let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
-            if self.elem_count() == 0 {
-                return Ok(self.clone());
+            if shape.elem_count() == 0 {
+                return self.empty_binary_op::<crate::op::$op_name>(
+                    &rhs,
+                    shape,
+                    BinaryOp::$op_name,
+                );
             }
             let storage = self.storage().binary_impl::<crate::op::$op_name>(
                 &*rhs.storage(),
@@ -585,6 +589,24 @@ impl Tensor {
         } else {
             Ok(lhs)
         }
+    }
+
+    fn empty_binary_op<B: crate::op::BinaryOpT>(
+        &self,
+        rhs: &Self,
+        shape: &Shape,
+        binary_op: BinaryOp,
+    ) -> Result<Self> {
+        {
+            let lhs_storage = self.storage();
+            let rhs_storage = rhs.storage();
+            lhs_storage.same_device(&rhs_storage, B::NAME)?;
+            lhs_storage.same_dtype(&rhs_storage, B::NAME)?;
+        }
+
+        let storage = self.device().zeros(shape, self.dtype())?;
+        let op = BackpropOp::new2(self, rhs, |lhs, rhs| Op::Binary(lhs, rhs, binary_op));
+        Ok(from_storage(storage, shape.clone(), op, false))
     }
 
     /// Returns true if the computation graph should track this op, that is if it is
