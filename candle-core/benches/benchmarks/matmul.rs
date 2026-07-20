@@ -58,12 +58,51 @@ fn run_bench(c: &mut Criterion, device: &Device, name: &str, shape_a: &[usize], 
     group.finish();
 }
 
+fn run_broadcast_view_bench(c: &mut Criterion, device: &Device) {
+    let (batch, m, n, k) = (32, 32, 32, 32);
+    let lhs = Tensor::zeros((batch, m, k), DType::F32, device).unwrap();
+    let rhs = Tensor::zeros((batch, k, n), DType::F32, device).unwrap();
+    let lhs_broadcast = Tensor::zeros((1, m, k), DType::F32, device)
+        .unwrap()
+        .broadcast_as((batch, m, k))
+        .unwrap();
+    let rhs_broadcast = Tensor::zeros((1, k, n), DType::F32, device)
+        .unwrap()
+        .broadcast_as((batch, k, n))
+        .unwrap();
+    let lhs_materialized = lhs_broadcast.contiguous().unwrap();
+    let rhs_materialized = rhs_broadcast.contiguous().unwrap();
+    let flops = 2 * batch * m * n * k;
+
+    let mut group = c.benchmark_group(device.bench_name("matmul_broadcast_view_32"));
+    group.throughput(Throughput::Bytes(flops as u64));
+    for (name, lhs, rhs) in [
+        ("lhs_broadcast", &lhs_broadcast, &rhs),
+        ("lhs_materialized", &lhs_materialized, &rhs),
+        ("rhs_broadcast", &lhs, &rhs_broadcast),
+        ("rhs_materialized", &lhs, &rhs_materialized),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter_custom(|iters| {
+                let start = Instant::now();
+                for _i in 0..iters {
+                    black_box(lhs).matmul(black_box(rhs)).unwrap();
+                }
+                device.sync().unwrap();
+                start.elapsed()
+            })
+        });
+    }
+    group.finish();
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
         for (name, shape_a, shape_b) in MATMUL_SHAPES {
             run_bench(c, &device, name, shape_a, shape_b);
         }
+        run_broadcast_view_bench(c, &device);
     }
 }
 
