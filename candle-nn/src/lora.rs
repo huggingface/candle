@@ -328,9 +328,8 @@ impl LoraLinear {
             b_stack.push(adapter.b_t_scaled_padded(r_max)?.to_dtype(dtype)?);
         }
         let row_slots = Tensor::from_vec(row_slots, batch, device)?;
-        // [batch, in_dim, r_max] and [batch, r_max, out_dim].
-        let a_sel = Tensor::stack(&a_stack, 0)?.index_select(&row_slots, 0)?;
-        let b_sel = Tensor::stack(&b_stack, 0)?.index_select(&row_slots, 0)?;
+        let a_stack = Tensor::stack(&a_stack, 0)?;
+        let b_stack = Tensor::stack(&b_stack, 0)?;
         let x3 = match x.rank() {
             2 => x.unsqueeze(1)?,
             3 => x.clone(),
@@ -339,7 +338,7 @@ impl LoraLinear {
                  rank {rank} tensor"
             ),
         };
-        let delta = x3.contiguous()?.matmul(&a_sel)?.matmul(&b_sel)?;
+        let delta = batched_lora_delta(&x3, &a_stack, &b_stack, &row_slots)?;
         let delta = if x.rank() == 2 {
             delta.squeeze(1)?
         } else {
@@ -347,6 +346,30 @@ impl LoraLinear {
         };
         base_out.add(&delta)
     }
+}
+
+/// Computes the LoRA delta for a prepared heterogeneous batch:
+/// `delta[i] = x[i] · a_stack[slot(i)] · b_stack[slot(i)]` for every batch
+/// row `i`, where `x` is `[batch, seq, in]`, `a_stack` is
+/// `[n_slots, in, r_max]` (`A^T`, rank-padded with zeros), `b_stack` is
+/// `[n_slots, r_max, out]` (`B^T`, rank-padded, `alpha/r` scaling folded in,
+/// slot 0 all-zero for no-adapter rows) and `row_slots` is a `[batch]` u32
+/// tensor mapping every row to its slot.
+///
+/// This is the seam a fused SGMV/BGMV kernel can replace: the reference
+/// implementation below gathers per-row copies of the adapter matrices and
+/// applies them with two batched matmuls, whereas a dedicated kernel can read
+/// the stacks in place through `row_slots` without materializing the gather.
+fn batched_lora_delta(
+    x: &Tensor,
+    a_stack: &Tensor,
+    b_stack: &Tensor,
+    row_slots: &Tensor,
+) -> Result<Tensor> {
+    // [batch, in, r_max] and [batch, r_max, out].
+    let a_sel = a_stack.index_select(row_slots, 0)?;
+    let b_sel = b_stack.index_select(row_slots, 0)?;
+    x.contiguous()?.matmul(&a_sel)?.matmul(&b_sel)
 }
 
 impl Module for LoraLinear {
