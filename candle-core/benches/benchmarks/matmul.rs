@@ -24,10 +24,6 @@ fn run(a: &Tensor, b: &Tensor) {
     a.broadcast_matmul(b).unwrap();
 }
 
-fn run_direct(a: &Tensor, b: &Tensor) {
-    a.matmul(b).unwrap();
-}
-
 fn calculate_flops(shape_a: &[usize], shape_b: &[usize]) -> usize {
     let batch: usize = shape_a
         .iter()
@@ -90,7 +86,7 @@ fn run_broadcast_view_bench(c: &mut Criterion, device: &Device) {
             b.iter_custom(|iters| {
                 let start = Instant::now();
                 for _i in 0..iters {
-                    run_direct(black_box(lhs), black_box(rhs));
+                    black_box(lhs).matmul(black_box(rhs)).unwrap();
                 }
                 device.sync().unwrap();
                 start.elapsed()

@@ -64,10 +64,20 @@ fn matmul_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
-fn assert_close(actual: &Tensor, expected: &Tensor) -> Result<()> {
+fn assert_close(label: &str, actual: &Tensor, expected: &Tensor) -> Result<()> {
     assert_eq!(actual.shape(), expected.shape());
-    let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
-    assert!(max_diff < 1e-5, "tensor mismatch: {max_diff}");
+    let actual = actual.flatten_all()?.to_vec1::<f32>()?;
+    let expected = expected.flatten_all()?.to_vec1::<f32>()?;
+    // CUDA can accumulate broadcast and materialized batches in different orders.
+    let (atol, rtol) = (1e-5, 1e-6);
+    for (index, (&actual, &expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        let diff = (actual - expected).abs();
+        let tolerance = atol + rtol * expected.abs();
+        assert!(
+            diff <= tolerance,
+            "{label} mismatch at {index}: {actual} != {expected} ({diff} > {tolerance})"
+        );
+    }
     Ok(())
 }
 
@@ -91,12 +101,14 @@ fn matmul_broadcast_grad(device: &Device) -> Result<()> {
     let grads_ref = (&out_ref * &weights)?.sum_all()?.backward()?;
 
     assert_close(
+        "lhs broadcast gradient",
         grads.get(&lhs).context("no grad for lhs")?,
         grads_ref
             .get(&lhs_ref)
             .context("no reference grad for lhs")?,
     )?;
     assert_close(
+        "rhs gradient with lhs broadcast",
         grads.get(&rhs).context("no grad for rhs")?,
         grads_ref
             .get(&rhs_ref)
@@ -119,12 +131,14 @@ fn matmul_broadcast_grad(device: &Device) -> Result<()> {
     let grads_ref = (&out_ref * &weights)?.sum_all()?.backward()?;
 
     assert_close(
+        "transposed lhs gradient",
         grads.get(&lhs).context("no grad for transposed lhs")?,
         grads_ref
             .get(&lhs_ref)
             .context("no reference grad for transposed lhs")?,
     )?;
     assert_close(
+        "broadcast rhs gradient",
         grads.get(&rhs).context("no grad for broadcast rhs")?,
         grads_ref
             .get(&rhs_ref)
