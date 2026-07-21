@@ -233,6 +233,29 @@ macro_rules! dummy_num_assign {
                     stringify!($ty)
                 )
             }
+
+            type Accum = Self;
+
+            fn to_accum(self) -> Self::Accum {
+                panic!(
+                    "{} is a dummy type and does not support operations",
+                    stringify!($ty)
+                )
+            }
+
+            fn accum_add(_acc: &mut Self::Accum, _val: Self) {
+                panic!(
+                    "{} is a dummy type and does not support operations",
+                    stringify!($ty)
+                )
+            }
+
+            fn from_accum(_acc: Self::Accum) -> Self {
+                panic!(
+                    "{} is a dummy type and does not support operations",
+                    stringify!($ty)
+                )
+            }
         }
     };
 }
