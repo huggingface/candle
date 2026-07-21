@@ -1051,7 +1051,17 @@ impl Tensor {
         let mean_dims = mean_dims.to_indexes(self.shape(), "mean-keepdim")?;
         let reduced_dim: usize = mean_dims.iter().map(|i| self.dims()[*i]).product();
         let scale = 1f64 / (reduced_dim as f64);
-        self.sum_impl(mean_dims, true)? * scale
+        // A f16 sum can overflow to infinity well before the mean itself would (e.g.
+        // summing 65520 ones overflows f16's ~65504 max, even though the true mean, 1.0,
+        // is trivially representable). Do the sum and scaling in f32 and narrow back down
+        // once at the end, instead of dividing an already-narrowed, possibly-infinite sum.
+        match self.dtype() {
+            DType::F16 | DType::BF16 => {
+                let dtype = self.dtype();
+                (self.to_dtype(DType::F32)?.sum_impl(mean_dims, true)? * scale)?.to_dtype(dtype)
+            }
+            _ => self.sum_impl(mean_dims, true)? * scale,
+        }
     }
 
     /// Returns the mean of all elements in the input tensor. The mean is performed over all the
@@ -1061,7 +1071,15 @@ impl Tensor {
         let mean_dims = mean_dims.to_indexes(self.shape(), "mean")?;
         let reduced_dim: usize = mean_dims.iter().map(|i| self.dims()[*i]).product();
         let scale = 1f64 / (reduced_dim as f64);
-        self.sum_impl(mean_dims, false)? * scale
+        // See the comment in `mean_keepdim`: narrow-down-then-scale can overflow f16 even
+        // when the true mean is in range, so scale in f32 and narrow back down at the end.
+        match self.dtype() {
+            DType::F16 | DType::BF16 => {
+                let dtype = self.dtype();
+                (self.to_dtype(DType::F32)?.sum_impl(mean_dims, false)? * scale)?.to_dtype(dtype)
+            }
+            _ => self.sum_impl(mean_dims, false)? * scale,
+        }
     }
 
     /// Returns the unbiased variance over the selected dimension.
@@ -2136,7 +2154,11 @@ impl Tensor {
     }
 
     pub fn mean_all(&self) -> Result<Tensor> {
-        self.sum_all()? / self.elem_count() as f64
+        // Route through `mean` rather than `sum_all()? / count` so f16 tensors get the
+        // overflow-safe f32 scaling from `mean`/`mean_keepdim` instead of dividing an
+        // already-narrowed (possibly infinite) f16 sum.
+        let dims: Vec<_> = (0..self.rank()).collect();
+        self.mean(dims)
     }
 
     fn flatten_<D1: Dim, D2: Dim>(

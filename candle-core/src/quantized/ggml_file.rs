@@ -5,6 +5,19 @@ use crate::{Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 
+// GGML tensors carry at most GGML_MAX_DIMS (4) dimensions, see ggml.h. Values
+// read from an untrusted file are validated against this before being used as
+// an allocation length, mirroring the GGUF caps in huggingface/candle#3533.
+const GGML_MAX_DIMS: u32 = 4;
+
+// `file_size` is the byte length captured once up front so length-prefixed
+// fields read from the file can be rejected before they drive an allocation,
+// without seeking to the end and back on every read.
+fn remaining_bytes<R: std::io::Seek>(reader: &mut R, file_size: u64) -> Result<u64> {
+    let cur = reader.stream_position()?;
+    Ok(file_size.saturating_sub(cur))
+}
+
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.h#L37
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Magic {
@@ -103,11 +116,26 @@ pub struct Vocab {
 }
 
 impl Vocab {
-    fn read<R: std::io::Read>(reader: &mut R, n_vocab: usize) -> Result<Self> {
+    fn read<R: std::io::Read + std::io::Seek>(
+        reader: &mut R,
+        n_vocab: usize,
+        file_size: u64,
+    ) -> Result<Self> {
         // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.cpp#L556
+        // Every entry is at least 8 bytes on disk (u32 length + f32 score), so a
+        // n_vocab larger than remaining/8 cannot be backed by the file. Reject it
+        // before reserving, so a crafted header can't request a huge allocation.
+        let remaining = remaining_bytes(reader, file_size)?;
+        if n_vocab as u64 > remaining / 8 {
+            crate::bail!("ggml: vocab size {n_vocab} exceeds remaining file bytes {remaining}")
+        }
         let mut token_score_pairs = Vec::with_capacity(n_vocab);
         for _index in 0..n_vocab {
             let len = reader.read_u32::<LittleEndian>()? as usize;
+            let remaining = remaining_bytes(reader, file_size)?;
+            if len as u64 > remaining {
+                crate::bail!("ggml: token length {len} exceeds remaining file bytes {remaining}")
+            }
             let mut word = vec![0u8; len];
             reader.read_exact(&mut word)?;
             let score = reader.read_f32::<LittleEndian>()?;
@@ -192,8 +220,12 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     reader: &mut R,
     magic: VersionedMagic,
     device: &Device,
+    file_size: u64,
 ) -> Result<(String, super::QTensor)> {
     let n_dims = reader.read_u32::<LittleEndian>()?;
+    if n_dims > GGML_MAX_DIMS {
+        crate::bail!("ggml: tensor n_dims {n_dims} exceeds max {GGML_MAX_DIMS}")
+    }
     let name_len = reader.read_u32::<LittleEndian>()?;
     let ggml_dtype = reader.read_u32::<LittleEndian>()?;
     let ggml_dtype = GgmlDType::from_u32(ggml_dtype)?;
@@ -202,6 +234,10 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     // The dimensions are stored in reverse order, see for example:
     // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/convert.py#L969
     dims.reverse();
+    let remaining = remaining_bytes(reader, file_size)?;
+    if name_len as u64 > remaining {
+        crate::bail!("ggml: tensor name length {name_len} exceeds remaining file bytes {remaining}")
+    }
     let mut name = vec![0u8; name_len as usize];
     reader.read_exact(&mut name)?;
     let name = String::from_utf8_lossy(&name).into_owned();
@@ -211,8 +247,21 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
         reader.seek(std::io::SeekFrom::Current(((32 - pos % 32) % 32) as i64))?;
     }
     let dims = dims.iter().map(|&u| u as usize).collect::<Vec<_>>();
-    let tensor_elems = dims.iter().product::<usize>();
-    let size_in_bytes = tensor_elems * ggml_dtype.type_size() / ggml_dtype.block_size();
+    // Dimensions come from the file: fold with checked_mul so a crafted shape
+    // reports an error instead of panicking (debug) or wrapping (release) into a
+    // bogus, too-small `size_in_bytes`.
+    let size_in_bytes = dims
+        .iter()
+        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+        .and_then(|elems| elems.checked_mul(ggml_dtype.type_size()))
+        .map(|nbytes| nbytes / ggml_dtype.block_size())
+        .ok_or_else(|| crate::Error::Msg(format!("ggml: tensor shape {dims:?} size overflow")))?;
+    // Validate against the file before allocating so a crafted size can't force
+    // a huge up-front allocation.
+    let remaining = remaining_bytes(reader, file_size)?;
+    if size_in_bytes as u64 > remaining {
+        crate::bail!("ggml: tensor needs {size_in_bytes} bytes, only {remaining} remaining in file")
+    }
     // TODO: Mmap version to avoid copying the data around?
     let mut raw_data = vec![0u8; size_in_bytes];
     reader.read_exact(&mut raw_data)?;
@@ -240,11 +289,11 @@ impl Content {
         reader.seek(std::io::SeekFrom::Start(0))?;
         let magic = VersionedMagic::read(reader)?;
         let hparams = HParams::read(reader)?;
-        let vocab = Vocab::read(reader, hparams.n_vocab as usize)?;
+        let vocab = Vocab::read(reader, hparams.n_vocab as usize, last_position)?;
         let mut tensors = HashMap::new();
 
         while reader.stream_position()? != last_position {
-            let (name, tensor) = read_one_tensor(reader, magic, device)?;
+            let (name, tensor) = read_one_tensor(reader, magic, device, last_position)?;
             tensors.insert(name, tensor);
         }
         let device = device.clone();
