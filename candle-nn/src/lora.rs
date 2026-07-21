@@ -160,8 +160,23 @@ impl LoraLinear {
         lora_b: Tensor,
         alpha: f64,
     ) -> Result<()> {
+        // Overwriting the adapter that is currently merged into the base weight
+        // would make `unmerge` subtract the new delta from a base that still
+        // holds the old one, corrupting the weights. Refuse it, as
+        // `set_active_adapter` does for switching.
+        if self.merged.as_deref() == Some(name) {
+            candle::bail!(
+                "adapter {name} is merged into the base weight, unmerge it before overwriting"
+            )
+        }
         let rank = lora_a.dim(0)?;
         let scale = alpha / rank as f64;
+        // Align the adapter tensors with the base weight's dtype so the plain
+        // `forward` (and `merge`/`delta_weight`) never hit a mixed-dtype matmul
+        // when a PEFT checkpoint is stored in a different dtype than the model.
+        let dtype = self.base.weight().dtype();
+        let lora_a = lora_a.to_dtype(dtype)?;
+        let lora_b = lora_b.to_dtype(dtype)?;
         self.adapters.insert(
             name.to_string(),
             Adapter {
@@ -322,10 +337,14 @@ impl LoraLinear {
         let (dtype, device) = (x.dtype(), x.device());
         let mut a_stack = vec![Tensor::zeros((in_dim, r_max), dtype, device)?];
         let mut b_stack = vec![Tensor::zeros((r_max, out_dim), dtype, device)?];
+        // Adapter tensors are stored in the base weight's dtype (see
+        // `add_adapter_tensors`), which equals `x`'s dtype here since
+        // `base.forward(x)` above already ran, so the stacks are homogeneous
+        // with the zero slot without a per-adapter cast.
         for name in involved {
             let adapter = &self.adapters[name];
-            a_stack.push(adapter.a_t_padded(r_max)?.to_dtype(dtype)?);
-            b_stack.push(adapter.b_t_scaled_padded(r_max)?.to_dtype(dtype)?);
+            a_stack.push(adapter.a_t_padded(r_max)?);
+            b_stack.push(adapter.b_t_scaled_padded(r_max)?);
         }
         let row_slots = Tensor::from_vec(row_slots, batch, device)?;
         let a_stack = Tensor::stack(&a_stack, 0)?;

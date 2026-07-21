@@ -240,6 +240,67 @@ fn lora_batched_forward_errors(device: &Device) -> Result<()> {
     Ok(())
 }
 
+/// Reloading the adapter that is currently merged into the base weight would
+/// make `unmerge` subtract the new delta from a base still holding the old one;
+/// it must be rejected instead. Device-independent control-flow, so CPU only.
+#[test]
+fn lora_reload_while_merged_is_rejected() -> Result<()> {
+    let device = Device::Cpu;
+    let base = make_base(&device)?;
+    let mut varmap = VarMap::new();
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+    let mut lora = LoraLinear::new(base);
+    lora.add_adapter("a", vb.pp("lora_a"), 2, 2.0)?;
+    varmap.set_one(
+        "lora_a.lora_A.weight",
+        Tensor::new(&[[1f32, 0., 0.], [0., 1., 0.]], &device)?,
+    )?;
+    varmap.set_one(
+        "lora_a.lora_B.weight",
+        Tensor::new(&[[1f32, 0.], [0., 1.]], &device)?,
+    )?;
+    let x = Tensor::new(&[[1f32, 2., 3.]], &device)?;
+
+    lora.set_active_adapter(Some("a"))?;
+    let active = to_vec2_round(&lora.forward(&x)?, 4)?;
+    lora.merge()?;
+    assert_eq!(to_vec2_round(&lora.forward(&x)?, 4)?, active);
+
+    // Overwriting the merged adapter must be rejected, not silently corrupt base.
+    assert!(lora.load_adapter("a", vb.pp("lora_a"), 2, 2.0).is_err());
+    // The rejected reload left the merged state untouched.
+    assert_eq!(to_vec2_round(&lora.forward(&x)?, 4)?, active);
+
+    // Unmerge restores the same output, and the base weight exactly.
+    lora.unmerge()?;
+    assert_eq!(to_vec2_round(&lora.forward(&x)?, 4)?, active);
+    lora.set_active_adapter(None)?;
+    assert_eq!(to_vec2_round(&lora.forward(&x)?, 4)?, vec![vec![1f32, 2.]]);
+    // Reloading is allowed once nothing is merged.
+    assert!(lora.load_adapter("a", vb.pp("lora_a"), 2, 2.0).is_ok());
+    Ok(())
+}
+
+/// An adapter checkpoint stored in a different dtype than the model must load
+/// and run: `add_adapter_tensors` casts it to the base weight's dtype so the
+/// plain `forward` does not hit a mixed-dtype matmul. CPU only (uses f64).
+#[test]
+fn lora_adapter_dtype_cast_to_base() -> Result<()> {
+    let device = Device::Cpu;
+    let base = make_base(&device)?; // f32, weight [[1, 0, 0], [0, 1, 0]]
+    let avm = VarMap::new();
+    let avb = VarBuilder::from_varmap(&avm, DType::F64, &device);
+    let mut lora = LoraLinear::new(base);
+    lora.add_adapter("a", avb.pp("a"), 2, 4.0)?;
+    let x = Tensor::new(&[[1f32, 2., 3.]], &device)?;
+    let y = lora.forward(&x)?;
+    // lora_B is zero-initialized, so the delta is zero and the output equals
+    // the base layer; the point is that the f64 adapter runs against f32 x.
+    assert_eq!(y.dtype(), DType::F32);
+    assert_eq!(to_vec2_round(&y, 4)?, vec![vec![1f32, 2.]]);
+    Ok(())
+}
+
 test_device!(
     lora_forward_matches_manual_computation,
     lora_forward_matches_manual_computation_cpu,
