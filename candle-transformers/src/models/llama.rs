@@ -91,6 +91,26 @@ impl Proj {
         }
     }
 
+    /// Forward pass with an optional per-row adapter assignment (see
+    /// [`LoraLinear::forward_with_adapters`]). Adapters only live on the
+    /// projections their config targeted, so rows selecting an adapter that
+    /// is not registered on this projection fall back to the base layer here.
+    fn forward_with_adapters(
+        &self,
+        x: &Tensor,
+        assignments: Option<&[Option<&str>]>,
+    ) -> Result<Tensor> {
+        let (Self::Lora(l), Some(assignments)) = (self, assignments) else {
+            return self.forward(x);
+        };
+        let names = l.adapter_names();
+        let mapped: Vec<Option<&str>> = assignments
+            .iter()
+            .map(|a| (*a).filter(|name| names.contains(name)))
+            .collect();
+        l.forward_with_adapters(x, &mapped)
+    }
+
     fn has_adapter(&self, name: &str) -> bool {
         match self {
             Self::Plain(_) => false,
@@ -788,12 +808,13 @@ impl CausalSelfAttention {
         index_pos: usize,
         block_idx: usize,
         cache: &mut Cache,
+        adapters: Option<&[Option<&str>]>,
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
-        let q = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+        let q = self.q_proj.forward_with_adapters(x, adapters)?;
+        let k = self.k_proj.forward_with_adapters(x, adapters)?;
+        let v = self.v_proj.forward_with_adapters(x, adapters)?;
 
         let q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
@@ -823,6 +844,7 @@ impl CausalSelfAttention {
                 hidden_size,
                 paged,
                 decode_slot,
+                adapters,
             );
         }
 
@@ -864,7 +886,7 @@ impl CausalSelfAttention {
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
             let y = flashinfer_decode_attention(&q_dec, &k, &v, softmax_scale)?;
             let y = y.reshape(&[b_sz, 1, hidden_size])?;
-            return self.o_proj.forward(&y);
+            return self.o_proj.forward_with_adapters(&y, adapters);
         }
 
         let k = self.repeat_kv(k)?;
@@ -895,7 +917,7 @@ impl CausalSelfAttention {
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
-        let y = self.o_proj.forward(&y)?;
+        let y = self.o_proj.forward_with_adapters(&y, adapters)?;
         Ok(y)
     }
 
@@ -919,6 +941,7 @@ impl CausalSelfAttention {
         hidden_size: usize,
         paged: &PagedKvCache,
         decode_slot: Option<&Tensor>,
+        adapters: Option<&[Option<&str>]>,
     ) -> Result<Tensor> {
         paged.write_new_kv(k, v, index_pos, decode_slot)?;
 
@@ -947,7 +970,7 @@ impl CausalSelfAttention {
             paged.page_block_size,
         )?
         .reshape((b_sz, seq_len, hidden_size))?;
-        self.o_proj.forward(&y)
+        self.o_proj.forward_with_adapters(&y, adapters)
     }
 
     fn has_adapter(&self, name: &str) -> bool {
@@ -1015,10 +1038,11 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, adapters: Option<&[Option<&str>]>) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
-        self.c_proj.forward(&x)
+        let x = (candle_nn::ops::silu(&self.c_fc1.forward_with_adapters(x, adapters)?)?
+            * self.c_fc2.forward_with_adapters(x, adapters)?)?;
+        self.c_proj.forward_with_adapters(&x, adapters)
     }
 
     fn has_adapter(&self, name: &str) -> bool {
@@ -1082,13 +1106,17 @@ impl Block {
         index_pos: usize,
         block_idx: usize,
         cache: &mut Cache,
+        adapters: Option<&[Option<&str>]>,
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let x = (self.attn.forward(&x, index_pos, block_idx, cache)? + residual)?;
+        let x = (self
+            .attn
+            .forward(&x, index_pos, block_idx, cache, adapters)?
+            + residual)?;
         let residual = &x;
-        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        let x = (self.mlp.forward(&self.rms_2.forward(&x)?, adapters)? + residual)?;
         Ok(x)
     }
 
@@ -1159,7 +1187,7 @@ impl Llama {
         let (_, seq_len, _) = input_embed.dims3()?;
         let mut x = input_embed.clone();
         for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = block.forward(&x, index_pos, block_idx, cache)?;
+            x = block.forward(&x, index_pos, block_idx, cache, None)?;
         }
         let x = self.ln_f.forward(&x)?;
         let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
@@ -1171,7 +1199,48 @@ impl Llama {
         let (_b_sz, seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = block.forward(&x, index_pos, block_idx, cache)?;
+            x = block.forward(&x, index_pos, block_idx, cache, None)?;
+        }
+        let x = self.ln_f.forward(&x)?;
+        let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
+        let logits = self.lm_head.forward(&x)?;
+        logits.to_dtype(DType::F32)
+    }
+
+    /// Like [`Llama::forward`], but every sequence in the batch selects its
+    /// own LoRA adapter (S-LoRA / Punica style heterogeneous batching).
+    ///
+    /// `adapter_assignments` holds one entry per batch row: `Some(name)` to
+    /// route that sequence through a registered adapter, `None` to run it on
+    /// the frozen base weights only. The assignments are threaded through the
+    /// blocks down to each projection's
+    /// [`LoraLinear::forward_with_adapters`] batched path (which the
+    /// `lora-cuda` feature routes through the fused BGMV kernel for a decode
+    /// step), so a mixed batch runs in one pass instead of one forward per
+    /// adapter group. The plain `forward` / `forward_input_embed` paths are
+    /// unchanged and keep ignoring adapters unless one is activated.
+    pub fn forward_with_adapters(
+        &self,
+        x: &Tensor,
+        index_pos: usize,
+        cache: &mut Cache,
+        adapter_assignments: &[Option<&str>],
+    ) -> Result<Tensor> {
+        let (b_sz, seq_len) = x.dims2()?;
+        if adapter_assignments.len() != b_sz {
+            candle::bail!(
+                "forward_with_adapters: {} adapter assignments for a batch of {b_sz} sequences",
+                adapter_assignments.len()
+            )
+        }
+        for name in adapter_assignments.iter().flatten() {
+            if !self.blocks.iter().any(|b| b.has_adapter(name)) {
+                candle::bail!("no such LoRA adapter: {name}")
+            }
+        }
+        let mut x = self.wte.forward(x)?;
+        for (block_idx, block) in self.blocks.iter().enumerate() {
+            x = block.forward(&x, index_pos, block_idx, cache, Some(adapter_assignments))?;
         }
         let x = self.ln_f.forward(&x)?;
         let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
@@ -1431,6 +1500,140 @@ mod tests {
         let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
         let adapter_logits = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
         assert_ne!(base_logits, adapter_logits);
+        Ok(())
+    }
+
+    fn lora_adapter_weights_valued(
+        cfg: &Config,
+        rank: usize,
+        dev: &Device,
+        prefix: &str,
+        value: f64,
+    ) -> HashMap<String, Tensor> {
+        let h = cfg.hidden_size;
+        let mut ts = HashMap::new();
+        for i_layer in 0..cfg.num_hidden_layers {
+            let p = if prefix.is_empty() {
+                format!("model.layers.{i_layer}.self_attn.o_proj")
+            } else {
+                format!("{prefix}.model.layers.{i_layer}.self_attn.o_proj")
+            };
+            ts.insert(
+                format!("{p}.lora_A.weight"),
+                (Tensor::ones((rank, h), DType::F32, dev).unwrap() * value).unwrap(),
+            );
+            ts.insert(
+                format!("{p}.lora_B.weight"),
+                (Tensor::ones((h, rank), DType::F32, dev).unwrap() * value).unwrap(),
+            );
+        }
+        ts
+    }
+
+    /// A model with two o_proj adapters of different ranks and weights:
+    /// "a" (rank 2, alpha 4) and "b" (rank 1, alpha 3).
+    fn multi_adapter_model(cfg: &Config, dev: &Device) -> Result<Llama> {
+        let base_vb = VarBuilder::from_tensors(base_weights(cfg, dev), DType::F32, dev);
+        let vb_a = VarBuilder::from_tensors(
+            lora_adapter_weights_valued(cfg, 2, dev, PEFT_ADAPTER_PREFIX, 1.0),
+            DType::F32,
+            dev,
+        );
+        let vb_b = VarBuilder::from_tensors(
+            lora_adapter_weights_valued(cfg, 1, dev, PEFT_ADAPTER_PREFIX, 0.5),
+            DType::F32,
+            dev,
+        );
+        let target = LoraConfig {
+            rank: 2,
+            alpha: 4.0,
+            target_modules: vec!["o_proj".to_string()],
+        };
+        let load_config = LlamaLoadConfig::default()
+            .with_lora_adapter("a", vb_a, target.clone())
+            .with_lora_adapter(
+                "b",
+                vb_b,
+                LoraConfig {
+                    rank: 1,
+                    alpha: 3.0,
+                    ..target
+                },
+            );
+        Llama::load_with_config(base_vb, cfg, load_config)
+    }
+
+    fn round4(rows: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+        rows.into_iter()
+            .map(|r| r.into_iter().map(|v| (v * 1e4).round() / 1e4).collect())
+            .collect()
+    }
+
+    #[test]
+    fn forward_with_adapters_matches_per_sequence_execution() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let mut model = multi_adapter_model(&cfg, &dev)?;
+
+        // A heterogeneous batch: two different adapters, a base-only row, and a
+        // repeated adapter.
+        let input = Tensor::new(&[[1u32, 2, 3], [4, 5, 6], [2, 4, 6], [3, 1, 7]], &dev)?;
+        let assignments = [Some("a"), None, Some("b"), Some("a")];
+
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let batched = round4(
+            model
+                .forward_with_adapters(&input, 0, &mut cache, &assignments)?
+                .to_vec2::<f32>()?,
+        );
+
+        // Reference: run every sequence on its own with its adapter active.
+        for (i, assignment) in assignments.iter().enumerate() {
+            model.set_active_adapter(*assignment)?;
+            let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+            let row = model.forward(&input.narrow(0, i, 1)?, 0, &mut cache)?;
+            assert_eq!(round4(row.to_vec2::<f32>()?), vec![batched[i].clone()]);
+        }
+
+        // The active adapter must not leak into the batched path.
+        model.set_active_adapter(Some("b"))?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let rerun = model.forward_with_adapters(&input, 0, &mut cache, &assignments)?;
+        assert_eq!(round4(rerun.to_vec2::<f32>()?), batched);
+        Ok(())
+    }
+
+    #[test]
+    fn forward_with_adapters_all_none_matches_plain_forward() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let model = multi_adapter_model(&cfg, &dev)?;
+        let input = Tensor::new(&[[1u32, 2, 3], [4, 5, 6]], &dev)?;
+
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let batched = model.forward_with_adapters(&input, 0, &mut cache, &[None, None])?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let plain = model.forward(&input, 0, &mut cache)?;
+        assert_eq!(batched.to_vec2::<f32>()?, plain.to_vec2::<f32>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn forward_with_adapters_rejects_bad_assignments() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let model = multi_adapter_model(&cfg, &dev)?;
+        let input = Tensor::new(&[[1u32, 2, 3], [4, 5, 6]], &dev)?;
+
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        // Assignment count must match the batch size.
+        assert!(model
+            .forward_with_adapters(&input, 0, &mut cache, &[Some("a")])
+            .is_err());
+        // Unknown adapter names are rejected instead of silently running base.
+        assert!(model
+            .forward_with_adapters(&input, 0, &mut cache, &[Some("a"), Some("nope")])
+            .is_err());
         Ok(())
     }
 
@@ -1758,7 +1961,7 @@ mod tests {
 
         // Ground truth: the long-established dense (non-flash) causal softmax path.
         let mut dense_cache = Cache::new(true, dtype, &cfg, &device)?;
-        let y_dense = attn.forward(&x, 0, 0, &mut dense_cache)?;
+        let y_dense = attn.forward(&x, 0, 0, &mut dense_cache, None)?;
 
         // Candidate: paged cache sized to hold the whole sequence in a single block,
         // routed through `flash_attn_varlen_paged_windowed`.
@@ -1781,7 +1984,7 @@ mod tests {
         };
         let mut paged_cache = Cache::new(true, dtype, &cfg, &device)?;
         paged_cache.set_paged_kv(0, paged)?;
-        let y_paged = attn.forward(&x, 0, 0, &mut paged_cache)?;
+        let y_paged = attn.forward(&x, 0, 0, &mut paged_cache, None)?;
 
         let diff = y_dense
             .to_dtype(DType::F32)?
@@ -1866,12 +2069,12 @@ mod tests {
 
         // Baseline: today's host-side narrow-based rotary lookup.
         let mut narrow_cache = Cache::new(false, DType::F32, &cfg, &device)?;
-        let y_narrow = attn.forward(&x, index_pos, 0, &mut narrow_cache)?;
+        let y_narrow = attn.forward(&x, index_pos, 0, &mut narrow_cache, None)?;
 
         // Candidate: device-tensor decode-position gather, same absolute position.
         let mut gather_cache = Cache::new(false, DType::F32, &cfg, &device)?;
         gather_cache.set_decode_position(0, Tensor::new(&[index_pos as u32], &device)?)?;
-        let y_gather = attn.forward(&x, index_pos, 0, &mut gather_cache)?;
+        let y_gather = attn.forward(&x, index_pos, 0, &mut gather_cache, None)?;
 
         assert_eq!(y_narrow.to_vec3::<f32>()?, y_gather.to_vec3::<f32>()?);
         Ok(())
@@ -1887,7 +2090,7 @@ mod tests {
         let x = Tensor::randn(0f32, 1., (1, 3, cfg.hidden_size), &device)?;
         let mut cache = Cache::new(false, DType::F32, &cfg, &device)?;
         cache.set_decode_position(0, Tensor::new(&[0u32], &device)?)?;
-        assert!(attn.forward(&x, 0, 0, &mut cache).is_err());
+        assert!(attn.forward(&x, 0, 0, &mut cache, None).is_err());
         Ok(())
     }
 
@@ -2198,7 +2401,7 @@ mod tests {
         let mut x = x.clone();
         for (block_idx, layer) in layers.iter().enumerate() {
             x = layer
-                .forward(&x, index_pos, block_idx, cache)
+                .forward(&x, index_pos, block_idx, cache, None)
                 .with_context(|| format!("layer {block_idx} forward"))?;
         }
         Ok(x)
