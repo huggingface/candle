@@ -4,6 +4,23 @@
 use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
+// `elem_count` is read from a tensor shape and could in principle exceed u32::MAX for a very
+// large tensor; `as u32` would silently truncate it into a bogus, too-small launch grid instead
+// of erroring out. Mirrors the same guard added to candle-core's cuda_backend in
+// huggingface/candle#3663.
+#[cfg(feature = "cuda")]
+fn cuda_launch_config_for_num_elems(
+    elem_count: usize,
+) -> Result<candle::cuda_backend::cudarc::driver::LaunchConfig> {
+    let elem_count = u32::try_from(elem_count).map_err(|_| {
+        candle::Error::Msg(format!(
+            "cuda kernel launch element count {elem_count} exceeds u32::MAX"
+        ))
+        .bt()
+    })?;
+    Ok(candle::cuda_backend::cudarc::driver::LaunchConfig::for_num_elems(elem_count))
+}
+
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
 ///
@@ -90,7 +107,7 @@ impl candle::CustomOp1 for Sigmoid {
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::backend::BackendStorage;
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg, ValidAsZeroBits,
+            CudaSlice, DeviceRepr, PushKernelArg, ValidAsZeroBits,
         };
         use candle::cuda_backend::SlicePtrOrNull;
         use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
@@ -107,7 +124,7 @@ impl candle::CustomOp1 for Sigmoid {
                 let shape = layout.shape();
                 let dims = shape.dims();
                 let el_count = shape.elem_count();
-                let cfg = LaunchConfig::for_num_elems(el_count as u32);
+                let cfg = cuda_launch_config_for_num_elems(el_count)?;
                 let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
                 let src = &src.slice(layout.start_offset()..);
                 let func = dev.get_or_load_func(&kernel_name::<T>("usigmoid"), &kernels::UNARY)?;
