@@ -91,14 +91,26 @@ impl TensorInfo {
         tensor_data_offset: u64,
         device: &Device,
     ) -> Result<QTensor> {
-        let tensor_elems = self.shape.elem_count();
+        // The shape dimensions are read from an untrusted file. Fold the product
+        // with checked_mul so a crafted shape reports an error instead of
+        // panicking (debug) or wrapping (release) into a bogus, too-small
+        // size_in_bytes. Mirrors the GGML loader hardening in #3713.
+        let dims = self.shape.dims();
+        let tensor_elems = dims
+            .iter()
+            .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+            .ok_or_else(|| crate::Error::Msg(format!("gguf: tensor shape {dims:?} overflows")))?;
         let block_size = self.ggml_dtype.block_size();
         if !tensor_elems.is_multiple_of(block_size) {
             crate::bail!(
             "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )
         }
-        let size_in_bytes = tensor_elems / block_size * self.ggml_dtype.type_size();
+        let size_in_bytes = (tensor_elems / block_size)
+            .checked_mul(self.ggml_dtype.type_size())
+            .ok_or_else(|| {
+                crate::Error::Msg(format!("gguf: tensor shape {dims:?} size overflows"))
+            })?;
         let tensor_start = tensor_data_offset.saturating_add(self.offset);
         let file_size = reader.seek(std::io::SeekFrom::End(0))?;
         let remaining = file_size.saturating_sub(tensor_start);
@@ -557,6 +569,15 @@ impl Content {
             Some(Value::I32(v)) if *v >= 0 => *v as u64,
             _ => DEFAULT_ALIGNMENT,
         };
+        // `general.alignment` comes from untrusted metadata. The guards above
+        // only reject negative values, so a zero would reach `div_ceil(0)` and
+        // panic. Per the GGUF spec the alignment must be a non-zero power of
+        // two; reject anything else with a clear error instead of panicking.
+        if alignment == 0 || !alignment.is_power_of_two() {
+            crate::bail!(
+                "gguf: invalid general.alignment {alignment}, must be a non-zero power of two"
+            )
+        }
         let tensor_data_offset = position.div_ceil(alignment) * alignment;
         Ok(Self {
             magic,
