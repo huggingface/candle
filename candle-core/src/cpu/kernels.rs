@@ -2,6 +2,21 @@ pub trait VecOps: num_traits::NumAssign + Copy {
     fn min(self, rhs: Self) -> Self;
     fn max(self, rhs: Self) -> Self;
 
+    /// Wide accumulator used when summing many `Self` values one at a time (e.g. a
+    /// reduction over a non-contiguous or non-trailing axis). Narrow floats override
+    /// this with `f32` so long running sums don't saturate the way a plain `Self +=`
+    /// would; every other type just accumulates in itself.
+    type Accum: Copy;
+
+    /// Seed the accumulator from a starting `Self` value (usually `Self::zero()`).
+    fn to_accum(self) -> Self::Accum;
+
+    /// Fold `val` into `acc`.
+    fn accum_add(acc: &mut Self::Accum, val: Self);
+
+    /// Narrow the accumulator back down to `Self` once the reduction is complete.
+    fn from_accum(acc: Self::Accum) -> Self;
+
     /// Element-wise addition of two slices into a third.
     #[inline(always)]
     fn vec_add(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
@@ -85,6 +100,20 @@ impl VecOps for f32 {
         Self::max(self, other)
     }
 
+    type Accum = Self;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val;
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        acc
+    }
+
     fn vec_add(lhs: &[Self], rhs: &[Self], res: &mut [Self]) {
         #[cfg(feature = "mkl")]
         crate::mkl::vs_add(lhs, rhs, res);
@@ -134,6 +163,33 @@ impl VecOps for half::f16 {
         super::vec_dot_f16(lhs, rhs, &mut res_f32, len);
         *res = half::f16::from_f32(res_f32);
     }
+
+    // Accumulate in f32: a sequential sum in f16 saturates on long axes (e.g. an
+    // f16 sum of 4096 ones stalls at 2048 once the running ULP exceeds 1),
+    // giving wrong `sum`/`mean` results that also disagree with the Metal
+    // backend. This mirrors the f32 accumulation already used by `vec_dot`.
+    #[inline(always)]
+    unsafe fn vec_reduce_sum(xs: *const Self, res: *mut Self, len: usize) {
+        let mut sum = 0f32;
+        for i in 0..len {
+            sum += (*xs.add(i)).to_f32();
+        }
+        *res = half::f16::from_f32(sum);
+    }
+
+    type Accum = f32;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self.to_f32()
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val.to_f32();
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        half::f16::from_f32(acc)
+    }
 }
 
 impl VecOps for f64 {
@@ -158,6 +214,20 @@ impl VecOps for f64 {
             .zip(rhs)
             .zip(res)
             .for_each(|((&a, &b), y)| *y = a + b)
+    }
+
+    type Accum = Self;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val;
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        acc
     }
 }
 impl VecOps for half::bf16 {
@@ -187,6 +257,33 @@ impl VecOps for half::bf16 {
         super::vec_dot_bf16(lhs, rhs, &mut res_f32, len);
         *res = half::bf16::from_f32(res_f32);
     }
+
+    // Accumulate in f32: a sequential sum in bf16 saturates on long axes (bf16
+    // has only 8 mantissa bits, so the running sum stalls even sooner than
+    // f16), giving wrong `sum`/`mean` results that also disagree with the Metal
+    // backend. This mirrors the f32 accumulation already used by `vec_dot`.
+    #[inline(always)]
+    unsafe fn vec_reduce_sum(xs: *const Self, res: *mut Self, len: usize) {
+        let mut sum = 0f32;
+        for i in 0..len {
+            sum += (*xs.add(i)).to_f32();
+        }
+        *res = half::bf16::from_f32(sum);
+    }
+
+    type Accum = f32;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self.to_f32()
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val.to_f32();
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        half::bf16::from_f32(acc)
+    }
 }
 impl VecOps for u8 {
     #[inline(always)]
@@ -197,6 +294,20 @@ impl VecOps for u8 {
     #[inline(always)]
     fn max(self, other: Self) -> Self {
         <Self as Ord>::max(self, other)
+    }
+
+    type Accum = Self;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val;
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        acc
     }
 }
 impl VecOps for u32 {
@@ -209,6 +320,20 @@ impl VecOps for u32 {
     fn max(self, other: Self) -> Self {
         <Self as Ord>::max(self, other)
     }
+
+    type Accum = Self;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val;
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        acc
+    }
 }
 impl VecOps for i16 {
     #[inline(always)]
@@ -219,6 +344,20 @@ impl VecOps for i16 {
     #[inline(always)]
     fn max(self, other: Self) -> Self {
         <Self as Ord>::max(self, other)
+    }
+
+    type Accum = Self;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val;
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        acc
     }
 }
 impl VecOps for i32 {
@@ -231,6 +370,20 @@ impl VecOps for i32 {
     fn max(self, other: Self) -> Self {
         <Self as Ord>::max(self, other)
     }
+
+    type Accum = Self;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val;
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        acc
+    }
 }
 impl VecOps for i64 {
     #[inline(always)]
@@ -241,6 +394,20 @@ impl VecOps for i64 {
     #[inline(always)]
     fn max(self, other: Self) -> Self {
         <Self as Ord>::max(self, other)
+    }
+
+    type Accum = Self;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val;
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        acc
     }
 }
 
@@ -253,6 +420,20 @@ impl VecOps for float8::F8E4M3 {
     #[inline(always)]
     fn max(self, other: Self) -> Self {
         Self::max(self, other)
+    }
+
+    type Accum = Self;
+    #[inline(always)]
+    fn to_accum(self) -> Self::Accum {
+        self
+    }
+    #[inline(always)]
+    fn accum_add(acc: &mut Self::Accum, val: Self) {
+        *acc += val;
+    }
+    #[inline(always)]
+    fn from_accum(acc: Self::Accum) -> Self {
+        acc
     }
 }
 
