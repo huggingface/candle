@@ -26,10 +26,9 @@ pub fn apply_frequency_presence_penalty(
     presence_penalty: f32,
 ) -> Result<Tensor> {
     if frequency_penalty == 0. && presence_penalty == 0. {
-        return Ok(logits.clone());
+        return logits.to_dtype(DType::F32);
     }
     let device = logits.device();
-    let dtype = logits.dtype();
     let mut logits_v = logits.to_dtype(DType::F32)?.to_vec1::<f32>()?;
     let mut counts = std::collections::HashMap::new();
     for token_id in context {
@@ -41,7 +40,11 @@ pub fn apply_frequency_presence_penalty(
         }
     }
     let logits_len = logits_v.len();
-    Tensor::from_vec(logits_v, logits_len, device)?.to_dtype(dtype)
+    // Stay in f32: rounding the adjusted logits back down to the caller's original dtype
+    // (e.g. f16/bf16) can erase a small penalty outright before `LogitsProcessor::sample`
+    // converts back to f32 anyway. Mirrors `utils::apply_repeat_penalty`, which never casts
+    // back either.
+    Tensor::from_vec(logits_v, logits_len, device)
 }
 
 pub struct LogitsProcessor {

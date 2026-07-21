@@ -1,4 +1,4 @@
-use candle::{Device, Result, Tensor};
+use candle::{DType, Device, Result, Tensor};
 use candle_transformers::generation::{
     apply_frequency_presence_penalty, LogitsProcessor, Sampling,
 };
@@ -144,6 +144,18 @@ fn frequency_presence_penalty_noop_and_out_of_range() -> Result<()> {
     // Context tokens outside the vocab are ignored rather than panicking.
     let same = apply_frequency_presence_penalty(&logits, &[100], 1.0, 1.0)?;
     assert_eq!(same.to_vec1::<f32>()?, logits.to_vec1::<f32>()?);
+    Ok(())
+}
+
+#[test]
+fn frequency_presence_penalty_preserves_precision_for_f16_input() -> Result<()> {
+    // A f16 logit of 1000.0 has an ULP of ~0.98, so subtracting a small penalty like 0.5 and
+    // rounding back down to f16 would erase it outright. Staying in f32 (matching
+    // `utils::apply_repeat_penalty`'s convention) preserves the adjustment exactly.
+    let logits = Tensor::new(&[1000.0f32], &Device::Cpu)?.to_dtype(DType::F16)?;
+    let penalized = apply_frequency_presence_penalty(&logits, &[0], 0.5, 0.0)?;
+    assert_eq!(penalized.dtype(), DType::F32);
+    assert_eq!(penalized.to_vec1::<f32>()?, [999.5]);
     Ok(())
 }
 
