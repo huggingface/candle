@@ -140,6 +140,28 @@ fn rejects_zero_general_alignment() {
 }
 
 #[test]
+fn rejects_non_multiple_of_8_general_alignment() {
+    let mut buf = header(0, 1);
+    buf.extend(length_prefixed(b"general.alignment"));
+    buf.extend_from_slice(&4u32.to_le_bytes()); // value_type = U32
+    buf.extend_from_slice(&5u32.to_le_bytes()); // alignment = 5, not a multiple of 8
+    assert_rejects(buf, "alignment");
+}
+
+#[test]
+fn accepts_non_power_of_two_general_alignment() {
+    // The GGUF spec only requires `general.alignment` to be a multiple of 8, not
+    // a power of two: 24 and 40 are valid alignments that real files may use.
+    let mut buf = header(0, 1);
+    buf.extend(length_prefixed(b"general.alignment"));
+    buf.extend_from_slice(&4u32.to_le_bytes()); // value_type = U32
+    buf.extend_from_slice(&24u32.to_le_bytes()); // alignment = 24
+    let mut cursor = Cursor::new(buf);
+    let content = Content::read(&mut cursor).expect("alignment = 24 should be accepted");
+    assert_eq!(content.tensor_data_offset % 24, 0);
+}
+
+#[test]
 fn rejects_tensor_shape_product_overflow() {
     // Two dims of 2^40 overflow `Shape::elem_count()` (their product is 2^80).
     // Loading the tensor used to panic ("attempt to multiply with overflow") in
