@@ -33,7 +33,9 @@ fn dtype_code(dt: DType) -> Result<u32> {
 struct LoraShrink;
 
 impl LoraShrink {
-    fn fwd_t<T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr>(
+    fn fwd_t<
+        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+    >(
         &self,
         x: &CudaStorage,
         x_l: &Layout,
@@ -57,7 +59,9 @@ impl LoraShrink {
         let dev = x.device();
         let x = x.as_cuda_slice::<T>()?.slice(x_l.start_offset()..);
         let a = a.as_cuda_slice::<T>()?.slice(a_l.start_offset()..);
-        let slots = slots.as_cuda_slice::<u32>()?.slice(slots_l.start_offset()..);
+        let slots = slots
+            .as_cuda_slice::<u32>()?
+            .slice(slots_l.start_offset()..);
         let out_shape = Shape::from((batch, r));
         let mut dst = unsafe { dev.alloc::<T>(batch * r)? };
         let stream = dev.cuda_stream();
@@ -121,7 +125,9 @@ impl candle::CustomOp3 for LoraShrink {
 struct LoraExpand;
 
 impl LoraExpand {
-    fn fwd_t<T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr>(
+    fn fwd_t<
+        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+    >(
         &self,
         tmp: &CudaStorage,
         tmp_l: &Layout,
@@ -145,7 +151,9 @@ impl LoraExpand {
         let dev = tmp.device();
         let tmp = tmp.as_cuda_slice::<T>()?.slice(tmp_l.start_offset()..);
         let b = b.as_cuda_slice::<T>()?.slice(b_l.start_offset()..);
-        let slots = slots.as_cuda_slice::<u32>()?.slice(slots_l.start_offset()..);
+        let slots = slots
+            .as_cuda_slice::<u32>()?
+            .slice(slots_l.start_offset()..);
         let out_shape = Shape::from((batch, out_dim));
         let mut dst = unsafe { dev.alloc::<T>(batch * out_dim)? };
         let stream = dev.cuda_stream();
