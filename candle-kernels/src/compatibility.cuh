@@ -6,7 +6,7 @@
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/#features-and-technical-specifications
 
 // FIXME: the minimum compute capabilities are just guesses since the table is not specific enough
-#if (__CUDACC_VER_MAJOR__ < 12 || __CUDACC_VER_MINOR__ < 2) && __CUDA_ARCH__ < 800
+#if (__CUDACC_VER_MAJOR__ < 12 || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ < 3)) && __CUDA_ARCH__ < 800
 __device__ __forceinline__ __half __hmax_nan(__half a, __half b) {
     return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
 }
