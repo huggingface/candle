@@ -379,12 +379,30 @@ impl LoraLinear {
 /// implementation below gathers per-row copies of the adapter matrices and
 /// applies them with two batched matmuls, whereas a dedicated kernel can read
 /// the stacks in place through `row_slots` without materializing the gather.
+///
+/// With the `lora-cuda` feature, a decode-step batch (`seq == 1`) on a CUDA
+/// device is routed through the [`candle_lora_kernels`] BGMV kernels, which
+/// return the same delta; every other case uses the reference path below.
 fn batched_lora_delta(
     x: &Tensor,
     a_stack: &Tensor,
     b_stack: &Tensor,
     row_slots: &Tensor,
 ) -> Result<Tensor> {
+    #[cfg(feature = "lora-cuda")]
+    {
+        let (batch, seq, in_dim) = x.dims3()?;
+        let supported = matches!(
+            x.dtype(),
+            candle::DType::F32 | candle::DType::F16 | candle::DType::BF16
+        );
+        if seq == 1 && x.device().is_cuda() && supported {
+            let x2d = x.reshape((batch, in_dim))?;
+            let delta = candle_lora_kernels::bgmv_delta(&x2d, a_stack, b_stack, row_slots)?;
+            let out_dim = delta.dim(1)?;
+            return delta.reshape((batch, 1, out_dim));
+        }
+    }
     // [batch, in, r_max] and [batch, r_max, out].
     let a_sel = a_stack.index_select(row_slots, 0)?;
     let b_sel = b_stack.index_select(row_slots, 0)?;
