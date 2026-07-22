@@ -782,6 +782,81 @@ impl Llama {
         logits.to_dtype(DType::F32)
     }
 
+    /// Batch-native, adapter-aware autoregressive decode loop for
+    /// heterogeneous multi-LoRA serving.
+    ///
+    /// `prompt_tokens` is `[batch, prompt_len]`: every row is prefilled
+    /// together in a single [`Self::forward_with_adapters`] call, then
+    /// decoded one token per row per step for up to `max_new_tokens` steps,
+    /// again through one batched call per step. `adapter_assignments` picks,
+    /// per row, `Some(adapter_name)` or `None` for a base-model-only row;
+    /// rows are never grouped or re-batched by adapter, so the whole batch
+    /// (prefill and every decode step) goes through exactly one forward
+    /// pass. `logits_processors` supplies one sampler per row, so each
+    /// sequence can use its own temperature/sampling strategy. `cache` must
+    /// have `use_kv_cache` set, since decode steps rely on each row's own
+    /// past keys/values (isolated by the batch dimension) rather than
+    /// recomputing them.
+    ///
+    /// Returns, for each row, the `max_new_tokens` newly generated token ids
+    /// (the prompt itself is not included).
+    pub fn generate_with_adapters(
+        &self,
+        prompt_tokens: &Tensor,
+        adapter_assignments: &[Option<&str>],
+        max_new_tokens: usize,
+        cache: &mut Cache,
+        logits_processors: &mut [crate::generation::LogitsProcessor],
+    ) -> Result<Vec<Vec<u32>>> {
+        let (b_sz, prompt_len) = prompt_tokens.dims2()?;
+        if adapter_assignments.len() != b_sz {
+            candle::bail!(
+                "generate_with_adapters: {} adapter assignments for a batch of {b_sz} sequences",
+                adapter_assignments.len()
+            )
+        }
+        if logits_processors.len() != b_sz {
+            candle::bail!(
+                "generate_with_adapters: {} logits processors for a batch of {b_sz} sequences",
+                logits_processors.len()
+            )
+        }
+        if !cache.use_kv_cache {
+            candle::bail!(
+                "generate_with_adapters requires a cache with use_kv_cache set, so that each \
+                 sequence's past keys/values stay isolated across decode steps"
+            )
+        }
+        let mut generated: Vec<Vec<u32>> = vec![Vec::with_capacity(max_new_tokens); b_sz];
+        if max_new_tokens == 0 {
+            return Ok(generated);
+        }
+
+        let device = prompt_tokens.device();
+        let logits = self.forward_with_adapters(prompt_tokens, 0, cache, adapter_assignments)?;
+        let mut index_pos = prompt_len;
+        let mut next_tokens = Vec::with_capacity(b_sz);
+        for (row, processor) in logits_processors.iter_mut().enumerate() {
+            let token = processor.sample(&logits.i(row)?)?;
+            generated[row].push(token);
+            next_tokens.push(token);
+        }
+
+        for _ in 1..max_new_tokens {
+            let input = Tensor::from_vec(next_tokens.clone(), (b_sz, 1), device)?;
+            let logits =
+                self.forward_with_adapters(&input, index_pos, cache, adapter_assignments)?;
+            index_pos += 1;
+            next_tokens.clear();
+            for (row, processor) in logits_processors.iter_mut().enumerate() {
+                let token = processor.sample(&logits.i(row)?)?;
+                generated[row].push(token);
+                next_tokens.push(token);
+            }
+        }
+        Ok(generated)
+    }
+
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         Self::load_with_config(vb, cfg, LlamaLoadConfig::default())
     }
@@ -1147,6 +1222,127 @@ mod tests {
         // the base weights.
         assert!(model
             .forward_with_adapters(&input, 0, &mut cache, &[Some("a"), Some("nope")])
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn generate_with_adapters_matches_sequential_reference() -> Result<()> {
+        use crate::generation::{LogitsProcessor, Sampling};
+
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let model = multi_adapter_model(&cfg, &dev)?;
+
+        // Three concurrent rows in one batch: adapter "a", adapter "b", and
+        // no adapter at all.
+        let prompts = Tensor::new(&[[1u32, 2, 3], [4, 5, 6], [2, 4, 6]], &dev)?;
+        let assignments = [Some("a"), Some("b"), None];
+        let max_new_tokens = 3;
+
+        let mut cache = Cache::new(true, DType::F32, &cfg, &dev)?;
+        let mut processors: Vec<_> = (0..assignments.len())
+            .map(|_| LogitsProcessor::from_sampling(0, Sampling::ArgMax))
+            .collect();
+        let batched = model.generate_with_adapters(
+            &prompts,
+            &assignments,
+            max_new_tokens,
+            &mut cache,
+            &mut processors,
+        )?;
+        assert_eq!(batched.len(), assignments.len());
+        for row in &batched {
+            assert_eq!(row.len(), max_new_tokens);
+        }
+
+        // Reference: drive every row through the same prefill + decode steps
+        // on its own (batch size 1), never grouping rows by adapter.
+        for (row, assignment) in assignments.iter().enumerate() {
+            let mut cache = Cache::new(true, DType::F32, &cfg, &dev)?;
+            let mut processor = LogitsProcessor::from_sampling(0, Sampling::ArgMax);
+            let prompt = prompts.narrow(0, row, 1)?;
+            let logits = model.forward_with_adapters(&prompt, 0, &mut cache, &[*assignment])?;
+            let mut index_pos = prompt.dim(1)?;
+            let mut next_token = processor.sample(&logits.i(0)?)?;
+            let mut expected = vec![next_token];
+            for _ in 1..max_new_tokens {
+                let input = Tensor::new(&[[next_token]], &dev)?;
+                let logits =
+                    model.forward_with_adapters(&input, index_pos, &mut cache, &[*assignment])?;
+                index_pos += 1;
+                next_token = processor.sample(&logits.i(0)?)?;
+                expected.push(next_token);
+            }
+            assert_eq!(batched[row], expected);
+        }
+
+        // The no-adapter row must match the plain base decode path too, not
+        // only `forward_with_adapters(&[None])`.
+        let mut plain_cache = Cache::new(true, DType::F32, &cfg, &dev)?;
+        let mut plain_processor = LogitsProcessor::from_sampling(0, Sampling::ArgMax);
+        let base_prompt = prompts.narrow(0, 2, 1)?;
+        let logits = model.forward(&base_prompt, 0, &mut plain_cache)?;
+        let mut index_pos = base_prompt.dim(1)?;
+        let mut next_token = plain_processor.sample(&logits.i(0)?)?;
+        let mut expected_plain = vec![next_token];
+        for _ in 1..max_new_tokens {
+            let input = Tensor::new(&[[next_token]], &dev)?;
+            let logits = model.forward(&input, index_pos, &mut plain_cache)?;
+            index_pos += 1;
+            next_token = plain_processor.sample(&logits.i(0)?)?;
+            expected_plain.push(next_token);
+        }
+        assert_eq!(batched[2], expected_plain);
+        Ok(())
+    }
+
+    #[test]
+    fn generate_with_adapters_requires_kv_cache() -> Result<()> {
+        use crate::generation::{LogitsProcessor, Sampling};
+
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let model = multi_adapter_model(&cfg, &dev)?;
+        let prompts = Tensor::new(&[[1u32, 2, 3]], &dev)?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let mut processors = vec![LogitsProcessor::from_sampling(0, Sampling::ArgMax)];
+        assert!(model
+            .generate_with_adapters(&prompts, &[Some("a")], 2, &mut cache, &mut processors)
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn generate_with_adapters_rejects_mismatched_counts() -> Result<()> {
+        use crate::generation::{LogitsProcessor, Sampling};
+
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let model = multi_adapter_model(&cfg, &dev)?;
+        let prompts = Tensor::new(&[[1u32, 2, 3], [4, 5, 6]], &dev)?;
+
+        // Only one adapter assignment for a batch of two rows.
+        let mut cache = Cache::new(true, DType::F32, &cfg, &dev)?;
+        let mut processors = vec![
+            LogitsProcessor::from_sampling(0, Sampling::ArgMax),
+            LogitsProcessor::from_sampling(0, Sampling::ArgMax),
+        ];
+        assert!(model
+            .generate_with_adapters(&prompts, &[Some("a")], 2, &mut cache, &mut processors)
+            .is_err());
+
+        // Two assignments but only one logits processor.
+        let mut cache = Cache::new(true, DType::F32, &cfg, &dev)?;
+        let mut one_processor = vec![LogitsProcessor::from_sampling(0, Sampling::ArgMax)];
+        assert!(model
+            .generate_with_adapters(
+                &prompts,
+                &[Some("a"), None],
+                2,
+                &mut cache,
+                &mut one_processor
+            )
             .is_err());
         Ok(())
     }
