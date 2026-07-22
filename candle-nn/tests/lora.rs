@@ -337,3 +337,52 @@ test_device!(
     lora_batched_forward_errors_gpu,
     lora_batched_forward_errors_metal
 );
+
+/// Multi-step decode-loop parity for the CUDA BGMV kernel.
+///
+/// Every one of the `test_device!`-generated `_gpu` tests above still runs
+/// with a single `seq > 1` or one-shot call, and without the `lora-cuda`
+/// feature they never touch `candle_lora_kernels::bgmv_delta` at all (see
+/// `batched_lora_delta` in `candle-nn/src/lora.rs`, which only routes to it
+/// for `seq == 1` batches on a CUDA device). A generation loop such as
+/// `Llama::generate_with_adapters` calls `forward_with_adapters` with a
+/// `[batch, 1, in]` input once per decode step, reusing the same adapter
+/// stacks and CUDA buffers across many kernel launches in a row, which is a
+/// different code path than a single isolated call. This test drives several
+/// such steps back to back on a heterogeneous batch (two adapters and a
+/// base-only row) and checks the GPU kernel path matches the CPU gather +
+/// batched matmul reference at every step, not just the first.
+#[cfg(feature = "lora-cuda")]
+#[test]
+fn lora_batched_forward_multistep_decode_gpu_matches_cpu() -> Result<()> {
+    let cpu = Device::Cpu;
+    let gpu = Device::new_cuda(0)?;
+    let lora_cpu = make_multi_lora(&cpu)?;
+    let lora_gpu = make_multi_lora(&gpu)?;
+
+    // Two different adapters and a base-only row, as in the other batched
+    // tests; a different input per step stands in for the evolving hidden
+    // state a real decode loop would feed in at each new token.
+    let assignments = [Some("a"), Some("b"), None];
+    let steps: &[[[f32; 3]; 3]] = &[
+        [[1., 2., 3.], [-1., 0.5, 2.], [0.25, -1., 1.]],
+        [[0.1, -0.2, 0.3], [1.5, -1., 0.], [-0.5, 0.5, 0.5]],
+        [[2., 1., -1.], [0., 0., 1.], [-1., -1., -1.]],
+        [[0.5, 0.5, 0.5], [-2., 1., 0.5], [1., -1., 0.]],
+    ];
+
+    for (step, values) in steps.iter().enumerate() {
+        // [batch, 1, in]: the shape a decode step feeds through the model.
+        let x_cpu = Tensor::new(values, &cpu)?.unsqueeze(1)?;
+        let x_gpu = Tensor::new(values, &gpu)?.unsqueeze(1)?;
+
+        let cpu_out = lora_cpu.forward_with_adapters(&x_cpu, &assignments)?;
+        let gpu_out = lora_gpu.forward_with_adapters(&x_gpu, &assignments)?;
+        assert_eq!(
+            to_vec3_round(&gpu_out, 4)?,
+            to_vec3_round(&cpu_out, 4)?,
+            "decode step {step} diverged between the CUDA BGMV kernel and the CPU reference"
+        );
+    }
+    Ok(())
+}
