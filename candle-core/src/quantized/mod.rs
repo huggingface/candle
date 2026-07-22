@@ -2,7 +2,7 @@ use crate::{
     backend::BackendStorage, CpuStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use k_quants::*;
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::OnceLock};
 
 #[cfg(target_feature = "avx2")]
 pub mod avx;
@@ -59,6 +59,10 @@ fn as_t_slice<T>(data: &[u8]) -> &[T] {
 pub struct QTensor {
     storage: QStorage,
     shape: Shape,
+    /// Lazily initialized storage for repacked quantized data. Currently raw bits, could be `QStorage` in the future.
+    /// Not always used.
+    #[allow(dead_code)]
+    repacked_qs: OnceLock<Option<Vec<u8>>>,
 }
 
 impl Device {
@@ -422,6 +426,7 @@ pub trait QuantizedType: Send + Sync {
     fn dtype(&self) -> GgmlDType;
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
     fn matmul_t_f16(&self, mkn: (usize, usize, usize), lhs: &[f16], dst: &mut [f16]) -> Result<()>;
+    fn embedding(&self, ids: &[u32], rows: usize, hidden: usize) -> Result<CpuStorage>;
     fn dequantize(&self, elem_count: usize) -> Result<CpuStorage>;
     fn storage_size_in_bytes(&self) -> usize;
     fn as_ptr(&self) -> *const u8;
@@ -439,6 +444,34 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
     }
     fn matmul_t_f16(&self, mkn: (usize, usize, usize), lhs: &[f16], dst: &mut [f16]) -> Result<()> {
         k_quants::matmul_f16(mkn, lhs, self.as_slice(), dst)
+    }
+
+    fn embedding(&self, ids: &[u32], rows: usize, hidden: usize) -> Result<CpuStorage> {
+        if !hidden.is_multiple_of(T::BLCK_SIZE) {
+            crate::bail!(
+                "quantized embedding hidden size {hidden} is not divisible by block size {}",
+                T::BLCK_SIZE
+            )
+        }
+        let row_blocks = hidden / T::BLCK_SIZE;
+        if self.len() != rows * row_blocks {
+            crate::bail!(
+                "quantized tensor has {} blocks, expected {}",
+                self.len(),
+                rows * row_blocks
+            )
+        }
+        let mut out = vec![0f32; ids.len() * hidden];
+        for (out_row, &row_id) in ids.iter().enumerate() {
+            let row = row_id as usize;
+            if row >= rows {
+                crate::bail!("embedding id {row} is out of range for {rows} rows")
+            }
+            let src = &self[row * row_blocks..(row + 1) * row_blocks];
+            let dst = &mut out[out_row * hidden..(out_row + 1) * hidden];
+            T::to_float(src, dst);
+        }
+        Ok(CpuStorage::F32(out))
     }
 
     fn size(&self) -> usize {
@@ -500,7 +533,11 @@ impl QTensor {
     pub fn new<S: Into<Shape>>(storage: QStorage, shape: S) -> Result<Self> {
         let shape = shape.into();
         check_shape(&shape, storage.block_size())?;
-        Ok(Self { storage, shape })
+        Ok(Self {
+            storage,
+            shape,
+            repacked_qs: OnceLock::new(),
+        })
     }
 
     pub fn quantize(src: &Tensor, dtype: GgmlDType) -> Result<Self> {
@@ -520,6 +557,7 @@ impl QTensor {
         Ok(Self {
             storage,
             shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
         })
     }
 
@@ -555,6 +593,7 @@ impl QTensor {
         Ok(Self {
             storage,
             shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
         })
     }
 
@@ -598,6 +637,7 @@ impl QTensor {
         Ok(Self {
             storage,
             shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
         })
     }
 
@@ -626,6 +666,7 @@ impl QTensor {
         Ok(Self {
             storage,
             shape: shape.clone(),
+            repacked_qs: OnceLock::new(),
         })
     }
 
@@ -666,6 +707,44 @@ impl QTensor {
                 Ok(s)
             }
         }
+    }
+
+    pub fn embedding(&self, ids: &Tensor) -> Result<Tensor> {
+        let (rows, hidden) = self.shape.dims2()?;
+        if !hidden.is_multiple_of(self.dtype().block_size()) {
+            crate::bail!(
+                "quantized embedding hidden size {hidden} is not divisible by block size {}",
+                self.dtype().block_size()
+            )
+        }
+        let mut out_shape = ids.dims().to_vec();
+        out_shape.push(hidden);
+        let device = self.device();
+        let ids = ids
+            .to_device(&device)?
+            .to_dtype(DType::U32)?
+            .flatten_all()?
+            .contiguous()?;
+        let storage = match &self.storage {
+            QStorage::Cpu(storage) => {
+                let ids = ids.to_vec1::<u32>()?;
+                Storage::Cpu(storage.embedding(&ids, rows, hidden)?)
+            }
+            QStorage::Metal(storage) => match &*ids.storage() {
+                Storage::Metal(ids_storage) => {
+                    Storage::Metal(storage.embedding(rows, hidden, ids_storage, ids.layout())?)
+                }
+                _ => unreachable!("ids were moved to the QTensor device"),
+            },
+            QStorage::Cuda(storage) => match &*ids.storage() {
+                Storage::Cuda(ids_storage) => {
+                    Storage::Cuda(storage.embedding(rows, hidden, ids_storage, ids.layout())?)
+                }
+                _ => unreachable!("ids were moved to the QTensor device"),
+            },
+        };
+        let none = crate::op::BackpropOp::none();
+        Ok(crate::tensor::from_storage(storage, out_shape, none, false))
     }
 
     pub fn storage_size_in_bytes(&self) -> usize {
@@ -803,6 +882,18 @@ impl QMatMul {
             }
         }
     }
+
+    pub fn embedding(&self, ids: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::QTensor(t) => t.embedding(ids),
+            Self::Tensor(w) | Self::TensorF16(w) => {
+                let mut final_dims = ids.dims().to_vec();
+                final_dims.push(w.dim(D::Minus1)?);
+                let ids = ids.to_device(w.device())?.flatten_all()?;
+                w.index_select(&ids, 0)?.reshape(final_dims)
+            }
+        }
+    }
 }
 
 impl crate::CustomOp1 for QTensor {
@@ -842,6 +933,42 @@ impl crate::CustomOp1 for QTensor {
                 let slice =
                     &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
                 let mut dst_storage = vec![0f32; dst_shape.elem_count()];
+
+                // Try the 8-column BlockQ4Kx8 repacked path.
+                #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+                if self_storage.dtype() == GgmlDType::Q4K && n.is_multiple_of(8) {
+                    use zerocopy::{FromBytes, IntoBytes};
+
+                    let total_blocks =
+                        self_storage.storage_size_in_bytes() / std::mem::size_of::<BlockQ4K>();
+                    let repacked = self.repacked_qs.get_or_init(|| {
+                        let blocks = unsafe {
+                            std::slice::from_raw_parts(
+                                self_storage.as_ptr() as *const BlockQ4K,
+                                total_blocks,
+                            )
+                        };
+                        let packed = k_quants::pack_to_q4kx8(blocks, n);
+                        Some(packed.as_bytes().to_vec())
+                    });
+                    if let Some(repacked_bytes) = repacked {
+                        let block_x8: &[BlockQ4Kx8] =
+                            <[BlockQ4Kx8]>::ref_from_bytes(repacked_bytes).map_err(|_| {
+                                crate::Error::Msg(
+                                    "repacked_qs alignment invariant violated".to_string(),
+                                )
+                            })?;
+
+                        k_quants::matmul_q4k_x8(
+                            (dst_shape.elem_count() / n, k, n),
+                            slice,
+                            block_x8,
+                            &mut dst_storage,
+                        )?;
+                        return Ok((crate::CpuStorage::F32(dst_storage), dst_shape));
+                    }
+                }
+
                 self_storage.matmul_t(
                     (dst_shape.elem_count() / n, k, n),
                     slice,
