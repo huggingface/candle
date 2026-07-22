@@ -16,6 +16,7 @@ exclude = [
     "candle-flash-attn",
     "candle-flash-attn-v3",
     "candle-kernels",
+    "candle-lora-kernels",
     "candle-metal-kernels",
     "candle-onnx",
 ]
@@ -40,6 +41,7 @@ candle-datasets = { path = "./candle-datasets", version = "0.11.0" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.11.0" }
 candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.11.0" }
 candle-kernels = { path = "./candle-kernels", version = "0.11.0" }
+candle-lora-kernels = { path = "./candle-lora-kernels", version = "0.11.0" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.11.0" }
 candle-nn = { path = "./candle-nn", version = "0.11.0" }
 candle-onnx = { path = "./candle-onnx", version = "0.11.0" }
