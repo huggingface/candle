@@ -14,15 +14,26 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-// We track owned Metal resources with `Retained`, but that only manages ownership,
-// not the thread's autorelease pool. Many Metal APIs (command buffer / encoder creation,
-// commit, waits) still return autoreleased temporaries; without a pool to drain them in a
-// tight loop they accumulate for the whole program lifetime. The creation and sync paths
-// below are therefore wrapped in `autoreleasepool`. See huggingface/candle#2271.
+// We track owned Metal resources with `Retained`, but that only manages *our* ownership, not
+// the thread's autorelease pool. Metal (and the MLX/MPS kernels it dispatches) autorelease many
+// temporaries - command buffers, encoders, and per-dispatch scratch objects - onto the running
+// thread's pool. A workload that never synchronizes back to the CPU (the reproducer in
+// huggingface/candle#2271) never returns to an outer autorelease pool, so those temporaries
+// accumulate for the whole program lifetime. We therefore drain a pool around every encoder
+// (via the `AutoreleasePoolGuard` held by the command guards, which spans the actual kernel
+// dispatch) and around the explicit flush/wait paths (via `autoreleasepool`).
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
 pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 
 const DEFAULT_CANDLE_METAL_COMPUTE_PER_BUFFER: usize = 50;
+
+// Upper bound on committed-but-not-yet-reaped command buffers kept in `in_flight`.
+// A workload that never reads a result back to the CPU (see huggingface/candle#2271)
+// never calls `flush_and_wait`, so committed command buffers - and the output buffers
+// they retain - are only released when we reap them here. We reap completed buffers on
+// every swap; this bound additionally blocks on the oldest buffer if the GPU falls far
+// enough behind that reaping alone cannot keep memory in check.
+const MAX_IN_FLIGHT: usize = 64;
 
 fn create_command_buffer(command_queue: &CommandQueue) -> Result<CommandBuffer, MetalKernelError> {
     command_queue.commandBuffer().map(CommandBuffer::new).ok_or(
@@ -30,9 +41,43 @@ fn create_command_buffer(command_queue: &CommandQueue) -> Result<CommandBuffer, 
     )
 }
 
+/// RAII wrapper around a thread-local autorelease pool.
+///
+/// `objc2` only exposes autorelease pools through the closure-based [`autoreleasepool`], but our
+/// command-encoder API hands the caller a guard that stays alive across the kernel dispatch, so we
+/// need a pool whose lifetime matches that guard rather than a lexical closure. Dropping the guard
+/// drains every temporary autoreleased since it was created (see huggingface/candle#2271).
+///
+/// Safety: `objc_autoreleasePoolPop` must run on the same thread as its matching push, and nested
+/// pools must be popped in LIFO order. [`Commands`] serializes all encoder access through a single
+/// mutex that the command guard holds for its whole lifetime, so at most one `AutoreleasePoolGuard`
+/// is ever live per thread; it is a short-lived local dropped at the end of each op. Both invariants
+/// therefore hold.
+struct AutoreleasePoolGuard {
+    context: *mut std::ffi::c_void,
+}
+
+impl AutoreleasePoolGuard {
+    fn new() -> Self {
+        // SAFETY: paired with the `objc_autoreleasePoolPop` in `Drop`, on the same thread; see the
+        // type-level note on why the LIFO/same-thread invariants hold.
+        let context = unsafe { objc2::ffi::objc_autoreleasePoolPush() };
+        Self { context }
+    }
+}
+
+impl Drop for AutoreleasePoolGuard {
+    fn drop(&mut self) {
+        // SAFETY: `context` came from `objc_autoreleasePoolPush` in `new`, popped once, same thread.
+        unsafe { objc2::ffi::objc_autoreleasePoolPop(self.context) };
+    }
+}
+
 /// RAII guard for compute command encoder operations.
 pub struct CommandsGuard<'a> {
     guard: MutexGuard<'a, EntryState>,
+    // Drains autoreleased temporaries created while encoding (dropped after `guard`). See #2271.
+    _pool: AutoreleasePoolGuard,
 }
 
 impl AsRef<ComputeCommandEncoder> for CommandsGuard<'_> {
@@ -61,6 +106,8 @@ impl CommandsGuard<'_> {
 pub struct BlitCommandsGuard<'a> {
     _guard: MutexGuard<'a, EntryState>,
     state: BlitCommandEncoder,
+    // Drains autoreleased temporaries created while encoding (dropped last). See #2271.
+    _pool: AutoreleasePoolGuard,
 }
 
 impl<'a> AsRef<BlitCommandEncoder> for BlitCommandsGuard<'a> {
@@ -165,69 +212,26 @@ impl Commands {
     }
 
     pub fn command_encoder(&self) -> Result<CommandsGuard<'_>, MetalKernelError> {
+        // Open the pool before touching Metal so it covers command-buffer/encoder creation *and*
+        // the kernel dispatch the caller performs while holding the returned guard. Draining only
+        // happens when the guard is dropped, i.e. after the dispatch. The objects we keep are held
+        // via `Retained` (in `state_guard`), so they survive the drain; only the pool's extra
+        // references are freed. See huggingface/candle#2271.
+        let pool = AutoreleasePoolGuard::new();
         let mut state_guard = self.state.lock().unwrap();
         let count = self.compute_count.fetch_add(1, Ordering::Relaxed);
         let flush = count >= self.compute_per_buffer;
 
-        // Create the command buffer / encoder inside an autorelease pool so the
-        // autoreleased Metal temporaries are reclaimed as soon as this returns.
-        // The objects we keep are held via `Retained` (in `state_guard`), so they
-        // survive the drain; only the pool's extra references are freed. Without
-        // this, autoreleased command buffers and encoders accumulate for the whole
-        // program lifetime (see huggingface/candle#2271).
-        autoreleasepool(|_| -> Result<(), MetalKernelError> {
-            if flush {
-                self.commit_swap_locked(&mut state_guard, 1)?;
-            }
+        if flush {
+            self.commit_swap_locked(&mut state_guard, 1)?;
+        }
 
-            if state_guard.current_encoder.is_none() {
-                let fence = Arc::new(Fence::new(&self.device));
-                let enc = state_guard.current.compute_command_encoder(&fence);
-                // Wait for all prior encoder fences before the first dispatch.
-                // Using HazardTrackingModeUntracked implies that Metal does not automatically flush GPU caches
-                // at encoder or command buffer boundaries.
-                {
-                    use std::collections::HashSet;
-                    let map = self.prev_ce_outputs.lock().unwrap();
-                    let mut seen = HashSet::new();
-                    for f in map.values() {
-                        let ptr = Arc::as_ptr(f) as usize;
-                        if seen.insert(ptr) {
-                            enc.wait_for_fence(f);
-                        }
-                    }
-                }
-                state_guard.current_encoder = Some(enc);
-            }
-            Ok(())
-        })?;
-
-        Ok(CommandsGuard { guard: state_guard })
-    }
-
-    pub fn blit_command_encoder(&self) -> Result<BlitCommandsGuard<'_>, MetalKernelError> {
-        let mut state_guard = self.state.lock().unwrap();
-        let count = self.compute_count.fetch_add(1, Ordering::Relaxed);
-        let flush = count >= self.compute_per_buffer;
-
-        // See `command_encoder` for why this is wrapped in an autorelease pool.
-        let encoder = autoreleasepool(|_| -> Result<BlitCommandEncoder, MetalKernelError> {
-            if flush {
-                self.commit_swap_locked(&mut state_guard, 1)?;
-            }
-
-            // End compute encoder before starting blit.
-            if let Some(enc) = state_guard.current_encoder.take() {
-                self.end_encoding(enc);
-            }
-
+        if state_guard.current_encoder.is_none() {
             let fence = Arc::new(Fence::new(&self.device));
-            let encoder = state_guard
-                .current
-                .blit_command_encoder(&fence, &self.prev_ce_outputs);
-
-            // Wait for all prior encoder fences before any blit commands execute.
-            // Required for HazardTrackingModeUntracked: GPU caches are not auto-flushed.
+            let enc = state_guard.current.compute_command_encoder(&fence);
+            // Wait for all prior encoder fences before the first dispatch.
+            // Using HazardTrackingModeUntracked implies that Metal does not automatically flush GPU caches
+            // at encoder or command buffer boundaries.
             {
                 use std::collections::HashSet;
                 let map = self.prev_ce_outputs.lock().unwrap();
@@ -235,16 +239,58 @@ impl Commands {
                 for f in map.values() {
                     let ptr = Arc::as_ptr(f) as usize;
                     if seen.insert(ptr) {
-                        encoder.wait_for_fence(f);
+                        enc.wait_for_fence(f);
                     }
                 }
             }
-            Ok(encoder)
-        })?;
+            state_guard.current_encoder = Some(enc);
+        }
+
+        Ok(CommandsGuard {
+            guard: state_guard,
+            _pool: pool,
+        })
+    }
+
+    pub fn blit_command_encoder(&self) -> Result<BlitCommandsGuard<'_>, MetalKernelError> {
+        // See `command_encoder` for why the pool spans the whole guard lifetime.
+        let pool = AutoreleasePoolGuard::new();
+        let mut state_guard = self.state.lock().unwrap();
+        let count = self.compute_count.fetch_add(1, Ordering::Relaxed);
+        let flush = count >= self.compute_per_buffer;
+
+        if flush {
+            self.commit_swap_locked(&mut state_guard, 1)?;
+        }
+
+        // End compute encoder before starting blit.
+        if let Some(enc) = state_guard.current_encoder.take() {
+            self.end_encoding(enc);
+        }
+
+        let fence = Arc::new(Fence::new(&self.device));
+        let encoder = state_guard
+            .current
+            .blit_command_encoder(&fence, &self.prev_ce_outputs);
+
+        // Wait for all prior encoder fences before any blit commands execute.
+        // Required for HazardTrackingModeUntracked: GPU caches are not auto-flushed.
+        {
+            use std::collections::HashSet;
+            let map = self.prev_ce_outputs.lock().unwrap();
+            let mut seen = HashSet::new();
+            for f in map.values() {
+                let ptr = Arc::as_ptr(f) as usize;
+                if seen.insert(ptr) {
+                    encoder.wait_for_fence(f);
+                }
+            }
+        }
 
         Ok(BlitCommandsGuard {
             _guard: state_guard,
             state: encoder,
+            _pool: pool,
         })
     }
 
@@ -340,6 +386,21 @@ impl Commands {
         let old_cb = std::mem::replace(&mut state.current, new_cb);
         state.in_flight.push(old_cb);
         self.compute_count.store(reset_to, Ordering::Release);
+
+        // Reap command buffers the GPU has already finished. Each retained command buffer
+        // keeps the resources it referenced (notably its output buffers) alive, so a loop
+        // that never triggers `flush_and_wait` would otherwise grow without bound. See #2271.
+        state
+            .in_flight
+            .retain(|cb| cb.status() != MTLCommandBufferStatus::Completed);
+
+        // Backpressure: if the GPU has fallen far enough behind that reaping did not bring
+        // us back under the bound, block on the oldest in-flight buffer (queue is FIFO) until
+        // memory is in check again.
+        while state.in_flight.len() > MAX_IN_FLIGHT {
+            let oldest = state.in_flight.remove(0);
+            Self::ensure_completed(&oldest)?;
+        }
 
         Ok(())
     }

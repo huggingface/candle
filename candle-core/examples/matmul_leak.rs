@@ -48,9 +48,10 @@ fn main() -> Result<()> {
     println!("start RSS: {:.2} MB", start_rss as f64 / 1e6);
 
     for i in 0..iterations {
-        let c = a.matmul(&b)?;
-        // Force the computation to actually run and read the result back to the CPU.
-        let _ = c.sum_all()?.to_scalar::<f32>()?;
+        // Exactly as in the issue reproducer: enqueue matmuls without ever reading a result back
+        // to the CPU and without wrapping the loop body in an autorelease pool. The backend must
+        // keep memory flat on its own; see huggingface/candle#2271.
+        let _ = a.matmul(&b)?;
 
         if i % 5_000 == 0 {
             let rss = rss_bytes();
