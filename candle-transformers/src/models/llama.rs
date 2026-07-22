@@ -1300,7 +1300,6 @@ impl Llama {
 
         let device = prompt_tokens.device();
         let logits = self.forward_with_adapters(prompt_tokens, 0, cache, adapter_assignments)?;
-        let mut index_pos = prompt_len;
         let mut next_tokens = Vec::with_capacity(b_sz);
         for (row, processor) in logits_processors.iter_mut().enumerate() {
             let token = processor.sample(&logits.i(row)?)?;
@@ -1308,11 +1307,10 @@ impl Llama {
             next_tokens.push(token);
         }
 
-        for _ in 1..max_new_tokens {
+        for index_pos in prompt_len..prompt_len + max_new_tokens - 1 {
             let input = Tensor::from_vec(next_tokens.clone(), (b_sz, 1), device)?;
             let logits =
                 self.forward_with_adapters(&input, index_pos, cache, adapter_assignments)?;
-            index_pos += 1;
             next_tokens.clear();
             for (row, processor) in logits_processors.iter_mut().enumerate() {
                 let token = processor.sample(&logits.i(row)?)?;
@@ -3115,14 +3113,13 @@ mod tests {
             let mut processor = LogitsProcessor::from_sampling(0, Sampling::ArgMax);
             let prompt = prompts.narrow(0, row, 1)?;
             let logits = model.forward_with_adapters(&prompt, 0, &mut cache, &[*assignment])?;
-            let mut index_pos = prompt.dim(1)?;
+            let prompt_len = prompt.dim(1)?;
             let mut next_token = processor.sample(&logits.i(0)?)?;
             let mut expected = vec![next_token];
-            for _ in 1..max_new_tokens {
+            for index_pos in prompt_len..prompt_len + max_new_tokens - 1 {
                 let input = Tensor::new(&[[next_token]], &dev)?;
                 let logits =
                     model.forward_with_adapters(&input, index_pos, &mut cache, &[*assignment])?;
-                index_pos += 1;
                 next_token = processor.sample(&logits.i(0)?)?;
                 expected.push(next_token);
             }
@@ -3135,13 +3132,12 @@ mod tests {
         let mut plain_processor = LogitsProcessor::from_sampling(0, Sampling::ArgMax);
         let base_prompt = prompts.narrow(0, 2, 1)?;
         let logits = model.forward(&base_prompt, 0, &mut plain_cache)?;
-        let mut index_pos = base_prompt.dim(1)?;
+        let base_prompt_len = base_prompt.dim(1)?;
         let mut next_token = plain_processor.sample(&logits.i(0)?)?;
         let mut expected_plain = vec![next_token];
-        for _ in 1..max_new_tokens {
+        for index_pos in base_prompt_len..base_prompt_len + max_new_tokens - 1 {
             let input = Tensor::new(&[[next_token]], &dev)?;
             let logits = model.forward(&input, index_pos, &mut plain_cache)?;
-            index_pos += 1;
             next_token = plain_processor.sample(&logits.i(0)?)?;
             expected_plain.push(next_token);
         }
