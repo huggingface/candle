@@ -1000,7 +1000,8 @@ fn conv1d_depthwise(dev: &Device) -> Result<()> {
 }
 
 fn conv2d_depthwise(dev: &Device) -> Result<()> {
-    let (b, c, h, w_, k) = (2usize, 5usize, 5usize, 7usize, 3usize);
+    // c is above the fast path's groups threshold so CUDA still exercises it here.
+    let (b, c, h, w_, k) = (2usize, 16usize, 5usize, 7usize, 3usize);
     let t = Tensor::randn(0f32, 1f32, (b, c, h, w_), dev)?;
     let weight = Tensor::randn(0f32, 1f32, (c, 1, k, k), dev)?;
     // Block-diagonal dense weight (c, c, k, k), zero off the diagonal.

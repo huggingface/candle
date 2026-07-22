@@ -128,6 +128,18 @@ impl ParamsConvTranspose2D {
     }
 }
 
+// The depthwise fast path trades `3 * groups` tiny launches for `2 * taps - 1` full-output
+// ones, so it only pays while the per-group path is launch-bound. Both limits are measured.
+const DEPTHWISE_LAUNCH_MARGIN_NUM: usize = 3;
+const DEPTHWISE_LAUNCH_MARGIN_DEN: usize = 2;
+const DEPTHWISE_MAX_GROUP_WORK: usize = 1 << 20;
+
+fn depthwise_fast_path_wins(groups: usize, taps: usize, group_work: usize) -> bool {
+    let per_group_launches = 3 * groups * DEPTHWISE_LAUNCH_MARGIN_DEN;
+    let fast_path_launches = (2 * taps - 1) * DEPTHWISE_LAUNCH_MARGIN_NUM;
+    per_group_launches >= fast_path_launches && group_work <= DEPTHWISE_MAX_GROUP_WORK
+}
+
 impl Tensor {
     fn conv1d_single_group(&self, kernel: &Self, params: &ParamsConv1D) -> Result<Self> {
         let storage =
@@ -192,7 +204,14 @@ impl Tensor {
         };
         if groups == 1 {
             self.conv1d_single_group(kernel, &params)
-        } else if c_in_k == 1 && c_out == c_in && groups == c_in && stride == 1 && dilation == 1 {
+        } else if c_in_k == 1
+            && c_out == c_in
+            && groups == c_in
+            && stride == 1
+            && dilation == 1
+            && self.device().is_cuda()
+            && depthwise_fast_path_wins(groups, k_size, b_size * params.l_out() * k_size)
+        {
             // Depthwise fast path: the per-group decomposition below launches O(groups) tiny
             // kernels, which dominates runtime on CUDA (issue #3389). Restricted to unit
             // stride/dilation as there is no strided-narrow primitive yet.
@@ -363,7 +382,18 @@ impl Tensor {
         };
         if groups == 1 {
             self.conv2d_single_group(kernel, &params)
-        } else if c_in_k == 1 && c_out == c_in && groups == c_in && stride == 1 && dilation == 1 {
+        } else if c_in_k == 1
+            && c_out == c_in
+            && groups == c_in
+            && stride == 1
+            && dilation == 1
+            && self.device().is_cuda()
+            && depthwise_fast_path_wins(
+                groups,
+                k_h * k_w,
+                b_size * params.out_h() * params.out_w() * k_h * k_w,
+            )
+        {
             // Depthwise fast path, see `conv1d_with_algo` (issue #3389).
             self.conv2d_depthwise(kernel, &params)
         } else {
