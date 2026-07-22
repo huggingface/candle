@@ -1,6 +1,7 @@
 //! Cache Implementations
 //!
-use candle::{DType, Device, Result, Tensor};
+use candle::{DType, Device, Result, Tensor,Error};
+// use candle::Error;
 
 #[derive(Debug, Clone)]
 pub struct Cache {
@@ -1140,3 +1141,326 @@ pub fn rope_i_inplace(data: &mut [f32], cos: &[f32], sin: &[f32], num_heads: usi
         }
     }
 }
+// ============================================================================
+// PAGED ATTENTION: BlockManager (Phase 1 CPU Infrastructure)
+// ============================================================================
+
+// use candle::{DType, Device, Tensor, Error, Result};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+// -----------------------------------------------------------------------------
+// VecSliceGuard: Holds the MutexGuard and the slice indices.
+// FIXED: No unsafe. Uses indices and calculates the slice in Deref.
+// -----------------------------------------------------------------------------
+
+/// A guard that holds the lock on the backing Vec while providing slice access.
+pub struct VecSliceGuard<'a> {
+    guard: std::sync::MutexGuard<'a, Vec<f32>>,
+    start: usize,
+    end: usize,
+}
+
+impl<'a> std::ops::Deref for VecSliceGuard<'a> {
+    type Target = [f32];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.guard[self.start..self.end]
+    }
+}
+
+// -----------------------------------------------------------------------------
+// SequenceState
+// -----------------------------------------------------------------------------
+
+#[derive(Default)]
+struct SequenceState {
+    blocks: Vec<usize>,
+    length: usize,
+}
+
+// -----------------------------------------------------------------------------
+// BlockManager
+// -----------------------------------------------------------------------------
+
+/// A flat memory pool for PagedAttention KV caches (CPU-only Phase 1).
+pub struct BlockManager {
+    data: Mutex<Vec<f32>>,
+    ref_counts: Vec<AtomicUsize>,
+    free_list: Mutex<Vec<usize>>,
+    seq_state: Mutex<HashMap<usize, SequenceState>>,
+    pub num_blocks: usize,
+    pub block_size: usize,
+    pub num_heads: usize,
+    pub head_dim: usize,
+    pub block_stride: usize,
+    pub token_stride: usize,
+}
+
+unsafe impl Send for BlockManager {}
+unsafe impl Sync for BlockManager {}
+
+impl BlockManager {
+    pub fn new(num_blocks: usize, block_size: usize, num_heads: usize, head_dim: usize) -> Self {
+        let token_stride = 2 * num_heads * head_dim;
+        let block_stride = block_size * token_stride;
+        let total_elements = num_blocks * block_stride;
+
+        let data = Mutex::new(vec![0.0; total_elements]);
+        let free_list: Vec<usize> = (0..num_blocks).collect();
+        let ref_counts = (0..num_blocks).map(|_| AtomicUsize::new(0)).collect();
+
+        Self {
+            data,
+            ref_counts,
+            free_list: Mutex::new(free_list),
+            seq_state: Mutex::new(HashMap::new()),
+            num_blocks,
+            block_size,
+            num_heads,
+            head_dim,
+            block_stride,
+            token_stride,
+        }
+    }
+
+    pub fn append_slot(&self, seq_id: usize) -> Option<(usize, usize)> {
+        let mut state_guard = self.seq_state.lock().unwrap();
+        let state = state_guard.entry(seq_id).or_insert_with(SequenceState::default);
+
+        if let Some(&last_block) = state.blocks.last() {
+            let tokens_in_last_block = state.length % self.block_size;
+            if tokens_in_last_block > 0 {
+                state.length += 1;
+                return Some((last_block, tokens_in_last_block));
+            }
+        }
+
+        let mut free_guard = self.free_list.lock().unwrap();
+        let new_block = free_guard.pop()?;
+
+        self.ref_counts[new_block].store(1, Ordering::Relaxed);
+        state.blocks.push(new_block);
+        state.length += 1;
+
+        Some((new_block, 0))
+    }
+
+    // FIXED: Result<()> (removed the explicit Error type)
+    pub fn write_kv(
+        &self,
+        block_id: usize,
+        token_idx: usize,
+        k: &[f32],
+        v: &[f32],
+    ) -> Result<()> {
+        if k.len() != self.num_heads * self.head_dim {
+            return Err(Error::Msg(format!(
+                "K length mismatch: expected {}",
+                self.num_heads * self.head_dim
+            )));
+        }
+        if v.len() != self.num_heads * self.head_dim {
+            return Err(Error::Msg(format!(
+                "V length mismatch: expected {}",
+                self.num_heads * self.head_dim
+            )));
+        }
+        if token_idx >= self.block_size {
+            return Err(Error::Msg(format!(
+                "token_idx {} exceeds block_size {}",
+                token_idx, self.block_size
+            )));
+        }
+        if block_id >= self.num_blocks {
+            return Err(Error::Msg(format!(
+                "block_id {} exceeds num_blocks {}",
+                block_id, self.num_blocks
+            )));
+        }
+
+        let head_dim = self.head_dim;
+        let offset_base = block_id * self.block_stride + token_idx * self.token_stride;
+
+        let mut data_guard = self.data.lock().unwrap();
+        let slice = &mut data_guard;
+
+        for i in 0..self.num_heads {
+            let k_start = i * head_dim;
+            let v_start = i * head_dim;
+            let dest_k = offset_base + i * head_dim;
+            let dest_v = offset_base + self.num_heads * head_dim + i * head_dim;
+
+            slice[dest_k..dest_k + head_dim].copy_from_slice(&k[k_start..k_start + head_dim]);
+            slice[dest_v..dest_v + head_dim].copy_from_slice(&v[v_start..v_start + head_dim]);
+        }
+
+        Ok(())
+    }
+
+    // FIXED: Returns Result<VecSliceGuard>, using the new fixed guard.
+    pub fn get_k_slice_guarded(
+        &self,
+        block_id: usize,
+        token_idx: usize,
+    ) -> Result<VecSliceGuard<'_>> {
+        if block_id >= self.num_blocks {
+            return Err(Error::Msg(format!(
+                "block_id {} exceeds num_blocks {}",
+                block_id, self.num_blocks
+            )));
+        }
+        if token_idx >= self.block_size {
+            return Err(Error::Msg(format!(
+                "token_idx {} exceeds block_size {}",
+                token_idx, self.block_size
+            )));
+        }
+
+        let head_dim = self.head_dim;
+        let offset_base = block_id * self.block_stride + token_idx * self.token_stride;
+        let start = offset_base;
+        let end = offset_base + (self.num_heads * head_dim);
+
+        // FIXED: Use map_err to convert poison errors to candle::Error.
+        let guard = self.data.lock().map_err(|e| Error::Msg(e.to_string()))?;
+
+        Ok(VecSliceGuard { guard, start, end })
+    }
+
+    pub fn decref(&self, block_id: usize) {
+        if block_id >= self.num_blocks {
+            return;
+        }
+        let prev = self.ref_counts[block_id].fetch_sub(1, Ordering::AcqRel);
+        if prev == 1 {
+            let mut free_guard = self.free_list.lock().unwrap();
+            free_guard.push(block_id);
+        }
+    }
+
+    pub fn incref(&self, block_id: usize) {
+        if block_id < self.num_blocks {
+            self.ref_counts[block_id].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn free_count(&self) -> usize {
+        self.free_list.lock().unwrap().len()
+    }
+
+    pub fn free_sequence(&self, seq_id: usize) {
+        let mut state_guard = self.seq_state.lock().unwrap();
+        if let Some(state) = state_guard.remove(&seq_id) {
+            for block_id in state.blocks {
+                self.decref(block_id);
+            }
+        }
+    }
+    /// Materializes the scattered blocks into a single contiguous Tensor.
+    /// This is the "Reference Implementation" (Issue #3656) for device-agnostic testing.
+    pub fn materialize_contiguous(&self, seq_id: usize) -> Result<(Tensor, Tensor)> {
+        let state_guard = self.seq_state.lock().unwrap();
+        let state = state_guard
+            .get(&seq_id)
+            .ok_or_else(|| Error::Msg("Sequence not found".to_string()))?;
+
+        let total_tokens = state.length;
+        let num_heads = self.num_heads;
+        let head_dim = self.head_dim;
+        let token_stride = self.token_stride; // 2 * num_heads * head_dim
+
+        let mut k_flat = Vec::with_capacity(total_tokens * num_heads * head_dim);
+        let mut v_flat = Vec::with_capacity(total_tokens * num_heads * head_dim);
+
+        let guard = self.data.lock().unwrap();
+
+        for (block_idx, &phys_block) in state.blocks.iter().enumerate() {
+            let tokens_in_block = if block_idx == state.blocks.len() - 1 {
+                let rem = total_tokens % self.block_size;
+                if rem == 0 { self.block_size } else { rem }
+            } else {
+                self.block_size
+            };
+
+            let base_offset = phys_block * self.block_stride;
+
+            for token_idx in 0..tokens_in_block {
+                let token_offset = base_offset + token_idx * token_stride;
+                let k_start = token_offset;
+                let k_end = k_start + num_heads * head_dim;
+                let v_start = token_offset + num_heads * head_dim;
+                let v_end = v_start + num_heads * head_dim;
+
+                k_flat.extend_from_slice(&guard[k_start..k_end]);
+                v_flat.extend_from_slice(&guard[v_start..v_end]);
+            }
+        }
+
+        let shape = (total_tokens, num_heads, head_dim);
+        let k_tensor = Tensor::from_vec(k_flat, shape, &Device::Cpu)?;
+        let v_tensor = Tensor::from_vec(v_flat, shape, &Device::Cpu)?;
+        Ok((k_tensor, v_tensor))
+    }
+}
+
+// -----------------------------------------------------------------------------
+// TESTS
+// -----------------------------------------------------------------------------
+
+#[cfg(test)]
+mod test_block_manager {
+    use super::*;
+
+    #[test]
+    fn test_append_slot_reuses_block() {
+        let manager = BlockManager::new(4, 4, 8, 16);
+        let seq_id = 0;
+
+        // Append 4 tokens, they should all go to the SAME block.
+        let (first_block, _) = manager.append_slot(seq_id).unwrap();
+        for i in 1..4 {
+            let (block_id, offset) = manager.append_slot(seq_id).unwrap();
+            assert_eq!(block_id, first_block); // Same block!
+            assert_eq!(offset, i);
+        }
+
+        // 5th token should allocate a NEW block.
+        let (block_id, offset) = manager.append_slot(seq_id).unwrap();
+        assert_ne!(block_id, first_block); // New block!
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn test_ref_count_does_not_leak() {
+        let manager = BlockManager::new(4, 4, 8, 16);
+        let seq_id = 0;
+
+        for _ in 0..5 {
+            manager.append_slot(seq_id).unwrap();
+        }
+
+        manager.free_sequence(seq_id);
+        assert_eq!(manager.free_count(), 4);
+    }
+
+    #[test]
+    fn test_write_and_read_kv() {
+        let manager = BlockManager::new(4, 4, 8, 16);
+        let seq_id = 0;
+        let (block_id, offset) = manager.append_slot(seq_id).unwrap();
+
+        let k: Vec<f32> = (0..128).map(|x| x as f32).collect();
+        let v: Vec<f32> = (128..256).map(|x| x as f32).collect();
+
+        let result = manager.write_kv(block_id, offset, &k, &v);
+        assert!(result.is_ok());
+
+        let guard = manager.get_k_slice_guarded(block_id, offset).unwrap();
+        assert_eq!(guard[0], 0.0);
+        assert_eq!(guard[15], 15.0);
+    }
+}
+    

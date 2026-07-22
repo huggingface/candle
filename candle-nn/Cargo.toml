@@ -42,3 +42,4 @@ metal-debug-labels = ["metal", "candle/metal-debug-labels"]
 [[bench]]
 name = "bench_main"
 harness = false
+
