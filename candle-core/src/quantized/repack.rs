@@ -959,9 +959,9 @@ define_indexed_gemv!(
     QK8_0
 );
 
-#[allow(clippy::too_many_arguments)]
 const INDEXED_BUCKET_MIN_PAIRS: usize = 32;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn try_indexed_gemv(
     storage: &dyn QuantizedType,
     cache: &PackedCache,
