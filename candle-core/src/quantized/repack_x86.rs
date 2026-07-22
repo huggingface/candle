@@ -151,7 +151,7 @@ pub(crate) fn pack_q6k(storage: &dyn QuantizedType, n: usize, k: usize) -> Packe
                     let ql = &blk.ql[h * 64..];
                     let qh = &blk.qh[h * 32..];
                     for j in 0..32 {
-                        vals[h * 128 + j] = (ql[j] & 0x0F) | (((qh[j] >> 0) & 3) << 4);
+                        vals[h * 128 + j] = (ql[j] & 0x0F) | ((qh[j] & 3) << 4);
                         vals[h * 128 + j + 32] = (ql[j + 32] & 0x0F) | (((qh[j] >> 2) & 3) << 4);
                         vals[h * 128 + j + 64] = (ql[j] >> 4) | (((qh[j] >> 4) & 3) << 4);
                         vals[h * 128 + j + 96] = (ql[j + 32] >> 4) | (((qh[j] >> 6) & 3) << 4);
@@ -314,7 +314,6 @@ mod kernels {
 
 // Full matmul over the packed tiles: lhs is m rows already quantized to BlockQ8K,
 // parallelized over (m-tiles x n-tiles) on the barrier pool by the caller's chunker.
-#[allow(clippy::too_many_arguments)]
 // Per-unit bodies live in #[target_feature] fns so intrinsics inline under portable
 // (target-cpu=generic) release builds; closures cannot carry the attribute.
 #[cfg(target_arch = "x86_64")]
@@ -358,8 +357,8 @@ unsafe fn matmul_unit_512(
             }
         }
     }
-    for i in 0..mt {
-        _mm512_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
+    for (i, row) in acc[..mt].iter().enumerate() {
+        _mm512_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), row[0]);
     }
 }
 
@@ -414,9 +413,9 @@ unsafe fn matmul_unit_256(
             }
         }
     }
-    for i in 0..mt {
-        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), acc[i][0]);
-        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N + 8), acc[i][1]);
+    for (i, row) in acc[..mt].iter().enumerate() {
+        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N), row[0]);
+        _mm256_storeu_ps(dst_ptr.add((m0 + i) * n + nt * TILE_N + 8), row[1]);
     }
 }
 
@@ -584,7 +583,7 @@ pub(crate) fn amx_available() -> bool {
         // is_x86_feature_detected!("amx-int8") is unstable; read CPUID leaf 7 directly
         #[cfg(target_arch = "x86_64")]
         let has_amx = {
-            let info = unsafe { core::arch::x86_64::__cpuid_count(7, 0) };
+            let info = core::arch::x86_64::__cpuid_count(7, 0);
             info.edx & (1 << 25) != 0 && info.edx & (1 << 24) != 0
         };
         #[cfg(not(target_arch = "x86_64"))]

@@ -789,6 +789,7 @@ define_gemv_fused!(
     QK8_0
 );
 
+#[cfg(target_arch = "aarch64")]
 pub(crate) fn try_gemv_fused(
     k: usize,
     lhs: &[f32],
@@ -959,8 +960,10 @@ define_indexed_gemv!(
     QK8_0
 );
 
+#[cfg(target_arch = "aarch64")]
 const INDEXED_BUCKET_MIN_PAIRS: usize = 32;
 
+#[cfg(target_arch = "aarch64")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_indexed_gemv(
     storage: &dyn QuantizedType,

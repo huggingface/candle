@@ -77,7 +77,7 @@ impl TextGeneration {
                 println!("{id:7} -> '{token}'");
             }
         } else {
-            print!("{}", &args.prompt);
+            print!("{}", args.prompt);
             std::io::stdout().flush()?;
         }
 
