@@ -1,5 +1,26 @@
 [target.wasm32-unknown-unknown]
 rustflags = [
     '--cfg', 'getrandom_backend="wasm_js"',
-    '-C', 'target-feature=+simd128',
+    # Threads (wasm-bindgen-rayon): atomics+bulk-memory+mutable-globals enable the
+    # feature, but shared memory must be requested explicitly at link (and a shared
+    # memory REQUIRES a max). Without --shared-memory the exported memory is a plain
+    # ArrayBuffer and can't be postMessage'd to workers.
+    # +relaxed-simd: fused i32x4_relaxed_dot_i8x16_i7x16_add Q4_K kernel. Big win on
+    # all-Q4 (~30 vs ~23 tok/s) because it covers the Q4_K lm_head. Needs a
+    # relaxed-simd browser (Chrome 114+/FF120+/Safari18+).
+    '-C', 'target-feature=+simd128,+atomics,+bulk-memory,+mutable-globals,+relaxed-simd',
+    '-C', 'link-arg=--shared-memory',
+    '-C', 'link-arg=--max-memory=4294967296',
+    # wasm-bindgen's thread transform requires an IMPORTED shared memory (it asserts
+    # mem.import.is_some()) and needs __heap_base, which lld GCs unless exported.
+    '-C', 'link-arg=--import-memory',
+    '-C', 'link-arg=--export=__heap_base',
+    '-C', 'link-arg=--export=__wasm_init_tls',
+    '-C', 'link-arg=--export=__tls_size',
+    '-C', 'link-arg=--export=__tls_align',
+    '-C', 'link-arg=--export=__tls_base',
 ]
+
+# Threads need std rebuilt with atomics, which requires nightly + rust-src.
+[unstable]
+build-std = ["std", "panic_abort"]
