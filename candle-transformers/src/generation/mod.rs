@@ -29,6 +29,9 @@ impl LogitsProcessor {
     }
 
     pub fn new(seed: u64, temperature: Option<f64>, top_p: Option<f64>) -> Self {
+        // `manual_filter` suggests `.filter(|&v| v >= 1e-7)`, but `f64` is only `PartialOrd`:
+        // that drops `NaN` where the comparison below keeps it. Left as-is on purpose.
+        #[allow(clippy::manual_filter)]
         let temperature = temperature.and_then(|v| if v < 1e-7 { None } else { Some(v) });
         let sampling = match temperature {
             None => Sampling::ArgMax,
