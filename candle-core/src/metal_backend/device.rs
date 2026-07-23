@@ -194,6 +194,35 @@ impl MetalDevice {
         &self.device
     }
 
+    /// Registers externally created buffers in the device's residency set
+    /// (which is attached to its command queue), keeping them permanently
+    /// GPU-resident like buffers from the device's own allocator, instead of
+    /// paying per-command-buffer residency bookkeeping.
+    ///
+    /// Useful for buffers candle did not allocate — e.g.
+    /// `newBufferWithBytesNoCopy` views over an mmap'd weights file — that are
+    /// streamed by many command buffers over their lifetime. The whole batch
+    /// is committed once, so registering many buffers costs one residency-set
+    /// commit. The caller keeps ownership of the buffers; unregister them
+    /// before dropping (the set retains its allocations).
+    ///
+    /// On systems where residency sets are unsupported (creating one failed at
+    /// device init), this is a no-op: the buffers remain fully usable, at the
+    /// default per-command-buffer residency cost.
+    pub fn register_external_buffers<'a>(&self, bufs: impl IntoIterator<Item = &'a Buffer>) {
+        self.residency_set.insert_batch(bufs);
+    }
+
+    /// Unregisters buffers previously passed to `register_external_buffers`,
+    /// releasing the residency set's retain so they can be deallocated (e.g.
+    /// when unloading a model to free its resources). Only unregister buffers
+    /// you registered yourself — the device's allocator also tracks its pool
+    /// buffers in this set. Ensure GPU work referencing a buffer has completed
+    /// before unregistering and dropping it.
+    pub fn unregister_external_buffers<'a>(&self, bufs: impl IntoIterator<Item = &'a Buffer>) {
+        self.residency_set.remove_batch(bufs);
+    }
+
     /// Returns a builder for buffer allocation. See `BufferBuilder`.
     pub fn new_buffer_builder(&self) -> BufferBuilder<'_> {
         BufferBuilder::new(self)
@@ -466,6 +495,21 @@ mod tests {
         // BF16 and F16 are 2 bytes per element. A scalar tensor requests
         // a 2-byte buffer. This must not be rounded down to 1.
         assert_eq!(buf_size(2), 2);
+    }
+
+    #[test]
+    fn test_register_external_buffers() {
+        // Skip when no Metal device is available (e.g. a CI runner without a GPU).
+        let Ok(crate::Device::Metal(device)) = crate::Device::new_metal(0) else {
+            return;
+        };
+        // A buffer created outside the device's allocator, as an embedder would.
+        let external = device
+            .device()
+            .new_buffer(16, candle_metal_kernels::RESOURCE_OPTIONS)
+            .unwrap();
+        device.register_external_buffers([&external]);
+        device.unregister_external_buffers([&external]);
     }
 }
 
