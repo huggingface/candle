@@ -802,6 +802,45 @@ impl QTensor {
     )> {
         self.storage.device_ptr_with_guard(stream)
     }
+
+    /// Returns a guarded CUDA device pointer to the raw quantized bytes and
+    /// their logical byte length.
+    ///
+    /// This is the supported zero-copy seam for specialized CUDA decode
+    /// extensions. It does not read bytes on the host and does not enqueue an
+    /// H2D copy. The returned `SyncOnDrop` guard must live through every launch
+    /// that consumes `ptr`, preserving Cudarc's stream-ordering contract.
+    ///
+    /// The pointer is valid only while `self` and the returned guard are alive.
+    #[cfg(feature = "cuda")]
+    pub fn cuda_raw_bytes_with_guard<'a>(
+        &'a self,
+        stream: &'a crate::cuda_backend::cudarc::driver::CudaStream,
+    ) -> Result<(
+        *const u8,
+        usize,
+        crate::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    )> {
+        let (ptr, guard) = self.device_ptr_with_guard(stream)?;
+        Ok((ptr, self.storage_size_in_bytes(), guard))
+    }
+
+    /// Returns a mutable guarded raw CUDA byte pointer for an exclusive layout
+    /// transform. # Safety: caller must guarantee no Candle/custom kernel can
+    /// read this QTensor until the transform and any required reverse transform
+    /// have completed. The GGUF dtype/shape byte length must remain unchanged.
+    #[cfg(feature = "cuda")]
+    pub unsafe fn cuda_raw_bytes_mut_with_guard<'a>(
+        &'a self,
+        stream: &'a crate::cuda_backend::cudarc::driver::CudaStream,
+    ) -> Result<(
+        *mut u8,
+        usize,
+        crate::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+    )> {
+        let (ptr, guard) = self.device_ptr_with_guard(stream)?;
+        Ok((ptr as *mut u8, self.storage_size_in_bytes(), guard))
+    }
 }
 
 #[derive(Clone, Debug)]

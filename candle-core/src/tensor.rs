@@ -2729,11 +2729,11 @@ impl Tensor {
         m.forward_t(self, train)
     }
 
-    pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {
+    pub fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {
         self.storage.read().unwrap()
     }
 
-    pub(crate) fn storage_mut(&self) -> std::sync::RwLockWriteGuard<'_, Storage> {
+    pub fn storage_mut(&self) -> std::sync::RwLockWriteGuard<'_, Storage> {
         self.storage.write().unwrap()
     }
 

@@ -132,7 +132,7 @@ impl Var {
             let msg = "cannot set a variable to a tensor that is derived from its value";
             Err(Error::CannotSetVar { msg }.bt())?
         }
-        let (mut dst, layout) = self.storage_mut_and_layout();
+        let (mut dst, layout) = unsafe { self.storage_mut_and_layout() };
         if !layout.is_contiguous() {
             let msg = "cannot set a non-contiguous variable";
             Err(Error::CannotSetVar { msg }.bt())?

@@ -20,7 +20,6 @@ fn main() -> Result<()> {
         .build_ptx()?;
 
     bindings.write(&ptx_path)?;
-
     let mut moe_builder = KernelBuilder::default()
         .source_files(vec![
             "src/moe/moe_gguf.cu",
