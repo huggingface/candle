@@ -240,7 +240,6 @@ impl ReduceSum<'_> {
     where
         T: WithDType,
     {
-        let mut dst = vec![start_elt; self.dst_shape.elem_count()];
         match src_l.contiguous_offsets() {
             Some((o1, o2)) => {
                 let src = &src[o1..o2];
@@ -254,6 +253,7 @@ impl ReduceSum<'_> {
                     .enumerate()
                     .all(|(i, &v)| v == src_l.shape().rank() - 1 - i);
                 if reduce_over_last_dims {
+                    let mut dst = vec![start_elt; self.dst_shape.elem_count()];
                     let reduce_sz = self
                         .reduce_dims_and_stride
                         .iter()
@@ -271,6 +271,12 @@ impl ReduceSum<'_> {
                     }
                     return Ok(dst);
                 };
+                // Reducing over a non-trailing axis can't use the contiguous fast path above, so
+                // it used to add straight into a `Vec<T>` here. For f16/bf16 that saturates on
+                // long reductions the same way a scalar `+=` chain would (e.g. summing a column
+                // of 4096 ones stalls once the running value's f16 ULP exceeds 1). Accumulate in
+                // each dtype's wide `Accum` type instead and narrow back down once at the end.
+                let mut acc = vec![start_elt.to_accum(); self.dst_shape.elem_count()];
                 for (unstr_index, &src) in src.iter().enumerate() {
                     let mut dst_index = unstr_index;
                     // Set the reduce_dims indexes to 0.
@@ -279,10 +285,12 @@ impl ReduceSum<'_> {
                         let (pre, post) = (dst_index / stride, dst_index % stride);
                         dst_index = (pre / dim) * stride + post;
                     }
-                    dst[dst_index] += src;
+                    T::accum_add(&mut acc[dst_index], src);
                 }
+                Ok(acc.into_iter().map(T::from_accum).collect())
             }
             None => {
+                let mut acc = vec![start_elt.to_accum(); self.dst_shape.elem_count()];
                 for (unstr_index, src_index) in src_l.strided_index().enumerate() {
                     let mut dst_index = unstr_index;
                     // Set the reduce_dims indexes to 0.
@@ -291,11 +299,11 @@ impl ReduceSum<'_> {
                         let (pre, post) = (dst_index / stride, dst_index % stride);
                         dst_index = (pre / dim) * stride + post;
                     }
-                    dst[dst_index] += src[src_index];
+                    T::accum_add(&mut acc[dst_index], src[src_index]);
                 }
+                Ok(acc.into_iter().map(T::from_accum).collect())
             }
         }
-        Ok(dst)
     }
 }
 
