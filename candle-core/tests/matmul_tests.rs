@@ -82,6 +82,73 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn zero_matmul(device: &Device) -> Result<()> {
+    let lhs = Tensor::zeros((2, 0), DType::F32, device)?;
+    let rhs = Tensor::zeros((0, 3), DType::F32, device)?;
+    let output = lhs.matmul(&rhs)?;
+    assert_eq!(output.dims(), &[2, 3]);
+    assert_eq!(output.to_vec2::<f32>()?, &[[0., 0., 0.], [0., 0., 0.]]);
+
+    let lhs = Tensor::zeros((2, 3, 4), DType::F32, device)?
+        .transpose(1, 2)?
+        .narrow(1, 0, 0)?;
+    let rhs = Tensor::zeros((2, 4, 3), DType::F32, device)?
+        .transpose(1, 2)?
+        .narrow(2, 0, 0)?;
+    assert!(!lhs.is_contiguous());
+    assert!(!rhs.is_contiguous());
+    assert_eq!(lhs.dims(), &[2, 0, 3]);
+    assert_eq!(rhs.dims(), &[2, 3, 0]);
+    assert_eq!(lhs.matmul(&rhs)?.dims(), &[2, 0, 0]);
+    Ok(())
+}
+
+fn assert_matmul_error(
+    device: &Device,
+    lhs: (&[usize], DType),
+    rhs: (&[usize], DType),
+    expected: &str,
+) -> Result<()> {
+    let lhs = Tensor::zeros(lhs.0, lhs.1, device)?;
+    let rhs = Tensor::zeros(rhs.0, rhs.1, device)?;
+    let err = lhs.matmul(&rhs).unwrap_err();
+    assert!(
+        err.to_string().starts_with(expected),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+fn zero_matmul_validation(device: &Device) -> Result<()> {
+    use DType::{F16, F32};
+
+    let shape_error = "shape mismatch in matmul";
+    assert_matmul_error(device, (&[0, 2], F32), (&[3, 4], F16), shape_error)?;
+    assert_matmul_error(device, (&[2, 3], F32), (&[4, 0], F32), shape_error)?;
+    assert_matmul_error(device, (&[0, 2, 3], F32), (&[1, 3, 4], F32), shape_error)?;
+    assert_matmul_error(
+        device,
+        (&[0, 2], F32),
+        (&[2, 3], F16),
+        "dtype mismatch in matmul",
+    )?;
+    Ok(())
+}
+
+fn zero_matmul_device_validation(device: &Device) -> Result<()> {
+    if device.is_cpu() {
+        return Ok(());
+    }
+    let lhs = Tensor::zeros((0, 2), DType::F32, &Device::Cpu)?;
+    let rhs = Tensor::zeros((2, 3), DType::F16, device)?;
+    let err = lhs.matmul(&rhs).unwrap_err();
+    assert!(
+        err.to_string().starts_with("device mismatch in matmul"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
 #[test]
 fn tensor_dot() -> Result<()> {
     let lhs = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
@@ -141,6 +208,24 @@ test_device!(
     broadcast_matmul_cpu,
     broadcast_matmul_gpu,
     broadcast_matmul_metal
+);
+test_device!(
+    zero_matmul,
+    zero_matmul_cpu,
+    zero_matmul_gpu,
+    zero_matmul_metal
+);
+test_device!(
+    zero_matmul_validation,
+    zero_matmul_validation_cpu,
+    zero_matmul_validation_gpu,
+    zero_matmul_validation_metal
+);
+test_device!(
+    zero_matmul_device_validation,
+    zero_matmul_device_validation_cpu,
+    zero_matmul_device_validation_gpu,
+    zero_matmul_device_validation_metal
 );
 test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal);
 test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal);
