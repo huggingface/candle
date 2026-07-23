@@ -177,7 +177,7 @@ fn main() -> Result<()> {
         let config_filename = api.get("config.json")?;
         let llava_config: LLaVAConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
         let tokenizer = Tokenizer::from_file(&args.tokenizer_path)
-            .map_err(|e| E::msg(format!("Error loading {}: {}", &args.tokenizer_path, e)))?;
+            .map_err(|e| E::msg(format!("Error loading {}: {}", args.tokenizer_path, e)))?;
         (
             llava_config.clone(),
             tokenizer,
@@ -258,7 +258,7 @@ fn main() -> Result<()> {
     println!("loading image");
     let (image_size, image_tensor) =
         load_image(&args.image_file, &image_processor, &llava_config, dtype)
-            .map_err(|e| E::msg(format!("Error loading {}: {}", &args.image_file, e)))?;
+            .map_err(|e| E::msg(format!("Error loading {}: {}", args.image_file, e)))?;
     let image_tensor = image_tensor.to_device(&device)?;
 
     let mut logits_processor = {
