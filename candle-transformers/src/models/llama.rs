@@ -131,6 +131,38 @@ impl Proj {
             Some(_) => Ok(()),
         }
     }
+
+    /// Registers `name` on this projection if `module` is one of
+    /// `config.target_modules`, promoting a plain projection into a
+    /// LoRA-augmented one in place first if needed. Promotion reuses the
+    /// already-resident base weight (a cheap `Tensor` clone, not a reload),
+    /// so the base model never gets a second copy in memory. A no-op if this
+    /// projection wasn't targeted by `config`.
+    fn load_lora_adapter(
+        &mut self,
+        module: &str,
+        name: &str,
+        vb: VarBuilder,
+        config: &LoraConfig,
+    ) -> Result<()> {
+        if !config.wants(module) {
+            return Ok(());
+        }
+        if let Self::Plain(base) = self {
+            *self = Self::Lora(LoraLinear::new(base.inner().clone()));
+        }
+        let Self::Lora(l) = self else { unreachable!() };
+        l.load_adapter(name, vb.pp(module), config.rank, config.alpha)
+    }
+
+    /// Removes `name` from this projection, if it carries an adapter under
+    /// that name. A no-op otherwise.
+    fn remove_adapter(&mut self, name: &str) -> Result<()> {
+        if let Self::Lora(l) = self {
+            l.remove_adapter(name)?;
+        }
+        Ok(())
+    }
 }
 
 fn load_projection(
@@ -991,6 +1023,30 @@ impl CausalSelfAttention {
         Ok(())
     }
 
+    fn load_lora_adapter(&mut self, name: &str, vb: VarBuilder, config: &LoraConfig) -> Result<()> {
+        let vb = vb.pp("self_attn");
+        self.q_proj
+            .load_lora_adapter("q_proj", name, vb.clone(), config)?;
+        self.k_proj
+            .load_lora_adapter("k_proj", name, vb.clone(), config)?;
+        self.v_proj
+            .load_lora_adapter("v_proj", name, vb.clone(), config)?;
+        self.o_proj.load_lora_adapter("o_proj", name, vb, config)?;
+        Ok(())
+    }
+
+    fn remove_adapter(&mut self, name: &str) -> Result<()> {
+        for p in [
+            &mut self.q_proj,
+            &mut self.k_proj,
+            &mut self.v_proj,
+            &mut self.o_proj,
+        ] {
+            p.remove_adapter(name)?;
+        }
+        Ok(())
+    }
+
     fn load(vb: VarBuilder, cfg: &Config, lora_adapters: &[LoraSpec]) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "attn");
         let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
@@ -1054,6 +1110,24 @@ impl Mlp {
     fn set_active_adapter(&mut self, name: Option<&str>) -> Result<()> {
         for p in [&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj] {
             p.set_active_adapter(name)?;
+        }
+        Ok(())
+    }
+
+    fn load_lora_adapter(&mut self, name: &str, vb: VarBuilder, config: &LoraConfig) -> Result<()> {
+        let vb = vb.pp("mlp");
+        self.c_fc1
+            .load_lora_adapter("gate_proj", name, vb.clone(), config)?;
+        self.c_fc2
+            .load_lora_adapter("up_proj", name, vb.clone(), config)?;
+        self.c_proj
+            .load_lora_adapter("down_proj", name, vb, config)?;
+        Ok(())
+    }
+
+    fn remove_adapter(&mut self, name: &str) -> Result<()> {
+        for p in [&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj] {
+            p.remove_adapter(name)?;
         }
         Ok(())
     }
@@ -1127,6 +1201,16 @@ impl Block {
     fn set_active_adapter(&mut self, name: Option<&str>) -> Result<()> {
         self.attn.set_active_adapter(name)?;
         self.mlp.set_active_adapter(name)
+    }
+
+    fn load_lora_adapter(&mut self, name: &str, vb: VarBuilder, config: &LoraConfig) -> Result<()> {
+        self.attn.load_lora_adapter(name, vb.clone(), config)?;
+        self.mlp.load_lora_adapter(name, vb, config)
+    }
+
+    fn remove_adapter(&mut self, name: &str) -> Result<()> {
+        self.attn.remove_adapter(name)?;
+        self.mlp.remove_adapter(name)
     }
 
     fn load(
@@ -1367,6 +1451,60 @@ impl Llama {
         }
         for block in &mut self.blocks {
             block.set_active_adapter(name)?;
+        }
+        Ok(())
+    }
+
+    /// Registers a new named LoRA adapter into an already-loaded model,
+    /// without reloading or duplicating the base weights: projections
+    /// targeted by `config` that are still plain are promoted to
+    /// LoRA-augmented ones in place, reusing their already-resident weight
+    /// tensor (a cheap `Tensor` clone, not a fresh load from disk), and any
+    /// projection that already carries other adapters simply gains another
+    /// one alongside them. `vb` is resolved under `prefix`, following the
+    /// same convention as
+    /// [`LlamaLoadConfig::with_lora_adapter_prefixed`] used at construction
+    /// time; pass an empty prefix if `vb` is already scoped to the model
+    /// root.
+    ///
+    /// The adapter is loaded but not made active -- call
+    /// [`Llama::set_active_adapter`] (or route it through
+    /// [`Llama::forward_with_adapters`]) to use it. Loading a second adapter
+    /// under a name that is already registered on some of the targeted
+    /// projections overwrites those adapters' weights in place.
+    pub fn load_lora_adapter_prefixed(
+        &mut self,
+        name: &str,
+        vb: VarBuilder,
+        config: LoraConfig,
+        prefix: &str,
+    ) -> Result<()> {
+        let vb = if prefix.is_empty() { vb } else { vb.pp(prefix) };
+        for (i, block) in self.blocks.iter_mut().enumerate() {
+            block.load_lora_adapter(name, vb.pp(format!("model.layers.{i}")), &config)?;
+        }
+        Ok(())
+    }
+
+    /// Like [`Llama::load_lora_adapter_prefixed`], but resolves `vb` under
+    /// the standard [`PEFT_ADAPTER_PREFIX`].
+    pub fn load_lora_adapter(
+        &mut self,
+        name: &str,
+        vb: VarBuilder,
+        config: LoraConfig,
+    ) -> Result<()> {
+        self.load_lora_adapter_prefixed(name, vb, config, PEFT_ADAPTER_PREFIX)
+    }
+
+    /// Removes a previously registered adapter from every projection that
+    /// carries it, without touching the base weights. Any projection where
+    /// `name` was the active adapter falls back to the frozen base layer,
+    /// exactly as if [`Llama::set_active_adapter`]`(None)` had been called
+    /// for it. A no-op if no projection carries `name`.
+    pub fn remove_lora_adapter(&mut self, name: &str) -> Result<()> {
+        for block in &mut self.blocks {
+            block.remove_adapter(name)?;
         }
         Ok(())
     }
@@ -1634,6 +1772,107 @@ mod tests {
                 },
             );
         Llama::load_with_config(base_vb, cfg, load_config)
+    }
+
+    #[test]
+    fn load_lora_adapter_matches_construction_time_loading() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let target = LoraConfig {
+            rank: 2,
+            alpha: 4.0,
+            target_modules: vec!["o_proj".to_string()],
+        };
+
+        // Reference: both adapters baked in at construction time.
+        let reference = multi_adapter_model(&cfg, &dev)?;
+
+        // Under test: load with no adapters at all -- every projection
+        // starts out plain -- then register "a" and "b" after the fact.
+        let base_vb = VarBuilder::from_tensors(base_weights(&cfg, &dev), DType::F32, &dev);
+        let mut model = Llama::load(base_vb, &cfg)?;
+        let vb_a = VarBuilder::from_tensors(
+            lora_adapter_weights_valued(&cfg, 2, &dev, PEFT_ADAPTER_PREFIX, 1.0),
+            DType::F32,
+            &dev,
+        );
+        let vb_b = VarBuilder::from_tensors(
+            lora_adapter_weights_valued(&cfg, 1, &dev, PEFT_ADAPTER_PREFIX, 0.5),
+            DType::F32,
+            &dev,
+        );
+        model.load_lora_adapter("a", vb_a, target.clone())?;
+        model.load_lora_adapter(
+            "b",
+            vb_b,
+            LoraConfig {
+                rank: 1,
+                alpha: 3.0,
+                ..target
+            },
+        )?;
+
+        // Batched forward with rows on adapter "a", "b" and none at all --
+        // the acceptance scenario: multiple adapters served from one live
+        // model, no second copy of the base weights involved.
+        let input = Tensor::new(&[[1u32, 2, 3], [4, 5, 6], [2, 4, 6]], &dev)?;
+        let assignments = [Some("a"), None, Some("b")];
+
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let got = model.forward_with_adapters(&input, 0, &mut cache, &assignments)?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let want = reference.forward_with_adapters(&input, 0, &mut cache, &assignments)?;
+        assert_eq!(got.to_vec2::<f32>()?, want.to_vec2::<f32>()?);
+        Ok(())
+    }
+
+    #[test]
+    fn load_lora_adapter_does_not_affect_base_forward_until_active() -> Result<()> {
+        let dev = Device::Cpu;
+        let cfg = tiny_config();
+        let base_vb = VarBuilder::from_tensors(base_weights(&cfg, &dev), DType::F32, &dev);
+        let mut model = Llama::load(base_vb, &cfg)?;
+        let input = Tensor::new(&[[1u32, 2, 3]], &dev)?;
+
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let before = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
+
+        let adapter_vb = VarBuilder::from_tensors(
+            lora_adapter_weights(&cfg, 2, &dev, PEFT_ADAPTER_PREFIX),
+            DType::F32,
+            &dev,
+        );
+        // This promotes o_proj from Plain to Lora in every block, reusing
+        // its already-resident base weight rather than reloading it.
+        model.load_lora_adapter(
+            "adapter",
+            adapter_vb,
+            LoraConfig {
+                rank: 2,
+                alpha: 4.0,
+                target_modules: vec!["o_proj".to_string()],
+            },
+        )?;
+
+        // Loading (but not activating) an adapter must not change plain
+        // forward output.
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let after_load = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
+        assert_eq!(before, after_load);
+
+        model.set_active_adapter(Some("adapter"))?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let after_active = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
+        assert_ne!(before, after_active);
+
+        model.remove_lora_adapter("adapter")?;
+        let mut cache = Cache::new(false, DType::F32, &cfg, &dev)?;
+        let after_remove = model.forward(&input, 0, &mut cache)?.to_vec2::<f32>()?;
+        assert_eq!(before, after_remove);
+        // The adapter is gone from every projection, so activating it again
+        // must fail.
+        assert!(model.set_active_adapter(Some("adapter")).is_err());
+        Ok(())
     }
 
     fn round4(rows: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
