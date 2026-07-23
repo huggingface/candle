@@ -1513,3 +1513,86 @@ test_device!(
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
 );
+
+/// `QMetalStorage::from_buffer` is how a zero-copy (e.g. mmap-backed) loader
+/// wires a tensor's storage to a *view* -- possibly at a nonzero offset --
+/// into a buffer shared with other tensors, instead of a buffer this storage
+/// owns outright. This must produce identical dequantize and matmul output
+/// to the normal owned-buffer path, at both a zero and a nonzero offset --
+/// an offset-arithmetic bug here would silently corrupt weights rather than
+/// crash.
+#[cfg(feature = "metal")]
+#[test]
+fn qmetalstorage_from_buffer_view_matches_owned_buffer() -> Result<()> {
+    use candle_core::quantized::{metal::QMetalStorage, QStorage, QTensor};
+
+    let device = Device::new_metal(0)?;
+    let metal_device = match &device {
+        Device::Metal(d) => d.clone(),
+        _ => unreachable!(),
+    };
+    let dtype = GgmlDType::Q4K;
+    // A (n_out, k) weight, matching quantized_matmul's own convention
+    // (quantize a (n,k)-shaped tensor, matmul against a (m,k) activation).
+    let k = dtype.block_size();
+    let n_out = 4usize;
+    let n = n_out * k;
+
+    let src_data: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.013).sin()).collect();
+    let src = Tensor::from_vec(src_data, (n_out, k), &device)?;
+    let canonical = QTensor::quantize(&src, dtype)?;
+    let canonical_dequant = canonical.dequantize(&device)?.to_vec2::<f32>()?;
+    let raw_bytes: Vec<u8> = canonical.data()?.to_vec();
+
+    // QTensor isn't Clone and QMatMul::from_qtensor takes it by value, so
+    // compute the canonical matmul reference once, up front -- it doesn't
+    // depend on front_padding, only `view` needs rebuilding per iteration.
+    let activation = Tensor::ones((1, k), DType::F32, &device)?;
+    let canonical_matmul = quantized::QMatMul::from_qtensor(canonical)?;
+    let canonical_out = canonical_matmul.forward(&activation)?.to_vec2::<f32>()?;
+
+    for front_padding in [0usize, 4096] {
+        let mut combined = vec![0xABu8; front_padding];
+        combined.extend_from_slice(&raw_bytes);
+        combined.extend_from_slice(&[0xCDu8; 4096]); // trailing padding, must never be read
+
+        let shared_buffer = metal_device.new_buffer_with_data(&combined)?;
+        let storage = QMetalStorage::from_buffer(
+            shared_buffer,
+            front_padding,
+            raw_bytes.len(),
+            metal_device.clone(),
+            dtype,
+        );
+        let view = QTensor::new(QStorage::Metal(storage), (n_out, k))?;
+
+        let view_dequant = view.dequantize(&device)?.to_vec2::<f32>()?;
+        let max_diff = canonical_dequant
+            .iter()
+            .flatten()
+            .zip(view_dequant.iter().flatten())
+            .map(|(a, b): (&f32, &f32)| (a - b).abs())
+            .fold(0f32, f32::max);
+        assert_eq!(
+            max_diff, 0.0,
+            "from_buffer view (offset={front_padding}) dequant must be bit-identical to the owned-buffer path"
+        );
+
+        // Exercise the offset-aware matmul path (call_quantized_matmul_mv_t),
+        // not just dequantize -- these are two independent call sites.
+        let view_matmul = quantized::QMatMul::from_qtensor(view)?;
+        let view_out = view_matmul.forward(&activation)?.to_vec2::<f32>()?;
+        let mm_max_diff = canonical_out
+            .iter()
+            .flatten()
+            .zip(view_out.iter().flatten())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0f32, f32::max);
+        assert_eq!(
+            mm_max_diff, 0.0,
+            "from_buffer view (offset={front_padding}) matmul must be bit-identical to the owned-buffer path"
+        );
+    }
+
+    Ok(())
+}
