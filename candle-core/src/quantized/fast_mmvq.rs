@@ -62,17 +62,24 @@ fn workspace_ensure(
     let map = WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
     let device_key = dev.id();
     let mut guard = map.lock().unwrap();
+    // alloc_zeros (not unsafe alloc): the quantize_q8_1 kernel writes only
+    // the k-sized portion of each row, but MATRIX_ROW_PADDING extends the
+    // row stride beyond that. The mmvq kernels read every block including
+    // the padded tail, so uninitialized bytes feed into the dot product and
+    // produce incorrect output (top-1 tends to be unchanged but ranks 2+
+    // and logit values drift). Same family as the fix in
+    // https://github.com/huggingface/candle/pull/3428 for mul_mat_vec_via_q8_1.
     let slot = match guard.entry(device_key) {
         std::collections::hash_map::Entry::Occupied(entry) => {
             let slot = entry.into_mut();
             if slot.cap < bytes {
-                slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
+                slot.slice = dev.alloc_zeros::<u8>(bytes)?;
                 slot.cap = bytes;
             }
             slot
         }
         std::collections::hash_map::Entry::Vacant(entry) => {
-            let slice = unsafe { dev.alloc::<u8>(bytes)? };
+            let slice = dev.alloc_zeros::<u8>(bytes)?;
             entry.insert(WorkspaceSlot { slice, cap: bytes })
         }
     };
