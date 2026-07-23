@@ -8,6 +8,16 @@ pub struct QMetalStorage {
     dtype: GgmlDType,
     device: MetalDevice,
     buffer: Arc<Buffer>,
+    /// Byte offset of this tensor's data within `buffer`. Nonzero when
+    /// `buffer` is shared across several tensors (e.g. one no-copy buffer
+    /// wrapping an entire mmap'd file) via `from_buffer`; zero for every
+    /// storage that owns its buffer outright.
+    offset: usize,
+    /// This tensor's own byte length -- may be smaller than `buffer.length()`
+    /// when `buffer` is shared. Every read/blit against `buffer` must use
+    /// this, not `buffer.length()`, or it silently reads past this tensor's
+    /// data into a neighboring one.
+    length: usize,
 }
 
 impl QMetalStorage {
@@ -19,10 +29,32 @@ impl QMetalStorage {
             .with_label("qstorage_zeros")
             .build()?;
         Ok(Self {
+            length: buffer.length(),
             buffer,
             device: device.clone(),
             dtype,
+            offset: 0,
         })
+    }
+
+    /// Wraps an existing, externally-created buffer -- e.g. a no-copy Metal
+    /// buffer over an mmap'd region -- as this tensor's storage, with no
+    /// allocation and no copy. `offset`/`length` locate this tensor's bytes
+    /// within `buffer`, which may be shared with other tensors.
+    pub fn from_buffer(
+        buffer: Arc<Buffer>,
+        offset: usize,
+        length: usize,
+        device: MetalDevice,
+        dtype: GgmlDType,
+    ) -> Self {
+        Self {
+            buffer,
+            offset,
+            length,
+            device,
+            dtype,
+        }
     }
 
     pub fn dtype(&self) -> GgmlDType {
@@ -37,19 +69,31 @@ impl QMetalStorage {
         &self.buffer
     }
 
+    /// Byte offset of this tensor's data within `buffer()`. Zero unless this
+    /// storage was built via `from_buffer` over a shared buffer.
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    /// This tensor's own byte length -- use this, not `buffer().length()`,
+    /// when `buffer()` may be shared with other tensors.
+    pub fn length(&self) -> usize {
+        self.length
+    }
+
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
 
         let buffer = self
             .device
             .new_buffer_builder()
-            .with_size(self.buffer.length())
+            .with_size(self.length)
             .with_label("qstorage_dequantize_blit")
             .build()?;
         {
             let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+            blit.copy_from_buffer(&self.buffer, self.offset, &buffer, 0, self.length);
         }
         self.device.flush_and_wait_current()?;
         let mut out = vec![0.0; elem_count];
@@ -144,7 +188,13 @@ impl QMetalStorage {
             .with_data(&qcpu_storage.data()?)
             .with_label("qstorage_quantized")
             .build()?;
+        // A fresh full-ownership allocation replaces whatever view (offset,
+        // length) this storage previously had -- reset both, or a
+        // quantize-after-from_buffer would keep stale view metadata pointing
+        // into a buffer this storage no longer shares.
+        self.length = buffer.length();
         self.buffer = buffer;
+        self.offset = 0;
         Ok(())
     }
 
@@ -166,7 +216,13 @@ impl QMetalStorage {
             .with_data(&qcpu_storage.data()?)
             .with_label("qstorage_quantize_imatrix")
             .build()?;
+        // A fresh full-ownership allocation replaces whatever view (offset,
+        // length) this storage previously had -- reset both, or a
+        // quantize-after-from_buffer would keep stale view metadata pointing
+        // into a buffer this storage no longer shares.
+        self.length = buffer.length();
         self.buffer = buffer;
+        self.offset = 0;
         Ok(())
     }
 
@@ -192,7 +248,13 @@ impl QMetalStorage {
             .with_data(&qcpu_storage.data()?)
             .with_label("qstorage_quantize_imatrix_onto")
             .build()?;
+        // A fresh full-ownership allocation replaces whatever view (offset,
+        // length) this storage previously had -- reset both, or a
+        // quantize-after-from_buffer would keep stale view metadata pointing
+        // into a buffer this storage no longer shares.
+        self.length = buffer.length();
         self.buffer = buffer;
+        self.offset = 0;
         Ok(())
     }
 
@@ -213,12 +275,18 @@ impl QMetalStorage {
             .with_data(&qcpu_storage.data()?)
             .with_label("qstorage_quantize_onto")
             .build()?;
+        // A fresh full-ownership allocation replaces whatever view (offset,
+        // length) this storage previously had -- reset both, or a
+        // quantize-after-from_buffer would keep stale view metadata pointing
+        // into a buffer this storage no longer shares.
+        self.length = buffer.length();
         self.buffer = buffer;
+        self.offset = 0;
         Ok(())
     }
 
     pub fn storage_size_in_bytes(&self) -> usize {
-        self.buffer.length()
+        self.length
     }
 
     pub fn embedding(
@@ -331,6 +399,7 @@ impl QMetalStorage {
                 storage.buffer(),
                 (layout.start_offset() + batch_id * k) * storage.dtype().size_in_bytes(),
                 &self.buffer,
+                self.offset,
                 batch_id * n * DType::F32.size_in_bytes(),
                 &dst,
             )
@@ -419,6 +488,7 @@ impl QMetalStorage {
             src0_l.dims(),
             &src0_stride,
             &self.buffer,
+            self.offset,
             src1_l.dims(),
             &src1_l
                 .stride()
@@ -442,13 +512,13 @@ impl QMetalStorage {
         let buffer = self
             .device
             .new_buffer_builder()
-            .with_size(self.buffer.length())
+            .with_size(self.length)
             .with_label("qstorage_data_blit")
             .build()?;
         {
             let mut blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+            blit.copy_from_buffer(&self.buffer, self.offset, &buffer, 0, self.length);
         }
         self.device.flush_and_wait_current()?;
         Ok(read_to_vec::<u8>(&buffer, self.storage_size_in_bytes()))
@@ -465,10 +535,13 @@ pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
         .with_label("qstorage_load_quantized")
         .build()?;
     let device = device.clone();
+    let length = buffer.length();
     Ok(QStorage::Metal(QMetalStorage {
         dtype: T::DTYPE,
         device,
         buffer,
+        offset: 0,
+        length,
     }))
 }
 
