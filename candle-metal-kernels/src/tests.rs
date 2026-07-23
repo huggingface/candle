@@ -31,6 +31,21 @@ fn device() -> Device {
     Device::system_default().unwrap()
 }
 
+#[test]
+fn pipeline_cache_distinguishes_sources() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    // Prime the cache with a name that is not present in the binary library.
+    kernels
+        .load_pipeline(&device, Source::Unary, "cos_f32")
+        .unwrap();
+    assert!(matches!(
+        kernels.load_pipeline(&device, Source::Binary, "cos_f32"),
+        Err(MetalKernelError::LoadFunctionError(_))
+    ));
+}
+
 fn approx(v: Vec<f32>, digits: i32) -> Vec<f32> {
     let b = 10f32.powi(digits);
     v.iter().map(|t| f32::round(t * b) / b).collect()
