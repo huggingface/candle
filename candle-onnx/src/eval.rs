@@ -28,7 +28,7 @@ trait Attr {
 
 trait AttrOwned: Sized {
     const TYPE: AttributeType;
-    fn get(attr: &onnx::AttributeProto) -> Result<Self>;
+    fn get(attr: &onnx::AttributeProto, device: &Device) -> Result<Self>;
 }
 
 impl Attr for i64 {
@@ -70,7 +70,7 @@ impl Attr for GraphProto {
 
 impl AttrOwned for Vec<String> {
     const TYPE: AttributeType = AttributeType::Strings;
-    fn get(attr: &onnx::AttributeProto) -> Result<Self> {
+    fn get(attr: &onnx::AttributeProto, _device: &Device) -> Result<Self> {
         let mut ret = vec![];
         for bytes in attr.strings.iter() {
             let s = String::from_utf8(bytes.clone()).map_err(candle::Error::wrap)?;
@@ -82,7 +82,7 @@ impl AttrOwned for Vec<String> {
 
 impl AttrOwned for Tensor {
     const TYPE: AttributeType = AttributeType::Tensor;
-    fn get(attr: &onnx::AttributeProto) -> Result<Self> {
+    fn get(attr: &onnx::AttributeProto, device: &Device) -> Result<Self> {
         let tensor_proto = match &attr.t {
             Some(value) => value,
             None => bail!(
@@ -120,7 +120,7 @@ impl AttrOwned for Tensor {
             dims.push(*dim as usize)
         }
 
-        Tensor::from_raw_buffer(&tensor_proto.raw_data, dtype, &dims, &Device::Cpu)
+        Tensor::from_raw_buffer(&tensor_proto.raw_data, dtype, &dims, device)
     }
 }
 
@@ -171,7 +171,11 @@ fn get_attr_opt<'a, T: Attr + ?Sized>(
     }
 }
 
-fn get_attr_opt_owned<T: AttrOwned>(node: &onnx::NodeProto, name: &str) -> Result<Option<T>> {
+fn get_attr_opt_owned<T: AttrOwned>(
+    node: &onnx::NodeProto,
+    name: &str,
+    device: &Device,
+) -> Result<Option<T>> {
     match node.attribute.iter().find(|attr| attr.name == name) {
         None => Ok(None),
         Some(attr) => {
@@ -183,13 +187,13 @@ fn get_attr_opt_owned<T: AttrOwned>(node: &onnx::NodeProto, name: &str) -> Resul
                     node.name
                 )
             }
-            let val = T::get(attr)?;
+            let val = T::get(attr, device)?;
             Ok(Some(val))
         }
     }
 }
 
-pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
+pub fn get_tensor(t: &onnx::TensorProto, name: &str, device: &Device) -> Result<Tensor> {
     let dims: Vec<usize> = t.dims.iter().map(|&x| x as usize).collect();
     match DataType::try_from(t.data_type) {
         Ok(DataType::Int32) => {
@@ -198,27 +202,22 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
                 let data: &[i32] =
                     unsafe { std::slice::from_raw_parts(t.raw_data.as_ptr() as *const i32, len) };
                 let data = data.iter().map(|v| *v as i64).collect::<Vec<_>>();
-                Tensor::from_vec(data, len, &Device::Cpu)
+                Tensor::from_vec(data, len, device)
             } else {
                 let data = t.int32_data.iter().map(|v| *v as i64).collect::<Vec<_>>();
-                Tensor::from_vec(data, t.int32_data.len(), &Device::Cpu)
+                Tensor::from_vec(data, t.int32_data.len(), device)
             }
         }
         Ok(dt) => match dtype(dt) {
             Some(dt) => {
                 if dt == DType::F32 && !t.float_data.is_empty() {
-                    Tensor::from_slice(&t.float_data, dims.as_slice(), &Device::Cpu)
+                    Tensor::from_slice(&t.float_data, dims.as_slice(), device)
                 } else if dt == DType::F64 && !t.double_data.is_empty() {
-                    Tensor::from_slice(&t.double_data, dims.as_slice(), &Device::Cpu)
+                    Tensor::from_slice(&t.double_data, dims.as_slice(), device)
                 } else if dt == DType::I64 && !t.int64_data.is_empty() {
-                    Tensor::from_slice(&t.int64_data, dims.as_slice(), &Device::Cpu)
+                    Tensor::from_slice(&t.int64_data, dims.as_slice(), device)
                 } else {
-                    Tensor::from_raw_buffer(
-                        t.raw_data.as_slice(),
-                        dt,
-                        dims.as_slice(),
-                        &Device::Cpu,
-                    )
+                    Tensor::from_raw_buffer(t.raw_data.as_slice(), dt, dims.as_slice(), device)
                 }
             }
             None => {
@@ -231,6 +230,86 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     }
 }
 
+/// Describes which [`Device`] each node of an ONNX graph should be evaluated on,
+/// enabling pipeline-parallel execution of a single graph across several devices
+/// (e.g. the first transformer blocks on one GPU and the rest on another).
+///
+/// A node's device is resolved as:
+/// 1. the device of the longest matching node-name prefix rule, if any;
+/// 2. otherwise, when at least one prefix rule is configured, the device of the
+///    node's first already-computed input, so a stage's device flows along the
+///    graph and only the first node of each stage needs an explicit rule;
+/// 3. otherwise the fallback device. In particular, [`Placement::uniform`] has no
+///    rules, so every node unconditionally runs on the fallback device, matching
+///    the documented behavior of [`simple_eval`].
+///
+/// Initializers (weights/constants) are materialized lazily, directly on the
+/// device of the node that first consumes them, so a model that does not fit on
+/// a single device can be split across several. Cross-device copies are inserted
+/// automatically at stage boundaries via [`Tensor::to_device`].
+///
+/// Notes / current limitations:
+/// - Transfers rely on `candle`'s `to_device`, which supports CPU<->CUDA and
+///   CUDA<->CUDA copies; Metal-to-Metal transfers are not implemented in
+///   candle-core, so multi-GPU placement is CUDA-only for now.
+/// - The placement is expected to be monotone along the topological order: a
+///   value moved to a later stage must not be read again by an earlier stage.
+///   A by-depth pipeline split satisfies this.
+#[derive(Clone, Debug)]
+pub struct Placement {
+    fallback: Device,
+    // Kept sorted by descending prefix length so the first match is the longest.
+    rules: Vec<(String, Device)>,
+}
+
+impl Placement {
+    /// Evaluate every node on a single device. This reproduces the behavior of
+    /// [`simple_eval`].
+    pub fn uniform(device: &Device) -> Self {
+        Self {
+            fallback: device.clone(),
+            rules: Vec::new(),
+        }
+    }
+
+    /// Start a placement whose default (fallback) device is `fallback`; attach
+    /// per-stage rules with [`Placement::with_prefix`].
+    pub fn new(fallback: &Device) -> Self {
+        Self {
+            fallback: fallback.clone(),
+            rules: Vec::new(),
+        }
+    }
+
+    /// Place every node whose name starts with `node_name_prefix` on `device`.
+    /// When several rules match a node, the one with the longest prefix wins.
+    pub fn with_prefix(mut self, node_name_prefix: &str, device: &Device) -> Self {
+        self.rules
+            .push((node_name_prefix.to_string(), device.clone()));
+        self.rules.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        self
+    }
+
+    fn fallback(&self) -> &Device {
+        &self.fallback
+    }
+
+    /// Whether at least one prefix rule is configured. [`Placement::uniform`]
+    /// has none, in which case every node must use the fallback device
+    /// unconditionally rather than inheriting an input's device.
+    fn has_rules(&self) -> bool {
+        !self.rules.is_empty()
+    }
+
+    /// The device explicitly assigned to `node_name` by the prefix rules, if any.
+    fn explicit_device(&self, node_name: &str) -> Option<&Device> {
+        self.rules
+            .iter()
+            .find(|(prefix, _)| node_name.starts_with(prefix.as_str()))
+            .map(|(_, device)| device)
+    }
+}
+
 // This function provides a direct evaluation of the proto.
 // Longer-term, we should first convert the proto to an intermediate representation of the compute
 // graph so as to make multiple evaluations more efficient.
@@ -238,23 +317,42 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
 // anymore.
 pub fn simple_eval(
     model: &onnx::ModelProto,
+    inputs: HashMap<String, Value>,
+    device: &Device,
+) -> Result<HashMap<String, Value>> {
+    simple_eval_with_placement(model, inputs, &Placement::uniform(device))
+}
+
+/// Like [`simple_eval`] but spreads the graph across the devices described by
+/// `placement`, inserting cross-device copies at stage boundaries. See
+/// [`Placement`] for how each node's device is resolved.
+pub fn simple_eval_with_placement(
+    model: &onnx::ModelProto,
     mut inputs: HashMap<String, Value>,
+    placement: &Placement,
 ) -> Result<HashMap<String, Value>> {
     let graph = match &model.graph {
         None => bail!("no graph defined in proto"),
         Some(graph) => graph,
     };
-    simple_eval_(graph, &mut inputs)
+    simple_eval_(graph, &mut inputs, placement, &HashMap::new())
 }
 
-fn simple_eval_(
-    graph: &onnx::GraphProto,
+fn simple_eval_<'a>(
+    graph: &'a onnx::GraphProto,
     values: &mut HashMap<String, Value>,
+    placement: &Placement,
+    parent_initializers: &HashMap<&'a str, &'a onnx::TensorProto>,
 ) -> Result<HashMap<String, Value>> {
-    for t in graph.initializer.iter() {
-        let tensor = get_tensor(t, t.name.as_str())?;
-        values.insert(t.name.to_string(), tensor);
-    }
+    // Initializers (weights/constants) are materialized lazily, directly on the
+    // device of the node that first consumes them (see the node loop below). This
+    // lets a model that does not fit on a single device be split across several.
+    // Subgraphs (e.g. `If` branches) inherit their enclosing graph's initializers,
+    // matching ONNX's lexical scoping rules for control-flow ops; a name declared
+    // locally shadows one of the same name from an outer scope.
+    let mut initializers: HashMap<&'a str, &'a onnx::TensorProto> = parent_initializers.clone();
+    initializers.extend(graph.initializer.iter().map(|t| (t.name.as_str(), t)));
+
     for input in graph.input.iter() {
         let input_type = match &input.r#type {
             Some(input_type) => input_type,
@@ -270,8 +368,15 @@ fn simple_eval_(
         };
 
         let tensor = match values.get(&input.name) {
-            None => bail!("missing input {}", input.name),
             Some(tensor) => tensor,
+            None => {
+                // Initializer defaults are materialized lazily on their
+                // consumer's device, so they may legitimately be absent here.
+                if initializers.contains_key(input.name.as_str()) {
+                    continue;
+                }
+                bail!("missing input {}", input.name)
+            }
         };
         let dt = match DataType::try_from(tensor_type.elem_type) {
             Ok(dt) => match dtype(dt) {
@@ -321,6 +426,36 @@ fn simple_eval_(
     }
     // The nodes are topologically sorted so we can just process them in order.
     for node in graph.node.iter() {
+        // Resolve the device this node runs on, then make sure all of its inputs
+        // live there: lazily materialize initializer inputs and move
+        // previously-computed inputs across stage boundaries when needed.
+        let node_device = match placement.explicit_device(&node.name) {
+            Some(d) => d.clone(),
+            None if placement.has_rules() => node
+                .input
+                .iter()
+                .filter(|s| !s.is_empty())
+                .find_map(|name| values.get(name).map(|t| t.device().clone()))
+                .unwrap_or_else(|| placement.fallback().clone()),
+            None => placement.fallback().clone(),
+        };
+        for name in node.input.iter().filter(|s| !s.is_empty()) {
+            let name = name.as_str();
+            let needs_move = match values.get(name) {
+                Some(tensor) => !tensor.device().same_device(&node_device),
+                None => false,
+            };
+            if needs_move {
+                let moved = values.get(name).unwrap().to_device(&node_device)?;
+                values.insert(name.to_string(), moved);
+            } else if !values.contains_key(name) {
+                if let Some(&proto) = initializers.get(name) {
+                    let tensor = get_tensor(proto, name, &node_device)?;
+                    values.insert(name.to_string(), tensor);
+                }
+            }
+        }
+
         let get = |input_name: &str| match values.get(input_name) {
             Some(value) => Ok(value),
             None => bail!("cannot find {input_name} for op '{}'", node.name),
@@ -577,11 +712,8 @@ fn simple_eval_(
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#ConstantOfShape
             "ConstantOfShape" => {
                 let input = get(&node.input[0])?;
-                let value = get_attr_opt_owned::<Tensor>(node, "value")?.unwrap_or(Tensor::zeros(
-                    (),
-                    DType::F32,
-                    &Device::Cpu,
-                )?);
+                let value = get_attr_opt_owned::<Tensor>(node, "value", &node_device)?
+                    .unwrap_or(Tensor::zeros((), DType::F32, &node_device)?);
 
                 let shape_vec: Vec<usize> = input
                     .to_vec1::<i64>()?
@@ -760,7 +892,7 @@ fn simple_eval_(
                             to_vec0_flexible::<$t>(start)?,
                             to_vec0_flexible::<$t>(limit)?,
                             to_vec0_flexible::<$t>(delta)?,
-                            &Device::Cpu,
+                            start.device(),
                         )?
                     };
                 }
@@ -1085,7 +1217,7 @@ fn simple_eval_(
                 let output = match value.r#type() {
                     AttributeType::Tensor => {
                         let t = value.t.as_ref().unwrap();
-                        get_tensor(t, &node.name)?
+                        get_tensor(t, &node.name, &node_device)?
                     }
                     rtype => bail!("unsupported 'value' type {rtype:?} for {}", node.name),
                 };
@@ -1161,7 +1293,7 @@ fn simple_eval_(
                         node.output.len()
                     );
                 }
-                let branch_out = simple_eval_(sub_graph, values)?;
+                let branch_out = simple_eval_(sub_graph, values, placement, &initializers)?;
                 for (i, out) in node.output.iter().enumerate() {
                     values.insert(
                         out.clone(),
@@ -1695,11 +1827,11 @@ fn simple_eval_(
                 let output = if random_type == "RandomUniform" {
                     let low: f32 = get_attr_opt(node, "low")?.copied().unwrap_or(0.0);
                     let high: f32 = get_attr_opt(node, "high")?.copied().unwrap_or(1.0);
-                    Tensor::rand(low, high, shape, &Device::Cpu)?.to_dtype(dtype)?
+                    Tensor::rand(low, high, shape, &node_device)?.to_dtype(dtype)?
                 } else {
                     let mean: f32 = get_attr_opt(node, "mean")?.copied().unwrap_or(0.0);
                     let scale: f32 = get_attr_opt(node, "scale")?.copied().unwrap_or(1.0);
-                    Tensor::randn(mean, scale, shape, &Device::Cpu)?.to_dtype(dtype)?
+                    Tensor::randn(mean, scale, shape, &node_device)?.to_dtype(dtype)?
                 };
                 values.insert(node.output[0].clone(), output);
             }
@@ -1793,8 +1925,8 @@ fn simple_eval_(
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0);
                 let beta = get_attr_opt::<f32>(node, "beta")?.copied().unwrap_or(1.0);
 
-                let alpha = Tensor::full(alpha, a.shape(), &Device::Cpu)?;
-                let beta = Tensor::full(beta, c.shape(), &Device::Cpu)?;
+                let alpha = Tensor::full(alpha, a.shape(), a.device())?;
+                let beta = Tensor::full(beta, c.shape(), c.device())?;
 
                 let trans_a = get_attr_opt::<i64>(node, "transA")?.copied().unwrap_or(0);
                 let trans_b = get_attr_opt::<i64>(node, "transB")?.copied().unwrap_or(0);
@@ -1824,8 +1956,9 @@ fn simple_eval_(
                     "Tanh".to_string(),
                     "Tanh".to_string(),
                 ];
-                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations")?
-                    .unwrap_or(activations_default.clone());
+                let activations =
+                    get_attr_opt_owned::<Vec<String>>(node, "activations", &node_device)?
+                        .unwrap_or(activations_default.clone());
                 if activations != activations_default {
                     bail!("LSTM currently only supports default activations ({activations_default:?})");
                 }
@@ -2031,8 +2164,9 @@ fn simple_eval_(
             "RNN" => {
                 // activation_alpha and activation_beta don't apply to (Tanh, Tanh) so ignoring them is okay
                 let activations_default = vec!["Tanh".to_string(), "Tanh".to_string()];
-                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations")?
-                    .unwrap_or(activations_default.clone());
+                let activations =
+                    get_attr_opt_owned::<Vec<String>>(node, "activations", &node_device)?
+                        .unwrap_or(activations_default.clone());
                 let clip = get_attr_opt::<f32>(node, "clip")?.copied();
                 if clip.is_some() {
                     bail!("RNN does not currently support clip attribute");
@@ -2548,6 +2682,16 @@ fn simple_eval_(
                 values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
+        }
+    }
+    // A graph output may be an initializer that no node consumed; materialize
+    // any such leftover (on the fallback device) before collecting results.
+    for output in graph.output.iter() {
+        if !values.contains_key(&output.name) {
+            if let Some(&proto) = initializers.get(output.name.as_str()) {
+                let tensor = get_tensor(proto, &output.name, placement.fallback())?;
+                values.insert(output.name.clone(), tensor);
+            }
         }
     }
     graph

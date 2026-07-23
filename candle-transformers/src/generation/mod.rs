@@ -2,7 +2,8 @@
 //!
 //! Functionality for modeling sampling strategies and logits processing in text generation
 //! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
-//! and combinations thereof.
+//! min-p sampling, and combinations thereof, as well as OpenAI-style frequency and presence
+//! penalties.
 use candle::{DType, Error, Result, Tensor};
 use rand::{distr::Distribution, SeedableRng};
 
@@ -13,8 +14,37 @@ pub enum Sampling {
     TopK { k: usize, temperature: f64 },
     TopP { p: f64, temperature: f64 },
     TopKThenTopP { k: usize, p: f64, temperature: f64 },
+    MinP { p: f64, temperature: f64 },
     // Note that the rng is not used for the Gumbel-Softmax sampling.
     GumbelSoftmax { temperature: f64 },
+}
+
+pub fn apply_frequency_presence_penalty(
+    logits: &Tensor,
+    context: &[u32],
+    frequency_penalty: f32,
+    presence_penalty: f32,
+) -> Result<Tensor> {
+    if frequency_penalty == 0. && presence_penalty == 0. {
+        return logits.to_dtype(DType::F32);
+    }
+    let device = logits.device();
+    let mut logits_v = logits.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+    let mut counts = std::collections::HashMap::new();
+    for token_id in context {
+        *counts.entry(*token_id).or_insert(0u32) += 1;
+    }
+    for (token_id, count) in counts {
+        if let Some(logit) = logits_v.get_mut(token_id as usize) {
+            *logit -= frequency_penalty * count as f32 + presence_penalty;
+        }
+    }
+    let logits_len = logits_v.len();
+    // Stay in f32: rounding the adjusted logits back down to the caller's original dtype
+    // (e.g. f16/bf16) can erase a small penalty outright before `LogitsProcessor::sample`
+    // converts back to f32 anyway. Mirrors `utils::apply_repeat_penalty`, which never casts
+    // back either.
+    Tensor::from_vec(logits_v, logits_len, device)
 }
 
 pub struct LogitsProcessor {
@@ -94,6 +124,20 @@ impl LogitsProcessor {
         }
     }
 
+    // min-p sampling keeps the tokens whose probability is at least min_p times the probability
+    // of the most likely token, then samples from the renormalized survivors.
+    fn sample_minp(&mut self, prs: &mut Vec<f32>, min_p: f32) -> Result<u32> {
+        let max_p = prs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let threshold = min_p * max_p;
+        for p in prs.iter_mut() {
+            if *p < threshold {
+                *p = 0.0;
+            }
+        }
+        // WeightedIndex renormalizes, so there is no need to rescale the survivors.
+        self.sample_multinomial(prs)
+    }
+
     // top-k sampling samples from the k tokens with the largest probabilities.
     // then top-p sampling.
     fn sample_topk_topp(&mut self, prs: &mut Vec<f32>, top_k: usize, top_p: f32) -> Result<u32> {
@@ -154,6 +198,15 @@ impl LogitsProcessor {
             Sampling::TopKThenTopP { k, p, temperature } => {
                 let mut prs = prs(*temperature)?;
                 self.sample_topk_topp(&mut prs, *k, *p as f32)?
+            }
+            Sampling::MinP { p, temperature } => {
+                let mut prs = prs(*temperature)?;
+                if *p <= 0.0 {
+                    // A non-positive threshold keeps every token.
+                    self.sample_multinomial(&prs)?
+                } else {
+                    self.sample_minp(&mut prs, *p as f32)?
+                }
             }
         };
         Ok(next_token)
