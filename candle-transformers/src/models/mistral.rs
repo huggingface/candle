@@ -426,6 +426,12 @@ impl Model {
         &self.embed_tokens
     }
 
+    /// Returns a reference to the lm_head linear layer.
+    /// This is useful for multimodal models like Mistral3 that need to share the lm_head.
+    pub fn lm_head(&self) -> &Linear {
+        &self.lm_head
+    }
+
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (_b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
@@ -457,6 +463,38 @@ impl Model {
         xs.narrow(1, seq_len - 1, 1)?
             .apply(&self.norm)?
             .apply(&self.lm_head)
+    }
+
+    /// Returns hidden states (without lm_head) for multimodal models like Mistral3.
+    ///
+    /// Unlike `forward_embeds` which returns logits for the last token only,
+    /// this method returns the full sequence hidden states after normalization.
+    ///
+    /// Returns: (batch_size, seq_len, hidden_size)
+    pub fn forward_embeds_hidden(
+        &mut self,
+        xs: &Tensor,
+        attn_mask: Option<&Tensor>,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        let (_b_size, seq_len, _) = xs.dims3()?;
+        let attention_mask = match attn_mask {
+            Some(mask) => Some(mask.clone()),
+            None => {
+                if seq_len <= 1 {
+                    None
+                } else {
+                    let mask = self.prepare_decoder_attention_mask(seq_len, seqlen_offset)?;
+                    Some(mask)
+                }
+            }
+        };
+        let mut xs = xs.clone();
+        for layer in self.layers.iter_mut() {
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
+        }
+        // Only apply norm, not lm_head - return full sequence hidden states
+        xs.apply(&self.norm)
     }
 
     pub fn clear_kv_cache(&mut self) {
