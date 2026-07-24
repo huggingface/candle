@@ -1,11 +1,11 @@
-use candle::{IndexOp, Tensor};
-use candle_nn::{Activation, Module, VarBuilder};
-use serde::Deserialize;
 use crate::models::lightonocr_2_1b::language_model;
 use crate::models::lightonocr_2_1b::projector::Projector;
 use crate::models::pixtral::vision_model;
 use crate::models::qwen3;
 use candle::Result;
+use candle::{IndexOp, Tensor};
+use candle_nn::{Activation, Module, VarBuilder};
+use serde::Deserialize;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Config {
@@ -19,44 +19,47 @@ pub struct Config {
     pub vision_config: vision_model::Config,
 }
 
-pub struct Model{
+pub struct Model {
     pub vision_encoder: vision_model::Model,
     pub vision_config: vision_model::Config,
     pub projector: Projector,
     pub language_model: language_model::ModelForCausalLM,
     pub image_token_id: usize,
-    pub model_config: Config
+    pub model_config: Config,
 }
 
 impl Model {
     pub fn new(cfg: Config, vb: VarBuilder) -> Result<Self> {
         let model_vb = vb.pp("model");
 
-        let vision_encoder = vision_model::Model::new(
-            &cfg.vision_config, 
-            model_vb.pp("vision_encoder"))?;
+        let vision_encoder =
+            vision_model::Model::new(&cfg.vision_config, model_vb.pp("vision_encoder"))?;
 
-        
         let projector = Projector::new(
-            cfg.vision_config.hidden_size , 
-            model_vb.pp("vision_projection")
+            cfg.vision_config.hidden_size,
+            model_vb.pp("vision_projection"),
         )?;
 
-        let language_model = language_model::ModelForCausalLM::new(&cfg.text_config, model_vb.pp("language_model"))?;
+        let language_model =
+            language_model::ModelForCausalLM::new(&cfg.text_config, model_vb.pp("language_model"))?;
 
-        Ok(Self { 
-            vision_encoder, 
-            vision_config: cfg.vision_config.clone(), 
+        Ok(Self {
+            vision_encoder,
+            vision_config: cfg.vision_config.clone(),
             projector,
-            language_model, 
+            language_model,
             image_token_id: cfg.image_token_id,
-            model_config: cfg
+            model_config: cfg,
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, pixel_values:&Tensor, offset: usize) -> Result<Tensor> {
-        let image_features = self.vision_encoder.forward(pixel_values)?
-        .squeeze(0)?;
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        pixel_values: &Tensor,
+        offset: usize,
+    ) -> Result<Tensor> {
+        let image_features = self.vision_encoder.forward(pixel_values)?.squeeze(0)?;
         let (_, _, h, w) = pixel_values.dims4()?;
         let ph = h / self.vision_config.patch_size;
         let pw = w / self.vision_config.patch_size;
@@ -65,12 +68,19 @@ impl Model {
 
         let image_embeds = self.projector.forward(&image_features, ph, pw)?;
         let image_embeds = image_embeds.to_dtype(token_embeds.dtype())?;
-        let combined_embeds = self.splice_image_embeddings(input_ids, &token_embeds, &image_embeds)?;
+        let combined_embeds =
+            self.splice_image_embeddings(input_ids, &token_embeds, &image_embeds)?;
 
-        self.language_model.forward_with_embeds(&combined_embeds, offset)
+        self.language_model
+            .forward_with_embeds(&combined_embeds, offset)
     }
 
-    pub fn splice_image_embeddings(&self, input_ids: &Tensor, embeds: &Tensor, image_embeds: &Tensor) -> Result<Tensor> {
+    pub fn splice_image_embeddings(
+        &self,
+        input_ids: &Tensor,
+        embeds: &Tensor,
+        image_embeds: &Tensor,
+    ) -> Result<Tensor> {
         let seq_len = input_ids.dim(1)?;
         let ids: Vec<u32> = input_ids
             .squeeze(0)?
@@ -90,7 +100,6 @@ impl Model {
                 rows.push(row);
             }
         }
-        Ok(Tensor::cat(&rows, 0)?
-            .unsqueeze(0)?)
+        Ok(Tensor::cat(&rows, 0)?.unsqueeze(0)?)
     }
 }

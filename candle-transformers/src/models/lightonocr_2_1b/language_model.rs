@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
-use candle::{DType, Device, Result, Tensor, Module};
+use crate::models::{
+    qwen3::{Config, Qwen3MLP, Qwen3RotaryEmbedding},
+    with_tracing::{linear_no_bias, Linear, RmsNorm},
+};
+use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::VarBuilder;
-use crate::models::{qwen3::{Config, Qwen3MLP, Qwen3RotaryEmbedding}, with_tracing::{Linear, RmsNorm, linear_no_bias}};
 
 use crate::models::qwen3::Qwen3Attention;
 
@@ -45,7 +48,6 @@ impl DecoderLayer {
         self.self_attn.clear_kv_cache();
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct Model {

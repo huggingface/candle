@@ -1,11 +1,9 @@
-use candle::{DType, Device, Tensor};
+use candle::{DType, Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb};
-use anyhow::Result;
 
 const PATCH_SIZE: u32 = 14;
 const MERGE_SIZE: u32 = 2;
 const TILE_SIZE: u32 = PATCH_SIZE * MERGE_SIZE;
-
 const MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
 const STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
 
@@ -15,7 +13,12 @@ pub struct PreprocessedImage {
     pub pw: usize,
 }
 
-pub fn preprocess(img: &DynamicImage, max_edge: u32, device: &Device, dtype: DType) -> Result<PreprocessedImage> {
+pub fn preprocess(
+    img: &DynamicImage,
+    max_edge: u32,
+    device: &Device,
+    dtype: DType,
+) -> Result<PreprocessedImage> {
     let (orig_w, orig_h) = img.dimensions();
     let scale = max_edge as f32 / orig_w.max(orig_h) as f32;
     let new_w = (orig_w as f32 * scale).round() as u32;
@@ -53,5 +56,9 @@ pub fn preprocess(img: &DynamicImage, max_edge: u32, device: &Device, dtype: DTy
     let ph = h / PATCH_SIZE as usize;
     let pw = w / PATCH_SIZE as usize;
 
-    Ok(PreprocessedImage { pixel_values, ph, pw })
+    Ok(PreprocessedImage {
+        pixel_values,
+        ph,
+        pw,
+    })
 }
