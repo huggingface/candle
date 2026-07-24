@@ -1,7 +1,6 @@
-use candle_core::{Device, Tensor};
+use candle::{DType, Device, Tensor};
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb};
 use anyhow::Result;
-use crate::get_dtype;
 
 const PATCH_SIZE: u32 = 14;
 const MERGE_SIZE: u32 = 2;
@@ -17,7 +16,7 @@ pub struct PreprocessedImage {
     pub pw: usize,             
 }
 
-pub fn preprocess(img: &DynamicImage, device: &Device) -> Result<PreprocessedImage> {
+pub fn preprocess(img: &DynamicImage, device: &Device, dtype: DType) -> Result<PreprocessedImage> {
     let (orig_w, orig_h) = img.dimensions();
     let scale = MAX_EDGE as f32 / orig_w.max(orig_h) as f32;
     let new_w = (orig_w as f32 * scale).round() as u32;
@@ -27,9 +26,6 @@ pub fn preprocess(img: &DynamicImage, device: &Device) -> Result<PreprocessedIma
     let pad_w = new_w.div_ceil(TILE_SIZE) * TILE_SIZE;
     let pad_h = new_h.div_ceil(TILE_SIZE) * TILE_SIZE;
     let mut padded = ImageBuffer::<Rgb<u8>, Vec<u8>>::new(pad_w, pad_h);
-    println!("image dimensions before resize: {}x{}", orig_w, orig_h);
-    println!("image dimensions after resize: {}x{}", new_w, new_h);
-    println!("padded dimensions: {}x{}", pad_w, pad_h);
     for y in 0..new_h {
         for x in 0..new_w {
             let px = img.get_pixel(x, y);
@@ -51,19 +47,12 @@ pub fn preprocess(img: &DynamicImage, device: &Device) -> Result<PreprocessedIma
         }
     }
 
-    let pixel_values = Tensor::from_vec(data.clone(), (3, h, w), device)?
-        .unsqueeze(0)?                   // (1, 3, H, W)
-        .to_dtype(get_dtype(device))?;
+    let pixel_values = Tensor::from_vec(data, (3, h, w), device)?
+        .unsqueeze(0)?
+        .to_dtype(dtype)?;
 
     let ph = h / PATCH_SIZE as usize;
     let pw = w / PATCH_SIZE as usize;
-
-    let raw_sum: f32 = data.clone().iter().sum();
-    let raw_min = data.clone().iter().cloned().fold(f32::INFINITY, f32::min);
-    let raw_max = data.clone().iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let nonzero = data.clone().iter().filter(|&&x| x != 0.0).count();
-    println!("pixel data sum={:.4} min={:.4} max={:.4} nonzero={}/{}", 
-        raw_sum, raw_min, raw_max, nonzero, data.len());
 
     Ok(PreprocessedImage { pixel_values, ph, pw })
 }

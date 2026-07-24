@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use candle::{DType, Device, Result, Tensor, Module};
 use candle_nn::VarBuilder;
-use crate::{
-    models::{qwen3::{Config, Qwen3MLP, Qwen3RotaryEmbedding}, with_tracing::{Linear, RmsNorm, linear_b, linear_no_bias}},
-    utils::repeat_kv,
-};
+use crate::models::{qwen3::{Config, Qwen3MLP, Qwen3RotaryEmbedding}, with_tracing::{Linear, RmsNorm, linear_no_bias}};
 
 use crate::models::qwen3::Qwen3Attention;
 
@@ -112,8 +109,13 @@ impl Model {
     }
 
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
-        let (b, l) = input.dims2()?;
-        let mut h = self.embed_tokens.forward(input)?;
+        let h = self.embed_tokens.forward(input)?;
+        self.forward_embeds(&h, offset)
+    }
+
+    pub fn forward_embeds(&mut self, h: &Tensor, offset: usize) -> Result<Tensor> {
+        let (b, l, _) = h.dims3()?;
+        let mut h = h.clone();
 
         let causal = if l == 1 {
             None
@@ -151,6 +153,18 @@ impl ModelForCausalLM {
             .forward(input, offset)?
             .narrow(1, l - 1, 1)?
             .apply(&self.lm_head)
+    }
+
+    pub fn forward_with_embeds(&mut self, embeds: &Tensor, offset: usize) -> Result<Tensor> {
+        let (_, l, _) = embeds.dims3()?;
+        self.base
+            .forward_embeds(embeds, offset)?
+            .narrow(1, l - 1, 1)?
+            .apply(&self.lm_head)
+    }
+
+    pub fn embed_tokens(&self, input: &Tensor) -> Result<Tensor> {
+        self.base.embed_tokens.forward(input)
     }
 
     pub fn clear_kv_cache(&mut self) {

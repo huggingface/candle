@@ -1,10 +1,7 @@
-use std::sync::Arc;
-
 use candle::{IndexOp, Tensor};
 use candle_nn::{Activation, Module, VarBuilder};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use crate::models::lightonocr_2_1b::language_model;
-use crate::models::lightonocr_2_1b::preprocessor::Preprocessor;
 use crate::models::lightonocr_2_1b::projector::Projector;
 use crate::models::pixtral::vision_model;
 use crate::models::qwen3;
@@ -64,13 +61,13 @@ impl Model {
         let ph = h / self.vision_config.patch_size;
         let pw = w / self.vision_config.patch_size;
 
-        let embeds = self.language_model.forward(input_ids, offset)?;
+        let token_embeds = self.language_model.embed_tokens(input_ids)?;
 
         let image_embeds = self.projector.forward(&image_features, ph, pw)?;
-        let image_embeds = image_embeds.to_dtype(embeds.dtype())?;
-        let embeds = self.splice_image_embeddings(input_ids, &embeds, &image_embeds)?;
+        let image_embeds = image_embeds.to_dtype(token_embeds.dtype())?;
+        let combined_embeds = self.splice_image_embeddings(input_ids, &token_embeds, &image_embeds)?;
 
-        Ok(embeds)
+        self.language_model.forward_with_embeds(&combined_embeds, offset)
     }
 
     pub fn splice_image_embeddings(&self, input_ids: &Tensor, embeds: &Tensor, image_embeds: &Tensor) -> Result<Tensor> {
@@ -94,6 +91,6 @@ impl Model {
             }
         }
         Ok(Tensor::cat(&rows, 0)?
-            .unsqueeze(0)?)  
+            .unsqueeze(0)?)
     }
 }
