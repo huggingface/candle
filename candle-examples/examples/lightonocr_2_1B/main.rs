@@ -167,7 +167,7 @@ struct Args {
     #[arg(long, help = "Path to model weights .safetensors (downloaded from HF if not provided)")]
     weights: Option<String>,
 
-    #[arg(long, default_value = "candle-examples/examples/lightonocr_2_1B/assets/730501a_sundbyberg_stockholm.pdf-01.png")]
+    #[arg(long, help = "Path to the image to OCR")]
     image_location: String,
 
     #[arg(long, default_value_t = DEFAULT_MAX_NEW_TOKENS)]
@@ -225,6 +225,10 @@ pub fn main() -> Result<()> {
     let max_edge = args.max_edge.unwrap_or(DEFAULT_MAX_EDGE);
     if max_edge < PATCH_SIZE {
         bail!("--max-edge must be at least {PATCH_SIZE}, got {max_edge}");
+    }
+
+    if args.image_location.is_empty() {
+        bail!("--image-location must be set"); 
     }
 
     let (config_path, tokenizer_path, weights_paths) = if args.config.is_some()
