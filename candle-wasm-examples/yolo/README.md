@@ -4,7 +4,7 @@ Here, we provide two examples of how to run YOLOv8 using a Candle-compiled WASM 
 
 ### Pure Rust UI
 
-To build and test the UI made in Rust you will need [Trunk](https://trunkrs.dev/#install)
+To build and test the UI made in Rust you will need [Trunk](https://github.com/trunk-rs/trunk#install)
 From the `candle-wasm-examples/yolo` directory run:
 
 Download assets:
