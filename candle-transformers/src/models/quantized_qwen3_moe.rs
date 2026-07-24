@@ -217,6 +217,12 @@ impl QuantizedAttention {
 
         self.attention_wo.forward(&reshaped_ctx.to_dtype(in_dtype)?)
     }
+
+    /// Drops this layer's cached KV state -- for reusing one loaded model
+    /// across independent requests without reloading weights.
+    pub fn clear_kv_cache(&mut self) {
+        self.kv_cache.reset();
+    }
 }
 
 struct LayerWeights {
@@ -229,6 +235,10 @@ struct LayerWeights {
 impl LayerWeights {
     fn forward_attn(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         self.self_attn.forward(x, mask, offset)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache();
     }
 }
 
@@ -447,5 +457,16 @@ impl GGUFQWenMoE {
         let xs = xs.narrow(1, l - 1, 1)?;
         let xs = self.norm.forward(&xs)?;
         self.output.forward(&xs)?.to_dtype(DType::F32)?.squeeze(1)
+    }
+
+    /// Resets every layer's KV cache -- for reusing one loaded model across
+    /// independent requests without reloading weights. Added for ratatoskr,
+    /// which serializes model access behind a mutex and clears state at the
+    /// start of every request rather than tracking sessions (see
+    /// ratatoskr's src/model/mod.rs).
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.clear_kv_cache();
+        }
     }
 }
