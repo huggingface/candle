@@ -1,107 +1,57 @@
-use std::path::Path;
+use std::path::PathBuf;
 
 use candle::{DType, Device, Tensor, bail};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::models::lightonocr_2_1b::model;
 use clap::Parser;
+use hf_hub::api::sync::Api;
 use tokenizers::Tokenizer;
 use candle::Result;
 
 mod preprocessor;
 use preprocessor::{PreprocessedImage, preprocess};
 
-pub struct TextGeneration{
+const PATCH_SIZE: u32 = 14;
+const MERGE_SIZE: u32 = 2;
+const DEFAULT_MODEL: &str = "lightonai/LightOnOCR-2-1B";
+const DEFAULT_MAX_EDGE: u32 = 768;
+const DEFAULT_MAX_NEW_TOKENS: usize = 256;
+
+pub struct TextGeneration {
     model: model::Model,
     device: Device,
-    tokenizer: TokenOutputStream, 
+    tokenizer: TokenOutputStream,
+    max_new_tokens: usize,
+    image_end: u32,
 }
 
 impl TextGeneration {
-    fn new(
-        model: model::Model,
-        tokenizer: Tokenizer, 
-        device: &Device,
-    ) -> Self {
-        Self { 
-            model, device: 
-            device.clone(), 
-            tokenizer: TokenOutputStream::new(tokenizer) ,
+    fn new(model: model::Model, tokenizer: Tokenizer, device: &Device, max_new_tokens: usize) -> Self {
+        Self {
+            model,
+            device: device.clone(),
+            tokenizer: TokenOutputStream::new(tokenizer),
+            max_new_tokens,
+            image_end: 151645,
         }
     }
-    pub fn load_and_resize_image(
-        &self,
-        image: String, 
-        max_edge: u32, 
-        patch_size: u32,
-        dtype: DType,
-        device: &Device
-    )-> Result<Tensor>{
-        let mut img = match image::open(image){
-            Ok(i) => {
-                i
-            }
-            Err(_) => {
-                candle::bail!("Unable to open the provided image.")
-            }
-        };
-        let (mut w, mut h) = (img.width(), img.height());
-        let longest = w.max(h);
-        const TILE_SIZE: u32 = 28;
-        if longest > max_edge{
-            let scale = max_edge as f32 / longest as f32;
-            let new_w = ((w as f32 * scale) / patch_size as f32).round() as u32 * patch_size;
-            let new_h = ((h as f32 * scale) / patch_size as f32).round() as u32 * patch_size;
 
-            img = img.resize_exact(
-            new_w, 
-            new_h, 
-            image::imageops::FilterType::Lanczos3);
-            let pad_w = new_w.div_ceil(TILE_SIZE) * TILE_SIZE;
-            let pad_h = new_h.div_ceil(TILE_SIZE) * TILE_SIZE;
-            h = pad_h;
-            w = pad_w;
-        }
-        let img = img.to_rgb8();
-        let data: Vec<f32> = img.pixels()
-            .flat_map(|p| [
-                p[0] as f32 / 255.0,
-                p[1] as f32 / 255.0,
-                p[2] as f32 / 255.0,
-                ])
-            .collect();
-        let tensor = Tensor::from_vec(data, (h as usize, w as usize, 3), device)?
-            .permute((2, 0, 1))?  // HWC → CHW
-            .to_dtype(dtype)?;
-
-        Ok(tensor)
-    }
-
-    fn run(&mut self, 
-        image: String, 
-        dtype: DType,
-        ) -> Result<()>{
-        self.model.language_model.clear_kv_cache();
+    fn run(&mut self, image: String, max_edge: u32, dtype: DType) -> Result<()> {
         println!("Running..");
-        let img = image::open(image).unwrap();
-        let preprocessed = preprocess(&img, &self.device, dtype).unwrap();
+        self.model.language_model.clear_kv_cache();
+        let img = image::open(image).map_err(|e| candle::Error::wrap(e.to_string()))?;
+        let preprocessed = preprocess(&img, max_edge, &self.device, dtype)
+            .map_err(|e| candle::Error::wrap(e.to_string()))?;
 
-        let merged_ph = preprocessed.ph / 2;
-        let merged_pw = preprocessed.pw / 2;
+        let merged_ph = preprocessed.ph / MERGE_SIZE as usize;
+        let merged_pw = preprocessed.pw / MERGE_SIZE as usize;
         let num_image_tokens = merged_ph * merged_pw;
 
-        match self.encode_image_tokens(num_image_tokens, preprocessed) {
-            Ok(_) => (),
-            Err(e) => {
-                dbg!(e);
-                panic!("IDK")
-            }
-        };
-
-        Ok(())
+        self.encode_image_tokens(num_image_tokens, preprocessed)
     }
 
-    fn encode_image_tokens(&mut self, num_image_tokens: usize, preprocessed: PreprocessedImage) -> Result<()>{
+    fn encode_image_tokens(&mut self, num_image_tokens: usize, preprocessed: PreprocessedImage) -> Result<()> {
         let encode = |s: &str| -> Result<Vec<u32>> {
             Ok(self.tokenizer.tokenizer()
                 .encode(s, false)
@@ -109,32 +59,26 @@ impl TextGeneration {
                 .get_ids()
                 .to_vec())
         };
-        
+
         let system_tokens    = encode("system")?;
         let user_tokens      = encode("user\n")?;
         let newline_tokens   = encode("\n")?;
-        let assistant_tokens = encode("assistant\n")?;        
+        let assistant_tokens = encode("assistant\n")?;
 
         let image_pad = 151655;
         let image_start = 151644u32;
-        let image_end = 151645u32;
         let image_tokens: Vec<u32> = vec![image_pad as u32; num_image_tokens];
 
         let mut input_ids: Vec<u32> = Vec::new();
-        
-        /* 
-        let chat_template = match ChatTemplate::from_tokenizer_config(template){
-            Ok(c) => c,
-            Err(e) => candle::bail!("Failed to load tokenizer config")
-        };*/
+
         input_ids.push(image_start);
         input_ids.extend_from_slice(&system_tokens);
-        input_ids.push(image_end);
+        input_ids.push(self.image_end);
         input_ids.extend_from_slice(&newline_tokens);
         input_ids.push(image_start);
         input_ids.extend_from_slice(&user_tokens);
         input_ids.extend_from_slice(&image_tokens);
-        input_ids.push(image_end);
+        input_ids.push(self.image_end);
         input_ids.extend_from_slice(&newline_tokens);
         input_ids.push(image_start);
         input_ids.extend_from_slice(&assistant_tokens);
@@ -142,63 +86,44 @@ impl TextGeneration {
         let seq_len = input_ids.len();
 
         let device = &self.device;
-        let input_tensor = Tensor::from_vec(
-            input_ids,
-            (1, seq_len),
-            device,
-        )?;
+        let input_tensor = Tensor::from_vec(input_ids, (1, seq_len), device)?;
 
-        let logits = self.model.forward(
-            &input_tensor,
-            &preprocessed.pixel_values,
-             0)?;
+        let logits = self.model.forward(&input_tensor, &preprocessed.pixel_values, 0)?;
 
         let mut generated: Vec<u32> = Vec::new();
         let mut offset = seq_len;
 
         let first = TextGeneration::greedy(logits)?;
         generated.push(first);
-        let max_new_tokens = 256usize; //TODO make this an argument
 
-        // Clear KV cache before starting generation to prevent out-of-memory
-
-        for _ in 1..max_new_tokens {
+        for _ in 1..self.max_new_tokens {
             let last = *generated.last().unwrap();
 
-            if last == image_end {
+            if last == self.image_end {
                 break;
             }
 
-            let input = Tensor::from_vec(
-                vec![last],
-                (1, 1),
-                device,
-            )?;
-
+            let input = Tensor::from_vec(vec![last], (1, 1), device)?;
             let logits = self.model.language_model.forward(&input, offset)?;
             let token = TextGeneration::greedy(logits)?;
             generated.push(token);
             offset += 1;
-            
         }
 
         let decode_ids: Vec<u32> = generated.iter()
             .copied()
-            .filter(|&t| t != image_end)
+            .filter(|&t| t != self.image_end)
             .collect();
 
-        let output = match self.tokenizer.tokenizer()
+        let output = self.tokenizer.tokenizer()
             .decode(&decode_ids, true)
-            .map_err(|e| anyhow::anyhow!("{}", e)){
-                Ok(out) => out,
-                Err(_) => candle::bail!("Failed to decode tokens")
-            };
+            .map_err(|e| candle::Error::wrap(e.to_string()))?;
 
-        println!("{}", output);
+        println!("{output}");
 
         Ok(())
     }
-    
+
     fn greedy(logits: Tensor) -> Result<u32> {
         let logits = logits.squeeze(0)?;
         let seq = logits.dim(0)?;
@@ -218,112 +143,114 @@ impl TextGeneration {
     }
 }
 
-
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-
     #[arg(long)]
     cpu: bool,
-
-    // Location of the config file for the model
-    #[arg(long)]
-    model_config: Option<String>,
-
-    // Location of the config file for the preprocesor
-    #[arg(long)]
-    processor_config: Option<String>,
 
     #[arg(long)]
     dtype: Option<String>,
 
-    //Location of the weights for the model
-    #[arg(long)]
-    model_weights: Option<String>,
+    #[arg(long, default_value = DEFAULT_MODEL)]
+    model_id: String,
 
-    //Location of the Tokenizer config
-    #[arg(long)]
-    tokenizer_config: Option<String>,
+    #[arg(long, default_value = "main")]
+    revision: String,
 
-    //Location of the image to transcribe
-    #[arg(long)]
+    #[arg(long, help = "Path to model config.json (downloaded from HF if not provided)")]
+    config: Option<String>,
+
+    #[arg(long, help = "Path to tokenizer.json (downloaded from HF if not provided)")]
+    tokenizer: Option<String>,
+
+    #[arg(long, help = "Path to model weights .safetensors (downloaded from HF if not provided)")]
+    weights: Option<String>,
+
+    #[arg(long, default_value = "candle-examples/examples/lightonocr_2_1B/assets/730501a_sundbyberg_stockholm.pdf-01.png")]
     image_location: String,
+
+    #[arg(long, default_value_t = DEFAULT_MAX_NEW_TOKENS)]
+    max_new_tokens: usize,
+
+    #[arg(long, help = "Maximum edge length for image resize (must be >= 14, dimensions padded to multiples of 28)")]
+    max_edge: Option<u32>,
 }
 
-pub fn main() -> Result<()>{
-    let args = Args::parse(); 
+fn download_hf_files(model_id: &str, revision: &str) -> Result<(PathBuf, PathBuf, Vec<PathBuf>)> {
+    let api = Api::new().map_err(|e| candle::Error::wrap(e.to_string()))?;
+    let repo = api.repo(hf_hub::Repo::with_revision(
+        model_id.to_string(),
+        hf_hub::RepoType::Model,
+        revision.to_string(),
+    ));
+
+    let config_path = repo.get("config.json")
+        .map_err(|e| candle::Error::wrap(e.to_string()))?;
+    let tokenizer_path = repo.get("tokenizer.json")
+        .map_err(|e| candle::Error::wrap(e.to_string()))?;
+
+    let weights_paths = match repo.get("model.safetensors") {
+        Ok(f) => vec![f],
+        Err(_) => {
+            let f = repo.get("pytorch_model.bin")
+                .map_err(|_| candle::Error::Msg(
+                    "Could not find model.safetensors or pytorch_model.bin on HuggingFace. Use --weights to specify a local file.".to_string()
+                ))?;
+            vec![f]
+        }
+    };
+
+    Ok((config_path, tokenizer_path, weights_paths))
+}
+
+fn read_config(path: &PathBuf) -> Result<model::Config> {
+    let content = std::fs::read_to_string(path)?;
+    serde_json::from_str(&content)
+        .map_err(|e| candle::Error::wrap(format!("Failed to parse config: {e}")))
+}
+
+pub fn main() -> Result<()> {
+    let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
 
     let dtype = match args.dtype.as_deref() {
         Some("f32") => DType::F32,
         Some("bf16") => DType::BF16,
         Some(dtype) => bail!("Unsupported dtype {dtype}"),
-        None => DType::BF16,
-    };  
-    // TODO all of this can be moved into the new function 
-    // also  if config not found need to use defaults.
-    //build preprocessor:
+        None if device.is_cuda() => DType::BF16,
+        None => DType::F32,
+    };
 
-    println!("Building..");
-    //Load model weights:
-    let weights_path = args.model_weights.as_deref()
-    .expect("Empty model weights field");
+    let max_edge = args.max_edge.unwrap_or(DEFAULT_MAX_EDGE);
+    if max_edge < PATCH_SIZE {
+        bail!("--max-edge must be at least {PATCH_SIZE}, got {max_edge}");
+    }
+
+    let (config_path, tokenizer_path, weights_paths) = if args.config.is_some()
+        || args.tokenizer.is_some()
+        || args.weights.is_some()
+    {
+        let config = args.config.as_deref().expect("--config required when using local files");
+        let tokenizer = args.tokenizer.as_deref().expect("--tokenizer required when using local files");
+        let weights = args.weights.as_deref().expect("--weights required when using local files");
+        (PathBuf::from(config), PathBuf::from(tokenizer), vec![PathBuf::from(weights)])
+    } else {
+        println!("Downloading model files from {}/{}...", args.model_id, args.revision);
+        download_hf_files(&args.model_id, &args.revision)?
+    };
+
+    let cfg = read_config(&config_path)?;
 
     let vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[weights_path], dtype, &device)
-    }?;
+        VarBuilder::from_mmaped_safetensors(&weights_paths, dtype, &device)?
+    };
 
-    let config_str = load_config(
-        args.model_config.as_deref(), 
-        "Model Config");
-    println!("Building model..");
-    let cfg: model::Config = serde_json::from_str(&config_str)
-    .expect("Failed to deserialize config");
     let model = model::Model::new(cfg, vb)?;
 
-    let tokenizer_path = args.tokenizer_config.as_deref().expect("No tokenizer config found");
-    let tokenizer = Tokenizer::from_file(tokenizer_path)
-        .map_err(|e| anyhow::anyhow!("Tokenizer error: {e}"))
-        .expect("Failed to create tokenizer");
-    println!("Building text_generation");
-    let mut text_generation = TextGeneration::new(model, tokenizer, &device);
-    println!("running text_generation");
-    text_generation.run(args.image_location, dtype)
-    
+    let tokenizer = Tokenizer::from_file(&tokenizer_path)
+        .map_err(|e| candle::Error::wrap(format!("Tokenizer error: {e}")))?;
+
+    let mut text_generation = TextGeneration::new(model, tokenizer, &device, args.max_new_tokens);
+    text_generation.run(args.image_location, max_edge, dtype)
 }
-
-pub fn load_config(file: Option<&str>, which_config: &str) -> String {
- 
-    let path = Path::new(
-        file.expect(
-            format!("Please provide a file for {which_config}")
-            .as_str()
-        )
-    );
-
-    let config_str = std::fs::read_to_string(path)
-    .expect(
-        format!("Failed to read path for {which_config}"
-        ).as_str()
-    );
-
-    config_str
-}   
-
-/*
-# CPU version
-cargo run --example lightonocr_2_1B -- \
-  --image-location candle-examples/examples/lightonocr_2_1B/assets/730501a_sundbyberg_stockholm.pdf-01.png \
-  --model-config candle-examples/examples/lightonocr_2_1B/assets/config.json \
-  --processor-config candle-examples/examples/lightonocr_2_1B/assets/processor_config.json \
-  --model-weights candle-examples/examples/lightonocr_2_1B/assets/model.safetensors \
-  --tokenizer-config candle-examples/examples/lightonocr_2_1B/assets/tokenizer.json
-
-# CUDA GPU version
-cargo run --example lightonocr_2_1B --features cuda -- \
-  --image-location candle-examples/examples/lightonocr_2_1B/assets/730501a_sundbyberg_stockholm.pdf-01.png \
-  --model-config candle-examples/examples/lightonocr_2_1B/assets/config.json \
-  --processor-config candle-examples/examples/lightonocr_2_1B/assets/processor_config.json \
-  --model-weights candle-examples/examples/lightonocr_2_1B/assets/model.safetensors \
-  --tokenizer-config candle-examples/examples/lightonocr_2_1B/assets/tokenizer.json
-*/
