@@ -458,13 +458,26 @@ impl Tensor {
                         // Skipping checks, the op went ok, we can skip
                         // the matmul size checks for now.
 
-                        let lhs_grad = grad.matmul(&rhs.t()?)?;
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
+                        // Only materialize a gradient for an operand that can
+                        // receive one. `track_op()` is `is_variable ||
+                        // op.is_some()`, so an operand that is neither a
+                        // variable nor a computed node (e.g. a frozen weight in
+                        // a LoRA / partial fine-tune) is skipped — otherwise we
+                        // allocate a full weight-sized gradient in the grad
+                        // store for every frozen matmul and keep them all alive
+                        // for the whole backward pass, which dominates peak
+                        // memory even though those grads are never read.
+                        if lhs.track_op() {
+                            let lhs_grad = grad.matmul(&rhs.t()?)?;
+                            let lhs_sum_grad = grads.or_insert(lhs)?;
+                            *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
+                        }
 
-                        let rhs_grad = lhs.t()?.matmul(&grad)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                        if rhs.track_op() {
+                            let rhs_grad = lhs.t()?.matmul(&grad)?;
+                            let rhs_sum_grad = grads.or_insert(rhs)?;
+                            *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                        }
                     }
                     Op::Cat(args, dim) => {
                         let mut start_idx = 0;
