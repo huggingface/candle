@@ -32,10 +32,7 @@ impl ResidencySet {
         self.insert_batch(std::iter::once(buf));
     }
 
-    /// Adds many buffers with a single commit: each commit synchronously
-    /// applies the pending changes, so batching a large set (e.g. weights at
-    /// model load) avoids paying that cost once per buffer. An empty batch is
-    /// a no-op.
+    /// Adds multiple buffers in a single commit.
     pub fn insert_batch<'a>(&self, bufs: impl IntoIterator<Item = &'a Buffer>) {
         if let Some(set) = &self.raw {
             let mut any = false;
@@ -49,8 +46,7 @@ impl ResidencySet {
         }
     }
 
-    /// Removes many buffers with a single commit; the batch counterpart of
-    /// `insert_batch`. An empty batch is a no-op.
+    /// Removes multiple buffers in a single commit.
     pub fn remove_batch<'a>(&self, bufs: impl IntoIterator<Item = &'a Buffer>) {
         if let Some(set) = &self.raw {
             let mut any = false;
