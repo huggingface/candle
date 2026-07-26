@@ -391,13 +391,7 @@ impl GGUFQWenMoE {
         })
     }
 
-    fn causal_mask(
-        &self,
-        b: usize,
-        tgt: usize,
-        offset: usize,
-        sw: Option<usize>,
-    ) -> Result<Tensor> {
+    fn causal_mask(&self, tgt: usize, offset: usize, sw: Option<usize>) -> Result<Tensor> {
         let minf = f32::NEG_INFINITY;
         let mask: Vec<_> = (0..tgt)
             .flat_map(|i| {
@@ -415,17 +409,20 @@ impl GGUFQWenMoE {
                 })
             })
             .collect();
-        Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
+        // Batch-independent mask: built with a batch dim of 1 and broadcast. A
+        // batch dim > 1 would claim `b` copies while the slice holds one,
+        // under-sizing storage (from_slice skips a concrete shape's length check).
+        Tensor::from_slice(&mask, (1, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
     }
 
     pub fn forward(&mut self, x: &Tensor, offset: usize) -> Result<Tensor> {
         let mut xs = self.tok_embeddings.forward(x)?;
-        let (b, l) = x.dims2()?;
+        let (_, l) = x.dims2()?;
 
         let causal_mask = if l == 1 {
             None
         } else {
-            Some(self.causal_mask(b, l, offset, None)?)
+            Some(self.causal_mask(l, offset, None)?)
         };
 
         for layer in self.layers.iter_mut() {
