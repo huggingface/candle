@@ -246,19 +246,6 @@ impl FusedMoeGGUF {
             topk_weights = topk_weights.broadcast_div(&topk_weights.sum_keepdim(D::Minus1)?)?;
         }
 
-        let (expert_ids, sorted_token_ids) = if is_prefill {
-            // For long-context (32K+), need to use custom sort kernel
-            // #[cfg(feature = "cuda")]
-            // {
-            //     use attention_rs::sort::ArgSortOp;
-            //     topk_ids.flatten_all()?.sort(true)?
-            // }
-            // #[cfg(not(feature = "cuda"))]
-            topk_ids.flatten_all()?.sort_last_dim(true)?
-        } else {
-            topk_ids.flatten_all()?.sort_last_dim(true)?
-        };
-
         // moe_gemm_gguf (CUDA's vLLM-style block-sorted fused MoE GEMM) has
         // no Metal implementation and a very different interface (it needs
         // sorted_token_ids/expert_ids, not per-token ids); Metal instead
@@ -278,6 +265,23 @@ impl FusedMoeGGUF {
             let down = self.down_experts.indexed_moe_forward(&down_inputs, &topk_ids)?;
             down.broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
         } else {
+            // sorted_token_ids/expert_ids are moe_gemm_gguf's own vLLM-style
+            // block-alignment inputs -- only computed here, not above, since
+            // the Metal branch never needs them (skips two real GPU
+            // dispatches, arg_sort_last_dim + gather, on the decode hot path).
+            let (expert_ids, sorted_token_ids) = if is_prefill {
+                // For long-context (32K+), need to use custom sort kernel
+                // #[cfg(feature = "cuda")]
+                // {
+                //     use attention_rs::sort::ArgSortOp;
+                //     topk_ids.flatten_all()?.sort(true)?
+                // }
+                // #[cfg(not(feature = "cuda"))]
+                topk_ids.flatten_all()?.sort_last_dim(true)?
+            } else {
+                topk_ids.flatten_all()?.sort_last_dim(true)?
+            };
+
             let gate = moe::moe_gemm_gguf(
                 &xs,
                 &self.gate_experts,

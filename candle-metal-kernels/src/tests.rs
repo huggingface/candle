@@ -2519,8 +2519,8 @@ fn kernel_mul_mm_id_q6_k_pipeline_loads() {
 }
 
 // Correctness test for `call_quantized_matmul_mm_id`, the Rust binding for
-// ggml's indexed/routed matmul (see ratatoskr/DESIGN.md section 15). Uses
-// GgmlDType::F32 rather than a real quantized type so the test exercises
+// ggml's indexed/routed matmul. Uses GgmlDType::F32 rather than a real
+// quantized type so the test exercises
 // only the id-routing/dispatch logic this binding is responsible for
 // (rowids scan, per-expert threadgroup dispatch, output scatter) without
 // also depending on GGUF block dequantization, which is already covered
@@ -2781,7 +2781,10 @@ fn kernel_mul_mm_id_f32_single_token_matches_reference() {
     let src1_buf = new_buffer(&device, &src1);
     let ids_buf = new_buffer(&device, &ids);
     let dst_buf = device
-        .new_buffer(expected.len() * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .new_buffer(
+            expected.len() * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
         .unwrap();
 
     let commands = commands(&device);
@@ -2820,4 +2823,181 @@ fn kernel_mul_mm_id_f32_single_token_matches_reference() {
             "mismatch at index {i}: got {g}, expected {e} (diff {diff})"
         );
     }
+}
+
+// Closes a gap review found: call_quantized_matmul_mm_id maps
+// GgmlDType::BF16 to this kernel name, but no such instantiation existed in
+// quantized.metal until this same change added it (mirroring the existing
+// dense kernel_mul_mm_bf16_f32's #if defined(__HAVE_BFLOAT__) guard).
+#[test]
+fn kernel_mul_mm_id_bf16_pipeline_loads() {
+    let device = device();
+    let kernels = Kernels::new();
+    kernels
+        .load_pipeline(&device, Source::Quantized, "kernel_mul_mm_id_bf16_f32")
+        .expect("kernel_mul_mm_id_bf16_f32 should load as a Metal compute pipeline");
+}
+
+// Closes another gap review found: kernel_mul_mm_id_f32_topk_matches_reference
+// gives every (token, slot) its own distinct input row (in_dim1==topk), which
+// never exercises the kernel's `id[0] % ne11` broadcast modulo in a way that
+// could be wrong and still pass. The real gate/up production shape (see
+// FusedMoeGGUF::forward's Metal branch) is in_dim1==1 with n_expert_used>1 --
+// one token embedding, shared across all its selected experts -- so this is
+// the case that actually proves the broadcast indexing, not just the
+// distinct-per-slot indexing the topk test already covers.
+#[test]
+fn kernel_mul_mm_id_f32_broadcast_matches_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 4usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 3usize;
+    let n_expert_used = 3usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    // in_dim1 == 1: one embedding per token, broadcast across all its slots.
+    let src1: Vec<f32> = (0..n_tokens * n_in)
+        .map(|idx| {
+            let t = idx / n_in;
+            let k = idx % n_in;
+            (t as f32 * 100.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ids: Vec<i32> = vec![0, 1, 2, 1, 2, 3, 3, 0, 1];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let mut expected = vec![0f32; n_tokens * n_expert_used * n_out];
+    for t in 0..n_tokens {
+        for s in 0..n_expert_used {
+            let e = ids[t * n_expert_used + s] as usize;
+            for j in 0..n_out {
+                let mut acc = 0f32;
+                for k in 0..n_in {
+                    acc += src0[e * n_out * n_in + j * n_in + k] * src1[t * n_in + k];
+                }
+                expected[t * n_expert_used * n_out + s * n_out + j] = acc;
+            }
+        }
+    }
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(
+            expected.len() * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, 1, n_in],
+        &[n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[n_tokens, n_expert_used],
+        &[n_expert_used * 4, 4],
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &dst_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&dst_buf, expected.len());
+
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (g - e).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * e.abs(),
+            "mismatch at index {i}: got {g}, expected {e} (diff {diff})"
+        );
+    }
+}
+
+// Closes a review-found gap: the threadgroup-memory-size check added to
+// call_quantized_matmul_mm_id (mirroring ggml's own host-side assert) should
+// reject an over-budget request with a clean error, not dispatch anyway and
+// let the driver fail unpredictably. Doesn't need real buffer contents --
+// the function must return Err before any dispatch happens.
+#[test]
+fn kernel_mul_mm_id_rejects_oversized_threadgroup_memory() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    // nei0*nei1*4 alone must exceed a real device's threadgroup memory
+    // budget (commonly 32KiB) once the fixed 8192-byte tile is added.
+    let nei0 = 4096usize;
+    let nei1 = 4096usize;
+    let n_expert = 1usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+
+    let src0 = vec![0f32; n_expert * n_out * n_in];
+    let src1 = vec![0f32; nei1 * nei0 * n_in];
+    let ids = vec![0i32; nei1 * nei0];
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(
+            nei1 * nei0 * n_out * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    let result = call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[nei1, nei0, n_in],
+        &[nei0 * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[nei1, nei0],
+        &[nei0 * 4, 4],
+        &ids_buf,
+        0,
+        &[nei1, nei0, n_out],
+        0,
+        &dst_buf,
+    );
+
+    assert!(
+        result.is_err(),
+        "expected an error for an oversized threadgroup memory request, got Ok"
+    );
 }

@@ -3,7 +3,7 @@ use crate::{
     debug_group, set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError,
     Output, Source,
 };
-use objc2_metal::MTLSize;
+use objc2_metal::{MTLDevice, MTLSize};
 
 #[derive(Debug, Clone, Copy)]
 pub enum GgmlDType {
@@ -497,6 +497,17 @@ pub fn call_quantized_matmul_mm_id(
     // expert -- worst case every row in the tile, i.e. nei0*nei1 total.
     let rowids_bytes = (nei0 * nei1 * 4) as usize;
     let smem = (8192 + rowids_bytes).div_ceil(16) * 16;
+    // ggml's own host code asserts this same bound (dst_rows <=
+    // dst_rows_max, derived from maxThreadgroupMemoryLength) before
+    // dispatching -- unbounded batch*n_expert_used could otherwise exceed
+    // the device's threadgroup memory budget and fail or misbehave on-device
+    // rather than surfacing a clear error here.
+    let max_smem = device.as_ref().maxThreadgroupMemoryLength() as usize;
+    if smem > max_smem {
+        return Err(MetalKernelError::InvalidInput(format!(
+            "qmm_mm_id: required threadgroup memory ({smem} bytes, from nei0={nei0} * nei1={nei1}) exceeds this device's max ({max_smem} bytes)"
+        )));
+    }
     encoder.set_threadgroup_memory_length(0, smem);
 
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);

@@ -37,6 +37,20 @@ impl QMetalStorage {
         &self.buffer
     }
 
+    /// Converts an element-stride array to bytes for this storage's
+    /// (possibly sub-byte-per-element, block-quantized) dtype. Shared by
+    /// `fwd` and `indexed_moe_forward` so the two matmul paths can't
+    /// silently diverge on how quantized weight strides are computed.
+    fn quantized_byte_strides(&self, stride: &[usize]) -> Vec<usize> {
+        stride
+            .iter()
+            .map(|x| {
+                (*x as f32 * (self.dtype.type_size() as f32 / self.dtype.block_size() as f32))
+                    as usize
+            })
+            .collect()
+    }
+
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
 
@@ -395,14 +409,7 @@ impl QMetalStorage {
         let src0_l = crate::Layout::contiguous(
             [vec![1; 4 - self_shape.rank()], self_shape.dims().to_vec()].concat(),
         );
-        let src0_stride = src0_l
-            .stride()
-            .iter()
-            .map(|x| {
-                (*x as f32 * (self.dtype.type_size() as f32 / self.dtype.block_size() as f32))
-                    as usize
-            })
-            .collect::<Vec<_>>();
+        let src0_stride = self.quantized_byte_strides(src0_l.stride());
 
         if src_shape.rank() > 4 {
             crate::bail!("weight rank ({}) must be <= 4", src_shape.rank())
@@ -463,7 +470,16 @@ impl QMetalStorage {
         if !ids_l.is_contiguous() {
             crate::bail!("indexed_moe_forward ids is not contiguous {ids_l:?}")
         }
-        assert_eq!(input.dtype(), DType::F32);
+        if input.dtype() != DType::F32 {
+            crate::bail!("indexed_moe_forward input must be F32, got {:?}", input.dtype())
+        }
+        // The kernel unconditionally reads `ids` as raw int32_t regardless of
+        // the Rust-side dtype tag; U32 is bit-compatible for the small
+        // non-negative expert indices this carries, but anything else would
+        // silently misread the buffer at the byte-stride computed below.
+        if ids.dtype() != DType::U32 {
+            crate::bail!("indexed_moe_forward ids must be U32, got {:?}", ids.dtype())
+        }
 
         let (_num_experts, n, k) = self_shape.dims3()?;
         let in_shape = input_l.shape();
@@ -498,14 +514,7 @@ impl QMetalStorage {
         let encoder = device.command_encoder()?;
 
         let src0_l = crate::Layout::contiguous(self_shape.dims());
-        let src0_stride = src0_l
-            .stride()
-            .iter()
-            .map(|x| {
-                (*x as f32 * (self.dtype.type_size() as f32 / self.dtype.block_size() as f32))
-                    as usize
-            })
-            .collect::<Vec<_>>();
+        let src0_stride = self.quantized_byte_strides(src0_l.stride());
 
         let input_stride = input_l
             .stride()
@@ -526,7 +535,7 @@ impl QMetalStorage {
             self_shape.dims(),
             &src0_stride,
             &self.buffer,
-            self.offset,
+            0, // this storage always owns its buffer outright, so its offset is always 0
             in_shape.dims(),
             &input_stride,
             input.buffer(),
