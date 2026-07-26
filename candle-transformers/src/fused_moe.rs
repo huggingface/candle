@@ -259,7 +259,25 @@ impl FusedMoeGGUF {
             topk_ids.flatten_all()?.sort_last_dim(true)?
         };
 
-        let ys = {
+        // moe_gemm_gguf (CUDA's vLLM-style block-sorted fused MoE GEMM) has
+        // no Metal implementation and a very different interface (it needs
+        // sorted_token_ids/expert_ids, not per-token ids); Metal instead
+        // uses QTensor::indexed_moe_forward, the simpler ids-per-token path.
+        // That function only computes the raw per-(token, selected-expert)
+        // matmul (see its doc comment) -- unlike moe_gemm_gguf, it doesn't
+        // fold in top-k weight scaling, so that happens here explicitly.
+        // The cross-expert sum below is unconditional and already correct
+        // for both branches: moe_gemm_gguf's CUDA kernel doesn't sum either
+        // (confirmed by reading its cuda_fwd -- topk_weights only scales
+        // rows), the sum has always been this function's own job.
+        let ys = if xs.device().is_metal() {
+            let x_bcast = xs.reshape((num_tokens, 1, hidden_dim))?;
+            let gate = self.gate_experts.indexed_moe_forward(&x_bcast, &topk_ids)?;
+            let up = self.up_experts.indexed_moe_forward(&x_bcast, &topk_ids)?;
+            let down_inputs = (up * gate.apply(&self.act)?)?;
+            let down = self.down_experts.indexed_moe_forward(&down_inputs, &topk_ids)?;
+            down.broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
+        } else {
             let gate = moe::moe_gemm_gguf(
                 &xs,
                 &self.gate_experts,
