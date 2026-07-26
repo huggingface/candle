@@ -535,13 +535,7 @@ impl ModelWeights {
         })
     }
 
-    fn causal_mask(
-        &self,
-        b: usize,
-        tgt: usize,
-        offset: usize,
-        sw: Option<usize>,
-    ) -> Result<Tensor> {
+    fn causal_mask(&self, tgt: usize, offset: usize, sw: Option<usize>) -> Result<Tensor> {
         let minf = f32::NEG_INFINITY;
         let mask: Vec<_> = (0..tgt)
             .flat_map(|i| {
@@ -559,18 +553,21 @@ impl ModelWeights {
                 })
             })
             .collect();
-        Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
+        // Batch-independent mask: built with a batch dim of 1 and broadcast. A
+        // batch dim > 1 would claim `b` copies while the slice holds one,
+        // under-sizing storage (from_slice skips a concrete shape's length check).
+        Tensor::from_slice(&mask, (1, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
     }
 
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let (b, l) = input.dims2()?;
+        let (_, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
         // Skip mask materialization when using CPU flash attention
         let causal_mask = if l == 1 || self.device.is_cpu() {
             None
         } else {
-            Some(self.causal_mask(b, l, offset, None)?)
+            Some(self.causal_mask(l, offset, None)?)
         };
         for layer in &mut self.layers {
             h = layer.forward(&h, causal_mask.as_ref(), offset)?;
