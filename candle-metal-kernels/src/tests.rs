@@ -2727,3 +2727,97 @@ fn kernel_mul_mm_id_f32_topk_matches_reference() {
         );
     }
 }
+
+// n_tokens=1 is the actual decode hot path (one token generated at a time),
+// well below ggml's own ne21>=32 threshold for preferring this mm kernel
+// over mul_mv_id -- callers here dispatch it unconditionally regardless of
+// that heuristic, so this is a real, not just theoretical, tiling boundary
+// to cover: BLOCK_SIZE_N=32 means a single token produces a heavily
+// under-filled tile.
+#[test]
+fn kernel_mul_mm_id_f32_single_token_matches_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 3usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 1usize;
+    let n_expert_used = 2usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+        .map(|idx| {
+            let s = (idx / n_in) % n_expert_used;
+            let k = idx % n_in;
+            (s as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ids: Vec<i32> = vec![2, 0];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let mut expected = vec![0f32; n_tokens * n_expert_used * n_out];
+    for s in 0..n_expert_used {
+        let e = ids[s] as usize;
+        for j in 0..n_out {
+            let mut acc = 0f32;
+            for k in 0..n_in {
+                acc += src0[e * n_out * n_in + j * n_in + k] * src1[s * n_in + k];
+            }
+            expected[s * n_out + j] = acc;
+        }
+    }
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(expected.len() * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[n_tokens, n_expert_used],
+        &[n_expert_used * 4, 4],
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &dst_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&dst_buf, expected.len());
+
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (g - e).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * e.abs(),
+            "mismatch at index {i}: got {g}, expected {e} (diff {diff})"
+        );
+    }
+}

@@ -438,6 +438,114 @@ impl QMetalStorage {
         Ok((dst_storage, dst_shape))
     }
 
+    /// Indexed/routed matmul for MoE expert dispatch: `self` holds all
+    /// experts' weights stacked as `[num_experts, n, k]`; `ids` is the
+    /// routing table `[batch, topk]` (one row of expert indices per token);
+    /// `input` is `[batch, topk_or_1, k]` (the `topk_or_1` broadcasts a
+    /// single per-token embedding across all its selected experts when 1,
+    /// or supplies a distinct value per selected expert when `topk`).
+    /// Returns `[batch, topk, n]`, one row per (token, selected-expert)
+    /// pair -- this does not apply top-k routing weights or sum across
+    /// experts; see candle_metal_kernels::call_quantized_matmul_mm_id.
+    pub fn indexed_moe_forward(
+        &self,
+        self_shape: &Shape,
+        input: &MetalStorage,
+        input_l: &crate::Layout,
+        ids: &MetalStorage,
+        ids_l: &crate::Layout,
+    ) -> Result<(MetalStorage, Shape)> {
+        use crate::MetalError;
+
+        if !input_l.is_contiguous() {
+            crate::bail!("indexed_moe_forward input is not contiguous {input_l:?}")
+        }
+        if !ids_l.is_contiguous() {
+            crate::bail!("indexed_moe_forward ids is not contiguous {ids_l:?}")
+        }
+        assert_eq!(input.dtype(), DType::F32);
+
+        let (_num_experts, n, k) = self_shape.dims3()?;
+        let in_shape = input_l.shape();
+        let (batch, in_dim1, in_k) = in_shape.dims3()?;
+        if in_k != k {
+            crate::bail!(
+                "indexed_moe_forward input {:?} incompatible with weight {:?}",
+                in_shape,
+                self_shape
+            )
+        }
+        let idx_shape = ids_l.shape();
+        let (idx_batch, topk) = idx_shape.dims2()?;
+        if idx_batch != batch {
+            crate::bail!(
+                "indexed_moe_forward batch mismatch: input {batch} vs ids {idx_batch}"
+            )
+        }
+        if in_dim1 != 1 && in_dim1 != topk {
+            crate::bail!(
+                "indexed_moe_forward input dim1 ({in_dim1}) must be 1 or topk ({topk})"
+            )
+        }
+
+        let device = input.device().clone();
+        let dst_shape = Shape::from((batch, topk, n));
+        let dst = device
+            .new_buffer_builder()
+            .with_size_for(dst_shape.elem_count(), DType::F32)
+            .with_label("indexed_moe_forward")
+            .build()?;
+        let encoder = device.command_encoder()?;
+
+        let src0_l = crate::Layout::contiguous(self_shape.dims());
+        let src0_stride = src0_l
+            .stride()
+            .iter()
+            .map(|x| {
+                (*x as f32 * (self.dtype.type_size() as f32 / self.dtype.block_size() as f32))
+                    as usize
+            })
+            .collect::<Vec<_>>();
+
+        let input_stride = input_l
+            .stride()
+            .iter()
+            .map(|x| x * DType::F32.size_in_bytes())
+            .collect::<Vec<_>>();
+        let ids_stride = ids_l
+            .stride()
+            .iter()
+            .map(|x| x * ids.dtype().size_in_bytes())
+            .collect::<Vec<_>>();
+
+        candle_metal_kernels::call_quantized_matmul_mm_id(
+            device.device(),
+            &encoder,
+            device.kernels(),
+            self.dtype.into(),
+            self_shape.dims(),
+            &src0_stride,
+            &self.buffer,
+            self.offset,
+            in_shape.dims(),
+            &input_stride,
+            input.buffer(),
+            input_l.start_offset() * DType::F32.size_in_bytes(),
+            idx_shape.dims(),
+            &ids_stride,
+            ids.buffer(),
+            ids_l.start_offset() * ids.dtype().size_in_bytes(),
+            dst_shape.dims(),
+            0,
+            &dst,
+        )
+        .map_err(MetalError::from)?;
+
+        let dst_storage =
+            crate::MetalStorage::new(dst, device.clone(), dst_shape.elem_count(), DType::F32);
+        Ok((dst_storage, dst_shape))
+    }
+
     pub fn data(&self) -> Result<Vec<u8>> {
         let buffer = self
             .device

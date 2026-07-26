@@ -89,6 +89,73 @@ fn test_matmul_mm() -> Result<()> {
     Ok(())
 }
 
+// Covers the Metal arm of QTensor::indexed_moe_forward (the CUDA-only-until-
+// now MoE expert-dispatch entry point candle_metal_kernels::
+// call_quantized_matmul_mm_id feeds into) with a *real* quantized weight,
+// not the F32 dtype the kernel-level tests use -- this is the layer that
+// extracts shapes/strides/dtypes from real QTensor/Tensor storage, which
+// the kernel-level tests can't exercise. Compares against dequantize-then-
+// manual-index-then-matmul, the same style of reference candle's own
+// quantized matmul tests use, so real Q4_0 quantization error is expected
+// and tolerated -- this isn't testing quantization accuracy, just that the
+// indexed routing lands on the right rows.
+#[cfg(feature = "metal")]
+#[test]
+fn indexed_moe_forward_metal() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    let dtype = GgmlDType::Q4_0;
+
+    let n_expert = 3usize;
+    let n_out = 64usize;
+    let n_in = 64usize;
+    let batch = 5usize;
+    let topk = 2usize;
+
+    let w_data: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|i| ((i % 97) as f32 - 48.0) * 0.01)
+        .collect();
+    let weight = Tensor::from_slice(&w_data, (n_expert, n_out, n_in), &device)?;
+    let qweight = quantized::QTensor::quantize(&weight, dtype)?;
+    // Reference uses the dequantized (i.e. quantization-error-including)
+    // weight, not w_data, so this isn't also asserting quantization
+    // accuracy -- that's covered elsewhere.
+    let dequant = qweight.dequantize(&device)?.to_vec3::<f32>()?;
+
+    let x_data: Vec<f32> = (0..batch * topk * n_in)
+        .map(|i| ((i % 53) as f32 - 26.0) * 0.02)
+        .collect();
+    let x = Tensor::from_slice(&x_data, (batch, topk, n_in), &device)?;
+
+    let ids_data: Vec<u32> = (0..batch * topk)
+        .map(|i| ((i * 7 + i / topk) % n_expert) as u32)
+        .collect();
+    let ids = Tensor::from_slice(&ids_data, (batch, topk), &device)?;
+
+    let got = qweight.indexed_moe_forward(&x, &ids)?;
+    assert_eq!(got.dims(), &[batch, topk, n_out]);
+    let got = got.to_vec3::<f32>()?;
+
+    for t in 0..batch {
+        for s in 0..topk {
+            let e = ids_data[t * topk + s] as usize;
+            for j in 0..n_out {
+                let mut acc = 0f32;
+                for k in 0..n_in {
+                    acc += dequant[e][j][k] * x_data[t * topk * n_in + s * n_in + k];
+                }
+                let diff = (got[t][s][j] - acc).abs();
+                assert!(
+                    diff <= 1e-2 + 1e-2 * acc.abs(),
+                    "mismatch at token {t} slot {s} out {j}: got {}, expected {acc} (diff {diff})",
+                    got[t][s][j]
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn quantized_matmul(device: &Device) -> Result<()> {
     let (m, k, n) = (3, 64, 4);
     let lhs_s = (0..(m * k)).map(|v| v as f32).collect::<Vec<_>>();
