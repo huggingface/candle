@@ -2517,3 +2517,213 @@ fn kernel_mul_mm_id_q6_k_pipeline_loads() {
         .load_pipeline(&device, Source::Quantized, "kernel_mul_mm_id_q6_K_f32")
         .expect("kernel_mul_mm_id_q6_K_f32 should load as a Metal compute pipeline");
 }
+
+// Correctness test for `call_quantized_matmul_mm_id`, the Rust binding for
+// ggml's indexed/routed matmul (see ratatoskr/DESIGN.md section 15). Uses
+// GgmlDType::F32 rather than a real quantized type so the test exercises
+// only the id-routing/dispatch logic this binding is responsible for
+// (rowids scan, per-expert threadgroup dispatch, output scatter) without
+// also depending on GGUF block dequantization, which is already covered
+// by the existing dense-matmul tests. Reference values are computed with
+// plain f32 dot products and compared with a tolerance loose enough to
+// absorb the GPU's different summation order.
+#[test]
+fn kernel_mul_mm_id_f32_matches_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 2usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 4usize;
+    let n_expert_used = 1usize;
+
+    // src0: [n_expert, n_out, n_in], row-major.
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    // src1: [n_tokens, n_expert_used, n_in], row-major.
+    let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+        .map(|idx| {
+            let t = idx / n_in;
+            let k = idx % n_in;
+            (t as f32 * 100.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    // ids: [n_tokens, n_expert_used] -- token t picks expert ids[t].
+    let ids: Vec<i32> = vec![0, 1, 0, 1];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    // Reference: dst[t][s][j] = sum_k src0[ids[t*n_expert_used+s]][j][k] * src1[t][s][k]
+    let mut expected = vec![0f32; n_tokens * n_expert_used * n_out];
+    for t in 0..n_tokens {
+        for s in 0..n_expert_used {
+            let e = ids[t * n_expert_used + s] as usize;
+            for j in 0..n_out {
+                let mut acc = 0f32;
+                for k in 0..n_in {
+                    acc += src0[e * n_out * n_in + j * n_in + k]
+                        * src1[t * n_expert_used * n_in + s * n_in + k];
+                }
+                expected[t * n_expert_used * n_out + s * n_out + j] = acc;
+            }
+        }
+    }
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(
+            expected.len() * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    // Strides are in bytes (matches call_quantized_matmul_mm_t's convention,
+    // see candle-core/src/quantized/metal.rs's caller) -- not element counts.
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[n_tokens, n_expert_used],
+        &[n_expert_used * 4, 4],
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &dst_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&dst_buf, expected.len());
+
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (g - e).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * e.abs(),
+            "mismatch at index {i}: got {g}, expected {e} (diff {diff})"
+        );
+    }
+}
+
+// Same as above but with n_expert_used=2 (real MoE models route to top-k>1
+// experts per token, e.g. k=8 for Qwen3-30B-A3B). The n_expert_used=1 case
+// above never exercises the kernel's `id[0] % ne11` broadcast indexing in a
+// way that could be wrong and still pass (mod 1 is always 0), so this is
+// the case that actually proves per-slot indexing is right, not just
+// per-token indexing.
+#[test]
+fn kernel_mul_mm_id_f32_topk_matches_reference() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 4usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 3usize;
+    let n_expert_used = 2usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+        .map(|idx| {
+            let t = idx / (n_expert_used * n_in);
+            let s = (idx / n_in) % n_expert_used;
+            let k = idx % n_in;
+            (t as f32 * 100.0 + s as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ids: Vec<i32> = vec![0, 1, 2, 3, 1, 2];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let mut expected = vec![0f32; n_tokens * n_expert_used * n_out];
+    for t in 0..n_tokens {
+        for s in 0..n_expert_used {
+            let e = ids[t * n_expert_used + s] as usize;
+            for j in 0..n_out {
+                let mut acc = 0f32;
+                for k in 0..n_in {
+                    acc += src0[e * n_out * n_in + j * n_in + k]
+                        * src1[t * n_expert_used * n_in + s * n_in + k];
+                }
+                expected[t * n_expert_used * n_out + s * n_out + j] = acc;
+            }
+        }
+    }
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let dst_buf = device
+        .new_buffer(
+            expected.len() * std::mem::size_of::<f32>(),
+            RESOURCE_OPTIONS,
+        )
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[n_tokens, n_expert_used],
+        &[n_expert_used * 4, 4],
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &dst_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let got: Vec<f32> = read_to_vec(&dst_buf, expected.len());
+
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (g - e).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * e.abs(),
+            "mismatch at index {i}: got {g}, expected {e} (diff {diff})"
+        );
+    }
+}
