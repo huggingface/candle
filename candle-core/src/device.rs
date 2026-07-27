@@ -327,6 +327,28 @@ impl Device {
         }
     }
 
+    /// Whether the device supports quantized matmul with this dtype.
+    ///
+    /// `Q8_1` and `Q8K` are activation formats rather than weight formats: CUDA has no matmul
+    /// kernel for them at all, and Metal only handles them on the mat-vec path (`m == 1`), so
+    /// they are reported as unsupported outside the CPU backend.
+    pub fn supports_qmatmul(&self, dtype: crate::quantized::GgmlDType) -> bool {
+        use crate::quantized::GgmlDType as D;
+        match dtype {
+            D::Q8_1 | D::Q8K => self.is_cpu(),
+            D::F32 | D::F16 | D::BF16 => true,
+            D::Q4_0 | D::Q4_1 | D::Q5_0 | D::Q5_1 | D::Q8_0 => true,
+            D::Q2K | D::Q3K | D::Q4K | D::Q5K | D::Q6K => true,
+        }
+    }
+
+    /// Whether the device supports dequantizing this dtype to a dense `F32` tensor.
+    ///
+    /// Every backend implements dequantization for every dtype today.
+    pub fn supports_dequantize(&self, _dtype: crate::quantized::GgmlDType) -> bool {
+        true
+    }
+
     /// Return `BF16` for devices that support it, otherwise default to `F32`.
     pub fn bf16_default_to_f32(&self) -> DType {
         if self.supports_bf16() {
