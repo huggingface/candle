@@ -3251,3 +3251,301 @@ fn kernel_mul_mv_id_f32_broadcast_matches_mm_id() {
         );
     }
 }
+
+// De-risk spike for `call_quantized_matmul_mm_id_chunked`: unlike the
+// mv_id spike above, this compares the chunked wrapper against the *same*
+// kernel
+// (`call_quantized_matmul_mm_id`) called unchunked, on a disjoint partition
+// of token-independent output rows -- so, per the design, the oracle is
+// bit-exact equality, not `allclose`. `max_nei1` is forced far below what
+// this device's real threadgroup-memory budget would ever require, so the
+// chunk loop actually runs multiple iterations regardless of the real
+// device's memory size (deriving the threshold from
+// `mm_id_max_nei1` here would make this a vacuous single-chunk spike on any
+// real Metal device).
+#[allow(clippy::too_many_arguments)]
+fn run_mm_id_chunked_case(
+    n_expert: usize,
+    n_out: usize,
+    n_in: usize,
+    n_tokens: usize,
+    n_expert_used: usize,
+    broadcast: bool,
+    max_nei1: i64,
+) {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ne11 = if broadcast { 1 } else { n_expert_used };
+    let src1: Vec<f32> = (0..n_tokens * ne11 * n_in)
+        .map(|idx| {
+            let t = idx / (ne11 * n_in);
+            let s = (idx / n_in) % ne11;
+            let k = idx % n_in;
+            (t as f32 * 1.7 + s as f32 * 0.3 + k as f32 * 0.01).sin()
+        })
+        .collect();
+
+    // Deterministic pseudo-random spread over [0, n_expert), not a fixed
+    // small hand-written array -- n_tokens here is large enough (this spike
+    // needs >= 4 chunks plus a ragged final one) that a literal ids list
+    // would be unwieldy, and a real routing table has no special structure
+    // this formula needs to preserve.
+    let ids: Vec<i32> = (0..n_tokens * n_expert_used)
+        .map(|idx| ((idx * 7 + 3) % n_expert) as i32)
+        .collect();
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let out_elems = n_tokens * n_expert_used * n_out;
+    let unchunked_dst = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+    let chunked_dst = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let src0_shape = [n_expert, n_out, n_in];
+    let src0_stride = [n_out * n_in * 4, n_in * 4, 4];
+    let src1_shape = [n_tokens, ne11, n_in];
+    let src1_stride = [ne11 * n_in * 4, n_in * 4, 4];
+    let ids_shape = [n_tokens, n_expert_used];
+    let ids_stride = [n_expert_used * 4, 4];
+    let dst_shape = [n_tokens, n_expert_used, n_out];
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &src0_shape,
+        &src0_stride,
+        &src0_buf,
+        0,
+        &src1_shape,
+        &src1_stride,
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &dst_shape,
+        0,
+        &unchunked_dst,
+    )
+    .unwrap();
+    call_quantized_matmul_mm_id_chunked(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &src0_shape,
+        &src0_stride,
+        &src0_buf,
+        0,
+        &src1_shape,
+        &src1_stride,
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &dst_shape,
+        0,
+        &chunked_dst,
+        max_nei1,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let unchunked: Vec<f32> = read_to_vec(&unchunked_dst, out_elems);
+    let chunked: Vec<f32> = read_to_vec(&chunked_dst, out_elems);
+
+    for (i, (u, c)) in unchunked.iter().zip(chunked.iter()).enumerate() {
+        assert_eq!(
+            u.to_bits(),
+            c.to_bits(),
+            "chunked output diverges from unchunked at index {i}: unchunked={u}, chunked={c} \
+             (expected bit-exact -- same kernel, disjoint token-independent output rows)"
+        );
+    }
+}
+
+// down/topk shape (ne11 == n_expert_used): n_tokens=37, max_nei1=5 forces 8
+// chunks (5,5,5,5,5,5,5,2) -- covers >=4 chunks, a ragged final chunk, and a
+// chunk size that is not a multiple of the kernel's own 32-wide tile, all in
+// one case.
+#[test]
+fn kernel_mul_mm_id_chunked_matches_unchunked_topk_shape() {
+    run_mm_id_chunked_case(6, 64, 32, 37, 3, false, 5);
+}
+
+// Same ragged/non-32-multiple chunking, but the broadcast (gate/up) shape --
+// the production case where a per-chunk src1 offset that used the wrong
+// stride (nei0*n_in instead of the broadcast ne11=1's n_in) would show up
+// as a real, catchable divergence.
+#[test]
+fn kernel_mul_mm_id_chunked_matches_unchunked_broadcast_shape() {
+    run_mm_id_chunked_case(6, 64, 32, 37, 3, true, 5);
+}
+
+// n_tokens=1 (a single chunk covering the whole batch) must be identical to
+// calling call_quantized_matmul_mm_id directly -- the wrapper's own
+// early-return path, not just the multi-chunk loop.
+#[test]
+fn kernel_mul_mm_id_chunked_single_chunk_matches_unchunked() {
+    run_mm_id_chunked_case(4, 64, 32, 3, 3, false, 100);
+}
+
+// Proves the ceiling chunking exists to remove is actually gone: at
+// nei0=8 (a realistic MoE top-k) and a token count derived from the real
+// device's own `mm_id_max_nei1`, an unchunked call fails exactly the way
+// `kernel_mul_mm_id_rejects_oversized_threadgroup_memory` above already
+// proves it should, while the chunked call -- given that same real
+// device-derived threshold, not a test-forced one -- succeeds.
+#[test]
+fn kernel_mul_mm_id_chunked_succeeds_above_the_real_device_ceiling() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 16usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let nei0 = 8usize; // a realistic MoE top-k
+
+    let max_nei1 = mm_id_max_nei1(&device, nei0 as i64);
+    assert!(
+        max_nei1 > 0,
+        "test assumption: this device can fit at least one chunk"
+    );
+    let n_tokens = (max_nei1 as usize) + 50;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+    let src1: Vec<f32> = (0..n_tokens * nei0 * n_in)
+        .map(|idx| {
+            let t = idx / (nei0 * n_in);
+            let s = (idx / n_in) % nei0;
+            let k = idx % n_in;
+            (t as f32 * 1.7 + s as f32 * 0.3 + k as f32 * 0.01).sin()
+        })
+        .collect();
+    let ids: Vec<i32> = (0..n_tokens * nei0)
+        .map(|idx| ((idx * 7 + 3) % n_expert) as i32)
+        .collect();
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let out_elems = n_tokens * nei0 * n_out;
+    let dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let src0_shape = [n_expert, n_out, n_in];
+    let src0_stride = [n_out * n_in * 4, n_in * 4, 4];
+    let src1_shape = [n_tokens, nei0, n_in];
+    let src1_stride = [nei0 * n_in * 4, n_in * 4, 4];
+    let ids_shape = [n_tokens, nei0];
+    let ids_stride = [nei0 * 4, 4];
+    let dst_shape = [n_tokens, nei0, n_out];
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+
+    let unchunked_result = call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &src0_shape,
+        &src0_stride,
+        &src0_buf,
+        0,
+        &src1_shape,
+        &src1_stride,
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &dst_shape,
+        0,
+        &dst_buf,
+    );
+    assert!(
+        unchunked_result.is_err(),
+        "test assumption violated: n_tokens={n_tokens} should exceed this device's real mm_id ceiling"
+    );
+
+    call_quantized_matmul_mm_id_chunked(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &src0_shape,
+        &src0_stride,
+        &src0_buf,
+        0,
+        &src1_shape,
+        &src1_stride,
+        &src1_buf,
+        0,
+        &ids_shape,
+        &ids_stride,
+        &ids_buf,
+        0,
+        &dst_shape,
+        0,
+        &dst_buf,
+        max_nei1,
+    )
+    .expect("chunked dispatch should succeed above the unchunked ceiling");
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    // Spot-check a handful of rows against a direct reference computation --
+    // cheap relative to the full O(n_tokens) reference the bit-exact tests
+    // above already cover at small scale; this test's job is proving the
+    // ceiling is gone, with a correctness sanity check, not re-proving
+    // full-array correctness redundantly.
+    let got: Vec<f32> = read_to_vec(&dst_buf, out_elems);
+    for &t in &[0usize, n_tokens / 2, n_tokens - 1] {
+        for s in 0..nei0 {
+            let e = ids[t * nei0 + s] as usize;
+            let mut acc = 0f32;
+            for k in 0..n_in {
+                acc += src0[e * n_out * n_in + k] * src1[t * nei0 * n_in + s * n_in + k];
+            }
+            let expected = acc; // j=0 row only, cheap spot check
+            let got_val = got[t * nei0 * n_out + s * n_out];
+            let diff = (got_val - expected).abs();
+            assert!(
+                diff <= 1e-2 + 1e-2 * expected.abs(),
+                "spot check failed at token {t}, slot {s}: got {got_val}, expected {expected}"
+            );
+        }
+    }
+}

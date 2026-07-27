@@ -375,6 +375,13 @@ pub fn call_quantized_get_rows(
 /// least that many bytes plus room for the `rowids` scratch array, and the
 /// per-expert dispatch depth isn't recoverable from the kernel signature at
 /// all.
+///
+/// Has a hard per-dispatch `nei1` (n_tokens) ceiling from that same
+/// threadgroup-memory sizing -- device- and top-k-dependent, not tunable.
+/// `call_quantized_matmul_mm_id_chunked`/`mm_id_max_nei1` below split a
+/// batch that might exceed it into dispatches that don't; call those instead
+/// of this function directly for any caller whose batch size isn't already
+/// known-bounded.
 #[allow(clippy::too_many_arguments)]
 pub fn call_quantized_matmul_mm_id(
     device: &Device,
@@ -511,6 +518,145 @@ pub fn call_quantized_matmul_mm_id(
     encoder.set_threadgroup_memory_length(0, smem);
 
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+    Ok(())
+}
+
+/// Largest `nei1` (n_tokens) a single `call_quantized_matmul_mm_id` dispatch
+/// can take on `device` without exceeding its threadgroup-memory budget, for
+/// a routing table with `nei0` experts-used-per-token. Inverts the exact
+/// `ceil16(8192 + nei0*nei1*4)` formula that function sizes its `rowids`
+/// scratch with -- device- and top-k-dependent, not a constant, and has no
+/// dtype term (the formula itself has none, unlike `mv_id_eligible`'s
+/// per-dtype tuning table). Returns 0 if even `nei1 == 1` wouldn't fit
+/// (pathological device/expert-count combination) so a caller can fail
+/// clearly instead of computing a nonsensical chunk size.
+pub fn mm_id_max_nei1(device: &Device, nei0: i64) -> i64 {
+    let max_smem = device.as_ref().maxThreadgroupMemoryLength() as i64;
+    // `ceil16(y) <= max_smem` is only equivalent to `y <= max_smem` when
+    // `max_smem` is itself a multiple of 16 -- true for every real device
+    // measured so far (16384/32768/65536), but not guaranteed by the API.
+    // Floor `max_smem` to a multiple of 16 first so this stays an
+    // exact inverse of `call_quantized_matmul_mm_id`'s own
+    // `ceil16(8192 + nei0*nei1*4) <= max_smem` check even off that
+    // assumption, rather than silently allowing a chunk that would still
+    // overflow after rounding (review finding, 2026-07-27).
+    let max_smem_floor16 = (max_smem / 16) * 16;
+    let avail = max_smem_floor16 - 8192;
+    if avail <= 0 || nei0 <= 0 {
+        return 0;
+    }
+    avail / (nei0 * 4)
+}
+
+/// Chunked wrapper over `call_quantized_matmul_mm_id`: splits a batch whose
+/// `nei1` (n_tokens) exceeds `max_nei1` into sequential dispatches of at
+/// most `max_nei1`
+/// tokens each, on the same command encoder, with no barrier between them.
+/// Safe with neither a barrier nor a concatenation step because `mm_id`'s
+/// output rows are token-independent: each chunk reads a disjoint,
+/// contiguous slice of `src1`/`ids` (the expert weights in `src0` are
+/// shared, read-only, and identical across chunks) and writes a disjoint,
+/// contiguous slice of `dst` -- the *same* trusted, unmodified kernel just
+/// runs once per chunk instead of once for the whole batch.
+///
+/// `max_nei1` is caller-supplied rather than derived internally so a test
+/// can force a tiny threshold and exercise real multi-chunk dispatch on a
+/// device whose actual budget would never trip it; production callers pass
+/// `mm_id_max_nei1(device, nei0)`. No `nei1 <= max_nei1` fast path back to
+/// `call_quantized_matmul_mm_id` directly -- the loop below already dispatches
+/// exactly once, at the original (unsliced) offsets, for that case (review
+/// finding, 2026-07-27: an earlier version had a separate, independently
+/// hand-written early-return branch here purely to avoid two `to_vec()`
+/// allocations on the common no-chunking-needed path, which was itself a
+/// second call site that could silently drift from the loop's own offset
+/// arithmetic -- not worth it for that saving).
+///
+/// Per-chunk offsets are computed from the same fields
+/// `call_quantized_matmul_mm_id` itself reads for a chunk-invariant
+/// value -- `src1`'s per-token stride from `src1_stride[len-3]`, `ids`'s
+/// from `ids_stride[len-2]`, and `dst`'s from `ne0 * nei0 * 4` (matching
+/// that function's own documented `ne1 = nei0`, not `nei0*nei1`,
+/// derivation -- there is no passed `dst` stride to read) -- not
+/// re-derived, so a chunk's offset can't silently drift from what the
+/// kernel will interpret these same shapes as. `dst_shape` itself is
+/// passed through unchanged: only `ne0` (its last dim) is ever read from
+/// it, and `ne0` is chunk-invariant.
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mm_id_chunked<E: EncoderProvider + Copy>(
+    device: &Device,
+    ep: E,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    src0_shape: &[usize],
+    src0_stride: &[usize],
+    src0: &Buffer,
+    src0_offset: usize,
+    src1_shape: &[usize],
+    src1_stride: &[usize],
+    src1: &Buffer,
+    src1_offset: usize,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids: &Buffer,
+    ids_offset: usize,
+    dst_shape: &[usize],
+    dst_offset: usize,
+    dst: &Buffer,
+    max_nei1: i64,
+) -> Result<(), MetalKernelError> {
+    if max_nei1 <= 0 {
+        return Err(MetalKernelError::InvalidInput(format!(
+            "call_quantized_matmul_mm_id_chunked: max_nei1 ({max_nei1}) must be positive"
+        )));
+    }
+
+    let nei0 = ids_shape[ids_shape.len() - 1] as i64;
+    let nei1 = ids_shape[ids_shape.len() - 2] as i64;
+
+    let nb12 = src1_stride[src1_stride.len() - 3]; // src1's per-token byte stride
+    let nbi1 = ids_stride[ids_stride.len() - 2]; // ids' per-token byte stride
+    let ne0 = dst_shape[dst_shape.len() - 1]; // n_out
+    let dst_token_stride = ne0 * (nei0 as usize) * std::mem::size_of::<f32>();
+
+    // Allocated once, outside the loop, and just overwritten per iteration --
+    // only the token-count slot changes chunk to chunk, so there is nothing
+    // to gain from a fresh `to_vec()` every pass (review finding, 2026-07-27).
+    let mut src1_chunk_shape = src1_shape.to_vec();
+    let src1_token_idx = src1_chunk_shape.len() - 3;
+    let mut ids_chunk_shape = ids_shape.to_vec();
+    let ids_token_idx = ids_chunk_shape.len() - 2;
+
+    let mut t0: i64 = 0;
+    while t0 < nei1 {
+        let chunk_len = (nei1 - t0).min(max_nei1) as usize;
+        src1_chunk_shape[src1_token_idx] = chunk_len;
+        ids_chunk_shape[ids_token_idx] = chunk_len;
+
+        call_quantized_matmul_mm_id(
+            device,
+            ep,
+            kernels,
+            dtype,
+            src0_shape,
+            src0_stride,
+            src0,
+            src0_offset,
+            &src1_chunk_shape,
+            src1_stride,
+            src1,
+            src1_offset + (t0 as usize) * nb12,
+            &ids_chunk_shape,
+            ids_stride,
+            ids,
+            ids_offset + (t0 as usize) * nbi1,
+            dst_shape,
+            dst_offset + (t0 as usize) * dst_token_stride,
+            dst,
+        )?;
+
+        t0 += chunk_len as i64;
+    }
+
     Ok(())
 }
 

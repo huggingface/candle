@@ -249,6 +249,85 @@ fn indexed_moe_forward_metal_decode_uses_mv_id_q2k() -> Result<()> {
     indexed_moe_forward_metal_decode_uses_mv_id(GgmlDType::Q2K)
 }
 
+// Covers the real production path chunked mm_id exists for -- a prefill
+// batch large enough that a single call_quantized_matmul_mm_id dispatch
+// would exceed the device's threadgroup-memory budget (found live via a
+// real ~2594-token prompt) -- through the real public indexed_moe_forward
+// API with real quantized weights, not just the kernel-level bit-exact
+// differential spike (candle-metal-kernels' own tests.rs). batch=2000 at
+// topk=8 gives nei0*nei1=16000, comfortably above the ~6144 ceiling every
+// Apple Silicon device reports to date (32KB threadgroup budget) -- this
+// exact test would fail without chunking with "required threadgroup
+// memory ... exceeds this device's max". Spot-checks a few tokens rather
+// than the
+// full batch (the chunking mechanism itself is already validated row-by-row,
+// bit-exact, at the kernel level) -- this test's job is proving the real
+// public API, with real quantized weights, produces correct values at a
+// batch size that would have failed outright before this phase.
+#[cfg(feature = "metal")]
+fn indexed_moe_forward_metal_prefill_above_ceiling_uses_chunking(dtype: GgmlDType) -> Result<()> {
+    let device = Device::new_metal(0)?;
+
+    let n_expert = 16usize;
+    let n_out = 8usize;
+    let n_in = 256usize; // K-quant block-size requirement, see the mv_id test above
+    let batch = 2000usize;
+    let topk = 8usize;
+
+    let w_data: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|i| ((i % 97) as f32 - 48.0) * 0.01)
+        .collect();
+    let weight = Tensor::from_slice(&w_data, (n_expert, n_out, n_in), &device)?;
+    let qweight = quantized::QTensor::quantize(&weight, dtype)?;
+    let dequant = qweight.dequantize(&device)?.to_vec3::<f32>()?;
+
+    let x_data: Vec<f32> = (0..batch * topk * n_in)
+        .map(|i| ((i % 53) as f32 - 26.0) * 0.02)
+        .collect();
+    let x = Tensor::from_slice(&x_data, (batch, topk, n_in), &device)?;
+
+    let ids_data: Vec<u32> = (0..batch * topk)
+        .map(|i| ((i * 7 + i / topk) % n_expert) as u32)
+        .collect();
+    let ids = Tensor::from_slice(&ids_data, (batch, topk), &device)?;
+
+    let got = qweight.indexed_moe_forward(&x, &ids)?;
+    assert_eq!(got.dims(), &[batch, topk, n_out]);
+    let got = got.to_vec3::<f32>()?;
+
+    for &t in &[0usize, batch / 2, batch - 1] {
+        for s in 0..topk {
+            let e = ids_data[t * topk + s] as usize;
+            for j in 0..n_out {
+                let mut acc = 0f32;
+                for k in 0..n_in {
+                    acc += dequant[e][j][k] * x_data[t * topk * n_in + s * n_in + k];
+                }
+                let diff = (got[t][s][j] - acc).abs();
+                assert!(
+                    diff <= 1e-2 + 1e-2 * acc.abs(),
+                    "{dtype:?} mismatch at token {t} slot {s} out {j}: got {}, expected {acc} (diff {diff})",
+                    got[t][s][j]
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn indexed_moe_forward_metal_prefill_above_ceiling_uses_chunking_q4k() -> Result<()> {
+    indexed_moe_forward_metal_prefill_above_ceiling_uses_chunking(GgmlDType::Q4K)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn indexed_moe_forward_metal_prefill_above_ceiling_uses_chunking_q6k() -> Result<()> {
+    indexed_moe_forward_metal_prefill_above_ceiling_uses_chunking(GgmlDType::Q6K)
+}
+
 fn quantized_matmul(device: &Device) -> Result<()> {
     let (m, k, n) = (3, 64, 4);
     let lhs_s = (0..(m * k)).map(|v| v as f32).collect::<Vec<_>>();

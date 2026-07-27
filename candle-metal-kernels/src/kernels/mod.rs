@@ -22,8 +22,9 @@ pub use fill::*;
 pub use indexing::*;
 pub use mlx_gemm::{call_mlx_gemm, call_mlx_gemv, GemmDType};
 pub use quantized::{
-    call_quantized_get_rows, call_quantized_matmul_mm_id, call_quantized_matmul_mm_t,
-    call_quantized_matmul_mv_id, call_quantized_matmul_mv_t, mv_id_eligible, GgmlDType,
+    call_quantized_get_rows, call_quantized_matmul_mm_id, call_quantized_matmul_mm_id_chunked,
+    call_quantized_matmul_mm_t, call_quantized_matmul_mv_id, call_quantized_matmul_mv_t,
+    mm_id_max_nei1, mv_id_eligible, GgmlDType,
 };
 pub use random::*;
 pub use reduce::*;

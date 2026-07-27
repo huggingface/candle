@@ -538,14 +538,19 @@ impl QMetalStorage {
         // throughput gap.
         let use_mv = batch == 1 && candle_metal_kernels::mv_id_eligible(self.dtype.into(), k);
 
-        // Both call_quantized_matmul_mv_id and call_quantized_matmul_mm_id
-        // take the same 19-argument shape; this macro keeps the two
-        // dispatch sites (which must stay in exact argument-for-argument
-        // sync) structurally unable to desync, rather than two independent
-        // ~20-line call expressions a future edit could update one of and
-        // forget the other.
+        // call_quantized_matmul_mv_id, call_quantized_matmul_mm_id, and
+        // call_quantized_matmul_mm_id_chunked all take the same leading
+        // 19-argument shape (chunked takes one more, `max_nei1`, trailing);
+        // this macro keeps every dispatch site (which must stay in exact
+        // argument-for-argument sync on that shared prefix) structurally
+        // unable to desync, rather than independent ~20-line call
+        // expressions a future edit could update one of and forget the
+        // others. Variadic in its trailing args (review finding, 2026-07-27:
+        // an earlier version only covered the exact-19-arg case, so adding
+        // chunking meant hand-writing a second, unprotected ~20-line call
+        // site for mm_id instead of extending this macro).
         macro_rules! dispatch_indexed_moe {
-            ($f:path) => {
+            ($f:path $(, $extra:expr)*) => {
                 $f(
                     device.device(),
                     &encoder,
@@ -566,6 +571,7 @@ impl QMetalStorage {
                     dst_shape.dims(),
                     0,
                     &dst,
+                    $($extra),*
                 )
                 .map_err(MetalError::from)?
             };
@@ -574,7 +580,16 @@ impl QMetalStorage {
         if use_mv {
             dispatch_indexed_moe!(candle_metal_kernels::call_quantized_matmul_mv_id);
         } else {
-            dispatch_indexed_moe!(candle_metal_kernels::call_quantized_matmul_mm_id);
+            // mm_id, unlike mv_id, has a hard per-dispatch ceiling: its
+            // rowids scratch is sized off the *whole-batch* token count in
+            // threadgroup memory, so a large enough prefill batch overflows
+            // the device's fixed budget regardless of tuning -- found live
+            // via a real ~2594-token prompt.
+            let max_nei1 = candle_metal_kernels::mm_id_max_nei1(device.device(), topk as i64);
+            dispatch_indexed_moe!(
+                candle_metal_kernels::call_quantized_matmul_mm_id_chunked,
+                max_nei1
+            );
         }
 
         let dst_storage =
