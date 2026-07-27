@@ -2,7 +2,8 @@
 //!
 //! Functionality for modeling sampling strategies and logits processing in text generation
 //! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
-//! and combinations thereof.
+//! min-p sampling, and combinations thereof, as well as OpenAI-style frequency and presence
+//! penalties.
 //!
 //! This module also provides [`IncrementalDecoder`], a detokenizer for streaming the text
 //! produced by a decode loop.
