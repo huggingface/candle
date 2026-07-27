@@ -1559,7 +1559,6 @@ fn cpu_supports_qmatmul_matches_backend() -> Result<()> {
             ran,
             "supports_qmatmul disagrees with the CPU backend for {dtype:?}"
         );
-        assert!(device.supports_dequantize(dtype));
     }
     Ok(())
 }

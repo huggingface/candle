@@ -342,13 +342,6 @@ impl Device {
         }
     }
 
-    /// Whether the device supports dequantizing this dtype to a dense `F32` tensor.
-    ///
-    /// Every backend implements dequantization for every dtype today.
-    pub fn supports_dequantize(&self, _dtype: crate::quantized::GgmlDType) -> bool {
-        true
-    }
-
     /// Return `BF16` for devices that support it, otherwise default to `F32`.
     pub fn bf16_default_to_f32(&self) -> DType {
         if self.supports_bf16() {
