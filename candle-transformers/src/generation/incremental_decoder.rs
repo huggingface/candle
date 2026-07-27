@@ -115,33 +115,52 @@ impl DecoderContext {
             lag_one_step: false,
             byte_fallback: false,
         };
-        // `fused` tracks whether the decoders seen so far have collapsed the token list into a
-        // single string. Before that point a decoder only ever sees one token at a time and
-        // cannot rewrite across token boundaries; after it, string rewrites apply to the whole
-        // decoded text and their reach has to be accounted for.
-        let mut fused = false;
-        if !scan_decoder(&value, &mut fused, &mut ctx) {
+        let mut scan = Scan::default();
+        if !scan_decoder(&value, &mut scan, &mut ctx) {
             return Self::UNBOUNDED;
         }
         ctx
     }
 }
 
+/// What the decoders seen so far in the chain have done to the token list, which decides how
+/// the ones after them have to be read.
+#[derive(Debug, Clone, Copy, Default)]
+struct Scan {
+    /// The list has been collapsed into a single string. Before that point a decoder only ever
+    /// sees one token at a time and cannot rewrite across token boundaries; after it, string
+    /// rewrites apply to the whole decoded text and their reach has to be accounted for.
+    fused: bool,
+    /// The list can lose entries, so pushing a token does not necessarily hand the decoders
+    /// after this one an extra element.
+    suppresses: bool,
+    /// A token's string can be rewritten into something that is not what the vocabulary holds,
+    /// so a `<0xXX>` marker reaching `ByteFallback` cannot be recognized from the raw id.
+    forges_markers: bool,
+}
+
+/// Characters that can appear in a `<0xXX>` byte marker. A rewrite that only ever inserts
+/// characters outside this set cannot turn a non-marker token into a marker, because every
+/// character of a marker is inside it.
+fn in_marker_alphabet(c: char) -> bool {
+    matches!(c, '<' | '>' | 'x' | 'X' | '0'..='9' | 'a'..='f' | 'A'..='F')
+}
+
 /// Walk a serialized decoder, accumulating how far a future token can reach back into the text
 /// already produced. Returns false as soon as the reach cannot be bounded.
-fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bool {
+fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> bool {
     let ty = match value.get("type").and_then(Value::as_str) {
         Some(ty) => ty,
         None => return false,
     };
     match ty {
         "Sequence" => match value.get("decoders").and_then(Value::as_array) {
-            Some(decoders) => decoders.iter().all(|d| scan_decoder(d, fused, ctx)),
+            Some(decoders) => decoders.iter().all(|d| scan_decoder(d, scan, ctx)),
             None => false,
         },
         // Joins the token list into a single string.
         "Fuse" => {
-            *fused = true;
+            scan.fused = true;
             true
         }
         // Concatenates every token's bytes before a single lossy UTF-8 conversion, which is what
@@ -153,10 +172,10 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
         // appended character can flip the whole accumulated string onto the fallback path and
         // rewrite the entire prefix.
         "ByteLevel" => {
-            if *fused {
+            if scan.fused {
                 return false;
             }
-            *fused = true;
+            scan.fused = true;
             true
         }
         // Groups runs of `<0xXX>` tokens before converting them to text, so an incomplete run
@@ -166,17 +185,25 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
         // against the whole accumulated string, so appending anything can retroactively turn a
         // decoded byte back into its literal marker.
         "ByteFallback" => {
-            if *fused {
+            // Recognizing an open marker run means testing the shape of each pushed token, which
+            // is only meaningful against the string the vocabulary holds. A decoder ahead of this
+            // one that can forge a marker out of something else defeats that.
+            if scan.fused || scan.forges_markers {
                 return false;
             }
+            // Merges a run of markers into one entry, so the list can shrink.
+            scan.suppresses = true;
             ctx.byte_fallback = true;
             true
         }
         // Per-token, apart from the prepend scheme which only affects the first token, i.e. the
-        // start of the text.
+        // start of the text. It maps one character to a space, so it can only destroy markers,
+        // never forge one.
         "Metaspace" => true,
         "WordPiece" => {
-            if *fused
+            // Strips a `##` prefix, which can expose a marker underneath it.
+            scan.forges_markers = true;
+            if scan.fused
                 && value
                     .get("cleanup")
                     .and_then(Value::as_bool)
@@ -187,7 +214,11 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
             true
         }
         "CTC" => {
-            if *fused {
+            // Deduplicates and drops entries that decode to nothing, and deleting the pad token
+            // from a string can expose a marker underneath it.
+            scan.suppresses = true;
+            scan.forges_markers = true;
+            if scan.fused {
                 // The pad token is stripped from the string whatever `cleanup` says, so its
                 // reach counts even when the cleanup patterns do not.
                 let pad = value.get("pad_token").and_then(Value::as_str).unwrap_or("");
@@ -208,7 +239,9 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
             true
         }
         "BPEDecoder" => {
-            if *fused {
+            // Replacing the suffix with nothing can expose a marker underneath it.
+            scan.forges_markers = true;
+            if scan.fused {
                 // On a fused string every occurrence of the suffix is dropped, wherever it is,
                 // so a suffix completed across pushes rewrites up to its own length of text.
                 let suffix = value.get("suffix").and_then(Value::as_str).unwrap_or("");
@@ -216,12 +249,19 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
             } else {
                 // The end-of-word suffix of the *last* token is dropped rather than turned into
                 // a space, so the tail of the text changes as soon as another token is pushed.
+                // The lag that compensates for it assumes each push hands this decoder one more
+                // entry, which an upstream decoder that drops entries breaks.
+                if scan.suppresses {
+                    return false;
+                }
                 ctx.lag_one_step = true;
             }
             true
         }
         "Strip" => {
-            if *fused {
+            // Trims characters off either end, which can expose a marker underneath them.
+            scan.forges_markers = true;
+            if scan.fused {
                 let stop = value.get("stop").and_then(Value::as_u64).unwrap_or(0) as usize;
                 let content = value.get("content").and_then(Value::as_str).unwrap_or("");
                 ctx.unstable_tail += stop * content.len();
@@ -229,7 +269,14 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
             true
         }
         "Replace" => {
-            if !*fused {
+            let content = value.get("content").and_then(Value::as_str).unwrap_or("");
+            // A replacement that is empty shortens the token, and one holding a character a
+            // marker could contain can spell part of one; either way a marker may appear where
+            // the vocabulary has none.
+            if content.is_empty() || content.chars().any(in_marker_alphabet) {
+                scan.forges_markers = true;
+            }
+            if !scan.fused {
                 // Applied to each token independently, so it cannot reach across tokens.
                 return true;
             }
@@ -248,6 +295,17 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
     }
 }
 
+/// An open run of `<0xXX>` byte markers. `ByteFallback` converts such a run as a whole, so none
+/// of its text is settled until a non-marker token closes it, and the window may not start
+/// inside it.
+#[derive(Debug, Clone, Copy)]
+struct ByteRun {
+    /// Offset in `text` where the run's output begins.
+    text_start: usize,
+    /// How many entries at the end of `window` the run spans.
+    tokens: usize,
+}
+
 /// A detokenizer that turns a stream of token ids into a stream of text deltas in amortized
 /// constant time per token.
 ///
@@ -256,7 +314,8 @@ pub struct IncrementalDecoder {
     tokenizer: Tokenizer,
     skip_special_tokens: bool,
     ctx: DecoderContext,
-    /// Ids that `Tokenizer::decode` filters out before the decoder ever sees them.
+    /// Special ids that `Tokenizer::decode` filters out before the decoder ever sees them.
+    /// Not the whole set it drops - see [`IncrementalDecoder::is_dropped`].
     dropped: HashSet<u32>,
     /// Every token pushed so far.
     tokens: Vec<u32>,
@@ -271,9 +330,8 @@ pub struct IncrementalDecoder {
     text: String,
     /// Number of bytes of `text` already returned by `push`.
     emitted: usize,
-    /// Where in `text` the currently open run of `<0xXX>` byte markers starts, if one is open.
-    /// Everything from there on is still subject to being re-rendered by the next marker.
-    open_byte_run: Option<usize>,
+    /// The currently open run of `<0xXX>` byte markers, if one is open.
+    open_byte_run: Option<ByteRun>,
     /// Bytes of previously returned text invalidated by the last `push`.
     retracted: usize,
 }
@@ -336,7 +394,7 @@ impl IncrementalDecoder {
     pub fn push(&mut self, token: u32) -> Result<&str> {
         self.retracted = 0;
         self.tokens.push(token);
-        if !self.dropped.contains(&token) {
+        if !self.is_dropped(token) {
             self.window.push(token);
         }
 
@@ -349,10 +407,11 @@ impl IncrementalDecoder {
         self.text.push_str(&new_window);
         self.window_text = new_window;
 
+        // Before re-anchoring, which needs to know how far back the open run reaches.
+        self.track_byte_run(token, common);
         if self.ctx.bounded && self.window.len() >= MAX_WINDOW_TOKENS {
             self.reanchor()?;
         }
-        self.track_byte_run(token, common);
 
         if common < self.emitted {
             self.retracted = self.emitted - common;
@@ -445,7 +504,10 @@ impl IncrementalDecoder {
     /// decoding rather than dropping or duplicating text.
     fn reanchor(&mut self) -> Result<()> {
         let min_tail = self.ctx.unstable_tail.max(1);
-        let mut keep = MIN_WINDOW_TOKENS;
+        // `ByteFallback` converts a marker run as a whole, so a window that starts inside an
+        // open one renders it differently from the full sequence: the shorter decode is a
+        // suffix *now*, but the next marker re-renders the part left outside the window.
+        let mut keep = MIN_WINDOW_TOKENS.max(self.open_byte_run.map_or(0, |run| run.tokens));
         while keep < self.window.len() {
             let start = self.window.len() - keep;
             let tail = self.decode(&self.window[start..])?;
@@ -463,14 +525,25 @@ impl IncrementalDecoder {
     /// back: the run is converted as a whole, so a later marker can re-render all of it.
     fn track_byte_run(&mut self, token: u32, common: usize) {
         // A dropped id never reaches the decoder, so it neither opens nor closes a run.
-        if !self.ctx.byte_fallback || self.dropped.contains(&token) {
+        if !self.ctx.byte_fallback || self.is_dropped(token) {
             return;
         }
-        if !self.is_byte_marker(token) {
-            self.open_byte_run = None;
-        } else if self.open_byte_run.is_none() {
-            self.open_byte_run = Some(common);
+        match (self.is_byte_marker(token), self.open_byte_run.as_mut()) {
+            (false, _) => self.open_byte_run = None,
+            (true, Some(run)) => run.tokens += 1,
+            (true, None) => {
+                self.open_byte_run = Some(ByteRun {
+                    text_start: common,
+                    tokens: 1,
+                })
+            }
         }
+    }
+
+    /// Whether `Tokenizer::decode` drops this id before the decoder runs: a special token being
+    /// skipped, or an id the vocabulary has no token for at all.
+    fn is_dropped(&self, token: u32) -> bool {
+        self.dropped.contains(&token) || self.tokenizer.id_to_token(token).is_none()
     }
 
     /// Whether an id decodes to a `<0xXX>` marker, matching `ByteFallback`'s own test.
@@ -506,8 +579,8 @@ impl IncrementalDecoder {
         if self.ctx.lag_one_step {
             limit = limit.min(common);
         }
-        if let Some(run_start) = self.open_byte_run {
-            limit = limit.min(run_start);
+        if let Some(run) = self.open_byte_run {
+            limit = limit.min(run.text_start);
         }
         limit.max(self.emitted)
     }

@@ -331,6 +331,97 @@ fn unbounded_decoder_emits_nothing_until_finish() {
 }
 
 #[test]
+fn ctc_before_bpe_is_unbounded() {
+    // `BPEDecoder`'s one-step lag assumes every push hands it one more entry. `CTC` dedups and
+    // drops entries that decode to nothing, so a pushed pad token settles nothing, yet the lag
+    // would treat it as if it had.
+    let decoder = json!({"type": "Sequence", "decoders": [
+        {"type": "CTC", "pad_token": "<pad>", "word_delimiter_token": "|", "cleanup": false},
+        {"type": "BPEDecoder", "suffix": "</w>"},
+    ]});
+    let tokenizer = tokenizer(&["ab</w>z", "<pad>", "cd</w>"], decoder);
+    let mut incremental = IncrementalDecoder::new(&tokenizer);
+    assert!(!incremental.is_windowed());
+
+    // The pad token leaves the text alone; only the third token settles anything.
+    for id in [0, 1, 2] {
+        assert_eq!(incremental.push(id).unwrap(), "");
+        assert_eq!(incremental.retracted(), 0);
+    }
+    assert_eq!(incremental.text(), "ab zcd");
+    assert_eq!(incremental.finish(), "ab zcd");
+
+    check_stream(&tokenizer, &[0, 1, 2]);
+}
+
+#[test]
+fn reanchoring_keeps_an_open_byte_run_whole() {
+    // A window starting inside an open marker run renders it differently from the full
+    // sequence: the shorter decode is a suffix at that moment, but the next marker re-renders
+    // the part left outside the window.
+    let decoder = json!({"type": "ByteFallback"});
+    let tokenizer = tokenizer(&["<0x61>", "<0xFF>", "z"], decoder);
+    let mut incremental = IncrementalDecoder::new(&tokenizer);
+
+    let mut ids = Vec::new();
+    for _ in 0..80 {
+        ids.push(0);
+        incremental.push(0).unwrap();
+        assert_eq!(incremental.text(), tokenizer.decode(&ids, true).unwrap());
+    }
+    // The whole run must still be in the window, so this re-renders all of it.
+    ids.push(1);
+    incremental.push(1).unwrap();
+    assert_eq!(incremental.text(), tokenizer.decode(&ids, true).unwrap());
+    assert_eq!(incremental.retracted(), 0);
+    assert_eq!(incremental.text().chars().count(), 81);
+    assert!(incremental.text().chars().all(|c| c == '\u{FFFD}'));
+}
+
+#[test]
+fn a_decoder_that_can_forge_byte_markers_is_unbounded() {
+    // Marker runs are recognized from the id's vocabulary token, so a decoder ahead of the
+    // `ByteFallback` that can turn something else into a marker defeats the tracking.
+    let forging = json!({"type": "Sequence", "decoders": [
+        {"type": "Replace", "pattern": {"String": "A"}, "content": "<0x61>"},
+        {"type": "ByteFallback"},
+    ]});
+    let forged = tokenizer(&["A", "<0xFF>"], forging);
+    assert!(!IncrementalDecoder::new(&forged).is_windowed());
+
+    // The SentencePiece chain replaces "▁" with a space, which cannot spell a marker, so it
+    // keeps the fast path.
+    let sentencepiece = json!({"type": "Sequence", "decoders": [
+        {"type": "Replace", "pattern": {"String": "▁"}, "content": " "},
+        {"type": "ByteFallback"},
+        {"type": "Fuse"},
+        {"type": "Strip", "content": " ", "start": 1, "stop": 0},
+    ]});
+    let tokenizer = tokenizer(&["▁Hello", "<0xE5>"], sentencepiece);
+    assert!(IncrementalDecoder::new(&tokenizer).is_windowed());
+}
+
+#[test]
+fn unknown_ids_stay_out_of_the_window() {
+    // `Tokenizer::decode` drops ids the vocabulary has no token for, so they never reach the
+    // decoder and must not hold the window open either.
+    let tokenizer = tokenizer(&["Hello", "Ġworld"], byte_level());
+    let mut decoder = IncrementalDecoder::new(&tokenizer);
+    decoder.push(0).unwrap();
+
+    let mut ids = vec![0];
+    for _ in 0..500 {
+        ids.push(9999);
+        decoder.push(9999).unwrap();
+        assert_eq!(decoder.text(), tokenizer.decode(&ids, true).unwrap());
+        assert_eq!(decoder.window_len(), 1);
+    }
+    ids.push(1);
+    assert_eq!(decoder.push(1).unwrap(), " world");
+    assert_eq!(decoder.text(), tokenizer.decode(&ids, true).unwrap());
+}
+
+#[test]
 fn clear_resets_the_stream() {
     let tokenizer = tokenizer(&["Hello", "Ġworld"], byte_level());
     let mut decoder = IncrementalDecoder::new(&tokenizer);
