@@ -135,15 +135,29 @@ struct Scan {
     /// after this one an extra element.
     suppresses: bool,
     /// A token's string can be rewritten into something that is not what the vocabulary holds,
-    /// so a `<0xXX>` marker reaching `ByteFallback` cannot be recognized from the raw id.
-    forges_markers: bool,
+    /// so whether a `<0xXX>` marker reaches `ByteFallback` can no longer be told from the raw
+    /// id. Forging a marker where the vocabulary has none would let already-emitted text be
+    /// re-rendered; destroying one would leave a run open that never closes.
+    alters_markers: bool,
 }
 
-/// Characters that can appear in a `<0xXX>` byte marker. A rewrite that only ever inserts
-/// characters outside this set cannot turn a non-marker token into a marker, because every
-/// character of a marker is inside it.
+/// Characters that can appear in a `<0xXX>` byte marker.
+///
+/// A marker is made of these characters and nothing else, which cuts both ways. A rewrite whose
+/// output holds none of them cannot forge a marker, since its result always carries a character
+/// no marker has; and one whose input pattern holds none of them cannot match inside a marker,
+/// so it cannot destroy one either.
 fn in_marker_alphabet(c: char) -> bool {
     matches!(c, '<' | '>' | 'x' | 'X' | '0'..='9' | 'a'..='f' | 'A'..='F')
+}
+
+/// Whether a rewrite of `pattern` into `content`, applied to a token, can leave it a marker when
+/// it was not one or stop it being one when it was.
+fn alters_markers(pattern: &str, content: &str) -> bool {
+    // An empty replacement shortens the token, which can expose a marker hidden behind a prefix.
+    content.is_empty()
+        || content.chars().any(in_marker_alphabet)
+        || pattern.chars().any(in_marker_alphabet)
 }
 
 /// Walk a serialized decoder, accumulating how far a future token can reach back into the text
@@ -187,8 +201,8 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
         "ByteFallback" => {
             // Recognizing an open marker run means testing the shape of each pushed token, which
             // is only meaningful against the string the vocabulary holds. A decoder ahead of this
-            // one that can forge a marker out of something else defeats that.
-            if scan.fused || scan.forges_markers {
+            // one that can change whether a token is a marker defeats that.
+            if scan.fused || scan.alters_markers {
                 return false;
             }
             // Merges a run of markers into one entry, so the list can shrink.
@@ -197,12 +211,29 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
             true
         }
         // Per-token, apart from the prepend scheme which only affects the first token, i.e. the
-        // start of the text. It maps one character to a space, so it can only destroy markers,
-        // never forge one.
-        "Metaspace" => true,
+        // start of the text.
+        "Metaspace" => {
+            let replacement = value
+                .get("replacement")
+                .and_then(Value::as_str)
+                .unwrap_or("\u{2581}");
+            let prepend = value
+                .get("prepend_scheme")
+                .and_then(Value::as_str)
+                .unwrap_or("always");
+            if prepend == "never" {
+                // Every occurrence becomes a space, so this is the ordinary rewrite test.
+                scan.alters_markers |= alters_markers(replacement, " ");
+            } else {
+                // On the first token the replacement is *dropped* rather than turned into a
+                // space, so `\u{2581}<0x61>` comes out as a marker the vocabulary never had.
+                scan.alters_markers = true;
+            }
+            true
+        }
         "WordPiece" => {
             // Strips a `##` prefix, which can expose a marker underneath it.
-            scan.forges_markers = true;
+            scan.alters_markers = true;
             if scan.fused
                 && value
                     .get("cleanup")
@@ -217,7 +248,7 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
             // Deduplicates and drops entries that decode to nothing, and deleting the pad token
             // from a string can expose a marker underneath it.
             scan.suppresses = true;
-            scan.forges_markers = true;
+            scan.alters_markers = true;
             if scan.fused {
                 // The pad token is stripped from the string whatever `cleanup` says, so its
                 // reach counts even when the cleanup patterns do not.
@@ -240,7 +271,7 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
         }
         "BPEDecoder" => {
             // Replacing the suffix with nothing can expose a marker underneath it.
-            scan.forges_markers = true;
+            scan.alters_markers = true;
             if scan.fused {
                 // On a fused string every occurrence of the suffix is dropped, wherever it is,
                 // so a suffix completed across pushes rewrites up to its own length of text.
@@ -260,7 +291,7 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
         }
         "Strip" => {
             // Trims characters off either end, which can expose a marker underneath them.
-            scan.forges_markers = true;
+            scan.alters_markers = true;
             if scan.fused {
                 let stop = value.get("stop").and_then(Value::as_u64).unwrap_or(0) as usize;
                 let content = value.get("content").and_then(Value::as_str).unwrap_or("");
@@ -270,11 +301,15 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
         }
         "Replace" => {
             let content = value.get("content").and_then(Value::as_str).unwrap_or("");
-            // A replacement that is empty shortens the token, and one holding a character a
-            // marker could contain can spell part of one; either way a marker may appear where
-            // the vocabulary has none.
-            if content.is_empty() || content.chars().any(in_marker_alphabet) {
-                scan.forges_markers = true;
+            let literal = value
+                .get("pattern")
+                .and_then(|p| p.get("String"))
+                .and_then(Value::as_str);
+            // A regex pattern cannot be reasoned about at all; a literal one is judged on both
+            // what it can spell and what it can match.
+            match literal {
+                Some(pattern) => scan.alters_markers |= alters_markers(pattern, content),
+                None => scan.alters_markers = true,
             }
             if !scan.fused {
                 // Applied to each token independently, so it cannot reach across tokens.

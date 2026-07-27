@@ -402,6 +402,39 @@ fn a_decoder_that_can_forge_byte_markers_is_unbounded() {
 }
 
 #[test]
+fn metaspace_before_byte_fallback_is_unbounded() {
+    // At the first token, a prepend scheme other than `Never` *drops* the replacement character
+    // rather than turning it into a space, so "▁<0x61>" comes out as a marker the vocabulary
+    // never had.
+    let prepending = json!({"type": "Sequence", "decoders": [
+        {"type": "Metaspace", "replacement": "▁", "prepend_scheme": "always", "split": true},
+        {"type": "ByteFallback"},
+    ]});
+    let forged = tokenizer(&["▁<0x61>", "<0xFF>"], prepending);
+    assert!(!IncrementalDecoder::new(&forged).is_windowed());
+
+    // With `never` every occurrence becomes a space, which spells no part of a marker.
+    let never = json!({"type": "Sequence", "decoders": [
+        {"type": "Metaspace", "replacement": "▁", "prepend_scheme": "never", "split": true},
+        {"type": "ByteFallback"},
+    ]});
+    let plain = tokenizer(&["▁<0x61>", "<0xFF>"], never);
+    assert!(IncrementalDecoder::new(&plain).is_windowed());
+}
+
+#[test]
+fn a_replace_that_destroys_byte_markers_is_unbounded() {
+    // Marker runs are recognized from the id's vocabulary token, so a rewrite that can match
+    // *inside* a marker leaves the tracking believing in runs the decoder never sees.
+    let destroying = json!({"type": "Sequence", "decoders": [
+        {"type": "Replace", "pattern": {"String": "<"}, "content": "_"},
+        {"type": "ByteFallback"},
+    ]});
+    let destroyed = tokenizer(&["<0x61>", "z"], destroying);
+    assert!(!IncrementalDecoder::new(&destroyed).is_windowed());
+}
+
+#[test]
 fn unknown_ids_stay_out_of_the_window() {
     // `Tokenizer::decode` drops ids the vocabulary has no token for, so they never reach the
     // decoder and must not hold the window open either.
