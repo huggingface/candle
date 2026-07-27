@@ -4,8 +4,14 @@
 //! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
 //! min-p sampling, and combinations thereof, as well as OpenAI-style frequency and presence
 //! penalties.
+//!
+//! This module also provides [`IncrementalDecoder`], a detokenizer for streaming the text
+//! produced by a decode loop.
 use candle::{DType, Error, Result, Tensor};
 use rand::{distr::Distribution, SeedableRng};
+
+mod incremental_decoder;
+pub use incremental_decoder::IncrementalDecoder;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
