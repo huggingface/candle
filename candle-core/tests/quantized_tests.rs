@@ -158,20 +158,23 @@ fn indexed_moe_forward_metal() -> Result<()> {
 
 // Same shape/reference discipline as indexed_moe_forward_metal above, but
 // batch=1 -- the real decode shape, and the one that now routes through
-// call_quantized_matmul_mv_id instead of mm_id (see
-// QMetalStorage::indexed_moe_forward's `use_mv` branch). Q4_0 is one of
-// the four dtypes covered by that branch, so this exercises the new
+// call_quantized_matmul_mv_id instead of mm_id for a dtype
+// `candle_metal_kernels::mv_id_eligible` covers (see
+// QMetalStorage::indexed_moe_forward's `use_mv` branch). Exercises the new
 // kernel through the real public API with real quantized weights, not
 // just the kernel-level differential spike.
 #[cfg(feature = "metal")]
-#[test]
-fn indexed_moe_forward_metal_decode_uses_mv_id() -> Result<()> {
+fn indexed_moe_forward_metal_decode_uses_mv_id(dtype: GgmlDType) -> Result<()> {
     let device = Device::new_metal(0)?;
-    let dtype = GgmlDType::Q4_0;
 
     let n_expert = 3usize;
     let n_out = 64usize;
-    let n_in = 64usize;
+    // 256, not 64: K-quant dtypes (Q4K/Q6K/Q2K) require their last dim
+    // divisible by their own block size (256) -- a QTensor::quantize
+    // constraint, unrelated to and stricter than mv_id's own nth0*nth1
+    // minimum (64 at most across the four covered dtypes), which 256
+    // clears comfortably too.
+    let n_in = 256usize;
     let batch = 1usize;
     let topk = 2usize;
 
@@ -207,7 +210,7 @@ fn indexed_moe_forward_metal_decode_uses_mv_id() -> Result<()> {
                 let diff = (got[t][s][j] - acc).abs();
                 assert!(
                     diff <= 1e-2 + 1e-2 * acc.abs(),
-                    "mismatch at token {t} slot {s} out {j}: got {}, expected {acc} (diff {diff})",
+                    "{dtype:?} mismatch at token {t} slot {s} out {j}: got {}, expected {acc} (diff {diff})",
                     got[t][s][j]
                 );
             }
@@ -215,6 +218,35 @@ fn indexed_moe_forward_metal_decode_uses_mv_id() -> Result<()> {
     }
 
     Ok(())
+}
+
+// mv_id_eligible's exact four dtypes -- not a sample of them. Q4_K and
+// Q6_K are common production quantization dtypes; Q4_0/Q2_K round out
+// tuning-class coverage. Each is its own #[test] (rather than a loop
+// inside one) so a failure names the specific dtype instead of requiring
+// a debugger to find it.
+#[cfg(feature = "metal")]
+#[test]
+fn indexed_moe_forward_metal_decode_uses_mv_id_q4k() -> Result<()> {
+    indexed_moe_forward_metal_decode_uses_mv_id(GgmlDType::Q4K)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn indexed_moe_forward_metal_decode_uses_mv_id_q6k() -> Result<()> {
+    indexed_moe_forward_metal_decode_uses_mv_id(GgmlDType::Q6K)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn indexed_moe_forward_metal_decode_uses_mv_id_q4_0() -> Result<()> {
+    indexed_moe_forward_metal_decode_uses_mv_id(GgmlDType::Q4_0)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn indexed_moe_forward_metal_decode_uses_mv_id_q2k() -> Result<()> {
+    indexed_moe_forward_metal_decode_uses_mv_id(GgmlDType::Q2K)
 }
 
 fn quantized_matmul(device: &Device) -> Result<()> {

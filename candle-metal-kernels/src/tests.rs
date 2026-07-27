@@ -3138,3 +3138,116 @@ fn kernel_mul_mv_id_pipelines_load() {
             .unwrap_or_else(|e| panic!("{name} should load as a Metal compute pipeline: {e}"));
     }
 }
+
+// Closes a review-found gap: kernel_mul_mv_id_f32_matches_mm_id above uses
+// in_dim1==n_expert_used (the down-projection shape, non-broadcast). The
+// real gate/up production shape (FusedMoeGGUF::forward's Metal branch) is
+// in_dim1==1 -- one token embedding, shared across all its selected
+// experts -- which exercises the kernel's `i11 = idx % ne11` broadcast
+// modulo in a way n_expert_used-per-slot input never does (mod 1 is always
+// 0, trivially correct even if the broadcast wiring were wrong). Mirrors
+// kernel_mul_mm_id_f32_broadcast_matches_reference's own precedent from
+// Phase 1, at the real n_tokens=1 decode shape mv_id targets.
+#[test]
+fn kernel_mul_mv_id_f32_broadcast_matches_mm_id() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 3usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 1usize;
+    let n_expert_used = 2usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    // in_dim1 == 1: one embedding for the token, broadcast across both
+    // selected experts.
+    let src1: Vec<f32> = (0..n_tokens * n_in)
+        .map(|idx| (idx as f32) * 0.001)
+        .collect();
+
+    let ids: Vec<i32> = vec![2, 0];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let out_elems = n_tokens * n_expert_used * n_out;
+    let mm_dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+    let mv_dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    // src1 is [n_tokens, 1, n_in] -- nb11 == nb12 (stride collapses since
+    // dim1 has size 1), matching how QMetalStorage::indexed_moe_forward's
+    // caller (FusedMoeGGUF::forward) actually broadcasts.
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, 1, n_in],
+        &[n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[n_tokens, n_expert_used],
+        &[n_expert_used * 4, 4],
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &mm_dst_buf,
+    )
+    .unwrap();
+    call_quantized_matmul_mv_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, 1, n_in],
+        &[n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[n_tokens, n_expert_used],
+        &[n_expert_used * 4, 4],
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &mv_dst_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let mm_got: Vec<f32> = read_to_vec(&mm_dst_buf, out_elems);
+    let mv_got: Vec<f32> = read_to_vec(&mv_dst_buf, out_elems);
+
+    for (i, (mm, mv)) in mm_got.iter().zip(mv_got.iter()).enumerate() {
+        let diff = (mm - mv).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * mm.abs(),
+            "mv_id diverges from mm_id at broadcast index {i}: mm_id={mm}, mv_id={mv} (diff {diff})"
+        );
+    }
+}

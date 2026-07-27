@@ -526,64 +526,55 @@ impl QMetalStorage {
             .map(|x| x * ids.dtype().size_in_bytes())
             .collect::<Vec<_>>();
 
-        // Decode (batch == 1) routes to the matrix-*vector* kernel where a
-        // differential de-risk spike has validated it (Q4_K, Q6_K, plus
-        // Q4_0/Q2_K for tuning-class coverage). Every other dtype and every
-        // batch > 1 (prefill) call keeps using the matrix-*matrix* kernel --
-        // always correct, just not the kernel this targets for the decode
+        // Decode (batch == 1) routes to the matrix-*vector* kernel where
+        // the differential de-risk spike has validated it. `mv_id_eligible`
+        // (candle-metal-kernels/src/kernels/quantized.rs) is the single
+        // source of truth for which dtypes qualify and the minimum
+        // contraction-dim (k) each needs -- not duplicated here, so it
+        // can't drift from the wrapper's own per-dtype tuning table. Every
+        // other dtype, every too-small-k shape, and every batch > 1
+        // (prefill) call keeps using the matrix-*matrix* kernel -- always
+        // correct, just not the kernel this targets for the decode
         // throughput gap.
-        let use_mv = batch == 1
-            && matches!(
-                self.dtype,
-                GgmlDType::Q4K | GgmlDType::Q6K | GgmlDType::Q4_0 | GgmlDType::Q2K
-            );
+        let use_mv = batch == 1 && candle_metal_kernels::mv_id_eligible(self.dtype.into(), k);
+
+        // Both call_quantized_matmul_mv_id and call_quantized_matmul_mm_id
+        // take the same 19-argument shape; this macro keeps the two
+        // dispatch sites (which must stay in exact argument-for-argument
+        // sync) structurally unable to desync, rather than two independent
+        // ~20-line call expressions a future edit could update one of and
+        // forget the other.
+        macro_rules! dispatch_indexed_moe {
+            ($f:path) => {
+                $f(
+                    device.device(),
+                    &encoder,
+                    device.kernels(),
+                    self.dtype.into(),
+                    self_shape.dims(),
+                    &src0_stride,
+                    &self.buffer,
+                    0, // this storage always owns its buffer outright, so its offset is always 0
+                    in_shape.dims(),
+                    &input_stride,
+                    input.buffer(),
+                    input_l.start_offset() * DType::F32.size_in_bytes(),
+                    idx_shape.dims(),
+                    &ids_stride,
+                    ids.buffer(),
+                    ids_l.start_offset() * ids.dtype().size_in_bytes(),
+                    dst_shape.dims(),
+                    0,
+                    &dst,
+                )
+                .map_err(MetalError::from)?
+            };
+        }
 
         if use_mv {
-            candle_metal_kernels::call_quantized_matmul_mv_id(
-                device.device(),
-                &encoder,
-                device.kernels(),
-                self.dtype.into(),
-                self_shape.dims(),
-                &src0_stride,
-                &self.buffer,
-                0, // this storage always owns its buffer outright, so its offset is always 0
-                in_shape.dims(),
-                &input_stride,
-                input.buffer(),
-                input_l.start_offset() * DType::F32.size_in_bytes(),
-                idx_shape.dims(),
-                &ids_stride,
-                ids.buffer(),
-                ids_l.start_offset() * ids.dtype().size_in_bytes(),
-                dst_shape.dims(),
-                0,
-                &dst,
-            )
-            .map_err(MetalError::from)?;
+            dispatch_indexed_moe!(candle_metal_kernels::call_quantized_matmul_mv_id);
         } else {
-            candle_metal_kernels::call_quantized_matmul_mm_id(
-                device.device(),
-                &encoder,
-                device.kernels(),
-                self.dtype.into(),
-                self_shape.dims(),
-                &src0_stride,
-                &self.buffer,
-                0, // this storage always owns its buffer outright, so its offset is always 0
-                in_shape.dims(),
-                &input_stride,
-                input.buffer(),
-                input_l.start_offset() * DType::F32.size_in_bytes(),
-                idx_shape.dims(),
-                &ids_stride,
-                ids.buffer(),
-                ids_l.start_offset() * ids.dtype().size_in_bytes(),
-                dst_shape.dims(),
-                0,
-                &dst,
-            )
-            .map_err(MetalError::from)?;
+            dispatch_indexed_moe!(candle_metal_kernels::call_quantized_matmul_mm_id);
         }
 
         let dst_storage =

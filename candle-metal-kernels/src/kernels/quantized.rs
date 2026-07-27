@@ -586,34 +586,17 @@ pub fn call_quantized_matmul_mv_id(
     let ne1 = nei0;
     let nb1 = ne0 * 4; // unused by the kernel; kept for ABI parity
 
-    // Per-dtype (nth0, nth1, width_divisor), reverse-derived from ggml's
-    // `f3f65429`-era GGML_OP_MUL_MAT_ID mat-vec branch -- not from
-    // call_quantized_matmul_mv_t's table, which diverges on Q2K (align 4
-    // there, for an unrelated plain-mv Metal bug fix) and F16/F32 (align 8
-    // there vs. this kernel's own width=ne01 fallback).
-    let (nth0, nth1, divisor) = match dtype {
-        GgmlDType::Q4_0 | GgmlDType::Q4_1 | GgmlDType::Q5_0 | GgmlDType::Q5_1 | GgmlDType::Q8_0 => {
-            (8usize, 8usize, 8usize)
-        }
-        GgmlDType::Q2K => (2, 32, 8),
-        GgmlDType::Q3K => (2, 32, 4),
-        GgmlDType::Q4K => (4, 8, 4),
-        GgmlDType::Q5K => (2, 32, 4),
-        GgmlDType::Q6K => (2, 32, 2),
-        GgmlDType::F16 | GgmlDType::F32 => (32, 1, 1),
-        GgmlDType::BF16 => Err(MetalKernelError::UnsupportedDTypeForOp(
-            "BF16",
-            "qmatmul_mv_id",
-        ))?,
-        GgmlDType::Q8_1 => Err(MetalKernelError::UnsupportedDTypeForOp(
-            "Q8_1",
-            "qmatmul_mv_id",
-        ))?,
-        GgmlDType::Q8K => Err(MetalKernelError::UnsupportedDTypeForOp(
-            "Q8K",
-            "qmatmul_mv_id",
-        ))?,
-    };
+    // Per-dtype (nth0, nth1, width_divisor, kernel name), reverse-derived
+    // from ggml's `f3f65429`-era GGML_OP_MUL_MAT_ID mat-vec branch -- not
+    // from call_quantized_matmul_mv_t's table, which diverges on Q2K (align
+    // 4 there, for an unrelated plain-mv Metal bug fix) and F16/F32 (align 8
+    // there vs. this kernel's own width=ne01 fallback). One match, not two
+    // (tuning table + kernel name previously lived in separate match
+    // statements over the same dtype, hand-synchronized on which variants
+    // are unsupported -- re-enabling one of BF16/Q8_1/Q8K in only one of
+    // the two would compile clean and panic the `unreachable!` in the
+    // other the first time it was hit).
+    let (nth0, nth1, divisor, name) = mv_id_dispatch_params(dtype)?;
 
     // Matches ggml's own host-side `GGML_ASSERT(ne00 >= nth0*nth1)` for
     // quantized src0 -- F16/F32 aren't gated by it upstream either.
@@ -633,21 +616,6 @@ pub fn call_quantized_matmul_mv_id(
         width: nth0,
         height: nth1,
         depth: 1,
-    };
-    let name = match dtype {
-        GgmlDType::Q4_0 => "kernel_mul_mv_id_q4_0_f32",
-        GgmlDType::Q4_1 => "kernel_mul_mv_id_q4_1_f32",
-        GgmlDType::Q5_0 => "kernel_mul_mv_id_q5_0_f32",
-        GgmlDType::Q5_1 => "kernel_mul_mv_id_q5_1_f32",
-        GgmlDType::Q8_0 => "kernel_mul_mv_id_q8_0_f32",
-        GgmlDType::Q2K => "kernel_mul_mv_id_q2_K_f32",
-        GgmlDType::Q3K => "kernel_mul_mv_id_q3_K_f32",
-        GgmlDType::Q4K => "kernel_mul_mv_id_q4_K_f32",
-        GgmlDType::Q5K => "kernel_mul_mv_id_q5_K_f32",
-        GgmlDType::Q6K => "kernel_mul_mv_id_q6_K_f32",
-        GgmlDType::F16 => "kernel_mul_mv_id_f16_f32",
-        GgmlDType::F32 => "kernel_mul_mv_id_f32_f32",
-        GgmlDType::BF16 | GgmlDType::Q8_1 | GgmlDType::Q8K => unreachable!("filtered out above"),
     };
 
     let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
@@ -703,6 +671,82 @@ pub fn call_quantized_matmul_mv_id(
     // in-kernel scan this one doesn't do.
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
+}
+
+/// Single source of truth for `call_quantized_matmul_mv_id`'s per-dtype
+/// `(nth0, nth1, width_divisor, kernel_name)` -- shared by the dispatch
+/// logic above and `mv_id_eligible` below so the two can't drift apart the
+/// way two hand-synchronized `match dtype` statements over the same
+/// variants otherwise could.
+fn mv_id_dispatch_params(
+    dtype: GgmlDType,
+) -> Result<(usize, usize, usize, &'static str), MetalKernelError> {
+    Ok(match dtype {
+        GgmlDType::Q4_0 => (8, 8, 8, "kernel_mul_mv_id_q4_0_f32"),
+        GgmlDType::Q4_1 => (8, 8, 8, "kernel_mul_mv_id_q4_1_f32"),
+        GgmlDType::Q5_0 => (8, 8, 8, "kernel_mul_mv_id_q5_0_f32"),
+        GgmlDType::Q5_1 => (8, 8, 8, "kernel_mul_mv_id_q5_1_f32"),
+        GgmlDType::Q8_0 => (8, 8, 8, "kernel_mul_mv_id_q8_0_f32"),
+        GgmlDType::Q2K => (2, 32, 8, "kernel_mul_mv_id_q2_K_f32"),
+        GgmlDType::Q3K => (2, 32, 4, "kernel_mul_mv_id_q3_K_f32"),
+        GgmlDType::Q4K => (4, 8, 4, "kernel_mul_mv_id_q4_K_f32"),
+        GgmlDType::Q5K => (2, 32, 4, "kernel_mul_mv_id_q5_K_f32"),
+        GgmlDType::Q6K => (2, 32, 2, "kernel_mul_mv_id_q6_K_f32"),
+        GgmlDType::F16 => (32, 1, 1, "kernel_mul_mv_id_f16_f32"),
+        GgmlDType::F32 => (32, 1, 1, "kernel_mul_mv_id_f32_f32"),
+        GgmlDType::BF16 => {
+            return Err(MetalKernelError::UnsupportedDTypeForOp(
+                "BF16",
+                "qmatmul_mv_id",
+            ))
+        }
+        GgmlDType::Q8_1 => {
+            return Err(MetalKernelError::UnsupportedDTypeForOp(
+                "Q8_1",
+                "qmatmul_mv_id",
+            ))
+        }
+        GgmlDType::Q8K => {
+            return Err(MetalKernelError::UnsupportedDTypeForOp(
+                "Q8K",
+                "qmatmul_mv_id",
+            ))
+        }
+    })
+}
+
+/// Whether `call_quantized_matmul_mv_id` is production-eligible for
+/// `dtype` at contraction-dimension `k` -- the single source of truth a
+/// caller like `QMetalStorage::indexed_moe_forward` should use to decide
+/// mv_id vs. mm_id, rather than duplicating a dtype allowlist or a k
+/// threshold at the call site.
+///
+/// Narrower than "every dtype `call_quantized_matmul_mv_id` can technically
+/// dispatch": Q4_1/Q5_0/Q5_1/Q8_0/Q3K/Q5K/F16/F32 all have real,
+/// ground-truth-derived tuning entries in `mv_id_dispatch_params` (ggml
+/// supports them, so the wrapper does too) but no differential test
+/// coverage against `call_quantized_matmul_mm_id` yet -- they stay off
+/// this list until they get one, even though calling the wrapper directly
+/// with one of them would work correctly today.
+///
+/// Also enforces ggml's own `ne00 >= nth0*nth1` minimum contraction-dim
+/// requirement (a real constraint of the mat-vec kernel, not an oversight):
+/// below that threshold this returns `false` even for a covered dtype, so a
+/// small-k caller falls back to `call_quantized_matmul_mm_id` (which has no
+/// such minimum) instead of the wrapper's own hard `InvalidInput` error --
+/// `call_quantized_matmul_mm_id` used to be called unconditionally for
+/// every shape before this file existed, and callers relying on that
+/// should see no new failure mode just because a `batch == 1` shape now
+/// prefers mv_id.
+pub fn mv_id_eligible(dtype: GgmlDType, k: usize) -> bool {
+    let min_k = match dtype {
+        GgmlDType::Q4K => 4 * 8,
+        GgmlDType::Q6K => 2 * 32,
+        GgmlDType::Q4_0 => 8 * 8,
+        GgmlDType::Q2K => 2 * 32,
+        _ => return false,
+    };
+    k >= min_k
 }
 
 fn divide(m: usize, b: usize) -> usize {
