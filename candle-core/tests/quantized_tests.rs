@@ -1513,3 +1513,38 @@ test_device!(
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_cuda,
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
 );
+
+#[test]
+fn ggml_dtype_supports_matmul_and_dequantize_on_cpu() -> Result<()> {
+    let cpu = Device::Cpu;
+    let all_dtypes = [
+        GgmlDType::F32,
+        GgmlDType::F16,
+        GgmlDType::BF16,
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q8_1,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+        GgmlDType::Q8K,
+    ];
+    for dtype in all_dtypes {
+        // The CPU backend implements `vec_dot` generically for every GGML dtype, so it always
+        // supports both matmul and dequantize.
+        assert!(
+            dtype.supports_matmul(&cpu),
+            "expected {dtype:?} to support matmul on the CPU backend"
+        );
+        assert!(
+            dtype.supports_dequantize(&cpu),
+            "expected {dtype:?} to support dequantize on the CPU backend"
+        );
+    }
+    Ok(())
+}
