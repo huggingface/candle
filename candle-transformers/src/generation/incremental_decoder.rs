@@ -58,6 +58,9 @@ const MIN_WINDOW_TOKENS: usize = 8;
 /// `MAX_WINDOW_TOKENS - MIN_WINDOW_TOKENS` pushes, so the amortized cost per token is constant.
 const MAX_WINDOW_TOKENS: usize = 64;
 
+/// How many window lengths to try around each re-anchoring candidate before doubling.
+const ANCHOR_CANDIDATES: usize = 3;
+
 /// Longest pattern rewritten by `tokenizers`' wordpiece `cleanup` helper (`" do not"`).
 const CLEANUP_PATTERN_LEN: usize = 7;
 
@@ -151,6 +154,24 @@ fn in_marker_alphabet(c: char) -> bool {
     matches!(c, '<' | '>' | 'x' | 'X' | '0'..='9' | 'a'..='f' | 'A'..='F')
 }
 
+/// Record that a fused decoder can reach `reach` bytes back into the text it produces.
+///
+/// Returns false when reach is already pending from an earlier decoder in the chain. That reach
+/// was measured against the string this decoder takes as *input*, and a rewrite that changes
+/// lengths moves the boundary it refers to, so the two cannot simply be added: with
+/// `Fuse -> Replace("ab", "q") -> Replace("a", "xxxxxxxxxx")`, two bytes of pending reach cover
+/// ten bytes of output.
+fn add_fused_reach(ctx: &mut DecoderContext, reach: usize) -> bool {
+    if reach == 0 {
+        return true;
+    }
+    if ctx.unstable_tail != 0 {
+        return false;
+    }
+    ctx.unstable_tail = reach;
+    true
+}
+
 /// Whether a rewrite of `pattern` into `content`, applied to a token, can leave it a marker when
 /// it was not one or stop it being one when it was.
 fn alters_markers(pattern: &str, content: &str) -> bool {
@@ -240,7 +261,7 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
                     .and_then(Value::as_bool)
                     .unwrap_or(true)
             {
-                ctx.unstable_tail += CLEANUP_PATTERN_LEN;
+                return add_fused_reach(ctx, CLEANUP_PATTERN_LEN);
             }
             true
         }
@@ -253,19 +274,17 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
                 // The pad token is stripped from the string whatever `cleanup` says, so its
                 // reach counts even when the cleanup patterns do not.
                 let pad = value.get("pad_token").and_then(Value::as_str).unwrap_or("");
-                ctx.unstable_tail += pad.len();
-                if value
+                let cleanup = value
                     .get("cleanup")
                     .and_then(Value::as_bool)
-                    .unwrap_or(true)
-                {
-                    ctx.unstable_tail += CLEANUP_PATTERN_LEN;
-                }
+                    .unwrap_or(true);
                 let delimiter = value
                     .get("word_delimiter_token")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                ctx.unstable_tail += delimiter.len();
+                let reach =
+                    pad.len() + delimiter.len() + if cleanup { CLEANUP_PATTERN_LEN } else { 0 };
+                return add_fused_reach(ctx, reach);
             }
             true
         }
@@ -276,7 +295,9 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
                 // On a fused string every occurrence of the suffix is dropped, wherever it is,
                 // so a suffix completed across pushes rewrites up to its own length of text.
                 let suffix = value.get("suffix").and_then(Value::as_str).unwrap_or("");
-                ctx.unstable_tail += suffix.len();
+                if !add_fused_reach(ctx, suffix.len()) {
+                    return false;
+                }
             } else {
                 // The end-of-word suffix of the *last* token is dropped rather than turned into
                 // a space, so the tail of the text changes as soon as another token is pushed.
@@ -295,7 +316,7 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
             if scan.fused {
                 let stop = value.get("stop").and_then(Value::as_u64).unwrap_or(0) as usize;
                 let content = value.get("content").and_then(Value::as_str).unwrap_or("");
-                ctx.unstable_tail += stop * content.len();
+                return add_fused_reach(ctx, stop * content.len());
             }
             true
         }
@@ -318,12 +339,9 @@ fn scan_decoder(value: &Value, scan: &mut Scan, ctx: &mut DecoderContext) -> boo
             // Applied to the whole text: appending bytes can create a match straddling the
             // boundary, rewriting up to `pattern.len()` bytes already emitted. A regex pattern
             // can match arbitrarily far back, which is exactly the unbounded case.
-            match value.get("pattern").and_then(|p| p.get("String")) {
-                Some(Value::String(pattern)) => {
-                    ctx.unstable_tail += pattern.len();
-                    true
-                }
-                _ => false,
+            match literal {
+                Some(pattern) => add_fused_reach(ctx, pattern.len()),
+                None => false,
             }
         }
         _ => false,
@@ -367,6 +385,10 @@ pub struct IncrementalDecoder {
     emitted: usize,
     /// The currently open run of `<0xXX>` byte markers, if one is open.
     open_byte_run: Option<ByteRun>,
+    /// How far emission may go while `lag_one_step` holds. It only advances on a push the
+    /// decoder actually sees: an id `decode` filters out leaves the text alone, so treating it
+    /// as a step would release the previous token's text a step early.
+    lag_limit: usize,
     /// Bytes of previously returned text invalidated by the last `push`.
     retracted: usize,
 }
@@ -394,6 +416,7 @@ impl IncrementalDecoder {
             text: String::new(),
             emitted: 0,
             open_byte_run: None,
+            lag_limit: 0,
             retracted: 0,
         }
     }
@@ -429,7 +452,8 @@ impl IncrementalDecoder {
     pub fn push(&mut self, token: u32) -> Result<&str> {
         self.retracted = 0;
         self.tokens.push(token);
-        if !self.is_dropped(token) {
+        let dropped = self.is_dropped(token);
+        if !dropped {
             self.window.push(token);
         }
 
@@ -442,6 +466,9 @@ impl IncrementalDecoder {
         self.text.push_str(&new_window);
         self.window_text = new_window;
 
+        if !dropped {
+            self.lag_limit = common;
+        }
         // Before re-anchoring, which needs to know how far back the open run reaches.
         self.track_byte_run(token, common);
         if self.ctx.bounded && self.window.len() >= MAX_WINDOW_TOKENS {
@@ -453,7 +480,7 @@ impl IncrementalDecoder {
             self.emitted = common;
         }
         let start = self.emitted;
-        self.emitted = self.emission_limit(common);
+        self.emitted = self.emission_limit();
         Ok(&self.text[start..self.emitted])
     }
 
@@ -518,6 +545,7 @@ impl IncrementalDecoder {
         self.text.clear();
         self.emitted = 0;
         self.open_byte_run = None;
+        self.lag_limit = 0;
         self.retracted = 0;
     }
 
@@ -544,12 +572,17 @@ impl IncrementalDecoder {
         // suffix *now*, but the next marker re-renders the part left outside the window.
         let mut keep = MIN_WINDOW_TOKENS.max(self.open_byte_run.map_or(0, |run| run.tokens));
         while keep < self.window.len() {
-            let start = self.window.len() - keep;
-            let tail = self.decode(&self.window[start..])?;
-            if tail.len() >= min_tail && self.window_text.ends_with(&tail) {
-                self.window.drain(..start);
-                self.window_text = tail;
-                return Ok(());
+            // A candidate can fail purely because of what its own first token turns into - a
+            // `WordPiece` continuation piece keeps its `##` when it leads, a `Metaspace` token
+            // loses its space - so try the neighbouring lengths before doubling away from them.
+            for candidate in keep..(keep + ANCHOR_CANDIDATES).min(self.window.len()) {
+                let start = self.window.len() - candidate;
+                let tail = self.decode(&self.window[start..])?;
+                if tail.len() >= min_tail && self.window_text.ends_with(&tail) {
+                    self.window.drain(..start);
+                    self.window_text = tail;
+                    return Ok(());
+                }
             }
             keep *= 2;
         }
@@ -596,7 +629,7 @@ impl IncrementalDecoder {
     }
 
     /// Largest prefix of `text` that no future token can rewrite.
-    fn emission_limit(&self, common: usize) -> usize {
+    fn emission_limit(&self) -> usize {
         // Nothing can be proven about an unbounded decoder, so nothing is emitted until
         // `finish`: this type never hands out text it may have to take back.
         if !self.ctx.bounded {
@@ -612,7 +645,7 @@ impl IncrementalDecoder {
             limit -= 1;
         }
         if self.ctx.lag_one_step {
-            limit = limit.min(common);
+            limit = limit.min(self.lag_limit);
         }
         if let Some(run) = self.open_byte_run {
             limit = limit.min(run.text_start);

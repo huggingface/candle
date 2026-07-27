@@ -455,6 +455,78 @@ fn unknown_ids_stay_out_of_the_window() {
 }
 
 #[test]
+fn bpe_lag_survives_a_skipped_token() {
+    // The one-step lag assumes each push hands `BPEDecoder` one more entry. A skipped special
+    // token never reaches the decoder, so the text does not move and the lag must not treat it
+    // as a step - otherwise the previous token's text is released one push early.
+    let added = json!([{
+        "id": 1, "content": "<eos>", "single_word": false,
+        "lstrip": false, "rstrip": false, "normalized": false, "special": true,
+    }]);
+    let decoder = json!({"type": "BPEDecoder", "suffix": "</w>"});
+    let tokenizer = tokenizer_with_added(&["a</w>b", "<eos>", "c"], decoder, added);
+    let mut incremental = IncrementalDecoder::new(&tokenizer);
+
+    assert_eq!(incremental.push(0).unwrap(), "");
+    assert_eq!(incremental.text(), "ab");
+    // The skipped token settles nothing.
+    assert_eq!(incremental.push(1).unwrap(), "");
+    assert_eq!(incremental.retracted(), 0);
+    assert_eq!(incremental.push(2).unwrap(), "a");
+    assert_eq!(incremental.text(), "a bc");
+    assert_eq!(incremental.retracted(), 0);
+
+    check_stream(&tokenizer, &[0, 1, 2]);
+}
+
+#[test]
+fn two_fused_rewrites_are_unbounded() {
+    // The first replace's reach is measured against the string the second one takes as input,
+    // and a length-changing rewrite moves the boundary it refers to: two bytes of pending reach
+    // end up covering ten bytes of output, so the reaches cannot simply be summed.
+    let decoder = json!({"type": "Sequence", "decoders": [
+        {"type": "Fuse"},
+        {"type": "Replace", "pattern": {"String": "ab"}, "content": "q"},
+        {"type": "Replace", "pattern": {"String": "a"}, "content": "xxxxxxxxxx"},
+    ]});
+    let tokenizer = tokenizer(&["a", "b"], decoder);
+    let mut incremental = IncrementalDecoder::new(&tokenizer);
+    assert!(!incremental.is_windowed());
+
+    assert_eq!(incremental.push(0).unwrap(), "");
+    assert_eq!(incremental.text(), "xxxxxxxxxx");
+    assert_eq!(incremental.push(1).unwrap(), "");
+    assert_eq!(incremental.text(), "q");
+    assert_eq!(incremental.retracted(), 0);
+    assert_eq!(incremental.finish(), "q");
+}
+
+#[test]
+fn wordpiece_reanchors_around_continuation_pieces() {
+    // A candidate window starting on a `##` piece keeps the prefix that the full decode strips,
+    // so it can never be a suffix. Trying the neighbouring lengths finds a boundary that works.
+    let decoder = json!({"type": "WordPiece", "prefix": "##", "cleanup": true});
+    let tokenizer = tokenizer(&["Ara", "##új", "##o", "No", "##guera"], decoder);
+    let mut incremental = IncrementalDecoder::new(&tokenizer);
+    let mut ids = Vec::new();
+    let mut state = 999u64;
+    for _ in 0..600 {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let id = (state >> 33) as u32 % 5;
+        ids.push(id);
+        incremental.push(id).unwrap();
+        assert_eq!(incremental.text(), tokenizer.decode(&ids, true).unwrap());
+    }
+    assert!(
+        incremental.window_len() <= 128,
+        "window grew to {} tokens",
+        incremental.window_len()
+    );
+}
+
+#[test]
 fn clear_resets_the_stream() {
     let tokenizer = tokenizer(&["Hello", "Ġworld"], byte_level());
     let mut decoder = IncrementalDecoder::new(&tokenizer);
