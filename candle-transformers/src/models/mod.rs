@@ -10,6 +10,8 @@
 //!  - Computer vision models: [`dinov2`], [`convmixer`], [`efficientnet`], ...
 //!  
 //! Some of the models also have quantized variants, e.g.  [`quantized_blip`], [`quantized_llama`] and  [`quantized_qwen2`].
+//! [`quantized_lm`] loads any of the quantized language models from a GGUF file by dispatching on
+//! its `general.architecture`.
 //!
 //! The implementations aim to be readable while maintaining good performance. For more information
 //! on each model see the model's module docs in the links below.
@@ -93,6 +95,7 @@ pub mod quantized_glm4;
 pub mod quantized_lfm2;
 pub mod quantized_llama;
 pub mod quantized_llama2_c;
+pub mod quantized_lm;
 pub mod quantized_metavoice;
 pub mod quantized_mistral;
 pub mod quantized_mixformer;
