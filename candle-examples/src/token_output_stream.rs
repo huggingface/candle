@@ -22,7 +22,12 @@ impl TokenOutputStream {
     }
 
     /// Returns the text that this token made available, if any. `None` means the token did not
-    /// complete a character yet, e.g. it carries the first byte of a multi-byte one.
+    /// settle any new text yet, e.g. it carries the first byte of a multi-byte character.
+    ///
+    /// The output is append-only: [`IncrementalDecoder::push`] only ever hands out text it has
+    /// shown cannot be rewritten, so what this returns is always safe to print or append. For a
+    /// tokenizer whose decoder can rewrite text it already produced, that means nothing is
+    /// streamed at all and the whole text arrives through [`Self::decode_rest`].
     pub fn next_token(&mut self, token: u32) -> Result<Option<String>> {
         let text = self.decoder.push(token)?;
         if text.is_empty() {

@@ -72,6 +72,11 @@ struct DecoderContext {
     /// Whether the decode of the last token depends on it being last, so that text only
     /// becomes stable once a further token has been pushed.
     lag_one_step: bool,
+    /// Whether a `ByteFallback` renders the tokens. It groups a run of `<0xXX>` markers and
+    /// converts the run as a whole, so an open run's text is not settled until a non-marker
+    /// token closes it - one invalid byte turns the entire run into replacement characters,
+    /// including the part that already decoded cleanly.
+    byte_fallback: bool,
 }
 
 impl DecoderContext {
@@ -79,6 +84,7 @@ impl DecoderContext {
         bounded: false,
         unstable_tail: 0,
         lag_one_step: false,
+        byte_fallback: false,
     };
 
     /// Resolve the bounded-context property of a tokenizer's decoder.
@@ -94,6 +100,7 @@ impl DecoderContext {
                     bounded: true,
                     unstable_tail: 0,
                     lag_one_step: false,
+                    byte_fallback: false,
                 }
             }
             Some(decoder) => decoder,
@@ -106,6 +113,7 @@ impl DecoderContext {
             bounded: true,
             unstable_tail: 0,
             lag_one_step: false,
+            byte_fallback: false,
         };
         // `fused` tracks whether the decoders seen so far have collapsed the token list into a
         // single string. Before that point a decoder only ever sees one token at a time and
@@ -157,7 +165,13 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
         // Applied to an already fused string it is unbounded: the `<0xXX>` shape is matched
         // against the whole accumulated string, so appending anything can retroactively turn a
         // decoded byte back into its literal marker.
-        "ByteFallback" => !*fused,
+        "ByteFallback" => {
+            if *fused {
+                return false;
+            }
+            ctx.byte_fallback = true;
+            true
+        }
         // Per-token, apart from the prepend scheme which only affects the first token, i.e. the
         // start of the text.
         "Metaspace" => true,
@@ -257,6 +271,9 @@ pub struct IncrementalDecoder {
     text: String,
     /// Number of bytes of `text` already returned by `push`.
     emitted: usize,
+    /// Where in `text` the currently open run of `<0xXX>` byte markers starts, if one is open.
+    /// Everything from there on is still subject to being re-rendered by the next marker.
+    open_byte_run: Option<usize>,
     /// Bytes of previously returned text invalidated by the last `push`.
     retracted: usize,
 }
@@ -283,6 +300,7 @@ impl IncrementalDecoder {
             window_text: String::new(),
             text: String::new(),
             emitted: 0,
+            open_byte_run: None,
             retracted: 0,
         }
     }
@@ -297,19 +315,24 @@ impl IncrementalDecoder {
 
     /// Whether the tokenizer's decoder was shown to have a bounded context.
     ///
-    /// When false the decoder is still correct but re-decodes the whole sequence on every push,
-    /// which is quadratic in the number of generated tokens.
+    /// When false the decoder is still correct, but it re-decodes the whole sequence on every
+    /// push - quadratic in the number of generated tokens - and [`IncrementalDecoder::push`]
+    /// streams nothing, since no part of the text can be shown to be settled. Use
+    /// [`IncrementalDecoder::text`] to observe it as it grows, and
+    /// [`IncrementalDecoder::finish`] to collect it at the end.
     pub fn is_windowed(&self) -> bool {
         self.ctx.bounded
     }
 
     /// Push a token and return the text that became available because of it.
     ///
-    /// The returned slice may be empty: text that a further token could still rewrite - a
-    /// trailing run of U+FFFD from an incomplete multi-byte character, or the reach of a
-    /// rewriting decoder - is held back until it is stable. Concatenating every value returned
-    /// by `push`, followed by [`IncrementalDecoder::finish`], reproduces [`IncrementalDecoder::text`]
-    /// exactly, unless [`IncrementalDecoder::retracted`] reports otherwise.
+    /// The returned slice may be empty: text that a further token could still rewrite is held
+    /// back until it is settled - a trailing run of U+FFFD from an incomplete multi-byte
+    /// character, an open run of `ByteFallback` byte markers, the reach of a rewriting decoder,
+    /// or, for a decoder that is not [windowed](IncrementalDecoder::is_windowed), all of it.
+    ///
+    /// Emission is append-only: concatenating every value returned by `push`, followed by
+    /// [`IncrementalDecoder::finish`], reproduces [`IncrementalDecoder::text`] exactly.
     pub fn push(&mut self, token: u32) -> Result<&str> {
         self.retracted = 0;
         self.tokens.push(token);
@@ -329,6 +352,7 @@ impl IncrementalDecoder {
         if self.ctx.bounded && self.window.len() >= MAX_WINDOW_TOKENS {
             self.reanchor()?;
         }
+        self.track_byte_run(token, common);
 
         if common < self.emitted {
             self.retracted = self.emitted - common;
@@ -361,10 +385,11 @@ impl IncrementalDecoder {
     }
 
     /// Number of bytes of previously returned text invalidated by the last
-    /// [`IncrementalDecoder::push`], to be removed from the end before appending its result.
+    /// [`IncrementalDecoder::push`].
     ///
-    /// This is always zero for a tokenizer whose decoder has a bounded context, which covers
-    /// every decoder `tokenizers` ships bar a `Replace` with a regex pattern.
+    /// This is a diagnostic, and is always zero: text is only ever emitted once it has been
+    /// shown to be settled. A non-zero value means the rewrite reach of some decoder was
+    /// under-estimated, i.e. a bug here rather than something a caller has to handle.
     pub fn retracted(&self) -> usize {
         self.retracted
     }
@@ -398,6 +423,7 @@ impl IncrementalDecoder {
         self.window_text.clear();
         self.text.clear();
         self.emitted = 0;
+        self.open_byte_run = None;
         self.retracted = 0;
     }
 
@@ -433,8 +459,41 @@ impl IncrementalDecoder {
         Ok(())
     }
 
+    /// Note which tokens are still inside an open `ByteFallback` run, so their text can be held
+    /// back: the run is converted as a whole, so a later marker can re-render all of it.
+    fn track_byte_run(&mut self, token: u32, common: usize) {
+        // A dropped id never reaches the decoder, so it neither opens nor closes a run.
+        if !self.ctx.byte_fallback || self.dropped.contains(&token) {
+            return;
+        }
+        if !self.is_byte_marker(token) {
+            self.open_byte_run = None;
+        } else if self.open_byte_run.is_none() {
+            self.open_byte_run = Some(common);
+        }
+    }
+
+    /// Whether an id decodes to a `<0xXX>` marker, matching `ByteFallback`'s own test.
+    fn is_byte_marker(&self, token: u32) -> bool {
+        match self.tokenizer.id_to_token(token) {
+            Some(t) => {
+                t.len() == 6
+                    && t.starts_with("<0x")
+                    && t.ends_with('>')
+                    && t.get(3..5)
+                        .is_some_and(|hex| u8::from_str_radix(hex, 16).is_ok())
+            }
+            None => false,
+        }
+    }
+
     /// Largest prefix of `text` that no future token can rewrite.
     fn emission_limit(&self, common: usize) -> usize {
+        // Nothing can be proven about an unbounded decoder, so nothing is emitted until
+        // `finish`: this type never hands out text it may have to take back.
+        if !self.ctx.bounded {
+            return self.emitted;
+        }
         let mut limit = self.text.len();
         // An incomplete multi-byte character decodes to U+FFFD, which a later token replaces.
         while limit > 0 && self.text[..limit].ends_with(REPLACEMENT) {
@@ -446,6 +505,9 @@ impl IncrementalDecoder {
         }
         if self.ctx.lag_one_step {
             limit = limit.min(common);
+        }
+        if let Some(run_start) = self.open_byte_run {
+            limit = limit.min(run_start);
         }
         limit.max(self.emitted)
     }

@@ -110,11 +110,13 @@ fn sentencepiece_leading_space() {
     // per-token decode would produce "HelloWorld".
     assert_eq!(incremental.push(0).unwrap(), "Hello");
     assert_eq!(incremental.push(1).unwrap(), " world");
-    // 叫 is three byte-fallback tokens.
+    // 叫 is three byte-fallback tokens. The run stays open until a non-marker token closes it,
+    // since one more marker could re-render the whole of it, so it lands with `finish`.
     assert_eq!(incremental.push(2).unwrap(), "");
     assert_eq!(incremental.push(3).unwrap(), "");
-    assert_eq!(incremental.push(4).unwrap(), "叫");
+    assert_eq!(incremental.push(4).unwrap(), "");
     assert_eq!(incremental.text(), "Hello world叫");
+    assert_eq!(incremental.finish(), "叫");
 
     check_stream(&tokenizer, &[0, 1, 2, 3, 4]);
 }
@@ -282,6 +284,50 @@ fn a_run_of_special_tokens_keeps_the_window_bounded() {
     ids.push(1);
     assert_eq!(decoder.push(1).unwrap(), " world");
     assert_eq!(decoder.text(), tokenizer.decode(&ids, true).unwrap());
+}
+
+#[test]
+fn byte_fallback_run_is_withheld_until_it_closes() {
+    // `ByteFallback` converts a run of `<0xXX>` markers as a whole: `String::from_utf8` is
+    // applied to every byte accumulated so far, so a single invalid byte re-renders the entire
+    // run as replacement characters - including the part that had already decoded cleanly.
+    let decoder = json!({"type": "ByteFallback"});
+    let tokenizer = tokenizer(&["<0x61>", "<0xFF>", "z"], decoder);
+    let mut incremental = IncrementalDecoder::new(&tokenizer);
+    assert!(incremental.is_windowed());
+
+    // "a" on its own, but nothing is emitted: the run is still open.
+    assert_eq!(incremental.push(0).unwrap(), "");
+    assert_eq!(incremental.text(), "a");
+    // The invalid byte turns the whole run into replacement characters.
+    assert_eq!(incremental.push(1).unwrap(), "");
+    assert_eq!(incremental.text(), "\u{FFFD}\u{FFFD}");
+    assert_eq!(incremental.retracted(), 0);
+    // A non-marker token closes the run, settling it.
+    assert_eq!(incremental.push(2).unwrap(), "\u{FFFD}\u{FFFD}z");
+
+    check_stream(&tokenizer, &[0, 1, 2, 0, 2, 1]);
+}
+
+#[test]
+fn unbounded_decoder_emits_nothing_until_finish() {
+    // A fused regex `Replace` rewriting a trailing "!" into "?": the first token decodes to
+    // "?", and the second rewrites it back to "!". Nothing may be streamed from a decoder that
+    // can do that, or a caller appending the deltas would print "?!a" instead of "!a".
+    let decoder = json!({"type": "Sequence", "decoders": [
+        {"type": "Fuse"},
+        {"type": "Replace", "pattern": {"Regex": "!$"}, "content": "?"},
+    ]});
+    let tokenizer = tokenizer(&["!", "a"], decoder);
+    let mut incremental = IncrementalDecoder::new(&tokenizer);
+    assert!(!incremental.is_windowed());
+
+    assert_eq!(incremental.push(0).unwrap(), "");
+    assert_eq!(incremental.text(), "?");
+    assert_eq!(incremental.push(1).unwrap(), "");
+    assert_eq!(incremental.text(), "!a");
+    assert_eq!(incremental.retracted(), 0);
+    assert_eq!(incremental.finish(), "!a");
 }
 
 #[test]
