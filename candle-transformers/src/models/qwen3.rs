@@ -396,6 +396,39 @@ impl DecoderLayer {
     }
 }
 
+// Build the additive causal mask for `tgt` query positions over `tgt + offset`
+// keys. The mask is identical for every batch row, so it is built with a batch
+// dim of `1` and broadcast across the batch at use. A batch dim > 1 would claim
+// `b` copies of the data while the slice holds only one, silently under-sizing
+// the tensor's storage: `Tensor::from_slice` does not check the element count of
+// a fully-concrete shape.
+fn causal_mask(
+    device: &Device,
+    dtype: DType,
+    tgt: usize,
+    offset: usize,
+    sw: Option<usize>,
+) -> Result<Tensor> {
+    let minf = f32::NEG_INFINITY;
+    let mask: Vec<_> = (0..tgt)
+        .flat_map(|i| {
+            (0..(tgt + offset)).map(move |j| {
+                let past_ok = j <= i + offset;
+                let sw_ok = match sw {
+                    Some(w) => (i + offset) as i64 - j as i64 <= w as i64,
+                    None => true,
+                };
+                if past_ok && sw_ok {
+                    0.
+                } else {
+                    minf
+                }
+            })
+        })
+        .collect();
+    Tensor::from_slice(&mask, (1, 1, tgt, tgt + offset), device)?.to_dtype(dtype)
+}
+
 #[derive(Debug, Clone)]
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
@@ -438,35 +471,8 @@ impl Model {
         }
     }
 
-    fn causal_mask(
-        &self,
-        b: usize,
-        tgt: usize,
-        offset: usize,
-        sw: Option<usize>,
-    ) -> Result<Tensor> {
-        let minf = f32::NEG_INFINITY;
-        let mask: Vec<_> = (0..tgt)
-            .flat_map(|i| {
-                (0..(tgt + offset)).map(move |j| {
-                    let past_ok = j <= i + offset;
-                    let sw_ok = match sw {
-                        Some(w) => (i + offset) as i64 - j as i64 <= w as i64,
-                        None => true,
-                    };
-                    if past_ok && sw_ok {
-                        0.
-                    } else {
-                        minf
-                    }
-                })
-            })
-            .collect();
-        Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
-    }
-
     pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
-        let (b, l) = input.dims2()?;
+        let (_, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
 
         // Build causal mask only for the standard attention fallback path.
@@ -476,7 +482,7 @@ impl Model {
         #[cfg(feature = "flash-attn")]
         let needs_mask = self.device.is_cpu() && l > 1;
         let causal = if needs_mask {
-            Some(self.causal_mask(b, l, offset, None)?)
+            Some(causal_mask(&self.device, self.dtype, l, offset, None)?)
         } else {
             None
         };
@@ -515,5 +521,37 @@ impl ModelForCausalLM {
 
     pub fn clear_kv_cache(&mut self) {
         self.base.clear_kv_cache();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The causal mask must be batch-independent so a single copy broadcasts
+    // across every row. Building it with the full batch dim used to under-size
+    // the storage, giving garbage/NaN for batch > 1 on the GPU attention path.
+    #[test]
+    fn causal_mask_is_batch_independent() -> Result<()> {
+        let device = Device::Cpu;
+        let (tgt, offset) = (3, 0);
+        let mask = causal_mask(&device, DType::F32, tgt, offset, None)?;
+        assert_eq!(mask.dims(), &[1, 1, tgt, tgt + offset]);
+
+        // Lower triangle is attended (0), the strict upper triangle is masked.
+        let neg_inf = f32::NEG_INFINITY;
+        assert_eq!(
+            mask.squeeze(0)?.squeeze(0)?.to_vec2::<f32>()?,
+            [[0., neg_inf, neg_inf], [0., 0., neg_inf], [0., 0., 0.]],
+        );
+
+        // Broadcasting onto batched scores gives every row the same mask.
+        let b = 4;
+        let scores = Tensor::zeros((b, 1, tgt, tgt + offset), DType::F32, &device)?;
+        let rows = scores.broadcast_add(&mask)?.squeeze(1)?.to_vec3::<f32>()?;
+        for row in &rows[1..] {
+            assert_eq!(row, &rows[0]);
+        }
+        Ok(())
     }
 }
