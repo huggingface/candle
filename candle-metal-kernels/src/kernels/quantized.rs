@@ -514,6 +514,197 @@ pub fn call_quantized_matmul_mm_id(
     Ok(())
 }
 
+/// Indexed/routed matmul for MoE expert dispatch, matrix-*vector* variant
+/// (ggml's `mul_mat_id`, batch-1 case) -- companion to
+/// `call_quantized_matmul_mm_id`, same input-shape contract (`src0`/`ids`/
+/// `dst` layouts), so callers can dispatch either interchangeably based on
+/// how many tokens a call covers. Intended for decode (`n_tokens == 1`),
+/// where `mm_id`'s matrix-matrix kernel degenerates into many tiny tile
+/// dispatches per expert.
+///
+/// Ground truth (dispatch grid, per-dtype `nth0`/`nth1`/width-divisor
+/// tuning, buffer/scalar binding order, and the absence of any threadgroup
+/// memory requirement) is reverse-derived from ggml's Metal encode path at
+/// `llama.cpp` commit `f3f65429` -- independently confirmed to be the exact
+/// commit this crate's vendored `kernel_mul_mv_id` was copied from (its
+/// body, template shape, and `tgpig.z`-decode logic are byte-identical to
+/// that commit's `ggml-metal.metal`), not assumed from the kernel body
+/// alone or copied from `call_quantized_matmul_mv_t`'s own per-dtype table
+/// (a *different*, non-`_id` kernel body that happens to share some but not
+/// all tuning values -- see the `Q2K` case below).
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantized_matmul_mv_id(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    src0_shape: &[usize],
+    src0_stride: &[usize],
+    src0: &Buffer,
+    src0_offset: usize,
+    src1_shape: &[usize],
+    src1_stride: &[usize],
+    src1: &Buffer,
+    src1_offset: usize,
+    ids_shape: &[usize],
+    ids_stride: &[usize],
+    ids: &Buffer,
+    ids_offset: usize,
+    dst_shape: &[usize],
+    dst_offset: usize,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    // Same shape convention as call_quantized_matmul_mm_id.
+    let ne00 = src0_shape[src0_shape.len() - 1] as i64; // n_in (contraction dim)
+    let ne01 = src0_shape[src0_shape.len() - 2] as i64; // n_out
+    let ne02 = src0_shape[src0_shape.len() - 3] as i64; // n_expert
+                                                        // Quantized src0's innermost stride is always 0 in ggml's own
+                                                        // convention -- sub-block indexing happens inside the kernel from
+                                                        // ne00/dtype, not from a passed byte stride. Matches
+                                                        // call_quantized_matmul_mv_t's own `nb00 = 0i64` for the same reason.
+    let nb00 = 0i64;
+    let nb01 = src0_stride[src0_stride.len() - 2] as i64;
+    let nb02 = src0_stride[src0_stride.len() - 3] as i64;
+
+    let ne10 = src1_shape[src1_shape.len() - 1] as i64; // == ne00 (k), read from src1's own shape
+    let nb10 = src1_stride[src1_stride.len() - 1] as i64;
+    let ne11 = src1_shape[src1_shape.len() - 2] as i64; // n_expert_used (bcast) or 1
+    let nb11 = src1_stride[src1_stride.len() - 2] as i64;
+    let ne12 = src1_shape[src1_shape.len() - 3] as i64; // n_tokens
+    let nb12 = src1_stride[src1_stride.len() - 3] as i64;
+    let ne13 = 1i64;
+
+    let nei0 = ids_shape[ids_shape.len() - 1] as i64; // n_expert_used
+    let nei1 = ids_shape[ids_shape.len() - 2] as i64; // n_tokens
+    let nbi1 = ids_stride[ids_stride.len() - 2] as i64;
+
+    let ne0 = dst_shape[dst_shape.len() - 1] as i64; // n_out
+                                                     // Same load-bearing note as call_quantized_matmul_mm_id: this is the
+                                                     // per-token row stride the kernel derives dst's write offset from
+                                                     // (`dst + i1*ne0 + i2*ne1*ne0`), and must equal n_expert_used (nei0),
+                                                     // not the total row count (nei0*nei1).
+    let ne1 = nei0;
+    let nb1 = ne0 * 4; // unused by the kernel; kept for ABI parity
+
+    // Per-dtype (nth0, nth1, width_divisor), reverse-derived from ggml's
+    // `f3f65429`-era GGML_OP_MUL_MAT_ID mat-vec branch -- not from
+    // call_quantized_matmul_mv_t's table, which diverges on Q2K (align 4
+    // there, for an unrelated plain-mv Metal bug fix) and F16/F32 (align 8
+    // there vs. this kernel's own width=ne01 fallback).
+    let (nth0, nth1, divisor) = match dtype {
+        GgmlDType::Q4_0 | GgmlDType::Q4_1 | GgmlDType::Q5_0 | GgmlDType::Q5_1 | GgmlDType::Q8_0 => {
+            (8usize, 8usize, 8usize)
+        }
+        GgmlDType::Q2K => (2, 32, 8),
+        GgmlDType::Q3K => (2, 32, 4),
+        GgmlDType::Q4K => (4, 8, 4),
+        GgmlDType::Q5K => (2, 32, 4),
+        GgmlDType::Q6K => (2, 32, 2),
+        GgmlDType::F16 | GgmlDType::F32 => (32, 1, 1),
+        GgmlDType::BF16 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "BF16",
+            "qmatmul_mv_id",
+        ))?,
+        GgmlDType::Q8_1 => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "Q8_1",
+            "qmatmul_mv_id",
+        ))?,
+        GgmlDType::Q8K => Err(MetalKernelError::UnsupportedDTypeForOp(
+            "Q8K",
+            "qmatmul_mv_id",
+        ))?,
+    };
+
+    // Matches ggml's own host-side `GGML_ASSERT(ne00 >= nth0*nth1)` for
+    // quantized src0 -- F16/F32 aren't gated by it upstream either.
+    if !matches!(dtype, GgmlDType::F16 | GgmlDType::F32) && ne00 < (nth0 * nth1) as i64 {
+        return Err(MetalKernelError::InvalidInput(format!(
+            "qmm_mv_id: ne00 ({ne00}) must be >= nth0*nth1 ({})",
+            nth0 * nth1
+        )));
+    }
+
+    let thread_groups_count = MTLSize {
+        width: divide(ne01 as usize, divisor),
+        height: 1, // ggml's `_ne1` is always 1 for this op
+        depth: (nei0 * nei1) as usize,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: nth0,
+        height: nth1,
+        depth: 1,
+    };
+    let name = match dtype {
+        GgmlDType::Q4_0 => "kernel_mul_mv_id_q4_0_f32",
+        GgmlDType::Q4_1 => "kernel_mul_mv_id_q4_1_f32",
+        GgmlDType::Q5_0 => "kernel_mul_mv_id_q5_0_f32",
+        GgmlDType::Q5_1 => "kernel_mul_mv_id_q5_1_f32",
+        GgmlDType::Q8_0 => "kernel_mul_mv_id_q8_0_f32",
+        GgmlDType::Q2K => "kernel_mul_mv_id_q2_K_f32",
+        GgmlDType::Q3K => "kernel_mul_mv_id_q3_K_f32",
+        GgmlDType::Q4K => "kernel_mul_mv_id_q4_K_f32",
+        GgmlDType::Q5K => "kernel_mul_mv_id_q5_K_f32",
+        GgmlDType::Q6K => "kernel_mul_mv_id_q6_K_f32",
+        GgmlDType::F16 => "kernel_mul_mv_id_f16_f32",
+        GgmlDType::F32 => "kernel_mul_mv_id_f32_f32",
+        GgmlDType::BF16 | GgmlDType::Q8_1 | GgmlDType::Q8K => unreachable!("filtered out above"),
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    debug_group!(
+        encoder,
+        "qmm_mv_id {name} n_tokens={nei1} K={ne00} N={ne01} n_expert={ne02}"
+    );
+
+    // Buffer/scalar binding order follows the kernel's own declared
+    // parameter list exactly (src0, src1, dst, ids, then every scalar in
+    // declaration order) -- this is what candle's set_params! macro must
+    // match, independent of how ggml's own host code happened to bind them
+    // (one combined kargs struct vs. individual setBytes calls is an
+    // Obj-C-side implementation detail of ggml's binding, not part of the
+    // kernel's own ABI).
+    set_params!(
+        encoder,
+        (
+            (src0, src0_offset),
+            (src1, src1_offset),
+            Output::with_offset(dst, dst_offset),
+            (ids, ids_offset),
+            nei0,
+            nei1,
+            nbi1,
+            ne00,
+            ne01,
+            ne02,
+            nb00,
+            nb01,
+            nb02,
+            ne10,
+            ne11,
+            ne12,
+            ne13,
+            nb10,
+            nb11,
+            nb12,
+            ne0,
+            ne1,
+            nb1
+        )
+    );
+
+    // No threadgroup memory is set for any dtype this function supports --
+    // confirmed against ggml's f3f65429 host code: only its IQ-family
+    // kernels (none reachable here) call setThreadgroupMemoryLength for
+    // this op. Do not copy call_quantized_matmul_mm_id's rowid-scan scratch
+    // sizing formula; it belongs to a different kernel with a different
+    // in-kernel scan this one doesn't do.
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
+    Ok(())
+}
+
 fn divide(m: usize, b: usize) -> usize {
     m.div_ceil(b)
 }

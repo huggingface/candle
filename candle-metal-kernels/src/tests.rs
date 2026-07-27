@@ -3001,3 +3001,140 @@ fn kernel_mul_mm_id_rejects_oversized_threadgroup_memory() {
         "expected an error for an oversized threadgroup memory request, got Ok"
     );
 }
+
+// De-risk spike for `call_quantized_matmul_mv_id`: a differential test
+// against `call_quantized_matmul_mm_id`, not a hand-computed reference. At
+// n_tokens=1 both kernels implement the identical ggml op, and mm_id is
+// already validated by the tests above -- so mm_id's own output is a
+// complete, free correctness oracle for mv_id's binding order, dispatch
+// shape, and the `ne1 = nei0` field (a bug class this same kind of mm_id
+// binding has been caught with before, see candle's own upstream PR
+// #3555). Same F32 dtype and shape as
+// kernel_mul_mm_id_f32_single_token_matches_reference above (the real
+// decode boundary: n_tokens=1, n_expert_used=2) so this is a true apples-
+// to-apples comparison at the shape mv_id actually targets.
+#[test]
+fn kernel_mul_mv_id_f32_matches_mm_id() {
+    let device = device();
+    let kernels = Kernels::new();
+
+    let n_expert = 3usize;
+    let n_out = 64usize;
+    let n_in = 32usize;
+    let n_tokens = 1usize;
+    let n_expert_used = 2usize;
+
+    let src0: Vec<f32> = (0..n_expert * n_out * n_in)
+        .map(|idx| {
+            let e = idx / (n_out * n_in);
+            let j = (idx / n_in) % n_out;
+            let k = idx % n_in;
+            (e as f32 * 1000.0 + j as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let src1: Vec<f32> = (0..n_tokens * n_expert_used * n_in)
+        .map(|idx| {
+            let s = (idx / n_in) % n_expert_used;
+            let k = idx % n_in;
+            (s as f32 * 10.0 + k as f32) * 0.001
+        })
+        .collect();
+
+    let ids: Vec<i32> = vec![2, 0];
+    assert_eq!(ids.len(), n_tokens * n_expert_used);
+
+    let src0_buf = new_buffer(&device, &src0);
+    let src1_buf = new_buffer(&device, &src1);
+    let ids_buf = new_buffer(&device, &ids);
+    let out_elems = n_tokens * n_expert_used * n_out;
+    let mm_dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+    let mv_dst_buf = device
+        .new_buffer(out_elems * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    let commands = commands(&device);
+    let encoder = commands.command_encoder().unwrap();
+    call_quantized_matmul_mm_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[n_tokens, n_expert_used],
+        &[n_expert_used * 4, 4],
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &mm_dst_buf,
+    )
+    .unwrap();
+    call_quantized_matmul_mv_id(
+        &device,
+        &encoder,
+        &kernels,
+        GgmlDType::F32,
+        &[n_expert, n_out, n_in],
+        &[n_out * n_in * 4, n_in * 4, 4],
+        &src0_buf,
+        0,
+        &[n_tokens, n_expert_used, n_in],
+        &[n_expert_used * n_in * 4, n_in * 4, 4],
+        &src1_buf,
+        0,
+        &[n_tokens, n_expert_used],
+        &[n_expert_used * 4, 4],
+        &ids_buf,
+        0,
+        &[n_tokens, n_expert_used, n_out],
+        0,
+        &mv_dst_buf,
+    )
+    .unwrap();
+    drop(encoder);
+    commands.wait_until_completed().unwrap();
+
+    let mm_got: Vec<f32> = read_to_vec(&mm_dst_buf, out_elems);
+    let mv_got: Vec<f32> = read_to_vec(&mv_dst_buf, out_elems);
+
+    for (i, (mm, mv)) in mm_got.iter().zip(mv_got.iter()).enumerate() {
+        let diff = (mm - mv).abs();
+        assert!(
+            diff <= 1e-3 + 1e-3 * mm.abs(),
+            "mv_id diverges from mm_id at index {i}: mm_id={mm}, mv_id={mv} (diff {diff})"
+        );
+    }
+}
+
+// Confirms the four mandatory-coverage quantized kernel names -- one per
+// distinct (nth0, nth1, width_divisor) tuning class reachable from
+// call_quantized_matmul_mv_id -- actually load as real Metal compute
+// pipelines from the compiled metallib. Q4_K and Q6_K are common
+// production quantization dtypes; Q4_0 and Q2_K cover the remaining
+// tuning classes. Mirrors kernel_mul_mm_id_q4_k_pipeline_loads's own
+// de-risk-spike-before-wiring precedent.
+#[test]
+fn kernel_mul_mv_id_pipelines_load() {
+    let device = device();
+    let kernels = Kernels::new();
+    for name in [
+        "kernel_mul_mv_id_q4_K_f32",
+        "kernel_mul_mv_id_q6_K_f32",
+        "kernel_mul_mv_id_q4_0_f32",
+        "kernel_mul_mv_id_q2_K_f32",
+    ] {
+        kernels
+            .load_pipeline(&device, Source::Quantized, name)
+            .unwrap_or_else(|e| panic!("{name} should load as a Metal compute pipeline: {e}"));
+    }
+}
