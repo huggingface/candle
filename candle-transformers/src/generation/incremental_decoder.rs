@@ -42,6 +42,7 @@
 
 use candle::{Error, Result};
 use serde_json::Value;
+use std::collections::HashSet;
 use tokenizers::Tokenizer;
 
 /// The character `String::from_utf8_lossy` (and `ByteFallback`) emits for bytes that do not
@@ -130,16 +131,33 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
             Some(decoders) => decoders.iter().all(|d| scan_decoder(d, fused, ctx)),
             None => false,
         },
-        // Both collapse the token list into a single string: `Fuse` by joining, `ByteLevel` by
-        // concatenating every token's bytes before a single lossy UTF-8 conversion. The latter
-        // is what lets a multi-byte character span tokens and be fixed up retroactively.
-        "Fuse" | "ByteLevel" => {
+        // Joins the token list into a single string.
+        "Fuse" => {
+            *fused = true;
+            true
+        }
+        // Concatenates every token's bytes before a single lossy UTF-8 conversion, which is what
+        // lets a multi-byte character span tokens and be fixed up retroactively. It also
+        // collapses the list into one string.
+        //
+        // Applied to an already fused string it is unbounded: a token whose characters are not
+        // all in the byte-level alphabet falls back to that token's raw UTF-8 bytes, so one
+        // appended character can flip the whole accumulated string onto the fallback path and
+        // rewrite the entire prefix.
+        "ByteLevel" => {
+            if *fused {
+                return false;
+            }
             *fused = true;
             true
         }
         // Groups runs of `<0xXX>` tokens before converting them to text, so an incomplete run
         // shows up as a trailing run of U+FFFD which a later token replaces.
-        "ByteFallback" => true,
+        //
+        // Applied to an already fused string it is unbounded: the `<0xXX>` shape is matched
+        // against the whole accumulated string, so appending anything can retroactively turn a
+        // decoded byte back into its literal marker.
+        "ByteFallback" => !*fused,
         // Per-token, apart from the prepend scheme which only affects the first token, i.e. the
         // start of the text.
         "Metaspace" => true,
@@ -156,6 +174,10 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
         }
         "CTC" => {
             if *fused {
+                // The pad token is stripped from the string whatever `cleanup` says, so its
+                // reach counts even when the cleanup patterns do not.
+                let pad = value.get("pad_token").and_then(Value::as_str).unwrap_or("");
+                ctx.unstable_tail += pad.len();
                 if value
                     .get("cleanup")
                     .and_then(Value::as_bool)
@@ -171,10 +193,17 @@ fn scan_decoder(value: &Value, fused: &mut bool, ctx: &mut DecoderContext) -> bo
             }
             true
         }
-        // The end-of-word suffix of the *last* token is dropped rather than turned into a
-        // space, so the tail of the text changes as soon as another token is pushed.
         "BPEDecoder" => {
-            ctx.lag_one_step = true;
+            if *fused {
+                // On a fused string every occurrence of the suffix is dropped, wherever it is,
+                // so a suffix completed across pushes rewrites up to its own length of text.
+                let suffix = value.get("suffix").and_then(Value::as_str).unwrap_or("");
+                ctx.unstable_tail += suffix.len();
+            } else {
+                // The end-of-word suffix of the *last* token is dropped rather than turned into
+                // a space, so the tail of the text changes as soon as another token is pushed.
+                ctx.lag_one_step = true;
+            }
             true
         }
         "Strip" => {
@@ -213,10 +242,16 @@ pub struct IncrementalDecoder {
     tokenizer: Tokenizer,
     skip_special_tokens: bool,
     ctx: DecoderContext,
+    /// Ids that `Tokenizer::decode` filters out before the decoder ever sees them.
+    dropped: HashSet<u32>,
+    /// Every token pushed so far.
     tokens: Vec<u32>,
-    /// Index into `tokens` of the first token of the decode window.
-    window_start: usize,
-    /// Decode of `tokens[window_start..]`; always a suffix of `text`.
+    /// The tokens the next decode runs over: a trailing slice of `tokens`, with the ids that
+    /// `decode` filters out left out. Dropping those is a no-op on the decode - the decoder is
+    /// handed the exact same input either way - and it keeps a run of skipped special tokens
+    /// from growing the window, since such a run offers no tail long enough to re-anchor on.
+    window: Vec<u32>,
+    /// Decode of `window`; always a suffix of `text`.
     window_text: String,
     /// Decode of the whole token sequence.
     text: String,
@@ -237,12 +272,14 @@ impl IncrementalDecoder {
     /// Create a decoder taking ownership of `tokenizer`.
     pub fn from_tokenizer(tokenizer: Tokenizer) -> Self {
         let ctx = DecoderContext::resolve(&tokenizer);
+        let dropped = dropped_ids(&tokenizer, true);
         Self {
             tokenizer,
             skip_special_tokens: true,
             ctx,
+            dropped,
             tokens: Vec::new(),
-            window_start: 0,
+            window: Vec::new(),
             window_text: String::new(),
             text: String::new(),
             emitted: 0,
@@ -253,6 +290,7 @@ impl IncrementalDecoder {
     /// Whether special tokens are dropped from the decoded text, `true` by default.
     pub fn with_skip_special_tokens(mut self, skip_special_tokens: bool) -> Self {
         self.skip_special_tokens = skip_special_tokens;
+        self.dropped = dropped_ids(&self.tokenizer, skip_special_tokens);
         self.clear();
         self
     }
@@ -275,8 +313,11 @@ impl IncrementalDecoder {
     pub fn push(&mut self, token: u32) -> Result<&str> {
         self.retracted = 0;
         self.tokens.push(token);
+        if !self.dropped.contains(&token) {
+            self.window.push(token);
+        }
 
-        let new_window = self.decode(self.window_start)?;
+        let new_window = self.decode(&self.window)?;
         let committed = self.text.len() - self.window_text.len();
         // The delta is taken against the *previous* decode of the same window, so a leading
         // space gained or lost by decoding a sub-sequence is present in both and cancels.
@@ -285,7 +326,7 @@ impl IncrementalDecoder {
         self.text.push_str(&new_window);
         self.window_text = new_window;
 
-        if self.ctx.bounded && self.tokens.len() - self.window_start >= MAX_WINDOW_TOKENS {
+        if self.ctx.bounded && self.window.len() >= MAX_WINDOW_TOKENS {
             self.reanchor()?;
         }
 
@@ -337,7 +378,7 @@ impl IncrementalDecoder {
     ///
     /// This stays bounded for a windowed decoder, and grows with the sequence otherwise.
     pub fn window_len(&self) -> usize {
-        self.tokens.len() - self.window_start
+        self.window.len()
     }
 
     /// The underlying tokenizer.
@@ -353,15 +394,14 @@ impl IncrementalDecoder {
     /// Reset the decoder, keeping the tokenizer and its resolved decoder context.
     pub fn clear(&mut self) {
         self.tokens.clear();
-        self.window_start = 0;
+        self.window.clear();
         self.window_text.clear();
         self.text.clear();
         self.emitted = 0;
         self.retracted = 0;
     }
 
-    fn decode(&self, from: usize) -> Result<String> {
-        let tokens = &self.tokens[from..];
+    fn decode(&self, tokens: &[u32]) -> Result<String> {
         if tokens.is_empty() {
             // Some decoders (`BPEDecoder`) index the last token unconditionally.
             return Ok(String::new());
@@ -380,11 +420,11 @@ impl IncrementalDecoder {
     fn reanchor(&mut self) -> Result<()> {
         let min_tail = self.ctx.unstable_tail.max(1);
         let mut keep = MIN_WINDOW_TOKENS;
-        while keep < self.tokens.len() - self.window_start {
-            let start = self.tokens.len() - keep;
-            let tail = self.decode(start)?;
+        while keep < self.window.len() {
+            let start = self.window.len() - keep;
+            let tail = self.decode(&self.window[start..])?;
             if tail.len() >= min_tail && self.window_text.ends_with(&tail) {
-                self.window_start = start;
+                self.window.drain(..start);
                 self.window_text = tail;
                 return Ok(());
             }
@@ -409,6 +449,23 @@ impl IncrementalDecoder {
         }
         limit.max(self.emitted)
     }
+}
+
+/// Ids that `Tokenizer::decode` drops before running the decoder: special tokens when they are
+/// being skipped, and ids that map to no token at all.
+///
+/// Conservative on purpose - an id missing from this set only means the window advances less
+/// eagerly, never that it advances when it should not.
+fn dropped_ids(tokenizer: &Tokenizer, skip_special_tokens: bool) -> HashSet<u32> {
+    if !skip_special_tokens {
+        return HashSet::new();
+    }
+    tokenizer
+        .get_added_tokens_decoder()
+        .into_iter()
+        .filter(|(_, token)| token.special)
+        .map(|(id, _)| id)
+        .collect()
 }
 
 /// Length in bytes of the longest common prefix of `a` and `b`, on a character boundary.

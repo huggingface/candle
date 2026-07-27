@@ -5,6 +5,10 @@ use tokenizers::Tokenizer;
 /// Build a tokenizer from an explicit vocabulary and decoder, so the tests exercise decoder
 /// behaviour without downloading anything.
 fn tokenizer(vocab: &[&str], decoder: Value) -> Tokenizer {
+    tokenizer_with_added(vocab, decoder, json!([]))
+}
+
+fn tokenizer_with_added(vocab: &[&str], decoder: Value, added_tokens: Value) -> Tokenizer {
     let vocab: serde_json::Map<String, Value> = vocab
         .iter()
         .enumerate()
@@ -14,7 +18,7 @@ fn tokenizer(vocab: &[&str], decoder: Value) -> Tokenizer {
         "version": "1.0",
         "truncation": null,
         "padding": null,
-        "added_tokens": [],
+        "added_tokens": added_tokens,
         "normalizer": null,
         "pre_tokenizer": null,
         "post_processor": null,
@@ -196,6 +200,88 @@ fn unbounded_decoder_falls_back_to_whole_sequence() {
         assert_eq!(incremental.text(), tokenizer.decode(&ids, true).unwrap());
     }
     assert_eq!(incremental.window_len(), ids.len());
+}
+
+#[test]
+fn fused_bpe_decoder_accounts_for_its_suffix() {
+    // After a `Fuse` the decoder sees one string, so every occurrence of the suffix is dropped
+    // wherever it lands - including one assembled across several pushed tokens, which rewrites
+    // text that a per-token reading would have considered settled.
+    let decoder = json!({"type": "Sequence", "decoders": [
+        {"type": "Fuse"},
+        {"type": "BPEDecoder", "suffix": "abc"},
+    ]});
+    let tokenizer = tokenizer(&["a", "b", "c", "x"], decoder);
+    let mut incremental = IncrementalDecoder::new(&tokenizer);
+    assert!(incremental.is_windowed());
+
+    // "a", then "ab", then the suffix completes and the text collapses to "".
+    for (i, id) in [0, 1, 2].into_iter().enumerate() {
+        assert_eq!(incremental.push(id).unwrap(), "");
+        assert_eq!(incremental.retracted(), 0, "retraction at step {i}");
+    }
+    assert_eq!(incremental.text(), "");
+    check_stream(&tokenizer, &[3, 0, 1, 2, 3]);
+}
+
+#[test]
+fn fused_ctc_accounts_for_its_pad_token() {
+    // The pad token is stripped from the fused string whether or not `cleanup` is set.
+    let decoder = json!({"type": "Sequence", "decoders": [
+        {"type": "Fuse"},
+        {"type": "CTC", "pad_token": "<pad>", "word_delimiter_token": "|", "cleanup": false},
+    ]});
+    let tokenizer = tokenizer(&["<", "p", "a", "d", ">"], decoder);
+    let mut incremental = IncrementalDecoder::new(&tokenizer);
+    assert!(incremental.is_windowed());
+
+    for (i, id) in [0, 1, 2, 3, 4].into_iter().enumerate() {
+        assert_eq!(incremental.push(id).unwrap(), "");
+        assert_eq!(incremental.retracted(), 0, "retraction at step {i}");
+    }
+    assert_eq!(incremental.text(), "");
+}
+
+#[test]
+fn byte_decoders_after_a_fuse_are_unbounded() {
+    // Both match a shape against the whole accumulated string, so appending one token can
+    // rewrite the entire prefix; neither may be windowed once the tokens have been fused.
+    for inner in [byte_level(), json!({"type": "ByteFallback"})] {
+        let fused = json!({"type": "Sequence", "decoders": [{"type": "Fuse"}, inner.clone()]});
+        let after_fuse = tokenizer(&["<0x61>", "Hello", "Ã"], fused);
+        assert!(
+            !IncrementalDecoder::new(&after_fuse).is_windowed(),
+            "{inner} after a Fuse must not be windowed"
+        );
+        // On its own it stays windowed.
+        let alone = tokenizer(&["<0x61>", "Hello", "Ã"], inner);
+        assert!(IncrementalDecoder::new(&alone).is_windowed());
+    }
+}
+
+#[test]
+fn a_run_of_special_tokens_keeps_the_window_bounded() {
+    // Skipped special tokens decode to nothing, so no candidate tail is ever long enough to
+    // re-anchor on. They never reach the decoder either, so the window can simply skip them.
+    let added = json!([{
+        "id": 2, "content": "<eos>", "single_word": false,
+        "lstrip": false, "rstrip": false, "normalized": false, "special": true,
+    }]);
+    let tokenizer = tokenizer_with_added(&["Hello", "Ġworld", "<eos>"], byte_level(), added);
+    let mut decoder = IncrementalDecoder::new(&tokenizer);
+    decoder.push(0).unwrap();
+
+    let mut ids = vec![0];
+    for _ in 0..500 {
+        ids.push(2);
+        decoder.push(2).unwrap();
+        assert_eq!(decoder.text(), tokenizer.decode(&ids, true).unwrap());
+        // The skipped tokens never enter the window at all.
+        assert_eq!(decoder.window_len(), 1);
+    }
+    ids.push(1);
+    assert_eq!(decoder.push(1).unwrap(), " world");
+    assert_eq!(decoder.text(), tokenizer.decode(&ids, true).unwrap());
 }
 
 #[test]
