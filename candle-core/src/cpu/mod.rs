@@ -249,11 +249,10 @@ pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
     *c = sum;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+
 #[cfg(any(
     target_feature = "neon",
     target_feature = "avx2",
-    target_feature = "simd128"
 ))]
 pub(crate) unsafe fn vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f16, k: usize) {
     let mut i = 0;
@@ -288,11 +287,10 @@ pub(crate) unsafe fn vec_add_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+
 #[cfg(any(
     target_feature = "neon",
     target_feature = "avx2",
-    target_feature = "simd128"
 ))]
 pub(crate) unsafe fn vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut bf16, k: usize) {
     let mut i = 0;
@@ -327,11 +325,10 @@ pub(crate) unsafe fn vec_add_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+
 #[cfg(any(
     target_feature = "neon",
     target_feature = "avx2",
-    target_feature = "simd128"
 ))]
 #[inline(always)]
 pub(crate) unsafe fn vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f16, k: usize) {
@@ -363,11 +360,9 @@ pub(crate) unsafe fn vec_scalar_add_f16(scalar: f16, xs: *const f16, ys: *mut f1
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[cfg(any(
     target_feature = "neon",
     target_feature = "avx2",
-    target_feature = "simd128"
 ))]
 #[inline(always)]
 pub(crate) unsafe fn vec_scalar_add_bf16(scalar: bf16, xs: *const bf16, ys: *mut bf16, k: usize) {
