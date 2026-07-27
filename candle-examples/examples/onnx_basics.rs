@@ -77,7 +77,7 @@ pub fn main() -> Result<()> {
                 println!("input {}: {value:?}", input.name);
                 inputs.insert(input.name.clone(), value);
             }
-            let outputs = candle_onnx::simple_eval(&model, inputs)?;
+            let outputs = candle_onnx::simple_eval(&model, inputs, &Device::Cpu)?;
             for (name, value) in outputs.iter() {
                 println!("output {name}: {value:?}")
             }

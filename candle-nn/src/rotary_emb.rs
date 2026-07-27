@@ -3,6 +3,23 @@
 use candle::{CpuStorage, Layout, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
+// `el / 2` is derived from a tensor shape and could in principle exceed u32::MAX for a very
+// large tensor; `as u32` would silently truncate it into a bogus, too-small launch grid instead
+// of erroring out. Mirrors the same guard added to candle-core's cuda_backend in
+// huggingface/candle#3663.
+#[cfg(feature = "cuda")]
+fn cuda_launch_config_for_num_elems(
+    elem_count: usize,
+) -> Result<candle::cuda_backend::cudarc::driver::LaunchConfig> {
+    let elem_count = u32::try_from(elem_count).map_err(|_| {
+        candle::Error::Msg(format!(
+            "cuda kernel launch element count {elem_count} exceeds u32::MAX"
+        ))
+        .bt()
+    })?;
+    Ok(candle::cuda_backend::cudarc::driver::LaunchConfig::for_num_elems(elem_count))
+}
+
 /// Interleaved variant of rotary embeddings.
 /// The x0 and x1 value are interleaved on the n_embd (= head_dim) dimension.
 /// The resulting y0 and y1 are also interleaved with:
@@ -112,9 +129,7 @@ impl candle::CustomOp3 for RotaryEmbI {
         s3: &candle::CudaStorage,
         l3: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
-        use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
-        };
+        use candle::cuda_backend::cudarc::driver::{CudaSlice, DeviceRepr, PushKernelArg};
         use candle::cuda_backend::{kernel_name, kernels, WrapErr};
         use candle::{CudaDevice, WithDType};
 
@@ -146,7 +161,7 @@ impl candle::CustomOp3 for RotaryEmbI {
                 0u32
             };
             let el = b * h * t * d;
-            let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
+            let cfg = cuda_launch_config_for_num_elems(el / 2)?;
             let func = dev.get_or_load_func(&kernel_name::<T>("rope_i"), &kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
             let dst = unsafe { dev.alloc::<T>(el)? };
@@ -417,9 +432,7 @@ impl candle::CustomOp3 for RotaryEmb {
         s3: &candle::CudaStorage,
         l3: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
-        use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
-        };
+        use candle::cuda_backend::cudarc::driver::{CudaSlice, DeviceRepr, PushKernelArg};
         use candle::cuda_backend::{kernel_name, kernels, WrapErr};
         use candle::{CudaDevice, WithDType};
 
@@ -451,7 +464,7 @@ impl candle::CustomOp3 for RotaryEmb {
                 0u32
             };
             let el = b * h * t * d;
-            let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
+            let cfg = cuda_launch_config_for_num_elems(el / 2)?;
             let func = dev.get_or_load_func(&kernel_name::<T>("rope"), &kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
             let dst = unsafe { dev.alloc::<T>(el)? };
@@ -691,9 +704,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
         s3: &candle::CudaStorage,
         l3: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
-        use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
-        };
+        use candle::cuda_backend::cudarc::driver::{CudaSlice, DeviceRepr, PushKernelArg};
         use candle::cuda_backend::{kernel_name, kernels, WrapErr};
         use candle::{CudaDevice, WithDType};
 
@@ -725,7 +736,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
                 0u32
             };
             let el = b * h * t * d;
-            let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
+            let cfg = cuda_launch_config_for_num_elems(el / 2)?;
             let func = dev.get_or_load_func(&kernel_name::<T>("rope_thd"), &kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
             let dst = unsafe { dev.alloc::<T>(el)? };

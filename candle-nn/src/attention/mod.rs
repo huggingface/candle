@@ -1,10 +1,12 @@
 pub mod cpu_flash;
+pub mod paged;
 pub mod varlen;
 
 use candle::Tensor;
 
 pub use cpu_flash::flash_attn;
 pub use cpu_flash::varlen::flash_attn_varlen_cpu;
+pub use paged::{paged_attention, reshape_and_cache, BlockAllocator};
 pub use varlen::flash_attn_varlen_unfused;
 
 #[derive(Debug, Clone, Default)]

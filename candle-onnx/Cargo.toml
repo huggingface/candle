@@ -20,3 +20,7 @@ prost-build = "0.14.1"
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
 clap = { version = "4.5.49", features = ["derive"] }
+
+[features]
+cuda = ["candle/cuda"]
+metal = ["candle/metal"]

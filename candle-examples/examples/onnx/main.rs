@@ -66,9 +66,10 @@ pub fn main() -> anyhow::Result<()> {
 
     let model = candle_onnx::read_file(model)?;
     let graph = model.graph.as_ref().unwrap();
+    let device = image.device().clone();
     let mut inputs = std::collections::HashMap::new();
     inputs.insert(graph.input[0].name.to_string(), image.unsqueeze(0)?);
-    let mut outputs = candle_onnx::simple_eval(&model, inputs)?;
+    let mut outputs = candle_onnx::simple_eval(&model, inputs, &device)?;
     let output = outputs.remove(&graph.output[0].name).unwrap();
     let prs = match args.which {
         Which::SqueezeNet => candle_nn::ops::softmax(&output, D::Minus1)?,

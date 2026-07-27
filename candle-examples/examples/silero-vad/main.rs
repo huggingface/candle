@@ -177,7 +177,7 @@ fn main() -> Result<()> {
             ("sr".to_string(), state.sample_rate.clone()),
             ("state".to_string(), state.state.clone()),
         ]);
-        let out = candle_onnx::simple_eval(&model, inputs).unwrap();
+        let out = candle_onnx::simple_eval(&model, inputs, &device).unwrap();
         let out_names = &model.graph.as_ref().unwrap().output;
         let output = out.get(&out_names[0].name).unwrap().clone();
         state.state = out.get(&out_names[1].name).unwrap().clone();

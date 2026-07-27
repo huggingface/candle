@@ -12,10 +12,15 @@ members = [
     "tensor-tools",
 ]
 exclude = [
+    "candle-awq-kernels",
     "candle-book",
     "candle-flash-attn",
     "candle-flash-attn-v3",
+    "candle-flashinfer-kernels",
+    "candle-fp8-kernels",
+    "candle-gptq-kernels",
     "candle-kernels",
+    "candle-lora-kernels",
     "candle-metal-kernels",
     "candle-onnx",
 ]
@@ -39,7 +44,12 @@ candle = { path = "./candle-core", package = "candle-core", version = "0.11.0" }
 candle-datasets = { path = "./candle-datasets", version = "0.11.0" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.11.0" }
 candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.11.0" }
+candle-awq-kernels = { path = "./candle-awq-kernels", version = "0.11.0", default-features = false }
+candle-flashinfer-kernels = { path = "./candle-flashinfer-kernels", version = "0.11.0" }
+candle-fp8-kernels = { path = "./candle-fp8-kernels", version = "0.11.0", default-features = false }
+candle-gptq-kernels = { path = "./candle-gptq-kernels", version = "0.11.0", default-features = false }
 candle-kernels = { path = "./candle-kernels", version = "0.11.0" }
+candle-lora-kernels = { path = "./candle-lora-kernels", version = "0.11.0" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.11.0" }
 candle-nn = { path = "./candle-nn", version = "0.11.0" }
 candle-onnx = { path = "./candle-onnx", version = "0.11.0" }
@@ -109,3 +119,15 @@ objc2-foundation = { version = "0.3.1" }
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+# Temporary override for astorise/candle#17: cudarc 0.19.8's teardown paths
+# (Drop for CudaSlice's cuStreamWaitEvent calls and SyncOnDrop::Record's
+# cuEventRecord) ignore is_managing_stream_synchronization(). A persistent
+# tensor accessed via device_ptr() inside a CUDA graph capture gets its
+# dependency event recorded as a node of that graph; dropping the tensor after
+# the graph is destroyed then fails CUDA_ERROR_INVALID_VALUE, which cudarc
+# parks in CudaContext::error_state and surfaces on the next unrelated call.
+# The fork gates those teardown paths symmetrically with the entry paths.
+# Remove once the fix lands upstream in a cudarc release.
+[patch.crates-io]
+cudarc = { git = "https://github.com/astorise/cudarc", tag = "candle-v0.19.9" }

@@ -9,10 +9,10 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
-    runs-on:
-      group: aws-g5-4xlarge-cache
+    runs-on: arc-gpu-candle
     container:
       image: nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+      options: --gpus all
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
       contents: write
@@ -23,6 +23,9 @@ jobs:
       security-events: write
     env:
       CUDA_COMPUTE_CAP: 86
+      # This runner OOM-kills (exit 137) compiling candle-transformers at full rustc
+      # parallelism; cap parallel rustc jobs to keep peak memory down.
+      CARGO_BUILD_JOBS: 2
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -33,3 +36,12 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
       - name: Test (cuda)
         run: cargo test --features cuda
+      - name: Build+test (cuda) - fused GPTQ/AWQ/FP8 dequant+GEMM kernels
+        run: cargo test -p candle-transformers --features cuda,gptq-cuda,awq-cuda,fp8-cuda
+      - name: Test (cuda) - GPTQ tensor-core kernel correctness
+        run: cargo test --manifest-path candle-gptq-kernels/Cargo.toml
+      - name: Build+test (cuda) - FlashInfer-style decode attention kernel
+        # `--features cuda` compiles and exercises the GPU kernel; the crate also builds
+        # CPU-only (default features), and the CPU reference fwd is covered by the
+        # decode_attention_cpu_matches_reference test either way.
+        run: cargo test --manifest-path candle-flashinfer-kernels/Cargo.toml --features cuda

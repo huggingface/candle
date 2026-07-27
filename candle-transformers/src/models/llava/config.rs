@@ -76,6 +76,7 @@ impl LLaVAConfig {
             bos_token_id: Some(self.bos_token_id as u32),
             eos_token_id: Some(LlamaEosToks::Single(self.eos_token_id as u32)),
             use_flash_attn: false,
+            use_flashinfer_attention: false,
             rope_scaling: None, // Assume we don't have LLaVA for Llama 3.1
             max_position_embeddings: self.max_position_embeddings,
             tie_word_embeddings: self.tie_word_embeddings.unwrap_or(false),

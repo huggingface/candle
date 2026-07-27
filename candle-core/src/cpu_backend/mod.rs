@@ -240,7 +240,6 @@ impl ReduceSum<'_> {
     where
         T: WithDType,
     {
-        let mut dst = vec![start_elt; self.dst_shape.elem_count()];
         match src_l.contiguous_offsets() {
             Some((o1, o2)) => {
                 let src = &src[o1..o2];
@@ -254,6 +253,7 @@ impl ReduceSum<'_> {
                     .enumerate()
                     .all(|(i, &v)| v == src_l.shape().rank() - 1 - i);
                 if reduce_over_last_dims {
+                    let mut dst = vec![start_elt; self.dst_shape.elem_count()];
                     let reduce_sz = self
                         .reduce_dims_and_stride
                         .iter()
@@ -271,6 +271,12 @@ impl ReduceSum<'_> {
                     }
                     return Ok(dst);
                 };
+                // Reducing over a non-trailing axis can't use the contiguous fast path above, so
+                // it used to add straight into a `Vec<T>` here. For f16/bf16 that saturates on
+                // long reductions the same way a scalar `+=` chain would (e.g. summing a column
+                // of 4096 ones stalls once the running value's f16 ULP exceeds 1). Accumulate in
+                // each dtype's wide `Accum` type instead and narrow back down once at the end.
+                let mut acc = vec![start_elt.to_accum(); self.dst_shape.elem_count()];
                 for (unstr_index, &src) in src.iter().enumerate() {
                     let mut dst_index = unstr_index;
                     // Set the reduce_dims indexes to 0.
@@ -279,10 +285,12 @@ impl ReduceSum<'_> {
                         let (pre, post) = (dst_index / stride, dst_index % stride);
                         dst_index = (pre / dim) * stride + post;
                     }
-                    dst[dst_index] += src;
+                    T::accum_add(&mut acc[dst_index], src);
                 }
+                Ok(acc.into_iter().map(T::from_accum).collect())
             }
             None => {
+                let mut acc = vec![start_elt.to_accum(); self.dst_shape.elem_count()];
                 for (unstr_index, src_index) in src_l.strided_index().enumerate() {
                     let mut dst_index = unstr_index;
                     // Set the reduce_dims indexes to 0.
@@ -291,11 +299,11 @@ impl ReduceSum<'_> {
                         let (pre, post) = (dst_index / stride, dst_index % stride);
                         dst_index = (pre / dim) * stride + post;
                     }
-                    dst[dst_index] += src[src_index];
+                    T::accum_add(&mut acc[dst_index], src[src_index]);
                 }
+                Ok(acc.into_iter().map(T::from_accum).collect())
             }
         }
-        Ok(dst)
     }
 }
 
@@ -330,8 +338,14 @@ impl Map1 for AvgPool2D {
         let w_out = (w - k_w) / s_w + 1;
         let src_index = layout.start_offset();
         let mut dst = vec![T::zero(); b_sz * c * h_out * w_out];
-        let scale = 1f64 / (k_h * k_w) as f64;
-        let scale = T::from_f64(scale);
+        let count = (k_h * k_w) as f64;
+        let scale = T::from_f64(1f64 / count);
+        // Narrow floats saturate when a large window (e.g. global average
+        // pooling) is summed in their own dtype, so the average comes out far
+        // too small; accumulate those in f64 instead (the Metal backend already
+        // accumulates in f32). f32/f64/integer dtypes keep the native
+        // accumulation so results stay bit-identical (e.g. PyTorch parity).
+        let wide = matches!(T::DTYPE, DType::F16 | DType::BF16);
         for b_idx in 0..b_sz {
             let dst = &mut dst[b_idx * c * h_out * w_out..];
             let src_index = src_index + b_idx * stride[0];
@@ -340,15 +354,28 @@ impl Map1 for AvgPool2D {
                 let src_index = src_index + c_idx * stride[1];
                 for h_idx in 0..h_out {
                     for w_idx in 0..w_out {
-                        let mut sum = T::zero();
-                        for m in 0..k_h {
-                            for n in 0..k_w {
-                                let m = s_h * h_idx + m;
-                                let n = s_w * w_idx + n;
-                                sum += src[src_index + m * stride_h + n * stride_w]
+                        let dst_val = if wide {
+                            let mut sum = 0f64;
+                            for m in 0..k_h {
+                                for n in 0..k_w {
+                                    let m = s_h * h_idx + m;
+                                    let n = s_w * w_idx + n;
+                                    sum += src[src_index + m * stride_h + n * stride_w].to_f64();
+                                }
                             }
-                        }
-                        dst[h_idx * w_out + w_idx] = sum * scale;
+                            T::from_f64(sum / count)
+                        } else {
+                            let mut sum = T::zero();
+                            for m in 0..k_h {
+                                for n in 0..k_w {
+                                    let m = s_h * h_idx + m;
+                                    let n = s_w * w_idx + n;
+                                    sum += src[src_index + m * stride_h + n * stride_w];
+                                }
+                            }
+                            sum * scale
+                        };
+                        dst[h_idx * w_out + w_idx] = dst_val;
                     }
                 }
             }

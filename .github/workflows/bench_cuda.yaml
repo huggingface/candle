@@ -1,0 +1,66 @@
+name: Bench / cuda lora
+
+# Manual-only GPU benchmark for the heterogeneous multi-LoRA batched path.
+# This is NOT a correctness gate (see ci_cuda.yaml for that) — it produces
+# timing numbers, so it never runs on pull_request, only on demand.
+#
+# It runs the candle-nn `lora_multi_adapter` criterion bench twice on the same
+# GPU: first with `--features cuda` (the pure-tensor gather+bmm reference path)
+# and then with `--features cuda,lora-cuda` (the candle-lora-kernels BGMV
+# kernels). The two runs share the same criterion group/function ids, so the
+# second run's output annotates the `batched` function with the change relative
+# to the reference run — i.e. the kernel speedup — against the same `sequential`
+# baseline.
+on:
+  workflow_dispatch:
+    inputs:
+      bench_ref:
+        description: 'Branch/tag/SHA to checkout and benchmark (defaults to the dispatched ref)'
+        required: false
+        type: string
+
+jobs:
+  bench-cuda-lora:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.inputs.bench_ref || github.run_id }}
+      cancel-in-progress: true
+    runs-on: arc-gpu-candle
+    container:
+      image: nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+      options: --gpus all
+    permissions:
+      contents: read
+    env:
+      CUDA_COMPUTE_CAP: 86
+      # Match ci_cuda.yaml: cap parallel rustc jobs to avoid OOM-kills on this runner.
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.inputs.bench_ref || github.ref }}
+      - name: Install dependencies
+        run: apt update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config git -y
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - name: Bench (cuda) - reference gather+bmm path
+        # Runs the lora bench on GPU with the batched path using the pure-tensor
+        # reference (no lora-cuda). Establishes the baseline the kernel run is
+        # compared against. Skipped on refs that don't ship the bench.
+        run: |
+          if grep -q 'lora_multi_adapter' candle-nn/benches/benchmarks/lora.rs 2>/dev/null; then
+            cargo bench -p candle-nn --features cuda --bench bench_main -- 'lora_multi_adapter' --measurement-time 5 --warm-up-time 2
+          else
+            echo "lora bench not present on this ref, skipping"
+          fi
+      - name: Bench (cuda) - BGMV kernel path
+        # Re-runs the same bench with the LoRA CUDA kernels enabled; criterion
+        # reports the change on the `batched` function relative to the reference
+        # run above. Skipped on refs without the lora-cuda feature.
+        run: |
+          if grep -q '^lora-cuda' candle-nn/Cargo.toml 2>/dev/null; then
+            cargo bench -p candle-nn --features cuda,lora-cuda --bench bench_main -- 'lora_multi_adapter' --measurement-time 5 --warm-up-time 2
+          else
+            echo "lora-cuda feature not present on this ref, skipping"
+          fi

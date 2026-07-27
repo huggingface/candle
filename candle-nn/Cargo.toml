@@ -21,6 +21,7 @@ safetensors = { workspace = true }
 serde = { workspace = true }
 objc2-metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+candle-lora-kernels = { workspace = true, optional = true }
 libc = { workspace = true }
 
 [dev-dependencies]
@@ -35,6 +36,7 @@ default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
 cudnn = ["candle/cudnn"]
+lora-cuda = ["cuda", "dep:candle-lora-kernels"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:objc2-metal"]
 metal-debug-labels = ["metal", "candle/metal-debug-labels"]

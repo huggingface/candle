@@ -45,6 +45,13 @@ impl Linear {
         let span = tracing::span!(tracing::Level::TRACE, "linear");
         Self { inner, span }
     }
+
+    /// The underlying `candle_nn::Linear`, e.g. to hand its (already
+    /// resident) weight off to a wrapper like
+    /// [`candle_nn::lora::LoraLinear`] without re-reading it from storage.
+    pub fn inner(&self) -> &candle_nn::Linear {
+        &self.inner
+    }
 }
 
 pub fn linear_b(d1: usize, d2: usize, b: bool, vb: VarBuilder) -> Result<Linear> {

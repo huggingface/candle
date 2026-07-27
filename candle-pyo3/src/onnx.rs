@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::utils::wrap_err;
 use crate::{PyDType, PyTensor};
+use candle::Device;
 use candle_onnx::eval::{dtype, get_tensor, simple_eval};
 use candle_onnx::onnx::tensor_proto::DataType;
 use candle_onnx::onnx::tensor_shape_proto::dimension::Value;
@@ -168,8 +169,12 @@ impl PyONNXModel {
         let mut map = HashMap::new();
         if let Some(graph) = self.0.graph.as_ref() {
             for tensor_description in graph.initializer.iter() {
-                let tensor = get_tensor(tensor_description, tensor_description.name.as_str())
-                    .map_err(wrap_err)?;
+                let tensor = get_tensor(
+                    tensor_description,
+                    tensor_description.name.as_str(),
+                    &Device::Cpu,
+                )
+                .map_err(wrap_err)?;
                 map.insert(tensor_description.name.to_string(), PyTensor(tensor));
             }
         }
@@ -200,9 +205,19 @@ impl PyONNXModel {
     /// Run the model on the given inputs.
     /// &RETURNS&: Dict[str,Tensor]
     fn run(&self, inputs: HashMap<String, PyTensor>) -> PyResult<HashMap<String, PyTensor>> {
-        let unwrapped_tensors = inputs.into_iter().map(|(k, v)| (k.clone(), v.0)).collect();
+        let unwrapped_tensors: HashMap<_, _> =
+            inputs.into_iter().map(|(k, v)| (k.clone(), v.0)).collect();
+        // Prefer a non-CPU device if any input lives on one, so that a CPU-only
+        // metadata tensor (e.g. a shape/axis input) can't arbitrarily win over a
+        // GPU data tensor depending on HashMap iteration order.
+        let device = unwrapped_tensors
+            .values()
+            .map(|t| t.device())
+            .find(|d| !d.is_cpu())
+            .cloned()
+            .unwrap_or(Device::Cpu);
 
-        let result = simple_eval(&self.0, unwrapped_tensors).map_err(wrap_err)?;
+        let result = simple_eval(&self.0, unwrapped_tensors, &device).map_err(wrap_err)?;
 
         Ok(result
             .into_iter()
