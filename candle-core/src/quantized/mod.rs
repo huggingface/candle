@@ -419,47 +419,6 @@ impl GgmlDType {
             Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K | Self::Q8K => k_quants::QK_K,
         }
     }
-
-    /// Whether tensors stored with this dtype can be used as the weight operand of a quantized
-    /// matmul on the given device.
-    ///
-    /// `F32`/`F16`/`BF16` are always supported: they are dequantized to a dense tensor and go
-    /// through the regular (non-quantized) matmul path rather than a dtype-specific kernel.
-    ///
-    /// `Q8_1` and `Q8K` are only used internally as activation/accumulator quantization formats
-    /// (e.g. as the intermediate `Q8_1` produced when quantizing activations before a CUDA
-    /// mat-vec/mat-mat kernel). They have dequantize kernels but no CUDA or Metal matmul kernel of
-    /// their own, so a quantized matmul against a checkpoint tensor stored in one of these dtypes
-    /// fails at runtime on those backends. The CPU backend implements `vec_dot` generically for
-    /// every dtype, so it always supports matmul.
-    pub fn supports_matmul(self, device: &crate::Device) -> bool {
-        match self {
-            Self::F32 | Self::F16 | Self::BF16 => true,
-            Self::Q8_1 | Self::Q8K => device.is_cpu(),
-            Self::Q4_0
-            | Self::Q4_1
-            | Self::Q5_0
-            | Self::Q5_1
-            | Self::Q8_0
-            | Self::Q2K
-            | Self::Q3K
-            | Self::Q4K
-            | Self::Q5K
-            | Self::Q6K => true,
-        }
-    }
-
-    /// Whether tensors stored with this dtype can be dequantized to a dense `F32` tensor on the
-    /// given device.
-    ///
-    /// Every backend (CPU, CUDA, Metal) implements dequantization for all `GgmlDType` variants
-    /// today, so this currently always returns `true`. It is exposed as a separate method from
-    /// [`Self::supports_matmul`] so callers don't have to assume dequantize support implies matmul
-    /// support (or vice-versa), and so future dtype/backend gaps can be reflected here without
-    /// changing the call sites that check it.
-    pub fn supports_dequantize(self, _device: &crate::Device) -> bool {
-        true
-    }
 }
 
 // A version of GgmlType without `vec_dot` so that it can be dyn boxed.

@@ -1514,37 +1514,52 @@ test_device!(
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
 );
 
+/// The exhaustive `match` in `Device::supports_qmatmul` forces a decision whenever a variant is
+/// added, and this list makes the test fail to compile until it is updated too.
+const ALL_GGML_DTYPES: [GgmlDType; 15] = [
+    GgmlDType::F32,
+    GgmlDType::F16,
+    GgmlDType::BF16,
+    GgmlDType::Q4_0,
+    GgmlDType::Q4_1,
+    GgmlDType::Q5_0,
+    GgmlDType::Q5_1,
+    GgmlDType::Q8_0,
+    GgmlDType::Q8_1,
+    GgmlDType::Q2K,
+    GgmlDType::Q3K,
+    GgmlDType::Q4K,
+    GgmlDType::Q5K,
+    GgmlDType::Q6K,
+    GgmlDType::Q8K,
+];
+
+/// Check the predicate against what the backend actually does rather than restating it.
 #[test]
-fn ggml_dtype_supports_matmul_and_dequantize_on_cpu() -> Result<()> {
-    let cpu = Device::Cpu;
-    let all_dtypes = [
-        GgmlDType::F32,
-        GgmlDType::F16,
-        GgmlDType::BF16,
-        GgmlDType::Q4_0,
-        GgmlDType::Q4_1,
-        GgmlDType::Q5_0,
-        GgmlDType::Q5_1,
-        GgmlDType::Q8_0,
-        GgmlDType::Q8_1,
-        GgmlDType::Q2K,
-        GgmlDType::Q3K,
-        GgmlDType::Q4K,
-        GgmlDType::Q5K,
-        GgmlDType::Q6K,
-        GgmlDType::Q8K,
-    ];
-    for dtype in all_dtypes {
-        // The CPU backend implements `vec_dot` generically for every GGML dtype, so it always
-        // supports both matmul and dequantize.
-        assert!(
-            dtype.supports_matmul(&cpu),
-            "expected {dtype:?} to support matmul on the CPU backend"
+fn cpu_supports_qmatmul_matches_backend() -> Result<()> {
+    let device = Device::Cpu;
+    // m > 1 so this exercises the general matmul path, not a mat-vec special case.
+    let (m, k, n) = (2, 256, 2);
+    let lhs = (0..m * k)
+        .map(|v| v as f32 / (m * k) as f32)
+        .collect::<Vec<_>>();
+    let rhs = (0..k * n)
+        .map(|v| v as f32 / (k * n) as f32)
+        .collect::<Vec<_>>();
+    let lhs = Tensor::from_vec(lhs, (m, k), &device)?;
+    let rhs = Tensor::from_vec(rhs, (k, n), &device)?;
+
+    for dtype in ALL_GGML_DTYPES {
+        let qtensor = quantized::QTensor::quantize(&rhs.t()?, dtype)?;
+        let ran = quantized::QMatMul::from_qtensor(qtensor)?
+            .forward(&lhs)
+            .is_ok();
+        assert_eq!(
+            device.supports_qmatmul(dtype),
+            ran,
+            "supports_qmatmul disagrees with the CPU backend for {dtype:?}"
         );
-        assert!(
-            dtype.supports_dequantize(&cpu),
-            "expected {dtype:?} to support dequantize on the CPU backend"
-        );
+        assert!(device.supports_dequantize(dtype));
     }
     Ok(())
 }
