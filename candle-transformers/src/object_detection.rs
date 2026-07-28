@@ -114,3 +114,55 @@ pub fn soft_non_maximum_suppression<D>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bbox(xmin: f32, ymin: f32, xmax: f32, ymax: f32) -> Bbox<()> {
+        Bbox {
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            confidence: 1.0,
+            data: (),
+        }
+    }
+
+    #[test]
+    fn test_iou_identical_boxes() {
+        let b = bbox(0.0, 0.0, 10.0, 10.0);
+        assert_eq!(iou(&b, &b), 1.0);
+    }
+
+    #[test]
+    fn test_iou_no_overlap() {
+        let b1 = bbox(0.0, 0.0, 1.0, 1.0);
+        let b2 = bbox(5.0, 5.0, 6.0, 6.0);
+        assert_eq!(iou(&b1, &b2), 0.0);
+    }
+
+    #[test]
+    fn test_iou_partial_overlap() {
+        let b1 = bbox(0.0, 0.0, 2.0, 2.0);
+        let b2 = bbox(1.0, 1.0, 3.0, 3.0);
+        let result = iou(&b1, &b2);
+        assert!((result - 4.0 / 14.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_iou_containment() {
+        let outer = bbox(0.0, 0.0, 4.0, 4.0);
+        let inner = bbox(1.0, 1.0, 3.0, 3.0);
+        let result = iou(&outer, &inner);
+        assert!((result - 9.0 / 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_iou_touching_edges() {
+        let b1 = bbox(0.0, 0.0, 1.0, 1.0);
+        let b2 = bbox(2.0, 0.0, 3.0, 1.0);
+        assert_eq!(iou(&b1, &b2), 0.0);
+    }
+}

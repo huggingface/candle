@@ -56,3 +56,96 @@ pub fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {
         Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::{Device, IndexOp};
+
+    #[test]
+    fn test_build_causal_mask_square() -> Result<()> {
+        let mask = build_causal_mask(4, 0, &Device::Cpu)?;
+        assert_eq!(mask.dims(), [4, 4]);
+        assert_eq!(
+            mask.to_vec2::<u8>()?,
+            [[0, 1, 1, 1], [0, 0, 1, 1], [0, 0, 0, 1], [0, 0, 0, 0],]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_causal_mask_with_index_pos() -> Result<()> {
+        let mask = build_causal_mask(2, 3, &Device::Cpu)?;
+        assert_eq!(mask.dims(), [2, 5]);
+        assert_eq!(mask.to_vec2::<u8>()?, [[0, 0, 0, 0, 1], [0, 0, 0, 0, 0],]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_causal_mask_single_token() -> Result<()> {
+        let mask = build_causal_mask(1, 0, &Device::Cpu)?;
+        assert_eq!(mask.dims(), [1, 1]);
+        assert_eq!(mask.to_vec2::<u8>()?, [[0]]);
+
+        let mask = build_causal_mask(1, 5, &Device::Cpu)?;
+        assert_eq!(mask.dims(), [1, 6]);
+        assert_eq!(mask.to_vec2::<u8>()?, [[0, 0, 0, 0, 0, 0]]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_repeat_penalty_positive_logits() -> Result<()> {
+        let logits = Tensor::new(&[1.0f32, 2.0, 3.0, 4.0], &Device::Cpu)?;
+        let result = apply_repeat_penalty(&logits, 2.0, &[1, 3])?;
+        assert_eq!(result.to_vec1::<f32>()?, [1.0, 1.0, 3.0, 2.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_repeat_penalty_negative_logits() -> Result<()> {
+        let logits = Tensor::new(&[-1.0f32, 2.0, -3.0, 4.0], &Device::Cpu)?;
+        let result = apply_repeat_penalty(&logits, 2.0, &[0, 2])?;
+        assert_eq!(result.to_vec1::<f32>()?, [-2.0, 2.0, -6.0, 4.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_repeat_penalty_no_op_cases() -> Result<()> {
+        let logits = Tensor::new(&[1.0f32, 2.0, 3.0], &Device::Cpu)?;
+
+        let result = apply_repeat_penalty(&logits, 2.0, &[])?;
+        assert_eq!(result.to_vec1::<f32>()?, [1.0, 2.0, 3.0]);
+
+        let result = apply_repeat_penalty(&logits, 1.0, &[0, 1, 2])?;
+        assert_eq!(result.to_vec1::<f32>()?, [1.0, 2.0, 3.0]);
+
+        let result = apply_repeat_penalty(&logits, 2.0, &[1, 1, 1])?;
+        assert_eq!(result.to_vec1::<f32>()?, [1.0, 1.0, 3.0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_repeat_kv() -> Result<()> {
+        let t = Tensor::arange(0f32, 24., &Device::Cpu)?.reshape((1, 2, 3, 4))?;
+
+        let out = repeat_kv(t.clone(), 1)?;
+        assert_eq!(out.dims(), [1, 2, 3, 4]);
+        assert_eq!(
+            out.flatten_all()?.to_vec1::<f32>()?,
+            t.flatten_all()?.to_vec1::<f32>()?
+        );
+
+        let out = repeat_kv(t, 2)?;
+        assert_eq!(out.dims(), [1, 4, 3, 4]);
+        let head0 = out.i((0, 0))?.to_vec2::<f32>()?;
+        let head1 = out.i((0, 1))?.to_vec2::<f32>()?;
+        let head2 = out.i((0, 2))?.to_vec2::<f32>()?;
+        let head3 = out.i((0, 3))?.to_vec2::<f32>()?;
+        assert_eq!(head0, head1);
+        assert_eq!(head2, head3);
+        assert_ne!(head0, head2);
+
+        Ok(())
+    }
+}

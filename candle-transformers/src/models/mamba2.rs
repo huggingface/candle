@@ -645,3 +645,153 @@ impl Model {
         self.dtype
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle::{Device, Result, Tensor};
+
+    fn test_config() -> Config {
+        Config {
+            d_model: 128,
+            n_layer: 2,
+            vocab_size: 1000,
+            d_state: 64,
+            expand: 2,
+            headdim: 64,
+            ngroups: 1,
+            pad_vocab_size_multiple: 16,
+        }
+    }
+
+    #[test]
+    fn test_config_vocab_size_padding() {
+        let mut cfg = test_config();
+        cfg.vocab_size = 1000;
+        cfg.pad_vocab_size_multiple = 16;
+        assert_eq!(cfg.vocab_size(), 1008);
+
+        cfg.vocab_size = 1024;
+        assert_eq!(cfg.vocab_size(), 1024);
+
+        cfg.vocab_size = 1;
+        assert_eq!(cfg.vocab_size(), 16);
+    }
+
+    #[test]
+    fn test_config_derived_dimensions() {
+        let cfg = test_config();
+        assert_eq!(cfg.d_inner(), 256);
+        assert_eq!(cfg.nheads(), 4);
+        assert_eq!(cfg.d_xbc(), 256 + 2 * 1 * 64);
+    }
+
+    #[test]
+    fn test_config_json_deserialization() -> Result<()> {
+        let json = r#"{
+            "hidden_size": 768,
+            "num_hidden_layers": 24,
+            "vocab_size": 50280,
+            "state_size": 128,
+            "expand": 2,
+            "head_dim": 64,
+            "n_groups": 1,
+            "pad_vocab_size_multiple": 8
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.d_model, 768);
+        assert_eq!(cfg.n_layer, 24);
+        assert_eq!(cfg.vocab_size, 50280);
+        assert_eq!(cfg.d_state, 128);
+        assert_eq!(cfg.headdim, 64);
+        assert_eq!(cfg.ngroups, 1);
+        assert_eq!(cfg.d_inner(), 1536);
+        assert_eq!(cfg.nheads(), 24);
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_default_values() {
+        let json = r#"{
+            "d_model": 128,
+            "n_layer": 2,
+            "vocab_size": 1000
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.d_state, 64);
+        assert_eq!(cfg.expand, 2);
+        assert_eq!(cfg.headdim, 64);
+        assert_eq!(cfg.ngroups, 1);
+        assert_eq!(cfg.pad_vocab_size_multiple, 16);
+    }
+
+    #[test]
+    fn test_state_new() -> Result<()> {
+        let cfg = test_config();
+        let state = State::new(2, &cfg, DType::F32, &Device::Cpu)?;
+        assert_eq!(state.hs.len(), cfg.n_layer);
+        assert_eq!(state.conv_states.len(), cfg.n_layer);
+        assert_eq!(state.pos, 0);
+        assert_eq!(
+            state.hs[0].dims(),
+            [2, cfg.nheads(), cfg.headdim, cfg.d_state]
+        );
+        assert_eq!(state.conv_states[0].dims(), [2, cfg.d_xbc(), D_CONV]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_segsum_basic() -> Result<()> {
+        let x = Tensor::new(&[1.0f32, 2.0, 3.0], &Device::Cpu)?;
+        let result = segsum(&x)?;
+        assert_eq!(result.dims(), [3, 3]);
+
+        let vals = result.to_vec2::<f32>()?;
+        assert_eq!(vals[0][0], 0.0);
+        assert_eq!(vals[1][1], 0.0);
+        assert_eq!(vals[2][2], 0.0);
+        assert_eq!(vals[1][0], 2.0);
+        assert_eq!(vals[2][0], 5.0);
+        assert_eq!(vals[2][1], 3.0);
+        assert!(vals[0][1].is_infinite() && vals[0][1] < 0.0);
+        assert!(vals[0][2].is_infinite() && vals[0][2] < 0.0);
+        assert!(vals[1][2].is_infinite() && vals[1][2] < 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pad_to_chunk_size_no_padding_needed() -> Result<()> {
+        let x = Tensor::zeros((2, 8, 4), DType::F32, &Device::Cpu)?;
+        let (padded, pad_len) = pad_to_chunk_size(&x, 4)?;
+        assert_eq!(pad_len, 0);
+        assert_eq!(padded.dims(), [2, 8, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pad_to_chunk_size_with_padding() -> Result<()> {
+        let x = Tensor::ones((2, 5, 4), DType::F32, &Device::Cpu)?;
+        let (padded, pad_len) = pad_to_chunk_size(&x, 4)?;
+        assert_eq!(pad_len, 3);
+        assert_eq!(padded.dims(), [2, 8, 4]);
+        let orig = padded.narrow(1, 0, 5)?.flatten_all()?.to_vec1::<f32>()?;
+        assert!(orig.iter().all(|&v| v == 1.0));
+        let pad = padded.narrow(1, 5, 3)?.flatten_all()?.to_vec1::<f32>()?;
+        assert!(pad.iter().all(|&v| v == 0.0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_reshape_into_and_from_chunks_roundtrip() -> Result<()> {
+        let x = Tensor::arange(0f32, 24., &Device::Cpu)?.reshape((1, 12, 2))?;
+        let chunked = reshape_into_chunks(&x, 4)?;
+        assert_eq!(chunked.dims(), [1, 3, 4, 2]);
+        let restored = reshape_from_chunks(&chunked)?;
+        assert_eq!(restored.dims(), [1, 12, 2]);
+        assert_eq!(
+            x.flatten_all()?.to_vec1::<f32>()?,
+            restored.flatten_all()?.to_vec1::<f32>()?
+        );
+        Ok(())
+    }
+}
