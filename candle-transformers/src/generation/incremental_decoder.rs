@@ -39,9 +39,27 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! The decoder only ever reads the tokenizer, and is generic over how it holds it, so a loop
+//! that runs one decoder per row does not have to clone the vocabulary per row:
+//!
+//! ```no_run
+//! use candle_transformers::generation::IncrementalDecoder;
+//! use std::sync::Arc;
+//!
+//! # fn main() {
+//! # let tokenizer: Arc<tokenizers::Tokenizer> = unimplemented!();
+//! # let batch_size = 8;
+//! let decoders: Vec<_> = (0..batch_size)
+//!     .map(|_| IncrementalDecoder::from_tokenizer(Arc::clone(&tokenizer)))
+//!     .collect();
+//! # let _ = decoders;
+//! # }
+//! ```
 
 use candle::{Error, Result};
 use serde_json::Value;
+use std::borrow::Borrow;
 use std::collections::HashSet;
 use tokenizers::Tokenizer;
 
@@ -363,8 +381,17 @@ struct ByteRun {
 /// constant time per token.
 ///
 /// See the [module documentation](self) for the approach.
-pub struct IncrementalDecoder {
-    tokenizer: Tokenizer,
+///
+/// `T` is how the decoder holds the tokenizer, which it only ever reads: `Tokenizer` to own it,
+/// `&Tokenizer` to borrow it, or `Arc<Tokenizer>` to share one across the decoders of a batch
+/// without cloning the vocabulary per row. It defaults to `Tokenizer`, so `IncrementalDecoder`
+/// on its own still names the owning form.
+///
+/// Cloning a decoder carries over the tokenizer and its resolved decoder context, so a batch
+/// loop can resolve both once and clone a decoder per row rather than rebuilding one.
+#[derive(Clone)]
+pub struct IncrementalDecoder<T = Tokenizer> {
+    tokenizer: T,
     skip_special_tokens: bool,
     ctx: DecoderContext,
     /// Special ids that `Tokenizer::decode` filters out before the decoder ever sees them.
@@ -393,18 +420,33 @@ pub struct IncrementalDecoder {
     retracted: usize,
 }
 
-impl IncrementalDecoder {
-    /// Create a decoder for `tokenizer`, resolving the bounded-context property of its decoder.
+impl IncrementalDecoder<Tokenizer> {
+    /// Create a decoder owning a clone of `tokenizer`, resolving the bounded-context property
+    /// of its decoder.
     ///
-    /// The tokenizer is cloned; use [`IncrementalDecoder::from_tokenizer`] to avoid the clone.
+    /// The clone deep-copies the vocabulary. Use [`IncrementalDecoder::from_tokenizer`] to hold
+    /// the tokenizer by reference or by `Arc` instead, which matters for a batched loop that
+    /// needs one decoder per row.
     pub fn new(tokenizer: &Tokenizer) -> Self {
         Self::from_tokenizer(tokenizer.clone())
     }
+}
 
-    /// Create a decoder taking ownership of `tokenizer`.
-    pub fn from_tokenizer(tokenizer: Tokenizer) -> Self {
-        let ctx = DecoderContext::resolve(&tokenizer);
-        let dropped = dropped_ids(&tokenizer, true);
+impl<T: Borrow<Tokenizer>> IncrementalDecoder<T> {
+    /// Create a decoder holding `tokenizer` however the caller has it: by value, by reference,
+    /// or behind an `Arc` shared with the rest of a batch.
+    ///
+    /// ```no_run
+    /// # use candle_transformers::generation::IncrementalDecoder;
+    /// # use std::sync::Arc;
+    /// # let tokenizer: tokenizers::Tokenizer = unimplemented!();
+    /// let owning = IncrementalDecoder::from_tokenizer(tokenizer.clone());
+    /// let borrowing = IncrementalDecoder::from_tokenizer(&tokenizer);
+    /// let sharing = IncrementalDecoder::from_tokenizer(Arc::new(tokenizer));
+    /// ```
+    pub fn from_tokenizer(tokenizer: T) -> Self {
+        let ctx = DecoderContext::resolve(tokenizer.borrow());
+        let dropped = dropped_ids(tokenizer.borrow(), true);
         Self {
             tokenizer,
             skip_special_tokens: true,
@@ -424,7 +466,7 @@ impl IncrementalDecoder {
     /// Whether special tokens are dropped from the decoded text, `true` by default.
     pub fn with_skip_special_tokens(mut self, skip_special_tokens: bool) -> Self {
         self.skip_special_tokens = skip_special_tokens;
-        self.dropped = dropped_ids(&self.tokenizer, skip_special_tokens);
+        self.dropped = dropped_ids(self.tokenizer.borrow(), skip_special_tokens);
         self.clear();
         self
     }
@@ -529,11 +571,11 @@ impl IncrementalDecoder {
 
     /// The underlying tokenizer.
     pub fn tokenizer(&self) -> &Tokenizer {
-        &self.tokenizer
+        self.tokenizer.borrow()
     }
 
-    /// Consume the decoder, returning the underlying tokenizer.
-    pub fn into_tokenizer(self) -> Tokenizer {
+    /// Consume the decoder, returning however the tokenizer was handed to it.
+    pub fn into_tokenizer(self) -> T {
         self.tokenizer
     }
 
@@ -554,7 +596,7 @@ impl IncrementalDecoder {
             // Some decoders (`BPEDecoder`) index the last token unconditionally.
             return Ok(String::new());
         }
-        self.tokenizer
+        self.tokenizer()
             .decode(tokens, self.skip_special_tokens)
             .map_err(|err| Error::Msg(format!("cannot decode: {err}")))
     }
@@ -611,12 +653,12 @@ impl IncrementalDecoder {
     /// Whether `Tokenizer::decode` drops this id before the decoder runs: a special token being
     /// skipped, or an id the vocabulary has no token for at all.
     fn is_dropped(&self, token: u32) -> bool {
-        self.dropped.contains(&token) || self.tokenizer.id_to_token(token).is_none()
+        self.dropped.contains(&token) || self.tokenizer().id_to_token(token).is_none()
     }
 
     /// Whether an id decodes to a `<0xXX>` marker, matching `ByteFallback`'s own test.
     fn is_byte_marker(&self, token: u32) -> bool {
-        match self.tokenizer.id_to_token(token) {
+        match self.tokenizer().id_to_token(token) {
             Some(t) => {
                 t.len() == 6
                     && t.starts_with("<0x")
