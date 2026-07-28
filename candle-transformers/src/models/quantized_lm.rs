@@ -160,12 +160,49 @@ impl Architecture {
         }
         Ok(())
     }
+
+    /// Whether this backend reads [`Options::use_flash_attn`].
+    ///
+    /// The flag is ignored by every other family, so a generic loader can leave it set.
+    pub fn supports_flash_attn(&self) -> bool {
+        *self == Self::Phi3
+    }
+
+    /// Reject a flash-attention request this build or device cannot honor.
+    ///
+    /// Only checked for the backends that read the flag; see
+    /// [`Architecture::supports_flash_attn`]. `quantized_phi3` calls a `flash_attn` shim that is
+    /// `unimplemented!()` without the `flash-attn` feature, so an unhonorable request would
+    /// otherwise panic at the first attention layer rather than fail at load.
+    pub fn check_flash_attn_support(&self, device: &Device, use_flash_attn: bool) -> Result<()> {
+        if !use_flash_attn || !self.supports_flash_attn() {
+            return Ok(());
+        }
+        if !cfg!(feature = "flash-attn") {
+            candle::bail!(
+                "the {} backend cannot use flash-attention: build candle-transformers with \
+                 --features flash-attn",
+                self.name()
+            )
+        }
+        if !device.is_cuda() {
+            candle::bail!(
+                "the {} backend can only use flash-attention on a cuda device",
+                self.name()
+            )
+        }
+        Ok(())
+    }
 }
 
 /// Per-family construction extras, with defaults that suit every backend.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
-    /// Use flash-attention where the backend supports it. Only `phi3` reads this today.
+    /// Use flash-attention where the backend supports it. Only `phi3` reads this today; the
+    /// other families ignore it, so a generic loader can leave it set.
+    ///
+    /// Setting it for a backend that does read it requires the `flash-attn` feature and a CUDA
+    /// device — see [`Architecture::check_flash_attn_support`].
     pub use_flash_attn: bool,
     /// Working dtype for the backends that take one (`glm4`, `qwen3moe`).
     ///
@@ -253,6 +290,7 @@ pub fn from_gguf_with<R: Read + Seek>(
     let arch = Architecture::from_content(&ct)?;
     let dtype = options.dtype_for(device);
     arch.check_device_support(device, dtype)?;
+    arch.check_flash_attn_support(device, options.use_flash_attn)?;
     let model: Box<dyn QuantizedLm> = match arch {
         Architecture::Llama => Box::new(quantized_llama::ModelWeights::from_gguf(
             ct, reader, device,
@@ -462,6 +500,47 @@ mod tests {
         for arch in [Architecture::Llama, Architecture::Glm4, Architecture::Qwen3] {
             arch.check_device_support(&Device::Cpu, DType::F32).unwrap();
         }
+    }
+
+    #[test]
+    fn unhonorable_flash_attn_is_rejected_before_any_read() {
+        // quantized_phi3's flash_attn shim is `unimplemented!()` without the feature, so an
+        // unhonorable request must fail at load rather than panic mid-forward.
+        let ct = content(&[("general.architecture", Value::String("phi3".to_string()))]);
+        let options = Options::new().with_flash_attn(true);
+        let mut reader = Cursor::new(Vec::new());
+        let err = match from_gguf_with(ct, &mut reader, &Device::Cpu, &options) {
+            Ok(_) => panic!("phi3 loaded with an unhonorable flash-attn request"),
+            Err(err) => err.to_string(),
+        };
+        if cfg!(feature = "flash-attn") {
+            assert!(err.contains("cuda device"), "{err}");
+        } else {
+            assert!(err.contains("--features flash-attn"), "{err}");
+        }
+    }
+
+    #[test]
+    fn flash_attn_is_ignored_by_the_families_that_do_not_read_it() {
+        assert!(Architecture::Phi3.supports_flash_attn());
+        for arch in [
+            Architecture::Llama,
+            Architecture::Gemma3,
+            Architecture::Glm4,
+            Architecture::Lfm2,
+            Architecture::Phi2,
+            Architecture::Qwen2,
+            Architecture::Qwen3,
+            Architecture::Qwen3Moe,
+        ] {
+            assert!(!arch.supports_flash_attn(), "{}", arch.name());
+            // The flag is inert for them, so a generic loader can leave it set.
+            arch.check_flash_attn_support(&Device::Cpu, true).unwrap();
+        }
+        // And an unset flag never trips the check.
+        Architecture::Phi3
+            .check_flash_attn_support(&Device::Cpu, false)
+            .unwrap();
     }
 
     #[test]
