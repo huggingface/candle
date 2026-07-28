@@ -536,3 +536,68 @@ fn clear_resets_the_stream() {
     assert!(decoder.tokens().is_empty());
     assert_eq!(decoder.push(1).unwrap(), " world");
 }
+
+#[test]
+fn a_borrowed_or_shared_tokenizer_decodes_identically() {
+    // The tokenizer is only ever read, so how the decoder holds it must not change what it
+    // produces: owned, borrowed and shared have to agree step by step.
+    let tokenizer = tokenizer(&["Hello", "Ġworld", "Ã", "©"], byte_level());
+    let ids = [0u32, 1, 2, 3, 1];
+
+    let owning = IncrementalDecoder::new(&tokenizer);
+    let borrowing = IncrementalDecoder::from_tokenizer(&tokenizer);
+    let sharing = IncrementalDecoder::from_tokenizer(std::sync::Arc::new(tokenizer.clone()));
+
+    let mut owning = owning;
+    let mut borrowing = borrowing;
+    let mut sharing = sharing;
+    for &id in ids.iter() {
+        let expected = owning.push(id).unwrap().to_string();
+        assert_eq!(borrowing.push(id).unwrap(), expected);
+        assert_eq!(sharing.push(id).unwrap(), expected);
+        assert_eq!(borrowing.text(), owning.text());
+        assert_eq!(sharing.text(), owning.text());
+    }
+    assert_eq!(owning.is_windowed(), sharing.is_windowed());
+    assert_eq!(borrowing.finish(), owning.finish());
+    assert_eq!(sharing.finish(), "");
+}
+
+#[test]
+fn a_batch_of_decoders_shares_one_tokenizer() {
+    // What a continuous-batching loop needs: one decoder per row, without a vocabulary clone or
+    // a re-resolution of the decoder context per row. Cloning a decoder carries both over, so
+    // the shared tokenizer is only ever pointed at, never copied.
+    let shared = std::sync::Arc::new(tokenizer(&["Hello", "Ġworld"], byte_level()));
+    let row = IncrementalDecoder::from_tokenizer(std::sync::Arc::clone(&shared));
+    let mut rows: Vec<_> = (0..4).map(|_| row.clone()).collect();
+    assert_eq!(std::sync::Arc::strong_count(&shared), 6);
+
+    // Each row is an independent stream over the same tokenizer.
+    for (i, decoder) in rows.iter_mut().enumerate() {
+        let expected = if i % 2 == 0 { "Hello" } else { " world" };
+        assert_eq!(decoder.push(i as u32 % 2).unwrap(), expected);
+        assert_eq!(decoder.text(), expected);
+    }
+
+    // And the tokenizer can be handed back in the form it came in.
+    let returned = row.into_tokenizer();
+    assert!(std::sync::Arc::ptr_eq(&returned, &shared));
+}
+
+#[test]
+fn cloning_a_decoder_forks_its_stream() {
+    let tokenizer = tokenizer(&["Hello", "Ġworld", "Ã", "©"], byte_level());
+    let mut decoder = IncrementalDecoder::from_tokenizer(&tokenizer);
+    decoder.push(0).unwrap();
+    // Fork with a multi-byte character still open, so the pending state has to come along too.
+    decoder.push(2).unwrap();
+
+    let mut fork = decoder.clone();
+    assert_eq!(fork.text(), decoder.text());
+    // The fork completes the character; the original leaves it undecodable and moves on.
+    assert_eq!(fork.push(3).unwrap(), "é");
+    assert_eq!(decoder.push(1).unwrap(), "\u{fffd} world");
+    assert_eq!(decoder.text(), tokenizer.decode(&[0, 2, 1], true).unwrap());
+    assert_eq!(fork.text(), tokenizer.decode(&[0, 2, 3], true).unwrap());
+}
