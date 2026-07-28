@@ -7,7 +7,8 @@
 //! both once:
 //!
 //! - [`QuantizedLm`] is the decoder interface every family already implements, so a loaded
-//!   model can be used behind a `Box<dyn QuantizedLm>` without a wrapper enum.
+//!   model can be used behind a `Box<dyn QuantizedLm>` without a wrapper enum — including from
+//!   a worker pool, since the trait requires `Send`.
 //! - [`from_gguf`] reads `general.architecture` and constructs the matching backend,
 //!   normalizing the per-family extras (`use_flash_attn`, working `dtype`) into [`Options`].
 //! - [`context_length`] and [`arch_metadata`] read architecture-prefixed metadata through the
@@ -44,7 +45,14 @@ use super::{
 ///
 /// `index_pos` is the number of tokens already in the KV cache, i.e. the position of the first
 /// token of `input` in the sequence.
-pub trait QuantizedLm {
+///
+/// `Send` is a supertrait so that a loaded model can be moved into a worker pool, e.g. held as
+/// `Mutex<Box<dyn QuantizedLm>>` in a model registry. Every backend already satisfies it, but
+/// type erasure drops auto traits and `Box<dyn QuantizedLm>` would not coerce to
+/// `Box<dyn QuantizedLm + Send>` after the fact — a consumer would be forced back to the
+/// per-family enum this module exists to delete. `Sync` is deliberately not required: `forward`
+/// takes `&mut self`, so callers serialize access anyway.
+pub trait QuantizedLm: Send {
     fn forward(&mut self, input: &Tensor, index_pos: usize) -> Result<Tensor>;
 }
 
@@ -362,6 +370,17 @@ mod tests {
             tensor_infos: HashMap::new(),
             tensor_data_offset: 0,
         }
+    }
+
+    #[test]
+    fn a_loaded_model_can_be_moved_into_a_worker_pool() {
+        // Checked at compile time. A registry holds the model behind a mutex and hands it to a
+        // worker, which needs `Send` through the erased type — and an auto trait dropped by
+        // erasure cannot be recovered afterwards. `Sync` is not required: `forward` takes
+        // `&mut self`, so access is serialized regardless.
+        fn assert_send<T: Send>() {}
+        assert_send::<Box<dyn QuantizedLm>>();
+        assert_send::<std::sync::Mutex<Box<dyn QuantizedLm>>>();
     }
 
     #[test]
