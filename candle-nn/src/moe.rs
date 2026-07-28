@@ -2,23 +2,8 @@
 #[cfg(feature = "cuda")]
 use candle::cuda_backend::kernels::ffi;
 #[allow(unused_imports)]
-use candle::quantized::{self, GgmlDType, QTensor};
+use candle::quantized::{self, QTensor};
 use candle::{Result, Tensor};
-
-/// The FFI code used by the CUDA `moe_gemm_gguf` kernels for each supported expert weight dtype,
-/// or `None` if `dtype` isn't one of the GGML quant types `moe_gemm_gguf` accepts.
-#[cfg(feature = "cuda")]
-fn moe_gemm_gguf_dtype_code(dtype: GgmlDType) -> Option<i32> {
-    match dtype {
-        GgmlDType::Q8_0 => Some(0),
-        GgmlDType::Q4K => Some(1),
-        GgmlDType::Q2K => Some(2),
-        GgmlDType::Q3K => Some(3),
-        GgmlDType::Q5K => Some(4),
-        GgmlDType::Q6K => Some(5),
-        _ => None,
-    }
-}
 
 #[cfg(feature = "cuda")]
 pub fn moe_gemm(
@@ -192,6 +177,7 @@ pub fn moe_gemm_gguf(
     dtype: candle::DType,
 ) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle::quantized::GgmlDType;
     use candle::DType;
     use half::{bf16, f16};
 
@@ -220,12 +206,19 @@ pub fn moe_gemm_gguf(
         let dev = input.device().as_cuda_device()?;
 
         // Q8_0: 0, Q4K: 1, Q2K: 2, Q3k: 3,  Q5K: 4, Q6K: 5
-        let gguf_dtype = moe_gemm_gguf_dtype_code(weights.dtype()).ok_or_else(|| {
-            candle::Error::Msg(
-                "moe_gemm_gguf `ISQ` only accept q2k, q3k, q4k, q5k, q6k or q8_0 weights!"
-                    .to_string(),
-            )
-        })?;
+        let gguf_dtype = match weights.dtype() {
+            GgmlDType::Q8_0 => 0,
+            GgmlDType::Q4K => 1,
+            GgmlDType::Q2K => 2,
+            GgmlDType::Q3K => 3,
+            GgmlDType::Q5K => 4,
+            GgmlDType::Q6K => 5,
+            _ => {
+                candle::bail!(
+                    "moe_gemm_gguf `ISQ` only accept q2k, q3k, q4k, q5k, q6k or q8_0 weights!"
+                )
+            }
+        };
 
         let weight_ptr = weights.device_ptr()?;
 
