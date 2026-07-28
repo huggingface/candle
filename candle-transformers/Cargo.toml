@@ -27,6 +27,7 @@ rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_plain = { workspace = true }
+tokenizers = { workspace = true }
 tracing = { workspace = true }
 
 [features]
