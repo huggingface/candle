@@ -2466,3 +2466,28 @@ fn commands_concurrent_acquisition() {
 
     commands.wait_until_completed().unwrap();
 }
+
+#[test]
+fn residency_set_batch_insert_remove() {
+    use objc2_metal::MTLResidencySet;
+
+    let device = device();
+    let set = ResidencySet::new(&device);
+    let Some(raw) = set.raw() else {
+        // Residency sets are unsupported on this device/OS; the set no-ops.
+        return;
+    };
+
+    let bufs: Vec<Buffer> = (0..3).map(|i| new_buffer(&device, &[i as f32])).collect();
+    let base = raw.allocationCount();
+
+    set.insert_batch(&bufs);
+    assert_eq!(raw.allocationCount(), base + bufs.len());
+    set.remove_batch(&bufs);
+    assert_eq!(raw.allocationCount(), base);
+
+    // Empty batches are valid and leave the set untouched.
+    set.insert_batch(std::iter::empty());
+    set.remove_batch(std::iter::empty());
+    assert_eq!(raw.allocationCount(), base);
+}
