@@ -7,6 +7,7 @@ use candle::{Result, Tensor};
 
 /// The FFI code used by the CUDA `moe_gemm_gguf` kernels for each supported expert weight dtype,
 /// or `None` if `dtype` isn't one of the GGML quant types `moe_gemm_gguf` accepts.
+#[cfg(feature = "cuda")]
 fn moe_gemm_gguf_dtype_code(dtype: GgmlDType) -> Option<i32> {
     match dtype {
         GgmlDType::Q8_0 => Some(0),
@@ -17,14 +18,6 @@ fn moe_gemm_gguf_dtype_code(dtype: GgmlDType) -> Option<i32> {
         GgmlDType::Q6K => Some(5),
         _ => None,
     }
-}
-
-/// Whether `dtype` is one of the GGML quant types accepted as expert weights by
-/// [`moe_gemm_gguf`] (`Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K` or `Q8_0`). `moe_gemm_gguf` is CUDA-only
-/// and fails at runtime for any other dtype; checking this ahead of time lets callers validate a
-/// checkpoint's expert tensors before dispatching a MoE forward pass.
-pub fn moe_gemm_gguf_supports_dtype(dtype: GgmlDType) -> bool {
-    moe_gemm_gguf_dtype_code(dtype).is_some()
 }
 
 #[cfg(feature = "cuda")]

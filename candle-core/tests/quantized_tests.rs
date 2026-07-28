@@ -1514,8 +1514,6 @@ test_device!(
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
 );
 
-/// The exhaustive `match` in `Device::supports_qmatmul` forces a decision whenever a variant is
-/// added, and this list makes the test fail to compile until it is updated too.
 const ALL_GGML_DTYPES: [GgmlDType; 15] = [
     GgmlDType::F32,
     GgmlDType::F16,
@@ -1534,7 +1532,6 @@ const ALL_GGML_DTYPES: [GgmlDType; 15] = [
     GgmlDType::Q8K,
 ];
 
-/// Check the predicate against what the backend actually does rather than restating it.
 #[test]
 fn cpu_supports_qmatmul_matches_backend() -> Result<()> {
     let device = Device::Cpu;
