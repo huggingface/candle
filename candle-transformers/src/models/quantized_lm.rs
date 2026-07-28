@@ -544,6 +544,30 @@ mod tests {
     }
 
     #[test]
+    fn cuda_accepts_what_the_cpu_cannot_reach() {
+        // No-op without a GPU. On the cuda runner this covers the branches a cpu-only run can
+        // never take: the qwen3moe accept path, its dtype rejection, and the cuda default.
+        let Ok(device) = Device::new_cuda(0) else {
+            return;
+        };
+        assert_eq!(Options::default().dtype_for(&device), DType::BF16);
+        for dtype in [DType::BF16, DType::F16] {
+            Architecture::Qwen3Moe
+                .check_device_support(&device, dtype)
+                .unwrap();
+        }
+        let err = match Architecture::Qwen3Moe.check_device_support(&device, DType::F32) {
+            Ok(()) => panic!("qwen3moe accepted an f32 working dtype"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("f16"), "{err}");
+        // Every family stays loadable on cuda under the resolved default.
+        for arch in [Architecture::Llama, Architecture::Glm4, Architecture::Qwen3] {
+            arch.check_device_support(&device, DType::BF16).unwrap();
+        }
+    }
+
+    #[test]
     fn default_options_resolve_a_cpu_dtype() {
         let options = Options::default();
         assert!(!options.use_flash_attn);
