@@ -165,6 +165,8 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     const TILE_SIZE: usize = 512;
 
     let total_out_pixels = out_h * out_w;
+    let use_same3_interior_fast_path =
+        p.k_h == 3 && p.k_w == 3 && p.stride == 1 && p.padding == 1 && p.dilation == 1;
 
     // Process batches and tiles in parallel using rayon.
     (0..p.b_size).into_par_iter().try_for_each(|b_idx| {
@@ -185,6 +187,27 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
             for (tile_idx, out_idx) in (tile_start..tile_end).enumerate() {
                 let out_y = out_idx / out_w;
                 let out_x = out_idx % out_w;
+                if use_same3_interior_fast_path
+                    && out_y > 0
+                    && out_y + 1 < p.i_h
+                    && out_x > 0
+                    && out_x + 1 < p.i_w
+                {
+                    for c_in in 0..p.c_in {
+                        for kh in 0..3 {
+                            let inp_base = inp_offset
+                                + c_in * inp_s1
+                                + (out_y + kh - 1) * inp_s2
+                                + (out_x - 1) * inp_s3;
+                            for kw in 0..3 {
+                                let patch_offset = c_in + (kh * 3 + kw) * p.c_in;
+                                let col_idx = patch_offset * tile_size + tile_idx;
+                                col_tile[col_idx] = inp[inp_base + kw * inp_s3];
+                            }
+                        }
+                    }
+                    continue;
+                }
                 // Extract the im2col patch for this output position
                 for c_in in 0..p.c_in {
                     let mut patch_offset = c_in;
