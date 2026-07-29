@@ -35,6 +35,7 @@ pyo3 = { version = "0.27", features = [
 ], optional = true }
 rayon = { workspace = true }
 rubato = { version = "2", optional = true }
+hound = { workspace = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -136,6 +137,9 @@ required-features = ["candle-datasets"]
 [[example]]
 name = "mimi"
 required-features = ["mimi"]
+
+[[example]]
+name = "qwen3-tts"
 
 [[example]]
 name = "snac"
