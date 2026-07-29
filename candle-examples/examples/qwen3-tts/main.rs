@@ -131,7 +131,7 @@ fn select_device(cpu: bool) -> candle::Result<Device> {
 
 struct ModelFiles {
     model_weights: PathBuf,
-    tokenizer: PathBuf,
+    model_dir: PathBuf,
     config: Option<PathBuf>,
 }
 
@@ -140,7 +140,7 @@ fn resolve_files(model_id: &str) -> anyhow::Result<ModelFiles> {
     if local.is_dir() {
         Ok(ModelFiles {
             model_weights: local.join("model.safetensors"),
-            tokenizer: local.join("tokenizer.json"),
+            model_dir: local.to_path_buf(),
             config: {
                 let p = local.join("config.json");
                 if p.exists() { Some(p) } else { None }
@@ -149,12 +149,55 @@ fn resolve_files(model_id: &str) -> anyhow::Result<ModelFiles> {
     } else {
         let api = Api::new()?;
         let repo = api.repo(Repo::new(model_id.to_string(), RepoType::Model));
+        let model_weights = repo.get("model.safetensors")?;
+        let model_dir = model_weights.parent().unwrap().to_path_buf();
         Ok(ModelFiles {
-            model_weights: repo.get("model.safetensors")?,
-            tokenizer: repo.get("tokenizer.json")?,
+            model_weights,
+            model_dir,
             config: repo.get("config.json").ok(),
         })
     }
+}
+
+/// Load a Tokenizer from a model directory.
+/// Tries `tokenizer.json` first, then falls back to building a Qwen2 BPE
+/// tokenizer from `vocab.json` + `merges.txt`.
+fn load_tokenizer(model_dir: &std::path::Path) -> anyhow::Result<Tokenizer> {
+    // Fast path: pre-built tokenizer.json
+    let tj = model_dir.join("tokenizer.json");
+    if tj.exists() {
+        return Tokenizer::from_file(&tj)
+            .map_err(|e| anyhow::anyhow!("tokenizer.json load error: {e}"));
+    }
+
+    // Qwen2-style: build BPE from vocab.json + merges.txt
+    let vocab_path  = model_dir.join("vocab.json");
+    let merges_path = model_dir.join("merges.txt");
+    if vocab_path.exists() && merges_path.exists() {
+        use tokenizers::models::bpe::BPE;
+        use tokenizers::pre_tokenizers::byte_level::ByteLevel;
+        use tokenizers::decoders::byte_level::ByteLevel as ByteLevelDecoder;
+        use tokenizers::processors::byte_level::ByteLevel as ByteLevelProcessor;
+
+        let bpe = BPE::from_file(
+            vocab_path.to_str().unwrap(),
+            merges_path.to_str().unwrap(),
+        )
+        .build()
+        .map_err(|e| anyhow::anyhow!("BPE build error: {e}"))?;
+
+        let mut tokenizer = Tokenizer::new(bpe);
+        tokenizer
+            .with_pre_tokenizer(Some(ByteLevel::default()))
+            .with_decoder(Some(ByteLevelDecoder::default()))
+            .with_post_processor(Some(ByteLevelProcessor::default()));
+        return Ok(tokenizer);
+    }
+
+    anyhow::bail!(
+        "No tokenizer found in {}. Expected tokenizer.json, or vocab.json + merges.txt.",
+        model_dir.display()
+    );
 }
 
 fn load_flat_weights(
@@ -562,8 +605,7 @@ fn main() -> anyhow::Result<()> {
 
     // ── Tokenizer ──────────────────────────────────────────────────────────
     eprintln!("Loading tokenizer…");
-    let tokenizer = Tokenizer::from_file(&files.tokenizer)
-        .map_err(|e| anyhow::anyhow!("tokenizer load error: {e}"))?;
+    let tokenizer = load_tokenizer(&files.model_dir)?;
     let input_ids = tokenize(&tokenizer, &args.text)?;
     eprintln!("Tokenized {} → {:?}", args.text, input_ids);
 
@@ -579,9 +621,9 @@ fn main() -> anyhow::Result<()> {
     // ── Decoder (speech tokenizer) ─────────────────────────────────────────
     eprintln!("Loading speech tokenizer decoder…");
     let decoder_path = {
-        let local = std::path::Path::new(&args.model_id);
-        if local.is_dir() {
-            local.join("speech_tokenizer/model.safetensors")
+        let st_path = files.model_dir.join("speech_tokenizer/model.safetensors");
+        if st_path.exists() {
+            st_path
         } else {
             let api = Api::new()?;
             let repo = api.repo(Repo::new(args.model_id.clone(), RepoType::Model));
