@@ -460,7 +460,7 @@ impl ModelWeights {
     /// state without recreating the model.
     pub fn clear_kv_cache(&mut self) {
         for layer in self.layers.iter_mut() {
-            layer.kv_cache.reset();
+            layer.self_attn.kv_cache.reset();
         }
     }
 
