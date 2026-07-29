@@ -2111,6 +2111,16 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn conv3d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConv3D,
+    ) -> Result<Self> {
+        crate::bail!("conv3d is not implemented for the cuda backend")
+    }
+
     fn conv_transpose2d(
         &self,
         l: &Layout,

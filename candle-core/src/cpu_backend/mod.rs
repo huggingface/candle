@@ -11,7 +11,9 @@ pub use utils::{
     binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2InPlace, Map2U8,
 };
 mod conv2d;
+mod conv3d;
 use conv2d::Conv2D;
+use conv3d::Conv3D;
 
 const USE_IM2COL_CONV1D: bool = true;
 const USE_COL2IM_CONV1D_TR: bool = true;
@@ -2859,6 +2861,16 @@ impl BackendStorage for CpuStorage {
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
         Conv2D(params).map(self, l, kernel, kernel_l)
+    }
+
+    fn conv3d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv3D,
+    ) -> Result<Self> {
+        Conv3D(params).map(self, l, kernel, kernel_l)
     }
 
     fn conv_transpose2d(
