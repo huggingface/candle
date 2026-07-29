@@ -447,6 +447,17 @@ impl ZImageAttention {
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
 
+            // The quantized pipeline runs f32 activations, but the
+            // flash kernels are f16/bf16-only: cast around the call.
+            // bf16 keeps f32's exponent range, so no overflow risk.
+            let in_dtype = q.dtype();
+            if in_dtype == candle::DType::F32 {
+                let q = q.to_dtype(candle::DType::BF16)?;
+                let k = k.to_dtype(candle::DType::BF16)?;
+                let v = v.to_dtype(candle::DType::BF16)?;
+                let result = flash_attn(&q, &k, &v, scale as f32, false)?;
+                return result.to_dtype(in_dtype)?.transpose(1, 2);
+            }
             let result = flash_attn(&q, &k, &v, scale as f32, false)?;
             result.transpose(1, 2)
         }
