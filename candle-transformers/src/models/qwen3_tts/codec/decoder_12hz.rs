@@ -295,14 +295,20 @@ impl Decoder12Hz {
             .reshape((batch, seq, 256))?;
         let first_proj = self.conv1d_1x1(&first_embed.transpose(1, 2)?, &self.first_output_proj)?;
 
-        // Rest quantizers
-        let mut rest_embed = Tensor::zeros((batch, seq, 256), DType::F32, device)?;
+        // Rest quantizers — accumulate in the codebook's native dtype to avoid
+        // F32/BF16 mismatch when weights were loaded in BF16.
+        let mut rest_embed: Option<Tensor> = None;
         for i in 0..15 {
             let c = codes.i((.., i + 1, ..))?.flatten_all()?;
             let e = self.rest_codebooks[i].index_select(&c, 0)?
                 .reshape((batch, seq, 256))?;
-            rest_embed = (rest_embed + e)?;
+            rest_embed = Some(match rest_embed {
+                None => e,
+                Some(acc) => (acc + e)?,
+            });
         }
+        let rest_embed = rest_embed
+            .unwrap_or_else(|| Tensor::zeros((batch, seq, 256), DType::F32, device).unwrap());
         let rest_proj = self.conv1d_1x1(&rest_embed.transpose(1, 2)?, &self.rest_output_proj)?;
 
         let quantized = (first_proj + rest_proj)?; // [B, 512, T]

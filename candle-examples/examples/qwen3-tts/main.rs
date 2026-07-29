@@ -630,7 +630,7 @@ fn main() -> anyhow::Result<()> {
             repo.get("speech_tokenizer/model.safetensors")?
         }
     };
-    let decoder_weights = load_flat_weights(&decoder_path, &device, dtype)?;
+    let decoder_weights = load_flat_weights(&decoder_path, &device, DType::F32)?;
     let decoder = Decoder12Hz::from_weights(&decoder_weights, Decoder12HzConfig::default())?;
 
     // ── Language / speaker ─────────────────────────────────────────────────
