@@ -428,7 +428,7 @@ impl Decoder12Hz {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
         let attn = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * scale)?
-            .broadcast_add(mask)?;
+            .broadcast_add(&mask.to_dtype(q.dtype())?)?;
         let attn = candle_nn::ops::softmax_last_dim(&attn)?;
         let out = attn.matmul(&v)?
             .transpose(1, 2)?
