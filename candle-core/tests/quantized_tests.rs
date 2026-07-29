@@ -1514,13 +1514,6 @@ test_device!(
     from_data_dequant_matches_canonical_when_caller_passes_cow_owned_metal
 );
 
-/// `QMetalStorage::from_buffer` is how a zero-copy (e.g. mmap-backed) loader
-/// wires a tensor's storage to a *view* -- possibly at a nonzero offset --
-/// into a buffer shared with other tensors, instead of a buffer this storage
-/// owns outright. This must produce identical dequantize and matmul output
-/// to the normal owned-buffer path, at both a zero and a nonzero offset --
-/// an offset-arithmetic bug here would silently corrupt weights rather than
-/// crash.
 #[cfg(feature = "metal")]
 #[test]
 fn qmetalstorage_from_buffer_view_matches_owned_buffer() -> Result<()> {
@@ -1544,9 +1537,6 @@ fn qmetalstorage_from_buffer_view_matches_owned_buffer() -> Result<()> {
     let canonical_dequant = canonical.dequantize(&device)?.to_vec2::<f32>()?;
     let raw_bytes: Vec<u8> = canonical.data()?.to_vec();
 
-    // QTensor isn't Clone and QMatMul::from_qtensor takes it by value, so
-    // compute the canonical matmul reference once, up front -- it doesn't
-    // depend on front_padding, only `view` needs rebuilding per iteration.
     let activation = Tensor::ones((1, k), DType::F32, &device)?;
     let canonical_matmul = quantized::QMatMul::from_qtensor(canonical)?;
     let canonical_out = canonical_matmul.forward(&activation)?.to_vec2::<f32>()?;
@@ -1578,8 +1568,7 @@ fn qmetalstorage_from_buffer_view_matches_owned_buffer() -> Result<()> {
             "from_buffer view (offset={front_padding}) dequant must be bit-identical to the owned-buffer path"
         );
 
-        // Exercise the offset-aware matmul path (call_quantized_matmul_mv_t),
-        // not just dequantize -- these are two independent call sites.
+        // Also test matmul as it is a separate code path
         let view_matmul = quantized::QMatMul::from_qtensor(view)?;
         let view_out = view_matmul.forward(&activation)?.to_vec2::<f32>()?;
         let mm_max_diff = canonical_out

@@ -8,15 +8,13 @@ pub struct QMetalStorage {
     dtype: GgmlDType,
     device: MetalDevice,
     buffer: Arc<Buffer>,
-    /// Byte offset of this tensor's data within `buffer`. Nonzero when
-    /// `buffer` is shared across several tensors (e.g. one no-copy buffer
-    /// wrapping an entire mmap'd file) via `from_buffer`; zero for every
-    /// storage that owns its buffer outright.
+    /// Byte offset of this tensor's data within `buffer`.
+    /// Allows multiple quantized tensors to be backed by the same underlying metal buffer.
     offset: usize,
-    /// This tensor's own byte length -- may be smaller than `buffer.length()`
-    /// when `buffer` is shared. Every read/blit against `buffer` must use
-    /// this, not `buffer.length()`, or it silently reads past this tensor's
-    /// data into a neighboring one.
+    /// This tensor's own byte length. May be smaller than `buffer.length()`
+    /// when `buffer` is shared. All uses of `buffer` must use this, and not
+    /// `buffer.length()`, or risk silently reading past this tensor's data
+    /// into a neighboring one.
     length: usize,
 }
 
@@ -37,10 +35,9 @@ impl QMetalStorage {
         })
     }
 
-    /// Wraps an existing, externally-created buffer -- e.g. a no-copy Metal
-    /// buffer over an mmap'd region -- as this tensor's storage, with no
-    /// allocation and no copy. `offset`/`length` locate this tensor's bytes
-    /// within `buffer`, which may be shared with other tensors.
+    /// Wraps an existing buffer as this tensor's storage.
+    /// The buffer may be used as the shared underlying buffer of several tensors,
+    /// so `offset` and `length` define the specific bytes that make up this tensor.
     pub fn from_buffer(
         buffer: Arc<Buffer>,
         offset: usize,
@@ -55,6 +52,19 @@ impl QMetalStorage {
             device,
             dtype,
         }
+    }
+
+    /// Replaces this storage's buffer with a freshly-allocated one it owns
+    /// outright, resetting `offset`/`length` to match it. A fresh allocation
+    /// replaces whatever view (offset, length) this storage previously had,
+    /// so all three fields must change together -- doing this by hand at
+    /// each call site risks a quantize-after-from_buffer leaving stale view
+    /// metadata pointing into a buffer this storage no longer shares.
+    fn replace_with_owned_buffer(&mut self, buffer: Arc<Buffer>) {
+        // New backing allocation
+        self.buffer = buffer;
+        self.offset = 0;
+        self.length = self.buffer.length();
     }
 
     pub fn dtype(&self) -> GgmlDType {
@@ -75,8 +85,8 @@ impl QMetalStorage {
         self.offset
     }
 
-    /// This tensor's own byte length -- use this, not `buffer().length()`,
-    /// when `buffer()` may be shared with other tensors.
+    /// Byte length of the tensor. Use this, not `buffer().length()`,
+    /// as the underlying buffer may be shared with other tensors.
     pub fn length(&self) -> usize {
         self.length
     }
@@ -188,13 +198,7 @@ impl QMetalStorage {
             .with_data(&qcpu_storage.data()?)
             .with_label("qstorage_quantized")
             .build()?;
-        // A fresh full-ownership allocation replaces whatever view (offset,
-        // length) this storage previously had -- reset both, or a
-        // quantize-after-from_buffer would keep stale view metadata pointing
-        // into a buffer this storage no longer shares.
-        self.length = buffer.length();
-        self.buffer = buffer;
-        self.offset = 0;
+        self.replace_with_owned_buffer(buffer);
         Ok(())
     }
 
@@ -216,13 +220,7 @@ impl QMetalStorage {
             .with_data(&qcpu_storage.data()?)
             .with_label("qstorage_quantize_imatrix")
             .build()?;
-        // A fresh full-ownership allocation replaces whatever view (offset,
-        // length) this storage previously had -- reset both, or a
-        // quantize-after-from_buffer would keep stale view metadata pointing
-        // into a buffer this storage no longer shares.
-        self.length = buffer.length();
-        self.buffer = buffer;
-        self.offset = 0;
+        self.replace_with_owned_buffer(buffer);
         Ok(())
     }
 
@@ -248,13 +246,7 @@ impl QMetalStorage {
             .with_data(&qcpu_storage.data()?)
             .with_label("qstorage_quantize_imatrix_onto")
             .build()?;
-        // A fresh full-ownership allocation replaces whatever view (offset,
-        // length) this storage previously had -- reset both, or a
-        // quantize-after-from_buffer would keep stale view metadata pointing
-        // into a buffer this storage no longer shares.
-        self.length = buffer.length();
-        self.buffer = buffer;
-        self.offset = 0;
+        self.replace_with_owned_buffer(buffer);
         Ok(())
     }
 
@@ -275,13 +267,7 @@ impl QMetalStorage {
             .with_data(&qcpu_storage.data()?)
             .with_label("qstorage_quantize_onto")
             .build()?;
-        // A fresh full-ownership allocation replaces whatever view (offset,
-        // length) this storage previously had -- reset both, or a
-        // quantize-after-from_buffer would keep stale view metadata pointing
-        // into a buffer this storage no longer shares.
-        self.length = buffer.length();
-        self.buffer = buffer;
-        self.offset = 0;
+        self.replace_with_owned_buffer(buffer);
         Ok(())
     }
 

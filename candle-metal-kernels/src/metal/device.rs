@@ -101,26 +101,6 @@ impl Device {
         }
     }
 
-    /// Wraps existing memory as a Metal buffer with no copy -- the buffer's
-    /// contents alias `pointer`'s memory for as long as the returned
-    /// `Buffer` (and anything holding it) is alive. Intended for a no-copy
-    /// view over mmap'd memory (e.g. GGUF model weights): the caller must
-    /// keep that mapping alive for at least as long as the returned buffer.
-    ///
-    /// Per Apple's documented constraint on `newBufferWithBytesNoCopy:...`,
-    /// `pointer` must be page-aligned and `length` a multiple of the page
-    /// size -- this method does not adjust either; the caller is
-    /// responsible (an mmap's own base pointer already satisfies this by
-    /// construction, so wrapping a whole mapping from its start needs no
-    /// adjustment).
-    ///
-    /// No deallocator is registered: nothing needs to be freed on this
-    /// side when the buffer is released, since the backing memory is
-    /// owned and will be unmapped by the caller, not by this buffer.
-    ///
-    /// # Safety
-    /// `pointer` must be valid for reads for `length` bytes for at least as
-    /// long as the returned `Buffer` is alive.
     pub unsafe fn new_buffer_with_bytes_no_copy(
         &self,
         pointer: *const c_void,
