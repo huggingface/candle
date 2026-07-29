@@ -262,7 +262,9 @@ impl FusedMoeGGUF {
             let gate = self.gate_experts.indexed_moe_forward(&x_bcast, &topk_ids)?;
             let up = self.up_experts.indexed_moe_forward(&x_bcast, &topk_ids)?;
             let down_inputs = (up * gate.apply(&self.act)?)?;
-            let down = self.down_experts.indexed_moe_forward(&down_inputs, &topk_ids)?;
+            let down = self
+                .down_experts
+                .indexed_moe_forward(&down_inputs, &topk_ids)?;
             down.broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
         } else {
             // sorted_token_ids/expert_ids are moe_gemm_gguf's own vLLM-style
