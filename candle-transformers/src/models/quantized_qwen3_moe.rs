@@ -490,11 +490,7 @@ impl GGUFQWenMoE {
     }
 
     /// Resets every layer's KV cache -- for reusing one loaded model across
-    /// independent requests without reloading weights. Added for ratatoskr,
-    /// which serializes model access behind a mutex (see ratatoskr's
-    /// src/model/mod.rs); ratatoskr now also tracks warm sessions and only
-    /// calls this when actually starting a new/different conversation, not
-    /// unconditionally on every request.
+    /// independent requests without reloading weights.
     pub fn clear_kv_cache(&mut self) {
         for layer in self.layers.iter_mut() {
             layer.clear_kv_cache();
@@ -505,8 +501,8 @@ impl GGUFQWenMoE {
     /// added for session checkpoint/restore, same shape and pairing
     /// convention as quantized_qwen2::ModelWeights's own
     /// kv_cache_state/set_kv_cache_state (kept consistent across both
-    /// standard-KV-cache backends so ratatoskr's session code doesn't need
-    /// per-architecture branching to persist/restore this).
+    /// standard-KV-cache backends so callers don't need per-architecture
+    /// branching to persist/restore this).
     pub fn kv_cache_state(&self) -> Vec<Option<(Tensor, Tensor)>> {
         self.layers.iter().map(|l| l.kv_cache_state()).collect()
     }
