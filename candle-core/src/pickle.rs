@@ -1038,7 +1038,7 @@ mod dos_hardening_tests {
     #[test]
     fn rejects_deep_persid_chain() {
         let mut b = vec![0x80, 0x02, b'K', 0]; // PROTO 2; BININT1 0
-        b.extend(std::iter::repeat(b'Q').take(1_000_000)); // 1e6 x BINPERSID
+        b.extend(std::iter::repeat_n(b'Q', 1_000_000)); // 1e6 x BINPERSID
         b.push(b'.'); // STOP
         let mut s = Stack::empty();
         assert!(s.read_loop(&mut &b[..]).is_err());
@@ -1090,10 +1090,10 @@ mod dos_hardening_tests {
     #[ignore = "allocates up to the ~512 MiB working-set cap before rejecting"]
     fn rejects_memo_replay_amplification() {
         let mut b = vec![0x80, 0x02, b']', b'(']; // PROTO 2; EMPTY_LIST; MARK
-        b.extend(std::iter::repeat([b'K', 1]).take(50_000).flatten()); // 50k x BININT1(1)
+        b.extend(std::iter::repeat_n([b'K', 1], 50_000).flatten()); // 50k x BININT1(1)
         b.push(b'e'); // APPENDS -> 50k-element list
         b.extend([b'q', 0]); // BINPUT 0 (memoise the list)
-        b.extend(std::iter::repeat([b'h', 0]).take(20_000).flatten()); // BINGET 0 x20k
+        b.extend(std::iter::repeat_n([b'h', 0], 20_000).flatten()); // BINGET 0 x20k
         b.push(b'.'); // STOP
         let mut s = Stack::empty();
         assert!(s.read_loop(&mut &b[..]).is_err());
