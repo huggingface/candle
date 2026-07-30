@@ -1,20 +1,25 @@
 use rocm_rs::miopen::tensor::{DataType, TensorDescriptor};
 use rocm_rs::miopen::{ConvolutionDescriptor, Handle};
 
-pub fn miopen_dtype<T: Copy>() -> DataType {
-    if std::any::type_name::<T>().contains("f32") {
-        DataType::MiopenFloat
-    } else if std::any::type_name::<T>().contains("f64") {
-        DataType::MiopenDouble
-    } else if std::any::type_name::<T>().contains("f16") {
-        DataType::MiopenHalf
-    } else if std::any::type_name::<T>().contains("bf16") {
-        DataType::MiopenBFloat16
+/// MIOpen tensor dtype for the Rust type `T`.
+///
+/// `bf16` has to be probed before `f16` — `half::bf16`'s type name contains
+/// both.
+pub fn miopen_dtype<T: Copy>() -> crate::Result<DataType> {
+    let type_name = std::any::type_name::<T>();
+    if type_name.contains("f32") {
+        Ok(DataType::MiopenFloat)
+    } else if type_name.contains("f64") {
+        Ok(DataType::MiopenDouble)
+    } else if type_name.contains("bf16") {
+        Ok(DataType::MiopenBFloat16)
+    } else if type_name.contains("f16") {
+        Ok(DataType::MiopenHalf)
     } else {
-        panic!(
-            "Unsupported dtype for MIOpen: {}",
-            std::any::type_name::<T>()
-        )
+        Err(crate::Error::Msg(format!(
+            "unsupported dtype for MIOpen: {}",
+            type_name
+        )))
     }
 }
 
@@ -40,7 +45,7 @@ pub fn conv2d_forward<T: Copy>(
     dilation_w: usize,
 ) -> crate::Result<()> {
     let x_desc = TensorDescriptor::new_4d(
-        miopen_dtype::<T>(),
+        miopen_dtype::<T>()?,
         b as i32,
         c_in as i32,
         i_h as i32,
@@ -49,7 +54,7 @@ pub fn conv2d_forward<T: Copy>(
     .map_err(|e| crate::Error::Msg(format!("MIOpen x_desc creation failed: {}", e)))?;
 
     let w_desc = TensorDescriptor::new_4d(
-        miopen_dtype::<T>(),
+        miopen_dtype::<T>()?,
         c_out as i32,
         c_in as i32,
         k_h as i32,
@@ -58,7 +63,7 @@ pub fn conv2d_forward<T: Copy>(
     .map_err(|e| crate::Error::Msg(format!("MIOpen w_desc creation failed: {}", e)))?;
 
     let y_desc = TensorDescriptor::new_4d(
-        miopen_dtype::<T>(),
+        miopen_dtype::<T>()?,
         b as i32,
         c_out as i32,
         out_h as i32,
@@ -167,11 +172,11 @@ pub fn conv_transpose1d_forward<T: Copy>(
     dilation: usize,
 ) -> crate::Result<()> {
     let x_desc =
-        TensorDescriptor::new_4d(miopen_dtype::<T>(), b as i32, c_in as i32, 1, l_in as i32)
+        TensorDescriptor::new_4d(miopen_dtype::<T>()?, b as i32, c_in as i32, 1, l_in as i32)
             .map_err(|e| crate::Error::Msg(format!("MIOpen x_desc creation failed: {}", e)))?;
 
     let w_desc = TensorDescriptor::new_4d(
-        miopen_dtype::<T>(),
+        miopen_dtype::<T>()?,
         c_in as i32,
         c_out as i32,
         1,
@@ -179,9 +184,14 @@ pub fn conv_transpose1d_forward<T: Copy>(
     )
     .map_err(|e| crate::Error::Msg(format!("MIOpen w_desc creation failed: {}", e)))?;
 
-    let y_desc =
-        TensorDescriptor::new_4d(miopen_dtype::<T>(), b as i32, c_out as i32, 1, l_out as i32)
-            .map_err(|e| crate::Error::Msg(format!("MIOpen y_desc creation failed: {}", e)))?;
+    let y_desc = TensorDescriptor::new_4d(
+        miopen_dtype::<T>()?,
+        b as i32,
+        c_out as i32,
+        1,
+        l_out as i32,
+    )
+    .map_err(|e| crate::Error::Msg(format!("MIOpen y_desc creation failed: {}", e)))?;
 
     let mut conv_desc = ConvolutionDescriptor::new()
         .map_err(|e| crate::Error::Msg(format!("MIOpen conv_desc creation failed: {}", e)))?;
@@ -277,4 +287,30 @@ pub fn conv_transpose1d_forward<T: Copy>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use half::{bf16, f16};
+
+    fn code<T: Copy>() -> u32 {
+        miopen_dtype::<T>().map(|d| d as u32).unwrap()
+    }
+
+    #[test]
+    fn dtype_mapping() {
+        assert_eq!(code::<f32>(), DataType::MiopenFloat as u32);
+        assert_eq!(code::<f64>(), DataType::MiopenDouble as u32);
+        assert_eq!(code::<f16>(), DataType::MiopenHalf as u32);
+        // `half::bf16`'s type name also contains "f16"; it must not fall
+        // through to MiopenHalf.
+        assert_eq!(code::<bf16>(), DataType::MiopenBFloat16 as u32);
+    }
+
+    #[test]
+    fn unsupported_dtype_errors() {
+        assert!(miopen_dtype::<u8>().is_err());
+        assert!(miopen_dtype::<i64>().is_err());
+    }
 }

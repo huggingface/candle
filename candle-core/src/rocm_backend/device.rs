@@ -131,6 +131,16 @@ impl RocmDevice {
         &self.stream.0
     }
 
+    /// Locks the rocrand generator.
+    ///
+    /// The lock is deliberately not unwrapped: a failure inside any `rand_*`
+    /// call would poison the mutex and turn every later call into a panic.
+    fn rocrand(&self) -> Result<std::sync::MutexGuard<'_, SendSyncPseudoRng>> {
+        self.rocrand
+            .lock()
+            .map_err(|_| crate::Error::Msg("Failed to lock rocrand generator".to_string()))
+    }
+
     /// Get or load a kernel function from the cache.
     /// This is public so that candle-nn and other crates can launch custom kernels.
     pub fn get_or_load_func(
@@ -340,7 +350,7 @@ impl BackendDevice for RocmDevice {
 
     fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, hi: f64) -> Result<Self::Storage> {
         let elem_count = shape.elem_count();
-        let mut rocrand = self.rocrand.lock().unwrap();
+        let mut rocrand = self.rocrand()?;
         let slice = match dtype {
             DType::U8
             | DType::U32
@@ -394,7 +404,7 @@ impl BackendDevice for RocmDevice {
         std: f64,
     ) -> Result<Self::Storage> {
         let elem_count = shape.elem_count();
-        let mut rocrand = self.rocrand.lock().unwrap();
+        let mut rocrand = self.rocrand()?;
         // rocrand can only generate an even number of normal values.
         let elem_count_round = if elem_count % 2 == 1 {
             elem_count + 1
@@ -445,16 +455,23 @@ impl BackendDevice for RocmDevice {
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {
-        let mut rocrand = self.rocrand.lock().unwrap();
+        let mut rocrand = self.rocrand()?;
         rocrand
             .set_seed(seed)
             .map_err(|e| crate::Error::Msg(format!("Failed to set rocrand seed: {}", e)))?;
-        *self.seed_value.write().unwrap() = seed;
+        *self
+            .seed_value
+            .write()
+            .map_err(|_| crate::Error::Msg("Failed to lock ROCm seed value".to_string()))? = seed;
         Ok(())
     }
 
     fn get_current_seed(&self) -> Result<u64> {
-        Ok(*self.seed_value.read().unwrap())
+        let seed = self
+            .seed_value
+            .read()
+            .map_err(|_| crate::Error::Msg("Failed to lock ROCm seed value".to_string()))?;
+        Ok(*seed)
     }
 
     fn synchronize(&self) -> Result<()> {
