@@ -231,9 +231,71 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     }
 }
 
+/// A reusable evaluation session for an ONNX model.
+///
+/// [`simple_eval`] re-parses every initializer (weight) from the model's raw protobuf bytes on each
+/// call, which is wasteful when the same model is run more than once. `Session` creates the
+/// initializers once and [`Session::run`] reuses them for every call.
+///
+/// Prefer `Session` over [`simple_eval`] whenever a model is evaluated in a loop (e.g.
+/// autoregressive decoding) or more than once.
+///
+/// ```no_run
+/// # fn example() -> candle::Result<()> {
+/// let model = candle_onnx::read_file("model.onnx")?;
+/// let session = candle_onnx::Session::new(&model)?;
+/// for inputs in std::iter::repeat(std::collections::HashMap::new()).take(3) {
+///     let outputs = session.run(inputs)?;
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub struct Session {
+    graph: onnx::GraphProto,
+    initializers: HashMap<String, Value>,
+}
+
+impl Session {
+    /// Builds a `Session` from a model.
+    ///
+    /// # Errors
+    ///
+    /// * Will return `Err` if `model` has no graph.
+    /// * Will return `Err` if any initializer has an unsupported or malformed data type.
+    pub fn new(model: &onnx::ModelProto) -> Result<Self> {
+        let graph = match &model.graph {
+            None => bail!("no graph defined in proto"),
+            Some(graph) => graph.clone(),
+        };
+        let mut initializers = HashMap::with_capacity(graph.initializer.len());
+        for t in &graph.initializer {
+            let tensor = get_tensor(t, t.name.as_str())?;
+            initializers.insert(t.name.clone(), tensor);
+        }
+        Ok(Self { graph, initializers })
+    }
+
+    /// Runs the model against the given inputs, returning the graph's named outputs. Can be called
+    /// repeatedly on the same `Session`.
+    ///
+    /// # Errors
+    ///
+    /// * Will return `Err` if a required graph input is missing from `inputs`, or if its
+    ///   dtype/shape doesn't match the graph's declaration.
+    /// * Will return `Err` if the graph contains an unsupported op, or if a node's input can't be
+    ///   found while evaluating the graph.
+    /// * Will return `Err` if an expected graph output isn't produced.
+    pub fn run(&self, inputs: HashMap<String, Value>) -> Result<HashMap<String, Value>> {
+        let mut values = self.initializers.clone(); // Arc-bump per tensor, not a data copy
+        values.extend(inputs);
+        validate_inputs(&self.graph, &values)?;
+        eval_nodes(&self.graph, &mut values)?;
+        collect_outputs(&self.graph, &mut values)
+    }
+}
+
 // This function provides a direct evaluation of the proto.
-// Longer-term, we should first convert the proto to an intermediate representation of the compute
-// graph so as to make multiple evaluations more efficient.
+// See [`Session`] if you need to do multiple evaluations.
 // An example upside of this would be to remove intermediary values when they are not needed
 // anymore.
 pub fn simple_eval(
